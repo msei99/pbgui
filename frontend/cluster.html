@@ -86,6 +86,7 @@
       border: 1px solid var(--border2);
       background: var(--bg3);
       color: var(--muted);
+      white-space: pre-line;
     }
     #status-msg.visible { display: block; }
     #status-msg.ok { border-color: rgba(74,222,128,0.32); color: var(--good); background: rgba(74,222,128,0.08); }
@@ -1342,6 +1343,39 @@
         });
       }
 
+      function repairAllClusterSshMessage(payload) {
+        var counts = payload.counts || {};
+        var failed = Number(counts.failed || 0);
+        var outboundErrors = Number(counts.outbound_errors || 0);
+        var missing = Number(counts.missing_source_keys || 0);
+        var lines = [
+          'Cluster SSH repair complete: ' + Number(counts.repaired || 0) + ' node(s) repaired, '
+          + Number(counts.outbound_installed || 0) + ' outbound key install(s), '
+          + failed + ' failed node(s), ' + outboundErrors + ' outbound error(s), '
+          + missing + ' missing source key(s).'
+        ];
+        var results = Array.isArray(payload.results) ? payload.results : [];
+        var failedRows = results.filter(function (item) { return item && item.status === 'failed'; }).map(function (item) {
+          return (item.pbname || item.node_id || 'unknown') + ': ' + (item.reason || 'unknown error');
+        });
+        if (failedRows.length) lines.push('Failed: ' + failedRows.join('; '));
+
+        var errorRows = [];
+        var installRows = [];
+        results.forEach(function (item) {
+          var source = item.pbname || item.node_id || 'unknown';
+          (Array.isArray(item.outbound_install_errors) ? item.outbound_install_errors : []).forEach(function (entry) {
+            errorRows.push(source + ' -> ' + nodeLabel(entry.target_node_id) + ': ' + (entry.reason || 'unknown error'));
+          });
+          (Array.isArray(item.outbound_installed) ? item.outbound_installed : []).forEach(function (entry) {
+            installRows.push(source + ' -> ' + nodeLabel(entry.target_node_id) + ' (' + (entry.changed ? 'installed' : 'already present') + ')');
+          });
+        });
+        if (errorRows.length) lines.push('Outbound errors: ' + errorRows.join('; '));
+        if (installRows.length) lines.push('Outbound installs: ' + installRows.join('; '));
+        return { text: lines.join('\n'), kind: (failed || outboundErrors || missing) ? 'warn' : 'ok' };
+      }
+
       function repairAllClusterSsh() {
         if (typeof window.PBGuiConfirm !== 'function') {
           setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
@@ -1358,18 +1392,8 @@
           if (btn) { btn.disabled = true; btn.textContent = 'Repairing...'; }
           setMessage('Repairing Cluster SSH trust for active nodes...', 'warn');
           fetchJson('/cluster-ssh/repair-all', { method: 'POST' }).then(function (payload) {
-            var counts = payload.counts || {};
-            var failed = Number(counts.failed || 0);
-            var outboundErrors = Number(counts.outbound_errors || 0);
-            var missing = Number(counts.missing_source_keys || 0);
-            var kind = (failed || outboundErrors || missing) ? 'warn' : 'ok';
-            setMessage(
-              'Cluster SSH repair complete: ' + Number(counts.repaired || 0) + ' node(s) repaired, '
-              + Number(counts.outbound_installed || 0) + ' outbound key install(s), '
-              + failed + ' failed node(s), ' + outboundErrors + ' outbound error(s), '
-              + missing + ' missing source key(s).',
-              kind
-            );
+            var message = repairAllClusterSshMessage(payload || {});
+            setMessage(message.text, message.kind);
             return loadCluster({ silent: true });
           }).catch(function (err) {
             setMessage('Cluster SSH repair failed: ' + err.message, 'err');
