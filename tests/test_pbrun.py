@@ -1169,6 +1169,21 @@ class TestClusterDesiredStateGate:
         assert rv7.cluster_gate == "desired_stopped"
         assert (Path(rv7.path) / "running_version.txt").read_text(encoding="utf-8") == "0"
 
+    def test_runv7_start_skips_config_load_when_cluster_desired_stopped(self, tmp_path, monkeypatch):
+        """Stopped Cluster state must not reload dynamic_ignore files every PBRun cycle."""
+
+        rv7 = _make_cluster_runv7(tmp_path)
+        _write_cluster_desired(tmp_path, Path(rv7.path), desired_state="stopped")
+        monkeypatch.setattr(rv7, "is_running", lambda: False)
+        monkeypatch.setattr(PBRun_mod, "_log", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(rv7, "load", lambda: pytest.fail("load must not run while Cluster desired state is stopped"))
+        monkeypatch.setattr(PBRun_mod.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("Popen must not run"))
+
+        rv7.start()
+
+        assert rv7.cluster_blocked is True
+        assert rv7.cluster_gate == "desired_stopped"
+
     def test_runv7_start_logs_expected_cluster_stop_once(self, tmp_path, monkeypatch):
         """Repeated expected Cluster stop blocks must not spam PBRun warnings."""
 

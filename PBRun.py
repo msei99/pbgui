@@ -746,6 +746,15 @@ class RunV7():
 
     def start(self):
         if not self.is_running():
+            pre_load_gate = self._cluster_gate_result()
+            if not pre_load_gate.get("ok") and str(pre_load_gate.get("status") or "") in {
+                "desired_stopped",
+                "missing_instance",
+                "tombstoned",
+                "wrong_host",
+            }:
+                self._block_cluster_gate_start(pre_load_gate)
+                return
             if Path(f'{self.path}/config.json').exists() and not self.load():
                 self.stop()
                 return
