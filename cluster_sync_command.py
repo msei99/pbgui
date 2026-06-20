@@ -43,10 +43,12 @@ MAX_OPERATION_BATCH_BYTES = 16 * 1024 * 1024
 MAX_CONFIG_BLOB_BYTES = 16 * 1024 * 1024
 MAX_CONFIG_BLOB_BATCH_BYTES = 16 * 1024 * 1024
 MAX_SECRET_BLOB_BYTES = 1024 * 1024
+MAX_APPLY_BUNDLE_BYTES = 24 * 1024 * 1024
 MAX_GET_OPS = 1000
 MAX_GET_BLOBS = 100
 
 READ_VERBS = frozenset({
+    "handshake",
     "hello",
     "get-state-vector",
     "get-desired-state",
@@ -57,8 +59,8 @@ READ_VERBS = frozenset({
     "materialize-v7-preview",
     "materialize-api-keys-preview",
 })
-WRITE_VERBS = frozenset({"join", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "rebuild", "materialize-v7", "materialize-api-keys"})
-STDIN_VERBS = frozenset({"put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob"})
+WRITE_VERBS = frozenset({"join", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "apply-bundle", "rebuild", "materialize-v7", "materialize-api-keys"})
+STDIN_VERBS = frozenset({"put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "apply-bundle"})
 SUPPORTED_VERBS = READ_VERBS | WRITE_VERBS
 
 
@@ -89,24 +91,13 @@ def run_command(
     _verify_remote_node(root, remote_node, allow_join=allow_join)
     paths = ClusterPaths.from_root(root)
 
+    if verb == "handshake":
+        payload = _hello_payload(root, identity, remote_node)
+        materialized = _safe_state_call(lambda: rebuild_materialized_state(root, write=False))
+        payload["state_vector"] = materialized.get("state_vector") or {}
+        return payload
     if verb == "hello":
-        payload = {
-            "ok": True,
-            "protocol_version": PROTOCOL_VERSION,
-            "cluster_id": cluster_id,
-            "node_id": str(identity["node_id"]),
-            "role": str(identity.get("role") or ""),
-            "remote_node": remote_node,
-        }
-        try:
-            key = ensure_cluster_ssh_key(root, node_id=str(identity.get("node_id") or ""))
-            payload.update({
-                "cluster_ssh_public_key": str(key.get("public_key") or ""),
-                "cluster_ssh_fingerprint": str(key.get("fingerprint") or ""),
-                "cluster_ssh_mode": "forced",
-            })
-        except Exception as exc:
-            payload["cluster_ssh_error"] = str(exc)
+        payload = _hello_payload(root, identity, remote_node)
         return payload
     if verb == "get-state-vector":
         materialized = _safe_state_call(lambda: rebuild_materialized_state(root, write=False))
@@ -203,6 +194,9 @@ def run_command(
         blob_hash = _validate_hash(tokens[1])
         path = _write_blob(paths.secret_blobs, blob_hash, stdin_data, MAX_SECRET_BLOB_BYTES, secret=True)
         return {"ok": True, "hash": blob_hash, "path": _relative_cluster_path(paths.root, path)}
+    if verb == "apply-bundle":
+        _require_arity(tokens, 1)
+        return _apply_bundle(root, paths, cluster_id, stdin_data)
     raise ClusterSyncCommandError(f"unsupported command: {verb}")
 
 
@@ -240,7 +234,30 @@ def _read_stdin_for_command(command_text: str) -> bytes:
     tokens = _parse_command(command_text)
     if tokens[0] not in STDIN_VERBS:
         return b""
-    return sys.stdin.buffer.read(max(MAX_CONFIG_BLOB_BATCH_BYTES, MAX_CONFIG_BLOB_BYTES, MAX_OPERATION_BATCH_BYTES) + 1)
+    return sys.stdin.buffer.read(max(MAX_CONFIG_BLOB_BATCH_BYTES, MAX_CONFIG_BLOB_BYTES, MAX_OPERATION_BATCH_BYTES, MAX_APPLY_BUNDLE_BYTES) + 1)
+
+
+def _hello_payload(cluster_root: Path, identity: dict[str, Any], remote_node: str) -> dict[str, Any]:
+    """Return peer metadata used by hello and handshake."""
+
+    payload = {
+        "ok": True,
+        "protocol_version": PROTOCOL_VERSION,
+        "cluster_id": str(identity["cluster_id"]),
+        "node_id": str(identity["node_id"]),
+        "role": str(identity.get("role") or ""),
+        "remote_node": remote_node,
+    }
+    try:
+        key = ensure_cluster_ssh_key(cluster_root, node_id=str(identity.get("node_id") or ""))
+        payload.update({
+            "cluster_ssh_public_key": str(key.get("public_key") or ""),
+            "cluster_ssh_fingerprint": str(key.get("fingerprint") or ""),
+            "cluster_ssh_mode": "forced",
+        })
+    except Exception as exc:
+        payload["cluster_ssh_error"] = str(exc)
+    return payload
 
 
 def _join_cluster(cluster_root: Path, remote_node: str, tokens: list[str], *, allow_join: bool) -> dict[str, Any]:
@@ -850,25 +867,107 @@ def _read_blob_batch_payload(raw: bytes) -> list[dict[str, Any]]:
     blobs = payload.get("blobs")
     if not isinstance(blobs, list):
         raise ClusterSyncCommandError("blob batch payload missing blobs list")
-    result: list[dict[str, Any]] = []
-    for item in blobs:
+    return _decode_blob_items(blobs, max_size=MAX_CONFIG_BLOB_BYTES, label="blob batch")
+
+
+def _read_apply_bundle_payload(raw: bytes) -> dict[str, Any]:
+    """Read one bounded apply-bundle payload with blobs and operations."""
+
+    if len(raw) > MAX_APPLY_BUNDLE_BYTES:
+        raise ClusterSyncCommandError("apply-bundle payload too large")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ClusterSyncCommandError("apply-bundle payload must be a JSON object") from exc
+    if not isinstance(payload, dict):
+        raise ClusterSyncCommandError("apply-bundle payload must be a JSON object")
+    operations = payload.get("operations")
+    if not isinstance(operations, list):
+        raise ClusterSyncCommandError("apply-bundle payload missing operations list")
+    clean_operations: list[dict[str, Any]] = []
+    for item in operations:
         if not isinstance(item, dict):
-            raise ClusterSyncCommandError("blob batch contains a non-object blob")
+            raise ClusterSyncCommandError("apply-bundle contains a non-object operation")
+        clean_operations.append(item)
+    config_blobs = payload.get("config_blobs")
+    secret_blobs = payload.get("secret_blobs")
+    if not isinstance(config_blobs, list):
+        raise ClusterSyncCommandError("apply-bundle payload missing config_blobs list")
+    if not isinstance(secret_blobs, list):
+        raise ClusterSyncCommandError("apply-bundle payload missing secret_blobs list")
+    return {
+        "operations": clean_operations,
+        "config_blobs": _decode_blob_items(config_blobs, max_size=MAX_CONFIG_BLOB_BYTES, label="apply-bundle config"),
+        "secret_blobs": _decode_blob_items(secret_blobs, max_size=MAX_SECRET_BLOB_BYTES, label="apply-bundle secret"),
+    }
+
+
+def _decode_blob_items(items: list[Any], *, max_size: int, label: str) -> list[dict[str, Any]]:
+    """Decode and verify content-addressed blob payload items."""
+
+    result: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ClusterSyncCommandError(f"{label} contains a non-object blob")
         blob_hash = _validate_hash(str(item.get("hash") or ""))
         encoded = item.get("content_b64")
         if not isinstance(encoded, str):
-            raise ClusterSyncCommandError("blob batch entry missing content_b64")
+            raise ClusterSyncCommandError(f"{label} entry missing content_b64")
         try:
             raw_blob = base64.b64decode(encoded.encode("ascii"), validate=True)
         except (UnicodeEncodeError, binascii.Error) as exc:
-            raise ClusterSyncCommandError("blob batch entry has invalid base64") from exc
-        if len(raw_blob) > MAX_CONFIG_BLOB_BYTES:
-            raise ClusterSyncCommandError("blob too large")
+            raise ClusterSyncCommandError(f"{label} entry has invalid base64") from exc
+        if len(raw_blob) > max_size:
+            raise ClusterSyncCommandError(f"{label} blob too large")
         expected = blob_hash.removeprefix("sha256:")
         if hashlib.sha256(raw_blob).hexdigest() != expected:
-            raise ClusterSyncCommandError("blob hash mismatch")
+            raise ClusterSyncCommandError(f"{label} blob hash mismatch")
         result.append({"hash": blob_hash, "raw": raw_blob})
     return result
+
+
+def _apply_bundle(cluster_root: Path, paths: ClusterPaths, cluster_id: str, raw: bytes) -> dict[str, Any]:
+    """Write blobs and operations, then rebuild and materialize in one command."""
+
+    payload = _read_apply_bundle_payload(raw)
+    config_blobs = payload["config_blobs"]
+    secret_blobs = payload["secret_blobs"]
+    operations = payload["operations"]
+
+    written_config: list[dict[str, str]] = []
+    for blob in config_blobs:
+        path = _write_blob(paths.config_blobs, str(blob["hash"]), blob["raw"], MAX_CONFIG_BLOB_BYTES, secret=False)
+        written_config.append({"hash": str(blob["hash"]), "path": _relative_cluster_path(paths.root, path)})
+
+    written_secret: list[dict[str, str]] = []
+    for blob in secret_blobs:
+        path = _write_blob(paths.secret_blobs, str(blob["hash"]), blob["raw"], MAX_SECRET_BLOB_BYTES, secret=True)
+        written_secret.append({"hash": str(blob["hash"]), "path": _relative_cluster_path(paths.root, path)})
+
+    for operation in operations:
+        _safe_state_call(lambda op=operation: validate_operation(op, expected_cluster_id=cluster_id))
+
+    written_ops: list[dict[str, Any]] = []
+    for operation in operations:
+        _safe_state_call(lambda op=operation: write_operation(cluster_root, op))
+        written_ops.append({"op_id": str(operation["op_id"]), "actor": str(operation["actor"]), "seq": int(operation["seq"])})
+
+    materialized = _safe_state_call(lambda: rebuild_materialized_state(cluster_root))
+    v7_result = _materialize_v7_configs(cluster_root, write=True)
+    api_preview = _materialize_api_keys(cluster_root, write=False)
+    api_result = api_preview
+    if api_preview.get("can_apply"):
+        api_result = _materialize_api_keys(cluster_root, write=True)
+    return {
+        "ok": True,
+        "count": len(written_ops),
+        "operations": written_ops,
+        "config_blobs": len(written_config),
+        "secret_blobs": len(written_secret),
+        "generation": int(((materialized.get("cluster_nodes") or {}).get("generation") or 0)),
+        "v7_materialization": v7_result,
+        "api_key_materialization": api_result,
+    }
 
 
 def _write_blob(base_dir: Path, blob_hash: str, raw: bytes, max_size: int, *, secret: bool) -> Path:

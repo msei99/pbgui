@@ -1304,21 +1304,26 @@ def main():
     _wait_for_cluster_boot_sync(Path(run.pbgdir), timeout=20)
     if run.pb7dir:
         run.watch_v7()
-    count = 0
+    maintenance_count = 0
+    next_maintenance = 0.0
     while True:
         try:
-            run.watch_memory()
+            now = time()
             if run.pb7dir:
+                # Keep Cluster Sync start/stop reactions fast without running the
+                # expensive per-bot process scan every second.
                 run.has_v7_runtime_changed()
+            if now >= next_maintenance:
+                run.watch_memory()
+                next_maintenance = now + 5
                 for run_v7 in run.run_v7:
                     run_v7.watch()
                     run_v7.watch_dynamic()
-            if count%2 == 0:
-                if run.pb7dir:
+                if maintenance_count % 2 == 0:
                     for run_v7 in run.run_v7:
                         run_v7.clean_log()
-            sleep(5)
-            count += 1
+                maintenance_count += 1
+            sleep(1)
         except Exception as e:
             _log("PBRun", f"Something went wrong, but continue {e}", level="ERROR")
             _log("PBRun", "PBRun.main loop traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})

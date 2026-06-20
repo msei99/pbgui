@@ -15,6 +15,8 @@ import shlex
 import subprocess
 import threading
 import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +48,8 @@ SERVICE = "PBCluster"
 STATUS_SCHEMA_VERSION = 1
 DEFAULT_SSH_TIMEOUT = 30
 CONFIG_BLOB_BATCH_TARGET_BYTES = 12 * 1024 * 1024
+APPLY_BUNDLE_TARGET_BYTES = 12 * 1024 * 1024
+DEFAULT_PEER_WORKERS = 32
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -68,6 +72,7 @@ class ClusterSyncWorker:
         *,
         interval: int = 60,
         boot_window: int = 20,
+        peer_workers: int = DEFAULT_PEER_WORKERS,
         peer_client: Any | None = None,
     ) -> None:
         """Initialize a worker for *pbgdir*."""
@@ -76,10 +81,12 @@ class ClusterSyncWorker:
         self.cluster_root = default_cluster_root(self.pbgdir)
         self.interval = max(5, int(interval))
         self.boot_window = max(0, int(boot_window))
+        self.peer_workers = max(1, int(peer_workers))
         self.status_path = ClusterPaths.from_root(self.cluster_root).root / "sync_status.json"
         self.trigger_path = ClusterPaths.from_root(self.cluster_root).root / "sync_request"
         self.peer_client = peer_client or SshClusterPeerClient(cluster_root=self.cluster_root)
         self._peer_backoff: dict[str, dict[str, Any]] = {}
+        self._local_state_lock = threading.Lock()
         self._last_trigger_mtime = self._trigger_mtime()
         self._stop = threading.Event()
         self._sync_requested = threading.Event()
@@ -229,7 +236,8 @@ class ClusterSyncWorker:
         nodes = cluster_nodes.get("nodes") if isinstance(cluster_nodes, dict) else {}
         nodes = nodes if isinstance(nodes, dict) else {}
         local_node_id = str(identity.get("node_id") or "")
-        results: list[dict[str, Any]] = []
+        results_by_peer: dict[str, dict[str, Any]] = {}
+        pending: list[tuple[str, dict[str, Any]]] = []
         for peer_id in sorted(nodes):
             peer = nodes.get(peer_id) if isinstance(nodes.get(peer_id), dict) else {}
             if str(peer_id) == local_node_id:
@@ -237,72 +245,101 @@ class ClusterSyncWorker:
             local_node = nodes.get(local_node_id) if isinstance(nodes.get(local_node_id), dict) else {}
             peer_mode = _peer_sync_mode(peer)
             if peer_mode == "disabled":
-                results.append(_peer_result(peer_id, peer, ok=False, status="disabled", reason="sync is disabled"))
+                results_by_peer[str(peer_id)] = _peer_result(peer_id, peer, ok=False, status="disabled", reason="sync is disabled")
                 continue
             if peer_mode == "outbound_only":
-                results.append(_peer_result(peer_id, peer, ok=True, status="outbound_only", reason="peer is outbound-only"))
+                results_by_peer[str(peer_id)] = _peer_result(peer_id, peer, ok=True, status="outbound_only", reason="peer is outbound-only")
                 continue
             allowed, reason = _peer_topology_allows(local_node, str(peer_id), peer)
             if not allowed:
-                results.append(_peer_result(peer_id, peer, ok=True, status="topology_skipped", reason=reason))
+                results_by_peer[str(peer_id)] = _peer_result(peer_id, peer, ok=True, status="topology_skipped", reason=reason)
                 continue
             if not str(peer.get("ssh_host") or "").strip():
-                results.append(_peer_result(peer_id, peer, ok=False, status="config_error", reason="reachable peer has no ssh_host"))
+                results_by_peer[str(peer_id)] = _peer_result(peer_id, peer, ok=False, status="config_error", reason="reachable peer has no ssh_host")
                 continue
             backoff = self._peer_backoff.get(str(peer_id)) or {}
             next_retry = float(backoff.get("next_retry") or 0)
             if next_retry and time.time() < next_retry:
                 result = _peer_result(peer_id, peer, ok=False, status="backoff", reason=str(backoff.get("error") or "previous sync failed"))
                 result["next_retry"] = int(next_retry)
-                results.append(result)
+                results_by_peer[str(peer_id)] = result
                 continue
-            try:
-                result = self._sync_peer(peer, local_node_id, str(identity.get("cluster_id") or ""))
-                self._peer_backoff.pop(str(peer_id), None)
-                results.append(result)
-            except Exception as exc:
-                failures = int(backoff.get("failures") or 0) + 1
-                delay = min(600, max(30, 30 * (2 ** min(failures - 1, 4))))
-                self._peer_backoff[str(peer_id)] = {
-                    "failures": failures,
-                    "next_retry": time.time() + delay,
-                    "error": str(exc),
+            pending.append((str(peer_id), peer))
+
+        if pending:
+            max_workers = min(self.peer_workers, len(pending))
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="pbcluster-peer") as executor:
+                future_map = {
+                    executor.submit(self._sync_peer_with_backoff, peer_id, peer, local_node_id, str(identity.get("cluster_id") or "")): peer_id
+                    for peer_id, peer in pending
                 }
-                _log(SERVICE, f"Peer sync failed for {peer.get('pbname') or peer_id}: {exc}", level="WARNING")
-                result = _peer_result(str(peer_id), peer, ok=False, status="error", reason=str(exc))
-                result["retry_delay"] = delay
-                results.append(result)
-        return results
+                for future in as_completed(future_map):
+                    peer_id = future_map[future]
+                    results_by_peer[peer_id] = future.result()
+
+        return [results_by_peer[str(peer_id)] for peer_id in sorted(nodes) if str(peer_id) != local_node_id and str(peer_id) in results_by_peer]
+
+    def _sync_peer_with_backoff(self, peer_id: str, peer: dict[str, Any], local_node_id: str, cluster_id: str) -> dict[str, Any]:
+        """Synchronize one peer and update its retry backoff."""
+
+        backoff = self._peer_backoff.get(str(peer_id)) or {}
+        try:
+            result = self._sync_peer(peer, local_node_id, cluster_id)
+            self._peer_backoff.pop(str(peer_id), None)
+            return result
+        except Exception as exc:
+            failures = int(backoff.get("failures") or 0) + 1
+            delay = min(600, max(30, 30 * (2 ** min(failures - 1, 4))))
+            self._peer_backoff[str(peer_id)] = {
+                "failures": failures,
+                "next_retry": time.time() + delay,
+                "error": str(exc),
+            }
+            _log(SERVICE, f"Peer sync failed for {peer.get('pbname') or peer_id}: {exc}", level="WARNING")
+            result = _peer_result(str(peer_id), peer, ok=False, status="error", reason=str(exc))
+            result["retry_delay"] = delay
+            return result
 
     def _sync_peer(self, peer: dict[str, Any], local_node_id: str, cluster_id: str) -> dict[str, Any]:
         """Synchronize local state with one peer."""
 
         peer_id = str(peer.get("node_id") or "")
         base_result = _peer_result(peer_id, peer, ok=True, status="synced")
-        hello = self.peer_client.run(peer, local_node_id, "hello")
+        hello, remote_vector = self._peer_handshake(peer, local_node_id)
         if str(hello.get("cluster_id") or "") != cluster_id:
             raise ClusterSyncWorkerError("peer belongs to another cluster")
         remote_node_id = str(hello.get("node_id") or "")
         if peer_id and remote_node_id and remote_node_id != peer_id:
             raise ClusterSyncWorkerError("peer node_id does not match cluster_nodes")
-        key_changed = self._record_peer_cluster_ssh_metadata(peer, hello)
+        with self._local_state_lock:
+            key_changed = self._record_peer_cluster_ssh_metadata(peer, hello)
 
-        remote_vector_payload = self.peer_client.run(peer, local_node_id, "get-state-vector")
-        remote_vector = _as_state_vector(remote_vector_payload.get("state_vector") or {})
         local_ops = load_operations(self.cluster_root, expected_cluster_id=cluster_id)
         local_vector = _state_vector_from_operations(local_ops)
 
         pulled_ops = self._pull_missing_operations(peer, local_node_id, remote_vector, local_vector, cluster_id)
         if pulled_ops:
-            rebuild_materialized_state(self.cluster_root)
-            local_ops = load_operations(self.cluster_root, expected_cluster_id=cluster_id)
+            with self._local_state_lock:
+                rebuild_materialized_state(self.cluster_root)
+                local_ops = load_operations(self.cluster_root, expected_cluster_id=cluster_id)
             local_vector = _state_vector_from_operations(local_ops)
 
         push_ops = _select_operations_missing_on_remote(local_ops, remote_vector)
-        pushed_config_blobs, pushed_secret_blobs = self._push_blobs_for_operations(peer, local_node_id, push_ops)
-        pushed_ops = self._push_operations(peer, local_node_id, push_ops)
-        if pushed_ops:
-            self._remote_rebuild_and_materialize(peer, local_node_id)
+        pushed_config_blobs = 0
+        pushed_secret_blobs = 0
+        pushed_ops = 0
+        if push_ops:
+            fast_result = self._apply_operations_bundle(peer, local_node_id, push_ops)
+            if fast_result is None:
+                pushed_config_blobs, pushed_secret_blobs = self._push_blobs_for_operations(peer, local_node_id, push_ops)
+                pushed_ops = self._push_operations(peer, local_node_id, push_ops)
+                if pushed_ops:
+                    self._remote_rebuild_and_materialize(peer, local_node_id)
+            else:
+                pushed_config_blobs = int(fast_result.get("config_blobs") or 0)
+                pushed_secret_blobs = int(fast_result.get("secret_blobs") or 0)
+                pushed_ops = int(fast_result.get("count") or len(push_ops))
+                base_result["remote_apply"] = "bundle"
 
         if pulled_ops or pushed_ops or key_changed:
             base_result["status"] = "changed"
@@ -318,6 +355,19 @@ class ClusterSyncWorker:
             "last_seen": int(time.time()),
         })
         return base_result
+
+    def _peer_handshake(self, peer: dict[str, Any], local_node_id: str) -> tuple[dict[str, Any], dict[str, int]]:
+        """Return peer hello metadata and state vector, using one SSH call when supported."""
+
+        try:
+            payload = self.peer_client.run(peer, local_node_id, "handshake")
+            return payload, _as_state_vector(payload.get("state_vector") or {})
+        except Exception as exc:
+            if not _is_unsupported_command_error(exc, "handshake"):
+                raise
+        hello = self.peer_client.run(peer, local_node_id, "hello")
+        remote_vector_payload = self.peer_client.run(peer, local_node_id, "get-state-vector")
+        return hello, _as_state_vector(remote_vector_payload.get("state_vector") or {})
 
     def _record_peer_cluster_ssh_metadata(self, peer: dict[str, Any], hello: dict[str, Any]) -> bool:
         """Record peer Cluster SSH public key metadata when hello exposes it."""
@@ -371,8 +421,9 @@ class ClusterSyncWorker:
                 for operation in operations:
                     validate_operation(operation, expected_cluster_id=cluster_id)
                     op_path = ClusterPaths.from_root(self.cluster_root).oplog / str(operation["actor"]) / f"{int(operation['seq']):08d}.json"
-                    existed = op_path.exists()
-                    write_operation(self.cluster_root, operation)
+                    with self._local_state_lock:
+                        existed = op_path.exists()
+                        write_operation(self.cluster_root, operation)
                     if not existed:
                         pulled += 1
                 start = end + 1
@@ -442,6 +493,22 @@ class ClusterSyncWorker:
         payload = json.dumps({"operations": operations}, sort_keys=True, separators=(",", ":"))
         result = self.peer_client.run(peer, local_node_id, "put-ops", payload=payload)
         return int(result.get("count") or len(operations))
+
+    def _apply_operations_bundle(self, peer: dict[str, Any], local_node_id: str, operations: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """Push blobs and operations, then materialize the peer in one remote command."""
+
+        if not operations:
+            return {"ok": True, "count": 0, "config_blobs": 0, "secret_blobs": 0}
+        config_blobs, secret_blobs = _collect_local_blobs_for_operations(self.cluster_root, operations)
+        payload = _apply_bundle_payload(operations, config_blobs, secret_blobs)
+        if len(payload.encode("utf-8")) > APPLY_BUNDLE_TARGET_BYTES:
+            return None
+        try:
+            return self.peer_client.run(peer, local_node_id, "apply-bundle", payload=payload)
+        except Exception as exc:
+            if _is_unsupported_command_error(exc, "apply-bundle"):
+                return None
+            raise
 
     def _remote_rebuild_and_materialize(self, peer: dict[str, Any], local_node_id: str) -> None:
         """Rebuild and materialize local files on a peer after a successful push."""
@@ -682,6 +749,26 @@ def _blob_batch_payload(blobs: list[dict[str, Any]]) -> str:
     }, sort_keys=True, separators=(",", ":"))
 
 
+def _apply_bundle_payload(operations: list[dict[str, Any]], config_blobs: list[dict[str, Any]], secret_blobs: list[dict[str, Any]]) -> str:
+    """Build one JSON payload for apply-bundle."""
+
+    def blob_items(blobs: list[dict[str, Any]]) -> list[dict[str, str]]:
+        return [
+            {"hash": str(blob.get("hash") or ""), "content_b64": base64.b64encode(blob.get("raw") or b"").decode("ascii")}
+            for blob in blobs
+        ]
+
+    return json.dumps(
+        {
+            "operations": operations,
+            "config_blobs": blob_items(config_blobs),
+            "secret_blobs": blob_items(secret_blobs),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _collect_local_blobs_for_operations(cluster_root: Path, operations: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Collect local config and secret blobs required to send operations."""
 
@@ -793,7 +880,7 @@ def _write_local_blob(base_dir: Path, blob_hash: str, raw: bytes, *, secret: boo
         raise ClusterSyncWorkerError("blob hash mismatch")
     path = _local_blob_path(base_dir, validated)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     tmp.write_bytes(raw)
     os.chmod(tmp, 0o600 if secret else 0o644)
     os.replace(tmp, path)
@@ -808,6 +895,13 @@ def _validate_hash(value: str) -> str:
         raise ClusterSyncWorkerError("invalid blob hash")
     int(digest, 16)
     return text
+
+
+def _is_unsupported_command_error(exc: Exception, command: str) -> bool:
+    """Return True when an older peer rejected a newer wrapper command."""
+
+    text = str(exc or "").lower()
+    return "unsupported command" in text and str(command or "").lower() in text
 
 
 def _remote_shell_path(path: str | None) -> str:

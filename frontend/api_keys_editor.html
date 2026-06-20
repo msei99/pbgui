@@ -1832,7 +1832,6 @@
             delete bybitExpiryData[savedName];
             cancelEdit();
             await loadUsers();
-            await checkSshSyncStatus();
             // Background HL expiry refresh: when a private key was submitted (new or
             // changed), automatically fetch the real expiry so the table shows it
             // without requiring an extra manual "Check Expiry" click.
@@ -1880,7 +1879,6 @@
             showToast("User deleted: " + name, "success");
             cancelEdit();
             await loadUsers();
-            await checkSshSyncStatus();
         } catch (e) {
             showToast("Delete failed: " + e.message, "error");
         }
@@ -2671,7 +2669,6 @@
             showToast("Restored from: " + filename, "success");
             backToList();
             await loadUsers();
-            await checkSshSyncStatus();
         } catch (e) {
             showToast("Restore failed: " + e.message, "error");
         }

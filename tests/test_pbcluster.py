@@ -2,6 +2,8 @@
 
 import json
 import hashlib
+import threading
+import time
 from pathlib import Path
 
 from cluster_sync_command import run_command
@@ -20,15 +22,23 @@ NODE_ID = "pbgui-node-00000000-0000-4000-8000-000000000010"
 NODE_B = "pbgui-node-00000000-0000-4000-8000-000000000011"
 
 
+def _node_id(index: int) -> str:
+    """Return a deterministic valid test node id."""
+
+    return f"pbgui-node-00000000-0000-4000-8000-{index:012d}"
+
+
 class _LocalPeerClient:
     """Peer client that executes wrapper commands against local temp roots."""
 
     def __init__(self, roots: dict[str, Path]) -> None:
         """Map node IDs to cluster roots."""
         self.roots = roots
+        self.calls: list[tuple[str, str]] = []
 
     def run(self, peer: dict, local_node_id: str, command_text: str, payload: str | bytes | None = None) -> dict:
         """Execute a restricted command against the peer's local cluster root."""
+        self.calls.append((str(peer["node_id"]), command_text))
         raw = payload if isinstance(payload, bytes) else str(payload or "").encode("utf-8")
         return run_command(self.roots[str(peer["node_id"])], local_node_id, command_text, raw, allow_join=True)
 
@@ -40,6 +50,40 @@ class _FailingPeerClient:
         """Fail when a test unexpectedly attempts peer transport."""
 
         raise AssertionError("skipped peer must not be contacted")
+
+
+class _ParallelPeerClient:
+    """Peer client that records concurrent handshake fanout."""
+
+    def __init__(self, remote_vector: dict[str, int]) -> None:
+        """Initialize concurrency counters."""
+
+        self.remote_vector = remote_vector
+        self.active = 0
+        self.max_active = 0
+        self.lock = threading.Lock()
+
+    def run(self, peer: dict, local_node_id: str, command_text: str, payload: str | bytes | None = None) -> dict:
+        """Delay handshakes so tests can observe parallel execution."""
+
+        if command_text != "handshake":
+            raise AssertionError(f"unexpected command: {command_text}")
+        with self.lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(0.05)
+        finally:
+            with self.lock:
+                self.active -= 1
+        return {
+            "ok": True,
+            "cluster_id": CLUSTER_ID,
+            "node_id": str(peer["node_id"]),
+            "role": str(peer.get("role") or "vps"),
+            "remote_node": local_node_id,
+            "state_vector": self.remote_vector,
+        }
 
 
 def _write_cluster_blob(cluster_root: Path, blob_hash: str, raw: bytes) -> None:
@@ -167,6 +211,31 @@ def test_cluster_sync_worker_reports_reachable_peer_without_ssh_host(tmp_path: P
     assert "ssh_host" in status["peers"][0]["reason"]
 
 
+def test_cluster_sync_worker_syncs_reachable_peers_in_parallel(tmp_path: Path) -> None:
+    """PBCluster fans out reachable peer checks concurrently instead of one by one."""
+
+    peer_ids = [_node_id(index) for index in range(12, 20)]
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "master", "pbname": "master-a"}, created_at=100)
+    for offset, peer_id in enumerate(peer_ids, start=1):
+        append_operation(
+            cluster_root,
+            "ADD_NODE",
+            {"node_id": peer_id, "role": "vps", "pbname": f"runner-{offset}", "sync_mode": "reachable", "ssh_host": f"runner-{offset}"},
+            created_at=100 + offset,
+        )
+    client = _ParallelPeerClient({NODE_ID: len(peer_ids) + 1})
+    worker = ClusterSyncWorker(tmp_path, peer_client=client, peer_workers=len(peer_ids))
+
+    status = worker.run_once(reason="test")
+
+    assert status["ok"] is True
+    assert status["peers_ok"] == len(peer_ids)
+    assert client.max_active > 1
+    assert {item["status"] for item in status["peers"]} == {"synced"}
+
+
 def test_cluster_sync_worker_skips_vps_peer_without_explicit_topology(tmp_path: Path) -> None:
     """VPS nodes do not initiate SSH fanout unless sync_peers explicitly allows it."""
 
@@ -243,16 +312,20 @@ def test_cluster_sync_worker_pushes_ops_blobs_and_remote_materializes(tmp_path: 
         created_at=102,
     )
 
-    worker = ClusterSyncWorker(
-        tmp_path / "node-a",
-        peer_client=_LocalPeerClient({NODE_ID: root_a, NODE_B: root_b}),
-    )
+    client = _LocalPeerClient({NODE_ID: root_a, NODE_B: root_b})
+    worker = ClusterSyncWorker(tmp_path / "node-a", peer_client=client)
 
     status = worker.run_once(reason="test")
 
     assert status["ok"] is True
     assert status["pushed_ops"] >= 3
     assert status["peers"][0]["status"] == "changed"
+    commands = [command for _, command in client.calls]
+    assert "handshake" in commands
+    assert "apply-bundle" in commands
+    assert "put-ops" not in commands
+    assert "rebuild" not in commands
+    assert "materialize-v7" not in commands
     remote_config = tmp_path / "node-b" / "data" / "run_v7" / "bot-a" / "config.json"
     assert json.loads(remote_config.read_text(encoding="utf-8"))["live"]["user"] == "bot-a"
     assert json.loads((root_b / "desired_state.json").read_text(encoding="utf-8"))["instances"]["bot-a"]["assigned_host"] == NODE_B
