@@ -690,7 +690,7 @@ def test_repair_all_cluster_ssh_repairs_active_nodes(monkeypatch, tmp_path: Path
 
     monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
 
-    result = asyncio.run(cluster.repair_all_cluster_ssh(session=None))
+    result = asyncio.run(cluster.repair_all_cluster_ssh(_JsonRequest({}), session=None))
 
     assert result["ok"] is True
     assert result["counts"]["repaired"] == 2
@@ -758,6 +758,60 @@ def test_repair_node_cluster_ssh_falls_back_to_node_ssh_metadata(monkeypatch, tm
     assert connect_calls[0]["known_hosts"] is None
     assert any("ensure-local" in command for command in commands)
     assert any("install-authorized-key" in command for command in commands)
+
+
+def test_repair_all_cluster_ssh_uses_temporary_passwords(monkeypatch, tmp_path: Path) -> None:
+    """Repair All SSH passes prompted passwords only to direct SSH fallback connections."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(
+        cluster,
+        "ensure_local_cluster_ssh_material",
+        lambda *args, **kwargs: {
+            "node_id": NODE_A,
+            "public_key": LOCAL_CLUSTER_PUBLIC_KEY,
+            "fingerprint": "SHA256:local",
+            "public_key_path": str(tmp_path / "local.pub"),
+        },
+    )
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master", "sync_peers": [NODE_B]}, created_at=101)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(ssh_host="198.51.100.23", ssh_user="bot", ssh_port=2222, remote_pbgui_dir="software/pbgui"), created_at=102)
+    connect_calls: list[dict[str, Any]] = []
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            return None
+
+    class FakeConn:
+        async def run(self, command: str, check: bool = False):
+            if "ensure-local" in command:
+                payload = {"ok": True, "public_key": REMOTE_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:remote"}
+            elif "install-authorized-key" in command:
+                payload = {"ok": True, "changed": True}
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+        def close(self) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            pass
+
+    async def fake_connect(**kwargs):
+        connect_calls.append(kwargs)
+        return FakeConn()
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
+    monkeypatch.setattr(cluster.asyncssh, "connect", fake_connect)
+
+    payload = {"ssh_passwords": {NODE_B: "secret-password"}}
+    result = asyncio.run(cluster.repair_all_cluster_ssh(_JsonRequest(payload), session=None))
+
+    assert result["ok"] is True
+    assert connect_calls
+    assert {item.get("password") for item in connect_calls} == {"secret-password"}
 
 
 def test_bootstrap_preview_reports_missing_local_config(monkeypatch, tmp_path: Path) -> None:

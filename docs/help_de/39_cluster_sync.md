@@ -216,7 +216,7 @@ PBCluster-SSH-Zugriff ist technischer Setup-Status. Beim normalen PBGui-Setup/Up
 
 VPS-Nodes starten standardmäßig keinen SSH-Fanout zu anderen Peers. Ein Runner-VPS kontaktiert nur explizite `sync_peers`; dadurch entsteht kein versehentliches VPS-zu-VPS-Mesh. Master können weiterhin zu erreichbaren VPS-Nodes pushen, solange ihre Outbound-Peer-Liste nicht explizit eingeschränkt wurde.
 
-Nutze **Edit** an einem Node, um Sync-Modus, SSH-Host/User/Port, Remote PBGui Dir und erlaubte Outbound-Peers zu konfigurieren. Nutze **Repair SSH** nach Änderungen an Peer-Listen oder nach einem Node-Update: die Aktion liest den remote PBCluster Public Key, speichert den Fingerprint in den Cluster-Metadaten und installiert die nötigen restricted Keys für den Master und konfigurierte Peer-Quellen. Nutze **Remove** nur für deaktivierte nicht-lokale Nodes, die keine V7-Configs mehr besitzen; die Aktion schreibt eine `REMOVE_NODE`-Operation und entfernt den Node aus der materialisierten Membership, während die Oplog-Historie erhalten bleibt.
+Nutze **Edit** an einem Node, um Sync-Modus, SSH-Host/User/Port, Remote PBGui Dir und erlaubte Outbound-Peers zu konfigurieren. Nutze **Repair SSH** für einen einzelnen Node nach Änderungen an dessen Peer-Liste, SSH-Metadaten oder nach einem Node-Update: die Aktion liest den remote PBCluster Public Key, speichert den Fingerprint in den Cluster-Metadaten und installiert die nötigen restricted Keys für den Master und konfigurierte Peer-Quellen. Nutze **Repair All SSH** nach einem größeren Update oder einer Topologieänderung, wenn mehrere aktive erreichbare Nodes einen Key-Refresh brauchen können. Die Aktion führt denselben Repair-Flow für alle aktiven Nodes aus, meldet fehlgeschlagene Nodes, Outbound-Install-Fehler und fehlende Source-Keys, und lässt disabled Nodes sowie inbound-Ziele von outbound-only Nodes unangetastet. Wenn normaler SSH-Key-Login noch nicht verfügbar ist, fragt PBGui für den betroffenen Node das SSH-Passwort ab, wiederholt den Repair nur für diesen Request mit diesem Passwort und speichert es nicht. Nutze **Remove** nur für deaktivierte nicht-lokale Nodes, die keine V7-Configs mehr besitzen; die Aktion schreibt eine `REMOVE_NODE`-Operation und entfernt den Node aus der materialisierten Membership, während die Oplog-Historie erhalten bleibt.
 
 Wenn ein gejointer Node **OK** zeigt, liest die **Preview**-Aktion den Remote-State-Vector und Desired State. Sie vergleicht Actor-Sequenzen, V7-Instance-Metadaten, Tombstones und API-Key-Metadaten mit lokalem State. Zusätzlich berechnet sie, welche lokalen Operationen remote fehlen, welche Remote-Operationsbereiche lokal fehlen und welche Hash-Referenzen eine spätere Write-Phase brauchen würde. Preview ist read-only; es kopiert keine Operationen, Blobs oder Configs.
 
@@ -255,6 +255,13 @@ Wenn eine Foreign-Cluster-Warnung erscheint:
 - Sync nicht erzwingen.
 - Prüfen, ob der Node wirklich zu diesem PBGui-Cluster gehört.
 - Remote-Cluster-Identität nur joinen oder zurücksetzen, wenn sicher ist, dass es der richtige Node ist.
+
+Wenn **Repair All SSH** Outbound-Fehler meldet:
+
+- Bei `SSH authentication failed` das angefragte SSH-Passwort für den genannten Node eingeben und aus dem Modal erneut versuchen. Das Passwort ist temporär und wird nicht gespeichert.
+- Bei `Remote host is unreachable` die **Reachable via SSH**-Metadaten des Nodes sowie Netzwerk-/Firewall-Zugriff prüfen und danach **Probe Active Nodes** ausführen.
+- Bei fehlenden Source-Keys zuerst **Repair SSH** auf dem Source-Node ausführen oder **Repair All SSH** wiederholen, nachdem der Source-Node einen gespeicherten Cluster-SSH-Public-Key hat.
+- Nach dem Repair erneut **Probe Active Nodes** ausführen, bevor **Join & Sync** oder Remote-Preview-Aktionen genutzt werden.
 
 ---
 

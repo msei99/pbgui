@@ -216,7 +216,7 @@ PBCluster SSH access is technical setup state. During normal PBGui setup/update 
 
 VPS nodes do not initiate SSH fanout to other peers by default. A runner VPS only contacts explicit `sync_peers`; this avoids accidental VPS-to-VPS meshes. Masters can still push to reachable VPS nodes unless their outbound peer list is explicitly restricted.
 
-Use **Edit** on a node to configure its sync mode, SSH host/user/port, Remote PBGui Dir and allowed outbound peers. Use **Repair SSH** after changing peer allowlists or after updating a node: it reads the remote PBCluster public key, stores its fingerprint in cluster metadata, and installs the required restricted keys for the master and any configured peer sources. Use **Remove** only for disabled non-local nodes that no longer own any V7 configs; it writes a `REMOVE_NODE` operation and removes the node from materialized membership while keeping oplog history intact.
+Use **Edit** on a node to configure its sync mode, SSH host/user/port, Remote PBGui Dir and allowed outbound peers. Use **Repair SSH** for one node after changing its peer allowlist, SSH metadata or after updating that node: it reads the remote PBCluster public key, stores its fingerprint in cluster metadata, and installs the required restricted keys for the master and any configured peer sources. Use **Repair All SSH** after a larger update or topology change when several active reachable nodes may need key refresh. It runs the same repair flow for every active node, reports failed nodes, outbound install errors and missing source keys, and leaves disabled/outbound-only inbound targets untouched. If normal SSH key login is not available yet, PBGui prompts for the affected node's SSH password, retries with that password for this request only, and does not save it. Use **Remove** only for disabled non-local nodes that no longer own any V7 configs; it writes a `REMOVE_NODE` operation and removes the node from materialized membership while keeping oplog history intact.
 
 When a joined node shows **OK**, the **Preview** action reads the remote state vector and desired state. It compares actor sequence numbers, V7 instance metadata, tombstones and API-key metadata against local state. It also calculates which local operations the remote is missing, which remote operation ranges are missing locally, and which hash references a later write phase would need. Preview is read-only; it does not copy operations, blobs or configs.
 
@@ -255,6 +255,13 @@ If a foreign cluster warning appears:
 - Do not force sync.
 - Verify that the node belongs to this PBGui cluster.
 - Join or reset the remote cluster identity only when you are sure it is the correct node.
+
+If **Repair All SSH** reports outbound errors:
+
+- For `SSH authentication failed`, enter the prompted SSH password for the named node and retry from the modal. The password is temporary and is not saved.
+- For `Remote host is unreachable`, verify the node's **Reachable via SSH** metadata and network/firewall access, then run **Probe Active Nodes**.
+- For missing source keys, run **Repair SSH** on the source node first or rerun **Repair All SSH** after the source node has a stored Cluster SSH public key.
+- After repair, run **Probe Active Nodes** again before using **Join & Sync** or remote Preview actions.
 
 ---
 

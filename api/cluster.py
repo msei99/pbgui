@@ -2190,7 +2190,48 @@ async def _run_remote_materialize_command(
     return payload
 
 
-async def _run_direct_cluster_ssh_setup(node: dict[str, Any], command: str, *, timeout: int = 15) -> Any:
+async def _optional_json_payload(request: Request | None) -> dict[str, Any]:
+    """Return a JSON request body when present."""
+
+    if request is None:
+        return {}
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _normalize_ssh_passwords(payload: Any) -> dict[str, str]:
+    """Return a sanitized per-node SSH password map from an API payload."""
+
+    if not isinstance(payload, dict):
+        return {}
+    raw = payload.get("ssh_passwords")
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, str] = {}
+    for key, value in raw.items():
+        node_key = str(key or "").strip()
+        password = str(value or "")
+        if node_key and password:
+            result[node_key] = password
+    return result
+
+
+def _ssh_password_for_node(node: dict[str, Any], passwords: dict[str, str] | None) -> str:
+    """Return a temporary SSH password for one node if the caller supplied one."""
+
+    if not passwords:
+        return ""
+    for key in (node.get("node_id"), node.get("pbname"), node.get("hostname"), node.get("ssh_host")):
+        text = str(key or "").strip()
+        if text and text in passwords:
+            return str(passwords[text] or "")
+    return ""
+
+
+async def _run_direct_cluster_ssh_setup(node: dict[str, Any], command: str, *, timeout: int = 15, ssh_password: str = "") -> Any:
     """Run Cluster SSH setup directly via a node's stored SSH metadata."""
 
     label = str(node.get("pbname") or node.get("hostname") or node.get("node_id") or "remote node")
@@ -2209,6 +2250,7 @@ async def _run_direct_cluster_ssh_setup(node: dict[str, Any], command: str, *, t
                 host=ssh_host,
                 port=ssh_port,
                 username=ssh_user,
+                password=str(ssh_password or "") or None,
                 known_hosts=None,
                 keepalive_interval=10,
             ),
@@ -2234,7 +2276,7 @@ async def _run_direct_cluster_ssh_setup(node: dict[str, Any], command: str, *, t
                     pass
 
 
-async def _run_remote_cluster_ssh_setup(node: dict[str, Any], identity: dict[str, Any], args: list[str], *, timeout: int = 15) -> dict[str, Any]:
+async def _run_remote_cluster_ssh_setup(node: dict[str, Any], identity: dict[str, Any], args: list[str], *, timeout: int = 15, ssh_passwords: dict[str, str] | None = None) -> dict[str, Any]:
     """Run the remote Cluster SSH setup helper through monitor SSH or stored node SSH metadata."""
 
     node_id, hostname, _local_node_id = _require_remote_node_ready(node, identity)
@@ -2247,7 +2289,7 @@ async def _run_remote_cluster_ssh_setup(node: dict[str, Any], identity: dict[str
     except Exception as exc:
         _log(SERVICE, f"Remote Cluster SSH setup via monitor pool failed for {hostname}: {exc}; trying direct SSH metadata", level="WARNING")
     if result is None:
-        result = await _run_direct_cluster_ssh_setup(node, command, timeout=timeout)
+        result = await _run_direct_cluster_ssh_setup(node, command, timeout=timeout, ssh_password=_ssh_password_for_node(node, ssh_passwords))
     exit_status = int(getattr(result, "exit_status", 1) or 0)
     if exit_status != 0:
         error = _probe_error_text(result)
@@ -2272,7 +2314,7 @@ def _append_node_update_if_changed(node_id: str, current: dict[str, Any], update
     return True
 
 
-async def _repair_node_cluster_ssh(node: dict[str, Any], identity: dict[str, Any], nodes: list[dict[str, Any]]) -> dict[str, Any]:
+async def _repair_node_cluster_ssh(node: dict[str, Any], identity: dict[str, Any], nodes: list[dict[str, Any]], *, ssh_passwords: dict[str, str] | None = None) -> dict[str, Any]:
     """Repair Cluster SSH key trust for one node and persist discovered key metadata."""
 
     node_id = str(node.get("node_id") or "")
@@ -2294,7 +2336,7 @@ async def _repair_node_cluster_ssh(node: dict[str, Any], identity: dict[str, Any
         changed = _append_node_update_if_changed(node_id, node, updates)
         materialized = rebuild_materialized_state(_cluster_root()) if changed else _load_cluster_snapshot()
         updated = _node_for_id(_node_list(materialized["cluster_nodes"]), node_id)
-        outbound_installed, outbound_install_errors = await _install_node_key_on_sync_peers(updated or node, identity, nodes, local_public_key)
+        outbound_installed, outbound_install_errors = await _install_node_key_on_sync_peers(updated or node, identity, nodes, local_public_key, ssh_passwords=ssh_passwords)
         return {
             "ok": True,
             "node_id": node_id,
@@ -2307,7 +2349,7 @@ async def _repair_node_cluster_ssh(node: dict[str, Any], identity: dict[str, Any
             "missing_source_keys": [],
         }
 
-    remote_key = await _run_remote_cluster_ssh_setup(node, identity, ["ensure-local", "--node-id", node_id])
+    remote_key = await _run_remote_cluster_ssh_setup(node, identity, ["ensure-local", "--node-id", node_id], ssh_passwords=ssh_passwords)
     remote_public_key = str(remote_key.get("public_key") or "").strip()
     if not remote_public_key:
         raise HTTPException(status_code=409, detail="Remote did not return a Cluster SSH public key")
@@ -2323,6 +2365,7 @@ async def _repair_node_cluster_ssh(node: dict[str, Any], identity: dict[str, Any
             "--source-public-key",
             str(local_key.get("public_key") or ""),
         ],
+        ssh_passwords=ssh_passwords,
     )
     installed.append({"source_node_id": local_node_id, "changed": bool(master_install.get("changed")), "role": "master"})
 
@@ -2341,10 +2384,11 @@ async def _repair_node_cluster_ssh(node: dict[str, Any], identity: dict[str, Any
             node,
             identity,
             ["install-authorized-key", "--source-node", source_id, "--source-public-key", source_public_key],
+            ssh_passwords=ssh_passwords,
         )
         installed.append({"source_node_id": source_id, "changed": bool(result.get("changed")), "role": str(source.get("role") or "node")})
 
-    outbound_installed, outbound_install_errors = await _install_node_key_on_sync_peers(node, identity, nodes, remote_public_key)
+    outbound_installed, outbound_install_errors = await _install_node_key_on_sync_peers(node, identity, nodes, remote_public_key, ssh_passwords=ssh_passwords)
 
     updates = {
         "cluster_ssh_public_key": remote_public_key,
@@ -2368,7 +2412,7 @@ async def _repair_node_cluster_ssh(node: dict[str, Any], identity: dict[str, Any
     }
 
 
-async def _install_node_key_on_sync_peers(source_node: dict[str, Any], identity: dict[str, Any], nodes: list[dict[str, Any]], source_public_key: str) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+async def _install_node_key_on_sync_peers(source_node: dict[str, Any], identity: dict[str, Any], nodes: list[dict[str, Any]], source_public_key: str, *, ssh_passwords: dict[str, str] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """Install one node's Cluster SSH key on its configured outbound sync peers."""
 
     source_id = str(source_node.get("node_id") or "")
@@ -2392,6 +2436,7 @@ async def _install_node_key_on_sync_peers(source_node: dict[str, Any], identity:
                     target,
                     identity,
                     ["install-authorized-key", "--source-node", source_id, "--source-public-key", source_public_key],
+                    ssh_passwords=ssh_passwords,
                 )
             outbound_installed.append({"target_node_id": target_id, "changed": bool(result.get("changed")), "role": str(target.get("role") or "node")})
         except HTTPException as exc:
@@ -3611,9 +3656,11 @@ def remove_cluster_node(node_id: str, session: SessionToken = Depends(require_au
 
 
 @router.post("/cluster-ssh/repair-all")
-async def repair_all_cluster_ssh(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+async def repair_all_cluster_ssh(request: Request, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     """Repair Cluster SSH trust for all active reachable nodes."""
 
+    request_payload = await _optional_json_payload(request)
+    ssh_passwords = _normalize_ssh_passwords(request_payload)
     snapshot = _load_cluster_snapshot()
     nodes = _node_list(snapshot["cluster_nodes"])
     identity = snapshot["identity"]
@@ -3641,7 +3688,7 @@ async def repair_all_cluster_ssh(session: SessionToken = Depends(require_auth)) 
             results.append({"node_id": node_id, "pbname": label, "ok": True, "status": "skipped", "reason": "node is outbound-only"})
             continue
         try:
-            result = await _repair_node_cluster_ssh(node, identity, nodes)
+            result = await _repair_node_cluster_ssh(node, identity, nodes, ssh_passwords=ssh_passwords)
         except HTTPException as exc:
             counts["failed"] += 1
             results.append({"node_id": node_id, "pbname": label, "ok": False, "status": "failed", "reason": str(exc.detail)})

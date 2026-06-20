@@ -44,11 +44,12 @@ Cluster Sync ersetzt die alten Sync-Wege. PBRun wird nur auf Hosts benötigt, di
 
 1. Öffne **System -> Cluster Sync**.
 2. Öffne beim VPS-Node **Edit**. Wenn der Node noch **Disabled** ist, stelle **Sync Mode** auf **Reachable via SSH**, prüfe SSH Host/User/Port und **Remote PBGui Dir**, und speichere.
-3. Nutze beim Node **Repair SSH**, damit die eingeschränkten PBCluster-SSH-Keys und Fingerprints installiert bzw. aktualisiert werden.
-4. Klicke **Probe Active Nodes** und warte, bis der Node erreichbar ist und **No Identity** meldet.
-5. Nutze danach **Join**.
-6. **Join** schreibt die Cluster-Identität, synchronisiert Cluster-Daten, materialisiert V7-Configs/API-Keys und startet PBRun danach wieder, wenn alles passt.
-7. Bei VPS-Runnern stoppt **Join** PBRun währenddessen automatisch. Die laufenden passivbot-Prozesse bleiben unangetastet.
+3. Nutze beim Node **Repair SSH**, damit die eingeschränkten PBCluster-SSH-Keys und Fingerprints installiert bzw. aktualisiert werden. Nutze stattdessen **Repair All SSH**, wenn mehrere Nodes aktualisiert wurden oder Peer-Allowlisten im Cluster geändert wurden.
+4. Wenn PBGui während des Repairs ein SSH-Passwort abfragt, gib das Passwort für den genannten Node ein. Es wird nur für diesen Repair-Request verwendet und nicht gespeichert.
+5. Klicke **Probe Active Nodes** und warte, bis der Node erreichbar ist und **No Identity** meldet.
+6. Nutze danach **Join**.
+7. **Join** schreibt die Cluster-Identität, synchronisiert Cluster-Daten, materialisiert V7-Configs/API-Keys und startet PBRun danach wieder, wenn alles passt.
+8. Bei VPS-Runnern stoppt **Join** PBRun währenddessen automatisch. Die laufenden passivbot-Prozesse bleiben unangetastet.
 
 ### 6. Ergebnis prüfen
 

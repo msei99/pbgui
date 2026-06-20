@@ -517,6 +517,36 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" id="repair-password-modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="repair-password-title">
+      <div class="modal-head">
+        <div id="repair-password-title">SSH Password Required</div>
+        <button class="modal-close" id="repair-password-close-btn" type="button" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div id="repair-password-message">Key login is not available yet. Enter the SSH password to retry Cluster SSH repair.</div>
+        <div class="field">
+          <div class="field-label">Cluster Node</div>
+          <div class="field-value" id="repair-password-node"></div>
+        </div>
+        <div class="field">
+          <div class="field-label">SSH User</div>
+          <div class="field-value" id="repair-password-user"></div>
+        </div>
+        <div class="modal-field">
+          <label for="repair-password-input">SSH Password</label>
+          <input class="modal-input" id="repair-password-input" type="password" autocomplete="current-password" placeholder="SSH password">
+          <div class="field-help">Used only for this repair request. It is not saved.</div>
+        </div>
+        <div class="modal-error" id="repair-password-error"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="repair-password-cancel-btn" type="button">Cancel</button>
+        <button class="btn warn" id="repair-password-confirm-btn" type="button">Retry Repair</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop" id="node-settings-modal" hidden>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="node-settings-title">
       <div class="modal-head">
@@ -645,6 +675,9 @@
       var nodesActionsBound = false;
       var pendingJoinNode = null;
       var pendingSelfJoinPayload = null;
+      var pendingRepairPasswordNodeId = '';
+      var pendingRepairPasswordReason = '';
+      var repairSshPasswords = {};
       var pendingSettingsNode = null;
       var pendingPreviewNode = null;
       var lastPreviewPayload = null;
@@ -1376,6 +1409,131 @@
         return { text: lines.join('\n'), kind: (failed || outboundErrors || missing) ? 'warn' : 'ok' };
       }
 
+      function isRepairAuthError(reason) {
+        var text = String(reason || '').toLowerCase();
+        return text.indexOf('ssh authentication failed') >= 0 || text.indexOf('permission denied') >= 0;
+      }
+
+      function repairAuthPromptTarget(payload) {
+        var results = Array.isArray((payload || {}).results) ? payload.results : [];
+        var match = null;
+        results.some(function (item) {
+          if (!item) return false;
+          if (item.status === 'failed' && isRepairAuthError(item.reason)) {
+            match = { node_id: item.node_id, reason: item.reason };
+            return true;
+          }
+          return (Array.isArray(item.outbound_install_errors) ? item.outbound_install_errors : []).some(function (entry) {
+            if (!isRepairAuthError(entry.reason)) return false;
+            match = { node_id: entry.target_node_id, reason: entry.reason };
+            return true;
+          });
+        });
+        return match;
+      }
+
+      function showRepairPasswordError(text) {
+        var el = document.getElementById('repair-password-error');
+        if (!el) return;
+        el.textContent = text || '';
+        el.className = text ? 'modal-error visible' : 'modal-error';
+      }
+
+      function setRepairPasswordBusy(busy) {
+        var input = document.getElementById('repair-password-input');
+        var confirm = document.getElementById('repair-password-confirm-btn');
+        var cancel = document.getElementById('repair-password-cancel-btn');
+        var close = document.getElementById('repair-password-close-btn');
+        [input, confirm, cancel, close].forEach(function (el) { if (el) el.disabled = !!busy; });
+        if (confirm) confirm.textContent = busy ? 'Repairing...' : 'Retry Repair';
+      }
+
+      function openRepairPasswordPrompt(target) {
+        target = target || {};
+        pendingRepairPasswordNodeId = String(target.node_id || '');
+        pendingRepairPasswordReason = String(target.reason || 'SSH authentication failed.');
+        var node = nodeMap[pendingRepairPasswordNodeId] || {};
+        var modal = document.getElementById('repair-password-modal');
+        var nodeEl = document.getElementById('repair-password-node');
+        var userEl = document.getElementById('repair-password-user');
+        var msgEl = document.getElementById('repair-password-message');
+        var input = document.getElementById('repair-password-input');
+        var label = node.pbname || node.hostname || shortId(pendingRepairPasswordNodeId);
+        if (nodeEl) nodeEl.textContent = label + ' / ' + (node.ssh_host || node.hostname || 'unknown') + ':' + (node.ssh_port || 22);
+        if (userEl) userEl.textContent = node.ssh_user || 'unknown';
+        if (msgEl) msgEl.textContent = 'Key login is not available for ' + label + '. Enter the SSH password to retry Cluster SSH repair. Previous error: ' + pendingRepairPasswordReason;
+        if (input) input.value = '';
+        showRepairPasswordError('');
+        setRepairPasswordBusy(false);
+        if (modal) modal.hidden = false;
+        setTimeout(function () { if (input) input.focus(); }, 50);
+      }
+
+      function closeRepairPasswordPrompt() {
+        pendingRepairPasswordNodeId = '';
+        pendingRepairPasswordReason = '';
+        repairSshPasswords = {};
+        var input = document.getElementById('repair-password-input');
+        if (input) input.value = '';
+        var modal = document.getElementById('repair-password-modal');
+        if (modal) modal.hidden = true;
+        showRepairPasswordError('');
+        setRepairPasswordBusy(false);
+      }
+
+      function submitRepairPasswordPrompt() {
+        if (!pendingRepairPasswordNodeId) return;
+        var input = document.getElementById('repair-password-input');
+        var password = input ? input.value : '';
+        if (!password) {
+          showRepairPasswordError('Enter the SSH password first.');
+          return;
+        }
+        repairSshPasswords[pendingRepairPasswordNodeId] = password;
+        setRepairPasswordBusy(true);
+        showRepairPasswordError('');
+        setMessage('Retrying Cluster SSH repair with a temporary SSH password...', 'warn');
+        runRepairAllClusterSsh({ passwordPrompt: true });
+      }
+
+      function runRepairAllClusterSsh(options) {
+        options = options || {};
+        var btn = document.getElementById('repair-all-ssh-btn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Repairing...'; }
+        setMessage('Repairing Cluster SSH trust for active nodes...', 'warn');
+        var headers = { 'Content-Type': 'application/json' };
+        return fetchJson('/cluster-ssh/repair-all', {
+          method: 'POST',
+          headers: headers,
+          body: JSON.stringify({ ssh_passwords: repairSshPasswords })
+        }).then(function (payload) {
+          var message = repairAllClusterSshMessage(payload || {});
+          setMessage(message.text, message.kind);
+          var authTarget = repairAuthPromptTarget(payload || {});
+          if (authTarget) {
+            var authNodeId = String(authTarget.node_id || '');
+            if (repairSshPasswords[authNodeId]) {
+              delete repairSshPasswords[authNodeId];
+              openRepairPasswordPrompt(authTarget);
+              showRepairPasswordError('SSH authentication still failed. Check the password and try again.');
+            } else {
+              openRepairPasswordPrompt(authTarget);
+            }
+          } else if (options.passwordPrompt) {
+            closeRepairPasswordPrompt();
+          }
+          return loadCluster({ silent: true });
+        }).catch(function (err) {
+          if (options.passwordPrompt) {
+            showRepairPasswordError(err.message || 'Cluster SSH repair failed.');
+          }
+          setMessage('Cluster SSH repair failed: ' + err.message, 'err');
+        }).finally(function () {
+          if (btn) { btn.disabled = false; btn.textContent = 'Repair All SSH'; }
+          if (options.passwordPrompt) setRepairPasswordBusy(false);
+        });
+      }
+
       function repairAllClusterSsh() {
         if (typeof window.PBGuiConfirm !== 'function') {
           setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
@@ -1388,18 +1546,8 @@
           confirmText: 'Repair All SSH'
         }).then(function (accepted) {
           if (!accepted) return;
-          var btn = document.getElementById('repair-all-ssh-btn');
-          if (btn) { btn.disabled = true; btn.textContent = 'Repairing...'; }
-          setMessage('Repairing Cluster SSH trust for active nodes...', 'warn');
-          fetchJson('/cluster-ssh/repair-all', { method: 'POST' }).then(function (payload) {
-            var message = repairAllClusterSshMessage(payload || {});
-            setMessage(message.text, message.kind);
-            return loadCluster({ silent: true });
-          }).catch(function (err) {
-            setMessage('Cluster SSH repair failed: ' + err.message, 'err');
-          }).finally(function () {
-            if (btn) { btn.disabled = false; btn.textContent = 'Repair All SSH'; }
-          });
+          repairSshPasswords = {};
+          runRepairAllClusterSsh();
         });
       }
 
@@ -2507,6 +2655,15 @@
         if (event.key === 'Enter') {
           event.preventDefault();
           submitSelfJoinPasswordPrompt();
+        }
+      });
+      document.getElementById('repair-password-close-btn').addEventListener('click', closeRepairPasswordPrompt);
+      document.getElementById('repair-password-cancel-btn').addEventListener('click', closeRepairPasswordPrompt);
+      document.getElementById('repair-password-confirm-btn').addEventListener('click', submitRepairPasswordPrompt);
+      document.getElementById('repair-password-input').addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          submitRepairPasswordPrompt();
         }
       });
       document.getElementById('join-close-btn').addEventListener('click', closeJoinModal);
