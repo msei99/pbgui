@@ -558,11 +558,13 @@ class RunV7():
         self.cluster_blocked = not bool(result.get("ok"))
         self.cluster_blocked_reason = "" if result.get("ok") else str(result.get("reason") or "")
 
-    def _block_cluster_gate_start(self, result: dict) -> None:
+    def _block_cluster_gate_start(self, result: dict, *, log: bool = True) -> None:
         """Stop or delay this bot because Cluster Sync desired state blocks it."""
 
         self._set_cluster_gate_state(result)
         _atomic_write_text(Path(self.path) / "running_version.txt", "0")
+        if not log:
+            return
         now_ts = int(datetime.now().timestamp())
         log_key = (self.cluster_gate, self.cluster_blocked_reason)
         quiet_states = {"desired_stopped", "missing_instance", "tombstoned", "wrong_host"}
@@ -1114,6 +1116,40 @@ class PBRun():
         except OSError:
             return (str(path), None, None)
 
+    @staticmethod
+    def _desired_state_signature(path: Path) -> tuple:
+        """Return a semantic desired-state signature, ignoring rebuild timestamps."""
+
+        try:
+            desired = _read_json_file(path)
+        except OSError:
+            return (str(path), None, None)
+        except Exception as exc:
+            return (str(path), "error", str(exc))
+
+        instances = desired.get("instances") if isinstance(desired.get("instances"), dict) else {}
+        instance_sig = []
+        for name, item in sorted(instances.items()):
+            if not isinstance(item, dict):
+                continue
+            instance_sig.append((
+                str(name),
+                str(item.get("assigned_host") or ""),
+                str(item.get("config_manifest_hash") or ""),
+                bool(item.get("conflicted") is True),
+                str(item.get("desired_state") or ""),
+                str(item.get("version") or ""),
+            ))
+
+        tombstones = desired.get("tombstones") if isinstance(desired.get("tombstones"), dict) else {}
+        tombstone_sig = tuple(sorted(str(name) for name in tombstones.keys()))
+        return (
+            str(path),
+            str(desired.get("cluster_id") or ""),
+            tuple(instance_sig),
+            tombstone_sig,
+        )
+
     def _current_v7_runtime_signature(self) -> tuple:
         """Return the local Cluster/run_v7 signature PBRun reconciles against."""
 
@@ -1121,7 +1157,7 @@ class PBRun():
         signature: list[tuple] = [
             self._file_signature(cluster_root / "cluster_id"),
             self._file_signature(cluster_root / "node_id"),
-            self._file_signature(cluster_root / "desired_state.json"),
+            self._desired_state_signature(cluster_root / "desired_state.json"),
         ]
         run_root = Path(self.v7_path)
         if not run_root.is_dir():
@@ -1209,7 +1245,7 @@ class PBRun():
                 if callable(pre_load_gate_fn):
                     pre_load_gate = pre_load_gate_fn()
                     if not pre_load_gate.get("ok") and str(pre_load_gate.get("status") or "") in CLUSTER_PRE_LOAD_BLOCK_STATES:
-                        run_v7._block_cluster_gate_start(pre_load_gate)
+                        run_v7._block_cluster_gate_start(pre_load_gate, log=False)
                         if run_v7.is_running():
                             run_v7.stop()
                         self.add_v7(run_v7)

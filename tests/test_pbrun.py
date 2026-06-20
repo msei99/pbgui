@@ -612,6 +612,71 @@ class TestV7RuntimeSignature:
         assert run.has_v7_runtime_changed() is True
         assert calls == ["watch"]
 
+    def test_cluster_desired_state_timestamp_only_change_does_not_rescan(self, tmp_path):
+        """PBRun should ignore Cluster desired_state rebuild timestamps."""
+
+        run = self._make_pbrun_stub(tmp_path)
+        calls = []
+        run.watch_v7 = lambda: calls.append("watch")
+        cluster_root = default_cluster_root(tmp_path)
+        identity = ensure_local_identity(cluster_root, pbname="runner-a")
+        desired_path = cluster_root / "desired_state.json"
+        desired = {
+            "cluster_id": identity["cluster_id"],
+            "generated_at": 1,
+            "instances": {
+                "bot-a": {
+                    "assigned_host": identity["node_id"],
+                    "config_manifest_hash": "sha256:a",
+                    "conflicted": False,
+                    "desired_state": "running",
+                    "version": "1",
+                }
+            },
+            "tombstones": {},
+        }
+        desired_path.write_text(json.dumps(desired), encoding="utf-8")
+
+        assert run.has_v7_runtime_changed() is False
+        desired["generated_at"] = 2
+        desired_path.write_text(json.dumps(desired), encoding="utf-8")
+
+        assert run.has_v7_runtime_changed() is False
+        assert calls == []
+
+    def test_cluster_desired_state_instance_change_still_triggers_rescan(self, tmp_path):
+        """PBRun should rescan when desired instance state changes."""
+
+        run = self._make_pbrun_stub(tmp_path)
+        calls = []
+        run.watch_v7 = lambda: calls.append("watch")
+        cluster_root = default_cluster_root(tmp_path)
+        identity = ensure_local_identity(cluster_root, pbname="runner-a")
+        desired_path = cluster_root / "desired_state.json"
+        desired = {
+            "cluster_id": identity["cluster_id"],
+            "generated_at": 1,
+            "instances": {
+                "bot-a": {
+                    "assigned_host": identity["node_id"],
+                    "config_manifest_hash": "sha256:a",
+                    "conflicted": False,
+                    "desired_state": "stopped",
+                    "version": "1",
+                }
+            },
+            "tombstones": {},
+        }
+        desired_path.write_text(json.dumps(desired), encoding="utf-8")
+
+        assert run.has_v7_runtime_changed() is False
+        desired["generated_at"] = 2
+        desired["instances"]["bot-a"]["desired_state"] = "running"
+        desired_path.write_text(json.dumps(desired), encoding="utf-8")
+
+        assert run.has_v7_runtime_changed() is True
+        assert calls == ["watch"]
+
     def test_run_v7_config_change_triggers_rescan(self, tmp_path):
         """PBRun should rescan when local materialized V7 configs change."""
 
@@ -1198,13 +1263,15 @@ class TestClusterDesiredStateGate:
         run.v7_path = str(tmp_path / "data" / "run_v7")
         run.run_v7 = []
         run._v7_runtime_signature = None
+        logs = []
 
-        monkeypatch.setattr(PBRun_mod, "_log", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(PBRun_mod, "_log", lambda *args, **kwargs: logs.append((args, kwargs)))
         monkeypatch.setattr(PBRun_mod.RunV7, "is_running", lambda _self: False)
         monkeypatch.setattr(PBRun_mod.RunV7, "load", lambda _self: pytest.fail("load must not run while Cluster desired state is stopped"))
 
         run.watch_v7([str(instance_dir)])
 
+        assert logs == []
         assert len(run.run_v7) == 1
         assert run.run_v7[0].cluster_gate == "desired_stopped"
         assert not (instance_dir / "approved_coins.json").exists()
