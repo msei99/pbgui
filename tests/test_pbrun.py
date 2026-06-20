@@ -1066,6 +1066,7 @@ class TestDynamicIgnoreStartupGate:
                 self.pbgdir = None
                 self.version = 3
                 self.start_calls = 0
+                self.start_reload_config = []
 
             def load(self):
                 return True
@@ -1073,8 +1074,9 @@ class TestDynamicIgnoreStartupGate:
             def is_running(self):
                 return False
 
-            def start(self):
+            def start(self, *, reload_config=True):
                 self.start_calls += 1
+                self.start_reload_config.append(reload_config)
 
             def stop(self):
                 pass
@@ -1094,6 +1096,7 @@ class TestDynamicIgnoreStartupGate:
 
         assert len(run.run_v7) == 1
         assert run.run_v7[0].start_calls == 1
+        assert run.run_v7[0].start_reload_config == [False]
 
     def test_load_versions_keeps_defaults_when_files_missing_or_no_match(self, tmp_path):
         """load_versions() should keep defaults when README is missing or contains no version token."""
@@ -1278,8 +1281,8 @@ class TestClusterDesiredStateGate:
         assert not (instance_dir / "ignored_coins.json").exists()
         assert not (instance_dir / "config_run.json").exists()
 
-    def test_runv7_start_logs_expected_cluster_stop_once(self, tmp_path, monkeypatch):
-        """Repeated expected Cluster stop blocks must not spam PBRun warnings."""
+    def test_runv7_start_does_not_log_expected_cluster_stop_blocks(self, tmp_path, monkeypatch):
+        """Expected Cluster stop blocks must stay out of PBRun's effective-operation log."""
 
         rv7 = _make_cluster_runv7(tmp_path)
         _write_cluster_desired(tmp_path, Path(rv7.path), desired_state="stopped")
@@ -1292,13 +1295,20 @@ class TestClusterDesiredStateGate:
         rv7.start()
         rv7.start()
 
-        expected_message = (
-            f"Cluster gate blocked passivbot_v7 {rv7.path}/config_run.json: "
-            "Cluster desired state is not running"
-        )
-        gate_logs = [item for item in logs if item[0][:2] == ("PBRun", expected_message)]
-        assert len(gate_logs) == 1
-        assert gate_logs[0][1]["level"] == "INFO"
+        gate_logs = [item for item in logs if "Cluster gate blocked passivbot_v7" in item[0][1]]
+        assert gate_logs == []
+
+    def test_runv7_watch_skips_quiet_cluster_block_without_process_scan(self, tmp_path, monkeypatch):
+        """Maintenance watch() must not rescan processes for already-blocked quiet Cluster states."""
+
+        rv7 = _make_cluster_runv7(tmp_path)
+        rv7.cluster_blocked = True
+        rv7.cluster_gate = "desired_stopped"
+
+        monkeypatch.setattr(rv7, "is_running", lambda: pytest.fail("is_running must not be called for quiet blocks"))
+        monkeypatch.setattr(rv7, "start", lambda **_kwargs: pytest.fail("start must not run for quiet blocks"))
+
+        rv7.watch()
 
     @pytest.mark.parametrize(
         ("desired_kwargs", "expected_gate"),

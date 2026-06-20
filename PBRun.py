@@ -41,6 +41,8 @@ CLUSTER_PRE_LOAD_BLOCK_STATES = frozenset({
     "wrong_host",
 })
 
+CLUSTER_QUIET_BLOCK_STATES = CLUSTER_PRE_LOAD_BLOCK_STATES
+
 
 def _arg_matches_path(arg: str, expected_path: Path) -> bool:
     if not arg:
@@ -563,18 +565,16 @@ class RunV7():
 
         self._set_cluster_gate_state(result)
         _atomic_write_text(Path(self.path) / "running_version.txt", "0")
-        if not log:
+        if not log or self.cluster_gate in CLUSTER_QUIET_BLOCK_STATES:
             return
         now_ts = int(datetime.now().timestamp())
         log_key = (self.cluster_gate, self.cluster_blocked_reason)
-        quiet_states = {"desired_stopped", "missing_instance", "tombstoned", "wrong_host"}
-        quiet_state = self.cluster_gate in quiet_states
-        should_log = log_key != self._cluster_gate_log_key or (not quiet_state and now_ts - self._cluster_gate_log_ts >= 60)
+        should_log = log_key != self._cluster_gate_log_key or now_ts - self._cluster_gate_log_ts >= 60
         if should_log:
             _log(
                 "PBRun",
                 f"Cluster gate blocked passivbot_v7 {self.path}/config_run.json: {self.cluster_blocked_reason}",
-                level="INFO" if quiet_state else "WARNING",
+                level="WARNING",
             )
             self._cluster_gate_log_ts = now_ts
             self._cluster_gate_log_key = log_key
@@ -690,6 +690,8 @@ class RunV7():
             self._dynamic_wait_log_ts = now_ts
 
     def watch(self):
+        if self.cluster_blocked and self.cluster_gate in CLUSTER_QUIET_BLOCK_STATES:
+            return
         if self.is_running():
             if not self._cluster_gate_allows_run():
                 self.stop()
@@ -753,13 +755,13 @@ class RunV7():
         version_file = Path(f'{self.path}/running_version.txt')
         _atomic_write_text(version_file, "0")
 
-    def start(self):
+    def start(self, *, reload_config: bool = True):
         if not self.is_running():
             pre_load_gate = self._cluster_gate_result()
             if not pre_load_gate.get("ok") and str(pre_load_gate.get("status") or "") in CLUSTER_PRE_LOAD_BLOCK_STATES:
                 self._block_cluster_gate_start(pre_load_gate)
                 return
-            if Path(f'{self.path}/config.json').exists() and not self.load():
+            if reload_config and Path(f'{self.path}/config.json').exists() and not self.load():
                 self.stop()
                 return
             if not self._cluster_gate_allows_run():
@@ -1258,9 +1260,9 @@ class PBRun():
                             running_version = self.find_running_version(v7_instance)
                             if running_version < run_v7.version:
                                 run_v7.stop()
-                                run_v7.start()
+                                run_v7.start(reload_config=False)
                     else:
-                        run_v7.start()
+                        run_v7.start(reload_config=False)
                     self.add_v7(run_v7)
                 else:
                     self.remove_v7(run_v7)
