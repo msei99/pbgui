@@ -284,6 +284,8 @@ class Exchange:
         self.swap = []
         self._user = user
         self.error = None
+        # Bitget: None = not yet detected, True/False = UTA(Elite) vs classic account
+        self._bitget_uta = None
 
 
     # _log removed: Exchange module uses `logging_helpers.human_log` directly
@@ -358,6 +360,22 @@ class Exchange:
             self.error = None
         except Exception as exc:
             self.error = str(exc)
+        # Bitget: auto-detect UTA / Elite (copy-trading) accounts so balances,
+        # positions and orders are read from the v3 API. Classic accounts return
+        # error 40084 on the v3 probe and keep the v2 path (no behaviour change).
+        if self.id == "bitget" and self._user and self.user.key != 'key' and not self.error:
+            self._bitget_uta = False
+            try:
+                self.instance.private_uta_get_v3_account_assets()
+                self._bitget_uta = True
+            except Exception as exc:
+                # 40084 == "Classic Account mode": expected for normal keys.
+                if "40084" not in str(exc):
+                    self._bitget_uta = False
+            try:
+                self.instance.options["uta"] = self._bitget_uta
+            except Exception:
+                pass
 
     def close(self):
         """Close the exchange instance and release resources (e.g. aiohttp sessions)."""
@@ -1020,6 +1038,16 @@ class Exchange:
         if self.id == "hyperliquid":
             return float(balance["total"]["USDC"])
         if self.id == "bitget":
+            if getattr(self, "_bitget_uta", False):
+                # UTA / Elite (copy-trading) account: v3 balance has no marginCoin
+                # list; use the ccxt-unified total (wallet balance).
+                try:
+                    return float(balance["USDT"]["total"])
+                except Exception:
+                    for x in (balance.get("info") or []):
+                        if isinstance(x, dict) and x.get("coin") == "USDT":
+                            return float(x.get("balance") or x.get("available") or 0.0)
+                    return 0.0
             return float(balance["info"][0]["available"])
         elif self.id == "bybit":
             if market_type == 'swap':
@@ -1443,6 +1471,48 @@ class Exchange:
                 else: 
                     self.save_income_other(history, self.user.name)
         elif self.id == "bitget":
+            if getattr(self, "_bitget_uta", False):
+                # UTA/Elite: classic fetch_ledger (v2) is rejected (40731); build
+                # income from v3 trade fills (execPnl + fees), matching the v2
+                # trade/fee filter used by the classic path below.
+                now = self.instance.milliseconds()
+                if not since:
+                    since = now - 365 * 24 * 60 * 60 * 1000
+                params = {"category": "USDT-FUTURES", "limit": "100"}
+                seen = set()
+                end = now
+                while True:
+                    params["endTime"] = int(end)
+                    params["startTime"] = int(since)
+                    fetched = self.instance.private_uta_get_v3_trade_fills(params)
+                    rows = (fetched.get("data") or {}).get("list") or []
+                    if not rows:
+                        break
+                    new = 0
+                    for x in rows:
+                        eid = x.get("execId")
+                        if not eid or eid in seen:
+                            continue
+                        seen.add(eid)
+                        new += 1
+                        fee = 0.0
+                        for fd in (x.get("feeDetail") or []):
+                            try:
+                                fee += float(fd.get("fee") or 0)
+                            except Exception:
+                                pass
+                        all.append({
+                            "symbol": x.get("symbol"),
+                            "timestamp": int(x.get("createdTime") or 0),
+                            # v3 feeDetail.fee is a positive cost -> subtract it.
+                            "income": float(x.get("execPnl") or 0) - fee,
+                            "uniqueid": eid,
+                        })
+                    oldest = int(rows[-1].get("createdTime") or 0)
+                    if new == 0 or oldest <= since:
+                        break
+                    end = oldest - 1
+                return all
             day = 24 * 60 * 60 * 1000
             week = 7 * day
             max = 365 * day
