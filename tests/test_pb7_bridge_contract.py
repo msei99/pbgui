@@ -752,7 +752,7 @@ def test_archive_storage_estimate_reports_saved_space(monkeypatch: pytest.Monkey
     archive_root = tmp_path / "archive"
     archive_root.mkdir()
 
-    def fake_run(cmd, cwd=None, capture_output=True, text=True, timeout=None, input=None):
+    def fake_run(cmd, cwd=None, capture_output=True, text=True, timeout=None, input=None, env=None):
         if cmd[:3] == ["git", "count-objects", "-v"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="size: 1024\nsize-pack: 3072\nsize-garbage: 0\n", stderr="")
         if cmd[:3] == ["git", "rev-parse", "HEAD^{tree}"]:
@@ -775,6 +775,171 @@ def test_archive_storage_estimate_reports_saved_space(monkeypatch: pytest.Monkey
     assert estimate["saved_percent"] == 100.0
 
 
+def test_archive_git_env_forces_english_cli_output() -> None:
+    """Archive Git commands should not inherit localized CLI messages."""
+    env = backtest_v7._archive_git_env()
+
+    assert env["LC_ALL"] == "C"
+    assert env["LANG"] == "C"
+    assert env["LANGUAGE"] == "C"
+
+
+def test_archive_pull_recovers_clean_foreign_archive_after_force_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Foreign archive pulls recover clean clones after compacted remote history."""
+    commands = []
+
+    def fake_run(cmd, cwd=None, capture_output=True, text=True, timeout=None, input=None, env=None):
+        commands.append(list(cmd))
+        if cmd == ["git", "pull", "--ff-only"]:
+            return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: Not possible to fast-forward\n")
+        if cmd == ["git", "status", "--porcelain"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if cmd == ["git", "branch", "--show-current"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="main\n", stderr="")
+        if cmd == ["git", "fetch", "origin", "main"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="forced update\n")
+        if cmd == ["git", "rev-parse", "--verify", "origin/main"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="remote-sha\n", stderr="")
+        if len(cmd) == 4 and cmd[:2] == ["git", "branch"] and cmd[2].startswith("pbgui-recovery-") and cmd[3] == "HEAD":
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if cmd == ["git", "reset", "--hard", "origin/main"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="HEAD is now at remote-sha\n", stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(backtest_v7, "_log_archive", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = backtest_v7._archive_pull_sync("other", tmp_path)
+
+    assert result["error"] == ""
+    assert result["recovered"] is True
+    assert any(len(cmd) == 4 and cmd[:2] == ["git", "branch"] and cmd[2].startswith("pbgui-recovery-") for cmd in commands)
+    assert ["git", "reset", "--hard", "origin/main"] in commands
+
+
+def test_archive_pull_recovers_local_layout_migration_after_force_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archive pulls can recover the local legacy-layout migration diff."""
+    commands = []
+
+    def fake_run(cmd, cwd=None, capture_output=True, text=True, timeout=None, input=None, env=None):
+        commands.append(list(cmd))
+        if cmd == ["git", "pull", "--ff-only"]:
+            return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: Not possible to fast-forward\n")
+        if cmd == ["git", "status", "--porcelain"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=" D v7.3/config/binance/run/config.json\n?? pbgui/\n", stderr="")
+        if cmd == ["git", "reset", "--hard", "HEAD"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="HEAD is now at local-sha\n", stderr="")
+        if cmd == ["git", "clean", "-fd", "--", "pbgui"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="Removing pbgui/\n", stderr="")
+        if cmd == ["git", "branch", "--show-current"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="main\n", stderr="")
+        if cmd == ["git", "fetch", "origin", "main"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="forced update\n")
+        if cmd == ["git", "rev-parse", "--verify", "origin/main"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="remote-sha\n", stderr="")
+        if len(cmd) == 4 and cmd[:2] == ["git", "branch"] and cmd[2].startswith("pbgui-recovery-") and cmd[3] == "HEAD":
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if cmd == ["git", "reset", "--hard", "origin/main"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="HEAD is now at remote-sha\n", stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(backtest_v7, "_log_archive", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = backtest_v7._archive_pull_sync("other", tmp_path)
+
+    assert result["error"] == ""
+    assert result["recovered"] is True
+    assert ["git", "reset", "--hard", "HEAD"] in commands
+    assert ["git", "clean", "-fd", "--", "pbgui"] in commands
+    assert ["git", "reset", "--hard", "origin/main"] in commands
+
+
+def test_archive_pull_does_not_reset_own_archive_after_divergence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Own archive pulls must not discard local commits after divergence."""
+    commands = []
+
+    def fake_run(cmd, cwd=None, capture_output=True, text=True, timeout=None, input=None, env=None):
+        commands.append(list(cmd))
+        if cmd == ["git", "pull", "--ff-only"]:
+            return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: Not possible to fast-forward\n")
+        if cmd == ["git", "status", "--porcelain"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(backtest_v7, "_log_archive", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = backtest_v7._archive_pull_sync("mine", tmp_path)
+
+    assert result["error"]
+    assert result["recovered"] is False
+    assert commands == [["git", "pull", "--ff-only"], ["git", "status", "--porcelain"]]
+
+
+def test_archive_pull_does_not_reset_dirty_foreign_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Foreign archive pulls do not auto-reset if local files were changed."""
+    commands = []
+
+    def fake_run(cmd, cwd=None, capture_output=True, text=True, timeout=None, input=None, env=None):
+        commands.append(list(cmd))
+        if cmd == ["git", "pull", "--ff-only"]:
+            return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: Not possible to fast-forward\n")
+        if cmd == ["git", "status", "--porcelain"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="M README.md\n", stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(backtest_v7, "_log_archive", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = backtest_v7._archive_pull_sync("other", tmp_path)
+
+    assert "local changes" in result["error"]
+    assert result["recovered"] is False
+    assert ["git", "reset", "--hard", "origin/main"] not in commands
+
+
+def test_pull_all_archives_stream_yields_final_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pull-all stream emits per-archive progress and a final done event."""
+    archive_root = tmp_path / "archives"
+    (archive_root / "other" / ".git").mkdir(parents=True)
+    (archive_root / "other" / ".git" / "config").write_text("[remote]\n", encoding="utf-8")
+
+    def fake_pull_stream(name: str, dest: Path):
+        yield backtest_v7._archive_stream_event("status", archive=name, message="git pull started")
+        return {"name": name, "output": "ok", "error": "", "recovered": False}
+
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archive_root)
+    monkeypatch.setattr(backtest_v7, "_archive_pull_stream_sync", fake_pull_stream)
+
+    events = [json.loads(line) for line in backtest_v7._pull_all_archives_stream_sync()]
+
+    assert events[0]["type"] == "archive_start"
+    assert events[1]["type"] == "status"
+    assert events[-1]["type"] == "done"
+    assert events[-1]["ok"] is True
+    assert events[-1]["results"] == [{"name": "other", "output": "ok", "error": "", "recovered": False}]
+
+
 def test_compact_archive_uses_force_with_lease_sequence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Archive compaction creates a root commit and force-pushes it with an explicit lease."""
     archives_root = tmp_path / "archives"
@@ -782,7 +947,7 @@ def test_compact_archive_uses_force_with_lease_sequence(tmp_path: Path, monkeypa
     archive_root.mkdir(parents=True)
     commands = []
 
-    def fake_run(cmd, cwd=None, capture_output=True, text=True, timeout=None):
+    def fake_run(cmd, cwd=None, capture_output=True, text=True, timeout=None, env=None):
         commands.append(list(cmd))
         if cmd[:3] == ["git", "remote", "get-url"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="https://example.invalid/repo.git\n", stderr="")

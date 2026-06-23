@@ -358,6 +358,17 @@ a:hover { text-decoration: underline; }
 .modal-btn-primary:hover { background: #1a6ae0; }
 .modal-btn-danger { background: var(--red); border-color: var(--red); color: #fff; }
 .modal-btn-danger:hover { background: #d43d3d; }
+.archive-pull-modal { width: min(920px, 94vw); height: min(680px, 88vh); max-width: 94vw; max-height: 88vh; }
+.archive-pull-progress { display: flex; flex-direction: column; gap: var(--sp-md); min-height: 0; height: 100%; }
+.archive-pull-head { display: flex; align-items: center; gap: var(--sp-md); }
+.archive-pull-spinner { width: 20px; height: 20px; border-radius: 50%; border: 3px solid rgba(255,255,255,.14); border-top-color: var(--accent); animation: archive-spin .9s linear infinite; flex: 0 0 auto; }
+.archive-pull-status { color: var(--text); font-size: var(--fs-sm); line-height: 1.4; }
+.archive-pull-meta { color: var(--text-dim); font-size: var(--fs-xs); }
+.archive-pull-bar { position: relative; height: 8px; border-radius: 999px; background: var(--bg3); overflow: hidden; border: 1px solid var(--border); }
+.archive-pull-bar::before { content: ''; position: absolute; top: 0; bottom: 0; left: -35%; width: 35%; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: archive-pull-bar 1.4s ease-in-out infinite; }
+.archive-pull-log { flex: 1; min-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: var(--sp-md); color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-xs); line-height: 1.45; }
+@keyframes archive-spin { to { transform: rotate(360deg); } }
+@keyframes archive-pull-bar { 0% { left: -35%; } 100% { left: 100%; } }
 .btn { height: var(--btn-h); padding: 0 16px; border-radius: 4px; font-size: var(--fs-base);
        cursor: pointer; border: 1px solid var(--border); background: var(--bg3); color: var(--text); }
 .btn:hover { background: rgba(255,255,255,.08); }
@@ -694,7 +705,7 @@ textarea.json-invalid:focus {
         <button class="sb-btn danger" onclick="deleteSelectedResults()">🗑 Delete Selected</button>
       </div>
       <div id="ctx-archive" class="ctx-actions" style="display:none">
-        <button class="sb-btn" onclick="pullAllArchives()">⬇ Pull All</button>
+        <button class="sb-btn" id="archive-pull-all-btn" onclick="pullAllArchives()">⬇ Pull All</button>
         <button class="sb-btn" onclick="pushArchive()">⬆ Git Push</button>
         <button class="sb-btn accent" onclick="addArchive()">+ Add Archive</button>
         <button class="sb-btn" onclick="setupArchive()">⚙ Setup</button>
@@ -981,6 +992,9 @@ var _archivesRefreshTimer = null;
 var _archivesRefreshInFlight = false;
 var _archiveRefreshTimer = null;
 var _archiveRefreshInFlight = false;
+var _archivePullRunning = false;
+var _archivePullTimer = null;
+var _archivePullStartedAt = 0;
 
 /* Set of backtest keys explicitly handled by the GUI editor.
    Any key in cfg.backtest NOT in this set will be auto-rendered
@@ -1021,6 +1035,44 @@ function apiFetch(path, opts) {
   return fetch(url, opts).then(function(r) {
     if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || r.statusText); });
     return r.json();
+  });
+}
+
+function apiFetchNdjson(path, opts, onEvent) {
+  opts = opts || {};
+  var url = API_BASE + path;
+  opts.headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN }, opts.headers || {});
+  return fetch(url, opts).then(function(r) {
+    if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || r.statusText); });
+    if (!r.body || !r.body.getReader || typeof TextDecoder === 'undefined') {
+      throw new Error('Streaming is not supported by this browser');
+    }
+    var reader = r.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = '';
+    var finalEvent = null;
+    function handleLine(line) {
+      line = String(line || '').trim();
+      if (!line) return;
+      var evt = JSON.parse(line);
+      if (onEvent) onEvent(evt);
+      if (evt.type === 'done') finalEvent = evt;
+    }
+    function pump() {
+      return reader.read().then(function(part) {
+        if (part.done) {
+          buffer += decoder.decode();
+          if (buffer.trim()) handleLine(buffer);
+          return finalEvent;
+        }
+        buffer += decoder.decode(part.value, { stream: true });
+        var lines = buffer.split('\n');
+        buffer = lines.pop();
+        lines.forEach(handleLine);
+        return pump();
+      });
+    }
+    return pump();
   });
 }
 
@@ -7849,26 +7901,154 @@ function addArchive() {
   ]);
 }
 
+function formatArchivePullElapsed() {
+  var seconds = Math.max(0, Math.floor((Date.now() - _archivePullStartedAt) / 1000));
+  var minutes = Math.floor(seconds / 60);
+  var rest = seconds % 60;
+  return (minutes ? minutes + 'm ' : '') + rest + 's';
+}
+
+function setArchivePullButtonsDisabled(disabled) {
+  var btn = document.getElementById('archive-pull-all-btn');
+  if (!btn) return;
+  if (disabled) {
+    if (!btn.dataset.originalText) btn.dataset.originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Pulling...';
+  } else {
+    btn.disabled = false;
+    btn.textContent = btn.dataset.originalText || '⬇ Pull All';
+  }
+}
+
+function updateArchivePullElapsed() {
+  var elapsed = formatArchivePullElapsed();
+  var meta = document.getElementById('archive-pull-elapsed');
+  if (meta) meta.textContent = 'Elapsed: ' + elapsed;
+  var btn = document.getElementById('archive-pull-all-btn');
+  if (btn && _archivePullRunning) btn.textContent = 'Pulling... ' + elapsed;
+}
+
+function openArchivePullProgress(title, subtitle) {
+  _archivePullStartedAt = Date.now();
+  showModal(title,
+    '<div class="archive-pull-progress">' +
+      '<div class="archive-pull-head"><div class="archive-pull-spinner"></div><div>' +
+        '<div class="archive-pull-status" id="archive-pull-status">' + esc(subtitle || 'Starting archive pull...') + '</div>' +
+        '<div class="archive-pull-meta" id="archive-pull-elapsed">Elapsed: 0s</div>' +
+      '</div></div>' +
+      '<div class="archive-pull-bar"></div>' +
+      '<pre class="archive-pull-log" id="archive-pull-log" aria-live="polite"></pre>' +
+      '<div class="archive-pull-meta">You can hide this window; the pull keeps running.</div>' +
+    '</div>',
+    [{ text: 'Hide', cls: '' }],
+    { className: 'archive-pull-modal' }
+  );
+  clearInterval(_archivePullTimer);
+  updateArchivePullElapsed();
+  _archivePullTimer = setInterval(updateArchivePullElapsed, 1000);
+}
+
+function setArchivePullStatus(message, isError) {
+  var status = document.getElementById('archive-pull-status');
+  if (!status) return;
+  status.textContent = message || '';
+  status.style.color = isError ? 'var(--red)' : 'var(--text)';
+}
+
+function appendArchivePullOutput(message) {
+  var log = document.getElementById('archive-pull-log');
+  if (!log || !message) return;
+  log.textContent += String(message).replace(/\r/g, '\n');
+  if (log.textContent.length > 120000) {
+    log.textContent = '... output truncated ...\n' + log.textContent.slice(-90000);
+  }
+  log.scrollTop = log.scrollHeight;
+}
+
+function stopArchivePullProgress() {
+  clearInterval(_archivePullTimer);
+  _archivePullTimer = null;
+  _archivePullRunning = false;
+  setArchivePullButtonsDisabled(false);
+  var spinner = document.querySelector('.archive-pull-spinner');
+  if (spinner) spinner.style.display = 'none';
+  var bar = document.querySelector('.archive-pull-bar');
+  if (bar) bar.style.display = 'none';
+}
+
+function handleArchivePullStreamEvent(evt) {
+  if (!evt || !evt.type) return;
+  if (evt.type === 'archive_start') {
+    setArchivePullStatus(evt.message || ('Pulling ' + (evt.archive || 'archive')));
+    appendArchivePullOutput('\n### ' + (evt.archive || 'archive') + '\n');
+  } else if (evt.type === 'status') {
+    setArchivePullStatus((evt.archive ? evt.archive + ': ' : '') + (evt.message || 'Working...'));
+  } else if (evt.type === 'output') {
+    appendArchivePullOutput(evt.message || '');
+  } else if (evt.type === 'error') {
+    setArchivePullStatus((evt.archive ? evt.archive + ': ' : '') + (evt.message || 'Pull failed'), true);
+    appendArchivePullOutput('\nERROR: ' + (evt.message || 'Pull failed') + '\n');
+  } else if (evt.type === 'archive_done') {
+    var r = evt.result || {};
+    appendArchivePullOutput('\n' + (r.name || evt.archive || 'archive') + ': ' + (r.error ? 'failed' : (r.recovered ? 'recovered' : 'ok')) + '\n');
+  }
+}
+
+function renderArchivePullResults(results) {
+  if (!results || !results.length) return '<div>No archives.</div>';
+  return results.map(function(r) {
+    var status = r.error ? 'Failed' : (r.recovered ? 'Recovered' : 'OK');
+    var body = r.error || r.output || 'ok';
+    return '<details open style="margin-bottom:var(--sp-md)">' +
+      '<summary><b>' + esc(r.name || 'archive') + '</b>: ' + esc(status) + '</summary>' +
+      '<pre style="font-size:var(--fs-xs);max-height:320px;overflow:auto;white-space:pre-wrap;margin:var(--sp-sm) 0 0;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:var(--sp-sm)">' + esc(body) + '</pre>' +
+      '</details>';
+  }).join('');
+}
+
+function runArchivePullStream(path, title, subtitle, onDone) {
+  if (_archivePullRunning) { toast('Archive pull already running', 'info'); return Promise.resolve(null); }
+  _archivePullRunning = true;
+  setArchivePullButtonsDisabled(true);
+  openArchivePullProgress(title, subtitle);
+  return apiFetchNdjson(path, { method: 'POST' }, handleArchivePullStreamEvent)
+    .then(function(done) {
+      stopArchivePullProgress();
+      if (!done) throw new Error('No completion status from server');
+      if (done.ok === false) throw new Error(done.error || 'Pull failed');
+      if (onDone) onDone(done);
+      return done;
+    })
+    .catch(function(e) {
+      stopArchivePullProgress();
+      setArchivePullStatus('Pull failed: ' + e.message, true);
+      appendArchivePullOutput('\nPull failed: ' + e.message + '\n');
+      toast('Pull failed: ' + e.message, 'err');
+      return null;
+    });
+}
+
 function pullArchive() {
   if (!selectedArchiveName) { toast('Click View on an archive first', 'err'); return; }
-  apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/pull', { method: 'POST' })
-    .then(function(d) { toast('Pull complete', 'ok'); viewArchive(selectedArchiveName); })
-    .catch(function(e) { toast('Pull failed: ' + e.message, 'err'); });
+  var archiveName = selectedArchiveName;
+  runArchivePullStream('/archives/' + encodeURIComponent(archiveName) + '/pull/stream', 'Pull Archive - ' + archiveName, 'Starting pull for ' + archiveName + '...', function(done) {
+    toast('Pull complete', 'ok');
+    showModal('Pull - ' + esc(archiveName), renderArchivePullResults([done.result || { name: archiveName, output: 'ok' }]), [
+      { text: 'Close', cls: '' }
+    ]);
+    viewArchive(archiveName);
+  });
 }
 
 function pullAllArchives() {
-  toast('Pulling all archives…', 'info');
-  apiFetch('/archives/pull-all', { method: 'POST' })
-    .then(function(d) {
-      var lines = (d.results || []).map(function(r) {
-        return '<b>' + esc(r.name) + '</b>: ' + esc(r.error || r.output || 'ok');
-      }).join('<br>');
-      showModal('Pull All — Results', '<div style="line-height:1.8">' + (lines || 'No archives.') + '</div>', [
+  toast('Pulling all archives... watch the progress window', 'info');
+  runArchivePullStream('/archives/pull-all/stream', 'Pull All Archives', 'Starting pull for all archives...', function(done) {
+      showModal('Pull All - Results', '<div style="line-height:1.8">' + renderArchivePullResults(done.results || []) + '</div>', [
         { text: 'Close', cls: '' }
       ]);
       loadArchives();
-    })
-    .catch(function(e) { toast('Pull-all failed: ' + e.message, 'err'); });
+    });
 }
 
 function showArchiveLog() {

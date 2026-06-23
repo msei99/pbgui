@@ -18,9 +18,11 @@ import json
 import multiprocessing
 import os
 import platform
+import queue
 import secrets
 import shutil
 import subprocess
+import threading
 import time
 import traceback
 import uuid
@@ -919,6 +921,15 @@ def _mask_archive_secret(text: str, secret: str = "") -> str:
     return text.strip()
 
 
+def _archive_git_env() -> dict[str, str]:
+    """Return an environment that forces Git CLI output to English."""
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+    env["LANG"] = "C"
+    env["LANGUAGE"] = "C"
+    return env
+
+
 def _run_archive_git_step(
     name: str,
     dest: Path,
@@ -932,7 +943,7 @@ def _run_archive_git_step(
     """Run one git step and write start/finish progress to ArchiveSync.log."""
     _log_archive(f"[{name}] {label} started")
     try:
-        result = subprocess.run(cmd, cwd=str(dest), capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(cmd, cwd=str(dest), capture_output=True, text=True, timeout=timeout, env=_archive_git_env())
     except subprocess.TimeoutExpired:
         _log_archive(f"[{name}] {label} timed out after {timeout}s", level="ERROR")
         raise
@@ -945,13 +956,113 @@ def _run_archive_git_step(
     return result, output
 
 
+def _archive_stream_event(event_type: str, **payload: Any) -> str:
+    """Return one NDJSON event for archive pull progress streams."""
+    payload["type"] = event_type
+    return json.dumps(payload, ensure_ascii=False) + "\n"
+
+
+def _run_archive_git_stream_step(
+    name: str,
+    dest: Path,
+    label: str,
+    cmd: list[str],
+    *,
+    timeout: int,
+    secret: str = "",
+    ok_returncodes: tuple[int, ...] = (0,),
+    stream_output: bool = True,
+):
+    """Run one git step and yield live output events while capturing the full output."""
+    _log_archive(f"[{name}] {label} started")
+    yield _archive_stream_event("status", archive=name, message=f"{label} started")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(dest),
+            env=_archive_git_env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=0,
+        )
+    except Exception as exc:
+        _log_archive(f"[{name}] {label} failed to start: {exc}", level="ERROR")
+        raise
+
+    output_queue: queue.Queue[str | None] = queue.Queue()
+    output_parts: list[str] = []
+
+    def read_output() -> None:
+        try:
+            if proc.stdout is None:
+                return
+            while True:
+                chunk = proc.stdout.read(256)
+                if not chunk:
+                    break
+                output_queue.put(chunk)
+        finally:
+            output_queue.put(None)
+
+    reader = threading.Thread(target=read_output, daemon=True)
+    reader.start()
+    deadline = time.monotonic() + timeout
+    reader_done = False
+    timed_out = False
+
+    while True:
+        wait_time = max(0.05, min(0.25, deadline - time.monotonic()))
+        try:
+            chunk = output_queue.get(timeout=wait_time)
+        except queue.Empty:
+            chunk = ""
+        if chunk is None:
+            reader_done = True
+        elif chunk:
+            output_parts.append(chunk)
+            if stream_output:
+                visible = _mask_archive_secret(chunk, secret).replace("\r", "\n")
+                if visible:
+                    yield _archive_stream_event("output", archive=name, message=visible)
+
+        if proc.poll() is not None and reader_done and output_queue.empty():
+            break
+        if time.monotonic() >= deadline:
+            timed_out = True
+            proc.kill()
+            break
+
+    if timed_out:
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        output = _mask_archive_secret("".join(output_parts), secret)
+        _log_archive(f"[{name}] {label} timed out after {timeout}s", level="ERROR")
+        yield _archive_stream_event("error", archive=name, message=f"{label} timed out after {timeout}s")
+        raise subprocess.TimeoutExpired(cmd, timeout, output=output)
+
+    returncode = proc.wait()
+    output = _mask_archive_secret("".join(output_parts), secret)
+    result = subprocess.CompletedProcess(cmd, returncode, stdout=output, stderr="")
+    if returncode in ok_returncodes:
+        suffix = "" if returncode == 0 else f" (return code {returncode})"
+        _log_archive(f"[{name}] {label} complete{suffix}: {output.strip() or 'ok'}")
+        yield _archive_stream_event("status", archive=name, message=f"{label} complete")
+    else:
+        _log_archive(f"[{name}] {label} failed ({returncode}): {output.strip() or 'no output'}", level="ERROR")
+        yield _archive_stream_event("status", archive=name, message=f"{label} failed")
+    return result, output.strip()
+
+
 def _archive_push_url(dest: Path, access_token: str) -> str | None:
     """Return an HTTPS remote URL with a transient token injected for push/fetch."""
     if not access_token:
         return None
     url_result = subprocess.run(
         ["git", "remote", "get-url", "origin"], cwd=str(dest),
-        capture_output=True, text=True, timeout=10,
+        capture_output=True, text=True, timeout=10, env=_archive_git_env(),
     )
     remote_url = (url_result.stdout or "").strip()
     if remote_url.startswith("http://"):
@@ -995,14 +1106,14 @@ def _current_tree_object_ids(dest: Path) -> list[str]:
     """Return object ids needed by the current HEAD tree."""
     root_result = subprocess.run(
         ["git", "rev-parse", "HEAD^{tree}"], cwd=str(dest),
-        capture_output=True, text=True, timeout=10,
+        capture_output=True, text=True, timeout=10, env=_archive_git_env(),
     )
     if root_result.returncode != 0:
         return []
     object_ids = {root_result.stdout.strip()}
     tree_result = subprocess.run(
         ["git", "ls-tree", "-r", "-t", "-z", "HEAD"], cwd=str(dest),
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=60, env=_archive_git_env(),
     )
     if tree_result.returncode != 0:
         return sorted(object_ids)
@@ -1021,7 +1132,7 @@ def _git_object_disk_bytes(dest: Path, object_ids: list[str]) -> int:
         return 0
     result = subprocess.run(
         ["git", "cat-file", "--batch-check=%(objectname) %(objectsize:disk)"],
-        cwd=str(dest), capture_output=True, text=True, input="\n".join(object_ids) + "\n", timeout=120,
+        cwd=str(dest), capture_output=True, text=True, input="\n".join(object_ids) + "\n", timeout=120, env=_archive_git_env(),
     )
     if result.returncode != 0:
         return 0
@@ -1100,9 +1211,9 @@ def _compact_archive_history(name: str, dest: Path, body: dict) -> dict[str, Any
 
     _log_archive(f"[{name}] compact history requested")
     if username:
-        subprocess.run(["git", "config", "user.name", username], cwd=str(dest), capture_output=True, timeout=10)
+        subprocess.run(["git", "config", "user.name", username], cwd=str(dest), capture_output=True, timeout=10, env=_archive_git_env())
     if email:
-        subprocess.run(["git", "config", "user.email", email], cwd=str(dest), capture_output=True, timeout=10)
+        subprocess.run(["git", "config", "user.email", email], cwd=str(dest), capture_output=True, timeout=10, env=_archive_git_env())
 
     branch_result, branch = _run_archive_git_step(
         name, dest, "git branch", ["git", "branch", "--show-current"], timeout=10, secret=access_token,
@@ -1202,6 +1313,227 @@ def _read_auto_pull_interval() -> int:
         return 0
 
 
+def _archive_status_is_local_layout_migration(status: str) -> bool:
+    """Return true for PBGui's legacy-layout migration diff only."""
+    lines = [line for line in (status or "").splitlines() if line.strip()]
+    if not lines:
+        return False
+    for line in lines:
+        if line.startswith("?? "):
+            code = "??"
+            path = line[3:]
+        elif len(line) >= 3 and line[2] == " ":
+            code = line[:2]
+            path = line[3:]
+        elif len(line) >= 2 and line[1] == " ":
+            code = line[0]
+            path = line[2:]
+        else:
+            return False
+        if code == "??" and (path == "pbgui/" or path.startswith("pbgui/")):
+            continue
+        if code.strip() == "D" and path.startswith("v") and "/" in path:
+            continue
+        return False
+    return True
+
+
+def _archive_pull_sync(name: str, dest: Path) -> dict:
+    """Pull one archive and recover foreign clones after remote history compaction."""
+    result, output = _run_archive_git_step(
+        name, dest, "git pull", ["git", "pull", "--ff-only"], timeout=60,
+    )
+    if result.returncode == 0:
+        return {"name": name, "output": output, "error": "", "recovered": False}
+
+    log_lines = [output] if output else []
+    status_result, status = _run_archive_git_step(
+        name, dest, "git status", ["git", "status", "--porcelain"], timeout=10,
+    )
+    if status_result.returncode != 0:
+        log_lines.append(status)
+        return {"name": name, "output": "\n".join(log_lines).strip(), "error": status or "git status failed", "recovered": False}
+    if status:
+        if not _archive_status_is_local_layout_migration(status):
+            msg = "Archive has local changes; not resetting divergent history automatically."
+            _log_archive(f"[{name}] {msg}", level="ERROR")
+            log_lines.extend([status, msg])
+            return {"name": name, "output": "\n".join(log_lines).strip(), "error": msg, "recovered": False}
+        reset_local_result, reset_local_out = _run_archive_git_step(
+            name, dest, "git undo local layout migration", ["git", "reset", "--hard", "HEAD"], timeout=120,
+        )
+        log_lines.append(reset_local_out)
+        if reset_local_result.returncode != 0:
+            return {"name": name, "output": "\n".join(log_lines).strip(), "error": reset_local_out or "git reset failed", "recovered": False}
+        clean_result, clean_out = _run_archive_git_step(
+            name, dest, "git clean local layout migration", ["git", "clean", "-fd", "--", "pbgui"], timeout=120,
+        )
+        log_lines.append(clean_out)
+        if clean_result.returncode != 0:
+            return {"name": name, "output": "\n".join(log_lines).strip(), "error": clean_out or "git clean failed", "recovered": False}
+    elif name == _own_archive_name():
+        return {"name": name, "output": output or "git pull failed", "error": output or "git pull failed", "recovered": False}
+
+    branch_result, branch = _run_archive_git_step(
+        name, dest, "git branch", ["git", "branch", "--show-current"], timeout=10,
+    )
+    branch = branch.strip()
+    if branch_result.returncode != 0 or not branch:
+        log_lines.append(branch)
+        return {"name": name, "output": "\n".join(log_lines).strip(), "error": "Could not determine archive branch", "recovered": False}
+
+    fetch_result, fetch_out = _run_archive_git_step(
+        name, dest, "git fetch", ["git", "fetch", "origin", branch], timeout=120,
+    )
+    log_lines.append(fetch_out)
+    if fetch_result.returncode != 0:
+        return {"name": name, "output": "\n".join(log_lines).strip(), "error": fetch_out or "git fetch failed", "recovered": False}
+
+    remote_ref = f"origin/{branch}"
+    verify_result, verify_out = _run_archive_git_step(
+        name, dest, "git remote ref", ["git", "rev-parse", "--verify", remote_ref], timeout=10,
+    )
+    log_lines.append(verify_out)
+    if verify_result.returncode != 0:
+        return {"name": name, "output": "\n".join(log_lines).strip(), "error": verify_out or f"Remote ref {remote_ref} not found", "recovered": False}
+
+    backup_branch = f"pbgui-recovery-{uuid.uuid4().hex[:8]}"
+    backup_result, backup_out = _run_archive_git_step(
+        name, dest, "git backup local head", ["git", "branch", backup_branch, "HEAD"], timeout=30,
+    )
+    log_lines.append(backup_out)
+    if backup_result.returncode != 0:
+        return {"name": name, "output": "\n".join(log_lines).strip(), "error": backup_out or "git backup branch failed", "recovered": False}
+
+    reset_result, reset_out = _run_archive_git_step(
+        name, dest, "git reset to remote", ["git", "reset", "--hard", remote_ref], timeout=120,
+    )
+    log_lines.append(reset_out)
+    if reset_result.returncode != 0:
+        return {"name": name, "output": "\n".join(log_lines).strip(), "error": reset_out or "git reset failed", "recovered": False}
+
+    msg = f"Recovered force-updated archive by backing up previous HEAD to {backup_branch} and resetting clone to {remote_ref}."
+    _log_archive(f"[{name}] {msg}")
+    log_lines.append(msg)
+    return {"name": name, "output": "\n".join(line for line in log_lines if line).strip(), "error": "", "recovered": True}
+
+
+def _archive_pull_stream_sync(name: str, dest: Path):
+    """Yield live progress events while pulling one archive."""
+    result, output = yield from _run_archive_git_stream_step(
+        name, dest, "git pull", ["git", "pull", "--ff-only"], timeout=60,
+    )
+    if result.returncode == 0:
+        final = {"name": name, "output": output, "error": "", "recovered": False}
+        yield _archive_stream_event("archive_done", archive=name, result=final)
+        return final
+
+    log_lines = [output] if output else []
+    status_result, status = yield from _run_archive_git_stream_step(
+        name, dest, "git status", ["git", "status", "--porcelain"], timeout=10, stream_output=False,
+    )
+    if status_result.returncode != 0:
+        log_lines.append(status)
+        final = {"name": name, "output": "\n".join(log_lines).strip(), "error": status or "git status failed", "recovered": False}
+        yield _archive_stream_event("error", archive=name, message=final["error"])
+        yield _archive_stream_event("archive_done", archive=name, result=final)
+        return final
+    if status:
+        if not _archive_status_is_local_layout_migration(status):
+            msg = "Archive has local changes; not resetting divergent history automatically."
+            _log_archive(f"[{name}] {msg}", level="ERROR")
+            log_lines.extend([status, msg])
+            final = {"name": name, "output": "\n".join(log_lines).strip(), "error": msg, "recovered": False}
+            yield _archive_stream_event("error", archive=name, message=msg)
+            yield _archive_stream_event("archive_done", archive=name, result=final)
+            return final
+        yield _archive_stream_event("status", archive=name, message="Detected local PBGui layout migration; undoing it before recovery")
+        reset_local_result, reset_local_out = yield from _run_archive_git_stream_step(
+            name, dest, "git undo local layout migration", ["git", "reset", "--hard", "HEAD"], timeout=120,
+        )
+        log_lines.append(reset_local_out)
+        if reset_local_result.returncode != 0:
+            final = {"name": name, "output": "\n".join(log_lines).strip(), "error": reset_local_out or "git reset failed", "recovered": False}
+            yield _archive_stream_event("error", archive=name, message=final["error"])
+            yield _archive_stream_event("archive_done", archive=name, result=final)
+            return final
+        clean_result, clean_out = yield from _run_archive_git_stream_step(
+            name, dest, "git clean local layout migration", ["git", "clean", "-fd", "--", "pbgui"], timeout=120,
+        )
+        log_lines.append(clean_out)
+        if clean_result.returncode != 0:
+            final = {"name": name, "output": "\n".join(log_lines).strip(), "error": clean_out or "git clean failed", "recovered": False}
+            yield _archive_stream_event("error", archive=name, message=final["error"])
+            yield _archive_stream_event("archive_done", archive=name, result=final)
+            return final
+    elif name == _own_archive_name():
+        final = {"name": name, "output": output or "git pull failed", "error": output or "git pull failed", "recovered": False}
+        yield _archive_stream_event("error", archive=name, message=final["error"])
+        yield _archive_stream_event("archive_done", archive=name, result=final)
+        return final
+
+    branch_result, branch = yield from _run_archive_git_stream_step(
+        name, dest, "git branch", ["git", "branch", "--show-current"], timeout=10, stream_output=False,
+    )
+    branch = branch.strip()
+    if branch_result.returncode != 0 or not branch:
+        log_lines.append(branch)
+        final = {"name": name, "output": "\n".join(log_lines).strip(), "error": "Could not determine archive branch", "recovered": False}
+        yield _archive_stream_event("error", archive=name, message=final["error"])
+        yield _archive_stream_event("archive_done", archive=name, result=final)
+        return final
+
+    fetch_result, fetch_out = yield from _run_archive_git_stream_step(
+        name, dest, "git fetch", ["git", "fetch", "origin", branch], timeout=120,
+    )
+    log_lines.append(fetch_out)
+    if fetch_result.returncode != 0:
+        final = {"name": name, "output": "\n".join(log_lines).strip(), "error": fetch_out or "git fetch failed", "recovered": False}
+        yield _archive_stream_event("error", archive=name, message=final["error"])
+        yield _archive_stream_event("archive_done", archive=name, result=final)
+        return final
+
+    remote_ref = f"origin/{branch}"
+    verify_result, verify_out = yield from _run_archive_git_stream_step(
+        name, dest, "git remote ref", ["git", "rev-parse", "--verify", remote_ref], timeout=10, stream_output=False,
+    )
+    log_lines.append(verify_out)
+    if verify_result.returncode != 0:
+        final = {"name": name, "output": "\n".join(log_lines).strip(), "error": verify_out or f"Remote ref {remote_ref} not found", "recovered": False}
+        yield _archive_stream_event("error", archive=name, message=final["error"])
+        yield _archive_stream_event("archive_done", archive=name, result=final)
+        return final
+
+    backup_branch = f"pbgui-recovery-{uuid.uuid4().hex[:8]}"
+    backup_result, backup_out = yield from _run_archive_git_stream_step(
+        name, dest, "git backup local head", ["git", "branch", backup_branch, "HEAD"], timeout=30, stream_output=False,
+    )
+    log_lines.append(backup_out)
+    if backup_result.returncode != 0:
+        final = {"name": name, "output": "\n".join(log_lines).strip(), "error": backup_out or "git backup branch failed", "recovered": False}
+        yield _archive_stream_event("error", archive=name, message=final["error"])
+        yield _archive_stream_event("archive_done", archive=name, result=final)
+        return final
+
+    reset_result, reset_out = yield from _run_archive_git_stream_step(
+        name, dest, "git reset to remote", ["git", "reset", "--hard", remote_ref], timeout=120,
+    )
+    log_lines.append(reset_out)
+    if reset_result.returncode != 0:
+        final = {"name": name, "output": "\n".join(log_lines).strip(), "error": reset_out or "git reset failed", "recovered": False}
+        yield _archive_stream_event("error", archive=name, message=final["error"])
+        yield _archive_stream_event("archive_done", archive=name, result=final)
+        return final
+
+    msg = f"Recovered force-updated archive by backing up previous HEAD to {backup_branch} and resetting clone to {remote_ref}."
+    _log_archive(f"[{name}] {msg}")
+    log_lines.append(msg)
+    final = {"name": name, "output": "\n".join(line for line in log_lines if line).strip(), "error": "", "recovered": True}
+    yield _archive_stream_event("status", archive=name, message=msg)
+    yield _archive_stream_event("archive_done", archive=name, result=final)
+    return final
+
+
 def _pull_all_archives_sync() -> list[dict]:
     """Pull all cloned archives; returns list of {name, output, error} dicts."""
     base = _archives_dir()
@@ -1213,19 +1545,44 @@ def _pull_all_archives_sync() -> list[dict]:
             continue
         name = d.name
         try:
-            result = subprocess.run(
-                ["git", "pull"], cwd=str(d),
-                capture_output=True, text=True, timeout=60
-            )
-            output = (result.stdout + result.stderr).strip()
-            _log_archive(f"[{name}] git pull: {output or 'ok'}")
-            results.append({"name": name, "output": output, "error": ""})
+            results.append(_archive_pull_sync(name, d))
         except subprocess.TimeoutExpired:
             _log_archive(f"[{name}] git pull timed out", level="ERROR")
             results.append({"name": name, "output": "", "error": "timed out"})
         except Exception as exc:
             _log_archive(f"[{name}] git pull failed: {exc}", level="ERROR")
             results.append({"name": name, "output": "", "error": str(exc)})
+    return results
+
+
+def _pull_all_archives_stream_sync():
+    """Yield live progress events while pulling all cloned archives."""
+    base = _archives_dir()
+    results = []
+    if not base.exists():
+        yield _archive_stream_event("done", ok=True, results=results)
+        return results
+    for d in sorted(base.iterdir()):
+        if not (d / ".git" / "config").exists():
+            continue
+        name = d.name
+        yield _archive_stream_event("archive_start", archive=name, message=f"Pulling {name}")
+        try:
+            result = yield from _archive_pull_stream_sync(name, d)
+            results.append(result)
+        except subprocess.TimeoutExpired:
+            _log_archive(f"[{name}] git pull timed out", level="ERROR")
+            result = {"name": name, "output": "", "error": "timed out", "recovered": False}
+            results.append(result)
+            yield _archive_stream_event("error", archive=name, message="timed out")
+            yield _archive_stream_event("archive_done", archive=name, result=result)
+        except Exception as exc:
+            _log_archive(f"[{name}] git pull failed: {exc}", level="ERROR")
+            result = {"name": name, "output": "", "error": str(exc), "recovered": False}
+            results.append(result)
+            yield _archive_stream_event("error", archive=name, message=str(exc))
+            yield _archive_stream_event("archive_done", archive=name, result=result)
+    yield _archive_stream_event("done", ok=True, results=results)
     return results
 
 
@@ -2987,7 +3344,7 @@ def create_archive(body: dict, session: SessionToken = Depends(require_auth)):
     try:
         result = subprocess.run(
             ["git", "clone", url, str(dest)],
-            capture_output=True, text=True, timeout=120
+            capture_output=True, text=True, timeout=120, env=_archive_git_env()
         )
         if result.returncode != 0:
             raise HTTPException(500, f"git clone failed: {result.stderr}")
@@ -3041,16 +3398,36 @@ def git_pull(name: str, session: SessionToken = Depends(require_auth)):
     if not dest.exists():
         raise HTTPException(404, f"Archive '{name}' not found")
     try:
-        result = subprocess.run(
-            ["git", "pull"], cwd=str(dest),
-            capture_output=True, text=True, timeout=60
-        )
-        output = (result.stdout + result.stderr).strip()
-        _log_archive(f"[{name}] git pull: {output or 'ok'}")
+        result = _archive_pull_sync(name, dest)
+        if result.get("error"):
+            raise HTTPException(500, result["error"])
         _invalidate_archive_cache(name)
-        return {"ok": True, "output": output}
+        return {"ok": True, "output": result.get("output", ""), "recovered": bool(result.get("recovered"))}
     except subprocess.TimeoutExpired:
         raise HTTPException(500, "git pull timed out")
+
+
+@router.post("/archives/{name}/pull/stream")
+def git_pull_stream(name: str, session: SessionToken = Depends(require_auth)):
+    """Stream live progress while pulling a single archive."""
+    _validate_name(name)
+    dest = _archives_dir() / name
+    if not dest.exists():
+        raise HTTPException(404, f"Archive '{name}' not found")
+
+    def generate():
+        try:
+            result = yield from _archive_pull_stream_sync(name, dest)
+            if not result.get("error"):
+                _invalidate_archive_cache(name)
+            yield _archive_stream_event("done", ok=not bool(result.get("error")), result=result, error=result.get("error", ""))
+        except subprocess.TimeoutExpired:
+            yield _archive_stream_event("done", ok=False, error="git pull timed out", result={"name": name, "output": "", "error": "git pull timed out", "recovered": False})
+        except Exception as exc:
+            _log_archive(f"[{name}] git pull stream failed: {exc}", level="ERROR")
+            yield _archive_stream_event("done", ok=False, error=str(exc), result={"name": name, "output": "", "error": str(exc), "recovered": False})
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 
 @router.post("/archives/pull-all")
@@ -3060,6 +3437,20 @@ def pull_all_archives(session: SessionToken = Depends(require_auth)):
     results = _pull_all_archives_sync()
     _invalidate_archive_cache()
     return {"ok": True, "results": results}
+
+
+@router.post("/archives/pull-all/stream")
+def pull_all_archives_stream(session: SessionToken = Depends(require_auth)):
+    """Stream live progress while pulling all cloned archives."""
+    _log_archive("Manual pull-all triggered")
+
+    def generate():
+        try:
+            yield from _pull_all_archives_stream_sync()
+        finally:
+            _invalidate_archive_cache()
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 
 @router.post("/archives/{name}/push")
@@ -3087,10 +3478,10 @@ def git_push(name: str, body: dict = None, session: SessionToken = Depends(requi
         _log_archive(f"[{name}] git push requested{' (dry-run)' if dry_run else ''}")
         if username:
             subprocess.run(["git", "config", "user.name", username], cwd=str(dest),
-                           capture_output=True, timeout=10)
+                           capture_output=True, timeout=10, env=_archive_git_env())
         if email:
             subprocess.run(["git", "config", "user.email", email], cwd=str(dest),
-                           capture_output=True, timeout=10)
+                           capture_output=True, timeout=10, env=_archive_git_env())
 
         if not dry_run:
             # Pull before push to avoid overwriting remote archive updates.
