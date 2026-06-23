@@ -506,18 +506,32 @@ async def handle_pb7_configuration_error(request: Request, exc: PB7Configuration
 # ── Central UI notification log ──────────────────────────────
 import datetime as _dt
 
+_notify_recent: dict[str, float] = {}
+_NOTIFY_DEDUPE_SECONDS = 2.0
+
 @app.post("/api/notify_log", tags=["ui"])
 async def append_notify_log(request: Request, session: SessionToken = Depends(require_auth)):
     """Append a UI notification message to data/logs/PBV7UI.log."""
     try:
         body = await request.json()
-        msg   = str(body.get("msg", ""))[:500]
-        level = str(body.get("level", "info"))
+        msg = str(body.get("msg", "")).strip()[:500]
+        if not msg:
+            return {"ok": True, "skipped": True}
+        level = str(body.get("level", "info") or "info").strip().upper()[:12]
+        now = _dt.datetime.now()
+        now_ts = now.timestamp()
+        key = f"{level}:{msg}"
+        for old_key, old_ts in list(_notify_recent.items()):
+            if now_ts - old_ts > _NOTIFY_DEDUPE_SECONDS:
+                _notify_recent.pop(old_key, None)
+        if now_ts - _notify_recent.get(key, 0) <= _NOTIFY_DEDUPE_SECONDS:
+            return {"ok": True, "duplicate": True}
+        _notify_recent[key] = now_ts
         log_path = Path(PBGDIR) / "data" / "logs" / "PBV7UI.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ts = now.strftime("%Y-%m-%d %H:%M:%S")
         with open(log_path, "a", encoding="utf-8") as f:
-            f.write(f"{ts} [{level.upper():4}] {msg}\n")
+            f.write(f"{ts} [{level:4}] {msg}\n")
     except Exception:
         pass
     return {"ok": True}

@@ -366,6 +366,7 @@
   var _alertsTimer = null;
   var _navConfirmResolve = null;
   var _navConfirmReturnFocus = null;
+  var _notifyHookTimer = null;
 
   function buildNotifyPanel() {
     if (document.getElementById('pbgui-notify-panel')) return;
@@ -402,6 +403,75 @@
     var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return proto + '//' + window.location.host;
   }
+
+  function _getApiOrigin() {
+    var c = cfg();
+    var apiOrigin = '';
+    if (c.apiBase) {
+      var m = c.apiBase.match(/^(https?:\/\/[^/]+)/);
+      if (m) apiOrigin = m[1];
+    }
+    return apiOrigin || window.location.origin;
+  }
+
+  function _notificationToken() {
+    return cfg().token || window.TOKEN || window.API_TOKEN || '';
+  }
+
+  function _normalizeNotificationLevel(level) {
+    var value = String(level || 'info').toLowerCase();
+    if (value === 'success') return 'ok';
+    if (value === 'error') return 'err';
+    if (value === 'warning') return 'warn';
+    return value || 'info';
+  }
+
+  function logUiNotification(message, level) {
+    var text = String(message == null ? '' : message).trim();
+    var token = _notificationToken();
+    if (!text || !token) return;
+    fetch(_getApiOrigin() + '/api/notify_log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ msg: text, level: _normalizeNotificationLevel(level) })
+    }).catch(function () {});
+  }
+
+  function _wrapTransientNotifier(name) {
+    var fn = window[name];
+    if (typeof fn !== 'function' || fn.__pbguiNotifyWrapped) return;
+    var wrapped = function (message, level) {
+      logUiNotification(message, level);
+      return fn.apply(this, arguments);
+    };
+    wrapped.__pbguiNotifyWrapped = true;
+    wrapped.__pbguiNotifyOriginal = fn;
+    window[name] = wrapped;
+  }
+
+  function installNotificationHooks() {
+    _wrapTransientNotifier('toast');
+    _wrapTransientNotifier('showToast');
+    if (_notifyHookTimer) return;
+    var attempts = 0;
+    _notifyHookTimer = window.setInterval(function () {
+      attempts += 1;
+      _wrapTransientNotifier('toast');
+      _wrapTransientNotifier('showToast');
+      if (attempts >= 20) {
+        window.clearInterval(_notifyHookTimer);
+        _notifyHookTimer = null;
+      }
+    }, 250);
+    window.addEventListener('load', function () {
+      _wrapTransientNotifier('toast');
+      _wrapTransientNotifier('showToast');
+    }, { once: true });
+  }
+
+  window.PBGuiNotify = window.PBGuiNotify || {};
+  window.PBGuiNotify.log = logUiNotification;
+  window.PBGuiNotify.installHooks = installNotificationHooks;
 
   function toggleNotifyPanel() {
     var panel = document.getElementById('pbgui-notify-panel');
@@ -855,7 +925,8 @@
     var cancelBtn = document.getElementById('pbgui-confirm-cancel');
     var acceptBtn = document.getElementById('pbgui-confirm-accept');
     if (!overlay || !title || !message || !detail || !cancelBtn || !acceptBtn) {
-      return Promise.resolve(window.confirm(String(options.message || 'Are you sure?')));
+      logUiNotification('Confirmation dialog unavailable. Reload the page and try again.', 'err');
+      return Promise.resolve(false);
     }
 
     if (typeof _navConfirmResolve === 'function') {
@@ -1021,6 +1092,7 @@
   function setupHandlers() {
     var c = cfg();
     var TOKEN   = c.token;
+    installNotificationHooks();
 
     /* Derive API origin (scheme + host + port) from apiBase or current location */
     var apiOrigin = '';
@@ -1048,6 +1120,7 @@
       }
 
       console.warn('[pbgui_nav] Unknown PBGui page "' + page + '".');
+      logUiNotification('Navigation unavailable - page is not registered.', 'warn');
       var msg = document.createElement('div');
       msg.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:9999;background:#ef444480;color:#fff;padding:.6rem 1.2rem;border-radius:8px;font-size:.85rem;pointer-events:none;';
       msg.textContent = 'Navigation unavailable — page is not registered.';
@@ -1236,7 +1309,7 @@
     function probe() {
       attempts++;
       if (statusEl) statusEl.textContent = 'Reconnecting\u2026 (' + attempts + '/' + maxAttempts + ')';
-      fetch(apiBase + '/api/services/status?token=' + encodeURIComponent(token || ''), { cache: 'no-store' })
+      fetch(apiBase + '/health', { cache: 'no-store' })
         .then(function (r) {
           if (r.ok) { window.location.reload(); }
           else { if (attempts < maxAttempts) setTimeout(probe, 2000); else _overlayFail(); }

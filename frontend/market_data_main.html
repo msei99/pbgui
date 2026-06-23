@@ -3044,7 +3044,7 @@
   <script src="/app/js/shared_help_overlay.js?v=4"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
   <script src="/app/js/log_viewer_panel.js?v=24"></script>
-  <script src="/app/js/pbgui_dialogs.js?v=3"></script>
+  <script src="/app/js/pbgui_dialogs.js?v=4"></script>
   <script src="/app/js/editor_shared.js?v=10"></script>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <script>
@@ -6057,7 +6057,8 @@
         var cancelButton = document.getElementById('btn-confirm-cancel');
         options = options || {};
         if (!overlay || !title || !message || !detail || !listWrap || !listLabel || !list || !confirmButton || !cancelButton) {
-          return Promise.resolve(window.confirm(String(options.message || 'Are you sure?')));
+          showToast('Confirmation dialog unavailable. Reload the page and try again.', 'error');
+          return Promise.resolve(false);
         }
 
         if (typeof uiState.confirmResolve === 'function') {

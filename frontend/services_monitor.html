@@ -770,7 +770,7 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/pbgui_dialogs.js?v=3"></script>
+<script src="/app/js/pbgui_dialogs.js?v=4"></script>
 <script src="/app/js/shared_help_overlay.js?v=4"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <!-- Guide button override — must run AFTER pbgui_nav.js DOMContentLoaded handler -->
@@ -1586,7 +1586,8 @@ window.PBGUI_NAV_CONFIG = {
     if (window.PBGuiDialogs && typeof window.PBGuiDialogs.confirm === 'function') {
       return window.PBGuiDialogs.confirm({ title: title, message: message, confirmText: confirmText });
     }
-    return Promise.resolve(window.confirm(message));
+    _resultPopup('Confirmation blocked', 'Confirmation dialog is unavailable.', 'Reload the page and try again.', false);
+    return false;
   }
 
   window.workerConfirmAction = async function (workerId, action) {
@@ -2107,8 +2108,19 @@ window.PBGUI_NAV_CONFIG = {
 
   function _showMsg(id, msg, isError) { _flash(id, msg, isError); }
 
+  function _logUiNotification(message, level) {
+    var text = String(message == null ? '' : message).trim();
+    if (!text || !TOKEN) return;
+    fetch('/api/notify_log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+      body: JSON.stringify({ msg: text, level: level || 'info' })
+    }).catch(function () {});
+  }
+
   /* ── Result popup dialog ── */
   function _resultPopup(title, message, output, isOk, hideFoot) {
+    _logUiNotification(String(title || 'Notice') + ': ' + String(message || ''), isOk ? 'ok' : 'err');
     var isNew = !document.getElementById('result-modal');
     var modal = document.getElementById('result-modal');
     if (!modal) {

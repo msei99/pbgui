@@ -500,6 +500,16 @@
         let actionDialogResolve = null;
         let actionDialogReturnFocus = null;
 
+        function logUiNotification(message, type) {
+            const text = String(message == null ? '' : message).trim();
+            if (!text || !API_TOKEN) return;
+            fetch('/api/notify_log', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + API_TOKEN },
+                body: JSON.stringify({ msg: text, level: type || 'info' })
+            }).catch(function () {});
+        }
+
         function closeActionDialog(confirmed) {
             const modal = document.getElementById('action-modal');
             if (modal) {
@@ -526,11 +536,7 @@
             const acceptBtn = document.getElementById('action-modal-accept');
 
             if (!modal || !title || !message || !detail || !cancelBtn || !acceptBtn) {
-                if (options.cancelText === null || options.cancelText === '') {
-                    window.alert(String(options.message || 'Done.'));
-                    return Promise.resolve(true);
-                }
-                return Promise.resolve(window.confirm(String(options.message || 'Are you sure?')));
+                return Promise.resolve(options.cancelText === null || options.cancelText === '');
             }
 
             if (typeof actionDialogResolve === 'function') {
@@ -566,9 +572,12 @@
         }
 
         async function showActionNotice(options) {
+            const noticeTitle = options && options.title ? String(options.title) : 'Notice';
+            const noticeMessage = options && options.message ? String(options.message) : '';
+            logUiNotification(noticeMessage ? noticeTitle + ': ' + noticeMessage : noticeTitle, options && options.level ? options.level : 'info');
             await showActionDialog({
-                title: options && options.title ? options.title : 'Notice',
-                message: options && options.message ? options.message : '',
+                title: noticeTitle,
+                message: noticeMessage,
                 detail: options && options.detail ? options.detail : '',
                 confirmText: options && options.confirmText ? options.confirmText : 'OK',
                 confirmClass: options && options.confirmClass ? options.confirmClass : 'btn-info',

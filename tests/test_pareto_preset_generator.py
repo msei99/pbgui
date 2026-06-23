@@ -538,6 +538,75 @@ def test_config_detail_score_uses_visible_score_context() -> None:
     assert detail["explorer_score"] == 1.0
 
 
+def test_config_detail_top_metrics_keeps_gain_when_many_scoring_metrics() -> None:
+    """Config detail top metrics should keep gain even when five scoring metrics already exist."""
+
+    class FakeConfig:
+        """Minimal config object with index and suite metrics."""
+
+        config_index = 176
+        is_pareto = True
+        scenario_metrics = {}
+        suite_metrics = {
+            "sharpe_ratio_usd": 0.091537,
+            "adg_pnl_w": 0.004136,
+            "position_held_hours_max": 1523.983333,
+            "loss_profit_ratio": 0.124496,
+            "trade_loss_max": 0.021452,
+            "gain_usd": 0.123456,
+            "drawdown_worst_usd": 0.0,
+        }
+
+    class FakeLoader:
+        """Minimal loader exposing config-detail dependencies."""
+
+        scoring_metrics = [
+            "sharpe_ratio_usd",
+            "adg_pnl_w",
+            "position_held_hours_max",
+            "loss_profit_ratio",
+            "trade_loss_max",
+        ]
+        scoring_goals = {"sharpe_ratio_usd": "max"}
+        scenario_labels = []
+        configs = [FakeConfig()]
+
+        def get_config_by_index(self, _config_index: int) -> FakeConfig:
+            return self.configs[0]
+
+        def get_pareto_configs(self) -> list[FakeConfig]:
+            return list(self.configs)
+
+        def ensure_bot_params(self, _config: FakeConfig) -> None:
+            return None
+
+        def ensure_details(self, _config: FakeConfig) -> None:
+            return None
+
+        def compute_risk_profile_score(self, _config: FakeConfig) -> dict:
+            return {"overall": 1.0}
+
+        def get_full_config(self, _config_index: int) -> dict:
+            return {}
+
+        def compute_trading_style(self, _config: FakeConfig) -> str:
+            return "Balanced"
+
+        def compute_overall_robustness(self, _config: FakeConfig) -> float:
+            return 1.0
+
+    detail = pareto_explorer._serialize_config_detail(FakeLoader(), 176)
+
+    assert [item["name"] for item in detail["top_metrics"]] == [
+        "sharpe_ratio_usd",
+        "adg_pnl_w",
+        "position_held_hours_max",
+        "loss_profit_ratio",
+        "trade_loss_max",
+        "gain",
+    ]
+
+
 def test_correlation_top_performers_deduplicates_configs() -> None:
     """Top Performer radar selection should not return the same config repeatedly."""
 

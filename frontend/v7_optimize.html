@@ -2102,6 +2102,7 @@ textarea.json-invalid:focus {
         <button class="sb-btn" id="btn-edit-selected">✏ Edit Selected</button>
         <button class="sb-btn" id="btn-duplicate-selected">⧉ Duplicate</button>
         <button class="sb-btn" id="btn-queue-selected">▶ Queue Selected</button>
+        <button class="sb-btn" id="btn-archive-selected">🗄 Add to Archive</button>
         <button class="sb-btn danger" id="btn-delete-selected">🗑 Delete Selected</button>
       </div>
 
@@ -2432,7 +2433,7 @@ textarea.json-invalid:focus {
 <script src="/app/js/editor_shared.js?v=10"></script>
 <script src="/app/js/suite_editor.js?v=4"></script>
 <script src="/app/js/log_viewer_panel.js?v=24"></script>
-<script src="/app/js/pbgui_dialogs.js?v=3"></script>
+<script src="/app/js/pbgui_dialogs.js?v=4"></script>
 <script>
 var TOKEN = "%%TOKEN%%";
 var API_BASE = "%%API_BASE%%";
@@ -10583,6 +10584,32 @@ async function queueSelectedConfigs() {
   setPanel('queue');
 }
 
+function archiveApiBase() {
+  return API_BASE.replace('/optimize-v7', '/backtest-v7');
+}
+
+async function addSelectedOptimizeConfigsToArchive() {
+  var selected = Array.from(state.selectedConfigs);
+  if (!selected.length) {
+    toast('Select at least one config to archive.', 'err');
+    return;
+  }
+  var base = archiveApiBase();
+  var settings = await authFetch(base + '/archives/settings');
+  var archiveName = settings.my_archive || '';
+  if (!archiveName) {
+    toast('No own archive configured in Backtest Archive setup.', 'err');
+    return;
+  }
+  for (var i = 0; i < selected.length; i++) {
+    await authFetch(base + '/archives/' + encodeURIComponent(archiveName) + '/add-optimize-config', {
+      method: 'POST',
+      body: JSON.stringify({ config_name: selected[i] })
+    });
+  }
+  toast('Archived ' + selected.length + ' Optimize config(s) to ' + archiveName + '.', 'ok');
+}
+
 async function editSelectedConfig() {
   var selected = Array.from(state.selectedConfigs);
   if (selected.length !== 1) {
@@ -10775,6 +10802,9 @@ function attachEventHandlers() {
   });
   el('btn-queue-selected').addEventListener('click', function() {
     queueSelectedConfigs().catch(handleError);
+  });
+  el('btn-archive-selected').addEventListener('click', function() {
+    addSelectedOptimizeConfigsToArchive().catch(handleError);
   });
   el('btn-delete-selected').addEventListener('click', function() {
     deleteSelectedConfigs().catch(handleError);
@@ -11160,6 +11190,21 @@ async function handleIncomingDraft() {
   }
 }
 
+async function handleOpenConfigParam() {
+  var url = new URL(window.location.href);
+  var configName = (url.searchParams.get('open_config') || '').trim();
+  if (!configName) return;
+  try {
+    await openConfigEditor(configName);
+    setPageEditorStatus('Opened Optimize config from archive.', 'ok');
+    url.searchParams.delete('open_config');
+    var remainingSearch = url.searchParams.toString();
+    history.replaceState({}, '', url.pathname + (remainingSearch ? '?' + remainingSearch : '') + url.hash);
+  } catch (error) {
+    handleError(error);
+  }
+}
+
 /* ── data-tip Fixed Tooltip ── */
 (function() {
   var tip = document.getElementById('data-tip-tooltip');
@@ -11223,6 +11268,7 @@ async function init() {
   connectWS();
   await refreshOptimizePageData();
   await handleIncomingDraft();
+  await handleOpenConfigParam();
 }
 
 init().catch(handleError);

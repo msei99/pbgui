@@ -2463,8 +2463,12 @@ def _serialize_config_detail(
         "drawdown_worst_usd": "max_drawdown",
     }
 
+    top_metric_names = preferred_metrics[:5]
+    if "gain_usd" in (config.suite_metrics or {}) and "gain_usd" not in top_metric_names:
+        top_metric_names.append("gain_usd")
+
     top_metrics = []
-    for metric_name in preferred_metrics[:5]:
+    for metric_name in top_metric_names:
         if metric_name in config.suite_metrics:
             top_metrics.append({
                 "name": metric_label_overrides.get(metric_name, metric_name),

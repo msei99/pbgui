@@ -33,6 +33,7 @@ import psutil
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, Response
 
+from api.archive_helpers import ensure_config_version
 from api.auth import SessionToken, require_auth, validate_token
 from api.pb7_bridge import (
     get_bot_param_keys,
@@ -2608,6 +2609,7 @@ def save_config(name: str, body: dict, source_name: str | None = None,
     if source_name:
         _validate_name(source_name)
     cfg = dict(body or {})
+    cfg = ensure_config_version(cfg, _get_new_optimize_template)
     backtest = dict(cfg.get("backtest") or {})
     backtest["base_dir"] = f"backtests/pbgui/{name}"
     cfg["backtest"] = backtest
@@ -2656,6 +2658,7 @@ def duplicate_config(name: str, body: dict, session: SessionToken = Depends(requ
     if dst.exists():
         raise HTTPException(409, f"Config '{new_name}' already exists")
     cfg = load_pb7_config(src, neutralize_added=True)
+    cfg = ensure_config_version(cfg, _get_new_optimize_template)
     cfg.setdefault("backtest", {})["base_dir"] = f"backtests/pbgui/{new_name}"
     save_pb7_config(cfg, dst)
     return {"ok": True, "name": new_name}

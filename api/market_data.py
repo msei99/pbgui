@@ -1729,7 +1729,7 @@ html,body{margin:0;padding:0;background:transparent;overflow:hidden;}
     }
 
     function hasCov(tf,startMs,endMs){
-        return coverageRatio(tf,startMs,endMs)>=0.3;
+        return coverageRatio(tf,startMs,endMs)>=0.995;
     }
 
     function coverageRatio(tf,startMs,endMs){
@@ -1771,11 +1771,10 @@ html,body{margin:0;padding:0;background:transparent;overflow:hidden;}
     }
 
     function pick(ms,startMs,endMs){
-        for(var i=0;i<TFO.length;i++){
-            var t=TFO[i];
-            if(ms>=TFT[t]&&hasCov(t,startMs,endMs))return t;
-        }
-        for(var j=TFO.length-1;j>=0;j--)if(hasCov(TFO[j],startMs,endMs))return TFO[j];
+        var want=wantTF(ms);
+        var wantIdx=TFO.indexOf(want);
+        if(wantIdx<0)wantIdx=TFO.length-1;
+        for(var i=wantIdx;i>=0;i--)if(hasCov(TFO[i],startMs,endMs))return TFO[i];
         for(var k=0;k<TFO.length;k++)if(hasLayer(TFO[k]))return TFO[k];
     return \"1d\";
   }
@@ -1799,11 +1798,32 @@ html,body{margin:0;padding:0;background:transparent;overflow:hidden;}
                 return new Date(s).getTime();
         }
 
+    function lowerBound(values,target){
+        var left=0,right=values.length;
+        while(left<right){
+            var mid=(left+right)>>1;
+            if(values[mid]<target)left=mid+1;
+            else right=mid;
+        }
+        return left;
+    }
+
+    function upperBound(values,target){
+        var left=0,right=values.length;
+        while(left<right){
+            var mid=(left+right)>>1;
+            if(values[mid]<=target)left=mid+1;
+            else right=mid;
+        }
+        return left;
+    }
+
     function yRange(tf,startMs,endMs){
         var d=L[tf];if(!d||!d.ts.length)return null;
         var mn=Infinity,mx=-Infinity,vmx=0;
-        for(var i=0;i<d.ts.length;i++){
-            if(d.ts[i]<startMs||d.ts[i]>endMs)continue;
+        var first=lowerBound(d.ts,startMs);
+        var last=upperBound(d.ts,endMs);
+        for(var i=first;i<last;i++){
             if(d.l[i]<mn)mn=d.l[i];
             if(d.h[i]>mx)mx=d.h[i];
             if(SVOL&&d.v[i]>vmx)vmx=d.v[i];
@@ -1868,7 +1888,7 @@ html,body{margin:0;padding:0;background:transparent;overflow:hidden;}
     var tfInd=document.getElementById(\"tf-ind\");
     var coinLabel=document.getElementById(\"coin-label\");
     var loadDiv=document.getElementById(\"loading\");
-    var CFG={scrollZoom:true,displayModeBar:true,responsive:true};
+    var CFG={scrollZoom:false,displayModeBar:true,responsive:true};
     var activeFetchController=null;
     var activeFetchToken=0;
     var lastSpanMs=null;
@@ -1889,8 +1909,12 @@ html,body{margin:0;padding:0;background:transparent;overflow:hidden;}
     }
 
     function clampRangeToLayer(xr,tf,preserveSpan){
-        if(!xr||xr.length<2||!hasLayer(tf))return xr;
-        var dataTs=L[tf].ts;
+        if(!xr||xr.length<2)return xr;
+        // Clamp to the full source range, not the currently loaded fine layer.
+        // Otherwise lazy-loaded panning snaps back to the last loaded window.
+        var base=(L["1d"]&&L["1d"].ts&&L["1d"].ts.length)?L["1d"]:((L["1h"]&&L["1h"].ts&&L["1h"].ts.length)?L["1h"]:null);
+        var dataTs=base?base.ts:(hasLayer(tf)?L[tf].ts:null);
+        if(!dataTs||!dataTs.length)return xr;
         var minMs=dataTs[0],maxMs=dataTs[dataTs.length-1];
         var a=ms(xr[0]),b=ms(xr[1]);
         if(!isFinite(a)||!isFinite(b))return xr;
@@ -1947,7 +1971,10 @@ html,body{margin:0;padding:0;background:transparent;overflow:hidden;}
         return plotPromise.then(function(){
             inited=true;
             setLastSpan(startMs,endMs);
-            setTimeout(function(){guard=false;},300);
+            setTimeout(function(){guard=false;},80);
+        }).catch(function(err){
+            guard=false;
+            throw err;
         });
     }
 
@@ -1992,88 +2019,98 @@ html,body{margin:0;padding:0;background:transparent;overflow:hidden;}
             });
     }
 
+    function updateAxesForRange(xr,startMs,endMs,rangeChanged){
+        var upd={};
+        if(rangeChanged)upd[\"xaxis.range\"]=xr;
+        var yr=yRange(cur,startMs,endMs);
+        if(yr){
+            upd[\"yaxis.range\"]=yr.price;
+            upd[\"yaxis.autorange\"]=false;
+            if(SVOL)upd[\"yaxis2.range\"]=yr.vol;
+        }
+        if(!Object.keys(upd).length){
+            setLastSpan(startMs,endMs);
+            return Promise.resolve();
+        }
+        return Plotly.relayout(el,upd).then(function(){
+            setLastSpan(startMs,endMs);
+        });
+    }
+
     function onZoom(){
         if(guard)return;
         clearTimeout(debounceTimer);
         debounceTimer=setTimeout(function(){
-      var xr=el.layout.xaxis.range;if(!xr||xr.length<2)return;
-      var a=ms(xr[0]),b=ms(xr[1]);
-      if(!isFinite(a)||!isFinite(b))return;
+            var xr=el.layout.xaxis.range;if(!xr||xr.length<2)return;
+            var a=ms(xr[0]),b=ms(xr[1]);
+            if(!isFinite(a)||!isFinite(b))return;
             var originalXr=[xr[0],xr[1]];
-            var xKey=Math.round(a/1000)+\":\"+Math.round(b/1000);
-            if(xKey===lastXKey)return;
-            lastXKey=xKey;
-            abortPendingFetch(true);
             var startMs=Math.min(a,b),endMs=Math.max(a,b),span=endMs-startMs;
             var requestedSpanMs=Math.max(1,span);
             var preserveSpan=lastSpanMs!==null&&Math.abs(requestedSpanMs-lastSpanMs)<=Math.max(60_000,lastSpanMs*0.05);
+            xr=clampRangeToLayer(xr,cur,preserveSpan);
+            var rangeChanged=xr[0]!==originalXr[0]||xr[1]!==originalXr[1];
+            a=ms(xr[0]);
+            b=ms(xr[1]);
+            if(!isFinite(a)||!isFinite(b))return;
+            startMs=Math.min(a,b);
+            endMs=Math.max(a,b);
+            span=endMs-startMs;
+            var xKey=Math.round(startMs/1000)+\":\"+Math.round(endMs/1000);
+            if(xKey===lastXKey&&!rangeChanged)return;
+            lastXKey=xKey;
+            abortPendingFetch(true);
             var want=wantTF(span),best=pick(span,startMs,endMs);
             var sameTfVisiblePoints=countPointsInRange(want,startMs,endMs);
-            var needSameTfFetch=LAZY_URL&&want===best&&want===cur&&(want==="15m"||want==="5m"||want==="1m")&&(coverageRatio(want,startMs,endMs)<0.98||sameTfVisiblePoints===0);
-            if(want!==best&&!hasCov(want,startMs,endMs)&&!unavailable[want]){
-                fetchNeeded(want,xr).then(function(loaded){
-                    if(!loaded)return;
-                    var nextBest=pick(span,startMs,endMs);
-                    xr=clampRangeToLayer(xr,nextBest,preserveSpan);
-                    if(nextBest!==cur){
-                        renderRange(xr,preserveSpan).catch(function(err){showError(err&&err.message?err.message:String(err));});
-                    }else{
-                        var clampedA=ms(xr[0]),clampedB=ms(xr[1]);
-                        startMs=Math.min(clampedA,clampedB);
-                        endMs=Math.max(clampedA,clampedB);
-                        var yr=yRange(cur,startMs,endMs);
-                        if(yr){
-                            guard=true;
-                            var upd={\"xaxis.range\":xr,\"yaxis.range\":yr.price,\"yaxis.autorange\":false};
-                            if(SVOL)upd[\"yaxis2.range\"]=yr.vol;
-                            Plotly.relayout(el,upd).then(function(){setLastSpan(startMs,endMs);setTimeout(function(){guard=false;},200);});
-                        }
-                    }
-                });
-                return;
+            var needFineFetch=LAZY_URL&&want!==best&&!hasCov(want,startMs,endMs)&&!unavailable[want];
+            var needSameTfFetch=LAZY_URL&&want===best&&want===cur&&(want==="15m"||want==="5m"||want==="1m")&&(coverageRatio(want,startMs,endMs)<0.995||sameTfVisiblePoints===0);
+            var renderPromise=Promise.resolve();
+            if(best!==cur){
+                renderPromise=renderRange(xr,preserveSpan).catch(function(err){showError(err&&err.message?err.message:String(err));});
+            }else{
+                renderPromise=updateAxesForRange(xr,startMs,endMs,rangeChanged).catch(function(err){showError(err&&err.message?err.message:String(err));});
             }
-            if(needSameTfFetch){
-                fetchNeeded(want,xr).then(function(loaded){
+            if(needFineFetch||needSameTfFetch){
+                renderPromise.then(function(){
+                    return fetchNeeded(want,xr);
+                }).then(function(loaded){
                     if(!loaded)return;
                     renderRange(xr,preserveSpan).catch(function(err){showError(err&&err.message?err.message:String(err));});
                 });
-                return;
             }
-            if(best!==cur){
-                renderRange(xr,preserveSpan).catch(function(err){showError(err&&err.message?err.message:String(err));});
-            }else{
-                xr=clampRangeToLayer(xr,cur,preserveSpan);
-                var clampedA=ms(xr[0]),clampedB=ms(xr[1]);
-                startMs=Math.min(clampedA,clampedB);
-                endMs=Math.max(clampedA,clampedB);
-                var currentSpanMs=Math.max(1,endMs-startMs);
-                var spanChanged=lastSpanMs===null||Math.abs(currentSpanMs-lastSpanMs)>Math.max(60_000,lastSpanMs*0.05);
-                var rangeChanged=xr[0]!==originalXr[0]||xr[1]!==originalXr[1];
-                if(!rangeChanged&&!spanChanged){
-                    setLastSpan(startMs,endMs);
-                    return;
-                }
-                var upd={};
-                if(rangeChanged)upd[\"xaxis.range\"]=xr;
-                if(spanChanged){
-                    var yr=yRange(cur,startMs,endMs);
-                    if(yr){
-                        upd[\"yaxis.range\"]=yr.price;
-                        upd[\"yaxis.autorange\"]=false;
-                        if(SVOL)upd[\"yaxis2.range\"]=yr.vol;
-                    }
-                }
-                if(!Object.keys(upd).length){
-                    setLastSpan(startMs,endMs);
-                    return;
-                }
-                guard=true;
-                Plotly.relayout(el,upd).then(function(){setLastSpan(startMs,endMs);setTimeout(function(){guard=false;},200);});
-      }
-    },80);
+        },35);
+    }
+
+    function onWheelZoom(event){
+        if(!inited||!el.layout||!el.layout.xaxis||!el.layout.xaxis.range)return;
+        var xr=el.layout.xaxis.range;
+        if(!xr||xr.length<2)return;
+        var a=ms(xr[0]),b=ms(xr[1]);
+        if(!isFinite(a)||!isFinite(b))return;
+        event.preventDefault();
+        event.stopPropagation();
+        var startMs=Math.min(a,b),endMs=Math.max(a,b),span=Math.max(1,endMs-startMs);
+        var delta=event.deltaY||0;
+        if(event.deltaMode===1)delta*=16;
+        else if(event.deltaMode===2)delta*=300;
+        var steps=Math.max(-6,Math.min(6,delta/120));
+        if(!steps)return;
+        var factor=Math.pow(1.28,steps);
+        var rect=el.getBoundingClientRect();
+        var anchorRatio=rect.width>0?(event.clientX-rect.left)/rect.width:0.5;
+        anchorRatio=Math.max(0.02,Math.min(0.98,anchorRatio));
+        var minSpanMs=60_000;
+        var newSpan=Math.max(minSpanMs,span*factor);
+        factor=newSpan/span;
+        var anchorMs=startMs+span*anchorRatio;
+        var nextStart=anchorMs-(anchorMs-startMs)*factor;
+        var nextEnd=anchorMs+(endMs-anchorMs)*factor;
+        var nextRange=clampRangeToLayer([iso(nextStart),iso(nextEnd)],cur,true);
+        Plotly.relayout(el,{\"xaxis.range\":nextRange}).catch(function(err){showError(err&&err.message?err.message:String(err));});
     }
 
     try{
+        el.addEventListener("wheel",onWheelZoom,{passive:false});
         if(typeof Plotly===\"undefined\")throw new Error(\"Plotly failed to load\");
         coinLabel.textContent=COIN||\"\";
         for(var tf in L){

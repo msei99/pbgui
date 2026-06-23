@@ -7,6 +7,22 @@
   var returnFocus = null;
   var currentMode = 'confirm';
 
+  function logDialogNotification(options, level) {
+    var message = String(options && options.message != null ? options.message : '').trim();
+    if (!message) return;
+    if (window.PBGuiNotify && typeof window.PBGuiNotify.log === 'function') {
+      window.PBGuiNotify.log(message, level || 'info');
+      return;
+    }
+    var token = window.TOKEN || window.API_TOKEN || (window.PBGUI_NAV_CONFIG && window.PBGUI_NAV_CONFIG.token);
+    if (!token) return;
+    fetch('/api/notify_log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ msg: message, level: level || 'info' })
+    }).catch(function () {});
+  }
+
   function ensureStyles() {
     if (document.getElementById(STYLE_ID)) return;
     var style = document.createElement('style');
@@ -121,6 +137,7 @@
 
   function open(mode, options) {
     options = options || {};
+    if (mode === 'alert') logDialogNotification(options, options.level || options.type || 'info');
     ensureOverlay();
     var overlay = document.getElementById(OVERLAY_ID);
     var title = document.getElementById('pbgui-dialog-title');
@@ -133,12 +150,7 @@
     var acceptBtn = document.getElementById('pbgui-dialog-accept');
 
     if (!overlay || !title || !message || !detail || !field || !label || !input || !cancelBtn || !acceptBtn) {
-      if (mode === 'prompt') return Promise.resolve(window.prompt(String(options.message || ''), String(options.defaultValue || '')));
-      if (mode === 'alert') {
-        window.alert(String(options.message || 'Done.'));
-        return Promise.resolve(true);
-      }
-      return Promise.resolve(window.confirm(String(options.message || 'Are you sure?')));
+      return Promise.resolve(mode === 'prompt' ? null : mode === 'alert');
     }
 
     if (typeof resolveDialog === 'function') {

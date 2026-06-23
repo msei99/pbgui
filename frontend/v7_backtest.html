@@ -111,6 +111,7 @@ a:hover { text-decoration: underline; }
            cursor: pointer; padding: 3px 8px; font-size: var(--fs-xs); transition: all .15s; }
 .act-btn:hover { color: var(--text); border-color: var(--accent); }
 .act-btn-danger:hover { color: var(--red); border-color: var(--red); }
+.results-count-label { color: var(--text-dim); font-size: var(--fs-sm); white-space: nowrap; }
 
 /* ── Config Editor form grid (matches v7_edit.html style) ── */
 .form-row { display: grid; gap: var(--sp-md); margin-bottom: var(--sp-md); }
@@ -312,6 +313,29 @@ a:hover { text-decoration: underline; }
              padding: var(--sp-lg); min-width: 160px; max-width: 760px; max-height: 85vh;
              overflow: hidden; resize: both; box-sizing: border-box;
              display: flex; flex-direction: column; }
+.score-preview-modal { width: min(1180px, 96vw); height: min(860px, 92vh); max-width: 96vw; max-height: 92vh;
+                       min-width: min(760px, 96vw); min-height: min(540px, 88vh); }
+.score-preview-modal .modal-body { display: flex; flex-direction: column; overflow: hidden; }
+.score-preview-wrap { display: flex; flex-direction: column; gap: var(--sp-md); flex: 1; min-height: 0; }
+.score-preview-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-sm); flex-shrink: 0; }
+.readme-preview { flex: 1; min-height: 0; overflow: auto; padding: 22px 26px; background: var(--bg); border: 1px solid var(--border);
+                  border-radius: 6px; color: var(--text); user-select: text; }
+.readme-preview h1, .readme-preview h2, .readme-preview h3 { margin: 0 0 var(--sp-md); line-height: 1.25; }
+.readme-preview h1 { font-size: 1.8rem; padding-bottom: var(--sp-sm); border-bottom: 1px solid var(--border); }
+.readme-preview h2 { font-size: 1.35rem; margin-top: var(--sp-lg); }
+.readme-preview h3 { font-size: 1.1rem; margin-top: var(--sp-md); }
+.readme-preview p { margin: 0 0 var(--sp-md); line-height: 1.55; }
+.readme-preview ul { margin: 0 0 var(--sp-md) 1.2rem; padding: 0; }
+.readme-preview li { margin: 0 0 4px; line-height: 1.5; }
+.readme-preview code { background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.08); border-radius: 4px; padding: 1px 4px; }
+.readme-preview a { color: var(--accent); text-decoration: none; }
+.readme-preview a:hover { text-decoration: underline; }
+.readme-preview img { max-width: 100%; vertical-align: middle; }
+.readme-preview .md-table-wrap { overflow: auto; margin: 0 0 var(--sp-md); border: 1px solid var(--border); border-radius: 6px; }
+.readme-preview table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+.readme-preview th, .readme-preview td { padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; text-align: left; }
+.readme-preview th { position: sticky; top: 0; z-index: 1; background: var(--bg2); color: var(--text-dim); text-transform: uppercase; }
+.readme-preview tr:last-child td { border-bottom: none; }
 .import-modal-box {
   background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
   padding: var(--sp-lg); width: var(--pbg-modal-settings-width, min(760px, 92vw)); max-height: 85vh;
@@ -678,10 +702,19 @@ textarea.json-invalid:focus {
       </div>
       <div id="ctx-archive-results" style="display:none">
         <button class="sb-btn" onclick="closeArchiveResults()">🏠 Archives</button>
-        <button class="sb-btn" onclick="rebacktestSelectedArchive()">🔄 Backtest</button>
-        <button class="sb-btn" onclick="addToRunFromArchive()">▶ Add to Run</button>
-        <button class="sb-btn" onclick="compareSelectedArchive()">📈 Compare</button>
-        <button class="sb-btn danger" onclick="deleteSelectedArchiveResults()">🗑 Delete Selected</button>
+        <button class="sb-btn" id="archive-btn-rebacktest" onclick="rebacktestSelectedArchive()">🔄 Backtest</button>
+        <button class="sb-btn" id="archive-btn-retest-replace" onclick="retestReplaceSelectedArchive()" style="display:none">♻ Retest &amp; Replace</button>
+        <button class="sb-btn" id="archive-btn-add-run" onclick="addToRunFromArchive()">▶ Add to Run</button>
+        <button class="sb-btn" id="archive-btn-compare" onclick="compareSelectedArchive()">📈 Compare</button>
+        <button class="sb-btn" id="archive-btn-score-preview" onclick="previewArchiveScores()" style="display:none">⭐ Score Preview</button>
+        <button class="sb-btn" id="archive-btn-opt-view" onclick="viewSelectedArchiveOptimizeConfig()" style="display:none">📄 View Config</button>
+        <button class="sb-btn" id="archive-btn-opt-open" onclick="optimizeSelectedArchiveConfig()" style="display:none">🧬 Optimize from Config</button>
+        <button class="sb-btn" id="archive-btn-opt-import" onclick="importSelectedArchiveOptimizeConfig()" style="display:none">📥 Import Config</button>
+        <button class="sb-btn danger" id="archive-btn-opt-delete" onclick="deleteSelectedArchiveOptimizeConfig()" style="display:none">🗑 Delete Config</button>
+        <button class="sb-btn danger" id="archive-btn-compact" onclick="compactArchiveHistory()" style="display:none">🧨 Compact History</button>
+        <button class="sb-btn danger" id="archive-btn-remove-duplicates" onclick="removeDuplicateArchiveResults()" style="display:none">🧹 Remove Duplicates</button>
+        <button class="sb-btn danger" id="archive-btn-remove-liquidated" onclick="removeLiquidatedArchiveResults()" style="display:none">🧹 Remove Liquidated</button>
+        <button class="sb-btn danger" id="archive-btn-delete" onclick="deleteSelectedArchiveResults()">🗑 Delete Selected</button>
       </div>
       <div id="ctx-legacy" class="ctx-actions" style="display:none">
         <button class="sb-btn" onclick="loadLegacyResults()">↻ Refresh</button>
@@ -753,6 +786,7 @@ textarea.json-invalid:focus {
             <option value="">All configs</option>
           </select>
           <input type="text" id="results-filter" class="sb-input" style="max-width:200px" placeholder="Search name…" oninput="renderResults()">
+          <span id="results-count-label" class="results-count-label"></span>
           <span style="flex:1"></span>
           <button class="act-btn" onclick="selectAllResults()" title="Select all visible rows">Select All</button>
           <button class="act-btn" onclick="deselectAllResults()" title="Deselect all">Deselect</button>
@@ -782,15 +816,20 @@ textarea.json-invalid:focus {
       <div id="archive-results-view" style="display:none">
         <!-- Sticky top area: toolbar + table -->
         <div id="archive-results-fixed-top" style="background:var(--bg);padding-bottom:var(--sp-sm);border-bottom:2px solid var(--border);box-shadow:0 4px 12px rgba(0,0,0,.6);margin-bottom:var(--sp-md)">
+          <div id="archive-layout-status" style="font-size:var(--fs-sm);color:var(--text-dim);padding-top:var(--sp-sm)"></div>
           <div id="archive-results-toolbar" style="display:flex;gap:var(--sp-sm);align-items:center;margin-bottom:var(--sp-md);flex-wrap:wrap;padding-top:var(--sp-sm)">
+            <button id="arc-tab-backtests" class="act-btn" onclick="setArchiveResultsMode('backtests')">Backtest Results</button>
+            <button id="arc-tab-optimize" class="act-btn" onclick="setArchiveResultsMode('optimize')">Optimize Settings</button>
+            <button id="arc-tab-schedules" class="act-btn" onclick="setArchiveResultsMode('schedules')">Retest Schedules</button>
             <label style="font-size:var(--fs-sm);color:var(--text-dim)">Config:</label>
             <select id="arc-results-config-filter" class="sb-input" style="max-width:200px" onchange="renderArchiveResults(selectedArchiveName)">
               <option value="">All configs</option>
             </select>
             <input type="text" id="arc-results-filter" class="sb-input" style="max-width:200px" placeholder="Search name…" oninput="renderArchiveResults(selectedArchiveName)">
+            <span id="archive-results-count-label" class="results-count-label"></span>
             <span style="flex:1"></span>
-            <button class="act-btn" onclick="selectAllArchiveResults()" title="Select all visible rows">Select All</button>
-            <button class="act-btn" onclick="deselectAllArchiveResults()" title="Deselect all">Deselect</button>
+            <button id="arc-btn-select-all" class="act-btn" onclick="selectAllArchiveResults()" title="Select all visible rows">Select All</button>
+            <button id="arc-btn-deselect" class="act-btn" onclick="deselectAllArchiveResults()" title="Deselect all">Deselect</button>
             <button id="archive-results-pin-btn" class="act-btn" onclick="toggleArchiveResultsSticky()" title="Pin table (sticky on/off)" style="font-size:15px;padding:0 6px">📌</button>
           </div>
           <div id="archive-results-list-wrap" style="height:25vh;min-height:80px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;position:relative">
@@ -918,6 +957,11 @@ var _lastQueueHash = '';       // JSON hash of last queue state (skip re-render 
 var results     = [];          // backtest results
 var archives    = [];          // git archives
 var archiveResults = [];       // results in selected archive
+var archiveOptimizeConfigs = []; // optimize settings in selected archive
+var archiveRetestSchedules = [];
+var archiveRetestRuns = [];
+var archiveResultsMode = 'backtests';
+var selectedArchiveMigrationStatus = null;
 var legacyResults = [];        // results in legacy pb7/backtests paths
 var compareSet  = [];          // paths of results to compare
 var settings    = { autostart: false, cpu: 1, cpu_max: 1, hsl_signal_modes: [], use_pbgui_market_data: false, hlcvs_cleanup_enabled: false, hlcvs_cleanup_days: 7, hlcvs_cleanup_interval_h: 24 };
@@ -932,6 +976,11 @@ var _rawEditorLastApplied = '';
 var _btJsonSync = null;
 var _cfgBotParamStatus = { long: {}, short: {} };
 var ws = null;
+var BACKTEST_VIEW_STATE_KEY = 'pbgui:v7_backtest:view_state';
+var _archivesRefreshTimer = null;
+var _archivesRefreshInFlight = false;
+var _archiveRefreshTimer = null;
+var _archiveRefreshInFlight = false;
 
 /* Set of backtest keys explicitly handled by the GUI editor.
    Any key in cfg.backtest NOT in this set will be auto-rendered
@@ -978,8 +1027,13 @@ function apiFetch(path, opts) {
 /* ── Notification log ── */
 /* (handled globally by pbgui_nav.js floating panel) */
 
+var _recentToasts = {};
 function toast(msg, type) {
   type = type || 'info';
+  var key = type + ':' + String(msg || '');
+  var now = Date.now();
+  if (_recentToasts[key] && now - _recentToasts[key] < 10000) return;
+  _recentToasts[key] = now;
   /* ── write to server log (fire-and-forget) ── */
   fetch('/api/notify_log', {
     method: 'POST',
@@ -1051,8 +1105,8 @@ function connectWS() {
       } else if (msg.type === 'archive_update') {
         // inotify detected a change in the local archives directory
         if (currentPanel === 'archive') {
-          if (selectedArchiveName) loadArchiveResults();
-          else loadArchives();
+          if (selectedArchiveName) scheduleArchiveRefresh();
+          else scheduleArchivesListRefresh();
         } else {
           // invalidate cache so next visit fetches fresh
           archives = [];
@@ -1079,6 +1133,54 @@ function wsRefresh() {
   }
 }
 
+function archiveModeFromValue(value) {
+  return value === 'optimize' || value === 'schedules' ? value : 'backtests';
+}
+
+function parseBacktestViewHash() {
+  var raw = String(window.location.hash || '').replace(/^#/, '');
+  if (!raw) return null;
+  var parts = raw.split(':');
+  if (parts[0] === 'archive' && parts[1]) {
+    try {
+      return { panel: 'archive', archive: decodeURIComponent(parts[1]), archiveMode: archiveModeFromValue(parts[2]) };
+    } catch (_e) {
+      return null;
+    }
+  }
+  if (['configs', 'queue', 'results', 'archive', 'legacy'].indexOf(raw) >= 0) {
+    return { panel: raw };
+  }
+  return null;
+}
+
+function loadStoredBacktestViewState() {
+  var fromHash = parseBacktestViewHash();
+  if (fromHash) return fromHash;
+  try {
+    var stored = JSON.parse(localStorage.getItem(BACKTEST_VIEW_STATE_KEY) || 'null');
+    if (stored && ['configs', 'queue', 'results', 'archive', 'legacy'].indexOf(stored.panel) >= 0) return stored;
+  } catch (_e) {}
+  return { panel: 'configs' };
+}
+
+function currentBacktestViewHash() {
+  if (currentPanel === 'archive' && selectedArchiveName) {
+    return 'archive:' + encodeURIComponent(selectedArchiveName) + ':' + archiveModeFromValue(archiveResultsMode);
+  }
+  return currentPanel || 'configs';
+}
+
+function persistBacktestViewState() {
+  var state = {
+    panel: currentPanel || 'configs',
+    archive: selectedArchiveName || '',
+    archiveMode: archiveModeFromValue(archiveResultsMode)
+  };
+  try { localStorage.setItem(BACKTEST_VIEW_STATE_KEY, JSON.stringify(state)); } catch (_e) {}
+  history.replaceState(null, '', window.location.pathname + window.location.search + '#' + currentBacktestViewHash());
+}
+
 /* ════════════════════════════════════════════════
    NAVIGATION
    ════════════════════════════════════════════════ */
@@ -1098,7 +1200,7 @@ function selectPanel(id) {
   document.querySelectorAll('.ctx-actions').forEach(function(c) {
     c.style.display = c.id === 'ctx-' + id ? '' : 'none';
   });
-  history.replaceState(null, '', window.location.pathname + window.location.search + '#' + id);
+  persistBacktestViewState();
   // Lazy-load data when switching panels
   if (id === 'configs') {
     if (configs.length === 0) loadConfigs(); else renderConfigs();
@@ -4370,8 +4472,30 @@ function _rthL(label, key) {
        + esc(label) + '\x3Cspan class="sort-arrow">' + arrow + '\x3C/span>\x3C/th>';
 }
 
+function updateResultsCountLabel(id, shown, total) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  shown = Math.max(0, Number(shown) || 0);
+  total = Math.max(0, Number(total) || 0);
+  if (shown === total) {
+    el.textContent = shown + (shown === 1 ? ' result' : ' results');
+  } else {
+    el.textContent = 'Showing ' + shown + ' of ' + total + (total === 1 ? ' result' : ' results');
+  }
+  el.style.display = '';
+}
+
+function hideResultsCountLabel(id) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = '';
+  el.style.display = 'none';
+}
+
 /* ── Shared results table renderer (used by both Results tab and Archive panel) ── */
 function _renderResultsTableInto(el, data, chartsEl, rthFn) {
+  if (!el) return;
+  data = Array.isArray(data) ? data : [];
   _activeResultsCtx = { data: data, chartsEl: chartsEl };
   window._filteredResults = data;
   if (!data.length) {
@@ -4389,6 +4513,7 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn) {
     '\x3C/tr>\x3C/thead>\x3Ctbody>';
 
   data.forEach(function(r, i) {
+    r = r || {};
     var btName = r.display_name || (r.config_name + '/' + (r.exchange_dir || '') + '/' + r.result_name);
     var liqStyle = r.liquidated ? ' style="background:rgba(255,75,75,.10)"' : '';
     var liqTitle = r.liquidated ? ' ⚠ liquidated' : '';
@@ -4419,36 +4544,89 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn) {
 
 function renderResults() {
   var el = document.getElementById('results-list');
-  var chartsEl = document.getElementById('results-charts');
-  var filter = (document.getElementById('results-filter').value || '').toLowerCase();
-  var cfgFilter = (document.getElementById('results-config-filter').value || '');
+  try {
+    var chartsEl = document.getElementById('results-charts');
+    var filterEl = document.getElementById('results-filter');
+    var cfgSel = document.getElementById('results-config-filter');
+    var filter = ((filterEl && filterEl.value) || '').toLowerCase();
+    var cfgFilter = (cfgSel && cfgSel.value) || '';
 
-  var filtered = results.filter(function(r) {
-    if (cfgFilter && r.config_name !== cfgFilter) return false;
-    if (!filter) return true;
-    var hay = ((r.config_name || '') + ' ' + (r.result_name || '')).toLowerCase();
-    return hay.indexOf(filter) >= 0;
-  });
+    var resultItems = Array.isArray(results) ? results : [];
+    var filtered = resultItems.filter(function(r) {
+      r = r || {};
+      if (cfgFilter && r.config_name !== cfgFilter) return false;
+      if (!filter) return true;
+      var hay = ((r.config_name || '') + ' ' + (r.result_name || '')).toLowerCase();
+      return hay.indexOf(filter) >= 0;
+    });
+    updateResultsCountLabel('results-count-label', filtered.length, resultItems.length);
 
-  // Sort
-  filtered.sort(function(a, b) {
-    var va = a[_resSort], vb = b[_resSort];
-    if (va === undefined) va = '';
-    if (vb === undefined) vb = '';
-    if (typeof va === 'string') va = va.toLowerCase();
-    if (typeof vb === 'string') vb = vb.toLowerCase();
-    if (va < vb) return _resSortAsc ? -1 : 1;
-    if (va > vb) return _resSortAsc ? 1 : -1;
-    return 0;
-  });
+    // Sort
+    filtered.sort(function(a, b) {
+      a = a || {};
+      b = b || {};
+      var va = a[_resSort], vb = b[_resSort];
+      if (va === undefined) va = '';
+      if (vb === undefined) vb = '';
+      if (typeof va === 'string') va = va.toLowerCase();
+      if (typeof vb === 'string') vb = vb.toLowerCase();
+      if (va < vb) return _resSortAsc ? -1 : 1;
+      if (va > vb) return _resSortAsc ? 1 : -1;
+      return 0;
+    });
 
-  _renderResultsTableInto(el, filtered, chartsEl, rth);
+    _renderResultsTableInto(el, filtered, chartsEl, rth);
+  } catch (e) {
+    if (el) el.innerHTML = '\x3Cdiv class="empty-state">Failed to render results: ' + esc(e.message || e) + '\x3C/div>';
+    toast('Render results failed: ' + (e.message || e), 'err');
+  }
 }
 
 /* ── Row selection: click to toggle, drag to multi-select ── */
 var _rowDragStart = null; /* { tr, y } */
 var _rowDragSelecting = false;
 var _rowDragMode = null;
+var _rowSelectAutoScroll = { frame: 0, wrap: null, y: 0, apply: null };
+
+function startRowSelectAutoScroll(wrap, y, apply) {
+  if (!wrap) return;
+  _rowSelectAutoScroll.wrap = wrap;
+  _rowSelectAutoScroll.y = y;
+  _rowSelectAutoScroll.apply = apply;
+  if (!_rowSelectAutoScroll.frame) {
+    _rowSelectAutoScroll.frame = window.requestAnimationFrame(tickRowSelectAutoScroll);
+  }
+}
+
+function stopRowSelectAutoScroll() {
+  if (_rowSelectAutoScroll.frame) window.cancelAnimationFrame(_rowSelectAutoScroll.frame);
+  _rowSelectAutoScroll.frame = 0;
+  _rowSelectAutoScroll.wrap = null;
+  _rowSelectAutoScroll.apply = null;
+}
+
+function tickRowSelectAutoScroll() {
+  _rowSelectAutoScroll.frame = 0;
+  var wrap = _rowSelectAutoScroll.wrap;
+  if (!wrap) return;
+  var rect = wrap.getBoundingClientRect();
+  var edge = 40;
+  var maxStep = 22;
+  var y = _rowSelectAutoScroll.y;
+  var dy = 0;
+  if (y < rect.top + edge) {
+    dy = -Math.ceil(((rect.top + edge) - y) / edge * maxStep);
+  } else if (y > rect.bottom - edge) {
+    dy = Math.ceil((y - (rect.bottom - edge)) / edge * maxStep);
+  }
+  if (!dy) return;
+  var before = wrap.scrollTop;
+  wrap.scrollTop += dy;
+  if (wrap.scrollTop !== before && typeof _rowSelectAutoScroll.apply === 'function') {
+    _rowSelectAutoScroll.apply(y);
+    _rowSelectAutoScroll.frame = window.requestAnimationFrame(tickRowSelectAutoScroll);
+  }
+}
 
 /* ── Config row selection: click to toggle, drag to multi-select ── */
 var _cfgDragStart = null;
@@ -4465,6 +4643,18 @@ var _cfgDragMode = null;
       if (y >= rows[i].getBoundingClientRect().top) idx = i;
     }
     return idx;
+  }
+  function applyRange(y) {
+    var rows = rowsOfCfg();
+    var anchor = rows.indexOf(_cfgDragStart.tr);
+    var cur = rowIdxAtY(rows, y);
+    var lo = Math.min(anchor, cur), hi = Math.max(anchor, cur);
+    rows.forEach(function(r, i) {
+      if (i >= lo && i <= hi) {
+        if (_cfgDragMode === 'add') r.classList.add('selected');
+        else r.classList.remove('selected');
+      }
+    });
   }
   document.addEventListener('mousedown', function(e) {
     if (e.button !== 0) return;
@@ -4483,16 +4673,8 @@ var _cfgDragMode = null;
     }
     if (_cfgDragSelecting) {
       e.preventDefault();
-      var rows = rowsOfCfg();
-      var anchor = rows.indexOf(_cfgDragStart.tr);
-      var cur = rowIdxAtY(rows, e.clientY);
-      var lo = Math.min(anchor, cur), hi = Math.max(anchor, cur);
-      rows.forEach(function(r, i) {
-        if (i >= lo && i <= hi) {
-          if (_cfgDragMode === 'add') r.classList.add('selected');
-          else r.classList.remove('selected');
-        }
-      });
+      applyRange(e.clientY);
+      startRowSelectAutoScroll(document.getElementById('configs-list'), e.clientY, applyRange);
     }
   });
   document.addEventListener('mouseup', function() {
@@ -4502,6 +4684,7 @@ var _cfgDragMode = null;
     _cfgDragStart = null;
     _cfgDragSelecting = false;
     _cfgDragMode = null;
+    stopRowSelectAutoScroll();
   });
   document.addEventListener('dblclick', function(e) {
     var tr = e.target.closest('#configs-list .tbl tbody tr');
@@ -4523,6 +4706,18 @@ var _cfgDragMode = null;
     }
     return idx;
   }
+  function applyRange(y) {
+    var rows = rowsOfRes();
+    var anchor = rows.indexOf(_rowDragStart.tr);
+    var cur = rowIdxAtY(rows, y);
+    var lo = Math.min(anchor, cur), hi = Math.max(anchor, cur);
+    rows.forEach(function(r, i) {
+      if (i >= lo && i <= hi) {
+        if (_rowDragMode === 'add') r.classList.add('selected');
+        else r.classList.remove('selected');
+      }
+    });
+  }
   document.addEventListener('mousedown', function(e) {
     if (e.button !== 0) return;
     var tr = e.target.closest('#results-list .tbl tbody tr');
@@ -4540,16 +4735,8 @@ var _cfgDragMode = null;
     }
     if (_rowDragSelecting) {
       e.preventDefault();
-      var rows = rowsOfRes();
-      var anchor = rows.indexOf(_rowDragStart.tr);
-      var cur = rowIdxAtY(rows, e.clientY);
-      var lo = Math.min(anchor, cur), hi = Math.max(anchor, cur);
-      rows.forEach(function(r, i) {
-        if (i >= lo && i <= hi) {
-          if (_rowDragMode === 'add') r.classList.add('selected');
-          else r.classList.remove('selected');
-        }
-      });
+      applyRange(e.clientY);
+      startRowSelectAutoScroll(document.getElementById('results-list-wrap'), e.clientY, applyRange);
     }
   });
   document.addEventListener('mouseup', function() {
@@ -4559,6 +4746,7 @@ var _cfgDragMode = null;
     _rowDragStart = null;
     _rowDragSelecting = false;
     _rowDragMode = null;
+    stopRowSelectAutoScroll();
   });
 })();
 
@@ -4577,6 +4765,18 @@ var _queueDragMode = null;
     }
     return idx;
   }
+  function applyRange(y) {
+    var rows = rowsOfQueue();
+    var anchor = rows.indexOf(_queueDragStart.tr);
+    var cur = rowIdxAtY(rows, y);
+    var lo = Math.min(anchor, cur), hi = Math.max(anchor, cur);
+    rows.forEach(function(r, i) {
+      if (i >= lo && i <= hi) {
+        if (_queueDragMode === 'add') r.classList.add('selected');
+        else r.classList.remove('selected');
+      }
+    });
+  }
   document.addEventListener('mousedown', function(e) {
     if (e.button !== 0) return;
     var tr = e.target.closest('#queue-list .tbl tbody tr');
@@ -4594,16 +4794,8 @@ var _queueDragMode = null;
     }
     if (_queueDragSelecting) {
       e.preventDefault();
-      var rows = rowsOfQueue();
-      var anchor = rows.indexOf(_queueDragStart.tr);
-      var cur = rowIdxAtY(rows, e.clientY);
-      var lo = Math.min(anchor, cur), hi = Math.max(anchor, cur);
-      rows.forEach(function(r, i) {
-        if (i >= lo && i <= hi) {
-          if (_queueDragMode === 'add') r.classList.add('selected');
-          else r.classList.remove('selected');
-        }
-      });
+      applyRange(e.clientY);
+      startRowSelectAutoScroll(document.getElementById('queue-list'), e.clientY, applyRange);
     }
   });
   document.addEventListener('mouseup', function() {
@@ -4613,6 +4805,7 @@ var _queueDragMode = null;
     _queueDragStart = null;
     _queueDragSelecting = false;
     _queueDragMode = null;
+    stopRowSelectAutoScroll();
   });
 }());
 
@@ -4658,6 +4851,18 @@ var _arcRowDragMode = null;
     }
     return idx;
   }
+  function applyRange(y) {
+    var rows = rowsOfArc();
+    var anchor = rows.indexOf(_arcRowDragStart.tr);
+    var cur = rowIdxAtY(rows, y);
+    var lo = Math.min(anchor, cur), hi = Math.max(anchor, cur);
+    rows.forEach(function(r, i) {
+      if (i >= lo && i <= hi) {
+        if (_arcRowDragMode === 'add') r.classList.add('selected');
+        else r.classList.remove('selected');
+      }
+    });
+  }
   document.addEventListener('mousedown', function(e) {
     if (e.button !== 0) return;
     var tr = e.target.closest('#archive-results-table .tbl tbody tr');
@@ -4675,16 +4880,8 @@ var _arcRowDragMode = null;
     }
     if (_arcRowDragSelecting) {
       e.preventDefault();
-      var rows = rowsOfArc();
-      var anchor = rows.indexOf(_arcRowDragStart.tr);
-      var cur = rowIdxAtY(rows, e.clientY);
-      var lo = Math.min(anchor, cur), hi = Math.max(anchor, cur);
-      rows.forEach(function(r, i) {
-        if (i >= lo && i <= hi) {
-          if (_arcRowDragMode === 'add') r.classList.add('selected');
-          else r.classList.remove('selected');
-        }
-      });
+      applyRange(e.clientY);
+      startRowSelectAutoScroll(document.getElementById('archive-results-list-wrap'), e.clientY, applyRange);
     }
   });
   document.addEventListener('mouseup', function() {
@@ -4694,6 +4891,7 @@ var _arcRowDragMode = null;
     _arcRowDragStart = null;
     _arcRowDragSelecting = false;
     _arcRowDragMode = null;
+    stopRowSelectAutoScroll();
   });
 }());
 
@@ -4712,6 +4910,18 @@ var _legacyRowDragMode = null;
     }
     return idx;
   }
+  function applyRange(y) {
+    var rows = rowsOfLegacy();
+    var anchor = rows.indexOf(_legacyRowDragStart.tr);
+    var cur = rowIdxAtY(rows, y);
+    var lo = Math.min(anchor, cur), hi = Math.max(anchor, cur);
+    rows.forEach(function(r, i) {
+      if (i >= lo && i <= hi) {
+        if (_legacyRowDragMode === 'add') r.classList.add('selected');
+        else r.classList.remove('selected');
+      }
+    });
+  }
   document.addEventListener('mousedown', function(e) {
     if (e.button !== 0) return;
     var tr = e.target.closest('#legacy-results-table .tbl tbody tr');
@@ -4729,16 +4939,8 @@ var _legacyRowDragMode = null;
     }
     if (_legacyRowDragSelecting) {
       e.preventDefault();
-      var rows = rowsOfLegacy();
-      var anchor = rows.indexOf(_legacyRowDragStart.tr);
-      var cur = rowIdxAtY(rows, e.clientY);
-      var lo = Math.min(anchor, cur), hi = Math.max(anchor, cur);
-      rows.forEach(function(r, i) {
-        if (i >= lo && i <= hi) {
-          if (_legacyRowDragMode === 'add') r.classList.add('selected');
-          else r.classList.remove('selected');
-        }
-      });
+      applyRange(e.clientY);
+      startRowSelectAutoScroll(document.getElementById('legacy-results-list-wrap'), e.clientY, applyRange);
     }
   });
   document.addEventListener('mouseup', function() {
@@ -4748,6 +4950,7 @@ var _legacyRowDragMode = null;
     _legacyRowDragStart = null;
     _legacyRowDragSelecting = false;
     _legacyRowDragMode = null;
+    stopRowSelectAutoScroll();
   });
 }());
 
@@ -4795,6 +4998,20 @@ function getSelectedArchiveResults() {
   return sel;
 }
 
+function setSelectedArchiveResults(paths) {
+  var selected = {};
+  (paths || []).forEach(function(path) { selected[path] = true; });
+  document.querySelectorAll('#archive-results-table .tbl tbody tr[data-path]').forEach(function(tr) {
+    tr.classList.toggle('selected', !!selected[tr.dataset.path]);
+  });
+}
+
+function getVisibleArchiveResultPaths() {
+  var paths = [];
+  document.querySelectorAll('#archive-results-table .tbl tbody tr[data-path]').forEach(function(tr) { paths.push(tr.dataset.path); });
+  return paths;
+}
+
 function selectAllLegacyResults() {
   document.querySelectorAll('#legacy-results-table .tbl tbody tr').forEach(function(tr) { tr.classList.add('selected'); });
 }
@@ -4826,6 +5043,246 @@ function deleteSelectedArchiveResults() {
       }).catch(function(e) { toast('Delete failed: ' + e.message, 'err'); });
     }}
   ]);
+}
+
+function removeLiquidatedArchiveResults() {
+  if (!selectedArchiveIsOwn()) { toast('Liquidated cleanup is only available for your own archive', 'err'); return; }
+  var selected = getSelectedArchiveResults();
+  var paths = selected.length ? selected : getVisibleArchiveResultPaths();
+  if (!paths.length) { toast('No visible archive results', 'err'); return; }
+  var scope = selected.length ? 'selected_results' : 'visible_results';
+  apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/results/remove-liquidated', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths: paths, scope: scope, dry_run: true })
+  }).then(function(preview) {
+    var items = preview.items || [];
+    if (!items.length) { toast('No liquidated results found in the current selection', 'ok'); return; }
+    var list = items.slice(0, 20).map(function(item) {
+      return '<li>' + esc((item.path || '').split('/').slice(-3).join('/')) + ' <span class="muted-line">' + esc(item.reason || '') + '</span></li>';
+    }).join('');
+    if (items.length > 20) list += '<li>… and ' + (items.length - 20) + ' more</li>';
+    showModal('Remove Liquidated Results',
+      '<p>Remove ' + items.length + ' liquidated archive result(s) from <b>' + esc(selectedArchiveName) + '</b>? This only changes the local archive clone until you run Git Push.</p><ul>' + list + '</ul>', [
+        { text: 'Cancel', cls: '' },
+        { text: 'Remove', cls: 'modal-btn-danger', action: function() {
+          apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/results/remove-liquidated', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths: paths, scope: scope, dry_run: false })
+          }).then(function(result) {
+            toast('Removed ' + (result.removed || 0) + ' liquidated result(s)', 'ok');
+            closeModal();
+            viewArchive(selectedArchiveName);
+          }).catch(function(e) { toast('Cleanup failed: ' + e.message, 'err'); });
+        }}
+      ]);
+  }).catch(function(e) { toast('Dry run failed: ' + e.message, 'err'); });
+}
+
+function removeDuplicateArchiveResults() {
+  if (!selectedArchiveIsOwn()) { toast('Duplicate cleanup is only available for your own archive', 'err'); return; }
+  var selected = getSelectedArchiveResults();
+  var paths = selected.length ? selected : getVisibleArchiveResultPaths();
+  if (!paths.length) { toast('No visible archive results', 'err'); return; }
+  var scope = selected.length ? 'selected_results' : 'visible_results';
+  apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/results/remove-duplicates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths: paths, scope: scope, dry_run: true })
+  }).then(function(preview) {
+    var items = preview.items || [];
+    if (!items.length) { toast('No duplicate results found in the current selection', 'ok'); return; }
+    var list = items.slice(0, 20).map(function(item) {
+      var label = (item.path || '').split('/').slice(-3).join('/');
+      var keep = (item.keep_path || '').split('/').slice(-3).join('/');
+      return '<li>' + esc(label) + ' <span class="muted-line">keeps ' + esc(keep) + '</span></li>';
+    }).join('');
+    if (items.length > 20) list += '<li>… and ' + (items.length - 20) + ' more</li>';
+    showModal('Remove Duplicate Results',
+      '<p>Remove ' + items.length + ' duplicate archive result(s) from <b>' + esc(selectedArchiveName) + '</b>? The newest result in each duplicate group is kept. This only changes the local archive clone until you run Git Push.</p><ul>' + list + '</ul>', [
+        { text: 'Cancel', cls: '' },
+        { text: 'Remove', cls: 'modal-btn-danger', action: function() {
+          apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/results/remove-duplicates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths: paths, scope: scope, dry_run: false })
+          }).then(function(result) {
+            toast('Removed ' + (result.removed || 0) + ' duplicate result(s)', 'ok');
+            closeModal();
+            viewArchive(selectedArchiveName);
+          }).catch(function(e) { toast('Cleanup failed: ' + e.message, 'err'); });
+        }}
+      ]);
+  }).catch(function(e) { toast('Dry run failed: ' + e.message, 'err'); });
+}
+
+function previewArchiveScores() {
+  if (!selectedArchiveName) { toast('Click View on an archive first', 'err'); return; }
+  toast('Calculating archive scores…', 'info');
+  apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/scores/preview')
+    .then(function(payload) { showArchiveScorePreview(payload, false); })
+    .catch(function(e) { toast('Score preview failed: ' + e.message, 'err'); });
+}
+
+function rebuildArchiveScores() {
+  if (!selectedArchiveName || !selectedArchiveIsOwn()) { toast('Score rebuild is only available for your own archive', 'err'); return; }
+  toast('Updating archive scores and README…', 'info');
+  apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/scores/rebuild', { method: 'POST' })
+    .then(function(payload) {
+      toast('Updated ' + (payload.scored || 0) + ' archive score(s)', 'ok');
+      showArchiveScorePreview(payload, true);
+      viewArchive(selectedArchiveName);
+    })
+    .catch(function(e) { toast('Score rebuild failed: ' + e.message, 'err'); });
+}
+
+function markdownSafeUrl(url) {
+  var value = String(url || '').trim();
+  if (/^(https?:|mailto:|#)/i.test(value)) return esc(value);
+  return '#';
+}
+
+function archiveRemoteBrowserUrl() {
+  var archive = findArchiveByName(selectedArchiveName);
+  var url = String((archive && archive.url) || '').trim();
+  if (!url) return '';
+  url = url.replace(/^https?:\/\/[^/@]+@/, function(prefix) { return prefix.replace(/\/\/[^/@]+@/, '//'); });
+  if (/^git@github\.com:/i.test(url)) url = url.replace(/^git@github\.com:/i, 'https://github.com/');
+  if (/^git@gitlab\.com:/i.test(url)) url = url.replace(/^git@gitlab\.com:/i, 'https://gitlab.com/');
+  url = url.replace(/\.git$/i, '').replace(/\/$/, '');
+  return /^https?:\/\//i.test(url) ? url : '';
+}
+
+function encodeArchiveRelativePath(path) {
+  return String(path || '').replace(/^\.\//, '').split('/').map(function(part) {
+    return encodeURIComponent(part);
+  }).join('/');
+}
+
+function markdownPreviewUrl(url) {
+  var value = String(url || '').trim();
+  if (/^(https?:|mailto:|#)/i.test(value)) return markdownSafeUrl(value);
+  value = value.replace(/^\.\//, '');
+  if (/^(pbgui\/|README\.md$)/i.test(value)) {
+    var base = archiveRemoteBrowserUrl();
+    if (base) return esc(base + '/tree/main/' + encodeArchiveRelativePath(value));
+  }
+  return '#';
+}
+
+function markdownLinkAttrs(url) {
+  var href = markdownPreviewUrl(url);
+  if (href === '#') return 'href="#" onclick="return false" title="This relative README link works on GitHub after push."';
+  return 'href="' + href + '" target="_blank" rel="noopener"';
+}
+
+function renderMarkdownInline(text) {
+  var html = esc(text || '');
+  html = html.replace(/&lt;wbr&gt;/g, '<wbr>');
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/\[!\[([^\]]*)\]\(([^)]+)\)\]\(([^)]+)\)/g, function(_, alt, src, href) {
+    return '<a ' + markdownLinkAttrs(href) + '><img alt="' + esc(alt) + '" src="' + markdownSafeUrl(src) + '"></a>';
+  });
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, function(_, alt, src) {
+    return '<img alt="' + esc(alt) + '" src="' + markdownSafeUrl(src) + '">';
+  });
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(_, label, href) {
+    return '<a ' + markdownLinkAttrs(href) + '>' + label + '</a>';
+  });
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  return html;
+}
+
+function renderMarkdownTable(rows) {
+  if (!rows.length) return '';
+  var parsed = rows.map(function(line) {
+    return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function(cell) { return cell.trim(); });
+  });
+  var header = parsed[0] || [];
+  var body = parsed.slice(1).filter(function(row) {
+    return !row.every(function(cell) { return /^:?-{3,}:?$/.test(cell); });
+  });
+  var html = '<div class="md-table-wrap"><table><thead><tr>';
+  header.forEach(function(cell) { html += '<th>' + renderMarkdownInline(cell) + '</th>'; });
+  html += '</tr></thead><tbody>';
+  body.forEach(function(row) {
+    html += '<tr>';
+    row.forEach(function(cell) { html += '<td>' + renderMarkdownInline(cell) + '</td>'; });
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  return html;
+}
+
+function renderArchiveReadmeMarkdown(markdown) {
+  var lines = String(markdown || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  var html = [];
+  var paragraph = [];
+  var list = [];
+  var table = [];
+  var code = [];
+  var inCode = false;
+  function flushParagraph() {
+    if (!paragraph.length) return;
+    html.push('<p>' + renderMarkdownInline(paragraph.join(' ')) + '</p>');
+    paragraph = [];
+  }
+  function flushList() {
+    if (!list.length) return;
+    html.push('<ul>' + list.map(function(item) { return '<li>' + renderMarkdownInline(item) + '</li>'; }).join('') + '</ul>');
+    list = [];
+  }
+  function flushTable() {
+    if (!table.length) return;
+    html.push(renderMarkdownTable(table));
+    table = [];
+  }
+  function flushCode() {
+    if (!code.length) return;
+    html.push('<pre><code>' + esc(code.join('\n')) + '</code></pre>');
+    code = [];
+  }
+  lines.forEach(function(line) {
+    var trimmed = line.trim();
+    if (/^```/.test(trimmed)) {
+      if (inCode) { flushCode(); inCode = false; } else { flushParagraph(); flushList(); flushTable(); inCode = true; }
+      return;
+    }
+    if (inCode) { code.push(line); return; }
+    if (/^<!--\s*pbgui:/.test(trimmed)) return;
+    if (!trimmed) { flushParagraph(); flushList(); flushTable(); return; }
+    if (/^\|/.test(trimmed)) { flushParagraph(); flushList(); table.push(trimmed); return; }
+    flushTable();
+    var heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      flushParagraph(); flushList();
+      html.push('<h' + heading[1].length + '>' + renderMarkdownInline(heading[2]) + '</h' + heading[1].length + '>');
+      return;
+    }
+    var bullet = trimmed.match(/^-\s+(.+)$/);
+    if (bullet) { flushParagraph(); list.push(bullet[1]); return; }
+    paragraph.push(trimmed);
+  });
+  flushParagraph(); flushList(); flushTable(); flushCode();
+  return html.join('');
+}
+
+function showArchiveScorePreview(payload, rebuilt) {
+  var readmeMarkdown = (payload && payload.readme_markdown) || (payload && payload.markdown) || '';
+  var html =
+    '<div class="score-preview-wrap">' +
+    '<p class="muted-line" style="margin:0">' + (rebuilt ? 'Manifest and README were updated. This is the generated README.md preview.' : 'Read-only README.md preview. Git Push updates manifest and README automatically before committing.') + '</p>' +
+    '<div class="score-preview-meta">' +
+      '<div><div class="sb-label">Score Version</div><b>' + esc(payload.score_version || '') + '</b></div>' +
+      '<div><div class="sb-label">Results</div><b>' + esc(payload.scored || 0) + ' / ' + esc(payload.total || 0) + '</b></div>' +
+      '<div><div class="sb-label">Generated</div><b>' + esc(payload.generated_at || '') + '</b></div>' +
+    '</div>' +
+    '<div class="readme-preview">' + renderArchiveReadmeMarkdown(readmeMarkdown) + '</div>' +
+    '</div>';
+  var buttons = [{ text: 'Close', cls: '' }];
+  if (selectedArchiveIsOwn()) buttons.push({ text: 'Update Manifest & README', cls: 'modal-btn-primary', action: rebuildArchiveScores });
+  showModal('README Preview — ' + esc(selectedArchiveName), html, buttons, { className: 'score-preview-modal' });
 }
 
 function deleteSelectedLegacyResults() {
@@ -6070,18 +6527,6 @@ function rebacktestSelected() {
 function rebacktestSelectedArchive() {
   var sel = getSelectedArchiveResults();
   if (!sel.length) { toast('Nothing selected', 'err'); return; }
-
-  if (sel.length === 1) {
-    apiFetch('/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
-      var matched = archiveResults.find(function(r) { return r.path === sel[0]; });
-      var name = matched ? matched.config_name : (sel[0].split('/').slice(-3, -2)[0] || 'rebacktest');
-      editingConfig = name;
-      selectPanel('configs');
-      showConfigEditor(name, cfg);
-    }).catch(function(e) { toast('Failed to load config: ' + e.message, 'err'); });
-    return;
-  }
-
   var today = new Date().toISOString().slice(0, 10);
   var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'combined'];
   apiFetch('/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
@@ -6123,31 +6568,145 @@ function rebacktestSelectedArchive() {
         }
         if (!exchanges.length) { toast('Select at least one exchange', 'err'); return; }
         closeModal();
-        (usePbguiData ? apiFetch('/pbgui_data_path').then(function(d) { return d.path || ''; }) : Promise.resolve('')).then(function(pbguiPath) {
-          var promises = sel.map(function(path) {
-            return apiFetch('/results/config?path=' + encodeURIComponent(path)).then(function(cfg) {
-              if (!cfg.backtest) cfg.backtest = {};
-              cfg.backtest.start_date = start;
-              cfg.backtest.end_date = end;
-              cfg.backtest.starting_balance = balance;
-              cfg.backtest.exchanges = exchanges;
-              if (pbguiPath) cfg.backtest.ohlcv_source_dir = pbguiPath;
-              var matched = archiveResults.find(function(r) { return r.path === path; });
-              var name = matched ? matched.config_name : (path.split('/').slice(-3, -2)[0] || 'rebacktest');
-              return apiFetch('/queue', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: name, config: cfg })
-              });
-            });
-          });
-          Promise.all(promises)
-            .then(function() { toast('Queued ' + sel.length + ' backtests', 'ok'); wsRefresh(); })
-            .catch(function(e) { toast('Failed: ' + e.message, 'err'); });
-        }).catch(function(e) { toast('Failed to get PBGui data path: ' + e.message, 'err'); });
+        apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/results/rebacktest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            paths: sel,
+            overrides: {
+              start_date: start,
+              end_date: end,
+              starting_balance: balance,
+              exchanges: exchanges,
+              use_pbgui_market_data: usePbguiData
+            }
+          })
+        }).then(function(d) {
+          toast('Queued ' + (d.queued || sel.length) + ' backtests', 'ok');
+          wsRefresh();
+        }).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
       }},
       { text: 'Cancel', cls: '' }
     ]);
+  }).catch(function(e) { toast('Failed to load config: ' + e.message, 'err'); });
+}
+
+function archiveRetestDefaultDays(cfg) {
+  var bt = (cfg && cfg.backtest) || {};
+  var start = bt.start_date ? new Date(String(bt.start_date).slice(0, 10) + 'T00:00:00Z') : null;
+  var end = bt.end_date ? new Date(String(bt.end_date).slice(0, 10) + 'T00:00:00Z') : null;
+  if (start && end && !isNaN(start.getTime()) && !isNaN(end.getTime()) && end >= start) {
+    return Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
+  }
+  return 365;
+}
+
+function updateArchiveRetestFields() {
+  var weekly = (document.getElementById('arr-cadence') || {}).value === 'weekly';
+  var weekdayWrap = document.getElementById('arr-weekday-wrap');
+  if (weekdayWrap) weekdayWrap.style.display = weekly ? '' : 'none';
+}
+
+function collectArchiveRetestPayload(paths) {
+  var mode = (document.getElementById('arr-date-mode') || {}).value || 'until_yesterday';
+  var lastDays = parseInt((document.getElementById('arr-last-days') || {}).value, 10) || 365;
+  var balance = parseFloat((document.getElementById('arr-balance') || {}).value) || 1000;
+  var exSel = document.getElementById('arr-exchanges');
+  var exchanges = [];
+  if (exSel) {
+    for (var i = 0; i < exSel.options.length; i++) {
+      if (exSel.options[i].selected) exchanges.push(exSel.options[i].value);
+    }
+  }
+  if (!exchanges.length) { toast('Select at least one exchange', 'err'); return null; }
+  return {
+    paths: paths,
+    date_mode: mode === 'last_x_days' ? 'last_x_days' : 'until_yesterday',
+    last_days: Math.max(1, Math.min(3650, lastDays)),
+    starting_balance: balance,
+    exchanges: exchanges,
+    use_pbgui_market_data: !!((document.getElementById('arr-pbgui-data') || {}).checked),
+    skip_liquidated: !!((document.getElementById('arr-skip-liquidated') || {}).checked)
+  };
+}
+
+function retestReplaceSelectedArchive() {
+  if (!selectedArchiveIsOwn()) { toast('Retest & Replace is only available for your own archive', 'err'); return; }
+  var sel = getSelectedArchiveResults();
+  if (!sel.length) { toast('Nothing selected', 'err'); return; }
+  var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'combined'];
+  apiFetch('/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
+    var defExchanges = (cfg.backtest && cfg.backtest.exchanges) || ['bybit'];
+    var defBalance = (cfg.backtest && cfg.backtest.starting_balance) || 1000;
+    var defDays = archiveRetestDefaultDays(cfg);
+    var exOpts = allExchanges.map(function(e) {
+      return '\x3Coption value="' + e + '"' + (defExchanges.indexOf(e) >= 0 ? ' selected' : '') + '>' + e + '\x3C/option>';
+    }).join('');
+    var body =
+      '\x3Cdiv style="display:flex;flex-direction:column;gap:var(--sp-md);height:100%;min-width:0">' +
+        '\x3Cp class="muted-line" style="margin:0">The new backtest always ends at yesterday. Replacement happens only after the new result finished successfully; Git Push stays manual.\x3C/p>' +
+        '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">Date Mode\x3C/div>' +
+          '\x3Cselect id="arr-date-mode" class="sb-input" style="width:100%">' +
+            '\x3Coption value="until_yesterday" selected>Same duration, end yesterday\x3C/option>' +
+            '\x3Coption value="last_x_days">Last X days, end yesterday\x3C/option>' +
+          '\x3C/select>\x3C/div>' +
+        '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">Last X days / fallback window\x3C/div>' +
+          '\x3Cinput id="arr-last-days" class="sb-input" style="width:100%;text-align:right" type="number" min="1" max="3650" step="1" value="' + defDays + '">' +
+          '\x3Cdiv class="muted-line">Used directly in Last X days mode, and as fallback when the old result has no valid dates.\x3C/div>\x3C/div>' +
+        '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">Starting Balance\x3C/div>' +
+          '\x3Cinput id="arr-balance" class="sb-input" style="width:100%;text-align:right" type="number" min="1" step="100" value="' + defBalance + '">\x3C/div>' +
+        '\x3Cdiv style="flex:1;display:flex;flex-direction:column;min-height:60px">\x3Cdiv class="sb-label">Exchanges\x3C/div>' +
+          '\x3Cselect id="arr-exchanges" class="sb-input" multiple style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '\x3C/select>\x3C/div>' +
+        '\x3Cdiv style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
+          '\x3Cinput type="checkbox" id="arr-pbgui-data" style="width:auto;margin:0">' +
+          '\x3Clabel for="arr-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data\x3C/label>\x3C/div>' +
+        '\x3Cdiv style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
+          '\x3Cinput type="checkbox" id="arr-skip-liquidated" checked style="width:auto;margin:0">' +
+          '\x3Clabel for="arr-skip-liquidated" style="font-size:var(--fs-sm);cursor:pointer">Do not replace when the new result is liquidated\x3C/label>\x3C/div>' +
+        '\x3Chr class="sb-sep">' +
+        '\x3Cdiv style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-sm)">' +
+          '\x3Cdiv>\x3Cdiv class="sb-label">Schedule\x3C/div>\x3Cselect id="arr-cadence" class="sb-input" onchange="updateArchiveRetestFields()">\x3Coption value="daily">Daily\x3C/option>\x3Coption value="weekly">Weekly\x3C/option>\x3C/select>\x3C/div>' +
+          '\x3Cdiv>\x3Cdiv class="sb-label">Time\x3C/div>\x3Cinput id="arr-time" class="sb-input" type="time" value="02:00">\x3C/div>' +
+          '\x3Cdiv id="arr-weekday-wrap" style="display:none;grid-column:span 2">\x3Cdiv class="sb-label">Weekday\x3C/div>\x3Cselect id="arr-weekday" class="sb-input">' +
+            '\x3Coption value="0">Monday\x3C/option>\x3Coption value="1">Tuesday\x3C/option>\x3Coption value="2">Wednesday\x3C/option>\x3Coption value="3">Thursday\x3C/option>\x3Coption value="4">Friday\x3C/option>\x3Coption value="5">Saturday\x3C/option>\x3Coption value="6">Sunday\x3C/option>' +
+          '\x3C/select>\x3C/div>' +
+        '\x3C/div>' +
+      '\x3C/div>';
+    showModal('Retest & Replace Archive Result', body, [
+      { text: 'Queue Now', cls: 'modal-btn-primary', action: function() {
+        var payload = collectArchiveRetestPayload(sel);
+        if (!payload) return;
+        closeModal();
+        apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/results/retest-replace', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }).then(function(d) {
+          toast('Queued ' + (d.queued || sel.length) + ' retest replacement(s)', 'ok');
+          wsRefresh();
+          viewArchive(selectedArchiveName);
+        }).catch(function(e) { toast('Retest & Replace failed: ' + e.message, 'err'); });
+      }},
+      { text: 'Create Schedule', cls: 'modal-btn-primary', action: function() {
+        var payload = collectArchiveRetestPayload(sel);
+        if (!payload) return;
+        payload.cadence = (document.getElementById('arr-cadence') || {}).value || 'daily';
+        payload.time = (document.getElementById('arr-time') || {}).value || '02:00';
+        payload.weekday = parseInt((document.getElementById('arr-weekday') || {}).value, 10) || 0;
+        closeModal();
+        apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/retest-schedules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }).then(function() {
+          toast('Retest schedule created', 'ok');
+          archiveResultsMode = 'schedules';
+          viewArchive(selectedArchiveName);
+        }).catch(function(e) { toast('Schedule failed: ' + e.message, 'err'); });
+      }},
+      { text: 'Cancel', cls: '' }
+    ]);
+    updateArchiveRetestFields();
   }).catch(function(e) { toast('Failed to load config: ' + e.message, 'err'); });
 }
 
@@ -6665,12 +7224,10 @@ function addResultToArchive() {
     var archName = s.my_archive || '';
     if (!archName) { toast('No own archive configured. Go to Archive \u2192 Settings.', 'err'); return; }
     var promises = sel.map(function(p) {
-      var parts = p.replace(/\/+$/, '').split('/pbgui/');
-      var destName = parts.length > 1 ? parts[parts.length - 1] : p.replace(/\/+$/, '').split('/').pop();
       return apiFetch('/archives/' + encodeURIComponent(archName) + '/add-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source_path: p, dest_name: destName })
+        body: JSON.stringify({ source_path: p })
       });
     });
     Promise.all(promises).then(function() {
@@ -6685,15 +7242,46 @@ function addResultToArchive() {
    ARCHIVE VIEW
    ════════════════════════════════════════════════ */
 var selectedArchiveName = '';
+var ownArchiveName = '';
 
 function loadArchives() {
-  apiFetch('/archives').then(function(d) {
+  return apiFetch('/archives').then(function(d) {
     archives = d.archives || [];
+    var own = archives.find(function(a) { return a && a.is_own; });
+    ownArchiveName = own ? own.name : ownArchiveName;
     renderArchiveList();
+    if (currentPanel === 'archive' && selectedArchiveName) {
+      updateArchiveStatusLine();
+      updateArchiveActionVisibility();
+    }
   }).catch(function(e) { toast('Load archives failed: ' + e.message, 'err'); });
 }
 
 function refreshArchives() { loadArchives(); }
+
+function scheduleArchivesListRefresh() {
+  if (_archivesRefreshTimer || _archivesRefreshInFlight) return;
+  _archivesRefreshTimer = setTimeout(function() {
+    _archivesRefreshTimer = null;
+    if (currentPanel !== 'archive' || selectedArchiveName) return;
+    _archivesRefreshInFlight = true;
+    Promise.resolve(loadArchives())
+      .catch(function() {})
+      .then(function() { _archivesRefreshInFlight = false; });
+  }, 750);
+}
+
+function scheduleArchiveRefresh() {
+  if (_archiveRefreshTimer || _archiveRefreshInFlight) return;
+  _archiveRefreshTimer = setTimeout(function() {
+    _archiveRefreshTimer = null;
+    if (currentPanel !== 'archive' || !selectedArchiveName) return;
+    _archiveRefreshInFlight = true;
+    Promise.resolve(loadArchiveResults({ silent: true }))
+      .catch(function() {})
+      .then(function() { _archiveRefreshInFlight = false; });
+  }, 750);
+}
 
 function renderArchiveList() {
   /* Always re-render the container; if an archive is selected, show its results below */
@@ -6703,14 +7291,16 @@ function renderArchiveList() {
     return;
   }
   var html = '<table class="tbl"><thead><tr>' +
-    '<th>Name</th><th>URL</th><th>Configs</th><th>Actions</th>' +
+    '<th>Name</th><th>URL</th><th>Backtests</th><th>Optimize</th><th>Layout</th><th>Actions</th>' +
     '</tr></thead><tbody>';
   archives.forEach(function(a) {
     var isSel = a.name === selectedArchiveName;
     html += '<tr' + (isSel ? ' class="selected"' : '') + ' ondblclick="viewArchive(\'' + esc(a.name) + '\')" style="cursor:pointer">' +
       '<td style="font-weight:600">' + esc(a.name) + '</td>' +
       '<td style="font-size:var(--fs-xs);color:var(--text-dim);word-break:break-all">' + esc(a.url || '') + '</td>' +
-      '<td>' + (a.configs || 0) + '</td>' +
+      '<td>' + (a.results || a.configs || 0) + '</td>' +
+      '<td>' + (a.optimize_configs || 0) + '</td>' +
+      '<td class="muted-line">' + esc(((a.migration_status || {}).label || '')) + '</td>' +
       '<td class="actions-cell">' +
         '<button class="act-btn act-btn-danger" onclick="deleteArchive(\'' + esc(a.name) + '\')" title="Delete">🗑</button>' +
       '</td></tr>';
@@ -6719,23 +7309,46 @@ function renderArchiveList() {
   el.innerHTML = html;
 }
 
-function viewArchive(name) {
+function viewArchive(name, opts) {
+  opts = opts || {};
   selectedArchiveName = name;
+  archiveResultsMode = archiveResultsMode || 'backtests';
+  persistBacktestViewState();
   /* Only manipulate sidebar/views when actually on the archive panel */
   if (currentPanel === 'archive') {
     document.getElementById('ctx-archive').style.display = 'none';
     document.getElementById('ctx-archive-results').style.display = '';
     document.getElementById('archive-list-view').style.display = 'none';
     document.getElementById('archive-results-view').style.display = '';
+    updateArchiveActionVisibility();
   }
-  apiFetch('/archives/' + encodeURIComponent(name) + '/results').then(function(d) {
-    archiveResults = d.results || [];
-    if (currentPanel === 'archive') renderArchiveResults(name);
-  }).catch(function(e) { if (currentPanel === 'archive') toast('Load failed: ' + e.message, 'err'); });
+  return Promise.all([
+    apiFetch('/archives/' + encodeURIComponent(name) + '/results'),
+    apiFetch('/archives/' + encodeURIComponent(name) + '/optimize-configs').catch(function() { return { configs: [] }; }),
+    apiFetch('/archives/' + encodeURIComponent(name) + '/retest-schedules').catch(function() { return { schedules: [], runs: [] }; })
+  ]).then(function(res) {
+    var resultPayload = res[0] || {};
+    archiveResults = resultPayload.results || [];
+    archiveOptimizeConfigs = (res[1] || {}).configs || [];
+    archiveRetestSchedules = (res[2] || {}).schedules || [];
+    archiveRetestRuns = (res[2] || {}).runs || [];
+    selectedArchiveMigrationStatus = resultPayload.migration_status || null;
+    if (currentPanel === 'archive') {
+      updateArchiveStatusLine();
+      updateArchiveActionVisibility();
+      renderArchiveResults(name);
+    }
+  }).catch(function(e) { if (currentPanel === 'archive' && !opts.silent) toast('Load failed: ' + e.message, 'err'); });
 }
 
 function closeArchiveResults() {
   selectedArchiveName = '';
+  archiveResultsMode = 'backtests';
+  persistBacktestViewState();
+  archiveOptimizeConfigs = [];
+  archiveRetestSchedules = [];
+  archiveRetestRuns = [];
+  selectedArchiveMigrationStatus = null;
   /* Switch sidebar back to archive list actions */
   document.getElementById('ctx-archive-results').style.display = 'none';
   document.getElementById('ctx-archive').style.display = '';
@@ -6756,6 +7369,64 @@ function closeArchiveResults() {
   _activeResultsCtx = { data: [], chartsEl: null };
 }
 
+function findArchiveByName(name) {
+  return archives.find(function(a) { return a.name === name; }) || null;
+}
+
+function selectedArchiveIsOwn() {
+  var archive = findArchiveByName(selectedArchiveName);
+  return !!((archive && archive.is_own) || (ownArchiveName && selectedArchiveName === ownArchiveName));
+}
+
+function updateArchiveStatusLine() {
+  var el = document.getElementById('archive-layout-status');
+  if (!el) return;
+  var status = selectedArchiveMigrationStatus || ((findArchiveByName(selectedArchiveName) || {}).migration_status || null);
+  var label = status && status.label ? status.label : '';
+  var opt = archiveOptimizeConfigs.length ? ' · Optimize settings: ' + archiveOptimizeConfigs.length : '';
+  var sched = archiveRetestSchedules.length ? ' · Retest schedules: ' + archiveRetestSchedules.length : '';
+  el.textContent = label ? label + opt + sched : (opt + sched).replace(/^ · /, '');
+}
+
+function updateArchiveActionVisibility() {
+  var isBacktests = archiveResultsMode === 'backtests';
+  var isOptimize = archiveResultsMode === 'optimize';
+  var own = selectedArchiveIsOwn();
+  ['archive-btn-rebacktest', 'archive-btn-add-run', 'archive-btn-compare', 'archive-btn-delete'].forEach(function(id) {
+    var node = document.getElementById(id);
+    if (node) node.style.display = isBacktests ? '' : 'none';
+  });
+  var replaceBtn = document.getElementById('archive-btn-retest-replace');
+  if (replaceBtn) replaceBtn.style.display = isBacktests && own ? '' : 'none';
+  var scoreBtn = document.getElementById('archive-btn-score-preview');
+  if (scoreBtn) scoreBtn.style.display = isBacktests ? '' : 'none';
+  ['archive-btn-opt-view', 'archive-btn-opt-open', 'archive-btn-opt-import'].forEach(function(id) {
+    var node = document.getElementById(id);
+    if (node) node.style.display = isOptimize ? '' : 'none';
+  });
+  var optDeleteBtn = document.getElementById('archive-btn-opt-delete');
+  if (optDeleteBtn) optDeleteBtn.style.display = isOptimize && own ? '' : 'none';
+  var compactBtn = document.getElementById('archive-btn-compact');
+  if (compactBtn) compactBtn.style.display = own ? '' : 'none';
+  var dupBtn = document.getElementById('archive-btn-remove-duplicates');
+  if (dupBtn) dupBtn.style.display = isBacktests && own ? '' : 'none';
+  var liqBtn = document.getElementById('archive-btn-remove-liquidated');
+  if (liqBtn) liqBtn.style.display = isBacktests && own ? '' : 'none';
+}
+
+function setArchiveResultsMode(mode) {
+  archiveResultsMode = mode === 'optimize' || mode === 'schedules' ? mode : 'backtests';
+  persistBacktestViewState();
+  var backBtn = document.getElementById('arc-tab-backtests');
+  var optBtn = document.getElementById('arc-tab-optimize');
+  var schedBtn = document.getElementById('arc-tab-schedules');
+  if (backBtn) backBtn.style.opacity = archiveResultsMode === 'backtests' ? '1' : '.55';
+  if (optBtn) optBtn.style.opacity = archiveResultsMode === 'optimize' ? '1' : '.55';
+  if (schedBtn) schedBtn.style.opacity = archiveResultsMode === 'schedules' ? '1' : '.55';
+  updateArchiveActionVisibility();
+  renderArchiveResults(selectedArchiveName);
+}
+
 function deleteArchive(name) {
   showModal('Delete Archive', '<p>Delete archive <b>' + esc(name) + '</b> from disk?<br>This cannot be undone.</p>', [
     { text: 'Cancel', cls: '' },
@@ -6772,8 +7443,9 @@ function deleteArchive(name) {
   ]);
 }
 
-function loadArchiveResults() {
-  if (selectedArchiveName) viewArchive(selectedArchiveName);
+function loadArchiveResults(opts) {
+  if (selectedArchiveName) return viewArchive(selectedArchiveName, opts || {});
+  return Promise.resolve();
 }
 
 function loadLegacyResults() {
@@ -6786,6 +7458,28 @@ function loadLegacyResults() {
 function renderArchiveResults(name) {
   var tableEl = document.getElementById('archive-results-table');
   var chartsEl = document.getElementById('archive-charts');
+  var selectedPaths = currentPanel === 'archive' && archiveResultsMode === 'backtests' ? getSelectedArchiveResults() : [];
+  updateArchiveStatusLine();
+  updateArchiveActionVisibility();
+  var cfgLabel = document.querySelector('#archive-results-toolbar label');
+  var cfgSelNode = document.getElementById('arc-results-config-filter');
+  var textFilterNode = document.getElementById('arc-results-filter');
+  if (cfgLabel) cfgLabel.style.display = archiveResultsMode === 'backtests' ? '' : 'none';
+  if (cfgSelNode) cfgSelNode.style.display = archiveResultsMode === 'backtests' ? '' : 'none';
+  if (textFilterNode) textFilterNode.placeholder = archiveResultsMode === 'backtests' ? 'Search name…' : (archiveResultsMode === 'schedules' ? 'Search schedule…' : 'Search optimize…');
+  setArchiveResultsModeButtons();
+
+  if (archiveResultsMode === 'schedules') {
+    hideResultsCountLabel('archive-results-count-label');
+    renderArchiveRetestSchedules();
+    return;
+  }
+
+  if (archiveResultsMode === 'optimize') {
+    hideResultsCountLabel('archive-results-count-label');
+    renderArchiveOptimizeConfigs();
+    return;
+  }
 
   /* Populate config filter dropdown */
   var cfgSel = document.getElementById('arc-results-config-filter');
@@ -6807,6 +7501,7 @@ function renderArchiveResults(name) {
     var hay = ((r.config_name || '') + ' ' + (r.result_name || '')).toLowerCase();
     return hay.indexOf(textFilter) >= 0;
   });
+  updateResultsCountLabel('archive-results-count-label', filtered.length, archiveResults.length);
 
   if (!filtered.length) {
     tableEl.innerHTML = '\x3Cdiv class="empty-state">No results in this archive.\x3C/div>';
@@ -6825,6 +7520,273 @@ function renderArchiveResults(name) {
   });
 
   _renderResultsTableInto(tableEl, sorted, chartsEl, _rthA);
+  setSelectedArchiveResults(selectedPaths);
+}
+
+function setArchiveResultsModeButtons() {
+  var backBtn = document.getElementById('arc-tab-backtests');
+  var optBtn = document.getElementById('arc-tab-optimize');
+  var schedBtn = document.getElementById('arc-tab-schedules');
+  var selectBtn = document.getElementById('arc-btn-select-all');
+  var deselectBtn = document.getElementById('arc-btn-deselect');
+  var selectable = archiveResultsMode === 'backtests';
+  if (backBtn) backBtn.style.opacity = archiveResultsMode === 'backtests' ? '1' : '.55';
+  if (optBtn) optBtn.style.opacity = archiveResultsMode === 'optimize' ? '1' : '.55';
+  if (schedBtn) schedBtn.style.opacity = archiveResultsMode === 'schedules' ? '1' : '.55';
+  if (selectBtn) selectBtn.style.display = selectable ? '' : 'none';
+  if (deselectBtn) deselectBtn.style.display = selectable ? '' : 'none';
+}
+
+function renderArchiveRetestSchedules() {
+  var tableEl = document.getElementById('archive-results-table');
+  var chartsEl = document.getElementById('archive-charts');
+  if (chartsEl) { chartsEl.style.display = 'none'; chartsEl.innerHTML = ''; }
+  var textFilter = ((document.getElementById('arc-results-filter') || {}).value || '').toLowerCase();
+  var filtered = archiveRetestSchedules.filter(function(item) {
+    if (!textFilter) return true;
+    var hay = ((item.id || '') + ' ' + (item.cadence || '') + ' ' + (item.last_status || '') + ' ' + (item.last_message || '')).toLowerCase();
+    return hay.indexOf(textFilter) >= 0;
+  });
+  if (!filtered.length) {
+    tableEl.innerHTML = '\x3Cdiv class="empty-state">No retest schedules for this archive. Select archive results and use Retest &amp; Replace to create one.\x3C/div>';
+    return;
+  }
+  var weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  var html = '\x3Ctable class="tbl">\x3Cthead>\x3Ctr>' +
+    '\x3Cth>Status\x3C/th>\x3Cth>Cadence\x3C/th>\x3Cth>Targets\x3C/th>\x3Cth>Date Mode\x3C/th>\x3Cth>Next Run\x3C/th>\x3Cth>Last Status\x3C/th>\x3Cth>Actions\x3C/th>' +
+    '\x3C/tr>\x3C/thead>\x3Ctbody>';
+  filtered.forEach(function(item) {
+    var cadence = item.cadence === 'weekly' ? 'Weekly ' + (weekdays[item.weekday || 0] || 'Mon') + ' ' + esc(item.time || '') : 'Daily ' + esc(item.time || '');
+    var options = item.options || {};
+    var mode = options.date_mode === 'last_x_days' ? 'Last ' + (options.last_days || '') + ' days' : 'Same length → yesterday';
+    var enabledText = item.enabled === false ? 'Disabled' : 'Enabled';
+    var statusText = item.last_status || '';
+    if (item.last_message) statusText += ': ' + item.last_message;
+    html += '\x3Ctr>' +
+      '\x3Ctd>' + esc(enabledText) + '\x3C/td>' +
+      '\x3Ctd>' + cadence + '\x3C/td>' +
+      '\x3Ctd>' + ((item.targets || []).length) + '\x3C/td>' +
+      '\x3Ctd>' + esc(mode) + '\x3C/td>' +
+      '\x3Ctd>' + esc(item.next_run_at || '') + '\x3C/td>' +
+      '\x3Ctd class="muted-line" style="max-width:320px;word-break:break-word">' + esc(statusText) + '\x3C/td>' +
+      '\x3Ctd class="actions-cell">' +
+        '\x3Cbutton class="icon-btn good archive-sched-run" data-id="' + esc(item.id) + '" title="Run now">▶\x3C/button>' +
+        '\x3Cbutton class="icon-btn archive-sched-toggle" data-id="' + esc(item.id) + '" title="Enable/disable">' + (item.enabled === false ? '✅' : '⏸') + '\x3C/button>' +
+        '\x3Cbutton class="icon-btn danger archive-sched-delete" data-id="' + esc(item.id) + '" title="Delete">🗑\x3C/button>' +
+      '\x3C/td>\x3C/tr>';
+  });
+  html += '\x3C/tbody>\x3C/table>';
+  tableEl.innerHTML = html;
+  tableEl.querySelectorAll('.archive-sched-run').forEach(function(btn) {
+    btn.onclick = function(e) { e.stopPropagation(); runArchiveRetestSchedule(btn.dataset.id); };
+  });
+  tableEl.querySelectorAll('.archive-sched-toggle').forEach(function(btn) {
+    btn.onclick = function(e) { e.stopPropagation(); toggleArchiveRetestSchedule(btn.dataset.id); };
+  });
+  tableEl.querySelectorAll('.archive-sched-delete').forEach(function(btn) {
+    btn.onclick = function(e) { e.stopPropagation(); deleteArchiveRetestSchedule(btn.dataset.id); };
+  });
+}
+
+function runArchiveRetestSchedule(id) {
+  apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/retest-schedules/' + encodeURIComponent(id) + '/run', { method: 'POST' })
+    .then(function(d) { toast('Queued ' + (d.queued || 0) + ' archive retest(s)', 'ok'); viewArchive(selectedArchiveName); wsRefresh(); })
+    .catch(function(e) { toast('Run failed: ' + e.message, 'err'); });
+}
+
+function toggleArchiveRetestSchedule(id) {
+  apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/retest-schedules/' + encodeURIComponent(id) + '/toggle', { method: 'POST' })
+    .then(function() { toast('Schedule updated', 'ok'); viewArchive(selectedArchiveName); })
+    .catch(function(e) { toast('Update failed: ' + e.message, 'err'); });
+}
+
+function deleteArchiveRetestSchedule(id) {
+  showModal('Delete Retest Schedule', '\x3Cp>Delete this archive retest schedule? Already queued retests are not removed.\x3C/p>', [
+    { text: 'Cancel', cls: '' },
+    { text: 'Delete', cls: 'modal-btn-danger', action: function() {
+      apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/retest-schedules/' + encodeURIComponent(id), { method: 'DELETE' })
+        .then(function() { toast('Schedule deleted', 'ok'); closeModal(); viewArchive(selectedArchiveName); })
+        .catch(function(e) { toast('Delete failed: ' + e.message, 'err'); });
+    }}
+  ]);
+}
+
+function renderArchiveOptimizeConfigs() {
+  var tableEl = document.getElementById('archive-results-table');
+  var chartsEl = document.getElementById('archive-charts');
+  if (chartsEl) { chartsEl.style.display = 'none'; chartsEl.innerHTML = ''; }
+  var textFilter = ((document.getElementById('arc-results-filter') || {}).value || '').toLowerCase();
+  var filtered = archiveOptimizeConfigs.filter(function(item) {
+    if (!textFilter) return true;
+    var hay = ((item.name || '') + ' ' + (item.pb7_config_version || '') + ' ' + (item.relative_path || '')).toLowerCase();
+    return hay.indexOf(textFilter) >= 0;
+  });
+  if (!filtered.length) {
+    tableEl.innerHTML = '\x3Cdiv class="empty-state">No Optimize settings in this archive.\x3C/div>';
+    return;
+  }
+  var html = '\x3Ctable class="tbl">\x3Cthead>\x3Ctr>' +
+    '\x3Cth>Name\x3C/th>\x3Cth>PB7 Version\x3C/th>\x3Cth>PBGui Version\x3C/th>\x3Cth>Modified\x3C/th>\x3Cth>Path\x3C/th>' +
+    '\x3C/tr>\x3C/thead>\x3Ctbody>';
+  filtered.forEach(function(item) {
+    html += '\x3Ctr data-path="' + esc(item.path) + '" data-name="' + esc(item.name || '') + '" title="Double-click to view config JSON">' +
+      '\x3Ctd>' + esc(item.name || '') + '\x3C/td>' +
+      '\x3Ctd>' + esc(item.pb7_config_version || '') + '\x3C/td>' +
+      '\x3Ctd>' + esc(item.pbgui_version || '') + '\x3C/td>' +
+      '\x3Ctd>' + fmtDate(item.modified) + '\x3C/td>' +
+      '\x3Ctd class="muted-line" style="max-width:360px;word-break:break-all">' + esc(item.relative_path || item.path || '') + '\x3C/td>' +
+      '\x3C/tr>';
+  });
+  html += '\x3C/tbody>\x3C/table>';
+  tableEl.innerHTML = html;
+  tableEl.querySelectorAll('tbody tr[data-path]').forEach(function(row) {
+    row.ondblclick = function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      document.querySelectorAll('#archive-results-table .tbl tbody tr.selected').forEach(function(tr) { tr.classList.remove('selected'); });
+      row.classList.add('selected');
+      viewArchiveOptimizeConfig(row.dataset.path, row.dataset.name);
+    };
+  });
+}
+
+function viewArchiveOptimizeConfig(path, name) {
+  apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/optimize-configs/config?path=' + encodeURIComponent(path))
+    .then(function(cfg) {
+      showModal('Optimize Config - ' + (name || ''), window.PBGuiJsonPanel.createPanelHtml({
+        wrapId: 'archive-opt-json-wrap',
+        preId: 'archive-opt-json',
+        title: 'Config JSON',
+        closeOnclick: 'closeModal()',
+        resizeHandler: 'startJsonResize(event,\'archive-opt-json\')'
+      }), [{ text: 'Close', cls: '' }]);
+      var pre = document.getElementById('archive-opt-json');
+      if (pre) pre.textContent = JSON.stringify(cfg, null, 2);
+    })
+    .catch(function(e) { toast('Failed to load Optimize config: ' + e.message, 'err'); });
+}
+
+function getSelectedArchiveOptimizeConfig() {
+  var rows = Array.from(document.querySelectorAll('#archive-results-table .tbl tbody tr.selected[data-path]'));
+  if (rows.length !== 1) {
+    toast(rows.length ? 'Select exactly one Optimize config.' : 'Select an Optimize config first.', 'err');
+    return null;
+  }
+  return { path: rows[0].dataset.path || '', name: rows[0].dataset.name || '' };
+}
+
+function viewSelectedArchiveOptimizeConfig() {
+  var item = getSelectedArchiveOptimizeConfig();
+  if (!item) return;
+  viewArchiveOptimizeConfig(item.path, item.name);
+}
+
+function optimizeSelectedArchiveConfig() {
+  var item = getSelectedArchiveOptimizeConfig();
+  if (!item) return;
+  optimizeFromArchiveOptimizeConfig(item.path, item.name);
+}
+
+function importSelectedArchiveOptimizeConfig() {
+  var item = getSelectedArchiveOptimizeConfig();
+  if (!item) return;
+  importArchiveOptimizeConfig(item.path, item.name);
+}
+
+function deleteSelectedArchiveOptimizeConfig() {
+  var item = getSelectedArchiveOptimizeConfig();
+  if (!item) return;
+  deleteArchiveOptimizeConfig(item.path, item.name);
+}
+
+function archiveOptimizeDefaultName(path, name) {
+  return name || (path || '').split('/').pop().replace(/\.json$/, '');
+}
+
+function requestArchiveOptimizeImport(path, importName, overwrite) {
+  return fetch(API_BASE + '/archives/' + encodeURIComponent(selectedArchiveName) + '/optimize-configs/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+    body: JSON.stringify({ path: path, name: importName.trim(), overwrite: !!overwrite })
+  }).then(function(response) {
+    return response.json().catch(function() { return {}; }).then(function(payload) {
+      if (!response.ok) {
+        var err = new Error(payload.detail || response.statusText);
+        err.status = response.status;
+        throw err;
+      }
+      return payload;
+    });
+  });
+}
+
+function openOptimizeEditorForConfig(configName) {
+  window.location.href = '/api/optimize-v7/main_page?token=' + encodeURIComponent(TOKEN) + '&open_config=' + encodeURIComponent(configName);
+}
+
+function optimizeFromArchiveOptimizeConfig(path, name) {
+  var importName = archiveOptimizeDefaultName(path, name).trim();
+  requestArchiveOptimizeImport(path, importName, false).then(function(data) {
+    toast('Opening Optimize config', 'ok');
+    openOptimizeEditorForConfig(data.name || importName);
+  }).catch(function(e) {
+    if (e.status === 409) {
+      showModal('Overwrite Optimize Config', '<p>Local Optimize config <b>' + esc(importName) + '</b> already exists. Overwrite it and open V7 Optimize?</p>', [
+        { text: 'Cancel', cls: '' },
+        { text: 'Overwrite & Open', cls: 'modal-btn-danger', action: function() {
+          requestArchiveOptimizeImport(path, importName, true).then(function(data) {
+            openOptimizeEditorForConfig(data.name || importName);
+          }).catch(function(err) { toast('Open failed: ' + err.message, 'err'); });
+        }}
+      ]);
+      return;
+    }
+    toast('Open failed: ' + e.message, 'err');
+  });
+}
+
+function importArchiveOptimizeConfig(path, name) {
+  var defaultName = archiveOptimizeDefaultName(path, name);
+  var body = '<div class="sb-label">Import as</div>' +
+    '<input type="text" id="archive-opt-import-name" class="sb-input" value="' + esc(defaultName) + '">' +
+    '<p class="muted-line">If the name exists locally, PBGui will ask before overwriting.</p>';
+  showModal('Import Optimize Config', body, [
+    { text: 'Cancel', cls: '' },
+    { text: 'Import', cls: 'modal-btn-primary', action: function() {
+      var importName = (document.getElementById('archive-opt-import-name') || {}).value || defaultName;
+      requestArchiveOptimizeImport(path, importName, false).then(function() {
+        toast('Optimize config imported', 'ok');
+        closeModal();
+      }).catch(function(e) {
+        if (e.status === 409) {
+          showModal('Overwrite Optimize Config', '<p>Local Optimize config <b>' + esc(importName) + '</b> already exists. Overwrite it?</p>', [
+            { text: 'Cancel', cls: '' },
+            { text: 'Overwrite', cls: 'modal-btn-danger', action: function() {
+              requestArchiveOptimizeImport(path, importName, true).then(function() { toast('Optimize config overwritten', 'ok'); closeModal(); })
+                .catch(function(err) { toast('Import failed: ' + err.message, 'err'); });
+            }}
+          ]);
+          return;
+        }
+        toast('Import failed: ' + e.message, 'err');
+      });
+    }}
+  ]);
+}
+
+function deleteArchiveOptimizeConfig(path, name) {
+  if (!selectedArchiveIsOwn()) {
+    toast('Optimize config deletion is only available for your own archive', 'err');
+    return;
+  }
+  showModal('Delete Optimize Config', '<p>Delete archived Optimize config <b>' + esc(name || path) + '</b> from <b>' + esc(selectedArchiveName) + '</b>? This only changes the local archive clone until you run Git Push.</p>', [
+    { text: 'Cancel', cls: '' },
+    { text: 'Delete', cls: 'modal-btn-danger', action: function() {
+      apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/optimize-configs/config?path=' + encodeURIComponent(path), { method: 'DELETE' })
+        .then(function() { toast('Optimize config deleted', 'ok'); closeModal(); viewArchive(selectedArchiveName); })
+        .catch(function(e) { toast('Delete failed: ' + e.message, 'err'); });
+    }}
+  ]);
 }
 
 function renderLegacyResults() {
@@ -6929,7 +7891,8 @@ function pushArchive() {
       email: s.email || '',
       access_token: s.access_token || ''
     };
-    toast('Pushing ' + myArchive + '…', 'info');
+    showArchiveLog();
+    toast('Pushing ' + myArchive + '… watch Archive Sync Log for progress', 'info');
     apiFetch('/archives/' + encodeURIComponent(myArchive) + '/push', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -6945,6 +7908,83 @@ function pushArchive() {
   }).catch(function(e) { toast('Could not load settings: ' + e.message, 'err'); });
 }
 
+function compactArchiveHistory() {
+  if (!selectedArchiveName || !selectedArchiveIsOwn()) {
+    toast('History compaction is only available for your own archive', 'err');
+    return;
+  }
+  apiFetch('/archives/settings').then(function(s) {
+    var body = {
+      dry_run: true,
+      username: s.username || '',
+      email: s.email || '',
+      access_token: s.access_token || ''
+    };
+    toast('Preparing compact-history dry run…', 'info');
+    apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/compact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function(preview) {
+      var status = preview.status || [];
+      var estimate = preview.storage_estimate || {};
+      var savingsText = estimate.available
+        ? esc(estimate.saved_human || '0 Bytes') + ' <span class="muted-line">(' + esc(estimate.saved_percent || 0) + '%)</span>'
+        : '<span class="muted-line">Estimate unavailable</span>';
+      var beforeText = estimate.available ? esc(estimate.current_human || 'unknown') : '<span class="muted-line">unknown</span>';
+      var afterText = estimate.available ? esc(estimate.after_human || 'unknown') : '<span class="muted-line">unknown</span>';
+      var statusHtml = status.length
+        ? '<pre style="font-size:var(--fs-xs);max-height:160px;overflow:auto;white-space:pre-wrap;margin:var(--sp-xs) 0 0">' + esc(status.join('\n')) + '</pre>'
+        : '<span class="muted-line">Clean working tree</span>';
+      var sizeHtml = preview.object_size
+        ? '<pre style="font-size:var(--fs-xs);max-height:180px;overflow:auto;white-space:pre-wrap;margin:var(--sp-xs) 0 0">' + esc(preview.object_size) + '</pre>'
+        : '<span class="muted-line">No size estimate available</span>';
+      var bodyHtml =
+        '<p><b>This rewrites remote Git history.</b> It replaces archive history with one root commit and force-pushes using <code>--force-with-lease</code>.</p>' +
+        '<p>Normal Git Push remains non-destructive. After compaction, stale clones of this archive must be recloned or reset.</p>' +
+        '<div style="border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);border-radius:6px;padding:var(--sp-sm);margin:var(--sp-sm) 0">' +
+          '<div class="sb-label">Estimated Savings</div>' +
+          '<div style="font-size:var(--fs-xl);font-weight:700;margin-top:2px">' + savingsText + '</div>' +
+          '<div class="form-row cols-2" style="gap:var(--sp-sm);margin-top:var(--sp-sm)">' +
+            '<div><div class="sb-label">Before</div><b>' + beforeText + '</b></div>' +
+            '<div><div class="sb-label">After Compact</div><b>' + afterText + '</b></div>' +
+          '</div>' +
+          '<p class="muted-line" style="margin:var(--sp-xs) 0 0">' + esc(estimate.note || 'Actual remote savings appear after remote garbage collection.') + '</p>' +
+        '</div>' +
+        '<div class="form-row cols-2" style="gap:var(--sp-sm);margin:var(--sp-sm) 0">' +
+          '<div><div class="sb-label">Archive</div><b>' + esc(selectedArchiveName) + '</b></div>' +
+          '<div><div class="sb-label">Branch</div><b>' + esc(preview.branch || 'unknown') + '</b></div>' +
+        '</div>' +
+        '<div class="form-row cols-2" style="gap:var(--sp-sm);margin:var(--sp-sm) 0">' +
+          '<div><div class="sb-label">Commit Count</div><b>' + esc(preview.commit_count || 'unknown') + '</b></div>' +
+          '<div><div class="sb-label">Manifest Items</div><b>' + esc(preview.manifest_items || 0) + '</b></div>' +
+        '</div>' +
+        '<div class="sb-label">Pending Local Changes</div>' + statusHtml +
+        '<div class="sb-label" style="margin-top:var(--sp-sm)">Object Size</div>' + sizeHtml;
+      showModal('Compact Archive History', bodyHtml, [
+        { text: 'Cancel', cls: '' },
+        { text: 'Compact & Force Push', cls: 'modal-btn-danger', action: function() {
+          closeModal();
+          showArchiveLog();
+          toast('Compacting ' + selectedArchiveName + '… watch Archive Sync Log for progress', 'info');
+          apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/compact', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(Object.assign({}, body, { dry_run: false }))
+          }).then(function(result) {
+            showModal('Compact Archive History — ' + esc(selectedArchiveName),
+              '<pre style="font-size:var(--fs-xs);max-height:360px;overflow-y:auto;white-space:pre-wrap;margin:0">' + esc(result.output || 'ok') + '</pre>',
+              [{ text: 'Close', cls: '' }]
+            );
+            loadArchives();
+            viewArchive(selectedArchiveName);
+          }).catch(function(e) { toast('Compact failed: ' + e.message, 'err'); });
+        }}
+      ]);
+    }).catch(function(e) { toast('Compact dry run failed: ' + e.message, 'err'); });
+  }).catch(function(e) { toast('Could not load settings: ' + e.message, 'err'); });
+}
+
 function setupArchive() {
   /* Load current settings, show setup modal */
   apiFetch('/archives/settings').then(function(s) {
@@ -6957,10 +7997,7 @@ function setupArchive() {
         '<label><span data-tip="Which of your cloned archives is your own (will be used for Git Push).">My Archive</span></label>' +
         '<select id="setup-arc-name" class="sb-input">' + archiveOptions + '</select>' +
       '</div>' +
-      '<div class="form-group" style="margin-bottom:var(--sp-sm)">' +
-        '<label><span data-tip="Sub-path inside the repo where configs are stored (e.g. pbgui/configs/pb7).">Archive Path</span></label>' +
-        '<input type="text" id="setup-arc-path" class="sb-input" value="' + esc(s.my_archive_path || '') + '" placeholder="pbgui/configs/pb7">' +
-      '</div>' +
+      '<p class="muted-line" style="margin:0 0 var(--sp-sm)">Archive paths are generated automatically from the PB7 config_version.</p>' +
       '<div class="form-row cols-2" style="gap:var(--sp-sm);margin-bottom:var(--sp-sm)">' +
         '<div class="form-group"><label><span data-tip="Git commit author name.">Username</span></label>' +
           '<input type="text" id="setup-arc-user" class="sb-input" value="' + esc(s.username || '') + '"></div>' +
@@ -6974,6 +8011,16 @@ function setupArchive() {
       '<div class="form-group" style="margin-bottom:var(--sp-sm)">' +
         '<label><span data-tip="Automatically pull all archives in the background every N minutes. Set to 0 to disable.">Auto Pull Interval (min, 0 = off)</span></label>' +
         '<input type="number" id="setup-arc-interval" class="sb-input" value="' + (s.auto_pull_interval || 0) + '" min="0" step="1" style="width:120px">' +
+      '</div>' +
+      '<hr class="sb-sep">' +
+      '<div class="form-group" style="margin-bottom:var(--sp-sm)">' +
+        '<label><span data-tip="Title written to the archive README.md on GitHub.">README Title</span></label>' +
+        '<input type="text" id="setup-arc-readme-title" class="sb-input" value="' + esc(s.readme_title || 'PBGui Config Archive') + '">' +
+      '</div>' +
+      '<div class="form-group" style="margin-bottom:var(--sp-sm)">' +
+        '<label><span data-tip="Static Markdown kept above PBGui generated score tables in README.md.">README Static Markdown</span></label>' +
+        '<textarea id="setup-arc-readme-static" class="sb-input" rows="7" style="height:auto;min-height:140px;font-family:var(--mono);resize:vertical" placeholder="Describe this archive, strategy rules, exchanges, notes…">' + esc(s.readme_static_markdown || '') + '</textarea>' +
+        '<p class="muted-line" style="margin:var(--sp-xs) 0 0">Saved in <code>pbgui/readme_config.json</code> and written to <code>README.md</code>. The generated score block stays separate.</p>' +
       '</div>';
     showModal('Setup My Archive', body, [
       { text: 'Cancel', cls: '' },
@@ -7001,7 +8048,22 @@ function setupArchive() {
         .catch(function(e) { toast('Save failed: ' + e.message, 'err'); });
       }}
     ]);
+    var setupSelect = document.getElementById('setup-arc-name');
+    if (setupSelect) setupSelect.addEventListener('change', function() { loadArchiveReadmeSetup(this.value); });
   }).catch(function(e) { toast('Could not load settings: ' + e.message, 'err'); });
+}
+
+function loadArchiveReadmeSetup(name) {
+  name = String(name || '').trim();
+  var titleEl = document.getElementById('setup-arc-readme-title');
+  var staticEl = document.getElementById('setup-arc-readme-static');
+  if (!name || !titleEl || !staticEl) return;
+  apiFetch('/archives/' + encodeURIComponent(name) + '/readme-config')
+    .then(function(cfg) {
+      titleEl.value = cfg.title || name;
+      staticEl.value = cfg.static_markdown || '';
+    })
+    .catch(function(e) { toast('Could not load README config: ' + e.message, 'err'); });
 }
 
 function _collectArchiveSetup() {
@@ -7009,11 +8071,12 @@ function _collectArchiveSetup() {
   if (!myArchive) { toast('Select the archive to use as your own', 'err'); return null; }
   return {
     my_archive:          myArchive,
-    my_archive_path:     document.getElementById('setup-arc-path').value.trim(),
     username:            document.getElementById('setup-arc-user').value.trim(),
     email:               document.getElementById('setup-arc-email').value.trim(),
     access_token:        document.getElementById('setup-arc-token').value,
-    auto_pull_interval:  parseInt(document.getElementById('setup-arc-interval').value, 10) || 0
+    auto_pull_interval:  parseInt(document.getElementById('setup-arc-interval').value, 10) || 0,
+    readme_title:        document.getElementById('setup-arc-readme-title').value.trim(),
+    readme_static_markdown: document.getElementById('setup-arc-readme-static').value
   };
 }
 
@@ -7045,9 +8108,11 @@ function makeDraggable(el, handle) {
   });
 }
 
-function showModal(title, bodyHtml, buttons) {
+function showModal(title, bodyHtml, buttons, opts) {
   var root = document.getElementById('modal-root');
   var box  = document.getElementById('modal-box');
+  opts = opts || {};
+  box.className = 'modal-box' + (opts.className ? ' ' + opts.className : '');
   box.style.left = ''; box.style.top = ''; box.style.position = ''; box.style.margin = '';
   var html = '<div class="modal-header">' +
              '<span class="modal-title">' + esc(title) + '</span>' +
@@ -7174,9 +8239,13 @@ initBacktestOhlcvPreflightController();
 loadConfigs();
 connectWS();
 
-// Restore panel from URL hash
-var hash = location.hash.replace('#', '');
-if (['configs', 'queue', 'results', 'archive', 'legacy'].indexOf(hash) >= 0) selectPanel(hash);
+// Restore panel/archive state from URL hash or localStorage.
+var initialViewState = loadStoredBacktestViewState();
+if (initialViewState.panel === 'archive' && initialViewState.archive) {
+  selectedArchiveName = initialViewState.archive;
+  archiveResultsMode = archiveModeFromValue(initialViewState.archiveMode);
+}
+if (['configs', 'queue', 'results', 'archive', 'legacy'].indexOf(initialViewState.panel) >= 0) selectPanel(initialViewState.panel);
 initializeBacktestPageFromUrl();
 </script>
 
