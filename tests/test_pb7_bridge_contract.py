@@ -354,6 +354,19 @@ def test_archive_result_listing_does_not_fingerprint_result_dirs(
     assert results[0]["pb7_config_version"] == "v7.4.2"
 
 
+def test_archive_result_listing_includes_dataset_coins(tmp_path: Path) -> None:
+    """Archive result summaries expose coins from PB7 dataset metadata."""
+    archive_root = tmp_path / "archive"
+    result_dir = write_archive_result(archive_root / "pbgui/configs/v7.4.2/backtests")
+    write_archive_json(result_dir / "dataset.json", {"coins": ["HYPE", "hype", "BTC"]})
+
+    results = archive_helpers.list_archive_backtest_results(archive_root)
+
+    assert len(results) == 1
+    assert results[0]["coins"] == ["HYPE", "BTC"]
+    assert results[0]["coins_text"] == "HYPE, BTC"
+
+
 def test_optimize_archive_path_uses_pb7_config_version() -> None:
     """Optimize archive paths also use PB7 config_version instead of pbgui.version."""
     rel_path, meta = derive_optimize_archive_relative_path(
@@ -439,6 +452,72 @@ def test_remove_liquidated_route_refuses_non_own_archive(tmp_path: Path, monkeyp
         backtest_v7.remove_archive_liquidated_results("other", {"paths": [], "dry_run": True}, session=None)
 
     assert exc_info.value.status_code == 403
+
+
+def test_rename_archive_backtest_config_moves_group_and_rewrites_base_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Own archive backtest config rename moves the group and updates result configs."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    result_dir = write_archive_result(archive_root / "pbgui/configs/v7.4.2/backtests")
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+
+    response = backtest_v7.rename_archive_backtest_config(
+        "mine",
+        {"path": str(result_dir), "new_name": "HYPE"},
+        session=None,
+    )
+
+    target_result = archive_root / "pbgui/configs/v7.4.2/backtests/HYPE/bybit/2026-06-21T120000Z"
+    assert response["ok"] is True
+    assert response["changed"] is True
+    assert response["old_name"] == "my_config"
+    assert response["new_name"] == "HYPE"
+    assert Path(response["path"]) == target_result
+    assert not (archive_root / "pbgui/configs/v7.4.2/backtests/my_config").exists()
+    assert (target_result / "analysis.json").exists()
+    config = json.loads((target_result / "config.json").read_text(encoding="utf-8"))
+    assert config["backtest"]["base_dir"] == "backtests/pbgui/HYPE"
+    assert (archive_root / ARCHIVE_MANIFEST).exists()
+
+
+def test_rename_archive_backtest_config_refuses_foreign_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backtest config rename is restricted to the configured own archive."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "other"
+    result_dir = write_archive_result(archive_root / "pbgui/configs/v7.4.2/backtests")
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+
+    with pytest.raises(HTTPException) as exc_info:
+        backtest_v7.rename_archive_backtest_config("other", {"path": str(result_dir), "new_name": "HYPE"}, session=None)
+
+    assert exc_info.value.status_code == 403
+
+
+def test_rename_archive_backtest_config_refuses_collision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backtest config rename must not overwrite an existing archive config group."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    result_dir = write_archive_result(archive_root / "pbgui/configs/v7.4.2/backtests")
+    (archive_root / "pbgui/configs/v7.4.2/backtests/HYPE").mkdir(parents=True)
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+
+    with pytest.raises(HTTPException) as exc_info:
+        backtest_v7.rename_archive_backtest_config("mine", {"path": str(result_dir), "new_name": "HYPE"}, session=None)
+
+    assert exc_info.value.status_code == 409
+    assert (archive_root / "pbgui/configs/v7.4.2/backtests/my_config").exists()
 
 
 def test_delete_archive_optimize_config_removes_config_and_meta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -654,6 +733,7 @@ def test_update_archive_scores_writes_manifest_and_readme_score_block(tmp_path: 
         "sortino_ratio": 2.0,
         "backtest_completion_ratio": 1.0,
     })
+    write_archive_json(result / "dataset.json", {"coins": ["HYPE"]})
     save_archive_readme_config(archive_root, {"title": "Score Archive", "static_markdown": "Static intro."})
 
     payload = update_archive_scores_and_readme(archive_root)
@@ -674,11 +754,17 @@ def test_update_archive_scores_writes_manifest_and_readme_score_block(tmp_path: 
     assert '<table width="100%">' not in readme
     assert "PBGui Score Table" in scores_page
     assert '<table width="100%">' in scores_page
-    assert '<th width="48%">Config</th>' in scores_page
+    assert '<th width="52%">Config</th>' in scores_page
     assert 'title="' in scores_page
     assert '<th width="14%">Result</th>' not in scores_page
     assert "PBGui Score Table" in scores_html
     assert "score-data" in scores_html
+    assert ">Conf</th>" not in scores_html
+    assert 'data-key="confidence"' not in scores_html
+    assert "coin-filter" in scores_html
+    assert 'data-key="coins_text"' in scores_html
+    assert '"coins":["HYPE"]' in scores_html
+    assert '"coins_text":"HYPE"' in scores_html
     assert "addEventListener('click'" in scores_html
     assert "Static intro." in readme
 
@@ -889,6 +975,48 @@ def test_archive_pull_does_not_reset_own_archive_after_divergence(
     assert commands == [["git", "pull", "--ff-only"], ["git", "status", "--porcelain"]]
 
 
+def test_archive_pull_preserves_local_archive_content_when_remote_is_ahead(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archive pulls keep local config files while refreshing generated metadata."""
+    commands = []
+    pull_count = 0
+    rebuilt = []
+
+    def fake_run(cmd, cwd=None, capture_output=True, text=True, timeout=None, input=None, env=None):
+        nonlocal pull_count
+        commands.append(list(cmd))
+        if cmd == ["git", "pull", "--ff-only"]:
+            pull_count += 1
+            if pull_count == 1:
+                return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="error: Your local changes would be overwritten\n")
+            return subprocess.CompletedProcess(cmd, 0, stdout="Updating remote changes\n", stderr="")
+        if cmd == ["git", "status", "--porcelain"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=" M pbgui/archive_manifest.json\n?? pbgui/configs/v7.12.0/optimize/sl_bt_twe_target.json\n?? pbgui/configs/v7.12.0/optimize/sl_bt_twe_target.meta.json\n",
+                stderr="",
+            )
+        if cmd == ["git", "checkout", "--", "pbgui/archive_manifest.json"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(backtest_v7, "_log_archive", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(backtest_v7, "rebuild_archive_manifest", lambda dest: rebuilt.append(dest) or {"items": []})
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = backtest_v7._archive_pull_sync("mine", tmp_path)
+
+    assert result["error"] == ""
+    assert result["recovered"] is True
+    assert pull_count == 2
+    assert ["git", "checkout", "--", "pbgui/archive_manifest.json"] in commands
+    assert rebuilt == [tmp_path]
+
+
 def test_archive_pull_does_not_reset_dirty_foreign_archive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -901,7 +1029,7 @@ def test_archive_pull_does_not_reset_dirty_foreign_archive(
         if cmd == ["git", "pull", "--ff-only"]:
             return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: Not possible to fast-forward\n")
         if cmd == ["git", "status", "--porcelain"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout="M README.md\n", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout="M pbgui/readme_config.json\n", stderr="")
         raise AssertionError(f"unexpected command: {cmd}")
 
     monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")

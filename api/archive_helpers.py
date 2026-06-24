@@ -411,6 +411,51 @@ def _exchange_dir_from_config(config: dict) -> str:
     return "combined"
 
 
+def _normalized_coin_values(value: Any) -> list[str]:
+    """Return a de-duplicated coin list from PB7 result metadata values."""
+    raw_values: list[Any] = []
+    if isinstance(value, dict):
+        side_values: list[str] = []
+        for side in ("long", "short"):
+            if side in value:
+                side_values.extend(_normalized_coin_values(value.get(side)))
+        if side_values:
+            return _normalized_coin_values(side_values)
+        raw_values.extend(value.keys())
+    elif isinstance(value, (list, tuple, set)):
+        raw_values.extend(value)
+    elif isinstance(value, str):
+        raw_values.extend(part for part in re.split(r"[,\s]+", value) if part)
+    else:
+        return []
+
+    seen: set[str] = set()
+    coins: list[str] = []
+    for raw in raw_values:
+        text = str(raw or "").strip().upper()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        coins.append(text)
+    return coins
+
+
+def _coins_from_result_metadata(result_dir: Path, config: dict) -> list[str]:
+    """Extract the visible coin list for an archived backtest result."""
+    dataset = load_json_file(result_dir / "dataset.json")
+    for value in (
+        dataset.get("coins"),
+        dataset.get("approved_coins"),
+        dataset.get("side_membership"),
+        dataset.get("coin_index"),
+        ((config or {}).get("live") or {}).get("approved_coins") if isinstance(config, dict) else None,
+    ):
+        coins = _normalized_coin_values(value)
+        if coins:
+            return coins
+    return []
+
+
 def derive_backtest_archive_relative_path(result_dir: Path, archive_root: Path) -> tuple[Path, dict]:
     """Derive the new versioned archive-relative path for a backtest result."""
     config = read_result_config(result_dir)
@@ -514,6 +559,7 @@ def summarize_backtest_result(result_dir: Path, archive_root: Path) -> dict:
     liquidated, liquidation_reason = detect_liquidation(analysis, config)
     rel = result_dir.resolve().relative_to(archive_root.resolve())
     config_name = _config_name_from_result(result_dir, config, archive_root)
+    coins = _coins_from_result_metadata(result_dir, config)
     version = config_version_info(config)
     return {
         "path": str(result_dir),
@@ -521,6 +567,8 @@ def summarize_backtest_result(result_dir: Path, archive_root: Path) -> dict:
         "config_name": config_name,
         "result_name": result_dir.name,
         "exchange_dir": _exchange_dir_from_config(config),
+        "coins": coins,
+        "coins_text": ", ".join(coins),
         "pb7_config_version": version["pb7_config_version"],
         "pbgui_version": version["pbgui_version"],
         "layout": "current" if is_new_backtest_result_path(result_dir, archive_root) else "legacy",
@@ -857,10 +905,11 @@ def archive_score_rows(scored_results: list[dict], limit: int = 100) -> list[dic
         score = result.get("pbgui_score") or {}
         rows.append({
             "score": score.get("value"),
-            "confidence": score.get("confidence"),
             "parts": score.get("parts", {}),
             "flags": score.get("flags", []),
             "config_name": result.get("config_name", ""),
+            "coins": result.get("coins", []),
+            "coins_text": result.get("coins_text", ""),
             "exchange_dir": result.get("exchange_dir", ""),
             "result_name": result.get("result_name", ""),
             "path": result.get("display_name", ""),
@@ -887,12 +936,11 @@ def build_archive_scores_markdown(scored_results: list[dict], limit: int | None 
         "<thead>",
         "<tr>",
         '<th align="right" width="7%">Score</th>',
-        '<th align="right" width="8%">Conf</th>',
-        '<th align="right" width="10%">ADG</th>',
-        '<th align="right" width="10%">Gain</th>',
-        '<th align="right" width="8%">DD</th>',
-        '<th align="right" width="9%">Sharpe</th>',
-        '<th width="48%">Config</th>',
+        '<th align="right" width="11%">ADG</th>',
+        '<th align="right" width="11%">Gain</th>',
+        '<th align="right" width="9%">DD</th>',
+        '<th align="right" width="10%">Sharpe</th>',
+        '<th width="52%">Config</th>',
         "</tr>",
         "</thead>",
         "<tbody>",
@@ -905,7 +953,6 @@ def build_archive_scores_markdown(scored_results: list[dict], limit: int | None 
         lines.append(
             "<tr>"
             f'<td align="right">{html.escape(_format_score_metric(row.get("score"), 1), quote=False)}</td>'
-            f'<td align="right">{html.escape(_format_score_metric((row.get("confidence") or 0) * 100, 0), quote=False)}%</td>'
             f'<td align="right">{html.escape(_format_score_metric(row.get("adg"), 6), quote=False)}</td>'
             f'<td align="right">{html.escape(_format_score_metric(row.get("gain"), 4), quote=False)}</td>'
             f'<td align="right">{html.escape(_format_score_metric(row.get("drawdown_worst"), 4), quote=False)}</td>'
@@ -923,24 +970,23 @@ def build_archive_scores_html(scored_results: list[dict], archive_root: Path | N
     payload = []
     for row in rows:
         score = row.get("score")
-        confidence = (row.get("confidence") or 0) * 100
         path = str(row.get("path") or "")
         url = archive_github_tree_url(archive_root, path) if archive_root is not None else ""
         payload.append({
             "score": score,
-            "confidence": confidence,
             "adg": row.get("adg"),
             "gain": row.get("gain"),
             "drawdown_worst": row.get("drawdown_worst"),
             "sharpe_ratio": row.get("sharpe_ratio"),
             "config_name": str(row.get("config_name") or ""),
+            "coins": [str(coin) for coin in row.get("coins") or []],
+            "coins_text": str(row.get("coins_text") or ""),
             "result_name": str(row.get("result_name") or ""),
             "exchange_dir": str(row.get("exchange_dir") or ""),
             "path": path,
             "url": url or path,
             "flags": [str(flag) for flag in row.get("flags") or []],
             "score_text": _format_score_metric(score, 1),
-            "confidence_text": _format_score_metric(confidence, 0) + "%",
             "adg_text": _format_score_metric(row.get("adg"), 6),
             "gain_text": _format_score_metric(row.get("gain"), 4),
             "drawdown_worst_text": _format_score_metric(row.get("drawdown_worst"), 4),
@@ -975,10 +1021,13 @@ a:hover {{ text-decoration: underline; }}
 h1 {{ margin: 0 0 6px; font-size: 28px; }}
 .meta {{ color: var(--muted); font-size: 13px; }}
 .toolbar {{ display: flex; gap: 10px; align-items: center; margin: 16px 0; flex-wrap: wrap; }}
-input[type="search"] {{ flex: 1 1 320px; max-width: 620px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); }}
+.toolbar label {{ color: var(--muted); font-size: 13px; }}
+input[type="search"], select {{ padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); }}
+input[type="search"] {{ flex: 1 1 320px; max-width: 620px; }}
+select {{ min-width: 150px; }}
 .count {{ color: var(--muted); }}
 .table-wrap {{ width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }}
-table {{ width: 100%; min-width: 1120px; border-collapse: collapse; }}
+table {{ width: 100%; min-width: 1220px; border-collapse: collapse; }}
 th, td {{ padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }}
 th {{ position: sticky; top: 0; background: var(--panel2); color: #f0f6fc; text-align: left; white-space: nowrap; cursor: pointer; user-select: none; }}
 th.num, td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
@@ -1004,6 +1053,8 @@ tbody tr:nth-child(odd) {{ background: var(--row); }}
   </div>
   <div class="toolbar">
     <input id="filter" type="search" placeholder="Filter config, result, exchange, flags..." autocomplete="off">
+    <label for="coin-filter">Coin</label>
+    <select id="coin-filter"><option value="">All coins</option></select>
     <span id="count" class="count"></span>
   </div>
   <div class="table-wrap">
@@ -1011,11 +1062,11 @@ tbody tr:nth-child(odd) {{ background: var(--row); }}
       <thead>
         <tr>
           <th class="num sort" data-key="score">Score</th>
-          <th class="num sort" data-key="confidence">Conf</th>
           <th class="num sort" data-key="adg">ADG</th>
           <th class="num sort" data-key="gain">Gain</th>
           <th class="num sort" data-key="drawdown_worst">DD</th>
           <th class="num sort" data-key="sharpe_ratio">Sharpe</th>
+          <th class="sort" data-key="coins_text">Coins</th>
           <th class="sort" data-key="config_name">Config</th>
         </tr>
       </thead>
@@ -1028,6 +1079,7 @@ tbody tr:nth-child(odd) {{ background: var(--row); }}
 const rows = JSON.parse(document.getElementById('score-data').textContent || '[]');
 const tbody = document.querySelector('#scores tbody');
 const filterInput = document.getElementById('filter');
+const coinFilter = document.getElementById('coin-filter');
 const countEl = document.getElementById('count');
 let sortKey = 'score';
 let sortDir = -1;
@@ -1050,26 +1102,37 @@ function compareRows(a, b) {{
   return String(av || '').localeCompare(String(bv || '')) * sortDir;
 }}
 
-function rowMatches(row, term) {{
+function populateCoinFilter() {{
+  const coins = [];
+  rows.forEach(row => (row.coins || []).forEach(coin => {{
+    if (coin && !coins.includes(coin)) coins.push(coin);
+  }}));
+  coins.sort((a, b) => String(a).localeCompare(String(b)));
+  coinFilter.innerHTML = '<option value="">All coins</option>' + coins.map(coin => '<option value="' + esc(coin) + '">' + esc(coin) + '</option>').join('');
+}}
+
+function rowMatches(row, term, coin) {{
+  if (coin && !(row.coins || []).includes(coin)) return false;
   if (!term) return true;
-  const hay = [row.config_name, row.result_name, row.exchange_dir, (row.flags || []).join(' ')].join(' ').toLowerCase();
+  const hay = [row.config_name, row.result_name, row.exchange_dir, row.coins_text, (row.flags || []).join(' ')].join(' ').toLowerCase();
   return hay.includes(term);
 }}
 
 function render() {{
   const term = filterInput.value.trim().toLowerCase();
-  const filtered = rows.filter(row => rowMatches(row, term)).sort(compareRows);
+  const coin = coinFilter.value;
+  const filtered = rows.filter(row => rowMatches(row, term, coin)).sort(compareRows);
   tbody.innerHTML = filtered.map(row => {{
     const flags = (row.flags || []).map(flag => '<span class="flag">' + esc(flag) + '</span>').join('');
     const href = row.url || row.path || '';
     const link = href ? '<a href="' + encodeURI(href) + '">' + esc(row.config_name || row.result_name || row.path) + '</a>' : esc(row.config_name || row.result_name || '');
     return '<tr>'
       + '<td class="num">' + esc(row.score_text) + '</td>'
-      + '<td class="num">' + esc(row.confidence_text) + '</td>'
       + '<td class="num">' + esc(row.adg_text) + '</td>'
       + '<td class="num">' + esc(row.gain_text) + '</td>'
       + '<td class="num">' + esc(row.drawdown_worst_text) + '</td>'
       + '<td class="num">' + esc(row.sharpe_ratio_text) + '</td>'
+      + '<td>' + esc(row.coins_text) + '</td>'
       + '<td class="config">' + link + flags + '<div class="sub">' + esc(row.exchange_dir) + ' - ' + esc(row.result_name) + '</div></td>'
       + '</tr>';
   }}).join('');
@@ -1088,6 +1151,8 @@ document.querySelectorAll('th.sort').forEach(th => {{
   }});
 }});
 filterInput.addEventListener('input', render);
+coinFilter.addEventListener('change', render);
+populateCoinFilter();
 render();
 </script>
 </body>

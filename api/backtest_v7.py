@@ -35,8 +35,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from api.archive_helpers import (
+    ARCHIVE_LAYOUT_ROOT,
     atomic_write_json,
     archive_migration_status,
+    archive_config_group_dir,
     build_archive_score_payload,
     cleanup_empty_parents,
     copy_backtest_result_to_archive,
@@ -1313,11 +1315,18 @@ def _read_auto_pull_interval() -> int:
         return 0
 
 
-def _archive_status_is_local_layout_migration(status: str) -> bool:
-    """Return true for PBGui's legacy-layout migration diff only."""
+_ARCHIVE_GENERATED_METADATA_PATHS = {
+    "README.md",
+    "SCORES.html",
+    "SCORES.md",
+    "pbgui/archive_manifest.json",
+}
+
+
+def _archive_status_entries(status: str) -> list[tuple[str, str]]:
+    """Parse `git status --porcelain` output into (code, path) entries."""
+    entries: list[tuple[str, str]] = []
     lines = [line for line in (status or "").splitlines() if line.strip()]
-    if not lines:
-        return False
     for line in lines:
         if line.startswith("?? "):
             code = "??"
@@ -1329,13 +1338,81 @@ def _archive_status_is_local_layout_migration(status: str) -> bool:
             code = line[0]
             path = line[2:]
         else:
-            return False
+            return []
+        entries.append((code, path))
+    return entries
+
+
+def _archive_status_is_local_layout_migration(status: str) -> bool:
+    """Return true for PBGui's legacy-layout migration diff only."""
+    entries = _archive_status_entries(status)
+    if not entries:
+        return False
+    for code, path in entries:
         if code == "??" and (path == "pbgui/" or path.startswith("pbgui/")):
             continue
         if code.strip() == "D" and path.startswith("v") and "/" in path:
             continue
         return False
     return True
+
+
+def _archive_status_is_preservable_local_content(status: str) -> bool:
+    """Return true when local dirty files are archive content plus generated metadata."""
+    entries = _archive_status_entries(status)
+    if not entries:
+        return False
+    for _code, path in entries:
+        if path in _ARCHIVE_GENERATED_METADATA_PATHS:
+            continue
+        if path.startswith("pbgui/configs/"):
+            continue
+        return False
+    return True
+
+
+def _archive_prepare_dirty_pull(name: str, dest: Path, status: str, log_lines: list[str]) -> tuple[bool, str]:
+    """Drop generated metadata so remote updates can pull without losing local archive content."""
+    if not _archive_status_is_preservable_local_content(status):
+        return False, ""
+    entries = _archive_status_entries(status)
+    tracked_generated = sorted({path for code, path in entries if path in _ARCHIVE_GENERATED_METADATA_PATHS and code != "??"})
+    untracked_generated = sorted({path for code, path in entries if path in _ARCHIVE_GENERATED_METADATA_PATHS and code == "??"})
+
+    if tracked_generated:
+        restore_result, restore_out = _run_archive_git_step(
+            name, dest, "git restore generated archive metadata", ["git", "checkout", "--", *tracked_generated], timeout=30,
+        )
+        log_lines.append(restore_out)
+        if restore_result.returncode != 0:
+            return False, restore_out or "git restore generated archive metadata failed"
+    if untracked_generated:
+        clean_result, clean_out = _run_archive_git_step(
+            name, dest, "git clean generated archive metadata", ["git", "clean", "-f", "--", *untracked_generated], timeout=30,
+        )
+        log_lines.append(clean_out)
+        if clean_result.returncode != 0:
+            return False, clean_out or "git clean generated archive metadata failed"
+
+    msg = "Preserved local archive content and refreshed generated metadata before pulling remote changes."
+    _log_archive(f"[{name}] {msg}")
+    log_lines.append(msg)
+    return True, ""
+
+
+def _archive_rebuild_manifest_after_pull(name: str, dest: Path, log_lines: list[str]) -> tuple[bool, str]:
+    """Rebuild generated manifest after a pull that preserved local archive content."""
+    try:
+        rebuild_archive_manifest(dest)
+    except Exception as exc:
+        msg = f"Archive pulled, but manifest rebuild failed: {exc}"
+        _log_archive(f"[{name}] {msg}", level="ERROR")
+        log_lines.append(msg)
+        return False, msg
+    msg = "Pulled remote changes while preserving local archive content; regenerated archive manifest."
+    _log_archive(f"[{name}] {msg}")
+    log_lines.append(msg)
+    return True, ""
 
 
 def _archive_pull_sync(name: str, dest: Path) -> dict:
@@ -1355,6 +1432,21 @@ def _archive_pull_sync(name: str, dest: Path) -> dict:
         return {"name": name, "output": "\n".join(log_lines).strip(), "error": status or "git status failed", "recovered": False}
     if status:
         if not _archive_status_is_local_layout_migration(status):
+            prepared, prepare_error = _archive_prepare_dirty_pull(name, dest, status, log_lines)
+            if prepare_error:
+                return {"name": name, "output": "\n".join(log_lines).strip(), "error": prepare_error, "recovered": False}
+            if prepared:
+                pull_again_result, pull_again_out = _run_archive_git_step(
+                    name, dest, "git pull after preserving local archive content", ["git", "pull", "--ff-only"], timeout=60,
+                )
+                log_lines.append(pull_again_out)
+                if pull_again_result.returncode != 0:
+                    error = pull_again_out or "git pull failed after preserving local archive content"
+                    return {"name": name, "output": "\n".join(log_lines).strip(), "error": error, "recovered": False}
+                rebuilt, rebuild_error = _archive_rebuild_manifest_after_pull(name, dest, log_lines)
+                if not rebuilt:
+                    return {"name": name, "output": "\n".join(log_lines).strip(), "error": rebuild_error, "recovered": False}
+                return {"name": name, "output": "\n".join(line for line in log_lines if line).strip(), "error": "", "recovered": True}
             msg = "Archive has local changes; not resetting divergent history automatically."
             _log_archive(f"[{name}] {msg}", level="ERROR")
             log_lines.extend([status, msg])
@@ -1440,6 +1532,35 @@ def _archive_pull_stream_sync(name: str, dest: Path):
         return final
     if status:
         if not _archive_status_is_local_layout_migration(status):
+            yield _archive_stream_event("status", archive=name, message="Checking local archive changes before pull")
+            prepared, prepare_error = _archive_prepare_dirty_pull(name, dest, status, log_lines)
+            if prepare_error:
+                final = {"name": name, "output": "\n".join(log_lines).strip(), "error": prepare_error, "recovered": False}
+                yield _archive_stream_event("error", archive=name, message=prepare_error)
+                yield _archive_stream_event("archive_done", archive=name, result=final)
+                return final
+            if prepared:
+                yield _archive_stream_event("status", archive=name, message="Pulling remote changes while preserving local archive content")
+                pull_again_result, pull_again_out = yield from _run_archive_git_stream_step(
+                    name, dest, "git pull after preserving local archive content", ["git", "pull", "--ff-only"], timeout=60,
+                )
+                log_lines.append(pull_again_out)
+                if pull_again_result.returncode != 0:
+                    error = pull_again_out or "git pull failed after preserving local archive content"
+                    final = {"name": name, "output": "\n".join(log_lines).strip(), "error": error, "recovered": False}
+                    yield _archive_stream_event("error", archive=name, message=error)
+                    yield _archive_stream_event("archive_done", archive=name, result=final)
+                    return final
+                rebuilt, rebuild_error = _archive_rebuild_manifest_after_pull(name, dest, log_lines)
+                if not rebuilt:
+                    final = {"name": name, "output": "\n".join(log_lines).strip(), "error": rebuild_error, "recovered": False}
+                    yield _archive_stream_event("error", archive=name, message=rebuild_error)
+                    yield _archive_stream_event("archive_done", archive=name, result=final)
+                    return final
+                final = {"name": name, "output": "\n".join(line for line in log_lines if line).strip(), "error": "", "recovered": True}
+                yield _archive_stream_event("status", archive=name, message="Pulled remote changes and regenerated archive manifest")
+                yield _archive_stream_event("archive_done", archive=name, result=final)
+                return final
             msg = "Archive has local changes; not resetting divergent history automatically."
             _log_archive(f"[{name}] {msg}", level="ERROR")
             log_lines.extend([status, msg])
@@ -3388,6 +3509,89 @@ def delete_archive_result(name: str, path: str, session: SessionToken = Depends(
     _invalidate_archive_cache(name)
     rebuild_archive_manifest(archive_base)
     return {"ok": True}
+
+
+def _validate_archive_config_rename_name(value: Any) -> str:
+    """Validate and normalize a user-supplied archive backtest config name."""
+    raw = str(value or "").strip()
+    if not raw or any(char in raw for char in ("/", "\\", "\x00")) or raw in {".", ".."}:
+        raise HTTPException(400, "Invalid new name")
+    normalized = safe_path_part(raw, "config")
+    if not normalized or normalized in {".", ".."}:
+        raise HTTPException(400, "Invalid new name")
+    return normalized
+
+
+@router.post("/archives/{name}/results/rename-config")
+def rename_archive_backtest_config(name: str, body: dict, session: SessionToken = Depends(require_auth)):
+    """Rename one versioned backtest config group in the configured own archive."""
+    _validate_name(name)
+    if name != _own_archive_name():
+        raise HTTPException(403, "Archive config rename is only allowed for the configured own archive")
+    archive_base = (_archives_dir() / name).resolve()
+    if not archive_base.exists():
+        raise HTTPException(404, f"Archive '{name}' not found")
+
+    source_path = str((body or {}).get("path") or "")
+    result_dir = Path(source_path).resolve()
+    if not is_inside_archive(result_dir, archive_base):
+        raise HTTPException(400, "Invalid result path")
+    if not (result_dir / "analysis.json").exists():
+        raise HTTPException(404, "Result not found")
+
+    try:
+        rel_parts = result_dir.relative_to(archive_base).parts
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid result path") from exc
+    layout_parts = ARCHIVE_LAYOUT_ROOT.parts
+    if len(rel_parts) < 6 or rel_parts[:2] != layout_parts or rel_parts[3] != "backtests":
+        raise HTTPException(400, "Only versioned archive backtest configs can be renamed")
+
+    config_dir = archive_config_group_dir(result_dir, archive_base).resolve()
+    if not is_inside_archive(config_dir, archive_base) or not config_dir.is_dir():
+        raise HTTPException(404, "Archive config group not found")
+    old_name = config_dir.name
+    new_name = _validate_archive_config_rename_name((body or {}).get("new_name"))
+    if new_name == old_name:
+        return {"ok": True, "changed": False, "old_name": old_name, "new_name": new_name, "path": str(result_dir)}
+
+    target_dir = config_dir.with_name(new_name).resolve()
+    if not is_inside_archive(target_dir, archive_base):
+        raise HTTPException(400, "Invalid new name")
+    if target_dir.exists():
+        raise HTTPException(409, f"Archive config '{new_name}' already exists")
+
+    try:
+        config_dir.rename(target_dir)
+    except OSError as exc:
+        raise HTTPException(500, f"Rename failed: {exc}") from exc
+
+    updated_configs = 0
+    for cfg_file in sorted(target_dir.glob("**/config.json")):
+        cfg = load_json_file(cfg_file)
+        if not isinstance(cfg, dict):
+            continue
+        backtest = cfg.get("backtest")
+        if not isinstance(backtest, dict):
+            backtest = {}
+            cfg["backtest"] = backtest
+        backtest["base_dir"] = _managed_backtest_base_dir(new_name)
+        atomic_write_json(cfg_file, cfg)
+        updated_configs += 1
+
+    new_result_dir = target_dir / Path(*rel_parts[5:])
+    _invalidate_archive_cache(name)
+    manifest = rebuild_archive_manifest(archive_base)
+    return {
+        "ok": True,
+        "changed": True,
+        "old_name": old_name,
+        "new_name": new_name,
+        "old_path": str(result_dir),
+        "path": str(new_result_dir),
+        "updated_configs": updated_configs,
+        "manifest": {"schema_version": manifest.get("schema_version"), "items": len(manifest.get("items", []))},
+    }
 
 
 @router.post("/archives/{name}/pull")

@@ -714,6 +714,7 @@ textarea.json-invalid:focus {
       <div id="ctx-archive-results" style="display:none">
         <button class="sb-btn" onclick="closeArchiveResults()">🏠 Archives</button>
         <button class="sb-btn" id="archive-btn-rebacktest" onclick="rebacktestSelectedArchive()">🔄 Backtest</button>
+        <button class="sb-btn" id="archive-btn-rename-config" onclick="renameSelectedArchiveConfig()" style="display:none">✏ Rename Config</button>
         <button class="sb-btn" id="archive-btn-retest-replace" onclick="retestReplaceSelectedArchive()" style="display:none">♻ Retest &amp; Replace</button>
         <button class="sb-btn" id="archive-btn-add-run" onclick="addToRunFromArchive()">▶ Add to Run</button>
         <button class="sb-btn" id="archive-btn-compare" onclick="compareSelectedArchive()">📈 Compare</button>
@@ -835,6 +836,10 @@ textarea.json-invalid:focus {
             <label style="font-size:var(--fs-sm);color:var(--text-dim)">Config:</label>
             <select id="arc-results-config-filter" class="sb-input" style="max-width:200px" onchange="renderArchiveResults(selectedArchiveName)">
               <option value="">All configs</option>
+            </select>
+            <label id="arc-results-coin-label" style="font-size:var(--fs-sm);color:var(--text-dim)">Coin:</label>
+            <select id="arc-results-coin-filter" class="sb-input" style="max-width:160px" onchange="renderArchiveResults(selectedArchiveName)">
+              <option value="">All coins</option>
             </select>
             <input type="text" id="arc-results-filter" class="sb-input" style="max-width:200px" placeholder="Search name…" oninput="renderArchiveResults(selectedArchiveName)">
             <span id="archive-results-count-label" class="results-count-label"></span>
@@ -4554,10 +4559,13 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn) {
     el.innerHTML = '\x3Cdiv class="empty-state">\x3Cdiv class="empty-icon">📊\x3C/div>No results found.\x3C/div>';
     return;
   }
+  var showCoins = data.some(function(r) {
+    return !!((r && r.coins_text) || (r && Array.isArray(r.coins) && r.coins.length));
+  });
 
   /* Columns: Backtest Name | Exch. | Result Time | ADG | Gain | Worst DD | Sharpe | Start B. | Final B. | TWE | POS | Actions */
   var html = '\x3Ctable class="tbl">\x3Cthead>\x3Ctr>' +
-    rthFn('Backtest Name', 'config_name') + rthFn('Exch.', 'exchange_dir') + rthFn('Result Time', 'modified') +
+    rthFn('Backtest Name', 'config_name') + (showCoins ? rthFn('Coins', 'coins_text') : '') + rthFn('Exch.', 'exchange_dir') + rthFn('Result Time', 'modified') +
     rthFn('ADG', 'adg') + rthFn('Gain', 'gain') + rthFn('Worst DD', 'drawdown_worst') + rthFn('Sharpe', 'sharpe_ratio') +
     rthFn('Start B.', 'starting_balance') + rthFn('Final B.', 'final_balance') +
     '\x3Cth>TWE\x3C/th>\x3Cth>POS\x3C/th>' +
@@ -4567,10 +4575,12 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn) {
   data.forEach(function(r, i) {
     r = r || {};
     var btName = r.display_name || (r.config_name + '/' + (r.exchange_dir || '') + '/' + r.result_name);
+    var coinsText = r.coins_text || (Array.isArray(r.coins) ? r.coins.join(', ') : '');
     var liqStyle = r.liquidated ? ' style="background:rgba(255,75,75,.10)"' : '';
     var liqTitle = r.liquidated ? ' ⚠ liquidated' : '';
     html += '\x3Ctr data-idx="' + i + '" data-path="' + esc(r.path) + '"' + liqStyle + '>' +
       '\x3Ctd title="' + esc(btName) + esc(liqTitle) + '" style="max-width:250px">' + (r.liquidated ? '\x3Cspan style="color:var(--red)" title="Liquidated">\u26a0\ufe0f\x3C/span> ' : '') + esc(btName) + '\x3C/td>' +
+      (showCoins ? '\x3Ctd title="' + esc(coinsText) + '" style="max-width:140px">' + esc(coinsText) + '\x3C/td>' : '') +
       '\x3Ctd>' + esc(Array.isArray(r.exchanges) ? r.exchanges.join(', ') : '') + '\x3C/td>' +
       '\x3Ctd>' + fmtDate(r.modified) + '\x3C/td>' +
       '\x3Ctd>' + fmt(r.adg, 4) + '\x3C/td>' +
@@ -5095,6 +5105,47 @@ function deleteSelectedArchiveResults() {
       }).catch(function(e) { toast('Delete failed: ' + e.message, 'err'); });
     }}
   ]);
+}
+
+function findArchiveResultByPath(path) {
+  return (archiveResults || []).find(function(item) { return item && item.path === path; }) || null;
+}
+
+function renameSelectedArchiveConfig() {
+  if (!selectedArchiveIsOwn()) { toast('Rename is only available for your own archive', 'err'); return; }
+  var sel = getSelectedArchiveResults();
+  if (sel.length !== 1) { toast('Select exactly one archive result to rename its config', 'err'); return; }
+  var item = findArchiveResultByPath(sel[0]);
+  if (!item) { toast('Selected archive result is no longer visible', 'err'); return; }
+  var currentName = item.config_name || '';
+  var coinText = item.coins_text || (Array.isArray(item.coins) ? item.coins.join(', ') : '');
+  var body = '\x3Cp>Rename archive config \x3Cb>' + esc(currentName) + '\x3C/b>' + (coinText ? ' for ' + esc(coinText) : '') + '. All results in this config group will move to the new name.\x3C/p>' +
+    '\x3Cdiv class="form-group">\x3Clabel>New name\x3C/label>\x3Cinput id="archive-rename-config-input" class="sb-input" value="' + esc(currentName) + '" style="width:100%">\x3C/div>';
+  showModal('Rename Archive Config', body, [
+    { text: 'Cancel', cls: '' },
+    { text: 'Rename', cls: 'modal-btn-primary', action: function() {
+      var input = document.getElementById('archive-rename-config-input');
+      var newName = input ? input.value.trim() : '';
+      var renamedPath = '';
+      if (!newName) { toast('New name is required', 'err'); return; }
+      apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/results/rename-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: item.path, new_name: newName })
+      }).then(function(resp) {
+        renamedPath = resp.path || item.path;
+        toast(resp.changed === false ? 'Name unchanged' : 'Archive config renamed to ' + (resp.new_name || newName), 'ok');
+        closeModal();
+        return viewArchive(selectedArchiveName);
+      }).then(function() {
+        setSelectedArchiveResults([renamedPath]);
+      }).catch(function(e) { toast('Rename failed: ' + e.message, 'err'); });
+    }}
+  ]);
+  setTimeout(function() {
+    var input = document.getElementById('archive-rename-config-input');
+    if (input) { input.focus(); input.select(); }
+  }, 0);
 }
 
 function removeLiquidatedArchiveResults() {
@@ -7448,6 +7499,8 @@ function updateArchiveActionVisibility() {
     var node = document.getElementById(id);
     if (node) node.style.display = isBacktests ? '' : 'none';
   });
+  var renameBtn = document.getElementById('archive-btn-rename-config');
+  if (renameBtn) renameBtn.style.display = isBacktests && own ? '' : 'none';
   var replaceBtn = document.getElementById('archive-btn-retest-replace');
   if (replaceBtn) replaceBtn.style.display = isBacktests && own ? '' : 'none';
   var scoreBtn = document.getElementById('archive-btn-score-preview');
@@ -7515,9 +7568,13 @@ function renderArchiveResults(name) {
   updateArchiveActionVisibility();
   var cfgLabel = document.querySelector('#archive-results-toolbar label');
   var cfgSelNode = document.getElementById('arc-results-config-filter');
+  var coinLabelNode = document.getElementById('arc-results-coin-label');
+  var coinSelNode = document.getElementById('arc-results-coin-filter');
   var textFilterNode = document.getElementById('arc-results-filter');
   if (cfgLabel) cfgLabel.style.display = archiveResultsMode === 'backtests' ? '' : 'none';
   if (cfgSelNode) cfgSelNode.style.display = archiveResultsMode === 'backtests' ? '' : 'none';
+  if (coinLabelNode) coinLabelNode.style.display = archiveResultsMode === 'backtests' ? '' : 'none';
+  if (coinSelNode) coinSelNode.style.display = archiveResultsMode === 'backtests' ? '' : 'none';
   if (textFilterNode) textFilterNode.placeholder = archiveResultsMode === 'backtests' ? 'Search name…' : (archiveResultsMode === 'schedules' ? 'Search schedule…' : 'Search optimize…');
   setArchiveResultsModeButtons();
 
@@ -7544,13 +7601,29 @@ function renderArchiveResults(name) {
       cfgNames.map(function(n) { return '\x3Coption value="' + esc(n) + '"' + (n === cfgVal ? ' selected' : '') + '>' + esc(n) + '\x3C/option>'; }).join('');
   }
 
+  var coinSel = document.getElementById('arc-results-coin-filter');
+  if (coinSel) {
+    var coinVal = coinSel.value;
+    var coinNames = [];
+    archiveResults.forEach(function(r) {
+      (Array.isArray(r.coins) ? r.coins : []).forEach(function(coin) {
+        if (coin && coinNames.indexOf(coin) < 0) coinNames.push(coin);
+      });
+    });
+    coinNames.sort();
+    coinSel.innerHTML = '\x3Coption value="">All coins\x3C/option>' +
+      coinNames.map(function(n) { return '\x3Coption value="' + esc(n) + '"' + (n === coinVal ? ' selected' : '') + '>' + esc(n) + '\x3C/option>'; }).join('');
+  }
+
   /* Apply config + text filter */
   var cfgFilter = cfgSel ? cfgSel.value : '';
+  var coinFilter = coinSel ? coinSel.value : '';
   var textFilter = ((document.getElementById('arc-results-filter') || {}).value || '').toLowerCase();
   var filtered = archiveResults.filter(function(r) {
     if (cfgFilter && r.config_name !== cfgFilter) return false;
+    if (coinFilter && (!Array.isArray(r.coins) || r.coins.indexOf(coinFilter) < 0)) return false;
     if (!textFilter) return true;
-    var hay = ((r.config_name || '') + ' ' + (r.result_name || '')).toLowerCase();
+    var hay = ((r.config_name || '') + ' ' + (r.result_name || '') + ' ' + (r.display_name || '') + ' ' + (r.coins_text || '')).toLowerCase();
     return hay.indexOf(textFilter) >= 0;
   });
   updateResultsCountLabel('archive-results-count-label', filtered.length, archiveResults.length);
