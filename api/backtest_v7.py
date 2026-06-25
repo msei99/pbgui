@@ -15,6 +15,7 @@ import glob
 import gzip
 import io
 import json
+import math
 import multiprocessing
 import os
 import platform
@@ -79,6 +80,7 @@ from api.pb7_ohlcv_tools import (
     stop_ohlcv_preload_job,
 )
 from logging_helpers import human_log as _log
+from pareto_preset_generator import OPTIMIZE_PRESET_DIRECTIONS, build_optimize_preset
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config
 from pbgui_purefunc import PBGDIR, load_ini, load_ini_section, save_ini, pb7dir, pb7venv
 
@@ -237,6 +239,128 @@ def _find_legacy_result_root(result_dir: Path) -> Path:
         if resolved.is_relative_to(root):
             return root
     raise HTTPException(400, "Invalid legacy result path")
+
+
+def _sanitize_optimize_preset_name(value: object, *, default: str) -> str:
+    """Return an Optimize-config-safe preset name."""
+    name = str(value or "").strip() or default
+    for char in (' ', '/', '\\', ':', '*', '?', '"', '<', '>', '|', '\0'):
+        name = name.replace(char, "_")
+    name = name.strip("._")
+    return name[:64] or default
+
+
+def _json_safe(value: object) -> object:
+    """Convert generated preset payload values into JSON-safe primitives."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(_json_safe(key)): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    try:
+        num = float(value)
+    except Exception:
+        return str(value)
+    if not math.isfinite(num):
+        return str(value)
+    rounded = round(num, 9)
+    return int(rounded) if rounded.is_integer() else rounded
+
+
+def _to_float(value: object) -> float | None:
+    """Parse finite numeric values used for bounds comparisons."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        text = str(value).strip()
+        if not text:
+            return None
+        return float(text)
+    except Exception:
+        return None
+
+
+def _bound_pair(value: object) -> tuple[float, float] | None:
+    """Return normalized lower and upper bounds from PB7 bounds formats."""
+    if isinstance(value, dict):
+        for lo_key, hi_key in (("lower", "upper"), ("min", "max"), ("lo", "hi")):
+            if lo_key in value and hi_key in value:
+                low = _to_float(value.get(lo_key))
+                high = _to_float(value.get(hi_key))
+                if low is not None and high is not None:
+                    return (low, high) if low <= high else (high, low)
+        if "bounds" in value:
+            return _bound_pair(value.get("bounds"))
+        return None
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        low = _to_float(value[0])
+        high = _to_float(value[1])
+        if low is not None and high is not None:
+            return (low, high) if low <= high else (high, low)
+    return None
+
+
+def _flatten_result_bot_params(config: dict) -> dict[str, Any]:
+    """Flatten PB7 result bot params into Pareto-style long_/short_ keys."""
+    bot_params: dict[str, Any] = {}
+    bot_config = config.get("bot", {}) if isinstance(config, dict) else {}
+    if not isinstance(bot_config, dict):
+        return bot_params
+    for side in ("long", "short"):
+        side_config = bot_config.get(side, {})
+        if not isinstance(side_config, dict):
+            continue
+        for param, value in side_config.items():
+            bot_params[f"{side}_{param}"] = value
+    return bot_params
+
+
+def _result_near_bounds(bounds: dict, bot_params: dict[str, Any], *, tolerance: float) -> dict[str, Any]:
+    """Detect selected result parameters close to their optimize bounds."""
+    at_lower: dict[str, dict[str, Any]] = {}
+    at_upper: dict[str, dict[str, Any]] = {}
+    within_range: list[str] = []
+    long_enabled = (_to_float(bot_params.get("long_n_positions")) or 0.0) > 0.0 or (_to_float(bot_params.get("long_total_wallet_exposure_limit")) or 0.0) > 0.0
+    short_enabled = (_to_float(bot_params.get("short_n_positions")) or 0.0) > 0.0 or (_to_float(bot_params.get("short_total_wallet_exposure_limit")) or 0.0) > 0.0
+    for param_name, bound_value in (bounds or {}).items():
+        name = str(param_name)
+        if name.startswith("long_") and not long_enabled:
+            continue
+        if name.startswith("short_") and not short_enabled:
+            continue
+        pair = _bound_pair(bound_value)
+        value = _to_float(bot_params.get(name))
+        if pair is None or value is None:
+            continue
+        lower, upper = pair
+        if abs(lower) < 1e-15 and abs(upper) < 1e-15:
+            continue
+        span = upper - lower
+        if span < 1e-10:
+            continue
+        if value <= lower + span * tolerance:
+            at_lower[name] = {"value": value, "bound": lower}
+        elif value >= upper - span * tolerance:
+            at_upper[name] = {"value": value, "bound": upper}
+        else:
+            within_range.append(name)
+    return {"at_lower": at_lower, "at_upper": at_upper, "within_range": within_range}
+
+
+def _result_optimize_preset_default_name(result_dir: Path, config: dict) -> str:
+    """Build a stable default preset name for a backtest result."""
+    backtest = config.get("backtest", {}) if isinstance(config, dict) else {}
+    base_dir = str(backtest.get("base_dir") or "").strip() if isinstance(backtest, dict) else ""
+    config_name = Path(base_dir).name if base_dir else result_dir.parent.parent.name
+    raw_name = f"bt_refine_{config_name}_{result_dir.name}"
+    return _sanitize_optimize_preset_name(raw_name, default="bt_refine_result")
 
 
 def _bt_log_dir() -> Path:
@@ -1413,6 +1537,39 @@ def _archive_rebuild_manifest_after_pull(name: str, dest: Path, log_lines: list[
     _log_archive(f"[{name}] {msg}")
     log_lines.append(msg)
     return True, ""
+
+
+def _archive_pre_push_pull(name: str, dest: Path, access_token: str, log_lines: list[str]) -> None:
+    """Pull before push while preserving local archive content and dropping generated metadata."""
+    pull_result, pull_out = _run_archive_git_step(
+        name, dest, "git pull (pre-push)", ["git", "pull"], timeout=60, secret=access_token,
+    )
+    log_lines.append(f"Git pull:\n{pull_out}")
+    if pull_result.returncode == 0:
+        return
+
+    status_result, status = _run_archive_git_step(
+        name, dest, "git status (pre-push)", ["git", "status", "--porcelain"], timeout=10, secret=access_token,
+    )
+    if status_result.returncode != 0:
+        log_lines.append(status)
+        raise HTTPException(500, f"git pull failed: {pull_out}")
+    if status:
+        prepared, prepare_error = _archive_prepare_dirty_pull(name, dest, status, log_lines)
+        if prepare_error:
+            raise HTTPException(500, f"git pull failed: {prepare_error}")
+        if prepared:
+            pull_again_result, pull_again_out = _run_archive_git_step(
+                name, dest, "git pull after preserving local archive content (pre-push)", ["git", "pull"], timeout=60, secret=access_token,
+            )
+            log_lines.append(f"Git pull after preserving local archive content:\n{pull_again_out}")
+            if pull_again_result.returncode != 0:
+                raise HTTPException(500, f"git pull failed: {pull_again_out}")
+            rebuilt, rebuild_error = _archive_rebuild_manifest_after_pull(name, dest, log_lines)
+            if not rebuilt:
+                raise HTTPException(500, rebuild_error)
+            return
+    raise HTTPException(500, f"git pull failed: {pull_out}")
 
 
 def _archive_pull_sync(name: str, dest: Path) -> dict:
@@ -3283,6 +3440,66 @@ def get_result_config(path: str, session: SessionToken = Depends(require_auth)):
     return load_pb7_config(config_file, neutralize_added=True)
 
 
+@router.post("/results/optimize-preset/build")
+def build_result_optimize_preset(body: dict, session: SessionToken = Depends(require_auth)):
+    """Build a PB7 optimize preset from a single backtest result config."""
+    request_body = body or {}
+    path_text = str(request_body.get("result_path") or request_body.get("path") or "").strip()
+    if not path_text:
+        raise HTTPException(status_code=400, detail="Missing result_path")
+    result_dir = _resolve_result_dir(path_text)
+    config_file = result_dir / "config.json"
+    if not config_file.exists():
+        raise HTTPException(status_code=404, detail="config.json not found")
+    config = load_pb7_config(config_file, neutralize_added=True)
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=422, detail="config.json did not contain an object")
+
+    analysis = load_json_file(result_dir / "analysis.json")
+    optimize = config.get("optimize", {}) if isinstance(config.get("optimize", {}), dict) else {}
+    params = dict(request_body.get("preset") or {})
+    direction = str(params.get("direction") or OPTIMIZE_PRESET_DIRECTIONS[0]).strip()
+    if direction not in OPTIMIZE_PRESET_DIRECTIONS:
+        direction = OPTIMIZE_PRESET_DIRECTIONS[0]
+    params["direction"] = direction
+
+    default_name = _result_optimize_preset_default_name(result_dir, config)
+    safe_name = _sanitize_optimize_preset_name(params.get("preset_name"), default=default_name)
+    bot_params = _flatten_result_bot_params(config)
+    near_bounds = None
+    if bool(params.get("show_near_bounds", False)) or bool(params.get("only_adjust_near_bounds", False)):
+        try:
+            tolerance = float(params.get("near_bounds_tol", 0.10) or 0.10)
+        except Exception:
+            tolerance = 0.10
+        tolerance = max(0.01, min(0.25, tolerance))
+        params["near_bounds_tol"] = tolerance
+        near_bounds = _result_near_bounds(optimize.get("bounds", {}) or {}, bot_params, tolerance=tolerance)
+
+    payload = build_optimize_preset(
+        config_context={
+            "bounds": dict(optimize.get("bounds", {}) or {}),
+            "bot_params": bot_params,
+            "suite_metrics": analysis if isinstance(analysis, dict) else {},
+            "optimize_settings": dict(optimize),
+            "config_index": 0,
+        },
+        full_config_data=config,
+        params=params,
+        near_bounds=near_bounds,
+    )
+    safe_payload = _json_safe(payload)
+    if not bool(request_body.get("include_config", True)) and isinstance(safe_payload, dict):
+        safe_payload.pop("preset_config", None)
+    return {
+        "ok": True,
+        "result_path": str(result_dir),
+        "preset_name": safe_name,
+        "directions": OPTIMIZE_PRESET_DIRECTIONS,
+        **safe_payload,
+    }
+
+
 @router.get("/results/equity")
 def get_result_equity(path: str, session: SessionToken = Depends(require_auth)):
     """Stream balance_and_equity CSV file directly for client-side parsing."""
@@ -3689,12 +3906,7 @@ def git_push(name: str, body: dict = None, session: SessionToken = Depends(requi
 
         if not dry_run:
             # Pull before push to avoid overwriting remote archive updates.
-            pull_result, pull_out = _run_archive_git_step(
-                name, dest, "git pull (pre-push)", ["git", "pull"], timeout=60, secret=access_token,
-            )
-            log_lines.append(f"Git pull:\n{pull_out}")
-            if pull_result.returncode != 0:
-                raise HTTPException(500, f"git pull failed: {pull_out}")
+            _archive_pre_push_pull(name, dest, access_token, log_lines)
 
             _log_archive(f"[{name}] archive migration check started")
             migration = maybe_migrate_own_archive(name, dest, _own_archive_name())

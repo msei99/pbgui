@@ -9,6 +9,7 @@ from pathlib import Path
 
 import msgpack
 
+from api import backtest_v7
 from api import pareto_explorer
 from ParetoDataLoader import ParetoDataLoader
 import pareto_preset_generator as generator
@@ -70,6 +71,12 @@ def _default_goals(metric_names: list[str]) -> dict[str, str]:
     return {metric: ("min" if metric in minimum else "max") for metric in metric_names}
 
 
+def _patch_metric_helpers(monkeypatch) -> None:
+    """Patch PB7 metric helper calls with compact deterministic fixtures."""
+    monkeypatch.setattr(generator, "get_optimize_metric_sets", _metric_sets)
+    monkeypatch.setattr(generator, "get_optimize_scoring_default_goals", _default_goals)
+
+
 def _base_context() -> tuple[dict, dict]:
     """Build a minimal selected-config context and source config."""
     full_config = {
@@ -111,6 +118,57 @@ def _base_context() -> tuple[dict, dict]:
         "optimize_settings": {},
     }
     return context, full_config
+
+
+def test_backtest_result_optimize_preset_uses_shared_generator(tmp_path, monkeypatch):
+    """Backtest-result preset previews should use the same preset generator as Pareto Explorer."""
+    _patch_metric_helpers(monkeypatch)
+    result_dir = tmp_path / "cfg" / "binance" / "2026-01-02"
+    result_dir.mkdir(parents=True)
+    (result_dir / "config.json").write_text("{}", encoding="utf-8")
+    (result_dir / "analysis.json").write_text("{}", encoding="utf-8")
+    config = {
+        "backtest": {"base_dir": "backtests/pbgui/source_cfg"},
+        "bot": {
+            "long": {
+                "entry_grid_spacing_pct": 0.011,
+                "n_positions": 3,
+                "total_wallet_exposure_limit": 4.0,
+            },
+            "short": {"n_positions": 0, "total_wallet_exposure_limit": 0.0},
+        },
+        "optimize": {
+            "bounds": {
+                "long_entry_grid_spacing_pct": [0.01, 0.10, 0.001],
+                "long_n_positions": [1, 5, 1],
+                "long_total_wallet_exposure_limit": [0.0, 10.0, 0.1],
+            },
+            "scoring": ["adg_w_usd", "loss_profit_ratio", "sharpe_ratio_usd"],
+            "limits": [],
+        },
+    }
+    analysis = {"drawdown_worst_usd": 0.20, "adg_w_usd": 0.01, "loss_profit_ratio": 0.3, "sharpe_ratio_usd": 1.4}
+    monkeypatch.setattr(backtest_v7, "_resolve_result_dir", lambda path: result_dir)
+    monkeypatch.setattr(backtest_v7, "load_pb7_config", lambda *args, **kwargs: copy.deepcopy(config))
+    monkeypatch.setattr(backtest_v7, "load_json_file", lambda path: copy.deepcopy(analysis))
+
+    payload = backtest_v7.build_result_optimize_preset({
+        "result_path": str(result_dir),
+        "include_config": False,
+        "preset": {
+            "preset_name": "from result",
+            "only_adjust_near_bounds": True,
+            "bounds_window_pct": 10,
+            "direction": "Balanced (keep run scoring)",
+            "risk_adjust": 0,
+        },
+    }, session=None)
+
+    changed = {row["param"] for row in payload["bounds_preview_rows"]}
+    assert payload["ok"] is True
+    assert payload["preset_name"] == "from_result"
+    assert "preset_config" not in payload
+    assert changed == {"long_entry_grid_spacing_pct"}
 
 
 def _loader_config(score: float, objectives: dict[str, float], scoring: list | None = None) -> dict:

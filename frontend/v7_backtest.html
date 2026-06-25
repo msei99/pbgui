@@ -701,8 +701,12 @@ textarea.json-invalid:focus {
         <button class="sb-btn" onclick="goBalanceCalculatorFromResult()">💰 Balance Calculator</button>
         <button class="sb-btn" onclick="calcBalanceFromResult()">⚡ Calc Balance</button>
         <button class="sb-btn" onclick="optimizeFromResult()">🧬 Optimize from Result</button>
+        <button class="sb-btn" onclick="optimizePresetFromResult()">Refine Optimize Preset</button>
         <button class="sb-btn" onclick="addResultToArchive()">🗄 Add to Archive</button>
         <button class="sb-btn danger" onclick="deleteSelectedResults()">🗑 Delete Selected</button>
+      </div>
+      <div id="ctx-optimize-preset" class="ctx-actions" style="display:none">
+        <button class="sb-btn" onclick="closeOptimizePresetPanel()">Back to Results</button>
       </div>
       <div id="ctx-archive" class="ctx-actions" style="display:none">
         <button class="sb-btn" id="archive-pull-all-btn" onclick="pullAllArchives()">⬇ Pull All</button>
@@ -818,6 +822,11 @@ textarea.json-invalid:focus {
         <!-- Icon-triggered charts below -->
         <div id="results-charts" style="display:none"></div>
       </div>
+    </div>
+
+    <!-- REFINE OPTIMIZE PRESET panel -->
+    <div id="panel-optimize-preset" class="view-panel">
+      <div id="optimize-preset-panel-host" style="height:100%;min-height:0;overflow:hidden"></div>
     </div>
 
     <!-- ARCHIVE panel -->
@@ -954,6 +963,7 @@ textarea.json-invalid:focus {
 
 <script src="/app/js/editor_shared.js?v=10"></script>
 <script src="/app/js/json_panel.js?v=1"></script>
+<script src="/app/js/optimize_preset_builder.js?v=2"></script>
 <script>
 /* ════════════════════════════════════════════════
    GLOBALS (injected by server)
@@ -1241,15 +1251,17 @@ function persistBacktestViewState() {
 /* ════════════════════════════════════════════════
    NAVIGATION
    ════════════════════════════════════════════════ */
-function selectPanel(id) {
+function selectPanel(id, opts) {
+  opts = opts || {};
   window.PBGuiEditorShared.clearFixedValidationStatus();
   /* If leaving archive while results are open, hide archive-results sidebar */
   if (id !== 'archive') {
     document.getElementById('ctx-archive-results').style.display = 'none';
   }
   currentPanel = id;
+  var navPanel = id === 'optimize-preset' ? 'results' : id;
   document.querySelectorAll('.sb-section').forEach(function(b) {
-    b.classList.toggle('active', b.getAttribute('data-panel') === id);
+    b.classList.toggle('active', b.getAttribute('data-panel') === navPanel);
   });
   document.querySelectorAll('.view-panel').forEach(function(p) {
     p.classList.toggle('active', p.id === 'panel-' + id);
@@ -1257,7 +1269,7 @@ function selectPanel(id) {
   document.querySelectorAll('.ctx-actions').forEach(function(c) {
     c.style.display = c.id === 'ctx-' + id ? '' : 'none';
   });
-  persistBacktestViewState();
+  if (opts.persist !== false) persistBacktestViewState();
   // Lazy-load data when switching panels
   if (id === 'configs') {
     if (configs.length === 0) loadConfigs(); else renderConfigs();
@@ -7318,6 +7330,68 @@ function optimizeFromResult() {
     if (draftName) targetUrl += '&draft_name=' + encodeURIComponent(draftName);
     window.location.href = targetUrl;
   }).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
+}
+
+function optimizePresetNameFromResult(path, resultData) {
+  var parts = ['bt_refine'];
+  if (resultData && resultData.config_name) parts.push(resultData.config_name);
+  if (resultData && resultData.result_name) parts.push(resultData.result_name);
+  if (parts.length === 1) {
+    String(path || '').split(/[\\/]/).filter(Boolean).slice(-2).forEach(function(part) { parts.push(part); });
+  }
+  return window.PBGuiOptimizePresetBuilder.sanitizeName(parts.join('_'), 'bt_refine_result');
+}
+
+function closeOptimizePresetPanel() {
+  if (window.PBGuiOptimizePresetBuilder) {
+    window.PBGuiOptimizePresetBuilder.close();
+    if (currentPanel === 'optimize-preset') selectPanel('results');
+    return;
+  }
+  selectPanel('results');
+}
+
+function optimizePresetFromResult() {
+  var sel = getSelectedResults();
+  if (sel.length !== 1) { toast('Select exactly 1 result', 'err'); return; }
+  if (!window.PBGuiOptimizePresetBuilder) { toast('Optimize preset builder is not loaded', 'err'); return; }
+  var path = sel[0];
+  var resultData = (results || []).find(function(r) { return r && r.path === path; }) || null;
+  selectPanel('optimize-preset', { persist: false });
+  window.PBGuiOptimizePresetBuilder.open({
+    mount: 'optimize-preset-panel-host',
+    closeLabel: 'Back to Results',
+    sourceLabel: 'Backtest Result',
+    sourceName: (resultData && (resultData.display_name || resultData.result_name)) || path,
+    defaultName: optimizePresetNameFromResult(path, resultData),
+    notify: toast,
+    onClose: function() {
+      selectPanel('results');
+      setSelectedResults([path]);
+    },
+    buildPreset: function(body) {
+      body.result_path = path;
+      return apiFetch('/results/optimize-preset/build', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }).catch(function(err) {
+        if (err && err.message === 'Not Found') {
+          throw new Error('Backtest preset API route is not loaded yet. Restart PBGui/API so the bumped API serial is active.');
+        }
+        throw err;
+      });
+    },
+    saveConfig: function(name, config) {
+      return window.PBGuiOptimizePresetBuilder.saveOptimizePresetConfig(TOKEN, name, config);
+    },
+    queueConfig: function(name) {
+      return window.PBGuiOptimizePresetBuilder.queueOptimizePreset(TOKEN, name);
+    },
+    openOptimize: function(config, name) {
+      return window.PBGuiOptimizePresetBuilder.openOptimizeSeedDraft(TOKEN, config, name);
+    }
+  });
 }
 
 function addResultToArchive() {

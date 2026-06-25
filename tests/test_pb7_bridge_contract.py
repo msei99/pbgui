@@ -1017,6 +1017,47 @@ def test_archive_pull_preserves_local_archive_content_when_remote_is_ahead(
     assert rebuilt == [tmp_path]
 
 
+def test_archive_push_pre_pull_preserves_local_archive_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archive push pre-pull handles generated metadata without discarding local configs."""
+    commands = []
+    pull_count = 0
+    rebuilt = []
+    log_lines = []
+
+    def fake_run(cmd, cwd=None, capture_output=True, text=True, timeout=None, input=None, env=None):
+        nonlocal pull_count
+        commands.append(list(cmd))
+        if cmd == ["git", "pull"]:
+            pull_count += 1
+            if pull_count == 1:
+                return subprocess.CompletedProcess(cmd, 1, stdout="Updating remote changes\n", stderr="error: Your local changes would be overwritten\n")
+            return subprocess.CompletedProcess(cmd, 0, stdout="Merge made by recursive\n", stderr="")
+        if cmd == ["git", "status", "--porcelain"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=" M pbgui/archive_manifest.json\n?? pbgui/configs/v7.12.0/optimize/sl_bt_twe_target.json\n",
+                stderr="",
+            )
+        if cmd == ["git", "checkout", "--", "pbgui/archive_manifest.json"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(backtest_v7, "_log_archive", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(backtest_v7, "rebuild_archive_manifest", lambda dest: rebuilt.append(dest) or {"items": []})
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    backtest_v7._archive_pre_push_pull("mine", tmp_path, "secret", log_lines)
+
+    assert pull_count == 2
+    assert ["git", "checkout", "--", "pbgui/archive_manifest.json"] in commands
+    assert rebuilt == [tmp_path]
+    assert any("preserving local archive content" in line for line in log_lines)
+
+
 def test_archive_pull_does_not_reset_dirty_foreign_archive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
