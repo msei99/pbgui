@@ -201,3 +201,79 @@ def test_backup_draft_save_clears_tombstone(monkeypatch, tmp_path: Path) -> None
     assert "test_inst" in desired["instances"]
     assert "test_inst" not in desired["tombstones"]
     assert desired["instances"]["test_inst"]["version"] == "8"
+
+
+def test_copy_instance_config_copies_referenced_override_files(monkeypatch, tmp_path: Path) -> None:
+    """Copying an instance config writes target config and referenced override files."""
+
+    (tmp_path / "pbgui.ini").write_text("[main]\npbname=master\n", encoding="utf-8")
+    source_dir = tmp_path / "data" / "run_v7" / "source_user"
+    source_dir.mkdir(parents=True)
+    source_cfg = {
+        "live": {"user": "source_user"},
+        "pbgui": {"version": 3, "enabled_on": "vps-a"},
+        "coin_overrides": {"BTC": {"override_config_path": "BTC.json"}},
+    }
+    source_override = {"bot": {"long": {"total_wallet_exposure_limit": 1.2}}, "custom": "keep"}
+    (source_dir / "config.json").write_text(json.dumps(source_cfg), encoding="utf-8")
+    (source_dir / "BTC.json").write_text(json.dumps(source_override), encoding="utf-8")
+    target_dir = tmp_path / "data" / "run_v7" / "target_user"
+    target_dir.mkdir()
+    (target_dir / "config.json").write_text(
+        json.dumps({"live": {"user": "target_user"}, "pbgui": {"version": 1, "enabled_on": "disabled"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(v7_instances, "_monitor", None)
+
+    def fake_load(path: Path, neutralize_added: bool = False) -> dict:
+        """Read JSON without invoking the pb7_config migration pipeline."""
+
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+
+    def fake_save(cfg: dict, path: Path) -> None:
+        """Write JSON without invoking the pb7_config migration pipeline."""
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    async def noop_runtime_check(name: str, cfg: dict) -> None:
+        return None
+
+    async def noop_ssh_sync(name: str) -> dict:
+        return {"ok": 0, "failed": 0, "hosts": []}
+
+    class FakeUsers:
+        """Minimal Users replacement for copy_instance_config."""
+
+        def find_exchange(self, user: str) -> str:
+            return "binance"
+
+    async def request_json() -> dict:
+        return {
+            "target_user": "target_user",
+            "config": {
+                "live": {"user": "source_user"},
+                "pbgui": {"version": 3, "enabled_on": "vps-a"},
+                "coin_overrides": {"BTC": {"override_config_path": "BTC.json"}},
+            },
+        }
+
+    monkeypatch.setattr(v7_instances, "load_pb7_config", fake_load)
+    monkeypatch.setattr(v7_instances, "save_pb7_config", fake_save)
+    monkeypatch.setattr(v7_instances, "_ensure_target_runtime_compatible", noop_runtime_check)
+    monkeypatch.setattr(v7_instances, "_ssh_sync_instance", noop_ssh_sync)
+    monkeypatch.setitem(sys.modules, "User", SimpleNamespace(Users=lambda: FakeUsers()))
+
+    result = asyncio.run(v7_instances.copy_instance_config("source_user", SimpleNamespace(json=request_json), session=None))
+    target_cfg = _read_json(tmp_path / "data" / "run_v7" / "target_user" / "config.json")
+    target_override = _read_json(tmp_path / "data" / "run_v7" / "target_user" / "BTC.json")
+
+    assert result["name"] == "target_user"
+    assert result["source"] == "source_user"
+    assert result["override_copy"] == {"copied": ["BTC.json"], "missing": []}
+    assert target_cfg["live"]["user"] == "target_user"
+    assert target_cfg["pbgui"]["version"] == 2
+    assert target_cfg["pbgui"]["enabled_on"] == "disabled"
+    assert target_cfg["backtest"]["base_dir"] == "backtests/pbgui/target_user"
+    assert target_override == source_override

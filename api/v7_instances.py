@@ -1436,11 +1436,20 @@ async def save_instance_config(
       - Atomic write via temp-file rename
       - Records PBCluster desired state for remote materialization
     """
-    _validate_name(name)
     body = await request.json()
     cfg = body.get("config")
     if not isinstance(cfg, dict):
         raise HTTPException(status_code=400, detail="Missing or invalid 'config' in body")
+    return await _save_instance_config_payload(name, cfg)
+
+
+async def _save_instance_config_payload(
+    name: str,
+    cfg: dict,
+    override_source_name: str | None = None,
+) -> dict:
+    """Save a prepared v7 config and optionally copy referenced override files."""
+    _validate_name(name)
 
     strip_pbgui_param_status(cfg)
     await _ensure_target_runtime_compatible(name, cfg)
@@ -1449,6 +1458,7 @@ async def save_instance_config(
     instance_dir.mkdir(parents=True, exist_ok=True)
     config_path = instance_dir / "config.json"
     previous_version = _instance_config_version(name)
+    override_copy = {"copied": [], "missing": []}
 
     # Copy coin override files from source backtest config on first save of a new instance.
     # The JS sets pbgui.from_backtest_config when navigating from "Add to Run".
@@ -1544,6 +1554,14 @@ async def save_instance_config(
         if copied:
             _log(SERVICE, f"Copied {len(copied)} coin override file(s) from backup '{name}/{backup_src_dir.name}' before saving")
 
+    if override_source_name:
+        override_copy = _copy_referenced_instance_override_files(override_source_name, name, instance_dir, cfg)
+        if override_copy["copied"]:
+            _log(
+                SERVICE,
+                f"Copied {len(override_copy['copied'])} coin override file(s) from instance '{override_source_name}' to '{name}'",
+            )
+
     save_pb7_config(cfg, config_path)
 
     # Keep referenced per-coin override files on the current PB7 schema even when
@@ -1581,12 +1599,95 @@ async def save_instance_config(
     sync_result = await _ssh_sync_instance(name)
 
     _log(SERVICE, f"Saved config for '{name}' (v{version})")
-    return {
+    result = {
         "ok": True,
         "name": name,
         "version": version,
         "sync": sync_result,
     }
+    if override_source_name:
+        result["override_copy"] = override_copy
+    return result
+
+
+def _referenced_override_filenames(cfg: dict) -> list[str]:
+    """Return sanitized per-coin override filenames referenced by a config."""
+    filenames: set[str] = set()
+    for override in (cfg.get("coin_overrides") or {}).values():
+        if not isinstance(override, dict) or not override.get("override_config_path"):
+            continue
+        filename = Path(str(override["override_config_path"])).name
+        if filename and filename.endswith(".json"):
+            filenames.add(filename)
+    return sorted(filenames)
+
+
+def _copy_referenced_instance_override_files(
+    source_name: str,
+    target_name: str,
+    target_dir: Path,
+    cfg: dict,
+) -> dict[str, list[str]]:
+    """Copy referenced override files from one run instance directory to another."""
+    if source_name == target_name:
+        return {"copied": [], "missing": []}
+    _validate_name(source_name)
+    source_dir = Path(PBGDIR) / "data" / "run_v7" / source_name
+    copied: list[str] = []
+    missing: list[str] = []
+    for filename in _referenced_override_filenames(cfg):
+        src_file = source_dir / filename
+        if not src_file.is_file():
+            missing.append(filename)
+            continue
+        try:
+            normalized_override = load_pb7_config(src_file, neutralize_added=False)
+            save_pb7_config(normalized_override, target_dir / filename)
+        except Exception:
+            shutil.copy2(str(src_file), str(target_dir / filename))
+        copied.append(filename)
+    if missing:
+        _log(
+            SERVICE,
+            f"Missing {len(missing)} referenced coin override file(s) while copying instance '{source_name}' to '{target_name}': {', '.join(missing)}",
+            level="WARNING",
+        )
+    return {"copied": copied, "missing": missing}
+
+
+@router.put("/instances/{source_name}/copy-config")
+async def copy_instance_config(
+    source_name: str,
+    request: Request,
+    session: SessionToken = Depends(require_auth),
+):
+    """Copy the current editor config to another v7 user instance."""
+    _validate_name(source_name)
+    source_config_path = Path(PBGDIR) / "data" / "run_v7" / source_name / "config.json"
+    if not source_config_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Source instance '{source_name}' not found")
+    body = await request.json()
+    target_user = str(body.get("target_user") or "").strip()
+    if not target_user:
+        raise HTTPException(status_code=400, detail="Missing target_user")
+    _validate_name(target_user)
+    if target_user == source_name:
+        raise HTTPException(status_code=400, detail="Target user must be different from the source instance")
+    cfg = body.get("config")
+    if not isinstance(cfg, dict):
+        raise HTTPException(status_code=400, detail="Missing or invalid 'config' in body")
+    if not isinstance(cfg.get("live"), dict):
+        cfg["live"] = {}
+    cfg["live"]["user"] = target_user
+    if not isinstance(cfg.get("pbgui"), dict):
+        cfg["pbgui"] = {}
+    cfg["pbgui"]["enabled_on"] = "disabled"
+    target_config_path = Path(PBGDIR) / "data" / "run_v7" / target_user / "config.json"
+    if target_config_path.is_file():
+        cfg["pbgui"]["version"] = _instance_config_version(target_user)
+    result = await _save_instance_config_payload(target_user, cfg, override_source_name=source_name)
+    result["source"] = source_name
+    return result
 
 
 @router.get("/users")

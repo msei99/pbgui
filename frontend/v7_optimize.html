@@ -2155,7 +2155,7 @@ textarea.json-invalid:focus {
       </div>
       <div id="configs-list-wrap">
         <table class="tbl">
-          <thead>
+          <thead id="configs-thead">
             <tr>
               <th>Name</th>
               <th>Exchange</th>
@@ -2183,7 +2183,7 @@ textarea.json-invalid:focus {
       </div>
       <div id="queue-list-wrap">
         <table class="tbl">
-          <thead>
+          <thead id="queue-thead">
             <tr>
               <th class="queue-order-head"></th>
               <th>Name</th>
@@ -2483,6 +2483,10 @@ var state = {
   selectedParetos: new Set(),
   selectedResultPath: '',
   selectedResultName: '',
+  configSortKey: 'modified',
+  configSortDir: 'desc',
+  queueSortKey: '',
+  queueSortDir: 'asc',
   resultSortKey: 'modified',
   resultSortDir: 'desc',
   paretoMode: 'none',
@@ -8915,11 +8919,161 @@ function normalizeAutostart(raw) {
   return String(raw || '').toLowerCase() === 'true';
 }
 
+function sortIndicator(sortKey, activeKey, direction) {
+  if (activeKey !== sortKey) return '<span class="sort-indicator">↕</span>';
+  return '<span class="sort-indicator">' + (direction === 'desc' ? '↓' : '↑') + '</span>';
+}
+
+function compareSortValues(aValue, bValue, direction) {
+  var dir = direction === 'desc' ? -1 : 1;
+  if (typeof aValue === 'number' || typeof bValue === 'number') {
+    var aNum = Number(aValue || 0);
+    var bNum = Number(bValue || 0);
+    if (aNum !== bNum) return aNum < bNum ? -1 * dir : 1 * dir;
+    return 0;
+  }
+  var textCompare = String(aValue || '').localeCompare(String(bValue || ''));
+  return textCompare ? textCompare * dir : 0;
+}
+
+function configHeaderLabel(sortKey) {
+  if (sortKey === 'name') return 'Name';
+  if (sortKey === 'exchange') return 'Exchange';
+  if (sortKey === 'backtest_count') return 'Backtests';
+  if (sortKey === 'start_date') return 'Start';
+  if (sortKey === 'end_date') return 'End';
+  if (sortKey === 'modified') return 'Modified';
+  return sortKey;
+}
+
+function queueHeaderLabel(sortKey) {
+  if (sortKey === 'name') return 'Name';
+  if (sortKey === 'exchange') return 'Exchange';
+  if (sortKey === 'status') return 'Status';
+  if (sortKey === 'created') return 'Created';
+  return sortKey;
+}
+
+function renderSortableTableHead(theadId, sortKeys, activeKey, direction, labelFn, leadingHtml, trailingHtml) {
+  var thead = el(theadId);
+  if (!thead) return;
+  var html = '<tr>' + (leadingHtml || '');
+  sortKeys.forEach(function(sortKey) {
+    var isActive = activeKey === sortKey;
+    var ariaSort = isActive ? (direction === 'desc' ? 'descending' : 'ascending') : 'none';
+    html += '<th class="sortable' + (isActive ? ' active' : '') + '" data-sort-key="' + escapeHtml(sortKey) + '" aria-sort="' + ariaSort + '">'
+      + escapeHtml(labelFn(sortKey))
+      + sortIndicator(sortKey, activeKey, direction)
+      + '</th>';
+  });
+  html += (trailingHtml || '') + '</tr>';
+  thead.innerHTML = html;
+}
+
+function renderConfigsTableHead() {
+  var thead = el('configs-thead');
+  if (!thead) return;
+  var html = '<tr>';
+  ['name', 'exchange', 'backtest_count', 'start_date', 'end_date'].forEach(function(sortKey) {
+    var isActive = state.configSortKey === sortKey;
+    var ariaSort = isActive ? (state.configSortDir === 'desc' ? 'descending' : 'ascending') : 'none';
+    html += '<th class="sortable' + (isActive ? ' active' : '') + '" data-sort-key="' + escapeHtml(sortKey) + '" aria-sort="' + ariaSort + '">'
+      + escapeHtml(configHeaderLabel(sortKey))
+      + sortIndicator(sortKey, state.configSortKey, state.configSortDir)
+      + '</th>';
+  });
+  html += '<th>Flags</th>';
+  var modifiedActive = state.configSortKey === 'modified';
+  var modifiedAriaSort = modifiedActive ? (state.configSortDir === 'desc' ? 'descending' : 'ascending') : 'none';
+  html += '<th class="sortable' + (modifiedActive ? ' active' : '') + '" data-sort-key="modified" aria-sort="' + modifiedAriaSort + '">'
+    + 'Modified'
+    + sortIndicator('modified', state.configSortKey, state.configSortDir)
+    + '</th>';
+  html += '<th>Actions</th></tr>';
+  thead.innerHTML = html;
+}
+
+function renderQueueTableHead() {
+  renderSortableTableHead(
+    'queue-thead',
+    ['name', 'exchange', 'status', 'created'],
+    state.queueSortKey,
+    state.queueSortDir,
+    queueHeaderLabel,
+    '<th class="queue-order-head"></th>',
+    '<th>Actions</th>'
+  );
+}
+
+function getConfigSortValue(cfg, sortKey) {
+  if (sortKey === 'name') return String(cfg && cfg.name || '').toLowerCase();
+  if (sortKey === 'exchange') return String(cfg && cfg.exchange || '').toLowerCase();
+  if (sortKey === 'backtest_count') return Number(cfg && cfg.backtest_count || 0);
+  if (sortKey === 'start_date') return String(cfg && cfg.start_date || '');
+  if (sortKey === 'end_date') return String(cfg && cfg.end_date || '');
+  if (sortKey === 'modified') return String(cfg && cfg.modified || '');
+  return '';
+}
+
+function sortConfigs(items) {
+  var sortKey = state.configSortKey || 'modified';
+  var direction = state.configSortDir === 'desc' ? 'desc' : 'asc';
+  return (items || []).slice().sort(function(a, b) {
+    var primary = compareSortValues(getConfigSortValue(a, sortKey), getConfigSortValue(b, sortKey), direction);
+    if (primary) return primary;
+    return String(a && a.name || '').localeCompare(String(b && b.name || ''));
+  });
+}
+
+function getQueueSortValue(item, sortKey) {
+  if (sortKey === 'name') return String(item && (item.name || item.filename) || '').toLowerCase();
+  if (sortKey === 'exchange') return String(item && item.exchange || '').toLowerCase();
+  if (sortKey === 'status') return String(item && item.status || 'queued').toLowerCase();
+  if (sortKey === 'created') {
+    var timestamp = item && item.created ? new Date(item.created).getTime() : 0;
+    return isNaN(timestamp) ? 0 : timestamp;
+  }
+  return '';
+}
+
+function sortQueueItems(items) {
+  if (!state.queueSortKey) return (items || []).slice();
+  var sortKey = state.queueSortKey;
+  var direction = state.queueSortDir === 'desc' ? 'desc' : 'asc';
+  return (items || []).slice().sort(function(a, b) {
+    var primary = compareSortValues(getQueueSortValue(a, sortKey), getQueueSortValue(b, sortKey), direction);
+    if (primary) return primary;
+    return String(a && (a.name || a.filename) || '').localeCompare(String(b && (b.name || b.filename) || ''));
+  });
+}
+
+function toggleConfigSort(sortKey) {
+  var normalized = String(sortKey || '').trim();
+  if (!normalized) return;
+  if (state.configSortKey === normalized) {
+    state.configSortDir = state.configSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    state.configSortKey = normalized;
+    state.configSortDir = normalized === 'modified' || normalized === 'backtest_count' ? 'desc' : 'asc';
+  }
+  renderConfigs();
+}
+
+function toggleQueueSort(sortKey) {
+  var normalized = String(sortKey || '').trim();
+  if (!normalized) return;
+  if (state.queueSortKey === normalized) {
+    state.queueSortDir = state.queueSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    state.queueSortKey = normalized;
+    state.queueSortDir = normalized === 'created' ? 'desc' : 'asc';
+  }
+  renderQueue();
+}
+
 function filterConfigs() {
   var query = state.configSearch.trim().toLowerCase();
-  var list = state.configs.slice().sort(function(a, b) {
-    return String(b.modified || '').localeCompare(String(a.modified || ''));
-  });
+  var list = sortConfigs(state.configs);
   if (!query) return list;
   return list.filter(function(cfg) {
     return String(cfg.name || '').toLowerCase().indexOf(query) >= 0;
@@ -9166,6 +9320,7 @@ function renderEmpty(tbodyId, cols, message, actionText, actionId) {
 }
 
 function renderConfigs() {
+  renderConfigsTableHead();
   var configs = filterConfigs();
   var tbody = el('configs-tbody');
   tbody.innerHTML = '';
@@ -9212,6 +9367,7 @@ function updateConfigSelectionUi(filteredConfigs) {
 }
 
 function renderQueue() {
+  renderQueueTableHead();
   var tbody = el('queue-tbody');
   tbody.innerHTML = '';
   if (!state.queue.length) {
@@ -9221,7 +9377,7 @@ function renderQueue() {
     updateMetaCounts();
     return;
   }
-  state.queue.forEach(function(item) {
+  sortQueueItems(state.queue).forEach(function(item) {
     var tr = document.createElement('tr');
     tr.setAttribute('data-filename', item.filename);
     if (state.selectedQueue.has(item.filename)) tr.classList.add('selected');
@@ -10907,6 +11063,12 @@ function attachEventHandlers() {
     if (target.classList.contains('cfg-delete')) return deleteConfig(target.dataset.name).catch(handleError);
   });
 
+  el('configs-thead').addEventListener('click', function(event) {
+    var header = event.target.closest('th[data-sort-key]');
+    if (!header || !event.currentTarget.contains(header)) return;
+    toggleConfigSort(header.dataset.sortKey);
+  });
+
   el('queue-tbody').addEventListener('click', function(event) {
     var target = event.target.closest('button');
     if (!target || !event.currentTarget.contains(target)) return;
@@ -10923,6 +11085,12 @@ function attachEventHandlers() {
     if (target.classList.contains('queue-log')) return openLogPanel(filename, target.dataset.name);
     if (target.classList.contains('queue-edit')) return openQueueConfigEditor(filename).catch(handleError);
     if (target.classList.contains('queue-delete')) return deleteQueueItem(filename).catch(handleError);
+  });
+
+  el('queue-thead').addEventListener('click', function(event) {
+    var header = event.target.closest('th[data-sort-key]');
+    if (!header || !event.currentTarget.contains(header)) return;
+    toggleQueueSort(header.dataset.sortKey);
   });
 
   el('queue-config-choice-list').addEventListener('click', function(event) {

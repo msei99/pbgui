@@ -509,6 +509,7 @@ textarea.json-invalid:focus {
       <button class="sb-btn" onclick="goBack()" title="Back to list">🏠 Home</button>
       <button class="sb-btn primary" id="btn-save" onclick="saveConfig()" title="Save config & sync">💾 Save</button>
       <button class="sb-btn info" onclick="openImportModal()" title="Import JSON config">📥 Import</button>
+      <button class="sb-btn info" onclick="openCopyUserModal()" title="Copy current config to another user">📋 Copy</button>
       <hr class="sb-sep">
       <button class="sb-btn" onclick="goBacktest()" title="Open in Backtest">📊 Backtest</button>
       <button class="sb-btn" onclick="goStrategyExplorer()" title="Open Strategy Explorer">🔍 Strategy Explorer</button>
@@ -1013,6 +1014,25 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
     <div class="modal-actions">
       <button class="btn btn-ok" onclick="doImport()">OK</button>
       <button class="btn btn-cancel" onclick="closeImportModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Copy User Modal -->
+<div class="modal-overlay" id="copy-user-modal">
+  <div class="modal-box" style="max-width:520px;">
+    <h3>Copy config to user</h3>
+    <div style="color:var(--text-dim);font-size:var(--fs-sm);line-height:1.45;">
+      Save the current editor config for another user. The copied config is saved disabled. If the target already has a config, it will be backed up and overwritten.
+    </div>
+    <div class="form-group">
+      <label>Target user</label>
+      <select id="copy-user"></select>
+    </div>
+    <div id="copy-user-error" class="field-status field-status-inline" aria-live="polite"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ok" id="btn-copy-user-ok" onclick="doCopyToUser()">Copy</button>
+      <button class="btn btn-cancel" onclick="closeCopyUserModal()">Cancel</button>
     </div>
   </div>
 </div>
@@ -2370,6 +2390,133 @@ async function saveConfig() {
   } finally {
     btnSave.disabled = false;
     btnSave.innerHTML = '💾 Save';
+  }
+}
+
+/* ─── Copy To User ──────────────────────────────────────────── */
+function openCopyUserModal() {
+  var errEl = document.getElementById('copy-user-error');
+  var sel = document.getElementById('copy-user');
+  var btn = document.getElementById('btn-copy-user-ok');
+  window.PBGuiEditorShared.clearInlineStatus(errEl, 'field-status field-status-inline');
+  sel.innerHTML = '';
+
+  if (IS_NEW === 'true') {
+    window.PBGuiEditorShared.setInlineStatusError(errEl, {
+      baseClassName: 'field-status field-status-inline',
+      summary: 'Copy unavailable',
+      message: 'Save this new instance before copying it to another user.'
+    });
+    btn.disabled = true;
+  } else {
+    allUsers.forEach(function(u) {
+      if (!u || !u.name || u.name === INSTANCE_NAME) return;
+      var opt = document.createElement('option');
+      opt.value = u.name;
+      opt.textContent = u.name;
+      sel.appendChild(opt);
+    });
+    btn.disabled = sel.options.length === 0;
+    if (sel.options.length === 0) {
+      window.PBGuiEditorShared.setInlineStatusError(errEl, {
+        baseClassName: 'field-status field-status-inline',
+        summary: 'No target user available',
+        message: 'Add another v7 user before copying this config.'
+      });
+    }
+  }
+
+  btn.innerHTML = 'Copy';
+  window.PBGuiEditorShared.openModal('copy-user-modal');
+}
+
+function closeCopyUserModal() {
+  var errEl = document.getElementById('copy-user-error');
+  window.PBGuiEditorShared.clearInlineStatus(errEl, 'field-status field-status-inline');
+  window.PBGuiEditorShared.closeModal('copy-user-modal');
+}
+
+async function doCopyToUser() {
+  var btn = document.getElementById('btn-copy-user-ok');
+  var errEl = document.getElementById('copy-user-error');
+  var targetUser = document.getElementById('copy-user').value;
+  window.PBGuiEditorShared.clearInlineStatus(errEl, 'field-status field-status-inline');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Copying...';
+  try {
+    if (IS_NEW === 'true') {
+      throw new Error('Save this new instance before copying it to another user.');
+    }
+    if (!targetUser) {
+      throw new Error('Select a target user.');
+    }
+    if (targetUser === INSTANCE_NAME) {
+      throw new Error('Target user must be different from the source instance.');
+    }
+    await _symbolsAndTagsLoadPromise;
+    if (!ensureRawJsonValidForSave()) return;
+    if (!ensureStructuredJsonFieldsValidForSave()) return;
+    if (!validateExecutionSyncFieldsForSave()) return;
+    if (!validateDynamicIgnoreTargetForSave()) return;
+
+    var config = collectConfig();
+    var copyConfig = JSON.parse(JSON.stringify(config));
+    if (!copyConfig.live || typeof copyConfig.live !== 'object' || Array.isArray(copyConfig.live)) {
+      copyConfig.live = {};
+    }
+    copyConfig.live.user = targetUser;
+    if (!copyConfig.pbgui || typeof copyConfig.pbgui !== 'object' || Array.isArray(copyConfig.pbgui)) {
+      copyConfig.pbgui = {};
+    }
+    copyConfig.pbgui.enabled_on = 'disabled';
+
+    var resp = await apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/copy-config', {
+      method: 'PUT',
+      body: JSON.stringify({ target_user: targetUser, config: copyConfig }),
+    });
+    var data = {};
+    try { data = await resp.json(); } catch (e) { data = {}; }
+    if (!resp.ok) {
+      var detail = data.detail || resp.statusText || 'Copy failed';
+      if (resp.status === 409 && String(detail || '').indexOf('Update your VPS first') === 0) {
+        window.PBGuiDialogs.alert({
+          title: 'Copy blocked',
+          message: detail,
+          confirmText: 'OK'
+        });
+      } else {
+        window.PBGuiEditorShared.setInlineStatusError(errEl, {
+          baseClassName: 'field-status field-status-inline',
+          summary: 'Copy failed',
+          message: detail
+        });
+      }
+      return;
+    }
+
+    var syncOk = (data.sync && data.sync.ok) || 0;
+    var syncFail = (data.sync && data.sync.failed) || 0;
+    var suffix = '';
+    if (syncOk > 0) suffix = ' | SSH sync: ' + syncOk + ' host(s) OK';
+    else if (syncFail > 0) suffix = ' | SSH sync: ' + syncFail + ' failed';
+    var copiedOverrides = (data.override_copy && data.override_copy.copied || []).length;
+    var missingOverrides = (data.override_copy && data.override_copy.missing || []).length;
+    if (copiedOverrides > 0) suffix += ' | overrides: ' + copiedOverrides;
+    closeCopyUserModal();
+    if (missingOverrides > 0) {
+      toast('Copied disabled config to ' + targetUser + ', but ' + missingOverrides + ' override file(s) were missing' + suffix, 'err');
+    } else {
+      toast('Copied disabled config to ' + targetUser + ' v' + data.version + suffix, 'ok');
+    }
+  } catch (e) {
+    window.PBGuiEditorShared.setInlineStatusError(errEl, {
+      baseClassName: 'field-status field-status-inline',
+      summary: 'Copy failed',
+      message: e.message || String(e)
+    });
+  } finally {
+    btn.disabled = IS_NEW === 'true' || document.getElementById('copy-user').options.length === 0;
+    btn.innerHTML = 'Copy';
   }
 }
 
