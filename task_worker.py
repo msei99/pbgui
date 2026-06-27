@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 import threading
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -19,6 +20,12 @@ from hyperliquid_aws import (
 from hyperliquid_best_1m import improve_best_hyperliquid_1m_archive_for_coin, _is_stock_perp_coin
 from binance_best_1m import improve_best_binance_1m_for_coin
 from bybit_best_1m import improve_best_bybit_1m_for_coin
+from okx_best_1m import (
+    REST_RATE_PER_SECOND as _OKX_REST_RATE_PER_SECOND,
+    RateLimiter as _OkxRateLimiter,
+    improve_best_okx_1m_for_coin,
+    get_storage_coin_dir as _okx_storage_coin_dir,
+)
 from market_data import (
     append_exchange_download_log,
     load_aws_profile_credentials,
@@ -42,6 +49,7 @@ from inventory_cache import refresh_coin as _refresh_inventory_coin, sweep_cache
 
 
 _STOP = False
+OKX_BEST_1M_PIPELINE_WORKERS = 2
 
 
 def _handle_stop(signum, frame):
@@ -236,6 +244,8 @@ def _run_job(job_path: Path) -> None:
             _run_binance_best_1m(job_path, payload)
         elif jtype == "bybit_best_1m":
             _run_bybit_best_1m(job_path, payload)
+        elif jtype == "okx_best_1m":
+            _run_okx_best_1m(job_path, payload)
         else:
             raise RuntimeError(f"Unknown job type: {jtype}")
 
@@ -1102,6 +1112,213 @@ def _run_bybit_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
         except Exception:
             pass
 
+    _append_to_job_log(job_id, f"job finished  duration={int(time.time()-started_ts)}s")
+
+
+def _run_okx_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
+    started_ts = time.time()
+    job_id = job_path.stem
+    coins = payload.get("coins")
+    coins = coins if isinstance(coins, list) else []
+    coins = [str(c).strip().upper() for c in coins if str(c).strip()]
+
+    if not coins:
+        raise ValueError("No coins in job")
+
+    end_day = str(payload.get("end_day") or "").strip()
+    if not end_day:
+        end_day = datetime.utcnow().strftime("%Y%m%d")
+    start_day = str(payload.get("start_day") or "").strip()
+    refetch = bool(payload.get("refetch") or False)
+
+    total_steps = max(1, len(coins))
+    completed_count = 0
+    started_count = 0
+    pipeline_workers = min(len(coins), OKX_BEST_1M_PIPELINE_WORKERS)
+    try:
+        requested_workers = int(payload.get("pipeline_workers") or 0)
+        if requested_workers > 0:
+            pipeline_workers = min(len(coins), max(1, min(4, requested_workers)))
+    except Exception:
+        pass
+
+    _init_job_log(job_id)
+    _append_to_job_log(job_id, f"job started  coins={coins}  end_day={end_day}  start_day={start_day or 'inception'}  refetch={refetch}")
+    _append_to_job_log(job_id, f"pipeline  workers={pipeline_workers}  shared_rest_rate={_OKX_REST_RATE_PER_SECOND}/s")
+
+    progress_lock = threading.Lock()
+    log_lock = threading.Lock()
+    state_lock = threading.Lock()
+    ready_event = threading.Event()
+    cancel_event = threading.Event()
+    advanced_by_step: dict[int, bool] = {}
+    rest_limiter = _OkxRateLimiter(_OKX_REST_RATE_PER_SECOND)
+    advance_stages = {"archive_index", "archive_download", "archive_bucket", "archive_write", "repair", "rest_recent"}
+
+    def append_job_log(line: str) -> None:
+        with log_lock:
+            _append_to_job_log(job_id, line)
+
+    def update_progress(**kw):
+        def mut(o):
+            pr = o.get("progress")
+            pr = pr if isinstance(pr, dict) else {}
+            pr.update(kw)
+            pr["step"] = int(completed_count)
+            pr["total"] = int(total_steps)
+            pr["pipeline_workers"] = int(pipeline_workers)
+            pr["mode"] = "okx_best_1m"
+            o["progress"] = pr
+        with progress_lock:
+            update_job_file(job_path, mutate=mut)
+
+    update_progress(stage="starting", last_result={"days_checked": 0, "minutes_written": 0, "duration_s": 0})
+
+    def _job_stop_check() -> bool:
+        return bool(_STOP or cancel_event.is_set() or _is_cancel_requested(job_path))
+
+    def run_coin(step_no: int, coin: str) -> dict[str, Any]:
+        if _STOP:
+            raise RuntimeError("Worker stopping")
+        if _is_cancel_requested(job_path) or cancel_event.is_set():
+            raise RuntimeError("cancelled")
+        append_job_log(f"[{step_no}/{total_steps}] {coin}  starting")
+        update_progress(stage="running", coin=coin, chunk_done=0, chunk_total=0,
+                        last_result={"days_checked": 0, "minutes_written": 0,
+                                     "duration_s": int(max(0, time.time() - started_ts))})
+
+        last_chunk_update = 0.0
+        last_logged_stage = ""
+        last_log_ts2: list[float] = [0.0]
+        advanced = False
+
+        def progress_cb(snap: dict[str, Any], _coin=coin) -> None:
+            nonlocal advanced, last_chunk_update, last_logged_stage
+            now = time.time()
+            stage = str(snap.get("stage") or "running")
+            if not advanced and stage in advance_stages:
+                advanced = True
+                with state_lock:
+                    advanced_by_step[int(step_no)] = True
+                ready_event.set()
+            if stage != last_logged_stage or now - last_log_ts2[0] >= 60.0:
+                last_logged_stage = stage
+                last_log_ts2[0] = now
+                extra = ""
+                if snap.get("day"):
+                    extra = f"  day={snap['day']}"
+                elif snap.get("month_key"):
+                    extra = f"  month={snap['month_key']}"
+                elif snap.get("first_archive"):
+                    extra = f"  first_archive={snap['first_archive']}"
+                done = snap.get("done")
+                total = snap.get("total_days") or snap.get("planned")
+                if done is not None and total is not None:
+                    extra += f"  {done}/{total}"
+                append_job_log(f"  {_coin}  stage={stage}{extra}")
+            if now - last_chunk_update < 0.5:
+                return
+            last_chunk_update = now
+            kw: dict[str, Any] = {"stage": stage}
+            if snap.get("day"):
+                kw["day"] = str(snap["day"])
+            if snap.get("month_key"):
+                kw["month_key"] = str(snap["month_key"])
+            done = snap.get("done")
+            if done is not None:
+                total_days = snap.get("total_days") or snap.get("planned")
+                kw["chunk_done"] = int(done)
+                kw["chunk_total"] = int(total_days) if total_days else int(total_steps * 100)
+            if any(k in snap for k in ("days_checked", "minutes_written", "rest_minutes_fetched", "repair_minutes_fetched")):
+                kw["last_result"] = {
+                    "days_checked": int(snap.get("days_checked") or 0),
+                    "rest_minutes_fetched": int(snap.get("rest_minutes_fetched") or 0),
+                    "repair_minutes_fetched": int(snap.get("repair_minutes_fetched") or 0),
+                    "minutes_written": int(snap.get("minutes_written") or 0),
+                    "duration_s": int(max(0, time.time() - started_ts)),
+                }
+            update_progress(**kw)
+
+        res = improve_best_okx_1m_for_coin(
+            coin=coin,
+            end_date=end_day,
+            start_date_override=start_day or None,
+            refetch=refetch,
+            progress_cb=progress_cb,
+            stop_check=_job_stop_check,
+            rest_limiter=rest_limiter,
+        )
+        out = res.to_dict()
+        if isinstance(out, dict):
+            out["duration_s"] = int(max(0, time.time() - started_ts))
+        return out
+
+    executor = ThreadPoolExecutor(max_workers=max(1, int(pipeline_workers)))
+    active: dict[Any, tuple[int, str]] = {}
+
+    def submit_next() -> None:
+        nonlocal started_count
+        if started_count >= len(coins):
+            return
+        if _STOP:
+            raise RuntimeError("Worker stopping")
+        if _is_cancel_requested(job_path) or cancel_event.is_set():
+            raise RuntimeError("cancelled")
+        started_count += 1
+        coin = coins[started_count - 1]
+        future = executor.submit(run_coin, started_count, coin)
+        active[future] = (started_count, coin)
+
+    try:
+        submit_next()
+        while active:
+            done, _pending = wait(tuple(active.keys()), timeout=0.5, return_when=FIRST_COMPLETED)
+            if _STOP or _is_cancel_requested(job_path):
+                cancel_event.set()
+                for future in active:
+                    future.cancel()
+                raise RuntimeError("cancelled" if _is_cancel_requested(job_path) else "Worker stopping")
+
+            for future in done:
+                step_no, coin = active.pop(future)
+                try:
+                    out = future.result()
+                except RuntimeError as exc:
+                    cancel_event.set()
+                    append_job_log(f"  {coin}  ERROR {exc}")
+                    for other in active:
+                        other.cancel()
+                    if _is_cancel_requested(job_path):
+                        raise RuntimeError("cancelled") from exc
+                    raise
+                except Exception as exc:
+                    cancel_event.set()
+                    append_job_log(f"  {coin}  ERROR {exc}")
+                    for other in active:
+                        other.cancel()
+                    raise
+
+                completed_count += 1
+                append_exchange_download_log("okx", f"[INFO] [okx_best_1m_job] {coin} {out}")
+                append_job_log(f"  {coin}  done  days_checked={out.get('days_checked', 0)}  minutes_written={out.get('minutes_written', 0)}  notes={out.get('notes', [])}")
+                update_progress(stage="running", coin=coin, last_result=out)
+                with state_lock:
+                    was_advanced = bool(advanced_by_step.pop(int(step_no), False))
+                if not active or not was_advanced:
+                    ready_event.set()
+                try:
+                    _refresh_inventory_coin("okx", "1m", _okx_storage_coin_dir(coin))
+                except Exception:
+                    pass
+
+            if ready_event.is_set() and len(active) < pipeline_workers and started_count < len(coins):
+                ready_event.clear()
+                submit_next()
+    finally:
+        cancel = bool(cancel_event.is_set() or _STOP or _is_cancel_requested(job_path))
+        executor.shutdown(wait=True, cancel_futures=cancel)
+
+    update_progress(stage="running", last_result={"duration_s": int(max(0, time.time() - started_ts))})
     _append_to_job_log(job_id, f"job finished  duration={int(time.time()-started_ts)}s")
 
 

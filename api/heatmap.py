@@ -285,7 +285,7 @@ def get_heatmap_overview(
     # Candles: stacked-bar overview
     lag = _get_missing_lag_minutes(ex)
     day_counts: dict = {}
-    if ex in ("hyperliquid", "binance", "bybit", "binanceusdm"):
+    if ex in ("hyperliquid", "binance", "bybit", "binanceusdm", "okx"):
         try:
             day_counts = get_daily_source_counts_for_range(
                 exchange=sx,

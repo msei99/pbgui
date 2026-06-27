@@ -102,6 +102,18 @@ SETTINGS_EXCHANGES: dict[str, dict[str, Any]] = {
         },
         "save_message": "Settings saved. Applied automatically in the next Bybit refresh cycle.",
     },
+    "okx": {
+        "label": "OKX",
+        "ini_section": "okx_data",
+        "defaults": {
+            "interval_seconds": 3600,
+            "coin_pause_seconds": 0.5,
+            "api_timeout_seconds": 30.0,
+            "min_lookback_days": 2,
+            "max_lookback_days": 7,
+        },
+        "save_message": "Settings saved. Applied automatically in the next OKX refresh cycle.",
+    },
 }
 
 
@@ -665,6 +677,8 @@ def _get_exchange_status_key(exchange: str) -> str:
         return "binance_latest_1m"
     elif exchange == "bybit":
         return "bybit_latest_1m"
+    elif exchange == "okx":
+        return "okx_latest_1m"
     elif exchange == "hyperliquid":
         return "latest_1m"
     return ""
@@ -677,6 +691,8 @@ def _get_exchange_flag_prefix(exchange: str) -> str:
         return "binance_latest_1m"
     elif exchange == "bybit":
         return "bybit_latest_1m"
+    elif exchange == "okx":
+        return "okx_latest_1m"
     elif exchange == "hyperliquid":
         return "hyperliquid_latest_1m"
     return ""
@@ -741,7 +757,7 @@ BEST_1M_EXCHANGES: dict[str, dict[str, str]] = {
             "(monthly and daily ZIPs) and backfills gaps via CCXT."
         ),
         "hint": (
-            "Leave the coin list empty to queue all enabled Binance coins. "
+            "Leave the coin list empty to queue all available Binance USDM coins. "
             "Use refetch only when you need to rebuild corrupted days from scratch."
         ),
         "refetch_label": "Refetch all days from scratch",
@@ -755,8 +771,22 @@ BEST_1M_EXCHANGES: dict[str, dict[str, str]] = {
             "1m OHLCV, then tops up the last days via CCXT REST."
         ),
         "hint": (
-            "Leave the coin list empty to queue all enabled Bybit coins. "
+            "Leave the coin list empty to queue all available Bybit coins. "
             "Use refetch only when you need to overwrite broken local days."
+        ),
+        "refetch_label": "Refetch all days from scratch",
+    },
+    "okx": {
+        "label": "OKX",
+        "job_type": "okx_best_1m",
+        "queue_exchange": "okx",
+        "description": (
+            "Downloads OKX USDT-SWAP 1m OHLCV history from OKX public daily "
+            "archives, enriches missing archive volume from REST, and repairs gaps via REST."
+        ),
+        "hint": (
+            "Leave the coin list empty to queue all available OKX coins. "
+            "Only OKX USDT-SWAP perpetual markets are used."
         ),
         "refetch_label": "Refetch all days from scratch",
     },
@@ -767,10 +797,10 @@ def _best_1m_exchange_meta(exchange: str) -> dict[str, str] | None:
     return BEST_1M_EXCHANGES.get(_normalize_settings_exchange(exchange))
 
 
-def _get_best_1m_enabled_coins(exchange: str) -> list[str]:
-    cfg = load_market_data_config()
-    enabled_coins, _, _ = get_effective_enabled_coins(exchange, cfg=cfg)
-    return [str(coin).strip().upper() for coin in enabled_coins if str(coin).strip()]
+def _get_best_1m_available_coins(exchange: str) -> list[str]:
+    """Return all available coins for manual Best 1m builds."""
+
+    return [str(coin).strip().upper() for coin in get_market_data_coin_options(exchange) if str(coin).strip()]
 
 
 def _normalize_best_1m_request_coin(coin: str) -> str:
@@ -2197,11 +2227,11 @@ def get_best_1m_info(exchange: str, session: SessionToken = Depends(require_auth
         "success": True,
         "exchange": exchange_clean,
         "label": meta["label"],
-        "coins": _get_best_1m_enabled_coins(exchange_clean),
+        "coins": _get_best_1m_available_coins(exchange_clean),
         "description": meta["description"],
         "hint": meta["hint"],
         "refetch_label": meta["refetch_label"],
-        "empty_message": "No enabled coins. Add coins in Settings first.",
+        "empty_message": "No available coins found for this exchange. Refresh CoinData first.",
     }
 
 
@@ -2235,16 +2265,16 @@ def queue_best_1m_job(
     raw_coins = list(dict.fromkeys(raw_coins))
     selected_only = bool(request.get("selected_only", False))
 
-    enabled_coins = _get_best_1m_enabled_coins(exchange_clean)
+    available_coins = _get_best_1m_available_coins(exchange_clean)
 
     if raw_coins and "ALL" not in raw_coins:
         build_coins = list(raw_coins)
     else:
         if selected_only:
             return {"success": False, "error": "No explicitly selected coins were provided."}
-        if not enabled_coins:
-            return {"success": False, "error": "No enabled coins. Add coins in Settings first."}
-        build_coins = list(enabled_coins)
+        if not available_coins:
+            return {"success": False, "error": "No available coins found for this exchange. Refresh CoinData first."}
+        build_coins = list(available_coins)
 
     if not build_coins:
         return {"success": False, "error": "No coins selected."}
@@ -2717,7 +2747,7 @@ def trigger_refresh_now(request: dict, session: SessionToken = Depends(require_a
     
     Request body:
         {
-            "exchange": "binanceusdm"|"bybit"|"hyperliquid"
+            "exchange": "binanceusdm"|"bybit"|"hyperliquid"|"okx"
         }
     """
     exchange = request.get("exchange", "").lower().strip()
@@ -2746,7 +2776,7 @@ def cancel_refresh(request: dict, session: SessionToken = Depends(require_auth))
     
     Request body:
         {
-            "exchange": "binanceusdm"|"bybit"|"hyperliquid"
+            "exchange": "binanceusdm"|"bybit"|"hyperliquid"|"okx"
         }
     """
     exchange = request.get("exchange", "").lower().strip()
@@ -2775,7 +2805,7 @@ def stop_current_run(request: dict, session: SessionToken = Depends(require_auth
     
     Request body:
         {
-            "exchange": "binanceusdm"|"bybit"|"hyperliquid"
+            "exchange": "binanceusdm"|"bybit"|"hyperliquid"|"okx"
         }
     """
     exchange = request.get("exchange", "").lower().strip()

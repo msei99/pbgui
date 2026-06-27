@@ -1004,6 +1004,7 @@ window.PBGUI_NAV_CONFIG = {
   var _migrationStatus = null;
   var _apiRestartPendingUntil = 0;
   var _migrationRestartTimer = null;
+  var _serviceActionPending = {};
 
   function esc(value) {
     return String(value == null ? '' : value)
@@ -1057,24 +1058,26 @@ window.PBGUI_NAV_CONFIG = {
     var stopProp = compact ? ';event.stopPropagation()' : '';
     var running = !!item.running;
     var skipped = serviceSkipped(item);
+    var pending = _serviceActionPending[svc.id] || '';
+    var disabledAttr = pending ? ' disabled' : '';
     var html = '';
     if (!skipped) {
       if (svc.isApiServer) {
         html += running
-          ? '<button class="' + cls + ' restart" onclick="restartApiServer()' + stopProp + '">&#8635; Restart</button>'
-          : '<button class="' + cls + ' start" onclick="svcAction(\'' + svc.id + '\',\'start\')' + stopProp + '">&#9654; Start</button>';
+          ? '<button class="' + cls + ' restart" onclick="restartApiServer()' + stopProp + '"' + disabledAttr + '>&#8635; Restart</button>'
+          : '<button class="' + cls + ' start" onclick="svcAction(\'' + svc.id + '\',\'start\')' + stopProp + '"' + disabledAttr + '>&#9654; Start</button>';
       } else {
         html += running
-          ? '<button class="' + cls + ' stop" onclick="svcAction(\'' + svc.id + '\',\'stop\')' + stopProp + '">&#9632; Stop</button>'
-            + '<button class="' + cls + ' restart" onclick="svcAction(\'' + svc.id + '\',\'stop\');setTimeout(function(){svcAction(\'' + svc.id + '\',\'start\');},1500)' + stopProp + '">&#8635; Restart</button>'
-          : '<button class="' + cls + ' start" onclick="svcAction(\'' + svc.id + '\',\'start\')' + stopProp + '">&#9654; Start</button>';
+          ? '<button class="' + cls + ' stop" onclick="svcAction(\'' + svc.id + '\',\'stop\')' + stopProp + '"' + disabledAttr + '>&#9632; Stop</button>'
+            + '<button class="' + cls + ' restart" onclick="svcAction(\'' + svc.id + '\',\'restart\')' + stopProp + '"' + disabledAttr + '>&#8635; Restart</button>'
+          : '<button class="' + cls + ' start" onclick="svcAction(\'' + svc.id + '\',\'start\')' + stopProp + '"' + disabledAttr + '>&#9654; Start</button>';
       }
     }
     if (item.can_enable) {
       if (item.enabled) {
-        html += '<button class="' + cls + ' disable" onclick="svcAction(\'' + svc.id + '\',\'disable\')' + stopProp + '">Disable</button>';
+        html += '<button class="' + cls + ' disable" onclick="svcAction(\'' + svc.id + '\',\'disable\')' + stopProp + '"' + disabledAttr + '>Disable</button>';
       } else if (!item.enable_blocked_reason) {
-        html += '<button class="' + cls + ' enable" onclick="svcAction(\'' + svc.id + '\',\'enable\')' + stopProp + '">Enable</button>';
+        html += '<button class="' + cls + ' enable" onclick="svcAction(\'' + svc.id + '\',\'enable\')' + stopProp + '"' + disabledAttr + '>Enable</button>';
       }
     }
     return html;
@@ -1608,9 +1611,7 @@ window.PBGUI_NAV_CONFIG = {
     var label = item.label || workerId;
     var ok = await workerConfirm('Restart worker', 'Restart worker "' + label + '"?', 'Restart');
     if (!ok) return;
-    return window.workerAction(workerId, 'stop').then(function () {
-      setTimeout(function () { window.workerAction(workerId, 'start'); }, 600);
-    });
+    return window.workerAction(workerId, 'restart');
   };
 
   window.workerAction = function (workerId, action) {
@@ -1753,6 +1754,9 @@ window.PBGUI_NAV_CONFIG = {
 
   /* ── Service actions ───────────────────────────────────── */
   window.svcAction = function (svcId, action) {
+    if (_serviceActionPending[svcId]) return Promise.resolve();
+    _serviceActionPending[svcId] = action;
+    updateStatusUI();
     return fetch(API_BASE + '/' + svcId + '/' + action + '?token=' + TOKEN, { method: 'POST' })
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (data) {
@@ -1781,6 +1785,10 @@ window.PBGUI_NAV_CONFIG = {
           false
         );
         fetchStatus();
+      })
+      .finally(function () {
+        delete _serviceActionPending[svcId];
+        updateStatusUI();
       });
   };
 

@@ -24,6 +24,18 @@ SOURCE_LABELS = {
     SOURCE_CODE_OTHER: "other_exchange",
 }
 
+
+def _source_label_for_code(exchange: str, code: int) -> str | None:
+    """Return the UI source label for a stored source code."""
+
+    code_i = int(code)
+    ex = str(exchange or "").strip().lower()
+    if code_i == SOURCE_CODE_OTHER and ex != "hyperliquid":
+        # Code 3 means external fallback only for Hyperliquid best candles.
+        # Other exchanges use it for official archive data in older indexes.
+        return "api"
+    return SOURCE_LABELS.get(code_i)
+
 MAGIC = b"PBGS"
 VERSION = 1
 BITS_PER_MIN = 2
@@ -206,7 +218,7 @@ def get_source_minutes_for_range(
                 code = (data[byte_index] >> shift) & 0x03
                 if code == SOURCE_CODE_MISSING:
                     continue
-                label = SOURCE_LABELS.get(int(code))
+                label = _source_label_for_code(exchange, int(code))
                 if not label:
                     continue
                 hour = minute // 60
@@ -350,12 +362,18 @@ def get_daily_source_counts_for_range(
                 if future_missing > 0:
                     counts[0] = max(0, int(counts[0]) - int(future_missing))
 
+            api_count = int(counts[1])
+            other_count = int(counts[3])
+            if str(exchange or "").strip().lower() != "hyperliquid" and other_count:
+                api_count += other_count
+                other_count = 0
+
             day_key = cur.strftime("%Y%m%d")
             out[day_key] = {
                 "missing": int(counts[0]),
-                "api": int(counts[1]),
+                "api": api_count,
                 "l2Book_mid": int(counts[2]),
-                "other_exchange": int(counts[3]),
+                "other_exchange": other_count,
             }
         cur = cur + timedelta(days=1)
 

@@ -26,6 +26,7 @@ from market_data import get_daily_hour_coverage_for_dataset, get_effective_enabl
 from rate_limit_budget import RateLimitBudget, EXCHANGE_RATE_LIMITS, get_weight
 from hyperliquid_best_1m import update_latest_hyperliquid_1m_api_for_coin
 from binance_best_1m import update_latest_binance_1m_for_coin
+from okx_best_1m import update_latest_okx_1m_for_coin
 from inventory_cache import refresh_coin as _refresh_inventory_coin
 
 
@@ -489,6 +490,14 @@ class PBData():
         self._bybit_latest_1m_min_lookback_days = 2
         self._bybit_latest_1m_max_lookback_days = 7
         self._bybit_latest_1m_task = None
+        # OKX latest 1m auto-refresh settings
+        self._okx_latest_1m_enabled = True
+        self._okx_latest_1m_interval_seconds = 3600
+        self._okx_latest_1m_coin_pause_seconds = 0.5
+        self._okx_latest_1m_api_timeout_seconds = 30.0
+        self._okx_latest_1m_min_lookback_days = 2
+        self._okx_latest_1m_max_lookback_days = 7
+        self._okx_latest_1m_task = None
         self._market_data_status: dict = {}
         self._market_data_status_lock = asyncio.Lock()
         # Load initial settings (ws_max, log_level, ...)
@@ -756,6 +765,23 @@ class PBData():
             bbt_max_lb = _get_int_opt('bybit_data', 'latest_1m_max_lookback_days')
             if bbt_max_lb is not None and bbt_max_lb > 0:
                 self._bybit_latest_1m_max_lookback_days = int(bbt_max_lb)
+
+            # OKX latest 1m settings
+            okx_interval = _get_int_opt('okx_data', 'latest_1m_interval_seconds')
+            if okx_interval is not None and okx_interval > 0:
+                self._okx_latest_1m_interval_seconds = int(okx_interval)
+            okx_pause = _get_float_opt('okx_data', 'latest_1m_coin_pause_seconds')
+            if okx_pause is not None and okx_pause >= 0:
+                self._okx_latest_1m_coin_pause_seconds = float(okx_pause)
+            okx_timeout = _get_float_opt('okx_data', 'latest_1m_api_timeout_seconds')
+            if okx_timeout is not None and okx_timeout > 0:
+                self._okx_latest_1m_api_timeout_seconds = float(okx_timeout)
+            okx_min_lb = _get_int_opt('okx_data', 'latest_1m_min_lookback_days')
+            if okx_min_lb is not None and okx_min_lb > 0:
+                self._okx_latest_1m_min_lookback_days = int(okx_min_lb)
+            okx_max_lb = _get_int_opt('okx_data', 'latest_1m_max_lookback_days')
+            if okx_max_lb is not None and okx_max_lb > 0:
+                self._okx_latest_1m_max_lookback_days = int(okx_max_lb)
 
             # Pause between per-user REST calls in shared pollers
             new_rest_pause = _get_float_opt('pbdata', 'shared_rest_user_pause_seconds')
@@ -1361,6 +1387,161 @@ class PBData():
             if await _wait_for_flag(_bbt_flag, _remaining_wait):
                 try:
                     _bbt_flag.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    async def _okx_latest_1m_loop(self):
+        """Background loop: refresh OKX USDT-SWAP 1m candles for enabled coins."""
+        await asyncio.sleep(24)  # Offset from HL/Binance/Bybit loops
+        while True:
+            try:
+                try:
+                    self._load_settings()
+                except Exception:
+                    pass
+
+                if not self._okx_latest_1m_enabled:
+                    await asyncio.sleep(5)
+                    continue
+
+                cfg = load_market_data_config()
+                coins, missing_saved_coins, auto_enable_new_coins = get_effective_enabled_coins("okx", cfg=cfg)
+                coins = [str(c).strip().upper() for c in coins if str(c).strip()]
+
+                if missing_saved_coins and not auto_enable_new_coins:
+                    try:
+                        set_enabled_coins("okx", coins)
+                        _human_log(
+                            "PBData",
+                            f"[market-data] pruned unavailable enabled coins from okx list: {', '.join(sorted(missing_saved_coins))}",
+                            level="INFO",
+                        )
+                    except Exception as e:
+                        _human_log("PBData", f"[market-data] failed to prune unavailable okx coins: {e}", level="WARNING")
+
+                if not coins:
+                    await asyncio.sleep(float(self._okx_latest_1m_interval_seconds))
+                    continue
+
+                _coins_done_offset = 0
+                now = datetime.now()
+                now_ts = now.timestamp()
+                _prev_okx: dict = {}
+                try:
+                    _prev_okx = dict(self._market_data_status or {}).get("okx_latest_1m", {}).get("coins", {})
+                except Exception:
+                    pass
+                status_okx = {
+                    "exchange": "okx",
+                    "interval_seconds": int(self._okx_latest_1m_interval_seconds),
+                    "last_run_ts": int(now_ts),
+                    "running": True,
+                    "current_coin": None,
+                    "coins_done": _coins_done_offset,
+                    "coins_total": len(coins),
+                    "coins": _prune_coin_status_map(_prev_okx, coins),
+                }
+                try:
+                    await self._update_market_data_status("okx_latest_1m", status_okx)
+                except Exception:
+                    pass
+
+                for coin in coins:
+                    coin_status: dict = {"last_fetch": None, "result": "skipped"}
+                    max_lb = int(self._okx_latest_1m_max_lookback_days)
+                    lookback_days = int(self._okx_latest_1m_min_lookback_days)
+
+                    try:
+                        from okx_best_1m import get_newest_day as okx_get_newest_day
+                        newest_day = okx_get_newest_day(coin) or ""
+                        if newest_day:
+                            d_new = datetime.strptime(newest_day, "%Y%m%d").date()
+                            days_since = (datetime.utcnow().date() - d_new).days
+                            if days_since < 0:
+                                days_since = 0
+                            lookback_days = max(lookback_days, days_since + 1)
+                        else:
+                            lookback_days = max_lb
+                            coin_status["note"] = "no_local_data"
+                    except Exception as e:
+                        coin_status["error"] = f"coverage:{type(e).__name__}"
+
+                    if lookback_days > max_lb:
+                        coin_status["note"] = "window_limited"
+                        lookback_days = max_lb
+
+                    try:
+                        res = await asyncio.to_thread(
+                            update_latest_okx_1m_for_coin,
+                            coin=coin,
+                            lookback_days=int(lookback_days),
+                            overwrite=True,
+                            timeout_s=float(self._okx_latest_1m_api_timeout_seconds),
+                        )
+                        coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
+                        coin_status["result"] = "ok"
+                        coin_status["lookback_days"] = int(lookback_days)
+                        coin_status["api_result"] = res
+                        try:
+                            from okx_best_1m import get_storage_coin_dir as okx_storage_coin_dir
+                            _refresh_inventory_coin("okx", "1m", okx_storage_coin_dir(coin))
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
+                        coin_status["result"] = "error"
+                        coin_status["error"] = str(e)
+
+                    status_okx["coins"][coin] = coin_status
+                    status_okx["coins_done"] = status_okx.get("coins_done", 0) + 1
+                    status_okx["current_coin"] = coin
+                    try:
+                        await self._update_market_data_status("okx_latest_1m", status_okx)
+                    except Exception:
+                        pass
+
+                    _okx_stop = _Path(f"{PBGDIR}/data/logs/okx_latest_1m_stop.flag")
+                    if _okx_stop.exists():
+                        try:
+                            _okx_stop.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        status_okx["running"] = False
+                        status_okx["current_coin"] = None
+                        status_okx["stopped"] = True
+                        status_okx["last_run_duration_s"] = int(datetime.now().timestamp() - now_ts)
+                        try:
+                            await self._update_market_data_status("okx_latest_1m", status_okx)
+                        except Exception:
+                            pass
+                        break
+
+                    if self._okx_latest_1m_coin_pause_seconds > 0:
+                        await asyncio.sleep(float(self._okx_latest_1m_coin_pause_seconds))
+
+                status_okx["running"] = False
+                status_okx["current_coin"] = None
+                status_okx["last_run_duration_s"] = int(datetime.now().timestamp() - now_ts)
+                try:
+                    await self._update_market_data_status("okx_latest_1m", status_okx)
+                except Exception:
+                    pass
+
+            except Exception as e:
+                try:
+                    _human_log('PBData', f"[market-data] okx_latest_1m loop error: {e}", level='WARNING')
+                except Exception:
+                    pass
+
+            _okx_flag = _Path(f"{PBGDIR}/data/logs/okx_latest_1m_run_now.flag")
+            try:
+                _elapsed = datetime.now().timestamp() - now_ts
+                _remaining_wait = max(0.0, float(self._okx_latest_1m_interval_seconds) - _elapsed)
+            except Exception:
+                _remaining_wait = float(self._okx_latest_1m_interval_seconds)
+            if await _wait_for_flag(_okx_flag, _remaining_wait):
+                try:
+                    _okx_flag.unlink(missing_ok=True)
                 except Exception:
                     pass
 
@@ -3642,6 +3823,8 @@ class PBData():
                     self._binance_latest_1m_task = asyncio.create_task(self._binance_latest_1m_loop())
                 if not hasattr(self, "_bybit_latest_1m_task") or self._bybit_latest_1m_task is None or self._bybit_latest_1m_task.done():
                     self._bybit_latest_1m_task = asyncio.create_task(self._bybit_latest_1m_loop())
+                if not hasattr(self, "_okx_latest_1m_task") or self._okx_latest_1m_task is None or self._okx_latest_1m_task.done():
+                    self._okx_latest_1m_task = asyncio.create_task(self._okx_latest_1m_loop())
             except Exception as e:
                 _human_log('PBData', f"Error starting shared pollers: {e}", level='DEBUG')
         else:

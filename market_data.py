@@ -396,7 +396,7 @@ def get_market_data_coin_options(exchange: str) -> list[str]:
             only_cpt=False,
             notices_ignore=False,
             tags=[],
-            quote_filter=None,
+            quote_filter=["USDT"] if ex == "okx" else None,
             use_cache=True,
             active_only=True,
         )
@@ -420,10 +420,12 @@ def get_market_data_coin_options(exchange: str) -> list[str]:
             for row in mapping if isinstance(mapping, list) else []:
                 if not bool(row.get("swap", False)) or not bool(row.get("active", True)) or not bool(row.get("linear", True)):
                     continue
+                quote = str(row.get("quote") or "").strip().upper()
+                if ex == "okx" and quote != "USDT":
+                    continue
                 coin = str(row.get("coin") or "").strip()
                 if not coin:
                     symbol = str(row.get("ccxt_symbol") or row.get("symbol") or "").strip()
-                    quote = str(row.get("quote") or "").strip().upper()
                     if not symbol:
                         continue
                     coin = compute_coin_name(symbol, quote)
@@ -1339,7 +1341,7 @@ def get_minute_presence_for_dataset(
     s0 = _normalize_day_str(start_day) if start_day else ""
     s1 = _normalize_day_str(end_day) if end_day else ""
 
-    if ds_l in ("1m", "candles_1m") and ex in ("hyperliquid", "binanceusdm"):
+    if ds_l in ("1m", "candles_1m") and ex in ("hyperliquid", "binanceusdm", "okx"):
         idx_days = get_source_minutes_for_range(
             exchange=ex,
             coin=cn,

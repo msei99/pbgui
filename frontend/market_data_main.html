@@ -2626,6 +2626,7 @@
             <option value="hyperliquid">Hyperliquid</option>
             <option value="binance">Binance USDM</option>
             <option value="bybit">Bybit</option>
+            <option value="okx">OKX</option>
           </select>
         </label>
       </div>
@@ -2881,11 +2882,11 @@
               <div class="best1m-selector-stack">
                 <label class="settings-field">
                   <span class="field-label">Coins for build</span>
-                  <span class="note best1m-selection-note">Leave this empty to queue all enabled coins. Drag across coin rows to add or remove larger ranges quickly.</span>
+                  <span class="note best1m-selection-note">Leave this empty to queue all available coins. Drag across coin rows to add or remove larger ranges quickly.</span>
                 </label>
                 <div class="coin-picker-toolbar">
                   <div class="coin-filter-wrap">
-                    <input id="best1m-coin-filter" type="text" placeholder="Filter enabled coin list">
+                    <input id="best1m-coin-filter" type="text" placeholder="Filter available coin list">
                   </div>
                   <button class="btn secondary" id="btn-best1m-select-visible" type="button">Select visible</button>
                   <button class="btn secondary" id="btn-best1m-clear-selection" type="button">Clear all</button>
@@ -2910,7 +2911,7 @@
               </label>
               <div class="best1m-actions">
                 <button class="btn primary" id="btn-best1m-queue" type="button">Build best 1m</button>
-                <span class="note" id="best1m-coin-count">0 enabled coins</span>
+                <span class="note" id="best1m-coin-count">0 available coins</span>
               </div>
               <p class="note" id="best1m-hint"></p>
             </div>
@@ -3054,7 +3055,8 @@
       var exchangeOptions = [
         { key: 'hyperliquid', statusKey: 'hyperliquid', label: 'Hyperliquid' },
         { key: 'binance', statusKey: 'binanceusdm', label: 'Binance USDM' },
-        { key: 'bybit', statusKey: 'bybit', label: 'Bybit' }
+        { key: 'bybit', statusKey: 'bybit', label: 'Bybit' },
+        { key: 'okx', statusKey: 'okx', label: 'OKX' }
       ];
       var sectionButtons = [
         { buttonId: 'btn-panel-settings', panelId: 'settings-panel', label: 'Settings' },
@@ -3102,12 +3104,14 @@
       };
       var best1mJobMonitorMeta = {
         binance: { exchange: 'binanceusdm', jobType: 'binance_best_1m' },
-        bybit: { exchange: 'bybit', jobType: 'bybit_best_1m' }
+        bybit: { exchange: 'bybit', jobType: 'bybit_best_1m' },
+        okx: { exchange: 'okx', jobType: 'okx_best_1m' }
       };
       var best1mQueueMeta = {
         hyperliquid: { api: 'heatmap', path: '/queue-build-ohlcv' },
         binance: { api: 'market-data', path: '/best-1m/queue/binance' },
-        bybit: { api: 'market-data', path: '/best-1m/queue/bybit' }
+        bybit: { api: 'market-data', path: '/best-1m/queue/bybit' },
+        okx: { api: 'market-data', path: '/best-1m/queue/okx' }
       };
       var tradfiMapState = {
         rows: [],
@@ -5222,11 +5226,11 @@
         }
         if (queueScope) {
           if (!enabledCoins.length) {
-            queueScope.textContent = '0 enabled coins';
+            queueScope.textContent = '0 available coins';
           } else if (selectedCoins.length) {
             queueScope.textContent = selectedCoins.length + ' selected coin' + (selectedCoins.length === 1 ? '' : 's');
           } else {
-            queueScope.textContent = 'All ' + enabledCoins.length + ' enabled coins';
+            queueScope.textContent = 'All ' + enabledCoins.length + ' available coins';
           }
         }
         if (selectVisibleButton) selectVisibleButton.disabled = !visibleCoins.length;
@@ -5595,7 +5599,7 @@
 
         if (queueButton) queueButton.disabled = !coins.length;
         if (!coins.length) {
-          setBest1mFeedback(payload.empty_message || 'No enabled coins. Add coins in Settings first.', 'warning');
+          setBest1mFeedback(payload.empty_message || 'No available coins found for this exchange. Refresh CoinData first.', 'warning');
         } else {
           clearBest1mFeedback();
         }
@@ -5609,7 +5613,7 @@
         document.getElementById('best1m-coin-count').textContent = 'Loading…';
         document.getElementById('best1m-selected-count').textContent = 'Loading…';
         document.getElementById('best1m-filtered-count').textContent = '';
-        document.getElementById('best1m-coin-picker').innerHTML = '<div class="coin-picker-empty">Loading enabled coins...</div>';
+        document.getElementById('best1m-coin-picker').innerHTML = '<div class="coin-picker-empty">Loading available coins...</div>';
         document.getElementById('btn-best1m-queue').disabled = true;
 
         try {

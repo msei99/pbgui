@@ -60,6 +60,7 @@ _MIGRATION_DEFAULT_SERVICES = ["api", "pbcluster", "pbrun", "pbdata", "pbcoindat
 _MIGRATION_LEGACY_STOP_SERVICES = ["pbcluster", "pbrun", "pbdata", "pbcoindata"]
 _fetch_summary_snapshot: Dict[str, Any] = {}
 _poller_metrics_snapshot: Dict[str, Any] = {}
+_TASK_WORKER_STOP_TIMEOUT_S = 35.0
 
 
 def _get_service(name: str):
@@ -135,6 +136,32 @@ def _run_user_systemctl(args: list[str], *, timeout: int = 15) -> subprocess.Com
     )
 
 
+def _systemd_action_error_message(
+    *,
+    action: str,
+    unit: str,
+    output: str,
+    status: dict[str, Any] | None,
+) -> str:
+    """Build a user-facing systemd action error with final state context."""
+
+    message = f"systemctl --user {action} {unit} failed"
+    if output:
+        message = f"{message}: {output}"
+    if status:
+        state = str(status.get("systemd_state") or "unknown")
+        running = "running" if status.get("running") else "stopped"
+        message = f"{message}\nCurrent state: {running} ({state})."
+        if action == "stop" and status.get("running"):
+            message = (
+                f"{message}\nThe service may have been killed after TimeoutStopSec and "
+                "restarted automatically by systemd."
+            )
+        elif action == "restart" and status.get("running"):
+            message = f"{message}\nThe service is running, but systemd reported the restart action as failed."
+    return message
+
+
 def _systemd_service_status(name: str) -> dict[str, Any] | None:
     """Return systemd status for service, or None when no unit is installed."""
     unit = _systemd_unit_for_service(name)
@@ -183,9 +210,36 @@ def _systemd_service_action(name: str, action: str) -> dict[str, Any] | None:
     if not unit:
         return None
     args = [action, "--now", unit] if action in {"enable", "disable"} else [action, unit]
-    proc = _run_user_systemctl(args, timeout=30)
+    try:
+        proc = _run_user_systemctl(args, timeout=60)
+    except subprocess.TimeoutExpired as exc:
+        output = "\n".join(str(part).strip() for part in (exc.stderr, exc.stdout) if str(part or "").strip())
+        status = _systemd_service_status(name)
+        if status is not None:
+            result = dict(status)
+            result["action_failed"] = True
+            result["error"] = _systemd_action_error_message(
+                action=action,
+                unit=unit,
+                output=output or f"timed out after {int(exc.timeout or 0)}s",
+                status=status,
+            )
+            return result
+        raise RuntimeError(output or f"systemctl --user {' '.join(args)} timed out")
     if proc.returncode != 0:
         output = ((proc.stderr or "") + (proc.stdout or "")).strip()
+        status = _systemd_service_status(name)
+        if status is not None:
+            result = dict(status)
+            result["action_failed"] = True
+            result["systemd_action_returncode"] = int(proc.returncode)
+            result["error"] = _systemd_action_error_message(
+                action=action,
+                unit=unit,
+                output=output,
+                status=status,
+            )
+            return result
         raise RuntimeError(output or f"systemctl --user {' '.join(args)} failed")
     status = _systemd_service_status(name)
     if status is not None:
@@ -282,6 +336,8 @@ def _service_action(name: str, action: str) -> dict[str, Any]:
             return result
     systemd_status = _systemd_service_action(name, action)
     if systemd_status is not None:
+        if systemd_status.get("error"):
+            return systemd_status
         return _service_status(name) if action in {"enable", "disable"} else systemd_status
 
     if action in {"enable", "disable"}:
@@ -751,6 +807,8 @@ def _run_systemd_migration() -> dict[str, Any]:
             continue
         service_id = "api-server" if service == "api" else service
         action_result = _service_action(service_id, "restart")
+        if action_result.get("error"):
+            raise RuntimeError(str(action_result.get("error")))
         if not action_result.get("running"):
             raise RuntimeError(f"pbgui-{service}.service did not become active after restart.")
         logs.append(f"Restarted {service_id} with {action_result.get('manager', 'unknown')}.")
@@ -1021,6 +1079,19 @@ def _spawn_task_worker() -> None:
     )
 
 
+async def _wait_for_task_worker_exit(pid: int, timeout_s: float = _TASK_WORKER_STOP_TIMEOUT_S) -> bool:
+    """Wait until the detached market-data task worker process has exited."""
+
+    from task_queue import is_pid_running
+
+    deadline = time.monotonic() + max(0.1, float(timeout_s))
+    while time.monotonic() < deadline:
+        if not is_pid_running(int(pid)):
+            return True
+        await asyncio.sleep(0.5)
+    return not is_pid_running(int(pid))
+
+
 async def _start_worker(worker_id: str) -> None:
     if worker_id == "market-data-task":
         _spawn_task_worker()
@@ -1051,7 +1122,9 @@ async def _stop_worker(worker_id: str) -> None:
         pid = read_worker_pid()
         if pid and is_pid_running(int(pid)):
             os.kill(int(pid), signal.SIGTERM)
-            await asyncio.sleep(0.4)
+            exited = await _wait_for_task_worker_exit(int(pid))
+            if not exited:
+                raise HTTPException(status_code=409, detail=f"Market Data Queue worker PID {pid} did not stop within {int(_TASK_WORKER_STOP_TIMEOUT_S)}s")
         pid = read_worker_pid()
         if pid and not is_pid_running(int(pid)):
             clear_worker_pid()
@@ -1161,6 +1234,19 @@ def stop_service(service: str, session: SessionToken = Depends(require_auth)) ->
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/{service}/restart")
+def restart_service(service: str, session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    if service not in _SERVICES:
+        raise HTTPException(status_code=404, detail=f"Unknown service: {service}")
+    if service == "api-server":
+        return restart_api_server(session=session)
+    try:
+        return _service_action(service, "restart")
+    except Exception as e:
+        _log(SERVICE, f"restart {service} failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/{service}/enable")
 def enable_service(service: str, session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
     if service not in _SERVICES:
@@ -1186,14 +1272,17 @@ def disable_service(service: str, session: SessionToken = Depends(require_auth))
 @router.post("/workers/{worker_id}/{action}")
 async def worker_action(worker_id: str, action: str, session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
     normalized_action = str(action or "").strip().lower()
-    if normalized_action not in {"start", "stop"}:
+    if normalized_action not in {"start", "stop", "restart"}:
         raise HTTPException(status_code=404, detail=f"Unknown action: {action}")
 
     try:
         if normalized_action == "start":
             await _start_worker(worker_id)
+        elif normalized_action == "stop":
+            await _stop_worker(worker_id)
         else:
             await _stop_worker(worker_id)
+            await _start_worker(worker_id)
         await asyncio.sleep(0.1)
         item = await _find_worker(worker_id)
         if item is None:
