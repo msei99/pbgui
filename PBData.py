@@ -373,6 +373,7 @@ class PBData():
         self._mapping_rebuild_min_interval = 300.0  # seconds per exchange
         self._pollers_delay_seconds = 60.0
         self._pollers_enabled_after_ts = datetime.now().timestamp() + self._pollers_delay_seconds
+        self._last_pollers_delay_log_after_ts = None
         # Shared poller intervals (seconds)
         self._shared_combined_interval_seconds = 90
         self._shared_history_interval_seconds = 300
@@ -3723,9 +3724,11 @@ class PBData():
         except Exception:
             pass
         now_ts = datetime.now().timestamp()
-        # Only log when the set changes or periodically
+        # Only log active user queues when the set changes or periodically.
         current_users_set = set(self.fetch_users)
-        if current_users_set != self._last_fetch_users_snapshot or (now_ts - self._last_queue_log_ts) >= self._queue_log_every_secs:
+        if not current_users_set:
+            self._last_fetch_users_snapshot = current_users_set
+        elif current_users_set != self._last_fetch_users_snapshot or (now_ts - self._last_queue_log_ts) >= self._queue_log_every_secs:
             _human_log('PBData', f"[async] Will process users: {self.fetch_users}", level='INFO')
             self._last_fetch_users_snapshot = current_users_set
             self._last_queue_log_ts = now_ts
@@ -3829,8 +3832,11 @@ class PBData():
                 _human_log('PBData', f"Error starting shared pollers: {e}", level='DEBUG')
         else:
             try:
-                remaining = int(self._pollers_enabled_after_ts - now_ts)
-                _human_log('PBData', f"[poll] Shared pollers delayed: starting in {remaining}s (now={int(now_ts)} enable_after={int(self._pollers_enabled_after_ts)})", level='DEBUG')
+                enable_after_ts = int(self._pollers_enabled_after_ts)
+                if self._last_pollers_delay_log_after_ts != enable_after_ts:
+                    remaining = max(0, int(self._pollers_enabled_after_ts - now_ts))
+                    _human_log('PBData', f"[poll] Shared pollers delayed: starting in {remaining}s (now={int(now_ts)} enable_after={enable_after_ts})", level='DEBUG')
+                    self._last_pollers_delay_log_after_ts = enable_after_ts
             except Exception:
                 pass
 

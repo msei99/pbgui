@@ -69,6 +69,30 @@ def enqueue_job(*, job_type: str, payload: dict[str, Any], exchange: str = "") -
     return EnqueueResult(job_id=jid, path=str(path))
 
 
+def enqueue_running_job(*, job_type: str, payload: dict[str, Any], exchange: str = "", manual_parallel: bool = True) -> EnqueueResult:
+    """Create a job directly in running/ for an immediate one-shot worker."""
+
+    ensure_task_dirs()
+    jid = f"{int(time.time())}-{uuid4().hex[:10]}"
+    job = {
+        "id": jid,
+        "type": str(job_type).strip(),
+        "exchange": str(exchange).strip().lower(),
+        "created_ts": int(time.time()),
+        "updated_ts": int(time.time()),
+        "payload": payload or {},
+        "status": "running",
+        "progress": {},
+        "error": "",
+        "manual_parallel": bool(manual_parallel),
+        "run_requested": False,
+        "run_requested_ts": 0,
+    }
+    path = get_task_state_dir("running") / f"{jid}.json"
+    _atomic_write_json(path, job)
+    return EnqueueResult(job_id=jid, path=str(path))
+
+
 def list_jobs(*, states: list[str] | None = None, limit: int = 50) -> list[dict[str, Any]]:
     ensure_task_dirs()
     if not states:

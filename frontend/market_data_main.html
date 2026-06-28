@@ -1222,6 +1222,120 @@
       flex-wrap: wrap;
     }
 
+    .copy-data-shell {
+      display: grid;
+      gap: var(--sp-md);
+      max-width: 1120px;
+    }
+
+    .copy-data-form-grid {
+      display: grid;
+      gap: var(--sp-md);
+    }
+
+    .copy-data-exchange-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: var(--sp-sm);
+    }
+
+    .copy-data-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-md);
+      flex-wrap: wrap;
+    }
+
+    .copy-data-summary {
+      border: 1px solid rgba(99, 179, 237, 0.24);
+      border-radius: 10px;
+      background: rgba(12, 17, 26, 0.5);
+      padding: var(--sp-md);
+      display: grid;
+      gap: var(--sp-sm);
+    }
+
+    .copy-data-summary-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: var(--sp-md);
+      flex-wrap: wrap;
+    }
+
+    .copy-data-summary-title {
+      margin: 0;
+      font-size: var(--fs-md);
+      color: #f8fafc;
+    }
+
+    .copy-data-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: var(--sp-sm);
+    }
+
+    .copy-data-summary-item {
+      border: 1px solid rgba(99, 179, 237, 0.16);
+      border-radius: 8px;
+      background: rgba(15, 23, 42, 0.72);
+      padding: var(--sp-sm) var(--sp-md);
+      min-width: 0;
+    }
+
+    .copy-data-summary-label {
+      color: var(--text-dim);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .copy-data-summary-value {
+      color: #f8fafc;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .copy-data-summary-log {
+      margin: 0;
+      border-radius: 6px;
+      border: 1px solid rgba(99, 179, 237, 0.12);
+      background: rgba(2, 6, 23, 0.58);
+      padding: var(--sp-sm);
+      color: #cbd5e1;
+      font-family: 'Courier New', monospace;
+      font-size: var(--fs-xs);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    [data-tip] {
+      cursor: help;
+      text-decoration-line: underline;
+      text-decoration-style: dotted;
+      text-decoration-color: #64748b;
+      text-underline-offset: 2px;
+      text-decoration-thickness: 1px;
+    }
+
+    #data-tip-tooltip {
+      display: none;
+      position: fixed;
+      z-index: 9999;
+      background: #1e293b;
+      color: #e2e8f0;
+      border: 1px solid #334155;
+      border-radius: 5px;
+      font-size: var(--fs-xs);
+      font-weight: 400;
+      padding: 6px 10px;
+      white-space: pre-wrap;
+      max-width: 520px;
+      line-height: 1.5;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+      pointer-events: none;
+    }
+
     .summary-grid {
       display: grid;
       gap: var(--sp-md);
@@ -2601,6 +2715,7 @@
             <button class="sb-btn" id="btn-inventory-clear-dataset" type="button">Clear dataset</button>
           </div>
           <a class="sb-btn sidebar-shortcut" id="sidebar-best-1m-link" href="#">Build Best 1m</a>
+          <button class="sb-btn" id="btn-panel-copy-data" data-panel="copy-data-panel" type="button">Copy Data</button>
           <a class="sb-btn sidebar-shortcut" id="sidebar-l2books-link" href="#" hidden>Download l2Books</a>
           <button class="sb-btn" id="btn-panel-activity" data-panel="activity-panel">Activity Log</button>
           <hr class="sb-sep" id="sidebar-context-sep" hidden>
@@ -2932,6 +3047,71 @@
         </div>
       </section>
 
+      <section class="content-panel" id="copy-data-panel" hidden>
+        <article class="panel-card copy-data-shell">
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow">OHLCV Copy</div>
+              <h2>Copy Data</h2>
+              <p class="note">Queue an rsync copy from this local PBGui data/ohlcv tree to a remote PBGui host over SSH.</p>
+            </div>
+          </div>
+          <div id="copy-data-feedback" class="callout" hidden></div>
+          <div class="callout warning">
+            This job never uses --delete. Use Dry run first to see the target path and rsync transfer stats without creating directories or writing files.
+          </div>
+          <div class="copy-data-form-grid">
+            <div class="settings-grid settings-grid-wide">
+              <label class="settings-field">
+                <span class="field-label" data-tip="Remote shell command only. Do not include the final target here. Examples: ssh, ssh -p 2222, ssh -J user@jump-host, ssh -J user@jump-host -p 2222.">SSH command without target</span>
+                <input id="copy-data-ssh-command" type="text" value="ssh" placeholder="ssh -J user@jump-host -p 2222" autocomplete="off">
+              </label>
+              <label class="settings-field">
+                <span class="field-label" data-tip="Final SSH target for rsync. Examples: user@target-host, target-host, localhost for a reverse tunnel, or an SSH config alias.">Remote target</span>
+                <input id="copy-data-target" type="text" placeholder="localhost or user@host" autocomplete="off">
+              </label>
+              <label class="settings-field">
+                <span class="field-label" data-tip="Absolute data/ohlcv root on the remote host. Leave empty when the target PBGui uses the same path as this machine. The copy job creates missing exchange subdirectories below this root.">Destination data/ohlcv root</span>
+                <input id="copy-data-destination-root" type="text" placeholder="Leave empty to use this PBGui path on the target" autocomplete="off">
+              </label>
+              <label class="settings-field">
+                <span class="field-label" data-tip="Missing files only adds --ignore-existing and leaves target files untouched. Update changed files lets rsync replace changed files. Neither mode uses --delete.">Copy mode</span>
+                <select id="copy-data-mode">
+                  <option value="missing_only" selected>Missing files only</option>
+                  <option value="update">Update changed files</option>
+                </select>
+              </label>
+            </div>
+            <div>
+              <div class="field-label">Exchanges</div>
+              <div class="copy-data-exchange-grid">
+                <label class="settings-toggle"><input type="checkbox" data-copy-data-exchange="binance" checked>Binance USDM</label>
+                <label class="settings-toggle"><input type="checkbox" data-copy-data-exchange="bybit" checked>Bybit</label>
+                <label class="settings-toggle"><input type="checkbox" data-copy-data-exchange="okx">OKX</label>
+                <label class="settings-toggle"><input type="checkbox" data-copy-data-exchange="hyperliquid">Hyperliquid</label>
+              </div>
+            </div>
+            <div class="copy-data-actions">
+              <button class="btn secondary" id="btn-copy-data-test" type="button">Test connection</button>
+              <button class="btn secondary" id="btn-copy-data-dry-run" type="button">Dry run</button>
+              <button class="btn primary" id="btn-copy-data-queue" type="button">Queue copy job</button>
+              <span class="note">Use Activity Log or the embedded monitor below to watch progress.</span>
+            </div>
+          </div>
+          <div id="copy-data-dry-run-summary" class="copy-data-summary" hidden></div>
+          <article class="best1m-job-monitor-shell" id="copy-data-job-monitor-card">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">Queue</div>
+                <h3>Copy Job Monitor</h3>
+                <p class="note">Queued, running, done, and failed OHLCV copy jobs.</p>
+              </div>
+            </div>
+            <iframe class="best1m-job-monitor-frame" id="copy-data-job-monitor-frame" title="Copy Data Job Monitor" loading="lazy" scrolling="no"></iframe>
+          </article>
+        </article>
+      </section>
+
       <section class="content-panel" id="inventory-panel" hidden>
         <div class="inventory-layout">
           <article class="panel-card inventory-shell">
@@ -3025,6 +3205,7 @@
     </main>
   </div>
 
+  <div id="data-tip-tooltip"></div>
   <div id="toast-stack"></div>
 
   <script>
@@ -3063,6 +3244,7 @@
         { buttonId: 'btn-panel-status', panelId: 'status-panel', label: 'Status Monitor' },
         { buttonId: 'btn-panel-inventory', panelId: 'inventory-panel', label: 'OHLCV Data' },
         { buttonId: null, panelId: 'best1m-panel', label: 'Build Best 1m' },
+        { buttonId: 'btn-panel-copy-data', panelId: 'copy-data-panel', label: 'Copy Data' },
         { buttonId: 'btn-panel-activity', panelId: 'activity-panel', label: 'Activity Log' }
       ];
       var settingsSubsectionButtons = [
@@ -3151,6 +3333,10 @@
         confirmResolve: null,
         confirmReturnFocus: null
       };
+      var copyDataDryRunState = {
+        requestId: 0,
+        timer: 0
+      };
       var helpLang = 'EN';
       var helpTopics = [];
       var helpSel = 0;
@@ -3175,6 +3361,34 @@
           .replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;')
           .replace(/'/g, '&#39;');
+      }
+
+      function initDataTipTooltip() {
+        var tip = document.getElementById('data-tip-tooltip');
+        if (!tip) return;
+        document.addEventListener('mouseover', function (event) {
+          var element = event.target && event.target.closest ? event.target.closest('[data-tip]') : null;
+          if (!element) return;
+          var text = element.getAttribute('data-tip');
+          if (!text) return;
+          tip.textContent = text;
+          tip.style.display = 'block';
+        });
+        document.addEventListener('mousemove', function (event) {
+          if (tip.style.display === 'none') return;
+          var x = event.clientX + 14;
+          var y = event.clientY + 14;
+          var tipWidth = tip.offsetWidth;
+          var tipHeight = tip.offsetHeight;
+          if (x + tipWidth > window.innerWidth - 8) x = event.clientX - tipWidth - 10;
+          if (y + tipHeight > window.innerHeight - 8) y = event.clientY - tipHeight - 10;
+          tip.style.left = x + 'px';
+          tip.style.top = y + 'px';
+        });
+        document.addEventListener('mouseout', function (event) {
+          var element = event.target && event.target.closest ? event.target.closest('[data-tip]') : null;
+          if (element) tip.style.display = 'none';
+        });
       }
 
       function mdToHtml(md) {
@@ -3491,6 +3705,12 @@
         return API_BASE + path + joiner + 'token=' + encodeURIComponent(TOKEN);
       }
 
+      function jobsApiUrl(path) {
+        var joiner = path.indexOf('?') === -1 ? '?' : '&';
+        var root = String(API_BASE || '').replace(/\/market-data\/?$/, '');
+        return root + path + joiner + 'token=' + encodeURIComponent(TOKEN);
+      }
+
       function buildBest1mJobMonitorUrl(exchangeKey, forceReload) {
         var meta = getExchangeMeta(exchangeKey);
         var jobMeta = best1mJobMonitorMeta[meta.key];
@@ -3522,6 +3742,26 @@
         }
       }
 
+      function buildCopyDataJobMonitorUrl(forceReload) {
+        var url = '/app/jobs_monitor.html?token=' + encodeURIComponent(TOKEN)
+          + '&v=' + encodeURIComponent(PBGUI_SERIAL || '0')
+          + '&embed=1'
+          + '&exchange=ohlcv'
+          + '&job_type=' + encodeURIComponent('ohlcv_copy,ohlcv_copy_dry_run');
+        if (forceReload) url += '&_ts=' + Date.now();
+        return url;
+      }
+
+      function mountCopyDataJobMonitor(forceReload) {
+        var frame = document.getElementById('copy-data-job-monitor-frame');
+        if (!frame) return;
+        var nextSrc = buildCopyDataJobMonitorUrl(forceReload === true);
+        if (forceReload === true || frame.dataset.src !== nextSrc) {
+          frame.dataset.src = nextSrc;
+          frame.src = nextSrc;
+        }
+      }
+
       function heatmapApiBase() {
         return String(API_BASE || '').replace(/\/market-data$/, '/heatmap');
       }
@@ -3539,6 +3779,16 @@
           requestOptions.headers['Content-Type'] = 'application/json';
         }
         var response = await fetch(apiUrl(path), requestOptions);
+        if (!response.ok) {
+          throw new Error('HTTP ' + response.status);
+        }
+        return response.json();
+      }
+
+      async function fetchJobsJson(path, options) {
+        var requestOptions = options || {};
+        requestOptions.cache = requestOptions.cache || 'no-store';
+        var response = await fetch(jobsApiUrl(path), requestOptions);
         if (!response.ok) {
           throw new Error('HTTP ' + response.status);
         }
@@ -3623,6 +3873,314 @@
 
       function clearBest1mFeedback() {
         setBest1mFeedback('', 'info');
+      }
+
+      function setCopyDataFeedback(message, type) {
+        var box = document.getElementById('copy-data-feedback');
+        if (!box) return;
+        var text = String(message || '').trim();
+        if (!text) {
+          box.hidden = true;
+          box.textContent = '';
+          box.className = 'callout';
+          return;
+        }
+        box.hidden = false;
+        box.className = type === 'error' || type === 'warning' ? 'callout warning' : 'callout';
+        box.textContent = text;
+      }
+
+      function getSelectedCopyDataExchanges() {
+        return Array.from(document.querySelectorAll('[data-copy-data-exchange]')).filter(function (input) {
+          return input && input.checked;
+        }).map(function (input) {
+          return String(input.getAttribute('data-copy-data-exchange') || '').trim();
+        }).filter(Boolean);
+      }
+
+      function collectCopyDataRequest() {
+        return {
+          target: readFieldValue('copy-data-target'),
+          ssh_command: readFieldValue('copy-data-ssh-command') || 'ssh',
+          destination_root: readFieldValue('copy-data-destination-root'),
+          mode: readFieldValue('copy-data-mode') || 'missing_only',
+          exchanges: getSelectedCopyDataExchanges()
+        };
+      }
+
+      function validateCopyDataRequest(request, options) {
+        var requireExchanges = !(options && options.requireExchanges === false);
+        if (!request.target) return 'Remote target is required.';
+        if (requireExchanges && !request.exchanges.length) return 'Select at least one exchange to copy.';
+        return '';
+      }
+
+      function resetCopyDataDryRunSummary() {
+        if (copyDataDryRunState.timer) {
+          window.clearTimeout(copyDataDryRunState.timer);
+          copyDataDryRunState.timer = 0;
+        }
+        copyDataDryRunState.requestId += 1;
+        var box = document.getElementById('copy-data-dry-run-summary');
+        if (box) {
+          box.hidden = true;
+          box.innerHTML = '';
+        }
+      }
+
+      function copyDataStatValue(line, label) {
+        var needle = String(label || '') + ':';
+        var idx = String(line || '').indexOf(needle);
+        return idx === -1 ? '' : String(line || '').slice(idx + needle.length).trim();
+      }
+
+      function parseCopyDataCount(value) {
+        var text = String(value || '').split('(')[0].trim();
+        if (!text) return null;
+        text = text.replace(/\s+/g, '').replace(/\./g, '').replace(/,/g, '.');
+        var number = Number(text);
+        return Number.isFinite(number) ? number : null;
+      }
+
+      function parseCopyDataByteValue(value) {
+        var text = String(value || '').trim();
+        if (!text) return null;
+        var match = text.match(/([0-9][0-9.,]*)\s*([KMGTPE]?)(?:i?B|bytes)?/i);
+        if (!match) return null;
+        var numberText = match[1];
+        if (numberText.indexOf(',') !== -1) {
+          numberText = numberText.replace(/\./g, '').replace(/,/g, '.');
+        } else if ((numberText.match(/\./g) || []).length > 1) {
+          numberText = numberText.replace(/\./g, '');
+        }
+        var number = Number(numberText);
+        if (!Number.isFinite(number)) return null;
+        var unit = String(match[2] || '').toUpperCase();
+        var powers = { K: 1, M: 2, G: 3, T: 4, P: 5, E: 6 };
+        var power = powers[unit] || 0;
+        return number * Math.pow(1024, power);
+      }
+
+      function formatCopyDataCount(value) {
+        return Number.isFinite(value) ? String(Math.round(value)).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '';
+      }
+
+      function formatCopyDataBytes(value) {
+        if (!Number.isFinite(value)) return '';
+        var units = ['bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
+        var size = Math.max(0, value);
+        var index = 0;
+        while (size >= 1024 && index < units.length - 1) {
+          size = size / 1024;
+          index += 1;
+        }
+        return index === 0 ? String(Math.round(size)) + ' bytes' : size.toFixed(2) + ' ' + units[index];
+      }
+
+      function copyDataDryRunStatsFromJob(job) {
+        var progress = job && job.progress && typeof job.progress === 'object' ? job.progress : {};
+        var result = progress.last_result && typeof progress.last_result === 'object' ? progress.last_result : {};
+        if (!result.dry_run) return {};
+        var exchangeStats = Array.isArray(result.exchange_stats) ? result.exchange_stats : [];
+        return {
+          remote_paths: Array.isArray(result.remote_paths) ? result.remote_paths : [],
+          files_total: Number.isFinite(Number(result.files_total)) ? formatCopyDataCount(Number(result.files_total)) : '',
+          files_transferred: Number.isFinite(Number(result.files_transferred)) ? formatCopyDataCount(Number(result.files_transferred)) : '',
+          total_size: Number.isFinite(Number(result.total_size_bytes)) ? formatCopyDataBytes(Number(result.total_size_bytes)) : '',
+          transfer_size: Number.isFinite(Number(result.transfer_size_bytes)) ? formatCopyDataBytes(Number(result.transfer_size_bytes)) : '',
+          bytes_sent: Number.isFinite(Number(result.bytes_sent)) ? formatCopyDataBytes(Number(result.bytes_sent)) : '',
+          bytes_received: Number.isFinite(Number(result.bytes_received)) ? formatCopyDataBytes(Number(result.bytes_received)) : '',
+          duration: Number.isFinite(Number(result.duration_s)) ? String(Number(result.duration_s)) + 's' : '',
+          stats_lines: exchangeStats.map(function (item) {
+            var label = String(item && (item.label || item.exchange) ? (item.label || item.exchange) : 'Exchange');
+            var files = Number.isFinite(Number(item && item.files_transferred)) ? formatCopyDataCount(Number(item.files_transferred)) : '-';
+            var size = Number.isFinite(Number(item && item.transfer_size_bytes)) ? formatCopyDataBytes(Number(item.transfer_size_bytes)) : '-';
+            var remote = String(item && item.remote_path ? item.remote_path : '');
+            return label + ': ' + files + ' files, ' + size + ' transfer' + (remote ? ' -> ' + remote : '');
+          })
+        };
+      }
+
+      function mergeCopyDataDryRunStats(primary, fallback) {
+        primary = primary || {};
+        fallback = fallback || {};
+        return {
+          remote_paths: Array.isArray(primary.remote_paths) && primary.remote_paths.length ? primary.remote_paths : (fallback.remote_paths || []),
+          files_total: primary.files_total || fallback.files_total || '',
+          files_transferred: primary.files_transferred || fallback.files_transferred || '',
+          total_size: primary.total_size || fallback.total_size || '',
+          transfer_size: primary.transfer_size || fallback.transfer_size || '',
+          bytes_sent: primary.bytes_sent || fallback.bytes_sent || '',
+          bytes_received: primary.bytes_received || fallback.bytes_received || '',
+          duration: primary.duration || fallback.duration || '',
+          stats_lines: Array.isArray(primary.stats_lines) && primary.stats_lines.length ? primary.stats_lines : (fallback.stats_lines || [])
+        };
+      }
+
+      function parseCopyDataDryRunLog(lines) {
+        lines = Array.isArray(lines) ? lines : [];
+        var remotePaths = [];
+        var duration = '';
+        var statsLines = [];
+        var totals = {
+          files_total: 0,
+          files_transferred: 0,
+          total_size: 0,
+          transfer_size: 0,
+          bytes_sent: 0,
+          bytes_received: 0
+        };
+        var seen = {
+          files_total: false,
+          files_transferred: false,
+          total_size: false,
+          transfer_size: false,
+          bytes_sent: false,
+          bytes_received: false
+        };
+        lines.forEach(function (lineRaw) {
+          var line = String(lineRaw || '').trim();
+          var remoteMatch = line.match(/\bremote=([^\s]+)/);
+          if (remoteMatch && remotePaths.indexOf(remoteMatch[1]) === -1) {
+            remotePaths.push(remoteMatch[1]);
+          }
+          var durationMatch = line.match(/\bduration=(\d+s)\b/);
+          if (durationMatch) duration = durationMatch[1];
+          if (
+            line.indexOf('Number of files:') !== -1 ||
+            line.indexOf('Number of regular files transferred:') !== -1 ||
+            line.indexOf('Total file size:') !== -1 ||
+            line.indexOf('Total transferred file size:') !== -1 ||
+            line.indexOf('Total bytes sent:') !== -1 ||
+            line.indexOf('Total bytes received:') !== -1
+          ) {
+            statsLines.push(line.replace(/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+/, '').trim());
+          }
+          var parsed;
+          if (line.indexOf('Number of regular files transferred:') !== -1) {
+            parsed = parseCopyDataCount(copyDataStatValue(line, 'Number of regular files transferred'));
+            if (parsed !== null) { totals.files_transferred += parsed; seen.files_transferred = true; }
+          } else if (line.indexOf('Number of files:') !== -1) {
+            parsed = parseCopyDataCount(copyDataStatValue(line, 'Number of files'));
+            if (parsed !== null) { totals.files_total += parsed; seen.files_total = true; }
+          } else if (line.indexOf('Total transferred file size:') !== -1) {
+            parsed = parseCopyDataByteValue(copyDataStatValue(line, 'Total transferred file size'));
+            if (parsed !== null) { totals.transfer_size += parsed; seen.transfer_size = true; }
+          } else if (line.indexOf('Total file size:') !== -1) {
+            parsed = parseCopyDataByteValue(copyDataStatValue(line, 'Total file size'));
+            if (parsed !== null) { totals.total_size += parsed; seen.total_size = true; }
+          } else if (line.indexOf('Total bytes sent:') !== -1) {
+            parsed = parseCopyDataByteValue(copyDataStatValue(line, 'Total bytes sent'));
+            if (parsed !== null) { totals.bytes_sent += parsed; seen.bytes_sent = true; }
+          } else if (line.indexOf('Total bytes received:') !== -1) {
+            parsed = parseCopyDataByteValue(copyDataStatValue(line, 'Total bytes received'));
+            if (parsed !== null) { totals.bytes_received += parsed; seen.bytes_received = true; }
+          }
+        });
+        return {
+          remote_paths: remotePaths,
+          files_total: seen.files_total ? formatCopyDataCount(totals.files_total) : '',
+          files_transferred: seen.files_transferred ? formatCopyDataCount(totals.files_transferred) : '',
+          total_size: seen.total_size ? formatCopyDataBytes(totals.total_size) : '',
+          transfer_size: seen.transfer_size ? formatCopyDataBytes(totals.transfer_size) : '',
+          bytes_sent: seen.bytes_sent ? formatCopyDataBytes(totals.bytes_sent) : '',
+          bytes_received: seen.bytes_received ? formatCopyDataBytes(totals.bytes_received) : '',
+          duration: duration,
+          stats_lines: statsLines
+        };
+      }
+
+      function renderCopyDataDryRunSummary(data) {
+        var box = document.getElementById('copy-data-dry-run-summary');
+        if (!box) return;
+        data = data || {};
+        var result = data.result || {};
+        var job = data.job || {};
+        var stats = data.stats || {};
+        var payload = job.payload && typeof job.payload === 'object' ? job.payload : {};
+        var status = String(data.status || job.status || 'queued');
+        var target = String(result.target || payload.target || '');
+        var root = String(result.destination_root || payload.destination_root || '');
+        var exchanges = result.exchanges || payload.exchanges || [];
+        exchanges = Array.isArray(exchanges) ? exchanges : [];
+        var targetRoot = target && root ? target + ':' + root : (root || target || '-');
+        var rows = [
+          ['Status', status],
+          ['Remote root', targetRoot],
+          ['Exchanges', exchanges.length ? exchanges.join(', ') : '-'],
+          ['Files to transfer', stats.files_transferred || '-'],
+          ['Transfer size', stats.transfer_size || '-'],
+          ['Total source size', stats.total_size || '-'],
+          ['Sent / received', (stats.bytes_sent || '-') + ' / ' + (stats.bytes_received || '-')],
+          ['Duration', stats.duration || '-']
+        ];
+        var remotePaths = Array.isArray(stats.remote_paths) && stats.remote_paths.length ? stats.remote_paths.join('\n') : '';
+        var statsText = Array.isArray(stats.stats_lines) && stats.stats_lines.length ? stats.stats_lines.join('\n') : '';
+        var detail = data.error || remotePaths || statsText || 'Waiting for rsync dry-run stats...';
+        if (remotePaths && statsText) detail = remotePaths + '\n\n' + statsText;
+        box.hidden = false;
+        box.className = 'copy-data-summary';
+        box.innerHTML = ''
+          + '<div class="copy-data-summary-head">'
+          +   '<h3 class="copy-data-summary-title">Dry-run summary</h3>'
+          +   '<span class="note">Job ' + esc(result.job_id || job.id || '') + '</span>'
+          + '</div>'
+          + '<div class="copy-data-summary-grid">'
+          + rows.map(function (row) {
+            return ''
+              + '<div class="copy-data-summary-item">'
+              +   '<div class="copy-data-summary-label">' + esc(row[0]) + '</div>'
+              +   '<div class="copy-data-summary-value">' + esc(row[1]) + '</div>'
+              + '</div>';
+          }).join('')
+          + '</div>'
+          + '<pre class="copy-data-summary-log">' + esc(detail) + '</pre>';
+      }
+
+      function scheduleCopyDataDryRunSummaryPoll(result, requestId, attempt) {
+        if (requestId !== copyDataDryRunState.requestId) return;
+        copyDataDryRunState.timer = window.setTimeout(function () {
+          pollCopyDataDryRunSummary(result, requestId, attempt + 1);
+        }, attempt < 3 ? 900 : 1800);
+      }
+
+      async function pollCopyDataDryRunSummary(result, requestId, attempt) {
+        if (requestId !== copyDataDryRunState.requestId) return;
+        var jobId = String(result && result.job_id ? result.job_id : '').trim();
+        if (!jobId) return;
+        try {
+          var job = await fetchJobsJson('/jobs/' + encodeURIComponent(jobId));
+          var status = String(job && job.status ? job.status : 'running').toLowerCase();
+          var structuredStats = copyDataDryRunStatsFromJob(job);
+          renderCopyDataDryRunSummary({ result: result, job: job, status: status, stats: structuredStats });
+          if (status === 'done' || status === 'failed') {
+            var logPayload = await fetchJobsJson('/jobs/' + encodeURIComponent(jobId) + '/log?lines=500');
+            var lines = logPayload && Array.isArray(logPayload.log) ? logPayload.log : [];
+            var logStats = parseCopyDataDryRunLog(lines);
+            renderCopyDataDryRunSummary({ result: result, job: job, status: status, stats: mergeCopyDataDryRunStats(structuredStats, logStats), error: status === 'failed' ? String(job.error || 'Dry run failed.') : '' });
+            mountCopyDataJobMonitor(true);
+            return;
+          }
+          if (attempt < 180) {
+            scheduleCopyDataDryRunSummaryPoll(result, requestId, attempt);
+          }
+        } catch (error) {
+          renderCopyDataDryRunSummary({ result: result, status: 'unknown', error: error && error.message ? error.message : 'Failed to load dry-run summary.' });
+          if (attempt < 20) {
+            scheduleCopyDataDryRunSummaryPoll(result, requestId, attempt);
+          }
+        }
+      }
+
+      function startCopyDataDryRunSummary(result) {
+        if (copyDataDryRunState.timer) {
+          window.clearTimeout(copyDataDryRunState.timer);
+          copyDataDryRunState.timer = 0;
+        }
+        copyDataDryRunState.requestId += 1;
+        var requestId = copyDataDryRunState.requestId;
+        renderCopyDataDryRunSummary({ result: result, status: 'queued' });
+        pollCopyDataDryRunSummary(result, requestId, 0);
       }
 
       function inputDayToBest1m(value) {
@@ -5701,6 +6259,77 @@
         }
       }
 
+      async function queueCopyDataJob(dryRun) {
+        dryRun = dryRun === true;
+        var copyButton = document.getElementById('btn-copy-data-queue');
+        var dryRunButton = document.getElementById('btn-copy-data-dry-run');
+        var request = collectCopyDataRequest();
+        var validationError = validateCopyDataRequest(request);
+        if (validationError) {
+          setCopyDataFeedback(validationError, 'error');
+          showToast(validationError, 'error');
+          return;
+        }
+
+        if (copyButton) copyButton.disabled = true;
+        if (dryRunButton) dryRunButton.disabled = true;
+        if (dryRun) resetCopyDataDryRunSummary();
+        setCopyDataFeedback(dryRun ? 'Queueing OHLCV copy dry run…' : 'Queueing OHLCV copy job…', 'info');
+        try {
+          var result = await fetchJson(dryRun ? '/copy-data/dry-run/queue' : '/copy-data/queue', {
+            method: 'POST',
+            body: JSON.stringify(request)
+          });
+          if (!result || result.success === false) {
+            throw new Error(result && result.error ? result.error : (dryRun ? 'Failed to queue OHLCV copy dry run.' : 'Failed to queue OHLCV copy job.'));
+          }
+          var message = result.message || (dryRun ? ('Queued OHLCV copy dry run ' + result.job_id + '.') : ('Queued OHLCV copy job ' + result.job_id + '.'));
+          setCopyDataFeedback(message, 'info');
+          showToast(message, 'success');
+          mountCopyDataJobMonitor(true);
+          if (dryRun) startCopyDataDryRunSummary(result);
+        } catch (error) {
+          var errMessage = error && error.message ? error.message : (dryRun ? 'Failed to queue OHLCV copy dry run.' : 'Failed to queue OHLCV copy job.');
+          setCopyDataFeedback(errMessage, 'error');
+          showToast(errMessage, 'error');
+        } finally {
+          if (copyButton) copyButton.disabled = false;
+          if (dryRunButton) dryRunButton.disabled = false;
+        }
+      }
+
+      async function testCopyDataConnection() {
+        var testButton = document.getElementById('btn-copy-data-test');
+        var request = collectCopyDataRequest();
+        var validationError = validateCopyDataRequest(request, { requireExchanges: false });
+        if (validationError) {
+          setCopyDataFeedback(validationError, 'error');
+          showToast(validationError, 'error');
+          return;
+        }
+
+        if (testButton) testButton.disabled = true;
+        setCopyDataFeedback('Testing SSH connection and destination path…', 'info');
+        try {
+          var result = await fetchJson('/copy-data/test', {
+            method: 'POST',
+            body: JSON.stringify(request)
+          });
+          if (!result || result.success === false) {
+            throw new Error((result && (result.error || result.detail || result.message)) || 'Copy Data connection test failed.');
+          }
+          var message = result.message || 'SSH connection test passed.';
+          setCopyDataFeedback(message, 'info');
+          showToast(message, 'success');
+        } catch (error) {
+          var errMessage = error && error.message ? error.message : 'Copy Data connection test failed.';
+          setCopyDataFeedback(errMessage, 'error');
+          showToast(errMessage, 'error');
+        } finally {
+          if (testButton) testButton.disabled = false;
+        }
+      }
+
       function reloadStatusMonitor() {
         var meta = getExchangeMeta(uiState.contextExchange);
         mountStatusMonitor(meta, true);
@@ -6887,6 +7516,7 @@
         }
         if (panelId === 'status-panel') updateStatusPanel();
         if (panelId === 'best1m-panel') refreshBest1mPanel(false);
+        if (panelId === 'copy-data-panel') mountCopyDataJobMonitor(false);
         if (panelId === 'inventory-panel') loadInventoryPanel(false);
         syncSidebarShortcutState();
         syncActivityLogViewer(panelId);
@@ -6940,6 +7570,15 @@
 
         document.getElementById('btn-best1m-queue').addEventListener('click', function () {
           queueBest1mGeneric();
+        });
+        document.getElementById('btn-copy-data-test').addEventListener('click', function () {
+          testCopyDataConnection();
+        });
+        document.getElementById('btn-copy-data-dry-run').addEventListener('click', function () {
+          queueCopyDataJob(true);
+        });
+        document.getElementById('btn-copy-data-queue').addEventListener('click', function () {
+          queueCopyDataJob(false);
         });
         document.getElementById('best1m-coin-filter').addEventListener('input', function (event) {
           best1mState.coinFilter = String(event.target.value || '');
@@ -7382,8 +8021,9 @@
       }
 
       initHelpOverlay();
-  initTradfiSpecsWindow();
-        installBest1mFrameAutoResize();
+      initDataTipTooltip();
+      initTradfiSpecsWindow();
+      installBest1mFrameAutoResize();
       installBest1mJobMonitorFrameAutoResize();
       bindSectionButtons();
       bindActions();

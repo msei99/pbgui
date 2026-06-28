@@ -142,6 +142,19 @@ The inventory table now also uses the same mouse-selection behavior as the FastA
 
 The inventory table headers are sortable as well. Clicking a column header toggles between ascending and descending order for the currently visible rows in that dataset view.
 
+## Copy Data
+
+Use **Copy Data** to copy local OHLCV files from this PBGui `data/ohlcv` tree to another PBGui host over SSH with `rsync`.
+
+- **SSH command without target** — the SSH command used as rsync's remote shell. Do not include the final target here. Examples: `ssh`, `ssh -p 2222`, `ssh -J user@jump-host`, `ssh -J user@jump-host -p 2222`.
+- **Remote target** — the final SSH target used by rsync, for example `user@target-host`, `target-host`, `localhost` for a reverse tunnel, or an SSH config alias.
+- **Destination data/ohlcv root** — absolute `data/ohlcv` root on the target host. Leave empty when the target PBGui uses the same path as this machine.
+- **Copy mode** — `Missing files only` adds `--ignore-existing`; `Update changed files` lets rsync replace changed files. Neither mode uses `--delete`.
+
+Click **Test connection** first to run a read-only SSH and destination-path check. It does not create directories and does not copy files.
+
+Click **Dry run** before the real copy when you want to verify the exact target path and estimated rsync transfer. The dry run queues a background job with `--dry-run --stats --itemize-changes`; it skips remote `mkdir`, writes no files, and records the per-exchange rsync stats in the embedded Copy Job Monitor log.
+
 ## Settings (Latest 1m Auto-Refresh) — Hyperliquid
 
 Controls the automatic 1m candle refresh loop for Hyperliquid symbols.

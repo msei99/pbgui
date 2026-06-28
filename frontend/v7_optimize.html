@@ -300,6 +300,7 @@ button, input, textarea, select { font: inherit; }
 
 .panel-input,
 .modal-field input,
+.modal-field select,
 .modal-field textarea,
 .json-view {
   width: 100%;
@@ -309,7 +310,8 @@ button, input, textarea, select { font: inherit; }
   color: var(--text);
 }
 .panel-input,
-.modal-field input { height: var(--input-h); padding: 0 var(--sp-sm); }
+.modal-field input,
+.modal-field select { height: var(--input-h); padding: 0 var(--sp-sm); }
 .modal-field textarea,
 .json-view {
   padding: var(--sp-sm);
@@ -1703,6 +1705,31 @@ textarea.json-invalid:focus {
   overflow: auto;
 }
 
+.import-config-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sm);
+}
+
+.import-config-source-row .btn {
+  min-width: 140px;
+}
+
+.import-config-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-md);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255,255,255,.02);
+  padding: var(--sp-md);
+}
+
+.import-config-archive-meta {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
 #toast-stack {
   position: fixed;
   right: 18px;
@@ -2099,6 +2126,7 @@ textarea.json-invalid:focus {
 
       <div id="ctx-configs" class="ctx-actions">
         <button class="sb-btn accent" id="btn-new-config">+ New Config</button>
+        <button class="sb-btn" id="btn-import-config">Import Config</button>
         <button class="sb-btn" id="btn-edit-selected">✏ Edit Selected</button>
         <button class="sb-btn" id="btn-duplicate-selected">⧉ Duplicate</button>
         <button class="sb-btn" id="btn-queue-selected">▶ Queue Selected</button>
@@ -2272,6 +2300,61 @@ textarea.json-invalid:focus {
     <div class="modal-field">
       <label for="editor-json">Config JSON</label>
       <textarea id="editor-json" spellcheck="false"></textarea>
+    </div>
+  </div>
+</section>
+
+<section id="import-config-modal" class="modal import-config-modal">
+  <div class="modal-head">
+    <div>
+      <h3>Import Optimize Config</h3>
+      <div class="muted-line">Paste a PB7 optimize JSON config, choose a local .json file, or load one from a Backtest Archive. Import opens an unsaved editor draft.</div>
+    </div>
+    <button class="btn ghost" id="btn-close-import-config">Close</button>
+  </div>
+  <div class="modal-body">
+    <div class="import-config-source-row" role="group" aria-label="Import source">
+      <button class="btn primary" id="import-config-source-local" type="button" aria-pressed="true">Paste / File</button>
+      <button class="btn ghost" id="import-config-source-archive" type="button" aria-pressed="false">Backtest Archive</button>
+    </div>
+    <div class="modal-field">
+      <label for="import-config-name">Config name</label>
+      <input id="import-config-name" type="text" placeholder="derived from file, archive item, or backtest.base_dir">
+    </div>
+    <div id="import-config-local-panel" class="import-config-panel">
+      <div class="modal-field">
+        <label for="import-config-file">JSON file</label>
+        <input id="import-config-file" type="file" accept=".json,application/json">
+      </div>
+      <div class="modal-field">
+        <label for="import-config-json">Config JSON</label>
+        <textarea id="import-config-json" spellcheck="false" placeholder="Paste full PB7 optimize config JSON here"></textarea>
+      </div>
+    </div>
+    <div id="import-config-archive-panel" class="import-config-panel" style="display:none">
+      <div class="modal-grid">
+        <div class="modal-field">
+          <label for="import-config-archive">Backtest Archive</label>
+          <select id="import-config-archive">
+            <option value="">Choose archive</option>
+          </select>
+        </div>
+        <div class="modal-field">
+          <label for="import-config-archive-config">Archived config</label>
+          <select id="import-config-archive-config">
+            <option value="">Choose config</option>
+          </select>
+        </div>
+      </div>
+      <div id="import-config-archive-meta" class="import-config-archive-meta">Choose Backtest Archive to load stored Optimize configs.</div>
+      <div class="modal-actions">
+        <button class="btn ghost" id="btn-import-config-archive-refresh" type="button">Refresh Archives</button>
+      </div>
+    </div>
+    <div id="import-config-status" class="editor-status">Paste JSON or choose a .json file.</div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="btn-import-config-cancel">Cancel</button>
+      <button class="btn primary" id="btn-import-config-open">Import to Editor</button>
     </div>
   </div>
 </section>
@@ -2502,6 +2585,12 @@ var state = {
   editorDraftName: '',
   editorBackendHint: '',
   editorLastConfig: null,
+  importConfigSource: 'local',
+  importArchives: [],
+  importArchiveConfigs: [],
+  importArchiveName: '',
+  importArchivesLoaded: false,
+  importArchivesLoading: false,
   limitsMeta: null,
   optimizeBounds: [],
   optimizeFixedParams: [],
@@ -9984,6 +10073,7 @@ function closeAllModals() {
   stopActivePlotSession();
   el('modal-backdrop').classList.remove('open');
   el('editor-modal').classList.remove('open');
+  el('import-config-modal').classList.remove('open');
   el('json-modal').classList.remove('open');
   el('settings-modal').classList.remove('open');
   el('queue-config-choice-modal').classList.remove('open');
@@ -10032,6 +10122,277 @@ async function openNewConfig() {
 async function openConfigEditor(name) {
   var data = await apiFetch('/configs/' + encodeURIComponent(name));
   openEditorWithConfig(data, name, name);
+}
+
+function normalizeOptimizeImportName(value) {
+  var raw = String(value == null ? '' : value).trim().replace(/\.json$/i, '');
+  var cleaned = raw.replace(/[\\/\x00]+/g, '_').replace(/\s+/g, '_').replace(/^[._]+|[._]+$/g, '').trim();
+  return cleaned || '';
+}
+
+function suggestOptimizeImportName(config, fileName) {
+  var fromFile = normalizeOptimizeImportName(String(fileName || '').split(/[\\/]/).pop() || '');
+  if (fromFile) return fromFile;
+  var backtest = config && typeof config === 'object' && !Array.isArray(config) ? config.backtest : null;
+  var baseDir = backtest && typeof backtest === 'object' ? String(backtest.base_dir || '') : '';
+  var fromBaseDir = normalizeOptimizeImportName(baseDir.split(/[\\/]/).filter(Boolean).pop() || '');
+  if (fromBaseDir) return fromBaseDir;
+  var live = config && typeof config === 'object' && !Array.isArray(config) ? config.live : null;
+  var fromUser = live && typeof live === 'object' ? normalizeOptimizeImportName(live.user || '') : '';
+  return fromUser || 'imported_optimize';
+}
+
+function setImportConfigStatus(message, kind) {
+  var node = el('import-config-status');
+  node.textContent = message || '';
+  node.className = 'editor-status' + (kind ? ' ' + kind : '');
+}
+
+function suggestArchiveOptimizeImportName(item) {
+  if (!item || typeof item !== 'object') return '';
+  var fromName = normalizeOptimizeImportName(item.name || '');
+  if (fromName) return fromName;
+  var path = String(item.relative_path || item.path || '');
+  return normalizeOptimizeImportName(path.split(/[\\/]/).pop() || '');
+}
+
+function importArchiveConfigLabel(item) {
+  var name = item && item.name ? String(item.name) : 'Unnamed config';
+  var rel = item && item.relative_path ? String(item.relative_path) : '';
+  return rel && rel !== name ? name + ' - ' + rel : name;
+}
+
+function renderImportArchiveSelect() {
+  var select = el('import-config-archive');
+  if (!select) return;
+  if (!state.importArchives.length) {
+    state.importArchiveName = '';
+    select.innerHTML = '<option value="">No Backtest Archives configured</option>';
+    return;
+  }
+  var existing = state.importArchives.some(function(archive) { return archive.name === state.importArchiveName; });
+  if (!existing) {
+    var withConfigs = state.importArchives.find(function(archive) { return Number(archive.optimize_configs || 0) > 0; });
+    state.importArchiveName = ((withConfigs || state.importArchives[0] || {}).name || '');
+  }
+  select.innerHTML = state.importArchives.map(function(archive) {
+    var count = Number(archive.optimize_configs || 0);
+    var label = archive.name + (count ? ' (' + count + ' Optimize configs)' : '');
+    return '<option value="' + escAttr(archive.name) + '">' + esc(label) + '</option>';
+  }).join('');
+  select.value = state.importArchiveName;
+}
+
+function setImportArchiveConfigPlaceholder(message) {
+  var select = el('import-config-archive-config');
+  var meta = el('import-config-archive-meta');
+  if (select) select.innerHTML = '<option value="">' + esc(message) + '</option>';
+  if (meta) meta.textContent = message;
+}
+
+function renderImportArchiveConfigSelect() {
+  var select = el('import-config-archive-config');
+  var meta = el('import-config-archive-meta');
+  if (!select) return;
+  if (!state.importArchiveConfigs.length) {
+    setImportArchiveConfigPlaceholder('Selected archive has no stored Optimize configs.');
+    return;
+  }
+  select.innerHTML = state.importArchiveConfigs.map(function(item) {
+    var path = String(item.path || '');
+    return '<option value="' + escAttr(path) + '">' + esc(importArchiveConfigLabel(item)) + '</option>';
+  }).join('');
+  if (meta) {
+    meta.textContent = state.importArchiveConfigs.length + ' archived Optimize config' + (state.importArchiveConfigs.length === 1 ? '' : 's') + ' available.';
+  }
+}
+
+function selectedImportArchiveConfig() {
+  var selectedPath = (el('import-config-archive-config') || {}).value || '';
+  if (!selectedPath) return null;
+  return state.importArchiveConfigs.find(function(item) { return String(item.path || '') === selectedPath; }) || null;
+}
+
+function setImportArchiveConfigNameFromSelection() {
+  var item = selectedImportArchiveConfig();
+  if (!item) return;
+  el('import-config-name').value = suggestArchiveOptimizeImportName(item);
+}
+
+async function loadImportArchiveConfigs(archiveName) {
+  archiveName = String(archiveName || '').trim();
+  state.importArchiveName = archiveName;
+  state.importArchiveConfigs = [];
+  if (!archiveName) {
+    setImportArchiveConfigPlaceholder('Choose Backtest Archive to load stored Optimize configs.');
+    return;
+  }
+  setImportArchiveConfigPlaceholder('Loading archived Optimize configs...');
+  setImportConfigStatus('Loading archived Optimize configs...', '');
+  var data = await authFetch(archiveApiBase() + '/archives/' + encodeURIComponent(archiveName) + '/optimize-configs');
+  state.importArchiveConfigs = (Array.isArray(data.configs) ? data.configs : []).sort(function(a, b) {
+    return importArchiveConfigLabel(a).localeCompare(importArchiveConfigLabel(b));
+  });
+  renderImportArchiveConfigSelect();
+  setImportArchiveConfigNameFromSelection();
+  if (state.importArchiveConfigs.length) {
+    setImportConfigStatus('Choose an archived config, then import it to the editor.', 'ok');
+  } else {
+    setImportConfigStatus('Selected archive has no stored Optimize configs.', 'err');
+  }
+}
+
+async function loadImportArchives(force) {
+  if (state.importArchivesLoading) return;
+  if (state.importArchivesLoaded && !force) return;
+  state.importArchivesLoading = true;
+  try {
+    setImportConfigStatus('Loading Backtest Archives...', '');
+    setImportArchiveConfigPlaceholder('Loading Backtest Archives...');
+    var data = await authFetch(archiveApiBase() + '/archives');
+    state.importArchives = Array.isArray(data.archives) ? data.archives : [];
+    state.importArchivesLoaded = true;
+    renderImportArchiveSelect();
+    if (!state.importArchives.length) {
+      setImportArchiveConfigPlaceholder('No Backtest Archives configured.');
+      setImportConfigStatus('No Backtest Archives configured.', 'err');
+      return;
+    }
+    await loadImportArchiveConfigs(state.importArchiveName);
+  } catch (error) {
+    setImportConfigStatus(error && error.message ? error.message : 'Could not load Backtest Archives.', 'err');
+    setImportArchiveConfigPlaceholder('Could not load Backtest Archives.');
+  } finally {
+    state.importArchivesLoading = false;
+  }
+}
+
+function setImportConfigSource(source) {
+  var archiveSource = source === 'archive';
+  state.importConfigSource = archiveSource ? 'archive' : 'local';
+  var localBtn = el('import-config-source-local');
+  var archiveBtn = el('import-config-source-archive');
+  localBtn.className = archiveSource ? 'btn ghost' : 'btn primary';
+  archiveBtn.className = archiveSource ? 'btn primary' : 'btn ghost';
+  localBtn.setAttribute('aria-pressed', archiveSource ? 'false' : 'true');
+  archiveBtn.setAttribute('aria-pressed', archiveSource ? 'true' : 'false');
+  el('import-config-local-panel').style.display = archiveSource ? 'none' : '';
+  el('import-config-archive-panel').style.display = archiveSource ? '' : 'none';
+  el('btn-import-config-open').textContent = archiveSource ? 'Import Archive Config to Editor' : 'Import to Editor';
+  if (archiveSource) {
+    if (!state.importArchivesLoaded) {
+      loadImportArchives(false).catch(function(error) {
+        setImportConfigStatus(error && error.message ? error.message : 'Could not load Backtest Archives.', 'err');
+      });
+    } else if (state.importArchiveConfigs.length) {
+      setImportConfigStatus('Choose an archived config, then import it to the editor.', 'ok');
+    } else {
+      setImportConfigStatus('Choose Backtest Archive to load stored Optimize configs.', '');
+    }
+  } else {
+    setImportConfigStatus('Paste JSON or choose a .json file.', '');
+  }
+}
+
+function parseImportConfigJson() {
+  var raw = el('import-config-json').value || '';
+  var validation = validateJsonText(raw, {
+    expectObject: true,
+    emptyMessage: 'Import JSON cannot be empty'
+  });
+  if (validation.error || !validation.parsed) {
+    throw new Error(validation.error && validation.error.message ? validation.error.message : 'Invalid JSON');
+  }
+  return validation.parsed;
+}
+
+function openImportConfigModal() {
+  el('import-config-file').value = '';
+  el('import-config-name').value = '';
+  el('import-config-json').value = '';
+  setImportConfigSource('local');
+  openBackdrop();
+  el('import-config-modal').classList.add('open');
+  el('import-config-json').focus();
+}
+
+async function handleImportConfigFileChange(event) {
+  var file = event && event.target && event.target.files ? event.target.files[0] : null;
+  if (!file) return;
+  try {
+    var text = await file.text();
+    el('import-config-json').value = text;
+    var parsed = parseImportConfigJson();
+    el('import-config-name').value = suggestOptimizeImportName(parsed, file.name || '');
+    setImportConfigStatus('Loaded ' + (file.name || 'JSON file') + '.', 'ok');
+  } catch (error) {
+    setImportConfigStatus(error && error.message ? error.message : 'Could not read selected file.', 'err');
+  }
+}
+
+async function importArchiveOptimizeConfigDraft() {
+  var archiveName = String((el('import-config-archive') || {}).value || '').trim();
+  var item = selectedImportArchiveConfig();
+  if (!archiveName) {
+    setImportConfigStatus('Choose a Backtest Archive first.', 'err');
+    return;
+  }
+  if (!item || !item.path) {
+    setImportConfigStatus('Choose an archived Optimize config first.', 'err');
+    return;
+  }
+  try {
+    setImportConfigStatus('Loading archived config...', '');
+    var archivedConfig = await authFetch(archiveApiBase() + '/archives/' + encodeURIComponent(archiveName) + '/optimize-configs/config?path=' + encodeURIComponent(item.path));
+    var suggestedName = normalizeOptimizeImportName(el('import-config-name').value)
+      || suggestArchiveOptimizeImportName(item)
+      || suggestOptimizeImportName(archivedConfig, item.name || item.relative_path || item.path || '');
+    setImportConfigStatus('Preparing archived config...', '');
+    var prepared = await apiFetch('/configs/prepare', {
+      method: 'POST',
+      body: JSON.stringify({ config: archivedConfig })
+    });
+    closeAllModals();
+    openEditorWithConfig(prepared, suggestedName, '');
+    setPageEditorStatus('Imported archived config draft. Review it, then Save or Save & Queue.', 'ok');
+    toast('Archived config imported into editor draft.', 'ok');
+  } catch (error) {
+    setImportConfigStatus(error && error.message ? error.message : 'Archive import failed.', 'err');
+  }
+}
+
+async function importOptimizeConfigDraft() {
+  if (state.importConfigSource === 'archive') {
+    await importArchiveOptimizeConfigDraft();
+    return;
+  }
+
+  var parsed;
+  try {
+    parsed = parseImportConfigJson();
+  } catch (error) {
+    setImportConfigStatus(error && error.message ? error.message : 'Invalid JSON', 'err');
+    return;
+  }
+
+  var fileNode = el('import-config-file');
+  var file = fileNode && fileNode.files ? fileNode.files[0] : null;
+  var suggestedName = normalizeOptimizeImportName(el('import-config-name').value)
+    || suggestOptimizeImportName(parsed, file ? file.name : '');
+
+  try {
+    setImportConfigStatus('Preparing imported config...', '');
+    var prepared = await apiFetch('/configs/prepare', {
+      method: 'POST',
+      body: JSON.stringify({ config: parsed })
+    });
+    closeAllModals();
+    openEditorWithConfig(prepared, suggestedName, '');
+    setPageEditorStatus('Imported config draft. Review it, then Save or Save & Queue.', 'ok');
+    toast('Config imported into editor draft.', 'ok');
+  } catch (error) {
+    setImportConfigStatus(error && error.message ? error.message : 'Import failed.', 'err');
+  }
 }
 
 function queueConfigChoiceCandidates(detail) {
@@ -10931,6 +11292,32 @@ function attachEventHandlers() {
   });
   el('btn-new-config').addEventListener('click', function() {
     openNewConfig().catch(handleError);
+  });
+  el('btn-import-config').addEventListener('click', openImportConfigModal);
+  el('import-config-source-local').addEventListener('click', function() {
+    setImportConfigSource('local');
+  });
+  el('import-config-source-archive').addEventListener('click', function() {
+    setImportConfigSource('archive');
+  });
+  el('btn-close-import-config').addEventListener('click', closeAllModals);
+  el('btn-import-config-cancel').addEventListener('click', closeAllModals);
+  el('btn-import-config-open').addEventListener('click', function() {
+    importOptimizeConfigDraft().catch(handleError);
+  });
+  el('import-config-file').addEventListener('change', function(event) {
+    handleImportConfigFileChange(event).catch(handleError);
+  });
+  el('import-config-archive').addEventListener('change', function(event) {
+    loadImportArchiveConfigs(event.target.value).catch(function(error) {
+      setImportConfigStatus(error && error.message ? error.message : 'Could not load archived configs.', 'err');
+    });
+  });
+  el('import-config-archive-config').addEventListener('change', setImportArchiveConfigNameFromSelection);
+  el('btn-import-config-archive-refresh').addEventListener('click', function() {
+    loadImportArchives(true).catch(function(error) {
+      setImportConfigStatus(error && error.message ? error.message : 'Could not refresh Backtest Archives.', 'err');
+    });
   });
   el('config-search').addEventListener('input', function(event) {
     state.configSearch = event.target.value || '';

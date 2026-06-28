@@ -140,6 +140,19 @@ Die Inventory-Tabelle verwendet jetzt außerdem dasselbe Maus-Selektionsverhalte
 
 Zusätzlich sind die Spaltenköpfe der Inventory-Tabelle jetzt sortierbar. Ein Klick auf einen Header schaltet für die aktuell sichtbaren Zeilen in dieser Dataset-Ansicht zwischen aufsteigender und absteigender Reihenfolge um.
 
+## Copy Data
+
+Mit **Copy Data** kopierst du lokale OHLCV-Dateien aus diesem PBGui-`data/ohlcv`-Baum per SSH/`rsync` auf einen anderen PBGui-Host.
+
+- **SSH command without target** — der SSH-Befehl, den rsync als Remote-Shell verwendet. Das finale Ziel gehört nicht in dieses Feld. Beispiele: `ssh`, `ssh -p 2222`, `ssh -J user@jump-host`, `ssh -J user@jump-host -p 2222`.
+- **Remote target** — das finale SSH-Ziel für rsync, z. B. `user@target-host`, `target-host`, `localhost` bei einem Reverse-Tunnel oder ein SSH-Config-Alias.
+- **Destination data/ohlcv root** — absoluter `data/ohlcv`-Root auf dem Zielhost. Leer lassen, wenn der Ziel-PBGui denselben Pfad wie diese Maschine nutzt.
+- **Copy mode** — `Missing files only` nutzt `--ignore-existing`; `Update changed files` erlaubt rsync, geänderte Dateien zu ersetzen. Beide Modi verwenden kein `--delete`.
+
+Nutze zuerst **Test connection** für einen read-only SSH- und Zielpfad-Check. Dabei werden keine Verzeichnisse angelegt und keine Dateien kopiert.
+
+Nutze **Dry run** vor dem echten Kopieren, wenn du den exakten Zielpfad und die geschätzte rsync-Übertragung prüfen willst. Der Dry Run reiht einen Background-Job mit `--dry-run --stats --itemize-changes` ein, überspringt remote `mkdir`, schreibt keine Dateien und protokolliert die rsync-Statistik pro Exchange im eingebetteten Copy Job Monitor.
+
 ## Settings (Latest 1m Auto-Refresh) — Hyperliquid
 
 Steuert den automatischen 1m-Candle-Refresh-Loop für Hyperliquid-Symbole.

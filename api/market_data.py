@@ -2,10 +2,11 @@
 
 from datetime import date as _date, datetime as _datetime
 import shutil
+import shlex
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 import json
 from urllib.parse import urlencode
@@ -57,12 +58,14 @@ from market_data_sources import SOURCE_CODE_API, remove_days_from_index, update_
 from pbgui_purefunc import coin_from_symbol_code
 from pbgui_purefunc import load_ini, save_ini
 from tradfi_sync import auto_map_tradfi, fetch_tiingo_meta, fetch_xyz_spec
+from logging_helpers import human_log as _log
 
 from .auth import require_auth, SessionToken
 from .heatmap import _get_missing_lag_minutes
 
 router = APIRouter(prefix="/market-data", tags=["market-data"])
 _market_data_status_snapshot: dict[str, Any] = {}
+SERVICE = "MarketDataAPI"
 
 PBGDIR = Path(__file__).resolve().parent.parent
 SETTINGS_EXCHANGES: dict[str, dict[str, Any]] = {
@@ -76,7 +79,7 @@ SETTINGS_EXCHANGES: dict[str, dict[str, Any]] = {
             "min_lookback_days": 2,
             "max_lookback_days": 4,
         },
-        "save_message": "Settings saved. Enabled coins and auto-refresh settings are applied automatically in the next refresh cycle.",
+        "save_message": "Settings saved. Refresh queued; cycle will start within seconds.",
     },
     "binance": {
         "label": "Binance USDM",
@@ -88,7 +91,7 @@ SETTINGS_EXCHANGES: dict[str, dict[str, Any]] = {
             "min_lookback_days": 2,
             "max_lookback_days": 7,
         },
-        "save_message": "Settings saved. Applied automatically in the next Binance refresh cycle.",
+        "save_message": "Settings saved. Binance refresh queued; cycle will start within seconds.",
     },
     "bybit": {
         "label": "Bybit",
@@ -100,7 +103,7 @@ SETTINGS_EXCHANGES: dict[str, dict[str, Any]] = {
             "min_lookback_days": 2,
             "max_lookback_days": 7,
         },
-        "save_message": "Settings saved. Applied automatically in the next Bybit refresh cycle.",
+        "save_message": "Settings saved. Bybit refresh queued; cycle will start within seconds.",
     },
     "okx": {
         "label": "OKX",
@@ -112,7 +115,7 @@ SETTINGS_EXCHANGES: dict[str, dict[str, Any]] = {
             "min_lookback_days": 2,
             "max_lookback_days": 7,
         },
-        "save_message": "Settings saved. Applied automatically in the next OKX refresh cycle.",
+        "save_message": "Settings saved. OKX refresh queued; cycle will start within seconds.",
     },
 }
 
@@ -325,6 +328,11 @@ def _save_market_data_settings(exchange: str, request: dict[str, Any]) -> dict[s
         save_ini("market_data", "l2book_archive_enabled", "true" if bool(settings.get("l2book_archive_enabled")) else "false")
         save_ini("market_data", "l2book_archive_dir", str(settings.get("l2book_archive_dir") or "").strip())
         save_ini("tradfi_profiles", "tiingo_api_key", str(settings.get("tiingo_api_key") or "").strip())
+
+    try:
+        _touch_exchange_refresh_flag(ex)
+    except Exception as exc:
+        _log(SERVICE, f"Failed to queue {ex} latest 1m refresh after settings save: {exc}", level="WARNING")
 
     return _build_market_data_settings_payload(ex)
 
@@ -698,6 +706,16 @@ def _get_exchange_flag_prefix(exchange: str) -> str:
     return ""
 
 
+def _touch_exchange_refresh_flag(exchange: str) -> None:
+    """Wake the PBData latest-1m loop for an exchange."""
+    flag_prefix = _get_exchange_flag_prefix(exchange)
+    if not flag_prefix:
+        return
+    flag_path = PBGDIR / "data" / "logs" / f"{flag_prefix}_run_now.flag"
+    flag_path.parent.mkdir(parents=True, exist_ok=True)
+    flag_path.touch()
+
+
 def _render_market_data_status_html(request: Request, token: str, exchange: str) -> str:
     exchange_param = str(exchange or "").strip().lower()
     html_path = PBGDIR / "frontend" / "market_data_status.html"
@@ -792,6 +810,20 @@ BEST_1M_EXCHANGES: dict[str, dict[str, str]] = {
     },
 }
 
+COPY_DATA_EXCHANGES: dict[str, dict[str, str]] = {
+    "binance": {"label": "Binance USDM", "storage": "binanceusdm"},
+    "bybit": {"label": "Bybit", "storage": "bybit"},
+    "okx": {"label": "OKX", "storage": "okx"},
+    "hyperliquid": {"label": "Hyperliquid", "storage": "hyperliquid"},
+}
+
+COPY_DATA_MODES: dict[str, str] = {
+    "missing_only": "Missing files only",
+    "update": "Update changed files",
+}
+COPY_DATA_TARGET_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-@")
+COPY_DATA_REMOTE_PATH_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-")
+
 
 def _best_1m_exchange_meta(exchange: str) -> dict[str, str] | None:
     return BEST_1M_EXCHANGES.get(_normalize_settings_exchange(exchange))
@@ -806,6 +838,293 @@ def _get_best_1m_available_coins(exchange: str) -> list[str]:
 def _normalize_best_1m_request_coin(coin: str) -> str:
     normalized = coin_from_symbol_code(str(coin or "").strip())
     return str(normalized or "").strip().upper()
+
+
+def _normalize_copy_data_exchange(exchange: str) -> str:
+    """Return the supported Copy Data exchange key for a request value."""
+
+    ex = _normalize_settings_exchange(exchange)
+    if ex == "binanceusdm":
+        ex = "binance"
+    return ex
+
+
+def _normalize_copy_data_exchanges(raw_exchanges: Any) -> list[str]:
+    """Validate and de-duplicate Copy Data exchange selections."""
+
+    if not isinstance(raw_exchanges, list):
+        raw_exchanges = []
+    exchanges: list[str] = []
+    for value in raw_exchanges:
+        ex = _normalize_copy_data_exchange(str(value or ""))
+        if not ex:
+            continue
+        if ex not in COPY_DATA_EXCHANGES:
+            raise ValueError(f"Unsupported exchange for Copy Data: {value}")
+        if ex not in exchanges:
+            exchanges.append(ex)
+    if not exchanges:
+        raise ValueError("Select at least one exchange to copy.")
+    return exchanges
+
+
+def _normalize_copy_data_target(target: Any) -> str:
+    """Validate the remote rsync target host."""
+
+    text = str(target or "").strip()
+    if not text:
+        raise ValueError("Remote target is required.")
+    if any(ch.isspace() for ch in text) or any(ch in text for ch in ("/", "\\", "\x00", ":")):
+        raise ValueError("Remote target must be a host or user@host without spaces, slashes, or a path.")
+    if any(ch not in COPY_DATA_TARGET_CHARS for ch in text):
+        raise ValueError("Remote target contains unsupported characters.")
+    if text in (".", ".."):
+        raise ValueError("Remote target is invalid.")
+    return text
+
+
+def _normalize_copy_data_destination_root(destination_root: Any) -> str:
+    """Validate the target-side absolute data/ohlcv root path."""
+
+    text = str(destination_root or "").strip()
+    if not text:
+        text = str((PBGDIR / "data" / "ohlcv").resolve())
+    if "\x00" in text or "\n" in text or "\r" in text or any(ch.isspace() for ch in text):
+        raise ValueError("Destination root must not contain whitespace or control characters.")
+    if not text.startswith("/"):
+        raise ValueError("Destination root must be an absolute path on the target host.")
+    if any(ch not in COPY_DATA_REMOTE_PATH_CHARS for ch in text):
+        raise ValueError("Destination root contains unsupported characters.")
+    return text.rstrip("/") or "/"
+
+
+def _parse_copy_data_ssh_command(ssh_command: Any) -> list[str]:
+    """Parse and validate the SSH command used as rsync's remote shell."""
+
+    text = str(ssh_command or "").strip() or "ssh"
+    try:
+        parts = shlex.split(text)
+    except ValueError as exc:
+        raise ValueError(f"Invalid SSH command: {exc}") from exc
+    if not parts:
+        parts = ["ssh"]
+    if Path(parts[0]).name != "ssh":
+        raise ValueError("SSH command must start with ssh.")
+    return parts
+
+
+def _build_copy_data_queue_payload(request: dict[str, Any]) -> dict[str, Any]:
+    """Build the sanitized task-queue payload for an OHLCV copy job."""
+
+    payload = _build_copy_data_test_payload(request)
+    mode = str(request.get("mode") or "missing_only").strip().lower()
+    if mode not in COPY_DATA_MODES:
+        raise ValueError("Invalid copy mode.")
+
+    exchanges = _normalize_copy_data_exchanges(request.get("exchanges"))
+    payload.update(
+        {
+            "exchanges": exchanges,
+            "exchange_storage": {ex: COPY_DATA_EXCHANGES[ex]["storage"] for ex in exchanges},
+            "mode": mode,
+        }
+    )
+    return payload
+
+
+def _queue_copy_data_job_response(request: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    """Queue a Copy Data job and start the worker when needed."""
+
+    import subprocess
+    import sys
+
+    from market_data import append_exchange_download_log
+    from task_queue import enqueue_running_job, move_job_file, update_job_file
+
+    try:
+        payload = _build_copy_data_queue_payload(request)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+
+    dry_run = bool(dry_run)
+    if dry_run:
+        payload["dry_run"] = True
+
+    exchanges = list(payload.get("exchanges") or [])
+    labels = [COPY_DATA_EXCHANGES[ex]["label"] for ex in exchanges if ex in COPY_DATA_EXCHANGES]
+    job_type = "ohlcv_copy_dry_run" if dry_run else "ohlcv_copy"
+    action_label = "dry run" if dry_run else "copy"
+    try:
+        job = enqueue_running_job(
+            job_type=job_type,
+            exchange="ohlcv",
+            payload=payload,
+            manual_parallel=True,
+        )
+    except Exception as exc:
+        return {"success": False, "error": f"Failed to enqueue OHLCV {action_label} job: {exc}"}
+
+    append_exchange_download_log(
+        "ohlcv",
+        f"[{job_type}] queued job_id={job.job_id} target={payload['target']} exchanges={','.join(exchanges)} mode={payload['mode']}",
+    )
+
+    worker_started = False
+    runner_started = False
+    job_path = Path(job.path)
+    try:
+        subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py"), "--run-job", str(job_path)],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            start_new_session=True,
+        )
+        runner_started = True
+    except Exception as exc:
+        try:
+            update_job_file(job_path, mutate=lambda o: o.update({"status": "failed", "error": f"Failed to launch {action_label} worker: {exc}"}))
+            move_job_file(job_path, "failed")
+        except Exception:
+            pass
+        return {"success": False, "error": f"Failed to launch {action_label} worker: {exc}"}
+
+    return {
+        "success": True,
+        "job_id": job.job_id,
+        "job_type": job_type,
+        "dry_run": dry_run,
+        "target": payload["target"],
+        "destination_root": payload["destination_root"],
+        "exchanges": exchanges,
+        "mode": payload["mode"],
+        "worker_started": worker_started,
+        "runner_started": runner_started,
+        "message": (
+            f"Queued OHLCV copy {'dry run ' if dry_run else ''}job {job.job_id} for {', '.join(labels) or len(exchanges)} "
+            f"to {payload['target']}:{payload['destination_root']}."
+        ),
+    }
+
+
+def _build_copy_data_test_payload(request: dict[str, Any]) -> dict[str, Any]:
+    """Build the sanitized payload for a read-only Copy Data connection test."""
+
+    if not isinstance(request, dict):
+        raise ValueError("Invalid request payload.")
+
+    target = _normalize_copy_data_target(request.get("target"))
+    destination_root = _normalize_copy_data_destination_root(request.get("destination_root"))
+    ssh_args = _parse_copy_data_ssh_command(request.get("ssh_command"))
+    if len(ssh_args) > 1 and ssh_args[-1] == target:
+        raise ValueError("SSH command must not include the target host. Put it only in Remote target.")
+
+    return {
+        "target": target,
+        "destination_root": destination_root,
+        "ssh_command": shlex.join(ssh_args),
+    }
+
+
+def _build_copy_data_ssh_test_command(payload: dict[str, Any], remote_args: list[str]) -> list[str]:
+    """Build one read-only SSH probe command from a sanitized Copy Data payload."""
+
+    ssh_args = _parse_copy_data_ssh_command(payload.get("ssh_command"))
+    target = _normalize_copy_data_target(payload.get("target"))
+    return list(ssh_args) + [target] + [str(part) for part in remote_args]
+
+
+def _copy_data_remote_parent(path: str) -> str:
+    """Return the POSIX parent path for a remote destination root."""
+
+    parent = PurePosixPath(str(path or "/")).parent
+    return str(parent) or "/"
+
+
+def _run_copy_data_ssh_probe(cmd: list[str], *, timeout_s: float = 12.0) -> dict[str, Any]:
+    """Run one read-only SSH probe command with a short timeout."""
+
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=float(timeout_s),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "returncode": 124, "error": "SSH probe timed out."}
+    except Exception as exc:
+        return {"ok": False, "returncode": 1, "error": str(exc)}
+
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    return {
+        "ok": proc.returncode == 0,
+        "returncode": int(proc.returncode),
+        "stdout": stdout,
+        "stderr": stderr,
+        "error": stderr or stdout or f"SSH probe failed with exit code {proc.returncode}.",
+    }
+
+
+def _test_copy_data_connection_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Run read-only SSH checks for Copy Data target and destination path."""
+
+    target = str(payload.get("target") or "").strip()
+    destination_root = _normalize_copy_data_destination_root(payload.get("destination_root"))
+    parent_root = _copy_data_remote_parent(destination_root)
+
+    ping = _run_copy_data_ssh_probe(_build_copy_data_ssh_test_command(payload, ["printf", "PBGUI_COPY_TEST_OK"]))
+    if not ping.get("ok"):
+        return {
+            "success": False,
+            "target": target,
+            "destination_root": destination_root,
+            "message": "SSH connection test failed.",
+            "detail": str(ping.get("error") or "SSH probe failed."),
+            "checks": {"ssh": ping},
+        }
+
+    root_exists = _run_copy_data_ssh_probe(_build_copy_data_ssh_test_command(payload, ["test", "-d", destination_root]))
+    root_writable = {"ok": False, "returncode": 1, "error": "Destination root does not exist."}
+    parent_exists = {"ok": False, "returncode": 1, "error": "Not checked."}
+    parent_writable = {"ok": False, "returncode": 1, "error": "Not checked."}
+
+    if root_exists.get("ok"):
+        root_writable = _run_copy_data_ssh_probe(_build_copy_data_ssh_test_command(payload, ["test", "-w", destination_root]))
+        success = bool(root_writable.get("ok"))
+        message = "SSH OK. Destination root exists and is writable." if success else "SSH OK, but destination root is not writable."
+    else:
+        parent_exists = _run_copy_data_ssh_probe(_build_copy_data_ssh_test_command(payload, ["test", "-d", parent_root]))
+        if parent_exists.get("ok"):
+            parent_writable = _run_copy_data_ssh_probe(_build_copy_data_ssh_test_command(payload, ["test", "-w", parent_root]))
+        success = bool(parent_writable.get("ok"))
+        message = (
+            "SSH OK. Destination root does not exist yet, but its parent is writable so the copy job can create it."
+            if success
+            else "SSH OK, but destination root is missing and its parent is not writable."
+        )
+
+    return {
+        "success": success,
+        "target": target,
+        "destination_root": destination_root,
+        "destination_parent": parent_root,
+        "message": message,
+        "checks": {
+            "ssh": ping,
+            "root_exists": root_exists,
+            "root_writable": root_writable,
+            "parent_exists": parent_exists,
+            "parent_writable": parent_writable,
+        },
+    }
 
 
 INVENTORY_VIEW_META: dict[str, dict[str, Any]] = {
@@ -2335,6 +2654,45 @@ def queue_best_1m_job(
             "Use Activity Log or Jobs to watch progress."
         ),
     }
+
+
+@router.post("/copy-data/queue")
+def queue_copy_data_job(
+    request: dict,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Queue an rsync-based local OHLCV copy job for the task worker."""
+
+    return _queue_copy_data_job_response(request, dry_run=False)
+
+
+@router.post("/copy-data/dry-run/queue")
+def queue_copy_data_dry_run_job(
+    request: dict,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Queue a dry-run rsync OHLCV copy job that writes nothing remotely."""
+
+    return _queue_copy_data_job_response(request, dry_run=True)
+
+
+@router.post("/copy-data/test")
+def test_copy_data_connection(
+    request: dict,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Run a read-only SSH and destination-path check for Copy Data."""
+
+    try:
+        payload = _build_copy_data_test_payload(request)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+
+    try:
+        result = _test_copy_data_connection_payload(payload)
+    except Exception as exc:
+        return {"success": False, "error": f"Connection test failed: {exc}"}
+    return result
 
 
 @router.get("/inventory/chart/ohlcv", response_class=HTMLResponse)

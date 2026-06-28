@@ -3,7 +3,7 @@
 ## Before Finishing ANY Task
 
 1. **Changelog** — Add entry to `releases/unreleased.md`. Never skip.
-2. **serial.txt** — If any file under `api/`, `PBApiServer.py`, or a module imported at API startup changed: increment `api/serial.txt` by 1.
+2. **serial.txt** — If any file under `api/`, `PBApiServer.py`, or a module imported at API startup changed: increment `api/serial.txt` by 1 before finishing. This is mandatory for every final change set that touches API startup/runtime code so the UI can show the restart-required button. If you make more API/startup edits after an earlier serial bump in the same session, bump `api/serial.txt` again. Never tell the user to restart first because you forgot this bump.
 3. **Commit** — Always ask before committing or pushing. Never commit without explicit user confirmation.
 
 ## Project Architecture

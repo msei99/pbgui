@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import signal
+import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -28,6 +31,7 @@ from okx_best_1m import (
 )
 from market_data import (
     append_exchange_download_log,
+    get_market_data_root_dir,
     load_aws_profile_credentials,
     load_aws_profile_region,
     normalize_market_data_coin_dir,
@@ -50,6 +54,24 @@ from inventory_cache import refresh_coin as _refresh_inventory_coin, sweep_cache
 
 _STOP = False
 OKX_BEST_1M_PIPELINE_WORKERS = 2
+OHLCV_COPY_EXCHANGES: dict[str, dict[str, str]] = {
+    "binance": {"label": "Binance USDM", "storage": "binanceusdm"},
+    "binanceusdm": {"label": "Binance USDM", "storage": "binanceusdm"},
+    "bybit": {"label": "Bybit", "storage": "bybit"},
+    "okx": {"label": "OKX", "storage": "okx"},
+    "hyperliquid": {"label": "Hyperliquid", "storage": "hyperliquid"},
+}
+OHLCV_COPY_MODES = {"missing_only", "update"}
+OHLCV_COPY_TARGET_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-@")
+OHLCV_COPY_REMOTE_PATH_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-")
+OHLCV_COPY_RSYNC_STAT_LABELS = (
+    "Number of files",
+    "Number of regular files transferred",
+    "Total file size",
+    "Total transferred file size",
+    "Total bytes sent",
+    "Total bytes received",
+)
 
 
 def _handle_stop(signum, frame):
@@ -246,6 +268,10 @@ def _run_job(job_path: Path) -> None:
             _run_bybit_best_1m(job_path, payload)
         elif jtype == "okx_best_1m":
             _run_okx_best_1m(job_path, payload)
+        elif jtype == "ohlcv_copy":
+            _run_ohlcv_copy(job_path, payload)
+        elif jtype == "ohlcv_copy_dry_run":
+            _run_ohlcv_copy(job_path, payload, dry_run=True)
         else:
             raise RuntimeError(f"Unknown job type: {jtype}")
 
@@ -365,6 +391,472 @@ def run_single_job_file(job_path_str: str) -> int:
     signal.signal(signal.SIGINT, _handle_stop)
     _run_job(job_path)
     return 0
+
+
+def _normalize_ohlcv_copy_exchange(exchange: Any) -> str:
+    """Return the supported copy exchange key for a request value."""
+
+    ex = str(exchange or "").strip().lower().replace("-", "")
+    if ex == "binanceusdm":
+        return "binance"
+    return ex
+
+
+def _normalize_ohlcv_copy_exchanges(raw_exchanges: Any) -> list[str]:
+    """Validate and de-duplicate requested OHLCV copy exchanges."""
+
+    if not isinstance(raw_exchanges, list):
+        raw_exchanges = []
+    exchanges: list[str] = []
+    for raw_exchange in raw_exchanges:
+        ex = _normalize_ohlcv_copy_exchange(raw_exchange)
+        if not ex:
+            continue
+        if ex not in OHLCV_COPY_EXCHANGES:
+            raise ValueError(f"Unsupported exchange for OHLCV copy: {raw_exchange}")
+        if ex not in exchanges:
+            exchanges.append(ex)
+    if not exchanges:
+        raise ValueError("No exchanges selected for OHLCV copy")
+    return exchanges
+
+
+def _normalize_ohlcv_copy_target(target: Any) -> str:
+    """Validate the rsync remote target host field."""
+
+    text = str(target or "").strip()
+    if not text:
+        raise ValueError("Remote target is required")
+    if any(ch.isspace() for ch in text) or any(ch in text for ch in ("/", "\\", "\x00", ":")):
+        raise ValueError("Remote target must be a host or user@host without spaces, slashes, or a path")
+    if any(ch not in OHLCV_COPY_TARGET_CHARS for ch in text):
+        raise ValueError("Remote target contains unsupported characters")
+    if text in (".", ".."):
+        raise ValueError("Remote target is invalid")
+    return text
+
+
+def _normalize_ohlcv_copy_destination_root(destination_root: Any) -> str:
+    """Validate the absolute target-side data/ohlcv root path."""
+
+    text = str(destination_root or "").strip()
+    if not text:
+        text = str(get_market_data_root_dir())
+    if "\x00" in text or "\n" in text or "\r" in text or any(ch.isspace() for ch in text):
+        raise ValueError("Destination root must not contain whitespace or control characters")
+    if not text.startswith("/"):
+        raise ValueError("Destination root must be an absolute path on the target host")
+    if any(ch not in OHLCV_COPY_REMOTE_PATH_CHARS for ch in text):
+        raise ValueError("Destination root contains unsupported characters")
+    return text.rstrip("/") or "/"
+
+
+def _parse_ohlcv_copy_ssh_args(ssh_command: Any) -> list[str]:
+    """Parse the configured ssh command into argv for subprocess use."""
+
+    text = str(ssh_command or "").strip() or "ssh"
+    try:
+        parts = shlex.split(text)
+    except ValueError as exc:
+        raise ValueError(f"Invalid SSH command: {exc}") from exc
+    if not parts:
+        parts = ["ssh"]
+    if Path(parts[0]).name != "ssh":
+        raise ValueError("SSH command must start with ssh")
+    return parts
+
+
+def _remote_ohlcv_copy_dir(destination_root: str, storage_name: str) -> str:
+    """Build a POSIX target path for one exchange directory."""
+
+    root = str(destination_root or "").rstrip("/") or "/"
+    storage = str(storage_name or "").strip("/")
+    return f"/{storage}" if root == "/" else f"{root}/{storage}"
+
+
+def _build_ohlcv_copy_mkdir_command(*, target: str, ssh_args: list[str], remote_dir: str) -> list[str]:
+    """Build the remote mkdir command for one exchange copy."""
+
+    return list(ssh_args) + [str(target), "mkdir", "-p", str(remote_dir)]
+
+
+def _build_ohlcv_copy_rsync_command(
+    *,
+    source_dir: Path,
+    target: str,
+    destination_root: str,
+    storage_name: str,
+    ssh_args: list[str],
+    mode: str,
+    dry_run: bool = False,
+) -> list[str]:
+    """Build the rsync argv for one exchange copy without using a local shell."""
+
+    remote_dir = _remote_ohlcv_copy_dir(destination_root, storage_name)
+    cmd = [
+        "rsync",
+        "-a",
+        "--partial",
+        "--partial-dir=.rsync-partial",
+        "--delay-updates",
+        "--human-readable",
+        "--info=progress2,stats2",
+    ]
+    if dry_run:
+        cmd.extend(["--dry-run", "--stats", "--itemize-changes"])
+    if str(mode or "").strip().lower() == "missing_only":
+        cmd.append("--ignore-existing")
+    cmd.extend([
+        "-e",
+        shlex.join(list(ssh_args)),
+        f"{source_dir}/",
+        f"{target}:{remote_dir}/",
+    ])
+    return cmd
+
+
+def _terminate_ohlcv_copy_process(proc: subprocess.Popen[str]) -> None:
+    """Terminate a running copy subprocess and its process group."""
+
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except Exception:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=10)
+    except Exception:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+
+def _append_ohlcv_copy_output(job_id: str, raw_line: str) -> list[str]:
+    """Append cleaned subprocess output lines to the job log and return them."""
+
+    out: list[str] = []
+    for part in str(raw_line or "").replace("\r", "\n").splitlines():
+        text = part.strip()
+        if text:
+            out.append(text)
+            _append_to_job_log(job_id, f"    {text}")
+    return out
+
+
+def _is_ohlcv_copy_rsync_stat_line(line: str) -> bool:
+    """Return true when an rsync output line contains a summary stat."""
+
+    text = str(line or "")
+    return any(f"{label}:" in text for label in OHLCV_COPY_RSYNC_STAT_LABELS)
+
+
+def _ohlcv_copy_stat_value(line: str, label: str) -> str:
+    """Extract the value after one rsync stat label."""
+
+    needle = f"{label}:"
+    idx = str(line or "").find(needle)
+    return "" if idx < 0 else str(line or "")[idx + len(needle):].strip()
+
+
+def _parse_ohlcv_copy_count(value: Any) -> int | None:
+    """Parse rsync integer counts with comma or dot thousands separators."""
+
+    text = str(value or "").split("(", 1)[0].strip()
+    if not text:
+        return None
+    text = text.replace(" ", "").replace(".", "").replace(",", "")
+    try:
+        return int(text)
+    except Exception:
+        return None
+
+
+def _parse_ohlcv_copy_bytes(value: Any) -> int | None:
+    """Parse rsync human-readable byte values into bytes."""
+
+    import re
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.search(r"([0-9][0-9.,]*)\s*([KMGTPE]?)(?:i?B|bytes)?", text, re.IGNORECASE)
+    if not match:
+        return None
+    number_text = str(match.group(1) or "")
+    unit = str(match.group(2) or "").upper()
+    if "," in number_text:
+        number_text = number_text.replace(".", "").replace(",", ".")
+    elif number_text.count(".") > 1:
+        number_text = number_text.replace(".", "")
+    elif not unit and "." in number_text and len(number_text.rsplit(".", 1)[-1]) == 3:
+        number_text = number_text.replace(".", "")
+    try:
+        number = float(number_text)
+    except Exception:
+        return None
+    power = {"K": 1, "M": 2, "G": 3, "T": 4, "P": 5, "E": 6}.get(unit, 0)
+    return int(round(number * (1024 ** power)))
+
+
+def _parse_ohlcv_copy_rsync_stats(lines: list[str]) -> dict[str, Any]:
+    """Parse one rsync --stats output block."""
+
+    out: dict[str, Any] = {
+        "files_total": 0,
+        "files_transferred": 0,
+        "total_size_bytes": 0,
+        "transfer_size_bytes": 0,
+        "bytes_sent": 0,
+        "bytes_received": 0,
+        "stats_lines": [],
+    }
+    seen: set[str] = set()
+    for line in lines or []:
+        text = str(line or "").strip()
+        if not _is_ohlcv_copy_rsync_stat_line(text):
+            continue
+        out["stats_lines"].append(text)
+        if "Number of regular files transferred:" in text:
+            value = _parse_ohlcv_copy_count(_ohlcv_copy_stat_value(text, "Number of regular files transferred"))
+            if value is not None:
+                out["files_transferred"] = value
+                seen.add("files_transferred")
+        elif "Number of files:" in text:
+            value = _parse_ohlcv_copy_count(_ohlcv_copy_stat_value(text, "Number of files"))
+            if value is not None:
+                out["files_total"] = value
+                seen.add("files_total")
+        elif "Total transferred file size:" in text:
+            value = _parse_ohlcv_copy_bytes(_ohlcv_copy_stat_value(text, "Total transferred file size"))
+            if value is not None:
+                out["transfer_size_bytes"] = value
+                seen.add("transfer_size_bytes")
+        elif "Total file size:" in text:
+            value = _parse_ohlcv_copy_bytes(_ohlcv_copy_stat_value(text, "Total file size"))
+            if value is not None:
+                out["total_size_bytes"] = value
+                seen.add("total_size_bytes")
+        elif "Total bytes sent:" in text:
+            value = _parse_ohlcv_copy_bytes(_ohlcv_copy_stat_value(text, "Total bytes sent"))
+            if value is not None:
+                out["bytes_sent"] = value
+                seen.add("bytes_sent")
+        elif "Total bytes received:" in text:
+            value = _parse_ohlcv_copy_bytes(_ohlcv_copy_stat_value(text, "Total bytes received"))
+            if value is not None:
+                out["bytes_received"] = value
+                seen.add("bytes_received")
+    out["seen"] = sorted(seen)
+    return out
+
+
+def _build_ohlcv_copy_dry_run_result(stats: dict[str, Any], *, copied: list[str], skipped: list[str], duration_s: int) -> dict[str, Any]:
+    """Build the structured dry-run result stored in the job progress."""
+
+    return {
+        "dry_run": True,
+        "exchanges": list(copied),
+        "skipped_exchanges": list(skipped),
+        "remote_paths": list(stats.get("remote_paths") or []),
+        "files_total": int(stats.get("files_total") or 0),
+        "files_transferred": int(stats.get("files_transferred") or 0),
+        "total_size_bytes": int(stats.get("total_size_bytes") or 0),
+        "transfer_size_bytes": int(stats.get("transfer_size_bytes") or 0),
+        "bytes_sent": int(stats.get("bytes_sent") or 0),
+        "bytes_received": int(stats.get("bytes_received") or 0),
+        "exchange_stats": list(stats.get("exchange_stats") or []),
+        "duration_s": int(duration_s),
+    }
+
+
+def _run_ohlcv_copy_command(job_path: Path, job_id: str, cmd: list[str], label: str) -> list[str]:
+    """Run one mkdir/rsync command, streaming output and honoring cancellation."""
+
+    stats_lines: list[str] = []
+    _append_to_job_log(job_id, f"  {label}: {shlex.join(cmd)}")
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(Path(__file__).resolve().parent),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        start_new_session=True,
+    )
+    try:
+        while True:
+            if _STOP or _is_cancel_requested(job_path):
+                _terminate_ohlcv_copy_process(proc)
+                raise RuntimeError("cancelled")
+            if proc.stdout:
+                ready, _, _ = select.select([proc.stdout], [], [], 0.5)
+                if ready:
+                    line = proc.stdout.readline()
+                    if line:
+                        for text in _append_ohlcv_copy_output(job_id, line):
+                            if _is_ohlcv_copy_rsync_stat_line(text):
+                                stats_lines.append(text)
+                        continue
+            rc = proc.poll()
+            if rc is not None:
+                break
+        if proc.stdout:
+            for line in proc.stdout.readlines():
+                for text in _append_ohlcv_copy_output(job_id, line):
+                    if _is_ohlcv_copy_rsync_stat_line(text):
+                        stats_lines.append(text)
+        if proc.returncode != 0:
+            raise RuntimeError(f"{label} failed with exit code {proc.returncode}")
+        return stats_lines
+    finally:
+        if proc.poll() is None:
+            _terminate_ohlcv_copy_process(proc)
+
+
+def _run_ohlcv_copy(job_path: Path, payload: dict[str, Any], *, dry_run: bool = False) -> None:
+    """Copy selected local OHLCV exchange directories to a remote PBGui data root."""
+
+    started_ts = time.time()
+    job_id = job_path.stem
+    dry_run = bool(dry_run or payload.get("dry_run"))
+    target = _normalize_ohlcv_copy_target(payload.get("target"))
+    destination_root = _normalize_ohlcv_copy_destination_root(payload.get("destination_root"))
+    ssh_args = _parse_ohlcv_copy_ssh_args(payload.get("ssh_command"))
+    if len(ssh_args) > 1 and ssh_args[-1] == target:
+        raise ValueError("SSH command must not include the target host")
+    mode = str(payload.get("mode") or "missing_only").strip().lower()
+    if mode not in OHLCV_COPY_MODES:
+        raise ValueError("Invalid OHLCV copy mode")
+    exchanges = _normalize_ohlcv_copy_exchanges(payload.get("exchanges"))
+    if shutil.which("rsync") is None:
+        raise RuntimeError("rsync is not installed or not available in PATH")
+
+    total_steps = max(1, len(exchanges))
+    step_i = 0
+    copied: list[str] = []
+    skipped: list[str] = []
+    source_root = get_market_data_root_dir()
+    dry_run_totals: dict[str, Any] = {
+        "remote_paths": [],
+        "files_total": 0,
+        "files_transferred": 0,
+        "total_size_bytes": 0,
+        "transfer_size_bytes": 0,
+        "bytes_sent": 0,
+        "bytes_received": 0,
+        "exchange_stats": [],
+    }
+
+    _init_job_log(job_id)
+    _append_to_job_log(
+        job_id,
+        f"job started  target={target}  destination_root={destination_root}  exchanges={exchanges}  mode={mode}  dry_run={1 if dry_run else 0}",
+    )
+    _append_to_job_log(job_id, "safety  delete=disabled  missing_only=" + ("1" if mode == "missing_only" else "0") + "  writes=" + ("0" if dry_run else "1"))
+
+    def update_progress(**kw: Any) -> None:
+        def mut(o: dict[str, Any]) -> None:
+            pr = o.get("progress")
+            pr = pr if isinstance(pr, dict) else {}
+            pr.update(kw)
+            pr["step"] = int(step_i)
+            pr["total"] = int(total_steps)
+            pr["mode"] = "ohlcv_copy_dry_run" if dry_run else "ohlcv_copy"
+            o["progress"] = pr
+        update_job_file(job_path, mutate=mut)
+
+    update_progress(stage="starting", target=target, destination_root=destination_root, copied_exchanges=[], skipped_exchanges=[])
+
+    for exchange in exchanges:
+        if _STOP:
+            raise RuntimeError("Worker stopping")
+        if _is_cancel_requested(job_path):
+            raise RuntimeError("cancelled")
+        step_i += 1
+        meta = OHLCV_COPY_EXCHANGES[exchange]
+        storage = meta["storage"]
+        label = meta["label"]
+        source_dir = source_root / storage
+        remote_dir = _remote_ohlcv_copy_dir(destination_root, storage)
+        update_progress(stage="preparing", exchange=exchange, storage=storage, remote_dir=remote_dir)
+
+        if not source_dir.is_dir():
+            skipped.append(exchange)
+            _append_to_job_log(job_id, f"[{step_i}/{total_steps}] {label} skipped  missing_source={source_dir}")
+            update_progress(stage="skipped", skipped_exchanges=list(skipped))
+            continue
+
+        action_label = "dry run" if dry_run else "copy"
+        _append_to_job_log(job_id, f"[{step_i}/{total_steps}] {label} {action_label} starting  source={source_dir}  remote={target}:{remote_dir}/")
+        if dry_run:
+            _append_to_job_log(job_id, f"  {label} mkdir skipped for dry run; no remote directories or files will be created")
+        else:
+            mkdir_cmd = _build_ohlcv_copy_mkdir_command(target=target, ssh_args=ssh_args, remote_dir=remote_dir)
+            update_progress(stage="mkdir", exchange=exchange, storage=storage, remote_dir=remote_dir)
+            _run_ohlcv_copy_command(job_path, job_id, mkdir_cmd, f"{label} mkdir")
+
+        rsync_cmd = _build_ohlcv_copy_rsync_command(
+            source_dir=source_dir,
+            target=target,
+            destination_root=destination_root,
+            storage_name=storage,
+            ssh_args=ssh_args,
+            mode=mode,
+            dry_run=dry_run,
+        )
+        update_progress(stage="rsync_dry_run" if dry_run else "rsync", exchange=exchange, storage=storage, remote_dir=remote_dir)
+        rsync_stats_lines = _run_ohlcv_copy_command(job_path, job_id, rsync_cmd, f"{label} rsync{' dry run' if dry_run else ''}") or []
+        copied.append(exchange)
+        progress_payload: dict[str, Any] = {
+            "stage": "running",
+            "copied_exchanges": list(copied),
+            "skipped_exchanges": list(skipped),
+            "last_exchange": exchange,
+        }
+        if dry_run:
+            exchange_stats = _parse_ohlcv_copy_rsync_stats(rsync_stats_lines)
+            exchange_stats.update(
+                {
+                    "exchange": exchange,
+                    "label": label,
+                    "remote_path": f"{target}:{remote_dir}/",
+                }
+            )
+            dry_run_totals["remote_paths"].append(f"{target}:{remote_dir}/")
+            dry_run_totals["exchange_stats"].append(exchange_stats)
+            for key in ("files_total", "files_transferred", "total_size_bytes", "transfer_size_bytes", "bytes_sent", "bytes_received"):
+                dry_run_totals[key] = int(dry_run_totals.get(key) or 0) + int(exchange_stats.get(key) or 0)
+            progress_payload["last_result"] = _build_ohlcv_copy_dry_run_result(
+                dry_run_totals,
+                copied=copied,
+                skipped=skipped,
+                duration_s=int(max(0, time.time() - started_ts)),
+            )
+        update_progress(**progress_payload)
+        append_exchange_download_log("ohlcv", f"[{'ohlcv_copy_dry_run' if dry_run else 'ohlcv_copy'}] {label} {'dry run' if dry_run else 'copied'} to {target}:{remote_dir}/ mode={mode}")
+        _append_to_job_log(job_id, f"[{step_i}/{total_steps}] {label} {'dry run ' if dry_run else ''}done")
+
+    if not copied:
+        raise RuntimeError("No selected source exchange directories exist")
+
+    duration_s = int(max(0, time.time() - started_ts))
+    if dry_run:
+        last_result = _build_ohlcv_copy_dry_run_result(dry_run_totals, copied=copied, skipped=skipped, duration_s=duration_s)
+    else:
+        last_result = {"copied": len(copied), "skipped": len(skipped), "duration_s": duration_s}
+    update_progress(
+        stage="done",
+        copied_exchanges=list(copied),
+        skipped_exchanges=list(skipped),
+        last_result=last_result,
+    )
+    _append_to_job_log(job_id, f"job finished  {'dry_run_exchanges' if dry_run else 'copied'}={len(copied)}  skipped={len(skipped)}  duration={int(time.time()-started_ts)}s")
 
 
 def _run_hl_aws_l2book_auto(job_path: Path, payload: dict[str, Any]) -> None:

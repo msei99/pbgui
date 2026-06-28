@@ -4,6 +4,9 @@ from pathlib import Path
 import importlib
 import importlib.util
 import sys
+from types import SimpleNamespace
+
+import pytest
 
 
 repo_root = Path(__file__).parent.parent.parent
@@ -59,6 +62,41 @@ def test_okx_status_and_best_1m_wiring() -> None:
     assert meta["queue_exchange"] == "okx"
 
 
+def test_save_market_data_settings_queues_refresh_flag(monkeypatch, tmp_path) -> None:
+    """Saving settings wakes the PBData latest-1m loop immediately."""
+
+    saved_ini: list[tuple[str, str, str]] = []
+
+    monkeypatch.setattr(market_data_api, "PBGDIR", tmp_path)
+    monkeypatch.setattr(market_data_api, "set_enabled_coins", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(market_data_api, "set_auto_enable_new_coins", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(market_data_api, "save_ini", lambda section, key, value: saved_ini.append((section, key, value)))
+    monkeypatch.setattr(
+        market_data_api,
+        "_build_market_data_settings_payload",
+        lambda exchange: {"exchange": exchange},
+    )
+
+    result = market_data_api._save_market_data_settings(
+        "okx",
+        {
+            "enabled_coins": ["BTC"],
+            "auto_enable_new_coins": True,
+            "settings": {
+                "interval_seconds": 3600,
+                "coin_pause_seconds": 0.5,
+                "api_timeout_seconds": 30,
+                "min_lookback_days": 2,
+                "max_lookback_days": 7,
+            },
+        },
+    )
+
+    assert result == {"exchange": "okx"}
+    assert (tmp_path / "data" / "logs" / "okx_latest_1m_run_now.flag").exists()
+    assert ("okx_data", "latest_1m_interval_seconds", "3600") in saved_ini
+
+
 def test_best_1m_available_coins_do_not_require_enabled_settings(monkeypatch) -> None:
     """Manual Best 1m builds list available coins, not auto-refresh enabled coins."""
 
@@ -70,3 +108,208 @@ def test_best_1m_available_coins_do_not_require_enabled_settings(monkeypatch) ->
     )
 
     assert market_data_api._get_best_1m_available_coins("okx") == ["BTC", "ETH"]
+
+
+def test_copy_data_queue_payload_defaults_to_missing_only() -> None:
+    """Copy Data queue payloads normalize safe rsync defaults."""
+
+    payload = market_data_api._build_copy_data_queue_payload(
+        {
+            "target": "localhost",
+            "ssh_command": "ssh -J user@jump-host -p 2222",
+            "exchanges": ["binance", "bybit", "binanceusdm"],
+        }
+    )
+
+    assert payload["target"] == "localhost"
+    assert payload["mode"] == "missing_only"
+    assert payload["exchanges"] == ["binance", "bybit"]
+    assert payload["exchange_storage"]["binance"] == "binanceusdm"
+    assert payload["destination_root"].endswith("/data/ohlcv")
+
+
+def test_copy_data_queue_payload_rejects_target_inside_ssh_command() -> None:
+    """The SSH command field must not include the rsync target host."""
+
+    with pytest.raises(ValueError, match="must not include the target host"):
+        market_data_api._build_copy_data_queue_payload(
+            {
+                "target": "localhost",
+                "ssh_command": "ssh -J user@jump-host -p 2222 localhost",
+                "exchanges": ["bybit"],
+            }
+        )
+
+
+def test_copy_data_queue_payload_rejects_remote_path_metacharacters() -> None:
+    """Destination roots reject shell metacharacters before remote mkdir is queued."""
+
+    with pytest.raises(ValueError, match="Destination root contains unsupported characters"):
+        market_data_api._build_copy_data_queue_payload(
+            {
+                "target": "localhost",
+                "destination_root": "/tmp/ohlcv;touch-pwned",
+                "exchanges": ["bybit"],
+            }
+        )
+
+
+def test_copy_data_ssh_test_command_supports_proxy_jump() -> None:
+    """The read-only SSH test command keeps ProxyJump options and appends the target separately."""
+
+    payload = market_data_api._build_copy_data_queue_payload(
+        {
+            "target": "localhost",
+            "ssh_command": "ssh -J user@jump-host -p 2222",
+            "destination_root": "/home/mani/software/pbgui/data/ohlcv",
+            "exchanges": ["bybit"],
+        }
+    )
+
+    cmd = market_data_api._build_copy_data_ssh_test_command(payload, ["test", "-d", payload["destination_root"]])
+
+    assert cmd == [
+        "ssh",
+        "-J",
+        "user@jump-host",
+        "-p",
+        "2222",
+        "localhost",
+        "test",
+        "-d",
+        "/home/mani/software/pbgui/data/ohlcv",
+    ]
+
+
+def test_copy_data_test_payload_does_not_require_exchange_selection() -> None:
+    """The read-only connection test validates target/path without requiring copy exchanges."""
+
+    payload = market_data_api._build_copy_data_test_payload(
+        {
+            "target": "localhost",
+            "ssh_command": "ssh -J user@jump-host -p 2222",
+            "destination_root": "/home/mani/software/pbgui/data/ohlcv",
+        }
+    )
+
+    assert payload == {
+        "target": "localhost",
+        "ssh_command": "ssh -J user@jump-host -p 2222",
+        "destination_root": "/home/mani/software/pbgui/data/ohlcv",
+    }
+
+
+def test_copy_data_connection_payload_reports_writable_root(monkeypatch) -> None:
+    """Connection checks report success when SSH, root existence, and root writability pass."""
+
+    calls: list[list[str]] = []
+
+    def fake_probe(cmd: list[str], *, timeout_s: float = 12.0) -> dict:
+        calls.append(cmd)
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(market_data_api, "_run_copy_data_ssh_probe", fake_probe)
+    payload = market_data_api._build_copy_data_queue_payload(
+        {
+            "target": "optimizer",
+            "ssh_command": "ssh",
+            "destination_root": "/srv/pbgui/data/ohlcv",
+            "exchanges": ["okx"],
+        }
+    )
+
+    result = market_data_api._test_copy_data_connection_payload(payload)
+
+    assert result["success"] is True
+    assert "exists and is writable" in result["message"]
+    assert calls == [
+        ["ssh", "optimizer", "printf", "PBGUI_COPY_TEST_OK"],
+        ["ssh", "optimizer", "test", "-d", "/srv/pbgui/data/ohlcv"],
+        ["ssh", "optimizer", "test", "-w", "/srv/pbgui/data/ohlcv"],
+    ]
+
+
+def test_copy_data_dry_run_queue_uses_dry_run_job_type(monkeypatch) -> None:
+    """The Dry run endpoint queues a write-free OHLCV dry-run worker job."""
+
+    enqueued: list[dict] = []
+    popen_calls: list[list[str]] = []
+
+    def fake_enqueue_running_job(**kwargs):
+        enqueued.append(kwargs)
+        return SimpleNamespace(job_id="dry-run-1", path=str(repo_root / "data" / "ohlcv" / "_tasks" / "running" / "dry-run-1.json"))
+
+    def fake_popen(cmd: list[str], **_kwargs):
+        popen_calls.append(cmd)
+        return SimpleNamespace(pid=12345)
+
+    monkeypatch.setattr("task_queue.enqueue_running_job", fake_enqueue_running_job)
+    monkeypatch.setattr("market_data.append_exchange_download_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    result = market_data_api.queue_copy_data_dry_run_job(
+        {
+            "target": "optimizer",
+            "ssh_command": "ssh -J user@jump-host -p 2222",
+            "destination_root": "/srv/pbgui/data/ohlcv",
+            "exchanges": ["bybit"],
+        },
+        None,
+    )
+
+    assert result["success"] is True
+    assert result["dry_run"] is True
+    assert result["runner_started"] is True
+    assert result["job_type"] == "ohlcv_copy_dry_run"
+    assert enqueued[0]["job_type"] == "ohlcv_copy_dry_run"
+    assert enqueued[0]["exchange"] == "ohlcv"
+    assert enqueued[0]["manual_parallel"] is True
+    assert enqueued[0]["payload"]["dry_run"] is True
+    assert enqueued[0]["payload"]["mode"] == "missing_only"
+    assert enqueued[0]["payload"]["exchanges"] == ["bybit"]
+    assert popen_calls
+    assert popen_calls[0][1].endswith("task_worker.py")
+    assert popen_calls[0][2] == "--run-job"
+
+
+def test_copy_data_queue_uses_fresh_one_shot_worker(monkeypatch) -> None:
+    """Real Copy Data jobs also use a fresh runner so stale resident workers cannot consume them."""
+
+    enqueued: list[dict] = []
+    popen_calls: list[list[str]] = []
+
+    def fake_enqueue_running_job(**kwargs):
+        enqueued.append(kwargs)
+        return SimpleNamespace(job_id="copy-1", path=str(repo_root / "data" / "ohlcv" / "_tasks" / "running" / "copy-1.json"))
+
+    def fake_popen(cmd: list[str], **_kwargs):
+        popen_calls.append(cmd)
+        return SimpleNamespace(pid=12345)
+
+    monkeypatch.setattr("task_queue.enqueue_running_job", fake_enqueue_running_job)
+    monkeypatch.setattr("market_data.append_exchange_download_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    result = market_data_api.queue_copy_data_job(
+        {
+            "target": "optimizer",
+            "ssh_command": "ssh -J user@jump-host -p 2222",
+            "destination_root": "/srv/pbgui/data/ohlcv",
+            "exchanges": ["binance", "bybit"],
+        },
+        None,
+    )
+
+    assert result["success"] is True
+    assert result["dry_run"] is False
+    assert result["runner_started"] is True
+    assert result["worker_started"] is False
+    assert result["job_type"] == "ohlcv_copy"
+    assert enqueued[0]["job_type"] == "ohlcv_copy"
+    assert enqueued[0]["exchange"] == "ohlcv"
+    assert enqueued[0]["manual_parallel"] is True
+    assert "dry_run" not in enqueued[0]["payload"]
+    assert enqueued[0]["payload"]["exchanges"] == ["binance", "bybit"]
+    assert popen_calls
+    assert popen_calls[0][1].endswith("task_worker.py")
+    assert popen_calls[0][2] == "--run-job"
