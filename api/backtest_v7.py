@@ -4026,13 +4026,18 @@ def rebuild_archive_scores(name: str, session: SessionToken = Depends(require_au
 
 
 @router.post("/archives/{name}/add-config")
-def add_config_to_archive(name: str, body: dict,
-                          session: SessionToken = Depends(require_auth)):
+async def add_config_to_archive(name: str, body: dict,
+                                session: SessionToken = Depends(require_auth)):
     """Copy a result directory into an archive using the versioned layout."""
     _validate_name(name)
     source_path = body.get("source_path", "")
     if not source_path:
         raise HTTPException(400, "source_path is required")
+    return await asyncio.to_thread(_add_config_to_archive_sync, name, source_path)
+
+
+def _add_config_to_archive_sync(name: str, source_path: str) -> dict[str, Any]:
+    """Synchronous result archive copy used from a worker thread."""
 
     src = Path(source_path)
     if not src.exists():
@@ -4045,11 +4050,13 @@ def add_config_to_archive(name: str, body: dict,
     if not archive_dir.exists():
         raise HTTPException(404, f"Archive '{name}' not found")
 
+    _log(SERVICE, f"Archiving backtest result {src} to archive {name}", level="INFO")
     migration = maybe_migrate_own_archive(name, archive_dir, _own_archive_name())
     copied = copy_backtest_result_to_archive(src, archive_dir)
     copied["migration_status"] = migration.get("status") or archive_migration_status(archive_dir)
     _invalidate_archive_cache(name)
     copied["manifest"] = rebuild_archive_manifest(archive_dir)
+    _log(SERVICE, f"Archived backtest result to archive {name}: {copied.get('relative_path', '')}", level="INFO")
     return copied
 
 

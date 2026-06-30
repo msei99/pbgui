@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import subprocess
 import datetime
 from pathlib import Path
@@ -256,7 +257,7 @@ def test_add_config_to_archive_accepts_missing_dest_name(tmp_path: Path, monkeyp
     monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "")
     monkeypatch.setattr(backtest_v7, "_resolve_result_dir", lambda path: Path(path).resolve())
 
-    response = backtest_v7.add_config_to_archive("mine", {"source_path": str(result_dir)}, session=None)
+    response = asyncio.run(backtest_v7.add_config_to_archive("mine", {"source_path": str(result_dir)}, session=None))
 
     assert response["ok"] is True
     assert response["relative_path"] == "pbgui/configs/v7.4.2/backtests/my_config/bybit/2026-06-21T120000Z"

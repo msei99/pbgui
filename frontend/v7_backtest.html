@@ -702,7 +702,7 @@ textarea.json-invalid:focus {
         <button class="sb-btn" onclick="calcBalanceFromResult()">⚡ Calc Balance</button>
         <button class="sb-btn" onclick="optimizeFromResult()">🧬 Optimize from Result</button>
         <button class="sb-btn" onclick="optimizePresetFromResult()">Refine Optimize Preset</button>
-        <button class="sb-btn" onclick="addResultToArchive()">🗄 Add to Archive</button>
+        <button class="sb-btn" id="btn-result-add-archive" onclick="addResultToArchive()">🗄 Add to Archive</button>
         <button class="sb-btn danger" onclick="deleteSelectedResults()">🗑 Delete Selected</button>
       </div>
       <div id="ctx-optimize-preset" class="ctx-actions" style="display:none">
@@ -1048,8 +1048,18 @@ function apiFetch(path, opts) {
   var url = API_BASE + path;
   opts.headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN }, opts.headers || {});
   return fetch(url, opts).then(function(r) {
-    if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || r.statusText); });
-    return r.json();
+    return r.text().then(function(text) {
+      var payload = null;
+      if (text) {
+        try { payload = JSON.parse(text); }
+        catch (error) {
+          if (!r.ok) throw new Error(text.slice(0, 240) || r.statusText);
+          throw new Error('Unexpected non-JSON response from server: ' + text.slice(0, 240));
+        }
+      }
+      if (!r.ok) throw new Error((payload && payload.detail) || r.statusText);
+      return payload;
+    });
   });
 }
 
@@ -7394,25 +7404,52 @@ function optimizePresetFromResult() {
   });
 }
 
-function addResultToArchive() {
+function archiveResultLabel(path) {
+  var matched = results.find(function(item) { return item.path === path; });
+  if (matched) return matched.display_name || [matched.config_name, matched.exchange_dir, matched.result_name].filter(Boolean).join('/') || path;
+  return String(path || '').split('/').filter(Boolean).slice(-3).join('/') || String(path || 'result');
+}
+
+async function addResultToArchive() {
   var sel = getSelectedResults();
   if (!sel.length) { toast('Nothing selected', 'err'); return; }
-  apiFetch('/archives/settings').then(function(s) {
+  var button = document.getElementById('btn-result-add-archive');
+  var originalText = button ? button.textContent : '';
+  function setArchiveProgress(message) {
+    if (button) button.textContent = message;
+  }
+  if (button) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+  }
+  try {
+    setArchiveProgress('🗄 Checking archive...');
+    toast('Preparing archive export for ' + sel.length + ' result(s)...', 'info');
+    var s = await apiFetch('/archives/settings');
     var archName = s.my_archive || '';
     if (!archName) { toast('No own archive configured. Go to Archive \u2192 Settings.', 'err'); return; }
-    var promises = sel.map(function(p) {
-      return apiFetch('/archives/' + encodeURIComponent(archName) + '/add-config', {
+    for (var i = 0; i < sel.length; i++) {
+      var label = archiveResultLabel(sel[i]);
+      setArchiveProgress('🗄 Adding ' + (i + 1) + '/' + sel.length + ': ' + label);
+      await apiFetch('/archives/' + encodeURIComponent(archName) + '/add-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source_path: p })
+        body: JSON.stringify({ source_path: sel[i] })
       });
-    });
-    Promise.all(promises).then(function() {
-      toast('Added to archive \u201c' + archName + '\u201d', 'ok');
-      /* If already viewing this archive, refresh results immediately */
-      if (currentPanel === 'archive' && selectedArchiveName === archName) loadArchiveResults();
-    }).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
-  }).catch(function(e) { toast('Failed to load archive settings: ' + e.message, 'err'); });
+      toast('Added ' + (i + 1) + '/' + sel.length + ' to archive: ' + label, 'ok');
+    }
+    toast('Added ' + sel.length + ' result(s) to archive \u201c' + archName + '\u201d', 'ok');
+    /* If already viewing this archive, refresh results immediately */
+    if (currentPanel === 'archive' && selectedArchiveName === archName) loadArchiveResults();
+  } catch (e) {
+    toast('Failed: ' + e.message, 'err');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+      button.textContent = originalText || '🗄 Add to Archive';
+    }
+  }
 }
 
 /* ════════════════════════════════════════════════
