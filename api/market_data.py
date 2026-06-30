@@ -117,6 +117,18 @@ SETTINGS_EXCHANGES: dict[str, dict[str, Any]] = {
         },
         "save_message": "Settings saved. OKX refresh queued; cycle will start within seconds.",
     },
+    "bitget": {
+        "label": "Bitget",
+        "ini_section": "bitget_data",
+        "defaults": {
+            "interval_seconds": 3600,
+            "coin_pause_seconds": 0.5,
+            "api_timeout_seconds": 30.0,
+            "min_lookback_days": 2,
+            "max_lookback_days": 7,
+        },
+        "save_message": "Settings saved. Bitget refresh queued; cycle will start within seconds.",
+    },
 }
 
 
@@ -687,6 +699,8 @@ def _get_exchange_status_key(exchange: str) -> str:
         return "bybit_latest_1m"
     elif exchange == "okx":
         return "okx_latest_1m"
+    elif exchange == "bitget":
+        return "bitget_latest_1m"
     elif exchange == "hyperliquid":
         return "latest_1m"
     return ""
@@ -701,6 +715,8 @@ def _get_exchange_flag_prefix(exchange: str) -> str:
         return "bybit_latest_1m"
     elif exchange == "okx":
         return "okx_latest_1m"
+    elif exchange == "bitget":
+        return "bitget_latest_1m"
     elif exchange == "hyperliquid":
         return "hyperliquid_latest_1m"
     return ""
@@ -808,11 +824,26 @@ BEST_1M_EXCHANGES: dict[str, dict[str, str]] = {
         ),
         "refetch_label": "Refetch all days from scratch",
     },
+    "bitget": {
+        "label": "Bitget",
+        "job_type": "bitget_best_1m",
+        "queue_exchange": "bitget",
+        "description": (
+            "Downloads Bitget USDT-FUTURES 1m OHLCV history via public REST "
+            "and repairs missing days from the same REST source."
+        ),
+        "hint": (
+            "Leave the coin list empty to queue all available Bitget USDT-FUTURES coins. "
+            "Use refetch only when you need to overwrite broken local days."
+        ),
+        "refetch_label": "Refetch all days from scratch",
+    },
 }
 
 COPY_DATA_EXCHANGES: dict[str, dict[str, str]] = {
     "binance": {"label": "Binance USDM", "storage": "binanceusdm"},
     "bybit": {"label": "Bybit", "storage": "bybit"},
+    "bitget": {"label": "Bitget", "storage": "bitget"},
     "okx": {"label": "OKX", "storage": "okx"},
     "hyperliquid": {"label": "Hyperliquid", "storage": "hyperliquid"},
 }
@@ -825,6 +856,81 @@ COPY_DATA_TARGET_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWX
 COPY_DATA_REMOTE_PATH_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-")
 
 
+def _load_bitget_distributed_hosts() -> list[dict[str, str]]:
+    """Load known VPS hosts that can run distributed Bitget backfill jobs."""
+
+    hosts_root = PBGDIR / "data" / "vpsmanager" / "hosts"
+    out: list[dict[str, str]] = [
+        {
+            "hostname": "master",
+            "label": "Master (local downloader)",
+            "target": "master",
+            "ssh_command": "",
+            "mode": "master",
+        }
+    ]
+    if not hosts_root.is_dir():
+        return out
+
+    for path in sorted(hosts_root.glob("*/*.json")):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        hostname = str(raw.get("_hostname") or path.stem).strip()
+        user = str(raw.get("user") or "").strip()
+        ssh_host = str(raw.get("ip") or hostname).strip()
+        if not hostname or not ssh_host:
+            continue
+        try:
+            # Use the known VPS hostname/SSH alias as the command target. The raw
+            # IP can have a different host-key entry and fail strict SSH checks.
+            target = _normalize_copy_data_target(f"{user}@{hostname}" if user else hostname)
+            port = int(raw.get("firewall_ssh_port") or 22)
+            if port < 1 or port > 65535:
+                port = 22
+            ssh_args = ["ssh"] if port == 22 else ["ssh", "-p", str(port)]
+            out.append(
+                {
+                    "hostname": hostname,
+                    "label": f"{hostname} ({target}, ip={ssh_host})",
+                    "target": target,
+                    "ssh_command": shlex.join(ssh_args),
+                    "mode": "ssh",
+                }
+            )
+        except Exception:
+            continue
+    return out
+
+
+def _select_bitget_distributed_hosts(raw_hosts: Any) -> list[dict[str, str]]:
+    """Resolve requested distributed hostnames against known VPS host config."""
+
+    known = {str(item.get("hostname") or "").strip(): item for item in _load_bitget_distributed_hosts()}
+    if not isinstance(raw_hosts, list):
+        raw_hosts = []
+    selected: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw_item in raw_hosts:
+        if isinstance(raw_item, dict):
+            hostname = str(raw_item.get("hostname") or "").strip()
+        else:
+            hostname = str(raw_item or "").strip()
+        if not hostname or hostname in seen:
+            continue
+        host = known.get(hostname)
+        if not host:
+            raise ValueError(f"Unknown or unsupported Bitget downloader: {hostname}")
+        selected.append(dict(host))
+        seen.add(hostname)
+    if not selected:
+        raise ValueError("Select at least one VPS host for distributed Bitget backfill.")
+    return selected
+
+
 def _best_1m_exchange_meta(exchange: str) -> dict[str, str] | None:
     return BEST_1M_EXCHANGES.get(_normalize_settings_exchange(exchange))
 
@@ -835,9 +941,17 @@ def _get_best_1m_available_coins(exchange: str) -> list[str]:
     return [str(coin).strip().upper() for coin in get_market_data_coin_options(exchange) if str(coin).strip()]
 
 
-def _normalize_best_1m_request_coin(coin: str) -> str:
-    normalized = coin_from_symbol_code(str(coin or "").strip())
-    return str(normalized or "").strip().upper()
+def _normalize_best_1m_request_coin(coin: str, *, available_coins: list[str] | None = None) -> str:
+    raw = str(coin or "").strip().upper()
+    if not raw:
+        return ""
+    available = {str(item or "").strip().upper() for item in (available_coins or []) if str(item or "").strip()}
+    if raw == "ALL" or raw in available:
+        return raw
+    normalized = str(coin_from_symbol_code(raw) or "").strip().upper()
+    if available and normalized in available:
+        return normalized
+    return normalized or raw
 
 
 def _normalize_copy_data_exchange(exchange: str) -> str:
@@ -2550,6 +2664,8 @@ def get_best_1m_info(exchange: str, session: SessionToken = Depends(require_auth
         "description": meta["description"],
         "hint": meta["hint"],
         "refetch_label": meta["refetch_label"],
+        "distributed_supported": exchange_clean == "bitget",
+        "distributed_hosts": _load_bitget_distributed_hosts() if exchange_clean == "bitget" else [],
         "empty_message": "No available coins found for this exchange. Refresh CoinData first.",
     }
 
@@ -2566,27 +2682,31 @@ def queue_best_1m_job(
     from datetime import date as _date
 
     from market_data import append_exchange_download_log
-    from task_queue import enqueue_job, is_pid_running, read_worker_pid
+    from task_queue import enqueue_job, enqueue_running_job, is_pid_running, move_job_file, read_worker_pid, update_job_file
 
     exchange_clean = _normalize_settings_exchange(exchange)
     meta = _best_1m_exchange_meta(exchange_clean)
     if not meta:
         return {"success": False, "error": "Unsupported exchange for Best 1m."}
 
+    available_coins = _get_best_1m_available_coins(exchange_clean)
     raw_coins = request.get("coins", [])
     if not isinstance(raw_coins, list):
         raw_coins = []
     raw_coins = [
-        _normalize_best_1m_request_coin(coin)
+        _normalize_best_1m_request_coin(coin, available_coins=available_coins)
         for coin in raw_coins
         if str(coin).strip()
     ]
     raw_coins = list(dict.fromkeys(raw_coins))
     selected_only = bool(request.get("selected_only", False))
 
-    available_coins = _get_best_1m_available_coins(exchange_clean)
-
     if raw_coins and "ALL" not in raw_coins:
+        invalid_coins = [coin for coin in raw_coins if coin not in available_coins]
+        if invalid_coins:
+            preview = ", ".join(invalid_coins[:10])
+            suffix = "..." if len(invalid_coins) > 10 else ""
+            return {"success": False, "error": f"Unsupported coin(s) for {meta['label']}: {preview}{suffix}. Refresh CoinData and select coins from the list."}
         build_coins = list(raw_coins)
     else:
         if selected_only:
@@ -2609,29 +2729,65 @@ def queue_best_1m_job(
 
     effective_end = end_day or _date.today().strftime("%Y%m%d")
     refetch = bool(request.get("refetch", False))
+    distributed = bool(request.get("distributed", False))
+    distributed_hosts: list[dict[str, str]] = []
+    if distributed:
+        if exchange_clean != "bitget":
+            return {"success": False, "error": "Distributed Best 1m backfill is only supported for Bitget."}
+        try:
+            distributed_hosts = _select_bitget_distributed_hosts(request.get("distributed_hosts"))
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
 
+    job_type = "bitget_best_1m_distributed" if distributed else meta["job_type"]
+    run_immediately = job_type in {"bitget_best_1m", "bitget_best_1m_distributed"}
+    payload: dict[str, Any] = {
+        "coins": list(build_coins),
+        "end_day": effective_end,
+        "start_day": start_day,
+        "refetch": refetch,
+    }
+    if distributed:
+        payload["distributed_hosts"] = distributed_hosts
     try:
-        job = enqueue_job(
-            job_type=meta["job_type"],
+        enqueue_fn = enqueue_running_job if run_immediately else enqueue_job
+        job = enqueue_fn(
+            job_type=job_type,
             exchange=meta["queue_exchange"],
-            payload={
-                "coins": list(build_coins),
-                "end_day": effective_end,
-                "start_day": start_day,
-                "refetch": refetch,
-            },
+            payload=payload,
         )
     except Exception as exc:
         return {"success": False, "error": f"Failed to enqueue job: {exc}"}
 
     append_exchange_download_log(
         meta["queue_exchange"],
-        f"[{meta['job_type']}] queued job_id={job.job_id} coins={len(build_coins)} range={start_day or '?'}-{effective_end}",
+        f"[{job_type}] queued job_id={job.job_id} coins={len(build_coins)} range={start_day or '?'}-{effective_end} downloaders={len(distributed_hosts)}",
     )
+
+    runner_started = False
+    if run_immediately:
+        job_path = Path(job.path)
+        try:
+            subprocess.Popen(
+                [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py"), "--run-job", str(job_path)],
+                cwd=str(Path(__file__).resolve().parents[1]),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                start_new_session=True,
+            )
+            runner_started = True
+        except Exception as exc:
+            try:
+                update_job_file(job_path, mutate=lambda o: o.update({"status": "failed", "error": f"Failed to launch {job_type} runner: {exc}"}))
+                move_job_file(job_path, "failed")
+            except Exception:
+                pass
+            return {"success": False, "error": f"Failed to launch {meta['label']} worker: {exc}"}
 
     try:
         pid = read_worker_pid()
-        if not (pid and is_pid_running(int(pid))):
+        if not run_immediately and not (pid and is_pid_running(int(pid))):
             subprocess.Popen(
                 [sys.executable, str(Path(__file__).resolve().parents[1] / "task_worker.py")],
                 stdout=subprocess.DEVNULL,
@@ -2644,14 +2800,19 @@ def queue_best_1m_job(
     return {
         "success": True,
         "job_id": job.job_id,
+        "job_type": job_type,
         "exchange": exchange_clean,
         "coins_count": len(build_coins),
+        "distributed": distributed,
+        "distributed_hosts_count": len(distributed_hosts),
+        "runner_started": runner_started,
         "start_day": start_day,
         "end_day": effective_end,
         "refetch": refetch,
         "message": (
-            f"Queued {meta['label']} Best 1m job {job.job_id} for {len(build_coins)} coin(s). "
-            "Use Activity Log or Jobs to watch progress."
+            f"Queued {meta['label']} {'distributed ' if distributed else ''}Best 1m job {job.job_id} for {len(build_coins)} coin(s)"
+            + (f" across {len(distributed_hosts)} downloader(s). " if distributed else ". ")
+            + "Use Activity Log or Jobs to watch progress."
         ),
     }
 

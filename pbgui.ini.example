@@ -26,3 +26,11 @@ port = 8000
 [vps_manager]
 # Number of rotated historical task logs to keep per VPS Manager action
 task_log_history = 10
+
+[bitget_data]
+# Latest 1m Bitget USDT-FUTURES refresh settings
+latest_1m_interval_seconds = 3600
+latest_1m_coin_pause_seconds = 0.5
+latest_1m_api_timeout_seconds = 30
+latest_1m_min_lookback_days = 2
+latest_1m_max_lookback_days = 7

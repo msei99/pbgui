@@ -1222,6 +1222,57 @@
       flex-wrap: wrap;
     }
 
+    .best1m-distributed-card {
+      display: grid;
+      gap: var(--sp-sm);
+      padding: var(--sp-md);
+      border: 1px solid rgba(99, 179, 237, 0.16);
+      border-radius: 10px;
+      background: rgba(12, 17, 26, 0.45);
+    }
+
+    .best1m-host-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: var(--sp-sm);
+    }
+
+    .best1m-host-row {
+      display: grid;
+      gap: 2px;
+      width: 100%;
+      text-align: left;
+      padding: 8px 10px;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 8px;
+      background: rgba(15, 23, 34, 0.82);
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+    }
+
+    .best1m-host-row:hover {
+      border-color: rgba(99, 179, 237, 0.38);
+      background: rgba(99, 179, 237, 0.08);
+    }
+
+    .best1m-host-row.selected {
+      border-color: rgba(99, 179, 237, 0.56);
+      background: rgba(99, 179, 237, 0.14);
+    }
+
+    .best1m-host-name {
+      font-weight: 700;
+    }
+
+    .best1m-host-target {
+      color: var(--text-dim);
+      font-size: var(--fs-xs);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     .copy-data-shell {
       display: grid;
       gap: var(--sp-md);
@@ -2741,6 +2792,7 @@
             <option value="hyperliquid">Hyperliquid</option>
             <option value="binance">Binance USDM</option>
             <option value="bybit">Bybit</option>
+            <option value="bitget">Bitget</option>
             <option value="okx">OKX</option>
           </select>
         </label>
@@ -3024,6 +3076,14 @@
                 <input id="best1m-refetch" type="checkbox">
                 <span id="best1m-refetch-label">Refetch all days from scratch</span>
               </label>
+              <div class="best1m-distributed-card" id="best1m-distributed-card" hidden>
+                <label class="settings-toggle">
+                  <input id="best1m-distributed-enabled" type="checkbox">
+                  <span>Distribute Bitget backfill over selected downloaders</span>
+                </label>
+                <div class="best1m-host-list" id="best1m-distributed-hosts"></div>
+                <span class="note" id="best1m-distributed-note">VPS downloaders only need reachable SSH and python3; the master writes the local NPZ files.</span>
+              </div>
               <div class="best1m-actions">
                 <button class="btn primary" id="btn-best1m-queue" type="button">Build best 1m</button>
                 <span class="note" id="best1m-coin-count">0 available coins</span>
@@ -3087,6 +3147,7 @@
               <div class="copy-data-exchange-grid">
                 <label class="settings-toggle"><input type="checkbox" data-copy-data-exchange="binance" checked>Binance USDM</label>
                 <label class="settings-toggle"><input type="checkbox" data-copy-data-exchange="bybit" checked>Bybit</label>
+                <label class="settings-toggle"><input type="checkbox" data-copy-data-exchange="bitget" checked>Bitget</label>
                 <label class="settings-toggle"><input type="checkbox" data-copy-data-exchange="okx">OKX</label>
                 <label class="settings-toggle"><input type="checkbox" data-copy-data-exchange="hyperliquid">Hyperliquid</label>
               </div>
@@ -3237,6 +3298,7 @@
         { key: 'hyperliquid', statusKey: 'hyperliquid', label: 'Hyperliquid' },
         { key: 'binance', statusKey: 'binanceusdm', label: 'Binance USDM' },
         { key: 'bybit', statusKey: 'bybit', label: 'Bybit' },
+        { key: 'bitget', statusKey: 'bitget', label: 'Bitget' },
         { key: 'okx', statusKey: 'okx', label: 'OKX' }
       ];
       var sectionButtons = [
@@ -3280,6 +3342,9 @@
         enabledCoins: [],
         coinFilter: '',
         selectedCoins: new Set(),
+        distributedHosts: [],
+        selectedDistributedHosts: new Set(),
+        distributedEnabled: false,
         dragStart: null,
         dragSelecting: false,
         dragMode: null
@@ -3287,12 +3352,14 @@
       var best1mJobMonitorMeta = {
         binance: { exchange: 'binanceusdm', jobType: 'binance_best_1m' },
         bybit: { exchange: 'bybit', jobType: 'bybit_best_1m' },
+        bitget: { exchange: 'bitget', jobType: 'bitget_best_1m,bitget_best_1m_distributed' },
         okx: { exchange: 'okx', jobType: 'okx_best_1m' }
       };
       var best1mQueueMeta = {
         hyperliquid: { api: 'heatmap', path: '/queue-build-ohlcv' },
         binance: { api: 'market-data', path: '/best-1m/queue/binance' },
         bybit: { api: 'market-data', path: '/best-1m/queue/bybit' },
+        bitget: { api: 'market-data', path: '/best-1m/queue/bitget' },
         okx: { api: 'market-data', path: '/best-1m/queue/okx' }
       };
       var tradfiMapState = {
@@ -5822,6 +5889,49 @@
         updateBest1mSelectionSummary();
       }
 
+      function getBest1mSelectedDistributedHosts() {
+        var selectedSet = best1mState.selectedDistributedHosts instanceof Set ? best1mState.selectedDistributedHosts : new Set();
+        return (Array.isArray(best1mState.distributedHosts) ? best1mState.distributedHosts : []).filter(function (host) {
+          return selectedSet.has(String(host.hostname || ''));
+        });
+      }
+
+      function renderBest1mDistributedHosts() {
+        var card = document.getElementById('best1m-distributed-card');
+        var list = document.getElementById('best1m-distributed-hosts');
+        var note = document.getElementById('best1m-distributed-note');
+        var toggle = document.getElementById('best1m-distributed-enabled');
+        if (!card || !list || !note || !toggle) return;
+
+        var hosts = Array.isArray(best1mState.distributedHosts) ? best1mState.distributedHosts : [];
+        var isBitget = best1mState.exchange === 'bitget';
+        card.hidden = !isBitget;
+        toggle.disabled = !isBitget || !hosts.length;
+        toggle.checked = !!(isBitget && best1mState.distributedEnabled && hosts.length);
+        if (!isBitget) {
+          list.innerHTML = '';
+          note.textContent = 'Distributed backfill is only available for Bitget.';
+          return;
+        }
+        if (!hosts.length) {
+          list.innerHTML = '<div class="coin-picker-empty">No Bitget downloaders available.</div>';
+          note.textContent = 'Use Master or add VPS hosts, then reload this panel to use distributed Bitget backfill.';
+          return;
+        }
+
+        var selected = best1mState.selectedDistributedHosts instanceof Set ? best1mState.selectedDistributedHosts : new Set();
+        list.innerHTML = hosts.map(function (host) {
+          var hostname = String(host.hostname || '');
+          var checked = selected.has(hostname);
+          return ''
+            + '<button class="best1m-host-row' + (checked ? ' selected' : '') + '" type="button" data-best1m-host="' + esc(hostname) + '" aria-pressed="' + (checked ? 'true' : 'false') + '">'
+            +   '<span class="best1m-host-name">' + esc(hostname) + '</span>'
+            +   '<span class="best1m-host-target">' + esc(host.target || host.label || '') + '</span>'
+            + '</button>';
+        }).join('');
+        note.textContent = getBest1mSelectedDistributedHosts().length + ' / ' + hosts.length + ' downloader(s) selected. VPS downloaders only need reachable SSH and python3; the master writes the local NPZ files.';
+      }
+
       function getBest1mCoinRows() {
         return Array.from(document.querySelectorAll('#best1m-coin-picker [data-best1m-coin-row]'));
       }
@@ -6146,14 +6256,24 @@
 
         best1mState.exchange = exchangeKey;
         best1mState.enabledCoins = coins.slice();
+        best1mState.distributedHosts = Array.isArray(payload.distributed_hosts) ? payload.distributed_hosts.slice() : [];
         if (exchangeChanged) {
           best1mState.coinFilter = '';
+          best1mState.distributedEnabled = false;
+          best1mState.selectedDistributedHosts = new Set();
           if (filterInput) filterInput.value = '';
         }
+        var validHostnames = new Set(best1mState.distributedHosts.map(function (host) {
+          return String(host.hostname || '');
+        }));
+        best1mState.selectedDistributedHosts = new Set(Array.from(best1mState.selectedDistributedHosts || []).filter(function (hostname) {
+          return validHostnames.has(hostname);
+        }));
 
         best1mState.selectedCoins = new Set(nextSelected);
         resetBest1mDragSelection();
         renderBest1mCoinPicker();
+        renderBest1mDistributedHosts();
 
         if (queueButton) queueButton.disabled = !coins.length;
         if (!coins.length) {
@@ -6172,6 +6292,8 @@
         document.getElementById('best1m-selected-count').textContent = 'Loading…';
         document.getElementById('best1m-filtered-count').textContent = '';
         document.getElementById('best1m-coin-picker').innerHTML = '<div class="coin-picker-empty">Loading available coins...</div>';
+        best1mState.distributedHosts = [];
+        renderBest1mDistributedHosts();
         document.getElementById('btn-best1m-queue').disabled = true;
 
         try {
@@ -6231,6 +6353,14 @@
         var startDate = inputDayToBest1m(document.getElementById('best1m-start-date').value);
         var endDate = inputDayToBest1m(document.getElementById('best1m-end-date').value);
         var selectedCoins = getBest1mSelectedCoins();
+        var distributedEnabled = meta.key === 'bitget' && Boolean(document.getElementById('best1m-distributed-enabled').checked);
+        var distributedHosts = distributedEnabled ? getBest1mSelectedDistributedHosts() : [];
+        if (distributedEnabled && !distributedHosts.length) {
+          var hostMessage = 'Select at least one downloader for distributed Bitget backfill.';
+          setBest1mFeedback(hostMessage, 'error');
+          showToast(hostMessage, 'error');
+          return;
+        }
 
         queueButton.disabled = true;
         clearBest1mFeedback();
@@ -6241,7 +6371,9 @@
               coins: selectedCoins,
               start_day: startDate,
               end_day: endDate,
-              refetch: Boolean(document.getElementById('best1m-refetch').checked)
+              refetch: Boolean(document.getElementById('best1m-refetch').checked),
+              distributed: distributedEnabled,
+              distributed_hosts: distributedHosts.map(function (host) { return host.hostname; })
             })
           });
           if (!result || result.success === false) {
@@ -7610,6 +7742,28 @@
         });
         document.getElementById('btn-best1m-clear-selection').addEventListener('click', function () {
           setBest1mSelectedCoins([]);
+        });
+        document.getElementById('best1m-distributed-enabled').addEventListener('change', function (event) {
+          best1mState.distributedEnabled = Boolean(event.target.checked);
+          renderBest1mDistributedHosts();
+        });
+        document.getElementById('best1m-distributed-hosts').addEventListener('click', function (event) {
+          var row = event.target && event.target.closest ? event.target.closest('[data-best1m-host]') : null;
+          if (!row) return;
+          var hostname = String(row.getAttribute('data-best1m-host') || '');
+          if (!hostname) return;
+          var selected = best1mState.selectedDistributedHosts instanceof Set ? best1mState.selectedDistributedHosts : new Set();
+          if (selected.has(hostname)) selected.delete(hostname);
+          else selected.add(hostname);
+          best1mState.selectedDistributedHosts = selected;
+          renderBest1mDistributedHosts();
+        });
+        document.getElementById('best1m-distributed-hosts').addEventListener('keydown', function (event) {
+          if (!event || (event.key !== 'Enter' && event.key !== ' ')) return;
+          var row = event.target && event.target.closest ? event.target.closest('[data-best1m-host]') : null;
+          if (!row) return;
+          event.preventDefault();
+          row.click();
         });
         renderBest1mCoinPicker();
 

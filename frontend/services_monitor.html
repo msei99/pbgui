@@ -1036,12 +1036,32 @@ window.PBGUI_NAV_CONFIG = {
     return serviceSkipped(item) ? '' : (item.running ? 'running' : 'stopped');
   }
 
-  function serviceStatusText(item) {
+  function serviceStatusText(item, svcId) {
     var base = serviceSkipped(item) ? 'Skipped' : (item.running ? 'Running' : 'Stopped');
     if (item.can_enable) {
       base += ' · ' + (item.enabled ? 'Enabled' : 'Disabled');
     }
+    var pending = _serviceActionPending[svcId || ''] || '';
+    if (pending) base += ' · ' + serviceActionProgressText(pending);
     return base;
+  }
+
+  function serviceActionProgressText(action) {
+    if (action === 'restart') return 'Restarting...';
+    if (action === 'start') return 'Starting...';
+    if (action === 'stop') return 'Stopping...';
+    if (action === 'enable') return 'Enabling...';
+    if (action === 'disable') return 'Disabling...';
+    return 'Working...';
+  }
+
+  function serviceActionDoneText(action, svcId) {
+    if (action === 'restart') return svcId + ' restart requested successfully.';
+    if (action === 'start') return svcId + ' start requested successfully.';
+    if (action === 'stop') return svcId + ' stop requested successfully.';
+    if (action === 'enable') return svcId + ' autostart enabled.';
+    if (action === 'disable') return svcId + ' autostart disabled.';
+    return svcId + ' action completed.';
   }
 
   function serviceStatusTitle(item) {
@@ -1060,24 +1080,25 @@ window.PBGUI_NAV_CONFIG = {
     var skipped = serviceSkipped(item);
     var pending = _serviceActionPending[svc.id] || '';
     var disabledAttr = pending ? ' disabled' : '';
+    var pendingText = pending ? serviceActionProgressText(pending) : '';
     var html = '';
     if (!skipped) {
       if (svc.isApiServer) {
         html += running
-          ? '<button class="' + cls + ' restart" onclick="restartApiServer()' + stopProp + '"' + disabledAttr + '>&#8635; Restart</button>'
-          : '<button class="' + cls + ' start" onclick="svcAction(\'' + svc.id + '\',\'start\')' + stopProp + '"' + disabledAttr + '>&#9654; Start</button>';
+          ? '<button class="' + cls + ' restart" onclick="restartApiServer()' + stopProp + '"' + disabledAttr + '>&#8635; ' + (pending === 'restart' ? pendingText : 'Restart') + '</button>'
+          : '<button class="' + cls + ' start" onclick="svcAction(\'' + svc.id + '\',\'start\')' + stopProp + '"' + disabledAttr + '>&#9654; ' + (pending === 'start' ? pendingText : 'Start') + '</button>';
       } else {
         html += running
-          ? '<button class="' + cls + ' stop" onclick="svcAction(\'' + svc.id + '\',\'stop\')' + stopProp + '"' + disabledAttr + '>&#9632; Stop</button>'
-            + '<button class="' + cls + ' restart" onclick="svcAction(\'' + svc.id + '\',\'restart\')' + stopProp + '"' + disabledAttr + '>&#8635; Restart</button>'
-          : '<button class="' + cls + ' start" onclick="svcAction(\'' + svc.id + '\',\'start\')' + stopProp + '"' + disabledAttr + '>&#9654; Start</button>';
+          ? '<button class="' + cls + ' stop" onclick="svcAction(\'' + svc.id + '\',\'stop\')' + stopProp + '"' + disabledAttr + '>&#9632; ' + (pending === 'stop' ? pendingText : 'Stop') + '</button>'
+            + '<button class="' + cls + ' restart" onclick="svcAction(\'' + svc.id + '\',\'restart\')' + stopProp + '"' + disabledAttr + '>&#8635; ' + (pending === 'restart' ? pendingText : 'Restart') + '</button>'
+          : '<button class="' + cls + ' start" onclick="svcAction(\'' + svc.id + '\',\'start\')' + stopProp + '"' + disabledAttr + '>&#9654; ' + (pending === 'start' ? pendingText : 'Start') + '</button>';
       }
     }
     if (item.can_enable) {
       if (item.enabled) {
-        html += '<button class="' + cls + ' disable" onclick="svcAction(\'' + svc.id + '\',\'disable\')' + stopProp + '"' + disabledAttr + '>Disable</button>';
+        html += '<button class="' + cls + ' disable" onclick="svcAction(\'' + svc.id + '\',\'disable\')' + stopProp + '"' + disabledAttr + '>' + (pending === 'disable' ? pendingText : 'Disable') + '</button>';
       } else if (!item.enable_blocked_reason) {
-        html += '<button class="' + cls + ' enable" onclick="svcAction(\'' + svc.id + '\',\'enable\')' + stopProp + '"' + disabledAttr + '>Enable</button>';
+        html += '<button class="' + cls + ' enable" onclick="svcAction(\'' + svc.id + '\',\'enable\')' + stopProp + '"' + disabledAttr + '>' + (pending === 'enable' ? pendingText : 'Enable') + '</button>';
       }
     }
     return html;
@@ -1093,7 +1114,7 @@ window.PBGUI_NAV_CONFIG = {
       if (dotSb) dotSb.className = 'sb-dot ' + cls;
       if (dotCs) dotCs.className = 'status-dot ' + cls;
       if (lbl) {
-        lbl.textContent = serviceStatusText(item);
+        lbl.textContent = serviceStatusText(item, svc.id);
         lbl.title = serviceStatusTitle(item);
       }
       /* ctrl-strip buttons */
@@ -1629,7 +1650,7 @@ window.PBGUI_NAV_CONFIG = {
     SERVICES.forEach(function (svc) {
       var item = _status[svc.id] || {};
       var cls = serviceStatusClass(item);
-      var label = serviceStatusText(item);
+      var label = serviceStatusText(item, svc.id);
       var title = serviceStatusTitle(item);
       var btns = renderServiceButtons(svc, item, true);
       html += '<div class="svc-card ' + cls + '" onclick="selectPanel(\'' + svc.id + '\')">'
@@ -1773,6 +1794,15 @@ window.PBGUI_NAV_CONFIG = {
         }
         if (d.error) {
           throw new Error(d.error);
+        }
+        if (action === 'restart') {
+          _resultPopup(
+            'Service restart requested',
+            serviceActionDoneText(action, svcId),
+            'The status cards refresh automatically; watch the service dot and log tab for startup progress.',
+            true,
+            false
+          );
         }
         fetchStatus();
       })

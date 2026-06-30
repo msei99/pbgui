@@ -396,7 +396,7 @@ def get_market_data_coin_options(exchange: str) -> list[str]:
             only_cpt=False,
             notices_ignore=False,
             tags=[],
-            quote_filter=["USDT"] if ex == "okx" else None,
+            quote_filter=["USDT"] if ex in ("okx", "bitget") else None,
             use_cache=True,
             active_only=True,
         )
@@ -421,7 +421,7 @@ def get_market_data_coin_options(exchange: str) -> list[str]:
                 if not bool(row.get("swap", False)) or not bool(row.get("active", True)) or not bool(row.get("linear", True)):
                     continue
                 quote = str(row.get("quote") or "").strip().upper()
-                if ex == "okx" and quote != "USDT":
+                if ex in ("okx", "bitget") and quote != "USDT":
                     continue
                 coin = str(row.get("coin") or "").strip()
                 if not coin:

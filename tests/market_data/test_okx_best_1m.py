@@ -1,13 +1,14 @@
-"""Tests for the OKX 1m market-data downloader helpers."""
+"""Tests for exchange 1m market-data downloader helpers."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from io import BytesIO
 import zipfile
 
 import numpy as np
 
+import bitget_best_1m as bitget
 import okx_best_1m as okx
 
 
@@ -265,3 +266,223 @@ def test_write_candles_for_day_persists_npz_and_source_index(monkeypatch, tmp_pa
         "minute_indices": [0],
         "code": okx.SOURCE_CODE_API,
     }]
+
+
+def test_bitget_btc_symbol_inputs_resolve_to_native_and_storage_dir() -> None:
+    """BTC variants resolve to BTCUSDT and BTC_USDT:USDT."""
+
+    assert bitget._coin_to_bitget_symbol("BTC") == "BTCUSDT"
+    assert bitget._coin_to_bitget_symbol("BTCUSDT") == "BTCUSDT"
+    assert bitget._coin_to_bitget_symbol("BTC/USDT:USDT") == "BTCUSDT"
+    assert bitget.get_storage_coin_dir("BTC_USDT:USDT") == "BTC_USDT:USDT"
+
+
+def test_bitget_mapping_preserves_power_of_ten_base_prefix() -> None:
+    """Mapped power-of-ten markets keep their native Bitget base prefix."""
+
+    assert bitget._coin_to_bitget_symbol("BONK") == "1000BONKUSDT"
+    assert bitget.get_storage_coin_dir("BONK") == "1000BONK_USDT:USDT"
+
+
+def test_bitget_rest_row_maps_base_volume_to_bv() -> None:
+    """Bitget row index 5 is stored as base-volume value."""
+
+    row = ["1711929600000", "1", "2", "0.5", "1.5", "27.59", "41.385"]
+    parsed = bitget._parse_rest_row(row)
+
+    assert parsed == {"t": 1711929600000, "o": 1.0, "h": 2.0, "l": 0.5, "c": 1.5, "v": 27.59}
+
+
+def test_bitget_bucket_rows_dedupes_overlapping_minutes() -> None:
+    """Duplicate rows for the same day/minute collapse to one candle."""
+
+    rows = [
+        ["1711929600000", "1", "2", "0.5", "1.5", "10", "15"],
+        ["1711929600000", "1", "2", "0.5", "1.6", "11", "17.6"],
+    ]
+
+    buckets = bitget._bucket_rows(rows, since_ms=1711929600000, end_ms=1711929660000)
+
+    assert list(buckets.keys()) == ["2024-04-01"]
+    assert len(buckets["2024-04-01"]) == 1
+    assert buckets["2024-04-01"][0]["c"] == 1.6
+    assert buckets["2024-04-01"][0]["v"] == 11.0
+
+
+def test_bitget_bucket_rows_enforces_global_range_boundaries() -> None:
+    """Global range filtering preserves start_date_override semantics."""
+
+    rows = [
+        ["1711929540000", "1", "1", "1", "1", "1", "1"],
+        ["1711929600000", "2", "2", "2", "2", "2", "4"],
+        ["1711929660000", "3", "3", "3", "3", "3", "9"],
+    ]
+
+    buckets = bitget._bucket_rows(rows, since_ms=1711929600000, end_ms=1711929660000)
+
+    assert len(buckets["2024-04-01"]) == 1
+    assert buckets["2024-04-01"][0]["o"] == 2.0
+
+
+def test_bitget_write_day_npz_uses_candles_key_and_dtype(tmp_path) -> None:
+    """Written NPZ files match PBGui's structured candle schema."""
+
+    path = tmp_path / "2024-04-01.npz"
+    bitget._write_day_npz(
+        path,
+        {
+            0: {"t": 1711929600000, "o": 1.0, "h": 2.0, "l": 0.5, "c": 1.5, "v": 27.59},
+        },
+    )
+
+    with np.load(path) as data:
+        assert "candles" in data
+        arr = data["candles"]
+    assert arr.dtype == bitget._NPZ_DTYPE
+    assert arr[0]["bv"] == np.float32(27.59)
+
+
+def test_bitget_build_end_time_cursors_uses_200_minute_steps() -> None:
+    """A 401-minute range needs three descending endTime cursors."""
+
+    start = 1_000_000
+    end = start + (401 * bitget.MS_PER_MINUTE)
+
+    assert bitget._build_end_time_cursors(start, end) == [
+        end,
+        end - (200 * bitget.MS_PER_MINUTE),
+        end - (400 * bitget.MS_PER_MINUTE),
+    ]
+
+
+def test_bitget_defaults_stay_below_official_public_rate_limit() -> None:
+    """Bitget REST defaults leave headroom below the 20 req/s IP endpoint limit."""
+
+    assert bitget.REST_RATE_PER_SECOND == 18.0
+    assert bitget.REST_WORKERS == 16
+    assert bitget.MAX_RETRIES >= 8
+
+
+def test_bitget_429_retries_with_rate_limit_penalty(monkeypatch) -> None:
+    """HTTP 429 responses back off before retrying the request."""
+
+    class FakeResponse:
+        """Minimal response object for Bitget retry tests."""
+
+        def __init__(self, status_code: int, payload: dict) -> None:
+            self.status_code = status_code
+            self._payload = payload
+            self.text = '{"code":"429","msg":"Too Many Requests"}' if status_code == 429 else '{"code":"00000"}'
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return self._payload
+
+    class FakeSession:
+        """Return one 429 response followed by a successful payload."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get(self, *_args, **_kwargs) -> FakeResponse:
+            self.calls += 1
+            if self.calls == 1:
+                return FakeResponse(429, {"code": "429", "msg": "Too Many Requests", "data": None})
+            return FakeResponse(200, {"code": "00000", "data": []})
+
+    fake_session = FakeSession()
+    sleeps: list[float] = []
+    monkeypatch.setattr(bitget, "_get_session", lambda: fake_session)
+    monkeypatch.setattr(bitget.random, "random", lambda: 0.0)
+    monkeypatch.setattr(bitget.time, "sleep", lambda seconds: sleeps.append(float(seconds)))
+
+    payload = bitget._bitget_get_json(
+        bitget.HISTORY_ENDPOINT,
+        {"symbol": "BTCUSDT", "productType": bitget.PRODUCT_TYPE, "granularity": bitget.GRANULARITY},
+        limiter=bitget.RateLimiter(1000.0),
+    )
+
+    assert payload == {"code": "00000", "data": []}
+    assert fake_session.calls == 2
+    assert any(seconds >= bitget.RATE_LIMIT_PENALTY_S for seconds in sleeps)
+
+
+def test_bitget_40034_raises_unavailable_symbol(monkeypatch) -> None:
+    """Bitget symbol-not-exists responses stay non-retryable and typed."""
+
+    class FakeSession:
+        """Return Bitget's unavailable-symbol response."""
+
+        def get(self, *_args, **_kwargs) -> _FakeResponse:
+            return _FakeResponse(400, {"code": "40034", "msg": "Symbol not exists"}, text='{"code":"40034","msg":"Symbol not exists"}')
+
+    monkeypatch.setattr(bitget, "_get_session", lambda: FakeSession())
+
+    try:
+        bitget._bitget_get_json(
+            bitget.HISTORY_ENDPOINT,
+            {"symbol": "HYUNUSDT", "productType": bitget.PRODUCT_TYPE, "granularity": bitget.GRANULARITY},
+        )
+    except bitget.BitgetUnavailableSymbolError as exc:
+        assert "40034" in str(exc)
+        assert "Symbol not exists" in str(exc)
+    else:
+        raise AssertionError("expected BitgetUnavailableSymbolError")
+
+
+def test_okx_latest_success_logs_info_even_with_errors_field(monkeypatch) -> None:
+    """OKX latest success logs must not be auto-classified as ERROR by errors=0."""
+
+    logs: list[tuple[str, str, str | None]] = []
+    monkeypatch.setattr(okx, "_rest_fetch_range", lambda *_args, **_kwargs: ({}, 0, []))
+    monkeypatch.setattr(okx, "append_exchange_download_log", lambda exchange, line, level=None: logs.append((exchange, line, level)))
+
+    result = okx.update_latest_okx_1m_for_coin(coin="BTC", lookback_days=2)
+
+    assert result["result"] == "ok"
+    done_logs = [item for item in logs if "[okx_latest_1m] done" in item[1]]
+    assert done_logs
+    assert done_logs[-1][2] == "INFO"
+
+
+def test_bitget_market_data_dispatch_tables_include_bitget() -> None:
+    """Best-1m and status dispatch tables expose Bitget."""
+
+    import task_worker
+    from api import market_data
+
+    assert market_data.BEST_1M_EXCHANGES["bitget"]["job_type"] == "bitget_best_1m"
+    assert market_data.BEST_1M_EXCHANGES["bitget"]["queue_exchange"] == "bitget"
+    assert market_data.COPY_DATA_EXCHANGES["bitget"]["storage"] == "bitget"
+    assert task_worker.OHLCV_COPY_EXCHANGES["bitget"]["storage"] == "bitget"
+    assert market_data._get_exchange_status_key("bitget") == "bitget_latest_1m"
+    assert market_data._get_exchange_flag_prefix("bitget") == "bitget_latest_1m"
+
+
+def test_bitget_heatmap_lag_uses_bitget_ini_section(monkeypatch) -> None:
+    """Bitget heatmap lag reads bitget_data instead of pbdata defaults."""
+
+    import pbgui_purefunc
+    from api import heatmap
+
+    def fake_load_ini(section, key):
+        """Return a Bitget-specific latest-1m interval."""
+
+        if section == "bitget_data" and key == "latest_1m_interval_seconds":
+            return "7200"
+        return "1800"
+
+    monkeypatch.setattr(pbgui_purefunc, "load_ini", fake_load_ini)
+
+    assert heatmap._get_missing_lag_minutes("bitget") == 120
+
+
+def test_bitget_day_helpers_return_yyyymmdd(monkeypatch) -> None:
+    """Newest/oldest helpers return compact YYYYMMDD strings."""
+
+    monkeypatch.setattr(bitget, "_list_existing_days", lambda coin: [date(2024, 4, 1), date(2024, 4, 3)])
+
+    assert bitget.get_oldest_day("BTC") == "20240401"
+    assert bitget.get_newest_day("BTC") == "20240403"

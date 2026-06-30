@@ -27,6 +27,7 @@ from rate_limit_budget import RateLimitBudget, EXCHANGE_RATE_LIMITS, get_weight
 from hyperliquid_best_1m import update_latest_hyperliquid_1m_api_for_coin
 from binance_best_1m import update_latest_binance_1m_for_coin
 from okx_best_1m import update_latest_okx_1m_for_coin
+from bitget_best_1m import update_latest_bitget_1m_for_coin
 from inventory_cache import refresh_coin as _refresh_inventory_coin
 
 
@@ -499,6 +500,14 @@ class PBData():
         self._okx_latest_1m_min_lookback_days = 2
         self._okx_latest_1m_max_lookback_days = 7
         self._okx_latest_1m_task = None
+        # Bitget latest 1m auto-refresh settings
+        self._bitget_latest_1m_enabled = True
+        self._bitget_latest_1m_interval_seconds = 3600
+        self._bitget_latest_1m_coin_pause_seconds = 0.5
+        self._bitget_latest_1m_api_timeout_seconds = 30.0
+        self._bitget_latest_1m_min_lookback_days = 2
+        self._bitget_latest_1m_max_lookback_days = 7
+        self._bitget_latest_1m_task = None
         self._market_data_status: dict = {}
         self._market_data_status_lock = asyncio.Lock()
         # Load initial settings (ws_max, log_level, ...)
@@ -783,6 +792,23 @@ class PBData():
             okx_max_lb = _get_int_opt('okx_data', 'latest_1m_max_lookback_days')
             if okx_max_lb is not None and okx_max_lb > 0:
                 self._okx_latest_1m_max_lookback_days = int(okx_max_lb)
+
+            # Bitget latest 1m settings
+            bitget_interval = _get_int_opt('bitget_data', 'latest_1m_interval_seconds')
+            if bitget_interval is not None and bitget_interval > 0:
+                self._bitget_latest_1m_interval_seconds = int(bitget_interval)
+            bitget_pause = _get_float_opt('bitget_data', 'latest_1m_coin_pause_seconds')
+            if bitget_pause is not None and bitget_pause >= 0:
+                self._bitget_latest_1m_coin_pause_seconds = float(bitget_pause)
+            bitget_timeout = _get_float_opt('bitget_data', 'latest_1m_api_timeout_seconds')
+            if bitget_timeout is not None and bitget_timeout > 0:
+                self._bitget_latest_1m_api_timeout_seconds = float(bitget_timeout)
+            bitget_min_lb = _get_int_opt('bitget_data', 'latest_1m_min_lookback_days')
+            if bitget_min_lb is not None and bitget_min_lb > 0:
+                self._bitget_latest_1m_min_lookback_days = int(bitget_min_lb)
+            bitget_max_lb = _get_int_opt('bitget_data', 'latest_1m_max_lookback_days')
+            if bitget_max_lb is not None and bitget_max_lb > 0:
+                self._bitget_latest_1m_max_lookback_days = int(bitget_max_lb)
 
             # Pause between per-user REST calls in shared pollers
             new_rest_pause = _get_float_opt('pbdata', 'shared_rest_user_pause_seconds')
@@ -1543,6 +1569,161 @@ class PBData():
             if await _wait_for_flag(_okx_flag, _remaining_wait):
                 try:
                     _okx_flag.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    async def _bitget_latest_1m_loop(self):
+        """Background loop: refresh Bitget USDT-FUTURES 1m candles for enabled coins."""
+        await asyncio.sleep(30)  # Offset from HL/Binance/Bybit/OKX loops
+        while True:
+            try:
+                try:
+                    self._load_settings()
+                except Exception:
+                    pass
+
+                if not self._bitget_latest_1m_enabled:
+                    await asyncio.sleep(5)
+                    continue
+
+                cfg = load_market_data_config()
+                coins, missing_saved_coins, auto_enable_new_coins = get_effective_enabled_coins("bitget", cfg=cfg)
+                coins = [str(c).strip().upper() for c in coins if str(c).strip()]
+
+                if missing_saved_coins and not auto_enable_new_coins:
+                    try:
+                        set_enabled_coins("bitget", coins)
+                        _human_log(
+                            "PBData",
+                            f"[market-data] pruned unavailable enabled coins from bitget list: {', '.join(sorted(missing_saved_coins))}",
+                            level="INFO",
+                        )
+                    except Exception as e:
+                        _human_log("PBData", f"[market-data] failed to prune unavailable bitget coins: {e}", level="WARNING")
+
+                if not coins:
+                    await asyncio.sleep(float(self._bitget_latest_1m_interval_seconds))
+                    continue
+
+                _coins_done_offset = 0
+                now = datetime.now()
+                now_ts = now.timestamp()
+                _prev_bitget: dict = {}
+                try:
+                    _prev_bitget = dict(self._market_data_status or {}).get("bitget_latest_1m", {}).get("coins", {})
+                except Exception:
+                    pass
+                status_bitget = {
+                    "exchange": "bitget",
+                    "interval_seconds": int(self._bitget_latest_1m_interval_seconds),
+                    "last_run_ts": int(now_ts),
+                    "running": True,
+                    "current_coin": None,
+                    "coins_done": _coins_done_offset,
+                    "coins_total": len(coins),
+                    "coins": _prune_coin_status_map(_prev_bitget, coins),
+                }
+                try:
+                    await self._update_market_data_status("bitget_latest_1m", status_bitget)
+                except Exception:
+                    pass
+
+                for coin in coins:
+                    coin_status: dict = {"last_fetch": None, "result": "skipped"}
+                    max_lb = int(self._bitget_latest_1m_max_lookback_days)
+                    lookback_days = int(self._bitget_latest_1m_min_lookback_days)
+
+                    try:
+                        from bitget_best_1m import get_newest_day as bitget_get_newest_day
+                        newest_day = bitget_get_newest_day(coin) or ""
+                        if newest_day:
+                            d_new = datetime.strptime(newest_day, "%Y%m%d").date()
+                            days_since = (datetime.utcnow().date() - d_new).days
+                            if days_since < 0:
+                                days_since = 0
+                            lookback_days = max(lookback_days, days_since + 1)
+                        else:
+                            lookback_days = max_lb
+                            coin_status["note"] = "no_local_data"
+                    except Exception as e:
+                        coin_status["error"] = f"coverage:{type(e).__name__}"
+
+                    if lookback_days > max_lb:
+                        coin_status["note"] = "window_limited"
+                        lookback_days = max_lb
+
+                    try:
+                        res = await asyncio.to_thread(
+                            update_latest_bitget_1m_for_coin,
+                            coin=coin,
+                            lookback_days=int(lookback_days),
+                            overwrite=True,
+                            timeout_s=float(self._bitget_latest_1m_api_timeout_seconds),
+                        )
+                        coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
+                        coin_status["result"] = "ok"
+                        coin_status["lookback_days"] = int(lookback_days)
+                        coin_status["api_result"] = res
+                        try:
+                            from bitget_best_1m import get_storage_coin_dir as bitget_storage_coin_dir
+                            _refresh_inventory_coin("bitget", "1m", bitget_storage_coin_dir(coin))
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
+                        coin_status["result"] = "error"
+                        coin_status["error"] = str(e)
+
+                    status_bitget["coins"][coin] = coin_status
+                    status_bitget["coins_done"] = status_bitget.get("coins_done", 0) + 1
+                    status_bitget["current_coin"] = coin
+                    try:
+                        await self._update_market_data_status("bitget_latest_1m", status_bitget)
+                    except Exception:
+                        pass
+
+                    _bitget_stop = _Path(f"{PBGDIR}/data/logs/bitget_latest_1m_stop.flag")
+                    if _bitget_stop.exists():
+                        try:
+                            _bitget_stop.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        status_bitget["running"] = False
+                        status_bitget["current_coin"] = None
+                        status_bitget["stopped"] = True
+                        status_bitget["last_run_duration_s"] = int(datetime.now().timestamp() - now_ts)
+                        try:
+                            await self._update_market_data_status("bitget_latest_1m", status_bitget)
+                        except Exception:
+                            pass
+                        break
+
+                    if self._bitget_latest_1m_coin_pause_seconds > 0:
+                        await asyncio.sleep(float(self._bitget_latest_1m_coin_pause_seconds))
+
+                status_bitget["running"] = False
+                status_bitget["current_coin"] = None
+                status_bitget["last_run_duration_s"] = int(datetime.now().timestamp() - now_ts)
+                try:
+                    await self._update_market_data_status("bitget_latest_1m", status_bitget)
+                except Exception:
+                    pass
+
+            except Exception as e:
+                try:
+                    _human_log('PBData', f"[market-data] bitget_latest_1m loop error: {e}", level='WARNING')
+                except Exception:
+                    pass
+
+            _bitget_flag = _Path(f"{PBGDIR}/data/logs/bitget_latest_1m_run_now.flag")
+            try:
+                _elapsed = datetime.now().timestamp() - now_ts
+                _remaining_wait = max(0.0, float(self._bitget_latest_1m_interval_seconds) - _elapsed)
+            except Exception:
+                _remaining_wait = float(self._bitget_latest_1m_interval_seconds)
+            if await _wait_for_flag(_bitget_flag, _remaining_wait):
+                try:
+                    _bitget_flag.unlink(missing_ok=True)
                 except Exception:
                     pass
 
@@ -3828,6 +4009,8 @@ class PBData():
                     self._bybit_latest_1m_task = asyncio.create_task(self._bybit_latest_1m_loop())
                 if not hasattr(self, "_okx_latest_1m_task") or self._okx_latest_1m_task is None or self._okx_latest_1m_task.done():
                     self._okx_latest_1m_task = asyncio.create_task(self._okx_latest_1m_loop())
+                if not hasattr(self, "_bitget_latest_1m_task") or self._bitget_latest_1m_task is None or self._bitget_latest_1m_task.done():
+                    self._bitget_latest_1m_task = asyncio.create_task(self._bitget_latest_1m_loop())
             except Exception as e:
                 _human_log('PBData', f"Error starting shared pollers: {e}", level='DEBUG')
         else:

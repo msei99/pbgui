@@ -4070,34 +4070,42 @@ def migrate_archive(name: str, session: SessionToken = Depends(require_auth)):
 
 
 @router.post("/archives/{name}/add-optimize-config")
-def add_optimize_config_to_archive(name: str, body: dict, session: SessionToken = Depends(require_auth)):
+async def add_optimize_config_to_archive(name: str, body: dict, session: SessionToken = Depends(require_auth)):
     """Copy an Optimize config into the versioned archive layout."""
     _validate_name(name)
     config_name = str((body or {}).get("config_name") or "").strip()
     _validate_name(config_name)
+    try:
+        return await asyncio.to_thread(_add_optimize_config_to_archive_sync, name, config_name)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log(SERVICE, f"Failed to archive optimize config {config_name}: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
+        raise HTTPException(500, f"Failed to archive optimize config: {exc}") from exc
+
+
+def _add_optimize_config_to_archive_sync(name: str, config_name: str) -> dict[str, Any]:
+    """Synchronous Optimize config archive copy used from a worker thread."""
+
     archive_dir = _archives_dir() / name
     if not archive_dir.exists():
         raise HTTPException(404, f"Archive '{name}' not found")
     cfg_file = _opt_archive_configs_dir() / f"{config_name}.json"
     if not cfg_file.exists():
         raise HTTPException(404, f"Optimize config '{config_name}' not found")
-    try:
-        cfg = load_pb7_config(cfg_file)
-        cfg = ensure_config_version(cfg, get_template_config)
-        dest, meta, skipped = resolve_optimize_archive_destination(archive_dir, config_name, cfg)
-        if not skipped:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            save_pb7_config(cfg, dest)
-        meta_path = dest.with_name(dest.stem + ".meta.json")
-        write_optimize_meta(meta_path, meta)
-        _invalidate_archive_cache(name)
-        manifest = rebuild_archive_manifest(archive_dir)
-        return {"ok": True, "path": str(dest), "relative_path": str(dest.relative_to(archive_dir)), "skipped": skipped, "meta": meta, "manifest": manifest}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _log(SERVICE, f"Failed to archive optimize config {config_name}: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
-        raise HTTPException(500, f"Failed to archive optimize config: {exc}") from exc
+    _log(SERVICE, f"Archiving optimize config {config_name} to archive {name}", level="INFO")
+    cfg = load_pb7_config(cfg_file)
+    cfg = ensure_config_version(cfg, get_template_config)
+    dest, meta, skipped = resolve_optimize_archive_destination(archive_dir, config_name, cfg)
+    if not skipped:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        save_pb7_config(cfg, dest)
+    meta_path = dest.with_name(dest.stem + ".meta.json")
+    write_optimize_meta(meta_path, meta)
+    _invalidate_archive_cache(name)
+    manifest = rebuild_archive_manifest(archive_dir)
+    _log(SERVICE, f"Archived optimize config {config_name} to archive {name}: {dest.relative_to(archive_dir)}", level="INFO")
+    return {"ok": True, "path": str(dest), "relative_path": str(dest.relative_to(archive_dir)), "skipped": skipped, "meta": meta, "manifest": manifest}
 
 
 @router.get("/archives/{name}/optimize-configs")

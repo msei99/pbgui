@@ -172,6 +172,121 @@
         }
         .expander-content.open { display: block; }
         .detail-row { margin: 0.3rem 0; }
+        .downloader-details {
+            margin-top: 0.75rem;
+            border: 1px solid rgba(96,165,250,0.22);
+            border-radius: 10px;
+            background: linear-gradient(135deg, rgba(15,23,42,0.96), rgba(17,24,39,0.9));
+            overflow: hidden;
+        }
+        .downloader-details summary {
+            cursor: pointer;
+            list-style: none;
+            padding: 0.75rem 0.9rem;
+            color: #dbeafe;
+            font-weight: 700;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.8rem;
+        }
+        .downloader-details summary::-webkit-details-marker { display: none; }
+        .downloader-details summary::before {
+            content: '▶';
+            color: #60a5fa;
+            margin-right: 0.2rem;
+        }
+        .downloader-details[open] summary::before { content: '▼'; }
+        .downloader-total {
+            color: #93c5fd;
+            font-size: var(--fs-xs);
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .downloader-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+            gap: 0.75rem;
+            padding: 0 0.9rem 0.9rem;
+        }
+        .downloader-card {
+            border: 1px solid rgba(148,163,184,0.16);
+            border-radius: 9px;
+            background: rgba(2,6,23,0.72);
+            padding: 0.75rem;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+        }
+        .downloader-card-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 0.75rem;
+            margin-bottom: 0.55rem;
+        }
+        .downloader-name {
+            color: #f8fafc;
+            font-weight: 700;
+            line-height: 1.25;
+            word-break: break-word;
+        }
+        .downloader-badge {
+            border: 1px solid rgba(96,165,250,0.28);
+            border-radius: 999px;
+            color: #bfdbfe;
+            background: rgba(59,130,246,0.1);
+            padding: 0.12rem 0.45rem;
+            font-size: var(--fs-xs);
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+        .downloader-badge.waiting {
+            border-color: rgba(148,163,184,0.22);
+            color: #cbd5e1;
+            background: rgba(148,163,184,0.08);
+        }
+        .downloader-badge.failed {
+            border-color: rgba(248,113,113,0.35);
+            color: #fecaca;
+            background: rgba(239,68,68,0.12);
+        }
+        .downloader-badge.done {
+            border-color: rgba(74,222,128,0.32);
+            color: #bbf7d0;
+            background: rgba(34,197,94,0.1);
+        }
+        .downloader-meter {
+            height: 7px;
+            border-radius: 999px;
+            overflow: hidden;
+            background: rgba(30,41,59,0.95);
+            margin-bottom: 0.6rem;
+        }
+        .downloader-meter-fill {
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, #38bdf8, #22c55e);
+            min-width: 2px;
+        }
+        .downloader-meter-fill.empty {
+            width: 100%;
+            min-width: 0;
+            background: repeating-linear-gradient(90deg, rgba(148,163,184,0.22), rgba(148,163,184,0.22) 8px, rgba(148,163,184,0.08) 8px, rgba(148,163,184,0.08) 16px);
+        }
+        .downloader-stats {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.45rem 0.65rem;
+            font-size: var(--fs-xs);
+        }
+        .downloader-stat-label { color: #94a3b8; display: block; }
+        .downloader-stat-value { color: #e2e8f0; font-weight: 700; }
+        .downloader-current {
+            grid-column: 1 / -1;
+            color: #cbd5e1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
         
         /* Tab header actions */
         .tab-header-actions {
@@ -497,6 +612,10 @@
         let reconnectAttempts = 0;
         const MAX_RECONNECT_ATTEMPTS = 5;
         let expandedJobs = new Set();
+        let expandedDownloaderJobs = new Set();
+        let activeJobsSnapshot = [];
+        const downloaderLogCache = new Map();
+        const downloaderLogFetches = new Set();
         let actionDialogResolve = null;
         let actionDialogReturnFocus = null;
 
@@ -611,6 +730,8 @@
                     jobExchange = 'binanceusdm';
                 } else if (jobType.startsWith('bybit_') || jobType.includes('bybit')) {
                     jobExchange = 'bybit';
+                } else if (jobType.startsWith('bitget_') || jobType.includes('bitget')) {
+                    jobExchange = 'bitget';
                 }
             }
             
@@ -705,8 +826,10 @@
 
             // Keep active jobs stable: running first, then queue/start order.
             activeJobs.sort(compareActiveJobs);
+            activeJobsSnapshot = activeJobs;
 
             runningContainer.innerHTML = activeJobs.map(renderActiveJob).join('');
+            ensureDownloaderLogFallbacks(activeJobs);
         }
 
         // ── Render Active Job (with details) ──
@@ -727,6 +850,8 @@
             const dlBytes = formatBytes(progress.downloaded_bytes_total);
             const skBytes = formatBytes(progress.skipped_existing_bytes_total);
             const flBytes = formatBytes(progress.failed_bytes_total);
+            const cachedLog = downloaderLogCache.get(job.id) || {};
+            const downloaderDetails = renderDownloaderDetails(job, { compact: true, open: expandedDownloaderJobs.has(job.id), logLines: cachedLog.lines || [] });
             const stage = progress.stage || '';
             const mode = progress.mode || '';
             const chunkDone = progress.chunk_done || 0;
@@ -780,6 +905,7 @@
                             </div>
                         </div>
                     ` : ''}
+                    ${downloaderDetails}
                 </div>
             `;
         }
@@ -817,6 +943,7 @@
             const durationStr = formatJobDuration(job);
 
             const isExpanded = expandedJobs.has(job.id);
+            const downloaderDetails = renderDownloaderDetails(job, { compact: true, open: expandedDownloaderJobs.has(job.id) });
 
             return `
                 <div class="job-card simple">
@@ -855,6 +982,7 @@
                             </div>
                         </div>
                     ` : ''}
+                    ${downloaderDetails}
                 </div>
             `;
         }
@@ -865,10 +993,28 @@
         }
 
         function formatJobDuration(job) {
+            const progress = job.progress || {};
+            const lr = progress.last_result || {};
+            const recordedDuration = parseFloat(lr.duration_s || 0);
+            if (['done', 'failed'].includes(job.status) && recordedDuration > 0) {
+                return formatDurationSeconds(Math.round(recordedDuration));
+            }
             const createdTs = parseFloat(job.created_ts || 0);
+            const runStartedTs = parseFloat(job.run_started_ts || 0);
+            const finishedTs = parseFloat(job.finished_ts || 0);
             const updatedTs = parseFloat(job.updated_ts || 0);
-            if (!(createdTs > 0) || updatedTs < createdTs) return '';
-            const dur = Math.round(updatedTs - createdTs);
+            const startTs = runStartedTs > 0 ? runStartedTs : createdTs;
+            let endTs = updatedTs;
+            if (finishedTs > 0) {
+                endTs = finishedTs;
+            } else if (job.status === 'running' && runStartedTs > 0) {
+                endTs = Date.now() / 1000;
+            }
+            if (!(startTs > 0) || endTs < startTs) return '';
+            return formatDurationSeconds(Math.round(endTs - startTs));
+        }
+
+        function formatDurationSeconds(dur) {
             const h = Math.floor(dur / 3600);
             const m = Math.floor((dur % 3600) / 60);
             const s = dur % 60;
@@ -894,6 +1040,229 @@
             const sizes = ['B', 'KB', 'MB', 'GB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i];
+        }
+
+        function numberValue(value) {
+            const n = Number(value || 0);
+            return Number.isFinite(n) ? n : 0;
+        }
+
+        function formatCount(value) {
+            return Math.round(numberValue(value)).toLocaleString();
+        }
+
+        function formatDaysFromMinutes(value) {
+            const days = numberValue(value) / 1440;
+            if (days >= 100) return Math.round(days).toLocaleString();
+            if (days >= 10) return days.toFixed(1);
+            return days.toFixed(2);
+        }
+
+        function parseHumanBytes(value) {
+            const text = String(value || '').trim();
+            const match = text.match(/^(\d+(?:\.\d+)?)\s*(B|KiB|MiB|GiB|TiB|KB|MB|GB|TB)$/i);
+            if (!match) return 0;
+            const amount = Number(match[1] || 0);
+            if (!Number.isFinite(amount)) return 0;
+            const unit = String(match[2] || 'B').toUpperCase();
+            const powers = { B: 0, KIB: 1, KB: 1, MIB: 2, MB: 2, GIB: 3, GB: 3, TIB: 4, TB: 4 };
+            return Math.round(amount * Math.pow(1024, powers[unit] || 0));
+        }
+
+        function parseDownloaderRowsFromLog(logLines) {
+            const stats = new Map();
+            const active = new Map();
+            (Array.isArray(logLines) ? logLines : []).forEach(line => {
+                const text = String(line || '');
+                const startMatch = text.match(/^\S+\s+\S+\s+(.+?)\s+segment\s+coin=(\S+)\s+symbol=\S+\s+range=(\S+)/);
+                if (startMatch) {
+                    active.set(startMatch[1].trim(), { coin: startMatch[2], range: startMatch[3] });
+                    return;
+                }
+                const match = text.match(/^\S+\s+\S+\s+(.+?)\s+segment done\s+coin=\S+\s+pages=(\d+)\s+rows=(\d+)(?:\s+payload=([^\s]+(?:\s+[A-Za-z]+)?))?.*?minutes_written=(\d+)/);
+                if (!match) return;
+                const host = match[1].trim();
+                active.delete(host);
+                const current = stats.get(host) || {
+                    host: host,
+                    mode: '',
+                    status: 'from log',
+                    segments: 0,
+                    pages: 0,
+                    rows: 0,
+                    payloadBytes: 0,
+                    minutesWritten: 0,
+                    currentCoin: '',
+                    currentRange: ''
+                };
+                current.segments += 1;
+                current.pages += numberValue(match[2]);
+                current.rows += numberValue(match[3]);
+                current.payloadBytes += parseHumanBytes(match[4]);
+                current.minutesWritten += numberValue(match[5]);
+                stats.set(host, current);
+            });
+            active.forEach((currentWork, host) => {
+                const current = stats.get(host) || {
+                    host: host,
+                    mode: '',
+                    status: 'running',
+                    segments: 0,
+                    pages: 0,
+                    rows: 0,
+                    payloadBytes: 0,
+                    minutesWritten: 0,
+                    currentCoin: '',
+                    currentRange: ''
+                };
+                current.currentCoin = currentWork.coin || '';
+                current.currentRange = currentWork.range || '';
+                current.status = current.status === 'from log' ? 'running' : current.status;
+                stats.set(host, current);
+            });
+            return Array.from(stats.values());
+        }
+
+        function getDownloaderRows(job, logLines) {
+            const payload = job && job.payload && typeof job.payload === 'object' ? job.payload : {};
+            const progress = job && job.progress && typeof job.progress === 'object' ? job.progress : {};
+            const lastResult = progress.last_result && typeof progress.last_result === 'object' ? progress.last_result : {};
+            const rawRows = Array.isArray(lastResult.host_results) && lastResult.host_results.length
+                ? lastResult.host_results
+                : (Array.isArray(lastResult.downloaders) ? lastResult.downloaders : []);
+            const byHost = new Map();
+            const sourceRows = rawRows.length ? rawRows : parseDownloaderRowsFromLog(logLines);
+            sourceRows.forEach(row => {
+                const coins = Array.isArray(row.coins) ? row.coins : [];
+                const currentCoin = String(row.current_coin !== undefined ? row.current_coin : (row.currentCoin || '')).trim();
+                const currentRange = String(row.current_range !== undefined ? row.current_range : (row.currentRange || '')).trim();
+                const host = String(row.host || row.hostname || 'Downloader');
+                byHost.set(host, {
+                    host: String(row.host || row.hostname || 'Downloader'),
+                    mode: String(row.mode || '').toUpperCase(),
+                    status: String(row.status || ''),
+                    segments: numberValue(row.segments),
+                    pages: numberValue(row.pages),
+                    rows: numberValue(row.rows),
+                    payloadBytes: numberValue(row.payload_bytes !== undefined ? row.payload_bytes : row.payloadBytes),
+                    minutesWritten: numberValue(row.minutes_written !== undefined ? row.minutes_written : row.minutesWritten),
+                    coins: coins.map(item => String(item)).filter(Boolean),
+                    currentCoin: currentCoin,
+                    currentRange: currentRange
+                });
+            });
+            if (Array.isArray(payload.distributed_hosts)) {
+                payload.distributed_hosts.forEach(hostInfo => {
+                    if (!hostInfo || typeof hostInfo !== 'object') return;
+                    const label = String(hostInfo.label || hostInfo.hostname || hostInfo.target || '').trim();
+                    if (!label || byHost.has(label)) return;
+                    byHost.set(label, {
+                        host: label,
+                        mode: String(hostInfo.mode || '').toUpperCase(),
+                        status: 'waiting',
+                        segments: 0,
+                        pages: 0,
+                        rows: 0,
+                        payloadBytes: 0,
+                        minutesWritten: 0,
+                        coins: [],
+                        currentCoin: '',
+                        currentRange: ''
+                    });
+                });
+            }
+            return Array.from(byHost.values()).filter(row => row.host);
+        }
+
+        function renderDownloaderDetails(job, opts) {
+            const options = opts || {};
+            const rows = getDownloaderRows(job, options.logLines || []);
+            if (!rows.length) return '';
+            const totalPayload = rows.reduce((sum, row) => sum + row.payloadBytes, 0);
+            const totalRows = rows.reduce((sum, row) => sum + row.rows, 0);
+            const totalPages = rows.reduce((sum, row) => sum + row.pages, 0);
+            const totalSegments = rows.reduce((sum, row) => sum + row.segments, 0);
+            const contributionScore = row => {
+                if (totalPayload > 0) return row.payloadBytes;
+                if (totalRows > 0) return row.rows;
+                if (totalPages > 0) return row.pages;
+                return row.segments;
+            };
+            const maxContribution = Math.max(1, ...rows.map(contributionScore));
+            const sortedRows = rows.slice().sort((a, b) => contributionScore(b) - contributionScore(a) || b.rows - a.rows || a.host.localeCompare(b.host));
+            const cards = sortedRows.map(row => {
+                const score = contributionScore(row);
+                const pct = score > 0 ? Math.max(3, Math.min(100, Math.round((score / maxContribution) * 100))) : 0;
+                const currentText = row.currentCoin ? (row.currentRange ? `${row.currentCoin} ${row.currentRange}` : row.currentCoin) : '';
+                const badge = row.mode || row.status || 'DL';
+                const statusClass = row.status === 'failed' ? ' failed' : (row.status === 'done' ? ' done' : (score <= 0 ? ' waiting' : ''));
+                return `
+                    <div class="downloader-card">
+                        <div class="downloader-card-head">
+                            <div class="downloader-name">${escapeHtml(row.host)}</div>
+                            <span class="downloader-badge${statusClass}">${escapeHtml(badge)}</span>
+                        </div>
+                        <div class="downloader-meter" title="${escapeHtml(formatBytes(row.payloadBytes))}">
+                            <div class="downloader-meter-fill${score > 0 ? '' : ' empty'}" style="width:${score > 0 ? pct : 100}%"></div>
+                        </div>
+                        <div class="downloader-stats">
+                            <div title="Data streamed to master."><span class="downloader-stat-label">Payload</span><span class="downloader-stat-value">${escapeHtml(formatBytes(row.payloadBytes))}</span></div>
+                            <div title="Raw 1m candles fetched."><span class="downloader-stat-label">Rows</span><span class="downloader-stat-value">${escapeHtml(formatCount(row.rows))}</span></div>
+                            <div title="Bitget REST pages fetched."><span class="downloader-stat-label">Pages</span><span class="downloader-stat-value">${escapeHtml(formatCount(row.pages))}</span></div>
+                            <div title="Chunks assigned; default is 30d per coin."><span class="downloader-stat-label">Segments</span><span class="downloader-stat-value">${escapeHtml(formatCount(row.segments))}</span></div>
+                            <div title="Unique 1m candles written, in days."><span class="downloader-stat-label">Written</span><span class="downloader-stat-value">${escapeHtml(formatDaysFromMinutes(row.minutesWritten))} days</span></div>
+                            <div title="Downloader state."><span class="downloader-stat-label">Status</span><span class="downloader-stat-value">${escapeHtml(row.status || 'active')}</span></div>
+                            ${currentText ? `<div class="downloader-current" title="${escapeHtml(currentText)}">Current: ${escapeHtml(currentText)}</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            const title = options.compact ? 'Downloader Traffic' : 'Downloader Traffic Details';
+            const totalText = `${formatBytes(totalPayload)} · ${formatCount(totalRows)} rows · ${formatCount(totalPages)} pages · ${formatCount(totalSegments)} segments`;
+            const hasLogFallback = Array.isArray(options.logLines) && options.logLines.length > 0;
+            const hint = totalPayload + totalRows + totalPages + totalSegments > 0
+                ? ''
+                : '<div class="details-empty" style="padding:0 0.9rem 0.9rem;">No per-downloader contribution has been recorded for this job yet.' + (hasLogFallback ? ' The log did not contain segment summary lines.' : ' New distributed Bitget runs fill these cards live.') + '</div>';
+            const jobId = String(options.jobId || (job && job.id) || '').replace(/'/g, "\\'");
+            const toggleAttr = jobId ? ` ontoggle="rememberDownloaderDetails('${jobId}', this.open)"` : '';
+            return `
+                <details class="downloader-details"${toggleAttr} ${options.open ? 'open' : ''}>
+                    <summary><span>${title}</span><span class="downloader-total">${escapeHtml(totalText)}</span></summary>
+                    ${hint}
+                    <div class="downloader-grid">${cards}</div>
+                </details>
+            `;
+        }
+
+        function downloaderContributionTotal(job) {
+            return getDownloaderRows(job).reduce((sum, row) => {
+                return sum + numberValue(row.payloadBytes) + numberValue(row.rows) + numberValue(row.pages) + numberValue(row.segments) + numberValue(row.minutesWritten);
+            }, 0);
+        }
+
+        function ensureDownloaderLogFallbacks(jobs) {
+            (Array.isArray(jobs) ? jobs : []).forEach(job => {
+                if (!job || job.type !== 'bitget_best_1m_distributed' || !job.id) return;
+                const cached = downloaderLogCache.get(job.id);
+                const now = Date.now();
+                const hasLiveStats = downloaderContributionTotal(job) > 0;
+                if (hasLiveStats && cached && now - Number(cached.ts || 0) < 30000) return;
+                if (cached && now - Number(cached.ts || 0) < 5000) return;
+                if (downloaderLogFetches.has(job.id)) return;
+                downloaderLogFetches.add(job.id);
+                fetch(`${API_BASE}/jobs/${job.id}/log?lines=0&token=${API_TOKEN}`)
+                    .then(resp => resp.ok ? resp.json() : null)
+                    .then(payload => {
+                        const lines = payload && Array.isArray(payload.log) ? payload.log : [];
+                        downloaderLogCache.set(job.id, { ts: Date.now(), lines: lines });
+                        if (currentTab === 'running' && activeJobsSnapshot.some(item => item && item.id === job.id)) {
+                            const runningContainer = document.getElementById('jobs-running');
+                            if (runningContainer) runningContainer.innerHTML = activeJobsSnapshot.map(renderActiveJob).join('');
+                        }
+                    })
+                    .catch(err => console.warn('Downloader log fallback failed:', err))
+                    .finally(() => downloaderLogFetches.delete(job.id));
+            });
         }
 
         function formatTimestamp(ts) {
@@ -929,6 +1298,16 @@
                 content.classList.add('open');
                 btn.textContent = '▼ Details';
                 expandedJobs.add(jobId);
+            }
+        }
+
+        function rememberDownloaderDetails(jobId, isOpen) {
+            const id = String(jobId || '').trim();
+            if (!id) return;
+            if (isOpen) {
+                expandedDownloaderJobs.add(id);
+            } else {
+                expandedDownloaderJobs.delete(id);
             }
         }
 
@@ -1145,7 +1524,7 @@
             return rendered || '<div class="details-empty">No details available.</div>';
         }
 
-        function renderJobDetails(job) {
+        function renderJobDetails(job, logLines) {
             const payload = job && job.payload && typeof job.payload === 'object' ? job.payload : {};
             const progress = job && job.progress && typeof job.progress === 'object' ? job.progress : {};
             const coins = Array.isArray(payload.coins) ? payload.coins.join(', ') : '';
@@ -1180,6 +1559,7 @@
                 { label: 'Step', value: progress.total ? `${progress.step || 0}/${progress.total}` : '' },
                 { label: 'Chunk progress', value: progress.chunk_total ? `${progress.chunk_done || 0}/${progress.chunk_total}` : '' }
             ];
+            const downloaderDetails = renderDownloaderDetails(job, { open: true, logLines: logLines || [] });
 
             return `
                 <div class="details-section">
@@ -1190,6 +1570,12 @@
                     <h3>Scope</h3>
                     <div class="details-kv">${renderDetailRows(scopeRows)}</div>
                 </div>
+                ${downloaderDetails ? `
+                    <div class="details-section">
+                        <h3>Downloader Traffic</h3>
+                        ${downloaderDetails}
+                    </div>
+                ` : ''}
                 <div class="details-section">
                     <h3>Payload</h3>
                     ${formatJsonBlock(payload)}
@@ -1243,6 +1629,18 @@
                 }
                 const job = await resp.json();
                 content.innerHTML = renderJobDetails(job || {});
+                if (job && job.type === 'bitget_best_1m_distributed') {
+                    try {
+                        const logResp = await fetch(`${API_BASE}/jobs/${jobId}/log?lines=0&token=${API_TOKEN}`);
+                        if (logResp.ok) {
+                            const logPayload = await logResp.json();
+                            const logLines = Array.isArray(logPayload.log) ? logPayload.log : [];
+                            content.innerHTML = renderJobDetails(job || {}, logLines);
+                        }
+                    } catch (logErr) {
+                        console.warn('Job detail log fallback failed:', logErr);
+                    }
+                }
             } catch (e) {
                 console.error('Job details error:', e);
                 content.innerHTML = `<div class="details-empty" style="color:#ef4444;">Failed to load job details: ${escapeHtml((e && e.message) || 'Unknown error')}</div>`;

@@ -4513,12 +4513,16 @@ async function apiFetch(path, opts) {
   var headers = Object.assign({}, init.headers || {}, { Authorization: 'Bearer ' + TOKEN });
   if (!headers['Content-Type'] && init.body) headers['Content-Type'] = 'application/json';
   var response = await fetch(API_BASE + path, Object.assign({}, init, { headers: headers }));
+  var text = await response.text();
   if (!response.ok) {
-    var text = await response.text();
     throw buildHttpError(response, text);
   }
-  if (response.status === 204) return null;
-  return response.json();
+  if (response.status === 204 || !text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error('Unexpected non-JSON response from server: ' + text.slice(0, 240));
+  }
 }
 
 async function authFetch(url, opts) {
@@ -4526,11 +4530,16 @@ async function authFetch(url, opts) {
   var headers = Object.assign({}, init.headers || {}, { Authorization: 'Bearer ' + TOKEN });
   if (!headers['Content-Type'] && init.body) headers['Content-Type'] = 'application/json';
   var response = await fetch(url, Object.assign({}, init, { headers: headers }));
+  var text = await response.text();
   if (!response.ok) {
-    var text = await response.text();
     throw buildHttpError(response, text);
   }
-  return response.json();
+  if (response.status === 204 || !text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error('Unexpected non-JSON response from server: ' + text.slice(0, 240));
+  }
 }
 
 function formatIso(value) {
@@ -11111,20 +11120,41 @@ async function addSelectedOptimizeConfigsToArchive() {
     toast('Select at least one config to archive.', 'err');
     return;
   }
-  var base = archiveApiBase();
-  var settings = await authFetch(base + '/archives/settings');
-  var archiveName = settings.my_archive || '';
-  if (!archiveName) {
-    toast('No own archive configured in Backtest Archive setup.', 'err');
-    return;
+  var button = el('btn-archive-selected');
+  var originalText = button ? button.textContent : '';
+  var setProgress = function(message) {
+    if (button) button.textContent = message;
+  };
+  if (button) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
   }
-  for (var i = 0; i < selected.length; i++) {
-    await authFetch(base + '/archives/' + encodeURIComponent(archiveName) + '/add-optimize-config', {
-      method: 'POST',
-      body: JSON.stringify({ config_name: selected[i] })
-    });
+  try {
+    var base = archiveApiBase();
+    setProgress('🗄 Checking archive...');
+    toast('Preparing archive export for ' + selected.length + ' config(s)...', 'info');
+    var settings = await authFetch(base + '/archives/settings');
+    var archiveName = settings.my_archive || '';
+    if (!archiveName) {
+      toast('No own archive configured in Backtest Archive setup.', 'err');
+      return;
+    }
+    for (var i = 0; i < selected.length; i++) {
+      setProgress('🗄 Archiving ' + (i + 1) + '/' + selected.length + ': ' + selected[i]);
+      await authFetch(base + '/archives/' + encodeURIComponent(archiveName) + '/add-optimize-config', {
+        method: 'POST',
+        body: JSON.stringify({ config_name: selected[i] })
+      });
+      toast('Archived ' + (i + 1) + '/' + selected.length + ': ' + selected[i], 'ok');
+    }
+    toast('Archived ' + selected.length + ' Optimize config(s) to ' + archiveName + '.', 'ok');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+      button.textContent = originalText || '🗄 Add to Archive';
+    }
   }
-  toast('Archived ' + selected.length + ' Optimize config(s) to ' + archiveName + '.', 'ok');
 }
 
 async function editSelectedConfig() {

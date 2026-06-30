@@ -12,7 +12,7 @@ import time
 import threading
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,26 @@ from hyperliquid_aws import (
 from hyperliquid_best_1m import improve_best_hyperliquid_1m_archive_for_coin, _is_stock_perp_coin
 from binance_best_1m import improve_best_binance_1m_for_coin
 from bybit_best_1m import improve_best_bybit_1m_for_coin
+from bitget_best_1m import (
+    DAY_MS as _BITGET_DAY_MS,
+    INCEPTION_DEFAULT as _BITGET_INCEPTION_DEFAULT,
+    MIN_DAY_CANDLES as _BITGET_MIN_DAY_CANDLES,
+    BitgetUnavailableSymbolError,
+    RateLimiter as _BitgetRateLimiter,
+    REST_RATE_PER_SECOND as _BITGET_REST_RATE_PER_SECOND,
+    REST_WORKERS as _BITGET_REST_WORKERS,
+    _build_end_time_cursors as _bitget_build_end_time_cursors,
+    _bucket_rows as _bitget_bucket_rows,
+    _coin_to_bitget_symbol,
+    _bitget_day_path,
+    _day_start_ms as _bitget_day_start_ms,
+    _find_inception_ms as _bitget_find_inception_ms,
+    _read_day_npz as _bitget_read_day_npz,
+    _rest_fetch_range as _bitget_rest_fetch_range,
+    _write_candles_for_day as _bitget_write_candles_for_day,
+    improve_best_bitget_1m_for_coin,
+    get_storage_coin_dir as _bitget_storage_coin_dir,
+)
 from okx_best_1m import (
     REST_RATE_PER_SECOND as _OKX_REST_RATE_PER_SECOND,
     RateLimiter as _OkxRateLimiter,
@@ -54,13 +74,43 @@ from inventory_cache import refresh_coin as _refresh_inventory_coin, sweep_cache
 
 _STOP = False
 OKX_BEST_1M_PIPELINE_WORKERS = 2
+BITGET_DISTRIBUTED_CHUNK_DAYS = 30
+BITGET_REMOTE_DOWNLOAD_WORKERS = 12
+BITGET_DISTRIBUTED_SEGMENT_RETRIES = 2
+BITGET_REMOTE_SEGMENT_RETRIES = 3
+BITGET_SSH_OPTIONS = [
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=20",
+    "-o", "ServerAliveInterval=15",
+    "-o", "ServerAliveCountMax=2",
+]
 OHLCV_COPY_EXCHANGES: dict[str, dict[str, str]] = {
     "binance": {"label": "Binance USDM", "storage": "binanceusdm"},
     "binanceusdm": {"label": "Binance USDM", "storage": "binanceusdm"},
     "bybit": {"label": "Bybit", "storage": "bybit"},
     "okx": {"label": "OKX", "storage": "okx"},
+    "bitget": {"label": "Bitget", "storage": "bitget"},
     "hyperliquid": {"label": "Hyperliquid", "storage": "hyperliquid"},
 }
+
+
+def _fmt_bytes_short(value: Any) -> str:
+    """Format byte counts for compact worker logs."""
+
+    try:
+        size = float(value or 0)
+    except Exception:
+        size = 0.0
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    unit = units[0]
+    for unit in units:
+        if abs(size) < 1024.0 or unit == units[-1]:
+            break
+        size /= 1024.0
+    if unit == "B":
+        return f"{int(size)} B"
+    return f"{size:.2f} {unit}"
+
 OHLCV_COPY_MODES = {"missing_only", "update"}
 OHLCV_COPY_TARGET_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-@")
 OHLCV_COPY_REMOTE_PATH_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-")
@@ -251,11 +301,11 @@ def _run_job(job_path: Path) -> None:
     payload = payload if isinstance(payload, dict) else {}
 
     def mark_error(err: str) -> None:
-        update_job_file(job_path, mutate=lambda o: o.update({"status": "failed", "error": str(err), "run_requested": False, "run_requested_ts": 0}))
+        update_job_file(job_path, mutate=lambda o: o.update({"status": "failed", "error": str(err), "run_requested": False, "run_requested_ts": 0, "finished_ts": int(time.time())}))
 
     # Stamp this worker's PID so _requeue_stale_running_jobs on a concurrent
     # worker startup can check whether we are still alive before stealing the job.
-    update_job_file(job_path, mutate=lambda o: o.update({"status": "running", "error": "", "worker_pid": os.getpid()}))
+    update_job_file(job_path, mutate=lambda o: o.update({"status": "running", "error": "", "worker_pid": os.getpid(), "run_started_ts": int(time.time()), "finished_ts": 0}))
 
     try:
         if jtype == "hl_aws_l2book_auto":
@@ -266,6 +316,10 @@ def _run_job(job_path: Path) -> None:
             _run_binance_best_1m(job_path, payload)
         elif jtype == "bybit_best_1m":
             _run_bybit_best_1m(job_path, payload)
+        elif jtype == "bitget_best_1m":
+            _run_bitget_best_1m(job_path, payload)
+        elif jtype == "bitget_best_1m_distributed":
+            _run_bitget_best_1m_distributed(job_path, payload)
         elif jtype == "okx_best_1m":
             _run_okx_best_1m(job_path, payload)
         elif jtype == "ohlcv_copy":
@@ -275,7 +329,7 @@ def _run_job(job_path: Path) -> None:
         else:
             raise RuntimeError(f"Unknown job type: {jtype}")
 
-        update_job_file(job_path, mutate=lambda o: o.update({"status": "done", "run_requested": False, "run_requested_ts": 0}))
+        update_job_file(job_path, mutate=lambda o: o.update({"status": "done", "run_requested": False, "run_requested_ts": 0, "finished_ts": int(time.time())}))
         move_job_file(job_path, "done")
     except Exception as e:
         _job_log(f"job error {job_path.name}: {e}")
@@ -679,7 +733,7 @@ def _run_ohlcv_copy_command(job_path: Path, job_id: str, cmd: list[str], label: 
     """Run one mkdir/rsync command, streaming output and honoring cancellation."""
 
     stats_lines: list[str] = []
-    _append_to_job_log(job_id, f"  {label}: {shlex.join(cmd)}")
+    _append_to_job_log(job_id, f"  {label}: starting stdlib remote downloader")
     proc = subprocess.Popen(
         cmd,
         cwd=str(Path(__file__).resolve().parent),
@@ -1601,6 +1655,1041 @@ def _run_bybit_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
         update_progress(stage="running", last_result=out)
         try:
             _refresh_inventory_coin("bybit", "1m", coin)
+        except Exception:
+            pass
+
+    _append_to_job_log(job_id, f"job finished  duration={int(time.time()-started_ts)}s")
+
+
+def _normalize_bitget_distributed_hosts(raw_hosts: Any) -> list[dict[str, Any]]:
+    """Validate distributed Bitget host payloads from the API queue endpoint."""
+
+    if not isinstance(raw_hosts, list):
+        raw_hosts = []
+    hosts: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in raw_hosts:
+        if not isinstance(raw, dict):
+            continue
+        hostname = str(raw.get("hostname") or "").strip()
+        mode = str(raw.get("mode") or "").strip().lower()
+        if mode == "master" or hostname.lower() == "master":
+            key = "master"
+            if key in seen:
+                continue
+            hosts.append(
+                {
+                    "hostname": "master",
+                    "label": "Master (local downloader)",
+                    "target": "master",
+                    "ssh_args": [],
+                    "ssh_command": "",
+                    "mode": "master",
+                }
+            )
+            seen.add(key)
+            continue
+        target = _normalize_ohlcv_copy_target(raw.get("target"))
+        raw_ssh_command = str(raw.get("ssh_command") or "").strip()
+        ssh_args = _parse_ohlcv_copy_ssh_args(raw_ssh_command)
+        if not raw_ssh_command or raw_ssh_command == "ssh":
+            ssh_args = ["ssh", *BITGET_SSH_OPTIONS]
+        if len(ssh_args) > 1 and ssh_args[-1] == target:
+            raise ValueError("Distributed Bitget SSH command must not include the target host")
+        key = hostname or target
+        if key in seen:
+            continue
+        hosts.append(
+            {
+                "hostname": hostname or target,
+                "label": str(raw.get("label") or hostname or target).strip() or target,
+                "target": target,
+                "ssh_args": ssh_args,
+                "ssh_command": shlex.join(ssh_args),
+                "mode": "ssh",
+            }
+        )
+        seen.add(key)
+    if not hosts:
+        raise ValueError("No distributed Bitget downloaders selected")
+    return hosts
+
+
+def _resolve_bitget_distributed_start_days(coins: list[str], *, start_day: str, end_day: str) -> dict[str, str]:
+    """Resolve per-coin distributed Bitget start days, using inception when no override is set."""
+
+    explicit_start = str(start_day or "").strip()
+    end_date = _parse_day(end_day).date()
+    if explicit_start:
+        start_date = _parse_day(explicit_start).date()
+        if end_date < start_date:
+            raise ValueError("end_day must be >= start_day")
+        return {str(coin).strip().upper(): start_date.strftime("%Y%m%d") for coin in coins if str(coin).strip()}
+
+    limiter = _BitgetRateLimiter(_BITGET_REST_RATE_PER_SECOND)
+    out: dict[str, str] = {}
+    for coin in coins:
+        coin_u = str(coin).strip().upper()
+        if not coin_u:
+            continue
+        try:
+            inception_ms = _bitget_find_inception_ms(coin_u, limiter=limiter)
+        except BitgetUnavailableSymbolError:
+            continue
+        inception_date = datetime.fromtimestamp(int(inception_ms) / 1000, tz=timezone.utc).date()
+        if inception_date <= end_date:
+            out[coin_u] = inception_date.strftime("%Y%m%d")
+    return out
+
+
+def _build_bitget_distributed_segments(
+    coins: list[str],
+    *,
+    start_day: str,
+    end_day: str,
+    chunk_days: int = BITGET_DISTRIBUTED_CHUNK_DAYS,
+    coin_start_days: dict[str, str] | None = None,
+) -> list[dict[str, str]]:
+    """Split each coin date range into small chunks for dynamic worker scheduling."""
+
+    if not end_day:
+        raise ValueError("end_day is required for distributed Bitget backfill")
+    explicit_start = _parse_day(start_day).date() if str(start_day or "").strip() else None
+    end_date = _parse_day(end_day).date()
+    if explicit_start and end_date < explicit_start:
+        raise ValueError("end_day must be >= start_day")
+
+    chunk_len = max(1, int(chunk_days or BITGET_DISTRIBUTED_CHUNK_DAYS))
+    segments: list[dict[str, str]] = []
+    for coin in coins:
+        coin_u = str(coin).strip().upper()
+        if not coin_u:
+            continue
+        raw_coin_start = (coin_start_days or {}).get(coin_u)
+        coin_start = _parse_day(raw_coin_start).date() if raw_coin_start else _BITGET_INCEPTION_DEFAULT
+        cur = explicit_start or coin_start
+        if cur > end_date:
+            continue
+        while cur <= end_date:
+            seg_end = min(end_date, cur + timedelta(days=chunk_len - 1))
+            segments.append(
+                {
+                    "coin": coin_u,
+                    "start_day": cur.strftime("%Y%m%d"),
+                    "end_day": seg_end.strftime("%Y%m%d"),
+                }
+            )
+            cur = seg_end + timedelta(days=1)
+    return segments
+
+
+def _bitget_distributed_days_to_fetch(coin: str, start_day: str, end_day: str, *, refetch: bool) -> list[date]:
+    """Return Bitget days that are missing or incomplete for distributed download."""
+
+    coin_u = str(coin or "").strip().upper()
+    start_date = _parse_day(start_day).date()
+    end_date = _parse_day(end_day).date()
+    today = datetime.now(tz=timezone.utc).date()
+    days: list[date] = []
+    cur = start_date
+    while cur <= end_date:
+        if refetch:
+            days.append(cur)
+        else:
+            day_s = cur.strftime("%Y-%m-%d")
+            existing = _bitget_read_day_npz(_bitget_day_path(coin_u, day_s), day=day_s)
+            if cur in (start_date, today):
+                if not existing:
+                    days.append(cur)
+            elif len(existing) < _BITGET_MIN_DAY_CANDLES:
+                days.append(cur)
+        cur += timedelta(days=1)
+    return days
+
+
+def _build_bitget_distributed_segments_for_days(coin: str, days: list[date], *, chunk_days: int) -> list[dict[str, str]]:
+    """Split missing Bitget days into consecutive distributed chunks."""
+
+    if not days:
+        return []
+    coin_u = str(coin or "").strip().upper()
+    chunk_len = max(1, int(chunk_days or BITGET_DISTRIBUTED_CHUNK_DAYS))
+    out: list[dict[str, str]] = []
+    run_start = run_end = sorted(days)[0]
+
+    def add_run(start: date, end: date) -> None:
+        cur = start
+        while cur <= end:
+            seg_end = min(end, cur + timedelta(days=chunk_len - 1))
+            out.append({"coin": coin_u, "start_day": cur.strftime("%Y%m%d"), "end_day": seg_end.strftime("%Y%m%d")})
+            cur = seg_end + timedelta(days=1)
+
+    for day in sorted(days)[1:]:
+        if day == run_end + timedelta(days=1):
+            run_end = day
+        else:
+            add_run(run_start, run_end)
+            run_start = run_end = day
+    add_run(run_start, run_end)
+    return out
+
+
+def _bitget_remote_download_script() -> str:
+    """Return a stdlib-only Python script that streams Bitget REST pages as JSON lines."""
+
+    return r'''
+import concurrent.futures
+import http.client
+import json
+import random
+import sys
+import threading
+import time
+import urllib.parse
+
+payload = json.loads(sys.argv[1])
+symbol = str(payload["symbol"])
+since_ms = int(payload["since_ms"])
+end_ms = int(payload["end_ms"])
+limit = int(payload.get("limit") or 200)
+rate = float(payload.get("rate_per_second") or 18.0)
+timeout_s = float(payload.get("timeout_s") or 30.0)
+workers = int(payload.get("workers") or 12)
+path = "/api/v2/mix/market/history-candles"
+headers = {"Accept": "application/json", "User-Agent": "PBGui/bitget-remote-raw"}
+
+class RateLimiter:
+    def __init__(self, rate_per_second):
+        self.interval = 1.0 / max(float(rate_per_second), 0.001)
+        self.lock = threading.Lock()
+        self.next_time = 0.0
+
+    def wait(self):
+        with self.lock:
+            now = time.monotonic()
+            if self.next_time > now:
+                time.sleep(self.next_time - now)
+                now = time.monotonic()
+            self.next_time = max(now, self.next_time) + self.interval
+
+    def penalize(self, seconds):
+        with self.lock:
+            self.next_time = max(self.next_time, time.monotonic() + max(0.0, float(seconds or 0.0)))
+
+limiter = RateLimiter(rate)
+thread_local = threading.local()
+
+def get_conn():
+    conn = getattr(thread_local, "conn", None)
+    if conn is None:
+        conn = http.client.HTTPSConnection("api.bitget.com", timeout=timeout_s)
+        thread_local.conn = conn
+    return conn
+
+def reset_conn():
+    conn = getattr(thread_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    thread_local.conn = None
+
+def fetch(end_time):
+    params = {
+        "symbol": symbol,
+        "productType": "USDT-FUTURES",
+        "granularity": "1m",
+        "limit": limit,
+        "endTime": int(end_time),
+    }
+    url = path + "?" + urllib.parse.urlencode(params)
+    delay = 0.5
+    for attempt in range(1, 9):
+        limiter.wait()
+        try:
+            conn = get_conn()
+            conn.request("GET", url, headers=headers)
+            resp = conn.getresponse()
+            body = resp.read().decode("utf-8")
+            if resp.status == 429:
+                limiter.penalize(3.0)
+                reset_conn()
+                raise RuntimeError("HTTP 429: " + body[:200])
+            if resp.status >= 500:
+                reset_conn()
+                raise RuntimeError("HTTP {}: {}".format(resp.status, body[:200]))
+            if resp.status >= 400:
+                reset_conn()
+                raise RuntimeError("HTTP {}: {}".format(resp.status, body[:200]))
+            data = json.loads(body)
+            code = str(data.get("code") or "")
+            if code != "00000":
+                if code.startswith("429"):
+                    limiter.penalize(3.0)
+                raise RuntimeError("Bitget code={} msg={}".format(code, data.get("msg") or data.get("message") or ""))
+            rows = data.get("data")
+            return rows if isinstance(rows, list) else []
+        except Exception as exc:
+            reset_conn()
+            if attempt >= 8:
+                raise
+            text = str(exc)
+            floor = 3.0 if "429" in text or "Too Many Requests" in text else 0.0
+            sleep_s = min(max(delay, floor), 20.0)
+            time.sleep(sleep_s + random.random() * min(sleep_s, 1.0))
+            delay = min(delay * 2.0, 20.0)
+
+cursor = int(end_ms)
+step_ms = limit * 60_000
+cursors = []
+while cursor > since_ms:
+    cursors.append(cursor)
+    cursor -= step_ms
+
+pages = 0
+rows_total = 0
+errors = []
+lock = threading.Lock()
+
+def fetch_cursor(cursor_value):
+    return cursor_value, fetch(cursor_value)
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(workers, len(cursors) or 1))) as executor:
+    futures = [executor.submit(fetch_cursor, item) for item in cursors]
+    for future in concurrent.futures.as_completed(futures):
+        try:
+            cursor_value, rows = future.result()
+            with lock:
+                pages += 1
+                rows_total += len(rows)
+            sys.stdout.write(json.dumps({"type": "rows", "cursor": cursor_value, "rows": rows}, separators=(",", ":")) + "\n")
+            sys.stdout.flush()
+            if pages == 1 or pages % 100 == 0:
+                print("progress pages={} rows={} cursor={}".format(pages, rows_total, cursor_value), file=sys.stderr, flush=True)
+        except Exception as exc:
+            errors.append(str(exc))
+
+if errors:
+    print(json.dumps({"type": "error", "pages": pages, "rows": rows_total, "errors": errors[:3]}, separators=(",", ":")), file=sys.stderr, flush=True)
+    raise SystemExit(1)
+print(json.dumps({"type": "done", "pages": pages, "rows": rows_total, "workers": workers}, separators=(",", ":")), file=sys.stderr, flush=True)
+'''.strip()
+
+
+def _build_bitget_remote_download_command(
+    host: dict[str, Any],
+    segment: dict[str, str],
+    *,
+    symbol: str,
+    since_ms: int,
+    end_ms: int,
+) -> list[str]:
+    """Build an SSH command that runs only a stdlib Bitget downloader remotely."""
+
+    payload = {
+        "symbol": str(symbol),
+        "since_ms": int(since_ms),
+        "end_ms": int(end_ms),
+        "limit": 200,
+        "rate_per_second": _BITGET_REST_RATE_PER_SECOND,
+        "timeout_s": 30.0,
+        "workers": BITGET_REMOTE_DOWNLOAD_WORKERS,
+    }
+    remote_cmd = "python3 -c {} {}".format(
+        shlex.quote(_bitget_remote_download_script()),
+        shlex.quote(json.dumps(payload, separators=(",", ":"))),
+    )
+    return list(host.get("ssh_args") or ["ssh"]) + [str(host.get("target") or ""), remote_cmd]
+
+
+def _run_bitget_remote_download_segment(
+    job_path: Path,
+    job_id: str,
+    cmd: list[str],
+    *,
+    label: str,
+    coin: str,
+    since_ms: int,
+    end_ms: int,
+    refetch: bool,
+) -> dict[str, Any]:
+    """Run one remote raw downloader and write returned candles locally on master."""
+
+    _append_to_job_log(job_id, f"  {label}: starting stdlib remote downloader")
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(Path(__file__).resolve().parent),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        start_new_session=True,
+    )
+    buckets: dict[str, dict[int, dict[str, Any]]] = {}
+    pages = 0
+    rows_seen = 0
+    payload_bytes = 0
+    try:
+        streams = [s for s in (proc.stdout, proc.stderr) if s is not None]
+        while streams:
+            if _STOP or _is_cancel_requested(job_path):
+                _terminate_ohlcv_copy_process(proc)
+                raise RuntimeError("cancelled")
+            ready, _, _ = select.select(streams, [], [], 0.5)
+            if not ready:
+                if proc.poll() is not None:
+                    break
+                continue
+            for stream in ready:
+                line = stream.readline()
+                if not line:
+                    try:
+                        streams.remove(stream)
+                    except ValueError:
+                        pass
+                    continue
+                text = line.strip()
+                if not text:
+                    continue
+                if stream is proc.stderr:
+                    _append_to_job_log(job_id, f"    {text}")
+                    continue
+                payload_bytes += len(line.encode("utf-8", errors="replace"))
+                try:
+                    obj = json.loads(text)
+                except Exception:
+                    _append_to_job_log(job_id, f"    remote stdout ignored: {text[:300]}")
+                    continue
+                if obj.get("type") != "rows":
+                    continue
+                rows = obj.get("rows")
+                rows = rows if isinstance(rows, list) else []
+                pages += 1
+                rows_seen += len(rows)
+                sub = _bitget_bucket_rows(rows, since_ms=since_ms, end_ms=end_ms)
+                for day_s, candles in sub.items():
+                    buckets.setdefault(day_s, {}).update(candles)
+
+        if proc.stdout:
+            for line in proc.stdout.readlines():
+                text = line.strip()
+                if not text:
+                    continue
+                payload_bytes += len(line.encode("utf-8", errors="replace"))
+                try:
+                    obj = json.loads(text)
+                except Exception:
+                    continue
+                if obj.get("type") == "rows":
+                    rows = obj.get("rows") if isinstance(obj.get("rows"), list) else []
+                    pages += 1
+                    rows_seen += len(rows)
+                    sub = _bitget_bucket_rows(rows, since_ms=since_ms, end_ms=end_ms)
+                    for day_s, candles in sub.items():
+                        buckets.setdefault(day_s, {}).update(candles)
+        if proc.stderr:
+            for line in proc.stderr.readlines():
+                text = line.strip()
+                if text:
+                    _append_to_job_log(job_id, f"    {text}")
+        rc = proc.wait(timeout=5)
+        if rc != 0:
+            raise RuntimeError(f"{label} failed with exit code {rc}")
+
+        minutes_written = 0
+        for day_s, candles in sorted(buckets.items()):
+            minutes_written += _bitget_write_candles_for_day(coin, day_s, candles, overwrite=bool(refetch))
+        return {
+            "pages": pages,
+            "rows": rows_seen,
+            "payload_bytes": payload_bytes,
+            "days": len(buckets),
+            "minutes_written": minutes_written,
+        }
+    finally:
+        if proc.poll() is None:
+            _terminate_ohlcv_copy_process(proc)
+
+
+def _run_bitget_master_download_segment(
+    *,
+    coin: str,
+    since_ms: int,
+    end_ms: int,
+    refetch: bool,
+    stop_check: Any,
+) -> dict[str, Any]:
+    """Download one Bitget segment on the master and write local candles."""
+
+    buckets, rows_seen = _bitget_rest_fetch_range(
+        coin,
+        since_ms,
+        end_ms,
+        timeout_s=30.0,
+        workers=_BITGET_REST_WORKERS,
+        stop_check=stop_check,
+    )
+    minutes_written = 0
+    for day_s, candles in sorted(buckets.items()):
+        minutes_written += _bitget_write_candles_for_day(coin, day_s, candles, overwrite=bool(refetch))
+    return {
+        "pages": len(_bitget_build_end_time_cursors(since_ms, end_ms)),
+        "rows": rows_seen,
+        "payload_bytes": 0,
+        "days": len(buckets),
+        "minutes_written": minutes_written,
+    }
+
+
+def _run_bitget_best_1m_distributed(job_path: Path, payload: dict[str, Any]) -> None:
+    """Run Bitget Best 1m backfill across selected downloaders."""
+
+    started_ts = time.time()
+    job_id = job_path.stem
+    coins = payload.get("coins")
+    coins = coins if isinstance(coins, list) else []
+    coins = [str(c).strip().upper() for c in coins if str(c).strip()]
+    if not coins:
+        raise ValueError("No coins in job")
+
+    hosts = _normalize_bitget_distributed_hosts(payload.get("distributed_hosts"))
+    end_day = str(payload.get("end_day") or "").strip() or datetime.utcnow().strftime("%Y%m%d")
+    start_day = str(payload.get("start_day") or "").strip()
+    refetch = bool(payload.get("refetch") or False)
+    chunk_days = int(payload.get("chunk_days") or BITGET_DISTRIBUTED_CHUNK_DAYS)
+
+    _init_job_log(job_id)
+    _append_to_job_log(
+        job_id,
+        f"job planning  distributed=1  coins={coins}  downloaders={len(hosts)}  chunk_days={chunk_days}  "
+        f"end_day={end_day}  start_day={start_day or 'per-coin-inception'}  refetch={refetch}",
+    )
+    progress_lock = threading.Lock()
+    queue_lock = threading.Lock()
+    queue_cond = threading.Condition(queue_lock)
+    segments: list[dict[str, str]] = []
+    segment_queue: list[dict[str, Any]] = []
+    coin_start_days: dict[str, str] = {}
+    planning_done = False
+    planning_error: Exception | None = None
+    completed_segments = 0
+    completed_downloaders = 0
+    segment_results: list[dict[str, Any]] = []
+    downloader_stats: dict[str, dict[str, Any]] = {}
+    skipped_coins: list[dict[str, str]] = []
+
+    def downloader_stats_snapshot_locked() -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for item in downloader_stats.values():
+            row = dict(item)
+            coins_value = row.get("coins")
+            row["coins"] = sorted(coins_value) if isinstance(coins_value, set) else []
+            rows.append(row)
+        return rows
+
+    def update_progress(**kw: Any) -> None:
+        with progress_lock:
+            def mut(o: dict[str, Any]) -> None:
+                pr = o.get("progress")
+                pr = pr if isinstance(pr, dict) else {}
+                old_last = pr.get("last_result")
+                old_last = old_last if isinstance(old_last, dict) else {}
+                pr.update(kw)
+                new_last = pr.get("last_result")
+                if isinstance(new_last, dict) and isinstance(old_last.get("downloaders"), list) and "downloaders" not in new_last:
+                    merged_last = dict(old_last)
+                    merged_last.update(new_last)
+                    pr["last_result"] = merged_last
+                pr["step"] = int(completed_segments)
+                pr["total"] = int(len(segments))
+                pr["mode"] = "bitget_best_1m_distributed"
+                pr["distributed_hosts"] = len(hosts)
+                pr["completed_hosts"] = int(completed_downloaders)
+                pr["chunk_days"] = int(chunk_days)
+                pr["duration_s"] = int(max(0, time.time() - started_ts))
+                o["progress"] = pr
+            update_job_file(job_path, mutate=mut)
+
+    def next_segment() -> dict[str, Any] | None:
+        with queue_cond:
+            while not segment_queue and not planning_done:
+                if _STOP:
+                    raise RuntimeError("Worker stopping")
+                if _is_cancel_requested(job_path):
+                    raise RuntimeError("cancelled")
+                queue_cond.wait(timeout=0.5)
+            if segment_queue:
+                return segment_queue.pop(0)
+            if planning_error is not None:
+                raise planning_error
+            return None
+
+    def requeue_segment(segment: dict[str, Any], attempt: int) -> None:
+        segment["_attempts"] = int(attempt)
+        with queue_cond:
+            segment_queue.append(segment)
+            queue_cond.notify()
+
+    def plan_segments() -> None:
+        nonlocal planning_done, planning_error
+        try:
+            end_date = _parse_day(end_day).date()
+            limiter = _BitgetRateLimiter(_BITGET_REST_RATE_PER_SECOND)
+            for coin in coins:
+                if _STOP:
+                    raise RuntimeError("Worker stopping")
+                if _is_cancel_requested(job_path):
+                    raise RuntimeError("cancelled")
+                coin_u = str(coin).strip().upper()
+                if not coin_u:
+                    continue
+                if start_day:
+                    coin_start = start_day
+                else:
+                    _append_to_job_log(job_id, f"planning coin inception  coin={coin_u}")
+                    update_progress(stage="planning_inception", coin=coin_u, last_result={"segments": len(segments), "duration_s": int(max(0, time.time() - started_ts))})
+                    try:
+                        inception_ms = _bitget_find_inception_ms(coin_u, limiter=limiter)
+                    except BitgetUnavailableSymbolError as exc:
+                        skipped = {"coin": coin_u, "reason": "unavailable", "error": str(exc)}
+                        skipped_coins.append(skipped)
+                        _append_to_job_log(job_id, f"planning coin skipped  coin={coin_u}  reason=unavailable  error={exc}")
+                        update_progress(
+                            stage="planning_skipped",
+                            coin=coin_u,
+                            last_result={"segments": len(segments), "coin_start_days": dict(coin_start_days), "skipped_coins": list(skipped_coins), "duration_s": int(max(0, time.time() - started_ts))},
+                        )
+                        continue
+                    inception_date = datetime.fromtimestamp(int(inception_ms) / 1000, tz=timezone.utc).date()
+                    if inception_date > end_date:
+                        _append_to_job_log(job_id, f"planning coin skipped  coin={coin_u}  inception={inception_date.strftime('%Y%m%d')}  end_day={end_day}")
+                        continue
+                    coin_start = inception_date.strftime("%Y%m%d")
+                coin_start_days[coin_u] = coin_start
+                days_to_fetch = _bitget_distributed_days_to_fetch(coin_u, coin_start, end_day, refetch=refetch)
+                planned = _build_bitget_distributed_segments_for_days(coin_u, days_to_fetch, chunk_days=chunk_days)
+                if not planned:
+                    _append_to_job_log(job_id, f"planning coin complete  coin={coin_u}  start_day={coin_start}  missing_days=0")
+                    continue
+                with queue_cond:
+                    segments.extend(planned)
+                    segment_queue.extend(planned)
+                    queue_cond.notify_all()
+                _append_to_job_log(job_id, f"planning coin queued  coin={coin_u}  start_day={coin_start}  missing_days={len(days_to_fetch)}  segments={len(planned)}  total_segments={len(segments)}")
+                update_progress(
+                    stage="planning_queued",
+                    coin=coin_u,
+                    last_result={"segments": len(segments), "coin_start_days": dict(coin_start_days), "missing_days": len(days_to_fetch), "duration_s": int(max(0, time.time() - started_ts))},
+                )
+        except Exception as exc:
+            planning_error = exc
+        finally:
+            with queue_cond:
+                planning_done = True
+                queue_cond.notify_all()
+
+    def run_downloader(host: dict[str, Any], host_index: int) -> dict[str, Any]:
+        nonlocal completed_segments, completed_downloaders
+        label = str(host.get("label") or host.get("hostname") or host.get("target") or f"host-{host_index + 1}")
+        is_master = str(host.get("mode") or "").strip().lower() == "master"
+        stat_key = f"{host_index}:{label}"
+        with progress_lock:
+            downloader_stats[stat_key] = {
+                "host": label,
+                "mode": "master" if is_master else "ssh",
+                "status": "running",
+                "segments": 0,
+                "coins": set(),
+                "pages": 0,
+                "rows": 0,
+                "payload_bytes": 0,
+                "minutes_written": 0,
+                "current_coin": "",
+                "current_range": "",
+            }
+            start_snapshot = downloader_stats_snapshot_locked()
+        _append_to_job_log(job_id, f"[{host_index + 1}/{len(hosts)}] {label} starting  mode={'master' if is_master else 'ssh'}")
+        update_progress(stage="downloader_starting", host=label, last_result={"downloaders": start_snapshot, "duration_s": int(max(0, time.time() - started_ts))})
+        host_coins: set[str] = set()
+        host_segments_done = 0
+        host_pages = 0
+        host_rows = 0
+        host_payload_bytes = 0
+        host_minutes = 0
+        host_failed = False
+        host_failed_segments = 0
+        while True:
+            if _STOP:
+                raise RuntimeError("Worker stopping")
+            if _is_cancel_requested(job_path):
+                raise RuntimeError("cancelled")
+            segment = next_segment()
+            if segment is None:
+                break
+            segment_attempt = int(segment.get("_attempts") or 0)
+            coin = str(segment.get("coin") or "").strip().upper()
+            try:
+                host_coins.add(coin)
+                range_start = _parse_day(str(segment.get("start_day") or "")).date()
+                range_end = _parse_day(str(segment.get("end_day") or "")).date()
+                since_ms = _bitget_day_start_ms(range_start)
+                end_ms = _bitget_day_start_ms(range_end) + _BITGET_DAY_MS
+                symbol = _coin_to_bitget_symbol(coin)
+                current_range = f"{segment.get('start_day')}-{segment.get('end_day')}"
+                with progress_lock:
+                    if stat_key in downloader_stats:
+                        downloader_stats[stat_key]["status"] = "running"
+                        downloader_stats[stat_key]["current_coin"] = coin
+                        downloader_stats[stat_key]["current_range"] = current_range
+                    running_snapshot = downloader_stats_snapshot_locked()
+                update_progress(stage="remote_running", host=label, coin=coin, day=segment.get("start_day"), last_result={"downloaders": running_snapshot, "duration_s": int(max(0, time.time() - started_ts))})
+                _append_to_job_log(
+                    job_id,
+                    f"  {label} segment  coin={coin}  symbol={symbol}  range={segment.get('start_day')}-{segment.get('end_day')}",
+                )
+                if is_master:
+                    segment_result = _run_bitget_master_download_segment(
+                        coin=coin,
+                        since_ms=since_ms,
+                        end_ms=end_ms,
+                        refetch=refetch,
+                        stop_check=lambda: bool(_STOP or _is_cancel_requested(job_path)),
+                    )
+                else:
+                    cmd = _build_bitget_remote_download_command(host, segment, symbol=symbol, since_ms=since_ms, end_ms=end_ms)
+                    remote_label = f"{label} remote bitget raw {coin} {segment.get('start_day')}-{segment.get('end_day')}"
+                    last_remote_error: Exception | None = None
+                    for remote_attempt in range(1, BITGET_REMOTE_SEGMENT_RETRIES + 1):
+                        try:
+                            segment_result = _run_bitget_remote_download_segment(
+                                job_path,
+                                job_id,
+                                cmd,
+                                label=remote_label,
+                                coin=coin,
+                                since_ms=since_ms,
+                                end_ms=end_ms,
+                                refetch=refetch,
+                            )
+                            break
+                        except Exception as exc:
+                            if _STOP or _is_cancel_requested(job_path):
+                                raise
+                            last_remote_error = exc
+                            if remote_attempt >= BITGET_REMOTE_SEGMENT_RETRIES:
+                                raise
+                            _append_to_job_log(
+                                job_id,
+                                f"  {label} ssh retry {remote_attempt + 1}/{BITGET_REMOTE_SEGMENT_RETRIES}  "
+                                f"coin={coin}  range={segment.get('start_day')}-{segment.get('end_day')}  error={exc}",
+                            )
+                            update_progress(
+                                stage="remote_retrying",
+                                host=label,
+                                coin=coin,
+                                last_result={"error": str(exc), "duration_s": int(max(0, time.time() - started_ts))},
+                            )
+                    else:
+                        raise RuntimeError(str(last_remote_error or "remote downloader failed"))
+            except Exception as exc:
+                if _STOP or _is_cancel_requested(job_path) or is_master:
+                    raise
+                next_attempt = segment_attempt + 1
+                if next_attempt > BITGET_DISTRIBUTED_SEGMENT_RETRIES:
+                    raise
+                host_failed = True
+                host_failed_segments += 1
+                requeue_segment(segment, next_attempt)
+                with progress_lock:
+                    if stat_key in downloader_stats:
+                        downloader_stats[stat_key]["status"] = "failed"
+                        downloader_stats[stat_key]["error"] = str(exc)
+                        downloader_stats[stat_key]["current_coin"] = ""
+                        downloader_stats[stat_key]["current_range"] = ""
+                    fail_snapshot = downloader_stats_snapshot_locked()
+                _append_to_job_log(
+                    job_id,
+                    f"  {label} segment failed  coin={coin}  range={segment.get('start_day')}-{segment.get('end_day')}  "
+                    f"attempt={next_attempt}/{BITGET_DISTRIBUTED_SEGMENT_RETRIES}  requeued=1  downloader_retired=1  error={exc}",
+                )
+                update_progress(
+                    stage="downloader_failed",
+                    host=label,
+                    coin=coin,
+                    last_result={"downloaders": fail_snapshot, "error": str(exc), "duration_s": int(max(0, time.time() - started_ts))},
+                )
+                break
+            segment_result.update({"host": label, "coin": coin, "start_day": segment.get("start_day"), "end_day": segment.get("end_day"), "mode": "master" if is_master else "ssh"})
+            host_segments_done += 1
+            host_pages += int(segment_result.get("pages") or 0)
+            host_rows += int(segment_result.get("rows") or 0)
+            host_payload_bytes += int(segment_result.get("payload_bytes") or 0)
+            host_minutes += int(segment_result.get("minutes_written") or 0)
+            _append_to_job_log(
+                job_id,
+                f"  {label} segment done  coin={coin}  pages={segment_result.get('pages', 0)}  rows={segment_result.get('rows', 0)}  "
+                f"payload={_fmt_bytes_short(segment_result.get('payload_bytes'))}  minutes_written={segment_result.get('minutes_written', 0)}",
+            )
+            with progress_lock:
+                completed_segments += 1
+                segment_results.append(dict(segment_result))
+                stat = downloader_stats.setdefault(stat_key, {"host": label, "mode": "master" if is_master else "ssh", "status": "running", "segments": 0, "coins": set(), "pages": 0, "rows": 0, "payload_bytes": 0, "minutes_written": 0, "current_coin": "", "current_range": ""})
+                stat["segments"] = int(stat.get("segments") or 0) + 1
+                stat["status"] = "running"
+                stat_coins = stat.get("coins")
+                if isinstance(stat_coins, set):
+                    stat_coins.add(coin)
+                stat["pages"] = int(stat.get("pages") or 0) + int(segment_result.get("pages") or 0)
+                stat["rows"] = int(stat.get("rows") or 0) + int(segment_result.get("rows") or 0)
+                stat["payload_bytes"] = int(stat.get("payload_bytes") or 0) + int(segment_result.get("payload_bytes") or 0)
+                stat["minutes_written"] = int(stat.get("minutes_written") or 0) + int(segment_result.get("minutes_written") or 0)
+                stat["current_coin"] = ""
+                stat["current_range"] = ""
+                downloaders_snapshot = downloader_stats_snapshot_locked()
+                total_payload_bytes = sum(int(item.get("payload_bytes") or 0) for item in segment_results)
+                total_rows = sum(int(item.get("rows") or 0) for item in segment_results)
+                total_pages = sum(int(item.get("pages") or 0) for item in segment_results)
+                total_minutes = sum(int(item.get("minutes_written") or 0) for item in segment_results)
+            update_progress(
+                stage="remote_done",
+                host=label,
+                coin=coin,
+                last_result={
+                    **segment_result,
+                    "downloaders": downloaders_snapshot,
+                    "payload_bytes_total": total_payload_bytes,
+                    "rows_total": total_rows,
+                    "pages_total": total_pages,
+                    "minutes_written_total": total_minutes,
+                    "duration_s": int(max(0, time.time() - started_ts)),
+                },
+            )
+
+        for coin in sorted(host_coins):
+            if _STOP:
+                raise RuntimeError("Worker stopping")
+            if _is_cancel_requested(job_path):
+                raise RuntimeError("cancelled")
+            try:
+                _refresh_inventory_coin("bitget", "1m", _bitget_storage_coin_dir(coin))
+            except Exception:
+                pass
+
+        with progress_lock:
+            completed_downloaders += 1
+            if stat_key in downloader_stats:
+                downloader_stats[stat_key]["status"] = "failed" if host_failed else "done"
+                downloader_stats[stat_key]["current_coin"] = ""
+                downloader_stats[stat_key]["current_range"] = ""
+            done_snapshot = downloader_stats_snapshot_locked()
+        update_progress(stage="host_done", host=label, last_result={"downloaders": done_snapshot, "duration_s": int(max(0, time.time() - started_ts))})
+        status = "failed" if host_failed else "done"
+        _append_to_job_log(job_id, f"[{host_index + 1}/{len(hosts)}] {label} {status}  segments={host_segments_done}  failed_segments={host_failed_segments}  pages={host_pages}  rows={host_rows}  payload={_fmt_bytes_short(host_payload_bytes)}  minutes_written={host_minutes}")
+        return {"host": label, "mode": "master" if is_master else "ssh", "status": status, "segments": host_segments_done, "failed_segments": host_failed_segments, "coins": sorted(host_coins), "pages": host_pages, "rows": host_rows, "payload_bytes": host_payload_bytes, "minutes_written": host_minutes}
+
+    _append_to_job_log(
+        job_id,
+        f"job started  distributed=1  coins={coins}  downloaders={len(hosts)}  segments=streaming  chunk_days={chunk_days}  "
+        f"end_day={end_day}  start_day={start_day or 'per-coin-inception'}  refetch={refetch}",
+    )
+    update_progress(stage="starting", last_result={"segments": 0, "hosts": len(hosts), "duration_s": 0})
+    results: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=len(hosts) + 1) as executor:
+        planner_future = executor.submit(plan_segments)
+        futures = []
+        for idx, host in enumerate(hosts):
+            futures.append(executor.submit(run_downloader, host, idx))
+        for future in futures:
+            results.append(future.result())
+        planner_future.result()
+    if not segments:
+        raise ValueError("No distributed Bitget segments to run")
+
+    fallback_segments: list[dict[str, Any]] = []
+    with queue_cond:
+        while segment_queue:
+            fallback_segments.append(segment_queue.pop(0))
+    if fallback_segments:
+        fallback_label = "Master fallback"
+        fallback_result = {
+            "host": fallback_label,
+            "mode": "master",
+            "status": "done",
+            "segments": 0,
+            "coins": set(),
+            "pages": 0,
+            "rows": 0,
+            "payload_bytes": 0,
+            "minutes_written": 0,
+        }
+        _append_to_job_log(job_id, f"{fallback_label} starting  requeued_segments={len(fallback_segments)}")
+        for segment in fallback_segments:
+            if _STOP:
+                raise RuntimeError("Worker stopping")
+            if _is_cancel_requested(job_path):
+                raise RuntimeError("cancelled")
+            coin = str(segment.get("coin") or "").strip().upper()
+            range_start = _parse_day(str(segment.get("start_day") or "")).date()
+            range_end = _parse_day(str(segment.get("end_day") or "")).date()
+            since_ms = _bitget_day_start_ms(range_start)
+            end_ms = _bitget_day_start_ms(range_end) + _BITGET_DAY_MS
+            _append_to_job_log(job_id, f"  {fallback_label} segment  coin={coin}  range={segment.get('start_day')}-{segment.get('end_day')}  attempts={segment.get('_attempts', 0)}")
+            segment_result = _run_bitget_master_download_segment(
+                coin=coin,
+                since_ms=since_ms,
+                end_ms=end_ms,
+                refetch=refetch,
+                stop_check=lambda: bool(_STOP or _is_cancel_requested(job_path)),
+            )
+            segment_result.update({"host": fallback_label, "coin": coin, "start_day": segment.get("start_day"), "end_day": segment.get("end_day"), "mode": "master"})
+            fallback_result["segments"] = int(fallback_result.get("segments") or 0) + 1
+            fallback_coins = fallback_result.get("coins")
+            if isinstance(fallback_coins, set):
+                fallback_coins.add(coin)
+            fallback_result["pages"] = int(fallback_result.get("pages") or 0) + int(segment_result.get("pages") or 0)
+            fallback_result["rows"] = int(fallback_result.get("rows") or 0) + int(segment_result.get("rows") or 0)
+            fallback_result["minutes_written"] = int(fallback_result.get("minutes_written") or 0) + int(segment_result.get("minutes_written") or 0)
+            with progress_lock:
+                completed_segments += 1
+                segment_results.append(dict(segment_result))
+            update_progress(stage="master_fallback", host=fallback_label, coin=coin, last_result={**segment_result, "duration_s": int(max(0, time.time() - started_ts))})
+            _append_to_job_log(job_id, f"  {fallback_label} segment done  coin={coin}  pages={segment_result.get('pages', 0)}  rows={segment_result.get('rows', 0)}  minutes_written={segment_result.get('minutes_written', 0)}")
+        fallback_result["coins"] = sorted(fallback_result.get("coins")) if isinstance(fallback_result.get("coins"), set) else []
+        results.append(fallback_result)
+        _append_to_job_log(job_id, f"{fallback_label} done  segments={fallback_result.get('segments', 0)}  pages={fallback_result.get('pages', 0)}  rows={fallback_result.get('rows', 0)}  minutes_written={fallback_result.get('minutes_written', 0)}")
+
+    last_result = {
+        "coins": len(coins),
+        "hosts": len(hosts),
+        "segments": len(segments),
+        "chunk_days": int(chunk_days),
+        "coin_start_days": dict(coin_start_days),
+        "skipped_coins": list(skipped_coins),
+        "duration_s": int(max(0, time.time() - started_ts)),
+        "host_results": results,
+        "segments_done": len(segment_results),
+        "pages": sum(int(item.get("pages") or 0) for item in segment_results),
+        "rows": sum(int(item.get("rows") or 0) for item in segment_results),
+        "payload_bytes": sum(int(item.get("payload_bytes") or 0) for item in segment_results),
+        "minutes_written": sum(int(item.get("minutes_written") or 0) for item in segment_results),
+    }
+    update_progress(stage="done", last_result=last_result)
+    append_exchange_download_log("bitget", f"[INFO] [bitget_best_1m_distributed_job] {last_result}")
+    _append_to_job_log(job_id, f"job finished  duration={int(time.time()-started_ts)}s  distributed=1")
+
+
+def _run_bitget_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
+    started_ts = time.time()
+    job_id = job_path.stem
+    coins = payload.get("coins")
+    coins = coins if isinstance(coins, list) else []
+    coins = [str(c).strip().upper() for c in coins if str(c).strip()]
+
+    if not coins:
+        raise ValueError("No coins in job")
+
+    end_day = str(payload.get("end_day") or "").strip()
+    if not end_day:
+        end_day = datetime.utcnow().strftime("%Y%m%d")
+    start_day = str(payload.get("start_day") or "").strip()
+    refetch = bool(payload.get("refetch") or False)
+
+    total_steps = max(1, len(coins))
+    step_i = 0
+
+    _init_job_log(job_id)
+    _append_to_job_log(job_id, f"job started  coins={coins}  end_day={end_day}  start_day={start_day or 'inception'}  refetch={refetch}")
+
+    def update_progress(**kw):
+        def mut(o):
+            pr = o.get("progress")
+            pr = pr if isinstance(pr, dict) else {}
+            pr.update(kw)
+            pr["step"] = int(step_i)
+            pr["total"] = int(total_steps)
+            pr["mode"] = "bitget_best_1m"
+            o["progress"] = pr
+        update_job_file(job_path, mutate=mut)
+
+    update_progress(stage="starting", last_result={"days_checked": 0, "minutes_written": 0, "duration_s": 0})
+
+    for coin in coins:
+        if _STOP:
+            raise RuntimeError("Worker stopping")
+        if _is_cancel_requested(job_path):
+            raise RuntimeError("cancelled")
+        step_i += 1
+        _append_to_job_log(job_id, f"[{step_i}/{total_steps}] {coin}  starting")
+        update_progress(stage="running", coin=coin, chunk_done=0, chunk_total=0,
+                        last_result={"days_checked": 0, "minutes_written": 0,
+                                     "duration_s": int(max(0, time.time() - started_ts))})
+
+        last_chunk_update = 0.0
+        last_logged_stage = ""
+        last_log_ts2: list[float] = [0.0]
+
+        def progress_cb(snap: dict[str, Any], _coin=coin) -> None:
+            nonlocal last_chunk_update, last_logged_stage
+            now = time.time()
+            stage = str(snap.get("stage") or "running")
+            if stage != last_logged_stage or now - last_log_ts2[0] >= 60.0:
+                last_logged_stage = stage
+                last_log_ts2[0] = now
+                extra = ""
+                if snap.get("day"):
+                    extra = f"  day={snap['day']}"
+                done = snap.get("done")
+                total = snap.get("total_days")
+                if done is not None and total is not None:
+                    extra += f"  {done}/{total}"
+                _append_to_job_log(job_id, f"  {_coin}  stage={stage}{extra}")
+            if now - last_chunk_update < 0.5:
+                return
+            last_chunk_update = now
+            kw: dict[str, Any] = {"stage": stage}
+            if snap.get("day"):
+                kw["day"] = str(snap["day"])
+            done = snap.get("done")
+            if done is not None:
+                total_days = snap.get("total_days")
+                kw["chunk_done"] = int(done)
+                kw["chunk_total"] = int(total_days) if total_days else int(total_steps * 100)
+            if any(k in snap for k in ("days_checked", "minutes_written", "rest_minutes_fetched", "repair_minutes_fetched")):
+                kw["last_result"] = {
+                    "days_checked": int(snap.get("days_checked") or 0),
+                    "rest_minutes_fetched": int(snap.get("rest_minutes_fetched") or 0),
+                    "repair_minutes_fetched": int(snap.get("repair_minutes_fetched") or 0),
+                    "minutes_written": int(snap.get("minutes_written") or 0),
+                    "duration_s": int(max(0, time.time() - started_ts)),
+                }
+            update_progress(**kw)
+
+        def _job_stop_check() -> bool:
+            return bool(_STOP or _is_cancel_requested(job_path))
+
+        try:
+            res = improve_best_bitget_1m_for_coin(
+                coin=coin,
+                end_date=end_day,
+                start_date_override=start_day or None,
+                refetch=refetch,
+                progress_cb=progress_cb,
+                stop_check=_job_stop_check,
+            )
+        except RuntimeError as e:
+            _append_to_job_log(job_id, f"  {coin}  ERROR {e}")
+            if _is_cancel_requested(job_path):
+                raise RuntimeError("cancelled") from e
+            raise
+        out = res.to_dict()
+        if isinstance(out, dict):
+            out["duration_s"] = int(max(0, time.time() - started_ts))
+        append_exchange_download_log("bitget", f"[INFO] [bitget_best_1m_job] {coin} {out}")
+        _append_to_job_log(job_id, f"  {coin}  done  days_checked={out.get('days_checked', 0)}  minutes_written={out.get('minutes_written', 0)}  notes={out.get('notes', [])}")
+        update_progress(stage="running", last_result=out)
+        try:
+            _refresh_inventory_coin("bitget", "1m", _bitget_storage_coin_dir(coin))
         except Exception:
             pass
 

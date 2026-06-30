@@ -41,6 +41,8 @@ def _get_missing_lag_minutes(exchange: str) -> int:
             sec = int(str(load_ini("binance_data", "latest_1m_interval_seconds") or "3600").strip())
         elif ex == "bybit":
             sec = int(str(load_ini("bybit_data", "latest_1m_interval_seconds") or "3600").strip())
+        elif ex == "bitget":
+            sec = int(str(load_ini("bitget_data", "latest_1m_interval_seconds") or "3600").strip())
         else:
             sec = int(str(load_ini("pbdata", "latest_1m_interval_seconds") or "1800").strip())
         return max(0, int((sec + 59) // 60))
@@ -285,7 +287,7 @@ def get_heatmap_overview(
     # Candles: stacked-bar overview
     lag = _get_missing_lag_minutes(ex)
     day_counts: dict = {}
-    if ex in ("hyperliquid", "binance", "bybit", "binanceusdm", "okx"):
+    if ex in ("hyperliquid", "binance", "bybit", "binanceusdm", "okx", "bitget"):
         try:
             day_counts = get_daily_source_counts_for_range(
                 exchange=sx,

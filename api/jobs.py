@@ -118,13 +118,27 @@ def delete_job_endpoint(job_id: str, states: Optional[str] = None, session: Sess
 @router.post("/{job_id}/retry")
 def retry_job(job_id: str, session: SessionToken = Depends(require_auth)):
     """Retry a failed job (moves it back to pending)."""
+    job_type = ""
+    for job in list_jobs(states=["failed"], limit=1000):
+        if str(job.get("id", "")).strip() == str(job_id).strip():
+            job_type = str(job.get("type") or "").strip()
+            break
     ok = retry_failed_job(job_id)
     if not ok:
         raise HTTPException(
             status_code=404,
             detail="Job not found or not in failed state"
         )
-    return {"success": True, "job_id": job_id}
+    runner_started = False
+    if job_type in {"bitget_best_1m", "bitget_best_1m_distributed"}:
+        start_ok, detail = start_pending_job(job_id)
+        if not start_ok:
+            raise HTTPException(
+                status_code=409 if detail and "already running" in detail else 500,
+                detail=detail or "Failed to start Bitget retry runner"
+            )
+        runner_started = True
+    return {"success": True, "job_id": job_id, "runner_started": runner_started}
 
 
 @router.post("/{job_id}/requeue")
@@ -179,6 +193,8 @@ def bulk_delete_jobs(request: dict, session: SessionToken = Depends(require_auth
                     elif exchange_filter == "binanceusdm" and (job_type.startswith("binance_") or "binance" in job_type):
                         filtered_jobs.append(j)
                     elif exchange_filter == "bybit" and (job_type.startswith("bybit_") or "bybit" in job_type):
+                        filtered_jobs.append(j)
+                    elif exchange_filter == "bitget" and (job_type.startswith("bitget_") or "bitget" in job_type):
                         filtered_jobs.append(j)
             all_jobs = filtered_jobs
         

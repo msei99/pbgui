@@ -1467,7 +1467,7 @@ def update_latest_okx_1m_for_coin(
             "errors": len(errors),
             "result": "ok" if not errors else "partial",
         }
-        append_exchange_download_log(STORAGE_EXCHANGE, f"[okx_latest_1m] done coin={coin_u} {result}")
+        append_exchange_download_log(STORAGE_EXCHANGE, f"[okx_latest_1m] done coin={coin_u} {result}", level="INFO")
         return result
     except Exception as exc:
         append_exchange_download_log(STORAGE_EXCHANGE, f"[okx_latest_1m] error coin={coin_u} err={exc}", level="WARNING")

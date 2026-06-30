@@ -110,6 +110,62 @@ def test_best_1m_available_coins_do_not_require_enabled_settings(monkeypatch) ->
     assert market_data_api._get_best_1m_available_coins("okx") == ["BTC", "ETH"]
 
 
+def test_best_1m_request_normalization_preserves_bitget_mapping_coin() -> None:
+    """Bitget mapping coins such as HYUNDAI must not be shortened to invalid symbols."""
+
+    available = ["BTC", "HYUNDAI"]
+
+    assert market_data_api._normalize_best_1m_request_coin("HYUNDAI", available_coins=available) == "HYUNDAI"
+    assert market_data_api._normalize_best_1m_request_coin("BTCUSDT", available_coins=available) == "BTC"
+    assert market_data_api._normalize_best_1m_request_coin("HYUN", available_coins=available) == "HYUN"
+
+
+def test_bitget_best_1m_queue_rejects_false_coin_after_normalization(monkeypatch, tmp_path) -> None:
+    """Bitget Best-1m jobs reject unsupported coins before writing a job payload."""
+
+    monkeypatch.setattr(market_data_api, "_get_best_1m_available_coins", lambda exchange: ["BTC", "HYUNDAI"])
+
+    result = market_data_api.queue_best_1m_job(
+        "bitget",
+        {"coins": ["HYUN"], "selected_only": True, "end_day": "20260629"},
+        None,
+    )
+
+    assert result["success"] is False
+    assert "Unsupported coin(s)" in result["error"]
+    assert "HYUN" in result["error"]
+
+
+def test_bitget_best_1m_queue_keeps_hyundai_mapping_coin(monkeypatch, tmp_path) -> None:
+    """Bitget Best-1m queue payloads keep the mapping coin instead of symbol-code shortening."""
+
+    enqueued: list[dict] = []
+    popen_calls: list[list[str]] = []
+
+    def fake_enqueue_running_job(**kwargs):
+        enqueued.append(kwargs)
+        return SimpleNamespace(job_id="bitget-1", path=str(tmp_path / "bitget-1.json"))
+
+    def fake_popen(cmd: list[str], **_kwargs):
+        popen_calls.append(cmd)
+        return SimpleNamespace(pid=12345)
+
+    monkeypatch.setattr(market_data_api, "_get_best_1m_available_coins", lambda exchange: ["BTC", "HYUNDAI"])
+    monkeypatch.setattr("task_queue.enqueue_running_job", fake_enqueue_running_job)
+    monkeypatch.setattr("market_data.append_exchange_download_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    result = market_data_api.queue_best_1m_job(
+        "bitget",
+        {"coins": ["HYUNDAI"], "selected_only": True, "end_day": "20260629"},
+        None,
+    )
+
+    assert result["success"] is True
+    assert enqueued[0]["payload"]["coins"] == ["HYUNDAI"]
+    assert popen_calls
+
+
 def test_copy_data_queue_payload_defaults_to_missing_only() -> None:
     """Copy Data queue payloads normalize safe rsync defaults."""
 
@@ -313,3 +369,198 @@ def test_copy_data_queue_uses_fresh_one_shot_worker(monkeypatch) -> None:
     assert popen_calls
     assert popen_calls[0][1].endswith("task_worker.py")
     assert popen_calls[0][2] == "--run-job"
+
+
+def test_bitget_best_1m_queue_uses_fresh_one_shot_worker(monkeypatch) -> None:
+    """Bitget Best 1m jobs bypass stale resident workers when queued."""
+
+    enqueued: list[dict] = []
+    popen_calls: list[list[str]] = []
+
+    def fake_enqueue_running_job(**kwargs):
+        enqueued.append(kwargs)
+        return SimpleNamespace(job_id="bitget-1", path=str(repo_root / "data" / "ohlcv" / "_tasks" / "running" / "bitget-1.json"))
+
+    def fake_popen(cmd: list[str], **_kwargs):
+        popen_calls.append(cmd)
+        return SimpleNamespace(pid=12345)
+
+    monkeypatch.setattr("task_queue.enqueue_running_job", fake_enqueue_running_job)
+    monkeypatch.setattr("market_data.append_exchange_download_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(market_data_api, "_get_best_1m_available_coins", lambda _exchange: ["BTC"])
+
+    result = market_data_api.queue_best_1m_job(
+        "bitget",
+        {"coins": ["BTC"], "end_day": "20260629", "refetch": False},
+        None,
+    )
+
+    assert result["success"] is True
+    assert result["runner_started"] is True
+    assert enqueued[0]["job_type"] == "bitget_best_1m"
+    assert enqueued[0]["exchange"] == "bitget"
+    assert enqueued[0]["payload"]["coins"] == ["BTC"]
+    assert popen_calls
+    assert popen_calls[0][1].endswith("task_worker.py")
+    assert popen_calls[0][2] == "--run-job"
+
+
+def test_bitget_distributed_queue_uses_selected_vps_hosts(monkeypatch) -> None:
+    """Distributed Bitget queue requests store selected known VPS hosts in the worker payload."""
+
+    enqueued: list[dict] = []
+    popen_calls: list[list[str]] = []
+
+    def fake_enqueue_running_job(**kwargs):
+        enqueued.append(kwargs)
+        return SimpleNamespace(job_id="bitget-dist-1", path=str(repo_root / "data" / "ohlcv" / "_tasks" / "running" / "bitget-dist-1.json"))
+
+    def fake_popen(cmd: list[str], **_kwargs):
+        popen_calls.append(cmd)
+        return SimpleNamespace(pid=12345)
+
+    monkeypatch.setattr("task_queue.enqueue_running_job", fake_enqueue_running_job)
+    monkeypatch.setattr("market_data.append_exchange_download_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(market_data_api, "_get_best_1m_available_coins", lambda _exchange: ["BTC"])
+    monkeypatch.setattr(
+        market_data_api,
+        "_load_bitget_distributed_hosts",
+        lambda: [
+            {
+                "hostname": "vps-a",
+                "label": "vps-a (pbgui@203.0.113.10)",
+                "target": "pbgui@203.0.113.10",
+                "ssh_command": "ssh -p 2222",
+            }
+        ],
+    )
+
+    result = market_data_api.queue_best_1m_job(
+        "bitget",
+        {
+            "coins": ["BTC"],
+            "start_day": "20260101",
+            "end_day": "20260131",
+            "distributed": True,
+            "distributed_hosts": ["vps-a"],
+        },
+        None,
+    )
+
+    assert result["success"] is True
+    assert result["job_type"] == "bitget_best_1m_distributed"
+    assert result["distributed"] is True
+    assert result["distributed_hosts_count"] == 1
+    assert enqueued[0]["job_type"] == "bitget_best_1m_distributed"
+    assert enqueued[0]["exchange"] == "bitget"
+    assert enqueued[0]["payload"]["distributed_hosts"][0]["hostname"] == "vps-a"
+    assert popen_calls[0][1].endswith("task_worker.py")
+    assert popen_calls[0][2] == "--run-job"
+
+
+def test_bitget_distributed_queue_rejects_unknown_host(monkeypatch) -> None:
+    """Distributed queue requests can only reference known VPS hosts."""
+
+    monkeypatch.setattr(market_data_api, "_get_best_1m_available_coins", lambda _exchange: ["BTC"])
+    monkeypatch.setattr(market_data_api, "_load_bitget_distributed_hosts", lambda: [])
+
+    result = market_data_api.queue_best_1m_job(
+        "bitget",
+        {"coins": ["BTC"], "end_day": "20260131", "distributed": True, "distributed_hosts": ["missing"]},
+        None,
+    )
+
+    assert result["success"] is False
+    assert "Unknown or unsupported Bitget downloader" in result["error"]
+
+
+def test_bitget_distributed_queue_accepts_master_downloader(monkeypatch) -> None:
+    """Distributed queue requests can target the master downloader without SSH."""
+
+    enqueued: list[dict] = []
+
+    def fake_enqueue_running_job(**kwargs):
+        enqueued.append(kwargs)
+        return SimpleNamespace(job_id="bitget-dist-master", path=str(repo_root / "data" / "ohlcv" / "_tasks" / "running" / "bitget-dist-master.json"))
+
+    monkeypatch.setattr("task_queue.enqueue_running_job", fake_enqueue_running_job)
+    monkeypatch.setattr("market_data.append_exchange_download_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("subprocess.Popen", lambda *_args, **_kwargs: SimpleNamespace(pid=12345))
+    monkeypatch.setattr(market_data_api, "_get_best_1m_available_coins", lambda _exchange: ["BTC"])
+    monkeypatch.setattr(
+        market_data_api,
+        "_load_bitget_distributed_hosts",
+        lambda: [
+            {
+                "hostname": "master",
+                "label": "Master (local downloader)",
+                "target": "master",
+                "ssh_command": "",
+                "mode": "master",
+            }
+        ],
+    )
+
+    result = market_data_api.queue_best_1m_job(
+        "bitget",
+        {
+            "coins": ["BTC"],
+            "start_day": "20260101",
+            "end_day": "20260131",
+            "distributed": True,
+            "distributed_hosts": ["master"],
+        },
+        None,
+    )
+
+    assert result["success"] is True
+    assert result["distributed_hosts_count"] == 1
+    assert enqueued[0]["payload"]["distributed_hosts"][0]["mode"] == "master"
+    assert enqueued[0]["payload"]["distributed_hosts"][0]["target"] == "master"
+
+
+def test_bitget_failed_job_retry_starts_fresh_runner(monkeypatch) -> None:
+    """Retrying failed Bitget jobs starts the current one-shot worker immediately."""
+
+    jobs_api = importlib.import_module("api.jobs")
+    started: list[str] = []
+
+    monkeypatch.setattr(
+        jobs_api,
+        "list_jobs",
+        lambda **_kwargs: [{"id": "bitget-1", "type": "bitget_best_1m", "status": "failed"}],
+    )
+    monkeypatch.setattr(jobs_api, "retry_failed_job", lambda job_id: job_id == "bitget-1")
+
+    def fake_start_pending_job(job_id: str):
+        started.append(job_id)
+        return True, ""
+
+    monkeypatch.setattr(jobs_api, "start_pending_job", fake_start_pending_job)
+
+    result = jobs_api.retry_job("bitget-1", None)
+
+    assert result == {"success": True, "job_id": "bitget-1", "runner_started": True}
+    assert started == ["bitget-1"]
+
+
+def test_bitget_distributed_failed_job_retry_starts_fresh_runner(monkeypatch) -> None:
+    """Retrying failed distributed Bitget jobs starts a one-shot worker immediately."""
+
+    jobs_api = importlib.import_module("api.jobs")
+    started: list[str] = []
+
+    monkeypatch.setattr(
+        jobs_api,
+        "list_jobs",
+        lambda **_kwargs: [{"id": "bitget-dist-1", "type": "bitget_best_1m_distributed", "status": "failed"}],
+    )
+    monkeypatch.setattr(jobs_api, "retry_failed_job", lambda job_id: job_id == "bitget-dist-1")
+    monkeypatch.setattr(jobs_api, "start_pending_job", lambda job_id: (started.append(job_id) or True, ""))
+
+    result = jobs_api.retry_job("bitget-dist-1", None)
+
+    assert result == {"success": True, "job_id": "bitget-dist-1", "runner_started": True}
+    assert started == ["bitget-dist-1"]
