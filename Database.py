@@ -432,7 +432,7 @@ class Database():
         exchange = Exchange(user.exchange, user)
 
         # Only fetch executions for exchanges where we have explicit support.
-        if exchange.id not in ('hyperliquid', 'binance', 'bitget', 'bybit', 'okx', 'gateio'):
+        if exchange.id not in ('hyperliquid', 'binance', 'bitget', 'bybit', 'kucoinfutures', 'okx', 'gateio'):
             return None
 
         since = None
@@ -478,6 +478,18 @@ class Database():
         # multiple windows to fetch older history.
         # For initial backfill, use a simple 365-day lookback by default.
         if exchange.id == 'bitget' and now_ms is not None:
+            try:
+                if since is None:
+                    if initial_lookback_days is not None:
+                        since = max(0, now_ms - int(initial_lookback_days) * day)
+                    else:
+                        since = max(0, now_ms - 365 * day)
+            except Exception:
+                pass
+
+        # KuCoin futures fills can be fetched without a symbol. For initial backfill,
+        # keep the scan bounded to one year by default.
+        if exchange.id == 'kucoinfutures' and now_ms is not None:
             try:
                 if since is None:
                     if initial_lookback_days is not None:

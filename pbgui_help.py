@@ -1,11 +1,8 @@
 assigned_balance = """
     ```
     assigned_balance overriding balance fetched from exchange
-    On spot market it is recommended to fix wallet balance to a given value.
-    This because in spot trading there are no positions, no wallet balance
-    and no unrealized PnL. There is only plain buy and sell.
-    So wallet balance and position must be simulated by looking in past user
-    trade history.
+    Use this when you want the bot to calculate risk from a fixed wallet
+    balance instead of the live futures balance fetched from the exchange.
     ```"""
 initial_entry_exec_max_market_dist_pct = """
     ```
@@ -68,7 +65,7 @@ price_step = """
     Default: None (0.000) Not every exchange has the same minimal step
     ```"""
 api_error = """
-    Check your API-Key and enable spot and/or future trading if you need it
+    Check your API-Key and enable futures trading if you need it
     """
 
 api_keys_guide = """

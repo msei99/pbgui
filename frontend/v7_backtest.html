@@ -1740,7 +1740,7 @@ function showInitialBacktestQueueDraftModal(items) {
 
   var firstCfg = (items[0] && items[0].config) || {};
   var today = new Date().toISOString().slice(0, 10);
-  var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'combined'];
+  var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'kucoin', 'combined'];
   var defExchanges = (firstCfg.backtest && firstCfg.backtest.exchanges) || ['bybit'];
   var defStart = (firstCfg.backtest && firstCfg.backtest.start_date) || '2020-01-01';
   var defBalance = (firstCfg.backtest && firstCfg.backtest.starting_balance) || 1000;
@@ -1923,7 +1923,7 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   setCfgBotParamStatus(paramStatus);
 
   /* ── Row 1: Identity & Time (cols-8: 4+2+1+1) ── */
-  var exAll = ['binance','bybit','bitget','okx','hyperliquid','combined'];
+  var exAll = ['binance','bybit','bitget','okx','hyperliquid','kucoin','combined'];
   var exSel = bt.exchanges || [];
   html += '<div class="form-row cols-8">';
   html += '<div class="form-group span-4"><label><span data-tip="Exchanges from which to fetch 1m OHLCV data for backtesting.">exchanges</span> ' +
@@ -2036,7 +2036,7 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
       '<div style="display:flex;gap:var(--sp-sm);align-items:end;margin-top:var(--sp-xs)">' +
         '<div class="form-group" style="width:140px"><label>Exchange</label>' +
           '<select id="kv-cs-exchange" class="form-input" onchange="kvLoadCoins(\'kv-cs\')">' +
-            '<option>binance</option><option>bybit</option><option>bitget</option><option>okx</option><option>hyperliquid</option>' +
+            '<option>binance</option><option>bybit</option><option>bitget</option><option>okx</option><option>hyperliquid</option><option>kucoin</option>' +
           '</select></div>' +
         '<div class="form-group" style="flex:1"><label>Coin</label>' +
           '<div class="ms-wrap" id="kv-cs-coin">' +
@@ -2062,7 +2062,7 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
       '<div style="display:flex;gap:var(--sp-sm);align-items:end;margin-top:var(--sp-xs)">' +
         '<div class="form-group" style="width:140px"><label>Exchange</label>' +
           '<select id="kv-mss-exchange" class="form-input" onchange="kvLoadCoins(\'kv-mss\')">' +
-            '<option>binance</option><option>bybit</option><option>bitget</option><option>okx</option><option>hyperliquid</option>' +
+            '<option>binance</option><option>bybit</option><option>bitget</option><option>okx</option><option>hyperliquid</option><option>kucoin</option>' +
           '</select></div>' +
         '<div class="form-group" style="flex:1"><label>Coin</label>' +
           '<div class="ms-wrap" id="kv-mss-coin">' +
@@ -2648,7 +2648,7 @@ function cfgSyncEditorFromParsed(name, cfg) {
   var live = (cfg && cfg.live) || {};
   var pbgui = (cfg && cfg.pbgui) || {};
   var logging = (cfg && cfg.logging) || {};
-  var exAll = ['binance','bybit','bitget','okx','hyperliquid','combined'];
+  var exAll = ['binance','bybit','bitget','okx','hyperliquid','kucoin','combined'];
   var anchor = cfgCaptureRawAnchor();
   var mfEnabled = bt.maker_fee_override !== null && bt.maker_fee_override !== undefined;
   var tfEnabled = bt.taker_fee_override !== null && bt.taker_fee_override !== undefined;
@@ -6263,15 +6263,19 @@ function loadConfig(cd) {
 /* ── Plot images (PB7-generated PNGs) ── */
 function loadPlotImages(cd) {
   var el = document.getElementById(cd.id);
-  var imgFiles = ['balance_and_equity.png', 'balance_and_equity_logy.png',
-    'balance_and_equity_btc.png', 'total_wallet_exposure.png', 'pnl_cumsum.png'];
-  var html = '';
-  imgFiles.forEach(function(f) {
-    var url = API_BASE + '/results/image?path=' + encodeURIComponent(cd.path) +
-      '&filename=' + encodeURIComponent(f) + '&token=' + encodeURIComponent(TOKEN);
-    html += '<img src="' + url + '" style="width:100%;margin-bottom:var(--sp-sm);border-radius:4px" onerror="this.style.display=\'none\'" alt="' + esc(f) + '">';
-  });
-  el.innerHTML = html;
+  apiFetch('/results/files?path=' + encodeURIComponent(cd.path))
+    .then(function(d) {
+      var files = (d.files || []).filter(function(f) { return f.toLowerCase().endsWith('.png'); });
+      if (!files.length) { el.innerHTML = '<div style="color:var(--text-dim)">No plot images found</div>'; return; }
+      var html = '';
+      files.forEach(function(f) {
+        var url = API_BASE + '/results/image?path=' + encodeURIComponent(cd.path) +
+          '&filename=' + encodeURIComponent(f) + '&token=' + encodeURIComponent(TOKEN);
+        html += '<img src="' + url + '" style="width:100%;margin-bottom:var(--sp-sm);border-radius:4px" onerror="this.style.display=\'none\'" alt="' + esc(f) + '">';
+      });
+      el.innerHTML = html;
+    })
+    .catch(function(e) { el.innerHTML = '<div style="color:var(--red)">Failed: ' + esc(e.message) + '</div>'; });
 }
 
 /* ── Fills images (per-coin PNGs) ── */
@@ -6576,7 +6580,7 @@ function rebacktestSelected() {
 
   /* Multiple: show parameter popup then queue all */
   var today = new Date().toISOString().slice(0, 10);
-  var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'combined'];
+  var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'kucoin', 'combined'];
 
   /* Collect default exchanges from first result */
   apiFetch('/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
@@ -6653,7 +6657,7 @@ function rebacktestSelectedArchive() {
   var sel = getSelectedArchiveResults();
   if (!sel.length) { toast('Nothing selected', 'err'); return; }
   var today = new Date().toISOString().slice(0, 10);
-  var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'combined'];
+  var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'kucoin', 'combined'];
   apiFetch('/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
     var defExchanges = (cfg.backtest && cfg.backtest.exchanges) || ['bybit'];
     var defStart = (cfg.backtest && cfg.backtest.start_date) || '2020-01-01';
@@ -6759,7 +6763,7 @@ function retestReplaceSelectedArchive() {
   if (!selectedArchiveIsOwn()) { toast('Retest & Replace is only available for your own archive', 'err'); return; }
   var sel = getSelectedArchiveResults();
   if (!sel.length) { toast('Nothing selected', 'err'); return; }
-  var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'combined'];
+  var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'kucoin', 'combined'];
   apiFetch('/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
     var defExchanges = (cfg.backtest && cfg.backtest.exchanges) || ['bybit'];
     var defBalance = (cfg.backtest && cfg.backtest.starting_balance) || 1000;
@@ -6856,7 +6860,7 @@ function rebacktestSelectedLegacy() {
   }
 
   var today = new Date().toISOString().slice(0, 10);
-  var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'combined'];
+  var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'kucoin', 'combined'];
   apiFetch('/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
     var defExchanges = (cfg.backtest && cfg.backtest.exchanges) || ['bybit'];
     var defStart = (cfg.backtest && cfg.backtest.start_date) || '2020-01-01';
@@ -7248,7 +7252,7 @@ function calcBalanceFromResult() {
 }
 
 function _showBalanceCalcModal(cfg, defaultExchange) {
-  var exchanges = ['binance', 'bybit', 'bitget', 'gateio', 'hyperliquid', 'okx'];
+  var exchanges = ['binance', 'bybit', 'bitget', 'gateio', 'hyperliquid', 'kucoin', 'okx'];
   var exchOpts = exchanges.map(function(e) {
     return '\x3Coption value="' + e + '"' + (e === defaultExchange ? ' selected' : '') + '\x3E' + e + '\x3C/option\x3E';
   }).join('');
@@ -8624,7 +8628,7 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/suite_editor.js?v=4"></script>
+<script src="/app/js/suite_editor.js?v=5"></script>
 <script src="/app/js/coin_overrides_editor.js?v=12"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */

@@ -2514,7 +2514,7 @@ textarea.json-invalid:focus {
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=10"></script>
-<script src="/app/js/suite_editor.js?v=4"></script>
+<script src="/app/js/suite_editor.js?v=5"></script>
 <script src="/app/js/log_viewer_panel.js?v=24"></script>
 <script src="/app/js/pbgui_dialogs.js?v=4"></script>
 <script>
@@ -7617,7 +7617,7 @@ function editorSelectedExchanges() {
 }
 
 function renderExchangePills(selected) {
-  var defaults = ['binance', 'bybit', 'gateio', 'bitget', 'okx', 'hyperliquid'];
+  var defaults = ['binance', 'bybit', 'gateio', 'bitget', 'okx', 'hyperliquid', 'kucoin'];
   var seen = {};
   var all = defaults.concat(Array.isArray(selected) ? selected : []);
   return all.filter(function(name) {
@@ -7765,7 +7765,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
   var pymooRefDirs = ((pymoo.algorithms || {}).nsga3 || {}).ref_dirs || {};
   var coinSources = normalizeOptimizeCoinSources(backtest.coin_sources, pbgui.coin_sources);
   var coinSourceKeys = Object.keys(coinSources).sort();
-  var coinSourceExchangeOptions = uniqStrings(['binance', 'bybit', 'gateio', 'bitget', 'okx', 'hyperliquid'].concat(Array.isArray(backtest.exchanges) ? backtest.exchanges : []));
+  var coinSourceExchangeOptions = uniqStrings(['binance', 'bybit', 'gateio', 'bitget', 'okx', 'hyperliquid', 'kucoin'].concat(Array.isArray(backtest.exchanges) ? backtest.exchanges : []));
   var coinSourceExchangeOptionsHtml = coinSourceExchangeOptions.map(function(exchange) {
     return '<option>' + escapeHtml(exchange) + '</option>';
   }).join('');
@@ -8032,7 +8032,7 @@ function populateOptimizeEditor(config, opts) {
   var exchanges = Array.isArray(backtest.exchanges)
     ? backtest.exchanges.slice()
     : (backtest.exchange ? [backtest.exchange] : []);
-  var exchangeOptions = uniqStrings(['binance', 'bybit', 'gateio', 'bitget', 'okx', 'hyperliquid'].concat(exchanges));
+  var exchangeOptions = uniqStrings(['binance', 'bybit', 'gateio', 'bitget', 'okx', 'hyperliquid', 'kucoin'].concat(exchanges));
   optRebuildMs('ms-opt-exchanges', exchangeOptions, exchanges);
   el('opted-start-date').value = backtest.start_date || '';
   el('opted-end-date').value = resolveOptimizeEditorEndDateValue(backtest.end_date);

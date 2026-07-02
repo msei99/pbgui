@@ -18,7 +18,7 @@ var _suiteState = {
   botParams: [],       // [{key, type, default}] loaded from API
   containerId: '',
   apiBase: '',
-  exchanges: ['binance','bybit','bitget','okx','hyperliquid'],
+  exchanges: ['binance','bybit','bitget','okx','hyperliquid','kucoin'],
 };
 
 /* ── Templates ──────────────────────────────────────────────── */

@@ -251,7 +251,7 @@ def import_passivbot_rust():
     return pbr
 
 PBGDIR = Path(__file__).resolve().parent
-PBGUI_VERSION = "v1.89"
+PBGUI_VERSION = "v1.89.1"
 _serial_path = PBGDIR / 'api' / 'serial.txt'
 PBGUI_SERIAL = _serial_path.read_text().strip() if _serial_path.exists() else ''
 
@@ -611,9 +611,6 @@ def load_symbols_from_ini(exchange: str, market_type: str):
             continue
         if market_type == "swap":
             if bool(row.get("swap", False)) and bool(row.get("active", True)) and bool(row.get("linear", True)):
-                symbols.append(symbol)
-        elif market_type == "spot":
-            if bool(row.get("spot", False)) and bool(row.get("active", True)):
                 symbols.append(symbol)
         elif market_type == "cpt":
             if bool(row.get("swap", False)) and bool(row.get("copy_trading", False)) and bool(row.get("active", True)):

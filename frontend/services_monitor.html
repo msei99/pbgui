@@ -1949,7 +1949,7 @@ window.PBGUI_NAV_CONFIG = {
 
     /* ── Shared REST pause per exchange (collapsible) ── */
     var exPauses = data.shared_rest_pause_by_exchange || {};
-    var EX_LIST = ['binance','bingx','bitget','bybit','gateio','hyperliquid','kucoin','okx'];
+    var EX_LIST = ['binance','bitget','bybit','gateio','hyperliquid','kucoin','okx'];
     html += '<details id="pbdata-ex-pauses" open style="margin-top:1rem;border:1px solid #1e2736;border-radius:6px;overflow:hidden;">';
     html += '<summary style="padding:0.5rem 0.75rem;cursor:pointer;background:#111827;color:#94a3b8;font-size:var(--fs-sm);font-weight:600;user-select:none;">&#9660; Shared REST pause per exchange</summary>';
     html += '<div style="padding:0.6rem 0.9rem 0.4rem;font-size:var(--fs-xs);color:#4a5568;border-bottom:1px solid #1e2736;">Per-exchange pause between users. Defaults come from PBData (e.g. hyperliquid/bybit) unless you set an override; only differences vs the global pause are saved as overrides.</div>';
@@ -2626,7 +2626,7 @@ window.PBGUI_NAV_CONFIG = {
     var fUsers = [], tUsers = [];
     document.querySelectorAll('#pbdata-fetch-users .tag:not(.inactive)').forEach(function (el) { fUsers.push(el.getAttribute('data-user')); });
     document.querySelectorAll('#pbdata-trades-users .tag:not(.inactive)').forEach(function (el) { tUsers.push(el.getAttribute('data-user')); });
-    var EX_LIST = ['binance','bingx','bitget','bybit','gateio','hyperliquid','kucoin','okx'];
+    var EX_LIST = ['binance','bitget','bybit','gateio','hyperliquid','kucoin','okx'];
     var exPauses = {};
     EX_LIST.forEach(function (ex) {
       var v = parseFloat(_val('pbdata-ex-' + ex));

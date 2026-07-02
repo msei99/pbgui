@@ -107,8 +107,11 @@ def compute_coin_name(market_id, quote=""):
             break
     # Remove exchange-specific separators (OKX dashes, Gateio underscores)
     name = name.replace("-", "").replace("_", "")
-    # Strip quote currency suffix
-    if quote and name.upper().endswith(quote.upper()):
+    # Strip quote currency suffix. KuCoin futures market IDs append an extra
+    # contract marker after the quote (e.g. XBTUSDTM, ETHUSDTM).
+    if quote and name.upper().endswith(f"{quote.upper()}M"):
+        name = name[:-(len(quote) + 1)]
+    elif quote and name.upper().endswith(quote.upper()):
         name = name[:-len(quote)]
     # Strip bare PERP suffix (Bybit/Bitget USDC markets: BTCPERP -> BTC)
     if name.upper().endswith("PERP") and len(name) > 4:
@@ -117,6 +120,8 @@ def compute_coin_name(market_id, quote=""):
     name = _strip_hyperliquid_k_prefix(name)
     # Strip 1000x multiplier prefixes (1000SHIB -> SHIB)
     name = remove_powers_of_ten(name)
+    if name.upper() == "XBT":
+        name = "BTC"
     return name.upper()
 
 
@@ -358,9 +363,7 @@ def get_symbol_for_coin(coin: str, exchange: str, use_cache=True) -> str:
             if not symbol:
                 continue
 
-            if market_type == "swap" and not bool(record.get("swap", False)):
-                continue
-            if market_type == "spot" and not bool(record.get("spot", False)):
+            if not bool(record.get("swap", False)):
                 continue
 
             quote = str(record.get("quote") or "").strip().upper()
@@ -710,6 +713,9 @@ class CoinData:
             if open_interest is not None and open_interest <= 0.0:
                 return False
 
+        if exchange == "kucoin" and str(record.get("quote") or "").upper() != "USDT":
+            return False
+
         return True
 
     def filter_mapping(
@@ -768,6 +774,8 @@ class CoinData:
             is_cpt = bool(record.get("copy_trading", False))
             record_tags = record.get("tags") or []
             is_eligible = self._passes_active_filter(exchange, record)
+            if active_only and not is_eligible:
+                continue
 
             passes = (
                 (not active_only or is_eligible)
@@ -2421,7 +2429,7 @@ class CoinData:
         Runs on its own interval (mapping_interval, in hours).
         Includes HIP-3 stock perpetuals detection.
         Only processes V7-supported exchanges (binance, bybit, bitget, gateio,
-        hyperliquid, okx). Legacy exchanges (bingx, kucoin) are excluded.
+        hyperliquid, kucoin, okx). Legacy exchanges are excluded.
         """
         now_ts = datetime.now().timestamp()
 

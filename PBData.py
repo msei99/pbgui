@@ -4109,7 +4109,7 @@ class PBData():
                             for u in self.users
                             if u.name in self.fetch_users
                             and u.name in (self.trades_users or [])
-                            and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'okx', 'gateio')
+                            and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'kucoin', 'okx', 'gateio')
                         ]
                     except Exception:
                         exec_users = []
@@ -4309,7 +4309,7 @@ class PBData():
                     for u in self.users
                     if u.name in self.fetch_users
                     and u.name in (self.trades_users or [])
-                    and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'okx', 'gateio')
+                    and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'kucoin', 'okx', 'gateio')
                 ]
             except Exception:
                 exec_users = []

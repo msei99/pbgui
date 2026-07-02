@@ -46,7 +46,7 @@ PBGDIR = Path(__file__).resolve().parent.parent
 RUN_V7_DIR = PBGDIR / "data" / "run_v7"
 COINDATA_DIR = PBGDIR / "data" / "coindata"
 
-EXCHANGES = ["binance", "bybit", "bitget", "gateio", "hyperliquid", "okx"]
+EXCHANGES = ["binance", "bybit", "bitget", "gateio", "hyperliquid", "kucoin", "okx"]
 
 
 def _read_json(path: Path) -> dict | list | None:

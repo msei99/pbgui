@@ -934,14 +934,19 @@ def market_options(config: dict[str, Any] | None = None, options: dict[str, Any]
     opts = dict(options or {})
     source_dir, prefer_source_only = _source_settings(cfg, opts)
     exchanges = get_available_exchanges_v7(source_dir=source_dir, include_pb7=not prefer_source_only)
-    cfg_exc = _safe_market_segment(_first_exchange(cfg), "binance")
+    cfg_exc = strategy_explorer_core._canonical_strategy_exchange(_first_exchange(cfg)) or "binance"
     cfg_coins = []
     for side in ("long", "short"):
         for coin in _approved_coins(cfg, side):
             coin = _safe_market_segment(coin)
             if coin and coin not in cfg_coins:
                 cfg_coins.append(coin)
-    if cfg_exc and cfg_exc not in exchanges and not prefer_source_only:
+    if (
+        cfg_exc
+        and cfg_exc in strategy_explorer_core._supported_strategy_exchanges()
+        and cfg_exc not in exchanges
+        and not prefer_source_only
+    ):
         exchanges = [cfg_exc] + exchanges
     coins_by_exchange: dict[str, list[str]] = {}
     for exchange in exchanges[:20]:

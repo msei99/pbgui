@@ -46,11 +46,42 @@
     var reconnTimer = null;
     var reconnDelay = 1000;
     var container   = document.getElementById('di-container-' + POSITION);
+    var pendingReload = false;
+    var loadSeq = 0;
 
     function reportHeight() {
     }
 
-    function load() {
+    function isCardControlActive() {
+        var active = document.activeElement;
+        if (!active || !container || !container.contains(active)) return false;
+        var tag = String(active.tagName || '').toLowerCase();
+        return tag === 'select' || tag === 'input' || tag === 'textarea';
+    }
+
+    function requestReload() {
+        if (isCardControlActive()) {
+            pendingReload = true;
+            return;
+        }
+        load();
+    }
+
+    if (container) {
+        container.addEventListener('focusout', function () {
+            if (!pendingReload) return;
+            setTimeout(function () {
+                if (isCardControlActive()) return;
+                pendingReload = false;
+                load();
+            }, 0);
+        });
+    }
+
+    function load(options) {
+        options = options || {};
+        var force = !!options.force;
+        var seq = ++loadSeq;
         var usersParam = (Array.isArray(USERS) && USERS.length > 0) ? USERS.join(',') : 'ALL';
         /* parse CUSTOM:from:to */
         var isCustom = currentPeriod.indexOf('CUSTOM:') === 0;
@@ -70,6 +101,11 @@
         fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (d) {
+                if (seq !== loadSeq) return;
+                if (!force && isCardControlActive()) {
+                    pendingReload = true;
+                    return;
+                }
                 /* ── Period select ── */
                 var periodCtrl = document.createElement('select');
                 periodCtrl.className = 'dt-ctrl-sel';
@@ -88,7 +124,8 @@
                     } else {
                         currentPeriod = this.value;
                     }
-                    load();
+                    pendingReload = false;
+                    load({ force: true });
                 });
 
                 /* ── CUSTOM date inputs ── */
@@ -101,7 +138,8 @@
                     fromCtrl.addEventListener('change', function () {
                         var _parts = currentPeriod.split(':');
                         currentPeriod = 'CUSTOM:' + this.value + ':' + (_parts[2] || customTo);
-                        load();
+                        pendingReload = false;
+                        load({ force: true });
                     });
                     toCtrl = document.createElement('input');
                     toCtrl.type = 'date'; toCtrl.className = 'dt-ctrl-date';
@@ -110,7 +148,8 @@
                     toCtrl.addEventListener('change', function () {
                         var _parts = currentPeriod.split(':');
                         currentPeriod = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + this.value;
-                        load();
+                        pendingReload = false;
+                        load({ force: true });
                     });
                     toNowCtrl = document.createElement('label');
                     toNowCtrl.className = 'dt-ctrl-now-wrap';
@@ -126,7 +165,8 @@
                             var _td = new Date().toISOString().slice(0,10);
                             currentPeriod = 'CUSTOM:' + (_parts[1] || customFrom) + ':' + _td;
                         }
-                        load();
+                        pendingReload = false;
+                        load({ force: true });
                     });
                 }
 
@@ -137,7 +177,8 @@
                 lastNCtrl.className = 'dt-ctrl-num';
                 lastNCtrl.addEventListener('change', function () {
                     currentLastN = parseInt(this.value, 10) || 0;
-                    load();
+                    pendingReload = false;
+                    load({ force: true });
                 });
 
                 /* ── Filter control ── */
@@ -148,7 +189,8 @@
                 filterCtrl.style.width = '68px';
                 filterCtrl.addEventListener('change', function () {
                     currentFilter = parseFloat(this.value) || 0;
-                    load();
+                    pendingReload = false;
+                    load({ force: true });
                 });
 
                 DashRender.buildIncome(container, d, {
@@ -169,7 +211,8 @@
                         /* load the last N rows up to (and including) the target date */
                         currentPeriod = 'CUSTOM:2017-01-01:' + dateStr;
                         /* currentLastN stays as-is */
-                        load();
+                        pendingReload = false;
+                        load({ force: true });
                     },
                     height:         HEIGHT > 0 ? HEIGHT : null,
                     displayModeBar: true,
@@ -214,7 +257,7 @@
                 if (m.type === 'income_updated') {
                     var mu = m.user || '';
                     var relevant = !mu || !Array.isArray(USERS) || USERS.length === 0 || USERS.indexOf(mu) !== -1;
-                    if (relevant) load();
+                    if (relevant) requestReload();
                 }
             } catch (_) {}
         };

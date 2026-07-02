@@ -92,7 +92,6 @@ class UserCreateUpdate(BaseModel):
 class TestResult(BaseModel):
     success: bool
     balance_futures: Optional[float] = None
-    balance_spot: Optional[float] = None
     error: Optional[str] = None
 
 
@@ -592,10 +591,9 @@ def list_exchanges(
     session: SessionToken = Depends(require_auth),
 ) -> dict[str, Any]:
     """List available exchanges and their capabilities."""
-    from Exchange import Exchanges, Spot, Passphrase, V7
+    from Exchange import Exchanges, Passphrase, V7
     return {
         "exchanges": Exchanges.list(),
-        "spot_exchanges": Spot.list(),
         "passphrase_exchanges": Passphrase.list(),
         "v7_exchanges": V7.list(),
     }
@@ -1102,7 +1100,7 @@ def test_connection(
     this test only (not saved to disk), allowing users to verify new credentials
     before committing to Save.
     """
-    from Exchange import Exchange, Spot
+    from Exchange import Exchange
     import copy
 
     users = _get_users()
@@ -1140,17 +1138,6 @@ def test_connection(
         result.error = str(e)
     finally:
         exchange.close()
-
-    # Try spot if exchange supports it
-    if result.success and user.exchange in Spot.list():
-        try:
-            exchange2 = Exchange(user.exchange, user)
-            balance_spot = exchange2.fetch_balance("spot")
-            if isinstance(balance_spot, (int, float)):
-                result.balance_spot = float(balance_spot)
-            exchange2.close()
-        except Exception:
-            pass
 
     return result
 

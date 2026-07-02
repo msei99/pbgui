@@ -167,7 +167,6 @@
         .badge-exchange.okx { color: #ccc; }
         .badge-exchange.gateio { color: #2ba6ff; }
         .badge-exchange.kucoin { color: #23af91; }
-        .badge-exchange.bingx { color: #2196f3; }
 
         .badge-in-use {
             display: inline-block;
@@ -1050,7 +1049,6 @@
     // Exchange metadata (populated from server)
     let EXCHANGES = [];
     let PASSPHRASE_EXCHANGES = [];
-    let SPOT_EXCHANGES = [];
     let V7_EXCHANGES = [];
 
     // State
@@ -1158,7 +1156,6 @@
             const data = await apiFetch("/exchanges");
             EXCHANGES = data.exchanges || [];
             PASSPHRASE_EXCHANGES = data.passphrase_exchanges || [];
-            SPOT_EXCHANGES = data.spot_exchanges || [];
             V7_EXCHANGES = data.v7_exchanges || [];
             populateExchangeSelect();
         } catch (e) {
@@ -1929,10 +1926,6 @@
             if (result.success) {
                 html += '<div class="balance-box"><div class="label">Futures Balance</div>';
                 html += '<div class="value">' + (result.balance_futures !== null ? result.balance_futures.toFixed(2) : "N/A") + '</div></div>';
-                if (result.balance_spot !== null) {
-                    html += '<div class="balance-box"><div class="label">Spot Balance</div>';
-                    html += '<div class="value">' + result.balance_spot.toFixed(2) + '</div></div>';
-                }
                 showToast("Connection successful!", "success");
             } else {
                 html += '<div class="balance-box"><div class="label">Connection Test</div>';

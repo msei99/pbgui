@@ -1,6 +1,6 @@
 import ccxt
 import ccxt.pro as ccxt_pro
-from User import User, Users
+from User import User
 from enum import Enum
 import json
 from pathlib import Path
@@ -124,6 +124,53 @@ def _ccxt_should_retry(exchange_instance, exc: Exception) -> bool:
         ),
     )
 
+
+def _mapping_exchange_id(exchange_id: str) -> str:
+    """Return the CoinData mapping directory name for an exchange id."""
+    exchange_id = str(exchange_id or "").strip().lower()
+    if exchange_id == "kucoinfutures":
+        return "kucoin"
+    return exchange_id
+
+
+def _resolve_ccxt_symbol_from_mapping(exchange_id: str, symbol: str) -> str | None:
+    """Resolve a symbol using CoinData mapping only.
+
+    Mapping rows are the source of truth. This intentionally does not construct
+    exchange symbols from strings; missing mapping data means no resolution.
+    """
+    exchange_key = _mapping_exchange_id(exchange_id)
+    value = str(symbol or "").strip()
+    if not exchange_key or not value:
+        return None
+
+    mapping_path = Path(PBGDIR) / "data" / "coindata" / exchange_key / "mapping.json"
+    try:
+        rows = json.loads(mapping_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(rows, list):
+        return None
+
+    value_upper = value.upper()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ccxt_symbol = str(row.get("ccxt_symbol") or "").strip()
+        if not ccxt_symbol:
+            continue
+        candidates = {
+            str(row.get("symbol") or "").strip().upper(),
+            ccxt_symbol.upper(),
+        }
+        coin = str(row.get("coin") or "").strip().upper()
+        quote = str(row.get("quote") or "").strip().upper()
+        if coin and quote:
+            candidates.add(f"{coin}{quote}")
+        if value_upper in candidates:
+            return ccxt_symbol
+    return None
+
 # Per-exchange limits for how many private (per-user) websocket clients
 # the process will create. When the limit is reached `get_private_ws_client`
 # will return None so callers can fallback to REST polling. Tunable later
@@ -133,6 +180,7 @@ MAX_PRIVATE_WS_PER_EXCHANGE = {
     'bitget': 10,
     'bybit': 10,
     'binance': 10,
+    'kucoinfutures': 10,
     'okx': 10,
 }
 
@@ -213,31 +261,10 @@ class Exchanges(Enum):
     HYPERLIQUID = 'hyperliquid'
     OKX = 'okx'
     KUCOIN = 'kucoin'
-    BINGX = 'bingx'
 
     @staticmethod
     def list():
         return list(map(lambda c: c.value, Exchanges))
-
-class Spot(Enum):
-    BINANCE = 'binance'
-    BYBIT = 'bybit'
-
-    @staticmethod
-    def list():
-        return list(map(lambda c: c.value, Spot))
-
-class Single(Enum):
-    BINANCE = 'binance'
-    BYBIT = 'bybit'
-    BITGET = 'bitget'
-    OKX = 'okx'
-    KUCOIN = 'kucoin'
-    BINGX = 'bingx'
-
-    @staticmethod
-    def list():
-        return list(map(lambda c: c.value, Single))
 
 class V7(Enum):
     BINANCE = 'binance'
@@ -245,6 +272,7 @@ class V7(Enum):
     BITGET = 'bitget'
     GATEIO = 'gateio'
     HYPERLIQUID = 'hyperliquid'
+    KUCOIN = 'kucoin'
     OKX = 'okx'
 
     @staticmethod
@@ -279,26 +307,13 @@ class Exchange:
         self.id = "kucoinfutures" if id == "kucoin" else id
         self.instance = None
         self._markets = None
-        self._tf = None
-        self.spot = []
-        self.swap = []
         self._user = user
-        self.error = None
 
 
     # _log removed: Exchange module uses `logging_helpers.human_log` directly
 
     @property
     def user(self): return self._user
-
-    @property
-    def tf(self):
-        if not self._tf:
-            self.connect()
-            self._tf = list(self.instance.timeframes.keys())
-            if "1s" in self._tf:
-                self._tf.remove('1s')
-        return self._tf
 
     @user.setter
     def user(self, new_user):
@@ -355,9 +370,8 @@ class Exchange:
                 self.instance.privateKey = self.user.private_key
         try:
             self.instance.checkRequiredCredentials()
-            self.error = None
-        except Exception as exc:
-            self.error = str(exc)
+        except Exception:
+            pass
 
     def close(self):
         """Close the exchange instance and release resources (e.g. aiohttp sessions)."""
@@ -387,43 +401,6 @@ class Exchange:
                     self.instance.close()
             except Exception as e:
                 _log('Exchange', f'Error closing exchange {self.id}: {e}', level='debug')
-
-    def create_ws_client(self):
-        """Create and return a ccxt.pro client configured for this exchange and user.
-        Returns None if ccxtpro is not installed or the exchange is unsupported.
-        """
-        ex_id = self.id
-        if not hasattr(ccxt_pro, ex_id):
-            return None
-        kwargs = {'enableRateLimit': True, 'timeout': DEFAULT_CCXT_TIMEOUT_MS, 'options': {'defaultType': 'swap'}}
-        if self.user:
-            if getattr(self.user, 'key', None):
-                kwargs['apiKey'] = getattr(self.user, 'key')
-            if getattr(self.user, 'secret', None):
-                kwargs['secret'] = getattr(self.user, 'secret')
-            if getattr(self.user, 'passphrase', None):
-                kwargs['password'] = getattr(self.user, 'passphrase')
-            if getattr(self.user, 'wallet_address', None):
-                kwargs['walletAddress'] = getattr(self.user, 'wallet_address')
-            if getattr(self.user, 'private_key', None):
-                kwargs['privateKey'] = getattr(self.user, 'private_key')
-        # Add recvWindow and time-difference adjustment for all exchanges
-        try:
-            kwargs.setdefault('options', {}).setdefault('recvWindow', 10000)
-            kwargs.setdefault('options', {}).setdefault('adjustForTimeDifference', True)
-            # HIP-3: Configure Hyperliquid to include stock perpetuals
-            if ex_id == 'hyperliquid':
-                kwargs.setdefault('options', {})['fetchMarkets'] = {
-                    'types': ['swap', 'hip3'],
-                    'hip3': {
-                        'dexes': [],  # Empty = auto-discover all HIP-3 DEXes
-                    }
-                }
-        except Exception:
-            pass
-
-        ex = getattr(ccxt_pro, ex_id)(kwargs)
-        return ex
 
     @classmethod
     async def get_shared_ws_client(cls, id: str, user: User = None):
@@ -703,25 +680,6 @@ class Exchange:
                         pass
 
     @classmethod
-    async def close_private_ws_client(cls, id: str, user: User):
-        """Close and remove a private ws client for the given exchange id and user."""
-        if not user:
-            return
-        base_key = "kucoinfutures" if id == "kucoin" else id
-        key = f"{base_key}:{user.name}"
-        client = cls._private_ws_clients.pop(key, None)
-        if client:
-            try:
-                await client.close()
-            except Exception:
-                pass
-            # Notify listeners that a private client for this exchange/user was closed
-            try:
-                _notify_private_client_closed(base_key, user.name)
-            except Exception:
-                pass
-
-    @classmethod
     async def _prune_private_ws_clients(cls, global_max=None, per_exchange=None):
         """Close excess private ws clients to satisfy new caps.
 
@@ -946,34 +904,10 @@ class Exchange:
             prices = self.instance.fetch_tickers(symbols=symbols)
         return prices
 
-    def fetch_open_orders(self, symbol: str, market_type: str):
-        if not self.instance: self.connect()
-        if self.id == "bybit" and market_type == "spot":
-            orders = self.instance.fetch_open_orders(symbol=symbol, params = {"type": market_type})
-        elif self.id == 'bingx':
-            orders = self.instance.fetch_open_orders(symbol=symbol)
-        else:
-            orders = self.instance.fetch_open_orders(symbol=symbol)
-        return orders
-
     def fetch_all_open_orders(self, symbol: str):
         if not self.instance: self.connect()
         orders = self.instance.fetch_open_orders(symbol=symbol)
         return orders
-
-    def fetch_position(self, symbol: str, market_type: str):
-        if not self.instance: self.connect()
-        if self.id in 'binance':
-            position = self.instance.fetch_account_positions(symbols=[symbol])
-            return position[0]
-        elif self.id == 'bingx':
-            positions = self.instance.fetch_positions(symbols=[symbol])
-            for position in positions:
-                if position["symbol"] == symbol:
-                    return position
-        else:
-            position = self.instance.fetch_position(symbol=symbol)
-            return position
 
     def fetch_positions(self):
         if not self.instance:
@@ -1011,7 +945,7 @@ class Exchange:
                     except Exception:
                         pass
 
-    def fetch_balance(self, market_type: str, symbol : str = None):
+    def fetch_balance(self, market_type: str):
         if not self.instance: self.connect()
         try:
             balance = self.instance.fetch_balance(params = {"type": market_type})
@@ -1022,86 +956,20 @@ class Exchange:
         if self.id == "bitget":
             return float(balance["info"][0]["available"])
         elif self.id == "bybit":
-            if market_type == 'swap':
-                balinfo = balance["info"]["result"]["list"][0]
-                if balinfo["accountType"] == "UNIFIED":
-                    return float(balinfo["totalWalletBalance"])
-                elif "USDT" in balance["total"]:
-                    return float(balance["total"]["USDT"])
-                else:
-                    return float(0)
+            balinfo = balance["info"]["result"]["list"][0]
+            if balinfo["accountType"] == "UNIFIED":
+                return float(balinfo["totalWalletBalance"])
+            elif "USDT" in balance["total"]:
+                return float(balance["total"]["USDT"])
             else:
-                if symbol:
-                    if symbol.endswith('USDT'):
-                        symbol = symbol.replace("USDT", "")
-                    elif symbol.endswith('USDC'):
-                        symbol = symbol.replace("USDC", "")
-                    elif symbol.endswith('BTC'):
-                        symbol = symbol.replace("BTC", "")
-                    elif symbol.endswith('EUR'):
-                        symbol = symbol.replace("EUR", "")
-                    return float(balance["total"][symbol])
-                else:
-                    if "USDT" in balance["total"]:
-                        return float(balance["total"]["USDT"])
-                    else:
-                        return float(0)
+                return float(0)
         elif self.id == "binance":
-            if market_type == 'swap': return float(balance["info"]["totalWalletBalance"])
-            else:
-                if symbol:
-                    return float(balance["total"][symbol])
-                else:
-                    return float(balance["total"]["USDT"])
-        elif self.id == "bingx":
-            return float(balance["info"]["data"]["balance"]["balance"])
+            return float(balance["info"]["totalWalletBalance"])
         return float(balance["total"]["USDT"])
 
     def fetch_timestamp(self):
         if not self.instance: self.connect()
         return self.instance.milliseconds()
-
-    def fetch_spot(self, since: int = None):
-        if self.user.key == 'key':
-            return []
-        all_histories = []
-        all = []
-        if not self.instance: self.connect()
-        if self.id == "bybit":
-            day = 24 * 60 * 60 * 1000
-            week = 7 * day
-            max = 2 * 365 * day - day
-            now = self.instance.milliseconds()
-            if not since:
-                since = now - max
-            limit = 100
-            end = since + week
-            while True:
-                trades = self.instance.fetch_my_trades(since=since, limit=limit, params = {'type': 'spot', "endTime": end})
-                if trades:
-                    first_trade = trades[0]
-                    last_trade = trades[-1]
-                    all_histories = trades + all_histories
-                if len(trades) == limit:
-                    _log('Exchange', f'User:{self.user.name} Fetched {len(trades)} trades from {self.instance.iso8601(first_trade["timestamp"])} till {self.instance.iso8601(last_trade["timestamp"])}', level='DEBUG')
-                    end = trades[0]['timestamp']
-                else:
-                    _log('Exchange', f'User:{self.user.name} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='DEBUG')
-                    since = since + week
-                    end = since + week
-                if since > now:
-                    _log('Exchange', f'User:{self.user.name} Done', level='DEBUG')
-                    break
-            for history in all_histories:
-                income = {}
-                income["symbol"] = history["info"]["symbol"]
-                income["timestamp"] = history["timestamp"]
-                income["side"] = history["side"]
-                income["income"] = history["cost"]
-                income["fee"] = history["info"]["execFee"]
-                income["uniqueid"] = history["info"]["orderId"]
-                all.append(income)
-        return all
 
     def save_income_other(self, history : list, exchange: str):
         dest = Path(f'{PBGDIR}/data/logs')
@@ -1795,8 +1663,9 @@ class Exchange:
                     if not sym_id:
                         continue
 
-                    ccxt_symbol = self.symbol_to_exchange_symbol(sym_id, 'swap')
+                    ccxt_symbol = _resolve_ccxt_symbol_from_mapping(self.id, sym_id)
                     if not ccxt_symbol:
+                        _log('Exchange', f"binance execution symbol not found in CoinData mapping: {sym_id}", level='WARNING', user=self.user)
                         continue
 
                     cursor = int(since)
@@ -2246,6 +2115,135 @@ class Exchange:
 
             return executions
 
+        if self.id == "kucoinfutures":
+            # KuCoin futures supports global fills without a symbol. Keep the
+            # initial scan bounded and use adaptive windows to avoid missing busy periods.
+            day = 24 * 60 * 60 * 1000
+            initial_span = day
+            max_span = 7 * day
+            min_span = 60 * 60 * 1000  # 1 hour
+            max_age_total = 365 * day
+            now = self.instance.milliseconds()
+            if not since:
+                since = now - max_age_total
+            try:
+                since = max(int(since), int(now - max_age_total))
+            except Exception:
+                since = int(now - max_age_total)
+
+            def _to_float(val):
+                try:
+                    if val is None or val == '':
+                        return None
+                    return float(val)
+                except Exception:
+                    return None
+
+            executions = []
+            cursor = int(since)
+            seen_trade_ids: set[str] = set()
+            page_span = initial_span
+            limit = 1000
+
+            while cursor < now:
+                span = int(page_span)
+                trades = None
+                end_time = None
+
+                while True:
+                    end_time = min(int(cursor + span - 1), int(now))
+
+                    last_err = None
+                    for attempt in range(3):
+                        try:
+                            trades = self.instance.fetch_my_trades(
+                                symbol=None,
+                                since=int(cursor),
+                                limit=limit,
+                                params={'until': int(end_time)},
+                            )
+                            last_err = None
+                            break
+                        except Exception as e:
+                            if not _ccxt_should_retry(self.instance, e):
+                                raise
+                            last_err = e
+                            _log(
+                                'Exchange',
+                                f"kucoinfutures fetch_my_trades error (global) attempt={attempt+1}/3: {e}",
+                                level='WARNING',
+                                user=self.user,
+                            )
+                            sleep(min(2 ** attempt, 5))
+                    if last_err is not None:
+                        raise last_err
+
+                    try:
+                        if trades and len(trades) >= limit and span > min_span:
+                            span = max(min_span, span // 2)
+                            continue
+                    except Exception:
+                        pass
+                    break
+
+                if trades:
+                    page_span = initial_span
+                    for t in trades:
+                        try:
+                            ts = int(t.get('timestamp') or 0)
+                            if ts <= 0:
+                                continue
+
+                            info = t.get('info') if isinstance(t.get('info'), dict) else {}
+                            trade_id = t.get('id') or info.get('tradeId') or info.get('id')
+                            if not trade_id:
+                                continue
+                            trade_id = str(trade_id)
+                            if trade_id in seen_trade_ids:
+                                continue
+                            seen_trade_ids.add(trade_id)
+
+                            fee_cost = None
+                            try:
+                                fee_obj = t.get('fee')
+                                if isinstance(fee_obj, dict):
+                                    fee_cost = _to_float(fee_obj.get('cost'))
+                                else:
+                                    fee_cost = _to_float(fee_obj)
+                                if fee_cost is None:
+                                    fee_cost = _to_float(info.get('fee'))
+                                if fee_cost is not None:
+                                    fee_cost = abs(float(fee_cost))
+                            except Exception:
+                                fee_cost = None
+
+                            executions.append(
+                                {
+                                    'symbol': t.get('symbol') or str(info.get('symbol') or ''),
+                                    'timestamp': ts,
+                                    'side': t.get('side') or info.get('side'),
+                                    'price': _to_float(t.get('price')) or _to_float(info.get('price')),
+                                    'qty': _to_float(t.get('amount')) or _to_float(info.get('size')),
+                                    'fee': fee_cost,
+                                    'realized_pnl': None,
+                                    'order_id': t.get('order') or info.get('orderId') or info.get('order_id'),
+                                    'trade_id': trade_id,
+                                    'raw_json': json.dumps(t, ensure_ascii=False, default=str),
+                                }
+                            )
+                        except Exception:
+                            continue
+                else:
+                    try:
+                        page_span = min(int(page_span) * 2, int(max_span))
+                    except Exception:
+                        page_span = initial_span
+
+                cursor = int(end_time) + 1
+                sleep(0.2)
+
+            return executions
+
         if self.id == "gateio":
             # Gate.io supports fetching swap trades without symbol using `fetch_my_trades`.
             # The underlying endpoint caps results, so we slice time windows and shrink
@@ -2451,8 +2449,9 @@ class Exchange:
                     if not sym_id:
                         continue
 
-                    ccxt_symbol = self.symbol_to_exchange_symbol(sym_id, 'swap')
+                    ccxt_symbol = _resolve_ccxt_symbol_from_mapping(self.id, sym_id)
                     if not ccxt_symbol:
+                        _log('Exchange', f"bitget execution symbol not found in CoinData mapping: {sym_id}", level='WARNING', user=self.user)
                         continue
 
                     cursor = int(since)
@@ -2570,442 +2569,7 @@ class Exchange:
 
         return []
     
-    def fetch_trades(self, symbol: str, market_type: str, since: int):
-        all_trades = []
-        last_trade_id = ""
-        if not self.instance: self.connect()
-        if self.instance.has['fetchMyTrades'] or self.instance.has['fetchTrades']:
-            end_time = self.instance.milliseconds()
-            # With ccxt >= 4.1.7 we can use pagination in one line
-            # trades = self.instance.fetch_my_trades(symbol=symbol, since=since, params = {"type": market_type, "paginate": True, "paginationDirection": "forward", "until": self.instance.milliseconds()})
-            if self.id == "binance":
-                if market_type == "futures":
-                    week = 7 * 24 * 60 * 60 * 1000
-                else:
-                    week = 24 * 60 * 60 * 1000
-                now = self.instance.milliseconds()
-                all_trades = []
-                if since == 1577840461000:
-                    first_trade = self.instance.fetch_my_trades(symbol, None, None, {'fromId': 0})
-                    if first_trade:
-                        since = first_trade[0]["timestamp"]
-                while since < now:
-                    _log('Exchange', f'Symbol:{symbol} Fetching trades from {self.instance.iso8601(since)}', level='INFO', user=self.user)
-                    end_time = since + week
-                    if end_time > now:
-                        end_time = now
-                    trades = self.instance.fetch_my_trades(symbol, since, None, {
-                        'endTime': end_time,
-                    })
-                    if len(trades):
-                        last_trade = trades[len(trades) - 1]
-                        since = last_trade['timestamp'] + 1
-                        all_trades = all_trades + trades
-                    else:
-                        since = end_time
-            elif self.id == "bybit":
-                day = 24 * 60 * 60 * 1000
-                week = 7 * day
-                year = 365 * day
-                now = self.instance.milliseconds()
-                all_trades = []
-                if since == 1577840461000:
-                    since = now - 2 * year + day
-                    end_time = since + week
-                    first_trade = self.instance.fetch_my_trades(symbol, since, 100, params = {'type': market_type, "paginate": True, 'endTime': end_time })
-                    if first_trade:
-                        since = first_trade[0]["timestamp"]
-                while since < now:
-                    _log('Exchange', f'Symbol:{symbol} Fetching trades from {self.instance.iso8601(since)}', level='INFO', user=self.user)
-                    end_time = since + week
-                    if end_time > now:
-                        end_time = now
-                    trades = self.instance.fetch_my_trades(symbol, since, 100, params = {'type': market_type, 'endTime': end_time })
-                    if len(trades):
-                        last_trade = trades[len(trades) - 1]
-                        if "nextPageCursor" in last_trade["info"]:
-                            cursor = last_trade["info"]["nextPageCursor"]
-                            while True:
-                                _log('Exchange', f'Symbol:{symbol} Fetching trades from {cursor}', level='INFO', user=self.user)
-                                all_trades = all_trades + trades
-                                trades = self.instance.fetch_my_trades(symbol, since, 100, params = {'type': market_type, 'cursor': cursor, 'endTime': end_time })
-                                if len(trades):
-                                    lpage = trades[len(trades) - 1]
-                                    if "nextPageCursor" in lpage["info"]:
-                                        cursor = lpage["info"]["nextPageCursor"]
-                                    else:
-                                        break
-                                else:
-                                    break
-                        since = last_trade['timestamp'] + 1
-                        all_trades = all_trades + trades
-                    else:
-                        since = end_time
-            elif self.id == "kucoinfutures":
-                week = 7 * 24 * 60 * 60 * 1000
-                now = self.instance.milliseconds()
-                limit = 50
-                end = since + week
-                while True:
-                    trades = self.instance.fetch_my_trades(symbol=symbol, since=since, limit=limit, params = {"endAt": end})
-                    if trades:
-                        first_trade = trades[0]
-                        last_trade = trades[-1]
-                        all_trades = trades + all_trades
-                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', level='INFO', user=self.user)
-                    if len(trades) == limit:
-                        end = trades[0]['timestamp']
-                    else:
-                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
-                        since += week
-                        end = since + week
-                    if since > now:
-                        _log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
-                        break
-            elif self.id == "okx":
-                week = 7 * 24 * 60 * 60 * 1000
-                max = 90 * 24 * 60 * 60 * 1000
-                now = self.instance.milliseconds()
-                if since == 1577840461000:
-                    since = now - max
-                limit = 50
-                end = since + week
-                while True:
-                    trades = self.instance.fetch_my_trades(symbol=symbol, since=since, limit=limit, params = {"end": end})
-                    if trades:
-                        first_trade = trades[0]
-                        last_trade = trades[-1]
-                        all_trades = trades + all_trades
-                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', level='INFO', user=self.user)
-                    if len(trades) == limit:
-                        end = trades[0]['timestamp']
-                    else:
-                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
-                        since += week
-                        end = since + week
-                    if since > now:
-                        _log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
-                        break
-            elif self.id == "bingx":
-                week = 7 * 24 * 60 * 60 * 1000
-                max = 90 * 24 * 60 * 60 * 1000
-                now = self.instance.milliseconds()
-                if since == 1577840461000:
-                    since = now - max
-                limit = 500
-                end = since + week
-                bingx_symbol = f'{symbol.split("/")[0]}-{symbol.split(":")[-1]}'
-                while True:
-                    now = self.instance.milliseconds()
-                    orders = self.instance.swapV2PrivateGetTradeAllOrders({"symbol": bingx_symbol, "limit": limit, "startTime": since, "endTime": end, "timestamp": now})
-                    trades = orders["data"]["orders"]
-                    if trades:
-                        first_trade = trades[0]
-                        last_trade = trades[-1]
-                        all_trades = trades + all_trades
-                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["time"]} till {last_trade["time"]}', level='INFO', user=self.user)
-                    if len(trades) == limit:
-                        since = int(trades[-1]['time'])
-                    else:
-                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
-                        since += week
-                        end = since + week
-                    if since > now:
-                        _log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
-                        break
-                bingx_trades = []
-                for trade in all_trades:
-                    if trade["status"] == "FILLED":
-                        trade["id"] = trade["orderId"]
-                        trade["timestamp"] = int(trade["time"])
-                        trade["amount"] = float(trade["executedQty"])
-                        trade["fee"] = float(trade["commission"])
-                        trade["price"] = float(trade["price"])
-                        bingx_trades.append(trade)
-                all_trades = bingx_trades
-            elif self.id == "bitget":
-                # week = 7 * 24 * 60 * 60 * 1000
-                max = 90 * 24 * 60 * 60 * 1000
-                now = self.instance.milliseconds()
-                end = since + max
-                limit = 100
-                while True:
-                    trades = self.instance.fetch_my_trades(symbol=symbol, since=since, limit=limit, params = {"type": market_type, "endTime": end})
-                    if trades:
-                        first_trade = trades[0]
-                        last_trade = trades[-1]
-                        all_trades = trades + all_trades
-                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {first_trade["timestamp"]} till {last_trade["timestamp"]}', level='INFO', user=self.user)
-                    if len(trades) == limit:
-                        end = trades[0]['timestamp']
-                    else:
-                        _log('Exchange', f'Symbol:{symbol} Fetched {len(trades)} trades from {self.instance.iso8601(since)} till {self.instance.iso8601(end)}', level='INFO', user=self.user)
-                        since += max
-                        end = since + max
-                    if since > now:
-                        _log('Exchange', f'Symbol:{symbol} Done', level='INFO', user=self.user)
-                        break
-        if all_trades:
-            sort_trades = sorted(all_trades, key=lambda d: d['timestamp'])
-            return sort_trades
-
-    def symbol_to_exchange_symbol(self, symbol: str, market_type: str):
-        if self.id == 'binance':
-            if not self.instance: self.connect()
-            if not self._markets: self._markets = self.instance.load_markets()
-            for (k,v) in list(self._markets.items()):
-                if market_type == "spot":
-                    if v["id"] == symbol and v["spot"]:
-                        return v["symbol"]
-                if market_type == "swap":
-                    if v["id"] == symbol and v["swap"]:
-                        return v["symbol"]
-        elif self.id == 'hyperliquid':
-            return f'{symbol[0:-4]}/USDC:USDC'
-        elif self.id == 'bitget':
-            return f'{symbol[0:-4]}/USDT:USDT'
-        elif self.id == 'kucoinfutures':
-            return f'{symbol}M'
-        elif self.id == 'okx':
-            return f'{symbol[0:-4]}-USDT-SWAP'
-        elif self.id == 'bingx':
-            return f'{symbol[0:-4]}/USDT:USDT'
-        else:
-            if market_type == "spot":
-                return f'{symbol[0:-4]}/USDT'
-            else:
-                return symbol
-
     def load_market(self):
         if not self.instance: self.connect()
         self._markets = self.instance.load_markets()
         return self._markets
-
-    def fetch_symbol_info(self, symbol: str, market_type: str):
-        if not self.instance: self.connect()
-        if not self._markets: self._markets = self.instance.load_markets()
-        if market_type == "spot":
-            symbol = f'{symbol[0:-4]}/USDT'
-        else:
-            if symbol[-4:] == 'USDC':
-                symbol = f'{symbol[0:-4]}/USDC:USDC'
-            else:
-                symbol = f'{symbol[0:-4]}/USDT:USDT'
-        symbol_info = self._markets[symbol]
-        if self.id == 'binance':
-            if market_type == "futures":
-                min_costs = (
-                    0.1 if symbol_info["limits"]["cost"]["min"] is None else symbol_info["limits"]["cost"]["min"]
-                )
-                min_qtys = symbol_info["limits"]["amount"]["min"]
-                for felm in symbol_info["info"]["filters"]:
-                    if felm["filterType"] == "PRICE_FILTER":
-                        price_steps = float(felm["tickSize"])
-                    elif felm["filterType"] == "MARKET_LOT_SIZE":
-                        qty_steps = float(felm["stepSize"])
-                c_mults = symbol_info["contractSize"]
-            else:
-                for q in symbol_info["info"]["filters"]:
-                    if q["filterType"] == "LOT_SIZE":
-                        min_qtys = symbol_info["min_qty"] = float(q["minQty"])
-                        qty_steps = symbol_info["qty_step"] = float(q["stepSize"])
-                    elif q["filterType"] == "PRICE_FILTER":
-                        price_steps = symbol_info["price_step"] = float(q["tickSize"])
-                    elif q["filterType"] == "NOTIONAL":
-                        min_costs = symbol_info["min_cost"] = float(q["minNotional"])
-                c_mults = 1.0
-        elif self.id == 'bybit':
-            if market_type == "futures":
-                min_costs = (
-                    0.1 if symbol_info["limits"]["cost"]["min"] is None else symbol_info["limits"]["cost"]["min"]
-                )
-                min_qtys = symbol_info["limits"]["amount"]["min"]
-                qty_steps = symbol_info["precision"]["amount"]
-                price_steps = symbol_info["precision"]["price"]
-                c_mults = symbol_info["contractSize"]
-            else:
-                min_costs = (
-                    0.1 if symbol_info["limits"]["cost"]["min"] is None else symbol_info["limits"]["cost"]["min"]
-                )
-                min_qtys = symbol_info["limits"]["amount"]["min"]
-                qty_steps = symbol_info["precision"]["amount"]
-                price_steps = symbol_info["precision"]["price"]
-                c_mults = 1.0
-        else:
-            min_costs = max(
-                5.1, 0.1 if symbol_info["limits"]["cost"]["min"] is None else symbol_info["limits"]["cost"]["min"]
-            )
-            min_qtys = symbol_info["limits"]["amount"]["min"]
-            qty_steps = symbol_info["precision"]["amount"]
-            price_steps = symbol_info["precision"]["price"]
-            c_mults = symbol_info["contractSize"]
-        return symbol_info, min_costs, min_qtys, price_steps, qty_steps, c_mults
-
-    def fetch_copytrading_symbols(self):
-        if not self.instance: self.connect()
-        # print(self.instance.__dir__())
-        cpSymbols = []
-        if self.id == 'binance':
-            users = Users()
-            all_users = users.find_binance_users()
-            if all_users:
-                for user in all_users:
-                    self.user = user
-                    self.connect()
-                    try:
-                        symbols = self.instance.sapiGetCopytradingFuturesLeadsymbol()
-                        if symbols and symbols.get("data"):
-                            for symbol in symbols["data"]:
-                                cpSymbols.append(symbol["symbol"])
-                            break
-                    except Exception as e:
-                        _log('Exchange', f'User:{self.user.name} Error: {e}', level='ERROR', user=self.user)
-        elif self.id == 'bybit':
-            # print(self.instance.__dir__())
-            symbols = self.instance.publicGetContractV3PublicCopytradingSymbolList()
-            for symbol in symbols["result"]["list"]:
-                cpSymbols.append(symbol["symbol"])
-        elif self.id == 'bitget':
-            users = Users()
-            users = users.find_bitget_users()
-            if users:
-                for user in users:
-                    self.user = user
-                    self.connect()
-                    try:
-                        # print(self.instance.__dir__())
-                        symbols = self.instance.privateCopyGetV2CopyMixTraderConfigQuerySymbols({"productType": "USDT-FUTURES"})
-                        if symbols:
-                            for symbol in symbols["data"]:
-                                cpSymbols.append(symbol["symbol"])
-                            break
-                    except Exception as e:
-                        _log('Exchange', f'User:{self.user.name} Error: {e}', level='ERROR')
-        cpSymbols.sort()
-        return cpSymbols
-
-    def fetch_symbols(self):
-        if not self.instance: self.connect()
-        self._markets = self.instance.load_markets()
-        self.swap = []
-        self.spot = []
-        self.cpt = []
-        for (k,v) in list(self._markets.items()):
-            if v["swap"] and v["active"] and v["linear"]:
-                if self.id == "hyperliquid":
-                    # Skip HIP-3 stock perpetuals — only regular crypto swaps belong in ini
-                    info = v.get("info", {})
-                    if isinstance(info, dict) and info.get("hip3"):
-                        continue
-                    if v["symbol"].endswith('USDC'):
-                        self.swap.append(v["symbol"][0:-5].replace("/", "").replace("-", ""))
-                if self.id == "bitget":
-                    if v["id"][-4:] == 'USDT':
-                        self.swap.append(v["id"])
-                elif self.id == "kucoinfutures":
-                    if v["id"][-5:] == 'USDTM':
-                        self.swap.append(v["id"][:len(v["id"])-1])
-                elif self.id == "okx":
-                    if v["id"].split("-")[1] == 'USDT':
-                        # print(v)
-                        self.swap.append(''.join(v["id"].split("-")[0:2]))
-                elif self.id == "bybit":
-                    if v["id"].endswith('USDT'):
-                        if v["info"]["copyTrading"] == "both":
-                            self.cpt.append(v["id"])
-                        self.swap.append(v["id"])
-                elif self.id == "binance":
-                    if v["id"].endswith('USDT'):
-                        # print(v)
-                        self.swap.append(v["id"])
-                elif self.id == "bingx":
-                    if v["id"].endswith('USDT'):
-                        self.swap.append(''.join(v["id"].split("-")))
-                elif self.id == "gateio":
-                    if v["id"].endswith('USDT'):
-                        self.swap.append(''.join(v["id"].split("_")))
-                        # print(v)
-            if v["spot"] and v["active"] and (self.id == "bybit" or self.id == "binance"):
-                self.spot.append(v["id"])
-        if self.id in ["bitget", "binance"]:
-            self.cpt = self.fetch_copytrading_symbols()
-        self.spot.sort()
-        self.swap.sort()
-        if self.cpt:
-            self.cpt.sort()
-
-    def load_symbols(self):
-        self.spot = []
-        self.swap = []
-        self.cpt = []
-
-        mapping_path = Path.cwd() / "data" / "coindata" / str(self.id).lower() / "mapping.json"
-        if mapping_path.exists():
-            try:
-                mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
-                for row in mapping if isinstance(mapping, list) else []:
-                    symbol = str(row.get("symbol") or "").strip().upper()
-                    if not symbol:
-                        continue
-                    if bool(row.get("swap", False)) and bool(row.get("active", True)) and bool(row.get("linear", True)):
-                        self.swap.append(symbol)
-                        if bool(row.get("copy_trading", False)):
-                            self.cpt.append(symbol)
-                    if bool(row.get("spot", False)) and bool(row.get("active", True)) and self.id in ["bybit", "binance"]:
-                        self.spot.append(symbol)
-            except Exception:
-                self.spot = []
-                self.swap = []
-                self.cpt = []
-
-        self.spot = sorted(set(self.spot))
-        self.swap = sorted(set(self.swap))
-        self.cpt = sorted(set(self.cpt))
-    
-    def fetch_symbol_infos(self, symbol: str):
-        if not self.instance:
-            self.connect()
-            self._markets = self.instance.load_markets()
-        # symbol = self.symbol_to_exchange_symbol(symbol, "swap")
-        if self.id == 'hyperliquid':
-            symbol = f'{symbol[0:-4]}/USDC:USDC'
-        else:
-            symbol = f'{symbol[0:-4]}/USDT:USDT'
-        # print(symbol)
-        if symbol not in self._markets:
-            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-        symbol_info = self._markets[symbol]
-        # print(symbol_info)
-        if symbol_info["limits"]["leverage"]["max"] is None:
-            lev = "unknown"
-        else:
-            lev = symbol_info["limits"]["leverage"]["max"]
-        contractSize = symbol_info["contractSize"]
-        if symbol_info["limits"]["amount"]["min"]:
-            min_amount = symbol_info["limits"]["amount"]["min"]
-        elif symbol_info["precision"]["amount"]:
-            min_amount = symbol_info["precision"]["amount"]
-            
-        min_qty = min_amount * contractSize
-        price = self.fetch_price(symbol, "swap")['last']
-        # print(f'Price for {symbol} is {price}')
-        min_price = min_qty * price
-        # min_cost = 0.0
-        if symbol_info["limits"]["cost"]["min"]:
-            min_cost = symbol_info["limits"]["cost"]["min"]
-        else:
-            min_cost = 0.0
-        if min_cost > min_price:
-            min_price = min_cost
-        return min_price, price, contractSize, min_amount, min_cost, lev
-
-    def calculate_balance_needed(self, symbols: list, twe: float, entry_initial_qty_pct: float):
-        balance_needed = 0.0
-        we = twe / len(symbols)
-        for symbol in symbols:
-            min_price = self.fetch_symbol_min_order_price(symbol)
-            balance_needed_symbol = min_price / we / entry_initial_qty_pct
-            balance_needed += balance_needed_symbol
-            # print(symbol, we, min_price, balance_needed_symbol)
-        return balance_needed
-

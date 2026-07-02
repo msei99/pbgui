@@ -19,6 +19,7 @@ from typing import Any, Callable, List, Optional
 import numpy as np
 import pandas as pd
 
+from Exchange import V7
 from pb7_config import load_pb7_config
 from pbgui_purefunc import PBGDIR, pb7dir, pb7venv
 from strategy_explorer_types import (
@@ -213,11 +214,48 @@ def _get_se_ohlcv_source_settings(cfg: Any | None = None) -> tuple[str | None, b
     source_dir = _get_config_ohlcv_source_dir(cfg)
     return source_dir, bool(source_dir)
 
+
+_STRATEGY_EXPLORER_EXCHANGE_ALIASES = {
+    "binanceusdm": "binance",
+    "kucoinfutures": "kucoin",
+}
+
+
+def _canonical_strategy_exchange(exchange: str) -> str:
+    exchange = _safe_market_segment(exchange).lower()
+    if not exchange:
+        return ""
+    return _STRATEGY_EXPLORER_EXCHANGE_ALIASES.get(exchange, exchange)
+
+
+def _strategy_exchange_aliases(exchange: str) -> list[str]:
+    exchange = _canonical_strategy_exchange(exchange)
+    if not exchange:
+        return []
+    aliases = [exchange]
+    for alias, canonical in _STRATEGY_EXPLORER_EXCHANGE_ALIASES.items():
+        if canonical == exchange and alias not in aliases:
+            aliases.append(alias)
+    return aliases
+
+
+def _supported_strategy_exchanges() -> set[str]:
+    return {str(exchange).lower() for exchange in V7.list()}
+
+
+def _add_strategy_exchange(exchange: str, exchanges: set[str], supported: set[str]) -> None:
+    canonical = _canonical_strategy_exchange(exchange)
+    if canonical and canonical in supported:
+        exchanges.add(canonical)
+
 def get_available_exchanges_v7(source_dir: str | None = None, *, include_pb7: bool = True) -> List[str]:
     exchanges: set[str] = set()
+    supported = _supported_strategy_exchanges()
     source_dir = _resolve_safe_ohlcv_source_dir(source_dir)
 
     if include_pb7:
+        exchanges.update(supported)
+
         # 1) Historical data layout: pb7/historical_data/ohlcvs_<exchange>/...
         hist_dir = os.path.join(pb7dir(), "historical_data")
         if os.path.isdir(hist_dir):
@@ -226,7 +264,7 @@ def get_available_exchanges_v7(source_dir: str | None = None, *, include_pb7: bo
                     continue
                 path = os.path.join(hist_dir, d)
                 if os.path.isdir(path):
-                    exchanges.add(d[len("ohlcvs_") :])
+                    _add_strategy_exchange(d[len("ohlcvs_") :], exchanges, supported)
 
         # 2) CandlestickManager cache layout: pb7/caches/ohlcv/<exchange>/1m/...
         cm_root = os.path.join(pb7dir(), "caches", "ohlcv")
@@ -234,7 +272,7 @@ def get_available_exchanges_v7(source_dir: str | None = None, *, include_pb7: bo
             for d in os.listdir(cm_root):
                 path = os.path.join(cm_root, d, "1m")
                 if os.path.isdir(path):
-                    exchanges.add(d)
+                    _add_strategy_exchange(d, exchanges, supported)
 
     def _source_has_data(exchange_root: str) -> bool:
         if not os.path.isdir(exchange_root):
@@ -263,11 +301,35 @@ def get_available_exchanges_v7(source_dir: str | None = None, *, include_pb7: bo
             for d in os.listdir(source_root):
                 path = os.path.join(source_root, d, "1m")
                 if _source_has_data(path):
-                    exchanges.add(d)
+                    _add_strategy_exchange(d, exchanges, supported)
         except Exception:
             pass
 
     return sorted(exchanges)
+
+
+def _get_coindata_active_coins(exchange: str) -> list[str]:
+    exchange = _canonical_strategy_exchange(exchange)
+    if not exchange or exchange not in _supported_strategy_exchanges():
+        return []
+    try:
+        from PBCoinData import CoinData
+
+        coindata = CoinData()
+        approved, ignored = coindata.filter_mapping(
+            exchange=exchange,
+            market_cap_min_m=0,
+            vol_mcap_max=float("inf"),
+            only_cpt=False,
+            notices_ignore=False,
+            tags=[],
+            active_only=True,
+            quote_filter=None,
+            use_cache=True,
+        )
+        return sorted(set(approved) | set(ignored))
+    except Exception:
+        return []
 
 def get_available_symbols_v7(exchange: str) -> List[str]:
     exchange = _safe_market_segment(exchange)
@@ -436,57 +498,63 @@ def _resolve_exchange_for_history(exchange: str, symbol: str) -> str:
 
 
 def get_available_coins_v7(exchange: str, source_dir: str | None = None, *, include_pb7: bool = True) -> List[str]:
-    exchange = _safe_market_segment(exchange)
+    exchange = _canonical_strategy_exchange(exchange)
     source_dir = _resolve_safe_ohlcv_source_dir(source_dir)
-    if not exchange:
+    if not exchange or exchange not in _supported_strategy_exchanges():
         return []
 
     coins: set[str] = set()
 
     if include_pb7:
         # 1) Historical data layout: pb7/historical_data/ohlcvs_<exchange>/<coin>/YYYY-MM-DD.npy
-        hist_sym_dir = os.path.join(pb7dir(), "historical_data", f"ohlcvs_{exchange}")
-        if os.path.isdir(hist_sym_dir):
-            for d in os.listdir(hist_sym_dir):
-                p = os.path.join(hist_sym_dir, d)
-                if os.path.isdir(p) and not d.startswith("."):
-                    c = _coin_from_symbol_code(d)
-                    if c:
-                        coins.add(c)
-
-        # 2) CandlestickManager cache layout: pb7/caches/ohlcv/<exchange>/1m/<symbol_code>/YYYY-MM-DD.npy
-        cm_sym_dir = os.path.join(pb7dir(), "caches", "ohlcv", exchange, "1m")
-        if os.path.isdir(cm_sym_dir):
-            for d in os.listdir(cm_sym_dir):
-                p = os.path.join(cm_sym_dir, d)
-                if os.path.isdir(p) and not d.startswith("."):
-                    c = _coin_from_symbol_code(d)
-                    if c:
-                        coins.add(c)
-
-    source_root = str(source_dir or "").strip()
-    if source_root:
-        src_dir = os.path.join(source_root, exchange, "1m")
-        if os.path.isdir(src_dir):
-            try:
-                for d in os.listdir(src_dir):
-                    p = os.path.join(src_dir, d)
+        for exchange_alias in _strategy_exchange_aliases(exchange):
+            hist_sym_dir = os.path.join(pb7dir(), "historical_data", f"ohlcvs_{exchange_alias}")
+            if os.path.isdir(hist_sym_dir):
+                for d in os.listdir(hist_sym_dir):
+                    p = os.path.join(hist_sym_dir, d)
                     if os.path.isdir(p) and not d.startswith("."):
-                        try:
-                            has_data = any(
-                                f.endswith(".npy") or f.endswith(".npz")
-                                for f in os.listdir(p)
-                                if not f.startswith(".")
-                            )
-                        except Exception:
-                            has_data = False
-                        if not has_data:
-                            continue
                         c = _coin_from_symbol_code(d)
                         if c:
                             coins.add(c)
-            except Exception:
-                pass
+
+        # 2) CandlestickManager cache layout: pb7/caches/ohlcv/<exchange>/1m/<symbol_code>/YYYY-MM-DD.npy
+        for exchange_alias in _strategy_exchange_aliases(exchange):
+            cm_sym_dir = os.path.join(pb7dir(), "caches", "ohlcv", exchange_alias, "1m")
+            if os.path.isdir(cm_sym_dir):
+                for d in os.listdir(cm_sym_dir):
+                    p = os.path.join(cm_sym_dir, d)
+                    if os.path.isdir(p) and not d.startswith("."):
+                        c = _coin_from_symbol_code(d)
+                        if c:
+                            coins.add(c)
+
+    source_root = str(source_dir or "").strip()
+    if source_root:
+        for exchange_alias in _strategy_exchange_aliases(exchange):
+            src_dir = os.path.join(source_root, exchange_alias, "1m")
+            if os.path.isdir(src_dir):
+                try:
+                    for d in os.listdir(src_dir):
+                        p = os.path.join(src_dir, d)
+                        if os.path.isdir(p) and not d.startswith("."):
+                            try:
+                                has_data = any(
+                                    f.endswith(".npy") or f.endswith(".npz")
+                                    for f in os.listdir(p)
+                                    if not f.startswith(".")
+                                )
+                            except Exception:
+                                has_data = False
+                            if not has_data:
+                                continue
+                            c = _coin_from_symbol_code(d)
+                            if c:
+                                coins.add(c)
+                except Exception:
+                    pass
+
+    if not coins:
+        coins.update(_get_coindata_active_coins(exchange))
 
     return sorted(coins)
 
