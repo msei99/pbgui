@@ -176,11 +176,11 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
 .msel-btn:hover { border-color: #63b3ed; }
 .msel-arrow { font-size: 0.55rem; margin-left: 0.4rem; flex-shrink: 0; }
 .msel-drop {
-  display: none; position: absolute; top: 100%; left: 0;
+  display: none; position: fixed;
   background: #1a202c; border: 1px solid #4a5568; border-radius: 4px;
   min-width: 180px; max-height: 260px; overflow: hidden;
-  z-index: 200; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-  margin-top: 2px; width: 100%;
+  z-index: 60000; box-shadow: 0 10px 28px rgba(0,0,0,0.65);
+  margin-top: 2px;
 }
 .msel-drop.open { display: block; }
 .msel-filter {
@@ -190,13 +190,15 @@ select:focus, input[type="number"]:focus { outline: none; border-color: #63b3ed;
   padding: 0.35rem 0.5rem; font-size: var(--fs-sm); outline: none;
 }
 .msel-filter::placeholder { color: #64748b; }
-.msel-list { max-height: 180px; overflow-y: auto; }
+.msel-list { max-height: 220px; overflow-y: auto; }
 .msel-item {
   display: flex; align-items: center; gap: 0.4rem;
   padding: 0.3rem 0.6rem; cursor: pointer; font-size: var(--fs-sm);
   color: #e2e8f0; white-space: nowrap;
 }
 .msel-item:hover { background: #2d3748; }
+.msel-item.selected { background: rgba(99,179,237,.12); color: #fff; }
+.msel-item.selected:hover { background: rgba(99,179,237,.18); }
 .msel-item input[type="checkbox"] { accent-color: #63b3ed; margin: 0; cursor: pointer; }
 .msel-sep { border-top: 1px solid #2d3748; margin: 0.15rem 0; }
 .cfg-row {
@@ -655,10 +657,23 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
 
   var _mselCounter = 0;
 
+  function closeUsersDropdown(drop) {
+    if (!drop) return;
+    if (typeof drop._pbguiClose === 'function') drop._pbguiClose();
+    else drop.classList.remove('open');
+  }
+
+  function closeAllUsersDropdowns(exceptDrop) {
+    document.querySelectorAll('.msel-drop.open').forEach(function (d) {
+      if (d !== exceptDrop) closeUsersDropdown(d);
+    });
+  }
+
   function makeUsersDropdown(currentUsers, onChange) {
     var uid   = 'msel' + (++_mselCounter);
     var selected = (currentUsers && currentUsers.length) ? currentUsers.slice() : ['ALL'];
-    var opts  = ['ALL'].concat(allUsers);
+    var committed = selected.slice();
+    var dirty = false;
 
     var wrap    = el('div', 'msel-wrap');
     var btn     = el('div', 'msel-btn');
@@ -679,6 +694,66 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     drop.appendChild(list);
     wrap.appendChild(drop);
 
+    function sameSelection(a, b) {
+      if (!a || !b || a.length !== b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return false;
+      }
+      return true;
+    }
+
+    function orderedOptions() {
+      var out = ['ALL'];
+      var seen = { ALL: true };
+      if (selected.indexOf('ALL') < 0) {
+        selected.forEach(function (u) {
+          if (!u || seen[u]) return;
+          out.push(u); seen[u] = true;
+        });
+      }
+      allUsers.forEach(function (u) {
+        if (!u || seen[u]) return;
+        out.push(u); seen[u] = true;
+      });
+      return out;
+    }
+
+    function positionDrop() {
+      if (!drop.classList.contains('open')) return;
+      if (!btn.isConnected) { closeDrop(); return; }
+      var rect = btn.getBoundingClientRect();
+      var width = Math.max(180, rect.width);
+      var left = Math.min(Math.max(8, rect.right - width), Math.max(8, window.innerWidth - width - 8));
+      var below = window.innerHeight - rect.bottom - 12;
+      var above = rect.top - 12;
+      var openAbove = below < 180 && above > below;
+      var maxHeight = Math.max(140, openAbove ? above : below);
+      var top = openAbove ? Math.max(8, rect.top - maxHeight - 3) : rect.bottom + 3;
+      drop.style.left = left + 'px';
+      drop.style.top = top + 'px';
+      drop.style.width = width + 'px';
+      drop.style.maxHeight = maxHeight + 'px';
+      list.style.maxHeight = Math.max(120, maxHeight - filter.offsetHeight - 8) + 'px';
+    }
+
+    function commitSelection() {
+      if (!dirty || sameSelection(selected, committed)) return;
+      committed = selected.slice();
+      dirty = false;
+      onChange(committed.slice());
+    }
+
+    function closeDrop() {
+      if (!drop.classList.contains('open')) return;
+      drop.classList.remove('open');
+      window.removeEventListener('resize', positionDrop);
+      window.removeEventListener('scroll', positionDrop, true);
+      if (drop.parentNode === document.body && wrap.isConnected) wrap.appendChild(drop);
+      commitSelection();
+    }
+
+    drop._pbguiClose = closeDrop;
+
     function updateLabel() {
       if (!selected.length)                    btnLbl.textContent = '\u2014 select \u2014';
       else if (selected.indexOf('ALL') >= 0)   btnLbl.textContent = 'ALL';
@@ -688,8 +763,9 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
 
     function buildList() {
       list.innerHTML = '';
-      opts.forEach(function (u) {
+      orderedOptions().forEach(function (u) {
         var item = el('div', 'msel-item');
+        if (selected.indexOf(u) >= 0) item.classList.add('selected');
         item.setAttribute('data-u', u.toLowerCase());
         var cb = el('input');
         cb.type = 'checkbox'; cb.value = u;
@@ -723,7 +799,9 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
               }
             }
             updateLabel();
-            onChange(selected.slice());
+            dirty = true;
+            buildList();
+            applyFilter(filter.value || '');
           };
         })(u));
         var lbl = el('span', null, u);
@@ -756,12 +834,19 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       e.stopPropagation();
       var wasOpen = drop.classList.contains('open');
       /* close all other open dropdowns first */
-      document.querySelectorAll('.msel-drop.open').forEach(function (d) { d.classList.remove('open'); });
+      closeAllUsersDropdowns(drop);
       if (!wasOpen) {
+        document.body.appendChild(drop);
         drop.classList.add('open');
         filter.value = '';
+        buildList();
         applyFilter('');
+        positionDrop();
+        window.addEventListener('resize', positionDrop);
+        window.addEventListener('scroll', positionDrop, true);
         filter.focus();
+      } else {
+        closeDrop();
       }
     });
     drop.addEventListener('click', function (e) { e.stopPropagation(); });
@@ -1009,6 +1094,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     _liveState[lKey] = st;
     function refreshLivePositions() {
       if (!container.isConnected) { _disconnectLive(lKey); return; }
+      if (document.querySelector('.msel-drop.open')) return;
       if (st.loading) return;
       if (st.lastFetch && Date.now() - st.lastFetch < 5000) return;
       st.lastFetch = Date.now();
@@ -1047,6 +1133,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     _liveState[lKey] = st;
     function refreshLiveBalance() {
       if (!container.isConnected) { _disconnectLive(lKey); return; }
+      if (document.querySelector('.msel-drop.open')) return;
       if (st.loading) return;
       if (st.lastFetch && Date.now() - st.lastFetch < 5000) return;
       st.lastFetch = Date.now();
@@ -1060,7 +1147,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
           st.lastTs = Date.now();
           if (st.source === 'live' || st.source === 'mixed') {
             _lastRestBal[lKey] = d;
-            DashRender.buildBalance(container, d, {});
+            DashRender.buildBalance(container, d, container._pbguiBalanceRenderOpts || {});
             _setSourceStatus(container, '.db-status', st.source, st.lastTs);
           }
         })
@@ -1101,10 +1188,12 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             state[uKey] = v; scheduleSync();
             buildBalanceInline(container, r, c);
           });
-          DashRender.buildBalance(container, d, {
+          var balanceRenderOpts = {
             usersControl: usersCtrl,
             icon: _widgetIcon('BALANCE'), onDelete: _makeDeleteCb(r, c)
-          });
+          };
+          container._pbguiBalanceRenderOpts = balanceRenderOpts;
+          DashRender.buildBalance(container, d, balanceRenderOpts);
           _attachViewDrag(container, r, c);
           _connectLiveBal(container, pos, users);
           /* shrink cell to content when no explicit height has been stored */
@@ -2607,6 +2696,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
 
   /* ── Save / Cancel — callable from sidebar messages ── */
   function doSave() {
+    closeAllUsersDropdowns();
     var name = (state.name || '').trim();
     if (!name) { setStatus('Please enter a dashboard name.', 'error'); return; }
     setStatus('saving\u2026', '');
@@ -2643,9 +2733,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
 
   /* close all dropdowns on outside click */
   document.addEventListener('click', function () {
-    document.querySelectorAll('.msel-drop.open').forEach(function (d) {
-      d.classList.remove('open');
-    });
+    closeAllUsersDropdowns();
   });
 
   /* ── Live updates via WebSocket ─────────────────────────────────────────
@@ -2660,6 +2748,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     var _pendingTypes = [];
 
     function _rebuildCellsOfTypes(types) {
+      if (document.querySelector('.msel-drop.open')) return;
       var rows = state.rows || 1;
       var cols = state.cols || 1;
       for (var r = 1; r <= rows; r++) {

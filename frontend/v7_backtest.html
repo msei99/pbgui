@@ -5685,7 +5685,12 @@ function onResultActionsChanged() {
       html += chartWrap(ddId, vsClose);
       chartDivs.push({ id: ddId, type: 'drawdown', path: r.path, result: r, idx: idx });
 
-      /* 4. TWE chart — resolution dropdown + show coins toggle */
+      /* 4. Equity hard-stop drawdown chart */
+      var hardStopId = 'hard-stop-chart-' + idx;
+      html += chartWrap(hardStopId, vsClose);
+      chartDivs.push({ id: hardStopId, type: 'hard_stop_drawdown', path: r.path, result: r, idx: idx });
+
+      /* 5. TWE chart — resolution dropdown + show coins toggle */
       var tweId = 'twe-chart-' + idx;
       html += '\x3Cdiv style="margin-bottom:var(--sp-xs);display:flex;align-items:center;gap:var(--sp-md);flex-wrap:wrap">';
       html += '\x3Clabel style="font-size:var(--fs-sm);color:var(--text-dim)" title="Small resolutions with many symbols generate a lot of data and can take a long time to render">Resolution (min) \x3Cspan style="cursor:help;opacity:.6">(i)\x3C/span>:\x3C/label>';
@@ -5785,6 +5790,8 @@ function onResultActionsChanged() {
   chartDivs.forEach(function(cd) {
     if (cd.type === 'be' || cd.type === 'be_btc' || cd.type === 'drawdown' || cd.type === 'drawdown_btc') {
       loadAndRenderBEChart(cd);
+    } else if (cd.type === 'hard_stop_drawdown') {
+      loadAndRenderHardStopDrawdownChart(cd);
     } else if (cd.type === 'pnl_symbol') {
       loadAndRenderPnlChart(cd);
     } else if (cd.type === 'twe') {
@@ -5907,6 +5914,185 @@ function renderBEChart(cd, be) {
     var layout = _chartLayout(titleText, 'Balance');
     Plotly.newPlot(cd.id, traces, layout, _plotlyConf());
   }
+}
+
+function loadAndRenderHardStopDrawdownChart(cd) {
+  var equityPromise = _beCache[cd.path]
+    ? Promise.resolve(_beCache[cd.path])
+    : fetchCSV(cd.path, 'equity').then(function(csv) {
+        var be = normalizeBE(csv, cd.result);
+        _beCache[cd.path] = be;
+        return be;
+      });
+  var configPromise = apiFetch('/results/config?path=' + encodeURIComponent(cd.path));
+  Promise.all([equityPromise, configPromise]).then(function(parts) {
+    requestAnimationFrame(function() { renderHardStopDrawdownChart(cd, parts[0], parts[1]); });
+  }).catch(function(e) {
+    var el = document.getElementById(cd.id);
+    if (el) el.innerHTML = '<div style="color:var(--red);padding:var(--sp-md)">Failed to load hard-stop drawdown: ' + esc(e.message) + '</div>';
+  });
+}
+
+function _hardStopSideConfig(config, side) {
+  var bot = (config && config.bot) || {};
+  var cfg = bot[side] || {};
+  var twel = parseFloat(cfg.total_wallet_exposure_limit || 0) || 0;
+  var nPositions = Math.round(parseFloat(cfg.n_positions || 0) || 0);
+  var redThreshold = parseFloat(cfg.hsl_red_threshold || 0) || 0;
+  var emaSpan = parseFloat(cfg.hsl_ema_span_minutes || 0) || 0;
+  if (!cfg.hsl_enabled || twel <= 0 || nPositions <= 0 || redThreshold <= 0 || emaSpan <= 0) return null;
+  var ratios = cfg.hsl_tier_ratios || {};
+  return {
+    side: side,
+    redThreshold: redThreshold,
+    emaSpan: emaSpan,
+    yellowThreshold: (parseFloat(ratios.yellow || 0.5) || 0.5) * redThreshold,
+    orangeThreshold: (parseFloat(ratios.orange || 0.75) || 0.75) * redThreshold
+  };
+}
+
+function _hardStopLookbackDays(config) {
+  var live = (config && config.live) || {};
+  var raw = live.pnls_max_lookback_days;
+  if (raw === undefined || raw === null || raw === '') return 30;
+  if (String(raw).trim().toLowerCase() === 'all') return null;
+  var days = parseFloat(raw);
+  return isFinite(days) && days > 0 ? days : 30;
+}
+
+function _rollingDrawdown(timesMs, equity, lookbackDays) {
+  var drawdown = [];
+  var deque = [];
+  var lookbackMs = lookbackDays === null ? null : lookbackDays * 24 * 60 * 60 * 1000;
+  for (var i = 0; i < equity.length; i++) {
+    var ts = timesMs[i];
+    var eq = equity[i];
+    if (!isFinite(ts) || !isFinite(eq)) {
+      drawdown.push(0);
+      continue;
+    }
+    if (lookbackMs !== null) {
+      while (deque.length && timesMs[deque[0]] < ts - lookbackMs) deque.shift();
+    }
+    while (deque.length && equity[deque[deque.length - 1]] <= eq) deque.pop();
+    deque.push(i);
+    var peak = deque.length ? equity[deque[0]] : eq;
+    var dd = peak > 0 ? 1 - (eq / peak) : 0;
+    drawdown.push(Math.max(0, dd));
+  }
+  return drawdown;
+}
+
+function _hardStopEma(timesMs, raw, emaSpanMinutes) {
+  var alpha = 2.0 / (emaSpanMinutes + 1.0);
+  var ema = [];
+  var prev = 0;
+  var lastMinute = timesMs.length ? Math.floor(timesMs[0] / 60000) : 0;
+  for (var i = 0; i < raw.length; i++) {
+    var currentMinute = Math.floor(timesMs[i] / 60000);
+    if (i === 0) {
+      ema.push(prev);
+      continue;
+    }
+    var elapsed = Math.max(0, currentMinute - lastMinute);
+    if (elapsed > 0) {
+      var decay = Math.pow(1.0 - alpha, elapsed);
+      prev = raw[i] + (prev - raw[i]) * decay;
+    }
+    ema.push(Math.max(0, prev));
+    lastMinute = currentMinute;
+  }
+  return ema;
+}
+
+function _hardStopTriggerIndices(score, redThreshold) {
+  var indices = [];
+  var wasTriggered = false;
+  for (var i = 0; i < score.length; i++) {
+    var triggered = isFinite(score[i]) && score[i] >= redThreshold;
+    if (triggered && !wasTriggered) indices.push(i);
+    wasTriggered = triggered;
+  }
+  return indices;
+}
+
+function renderHardStopDrawdownChart(cd, be, config) {
+  var el = document.getElementById(cd.id);
+  if (!el) return;
+  var sideConfigs = ['long', 'short'].map(function(side) { return _hardStopSideConfig(config, side); }).filter(Boolean);
+  if (!sideConfigs.length) {
+    el.innerHTML = '<div style="color:var(--text-dim);padding:var(--sp-md)">Equity hard stop is not enabled for this result</div>';
+    return;
+  }
+  var points = [];
+  for (var i = 0; i < be.time.length; i++) {
+    var ts = new Date(be.time[i]).getTime();
+    var eq = parseFloat(be.equity[i]);
+    if (isFinite(ts) && isFinite(eq)) points.push({ time: be.time[i], ts: ts, equity: eq });
+  }
+  if (!points.length) {
+    el.innerHTML = '<div style="color:var(--text-dim);padding:var(--sp-md)">No equity data found for hard-stop drawdown</div>';
+    return;
+  }
+  var times = points.map(function(p) { return p.time; });
+  var timesMs = points.map(function(p) { return p.ts; });
+  var equity = points.map(function(p) { return p.equity; });
+  var lookbackDays = _hardStopLookbackDays(config);
+  var raw = _rollingDrawdown(timesMs, equity, lookbackDays);
+  var traces = [];
+  var layout = {
+    paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
+    font: { color: '#fafafa', size: 12, family: 'Source Sans Pro, sans-serif' },
+    margin: { l: 70, r: 30, t: 70, b: 50 },
+    title: { text: sideConfigs.length > 1 ? 'Equity Hard Stop Drawdown' : (sideConfigs[0].side.charAt(0).toUpperCase() + sideConfigs[0].side.slice(1) + ' Equity Hard Stop Drawdown'), x: 0.5, font: { size: 15 } },
+    xaxis: { gridcolor: '#333640', griddash: 'dot', showgrid: true, anchor: 'y' },
+    legend: { orientation: 'h', x: 0, y: 1.1 },
+    hovermode: 'x unified',
+    height: sideConfigs.length > 1 ? 1100 : 800
+  };
+  var domains = sideConfigs.length > 1
+    ? [{ draw: [0.78, 1.0], prox: [0.56, 0.72] }, { draw: [0.28, 0.50], prox: [0.0, 0.22] }]
+    : [{ draw: [0.30, 1.0], prox: [0.0, 0.22] }];
+  var colors = {
+    long: { raw: '#1f77b4', ema: '#ff7f0e', score: '#2ca02c', prox: '#2a9d8f' },
+    short: { raw: '#9467bd', ema: '#8c564b', score: '#e377c2', prox: '#6a4c93' }
+  };
+  var thresholdColors = { yellow: '#d4a017', orange: '#d95f02', red: '#b22222' };
+  sideConfigs.forEach(function(cfg, sideIdx) {
+    var axisNum = sideIdx * 2 + 1;
+    var proxAxisNum = axisNum + 1;
+    var yAxisName = axisNum === 1 ? 'y' : 'y' + axisNum;
+    var proxAxisName = 'y' + proxAxisNum;
+    var yLayoutName = axisNum === 1 ? 'yaxis' : 'yaxis' + axisNum;
+    var proxLayoutName = 'yaxis' + proxAxisNum;
+    var dom = domains[sideIdx];
+    var ema = _hardStopEma(timesMs, raw, cfg.emaSpan);
+    var score = raw.map(function(v, i) { return Math.min(v, ema[i] || 0); });
+    var proximity = score.map(function(v) { return cfg.redThreshold > 0 ? (v / cfg.redThreshold) * 100 : 0; });
+    var redTriggerIdx = _hardStopTriggerIndices(score, cfg.redThreshold);
+    var redTriggerTimes = redTriggerIdx.map(function(i) { return times[i]; });
+    var redTriggerScores = redTriggerIdx.map(function(i) { return score[i]; });
+    var redTriggerProximity = redTriggerIdx.map(function(i) { return proximity[i]; });
+    var redTriggerText = redTriggerIdx.map(function(i) {
+      return cfg.side.toUpperCase() + ' RED trigger<br>' + times[i] + '<br>Score: ' + score[i].toFixed(6) + '<br>RED: ' + cfg.redThreshold.toFixed(6) + '<br>% of RED: ' + proximity[i].toFixed(1) + '%';
+    });
+    var prefix = sideConfigs.length > 1 ? cfg.side.charAt(0).toUpperCase() + cfg.side.slice(1) + ' ' : '';
+    layout[yLayoutName] = { domain: dom.draw, gridcolor: '#333640', griddash: 'dot', title: prefix + 'Drawdown' };
+    layout[proxLayoutName] = { domain: dom.prox, gridcolor: '#333640', griddash: 'dot', title: '% of RED', anchor: 'x' };
+    traces.push({ x: times, y: raw, name: prefix + 'Raw Drawdown', mode: 'lines', yaxis: yAxisName, line: { color: colors[cfg.side].raw, width: 1 }, opacity: 0.45 });
+    traces.push({ x: times, y: ema, name: prefix + 'EMA Drawdown', mode: 'lines', yaxis: yAxisName, line: { color: colors[cfg.side].ema, width: 1 }, opacity: 0.75 });
+    traces.push({ x: times, y: score, name: prefix + 'Trigger Score', mode: 'lines', yaxis: yAxisName, line: { color: colors[cfg.side].score, width: 1.5, dash: 'dash' } });
+    traces.push({ x: [times[0], times[times.length - 1]], y: [cfg.yellowThreshold, cfg.yellowThreshold], name: prefix + 'Yellow Threshold', mode: 'lines', yaxis: yAxisName, line: { color: thresholdColors.yellow, width: 1, dash: 'dot' }, opacity: 0.8 });
+    traces.push({ x: [times[0], times[times.length - 1]], y: [cfg.orangeThreshold, cfg.orangeThreshold], name: prefix + 'Orange Threshold', mode: 'lines', yaxis: yAxisName, line: { color: thresholdColors.orange, width: 1, dash: 'dot' }, opacity: 0.8 });
+    traces.push({ x: [times[0], times[times.length - 1]], y: [cfg.redThreshold, cfg.redThreshold], name: prefix + 'RED Threshold', mode: 'lines', yaxis: yAxisName, line: { color: thresholdColors.red, width: 1.2, dash: 'dash' }, opacity: 0.85 });
+    traces.push({ x: times, y: proximity, name: prefix + 'RED Proximity', mode: 'lines', yaxis: proxAxisName, line: { color: colors[cfg.side].prox, width: 1.1 }, fill: 'tozeroy', fillcolor: 'rgba(42,157,143,0.14)' });
+    traces.push({ x: [times[0], times[times.length - 1]], y: [100, 100], name: prefix + 'RED Hit', mode: 'lines', yaxis: proxAxisName, line: { color: thresholdColors.red, width: 1.2, dash: 'dash' } });
+    if (redTriggerIdx.length) {
+      traces.push({ x: redTriggerTimes, y: redTriggerScores, text: redTriggerText, name: prefix + 'RED Trigger (' + redTriggerIdx.length + ')', mode: 'markers', yaxis: yAxisName, marker: { color: thresholdColors.red, size: 9, symbol: 'diamond', line: { color: '#ffffff', width: 1 } }, hovertemplate: '%{text}<extra></extra>' });
+      traces.push({ x: redTriggerTimes, y: redTriggerProximity, text: redTriggerText, name: prefix + 'RED Trigger %', mode: 'markers', yaxis: proxAxisName, marker: { color: thresholdColors.red, size: 8, symbol: 'triangle-up', line: { color: '#ffffff', width: 1 } }, hovertemplate: '%{text}<extra></extra>', showlegend: false });
+    }
+  });
+  Plotly.newPlot(cd.id, traces, layout, _plotlyConf());
 }
 
 function toggleLogScale(chartId, isLog) {

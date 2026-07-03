@@ -9,6 +9,7 @@ Provides:
 
 import asyncio
 import configparser
+import copy
 import csv
 import datetime
 import glob
@@ -190,6 +191,35 @@ def _load_and_repair_backtest_config(name: str, cfg_file: Path) -> dict:
 
 def _bt_queue_dir() -> Path:
     return Path(PBGDIR) / "data" / "bt_v7_queue"
+
+
+def _bt_queue_configs_dir() -> Path:
+    return _bt_queue_dir() / "configs"
+
+
+def _bt_queue_config_file(filename: str) -> Path:
+    return _bt_queue_configs_dir() / f"{filename}.json"
+
+
+def _queue_config_snapshot(data: dict | None) -> dict | None:
+    snapshot = (data or {}).get("config_snapshot")
+    return copy.deepcopy(snapshot) if isinstance(snapshot, dict) else None
+
+
+def _queue_launch_item_from_data(filename: str, data: dict) -> dict:
+    return {
+        "filename": filename,
+        "name": data.get("name", filename),
+        "json": data.get("json", ""),
+        "exchange": data.get("exchange", ""),
+        "config_snapshot": _queue_config_snapshot(data),
+    }
+
+
+def _queue_public_item(item: dict) -> dict:
+    public = dict(item)
+    public.pop("config_snapshot", None)
+    return public
 
 
 def _bt_configs_dir() -> Path:
@@ -816,6 +846,7 @@ class BacktestStore:
                         "name": data.get("name", filename),
                         "json": data.get("json", ""),
                         "exchange": data.get("exchange", ""),
+                        "config_snapshot": _queue_config_snapshot(data),
                         "archive_retest": data.get("archive_retest") if isinstance(data.get("archive_retest"), dict) else None,
                         "status": status,
                         "pid": pid,
@@ -982,18 +1013,24 @@ class BacktestWorker:
         """Spawn a backtest subprocess (detached)."""
         venv = pb7venv()
         pb7 = pb7dir()
-        config_path = item["json"]
+        source_config_path = Path(str(item["json"]))
+        config_path = source_config_path
         filename = item["filename"]
 
         log_path = _bt_log_dir() / f"{filename}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            cfg = load_pb7_config(Path(config_path))
+            snapshot = _queue_config_snapshot(item)
+            cfg = snapshot if snapshot is not None else load_pb7_config(source_config_path)
             settings = _read_ini_section()
             use_pbgui_market_data = settings.get("use_pbgui_market_data", "False").lower() == "true"
             changed, pbgui_data_path = _apply_pbgui_market_data_override(cfg, use_pbgui_market_data)
-            if changed:
-                save_pb7_config(cfg, Path(config_path))
+            if snapshot is not None:
+                config_path = _bt_queue_config_file(filename)
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                save_pb7_config(cfg, config_path)
+            elif changed:
+                save_pb7_config(cfg, source_config_path)
                 _log(
                     SERVICE,
                     f"Adjusted backtest.ohlcv_source_dir to PBGui market data before launch for {item.get('name') or filename}: {pbgui_data_path}",
@@ -2301,7 +2338,7 @@ async def _ws_push_loop(ws: WebSocket):
                 _store.changed.clear()   # clear AFTER refresh (refresh sets the event)
                 msg = {
                     "type": "queue_update",
-                    "items": list(_store.items.values()),
+                    "items": [_queue_public_item(item) for item in _store.items.values()],
                     "settings": _read_ini_section(),
                 }
                 await ws.send_json(msg)
@@ -3129,9 +3166,9 @@ def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)):
         "filename": filename,
         "json": str(cfg_file),
         "exchange": exchange_str,
+        "config_snapshot": copy.deepcopy(cfg),
     }
-    with open(queue_file, "w", encoding="utf-8") as f:
-        json.dump(queue_data, f, indent=4)
+    atomic_write_json(queue_file, queue_data)
 
     _store.notify()
     return {"ok": True, "filename": filename}
@@ -3148,12 +3185,7 @@ def start_queue_item(filename: str, session: SessionToken = Depends(require_auth
     with open(queue_file, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    item = {
-        "filename": filename,
-        "name": data.get("name", filename),
-        "json": data.get("json", ""),
-        "exchange": data.get("exchange", ""),
-    }
+    item = _queue_launch_item_from_data(filename, data)
     _worker._launch_backtest(item)
     _store.notify()
     return {"ok": True}
@@ -3170,15 +3202,9 @@ def restart_queue_item(filename: str, session: SessionToken = Depends(require_au
         data = json.load(f)
     data["status"] = "queued"
     data.pop("error", None)
-    with open(queue_file, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    atomic_write_json(queue_file, data)
     # Launch directly — don't rely on autostart being enabled
-    item = {
-        "filename": filename,
-        "name": data.get("name", filename),
-        "json": data.get("json", ""),
-        "exchange": data.get("exchange", ""),
-    }
+    item = _queue_launch_item_from_data(filename, data)
     _worker._launch_backtest(item)
     _store.notify()
     return {"ok": True}
@@ -3212,6 +3238,7 @@ def remove_queue_item(filename: str, session: SessionToken = Depends(require_aut
     # Remove files
     (_bt_queue_dir() / f"{filename}.json").unlink(missing_ok=True)
     (_bt_queue_dir() / f"{filename}.pid").unlink(missing_ok=True)
+    _bt_queue_config_file(filename).unlink(missing_ok=True)
     (_bt_log_dir() / f"{filename}.log").unlink(missing_ok=True)
     _store.notify()
     return {"ok": True}
@@ -3227,6 +3254,7 @@ def clear_finished(session: SessionToken = Depends(require_auth)):
             fn = item["filename"]
             (_bt_queue_dir() / f"{fn}.json").unlink(missing_ok=True)
             (_bt_queue_dir() / f"{fn}.pid").unlink(missing_ok=True)
+            _bt_queue_config_file(fn).unlink(missing_ok=True)
             (_bt_log_dir() / f"{fn}.log").unlink(missing_ok=True)
             removed += 1
     _store.notify()
