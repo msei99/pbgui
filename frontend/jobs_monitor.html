@@ -507,6 +507,16 @@
         const EXCHANGE_FILTER = (urlParams.get('exchange') || '').trim().toLowerCase();
         const JOB_TYPE_FILTER = (urlParams.get('job_type') || '').trim().toLowerCase();
 
+        function authOptions(options = {}) {
+            return {
+                ...options,
+                headers: {
+                    ...(options.headers || {}),
+                    'Authorization': `Bearer ${API_TOKEN || ''}`
+                }
+            };
+        }
+
         if (EMBED_MODE) {
             document.documentElement.classList.add('is-embedded');
             document.body.classList.add('is-embedded');
@@ -802,7 +812,7 @@
 
             pollingInterval = setInterval(async () => {
                 try {
-                    const resp = await fetch(`${API_BASE}/jobs/?states=pending,running&token=${API_TOKEN}`);
+                    const resp = await fetch(`${API_BASE}/jobs/?states=pending,running`, authOptions());
                     const data = await resp.json();
                     updateJobs(data.jobs);
                 } catch (e) {
@@ -1250,7 +1260,7 @@
                 if (cached && now - Number(cached.ts || 0) < 5000) return;
                 if (downloaderLogFetches.has(job.id)) return;
                 downloaderLogFetches.add(job.id);
-                fetch(`${API_BASE}/jobs/${job.id}/log?lines=0&token=${API_TOKEN}`)
+                fetch(`${API_BASE}/jobs/${job.id}/log?lines=0`, authOptions())
                     .then(resp => resp.ok ? resp.json() : null)
                     .then(payload => {
                         const lines = payload && Array.isArray(payload.log) ? payload.log : [];
@@ -1321,11 +1331,11 @@
             }))) return;
             
             try {
-                const resp = await fetch(`${API_BASE}/jobs/cancel?token=${API_TOKEN}`, {
+                const resp = await fetch(`${API_BASE}/jobs/cancel`, authOptions({
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({job_id: jobId, reason: 'user cancel'})
-                });
+                }));
                 
                 if (resp.ok) {
                     console.log(`Job ${jobId} cancelled`);
@@ -1349,9 +1359,9 @@
             }))) return;
             
             try {
-                const resp = await fetch(`${API_BASE}/jobs/${jobId}?token=${API_TOKEN}`, {
+                const resp = await fetch(`${API_BASE}/jobs/${jobId}`, authOptions({
                     method: 'DELETE'
-                });
+                }));
                 
                 if (resp.ok) {
                     console.log(`Job ${jobId} deleted`);
@@ -1375,9 +1385,9 @@
             }))) return;
             
             try {
-                const resp = await fetch(`${API_BASE}/jobs/${jobId}/retry?token=${API_TOKEN}`, {
+                const resp = await fetch(`${API_BASE}/jobs/${jobId}/retry`, authOptions({
                     method: 'POST'
-                });
+                }));
                 
                 if (resp.ok) {
                     console.log(`Job ${jobId} retried`);
@@ -1401,9 +1411,9 @@
             }))) return;
             
             try {
-                const resp = await fetch(`${API_BASE}/jobs/${jobId}/requeue?token=${API_TOKEN}`, {
+                const resp = await fetch(`${API_BASE}/jobs/${jobId}/requeue`, authOptions({
                     method: 'POST'
-                });
+                }));
                 
                 if (resp.ok) {
                     console.log(`Job ${jobId} requeued`);
@@ -1443,11 +1453,11 @@
                     payload.exchange = EXCHANGE_FILTER;
                 }
                 
-                const resp = await fetch(`${API_BASE}/jobs/bulk-delete?token=${API_TOKEN}`, {
+                const resp = await fetch(`${API_BASE}/jobs/bulk-delete`, authOptions({
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(payload)
-                });
+                }));
                 
                 if (resp.ok) {
                     const data = await resp.json();
@@ -1478,7 +1488,7 @@
             modal.classList.add('active');
             
             try {
-                const resp = await fetch(`${API_BASE}/jobs/${jobId}/log?lines=500&token=${API_TOKEN}`);
+                const resp = await fetch(`${API_BASE}/jobs/${jobId}/log?lines=500`, authOptions());
                 const data = await resp.json();
                 
                 if (!data.exists || !data.log || data.log.length === 0) {
@@ -1593,9 +1603,9 @@
 
             async function runJob(jobId) {
                 try {
-                    const resp = await fetch(`${API_BASE}/jobs/${jobId}/run?token=${API_TOKEN}`, {
+                    const resp = await fetch(`${API_BASE}/jobs/${jobId}/run`, authOptions({
                         method: 'POST'
-                    });
+                    }));
                     if (!resp.ok) {
                         const err = await resp.json().catch(() => ({}));
                         throw new Error(err.detail || resp.statusText || 'Failed to request run');
@@ -1622,7 +1632,7 @@
             modal.classList.add('active');
 
             try {
-                const resp = await fetch(`${API_BASE}/jobs/${jobId}?token=${API_TOKEN}`);
+                const resp = await fetch(`${API_BASE}/jobs/${jobId}`, authOptions());
                 if (!resp.ok) {
                     const err = await resp.json().catch(() => ({}));
                     throw new Error(err.detail || resp.statusText || 'Failed to load job details');
@@ -1631,7 +1641,7 @@
                 content.innerHTML = renderJobDetails(job || {});
                 if (job && job.type === 'bitget_best_1m_distributed') {
                     try {
-                        const logResp = await fetch(`${API_BASE}/jobs/${jobId}/log?lines=0&token=${API_TOKEN}`);
+                        const logResp = await fetch(`${API_BASE}/jobs/${jobId}/log?lines=0`, authOptions());
                         if (logResp.ok) {
                             const logPayload = await logResp.json();
                             const logLines = Array.isArray(logPayload.log) ? logPayload.log : [];
@@ -1683,7 +1693,7 @@
             container.innerHTML = '<p class="loading">Loading...</p>';
             
             try {
-                const resp = await fetch(`${API_BASE}/jobs/?states=${tab}&limit=50&token=${API_TOKEN}`);
+                const resp = await fetch(`${API_BASE}/jobs/?states=${tab}&limit=50`, authOptions());
                 const data = await resp.json();
                 
                 // Apply exchange filter + sort newest first

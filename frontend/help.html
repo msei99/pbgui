@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PBGui — Help & Tutorials</title>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
+  <script src="/app/vendor/marked.min.js?v=1"></script>
+  <script src="/app/vendor/purify.min.js?v=1"></script>
   <style>
     :root {
       --fs-xs: 11px;
@@ -593,7 +593,7 @@
       if (!TOKEN || hasInjectedPlaceholder(TOKEN)) return;
 
       try {
-        var response = await fetch('/api/help/meta?token=' + encodeURIComponent(TOKEN), { cache: 'no-store' });
+        var response = await fetch('/api/help/meta', { cache: 'no-store', headers: { 'Authorization': 'Bearer ' + TOKEN } });
         if (!response.ok) return;
 
         var data = await response.json();
@@ -711,7 +711,7 @@
           callback('');
           return;
         }
-        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang + '&token=' + encodeURIComponent(TOKEN))
+        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
@@ -830,7 +830,7 @@
         searchIndex = -1;
         helpSearchCount.textContent = '';
         helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang + '&token=' + encodeURIComponent(TOKEN))
+        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
@@ -849,7 +849,7 @@
 
       function loadHelpIndex(keyword) {
         helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch('/api/help/index?lang=' + helpLang + '&token=' + encodeURIComponent(TOKEN))
+        fetch('/api/help/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();

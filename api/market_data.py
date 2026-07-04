@@ -2076,7 +2076,7 @@ def _build_ohlcv_pyramid(ohlcv_df: Any, total_span_minutes: float) -> dict[str, 
 
 _OHLCV_CHART_TEMPLATE = r"""<!DOCTYPE html>
 <html><head><meta charset=\"utf-8\">
-<script src=\"https://cdn.plot.ly/plotly-2.35.2.min.js\"></script>
+<script src=\"/app/plotly.min.js?v=1\"></script>
 <style>
 html,body{margin:0;padding:0;background:transparent;overflow:hidden;}
 #wrap{position:relative;width:100%;}

@@ -53,16 +53,20 @@
     state.depsPromise = Promise.resolve()
       .then(function () {
         if (window.marked) return;
-        return loadScript('https://cdn.jsdelivr.net/npm/marked/marked.min.js');
+        return loadScript('/app/vendor/marked.min.js?v=1');
       })
       .then(function () {
         if (window.DOMPurify) return;
-        return loadScript('https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js');
+        return loadScript('/app/vendor/purify.min.js?v=1');
       })
       .then(function () {
         if (window.marked) window.marked.setOptions({ gfm: true, breaks: true });
       });
     return state.depsPromise;
+  }
+
+  function authHeaders() {
+    return state.token ? { 'Authorization': 'Bearer ' + state.token } : {};
   }
 
   function injectCss() {
@@ -268,7 +272,7 @@
       callback('');
       return;
     }
-    fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + state.lang + '&token=' + encodeURIComponent(state.token))
+    fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + state.lang, { headers: authHeaders() })
       .then(function (response) { if (!response.ok) throw new Error('HTTP ' + response.status); return response.json(); })
       .then(function (data) {
         state.topicCache[index] = renderMarkdown(data.content || '');
@@ -377,7 +381,7 @@
     state.searchIndex = -1;
     dom('pbgui-shared-help-search-count').textContent = '';
     dom('pbgui-shared-help-content').innerHTML = '<div class="pbgui-shared-help-loading">Loading...</div>';
-    fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + state.lang + '&token=' + encodeURIComponent(state.token))
+    fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + state.lang, { headers: authHeaders() })
       .then(function (response) { if (!response.ok) throw new Error('HTTP ' + response.status); return response.json(); })
       .then(function (data) {
         if (requestSeq !== state.topicRequestSeq) return;
@@ -404,7 +408,7 @@
     state.currentKeyword = String(keyword || 'overview');
     state.pendingAnchor = String(anchor || '');
     dom('pbgui-shared-help-toc-list').innerHTML = '<div class="pbgui-shared-help-loading">Loading...</div>';
-    fetch('/api/help/index?lang=' + state.lang + '&token=' + encodeURIComponent(state.token))
+    fetch('/api/help/index?lang=' + state.lang, { headers: authHeaders() })
       .then(function (response) { if (!response.ok) throw new Error('HTTP ' + response.status); return response.json(); })
       .then(function (data) {
         if (requestSeq !== state.indexRequestSeq) return;

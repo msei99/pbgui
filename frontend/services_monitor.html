@@ -771,7 +771,7 @@ window.PBGUI_NAV_CONFIG = {
 };
 </script>
 <script src="/app/js/pbgui_dialogs.js?v=4"></script>
-<script src="/app/js/shared_help_overlay.js?v=4"></script>
+<script src="/app/js/shared_help_overlay.js?v=6"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <!-- Guide button override — must run AFTER pbgui_nav.js DOMContentLoaded handler -->
 <script>
@@ -849,7 +849,7 @@ window.PBGUI_NAV_CONFIG = {
   function _ensureTopicCached(idx, cb) {
     if (_topicCache[idx] !== undefined) { cb(_topicCache[idx]); return; }
     var t = helpTopics[idx]; if (!t) { cb(''); return; }
-    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, authOptions())
       .then(function(r) { return r.json(); })
       .then(function(d) { _topicCache[idx] = mdToHtml(d.content || ''); cb(_topicCache[idx]); })
       .catch(function() { _topicCache[idx] = ''; cb(''); });
@@ -917,14 +917,14 @@ window.PBGUI_NAV_CONFIG = {
     var t = helpTopics[idx]; if (!t) return;
     _rawHtml = null; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = '';
     helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, authOptions())
       .then(function(r) { return r.json(); })
       .then(function(d) { _rawHtml = mdToHtml(d.content || ''); _topicCache[idx] = _rawHtml; helpContent.innerHTML = _rawHtml; helpContent.scrollTop = 0; var st = helpSearch.value.trim(); if (st) _applySearch(st); })
       .catch(function() { helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>'; });
   }
   function loadHelpIndex(keyword) {
     helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/docs/index?lang=' + helpLang + '&token=' + TOKEN)
+    fetch(docsBase + '/docs/index?lang=' + helpLang, authOptions())
       .then(function(r) { return r.json(); })
       .then(function(data) {
         helpTopics = data || []; renderToc();
@@ -1015,9 +1015,17 @@ window.PBGUI_NAV_CONFIG = {
       .replace(/'/g, '&#39;');
   }
 
+  function authOptions(options) {
+    var opts = Object.assign({}, options || {});
+    var headers = Object.assign({}, opts.headers || {});
+    if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
+    opts.headers = headers;
+    return opts;
+  }
+
   /* ── Status polling ────────────────────────────────────── */
   function fetchStatus() {
-    fetch(API_BASE + '/status?token=' + TOKEN)
+    fetch(API_BASE + '/status', authOptions())
       .then(function (r) { return r.json(); })
       .then(function (data) { _status = data; updateStatusUI(); scheduleStatus(); })
       .catch(function () { scheduleStatus(); });
@@ -1130,7 +1138,7 @@ window.PBGUI_NAV_CONFIG = {
 
   /* ── Worker status polling ─────────────────────────────── */
   window.fetchWorkers = function (force) {
-    fetch(API_BASE + '/workers/status?token=' + TOKEN)
+    fetch(API_BASE + '/workers/status', authOptions())
       .then(function (r) { return r.json(); })
       .then(function (data) {
         _workers = data || { counts: { total: 0, running: 0 }, groups: [] };
@@ -1319,7 +1327,7 @@ window.PBGUI_NAV_CONFIG = {
   function loadMigrationStatus(force) {
     var wrap = document.getElementById('migration-wrap');
     if (force && wrap) wrap.innerHTML = '<div style="color:#4a5568;font-style:italic;">Loading migration status...</div>';
-    fetch(API_BASE + '/migration/status?token=' + TOKEN)
+    fetch(API_BASE + '/migration/status', authOptions())
       .then(function (resp) {
         return resp.json().catch(function () { return {}; }).then(function (data) {
           if (!resp.ok) throw new Error(data.detail || 'Migration status request failed.');
@@ -1372,7 +1380,7 @@ window.PBGUI_NAV_CONFIG = {
     var btn = document.getElementById('migration-test-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Testing...'; }
     _resultPopup('Systemd migration test', 'Dry-run running...', '', true, true);
-    fetch(API_BASE + '/migration/test?token=' + TOKEN, { method: 'POST' })
+    fetch(API_BASE + '/migration/test', authOptions({ method: 'POST' }))
       .then(function (resp) {
         return resp.json().catch(function () { return {}; }).then(function (data) {
           if (!resp.ok) throw new Error(data.detail || 'Migration test failed.');
@@ -1404,7 +1412,7 @@ window.PBGUI_NAV_CONFIG = {
     var btn = document.getElementById('migration-run-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Migrating...'; }
     _resultPopup('Systemd migration', 'Migration running...', '', true, true);
-    fetch(API_BASE + '/migration/run?token=' + TOKEN, { method: 'POST' })
+    fetch(API_BASE + '/migration/run', authOptions({ method: 'POST' }))
       .then(function (resp) {
         return resp.json().catch(function () { return {}; }).then(function (data) {
           if (!resp.ok || data.ok === false) throw new Error(data.detail || data.error || 'Migration failed.');
@@ -1636,7 +1644,7 @@ window.PBGUI_NAV_CONFIG = {
   };
 
   window.workerAction = function (workerId, action) {
-    return fetch(API_BASE + '/workers/' + encodeURIComponent(workerId) + '/' + encodeURIComponent(action) + '?token=' + TOKEN, { method: 'POST' })
+    return fetch(API_BASE + '/workers/' + encodeURIComponent(workerId) + '/' + encodeURIComponent(action), authOptions({ method: 'POST' }))
       .then(function (r) { return r.json(); })
       .then(function () { window.fetchWorkers(true); })
       .catch(function () {});
@@ -1778,7 +1786,7 @@ window.PBGUI_NAV_CONFIG = {
     if (_serviceActionPending[svcId]) return Promise.resolve();
     _serviceActionPending[svcId] = action;
     updateStatusUI();
-    return fetch(API_BASE + '/' + svcId + '/' + action + '?token=' + TOKEN, { method: 'POST' })
+    return fetch(API_BASE + '/' + svcId + '/' + action, authOptions({ method: 'POST' }))
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (data) {
           if (!r.ok) {
@@ -1826,7 +1834,7 @@ window.PBGUI_NAV_CONFIG = {
     var btn = document.querySelector('[onclick="restartApiServer()"]');
     if (btn) { btn.disabled = true; btn.textContent = 'Restarting\u2026'; }
     var origin = API_BASE.replace(/\/api\/services$/, '');
-    fetch(API_BASE + '/api-server/restart?token=' + TOKEN, { method: 'POST' })
+    fetch(API_BASE + '/api-server/restart', authOptions({ method: 'POST' }))
       .then(function (resp) {
         if (!resp.ok) {
           return resp.json().catch(function () { return {}; }).then(function (data) {
@@ -1855,7 +1863,7 @@ window.PBGUI_NAV_CONFIG = {
     _settingsLoaded[svcId] = true;
     var ep = { pbcoindata: '/settings/pbcoindata', pbdata: '/settings/pbdata', 'api-server': '/settings/api-server' }[svcId];
     if (!ep) return;
-    fetch(API_BASE + ep + '?token=' + TOKEN)
+    fetch(API_BASE + ep, authOptions())
       .then(function (r) { return r.json(); })
       .then(function (data) { applySettings(svcId, data); })
       .catch(function () {});
@@ -2206,7 +2214,7 @@ window.PBGUI_NAV_CONFIG = {
   /* ── Fetch summary ─────────────────────────────────────── */
   function loadFetchSummary() {
     var wrap = document.getElementById('pbdata-status-wrap');
-    fetch(API_BASE + '/fetch-summary?token=' + TOKEN)
+    fetch(API_BASE + '/fetch-summary', authOptions())
       .then(function (r) { return r.json(); })
       .then(function (d) { renderFetchSummary(d, wrap); })
       .catch(function () { if (wrap) wrap.innerHTML = '<div style="color:#fca5a5;padding:1rem;">Failed to load fetch summary.</div>'; });
@@ -2374,7 +2382,7 @@ window.PBGUI_NAV_CONFIG = {
 
   function loadPollerMetrics() {
     var wrap = document.getElementById('pbdata-poller-metrics-wrap');
-    fetch(API_BASE + '/poller-metrics?token=' + TOKEN)
+    fetch(API_BASE + '/poller-metrics', authOptions())
       .then(function (r) { return r.json(); })
       .then(function (d) { renderPollerMetrics(d, wrap); })
       .catch(function () { if (wrap) wrap.innerHTML = '<div style="color:#fca5a5;padding:0.5rem;">Failed to load poller metrics.</div>'; });
@@ -2577,7 +2585,7 @@ window.PBGUI_NAV_CONFIG = {
     bar.className = 'cmc-status-bar loading';
     text.textContent = 'Checking API key\u2026';
     var t0 = Date.now();
-    fetch(API_BASE + '/settings/pbcoindata/key-status?token=' + TOKEN)
+    fetch(API_BASE + '/settings/pbcoindata/key-status', authOptions())
       .then(function (r) { return r.json(); })
       .then(function (d) {
         var elapsed = Math.round((Date.now() - t0) / 1000);
@@ -2667,11 +2675,11 @@ window.PBGUI_NAV_CONFIG = {
   };
 
   function _post(ep, body, msgId) {
-    fetch(API_BASE + ep + '?token=' + TOKEN, {
+    fetch(API_BASE + ep, authOptions({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    })
+    }))
     .then(function (r) { return r.json(); })
     .then(function (d) { _flash(msgId, d.ok ? 'Saved' : (d.detail || 'Error'), !d.ok); })
     .catch(function (e) { _flash(msgId, 'Error: ' + e.message, true); });
@@ -2796,7 +2804,7 @@ window.PBGUI_NAV_CONFIG = {
       _pricesLoading = true;
       var body = document.getElementById('prices-overlay-body');
       if (!opts.silent && body) body.innerHTML = '<div style="color:#64748b;padding:1rem;">Loading\u2026</div>';
-      fetch(API_BASE + '/prices-snapshot?token=' + TOKEN)
+      fetch(API_BASE + '/prices-snapshot', authOptions())
         .then(function (r) { return r.json(); })
         .then(function (d) {
           _allRows = d.rows || [];

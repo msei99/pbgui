@@ -289,7 +289,7 @@ body {
 
   // ── Load instances ──────────────────────────────────────
   function loadInstances() {
-    fetch(API_BASE + '/instances?token=' + encodeURIComponent(TOKEN))
+    fetch(API_BASE + '/instances', { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function(r) { return r.json(); })
       .then(function(list) {
         list.forEach(function(inst) {

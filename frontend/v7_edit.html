@@ -3264,7 +3264,7 @@ window.PBGUI_NAV_CONFIG = {
   });
 })();
 </script>
-<script src="/app/js/shared_help_overlay.js?v=4"></script>
+<script src="/app/js/shared_help_overlay.js?v=6"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 <!-- Guide overlay JS -->
@@ -3317,7 +3317,7 @@ window.PBGUI_NAV_CONFIG = {
 
   function loadHelpIndex(keyword) {
     helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/api/docs/index?lang=' + helpLang + '&token=' + TOKEN)
+    fetch(docsBase + '/api/docs/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function (r) { return r.json(); })
       .then(function (data) {
         helpTopics = data || [];
@@ -3359,7 +3359,7 @@ window.PBGUI_NAV_CONFIG = {
     if (!t) return;
     if (_topicCache[idx] !== undefined) { helpContent.innerHTML = _topicCache[idx]; helpContent.scrollTop = 0; return; }
     helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/api/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+    fetch(docsBase + '/api/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         _topicCache[idx] = mdToHtml(d.content || '');

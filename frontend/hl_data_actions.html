@@ -505,13 +505,11 @@
 <script>
 
 (function() {
-    console.log('[HLDA] Script starting...');
     if (window.self !== window.top) {
         document.documentElement.classList.add('hlda-embedded');
         document.body.classList.add('hlda-embedded');
     }
     var ROOT = document.getElementById('__HLDA_ROOT__');
-    console.log('[HLDA] ROOT element:', ROOT);
     if (!ROOT) { console.error('[HLDA] Root element not found'); return; }
 
     // Config from data-* attributes
@@ -531,6 +529,14 @@
     var activeJobs = { dl: [], build: [] };
     var currentTab = { dl: 'running', build: 'running' };
     var ws = null, wsRetryCount = 0;
+
+    function authOptions(options) {
+        var opts = Object.assign({}, options || {});
+        var headers = Object.assign({}, opts.headers || {});
+        if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
+        opts.headers = headers;
+        return opts;
+    }
 
     function isClippingAncestor(element, view) {
         if (!element || !view || typeof view.getComputedStyle !== 'function') return false;
@@ -660,21 +666,17 @@
     // ══════════════════════════════════════════════════════════════
     function toggleSection(id) {
         var el = $('sec-'+id);
-        console.log('[HLDA] toggleSection("'+id+'"), element:', el);
         if (!el) return;
         var open = el.classList.toggle('open');
-        console.log('[HLDA] section "'+id+'" now open:', open);
         saveState(id, open);
     }
 
     var shDownload = $('sh-download');
-    console.log('[HLDA] shDownload element:', shDownload);
     if (shDownload) {
         shDownload.addEventListener('click', function() { toggleSection('download'); });
     }
 
     var shBuild = $('sh-build');
-    console.log('[HLDA] shBuild element:', shBuild);
     if (shBuild) {
         shBuild.addEventListener('click', function() { toggleSection('build'); });
     }
@@ -918,8 +920,8 @@
         var dl=$('body-download'), bl=$('body-build');
         try {
             var r = await Promise.all([
-                fetch(API_BASE + '/heatmap/l2book-download-info?token=' + TOKEN),
-                fetch(API_BASE + '/heatmap/build-ohlcv-info?token=' + TOKEN),
+                fetch(API_BASE + '/heatmap/l2book-download-info', authOptions()),
+                fetch(API_BASE + '/heatmap/build-ohlcv-info', authOptions()),
             ]);
             if (!r[0].ok) throw new Error('Download info HTTP ' + r[0].status);
             if (!r[1].ok) throw new Error('Build info HTTP ' + r[1].status);
@@ -1534,11 +1536,11 @@
         btn.disabled=true; lo.classList.add('active'); hideMsg('dl');
         try {
             var coins = dlSelected.size===0||dlSelected.size===dlCoins.length ? ['All'] : Array.from(dlSelected);
-            var resp = await fetch(API_BASE + '/heatmap/queue-l2book-download-bulk?token=' + TOKEN, {
+            var resp = await fetch(API_BASE + '/heatmap/queue-l2book-download-bulk', authOptions({
                 method:'POST', headers:{'Content-Type':'application/json'},
                 body: JSON.stringify({ coins: coins, start_day:sd, end_day:ed,
                     only_missing_1m_src_hours: $('dl-only')?$('dl-only').checked:true }),
-            });
+            }));
             var data = await resp.json();
             if (data.error) { showMsg('dl','error',data.error); }
             else {
@@ -1557,11 +1559,11 @@
             var coins = buildSelected.size===0||buildSelected.size===buildCoins.length ? ['All'] : Array.from(buildSelected);
             var sd=inputToDay($('build-sd')?$('build-sd').value:''), ed=inputToDay($('build-ed')?$('build-ed').value:'');
             if (sd&&ed&&ed < sd) { showMsg('build','error','Start date must be on or before End date.'); return; }
-            var resp = await fetch(API_BASE + '/heatmap/queue-build-ohlcv?token=' + TOKEN, {
+            var resp = await fetch(API_BASE + '/heatmap/queue-build-ohlcv', authOptions({
                 method:'POST', headers:{'Content-Type':'application/json'},
                 body: JSON.stringify({ coins: coins, start_day:sd, end_day:ed,
                     refetch: $('build-refetch')?$('build-refetch').checked:false }),
-            });
+            }));
             var data = await resp.json();
             if (data.error) { showMsg('build','error',data.error); }
             else {
@@ -1721,7 +1723,7 @@
         if (!panel) return;
         panel.innerHTML = '\x3Cdiv class="hlda-empty"\x3ELoading…\x3C/div\x3E';
         try {
-            var resp = await fetch(API_BASE + '/jobs/?states=' + tab + '&limit=20&token=' + TOKEN);
+            var resp = await fetch(API_BASE + '/jobs/?states=' + tab + '&limit=20', authOptions());
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             var data = await resp.json();
             var jobs = data.jobs || data;
@@ -1872,7 +1874,7 @@
 
     async function runJob(id) {
         try {
-            var resp = await fetch(API_BASE + '/jobs/' + id + '/run?token=' + TOKEN, { method: 'POST' });
+            var resp = await fetch(API_BASE + '/jobs/' + id + '/run', authOptions({ method: 'POST' }));
             if (!resp.ok) {
                 var detail = 'HTTP ' + resp.status;
                 try {
@@ -1902,7 +1904,7 @@
         updateModalViewportHeight();
         modal.classList.add('active');
         try {
-            var resp = await fetch(API_BASE + '/jobs/' + jobId + '?token=' + TOKEN);
+            var resp = await fetch(API_BASE + '/jobs/' + jobId, authOptions());
             if (!resp.ok) {
                 var detail = 'HTTP ' + resp.status;
                 try {
@@ -1925,7 +1927,7 @@
         updateModalViewportHeight();
         modal.classList.add('active');
         try {
-            var r=await fetch(API_BASE + '/jobs/' + jobId + '/log?token=' + TOKEN);
+            var r=await fetch(API_BASE + '/jobs/' + jobId + '/log', authOptions());
             if (!r.ok) throw new Error('HTTP '+r.status);
             var d=await r.json();
             body.textContent = (d.log||d.lines||[]).join('\n') || 'No log entries.';
@@ -1939,11 +1941,11 @@
 
     async function cancelJob(id) {
         try {
-            var resp = await fetch(API_BASE + '/jobs/cancel?token=' + TOKEN, {
+            var resp = await fetch(API_BASE + '/jobs/cancel', authOptions({
                 method:'POST',
                 headers:{'Content-Type':'application/json'},
                 body: JSON.stringify({ job_id: id, reason: 'user cancel' })
-            });
+            }));
             if (!resp.ok) {
                 var detail = 'HTTP ' + resp.status;
                 try {
@@ -1963,15 +1965,15 @@
         }
     }
     async function deleteJob(id) {
-        try { await fetch(API_BASE + '/jobs/' + id + '?token=' + TOKEN, {method:'DELETE'}); } catch(e) {}
+        try { await fetch(API_BASE + '/jobs/' + id, authOptions({method:'DELETE'})); } catch(e) {}
         ['dl','build'].forEach(function(ns) { if(currentTab[ns]!=='running') loadHistoryTab(ns, currentTab[ns]); });
     }
     async function retryJob(id) {
-        try { await fetch(API_BASE + '/jobs/' + id + '/retry?token=' + TOKEN, {method:'POST'}); } catch(e) {}
+        try { await fetch(API_BASE + '/jobs/' + id + '/retry', authOptions({method:'POST'})); } catch(e) {}
         ['dl','build'].forEach(function(ns) { if(currentTab[ns]==='failed') loadHistoryTab(ns,'failed'); });
     }
     async function requeueJob(id) {
-        try { await fetch(API_BASE + '/jobs/' + id + '/requeue?token=' + TOKEN, {method:'POST'}); } catch(e) {}
+        try { await fetch(API_BASE + '/jobs/' + id + '/requeue', authOptions({method:'POST'})); } catch(e) {}
         ['dl','build'].forEach(function(ns) { if(currentTab[ns]==='done') loadHistoryTab(ns,'done'); });
     }
 

@@ -2459,7 +2459,7 @@ initMetricTooltipHandlers();
   function _ensureTopicCached(idx, cb) {
     if (_topicCache[idx] !== undefined) { cb(_topicCache[idx]); return; }
     var t = helpTopics[idx]; if (!t) { cb(''); return; }
-    fetch(docsBase + '/api/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+    fetch(docsBase + '/api/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function(r) { return r.json(); })
       .then(function(d) { _topicCache[idx] = mdToHtml(d.content || ''); cb(_topicCache[idx]); })
       .catch(function() { _topicCache[idx] = ''; cb(''); });
@@ -2527,14 +2527,14 @@ initMetricTooltipHandlers();
     var t = helpTopics[idx]; if (!t) return;
     _rawHtml = null; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = '';
     helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/api/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+    fetch(docsBase + '/api/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function(r) { return r.json(); })
       .then(function(d) { _rawHtml = mdToHtml(d.content || ''); _topicCache[idx] = _rawHtml; helpContent.innerHTML = _rawHtml; helpContent.scrollTop = 0; var st = helpSearch.value.trim(); if (st) _applySearch(st); })
       .catch(function() { helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>'; });
   }
   function loadHelpIndex(keyword) {
     helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/api/docs/index?lang=' + helpLang + '&token=' + TOKEN)
+    fetch(docsBase + '/api/docs/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         helpTopics = data || []; renderToc();
@@ -2579,7 +2579,7 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/shared_help_overlay.js?v=4"></script>
+<script src="/app/js/shared_help_overlay.js?v=6"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <script>
 document.addEventListener('click', handleCpuHistoryInteraction, true);

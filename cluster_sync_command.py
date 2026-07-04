@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import sys
 import uuid
 from datetime import datetime
@@ -494,6 +495,7 @@ def _materialize_v7_configs(cluster_root: Path, *, write: bool) -> dict[str, Any
         raise ClusterSyncCommandError("materialization blocked by missing or invalid blobs")
 
     written: list[dict[str, Any]] = []
+    deleted: list[dict[str, Any]] = []
     for item in plan.get("items") or []:
         if not isinstance(item, dict) or item.get("action") not in {"add", "update"} or item.get("status") != "ready":
             continue
@@ -510,18 +512,44 @@ def _materialize_v7_configs(cluster_root: Path, *, write: bool) -> dict[str, Any
             _atomic_write_bytes(run_root / instance / filename, raw, mode=0o644)
             files_written += 1
         written.append({"instance": instance, "files": files_written})
+    for item in plan.get("items") or []:
+        if not isinstance(item, dict) or item.get("action") != "delete" or item.get("status") != "ready":
+            continue
+        instance = str(item.get("instance") or "")
+        _validate_relative_name(instance, "instance")
+        target = run_root / instance
+        if not target.is_dir():
+            continue
+        backup_path = _backup_and_delete_tombstoned_v7_dir(Path(cluster_root), target, instance)
+        deleted.append({"instance": instance, "backup": str(backup_path)})
 
     counts = dict(plan.get("counts") or {})
     counts["written_instances"] = len(written)
     counts["written_files"] = sum(int(item.get("files") or 0) for item in written)
+    counts["deleted_instances"] = len(deleted)
     plan.update({
         "ok": True,
         "read_only": False,
         "counts": counts,
         "written": written,
-        "message": "V7 config files were materialized. No files were deleted and no bots were started or stopped.",
+        "deleted": deleted,
+        "message": "V7 config files were materialized. Tombstoned local config directories were backed up and removed. No bots were started or stopped.",
     })
     return plan
+
+
+def _backup_and_delete_tombstoned_v7_dir(cluster_root: Path, target: Path, instance: str) -> Path:
+    """Back up then remove a local run_v7 directory covered by a Cluster tombstone."""
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    backup_root = Path(cluster_root).parent / "backup" / "v7" / instance
+    backup_root.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_root / f"cluster_tombstone_{timestamp}"
+    if backup_path.exists():
+        backup_path = backup_root / f"cluster_tombstone_{timestamp}_{uuid.uuid4().hex[:8]}"
+    shutil.copytree(target, backup_path)
+    shutil.rmtree(target)
+    return backup_path
 
 
 def _repair_local_v7_config_blobs(
@@ -685,11 +713,13 @@ def _build_materialize_v7_plan(
         "add": 0,
         "update": 0,
         "skip": 0,
+        "delete": 0,
         "not_assigned": 0,
         "conflicted": 0,
         "tombstoned": 0,
         "error": 0,
         "files_to_write": 0,
+        "dirs_to_delete": 0,
     }
     items: list[dict[str, Any]] = []
 
@@ -735,7 +765,22 @@ def _build_materialize_v7_plan(
             "version": str(item.get("version") or ""),
             "files": [],
         }
-        counts["skip"] += 1
+        try:
+            _validate_relative_name(str(name), "instance")
+            if (run_root / str(name)).is_dir():
+                row.update({
+                    "action": "delete",
+                    "status": "ready",
+                    "reason": "local config directory is tombstoned and will be backed up before removal",
+                    "path": str(run_root / str(name)),
+                })
+                counts["delete"] += 1
+                counts["dirs_to_delete"] += 1
+            else:
+                counts["skip"] += 1
+        except Exception as exc:
+            row.update({"action": "skip", "status": "error", "reason": str(exc)})
+            counts["error"] += 1
         counts["tombstoned"] += 1
         items.append(row)
 
@@ -746,8 +791,8 @@ def _build_materialize_v7_plan(
         "run_v7_root": str(run_root),
         "counts": counts,
         "items": items,
-        "can_apply": counts["error"] == 0 and (counts["add"] + counts["update"]) > 0,
-        "message": "Preview only. Apply writes V7 JSON configs from config blobs without deleting files or starting/stopping bots.",
+        "can_apply": counts["error"] == 0 and (counts["add"] + counts["update"] + counts["delete"]) > 0,
+        "message": "Preview only. Apply writes V7 JSON configs from config blobs and removes backed-up local tombstone directories without starting/stopping bots.",
     }
 
 

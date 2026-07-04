@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui — V7 Backtest</title>
-<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<script src="/app/plotly.min.js?v=1"></script>
 <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
@@ -8872,7 +8872,7 @@ window.PBGUI_NAV_CONFIG = {
 })();
 </script>
 <script src="/app/js/log_viewer_panel.js?v=24"></script>
-<script src="/app/js/shared_help_overlay.js?v=4"></script>
+<script src="/app/js/shared_help_overlay.js?v=6"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 <!-- ── Sidebar resize ──────────────────────────── -->
@@ -8964,7 +8964,7 @@ window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize
     if (_topicCache[idx] !== undefined) { cb(_topicCache[idx]); return; }
     var t = helpTopics[idx];
     if (!t) { cb(''); return; }
-    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function(r) { return r.json(); })
       .then(function(d) { _topicCache[idx] = mdToHtml(d.content || ''); cb(_topicCache[idx]); })
       .catch(function() { _topicCache[idx] = ''; cb(''); });
@@ -9025,7 +9025,7 @@ window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize
 
   function loadHelpIndex(keyword) {
     helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/docs/index?lang=' + helpLang + '&token=' + TOKEN)
+    fetch(docsBase + '/docs/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         helpTopics = data || [];
@@ -9066,7 +9066,7 @@ window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize
     if (!t) return;
     _rawHtml = null; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = '';
     helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function(r) { return r.json(); })
       .then(function(d) {
         _rawHtml = mdToHtml(d.content || '');

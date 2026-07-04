@@ -8,7 +8,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PBGui Dashboard</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
 <style>
 :root {
     --fs-xs: 11px;
@@ -1377,9 +1376,9 @@ html, body {
         if (inOl) { html += '</ol>'; inOl = false; }
       }
       function inlineFormat(t) {
-        // :material/icon_name: → Material Symbols icon
+        // :material/icon_name: → compact local text fallback, no external icon font.
         t = t.replace(/:material\/([\w_]+):/g, function (_, name) {
-          return '<span class="material-symbols-outlined" style="font-size:1em;vertical-align:-0.15em;line-height:1">' + name + '</span>';
+          return '<span title="' + name + '" style="font-size:.9em;vertical-align:.02em;line-height:1">[' + name.replace(/_/g, ' ') + ']</span>';
         });
         // code (inline) — before bold/italic
         t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
@@ -1433,7 +1432,7 @@ html, body {
 
     function loadHelpIndex() {
       helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-      fetch(API_BASE + '/docs/index?lang=' + helpLang + '&token=' + TOKEN)
+      fetch(API_BASE + '/docs/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
         .then(function (r) { return r.json(); })
         .then(function (data) {
           helpTopics = data || [];
@@ -1476,7 +1475,7 @@ html, body {
       var t = helpTopics[idx];
       if (!t) return;
       helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-      fetch(API_BASE + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+      fetch(API_BASE + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
         .then(function (r) { return r.json(); })
         .then(function (d) { helpContent.innerHTML = mdToHtml(d.content || ''); helpContent.scrollTop = 0; })
         .catch(function () { helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>'; });
@@ -1558,7 +1557,7 @@ html, body {
     serial:   _NAV_SERIAL
   };
 </script>
-<script src="/app/js/shared_help_overlay.js?v=4"></script>
+<script src="/app/js/shared_help_overlay.js?v=6"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

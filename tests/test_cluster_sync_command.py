@@ -475,6 +475,28 @@ def test_materialize_v7_preview_and_apply_master_writes_all_config_blobs(tmp_pat
     assert after["counts"]["skip"] >= 1
 
 
+def test_materialize_v7_deletes_local_tombstoned_config_with_backup(tmp_path: Path) -> None:
+    """materialize-v7 removes stale local run_v7 dirs covered by tombstones."""
+
+    root = _init_cluster(tmp_path)
+    stale_dir = root.parent / "run_v7" / "deleted_inst"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / "config.json").write_text('{"pbgui":{"version":1}}', encoding="utf-8")
+    append_operation(root, "DELETE_INSTANCE", {"instance": "deleted_inst", "version": "1"}, created_at=104)
+
+    preview = run_command(root, NODE_B, "materialize-v7-preview")
+    result = run_command(root, NODE_B, "materialize-v7")
+
+    assert preview["can_apply"] is True
+    assert preview["counts"]["delete"] == 1
+    assert preview["counts"]["dirs_to_delete"] == 1
+    assert result["counts"]["deleted_instances"] == 1
+    assert not stale_dir.exists()
+    backup = Path(result["deleted"][0]["backup"])
+    assert backup.name.startswith("cluster_tombstone_")
+    assert (backup / "config.json").read_text(encoding="utf-8") == '{"pbgui":{"version":1}}'
+
+
 def test_materialize_v7_vps_writes_only_assigned_config_blobs(tmp_path: Path) -> None:
     """VPS nodes materialize only their assigned V7 configs."""
 

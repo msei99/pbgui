@@ -11975,7 +11975,7 @@ init().catch(handleError);
     if (_topicCache[idx] !== undefined) { callback(_topicCache[idx]); return; }
     var topic = helpTopics[idx];
     if (!topic) { callback(''); return; }
-    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function(response) { return response.json(); })
       .then(function(data) {
         _topicCache[idx] = mdToHtml(data.content || '');
@@ -12083,7 +12083,7 @@ init().catch(handleError);
     _sIdx = -1;
     helpSearchCount.textContent = '';
     helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang + '&token=' + TOKEN)
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function(response) { return response.json(); })
       .then(function(data) {
         _rawHtml = mdToHtml(data.content || '');
@@ -12100,7 +12100,7 @@ init().catch(handleError);
 
   function loadHelpIndex(keyword) {
     helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/docs/index?lang=' + helpLang + '&token=' + TOKEN)
+    fetch(docsBase + '/docs/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
       .then(function(response) { return response.json(); })
       .then(function(data) {
         helpTopics = data || [];
@@ -12225,7 +12225,7 @@ window.PBGUI_NAV_CONFIG = {
   serial: PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/shared_help_overlay.js?v=4"></script>
+<script src="/app/js/shared_help_overlay.js?v=6"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

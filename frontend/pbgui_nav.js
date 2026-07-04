@@ -34,6 +34,14 @@
     };
   }
 
+  function authOptions(token, options) {
+    var opts = Object.assign({}, options || {});
+    var headers = Object.assign({}, opts.headers || {});
+    if (token) headers.Authorization = 'Bearer ' + token;
+    opts.headers = headers;
+    return opts;
+  }
+
   /* ════════════════════════════════════
      NAV STRUCTURE
      ════════════════════════════════════ */
@@ -693,7 +701,7 @@
       if (m) apiOrigin = m[1];
     }
     if (!apiOrigin) apiOrigin = window.location.origin;
-    fetch(apiOrigin + '/api/vps/alerts?token=' + encodeURIComponent(c.token), { cache: 'no-store' })
+    fetch(apiOrigin + '/api/vps/alerts', authOptions(c.token, { cache: 'no-store' }))
       .then(function (resp) {
         if (!resp.ok) throw new Error('alerts failed');
         return resp.json();
@@ -720,11 +728,11 @@
       if (m) apiOrigin = m[1];
     }
     if (!apiOrigin) apiOrigin = window.location.origin;
-    fetch(apiOrigin + '/api/vps/alerts/ack?token=' + encodeURIComponent(c.token || ''), {
+    fetch(apiOrigin + '/api/vps/alerts/ack', authOptions(c.token, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: alertId })
-    })
+    }))
       .then(function (resp) {
         if (!resp.ok) throw new Error('ack failed');
         return resp.json();
@@ -745,7 +753,7 @@
       if (m) apiOrigin = m[1];
     }
     if (!apiOrigin) apiOrigin = window.location.origin;
-    fetch(apiOrigin + '/api/vps/alerts/ack-all?token=' + encodeURIComponent(c.token || ''), { method: 'POST' })
+    fetch(apiOrigin + '/api/vps/alerts/ack-all', authOptions(c.token, { method: 'POST' }))
       .then(function (resp) {
         if (!resp.ok) throw new Error('ack-all failed');
         return resp.json();
@@ -1345,7 +1353,7 @@
 
   function fetchRestartStatus(token, apiOrigin) {
     if (!token || !apiOrigin) return;
-    fetch(apiOrigin + '/api/server-status?token=' + encodeURIComponent(token), { cache: 'no-store' })
+    fetch(apiOrigin + '/api/server-status', authOptions(token, { cache: 'no-store' }))
       .then(function (resp) {
         if (!resp.ok) throw new Error('server-status failed');
         return resp.json();

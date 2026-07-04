@@ -1858,7 +1858,7 @@
       var topic = helpTopics[index];
       if (!topic) return;
       helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-      fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang + '&token=' + encodeURIComponent(TOKEN))
+      fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
         .then(function (response) { return response.json(); })
         .then(function (payload) {
           helpContent.innerHTML = mdToHtml(payload.content || '');
@@ -1872,7 +1872,7 @@
     function loadHelpIndex(keyword) {
       var helpTocList = document.getElementById('help-toc-list');
       helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-      fetch('/api/help/index?lang=' + helpLang + '&token=' + encodeURIComponent(TOKEN))
+      fetch('/api/help/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
         .then(function (response) { return response.json(); })
         .then(function (data) {
           helpTopics = data || [];
@@ -3178,7 +3178,7 @@
       serial: PBGUI_SERIAL
     };
   </script>
-  <script src="/app/js/shared_help_overlay.js?v=4"></script>
+  <script src="/app/js/shared_help_overlay.js?v=6"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

@@ -1359,8 +1359,7 @@
         }
 
         function apiPost(path, body) {
-            var url = (opts.apiBase || '') + '/dashboard' + path
-                + '?token=' + encodeURIComponent(opts.token || '');
+            var url = (opts.apiBase || '') + '/dashboard' + path;
             fetch(url, {
                 method: 'POST',
                 headers: {
@@ -1384,8 +1383,7 @@
         function loadBackups() {
             backupDiv.style.display = 'block';
             backupDiv.innerHTML = '<span style="color:#94a3b8;font-size:0.73rem;">Loading backups\u2026</span>';
-            var url = (opts.apiBase || '') + '/dashboard/income/backups'
-                + '?token=' + encodeURIComponent(opts.token || '');
+            var url = (opts.apiBase || '') + '/dashboard/income/backups';
             fetch(url, { headers: { 'Authorization': 'Bearer ' + (opts.token || '') } })
             .then(function (r) { return r.json(); })
             .then(function (d) {
@@ -1412,8 +1410,7 @@
                 restoreBtn.textContent = 'Restore';
                 restoreBtn.addEventListener('click', function () {
                     showConfirm('Restore database from ' + sel.options[sel.selectedIndex].textContent + '?', function () {
-                        var url2 = (opts.apiBase || '') + '/dashboard/income/restore'
-                            + '?token=' + encodeURIComponent(opts.token || '');
+                        var url2 = (opts.apiBase || '') + '/dashboard/income/restore';
                         fetch(url2, {
                             method: 'POST',
                             headers: {
@@ -2345,7 +2342,7 @@
         function fetchFreshClosePrice(row, state, tr, amountInput, quoteInput) {
             if (!shouldLoadFreshClosePrice(row, state)) return;
             state.closePriceLoading = true;
-            fetch((opts.apiBase || '') + '/dashboard/positions/close_price?token=' + encodeURIComponent(opts.token || '') + '&user=' + encodeURIComponent(row.user || '') + '&symbol=' + encodeURIComponent(row.symbol || '') + '&side=' + encodeURIComponent(row.side || ''), {
+            fetch((opts.apiBase || '') + '/dashboard/positions/close_price?user=' + encodeURIComponent(row.user || '') + '&symbol=' + encodeURIComponent(row.symbol || '') + '&side=' + encodeURIComponent(row.side || ''), {
                 headers: { 'Authorization': 'Bearer ' + (opts.token || '') }
             })
             .then(function (resp) {
@@ -2444,7 +2441,7 @@
             manageState.actionInFlight = true;
             updateManageLiveRows();
             setStatus(statusEl, 'Working...', '');
-            fetch((opts.apiBase || '') + '/dashboard/positions/manage?token=' + encodeURIComponent(opts.token || ''), {
+            fetch((opts.apiBase || '') + '/dashboard/positions/manage', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

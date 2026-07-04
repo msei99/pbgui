@@ -17,7 +17,9 @@ pbgui.code-workspace
 test_results/
 test-results/
 .vscode/
-scripts/
+scripts/*
+!scripts/
+!scripts/probe_bybit_data.py
 !setup/installer/scripts/
 !setup/installer/scripts/remote_master_bootstrap.sh
 pytest.ini

@@ -4,8 +4,8 @@
   <meta charset='utf-8'>
   <meta name='viewport' content='width=device-width, initial-scale=1.0'>
   <title>VPS Manager - PBGui</title>
-  <script src='https://cdn.jsdelivr.net/npm/marked/marked.min.js'></script>
-  <script src='https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js'></script>
+  <script src='/app/vendor/marked.min.js?v=1'></script>
+  <script src='/app/vendor/purify.min.js?v=1'></script>
   <style>
     :root {
       --fs-xs: 11px;
@@ -5678,10 +5678,12 @@
     }
 
     async function apiKeysFetch(path, options) {
-      const response = await fetch(API_BASE.replace('/api/vps-manager', '/api/api-keys') + path + '?token=' + encodeURIComponent(TOKEN), Object.assign({
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin'
-      }, options || {}));
+      const opts = Object.assign({ credentials: 'same-origin' }, options || {});
+      opts.headers = Object.assign({
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + TOKEN
+      }, (options && options.headers) || {});
+      const response = await fetch(API_BASE.replace('/api/vps-manager', '/api/api-keys') + path, opts);
       const data = await response.json().catch(function () { return {}; });
       if (!response.ok) throw new Error(data && data.detail ? data.detail : 'Request failed');
       return data;
@@ -6309,7 +6311,7 @@
           return;
         }
         helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang + '&token=' + encodeURIComponent(TOKEN))
+        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
@@ -6327,7 +6329,7 @@
 
       function loadHelpIndex(keyword) {
         helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch('/api/help/index?lang=' + helpLang + '&token=' + encodeURIComponent(TOKEN))
+        fetch('/api/help/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
@@ -6511,7 +6513,7 @@
     }
 
     function vpsManagerPost(path, payload) {
-      return fetch(API_BASE + path + '?token=' + encodeURIComponent(TOKEN), {
+      return fetch(API_BASE + path, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -6531,8 +6533,8 @@
 
     function vpsManagerGet(path, params) {
       const query = new URLSearchParams(params || {});
-      query.set('token', TOKEN);
-      return fetch(API_BASE + path + '?' + query.toString(), {
+      const qs = query.toString();
+      return fetch(API_BASE + path + (qs ? '?' + qs : ''), {
         headers: { 'Authorization': 'Bearer ' + TOKEN }
       }).then(function (response) {
         return response.json().catch(function () { return {}; }).then(function (data) {
@@ -6556,7 +6558,7 @@
     }
 
     function fetchVpsDetail(hostname) {
-      return fetch(API_BASE + '/detail/' + encodeURIComponent(hostname) + '?token=' + encodeURIComponent(TOKEN))
+      return fetch(API_BASE + '/detail/' + encodeURIComponent(hostname), { headers: { 'Authorization': 'Bearer ' + TOKEN } })
         .then(function (r) {
           if (!r.ok) {
             if (r.status === 404 && store.hostname === hostname) {
@@ -6588,7 +6590,7 @@
     }
 
     function fetchMasterDetail() {
-      return fetch(API_BASE + '/detail-master?token=' + encodeURIComponent(TOKEN))
+      return fetch(API_BASE + '/detail-master', { headers: { 'Authorization': 'Bearer ' + TOKEN } })
         .then(function (r) {
           if (!r.ok) throw new Error('master detail fetch failed');
           return r.json();
@@ -10858,7 +10860,7 @@
       setCpuHistoryLoading(host, bot, metric);
       showCpuHistoryOverlay();
       prepareCpuHistoryWindow(980, 560);
-      fetch(API_BASE + '/metric-history/' + encodeURIComponent(host) + '?token=' + encodeURIComponent(TOKEN) + '&metric=' + encodeURIComponent(requestMetric) + (bot ? '&bot_name=' + encodeURIComponent(bot) : ''))
+      fetch(API_BASE + '/metric-history/' + encodeURIComponent(host) + '?metric=' + encodeURIComponent(requestMetric) + (bot ? '&bot_name=' + encodeURIComponent(bot) : ''), { headers: { 'Authorization': 'Bearer ' + TOKEN } })
         .then(function (response) {
           if (!response.ok) throw new Error('metric history fetch failed');
           return response.json();
@@ -12052,7 +12054,7 @@
       restoreViewFromHash();
     });
   </script>
-  <script src="/app/js/shared_help_overlay.js?v=4"></script>
+  <script src="/app/js/shared_help_overlay.js?v=6"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>
 </html>

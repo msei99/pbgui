@@ -132,6 +132,28 @@ def _systemd_user_env() -> dict[str, str]:
     return env
 
 
+def _configured_cors() -> tuple[list[str], bool]:
+    """Return configured CORS origins and whether credentials may be sent."""
+    raw = str(load_ini("api_server", "cors_origins") or "").strip()
+    if not raw:
+        return [], False
+    origins = [item.strip() for item in raw.replace("\n", ",").split(",") if item.strip()]
+    if "*" in origins:
+        return ["*"], False
+    return origins, True
+
+
+def _request_token(request: Request, token: str = "") -> str:
+    """Extract an API token from query param or Authorization header."""
+    value = str(token or "").strip()
+    if value:
+        return value
+    authorization = request.headers.get("Authorization", "")
+    if authorization.startswith("Bearer "):
+        return authorization.replace("Bearer ", "", 1).strip()
+    return ""
+
+
 def _restart_current_api_systemd_unit() -> bool:
     """Restart pbgui-api.service when systemd owns the current API process."""
     env = _systemd_user_env()
@@ -461,10 +483,11 @@ app = FastAPI(
     ],
 )
 
+_cors_origins, _cors_allow_credentials = _configured_cors()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -905,7 +928,7 @@ async def nav_request(request: Request):
 # ── Docs endpoints ────────────────────────────────────────────
 
 @app.get("/api/docs/index")
-async def docs_index(lang: str = "EN", token: str = ""):
+async def docs_index(request: Request, lang: str = "EN", token: str = ""):
     """Return the list of help topics for the given language.
 
     Returns ``[{title: str, file: str}, ...]`` where ``file`` is the bare
@@ -913,7 +936,7 @@ async def docs_index(lang: str = "EN", token: str = ""):
     heading or the filename.
     """
     from api.auth import validate_token
-    if not validate_token(token):
+    if not validate_token(_request_token(request, token)):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     ln = str(lang or "EN").strip().upper()
@@ -938,14 +961,14 @@ async def docs_index(lang: str = "EN", token: str = ""):
 
 
 @app.get("/api/docs/content")
-async def docs_content(file: str, lang: str = "EN", token: str = ""):
+async def docs_content(request: Request, file: str, lang: str = "EN", token: str = ""):
     """Return the raw Markdown text for a help file.
 
     ``file`` must be a bare filename (no path separators), ``*.md`` only,
     and must exist in the appropriate ``docs/help[_de]/`` directory.
     """
     from api.auth import validate_token
-    if not validate_token(token):
+    if not validate_token(_request_token(request, token)):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     # Reject path traversal and non-markdown files
@@ -976,7 +999,7 @@ async def docs_content(file: str, lang: str = "EN", token: str = ""):
 # ── Help endpoints (FastAPI page, includes Strategy Explorer) ────────────────────────
 
 @app.get("/api/help/index")
-async def help_index(lang: str = "EN", token: str = ""):
+async def help_index(request: Request, lang: str = "EN", token: str = ""):
     """Return the list of help topics for the given language.
     
     Includes both general help docs and Strategy Explorer docs.
@@ -984,7 +1007,7 @@ async def help_index(lang: str = "EN", token: str = ""):
     is either "Help" or "Strategy Explorer".
     """
     from api.auth import validate_token
-    if not validate_token(token):
+    if not validate_token(_request_token(request, token)):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     ln = str(lang or "EN").strip().upper()
@@ -1017,24 +1040,24 @@ async def help_index(lang: str = "EN", token: str = ""):
 
 
 @app.get("/api/help/meta")
-async def help_meta(token: str = ""):
+async def help_meta(request: Request, token: str = ""):
     """Return PBGui version metadata for the shared Help page."""
     from api.auth import validate_token
-    if not validate_token(token):
+    if not validate_token(_request_token(request, token)):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     return {"version": PBGUI_VERSION, "serial": PBGUI_SERIAL}
 
 
 @app.get("/api/help/content")
-async def help_content(file: str, lang: str = "EN", token: str = ""):
+async def help_content(request: Request, file: str, lang: str = "EN", token: str = ""):
     """Return the raw Markdown text for a help file.
     
     Automatically determines if file is in help or strategy_explorer directory.
     ``file`` must be a bare filename (no path separators), ``*.md`` only.
     """
     from api.auth import validate_token
-    if not validate_token(token):
+    if not validate_token(_request_token(request, token)):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     # Reject path traversal and non-markdown files

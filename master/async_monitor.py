@@ -1375,7 +1375,7 @@ while True:
 "'''
 
 INSTANCE_COLLECT_SCRIPT = r'''python3 -u -c "
-import hashlib, json, os, re, subprocess, time
+import hashlib, json, os, re, subprocess, sys, time
 from datetime import datetime, timezone
 
 HOME = os.path.expanduser('~')
@@ -1392,6 +1392,21 @@ def _home_path(raw, default):
 
 PBGDIR = _home_path(os.environ.get('PBGUI_PBGDIR'), 'software/pbgui')
 PB7DIR = _home_path(os.environ.get('PBGUI_PB7DIR'), 'software/pb7')
+SERVICE = 'VPSMonitor'
+
+def _log(service, msg, level='WARNING'):
+    try:
+        ts = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+        log_dir = os.path.join(PBGDIR, 'data', 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, 'VPSMonitor.log'), 'a', encoding='utf-8') as f:
+            f.write(f'{ts} [{service}] [{level}] {msg}\n')
+    except Exception:
+        try:
+            print(str(msg), file=sys.stderr)
+        except Exception:
+            pass
+
 TODAY_START = int(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
 YESTERDAY_START = TODAY_START - 86400
 TODAY = datetime.fromtimestamp(TODAY_START, timezone.utc).strftime('%Y-%m-%d')
@@ -1652,7 +1667,8 @@ def _read_pb7_file(fp, mode, today_start, yesterday_start, bc=None, lines_out=No
                 if mode == 'dump' and not in_target:
                     continue
                 _process_pb7_line(line, mode, bc=bc, lines_out=lines_out, last_day=last_day)
-    except Exception: pass
+    except Exception as exc:
+        _log(SERVICE, f'[monitor-helper] Failed to read PB7 log file {fp}: {exc}', level='WARNING')
     return earliest
 
 def _read_err_file(fp, mode, today_start, yesterday_start, bc=None):
@@ -1673,7 +1689,8 @@ def _read_err_file(fp, mode, today_start, yesterday_start, bc=None):
                 if 'Traceback' in line and last_day:
                     if mode == 'count' and bc is not None:
                         if last_day == 'today': bc['tt'] += 1
-    except Exception: pass
+    except Exception as exc:
+        _log(SERVICE, f'[monitor-helper] Failed to read error log file {fp}: {exc}', level='WARNING')
 
 # cache from master
 EXPECTED_CACHE_VERSION = int(os.environ.get('PBGUI_CACHE_VERSION', '0') or 0)
@@ -1681,8 +1698,8 @@ cache_raw = os.environ.get('PBGUI_CACHE', '{}')
 host_cache = {}
 try:
     host_cache = json.loads(cache_raw)
-except Exception:
-    pass
+except Exception as exc:
+    _log(SERVICE, f'[monitor-cache] Failed to parse PBGUI_CACHE: {exc}', level='WARNING')
 if not isinstance(host_cache, dict):
     host_cache = {}
 host_cache_version = int(host_cache.get('_version', 0) or 0) if isinstance(host_cache, dict) else 0
@@ -1701,8 +1718,8 @@ try:
                 d = os.path.dirname(part)
                 running[os.path.basename(d)] = d
                 break
-except Exception:
-    pass
+except Exception as exc:
+    _log(SERVICE, f'[monitor-process] Failed to inspect running bot processes: {exc}', level='WARNING')
 
 # ── dump mode: return matching log lines for bot-log popup ──
 dump_mode = os.environ.get('PBGUI_DUMP')
@@ -1734,7 +1751,8 @@ if dump_mode:
                 if os.path.islink(fp): continue
                 if log_real and os.path.realpath(fp) == log_real: continue
                 pb7_old_files.append(fp)
-        except Exception: pass
+        except Exception as exc:
+            _log(SERVICE, f'[monitor-dump] Failed to collect old PB7 logs for {dump_bot}: {exc}', level='WARNING')
 
         today_start = TODAY_START
         yesterday_start = YESTERDAY_START
@@ -1786,7 +1804,8 @@ if dump_mode:
                             elif entry_lines and 'Traceback' not in line:
                                 entry_lines.append(line)
                     flush_tb_entry()
-                except Exception: pass
+                except Exception as exc:
+                    _log(SERVICE, f'[monitor-dump] Failed to read traceback log {fp}: {exc}', level='WARNING')
             # remove trailing separator
             while lines_out and lines_out[-1] == '-----':
                 lines_out.pop()
@@ -1839,8 +1858,8 @@ if rebuild_mode:
                 if os.path.islink(fp): continue
                 if log_real and os.path.realpath(fp) == log_real: continue
                 pb7_old_files.append(fp)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log(SERVICE, f'[monitor-rebuild] Failed to collect old PB7 logs for {rebuild_bot}: {exc}', level='WARNING')
 
         files_by_metric = {
             'errors': list(pb7_old_files) + ([pb7_log] if os.path.isfile(pb7_log) else []),
@@ -1853,8 +1872,8 @@ if rebuild_mode:
                 try:
                     with open(fp, 'r', encoding='utf-8', errors='ignore') as f:
                         lines.extend(f.read().splitlines())
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log(SERVICE, f'[monitor-rebuild] Failed to read {metric} log {fp}: {exc}', level='WARNING')
             buckets = _count_hourly_occurrences(lines, needles[metric])
             result[metric] = {
                 str(hour): int(buckets.get(hour, 0))
@@ -1886,8 +1905,8 @@ if rebuild_pnl_mode:
                 if log_real and os.path.realpath(fp) == log_real:
                     continue
                 pb7_old_files.append(fp)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log(SERVICE, f'[monitor-pnl] Failed to collect old PB7 logs for {rebuild_bot}: {exc}', level='WARNING')
         files = list(pb7_old_files) + ([pb7_log] if os.path.isfile(pb7_log) else [])
         days = {}
         last_fill_ts = 0
@@ -1909,8 +1928,8 @@ if rebuild_pnl_mode:
                         entry['pnl'] += float(fill[0])
                         entry['fills'] += int(fill[1])
                         last_fill_ts = max(last_fill_ts, ts_val)
-            except Exception:
-                pass
+            except Exception as exc:
+                _log(SERVICE, f'[monitor-pnl] Failed to read PB7 log {fp}: {exc}', level='WARNING')
         result['days'] = days
         result['last_fill_ts'] = last_fill_ts
     print(json.dumps(result))
@@ -1949,7 +1968,8 @@ try:
                 err_path = os.path.join(cfg_dir, err_name)
                 if os.path.isfile(err_path):
                     bot_logs.setdefault(name, {'errors': [], 'tracebacks': [], 'sidebar': []})['sidebar'].append(f'data/run_v7/{name}/{err_name}')
-except Exception: pass
+except Exception as exc:
+    _log(SERVICE, f'[monitor-sidebar] Failed to collect bot log sidebar files: {exc}', level='WARNING')
 
 for name, cfg_dir in sorted(running.items()):
     # config version + enabled_on + dynamic_ignore
@@ -1961,12 +1981,14 @@ for name, cfg_dir in sorted(running.items()):
             version = pbgui.get('version', 0)
             enabled_on = pbgui.get('enabled_on', 'disabled')
             dynamic_ignore = bool(pbgui.get('dynamic_ignore'))
-        except Exception: pass
+        except Exception as exc:
+            _log(SERVICE, f'[monitor-config] Failed to read config for {name}: {exc}', level='WARNING')
     rv = 0
     rvf = os.path.join(cfg_dir, 'running_version.txt')
     if os.path.isfile(rvf):
         try: rv = int(open(rvf).read().strip())
-        except Exception: pass
+        except Exception as exc:
+            _log(SERVICE, f'[monitor-config] Failed to read running version for {name}: {exc}', level='WARNING')
     gate = _cluster_gate_status(name, cfg_dir, version, cluster_context)
     v7.append({
         'name': name,
@@ -1997,7 +2019,8 @@ for name, cfg_dir in sorted(running.items()):
             try:
                 meta = json.load(open(sf)).get('meta', {})
                 start_ts = float(meta.get('bot_start_ts_ms', 0)) / 1000.0
-            except Exception: pass
+            except Exception as exc:
+                _log(SERVICE, f'[monitor-state] Failed to read start time for {name}: {exc}', level='WARNING')
 
     # per-bot cache
     bc = dict(host_cache.get(name, {}))
@@ -2038,8 +2061,8 @@ for name, cfg_dir in sorted(running.items()):
             if log_real and os.path.realpath(fp) == log_real:
                 continue
             pb7_old_files.append(fp)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log(SERVICE, f'[monitor-logs] Failed to collect old PB7 logs for {name}: {exc}', level='WARNING')
 
     # stderr capture (traceback source, wrapper-timestamped)
     err_log = os.path.join(cfg_dir, 'passivbot_err.log')
@@ -2097,7 +2120,8 @@ for name, cfg_dir in sorted(running.items()):
                 bc['log_off'] = _read_pb7_tail(pb7_log, offset, today_start, yesterday_start, bc)
                 bc['log_fp'] = current_log_fp
                 bc['log_sig'] = current_log_sig
-            except Exception: pass
+            except Exception as exc:
+                _log(SERVICE, f'[monitor-logs] Failed to update PB7 log counters for {name}: {exc}', level='WARNING')
         # incremental read: err_log
         if os.path.isfile(err_log):
             try:
@@ -2114,7 +2138,8 @@ for name, cfg_dir in sorted(running.items()):
                     offset = 0
                 bc['err_off'] = _read_err_tail(err_log, offset, today_start, yesterday_start, bc)
                 bc['err_sig'] = current_err_sig
-            except Exception: pass
+            except Exception as exc:
+                _log(SERVICE, f'[monitor-logs] Failed to update error log counters for {name}: {exc}', level='WARNING')
 
     # build monitor dict
     monitors.append({
@@ -2140,8 +2165,8 @@ try:
         for item in os.listdir(run_v7_root):
             if os.path.isfile(os.path.join(run_v7_root, item, 'config.json')):
                 candidate_names.add(item)
-except Exception:
-    pass
+except Exception as exc:
+    _log(SERVICE, f'[monitor-candidates] Failed to scan run_v7 candidates: {exc}', level='WARNING')
 if cluster_context.get('configured'):
     node_id = str(cluster_context.get('node_id') or '')
     for name, item in (cluster_context.get('instances') or {}).items():
