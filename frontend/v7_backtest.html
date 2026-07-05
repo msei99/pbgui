@@ -1303,6 +1303,10 @@ function loadSettings() {
   }).catch(function() {});
 }
 
+function pbguiMarketDataDefaultCheckedAttr() {
+  return (settings.use_pbgui_market_data === true || String(settings.use_pbgui_market_data).toLowerCase() === 'true') ? ' checked' : '';
+}
+
 function openSettingsModal() {
   var cpuMax = settings.cpu_max || 16;
   var cpu = settings.cpu || 1;
@@ -1764,7 +1768,7 @@ function showInitialBacktestQueueDraftModal(items) {
       '<div style="flex:1;display:flex;flex-direction:column;min-height:60px"><div class="sb-label">Exchanges</div>' +
         '<select id="rbt-exchanges" class="sb-input" multiple style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '</select></div>' +
       '<div style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
-        '<input type="checkbox" id="rbt-pbgui-data" style="width:auto;margin:0">' +
+        '<input type="checkbox" id="rbt-pbgui-data"' + pbguiMarketDataDefaultCheckedAttr() + ' style="width:auto;margin:0">' +
         '<label for="rbt-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data</label>' +
       '</div>' +
     '</div>';
@@ -6793,7 +6797,7 @@ function rebacktestSelected() {
         '<div style="flex:1;display:flex;flex-direction:column;min-height:60px"><div class="sb-label">Exchanges</div>' +
           '<select id="rbt-exchanges" class="sb-input" multiple style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '</select></div>' +
         '<div style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
-          '<input type="checkbox" id="rbt-pbgui-data" style="width:auto;margin:0">' +
+          '<input type="checkbox" id="rbt-pbgui-data"' + pbguiMarketDataDefaultCheckedAttr() + ' style="width:auto;margin:0">' +
           '<label for="rbt-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data</label>' +
         '</div>' +
       '</div>';
@@ -6866,7 +6870,7 @@ function rebacktestSelectedArchive() {
         '\x3Cdiv style="flex:1;display:flex;flex-direction:column;min-height:60px">\x3Cdiv class="sb-label">Exchanges\x3C/div>' +
           '\x3Cselect id="rbt-exchanges" class="sb-input" multiple style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '\x3C/select>\x3C/div>' +
         '\x3Cdiv style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
-          '\x3Cinput type="checkbox" id="rbt-pbgui-data" style="width:auto;margin:0">' +
+          '\x3Cinput type="checkbox" id="rbt-pbgui-data"' + pbguiMarketDataDefaultCheckedAttr() + ' style="width:auto;margin:0">' +
           '\x3Clabel for="rbt-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data\x3C/label>' +
         '\x3C/div>' +
       '\x3C/div>';
@@ -6973,7 +6977,7 @@ function retestReplaceSelectedArchive() {
         '\x3Cdiv style="flex:1;display:flex;flex-direction:column;min-height:60px">\x3Cdiv class="sb-label">Exchanges\x3C/div>' +
           '\x3Cselect id="arr-exchanges" class="sb-input" multiple style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '\x3C/select>\x3C/div>' +
         '\x3Cdiv style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
-          '\x3Cinput type="checkbox" id="arr-pbgui-data" style="width:auto;margin:0">' +
+          '\x3Cinput type="checkbox" id="arr-pbgui-data"' + pbguiMarketDataDefaultCheckedAttr() + ' style="width:auto;margin:0">' +
           '\x3Clabel for="arr-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data\x3C/label>\x3C/div>' +
         '\x3Cdiv style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
           '\x3Cinput type="checkbox" id="arr-skip-liquidated" checked style="width:auto;margin:0">' +
@@ -7069,7 +7073,7 @@ function rebacktestSelectedLegacy() {
         '\x3Cdiv style="flex:1;display:flex;flex-direction:column;min-height:60px">\x3Cdiv class="sb-label">Exchanges\x3C/div>' +
           '\x3Cselect id="rbt-exchanges" class="sb-input" multiple style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '\x3C/select>\x3C/div>' +
         '\x3Cdiv style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
-          '\x3Cinput type="checkbox" id="rbt-pbgui-data" style="width:auto;margin:0">' +
+          '\x3Cinput type="checkbox" id="rbt-pbgui-data"' + pbguiMarketDataDefaultCheckedAttr() + ' style="width:auto;margin:0">' +
           '\x3Clabel for="rbt-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data\x3C/label>' +
         '\x3C/div>' +
       '\x3C/div>';

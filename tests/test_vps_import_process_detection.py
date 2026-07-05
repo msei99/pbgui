@@ -13,7 +13,7 @@ import pytest
 
 import api.v7_instances as v7_instances
 import master.async_monitor as monitor_mod
-from master.async_monitor import INSTANCE_COLLECT_SCRIPT, CpuHistoryStore, VPSMonitor
+from master.async_monitor import INSTANCE_COLLECT_SCRIPT, CpuHistoryStore, VPSMonitor, collect_live_alerts
 from master.async_store import SystemMetrics
 import vps_manager_core as core
 import vps_manager_service as service_mod
@@ -1084,6 +1084,53 @@ def test_optional_service_local_disabled_overrides_stale_remote_config() -> None
     assert monitor._optional_service_expected("manibot90", "PBCoinData") is False
 
 
+def test_optional_pbrun_remote_unconfigured_prevents_restart() -> None:
+    """Remote PBRun=false prevents auto-restarting PBRun on hosts without local bots."""
+
+    monitor = object.__new__(VPSMonitor)
+    monitor.store = SimpleNamespace(host_meta={"manibot01": {"optional_services": {"PBRun": False}}})
+    monitor._local_optional_service_expected = lambda hostname, service_name: None
+
+    assert monitor._optional_service_expected("manibot01", "PBRun") is False
+    assert monitor._disabled_service_check("PBRun")["reason"] == "No local V7 run configs are enabled for this host"
+
+
+def test_optional_pbdata_remote_unconfigured_prevents_restart() -> None:
+    """Remote PBData=false prevents auto-restarting PBData when no users need it."""
+
+    monitor = object.__new__(VPSMonitor)
+    monitor.store = SimpleNamespace(host_meta={"manibot01": {"optional_services": {"PBData": False}}})
+    monitor._local_optional_service_expected = lambda hostname, service_name: None
+
+    assert monitor._optional_service_expected("manibot01", "PBData") is False
+    assert monitor._disabled_service_check("PBData")["reason"] == "No PBData fetch_users or trades_users are configured"
+
+
+def test_auto_heal_skips_disabled_optional_service() -> None:
+    """Auto-heal does not restart services that are explicitly not expected."""
+
+    monitor = object.__new__(VPSMonitor)
+    monitor._auto_restart = True
+    restarted: list[str] = []
+
+    async def fake_restart(hostname: str, service_name: str) -> bool:
+        restarted.append(f"{hostname}:{service_name}")
+        return True
+
+    async def fake_check(hostname: str, svc) -> dict:
+        if svc.name == "PBRun":
+            return monitor._disabled_service_check("PBRun")
+        return {"status": monitor_mod.ServiceStatus.RUNNING.value, "pid": 1, "error": None, "was_restarted": False}
+
+    monitor._check_service = fake_check
+    monitor._restart_service = fake_restart
+
+    result = asyncio.run(monitor._check_and_heal_services(["manibot01"]))
+
+    assert restarted == []
+    assert result["manibot01"]["PBRun"]["status"] == monitor_mod.ServiceStatus.DISABLED.value
+
+
 def test_pbcluster_expected_only_for_sync_enabled_nodes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """PBCluster service alerts are tied to explicit Cluster Sync membership."""
     cluster_dir = tmp_path / "data" / "cluster"
@@ -1515,12 +1562,15 @@ KV\tpython_exists\tyes
 KV\tstart_sh_exists\tno
 KV\tsystemctl_exists\tyes
 KV\tsystemctl_path\t/usr/bin/systemctl
+KV\tpbrun_configured\tno
+KV\tpbdata_configured\tno
 KV\tcoindata_configured\tno
 KV\tsystemd_user_manager\tyes
 KV\tsystemd_user_manager_detail\tactive
 SECTION\tunits\tBEGIN
 pbgui-pbcluster.service\tyes\tenabled\tactive
-pbgui-pbrun.service\tyes\tenabled\tactive
+pbgui-pbrun.service\tyes\tdisabled\tinactive
+pbgui-pbdata.service\tyes\tdisabled\tinactive
 pbgui-pbcoindata.service\tyes\tdisabled\tinactive
 SECTION\tunits\tEND
 SECTION\tcron\tBEGIN
@@ -1545,12 +1595,15 @@ KV\tpython_exists\tyes
 KV\tstart_sh_exists\tno
 KV\tsystemctl_exists\tyes
 KV\tsystemctl_path\t/usr/bin/systemctl
+KV\tpbrun_configured\tyes
+KV\tpbdata_configured\tno
 KV\tcoindata_configured\tno
 KV\tsystemd_user_manager\tyes
 KV\tsystemd_user_manager_detail\tactive
 SECTION\tunits\tBEGIN
 pbgui-pbcluster.service\tno\tnot-found\tinactive
 pbgui-pbrun.service\tyes\tenabled\tactive
+pbgui-pbdata.service\tyes\tdisabled\tinactive
 pbgui-pbcoindata.service\tno\tnot-found\tinactive
 SECTION\tunits\tEND
 SECTION\tcron\tBEGIN
@@ -1752,6 +1805,56 @@ def test_local_master_metrics_are_recorded_in_host_history(monkeypatch: pytest.M
         ("swap", "magicnucpro", 43, True, "peak"),
     ]
     assert all(store.flushes == 1 for store in stores.values())
+
+
+def test_system_cpu_alert_requires_sustained_live_cpu() -> None:
+    """CPU alerts require a continuous over-threshold streak, not only a high 60s average."""
+    config = SimpleNamespace(mem_error_server=128, swap_error_server=128, disk_error_server=128, cpu_error_server=95.0)
+    metrics = {
+        "timestamp": monitor_mod.time.time(),
+        "cpu": 96.4,
+        "cpu_60s": 96.4,
+        "cpu_60s_window": 60.0,
+        "cpu_threshold_duration": 59.0,
+        "mem_total": 1024 * 1024 * 1024,
+        "mem_available": 512 * 1024 * 1024,
+        "swap_total": 2048 * 1024 * 1024,
+        "swap_free": 1024 * 1024 * 1024,
+        "disk_total": 10 * 1024 * 1024 * 1024,
+        "disk_free": 2 * 1024 * 1024 * 1024,
+    }
+
+    assert collect_live_alerts({"manibot50": {"status": "connected"}}, {"manibot50": metrics}, {}, {}, config) == []
+
+    metrics["cpu_threshold_duration"] = 60.0
+    alerts = collect_live_alerts({"manibot50": {"status": "connected"}}, {"manibot50": metrics}, {}, {}, config)
+
+    assert len(alerts) == 1
+    assert alerts[0]["triggered_thresholds"] == ["cpu"]
+    assert "for 60s" in alerts[0]["details"]
+
+
+def test_vps_monitor_tracks_cpu_threshold_streak() -> None:
+    """The monitor resets CPU alert duration as soon as live CPU falls below threshold."""
+    monitor = object.__new__(VPSMonitor)
+    metrics = SystemMetrics(timestamp=100.0, cpu=96.0)
+    monitor.store = SimpleNamespace(system={"manibot50": metrics})
+    config = SimpleNamespace(cpu_error_server=95.0)
+
+    monitor._update_cpu_threshold_state(config, now=100.0)
+    assert metrics.cpu_threshold_since == 100.0
+    assert metrics.cpu_threshold_duration == 0.0
+
+    metrics.timestamp = 160.0
+    monitor._update_cpu_threshold_state(config, now=160.0)
+    assert metrics.cpu_threshold_since == 100.0
+    assert metrics.cpu_threshold_duration == 60.0
+
+    metrics.timestamp = 161.0
+    metrics.cpu = 40.0
+    monitor._update_cpu_threshold_state(config, now=161.0)
+    assert metrics.cpu_threshold_since == 0.0
+    assert metrics.cpu_threshold_duration == 0.0
 
 
 def test_cpu_history_store_keeps_confirmed_sample_for_same_minute(tmp_path: Path) -> None:

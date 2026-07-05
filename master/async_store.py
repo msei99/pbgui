@@ -22,6 +22,8 @@ class SystemMetrics:
     cpu_60s: float = 0.0
     cpu_60s_window: float = 0.0
     cpu_60s_samples: int = 0
+    cpu_threshold_since: float = 0.0
+    cpu_threshold_duration: float = 0.0
     mem_total: int = 0
     mem_available: int = 0
     mem_percent: float = 0.0
@@ -53,6 +55,8 @@ class SystemMetrics:
             cpu_60s=data.get("cpu_60s", 0.0),
             cpu_60s_window=data.get("cpu_60s_window", 0.0),
             cpu_60s_samples=data.get("cpu_60s_samples", 0),
+            cpu_threshold_since=data.get("cpu_threshold_since", 0.0),
+            cpu_threshold_duration=data.get("cpu_threshold_duration", 0.0),
             mem_total=mem[0] if len(mem) > 0 else 0,
             mem_available=mem[1] if len(mem) > 1 else 0,
             mem_percent=mem[2] if len(mem) > 2 else 0.0,
@@ -80,6 +84,8 @@ class SystemMetrics:
             "cpu_60s": self.cpu_60s,
             "cpu_60s_window": self.cpu_60s_window,
             "cpu_60s_samples": self.cpu_60s_samples,
+            "cpu_threshold_since": self.cpu_threshold_since,
+            "cpu_threshold_duration": self.cpu_threshold_duration,
             "mem_total": self.mem_total,
             "mem_available": self.mem_available,
             "mem_percent": self.mem_percent,

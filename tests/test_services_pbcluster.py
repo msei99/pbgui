@@ -95,6 +95,125 @@ def test_restart_service_route_preserves_api_restart_handler(monkeypatch) -> Non
     assert services.restart_service("api-server") == {"ok": True, "message": "Restarting..."}
 
 
+def test_migration_status_requires_start_sh_cleanup(monkeypatch, tmp_path) -> None:
+    """Legacy start.sh keeps migration available so the cleanup can run."""
+
+    pbgui_dir = tmp_path / "pbgui"
+    pbgui_dir.mkdir()
+    (pbgui_dir / "start.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    monkeypatch.setattr(services, "PBGDIR", str(pbgui_dir))
+    monkeypatch.setattr(services, "_read_legacy_crontab", lambda: {"entries": []})
+    monkeypatch.setattr(services, "_collect_pbgui_daemon_processes", lambda: [])
+    monkeypatch.setattr(
+        services,
+        "_migration_systemd_units",
+        lambda: [
+            {"service": service, "unit": unit, "exists": True, "enabled": True, "active": True, "state": "active"}
+            for service, unit in services._SYSTEMD_SERVICE_UNITS.items()
+        ],
+    )
+    monkeypatch.setattr(services, "load_ini", lambda section, key: "")
+    monkeypatch.setattr(services, "_detect_pbgui_python", lambda: str(tmp_path / "venv" / "bin" / "python"))
+
+    status = services._migration_status_payload()
+
+    assert status["migration_needed"] is True
+    assert status["legacy_start_sh"] == {"path": str(pbgui_dir / "start.sh"), "exists": True}
+
+
+def test_migration_status_requires_not_ready_default_unit(monkeypatch, tmp_path) -> None:
+    """Disabled or inactive default systemd units keep migration available."""
+
+    pbgui_dir = tmp_path / "pbgui"
+    pbgui_dir.mkdir()
+    monkeypatch.setattr(services, "PBGDIR", str(pbgui_dir))
+    monkeypatch.setattr(services, "_read_legacy_crontab", lambda: {"entries": []})
+    monkeypatch.setattr(services, "_collect_pbgui_daemon_processes", lambda: [])
+    monkeypatch.setattr(
+        services,
+        "_migration_systemd_units",
+        lambda: [
+            {"service": service, "unit": unit, "exists": True, "enabled": service != "pbdata", "active": service != "pbdata", "state": "inactive" if service == "pbdata" else "active"}
+            for service, unit in services._SYSTEMD_SERVICE_UNITS.items()
+        ],
+    )
+    monkeypatch.setattr(services, "_migration_required_services", lambda pbgdir=None: {"api-server", "pbdata"})
+    monkeypatch.setattr(services, "load_ini", lambda section, key: "")
+    monkeypatch.setattr(services, "_detect_pbgui_python", lambda: str(tmp_path / "venv" / "bin" / "python"))
+
+    status = services._migration_status_payload()
+
+    assert status["migration_needed"] is True
+    assert [row["service"] for row in status["not_ready_default_units"]] == ["pbdata"]
+
+
+def test_migration_status_ignores_not_ready_unrequired_units(monkeypatch, tmp_path) -> None:
+    """Disabled PBRun/PBData units are not migration blockers when no workload needs them."""
+
+    pbgui_dir = tmp_path / "pbgui"
+    pbgui_dir.mkdir()
+    monkeypatch.setattr(services, "PBGDIR", str(pbgui_dir))
+    monkeypatch.setattr(services, "_read_legacy_crontab", lambda: {"entries": []})
+    monkeypatch.setattr(services, "_collect_pbgui_daemon_processes", lambda: [])
+    monkeypatch.setattr(
+        services,
+        "_migration_systemd_units",
+        lambda: [
+            {"service": service, "unit": unit, "exists": True, "enabled": service not in {"pbrun", "pbdata"}, "active": service not in {"pbrun", "pbdata"}, "state": "inactive" if service in {"pbrun", "pbdata"} else "active"}
+            for service, unit in services._SYSTEMD_SERVICE_UNITS.items()
+        ],
+    )
+    monkeypatch.setattr(services, "_migration_required_services", lambda pbgdir=None: {"api-server"})
+    monkeypatch.setattr(services, "load_ini", lambda section, key: "")
+    monkeypatch.setattr(services, "_detect_pbgui_python", lambda: str(tmp_path / "venv" / "bin" / "python"))
+
+    status = services._migration_status_payload()
+
+    assert status["migration_needed"] is False
+    assert status["not_ready_default_units"] == []
+
+
+def test_run_systemd_migration_deletes_legacy_start_sh(monkeypatch, tmp_path) -> None:
+    """Successful migration removes the legacy start.sh autostart script."""
+
+    pbgui_dir = tmp_path / "pbgui"
+    setup_dir = pbgui_dir / "setup"
+    setup_dir.mkdir(parents=True)
+    setup_script = setup_dir / "setup_systemd.sh"
+    setup_script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    start_script = pbgui_dir / "start.sh"
+    start_script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    before = {
+        "warnings": [],
+        "legacy_crontab": {"entries": []},
+        "required_services": ["api-server", "pbcluster", "pbrun", "pbdata", "pbcoindata"],
+        "missing_default_units": [],
+        "not_ready_default_units": [],
+        "legacy_start_sh": {"path": str(start_script), "exists": True},
+    }
+    statuses = iter([before, {"warnings": []}])
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(services, "PBGDIR", str(pbgui_dir))
+    monkeypatch.setattr(services, "_migration_status_payload", lambda: next(statuses))
+    monkeypatch.setattr(services, "_try_enable_linger", lambda user: {"ok": True})
+    monkeypatch.setattr(services, "_detect_pbgui_python", lambda: str(tmp_path / "venv" / "bin" / "python"))
+    monkeypatch.setattr(services, "_current_username", lambda: "mani")
+    monkeypatch.setattr(services, "_stop_legacy_services", lambda logs: logs.append("stopped legacy"))
+    monkeypatch.setattr(services, "_service_action", lambda service, action: calls.append((service, action)) or {"running": True, "manager": "systemd"})
+    monkeypatch.setattr(services, "_systemd_unit_for_service", lambda service: "pbgui-api.service")
+    monkeypatch.setattr(services, "_remove_legacy_crontab_entries", lambda: {"removed": []})
+    monkeypatch.setattr(services, "_schedule_api_systemd_handoff", lambda logs: "handoff scheduled")
+    monkeypatch.setattr(services.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, stdout="", stderr=""))
+
+    result = services._run_systemd_migration()
+
+    assert result["ok"] is True
+    assert not start_script.exists()
+    assert any("Deleted legacy start.sh" in line for line in result["logs"])
+    assert calls == [("pbcluster", "restart"), ("pbrun", "restart"), ("pbdata", "restart"), ("pbcoindata", "restart")]
+
+
 def test_worker_restart_uses_single_restart_action() -> None:
     """Workers page uses the restart worker endpoint instead of stop/start timers."""
 

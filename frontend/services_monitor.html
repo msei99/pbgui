@@ -1252,6 +1252,12 @@ window.PBGUI_NAV_CONFIG = {
     return html + '</tbody></table></div>';
   }
 
+  function renderMigrationStartScript(startScript) {
+    startScript = startScript || {};
+    if (!startScript.exists) return '<div class="migration-ok">No legacy start.sh was detected.</div>';
+    return '<div class="migration-warn">Legacy start.sh will be deleted automatically during migration: ' + esc(startScript.path || '') + '</div>';
+  }
+
   function renderMigrationProcesses(processes) {
     processes = processes || [];
     if (!processes.length) return '<div class="migration-note">No PBGui daemon processes were detected by the preflight scan.</div>';
@@ -1289,6 +1295,7 @@ window.PBGUI_NAV_CONFIG = {
 
     var warnings = data.warnings || [];
     var missing = data.missing_default_units || [];
+    var notReady = data.not_ready_default_units || [];
     var html = '<div class="migration-hero">'
       + '<div class="migration-title">Systemd user services migration</div>'
       + '<div class="migration-desc">Move this PBGui master from legacy autostart/process control to systemd user services. The migration keeps existing data and paths, removes legacy PBGui crontab autostarts when possible, and restarts PBGui daemons through systemd.</div>'
@@ -1308,11 +1315,15 @@ window.PBGUI_NAV_CONFIG = {
     if (missing.length) {
       html += '<div class="migration-warn">Missing required units: ' + esc(missing.map(function (row) { return row.unit || row.service; }).join(', ')) + '</div>';
     }
+    if (notReady.length) {
+      html += '<div class="migration-warn">Not-ready required units: ' + esc(notReady.map(function (row) { return (row.unit || row.service) + ' (' + (row.enabled ? 'enabled' : 'disabled') + ', ' + (row.state || 'unknown') + ')'; }).join(', ')) + '</div>';
+    }
     warnings.forEach(function (warning) { html += '<div class="migration-warn">' + esc(warning) + '</div>'; });
     html += '</div>';
 
     html += '<div class="migration-section"><div class="migration-section-title"><span>Systemd units</span></div>' + renderMigrationUnits(data.systemd_units || []) + '</div>';
     html += '<div class="migration-section"><div class="migration-section-title"><span>Legacy crontab autostart</span></div>' + renderMigrationCrontab(data.legacy_crontab || {}) + '</div>';
+    html += '<div class="migration-section"><div class="migration-section-title"><span>Legacy start script</span></div>' + renderMigrationStartScript(data.legacy_start_sh || {}) + '</div>';
     html += '<div class="migration-section"><div class="migration-section-title"><span>Detected PBGui processes</span></div>' + renderMigrationProcesses(data.processes || []) + '</div>';
 
     html += '<div class="migration-section"><div class="migration-section-title"><span>Action</span></div>'

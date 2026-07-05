@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 from collections import Counter
 import glob
 import json
@@ -12,6 +13,7 @@ import pwd
 import re
 import shlex
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -535,15 +537,103 @@ def _migration_systemd_units() -> list[dict[str, Any]]:
     return rows
 
 
+def _parsed_list_config(raw: Any) -> list[str]:
+    """Parse list-like pbgui.ini values used by PBData."""
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = ast.literal_eval(text)
+    except Exception:
+        parsed = None
+    if isinstance(parsed, (list, tuple, set)):
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _pbrun_required_for_host(pbgdir: Path) -> bool:
+    """Return whether PBRun has local V7 configs assigned to this PBGui host."""
+    pbname = str(load_ini("main", "pbname") or socket.gethostname() or "").strip()
+    if not pbname:
+        return False
+    run_root = pbgdir / "data" / "run_v7"
+    if not run_root.is_dir():
+        return False
+    for cfg_path in run_root.glob("*/config.json"):
+        try:
+            payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        pbgui = payload.get("pbgui") if isinstance(payload, dict) else None
+        enabled_on = str((pbgui or {}).get("enabled_on") or "").strip()
+        if enabled_on and enabled_on != "disabled" and enabled_on == pbname:
+            return True
+    return False
+
+
+def _pbdata_required() -> bool:
+    """Return whether PBData has any configured users to process."""
+    fetch_users = _parsed_list_config(load_ini("pbdata", "fetch_users") or "")
+    trades_users = _parsed_list_config(load_ini("pbdata", "trades_users") or "")
+    return bool(fetch_users or trades_users)
+
+
+def _pbcoindata_required() -> bool:
+    """Return whether PBCoinData has a configured CoinMarketCap key."""
+    raw = str(load_ini("coinmarketcap", "api_key") or "").strip()
+    return bool(raw and raw.lower() not in {"none", "null", "false", "<api_key>"} and not (raw.startswith("<") and raw.endswith(">")))
+
+
+def _migration_required_services(pbgdir: Path | None = None) -> set[str]:
+    """Return local services that should be enabled by migration on this host."""
+    root = Path(pbgdir or PBGDIR)
+    required = {"api-server"}
+    if _pbcluster_required(root):
+        required.add("pbcluster")
+    if _pbrun_required_for_host(root):
+        required.add("pbrun")
+    if _pbdata_required():
+        required.add("pbdata")
+    if _pbcoindata_required():
+        required.add("pbcoindata")
+    return required
+
+
+def _pbcluster_required(pbgdir: Path) -> bool:
+    """Return whether PBCluster should run for this local Cluster Sync node."""
+    pbname = str(load_ini("main", "pbname") or socket.gethostname() or "").strip()
+    nodes_path = pbgdir / "data" / "cluster" / "cluster_nodes.json"
+    try:
+        payload = json.loads(nodes_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    nodes = payload.get("nodes") if isinstance(payload, dict) else None
+    if not isinstance(nodes, dict):
+        return False
+    for node in nodes.values():
+        if not isinstance(node, dict):
+            continue
+        names = {str(node.get("hostname") or "").strip(), str(node.get("pbname") or "").strip()}
+        if pbname in names and node.get("enabled") is not False:
+            return bool(node.get("sync_enabled"))
+    return False
+
+
 def _migration_status_payload() -> dict[str, Any]:
     """Build the migration preflight payload for the Services UI."""
     pbgdir = Path(PBGDIR)
+    legacy_start_sh = pbgdir / "start.sh"
     crontab = _read_legacy_crontab()
     processes = _collect_pbgui_daemon_processes()
     units = _migration_systemd_units()
-    default_units = {"api-server", "pbcluster", "pbrun", "pbdata", "pbcoindata"}
-    missing_default_units = [row for row in units if row["service"] in default_units and not row["exists"]]
+    required_units = _migration_required_services(pbgdir)
+    missing_default_units = [row for row in units if row["service"] in required_units and not row["exists"]]
+    not_ready_default_units = [
+        row for row in units
+        if row["service"] in required_units and row["exists"] and (not row["enabled"] or not row["active"])
+    ]
     legacy_entries = list(crontab.get("entries") or [])
+    legacy_start_sh_exists = legacy_start_sh.exists()
     warnings = []
     if crontab.get("warning"):
         warnings.append(
@@ -560,17 +650,26 @@ def _migration_status_payload() -> dict[str, Any]:
         "pb7venv": str(load_ini("main", "pb7venv") or ""),
         "systemd_unit_dir": str(Path.home() / ".config" / "systemd" / "user"),
         "systemd_units": units,
+        "required_services": sorted(required_units),
         "missing_default_units": missing_default_units,
+        "not_ready_default_units": not_ready_default_units,
         "legacy_crontab": {k: v for k, v in crontab.items() if k != "lines"},
+        "legacy_start_sh": {"path": str(legacy_start_sh), "exists": legacy_start_sh_exists},
         "processes": processes,
-        "migration_needed": bool(missing_default_units or legacy_entries),
+        "migration_needed": bool(missing_default_units or not_ready_default_units or legacy_entries or legacy_start_sh_exists),
         "warnings": warnings,
     }
 
 
 def _migration_enable_services(status: dict[str, Any]) -> list[str]:
     """Return the service set that migration would enable."""
-    return list(_MIGRATION_DEFAULT_SERVICES)
+    required = set(status.get("required_services") or [])
+    services = []
+    for service in _MIGRATION_DEFAULT_SERVICES:
+        service_id = "api-server" if service == "api" else service
+        if service_id in required:
+            services.append(service)
+    return services
 
 
 def _migration_setup_command(status: dict[str, Any]) -> tuple[list[str], list[str], Path, str, Path, str]:
@@ -739,12 +838,20 @@ def _test_systemd_migration() -> dict[str, Any]:
         logs.extend(f"  - {entry}" for entry in legacy_entries)
     else:
         logs.append("Would not remove crontab entries because none were detected.")
+    legacy_start_sh = status.get("legacy_start_sh") or {}
+    if legacy_start_sh.get("exists"):
+        logs.append(f"Would delete legacy start.sh after systemd services verify successfully: {legacy_start_sh.get('path') or ''}")
+    else:
+        logs.append("Would not delete legacy start.sh because it was not detected.")
 
     missing_units = [row.get("unit") or row.get("service") for row in status.get("missing_default_units") or []]
     if missing_units:
         logs.append("Would install missing systemd user unit(s): " + ", ".join(str(unit) for unit in missing_units))
     else:
         logs.append("Would refresh existing PBGui systemd user unit files.")
+    not_ready_units = [row.get("unit") or row.get("service") for row in status.get("not_ready_default_units") or []]
+    if not_ready_units:
+        logs.append("Would enable/restart not-ready systemd user unit(s): " + ", ".join(str(unit) for unit in not_ready_units))
 
     logs.append("Would run setup command:")
     logs.append(f"  {shlex.join(cmd)}")
@@ -823,6 +930,14 @@ def _run_systemd_migration() -> dict[str, Any]:
         warnings.append(
             "Could not inspect/remove legacy crontab autostart. If you configured PBGui autostart manually, remove it yourself to avoid duplicate starts."
         )
+
+    legacy_start_sh = pbgdir / "start.sh"
+    if legacy_start_sh.exists():
+        try:
+            legacy_start_sh.unlink()
+            logs.append(f"Deleted legacy start.sh: {legacy_start_sh}")
+        except Exception as exc:
+            warnings.append(f"Could not delete legacy start.sh {legacy_start_sh}: {exc}")
 
     api_message = _schedule_api_systemd_handoff(logs)
     logs.append(api_message)

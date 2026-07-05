@@ -91,7 +91,7 @@ DEPLOY_PROGRESS_LOG_TAIL_BYTES = 64 * 1024
 DEPLOY_PROGRESS_CACHE_LIMIT = 256
 DEPLOY_RUN_APPEAR_TIMEOUT_SECONDS = 30
 SAFE_VPS_INSTALL_PATH_RE = re.compile(r"^[A-Za-z0-9._~/-]+$")
-VPS_SYSTEMD_MIGRATION_SERVICES = ("pbcluster", "pbrun", "pbcoindata")
+VPS_SYSTEMD_MIGRATION_SERVICES = ("pbcluster", "pbrun", "pbdata", "pbcoindata")
 VPS_SYSTEMD_MIGRATION_UNITS = tuple(f"pbgui-{service}.service" for service in VPS_SYSTEMD_MIGRATION_SERVICES)
 VPS_SYSTEMD_MIGRATION_STATUS_TTL_SECONDS = 90
 _PLAYBOOK_TASK_CACHE: dict[str, tuple[str, ...]] = {}
@@ -2856,10 +2856,16 @@ class VPSManagerService:
 
     def _systemd_migration_required_units(self, units: list[dict[str, str]], values: dict[str, str]) -> list[dict[str, str]]:
         """Return systemd units required for currently configured optional services."""
+        pbrun_configured = values.get("pbrun_configured") == "yes"
+        pbdata_configured = values.get("pbdata_configured") == "yes"
         coindata_configured = values.get("coindata_configured") == "yes"
         required: list[dict[str, str]] = []
         for item in units:
             unit = item.get("unit")
+            if unit == "pbgui-pbrun.service" and not pbrun_configured:
+                continue
+            if unit == "pbgui-pbdata.service" and not pbdata_configured:
+                continue
             if unit == "pbgui-pbcoindata.service" and not coindata_configured:
                 continue
             required.append(item)
@@ -4697,9 +4703,13 @@ printf 'KV\tpython_exists\t%s\n' "$([ -x "$python_bin" ] && printf yes || printf
 printf 'KV\tstart_sh_exists\t%s\n' "$([ -e "$pbgui_dir/start.sh" ] && printf yes || printf no)"
 printf 'KV\tsystemctl_exists\t%s\n' "$([ -n "$systemctl_path" ] && printf yes || printf no)"
 printf 'KV\tsystemctl_path\t%s\n' "$systemctl_path"
-PBGUI_CONFIG_PATH="$pbgui_dir/pbgui.ini" python3 - <<'PY' 2>/dev/null || {{ printf 'KV\tcoindata_configured\tno\n'; }}
+PBGUI_CONFIG_PATH="$pbgui_dir/pbgui.ini" PBGUI_DIR="$pbgui_dir" python3 - <<'PY' 2>/dev/null || {{ printf 'KV\tpbrun_configured\tno\n'; printf 'KV\tpbdata_configured\tno\n'; printf 'KV\tcoindata_configured\tno\n'; }}
+import ast
 import configparser
+import json
 import os
+import platform
+from pathlib import Path
 
 config = configparser.ConfigParser()
 config.read(os.environ.get('PBGUI_CONFIG_PATH') or '')
@@ -4711,6 +4721,44 @@ def configured(value):
         return False
     return not normalized.startswith('<')
 
+def parsed_list(raw):
+    text = str(raw or '').strip()
+    if not text:
+        return []
+    try:
+        parsed = ast.literal_eval(text)
+        if isinstance(parsed, (list, tuple, set)):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    except Exception:
+        pass
+    return [part.strip() for part in text.split(',') if part.strip()]
+
+def pbrun_required():
+    pbgui_dir = Path(os.environ.get('PBGUI_DIR') or '')
+    pbname = config.get('main', 'pbname', fallback=platform.node()).strip() or platform.node()
+    run_root = pbgui_dir / 'data' / 'run_v7'
+    if not pbname or not run_root.is_dir():
+        return False
+    for cfg_path in run_root.glob('*/config.json'):
+        try:
+            payload = json.loads(cfg_path.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+        pbgui = payload.get('pbgui') if isinstance(payload, dict) else None
+        enabled_on = str((pbgui or {{}}).get('enabled_on') or '').strip()
+        if enabled_on and enabled_on != 'disabled' and enabled_on == pbname:
+            return True
+    return False
+
+def pbdata_required():
+    if not config.has_section('pbdata'):
+        return False
+    fetch_users = parsed_list(config.get('pbdata', 'fetch_users', fallback=''))
+    trades_users = parsed_list(config.get('pbdata', 'trades_users', fallback=''))
+    return bool(fetch_users or trades_users)
+
+print('KV\tpbrun_configured\t' + ('yes' if pbrun_required() else 'no'))
+print('KV\tpbdata_configured\t' + ('yes' if pbdata_required() else 'no'))
 print('KV\tcoindata_configured\t' + ('yes' if configured(config.get('coinmarketcap', 'api_key', fallback='')) else 'no'))
 PY
 if [ -n "$systemctl_path" ] && env XDG_RUNTIME_DIR="${{XDG_RUNTIME_DIR:-/run/user/$uid}}" systemctl --user show-environment >/dev/null 2>&1; then

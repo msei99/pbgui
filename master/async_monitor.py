@@ -51,6 +51,7 @@ CPU_HISTORY_STEP_SECONDS = 60
 CPU_HISTORY_RESOLUTION_PCT = 0.5
 CPU_HISTORY_MAX_PCT = 127.0
 CPU_HISTORY_FLUSH_INTERVAL = 10.0
+CPU_ALERT_SUSTAINED_SECONDS = 60.0
 COUNT_HISTORY_VERSION = 1
 COUNT_HISTORY_WINDOW_HOURS = 24 * 28
 COUNT_HISTORY_STEP_SECONDS = 3600
@@ -360,14 +361,16 @@ def collect_live_alerts(connections: dict[str, Any], system_state: dict[str, Any
         cpu_live = float(metrics.get('cpu') or 0)
         cpu_60s = float(metrics.get('cpu_60s') or 0)
         cpu_60s_window = float(metrics.get('cpu_60s_window') or 0)
+        cpu_threshold_duration = float(metrics.get('cpu_threshold_duration') or 0)
         cpu_confirmed = cpu_60s_window >= 60
+        cpu_sustained = cpu_live >= monitor_config.cpu_error_server and cpu_threshold_duration >= CPU_ALERT_SUSTAINED_SECONDS
         cpu = cpu_60s if cpu_confirmed else cpu_live
         has_system_metrics = any(metrics.get(key) not in (None, 0, 0.0) for key in ('mem_total', 'disk_total', 'swap_total', 'timestamp'))
         if has_system_metrics and not metrics_stale and (
             mem_available_mb <= monitor_config.mem_error_server
             or swap_free_mb <= monitor_config.swap_error_server
             or disk_free_mb <= monitor_config.disk_error_server
-            or (cpu_confirmed and cpu >= monitor_config.cpu_error_server)
+            or cpu_sustained
         ):
             triggered_thresholds: list[str] = []
             triggered_parts: list[str] = []
@@ -386,15 +389,17 @@ def collect_live_alerts(connections: dict[str, Any], system_state: dict[str, Any
                 triggered_parts.append(
                     f"disk free {int(disk_free_mb)}MB <= {int(monitor_config.disk_error_server)}MB"
                 )
-            if cpu_confirmed and cpu >= monitor_config.cpu_error_server:
+            if cpu_sustained:
                 triggered_thresholds.append("cpu")
                 triggered_parts.append(
-                    f"CPU {cpu:.1f}% >= {monitor_config.cpu_error_server:.1f}%"
+                    f"CPU {cpu_live:.1f}% >= {monitor_config.cpu_error_server:.1f}% for {int(cpu_threshold_duration)}s"
                 )
             current_text = (
                 f"Current: mem free {int(mem_available_mb)}MB, swap free {int(swap_free_mb)}MB, "
-                f"disk free {int(disk_free_mb)}MB, CPU {cpu:.1f}%"
+                f"disk free {int(disk_free_mb)}MB, CPU {cpu_live:.1f}%"
             )
+            if cpu_confirmed:
+                current_text += f", CPU 60s avg {cpu_60s:.1f}%"
             details = f"Triggered: {'; '.join(triggered_parts)}\n{current_text}"
             threshold_label = _system_threshold_labels(triggered_thresholds)
             alerts.append({
@@ -2198,7 +2203,7 @@ print(json.dumps({'monitors': monitors, 'v7': v7, 'cache': new_cache,
 
 
 HOST_META_SCRIPT = r'''python3 -u - <<'PY'
-import configparser, hashlib, json, os, re, subprocess, sys, time
+import configparser, hashlib, json, os, platform, re, subprocess, sys, time
 from pathlib import Path
 
 HOME = os.path.expanduser('~')
@@ -2451,14 +2456,18 @@ def collect_legacy_cron_lines(pbgui_dir):
     return [line for line in (res.stdout or '').splitlines() if any(token in line for token in tokens) or line.strip() == '#Ansible: pbgui']
 
 
-def build_systemd_migration_status(pbgui_dir, coindata_configured):
+def build_systemd_migration_status(pbgui_dir, pbrun_configured, pbdata_configured, coindata_configured):
     pbgui_path = Path(pbgui_dir)
     python_bin = pbgui_path.parent / 'venv_pbgui' / 'bin' / 'python'
     systemctl_path = run(['which', 'systemctl'], timeout=5)
     systemctl_exists = bool(systemctl_path)
     user_manager_ok, user_manager_detail = systemd_user_manager_ok(systemctl_exists)
-    all_unit_names = ['pbgui-pbcluster.service', 'pbgui-pbrun.service', 'pbgui-pbcoindata.service']
-    required_unit_names = ['pbgui-pbcluster.service', 'pbgui-pbrun.service']
+    all_unit_names = ['pbgui-pbcluster.service', 'pbgui-pbrun.service', 'pbgui-pbdata.service', 'pbgui-pbcoindata.service']
+    required_unit_names = ['pbgui-pbcluster.service']
+    if pbrun_configured:
+        required_unit_names.append('pbgui-pbrun.service')
+    if pbdata_configured:
+        required_unit_names.append('pbgui-pbdata.service')
     if coindata_configured:
         required_unit_names.append('pbgui-pbcoindata.service')
     units = [systemd_unit_status(unit, systemctl_exists) for unit in all_unit_names]
@@ -2510,7 +2519,44 @@ def build_systemd_migration_status(pbgui_dir, coindata_configured):
         'blockers': blockers,
     }
 
+def parsed_list_config(raw):
+    text = str(raw or '').strip()
+    if not text:
+        return []
+    try:
+        import ast
+        parsed = ast.literal_eval(text)
+        if isinstance(parsed, (list, tuple, set)):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    except Exception:
+        pass
+    return [part.strip() for part in text.split(',') if part.strip()]
+
+def pbrun_required_for_host(pbgui_dir, pbname):
+    run_root = Path(pbgui_dir) / 'data' / 'run_v7'
+    target = str(pbname or '').strip()
+    if not target or not run_root.is_dir():
+        return False
+    for cfg_path in run_root.glob('*/config.json'):
+        try:
+            payload = json.loads(cfg_path.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+        pbgui = payload.get('pbgui') if isinstance(payload, dict) else None
+        enabled_on = str((pbgui or {}).get('enabled_on') or '').strip()
+        if enabled_on and enabled_on != 'disabled' and enabled_on == target:
+            return True
+    return False
+
+def pbdata_required():
+    if not cfg.has_section('pbdata'):
+        return False
+    fetch_users = parsed_list_config(cfg.get('pbdata', 'fetch_users', fallback=''))
+    trades_users = parsed_list_config(cfg.get('pbdata', 'trades_users', fallback=''))
+    return bool(fetch_users or trades_users)
+
 role = cfg.get('main', 'role', fallback='slave')
+pbname = cfg.get('main', 'pbname', fallback=platform.node()).strip() or platform.node()
 pb7dir = cfg.get('main', 'pb7dir', fallback='')
 pb7venv = cfg.get('main', 'pb7venv', fallback='')
 coinmarketcap_api_key = config_value('coinmarketcap', 'api_key')
@@ -2519,6 +2565,8 @@ firewall_enabled = config_bool('firewall', 'enabled', False)
 firewall_ssh_port = config_value('firewall', 'ssh_port') or '22'
 firewall_ssh_ips = config_value('firewall', 'ssh_ips')
 coindata_configured = configured_text(coinmarketcap_api_key)
+pbrun_configured = pbrun_required_for_host(PBGDIR, pbname)
+pbdata_configured = pbdata_required()
 
 result = {
     'role': role,
@@ -2542,6 +2590,8 @@ result = {
     'firewall_ssh_port': firewall_ssh_port,
     'firewall_ssh_ips': firewall_ssh_ips,
     'optional_services': {
+        'PBRun': pbrun_configured,
+        'PBData': pbdata_configured,
         'PBCoinData': coindata_configured,
     },
 }
@@ -2600,7 +2650,7 @@ if os.path.isdir(logs_dir):
         if os.path.isfile(full) and (f.endswith('.log') or f.endswith('.log.old')):
             available.append('data/logs/' + f)
 result['available_logs'] = available
-result['systemd_migration'] = build_systemd_migration_status(PBGDIR, coindata_configured)
+result['systemd_migration'] = build_systemd_migration_status(PBGDIR, pbrun_configured, pbdata_configured, coindata_configured)
 
 print(json.dumps(result))
 PY'''
@@ -2657,6 +2707,8 @@ MONITORED_SERVICES = {
                              "PBCluster.py", "pbcluster.py"),
     "PBRun": ServiceInfo("PBRun", "data/pid/pbrun.pid",
                           "PBRun.py", "pbrun.py"),
+    "PBData": ServiceInfo("PBData", "data/pid/pbdata.pid",
+                           "PBData.py", "pbdata.py"),
     "PBCoinData": ServiceInfo("PBCoinData", "data/pid/pbcoindata.pid",
                                "PBCoinData.py", "pbcoindata.py"),
 }
@@ -2664,12 +2716,19 @@ MONITORED_SERVICES = {
 MONITORED_SERVICE_SYSTEMD_UNITS = {
     "PBCluster": "pbgui-pbcluster.service",
     "PBRun": "pbgui-pbrun.service",
+    "PBData": "pbgui-pbdata.service",
     "PBCoinData": "pbgui-pbcoindata.service",
 }
 
 PBCLUSTER_DISABLED_REASON = "Cluster Sync is not enabled for this node"
 
 OPTIONAL_SERVICE_REQUIREMENTS = {
+    "PBRun": {
+        "reason": "No local V7 run configs are enabled for this host",
+    },
+    "PBData": {
+        "reason": "No PBData fetch_users or trades_users are configured",
+    },
     "PBCoinData": {
         "config_key": "coinmarketcap_api_key",
         "reason": "CoinMarketCap API key is not configured",
@@ -2835,10 +2894,13 @@ class VPSMonitor:
         requirement = OPTIONAL_SERVICE_REQUIREMENTS.get(service_name)
         if not requirement:
             return True
-        config = self._local_vps_config(hostname)
-        if not config or requirement["config_key"] not in config:
+        config_key = requirement.get("config_key")
+        if not config_key:
             return None
-        return self._configured_optional_value(config.get(requirement["config_key"]))
+        config = self._local_vps_config(hostname)
+        if not config or config_key not in config:
+            return None
+        return self._configured_optional_value(config.get(config_key))
 
     def _optional_service_expected(self, hostname: str, service_name: str) -> bool:
         if service_name == "PBCluster":
@@ -3088,6 +3150,7 @@ class VPSMonitor:
         self._load_alert_routes()
         conn_summary = self.pool.get_status_summary().get("connections") or {}
         monitor_config = MonitorConfig()
+        self._update_cpu_threshold_state(monitor_config)
         live_alerts = collect_live_alerts(
             conn_summary,
             {h: m.to_dict() for h, m in self.store.system.items()},
@@ -3173,6 +3236,38 @@ class VPSMonitor:
             self._save_alert_state()
             self.store.changed.set()
 
+    def _update_cpu_threshold_state(self, monitor_config: MonitorConfig, now: float | None = None) -> None:
+        """Track how long each host's live CPU has stayed above the alert threshold."""
+        now = float(now or time.time())
+        for metrics in self.store.system.values():
+            ts = float(getattr(metrics, "timestamp", 0.0) or now)
+            cpu = float(getattr(metrics, "cpu", 0.0) or 0.0)
+            if cpu >= monitor_config.cpu_error_server:
+                since = float(getattr(metrics, "cpu_threshold_since", 0.0) or 0.0)
+                if since <= 0.0:
+                    since = ts
+                metrics.cpu_threshold_since = since
+                metrics.cpu_threshold_duration = max(0.0, ts - since)
+            else:
+                metrics.cpu_threshold_since = 0.0
+                metrics.cpu_threshold_duration = 0.0
+
+    def _current_system_status_text(self, host: str) -> str:
+        """Return current host metrics for recovery notifications."""
+        metrics = self.store.system.get(host)
+        if not metrics:
+            return ""
+        mem_available_mb = float(metrics.mem_available or 0) / 1024 / 1024
+        swap_free_mb = float(metrics.swap_free or 0) / 1024 / 1024
+        disk_free_mb = float(metrics.disk_free or 0) / 1024 / 1024
+        text = (
+            f"Current: mem free {int(mem_available_mb)}MB, swap free {int(swap_free_mb)}MB, "
+            f"disk free {int(disk_free_mb)}MB, CPU {float(metrics.cpu or 0):.1f}%"
+        )
+        if float(metrics.cpu_60s_window or 0) >= 60.0:
+            text += f", CPU 60s avg {float(metrics.cpu_60s or 0):.1f}%"
+        return text
+
     async def _emit_problem_event(self, alert: AlertRecord) -> None:
         if alert.kind == ALERT_KIND_OFFLINE:
             await self._send_alert_event("ssh_lost", f"⚠️ *VPSMonitor*: SSH connection lost to *{alert.host}*")
@@ -3203,7 +3298,9 @@ class VPSMonitor:
                 if len(alert.triggered_thresholds or []) == 1
                 else f"✅ *VPSMonitor*: System recovered on *{alert.host}*: {threshold_label}"
             )
-            current_text = str(alert.details or "").split("\n", 1)[1] if "\n" in str(alert.details or "") else str(alert.details or "")
+            current_text = self._current_system_status_text(alert.host)
+            if not current_text:
+                current_text = str(alert.details or "").split("\n", 1)[1] if "\n" in str(alert.details or "") else str(alert.details or "")
             recovered_from = str(alert.details or "").split("\n", 1)[0].replace("Triggered:", "Recovered from:", 1)
             await self._send_alert_event("system_recovered", f"{headline}\n{recovered_from}\n{current_text}")
             return
