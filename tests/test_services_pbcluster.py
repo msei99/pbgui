@@ -95,6 +95,37 @@ def test_restart_service_route_preserves_api_restart_handler(monkeypatch) -> Non
     assert services.restart_service("api-server") == {"ok": True, "message": "Restarting..."}
 
 
+def test_api_systemd_handoff_schedules_delayed_restart(monkeypatch, tmp_path) -> None:
+    """Migration schedules an API restart outside the current systemd request."""
+
+    calls: list[list[str]] = []
+
+    def fake_subprocess_run(args, **kwargs) -> subprocess.CompletedProcess:
+        calls.append(list(args))
+        assert kwargs.get("env") == {"XDG_RUNTIME_DIR": "/run/user/1000"}
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(services, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(services, "_systemd_unit_for_service", lambda name: "pbgui-api.service")
+    monkeypatch.setattr(
+        services,
+        "_systemd_service_status",
+        lambda name: {"running": True, "systemd_state": "active", "unit": "pbgui-api.service"},
+    )
+    monkeypatch.setattr(services, "_systemd_user_env", lambda: {"XDG_RUNTIME_DIR": "/run/user/1000"})
+    monkeypatch.setattr(services, "_run_user_systemctl", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("direct restart must not run")))
+    monkeypatch.setattr(services.subprocess, "run", fake_subprocess_run)
+
+    message = services._schedule_api_systemd_handoff([])
+
+    assert "API restart scheduled through transient systemd unit" in message
+    assert len(calls) == 1
+    assert calls[0][0:2] == ["systemd-run", "--user"]
+    assert "--collect" in calls[0]
+    assert "systemctl --user restart \"$unit\"" in calls[0][-1]
+    assert "deactivating" in calls[0][-1]
+
+
 def test_migration_status_requires_start_sh_cleanup(monkeypatch, tmp_path) -> None:
     """Legacy start.sh keeps migration available so the cleanup can run."""
 

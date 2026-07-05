@@ -756,11 +756,38 @@ def _schedule_api_systemd_handoff(logs: list[str]) -> str:
         raise RuntimeError("pbgui-api.service was not installed.")
     status = _systemd_service_status("api-server")
     if status is not None and status.get("running"):
-        proc = _run_user_systemctl(["--no-block", "restart", unit], timeout=10)
+        handoff_log = Path(PBGDIR) / "data" / "logs" / "api-systemd-handoff.log"
+        restart_unit = f"pbgui-api-restart-{os.getpid()}.service"
+        restart_cmd = f"""unit={shlex.quote(unit)}
+logfile={shlex.quote(str(handoff_log))}
+{{
+  printf '%s delayed restart for %s requested by migration\n' "$(date -Is)" "$unit"
+  sleep 1
+  for _ in $(seq 1 30); do
+    state="$(systemctl --user is-active "$unit" 2>/dev/null || true)"
+    if [ "$state" != "activating" ] && [ "$state" != "deactivating" ]; then
+      break
+    fi
+    printf '%s waiting for %s to leave state %s\n' "$(date -Is)" "$unit" "$state"
+    sleep 1
+  done
+  systemctl --user restart "$unit"
+  rc=$?
+  printf '%s restart command for %s exited rc=%s\n' "$(date -Is)" "$unit" "$rc"
+  exit "$rc"
+}} >> "$logfile" 2>&1"""
+        proc = subprocess.run(
+            ["systemd-run", "--user", f"--unit={restart_unit}", "--collect", "/bin/bash", "-lc", restart_cmd],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=_systemd_user_env(),
+        )
         if proc.returncode != 0:
             output = ((proc.stderr or "") + (proc.stdout or "")).strip()
-            raise RuntimeError(output or f"systemctl --user restart {unit} failed")
-        return "API restart requested through existing systemd unit."
+            raise RuntimeError(output or f"Could not schedule delayed restart for {unit}.")
+        return f"API restart scheduled through transient systemd unit {restart_unit}."
 
     current_pid = os.getpid()
     pidfile = Path(PBGDIR) / "data" / "pid" / "api_server.pid"
