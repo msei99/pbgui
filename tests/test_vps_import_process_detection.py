@@ -653,8 +653,8 @@ def test_build_ufw_apply_script_deletes_descending_and_never_resets() -> None:
     assert "ufw --force enable" in script
 
 
-def test_vps_status_prefers_remote_optional_meta_over_stale_local_config() -> None:
-    """A second master displays the VPS-reported CoinData service state."""
+def test_vps_status_keeps_coindata_expected_without_cmc_key() -> None:
+    """A second master still displays CoinData as expected without a CMC key."""
     service = object.__new__(VPSManagerService)
     service._vps_package_status_cache = {}
     service._vps_ssh_ok_cache = {}
@@ -687,7 +687,7 @@ def test_vps_status_prefers_remote_optional_meta_over_stale_local_config() -> No
 
     status = service._build_vps_status(vps, {}, False)
 
-    assert status["coindata_configured"] is False
+    assert status["coindata_configured"] is True
 
 
 def test_master_overview_row_is_online_without_remote_helper(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1064,24 +1064,14 @@ def test_run_vps_command_uses_fresh_remote_optional_values() -> None:
     assert captured["extra_vars"] is None
 
 
-def test_optional_service_remote_unconfigured_overrides_stale_local_config() -> None:
-    """Remote PBCoinData=false prevents stale local config from auto-restarting PBCoinData."""
+def test_pbcoindata_is_expected_without_coinmarketcap_key() -> None:
+    """PBCoinData remains expected because it updates exchange mappings without CMC."""
 
     monitor = object.__new__(VPSMonitor)
     monitor.store = SimpleNamespace(host_meta={"manibot90": {"optional_services": {"PBCoinData": False}}})
     monitor._local_optional_service_expected = lambda hostname, service_name: True
 
-    assert monitor._optional_service_expected("manibot90", "PBCoinData") is False
-
-
-def test_optional_service_local_disabled_overrides_stale_remote_config() -> None:
-    """A local clear request still prevents optional service auto-restart."""
-
-    monitor = object.__new__(VPSMonitor)
-    monitor.store = SimpleNamespace(host_meta={"manibot90": {"optional_services": {"PBCoinData": True}}})
-    monitor._local_optional_service_expected = lambda hostname, service_name: False
-
-    assert monitor._optional_service_expected("manibot90", "PBCoinData") is False
+    assert monitor._optional_service_expected("manibot90", "PBCoinData") is True
 
 
 def test_optional_pbrun_remote_unconfigured_prevents_restart() -> None:
@@ -1554,8 +1544,8 @@ def test_vps_manager_context_detail_uses_quick_detail_for_fluid_switching() -> N
     assert "_build_quick_detail_for_context" in body
 
 
-def test_systemd_migration_complete_with_unconfigured_optional_units() -> None:
-    """Unconfigured CoinData units do not keep systemd migration pending."""
+def test_systemd_migration_complete_with_unconfigured_pbrun_pbdata_units() -> None:
+    """Unconfigured PBRun/PBData units do not keep systemd migration pending."""
     service = object.__new__(VPSManagerService)
     output = """KV\tpbgui_dir_exists\tyes
 KV\tpython_exists\tyes
@@ -1571,7 +1561,7 @@ SECTION\tunits\tBEGIN
 pbgui-pbcluster.service\tyes\tenabled\tactive
 pbgui-pbrun.service\tyes\tdisabled\tinactive
 pbgui-pbdata.service\tyes\tdisabled\tinactive
-pbgui-pbcoindata.service\tyes\tdisabled\tinactive
+pbgui-pbcoindata.service\tyes\tenabled\tactive
 SECTION\tunits\tEND
 SECTION\tcron\tBEGIN
 SECTION\tcron\tEND
@@ -1618,7 +1608,7 @@ SECTION\tprocesses\tEND
     assert status["migration_complete"] is False
     assert status["migration_needed"] is True
     assert status["units_ready"] is False
-    assert [item["unit"] for item in status["required_units"]] == ["pbgui-pbcluster.service", "pbgui-pbrun.service"]
+    assert [item["unit"] for item in status["required_units"]] == ["pbgui-pbcluster.service", "pbgui-pbrun.service", "pbgui-pbcoindata.service"]
 
 
 def test_systemd_migration_running_status_does_not_reuse_stale_cache() -> None:
@@ -2001,7 +1991,7 @@ def test_v7_get_hosts_keeps_host_list_and_adds_details(tmp_path: Path, monkeypat
     monitor = SimpleNamespace(
         pool=True,
         enabled_hosts={host},
-        store=SimpleNamespace(host_meta={host: {"optional_services": {"PBCoinData": True}}}),
+        store=SimpleNamespace(host_meta={host: {"coindata_configured": True, "optional_services": {"PBCoinData": True}}}),
     )
     monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
     monkeypatch.setattr(v7_instances, "_monitor", monitor)
@@ -2012,6 +2002,22 @@ def test_v7_get_hosts_keeps_host_list_and_adds_details(tmp_path: Path, monkeypat
     details = {item["name"]: item for item in response["host_details"]}
     assert details[host]["coinmarketcap_configured"] is True
     assert details[host]["dynamic_ignore_allowed"] is True
+
+
+def test_v7_dynamic_ignore_does_not_treat_coindata_service_as_cmc_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CoinData service being expected does not prove CMC enrichment is configured."""
+    host = "test-vps"
+    (tmp_path / "pbgui.ini").write_text("[main]\npbname=master\n", encoding="utf-8")
+    monitor = SimpleNamespace(
+        store=SimpleNamespace(host_meta={host: {"optional_services": {"PBCoinData": True}}})
+    )
+    monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(v7_instances, "_monitor", monitor)
+
+    detail = v7_instances._host_dropdown_detail(host)
+
+    assert detail["coinmarketcap_configured"] is None
+    assert detail["dynamic_ignore_allowed"] is False
 
 
 def test_v7_dynamic_ignore_blocks_unknown_cmc_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

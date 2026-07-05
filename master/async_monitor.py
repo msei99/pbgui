@@ -2468,8 +2468,7 @@ def build_systemd_migration_status(pbgui_dir, pbrun_configured, pbdata_configure
         required_unit_names.append('pbgui-pbrun.service')
     if pbdata_configured:
         required_unit_names.append('pbgui-pbdata.service')
-    if coindata_configured:
-        required_unit_names.append('pbgui-pbcoindata.service')
+    required_unit_names.append('pbgui-pbcoindata.service')
     units = [systemd_unit_status(unit, systemctl_exists) for unit in all_unit_names]
     by_name = {item['unit']: item for item in units}
     required_units = [by_name[unit] for unit in required_unit_names if unit in by_name]
@@ -2592,7 +2591,7 @@ result = {
     'optional_services': {
         'PBRun': pbrun_configured,
         'PBData': pbdata_configured,
-        'PBCoinData': coindata_configured,
+        'PBCoinData': True,
     },
 }
 
@@ -2728,10 +2727,6 @@ OPTIONAL_SERVICE_REQUIREMENTS = {
     },
     "PBData": {
         "reason": "No PBData fetch_users or trades_users are configured",
-    },
-    "PBCoinData": {
-        "config_key": "coinmarketcap_api_key",
-        "reason": "CoinMarketCap API key is not configured",
     },
 }
 
@@ -2913,8 +2908,6 @@ class VPSMonitor:
         optional_services = meta.get("optional_services") if isinstance(meta, dict) else None
         if isinstance(optional_services, dict) and service_name in optional_services:
             remote_expected = bool(optional_services.get(service_name))
-        elif service_name == "PBCoinData" and isinstance(meta, dict) and "coindata_configured" in meta:
-            remote_expected = bool(meta.get("coindata_configured"))
 
         if local_expected is False or remote_expected is False:
             return False

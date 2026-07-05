@@ -50,19 +50,7 @@ LOG_PUSH_INTERVAL = 0.15     # ~150ms for log line push
 LOCAL_LOG_PUSH_INTERVAL = 0.15
 
 
-def _configured_secret_value(value: Any) -> bool:
-    normalized = str(value or "").strip()
-    if not normalized:
-        return False
-    lowered = normalized.lower()
-    if lowered in {"none", "null", "false", "<api_key>"}:
-        return False
-    return not (normalized.startswith("<") and normalized.endswith(">"))
-
-
 def _local_optional_service_blocker(service: str) -> str:
-    if service in {"PBCoinData", "pbcoindata"} and not _configured_secret_value(load_ini("coinmarketcap", "api_key")):
-        return "CoinMarketCap API key is not configured"
     return ""
 
 

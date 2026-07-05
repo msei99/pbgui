@@ -611,9 +611,6 @@ def _host_meta_coinmarketcap_configured(hostname: str) -> bool | None:
     meta = store.host_meta.get(hostname, {}) if store else {}
     if not isinstance(meta, dict):
         return None
-    optional_services = meta.get("optional_services")
-    if isinstance(optional_services, dict) and "PBCoinData" in optional_services:
-        return bool(optional_services.get("PBCoinData"))
     if "coindata_configured" in meta:
         return bool(meta.get("coindata_configured"))
     return None

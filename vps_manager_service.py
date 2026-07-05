@@ -2681,7 +2681,6 @@ class VPSManagerService:
     def _build_master_status(self, coindata_ok: bool) -> dict[str, Any]:
         summary_row = self._build_master_overview_row()
         local_coindata = self._ensure_coindata()
-        coindata_configured = _configured_optional_secret(getattr(local_coindata, "api_key", None))
         local_no_new_privs = _local_no_new_privileges()
         local_sudo_blocked_reason = "Local sudo blocked by runtime (`NoNewPrivs`)." if local_no_new_privs else ""
         pbgui_github = str(summary_row.get("pbgui_github") or "")
@@ -2690,7 +2689,7 @@ class VPSManagerService:
             "name": _local_master_name(),
             "online": bool(summary_row.get("online")),
             "coindata_ok": coindata_ok,
-            "coindata_configured": coindata_configured,
+            "coindata_configured": True,
             "update_ok": self.vpsmanager.update_status == "successful",
             "update_ready": True,
             "pending_updates": summary_row.get("updates", "N/A"),
@@ -2728,8 +2727,6 @@ class VPSManagerService:
         telemetry_fresh = self._host_telemetry_fresh(host_state)
         telemetry_age = self._host_telemetry_age(host_state)
         host_meta = self._host_meta(host_state)
-        coindata_meta = host_meta.get("coindata_configured")
-        coindata_configured = bool(coindata_meta) if coindata_meta is not None else _configured_optional_secret(vps.coinmarketcap_api_key)
         if quick:
             if not ssh_online:
                 ssh_ok = False
@@ -2750,7 +2747,7 @@ class VPSManagerService:
             "update_ready": bool(vps.user_pw),
             "pending_updates": summary_row.get("updates", "N/A"),
             "coindata_ok": coindata_ok,
-            "coindata_configured": coindata_configured,
+            "coindata_configured": True,
             "cmc_credits": host_meta.get("cmc_credits"),
             "online": ssh_online and telemetry_fresh,
             "ssh_online": ssh_online,
@@ -2858,15 +2855,12 @@ class VPSManagerService:
         """Return systemd units required for currently configured optional services."""
         pbrun_configured = values.get("pbrun_configured") == "yes"
         pbdata_configured = values.get("pbdata_configured") == "yes"
-        coindata_configured = values.get("coindata_configured") == "yes"
         required: list[dict[str, str]] = []
         for item in units:
             unit = item.get("unit")
             if unit == "pbgui-pbrun.service" and not pbrun_configured:
                 continue
             if unit == "pbgui-pbdata.service" and not pbdata_configured:
-                continue
-            if unit == "pbgui-pbcoindata.service" and not coindata_configured:
                 continue
             required.append(item)
         return required

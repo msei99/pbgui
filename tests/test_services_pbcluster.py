@@ -95,6 +95,14 @@ def test_restart_service_route_preserves_api_restart_handler(monkeypatch) -> Non
     assert services.restart_service("api-server") == {"ok": True, "message": "Restarting..."}
 
 
+def test_pbcoindata_start_is_not_blocked_without_cmc_key(monkeypatch) -> None:
+    """PBCoinData may run without CMC so exchange mappings can still update."""
+
+    monkeypatch.setattr(services, "load_ini", lambda section, key: "")
+
+    assert services._optional_service_blocker("pbcoindata") == ""
+
+
 def test_api_systemd_handoff_schedules_delayed_restart(monkeypatch, tmp_path) -> None:
     """Migration schedules an API restart outside the current systemd request."""
 

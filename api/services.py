@@ -103,19 +103,7 @@ def _systemd_unit_for_service(name: str) -> str | None:
     return unit if _systemd_unit_path(unit).exists() else None
 
 
-def _configured_optional_secret(value: Any) -> bool:
-    normalized = str(value or "").strip()
-    if not normalized:
-        return False
-    lowered = normalized.lower()
-    if lowered in {"none", "null", "false", "<api_key>", "<bucket_name>", "<bucket_name>:"}:
-        return False
-    return not (normalized.startswith("<") and normalized.endswith(">"))
-
-
 def _optional_service_blocker(name: str) -> str:
-    if name == "pbcoindata" and not _configured_optional_secret(load_ini("coinmarketcap", "api_key")):
-        return "CoinMarketCap API key is not configured"
     return ""
 
 
@@ -579,9 +567,8 @@ def _pbdata_required() -> bool:
 
 
 def _pbcoindata_required() -> bool:
-    """Return whether PBCoinData has a configured CoinMarketCap key."""
-    raw = str(load_ini("coinmarketcap", "api_key") or "").strip()
-    return bool(raw and raw.lower() not in {"none", "null", "false", "<api_key>"} and not (raw.startswith("<") and raw.endswith(">")))
+    """Return whether PBCoinData should run to maintain exchange mappings."""
+    return True
 
 
 def _migration_required_services(pbgdir: Path | None = None) -> set[str]:

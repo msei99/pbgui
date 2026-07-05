@@ -1141,6 +1141,15 @@ class CoinData:
     @api_key.setter
     def api_key(self, new_api_key):
         self._api_key = new_api_key
+
+    def _has_cmc_api_key(self) -> bool:
+        key = str(self.api_key or "").strip()
+        if not key:
+            return False
+        lowered = key.lower()
+        if lowered in {"none", "null", "false", "<api_key>"}:
+            return False
+        return not (key.startswith("<") and key.endswith(">"))
     
     @property
     def fetch_limit(self):
@@ -2080,6 +2089,9 @@ class CoinData:
             return False
 
     def fetch_api_status(self):
+        if not self._has_cmc_api_key():
+            self.api_error = "No API key configured"
+            return False
         endpoint = "status"
         url = 'https://pro-api.coinmarketcap.com/v1/key/info'
         headers = {
@@ -2372,7 +2384,7 @@ class CoinData:
         if data_file.exists():
             data_ts = data_file.stat().st_mtime
         now_ts = datetime.now().timestamp()
-        if data_ts < now_ts - 3600*self.fetch_interval:
+        if self._has_cmc_api_key() and data_ts < now_ts - 3600*self.fetch_interval:
             self.fetch_data()
             self.save_data()
             loadfromfile = False
@@ -2393,7 +2405,7 @@ class CoinData:
         if metadata_file.exists():
             metadata_ts = metadata_file.stat().st_mtime
         now_ts = datetime.now().timestamp()
-        if metadata_ts < now_ts - 3600*24*self.metadata_interval:
+        if self._has_cmc_api_key() and metadata_ts < now_ts - 3600*24*self.metadata_interval:
             self.fetch_metadata()
             self.save_metadata()
         if not self.metadata and metadata_file.exists():
