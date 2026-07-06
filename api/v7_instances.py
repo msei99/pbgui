@@ -40,6 +40,8 @@ from master.cluster_state import (
     default_cluster_root,
     ensure_local_identity,
     generate_node_id,
+    load_operations,
+    read_local_identity,
     rebuild_materialized_state,
 )
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config, strip_pbgui_param_status
@@ -937,17 +939,19 @@ async def set_instance_forced_mode(
     except Exception as exc:
         _log(SERVICE, f"Failed to backup '{name}' before forced-mode change: {exc}", level="WARNING")
 
+    history_version = _highest_cluster_instance_version(name)
+    version_base = max(old_version, history_version)
     live = cfg.setdefault("live", {})
     live["forced_mode_long"] = mode
     live["forced_mode_short"] = mode
-    cfg.setdefault("pbgui", {})["version"] = old_version + 1
+    cfg.setdefault("pbgui", {})["version"] = version_base + 1
 
     try:
         save_pb7_config(cfg, config_path)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not save config for '{name}': {exc}") from exc
 
-    _record_cluster_config_upsert(name, instance_dir, cfg, parent_version=old_version)
+    _record_cluster_config_upsert(name, instance_dir, cfg, parent_version=version_base)
     sync_result = await _ssh_sync_instance(name)
     _log(SERVICE, f"Set forced mode '{label}' for all positions on '{name}' (v{cfg['pbgui']['version']})", level="WARNING")
     return {
@@ -1105,6 +1109,38 @@ def _instance_config_version(name: str) -> int:
         return 0
 
 
+def _coerce_config_version(value: object) -> int:
+    """Return a numeric config version, or 0 for non-numeric history values."""
+
+    try:
+        return max(0, int(str(value).strip()))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _highest_cluster_instance_version(name: str) -> int:
+    """Return the highest recorded cluster version for an instance name."""
+
+    try:
+        root = _cluster_root()
+        identity = read_local_identity(root)
+        operations = load_operations(root, expected_cluster_id=str(identity["cluster_id"]))
+    except Exception:
+        return 0
+    highest = 0
+    for operation in operations:
+        if str(operation.get("instance") or "") != name:
+            continue
+        if str(operation.get("op") or "") not in {"UPSERT_CONFIG", "MOVE_INSTANCE", "DELETE_INSTANCE", "TOMBSTONE_INSTANCE"}:
+            continue
+        highest = max(
+            highest,
+            _coerce_config_version(operation.get("version")),
+            _coerce_config_version(operation.get("parent_version")),
+        )
+    return highest
+
+
 def _highest_backup_version(name: str) -> int:
     """Return the highest numeric backup version for an instance."""
     backup_root = Path(PBGDIR) / "data" / "backup" / "v7" / name
@@ -1215,7 +1251,7 @@ async def restore_instance(
 
     instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
     rollback = instance_dir.is_dir()
-    previous_version = _highest_backup_version(name)
+    previous_version = max(_highest_backup_version(name), _highest_cluster_instance_version(name))
     if rollback:
         instances = _enrich_with_vps_data(_load_local_instances())
         inst = next((item for item in instances if item["name"] == name), None)
@@ -1454,7 +1490,10 @@ async def _save_instance_config_payload(
     instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
     instance_dir.mkdir(parents=True, exist_ok=True)
     config_path = instance_dir / "config.json"
+    is_new_instance = not config_path.is_file()
     previous_version = _instance_config_version(name)
+    history_version = _highest_cluster_instance_version(name)
+    version_base = max(previous_version, history_version)
     override_copy = {"copied": [], "missing": []}
 
     # Copy coin override files from source backtest config on first save of a new instance.
@@ -1506,9 +1545,9 @@ async def _save_instance_config_payload(
             draft_version = int(cfg["pbgui"].get("version", 0) or 0)
         except (TypeError, ValueError):
             draft_version = 0
-        cfg["pbgui"]["version"] = max(draft_version, previous_version + 1)
+        cfg["pbgui"]["version"] = max(draft_version, version_base + 1)
     else:
-        cfg["pbgui"]["version"] = cfg["pbgui"].get("version", 0) + 1
+        cfg["pbgui"]["version"] = max(_coerce_config_version(cfg["pbgui"].get("version", 0)), version_base) + 1
 
     # Set backtest.exchange from user→exchange mapping
     live_user = cfg.get("live", {}).get("user", "")
@@ -1588,8 +1627,8 @@ async def _save_instance_config_payload(
         name,
         instance_dir,
         cfg,
-        parent_version=previous_version,
-        allow_tombstone_recreate=backup_src_dir is not None,
+        parent_version=version_base,
+        allow_tombstone_recreate=backup_src_dir is not None or is_new_instance,
     )
 
     # Return a legacy sync payload; PBCluster owns remote materialization.

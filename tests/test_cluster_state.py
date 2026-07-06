@@ -358,6 +358,66 @@ def test_conflict_detection_marks_same_parent_changes(tmp_path: Path) -> None:
     }
 
 
+def test_later_linear_config_save_clears_old_parent_conflict(tmp_path: Path) -> None:
+    """A later config version can supersede stale parent-version collisions."""
+
+    root = _init_cluster(tmp_path)
+    write_operation(
+        root,
+        _operation(
+            NODE_A,
+            1,
+            "UPSERT_CONFIG",
+            {
+                "instance": "bybit_BTC",
+                "parent_version": "1",
+                "version": "2",
+                "assigned_host": NODE_B,
+                "desired_state": "running",
+                "config_manifest_hash": HASH_A,
+            },
+        ),
+    )
+    write_operation(
+        root,
+        _operation(
+            NODE_B,
+            1,
+            "UPSERT_CONFIG",
+            {
+                "instance": "bybit_BTC",
+                "parent_version": "1",
+                "version": "2",
+                "assigned_host": NODE_C,
+                "desired_state": "running",
+                "config_manifest_hash": HASH_B,
+            },
+        ),
+    )
+    write_operation(
+        root,
+        _operation(
+            NODE_A,
+            2,
+            "UPSERT_CONFIG",
+            {
+                "instance": "bybit_BTC",
+                "parent_version": "2",
+                "version": "3",
+                "assigned_host": NODE_C,
+                "desired_state": "running",
+                "config_manifest_hash": HASH_B,
+            },
+        ),
+    )
+
+    instance = rebuild_materialized_state(root)["desired_state"]["instances"]["bybit_BTC"]
+
+    assert instance["version"] == "3"
+    assert instance["conflicted"] is False
+    assert "conflicts" not in instance
+
+
 def test_tombstone_prevents_stale_config_resurrection(tmp_path: Path) -> None:
     """A stale config upsert cannot recreate an instance after tombstone."""
 

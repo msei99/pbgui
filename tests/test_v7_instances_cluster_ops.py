@@ -203,6 +203,55 @@ def test_backup_draft_save_clears_tombstone(monkeypatch, tmp_path: Path) -> None
     assert desired["instances"]["test_inst"]["version"] == "8"
 
 
+def test_save_after_deleted_instance_uses_highest_cluster_version(monkeypatch, tmp_path: Path) -> None:
+    """Recreating an instance name advances beyond deleted cluster history."""
+
+    (tmp_path / "pbgui.ini").write_text("[main]\npbname=master\n", encoding="utf-8")
+    monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(v7_instances, "_monitor", None)
+    monkeypatch.setattr(v7_instances, "save_pb7_config", lambda cfg, path: path.write_text(json.dumps(cfg), encoding="utf-8"))
+
+    async def noop_runtime_check(name: str, cfg: dict) -> None:
+        return None
+
+    async def noop_ssh_sync(name: str) -> dict:
+        return {"ok": 0, "failed": 0, "hosts": []}
+
+    class FakeUsers:
+        """Minimal Users replacement for save_instance_config."""
+
+        def find_exchange(self, user: str) -> str:
+            return ""
+
+    v7_instances._record_cluster_config_upsert(
+        "test_inst",
+        tmp_path / "data" / "run_v7" / "test_inst",
+        _write_config(tmp_path / "data" / "run_v7" / "test_inst", 5, "disabled"),
+        parent_version=4,
+    )
+    v7_instances._record_cluster_instance_delete("test_inst", 5)
+    shutil_dir = tmp_path / "data" / "run_v7" / "test_inst"
+    for item in shutil_dir.iterdir():
+        item.unlink()
+    shutil_dir.rmdir()
+
+    async def request_json() -> dict:
+        return {"config": {"live": {"user": "test_inst"}, "pbgui": {"version": 1, "enabled_on": "disabled"}}}
+
+    monkeypatch.setattr(v7_instances, "_ensure_target_runtime_compatible", noop_runtime_check)
+    monkeypatch.setattr(v7_instances, "_ssh_sync_instance", noop_ssh_sync)
+    monkeypatch.setitem(sys.modules, "User", SimpleNamespace(Users=lambda: FakeUsers()))
+
+    result = asyncio.run(v7_instances.save_instance_config("test_inst", SimpleNamespace(json=request_json), session=None))
+    desired = _read_json(tmp_path / "data" / "cluster" / "desired_state.json")
+    operation = sorted((tmp_path / "data" / "cluster" / "oplog").glob("*/*.json"))[-1]
+    payload = _read_json(operation)
+
+    assert result["version"] == 6
+    assert desired["instances"]["test_inst"]["version"] == "6"
+    assert payload["parent_version"] == "5"
+
+
 def test_copy_instance_config_copies_referenced_override_files(monkeypatch, tmp_path: Path) -> None:
     """Copying an instance config writes target config and referenced override files."""
 

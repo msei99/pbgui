@@ -572,7 +572,9 @@ def _mark_conflicts(
             )
             for item in changes
         }
-        if len(changes) > 1 and len(signatures) > 1 and instance in instances:
+        current_version = str((instances.get(instance) or {}).get("version") or "")
+        conflict_versions = {item["version"] for item in changes}
+        if len(changes) > 1 and len(signatures) > 1 and current_version in conflict_versions:
             instances[instance]["conflicted"] = True
             instances[instance]["conflicts"] = changes
 
