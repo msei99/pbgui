@@ -197,8 +197,23 @@ def _bt_queue_configs_dir() -> Path:
     return _bt_queue_dir() / "configs"
 
 
+def _bt_queue_config_bundle_dir(filename: str) -> Path:
+    return _bt_queue_configs_dir() / filename
+
+
 def _bt_queue_config_file(filename: str) -> Path:
+    return _bt_queue_config_bundle_dir(filename) / "backtest.json"
+
+
+def _bt_queue_legacy_config_file(filename: str) -> Path:
     return _bt_queue_configs_dir() / f"{filename}.json"
+
+
+def _cleanup_queue_config_snapshot(filename: str) -> None:
+    _bt_queue_legacy_config_file(filename).unlink(missing_ok=True)
+    bundle_dir = _bt_queue_config_bundle_dir(filename)
+    if bundle_dir.exists():
+        rmtree(bundle_dir, ignore_errors=True)
 
 
 def _queue_config_snapshot(data: dict | None) -> dict | None:
@@ -1028,6 +1043,7 @@ class BacktestWorker:
             if snapshot is not None:
                 config_path = _bt_queue_config_file(filename)
                 config_path.parent.mkdir(parents=True, exist_ok=True)
+                _copy_override_files(cfg, source_config_path.parent, config_path.parent)
                 save_pb7_config(cfg, config_path)
             elif changed:
                 save_pb7_config(cfg, source_config_path)
@@ -3238,7 +3254,7 @@ def remove_queue_item(filename: str, session: SessionToken = Depends(require_aut
     # Remove files
     (_bt_queue_dir() / f"{filename}.json").unlink(missing_ok=True)
     (_bt_queue_dir() / f"{filename}.pid").unlink(missing_ok=True)
-    _bt_queue_config_file(filename).unlink(missing_ok=True)
+    _cleanup_queue_config_snapshot(filename)
     (_bt_log_dir() / f"{filename}.log").unlink(missing_ok=True)
     _store.notify()
     return {"ok": True}
@@ -3254,7 +3270,7 @@ def clear_finished(session: SessionToken = Depends(require_auth)):
             fn = item["filename"]
             (_bt_queue_dir() / f"{fn}.json").unlink(missing_ok=True)
             (_bt_queue_dir() / f"{fn}.pid").unlink(missing_ok=True)
-            _bt_queue_config_file(fn).unlink(missing_ok=True)
+            _cleanup_queue_config_snapshot(fn)
             (_bt_log_dir() / f"{fn}.log").unlink(missing_ok=True)
             removed += 1
     _store.notify()

@@ -9121,9 +9121,19 @@
     function confirmDeleteVps(hostname) {
       openConfirmModal(
         'Delete VPS',
-        'Delete VPS ' + hostname + '? This removes the saved VPS Manager record.',
+        'Delete VPS ' + hostname + '? This only removes the saved VPS Manager record from PBGui. It does not delete files on the VPS.',
         function () {
           send({ cmd: 'delete_vps', hostname: hostname });
+        }
+      );
+    }
+
+    function confirmPurgeVpsInstall(hostname) {
+      openConfirmModal(
+        'Purge VPS install',
+        'Remove PBGui/PB7 files, PBGui systemd units, PBGui cron jobs and Cluster Sync authorized_keys entries from ' + hostname + '? Run this before Delete VPS if you want the remote install removed.',
+        function () {
+          vpsActionWithPw(hostname, 'vps-purge-install', 'Purge VPS Install');
         }
       );
     }
@@ -9810,6 +9820,7 @@
           <button class='${linuxUpdateBtnClass}' type='button' onclick='updateLinuxVpsAction(${js(selectedHost)})'>Update Linux</button>
           <button class='${rebootBtnClass}' type='button' onclick='vpsActionWithPw(${js(selectedHost)}, "vps-reboot", "Reboot VPS")'>Reboot VPS</button>
           <button class='sb-btn' type='button' onclick='vpsActionWithPw(${js(selectedHost)}, "vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>
+          <button class='sb-btn danger' type='button' onclick='confirmPurgeVpsInstall(${js(selectedHost)})'>Purge VPS Install</button>
           <button class='sb-btn' type='button' onclick='openCoinDataPrompt(${js(selectedHost)})'>Update CoinData API</button>
           <button class='${systemdMigrationBtn.className}' type='button' title='${escAttr(systemdMigrationBtn.title)}' onclick='previewVpsSystemdMigration(${js(selectedHost)})'>${esc(systemdMigrationBtn.text)}</button>`;
       } else if (store.view === 'add') {

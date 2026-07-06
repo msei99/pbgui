@@ -193,6 +193,78 @@ def test_remove_node_operation_hides_materialized_node(tmp_path: Path) -> None:
     assert [op["op"] for op in operations] == ["ADD_NODE", "ADD_NODE", "REMOVE_NODE"]
 
 
+def test_removed_node_stays_hidden_after_later_membership_update(tmp_path: Path) -> None:
+    """Later peer membership updates must not recreate a removed node."""
+
+    root = _init_cluster(tmp_path)
+    write_operation(
+        root,
+        _operation(
+            NODE_A,
+            1,
+            "ADD_NODE",
+            {"node_id": NODE_B, "role": "vps", "pbname": "manibot70", "ssh_host": "10.0.0.2", "sync_mode": "disabled", "sync_enabled": False},
+        ) | {"created_at": 101},
+    )
+    write_operation(root, _operation(NODE_A, 2, "REMOVE_NODE", {"node_id": NODE_B}) | {"created_at": 102})
+    write_operation(
+        root,
+        _operation(
+            NODE_C,
+            1,
+            "UPDATE_NODE_ADDRESS",
+            {"node_id": NODE_B, "ssh_host": "10.0.0.3", "sync_mode": "reachable", "sync_enabled": True},
+        ) | {"created_at": 103},
+    )
+
+    materialized = rebuild_materialized_state(root)
+    operations = cluster_state_module.load_operations(root, expected_cluster_id=CLUSTER_ID)
+
+    assert NODE_B not in materialized["cluster_nodes"]["nodes"]
+    assert [operation["created_at"] for operation in operations] == [101, 102, 103]
+
+
+def test_newer_membership_update_wins_across_actors(tmp_path: Path) -> None:
+    """Newer node membership settings must not be overwritten by older peer ops."""
+
+    root = _init_cluster(tmp_path)
+    write_operation(
+        root,
+        _operation(
+            NODE_A,
+            1,
+            "ADD_NODE",
+            {"node_id": NODE_B, "role": "vps", "pbname": "runner", "ssh_host": "10.0.0.2", "sync_mode": "reachable", "sync_enabled": True},
+        ) | {"created_at": 200},
+    )
+    write_operation(
+        root,
+        _operation(
+            NODE_A,
+            2,
+            "UPDATE_NODE",
+            {"node_id": NODE_B, "sync_mode": "disabled", "sync_enabled": False},
+        ) | {"created_at": 300},
+    )
+    write_operation(
+        root,
+        _operation(
+            NODE_C,
+            1,
+            "UPDATE_NODE",
+            {"node_id": NODE_B, "ssh_host": "10.0.0.2", "sync_mode": "reachable", "sync_enabled": True},
+        ) | {"created_at": 250},
+    )
+
+    materialized = rebuild_materialized_state(root)
+    operations = cluster_state_module.load_operations(root, expected_cluster_id=CLUSTER_ID)
+    node = materialized["cluster_nodes"]["nodes"][NODE_B]
+
+    assert [operation["created_at"] for operation in operations] == [200, 250, 300]
+    assert node["sync_mode"] == "disabled"
+    assert node["sync_enabled"] is False
+
+
 def test_write_operation_requests_cluster_sync_once(monkeypatch, tmp_path: Path) -> None:
     """A new operation wakes PBCluster, while replaying the same operation is idempotent."""
 

@@ -437,6 +437,37 @@ def test_update_node_settings_records_reachable_sync_mode(monkeypatch, tmp_path:
     assert nodes[NODE_B]["sync_peers"] == [NODE_A]
 
 
+def test_update_node_settings_records_disabled_sync_mode(monkeypatch, tmp_path: Path) -> None:
+    """Saving node settings as disabled persists sync_mode and exposes removal."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    append_operation(
+        root,
+        "ADD_NODE",
+        {"node_id": NODE_B, "role": "vps", "pbname": "vps-a", "sync_mode": "reachable", "sync_enabled": True, "ssh_host": "203.0.113.10"},
+        created_at=102,
+    )
+
+    result = asyncio.run(
+        cluster.update_node_settings(
+            NODE_B,
+            _JsonRequest({"sync_mode": "disabled", "remote_pbgui_dir": "", "ssh_host": "203.0.113.10", "ssh_user": "bot", "ssh_port": 22, "sync_peers": []}),
+            session=None,
+        )
+    )
+    operations = load_operations(root, expected_cluster_id=CLUSTER_ID)
+    nodes = _read_json(tmp_path / "data" / "cluster" / "cluster_nodes.json")["nodes"]
+
+    assert result["changed"] is True
+    assert operations[-1]["op"] == "UPDATE_NODE"
+    assert operations[-1]["sync_mode"] == "disabled"
+    assert operations[-1]["sync_enabled"] is False
+    assert nodes[NODE_B]["sync_mode"] == "disabled"
+    assert nodes[NODE_B]["sync_enabled"] is False
+
+
 def test_update_local_node_settings_persists_detected_connection_metadata(monkeypatch, tmp_path: Path) -> None:
     """Saving local node settings fills local path, IP and user metadata."""
 

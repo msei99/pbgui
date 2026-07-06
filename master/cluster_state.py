@@ -320,7 +320,7 @@ def load_operations(cluster_root: Path, *, expected_cluster_id: str | None = Non
             if actor_dir.name != actor or op_path.name != f"{seq:08d}.json":
                 raise ClusterStateError(f"operation path does not match actor/seq: {op_path}")
             operations.append(operation)
-    operations.sort(key=lambda item: (str(item["actor"]), int(item["seq"]), str(item["op_id"])))
+    operations.sort(key=lambda item: (int(item["created_at"]), str(item["actor"]), int(item["seq"]), str(item["op_id"])))
     return operations
 
 
@@ -331,6 +331,7 @@ def rebuild_materialized_state(cluster_root: Path, *, write: bool = True) -> dic
     cluster_id = str(identity["cluster_id"])
     operations = load_operations(cluster_root, expected_cluster_id=cluster_id)
     nodes: dict[str, dict[str, Any]] = {}
+    removed_node_ids: set[str] = set()
     instances: dict[str, dict[str, Any]] = {}
     tombstones: dict[str, dict[str, Any]] = {}
     api_keys: dict[str, Any] | None = None
@@ -344,7 +345,7 @@ def rebuild_materialized_state(cluster_root: Path, *, write: bool = True) -> dic
         generated_at = max(generated_at, int(operation.get("created_at") or 0))
         op = str(operation["op"])
         if op in MEMBERSHIP_OPS:
-            _apply_membership(nodes, operation)
+            _apply_membership(nodes, removed_node_ids, operation)
         elif op in V7_OPS:
             _apply_v7(instances, tombstones, parent_changes, operation)
         elif op == "UPSERT_API_KEYS":
@@ -438,13 +439,15 @@ def detect_duplicate_node_ids(records: Iterable[dict[str, Any]]) -> set[str]:
     return duplicates
 
 
-def _apply_membership(nodes: dict[str, dict[str, Any]], operation: dict[str, Any]) -> None:
+def _apply_membership(nodes: dict[str, dict[str, Any]], removed_node_ids: set[str], operation: dict[str, Any]) -> None:
     """Apply a membership operation to materialized nodes."""
 
     op = str(operation["op"])
     node_id = str(operation["node_id"])
-    current = dict(nodes.get(node_id, {"node_id": node_id}))
+    if node_id in removed_node_ids:
+        return
     if op == "DISABLE_NODE":
+        current = dict(nodes.get(node_id, {"node_id": node_id}))
         current["enabled"] = False
         current["sync_mode"] = "disabled"
         current["sync_enabled"] = False
@@ -452,8 +455,10 @@ def _apply_membership(nodes: dict[str, dict[str, Any]], operation: dict[str, Any
         nodes[node_id] = current
         return
     if op == "REMOVE_NODE":
+        removed_node_ids.add(node_id)
         nodes.pop(node_id, None)
         return
+    current = dict(nodes.get(node_id, {"node_id": node_id}))
     if "sync_enabled" in operation and "sync_mode" not in operation:
         current.pop("sync_mode", None)
     for key, value in operation.items():

@@ -100,6 +100,15 @@ class TestVpsManagerFrontendLogic:
         assert "flushPendingWsMessages()" in source
         assert "store.pendingWsMessages = []" in source
 
+    def test_vps_manager_delete_and_remote_purge_are_separate_actions(self) -> None:
+        """Deleting a VPS record stays local while remote install purge is explicit."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+
+        assert "This only removes the saved VPS Manager record from PBGui" in source
+        assert "function confirmPurgeVpsInstall(hostname)" in source
+        assert "vpsActionWithPw(hostname, 'vps-purge-install', 'Purge VPS Install')" in source
+        assert "onclick='confirmPurgeVpsInstall(${js(selectedHost)})'>Purge VPS Install</button>" in source
+
     def test_dirty_optional_fields_survive_live_config_refresh(self) -> None:
         """Cleared optional fields must stay dirty while remote metadata is stale."""
         bootstrap = """

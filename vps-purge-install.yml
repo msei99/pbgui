@@ -1,0 +1,207 @@
+---
+# Purge PBGui-managed files from a selected VPS.
+# This removes the PBGui/PB7 installation artifacts, user systemd units,
+# PBGui cron jobs and Cluster Sync authorized_keys entries for this install.
+
+- hosts: "{{ hostname }}"
+  gather_facts: yes
+
+  vars:
+    ansible_become_password: "{{ user_pw }}"
+    user: "{{ user }}"
+    install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
+    pbgui_dir: "{{ install_dir }}/pbgui"
+    purge_paths:
+      - "{{ install_dir }}/pbgui"
+      - "{{ install_dir }}/pb7"
+      - "{{ install_dir }}/venv_pbgui"
+      - "{{ install_dir }}/venv_pbgui312"
+      - "{{ install_dir }}/venv_pb7"
+
+  tasks:
+    - name: display facts
+      debug:
+        var: ansible_facts
+      tags: debug,never
+
+    - name: validate install_dir safety
+      assert:
+        that:
+          - install_dir is match('^/[A-Za-z0-9._/-]+$')
+          - "'..' not in install_dir.split('/')"
+          - install_dir not in ['/', '/home', '/root', '/usr', '/opt', '/var', '/tmp']
+        fail_msg: "Refusing to purge unsafe install_dir={{ install_dir }}"
+
+    - name: stop and remove PBGui systemd user units
+      shell: |
+        set -u
+        target_user={{ user | quote }}
+        target_home="$(getent passwd "$target_user" | cut -d: -f6)"
+        if [ -z "$target_home" ]; then
+          target_home="$HOME"
+        fi
+        uid="$(id -u "$target_user" 2>/dev/null || id -u)"
+        export XDG_RUNTIME_DIR="/run/user/$uid"
+        unit_dir="$target_home/.config/systemd/user"
+        wants_dir="$unit_dir/default.target.wants"
+        changed=0
+        for unit in pbgui-api.service pbgui-pbcluster.service pbgui-pbrun.service pbgui-pbdata.service pbgui-pbcoindata.service pbgui-pbremote.service; do
+          systemctl --user stop "$unit" >/dev/null 2>&1 || true
+          systemctl --user disable "$unit" >/dev/null 2>&1 || true
+          systemctl --user reset-failed "$unit" >/dev/null 2>&1 || true
+          if [ -e "$wants_dir/$unit" ] || [ -e "$unit_dir/$unit" ]; then
+            changed=1
+          fi
+          rm -f "$wants_dir/$unit" "$unit_dir/$unit"
+        done
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+        echo "changed=$changed"
+      args:
+        executable: /bin/bash
+      register: systemd_purge_result
+      changed_when: "'changed=1' in systemd_purge_result.stdout"
+
+    - name: remove PBGui user cleanup cron job
+      cron:
+        name: "pbgui-cleanup-user"
+        state: absent
+
+    - name: remove legacy PBGui cron job
+      cron:
+        name: "pbgui"
+        state: absent
+
+    - name: remove PBGui root journal cleanup cron job
+      cron:
+        name: "pbgui-cleanup-journal"
+        user: root
+        state: absent
+      become: yes
+
+    - name: remove legacy PBGui crontab lines for this install
+      shell: |
+        set -u
+        tmp="$(mktemp)"
+        new="$(mktemp)"
+        trap 'rm -f "$tmp" "$new"' EXIT
+        crontab -l > "$tmp" 2>/dev/null || true
+        grep -Fv -- {{ pbgui_dir | quote }} "$tmp" > "$new" || true
+        if ! cmp -s "$tmp" "$new"; then
+          crontab "$new"
+          echo changed=1
+        else
+          echo changed=0
+        fi
+      args:
+        executable: /bin/bash
+      register: user_crontab_purge_result
+      changed_when: "'changed=1' in user_crontab_purge_result.stdout"
+
+    - name: stop leftover PBGui and PB7 processes from this install
+      shell: |
+        python3 - <<'PY'
+        import os
+        import signal
+        import time
+        from pathlib import Path
+
+        install = Path(os.environ['PBGUI_PURGE_INSTALL_DIR']).resolve()
+        patterns = [
+            str(install / 'pbgui' / 'PBApiServer.py'),
+            str(install / 'pbgui' / 'PBCluster.py'),
+            str(install / 'pbgui' / 'PBRun.py'),
+            str(install / 'pbgui' / 'PBCoinData.py'),
+            str(install / 'pb7' / 'src' / 'main.py'),
+            str(install / 'venv_pb7' / 'bin' / 'python'),
+            str(install / 'venv_pbgui' / 'bin' / 'python'),
+        ]
+        protected = {os.getpid()}
+        pid = os.getppid()
+        while pid and pid not in protected:
+            protected.add(pid)
+            try:
+                stat = Path(f'/proc/{pid}/stat').read_text(encoding='utf-8', errors='ignore')
+                pid = int(stat.rsplit(')', 1)[1].split()[1])
+            except Exception:
+                break
+        targets = []
+        for proc in Path('/proc').iterdir():
+            if not proc.name.isdigit():
+                continue
+            pid = int(proc.name)
+            if pid in protected:
+                continue
+            try:
+                raw = (proc / 'cmdline').read_bytes().replace(b'\x00', b' ').decode('utf-8', errors='ignore')
+            except Exception:
+                continue
+            if any(pattern in raw for pattern in patterns):
+                targets.append(pid)
+        for pid in targets:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        if targets:
+            time.sleep(2)
+        for pid in targets:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        print('changed=%d pids=%s' % (1 if targets else 0, ','.join(str(pid) for pid in targets)))
+        PY
+      args:
+        executable: /bin/bash
+      environment:
+        PBGUI_PURGE_INSTALL_DIR: "{{ install_dir }}"
+      register: process_purge_result
+      changed_when: "'changed=1' in process_purge_result.stdout"
+
+    - name: remove Cluster Sync authorized_keys entries for this install
+      shell: |
+        python3 - <<'PY'
+        from pathlib import Path
+        import os
+
+        pbgui_dir = os.environ.get('PBGUI_PURGE_DIR', '').rstrip('/')
+        path = Path.home() / '.ssh' / 'authorized_keys'
+        if not pbgui_dir or not path.exists():
+            print('changed=0')
+            raise SystemExit(0)
+        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+        kept = []
+        removed = 0
+        marker = f"{pbgui_dir}/cluster_sync_forced_command.sh"
+        for line in lines:
+            if marker in line and 'pbgui-cluster:' in line:
+                removed += 1
+                continue
+            kept.append(line)
+        if removed:
+            path.write_text(('\n'.join(kept).rstrip() + '\n') if kept else '', encoding='utf-8')
+            path.chmod(0o600)
+        print(f'changed={1 if removed else 0} removed={removed}')
+        PY
+      args:
+        executable: /bin/bash
+      environment:
+        PBGUI_PURGE_DIR: "{{ pbgui_dir }}"
+      register: authorized_keys_purge_result
+      changed_when: "'changed=1' in authorized_keys_purge_result.stdout"
+
+    - name: remove PBGui install directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ purge_paths }}"
+      register: install_dir_purge_result
+
+    - name: print purge summary
+      debug:
+        msg:
+          - "systemd: {{ systemd_purge_result.stdout_lines | default([]) | join(', ') }}"
+          - "user_cron: {{ user_crontab_purge_result.stdout_lines | default([]) | join(', ') }}"
+          - "processes: {{ process_purge_result.stdout_lines | default([]) | join(', ') }}"
+          - "authorized_keys: {{ authorized_keys_purge_result.stdout_lines | default([]) | join(', ') }}"
+          - "removed paths: {{ purge_paths | join(', ') }}"
