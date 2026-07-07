@@ -156,6 +156,16 @@
         PBGUI_REQUIRE_PBCOINDATA: "1"
       listen: "restart pbgui"
 
+    - name: Restart PBApiServer
+      shell: |
+        set -euo pipefail
+        restart_unit="pbgui-api-restart-$(date +%s%N)"
+        systemd-run --user --unit="$restart_unit" --collect /bin/bash -lc 'sleep 1; systemctl --user enable pbgui-api.service; systemctl --user restart pbgui-api.service'
+      args:
+        executable: /bin/bash
+      changed_when: true
+      listen: "restart pbgui"
+
     - name: Install pb7 requirements
       pip:
         virtualenv: "{{ pb7venv }}"

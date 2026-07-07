@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 
 import api.services as services
+import PBApiServer
 
 
 def test_local_services_registry_includes_pbcluster() -> None:
@@ -128,6 +129,42 @@ def test_restart_service_route_preserves_api_restart_handler(monkeypatch) -> Non
     monkeypatch.setattr(services, "restart_api_server", lambda session=None: {"ok": True, "message": "Restarting..."})
 
     assert services.restart_service("api-server") == {"ok": True, "message": "Restarting..."}
+
+
+def test_services_api_restart_uses_transient_systemd_unit(monkeypatch) -> None:
+    """Services API restart queues work outside pbgui-api.service's cgroup."""
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 0, stdout="queued", stderr="")
+
+    monkeypatch.setattr(services.subprocess, "run", fake_run)
+    ok, output = services._queue_api_systemd_restart("pbgui-api.service")
+
+    assert ok is True
+    assert output == "queued"
+    assert calls[0][:2] == ["systemd-run", "--user"]
+    assert "/bin/bash" in calls[0]
+    assert "systemctl --user restart pbgui-api.service" in calls[0][-1]
+
+
+def test_root_api_restart_uses_transient_systemd_unit(monkeypatch) -> None:
+    """Nav restart queues work outside pbgui-api.service's cgroup."""
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 0, stdout="queued", stderr="")
+
+    monkeypatch.setattr(PBApiServer.subprocess, "run", fake_run)
+    ok, output = PBApiServer._queue_current_api_systemd_restart()
+
+    assert ok is True
+    assert output == "queued"
+    assert calls[0][:2] == ["systemd-run", "--user"]
+    assert "/bin/bash" in calls[0]
+    assert "systemctl --user restart pbgui-api.service" in calls[0][-1]
 
 
 def test_pbcoindata_start_is_not_blocked_without_cmc_key(monkeypatch) -> None:

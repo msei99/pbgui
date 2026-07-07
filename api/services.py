@@ -131,6 +131,27 @@ def _run_user_systemctl(args: list[str], *, timeout: int = 15) -> subprocess.Com
     )
 
 
+def _queue_api_systemd_restart(unit: str) -> tuple[bool, str]:
+    """Queue an API restart from a transient unit outside the API service cgroup."""
+    restart_unit = f"pbgui-api-restart-{os.getpid()}-{time.time_ns()}"
+    restart_cmd = f"sleep 0.5\nsystemctl --user restart {shlex.quote(unit)}"
+    try:
+        proc = subprocess.run(
+            ["systemd-run", "--user", f"--unit={restart_unit}", "--collect", "/bin/bash", "-lc", restart_cmd],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=_systemd_user_env(),
+        )
+    except Exception as exc:
+        return False, str(exc)
+    output = ((proc.stderr or "") + (proc.stdout or "")).strip()
+    if proc.returncode != 0:
+        return False, output or str(proc.returncode)
+    return True, output or restart_unit
+
+
 def _systemd_action_error_message(
     *,
     action: str,
@@ -1454,15 +1475,11 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
 
         systemd_unit = _systemd_unit_for_service("api-server")
         if systemd_unit:
-            def _do_systemd_restart() -> None:
-                time.sleep(0.3)  # let HTTP response reach the browser first
-                proc = _run_user_systemctl(["--no-block", "restart", systemd_unit], timeout=10)
-                if proc.returncode != 0:
-                    output = ((proc.stderr or "") + (proc.stdout or "")).strip()
-                    _log(SERVICE, f"[restart] systemd restart failed for {systemd_unit}: {output}", level="ERROR")
-
-            _log(SERVICE, f"[restart] systemd restart requested for {systemd_unit}", level="WARNING")
-            threading.Thread(target=_do_systemd_restart, daemon=True).start()
+            ok, output = _queue_api_systemd_restart(systemd_unit)
+            if not ok:
+                _log(SERVICE, f"[restart] systemd restart scheduling failed for {systemd_unit}: {output}", level="ERROR")
+                raise RuntimeError(output or f"Could not schedule restart for {systemd_unit}.")
+            _log(SERVICE, f"[restart] systemd restart scheduled for {systemd_unit}: {output}", level="WARNING")
             return {"ok": True, "message": "Restarting…"}
 
         pbgdir = Path(PBGDIR)

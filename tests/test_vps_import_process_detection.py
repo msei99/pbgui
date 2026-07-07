@@ -1872,6 +1872,10 @@ def test_master_update_playbooks_repair_required_systemd_units(playbook_path: st
     assert "repair=inactive" in playbook
     assert "required_systemd_units" in playbook
     assert "PBGUI_REQUIRE_PBCOINDATA" in playbook
+    assert "Restart PBApiServer" in playbook
+    assert "systemd-run --user" in playbook
+    assert "systemctl --user enable pbgui-api.service" in playbook
+    assert "systemctl --user restart pbgui-api.service" in playbook
     assert 'user: "{{ user }}"' not in playbook
     assert "target_user={{ user | default('', true) | quote }}" in playbook
     assert 'getent passwd "$target_user"' in playbook

@@ -19,12 +19,13 @@ import json
 import logging
 import os
 import signal
+import shlex
 import subprocess
 import sys
 import warnings
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePath
-from time import sleep
+from time import sleep, time_ns
 
 _PBGUI_ROOT = Path(__file__).resolve().parent
 try:
@@ -132,6 +133,27 @@ def _systemd_user_env() -> dict[str, str]:
     return env
 
 
+def _queue_current_api_systemd_restart() -> tuple[bool, str]:
+    """Queue an API restart from a transient unit outside the API service cgroup."""
+    restart_unit = f"pbgui-api-restart-{os.getpid()}-{time_ns()}"
+    restart_cmd = f"sleep 0.5\nsystemctl --user restart {shlex.quote(_API_SYSTEMD_UNIT)}"
+    try:
+        proc = subprocess.run(
+            ["systemd-run", "--user", f"--unit={restart_unit}", "--collect", "/bin/bash", "-lc", restart_cmd],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=_systemd_user_env(),
+        )
+    except Exception as exc:
+        return False, str(exc)
+    output = ((proc.stderr or "") + (proc.stdout or "")).strip()
+    if proc.returncode != 0:
+        return False, output or str(proc.returncode)
+    return True, output or restart_unit
+
+
 def _configured_cors() -> tuple[list[str], bool]:
     """Return configured CORS origins and whether credentials may be sent."""
     raw = str(load_ini("api_server", "cors_origins") or "").strip()
@@ -184,19 +206,11 @@ def _restart_current_api_systemd_unit() -> bool:
     if props.get("ActiveState") != "active" or main_pid != os.getpid():
         return False
 
-    restart = subprocess.run(
-        ["systemctl", "--user", "--no-block", "restart", _API_SYSTEMD_UNIT],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        env=env,
-    )
-    if restart.returncode != 0:
-        output = ((restart.stderr or "") + (restart.stdout or "")).strip()
-        _log(SERVICE, f"[restart] systemd restart failed: {output or restart.returncode}", level="ERROR")
-        os._exit(1)
-    _log(SERVICE, f"[restart] queued systemd restart for {_API_SYSTEMD_UNIT}", level="WARNING")
+    ok, output = _queue_current_api_systemd_restart()
+    if not ok:
+        _log(SERVICE, f"[restart] systemd restart scheduling failed: {output}", level="ERROR")
+        return False
+    _log(SERVICE, f"[restart] queued systemd restart for {_API_SYSTEMD_UNIT}: {output}", level="WARNING")
     return True
 
 
