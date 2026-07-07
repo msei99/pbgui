@@ -6,7 +6,7 @@
 # 3. Checkout specified branch
 # 4. Optionally reset to specific commit (stays on branch)
 # 5. Pull if on branch HEAD (no specific commit)
-# 6. Sync systemd units and restart PBCluster/PBCoinData
+# 6. Sync systemd units and restart PBCluster/PBCoinData/PBMonitorAgent
 
 - hosts: localhost
   gather_facts: "{{ debug }}"
@@ -106,7 +106,7 @@
         required_units="pbgui-api.service"
         starter_help="$({{ ansible_playbook_python }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
         if printf '%s' "$starter_help" | grep -q 'PBCluster'; then
-          required_units="pbgui-api.service pbgui-pbcluster.service"
+          required_units="pbgui-api.service pbgui-pbcluster.service pbgui-monitor-agent.service"
         fi
         for unit in $required_units; do
           if [ ! -f "$unit_dir/$unit" ]; then
@@ -133,7 +133,7 @@
         enable_services="api,pbrun,pbdata,pbcoindata"
         starter_help="$({{ ansible_playbook_python }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
         if printf '%s' "$starter_help" | grep -q 'PBCluster'; then
-          enable_services="api,pbcluster"
+          enable_services="api,pbcluster,monitor-agent"
         fi
         args=("$setup_script" --pbgui-dir "{{ pbgdir }}" --python "{{ ansible_playbook_python }}" --enable "$enable_services" --no-start)
         if /bin/bash "$setup_script" --help 2>&1 | grep -q -- '--no-disable-excluded'; then
@@ -152,7 +152,7 @@
         starter_help="$({{ ansible_playbook_python }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
         if printf '%s' "$starter_help" | grep -q 'PBCluster'; then
           PBGUI_DIR="{{ pbgdir }}" PBGUI_PYTHON="{{ ansible_playbook_python }}" \
-            /bin/bash "{{ pbgdir }}/setup/vps_service_control.sh" restart PBCluster PBCoinData
+            /bin/bash "{{ pbgdir }}/setup/vps_service_control.sh" restart PBCluster PBCoinData PBMonitorAgent
           exit 0
         fi
         services=(PBRun PBCoinData)

@@ -1853,14 +1853,17 @@ def test_host_meta_migration_status_requires_monitor_agent_unit() -> None:
 
 
 @pytest.mark.parametrize("playbook_path", ["master-update-pbgui.yml", "master-update-pb.yml", "master-switch-pbgui-branch.yml"])
-def test_master_update_playbooks_repair_pbcluster_systemd_unit(playbook_path: str) -> None:
-    """Master updates must repair missing PBCluster systemd units even without git changes."""
+def test_master_update_playbooks_repair_required_systemd_units(playbook_path: str) -> None:
+    """Master updates must repair required systemd units even without git changes."""
     playbook = Path(playbook_path).read_text(encoding="utf-8")
     systemd_setup_block = playbook.split("register: systemd_setup_result", 1)[1].split("listen: \"restart pbgui\"", 1)[0]
 
     assert "Check required PBGui systemd units" in playbook
     assert "force_handlers: true" in playbook
     assert "pbgui-pbcluster.service" in playbook
+    assert "pbgui-monitor-agent.service" in playbook
+    assert "monitor-agent" in playbook
+    assert "PBMonitorAgent" in playbook
     assert "required_systemd_units" in playbook
     assert 'user: "{{ user }}"' not in playbook
     assert "target_user={{ user | default('', true) | quote }}" in playbook

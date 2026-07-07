@@ -18,6 +18,17 @@ def test_local_services_registry_includes_pbcluster() -> None:
     assert "pbcluster" in services._MIGRATION_LEGACY_STOP_SERVICES
 
 
+def test_local_services_registry_includes_monitor_agent() -> None:
+    """Local Services API exposes PBMonitorAgent as a systemd-only service."""
+
+    assert "monitor-agent" in services._SERVICES
+    assert services._SYSTEMD_SERVICE_UNITS["monitor-agent"] == "pbgui-monitor-agent.service"
+    assert services._SERVICE_SCRIPT_NAMES["monitor-agent"] == "monitor_agent.py"
+    assert services._SERVICE_PID_FILES["monitor-agent"] == "pbmonitoragent.pid"
+    assert "monitor-agent" in services._MIGRATION_DEFAULT_SERVICES
+    assert "monitor-agent" not in services._MIGRATION_LEGACY_STOP_SERVICES
+
+
 def test_local_services_ui_includes_pbcluster() -> None:
     """Services page renders a PBCluster card/panel and log viewer target."""
 
@@ -28,6 +39,30 @@ def test_local_services_ui_includes_pbcluster() -> None:
     assert "id=\"log-pbcluster\"" in source
     assert "id: 'pbcluster'" in source
     assert "PBCluster.log" in source
+
+
+def test_local_services_ui_includes_monitor_agent() -> None:
+    """Services page renders PBMonitorAgent controls and log viewer target."""
+
+    source = Path("frontend/services_monitor.html").read_text(encoding="utf-8")
+
+    assert "data-panel=\"monitor-agent\"" in source
+    assert "id=\"panel-monitor-agent\"" in source
+    assert "id=\"log-monitor-agent\"" in source
+    assert "id: 'monitor-agent'" in source
+    assert "PBMonitorAgent.log" in source
+
+
+def test_master_installers_enable_monitor_agent_service() -> None:
+    """Local and remote browser installers include the monitor-agent systemd unit."""
+
+    core_source = Path("setup/installer/core.py").read_text(encoding="utf-8")
+    remote_source = Path("setup/installer/scripts/remote_master_bootstrap.sh").read_text(encoding="utf-8")
+
+    assert '"pbgui-monitor-agent.service"' in core_source
+    assert '"monitor_agent.py"' in core_source
+    assert '"api,pbrun,pbdata,pbcoindata,monitor-agent"' in core_source
+    assert "--enable api,pbrun,pbdata,pbcoindata,monitor-agent" in remote_source
 
 
 def test_local_services_ui_uses_real_restart_action() -> None:
@@ -225,7 +260,7 @@ def test_run_systemd_migration_deletes_legacy_start_sh(monkeypatch, tmp_path) ->
     before = {
         "warnings": [],
         "legacy_crontab": {"entries": []},
-        "required_services": ["api-server", "pbcluster", "pbrun", "pbdata", "pbcoindata"],
+        "required_services": ["api-server", "pbcluster", "pbrun", "pbdata", "pbcoindata", "monitor-agent"],
         "missing_default_units": [],
         "not_ready_default_units": [],
         "legacy_start_sh": {"path": str(start_script), "exists": True},
@@ -250,7 +285,7 @@ def test_run_systemd_migration_deletes_legacy_start_sh(monkeypatch, tmp_path) ->
     assert result["ok"] is True
     assert not start_script.exists()
     assert any("Deleted legacy start.sh" in line for line in result["logs"])
-    assert calls == [("pbcluster", "restart"), ("pbrun", "restart"), ("pbdata", "restart"), ("pbcoindata", "restart")]
+    assert calls == [("pbcluster", "restart"), ("pbrun", "restart"), ("pbdata", "restart"), ("pbcoindata", "restart"), ("monitor-agent", "restart")]
 
 
 def test_worker_restart_uses_single_restart_action() -> None:

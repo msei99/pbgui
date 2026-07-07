@@ -51,6 +51,7 @@ LOCAL_SYSTEMD_UNITS = (
     "pbgui-pbrun.service",
     "pbgui-pbdata.service",
     "pbgui-pbcoindata.service",
+    "pbgui-monitor-agent.service",
     "pbgui-pbremote.service",
 )
 PBGUI_SERVICE_SCRIPTS = {
@@ -59,6 +60,7 @@ PBGUI_SERVICE_SCRIPTS = {
     "PBRun.py",
     "PBData.py",
     "PBCoinData.py",
+    "monitor_agent.py",
 }
 
 
@@ -855,7 +857,7 @@ def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifa
                 "--python",
                 pbgui_venv / "bin" / "python",
                 "--enable",
-                "api,pbrun,pbdata,pbcoindata",
+                "api,pbrun,pbdata,pbcoindata,monitor-agent",
             ],
             log,
         )

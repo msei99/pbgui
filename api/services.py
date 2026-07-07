@@ -34,12 +34,13 @@ SERVICE = "Services"
 
 router = APIRouter()
 
-_SERVICES = ["pbcluster", "pbrun", "pbdata", "pbcoindata", "api-server"]
+_SERVICES = ["pbcluster", "pbrun", "pbdata", "pbcoindata", "monitor-agent", "api-server"]
 _SYSTEMD_SERVICE_UNITS = {
     "pbcluster": "pbgui-pbcluster.service",
     "pbrun": "pbgui-pbrun.service",
     "pbdata": "pbgui-pbdata.service",
     "pbcoindata": "pbgui-pbcoindata.service",
+    "monitor-agent": "pbgui-monitor-agent.service",
     "api-server": "pbgui-api.service",
 }
 _SYSTEMD_RUNNING_STATES = {"active", "activating", "reloading"}
@@ -49,6 +50,7 @@ _SERVICE_SCRIPT_NAMES = {
     "pbrun": "PBRun.py",
     "pbdata": "PBData.py",
     "pbcoindata": "PBCoinData.py",
+    "monitor-agent": "monitor_agent.py",
     "api-server": "PBApiServer.py",
 }
 _SERVICE_PID_FILES = {
@@ -56,9 +58,10 @@ _SERVICE_PID_FILES = {
     "pbrun": "pbrun.pid",
     "pbdata": "pbdata.pid",
     "pbcoindata": "pbcoindata.pid",
+    "monitor-agent": "pbmonitoragent.pid",
     "api-server": "api_server.pid",
 }
-_MIGRATION_DEFAULT_SERVICES = ["api", "pbcluster", "pbrun", "pbdata", "pbcoindata"]
+_MIGRATION_DEFAULT_SERVICES = ["api", "pbcluster", "pbrun", "pbdata", "pbcoindata", "monitor-agent"]
 _MIGRATION_LEGACY_STOP_SERVICES = ["pbcluster", "pbrun", "pbdata", "pbcoindata"]
 _fetch_summary_snapshot: Dict[str, Any] = {}
 _poller_metrics_snapshot: Dict[str, Any] = {}
@@ -83,6 +86,8 @@ def _get_service(name: str):
     if name == "pbcoindata":
         from PBCoinData import CoinData
         return CoinData()
+    if name == "monitor-agent":
+        raise RuntimeError("PBMonitorAgent requires the pbgui-monitor-agent.service systemd user unit.")
     if name == "api-server":
         # Lazy import to avoid circular import (PBApiServer.py imports api/services.py)
         mod = importlib.import_module("PBApiServer")
@@ -575,6 +580,7 @@ def _migration_required_services(pbgdir: Path | None = None) -> set[str]:
     """Return local services that should be enabled by migration on this host."""
     root = Path(pbgdir or PBGDIR)
     required = {"api-server"}
+    required.add("monitor-agent")
     if _pbcluster_required(root):
         required.add("pbcluster")
     if _pbrun_required_for_host(root):

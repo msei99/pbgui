@@ -431,7 +431,7 @@
     .gs-topic { color:#93c5fd; font-weight:600; font-size:13px; margin-bottom:5px; }
     .gs-snip { color:#94a3b8; font-size:11px; line-height:1.55; }
   </style>
-  <script src="/app/js/log_viewer_panel.js?v=24"></script>
+  <script src="/app/js/log_viewer_panel.js?v=25"></script>
 </head>
 <body>
 <!-- ── Prices overlay ── -->
@@ -505,6 +505,9 @@
       </button>
       <button class="sb-btn" data-panel="pbcoindata">
         <span class="sb-dot" id="dot-pbcoindata"></span>PBCoinData
+      </button>
+      <button class="sb-btn" data-panel="monitor-agent">
+        <span class="sb-dot" id="dot-monitor-agent"></span>PBMonitorAgent
       </button>
       <button class="sb-btn" data-panel="api-server">
         <span class="sb-dot" id="dot-api-server"></span>PBAPIServer
@@ -681,6 +684,19 @@
           <span class="inline-msg" id="coindata-save-msg"></span>
         </div>
       </div>
+    </div>
+
+    <!-- PBMonitorAgent panel -->
+    <div id="panel-monitor-agent" class="svc-panel">
+      <div class="ctrl-strip">
+        <span class="ctrl-title">PBMonitorAgent</span>
+        <div class="ctrl-status">
+          <div class="status-dot" id="cs-monitor-agent"></div>
+          <span class="status-label" id="sl-monitor-agent">checking…</span>
+        </div>
+        <span id="ctrl-btns-monitor-agent"></span>
+      </div>
+      <div class="log-wrap"><div id="log-monitor-agent" style="height:100%;"></div></div>
     </div>
 
     <!-- API Server panel -->
@@ -982,6 +998,7 @@ window.PBGUI_NAV_CONFIG = {
     { id: 'pbrun',      label: 'PBRun',       logFile: 'PBRun.log',       isApiServer: false, guideKeyword: 'pbrun_service'      },
     { id: 'pbdata',     label: 'PBData',      logFile: 'PBData.log',      isApiServer: false, guideKeyword: 'pbdata'             },
     { id: 'pbcoindata', label: 'PBCoinData',  logFile: 'PBCoinData.log',  isApiServer: false, guideKeyword: 'pbcoindata_service' },
+    { id: 'monitor-agent', label: 'PBMonitorAgent', logFile: 'PBMonitorAgent.log', isApiServer: false, guideKeyword: 'vps_monitor' },
     { id: 'api-server', label: 'PBAPIServer', logFile: 'PBApiServer.log', isApiServer: true,  guideKeyword: 'pbapiserver'        },
   ];
 

@@ -2,7 +2,7 @@
 # Update pbgui on localhost
 # Steps:
 # 1. Clone/update pbgui repository
-# 2. If updated, install requirements, sync systemd units and restart PBCluster/PBCoinData
+# 2. If updated, install requirements, sync systemd units and restart PBCluster/PBCoinData/PBMonitorAgent
 
 - hosts: localhost
   gather_facts: "{{ debug }}"
@@ -44,7 +44,7 @@
           target_home="$(getent passwd "$target_user" | cut -d: -f6)"
         fi
         unit_dir="${target_home:-$HOME}/.config/systemd/user"
-        for unit in pbgui-api.service pbgui-pbcluster.service; do
+        for unit in pbgui-api.service pbgui-pbcluster.service pbgui-monitor-agent.service; do
           if [ ! -f "$unit_dir/$unit" ]; then
             echo "missing=$unit"
           fi
@@ -78,15 +78,15 @@
           - --python
           - "{{ ansible_playbook_python }}"
           - --enable
-          - api,pbcluster
+          - api,pbcluster,monitor-agent
           - --no-disable-excluded
           - --no-start
       register: systemd_setup_result
       changed_when: systemd_setup_result.rc == 0
       listen: "restart pbgui"
 
-    - name: Restart PBCluster and PBCoinData
-      script: setup/vps_service_control.sh restart PBCluster PBCoinData
+    - name: Restart PBCluster, PBCoinData and PBMonitorAgent
+      script: setup/vps_service_control.sh restart PBCluster PBCoinData PBMonitorAgent
       environment:
         PBGUI_DIR: "{{ pbgdir }}"
         PBGUI_PYTHON: "{{ ansible_playbook_python }}"

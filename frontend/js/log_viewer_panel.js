@@ -303,6 +303,8 @@ class LogViewerPanel {
         this._restartTargetService = null;
         this._pendingRestartCommand = null;
         this._startRemoteAtEnd = false;
+        this._closed = false;
+        this._reconnectTimer = 0;
 
         this._MAX    = 5000;
         this._CHUNK  = 500;
@@ -540,8 +542,8 @@ class LogViewerPanel {
     /* ═══════════════════════════════════════════════════════════
        Public API
        ═══════════════════════════════════════════════════════ */
-    open()  { this._connect(); }
-    close() { this._disconnect(); }
+    open()  { this._closed = false; this._connect(); }
+    close() { this._closed = true; this._disconnect(); }
 
     /** Currently selected file (local mode) */
     get currentFile() { return this._file; }
@@ -596,6 +598,10 @@ class LogViewerPanel {
        WebSocket
        ═══════════════════════════════════════════════════════ */
     _connect() {
+        if (this._reconnectTimer) {
+            clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = 0;
+        }
         this._disconnect();
         var url = this._wsBase + '/ws/vps?token=' + encodeURIComponent(this._token);
         var ws  = new WebSocket(url);
@@ -623,6 +629,12 @@ class LogViewerPanel {
             me._updateStreamBtn();
             var ce = me._q('conn');
             if (ce) ce.textContent = 'disconnected';
+            if (!me._closed && !me._reconnectTimer) {
+                me._reconnectTimer = setTimeout(function() {
+                    me._reconnectTimer = 0;
+                    if (!me._closed) me._connect();
+                }, 2000);
+            }
         };
     }
 

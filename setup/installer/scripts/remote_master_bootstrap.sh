@@ -491,7 +491,7 @@ ufw default allow outgoing
 ufw --force enable
 
 info "Installing PBGui systemd user services..."
-bash "$INSTALL_DIR/pbgui/setup/setup_systemd.sh" --user "$TARGET_USER" --pbgui-dir "$INSTALL_DIR/pbgui" --python "$INSTALL_DIR/venv_pbgui/bin/python" --enable api,pbrun,pbdata,pbcoindata
+bash "$INSTALL_DIR/pbgui/setup/setup_systemd.sh" --user "$TARGET_USER" --pbgui-dir "$INSTALL_DIR/pbgui" --python "$INSTALL_DIR/venv_pbgui/bin/python" --enable api,pbrun,pbdata,pbcoindata,monitor-agent
 
 info "Checking PBGui API service..."
 SERVICE_UID="$(id -u "$TARGET_USER")"
