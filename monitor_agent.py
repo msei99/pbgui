@@ -282,6 +282,7 @@ def _run_service_status() -> None:
         "PBRun": ("pbgui-pbrun.service", "data/pid/pbrun.pid", "pbrun.py"),
         "PBData": ("pbgui-pbdata.service", "data/pid/pbdata.pid", "pbdata.py"),
         "PBCoinData": ("pbgui-pbcoindata.service", "data/pid/pbcoindata.pid", "pbcoindata.py"),
+        "PBMonitorAgent": ("pbgui-monitor-agent.service", "data/pid/pbmonitoragent.pid", "monitor_agent.py"),
     }
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -292,11 +293,11 @@ def _run_service_status() -> None:
     for service_name, (unit, pid_file, process_match) in services.items():
         status = _systemd_service_status(unit)
         if status is None:
-            if service_name == "PBCluster":
+            if service_name in {"PBCluster", "PBMonitorAgent"}:
                 status = {
                     "status": "stopped",
                     "pid": None,
-                    "error": "PBCluster systemd user unit is missing or unavailable",
+                    "error": f"{service_name} systemd user unit is missing or unavailable",
                     "was_restarted": False,
                     "manager": "systemd",
                     "unit": unit,

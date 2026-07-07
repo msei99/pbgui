@@ -137,6 +137,49 @@ def _cluster_node_known(cluster_root: Path, node_id: str, pending: set[str]) -> 
     return isinstance(nodes, dict) and node_id in nodes
 
 
+def _read_cluster_nodes(cluster_root: Path) -> dict[str, dict]:
+    """Read materialized cluster nodes keyed by node id."""
+
+    path = cluster_root / "cluster_nodes.json"
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    nodes = data.get("nodes") if isinstance(data, dict) else None
+    return nodes if isinstance(nodes, dict) else {}
+
+
+def _best_existing_cluster_node_for_host(cluster_root: Path, hostname: str) -> tuple[str, str] | None:
+    """Return the best existing node id/role for a hostname or pbname."""
+
+    host = str(hostname or "").strip()
+    if not host:
+        return None
+    candidates: list[tuple[tuple[int, int, int], str, dict]] = []
+    for node_id, node in _read_cluster_nodes(cluster_root).items():
+        if not isinstance(node, dict):
+            continue
+        names = {
+            str(node.get("hostname") or "").strip(),
+            str(node.get("pbname") or "").strip(),
+        }
+        if host not in names:
+            continue
+        score = (
+            1 if node.get("enabled") is not False else 0,
+            1 if node.get("sync_enabled") is True else 0,
+            1 if str(node.get("sync_mode") or "") != "disabled" else 0,
+        )
+        candidates.append((score, str(node_id), node))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    _, node_id, node = candidates[0]
+    return node_id, str(node.get("role") or "vps")
+
+
 def _cluster_node_payload(node_id: str, hostname: str, role: str) -> dict:
     """Build a cluster membership payload for a local or known VPS host."""
 
@@ -192,6 +235,19 @@ def _cluster_node_for_enabled_host(
 
     mapping = _read_cluster_host_node_ids(cluster_root)
     hosts = mapping.setdefault("hosts", {})
+    existing = _best_existing_cluster_node_for_host(cluster_root, hostname)
+    if existing:
+        node_id, role = existing
+        entry = hosts.get(hostname)
+        if not isinstance(entry, dict) or str(entry.get("node_id") or "") != node_id:
+            hosts[hostname] = {
+                "node_id": node_id,
+                "created_at": int(time.time()),
+                "role": role,
+            }
+            _write_cluster_host_node_ids(cluster_root, mapping)
+        return node_id, hostname, role
+
     entry = hosts.get(hostname)
     if not isinstance(entry, dict):
         entry = {}

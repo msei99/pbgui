@@ -2545,6 +2545,8 @@ MONITORED_SERVICES = {
                            "PBData.py", "pbdata.py"),
     "PBCoinData": ServiceInfo("PBCoinData", "data/pid/pbcoindata.pid",
                                "PBCoinData.py", "pbcoindata.py"),
+    "PBMonitorAgent": ServiceInfo("PBMonitorAgent", "data/pid/pbmonitoragent.pid",
+                                  "monitor_agent.py", "monitor_agent.py"),
 }
 
 MONITORED_SERVICE_SYSTEMD_UNITS = {
@@ -2552,6 +2554,7 @@ MONITORED_SERVICE_SYSTEMD_UNITS = {
     "PBRun": "pbgui-pbrun.service",
     "PBData": "pbgui-pbdata.service",
     "PBCoinData": "pbgui-pbcoindata.service",
+    "PBMonitorAgent": "pbgui-monitor-agent.service",
 }
 
 PBCLUSTER_DISABLED_REASON = "Cluster Sync is not enabled for this node"
@@ -3639,10 +3642,8 @@ class VPSMonitor:
         if count >= METRICS_STREAM_RECONNECT_AFTER_STALE_RESTARTS:
             if should_log:
                 _log(SERVICE, f"[metrics] Stream stale for {hostname}: "
-                     f"{stale_text}; reconnecting SSH", level="WARNING")
-            self._stop_metrics_stream(hostname)
-            self._stream_stale_counts.pop(hostname, None)
-            await self.pool.disconnect(hostname)
+                     f"{stale_text}; restarting stream and keeping SSH connected", level="WARNING")
+            self._start_metrics_stream(hostname)
             return
         if should_log:
             _log(SERVICE, f"[metrics] Stream stale for {hostname}: "
@@ -4354,11 +4355,11 @@ class VPSMonitor:
         systemd_status = await self._check_systemd_service(hostname, svc.name)
         if systemd_status is not None:
             return systemd_status
-        if svc.name == "PBCluster":
+        if svc.name in {"PBCluster", "PBMonitorAgent"}:
             return {
                 "status": ServiceStatus.STOPPED.value,
                 "pid": None,
-                "error": "PBCluster systemd user unit is missing or unavailable",
+                "error": f"{svc.name} systemd user unit is missing or unavailable",
                 "was_restarted": False,
                 "manager": "systemd",
                 "unit": MONITORED_SERVICE_SYSTEMD_UNITS.get(svc.name),
@@ -4455,10 +4456,10 @@ class VPSMonitor:
                 _log(SERVICE, f"[service] Failed to restart {service_name} on "
                      f"{hostname} through systemd", level="ERROR")
                 return False
-            if service_name == "PBCluster":
+            if service_name in {"PBCluster", "PBMonitorAgent"}:
                 _log(
                     SERVICE,
-                    f"[service] PBCluster restart on {hostname} requires the systemd user unit; not using legacy starter.py fallback",
+                    f"[service] {service_name} restart on {hostname} requires the systemd user unit; not using legacy starter.py fallback",
                     level="WARNING",
                 )
                 return False

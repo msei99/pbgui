@@ -383,6 +383,42 @@ def test_vps_monitor_refresh_enabled_host_reconnects_after_auth_fix(monkeypatch:
     assert monitor._last_package_status_collect == {}
 
 
+def test_stale_metrics_stream_does_not_disconnect_ssh() -> None:
+    """A missing/stale monitor-agent stream must not make reachable SSH rows flap red."""
+    monitor = object.__new__(VPSMonitor)
+    monitor._stream_stale_counts = {"manibot50": monitor_mod.METRICS_STREAM_RECONNECT_AFTER_STALE_RESTARTS - 1}
+    monitor._stream_stale_last_logged = {}
+    updates: list[tuple[str, dict]] = []
+    started: list[str] = []
+    disconnected: list[str] = []
+
+    class FakeStore:
+        """Capture stream status updates."""
+
+        def update_stream_info(self, hostname: str, payload: dict) -> None:
+            """Store stream diagnostics updates."""
+            updates.append((hostname, payload))
+
+    class FakePool:
+        """Fail the test if stale metrics force an SSH disconnect."""
+
+        async def disconnect(self, hostname: str) -> None:
+            """Capture unwanted disconnect calls."""
+            disconnected.append(hostname)
+
+    monitor.store = FakeStore()
+    monitor.pool = FakePool()
+    monitor._start_metrics_stream = lambda hostname: started.append(hostname)
+
+    asyncio.run(monitor._restart_stale_metrics_stream("manibot50", stale_age=90.0, now=1000.0))
+
+    assert disconnected == []
+    assert started == ["manibot50"]
+    assert updates[0][0] == "manibot50"
+    assert updates[0][1]["stale"] is True
+    assert monitor._stream_stale_counts["manibot50"] == monitor_mod.METRICS_STREAM_RECONNECT_AFTER_STALE_RESTARTS
+
+
 def test_save_existing_vps_import_writes_missing_hosts_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     """Saving an import writes /etc/hosts with local sudo when the probe requires it."""
     writes: list[tuple[str, str, str]] = []
@@ -1215,6 +1251,38 @@ def test_pbcluster_check_requires_systemd_unit() -> None:
     assert not any("data/pid/pbcluster.pid" in command for command in commands)
 
 
+def test_monitor_agent_service_requires_systemd_unit() -> None:
+    """PBMonitorAgent is exposed as a systemd-only monitored service."""
+    commands: list[str] = []
+
+    class FakePool:
+        """Return a missing systemd unit and fail if PID fallback is used."""
+
+        async def run(self, hostname: str, command: str, timeout: int = 0):
+            """Capture commands and report the monitor-agent unit as missing."""
+            del hostname, timeout
+            commands.append(command)
+            return SimpleNamespace(exit_status=0, stdout="LoadState=not-found\n", stderr="")
+
+        def get_remote_pbgui_dirs(self, hostname: str) -> list[str]:
+            """Legacy PID fallback must not be used for PBMonitorAgent."""
+            del hostname
+            raise AssertionError("PBMonitorAgent used legacy PID fallback")
+
+    monitor = object.__new__(VPSMonitor)
+    monitor.pool = FakePool()
+    monitor._optional_service_expected = lambda hostname, service: True
+
+    result = asyncio.run(monitor._check_service("manibot90", monitor_mod.MONITORED_SERVICES["PBMonitorAgent"]))
+
+    assert monitor_mod.MONITORED_SERVICE_SYSTEMD_UNITS["PBMonitorAgent"] == "pbgui-monitor-agent.service"
+    assert result["status"] == monitor_mod.ServiceStatus.STOPPED.value
+    assert result["manager"] == "systemd"
+    assert result["unit"] == "pbgui-monitor-agent.service"
+    assert "systemd user unit" in result["error"]
+    assert not any("data/pid/pbmonitoragent.pid" in command for command in commands)
+
+
 def test_pbcluster_restart_does_not_use_legacy_starter_fallback() -> None:
     """PBCluster auto-restart does not create orphan starter.py processes."""
     commands: list[str] = []
@@ -1775,9 +1843,13 @@ def test_host_meta_migration_status_requires_monitor_agent_unit() -> None:
     """Remote systemd migration status includes the monitor-agent unit."""
 
     source = Path("master/async_monitor.py").read_text(encoding="utf-8")
+    agent_source = Path("monitor_agent.py").read_text(encoding="utf-8")
 
     assert "pbgui-monitor-agent.service" in source
     assert "required_unit_names = ['pbgui-pbcluster.service', 'pbgui-monitor-agent.service']" in source
+    assert '"PBMonitorAgent": ServiceInfo("PBMonitorAgent"' in source
+    assert '"PBMonitorAgent": "pbgui-monitor-agent.service"' in source
+    assert '"PBMonitorAgent": ("pbgui-monitor-agent.service"' in agent_source
 
 
 @pytest.mark.parametrize("playbook_path", ["master-update-pbgui.yml", "master-update-pb.yml", "master-switch-pbgui-branch.yml"])

@@ -2573,6 +2573,47 @@ def test_bootstrap_preview_skips_registered_vps_node(monkeypatch, tmp_path: Path
     assert preview["items"][0]["reason"] == "VPS node already registered"
 
 
+def test_v7_enabled_host_prefers_existing_reachable_node(monkeypatch, tmp_path: Path) -> None:
+    """Saving a V7 config does not create or reuse a disabled duplicate host node."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
+    (root / "cluster_nodes.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "nodes": {
+                NODE_B: {
+                    "node_id": NODE_B,
+                    "role": "vps",
+                    "hostname": "manibot40",
+                    "pbname": "manibot40",
+                    "sync_enabled": True,
+                    "sync_mode": "reachable",
+                },
+                NODE_C: {
+                    "node_id": NODE_C,
+                    "role": "vps",
+                    "hostname": "manibot40",
+                    "pbname": "manibot40",
+                    "sync_enabled": False,
+                    "sync_mode": "disabled",
+                },
+            },
+        }),
+        encoding="utf-8",
+    )
+    (root / "host_node_ids.json").write_text(
+        json.dumps({"schema_version": 1, "hosts": {"manibot40": {"node_id": NODE_C, "role": "vps"}}}),
+        encoding="utf-8",
+    )
+
+    node_id, hostname, role = v7_instances._cluster_node_for_enabled_host(root, {"node_id": NODE_A}, "manibot40")
+
+    mapping = _read_json(root / "host_node_ids.json")
+    assert (node_id, hostname, role) == (NODE_B, "manibot40", "vps")
+    assert mapping["hosts"]["manibot40"]["node_id"] == NODE_B
+
+
 def test_bootstrap_preview_preserves_registered_master_without_monitor_role(monkeypatch, tmp_path: Path) -> None:
     """Missing monitor role metadata must not downgrade an existing master node."""
 
