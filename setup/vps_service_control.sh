@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: vps_service_control.sh start|stop|restart PBRun [PBCluster] [PBCoinData]
+Usage: vps_service_control.sh start|stop|restart PBRun [PBCluster] [PBCoinData] [PBMonitorAgent]
 
 Controls VPS PBGui services. Uses systemd user units when all requested units
 exist and the user manager is available; otherwise falls back to starter.py.
@@ -59,6 +59,7 @@ unit_for() {
     PBRun) printf '%s\n' 'pbgui-pbrun.service' ;;
     PBCluster) printf '%s\n' 'pbgui-pbcluster.service' ;;
     PBCoinData) printf '%s\n' 'pbgui-pbcoindata.service' ;;
+    PBMonitorAgent) printf '%s\n' 'pbgui-monitor-agent.service' ;;
     *)
       printf 'Unknown service: %s\n' "$1" >&2
       return 1
@@ -71,6 +72,7 @@ script_for() {
     PBRun) printf '%s\n' 'PBRun.py' ;;
     PBCluster) printf '%s\n' 'PBCluster.py' ;;
     PBCoinData) printf '%s\n' 'PBCoinData.py' ;;
+    PBMonitorAgent) printf '%s\n' 'monitor_agent.py' ;;
     *) return 1 ;;
   esac
 }
@@ -111,6 +113,7 @@ service_configured() {
     PBRun) return 0 ;;
     PBCluster) return 0 ;;
     PBCoinData) configured_value "$(ini_value coinmarketcap api_key)" ;;
+    PBMonitorAgent) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -182,6 +185,13 @@ if can_use_systemd; then
   fi
   exit 0
 fi
+
+for service in "${active_services[@]}"; do
+  if [[ "$service" == "PBMonitorAgent" ]]; then
+    echo "PBMonitorAgent requires pbgui-monitor-agent.service; legacy starter.py fallback is not supported." >&2
+    exit 1
+  fi
+done
 
 echo "Using legacy starter.py fallback for: ${active_services[*]}"
 if [[ ! -x "$python_bin" ]]; then

@@ -1201,183 +1201,18 @@ class BotPnlHistoryStore:
         self._last_flush_ts = now_ts
         self._dirty = False
 
-# ── Remote scripts (same as old realtime_collector) ─────────
+# ── Remote scripts ──────────────────────────────────────────
 
-MONITOR_AGENT_SCRIPT = r'''python3 -u -c "
-import json, os, sys, time, threading, subprocess
-def rcpu():
-    with open('/proc/stat') as f:
-        p = f.readline().split()
-    idle = int(p[4])
-    return idle, sum(int(x) for x in p[1:])
-def system_cpu_pct(idle_prev, total_prev, idle_now, total_now):
-    dt = total_now - total_prev
-    if dt <= 0:
-        return 0.0
-    return round((1 - ((idle_now - idle_prev) / dt)) * 100, 1)
-def rmem():
-    d = {}
-    with open('/proc/meminfo') as f:
-        for ln in f:
-            k, v = ln.split(':')
-            if k in ('MemTotal','MemAvailable','SwapTotal','SwapFree'):
-                d[k] = int(v.split()[0]) * 1024
-    mt = d.get('MemTotal', 0)
-    ma = d.get('MemAvailable', 0)
-    mu = mt - ma
-    mp = round(mu / mt * 100, 1) if mt else 0
-    st = d.get('SwapTotal', 0)
-    sf = d.get('SwapFree', 0)
-    su = st - sf
-    sp = round(su / st * 100, 1) if st else 0
-    return [mt, ma, mp, mu], [st, su, sf, sp]
-def peak_pct(samples):
-    vals = [float(v) for (_, v) in samples if v is not None]
-    if not vals:
-        return 0.0
-    return round(max(vals), 1)
-def _ppid_watcher():
-    while True:
-        time.sleep(3)
-        if os.getppid() == 1:
-            os._exit(0)
-t = threading.Thread(target=_ppid_watcher, daemon=True)
-t.start()
-_bots_cpu_prev = {}
-_bots_cpu_history = {}
-_bots = {}
-pi, pt = rcpu()
-_cpu_60s_history = [(time.time(), pi, pt)]
-_mem_60s_history = []
-_disk_60s_history = []
-_swap_60s_history = []
-time.sleep(1)
-while True:
-    try:
-        ci, ct = rcpu()
-        now = time.time()
-        cpu = system_cpu_pct(pi, pt, ci, ct)
-        pi, pt = ci, ct
-        _cpu_60s_history.append((now, ci, ct))
-        cutoff = now - 62
-        _cpu_60s_history = [sample for sample in _cpu_60s_history if sample[0] >= cutoff]
-        cpu_60s = 0.0
-        cpu_60s_window = 0.0
-        cpu_60s_base = None
-        for sample in _cpu_60s_history:
-            elapsed = now - sample[0]
-            if elapsed >= 60:
-                cpu_60s_base = sample
-            else:
-                break
-        if cpu_60s_base:
-            cpu_60s_window = round(now - cpu_60s_base[0], 1)
-            cpu_60s = system_cpu_pct(cpu_60s_base[1], cpu_60s_base[2], ci, ct)
-        elif _cpu_60s_history:
-            cpu_60s_window = round(now - _cpu_60s_history[0][0], 1)
-        mem, swap = rmem()
-        s = os.statvfs('/')
-        dtot = s.f_frsize * s.f_blocks
-        dused = s.f_frsize * (s.f_blocks - s.f_bfree)
-        dfree = s.f_frsize * s.f_bavail
-        dpct = round(dused / dtot * 100, 1) if dtot else 0
-        _mem_60s_history.append((now, mem[2]))
-        _disk_60s_history.append((now, dpct))
-        if swap[0] > 0:
-            _swap_60s_history.append((now, swap[3]))
-        cutoff = now - 62
-        _mem_60s_history = [sample for sample in _mem_60s_history if sample[0] >= cutoff]
-        _disk_60s_history = [sample for sample in _disk_60s_history if sample[0] >= cutoff]
-        _swap_60s_history = [sample for sample in _swap_60s_history if sample[0] >= cutoff]
-        mem_60s_window = round(now - _mem_60s_history[0][0], 1) if _mem_60s_history else 0.0
-        disk_60s_window = round(now - _disk_60s_history[0][0], 1) if _disk_60s_history else 0.0
-        swap_60s_window = round(now - _swap_60s_history[0][0], 1) if _swap_60s_history else 0.0
-        mem_60s_peak = peak_pct(_mem_60s_history)
-        disk_60s_peak = peak_pct(_disk_60s_history)
-        swap_60s_peak = peak_pct(_swap_60s_history)
-        bots = []
-        try:
-            now = time.time()
-            out = subprocess.check_output(['ps', 'auxw'], text=True, timeout=2)
-            for line in out.splitlines():
-                if 'main.py' not in line or 'config_run.json' not in line:
-                    continue
-                parts = line.split()
-                pid = int(parts[1])
-                try:
-                    with open(f'/proc/{pid}/stat') as sf:
-                        sfp = sf.read().split()
-                    ticks = int(sfp[13]) + int(sfp[14])
-                except Exception:
-                    continue
-                prev = _bots_cpu_prev.get(pid)
-                bot_cpu_pct = 0.0
-                bot_cpu_60s = 0.0
-                bot_cpu_60s_window = 0.0
-                if prev:
-                    dt_sec = now - prev[1]
-                    if dt_sec > 0:
-                        bot_cpu_pct = round((ticks - prev[0]) / (dt_sec * 100) * 100, 1)
-                _bots_cpu_prev[pid] = (ticks, now)
-                history = _bots_cpu_history.get(pid)
-                if history is None:
-                    history = []
-                    _bots_cpu_history[pid] = history
-                history.append((now, ticks))
-                cutoff = now - 62
-                history[:] = [sample for sample in history if sample[0] >= cutoff]
-                bot_cpu_60s_base = None
-                for sample in history:
-                    elapsed = now - sample[0]
-                    if elapsed >= 60:
-                        bot_cpu_60s_base = sample
-                    else:
-                        break
-                if bot_cpu_60s_base:
-                    dt_sec = now - bot_cpu_60s_base[0]
-                    if dt_sec > 0:
-                        bot_cpu_60s_window = round(dt_sec, 1)
-                        bot_cpu_60s = round((ticks - bot_cpu_60s_base[1]) / (dt_sec * 100) * 100, 1)
-                elif history:
-                    bot_cpu_60s_window = round(now - history[0][0], 1)
-                rss_mb = 0
-                swap_mb = 0
-                try:
-                    with open(f'/proc/{pid}/status') as sf:
-                        for sl in sf.read().splitlines():
-                            if sl.startswith('VmRSS:'):
-                                rss_mb = round(int(sl.split()[1]) / 1024, 1)
-                            elif sl.startswith('VmSwap:'):
-                                swap_mb = round(int(sl.split()[1]) / 1024, 1)
-                except Exception:
-                    pass
-                name = _bots.get(pid, '')
-                if not name:
-                    for p in parts:
-                        if p.endswith('/config_run.json'):
-                            name = p.split('/')[-2]
-                            _bots[pid] = name
-                            break
-                if name:
-                    bots.append({'name': name, 'cpu': bot_cpu_pct, 'cpu_60s': bot_cpu_60s, 'cpu_60s_window': bot_cpu_60s_window, 'rss_mb': rss_mb, 'swap_mb': swap_mb})
-            alive = set()
-            for pl in out.splitlines():
-                if 'main.py' in pl and 'config_run.json' in pl:
-                    ps = pl.split()
-                    if len(ps) > 1:
-                        alive.add(int(ps[1]))
-            for dead in list(_bots_cpu_prev.keys()):
-                if dead not in alive:
-                    del _bots_cpu_prev[dead]
-                    _bots_cpu_history.pop(dead, None)
-                    _bots.pop(dead, None)
-        except Exception:
-            pass
-        print(json.dumps({'ts': time.time(), 'cpu': cpu, 'cpu_60s': cpu_60s, 'cpu_60s_window': cpu_60s_window, 'cpu_60s_samples': len(_cpu_60s_history), 'mem_60s_peak': mem_60s_peak, 'mem_60s_window': mem_60s_window, 'disk_60s_peak': disk_60s_peak, 'disk_60s_window': disk_60s_window, 'swap_60s_peak': swap_60s_peak, 'swap_60s_window': swap_60s_window, 'mem': mem, 'disk': [dtot, dused, dfree, dpct], 'swap': swap, 'bots': bots}), flush=True)
-    except Exception:
-        pass
-    time.sleep(1)
-"'''
+
+def _monitor_agent_tail_command(remote_pbgui_dir: str) -> str:
+    cache_path = remote_path_join(remote_pbgui_dir, "data", "monitor_agent", "live_metrics.ndjson")
+    cache_expr = remote_shell_path(cache_path)
+    return f"p={cache_expr}; while [ ! -f \"$p\" ]; do sleep 1; done; tail -n 1 -F \"$p\""
+
+
+def _monitor_agent_cache_read_command(remote_pbgui_dir: str, filename: str) -> str:
+    cache_path = remote_path_join(remote_pbgui_dir, "data", "monitor_agent", filename)
+    return f"cat {remote_shell_path(cache_path)}"
 
 INSTANCE_COLLECT_SCRIPT = r'''python3 -u -c "
 import hashlib, json, os, re, subprocess, sys, time
@@ -2462,8 +2297,8 @@ def build_systemd_migration_status(pbgui_dir, pbrun_configured, pbdata_configure
     systemctl_path = run(['which', 'systemctl'], timeout=5)
     systemctl_exists = bool(systemctl_path)
     user_manager_ok, user_manager_detail = systemd_user_manager_ok(systemctl_exists)
-    all_unit_names = ['pbgui-pbcluster.service', 'pbgui-pbrun.service', 'pbgui-pbdata.service', 'pbgui-pbcoindata.service']
-    required_unit_names = ['pbgui-pbcluster.service']
+    all_unit_names = ['pbgui-pbcluster.service', 'pbgui-pbrun.service', 'pbgui-monitor-agent.service', 'pbgui-pbdata.service', 'pbgui-pbcoindata.service']
+    required_unit_names = ['pbgui-pbcluster.service', 'pbgui-monitor-agent.service']
     if pbrun_configured:
         required_unit_names.append('pbgui-pbrun.service')
     if pbdata_configured:
@@ -3842,9 +3677,10 @@ class VPSMonitor:
         cancelled = False
         stream_error: str | None = None
         try:
-            proc = await self.pool.start_process(hostname, MONITOR_AGENT_SCRIPT)
+            pbgui_dir = self.pool.get_remote_pbgui_dir(hostname)
+            proc = await self.pool.start_process(hostname, _monitor_agent_tail_command(pbgui_dir))
             if not proc:
-                stream_error = "Cannot start metrics stream"
+                stream_error = "Cannot start monitor-agent cache stream"
                 _log(SERVICE, f"[metrics] Cannot start stream for {hostname}",
                      level="WARNING")
                 if self._stream_generations.get(hostname) == generation:
@@ -3877,6 +3713,13 @@ class VPSMonitor:
                     data = json.loads(line)
                     metrics = SystemMetrics.from_json(data)
                     self.store.update_system(hostname, metrics)
+                    self._update_monitor_agent_file_status(hostname, "live_metrics.ndjson", {
+                        "state": "ok",
+                        "error": None,
+                        "age": round(max(time.time() - float(data.get("generated_at") or metrics.timestamp or time.time()), 0.0), 1),
+                        "generated_at": float(data.get("generated_at") or metrics.timestamp or 0.0),
+                        "checked_at": time.time(),
+                    })
                     self._stream_stale_counts.pop(hostname, None)
                     self._record_host_metric_history(hostname, metrics)
                     bots = data.get("bots")
@@ -3943,6 +3786,81 @@ class VPSMonitor:
             # Keep the connection alive so the loop can restart the stream
             # without generating a spurious offline/recovered alert pair.
             _log(SERVICE, f"[metrics] Stream ended for {hostname}")
+
+    def _update_monitor_agent_file_status(self, hostname: str, filename: str, status: dict[str, Any]) -> None:
+        """Merge one monitor-agent cache-file status into stream diagnostics."""
+
+        current_stream = self.store.streams.get(hostname) or {}
+        current_agent = current_stream.get("monitor_agent") if isinstance(current_stream, dict) else None
+        if not isinstance(current_agent, dict):
+            current_agent = {}
+        files = dict(current_agent.get("files") or {})
+        files[filename] = dict(status)
+        rank = {"ok": 0, "unknown": 1, "stale": 2, "missing": 3, "error": 4}
+        state = "ok"
+        for item in files.values():
+            item_state = str((item or {}).get("state") or "unknown")
+            if rank.get(item_state, 1) > rank.get(state, 0):
+                state = item_state
+        errors = [str((item or {}).get("error") or "") for item in files.values() if (item or {}).get("error")]
+        self.store.update_stream_info(hostname, {
+            "monitor_agent": {
+                "state": state,
+                "error": errors[0] if errors else None,
+                "files": files,
+                "checked_at": time.time(),
+            },
+        })
+
+    async def _read_monitor_agent_json(self, hostname: str, filename: str, *, stale_after: float,
+                                       timeout: float = 10.0) -> dict[str, Any] | None:
+        """Read one monitor-agent JSON cache file from a VPS and validate freshness."""
+
+        pbgui_dir = self.pool.get_remote_pbgui_dir(hostname)
+        result = await self.pool.run(
+            hostname,
+            _monitor_agent_cache_read_command(pbgui_dir, filename),
+            timeout=timeout,
+            check=False,
+        )
+        now = time.time()
+        if not result or result.exit_status != 0 or not result.stdout:
+            error = f"monitor-agent cache missing: {filename}"
+            self._update_monitor_agent_file_status(hostname, filename, {"state": "missing", "error": error, "checked_at": now})
+            return None
+        try:
+            payload = json.loads(result.stdout.strip())
+        except json.JSONDecodeError:
+            error = f"monitor-agent cache invalid JSON: {filename}"
+            self._update_monitor_agent_file_status(hostname, filename, {"state": "error", "error": error, "checked_at": now})
+            return None
+        if not isinstance(payload, dict):
+            error = f"monitor-agent cache invalid payload: {filename}"
+            self._update_monitor_agent_file_status(hostname, filename, {"state": "error", "error": error, "checked_at": now})
+            return None
+        try:
+            generated_at = float(payload.get("generated_at") or 0.0)
+        except (TypeError, ValueError):
+            generated_at = 0.0
+        age = max(now - generated_at, 0.0) if generated_at > 0 else stale_after + 1.0
+        if age > stale_after:
+            error = f"monitor-agent cache stale: {filename} age={int(age)}s"
+            self._update_monitor_agent_file_status(hostname, filename, {
+                "state": "stale",
+                "error": error,
+                "age": round(age, 1),
+                "generated_at": generated_at,
+                "checked_at": now,
+            })
+            return None
+        self._update_monitor_agent_file_status(hostname, filename, {
+            "state": "ok",
+            "error": None,
+            "age": round(age, 1),
+            "generated_at": generated_at,
+            "checked_at": now,
+        })
+        return payload
 
     def _record_host_metric_history(self, hostname: str, metrics: SystemMetrics) -> None:
         minute = int((metrics.timestamp or time.time()) // CPU_HISTORY_STEP_SECONDS)
@@ -4020,93 +3938,16 @@ class VPSMonitor:
         return " ".join(parts)
 
     async def _rebuild_bot_count_history(self, hostname: str, bot_logs: dict[str, Any] | None) -> None:
-        if not hostname or not isinstance(bot_logs, dict):
-            return
-        now_hour = int(time.time() // COUNT_HISTORY_STEP_SECONDS)
-        min_hour = now_hour - COUNT_HISTORY_WINDOW_HOURS + 1
-        for bot_name, payload in bot_logs.items():
-            name = str(bot_name or '').strip()
-            if not name:
-                continue
-            key = self._bot_history_key(hostname, name)
-            rebuild_from_hour = now_hour
-            for metric in ('errors', 'tracebacks'):
-                store = self._bot_count_history[metric]
-                store.load()
-                meta = store._meta.get(key) or {}
-                last_hour = int(meta.get('last_hour') or 0)
-                metric_from_hour = max(min_hour, last_hour if last_hour > 0 else min_hour)
-                rebuild_from_hour = min(rebuild_from_hour, metric_from_hour)
+        """Disabled: masters must not start remote rebuild collectors."""
 
-            if rebuild_from_hour > now_hour:
-                continue
-
-            cmd = (
-                f"{self._instance_collect_env(hostname)} "
-                f"PBGUI_REBUILD_COUNTS=1 PBGUI_REBUILD_BOT={_shell_quote(name)} "
-                f"PBGUI_REBUILD_FROM_HOUR={rebuild_from_hour} PBGUI_REBUILD_TO_HOUR={now_hour} "
-                f"{INSTANCE_COLLECT_SCRIPT}"
-            )
-            result = await self.pool.run(hostname, cmd, timeout=90)
-            if not result or result.exit_status != 0 or not result.stdout:
-                continue
-            try:
-                parsed = json.loads(result.stdout.strip())
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(parsed, dict):
-                continue
-            for metric in ('errors', 'tracebacks'):
-                store = self._bot_count_history[metric]
-                buckets = parsed.get(metric) or {}
-                if not isinstance(buckets, dict):
-                    buckets = {}
-                for hour in range(rebuild_from_hour, now_hour + 1):
-                    value = buckets.get(str(hour), buckets.get(hour, 0))
-                    store.set_count(key, hour=hour, value=int(value or 0))
-                store.maybe_flush(now_ts=time.time())
+        del hostname, bot_logs
+        return
 
     async def _rebuild_bot_pnl_history(self, hostname: str, bot_logs: dict[str, Any] | None) -> None:
-        if not hostname or not isinstance(bot_logs, dict):
-            return
-        for bot_name in bot_logs.keys():
-            name = str(bot_name or '').strip()
-            if not name:
-                continue
-            last_fill_ts = self._bot_pnl_history.get_last_fill_ts(name)
-            cmd = (
-                f"{self._instance_collect_env(hostname)} "
-                f"PBGUI_REBUILD_PNL=1 PBGUI_REBUILD_BOT={_shell_quote(name)} "
-                f"PBGUI_REBUILD_PNL_SINCE_TS={int(last_fill_ts)} {INSTANCE_COLLECT_SCRIPT}"
-            )
-            result = await self.pool.run(hostname, cmd, timeout=90)
-            if not result or result.exit_status != 0 or not result.stdout:
-                continue
-            try:
-                parsed = json.loads(result.stdout.strip())
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(parsed, dict):
-                continue
-            changed = False
-            days = parsed.get('days') or {}
-            if isinstance(days, dict):
-                for day_key, entry in days.items():
-                    if not isinstance(entry, dict):
-                        continue
-                    try:
-                        day = int(day_key)
-                    except Exception:
-                        continue
-                    changed = self._bot_pnl_history.add_day_values(
-                        name,
-                        day=day,
-                        pnl=float(entry.get('pnl') or 0.0),
-                        fills=int(entry.get('fills') or 0),
-                    ) or changed
-            changed = self._bot_pnl_history.set_last_fill_ts(name, int(parsed.get('last_fill_ts') or 0)) or changed
-            if changed:
-                self._bot_pnl_history.maybe_flush(now_ts=time.time())
+        """Disabled: masters must not start remote PNL rebuild collectors."""
+
+        del hostname, bot_logs
+        return
 
     def _bot_history_key(self, hostname: str, bot_name: str) -> str:
         return f"{hostname}:{bot_name}"
@@ -4286,61 +4127,35 @@ class VPSMonitor:
                      level="WARNING")
 
     async def _collect_instances(self, hostname: str):
-        """Collect bot instances from a single VPS."""
-        host_cache = self._monitor_cache.get(hostname, {})
-        if not isinstance(host_cache, dict):
-            host_cache = {}
-        host_cache = dict(host_cache)
-        host_cache['_version'] = MONITOR_CACHE_VERSION
-        cache_json = json.dumps(host_cache)
-        cmd = (
-            f"{self._instance_collect_env(hostname)} "
-            f"PBGUI_CACHE_VERSION={MONITOR_CACHE_VERSION} "
-            f"PBGUI_CACHE={_shell_quote(cache_json)} {INSTANCE_COLLECT_SCRIPT}"
+        """Collect bot instances from the monitor-agent cache on a single VPS."""
+        parsed = await self._read_monitor_agent_json(
+            hostname,
+            "instance_snapshot.json",
+            stale_after=90.0,
+            timeout=10,
         )
-        result = await self.pool.run(hostname, cmd, timeout=30)
-        if result and result.exit_status == 0 and result.stdout:
-            try:
-                parsed = json.loads(result.stdout.strip())
-                if isinstance(parsed, dict):
-                    monitors = parsed.get('monitors', [])
-                    v7_list = parsed.get('v7', [])
-                    new_host_cache = parsed.get('cache', {})
-                    bot_logs = parsed.get('bot_logs', {})
-                    if isinstance(monitors, list) and isinstance(v7_list, list):
-                        await self._rebuild_bot_count_history(hostname, bot_logs if isinstance(bot_logs, dict) else {})
-                        await self._rebuild_bot_pnl_history(hostname, bot_logs if isinstance(bot_logs, dict) else {})
-                        enriched_monitors = []
-                        for monitor in monitors:
-                            item = dict(monitor) if isinstance(monitor, dict) else monitor
-                            if isinstance(item, dict):
-                                bot_name = str(item.get('u') or '')
-                                item['errors_4w'] = self._bot_count_total(hostname, bot_name, 'errors')
-                                item['tracebacks_4w'] = self._bot_count_total(hostname, bot_name, 'tracebacks')
-                                total_pnl, total_fills = self._bot_pnl_total(bot_name)
-                                item['pnl_hist_total'] = total_pnl
-                                item['pnls_hist_total'] = total_fills
-                            enriched_monitors.append(item)
-                        self.store.update_instances(hostname, enriched_monitors)
-                        self.store.update_v7_instances(hostname, v7_list)
-                        self.store.update_bot_logs(hostname, bot_logs if isinstance(bot_logs, dict) else {})
-                        if isinstance(new_host_cache, dict):
-                            self._monitor_cache[hostname] = new_host_cache
-                            self._save_monitor_cache()
-                        if self.debug_logging:
-                            _log(SERVICE, f"[instances] Collected "
-                                 f"{len(monitors)} monitors, "
-                                 f"{len(v7_list)} v7 instances from "
-                                 f"{hostname}", level="DEBUG")
-                        return
-                # fallback: old format
-                if isinstance(parsed, list) and len(parsed) == 2:
-                    self.store.update_instances(hostname, parsed[0])
-                    self.store.update_v7_instances(hostname, parsed[1])
-                else:
-                    self.store.update_instances(hostname, parsed)
-            except json.JSONDecodeError:
-                pass
+        if not parsed:
+            return
+        monitors = parsed.get('monitors', [])
+        v7_list = parsed.get('v7', [])
+        bot_logs = parsed.get('bot_logs', {})
+        if isinstance(monitors, list) and isinstance(v7_list, list):
+            enriched_monitors = []
+            for monitor in monitors:
+                item = dict(monitor) if isinstance(monitor, dict) else monitor
+                if isinstance(item, dict):
+                    bot_name = str(item.get('u') or '')
+                    item['errors_4w'] = self._bot_count_total(hostname, bot_name, 'errors')
+                    item['tracebacks_4w'] = self._bot_count_total(hostname, bot_name, 'tracebacks')
+                    total_pnl, total_fills = self._bot_pnl_total(bot_name)
+                    item['pnl_hist_total'] = total_pnl
+                    item['pnls_hist_total'] = total_fills
+                enriched_monitors.append(item)
+            self.store.update_instances(hostname, enriched_monitors)
+            self.store.update_v7_instances(hostname, v7_list)
+            self.store.update_bot_logs(hostname, bot_logs if isinstance(bot_logs, dict) else {})
+            if self.debug_logging:
+                _log(SERVICE, f"[instances] Read {len(monitors)} monitors and {len(v7_list)} v7 instances from agent cache on {hostname}", level="DEBUG")
 
     def _load_monitor_cache(self) -> None:
         try:
@@ -4441,50 +4256,32 @@ class VPSMonitor:
             return
 
         if collect_host_meta:
-            pbgui_dir = self.pool.get_remote_pbgui_dir(hostname)
-            script = HOST_META_SCRIPT.replace('__PBGDIR__', pbgui_dir)
-            result = await self.pool.run(hostname, script, timeout=20)
-            if result and result.exit_status == 0 and result.stdout:
-                try:
-                    parsed = json.loads(result.stdout.strip())
-                    if isinstance(parsed, dict):
-                        self.store.update_host_meta(hostname, parsed)
-                        self._last_host_meta_collect[hostname] = now
-                        if self.debug_logging:
-                            _log(SERVICE, f"[host-meta] Collected metadata for {hostname}",
-                                 level="DEBUG")
-                except json.JSONDecodeError:
-                    _log(SERVICE,
-                         f"[host-meta] Invalid JSON from {hostname}: "
-                         f"{(result.stdout or '').strip()[:400]}",
-                         level="WARNING")
-            elif result is None:
-                _log(SERVICE, f"[host-meta] Command failed for {hostname}: no SSH result",
-                     level="WARNING")
-            else:
-                _log(
-                    SERVICE,
-                    f"[host-meta] Command failed for {hostname}: exit={getattr(result, 'exit_status', 'n/a')} "
-                    f"stdout={(getattr(result, 'stdout', '') or '').strip()[:200]} "
-                    f"stderr={(getattr(result, 'stderr', '') or '').strip()[:200]}",
-                    level="WARNING",
-                )
+            parsed = await self._read_monitor_agent_json(
+                hostname,
+                "host_meta.json",
+                stale_after=180.0,
+                timeout=10,
+            )
+            if parsed:
+                self.store.update_host_meta(hostname, parsed)
+                self._last_host_meta_collect[hostname] = now
+                if self.debug_logging:
+                    _log(SERVICE, f"[host-meta] Read agent cache for {hostname}", level="DEBUG")
 
         if collect_package_status:
-            package_result = await self.pool.run(hostname, PACKAGE_STATUS_SCRIPT,
-                                                 timeout=75)
-            if package_result and package_result.exit_status == 0 and package_result.stdout:
-                try:
-                    package_data = json.loads(package_result.stdout.strip())
-                    if isinstance(package_data, dict):
-                        current_meta = dict(self.store.host_meta.get(hostname, {}))
-                        # Keep the last known package count when a slow probe falls back to N/A.
-                        if package_data.get('upgrades') == 'N/A' and current_meta.get('upgrades') not in (None, '', 'N/A'):
-                            package_data['upgrades'] = current_meta.get('upgrades')
-                        self.store.update_host_meta(hostname, package_data)
-                        self._last_package_status_collect[hostname] = now
-                except json.JSONDecodeError:
-                    pass
+            package_data = await self._read_monitor_agent_json(
+                hostname,
+                "package_status.json",
+                stale_after=7200.0,
+                timeout=10,
+            )
+            if package_data:
+                current_meta = dict(self.store.host_meta.get(hostname, {}))
+                # Keep the last known package count when a slow probe falls back to N/A.
+                if package_data.get('upgrades') == 'N/A' and current_meta.get('upgrades') not in (None, '', 'N/A'):
+                    package_data['upgrades'] = current_meta.get('upgrades')
+                self.store.update_host_meta(hostname, package_data)
+                self._last_package_status_collect[hostname] = now
 
     # ── Service monitoring ──────────────────────────────────
 
@@ -4726,8 +4523,26 @@ class VPSMonitor:
         all_results: dict[str, dict] = {}
         for hostname in hostnames:
             host_svc: dict[str, dict] = {}
-            for svc_name, svc_info in MONITORED_SERVICES.items():
-                check = await self._check_service(hostname, svc_info)
+            payload = await self._read_monitor_agent_json(
+                hostname,
+                "service_status.json",
+                stale_after=120.0,
+                timeout=10,
+            )
+            services = payload.get("services") if isinstance(payload, dict) else None
+            if not isinstance(services, dict):
+                services = {}
+            for svc_name in MONITORED_SERVICES.keys():
+                if not self._optional_service_expected(hostname, svc_name):
+                    check = self._disabled_service_check(svc_name)
+                else:
+                    raw_check = services.get(svc_name)
+                    check = dict(raw_check) if isinstance(raw_check, dict) else {
+                        "status": ServiceStatus.UNKNOWN.value,
+                        "pid": None,
+                        "error": "monitor-agent service status missing",
+                        "was_restarted": False,
+                    }
 
                 status_val = check["status"]
 

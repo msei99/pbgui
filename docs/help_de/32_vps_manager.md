@@ -131,7 +131,8 @@ Die Sidebar trennt die Log-Workflows jetzt bewusst von der normalen Host-Ansicht
 Die Status-Kacheln oberhalb des Setup-Rasters sind jetzt direkte Operator-Hinweise:
 - **Update Ready** wird sofort grün, sobald lokal ein VPS-User-Passwort eingetragen ist, und zeigt gleichzeitig die Anzahl ausstehender Linux-Updates.
 - **CoinData Ready** zeigt die verbleibenden CoinMarketCap-Credits, sobald der Monitor diesen Wert meldet.
-- Ausstehende Linux-Updates und Reboot-Hinweise werden zusätzlich über eine Live-SSH-Paketstatus-Abfrage aktualisiert.
+- **Monitor Agent** zeigt, ob der entfernte `pbgui-monitor-agent.service`-Cache OK, stale, missing oder error ist. Missing/stale behebst du mit **Update PBGui** auf der VPS oder per Prüfung von `systemctl --user status pbgui-monitor-agent.service` und `journalctl --user -u pbgui-monitor-agent.service` auf der VPS.
+- Ausstehende Linux-Updates und Reboot-Hinweise werden über den Package-Status-Cache des Monitor-Agent aktualisiert.
 - Die Detailseite enthält außerdem wieder eine einzeilige Zusammenfassungstabelle plus einen Remote-Server-Ressourcenblock ähnlich zur früheren Serveransicht.
 
 `Cleanup VPS` installiert oder aktualisiert jetzt zusätzlich zwei kleine tägliche Cleanup-Cronjobs auf der VPS: einen User-Job für Pip- und Rustup-Caches sowie einen Root-Job für `journalctl --vacuum-time=1d`. Die periodischen Jobs laufen still und behalten keine eigene Log-Historie.
@@ -153,7 +154,9 @@ Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöf
 3. Das Formular **Step 4: Initialize & Setup your VPS** und die **Save VPS Entry**-Vorgaben ausfüllen.
 4. Mit **Save VPS** den Eintrag anlegen oder aktualisieren.
 5. Mit **Initialize & Setup VPS** den Bootstrap-Lauf direkt aus der Add-Ansicht starten.
-6. Nach erfolgreicher Initialisierung für normale gespeicherte Einstellungsänderungen **Change VPS** und **Apply VPS Changes** verwenden.
+6. Nach erfolgreichem Setup registriert PBGui den Host lokal als Cluster-Node-Kandidat. Wenn diese VPS einem bestehenden Cluster beitreten soll, öffne **System -> Cluster Sync -> Nodes**, stelle den neuen Node auf **Reachable via SSH**, führe **Probe** aus, nutze **Join**, füge die VPS danach zu den Sync Peers des lokalen Masters hinzu und führe **Install Key** oder **Repair All SSH** aus.
+7. Wenn die VPS schon vor der automatischen Cluster-Registrierung eingerichtet wurde, öffne zuerst die VPS-Detailseite und klicke **Add to Cluster**. Diese Aktion schreibt nur lokale Cluster-Metadaten; sie verbindet nicht per SSH zur VPS und joint sie nicht.
+8. Nach erfolgreicher Initialisierung für normale gespeicherte Einstellungsänderungen **Change VPS** und **Apply VPS Changes** verwenden.
 
 ---
 
@@ -163,7 +166,7 @@ Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöf
 1. **Master (local)** klicken → **Update PBGui and PB7** → auf *successful* im Log warten
 2. Für jeden VPS: Hostname klicken → **Update PBGui and PB7**
 
-Der PBGui-Update-Workflow startet PBCluster für Cluster-Mode-Hosts neu. Wenn du einen Host manuell per `git pull` aktualisierst, starte PBCluster dort danach mit `systemctl --user restart pbgui-pbcluster.service` neu.
+Der PBGui-Update-Workflow startet PBCluster für Cluster-Mode-Hosts neu und installiert/startet `pbgui-monitor-agent.service` auf VPS-Hosts. Wenn du einen Host manuell per `git pull` aktualisierst, starte PBCluster und den Monitor-Agent dort danach mit `systemctl --user restart pbgui-pbcluster.service pbgui-monitor-agent.service` neu.
 
 ### Auf einen Feature-Branch wechseln
 1. Master oder VPS-Detailansicht öffnen

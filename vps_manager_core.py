@@ -65,6 +65,25 @@ def _cluster_sync_extra_vars() -> dict[str, str]:
     }
 
 
+def _register_vps_cluster_node(hostname: str) -> dict:
+    """Register one successful VPS setup as a local Cluster node candidate."""
+
+    host = str(hostname or "").strip()
+    if not host:
+        return {"ok": False, "changed": False, "error": "Hostname is required."}
+    try:
+        from api import cluster
+
+        result = cluster.apply_bootstrap_node(host, session=None)
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        _log("VPSManager", f"Could not add {host} to Cluster: {detail}", level="WARNING")
+        return {"ok": False, "changed": False, "error": str(detail)}
+    if result.get("changed"):
+        _log("VPSManager", f"Added {host} as Cluster node candidate", level="INFO")
+    return result
+
+
 def _command_updates_pbgui(command: str | None) -> bool:
     """Return True for playbooks that update or install PBGui files."""
 
@@ -867,6 +886,7 @@ PY"""
         self.last_setup = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if str(self.setup_status or "") == "successful":
             _set_vps_monitor_enabled(self.hostname, enabled=True)
+            _register_vps_cluster_node(self.hostname)
         self.save()
         shutil.rmtree(f"{self.path}/tmp", ignore_errors=True)
 

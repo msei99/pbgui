@@ -4,7 +4,7 @@ set -euo pipefail
 TARGET_USER="${USER:-}"
 PBGUI_DIR=""
 PYTHON_BIN=""
-ENABLE_SERVICES="api,pbcluster,pbrun,pbdata,pbcoindata"
+ENABLE_SERVICES="api,pbcluster,pbrun,pbdata,pbcoindata,monitor-agent"
 START_SERVICES=true
 DISABLE_EXCLUDED=true
 
@@ -47,7 +47,7 @@ Options:
   --user USER                 Target Linux user. Default: current user.
   --pbgui-dir PATH            PBGui directory. Default: current directory.
   --python PATH               PBGui venv Python. Default: ../venv_pbgui/bin/python.
-  --enable LIST               Comma-separated services to enable. Default: api,pbcluster,pbrun,pbdata,pbcoindata.
+  --enable LIST               Comma-separated services to enable. Default: api,pbcluster,pbrun,pbdata,pbcoindata,monitor-agent.
   --no-start                  Enable services but do not start/restart them now.
   --no-disable-excluded       Do not stop/disable services missing from --enable.
   -h, --help                  Show help.
@@ -151,6 +151,7 @@ write_unit "pbgui-pbcluster.service" "PBGui PBCluster Service" "PBCluster.py"
 write_unit "pbgui-pbrun.service" "PBGui PBRun Service" "PBRun.py"
 write_unit "pbgui-pbdata.service" "PBGui PBData Service" "PBData.py"
 write_unit "pbgui-pbcoindata.service" "PBGui PBCoinData Service" "PBCoinData.py"
+write_unit "pbgui-monitor-agent.service" "PBGui Monitor Agent" "monitor_agent.py"
 
 if [[ "$RUNNING_AS_ROOT" == true ]]; then
   loginctl enable-linger "$TARGET_USER" >/dev/null 2>&1 || warn "Could not enable linger for $TARGET_USER."
@@ -210,7 +211,7 @@ remove_obsolete_unit() {
 remove_obsolete_unit "pbgui-pbremote.service"
 run_user_systemctl daemon-reload
 if [[ "$DISABLE_EXCLUDED" == true ]]; then
-  for managed_service in api pbcluster pbrun pbdata pbcoindata; do
+  for managed_service in api pbcluster pbrun pbdata pbcoindata monitor-agent; do
     disable_service_if_excluded "$managed_service"
   done
 fi

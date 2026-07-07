@@ -1107,12 +1107,17 @@ def test_auto_heal_skips_disabled_optional_service() -> None:
         restarted.append(f"{hostname}:{service_name}")
         return True
 
-    async def fake_check(hostname: str, svc) -> dict:
-        if svc.name == "PBRun":
-            return monitor._disabled_service_check("PBRun")
-        return {"status": monitor_mod.ServiceStatus.RUNNING.value, "pid": 1, "error": None, "was_restarted": False}
+    async def fake_read_agent_json(hostname: str, filename: str, **kwargs) -> dict:
+        del hostname, filename, kwargs
+        return {"services": {
+            "PBCluster": {"status": monitor_mod.ServiceStatus.RUNNING.value, "pid": 1, "error": None, "was_restarted": False},
+            "PBRun": {"status": monitor_mod.ServiceStatus.STOPPED.value, "pid": None, "error": "down", "was_restarted": False},
+            "PBData": {"status": monitor_mod.ServiceStatus.RUNNING.value, "pid": 2, "error": None, "was_restarted": False},
+            "PBCoinData": {"status": monitor_mod.ServiceStatus.RUNNING.value, "pid": 3, "error": None, "was_restarted": False},
+        }}
 
-    monitor._check_service = fake_check
+    monitor._read_monitor_agent_json = fake_read_agent_json
+    monitor._optional_service_expected = lambda hostname, service_name: service_name != "PBRun"
     monitor._restart_service = fake_restart
 
     result = asyncio.run(monitor._check_and_heal_services(["manibot01"]))
@@ -1725,8 +1730,54 @@ def test_pbgui_code_update_playbooks_sync_systemd_units(playbook_path: str) -> N
     assert "--include-pbremote" not in playbook
     assert "--no-start" in playbook
     assert "failed_when: false" not in systemd_setup_block
-    assert "setup/vps_service_control.sh restart PBCluster PBRun PBCoinData" in playbook
+    assert "setup/vps_service_control.sh restart PBCluster PBRun PBCoinData PBMonitorAgent" in playbook
     assert "setup/vps_service_control.sh restart PBCluster PBRun PBRemote PBCoinData" not in playbook
+
+
+def test_metrics_stream_reads_monitor_agent_cache() -> None:
+    """Master-side live metrics must tail the monitor-agent cache, not run collectors."""
+
+    command = monitor_mod._monitor_agent_tail_command("software/pbgui")
+
+    assert "data/monitor_agent/live_metrics.ndjson" in command
+    assert "tail -n 1 -F" in command
+    assert "python3 -u -c" not in command
+
+
+@pytest.mark.parametrize("filename", [
+    "instance_snapshot.json",
+    "host_meta.json",
+    "service_status.json",
+    "package_status.json",
+])
+def test_slow_monitor_reads_use_agent_cache(filename: str) -> None:
+    """Master-side slow monitor paths read agent JSON cache files only."""
+
+    command = monitor_mod._monitor_agent_cache_read_command("software/pbgui", filename)
+
+    assert f"data/monitor_agent/{filename}" in command
+    assert command.startswith("cat ")
+    assert "python3 -u -c" not in command
+    assert "systemctl" not in command
+
+
+def test_vps_api_does_not_import_instance_collector_script() -> None:
+    """The VPS API must not send the old instance collector over SSH."""
+
+    source = Path("api/vps.py").read_text(encoding="utf-8")
+
+    assert "INSTANCE_COLLECT_SCRIPT" not in source
+    assert "get_recent_logs" in source
+    assert "get_bot_log" in source
+
+
+def test_host_meta_migration_status_requires_monitor_agent_unit() -> None:
+    """Remote systemd migration status includes the monitor-agent unit."""
+
+    source = Path("master/async_monitor.py").read_text(encoding="utf-8")
+
+    assert "pbgui-monitor-agent.service" in source
+    assert "required_unit_names = ['pbgui-pbcluster.service', 'pbgui-monitor-agent.service']" in source
 
 
 @pytest.mark.parametrize("playbook_path", ["master-update-pbgui.yml", "master-update-pb.yml", "master-switch-pbgui-branch.yml"])

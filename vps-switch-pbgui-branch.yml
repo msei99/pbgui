@@ -93,7 +93,7 @@
           target_home="$(getent passwd "$target_user" | cut -d: -f6)"
         fi
         unit_dir="${target_home:-$HOME}/.config/systemd/user"
-        for unit in pbgui-pbcluster.service pbgui-pbrun.service; do
+        for unit in pbgui-pbcluster.service pbgui-pbrun.service pbgui-monitor-agent.service; do
           if [ ! -f "$unit_dir/$unit" ]; then
             echo "missing=$unit"
           fi
@@ -176,7 +176,7 @@
 
     - name: Build enabled PBGui service list
       set_fact:
-        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun'] + (['pbcoindata'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
       listen: "restart pbgui"
 
     - name: Sync PBGui systemd user services
@@ -197,8 +197,8 @@
       changed_when: systemd_setup_result.rc == 0
       listen: "restart pbgui"
 
-    - name: Restart PBCluster, PBRun and PBCoinData
-      script: setup/vps_service_control.sh restart PBCluster PBRun PBCoinData
+    - name: Restart PBCluster, PBRun, PBCoinData and PBMonitorAgent
+      script: setup/vps_service_control.sh restart PBCluster PBRun PBCoinData PBMonitorAgent
       environment:
         PBGUI_DIR: "{{ install_dir }}/pbgui"
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"

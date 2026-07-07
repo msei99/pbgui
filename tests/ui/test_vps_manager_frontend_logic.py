@@ -109,6 +109,90 @@ class TestVpsManagerFrontendLogic:
         assert "vpsActionWithPw(hostname, 'vps-purge-install', 'Purge VPS Install')" in source
         assert "onclick='confirmPurgeVpsInstall(${js(selectedHost)})'>Purge VPS Install</button>" in source
 
+    def test_vps_manager_add_to_cluster_is_local_metadata_only(self) -> None:
+        """VPS Manager exposes Add to Cluster without remote side effects."""
+
+        source = HTML_PATH.read_text(encoding="utf-8")
+
+        assert "function addVpsToCluster(hostname)" in source
+        assert "send({ cmd: 'add_vps_to_cluster', hostname: target })" in source
+        assert "This only writes local Cluster metadata" in source
+        assert "It does not SSH to the VPS, join the remote node, stop services or change bot configs." in source
+        assert "${showClusterNodeBtn ? `<button class='${clusterNodeBtnClass}'" in source
+
+    def test_add_vps_initialize_requires_green_preflight_checks(self) -> None:
+        """Initialize stays blocked until required pre-flight checks pass."""
+        bootstrap = """
+        const store = { addVpsReady: { hostsOk: false, sshOk: true, loading: false } };
+        function hasSessionSecret(hostname, field) { return false; }
+        function validateFirewallIps(value) { return { ok: true }; }
+        """
+        assertions = """
+        const validForm = {
+          ip: '203.0.113.10', hostname: 'manibot40', user: 'mani', user_pw: 'user-pw',
+          init_methode: 'root', initial_root_pw: 'root-pw', root_pw: 'new-root-pw',
+          swap: '3G', install_dir: '/home/mani/software', firewall_ssh_ips: '198.51.100.1'
+        };
+        assert.equal(canInitForm(validForm), false);
+        store.addVpsReady = { hostsOk: true, sshOk: false, loading: false };
+        assert.equal(canInitForm(validForm), false);
+        store.addVpsReady = { hostsOk: true, sshOk: true, loading: true };
+        assert.equal(canInitForm(validForm), false);
+        store.addVpsReady = { hostsOk: true, sshOk: true, loading: false };
+        assert.equal(canInitForm(validForm), true);
+        """
+        _run_node_assertions(
+            ["hasInvalidPasswordChars", "addVpsPreflightReady", "canInitForm"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
+    def test_add_vps_initialize_click_is_guarded(self) -> None:
+        """A stale enabled button cannot send init_vps while pre-flight is red."""
+        bootstrap = """
+        const sent = [];
+        const toasts = [];
+        const store = {
+          addVpsReady: { hostsOk: false, sshOk: true, loading: false },
+          master: { debug: false },
+          addForm: {
+            ip: '203.0.113.10', hostname: 'manibot40', user: 'mani', user_pw: 'user-pw',
+            init_methode: 'root', initial_root_pw: 'root-pw', root_pw: 'new-root-pw',
+            swap: '3G', install_dir: '/home/mani/software', firewall_ssh_ips: '198.51.100.1'
+          }
+        };
+        function hasSessionSecret(hostname, field) { return false; }
+        function validateFirewallIps(value) { return { ok: true }; }
+        function toast(message, level) { toasts.push({ message, level }); }
+        function send(payload) { sent.push(payload); }
+        """
+        assertions = """
+        initAddVps();
+        assert.equal(sent.length, 0);
+        assert.equal(toasts[0].level, 'warning');
+        store.addVpsReady = { hostsOk: true, sshOk: true, loading: false };
+        initAddVps();
+        assert.equal(sent.length, 1);
+        assert.equal(sent[0].cmd, 'init_vps');
+        """
+        _run_node_assertions(
+            ["hasInvalidPasswordChars", "addVpsPreflightReady", "canInitForm", "initAddVps"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
+    def test_add_vps_preflight_result_refreshes_init_ready_state(self) -> None:
+        """The async pre-flight result must refresh the top Init ready card and button."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        marker = "if (msg.type === 'vps_ready_result')"
+        start = source.find(marker)
+        assert start >= 0
+        block = source[start : source.find("if (msg.type === 'public_ip_result')", start)]
+
+        assert "setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks())" in block
+        assert "setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm))" in block
+        assert "refreshLocalInteractiveState()" in block
+
     def test_dirty_optional_fields_survive_live_config_refresh(self) -> None:
         """Cleared optional fields must stay dirty while remote metadata is stale."""
         bootstrap = """

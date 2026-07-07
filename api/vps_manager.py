@@ -298,6 +298,12 @@ async def ws_vps_manager(websocket: WebSocket):
                         debug=bool(msg.get("debug")),
                     )
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                elif cmd == "add_vps_to_cluster":
+                    data = await asyncio.to_thread(
+                        service.add_vps_to_cluster,
+                        str(msg.get("hostname") or ""),
+                    )
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "preview_vps_systemd_migration":
                     data = await asyncio.to_thread(
                         service.preview_vps_systemd_migration,

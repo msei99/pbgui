@@ -2486,6 +2486,28 @@ def test_apply_bootstrap_records_known_vps_node(monkeypatch, tmp_path: Path) -> 
     assert mapping["hosts"]["vps-a"]["node_id"] == node["node_id"]
 
 
+def test_apply_bootstrap_node_records_only_selected_known_vps(monkeypatch, tmp_path: Path) -> None:
+    """The targeted VPS node bootstrap endpoint writes only the requested host."""
+
+    root = _init_cluster(tmp_path)
+    _write_vps_config(tmp_path, "vps-a", ip="203.0.113.10", user="bot", ssh_port=2222)
+    _write_vps_config(tmp_path, "vps-b", ip="203.0.113.11", user="bot", ssh_port=2223)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+
+    result = cluster.apply_bootstrap_node("vps-a", session=None)
+    nodes = _read_json(tmp_path / "data" / "cluster" / "cluster_nodes.json")["nodes"]
+    operations = load_operations(root, expected_cluster_id=CLUSTER_ID)
+    mapping = _read_json(tmp_path / "data" / "cluster" / "host_node_ids.json")
+
+    assert result["changed"] is True
+    assert result["result"]["counts"] == {"applied": 1, "skipped": 0, "failed": 0}
+    assert len(nodes) == 1
+    assert next(iter(nodes.values()))["pbname"] == "vps-a"
+    assert [op["pbname"] for op in operations if op["op"] == "ADD_NODE"] == ["vps-a"]
+    assert sorted(mapping["hosts"]) == ["vps-a"]
+    assert result["after"]["counts"]["add"] == 1
+
+
 def test_apply_bootstrap_uses_monitor_master_role(monkeypatch, tmp_path: Path) -> None:
     """Bootstrap preserves remote master roles reported by VPS Manager monitor metadata."""
 

@@ -15,7 +15,7 @@ import json
 import re
 import time
 import traceback
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from time import mktime
 from typing import Any, Optional
 
@@ -26,7 +26,7 @@ from api.auth import validate_token, require_auth, SessionToken
 from MonitorConfig import MonitorConfig
 from pbgui_purefunc import load_ini, save_ini
 from logging_helpers import human_log as _log
-from master.async_monitor import VPSMonitor, INSTANCE_COLLECT_SCRIPT
+from master.async_monitor import VPSMonitor
 from master.async_logs import (
     AsyncLogStreamer, LocalLogSub, resolve_bot_log_path,
     local_logs_dir, tail_file, resolve_local_log_path,
@@ -141,24 +141,47 @@ async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str |
                               expected_count: int | None = None, lines: int = 5000) -> list[str]:
     """Return filtered bot-log lines for popup display.
 
-    Delegates to the same remote script that counts errors / tracebacks,
-    guaranteeing identical file-reading order, timestamp parsing, and
-    day-bucket logic.
+    Uses existing SSH log-tail reads only. It must not launch the old remote
+    instance collector script because periodic monitor data now comes from the
+    local monitor-agent cache.
     """
-    if not _streamer or not hostname or not bot_name:
+    if not _streamer or not hostname or not bot_name or bucket != "today":
         return []
-    if bucket != "today":
+    line_limit = max(int(lines or 0), int(expected_count or 0), 200)
+    today_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    def is_today(line: str) -> bool:
+        return str(line or "").startswith(today_prefix)
+
+    if kind == "tracebacks":
+        output = await _streamer.get_recent_logs(hostname, f"data/run_v7/{bot_name}/passivbot_err.log", line_limit)
+        if output is None:
+            return []
+        matches: list[str] = []
+        block: list[str] = []
+        block_today = False
+
+        def flush_block() -> None:
+            if block_today and any("Traceback" in line for line in block):
+                if matches:
+                    matches.extend(["", "-----", ""])
+                matches.extend(block)
+
+        for raw_line in output.splitlines():
+            line = raw_line.rstrip("\n")
+            if re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", line):
+                flush_block()
+                block = [line]
+                block_today = is_today(line)
+            elif block:
+                block.append(line)
+        flush_block()
+        return matches[-line_limit:] if line_limit > 0 else matches
+
+    output = await _streamer.get_bot_log(hostname, bot_name, line_limit, pb_version)
+    if not output:
         return []
-    cmd = (f"PBGUI_DUMP=1 PBGUI_DUMP_KIND={kind} PBGUI_DUMP_BOT={bot_name} "
-           f"PBGUI_DUMP_BUCKET={bucket} PBGUI_DUMP_LINES={lines} "
-           f"{INSTANCE_COLLECT_SCRIPT}")
-    result = await _streamer._pool.run(hostname, cmd, timeout=30)
-    if result and result.exit_status == 0 and result.stdout:
-        try:
-            parsed = json.loads(result.stdout.strip())
-            return parsed.get("lines", [])
-        except json.JSONDecodeError:
-            pass
+    return [line for line in output.splitlines() if is_today(line) and " ERROR " in line][-line_limit:]
     return []
 
 

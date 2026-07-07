@@ -8,6 +8,7 @@ from pathlib import Path
 
 import vps_manager_core
 import vps_manager_service
+from api import cluster
 from master.cluster_state import append_operation, default_cluster_root, ensure_local_identity, rebuild_materialized_state
 from vps_manager_service import VPSManagerService
 
@@ -26,7 +27,10 @@ def _prepare_service(monkeypatch, tmp_path: Path) -> tuple[VPSManagerService, di
     (tmp_path / "pbgui.ini").write_text("[main]\npbname=second-master\n", encoding="utf-8")
     monkeypatch.setattr(vps_manager_core, "PBGDIR", str(tmp_path))
     monkeypatch.setattr(vps_manager_service, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
     monitor_ini = {"enabled_hosts": ""}
+    monkeypatch.setattr(vps_manager_core, "load_ini", lambda section, parameter: monitor_ini.get(parameter, ""))
+    monkeypatch.setattr(vps_manager_core, "save_ini", lambda section, parameter, value: monitor_ini.__setitem__(parameter, value))
     monkeypatch.setattr(vps_manager_service, "load_ini", lambda section, parameter: monitor_ini.get(parameter, ""))
     monkeypatch.setattr(vps_manager_service, "save_ini", lambda section, parameter, value: monitor_ini.__setitem__(parameter, value))
     monkeypatch.setattr(vps_manager_service, "_hosts_entry_status", lambda hostname, ip: {"ok": True})
@@ -71,6 +75,55 @@ def _prepare_service(monkeypatch, tmp_path: Path) -> tuple[VPSManagerService, di
     }, created_at=105)
     rebuild_materialized_state(root)
     return VPSManagerService(), monitor_ini
+
+
+def _write_successful_vps(service: VPSManagerService, hostname: str) -> vps_manager_core.VPS:
+    """Create one setup-complete VPS Manager host entry."""
+
+    vps = vps_manager_core.VPS()
+    vps.hostname = hostname
+    vps.ip = "203.0.113.40"
+    vps.user = "bot"
+    vps.remote_pbgui_dir = "/home/bot/software/pbgui"
+    vps.firewall_ssh_port = 2222
+    vps.setup_status = "successful"
+    vps.save()
+    service.vpsmanager.vpss.append(vps)
+    service.vpsmanager.vpss.sort(key=lambda item: item.hostname or "")
+    return vps
+
+
+def test_add_vps_to_cluster_records_only_selected_vps(monkeypatch, tmp_path: Path) -> None:
+    """VPS Manager can add one setup-complete VPS as a Cluster candidate."""
+
+    service, _monitor_ini = _prepare_service(monkeypatch, tmp_path)
+    _write_successful_vps(service, "new-runner")
+
+    result = service.add_vps_to_cluster("new-runner")
+    materialized = rebuild_materialized_state(default_cluster_root(tmp_path))
+    nodes = materialized["cluster_nodes"]["nodes"]
+    new_node = next(node for node in nodes.values() if node.get("pbname") == "new-runner")
+
+    assert result["cluster"]["changed"] is True
+    assert result["cluster_node"]["registered"] is True
+    assert new_node["sync_mode"] == "disabled"
+    assert new_node["ssh_host"] == "203.0.113.40"
+    assert new_node["ssh_user"] == "bot"
+    assert new_node["ssh_port"] == 2222
+
+
+def test_successful_setup_finished_auto_adds_vps_to_cluster(monkeypatch, tmp_path: Path) -> None:
+    """The VPS setup completion callback registers the host in local Cluster metadata."""
+
+    service, monitor_ini = _prepare_service(monkeypatch, tmp_path)
+    vps = _write_successful_vps(service, "auto-runner")
+
+    vps.setup_finished()
+    materialized = rebuild_materialized_state(default_cluster_root(tmp_path))
+    nodes = materialized["cluster_nodes"]["nodes"]
+
+    assert any(node.get("pbname") == "auto-runner" for node in nodes.values())
+    assert monitor_ini["enabled_hosts"] == "auto-runner"
 
 
 def test_cluster_nodes_import_preview_nodes_with_ssh_metadata(monkeypatch, tmp_path: Path) -> None:

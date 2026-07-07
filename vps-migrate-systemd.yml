@@ -14,6 +14,7 @@
     all_systemd_units:
       - pbgui-pbcluster.service
       - pbgui-pbrun.service
+      - pbgui-monitor-agent.service
       - pbgui-pbcoindata.service
       - pbgui-pbremote.service
 
@@ -75,8 +76,8 @@
     - name: build enabled PBGui migration service list
       set_fact:
         pbgui_coindata_configured: "{{ 'coindata_configured=yes' in optional_service_config.stdout_lines }}"
-        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun'] + (['pbcoindata'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
-        systemd_units: "{{ ['pbgui-pbcluster.service', 'pbgui-pbrun.service'] + (['pbgui-pbcoindata.service'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
+        systemd_units: "{{ ['pbgui-pbcluster.service', 'pbgui-pbrun.service', 'pbgui-monitor-agent.service'] + (['pbgui-pbcoindata.service'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
 
     - name: copy systemd setup helper
       copy:

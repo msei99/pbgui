@@ -4462,18 +4462,44 @@
 
     function renderVpsSummaryTags(status) {
       const onlineLabel = status.telemetry_stale ? 'Telemetry Stale' : (status.online ? 'Online' : 'Offline');
+      const agent = status.monitor_agent || {};
+      const agentState = String(agent.state || 'unknown');
+      const agentTone = agentState === 'ok' ? 'ok' : (agentState === 'unknown' ? 'warning' : 'error');
+      const agentLabel = agentState === 'ok' ? 'OK' : (agentState === 'stale' ? 'Stale' : (agentState === 'missing' ? 'Missing' : (agentState === 'error' ? 'Error' : 'Unknown')));
       return `
         <span class='tag ${status.online ? 'ok' : 'error'}'>${esc(onlineLabel)}</span>
+        <span class='tag ${agentTone}'>Monitor Agent ${esc(agentLabel)}</span>
         <span class='tag ${status.init_ok ? 'ok' : 'warning'}'>Init ${status.init_ok ? 'Done' : 'Pending'}</span>
         <span class='tag ${status.setup_ok ? 'ok' : 'warning'}'>Setup ${status.setup_ok ? 'Done' : 'Pending'}</span>
         <span class='tag ${status.update_ok ? 'ok' : 'warning'}'>Last Update ${status.update_ok ? 'Successful' : 'Pending/Failed'}</span>`;
     }
 
     function renderVpsStatusFields(status, summary) {
+      const agent = status.monitor_agent || {};
+      const agentState = String(agent.state || 'unknown');
+      const agentAge = Number(agent.age);
+      const agentFiles = agent.files || {};
+      const fileLabels = [
+        ['live_metrics.ndjson', 'Live'],
+        ['instance_snapshot.json', 'Instances'],
+        ['host_meta.json', 'Host meta'],
+        ['service_status.json', 'Services'],
+        ['package_status.json', 'Packages']
+      ];
+      const agentAges = fileLabels.map(function(pair) {
+        const item = agentFiles[pair[0]] || {};
+        const age = Number(item.age);
+        if (!Number.isFinite(age)) return '';
+        return pair[1] + ' ' + age.toFixed(1) + 's';
+      }).filter(Boolean).join(' · ');
+      const agentSub = agent.error
+        ? String(agent.error)
+        : (agentAges || (Number.isFinite(agentAge) ? ('Live cache age ' + agentAge.toFixed(1) + 's') : 'Source: agent cache'));
       return `
         <div class='status-grid'>
           <div class='status-item' data-field='role'><div class='status-label'>Role</div><div class='status-value'>${summary.role_icon || ''} ${esc(summary.role || '-')}</div></div>
           <div class='status-item' data-field='install-path'><div class='status-label'>Install Path</div><div class='status-value code'>${esc(status.install_dir || '-')}</div></div>
+          <div class='status-item' data-field='monitor-agent'><div class='status-label'>Monitor Agent</div><div class='status-value'>${esc(agentState.toUpperCase())}</div><div class='status-sub'>${esc(agentSub)}</div></div>
           <div class='status-item' data-field='last-init'><div class='status-label'>Last init</div><div class='status-value'>${esc(status.last_init || '-')}</div></div>
           <div class='status-item' data-field='last-setup'><div class='status-label'>Last setup</div><div class='status-value'>${esc(status.last_setup || '-')}</div></div>
           <div class='status-item' data-field='last-update'><div class='status-label'>Last update</div><div class='status-value'>${esc(status.last_update || '-')}</div></div>
@@ -6958,6 +6984,8 @@
         };
         if (store.view === 'add') {
           setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
+          setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
+          refreshLocalInteractiveState();
         }
         return;
       }
@@ -7185,6 +7213,13 @@
         if (hostname) {
           store.pendingAutoSetupSwitch = null;
           openVpsTaskLog(hostname, 'vps-setup', 'Setup VPS');
+          scheduleVpsDetailFetch(hostname);
+          needsForceView = true;
+        }
+      } else if (cmd === 'add_vps_to_cluster') {
+        const hostname = String(((msg.data || {}).hostname) || store.hostname || '');
+        toast('VPS added to Cluster. Run Join from Cluster Nodes when ready.', 'success');
+        if (hostname) {
           scheduleVpsDetailFetch(hostname);
           needsForceView = true;
         }
@@ -8280,6 +8315,10 @@
     }
 
     function initAddVps() {
+      if (!canInitForm(store.addForm)) {
+        toast('Fix the red pre-flight checks before initializing the VPS.', 'warning');
+        return;
+      }
       send({ cmd: 'init_vps', form: Object.assign({}, store.addForm), debug: !!store.master.debug });
     }
 
@@ -9059,6 +9098,18 @@
       send({ cmd: 'setup_vps', hostname: hostname, form: buildSecretAwareForm(hostname, ui.form), debug: !!ui.debug });
     }
 
+    function addVpsToCluster(hostname) {
+      const target = String(hostname || '').trim();
+      if (!target) return;
+      openConfirmModal(
+        'Add to Cluster',
+        'Add VPS ' + target + ' as a local Cluster node candidate? This only writes local Cluster metadata. It does not SSH to the VPS, join the remote node, stop services or change bot configs.',
+        function () {
+          send({ cmd: 'add_vps_to_cluster', hostname: target });
+        }
+      );
+    }
+
     function setPromptedVpsUserPassword(hostname, password) {
       const host = String(hostname || '');
       const pw = String(password || '');
@@ -9144,9 +9195,15 @@
       return str.indexOf('{{') >= 0 || str.indexOf('}}') >= 0;
     }
 
+    function addVpsPreflightReady() {
+      const ready = store.addVpsReady || {};
+      return !!ready.hostsOk && !!ready.sshOk && !ready.loading;
+    }
+
     function canInitForm(form) {
       const hasBase = !!(form && form.ip && form.user && form.user_pw);
       if (!hasBase) return false;
+      if (!addVpsPreflightReady()) return false;
       if (hasInvalidPasswordChars(form.user_pw)) return false;
       if (form.init_methode === 'private_key') {
         if (hasInvalidPasswordChars(form.private_key_user)) return false;
@@ -9789,6 +9846,11 @@
         const needsReboot = !!(st.summary_row || {}).reboot_required;
         const rebootBtnClass = needsReboot ? 'sb-btn warning' : 'sb-btn ok';
         const systemdMigrationBtn = getVpsSystemdMigrationButtonModel(selectedHost, detail, ui);
+        const clusterNode = (st.cluster_node || {});
+        const clusterNodeAction = String(clusterNode.action || '');
+        const showClusterNodeBtn = !!st.setup_ok && clusterNodeAction !== 'skip';
+        const clusterNodeBtnText = clusterNodeAction === 'update' ? 'Update Cluster Node' : 'Add to Cluster';
+        const clusterNodeBtnClass = clusterNodeAction === 'error' ? 'sb-btn warning' : 'sb-btn info';
         html = `
           <button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>
           <div class='sb-field'>
@@ -9805,6 +9867,7 @@
           ${!isRemoteMaster ? `<button class='sb-btn' type='button' onclick='selectView("vps-setup", ${js(selectedHost)})'>Change VPS</button>` : ''}
           <button class='sb-btn' type='button' onclick='selectView("vps-pbgui-branch", ${js(selectedHost)})'>PBGui Branch</button>
           <button class='sb-btn' type='button' onclick='selectView("vps-pb7-branch", ${js(selectedHost)})'>PB7 Branch</button>
+          ${showClusterNodeBtn ? `<button class='${clusterNodeBtnClass}' type='button' title='${escAttr(clusterNode.reason || '')}' onclick='addVpsToCluster(${js(selectedHost)})'>${esc(clusterNodeBtnText)}</button>` : ''}
           <button class='sb-btn' type='button' onclick='openExistingAsInit(${js(selectedHost)})'>Initialize</button>
           <button class='sb-btn danger' type='button' onclick='confirmDeleteVps(${js(selectedHost)})'>Delete VPS</button>
           <div class='sb-separator'>Tasks</div>
@@ -10369,12 +10432,24 @@
       const cmcCheck = store.addCmcCheck || {};
       const hasCmc = !!String(currentForm.coinmarketcap_api_key || '').trim();
       const cmcOk = !hasCmc || cmcCheck.ok;
+      const preflightReady = addVpsPreflightReady();
+      const ready = store.addVpsReady || {};
       const fwCheck = validateFirewallIps(currentForm.firewall_ssh_ips);
       const fwOk = fwCheck.ok;
       const setupReady = !!installDir && cmcOk && fwOk;
       let initReadySub;
       if (canInit) {
         initReadySub = 'All required fields are set';
+      } else if (!preflightReady) {
+        if (!ready.hostsOk) {
+          initReadySub = 'Add IP and hostname to local /etc/hosts first';
+        } else if (ready.loading) {
+          initReadySub = 'Waiting for pre-flight checks';
+        } else if (!ready.sshOk) {
+          initReadySub = 'SSH connectivity check must pass first';
+        } else {
+          initReadySub = 'Fix the red pre-flight checks first';
+        }
       } else if (userPwInvalid || initPwInvalid) {
         initReadySub = 'Password contains invalid characters {{ or }}';
       } else if (!setupReady) {

@@ -42,14 +42,15 @@ Cluster Sync ersetzt die alten Sync-Wege. PBRun wird nur auf Hosts benötigt, di
 
 ### 5. VPS-Nodes joinen
 
-1. Öffne **System -> Cluster Sync**.
-2. Öffne beim VPS-Node **Edit**. Wenn der Node noch **Disabled** ist, stelle **Sync Mode** auf **Reachable via SSH**, prüfe SSH Host/User/Port und **Remote PBGui Dir**, und speichere.
-3. Nutze beim Node **Repair SSH**, damit die eingeschränkten PBCluster-SSH-Keys und Fingerprints installiert bzw. aktualisiert werden. Nutze stattdessen **Repair All SSH**, wenn mehrere Nodes aktualisiert wurden oder Peer-Allowlisten im Cluster geändert wurden.
-4. Wenn PBGui während des Repairs ein SSH-Passwort abfragt, gib das Passwort für den genannten Node ein. Es wird nur für diesen Repair-Request verwendet und nicht gespeichert.
-5. Klicke **Probe Active Nodes** und warte, bis der Node erreichbar ist und **No Identity** meldet.
-6. Nutze danach **Join**.
-7. **Join** schreibt die Cluster-Identität, synchronisiert Cluster-Daten, materialisiert V7-Configs/API-Keys und startet PBRun danach wieder, wenn alles passt.
-8. Bei VPS-Runnern stoppt **Join** PBRun währenddessen automatisch. Die laufenden passivbot-Prozesse bleiben unangetastet.
+1. Öffne die VPS in **System -> VPS Manager**. Wenn sie nach dem Setup nicht automatisch registriert wurde, klicke **Add to Cluster**. Das schreibt nur lokale Cluster-Metadaten; es verbindet nicht per SSH zur VPS und joint sie nicht.
+2. Öffne **System -> Cluster Sync -> Nodes**.
+3. Öffne beim VPS-Node **Edit**, stelle **Sync Mode** auf **Reachable via SSH**, prüfe SSH Host/User/Port und **Remote PBGui Dir**, und speichere.
+4. Klicke **Probe Active Nodes** und warte, bis der Node erreichbar ist und **No Identity** meldet.
+5. Nutze **Join**. Join schreibt die Cluster-Identität, synchronisiert Cluster-Daten, materialisiert V7-Configs/API-Keys und startet PBRun danach wieder, wenn alles passt. Bei VPS-Runnern stoppt Join PBRun währenddessen automatisch; laufende passivbot-Prozesse bleiben unangetastet.
+6. Editiere den lokalen Master-Node, der mit dieser VPS synchronisieren soll, und füge die VPS zu dessen Sync Peers hinzu.
+7. Nutze beim VPS-Node **Install Key** oder nach mehreren aktualisierten Nodes bzw. Peer-Listen-Änderungen **Repair All SSH**.
+8. Wenn PBGui während Key-Installation oder Repair ein SSH-Passwort abfragt, gib das Passwort für den genannten Node ein. Es wird nur für diesen Request verwendet und nicht gespeichert.
+9. Klicke erneut **Probe Active Nodes**. **Login Key** sollte nach einem PBCluster-Sync-Durchlauf **Installed** anzeigen. **Skipped** bedeutet, dass der Node noch nicht in der Outbound-Sync-Peer-Liste des lokalen Masters liegt; es bedeutet nicht, dass Join fehlgeschlagen ist.
 
 ### 6. Ergebnis prüfen
 

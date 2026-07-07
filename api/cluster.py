@@ -4210,6 +4210,57 @@ def apply_bootstrap(session: SessionToken = Depends(require_auth)) -> dict[str, 
         raise HTTPException(status_code=500, detail="Failed to apply bootstrap") from exc
 
 
+@router.post("/bootstrap/nodes/{hostname}")
+def apply_bootstrap_node(hostname: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Write the bootstrap ADD_NODE/UPDATE_NODE operation for one known VPS host only."""
+
+    del session
+    target = str(hostname or "").strip()
+    try:
+        _validate_instance_name(target)
+        plan = _build_bootstrap_plan()
+        item = next(
+            (
+                item
+                for item in plan.get("items", [])
+                if str(item.get("type") or "") == "node"
+                and str(item.get("hostname") or item.get("pbname") or "").strip() == target
+            ),
+            None,
+        )
+        if not item:
+            raise HTTPException(status_code=404, detail="VPS host is not known to VPS Manager")
+
+        action = str(item.get("action") or "")
+        if action not in {"add", "update"}:
+            return {
+                "ok": True,
+                "changed": False,
+                "before": item,
+                "result": {
+                    "applied": [],
+                    "skipped": [{"type": "node", "name": target, "action": action, "reason": item.get("reason") or ""}],
+                    "failed": [],
+                    "counts": {"applied": 0, "skipped": 1, "failed": 0},
+                },
+                "after": _build_bootstrap_plan(),
+            }
+
+        result = _apply_bootstrap_plan({"items": [item]})
+        return {
+            "ok": result["counts"]["failed"] == 0,
+            "changed": bool(result["counts"].get("applied")),
+            "before": item,
+            "result": result,
+            "after": _build_bootstrap_plan(),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log(SERVICE, f"Failed to apply cluster bootstrap node for {target}: {exc}", level="ERROR")
+        raise HTTPException(status_code=500, detail="Failed to apply bootstrap node") from exc
+
+
 @router.get("/main_page", response_class=HTMLResponse)
 def get_main_page(
     request: Request,

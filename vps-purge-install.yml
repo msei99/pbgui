@@ -45,7 +45,7 @@
         unit_dir="$target_home/.config/systemd/user"
         wants_dir="$unit_dir/default.target.wants"
         changed=0
-        for unit in pbgui-api.service pbgui-pbcluster.service pbgui-pbrun.service pbgui-pbdata.service pbgui-pbcoindata.service pbgui-pbremote.service; do
+        for unit in pbgui-api.service pbgui-pbcluster.service pbgui-pbrun.service pbgui-pbdata.service pbgui-pbcoindata.service pbgui-monitor-agent.service pbgui-pbremote.service; do
           systemctl --user stop "$unit" >/dev/null 2>&1 || true
           systemctl --user disable "$unit" >/dev/null 2>&1 || true
           systemctl --user reset-failed "$unit" >/dev/null 2>&1 || true

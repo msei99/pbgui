@@ -34,7 +34,7 @@ from PBCoinData import CoinData
 from pb7_release import build_local_pb7_release_info, get_current_pb7_status, load_more_pb7_commits
 from pbgui_release import build_local_pbgui_release_info, load_more_pbgui_commits
 from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, load_ini_section, pb7dir as configured_pb7dir, save_ini, save_ini_section
-from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir, strip_ansi
+from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir, _register_vps_cluster_node, strip_ansi
 
 SERVICE = "VPSManagerApi"
 
@@ -2709,6 +2709,7 @@ class VPSManagerService:
                           coindata_ok: bool, *, quick: bool = False) -> dict[str, Any]:
         hostname = str(vps.hostname or "")
         summary_row = self._build_vps_overview_row(vps.hostname, host_state)
+        cluster_node = self._cluster_node_status(hostname)
         live_package_status = None
         if quick:
             # Keep the last full package probe visible between quick pushes.
@@ -2727,6 +2728,13 @@ class VPSManagerService:
         telemetry_fresh = self._host_telemetry_fresh(host_state)
         telemetry_age = self._host_telemetry_age(host_state)
         host_meta = self._host_meta(host_state)
+        stream = (host_state or {}).get("stream") or {}
+        monitor_agent = stream.get("monitor_agent") if isinstance(stream, dict) else None
+        if not isinstance(monitor_agent, dict):
+            monitor_agent = {
+                "state": "missing" if ssh_online else "unknown",
+                "error": "No monitor-agent status has been reported" if ssh_online else "Host is not connected",
+            }
         if quick:
             if not ssh_online:
                 ssh_ok = False
@@ -2764,7 +2772,36 @@ class VPSManagerService:
             "pb7_update_available": pb7_github.startswith("\u274c"),
             "server_metrics": self._build_remote_server_metrics(vps.hostname, host_state),
             "systemd_migration": self._get_vps_systemd_migration_status(vps, host_state, quick=quick),
+            "cluster_node": cluster_node,
+            "monitor_agent": monitor_agent,
         }
+
+    def _cluster_node_status(self, hostname: str) -> dict[str, Any]:
+        """Return the local Cluster bootstrap status for one VPS Manager host."""
+
+        host = str(hostname or "").strip()
+        if not host:
+            return {"ok": False, "registered": False, "action": "error", "reason": "Hostname is required."}
+        try:
+            from api import cluster
+
+            plan = cluster._build_bootstrap_plan()
+        except Exception as exc:
+            return {"ok": False, "registered": False, "action": "error", "reason": str(getattr(exc, "detail", None) or exc)}
+        for item in plan.get("items", []) if isinstance(plan, dict) else []:
+            if str(item.get("type") or "") != "node":
+                continue
+            if str(item.get("hostname") or item.get("pbname") or "").strip() != host:
+                continue
+            action = str(item.get("action") or "")
+            return {
+                "ok": action != "error",
+                "registered": action == "skip",
+                "action": action,
+                "reason": str(item.get("reason") or ""),
+                "node_id": str(item.get("node_id") or ""),
+            }
+        return {"ok": False, "registered": False, "action": "missing", "reason": "VPS host is not known to Cluster bootstrap."}
 
     def _empty_vps_systemd_migration_status(self, state: str = "unknown", error: str = "") -> dict[str, Any]:
         return {
@@ -5700,6 +5737,21 @@ done"""
             raise ValueError("Setup parameters are incomplete.")
         self.vpsmanager.setup_vps(vps, debug=debug, extra_vars={"vps_logging_services": self.get_vps_logging_config().get("services") or []})
         return self._build_vps_progress(vps, include_logs=True)
+
+    def add_vps_to_cluster(self, hostname: str) -> dict[str, Any]:
+        """Register one successfully set up VPS as a local Cluster node candidate."""
+
+        vps = self._require_vps(hostname)
+        if str(getattr(vps, "setup_status", "") or "") != "successful":
+            raise ValueError("Run VPS setup successfully before adding this host to Cluster.")
+        result = _register_vps_cluster_node(str(vps.hostname or ""))
+        if result.get("ok") is False:
+            raise ValueError(str(result.get("error") or "Failed to add VPS to Cluster."))
+        return {
+            "hostname": str(vps.hostname or ""),
+            "cluster": result,
+            "cluster_node": self._cluster_node_status(str(vps.hostname or "")),
+        }
 
     def fetch_vps_log(self, hostname: str, *, filename: str, size_kb: int, reverse: bool = True, debug: bool = False) -> dict[str, Any]:
         vps = self._require_vps(hostname)
