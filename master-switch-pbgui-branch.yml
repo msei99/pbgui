@@ -106,17 +106,28 @@
         required_units="pbgui-api.service"
         starter_help="$({{ ansible_playbook_python }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
         if printf '%s' "$starter_help" | grep -q 'PBCluster'; then
-          required_units="pbgui-api.service pbgui-pbcluster.service pbgui-monitor-agent.service"
+          required_units="pbgui-api.service pbgui-pbcluster.service pbgui-pbcoindata.service pbgui-monitor-agent.service"
         fi
+        uid="$(id -u "$target_user" 2>/dev/null || id -u)"
+        run_user_systemctl() {
+          env XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$uid}" systemctl --user "$@" 2>/dev/null || true
+        }
         for unit in $required_units; do
           if [ ! -f "$unit_dir/$unit" ]; then
-            echo "missing=$unit"
+            echo "repair=missing:$unit"
+            continue
+          fi
+          if [ "$unit" != "pbgui-api.service" ]; then
+            enabled="$(run_user_systemctl is-enabled "$unit")"
+            active="$(run_user_systemctl is-active "$unit")"
+            case "$enabled" in enabled|enabled-runtime) ;; *) echo "repair=disabled:$unit:$enabled" ;; esac
+            case "$active" in active|activating|reloading) ;; *) echo "repair=inactive:$unit:$active" ;; esac
           fi
         done
       args:
         executable: /bin/bash
       register: required_systemd_units
-      changed_when: "'missing=' in required_systemd_units.stdout"
+      changed_when: "'repair=' in required_systemd_units.stdout"
       notify: restart pbgui
 
   handlers:
@@ -133,7 +144,7 @@
         enable_services="api,pbrun,pbdata,pbcoindata"
         starter_help="$({{ ansible_playbook_python }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
         if printf '%s' "$starter_help" | grep -q 'PBCluster'; then
-          enable_services="api,pbcluster,monitor-agent"
+          enable_services="api,pbcluster,pbcoindata,monitor-agent"
         fi
         args=("$setup_script" --pbgui-dir "{{ pbgdir }}" --python "{{ ansible_playbook_python }}" --enable "$enable_services" --no-start)
         if /bin/bash "$setup_script" --help 2>&1 | grep -q -- '--no-disable-excluded'; then

@@ -44,16 +44,27 @@
           target_home="$(getent passwd "$target_user" | cut -d: -f6)"
         fi
         unit_dir="${target_home:-$HOME}/.config/systemd/user"
-        for unit in pbgui-api.service pbgui-pbcluster.service pbgui-monitor-agent.service; do
+        uid="$(id -u "$target_user" 2>/dev/null || id -u)"
+        run_user_systemctl() {
+          env XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$uid}" systemctl --user "$@" 2>/dev/null || true
+        }
+        for unit in pbgui-api.service pbgui-pbcluster.service pbgui-pbcoindata.service pbgui-monitor-agent.service; do
           if [ ! -f "$unit_dir/$unit" ]; then
-            echo "missing=$unit"
+            echo "repair=missing:$unit"
+            continue
+          fi
+          if [ "$unit" != "pbgui-api.service" ]; then
+            enabled="$(run_user_systemctl is-enabled "$unit")"
+            active="$(run_user_systemctl is-active "$unit")"
+            case "$enabled" in enabled|enabled-runtime) ;; *) echo "repair=disabled:$unit:$enabled" ;; esac
+            case "$active" in active|activating|reloading) ;; *) echo "repair=inactive:$unit:$active" ;; esac
           fi
         done
       args:
         executable: /bin/bash
       when: pbgdir != ""
       register: required_systemd_units
-      changed_when: "'missing=' in required_systemd_units.stdout"
+      changed_when: "'repair=' in required_systemd_units.stdout"
       notify: restart pbgui
 
     - name: print pbgui_repo
@@ -78,7 +89,7 @@
           - --python
           - "{{ ansible_playbook_python }}"
           - --enable
-          - api,pbcluster,monitor-agent
+          - api,pbcluster,pbcoindata,monitor-agent
           - --no-disable-excluded
           - --no-start
       register: systemd_setup_result
