@@ -13,6 +13,7 @@ import pytest
 
 import api.v7_instances as v7_instances
 import master.async_monitor as monitor_mod
+import master.async_logs as async_logs
 from master.async_monitor import INSTANCE_COLLECT_SCRIPT, CpuHistoryStore, VPSMonitor, collect_live_alerts
 from master.async_store import SystemMetrics
 import vps_manager_core as core
@@ -1100,6 +1101,51 @@ def test_run_vps_command_uses_fresh_remote_optional_values() -> None:
     assert captured["extra_vars"] is None
 
 
+def test_run_vps_command_uses_master_playbook_for_remote_master_updates() -> None:
+    """Remote master updates use master playbooks, not VPS playbooks."""
+    captured: dict[str, object] = {}
+
+    def fake_update_vps(vps, debug=False, extra_vars=None) -> None:
+        """Capture extra vars instead of running Ansible."""
+        captured["command"] = vps.command
+        del debug
+        captured["extra_vars"] = extra_vars
+
+    service = object.__new__(VPSManagerService)
+    service.vpsmanager = SimpleNamespace(update_vps=fake_update_vps)
+    service._load_vps_optional_config_pending = lambda vps: {}
+    service._write_vps_optional_config_pending = lambda vps, values: None
+    vps = SimpleNamespace(hostname="manibot02", user="mani", remote_pbgui_dir="", user_pw=None, coinmarketcap_api_key="", save=lambda: None)
+    service._require_vps = lambda hostname: vps
+    service._apply_session_secrets_to_vps = lambda token, vps: None
+    service._get_monitor_state = lambda: {
+        "connections": {"connections": {"manibot02": {"status": "connected"}}},
+        "streams": {"manibot02": {"last_update": 1_700_000_000}},
+        "host_meta": {"manibot02": {"role": "master", "coindata_configured": False}},
+    }
+    service._host_telemetry_fresh = lambda state: True
+
+    service.run_vps_command(token="token", hostname="manibot02", command="vps-update-pbgui", command_text="Update PBGui")
+
+    assert captured["command"] == "master-update-pbgui"
+    assert captured["extra_vars"] == {
+        "target_hosts": "manibot02",
+        "pbgdir": "/home/mani/software/pbgui",
+        "pbgui_python": "/home/mani/software/venv_pbgui/bin/python",
+        "pb7dir": "/home/mani/software/pb7",
+        "pb7venv": "/home/mani/software/venv_pb7",
+        "coinmarketcap_api_key": "",
+    }
+
+
+def test_vps_action_log_resolves_remote_master_task_logs() -> None:
+    """VPS task log aliases can point at remote-master master-update logs."""
+    resolved = async_logs.resolve_local_log_path("VPSAction:manibot02:master-update-pbgui")
+
+    assert resolved is not None
+    assert resolved.as_posix().endswith("data/vpsmanager/hosts/manibot02/master-update-pbgui.log")
+
+
 def test_pbcoindata_is_expected_without_coinmarketcap_key() -> None:
     """PBCoinData remains expected because it updates exchange mappings without CMC."""
 
@@ -1794,6 +1840,8 @@ def test_pbgui_code_update_playbooks_sync_systemd_units(playbook_path: str) -> N
     assert "Read PBGui optional service config" in playbook
     assert "pbgui_enabled_services" in playbook
     assert "{{ pbgui_enabled_services | join(',') }}" in playbook
+    assert "pbgui_role" not in playbook
+    assert "Restart remote master PBApiServer" not in playbook
     assert "setup/setup_systemd.sh" in playbook
     assert "--include-pbremote" not in playbook
     assert "--no-start" in playbook
@@ -1859,6 +1907,8 @@ def test_master_update_playbooks_repair_required_systemd_units(playbook_path: st
     systemd_setup_block = playbook.split("register: systemd_setup_result", 1)[1].split("listen: \"restart pbgui\"", 1)[0]
 
     assert "Check required PBGui systemd units" in playbook
+    assert "{{ target_hosts | default('localhost') }}" in playbook
+    assert "pbgui_python | default(ansible_playbook_python)" in playbook
     assert "force_handlers: true" in playbook
     assert "pbgui-pbcluster.service" in playbook
     assert "pbgui-pbcoindata.service" in playbook

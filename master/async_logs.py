@@ -184,6 +184,8 @@ def _resolve_vps_action_log_path(filename: str) -> Optional[Path]:
         hostname = parts[1].strip()
         action = parts[2].strip()
         resolved_name = _task_log_filename_from_action(action, "vps-", action_files)
+        if not resolved_name:
+            resolved_name = _task_log_filename_from_action(action, "master-", {})
         if not resolved_name and action.endswith(".log"):
             resolved_name = action
         if not hostname or not resolved_name:

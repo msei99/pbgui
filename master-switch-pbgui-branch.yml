@@ -8,7 +8,7 @@
 # 5. Pull if on branch HEAD (no specific commit)
 # 6. Sync systemd units and restart PBCluster/PBCoinData/PBMonitorAgent
 
-- hosts: localhost
+- hosts: "{{ target_hosts | default('localhost') }}"
   gather_facts: "{{ debug }}"
   force_handlers: true
 
@@ -104,7 +104,7 @@
         fi
         unit_dir="${target_home:-$HOME}/.config/systemd/user"
         required_units="pbgui-api.service"
-        starter_help="$({{ ansible_playbook_python }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
+        starter_help="$({{ pbgui_python | default(ansible_playbook_python) }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
         if printf '%s' "$starter_help" | grep -q 'PBCluster'; then
           required_units="pbgui-api.service pbgui-pbcluster.service pbgui-pbcoindata.service pbgui-monitor-agent.service"
         fi
@@ -130,9 +130,16 @@
 
   handlers:
     - name: Install pbgui requirements
-      pip:
-        requirements: "{{ pbgdir }}/requirements.txt"
-        extra_args: --upgrade
+      command:
+        argv:
+          - "{{ pbgui_python | default(ansible_playbook_python) }}"
+          - -m
+          - pip
+          - install
+          - --upgrade
+          - pip
+          - -r
+          - "{{ pbgdir }}/requirements.txt"
       listen: "restart pbgui"
 
     - name: Sync PBGui systemd user services
@@ -140,7 +147,7 @@
         set -euo pipefail
         setup_script="{{ pbgdir }}/setup/setup_systemd.sh"
         enable_services="api,pbrun,pbdata,pbcoindata"
-        starter_help="$({{ ansible_playbook_python }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
+        starter_help="$({{ pbgui_python | default(ansible_playbook_python) }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
         if printf '%s' "$starter_help" | grep -q 'PBCluster'; then
           enable_services="api,pbcluster,pbcoindata,monitor-agent"
         fi
@@ -158,9 +165,9 @@
     - name: Restart PBGui services for target branch
       shell: |
         set -euo pipefail
-        starter_help="$({{ ansible_playbook_python }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
+        starter_help="$({{ pbgui_python | default(ansible_playbook_python) }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
         if printf '%s' "$starter_help" | grep -q 'PBCluster'; then
-          PBGUI_DIR="{{ pbgdir }}" PBGUI_PYTHON="{{ ansible_playbook_python }}" \
+          PBGUI_DIR="{{ pbgdir }}" PBGUI_PYTHON="{{ pbgui_python | default(ansible_playbook_python) }}" \
             /bin/bash "{{ pbgdir }}/setup/vps_service_control.sh" restart PBCluster PBCoinData PBMonitorAgent
           exit 0
         fi
@@ -169,12 +176,12 @@
           services=(PBRun PBRemote PBCoinData)
         fi
         cd "{{ pbgdir }}"
-        "{{ ansible_playbook_python }}" "{{ pbgdir }}/starter.py" -r "${services[@]}"
+        "{{ pbgui_python | default(ansible_playbook_python) }}" "{{ pbgdir }}/starter.py" -r "${services[@]}"
       args:
         executable: /bin/bash
       environment:
         PBGUI_DIR: "{{ pbgdir }}"
-        PBGUI_PYTHON: "{{ ansible_playbook_python }}"
+        PBGUI_PYTHON: "{{ pbgui_python | default(ansible_playbook_python) }}"
         PBGUI_REQUIRE_PBCOINDATA: "1"
       listen: "restart pbgui"
 

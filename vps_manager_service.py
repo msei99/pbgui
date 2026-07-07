@@ -4528,6 +4528,19 @@ class VPSManagerService:
                 host_state = self._get_host_telemetry(monitor_state, hostname)
                 self._sync_vps_config_from_host_meta(vps, host_state)
                 host_meta = self._host_meta(host_state)
+                if str(host_meta.get("role") or "").strip().lower() == "master":
+                    install_dir = _install_dir_from_remote_pbgui_dir(
+                        str(getattr(vps, "remote_pbgui_dir", "") or ""),
+                        str(getattr(vps, "user", "") or ""),
+                    )
+                    command = "master-update-pb" if command == COMMAND_VPS_UPDATE_PB else "master-update-pbgui"
+                    command_extra_vars.update({
+                        "target_hosts": hostname,
+                        "pbgdir": f"{install_dir}/pbgui",
+                        "pbgui_python": f"{install_dir}/venv_pbgui/bin/python",
+                        "pb7dir": f"{install_dir}/pb7",
+                        "pb7venv": f"{install_dir}/venv_pb7",
+                    })
                 pending_optional = self._load_vps_optional_config_pending(vps)
                 if host_meta.get("coindata_configured") is False and "coinmarketcap_api_key" not in command_extra_vars and "coinmarketcap_api_key" not in pending_optional:
                     command_extra_vars["coinmarketcap_api_key"] = ""
