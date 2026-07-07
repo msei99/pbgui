@@ -1871,6 +1871,7 @@ def test_master_update_playbooks_repair_required_systemd_units(playbook_path: st
     assert "repair=disabled" in playbook
     assert "repair=inactive" in playbook
     assert "required_systemd_units" in playbook
+    assert "PBGUI_REQUIRE_PBCOINDATA" in playbook
     assert 'user: "{{ user }}"' not in playbook
     assert "target_user={{ user | default('', true) | quote }}" in playbook
     assert 'getent passwd "$target_user"' in playbook
@@ -1878,6 +1879,15 @@ def test_master_update_playbooks_repair_required_systemd_units(playbook_path: st
     assert "--no-start" in playbook
     assert "api,pbcluster,pbcoindata,monitor-agent" in playbook
     assert "failed_when: false" not in systemd_setup_block
+
+
+def test_master_restart_control_keeps_required_pbcoindata_enabled() -> None:
+    """Master restarts must not disable required PBCoinData without a CMC key."""
+    script = Path("setup/vps_service_control.sh").read_text(encoding="utf-8")
+
+    assert "PBGUI_REQUIRE_PBCOINDATA" in script
+    assert 'case "$require_coindata" in 1|true|yes|on) return 0 ;; esac' in script
+    assert 'PBCoinData)\n      local require_coindata=' in script
 
 
 def test_local_master_metrics_are_recorded_in_host_history(monkeypatch: pytest.MonkeyPatch) -> None:

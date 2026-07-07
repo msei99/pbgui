@@ -153,6 +153,7 @@
       environment:
         PBGUI_DIR: "{{ pbgdir }}"
         PBGUI_PYTHON: "{{ ansible_playbook_python }}"
+        PBGUI_REQUIRE_PBCOINDATA: "1"
       listen: "restart pbgui"
 
     - name: Install pb7 requirements

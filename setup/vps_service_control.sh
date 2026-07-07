@@ -112,7 +112,12 @@ service_configured() {
   case "$1" in
     PBRun) return 0 ;;
     PBCluster) return 0 ;;
-    PBCoinData) configured_value "$(ini_value coinmarketcap api_key)" ;;
+    PBCoinData)
+      local require_coindata="${PBGUI_REQUIRE_PBCOINDATA:-}"
+      require_coindata="${require_coindata,,}"
+      case "$require_coindata" in 1|true|yes|on) return 0 ;; esac
+      configured_value "$(ini_value coinmarketcap api_key)"
+      ;;
     PBMonitorAgent) return 0 ;;
     *) return 1 ;;
   esac
