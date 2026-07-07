@@ -251,7 +251,7 @@ def import_passivbot_rust():
     return pbr
 
 PBGDIR = Path(__file__).resolve().parent
-PBGUI_VERSION = "v1.90.5"
+PBGUI_VERSION = "v1.90.6"
 _serial_path = PBGDIR / 'api' / 'serial.txt'
 PBGUI_SERIAL = _serial_path.read_text().strip() if _serial_path.exists() else ''
 

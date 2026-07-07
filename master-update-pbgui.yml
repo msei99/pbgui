@@ -53,12 +53,10 @@
             echo "repair=missing:$unit"
             continue
           fi
-          if [ "$unit" != "pbgui-api.service" ]; then
-            enabled="$(run_user_systemctl is-enabled "$unit")"
-            active="$(run_user_systemctl is-active "$unit")"
-            case "$enabled" in enabled|enabled-runtime) ;; *) echo "repair=disabled:$unit:$enabled" ;; esac
-            case "$active" in active|activating|reloading) ;; *) echo "repair=inactive:$unit:$active" ;; esac
-          fi
+          enabled="$(run_user_systemctl is-enabled "$unit")"
+          active="$(run_user_systemctl is-active "$unit")"
+          case "$enabled" in enabled|enabled-runtime) ;; *) echo "repair=disabled:$unit:$enabled" ;; esac
+          case "$active" in active|activating|reloading) ;; *) echo "repair=inactive:$unit:$active" ;; esac
         done
       args:
         executable: /bin/bash

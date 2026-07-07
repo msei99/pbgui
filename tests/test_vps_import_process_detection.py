@@ -1870,6 +1870,7 @@ def test_master_update_playbooks_repair_required_systemd_units(playbook_path: st
     assert "is-active" in playbook
     assert "repair=disabled" in playbook
     assert "repair=inactive" in playbook
+    assert 'if [ "$unit" != "pbgui-api.service" ]' not in playbook
     assert "required_systemd_units" in playbook
     assert "PBGUI_REQUIRE_PBCOINDATA" in playbook
     assert "Restart PBApiServer" in playbook
