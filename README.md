@@ -51,10 +51,16 @@ The helper stops stale Streamlit processes, removes old Streamlit autostart entr
 
 ### Get your VPS for running passivbot
 
-I currently recommend [IONOS](https://aklam.io/CBA3zSaZ).
+I currently recommend [IONOS](https://aklam.io/CBA3zSaZ) and [netcup](https://www.netcup.com/server/vps-lite?ref=390177).
 For IONOS open `Server` -> `vServer (VPS)` -> `Linux VPS`.
 For normal VPS bots I currently suggest `VPS S+` with 2 vCores CPU, 2 GB RAM and 80 GB NVMe.
 For a remote master I currently suggest `VPS M+` with 4 vCores CPU, 4 GB RAM and 120 GB NVMe.
+
+Netcup also has very strong VPS offers:
+- `VPS pico G11s`: 1 vCore, 1 GB RAM, 30 GB SSD and traffic included. This is a good low-cost VPS for several bot instances; around 6 bots or more can work depending on strategy load and market-data usage.
+- `VPS Lite 1 G12s`: 2 vCore, 4 GB RAM, 80 GB SSD and traffic included. This is a good remote master option when you do not run optimizations on the master.
+
+Netcup 5 EUR new-customer coupons (no domains): `36nc17835299729`, `36nc17835299728`, `36nc17835299727`, `36nc17835299726`, `36nc17835299725`, `36nc17835299724`, `36nc17835299723`, `36nc17835299722`, `36nc17835299721`, `36nc17835299720`.
 
 ### Support:
 If you like to support pbgui, please join one of my copytradings:\

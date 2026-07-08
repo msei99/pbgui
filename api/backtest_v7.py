@@ -3159,14 +3159,14 @@ def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)):
     config = body.get("config")
     if config:
         cfg_dir.mkdir(parents=True, exist_ok=True)
-        _normalize_backtest_base_dir(config, name)
-        save_pb7_config(config, cfg_file)
+        cfg = _normalize_backtest_base_dir(config, name)
+        save_pb7_config(cfg, cfg_file)
+    else:
+        if not cfg_file.exists():
+            raise HTTPException(404, f"Config '{name}' not found")
 
-    if not cfg_file.exists():
-        raise HTTPException(404, f"Config '{name}' not found")
-
-    # Repair older configs created before base_dir normalization before queueing.
-    cfg = _load_and_repair_backtest_config(name, cfg_file)
+        # Repair older configs created before base_dir normalization before queueing.
+        cfg = _load_and_repair_backtest_config(name, cfg_file)
 
     filename = str(uuid.uuid4())
     bt = cfg.get("backtest", {})
@@ -4258,6 +4258,8 @@ def rebacktest_archive_results(name: str, body: dict, session: SessionToken = De
     overrides = (body or {}).get("overrides") or {}
     if not isinstance(overrides, dict):
         overrides = {}
+    requested_exchanges = overrides.get("exchanges")
+    exchange_runs = requested_exchanges if isinstance(requested_exchanges, list) and requested_exchanges else [None]
     queue_items = []
     for raw_path in paths:
         result_dir = Path(str(raw_path)).resolve()
@@ -4266,22 +4268,24 @@ def rebacktest_archive_results(name: str, body: dict, session: SessionToken = De
         cfg_file = result_dir / "config.json"
         if not cfg_file.exists():
             raise HTTPException(404, f"config.json not found: {result_dir}")
-        cfg = load_pb7_config(cfg_file, neutralize_added=True)
-        backtest = cfg.setdefault("backtest", {})
-        if overrides.get("start_date"):
-            backtest["start_date"] = overrides["start_date"]
-        if overrides.get("end_date"):
-            backtest["end_date"] = overrides["end_date"]
-        if overrides.get("starting_balance") not in (None, ""):
-            backtest["starting_balance"] = overrides["starting_balance"]
-        if isinstance(overrides.get("exchanges"), list) and overrides["exchanges"]:
-            backtest["exchanges"] = overrides["exchanges"]
-        if overrides.get("use_pbgui_market_data"):
-            _apply_pbgui_market_data_override(cfg, True)
-        base_dir = str(backtest.get("base_dir") or "").strip()
-        queue_name = Path(base_dir).name if base_dir else result_dir.parent.parent.name
-        queued = add_to_queue({"name": queue_name, "config": cfg}, session=session)
-        queue_items.append(queued)
+        base_cfg = load_pb7_config(cfg_file, neutralize_added=True)
+        for exchange in exchange_runs:
+            cfg = copy.deepcopy(base_cfg)
+            backtest = cfg.setdefault("backtest", {})
+            if overrides.get("start_date"):
+                backtest["start_date"] = overrides["start_date"]
+            if overrides.get("end_date"):
+                backtest["end_date"] = overrides["end_date"]
+            if overrides.get("starting_balance") not in (None, ""):
+                backtest["starting_balance"] = overrides["starting_balance"]
+            if exchange is not None:
+                backtest["exchanges"] = [exchange]
+            if overrides.get("use_pbgui_market_data"):
+                _apply_pbgui_market_data_override(cfg, True)
+            base_dir = str(backtest.get("base_dir") or "").strip()
+            queue_name = Path(base_dir).name if base_dir else result_dir.parent.parent.name
+            queued = add_to_queue({"name": queue_name, "config": cfg}, session=session)
+            queue_items.append(queued)
     return {"ok": True, "queued": len(queue_items), "queue_items": queue_items}
 
 

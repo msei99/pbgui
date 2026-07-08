@@ -1787,26 +1787,29 @@ function showInitialBacktestQueueDraftModal(items) {
       if (!exchanges.length) { toast('Select at least one exchange', 'err'); return; }
       closeModal();
       (usePbguiData ? apiFetch('/pbgui_data_path').then(function(d) { return d.path || ''; }) : Promise.resolve('')).then(function(pbguiPath) {
-        var promises = items.map(function(item) {
-          var cfg = JSON.parse(JSON.stringify((item && item.config) || {}));
-          if (!cfg.backtest) cfg.backtest = {};
-          cfg.backtest.start_date = start;
-          cfg.backtest.end_date = end;
-          cfg.backtest.starting_balance = balance;
-          cfg.backtest.exchanges = exchanges;
-          if (pbguiPath) cfg.backtest.ohlcv_source_dir = pbguiPath;
-          return apiFetch('/queue', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: String((item && item.name) || getInitialBacktestDraftName(cfg, null) || 'rebacktest'),
-              config: cfg
-            })
+        var promises = [];
+        items.forEach(function(item) {
+          exchanges.forEach(function(exchange) {
+            var cfg = JSON.parse(JSON.stringify((item && item.config) || {}));
+            if (!cfg.backtest) cfg.backtest = {};
+            cfg.backtest.start_date = start;
+            cfg.backtest.end_date = end;
+            cfg.backtest.starting_balance = balance;
+            cfg.backtest.exchanges = [exchange];
+            if (pbguiPath) cfg.backtest.ohlcv_source_dir = pbguiPath;
+            promises.push(apiFetch('/queue', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name: String((item && item.name) || getInitialBacktestDraftName(cfg, null) || 'rebacktest'),
+                config: cfg
+              })
+            }));
           });
         });
         Promise.all(promises)
           .then(function() {
-            toast('Queued ' + items.length + ' backtests', 'ok');
+            toast('Queued ' + promises.length + ' backtests', 'ok');
             selectPanel('queue');
             wsRefresh();
           })
@@ -6818,23 +6821,27 @@ function rebacktestSelected() {
         (usePbguiData ? apiFetch('/pbgui_data_path').then(function(d) { return d.path || ''; }) : Promise.resolve('')).then(function(pbguiPath) {
           var promises = sel.map(function(path) {
             return apiFetch('/results/config?path=' + encodeURIComponent(path)).then(function(cfg) {
-              if (!cfg.backtest) cfg.backtest = {};
-              cfg.backtest.start_date = start;
-              cfg.backtest.end_date = end;
-              cfg.backtest.starting_balance = balance;
-              cfg.backtest.exchanges = exchanges;
-              if (pbguiPath) cfg.backtest.ohlcv_source_dir = pbguiPath;
               var matched = results.find(function(r) { return r.path === path; });
               var name = matched ? matched.config_name : (path.split('/').slice(-3, -2)[0] || 'rebacktest');
-              return apiFetch('/queue', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: name, config: cfg })
+              var queuePromises = exchanges.map(function(exchange) {
+                var cfgForExchange = JSON.parse(JSON.stringify(cfg));
+                if (!cfgForExchange.backtest) cfgForExchange.backtest = {};
+                cfgForExchange.backtest.start_date = start;
+                cfgForExchange.backtest.end_date = end;
+                cfgForExchange.backtest.starting_balance = balance;
+                cfgForExchange.backtest.exchanges = [exchange];
+                if (pbguiPath) cfgForExchange.backtest.ohlcv_source_dir = pbguiPath;
+                return apiFetch('/queue', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ name: name, config: cfgForExchange })
+                });
               });
+              return Promise.all(queuePromises);
             });
           });
           Promise.all(promises)
-            .then(function() { toast('Queued ' + sel.length + ' backtests', 'ok'); wsRefresh(); })
+            .then(function() { toast('Queued ' + (sel.length * exchanges.length) + ' backtests', 'ok'); wsRefresh(); })
             .catch(function(e) { toast('Failed: ' + e.message, 'err'); });
         }).catch(function(e) { toast('Failed to get PBGui data path: ' + e.message, 'err'); });
       }},
@@ -7093,21 +7100,25 @@ function rebacktestSelectedLegacy() {
         (usePbguiData ? apiFetch('/pbgui_data_path').then(function(d) { return d.path || ''; }) : Promise.resolve('')).then(function(pbguiPath) {
           var promises = sel.map(function(path) {
             return apiFetch('/results/config?path=' + encodeURIComponent(path)).then(function(cfg) {
-              if (!cfg.backtest) cfg.backtest = {};
-              cfg.backtest.start_date = start;
-              cfg.backtest.end_date = end;
-              cfg.backtest.starting_balance = balance;
-              cfg.backtest.exchanges = exchanges;
-              if (pbguiPath) cfg.backtest.ohlcv_source_dir = pbguiPath;
-              return apiFetch('/queue', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: _legacySuggestedName(path), config: cfg })
+              var queuePromises = exchanges.map(function(exchange) {
+                var cfgForExchange = JSON.parse(JSON.stringify(cfg));
+                if (!cfgForExchange.backtest) cfgForExchange.backtest = {};
+                cfgForExchange.backtest.start_date = start;
+                cfgForExchange.backtest.end_date = end;
+                cfgForExchange.backtest.starting_balance = balance;
+                cfgForExchange.backtest.exchanges = [exchange];
+                if (pbguiPath) cfgForExchange.backtest.ohlcv_source_dir = pbguiPath;
+                return apiFetch('/queue', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ name: _legacySuggestedName(path), config: cfgForExchange })
+                });
               });
+              return Promise.all(queuePromises);
             });
           });
           Promise.all(promises)
-            .then(function() { toast('Queued ' + sel.length + ' backtests', 'ok'); wsRefresh(); })
+            .then(function() { toast('Queued ' + (sel.length * exchanges.length) + ' backtests', 'ok'); wsRefresh(); })
             .catch(function(e) { toast('Failed: ' + e.message, 'err'); });
         }).catch(function(e) { toast('Failed to get PBGui data path: ' + e.message, 'err'); });
       }},

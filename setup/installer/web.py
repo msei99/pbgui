@@ -284,7 +284,7 @@ def _html() -> str:
   </section>
   <section class="panel">
     <h2 id="mode-title">Local Master Install</h2>
-    <p class="recommendation remote-only">Recommended VPS: <a href="https://aklam.io/CBA3zSaZ" target="_blank" rel="noopener noreferrer">IONOS VPS Linux M+</a> with 4 vCores CPU, 4 GB RAM, and 120 GB NVMe.</p>
+    <p class="recommendation remote-only">Recommended remote master VPS: <a href="https://aklam.io/CBA3zSaZ" target="_blank" rel="noopener noreferrer">IONOS VPS Linux M+</a> with 4 vCores CPU, 4 GB RAM, and 120 GB NVMe, or <a href="https://www.netcup.com/server/vps-lite?ref=390177" target="_blank" rel="noopener noreferrer">netcup VPS Lite 1 G12s</a> with 2 vCores CPU, 4 GB RAM, 80 GB SSD and traffic included. Use netcup for a remote master without optimization; customers can be assigned via the referral link or a 5 EUR new-customer coupon such as <code>36nc17835299729</code>.</p>
     <form id="install-form" class="grid">
       <label class="full">Install mode
         <select name="install_mode" id="install-mode">
