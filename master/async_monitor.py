@@ -37,7 +37,7 @@ SERVICE = "VPSMonitor"
 LOOP_INTERVAL = 15          # seconds between main loop iterations
 SERVICE_CHECK_EVERY = 4     # every N iterations (= 60s at 15s)
 INSTANCE_COLLECT_INTERVAL = 30  # seconds
-HOST_META_INTERVAL = 30     # seconds
+HOST_META_INTERVAL = 10     # seconds
 PACKAGE_STATUS_INTERVAL = 3600  # seconds
 METRICS_STREAM_STARTUP_GRACE_SECONDS = 30.0
 METRICS_STREAM_STALE_SECONDS = 45.0
@@ -1213,6 +1213,17 @@ def _monitor_agent_tail_command(remote_pbgui_dir: str) -> str:
 def _monitor_agent_cache_read_command(remote_pbgui_dir: str, filename: str) -> str:
     cache_path = remote_path_join(remote_pbgui_dir, "data", "monitor_agent", filename)
     return f"cat {remote_shell_path(cache_path)}"
+
+
+def _host_meta_direct_command(remote_pbgui_dir: str) -> str:
+    """Return a direct remote host-metadata probe command."""
+
+    raw_dir = str(remote_pbgui_dir or "software/pbgui").strip().rstrip("/") or "software/pbgui"
+    if raw_dir.startswith("/"):
+        pbgdir_expr = json.dumps(raw_dir)
+    else:
+        pbgdir_expr = f"os.path.join(HOME, {json.dumps(raw_dir)})"
+    return HOST_META_SCRIPT.replace("os.path.join(HOME, '__PBGDIR__')", pbgdir_expr)
 
 INSTANCE_COLLECT_SCRIPT = r'''python3 -u -c "
 import hashlib, json, os, re, subprocess, sys, time
@@ -3884,6 +3895,36 @@ class VPSMonitor:
         })
         return payload
 
+    async def _collect_host_meta_direct(self, hostname: str, *, timeout: float = 25.0) -> dict[str, Any] | None:
+        """Collect host metadata directly when the remote agent cache is unavailable."""
+
+        pbgui_dir = self.pool.get_remote_pbgui_dir(hostname)
+        result = await self.pool.run(
+            hostname,
+            _host_meta_direct_command(pbgui_dir),
+            timeout=timeout,
+            check=False,
+        )
+        if not result or result.exit_status != 0 or not result.stdout:
+            error = f"direct host-meta probe failed for {hostname}"
+            if result and (result.stderr or result.stdout):
+                error = f"{error}: {(result.stderr or result.stdout).strip()[:200]}"
+            _log(SERVICE, f"[host-meta] {error}", level="WARNING")
+            return None
+        try:
+            payload = json.loads(result.stdout.strip())
+        except json.JSONDecodeError as exc:
+            _log(SERVICE, f"[host-meta] direct probe invalid JSON on {hostname}: {exc}", level="WARNING")
+            return None
+        if not isinstance(payload, dict):
+            _log(SERVICE, f"[host-meta] direct probe invalid payload on {hostname}", level="WARNING")
+            return None
+        payload.pop("coinmarketcap_api_key", None)
+        payload["schema_version"] = payload.get("schema_version") or 1
+        payload["generated_at"] = time.time()
+        payload["source"] = "direct-ssh"
+        return payload
+
     def _record_host_metric_history(self, hostname: str, metrics: SystemMetrics) -> None:
         minute = int((metrics.timestamp or time.time()) // CPU_HISTORY_STEP_SECONDS)
         self._host_metric_history['cpu'].record(
@@ -4346,9 +4387,11 @@ class VPSMonitor:
             parsed = await self._read_monitor_agent_json(
                 hostname,
                 "host_meta.json",
-                stale_after=180.0,
+                stale_after=30.0,
                 timeout=10,
             )
+            if not parsed:
+                parsed = await self._collect_host_meta_direct(hostname)
             if parsed:
                 self.store.update_host_meta(hostname, parsed)
                 self._last_host_meta_collect[hostname] = now

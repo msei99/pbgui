@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 import api.v7_instances as v7_instances
+import api.vps_manager as vps_manager_api
 import master.async_monitor as monitor_mod
 import master.async_logs as async_logs
 import monitor_agent
@@ -1239,6 +1240,91 @@ def test_auto_heal_does_not_restart_remote_services() -> None:
     assert restarted == []
     assert result["manibot02"]["PBData"]["status"] == monitor_mod.ServiceStatus.STOPPED.value
     assert result["manibot02"]["PBData"]["was_restarted"] is False
+
+
+def test_host_meta_falls_back_to_direct_probe_when_agent_cache_missing() -> None:
+    """Host metadata refresh reads directly over SSH when the agent cache is unavailable."""
+
+    class FakeStore:
+        """Minimal monitor store for host metadata collection."""
+
+        def __init__(self) -> None:
+            """Initialize captured metadata."""
+
+            self.host_meta = {}
+            self.streams = {}
+            self.changed = SimpleNamespace(set=lambda: None)
+
+        def update_host_meta(self, hostname: str, data: dict) -> None:
+            """Capture host metadata updates."""
+
+            self.host_meta[hostname] = data
+
+        def update_stream_info(self, hostname: str, info: dict) -> None:
+            """Capture monitor-agent diagnostics."""
+
+            self.streams[hostname] = info
+
+    class FakePool:
+        """Return a missing cache first and fresh direct metadata second."""
+
+        def __init__(self) -> None:
+            """Initialize executed command capture."""
+
+            self.commands = []
+
+        def get_remote_pbgui_dir(self, hostname: str) -> str:
+            """Return the configured remote PBGui checkout."""
+
+            del hostname
+            return "software/pbgui"
+
+        async def run(self, hostname: str, command: str, timeout: float = 0, check: bool = True):
+            """Simulate cache miss followed by direct SSH host-meta output."""
+
+            del hostname, timeout, check
+            self.commands.append(command)
+            if "host_meta.json" in command:
+                return SimpleNamespace(exit_status=1, stdout="", stderr="missing")
+            return SimpleNamespace(
+                exit_status=0,
+                stdout=json.dumps({"pbgv": "v1.90.8", "pbgc": "4573316", "pbgb": "main"}),
+                stderr="",
+            )
+
+    monitor = object.__new__(VPSMonitor)
+    monitor.pool = FakePool()
+    monitor.store = FakeStore()
+    monitor._last_host_meta_collect = {}
+    monitor._last_package_status_collect = {}
+    monitor._debug_logging = False
+    monitor._cache_host_snapshot = lambda hostname: None
+
+    asyncio.run(monitor._collect_host_meta("manibot01", force=True))
+
+    assert monitor.store.host_meta["manibot01"]["pbgv"] == "v1.90.8"
+    assert monitor.store.host_meta["manibot01"]["source"] == "direct-ssh"
+    assert len(monitor.pool.commands) == 2
+    assert "python3 -u" in monitor.pool.commands[1]
+
+
+def test_vps_manager_unknown_context_host_resets_to_overview() -> None:
+    """A stale URL hash for a deleted VPS does not raise through the websocket push path."""
+
+    class FakeService:
+        """Service double raising the same error as a deleted VPS detail lookup."""
+
+        def build_vps_detail(self, token: str, hostname: str, quick: bool = False) -> dict:
+            """Raise for the deleted host."""
+
+            del token, quick
+            raise ValueError(f"Unknown VPS: {hostname}")
+
+    context = {"view": "vps", "hostname": "manibot93", "token": "token"}
+
+    assert vps_manager_api._build_quick_detail_for_context(FakeService(), context) is None
+    assert context["view"] == "overview"
+    assert context["hostname"] == ""
 
 
 def test_pbcluster_expected_only_for_sync_enabled_nodes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

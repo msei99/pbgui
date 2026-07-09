@@ -603,7 +603,14 @@ def _build_detail_for_context(service: VPSManagerService, context: dict[str, str
     if view in VPS_CONTEXT_VIEWS:
         hostname = str(context.get("hostname") or "")
         if hostname:
-            return service.build_vps_detail(str(context.get("token") or ""), hostname)
+            try:
+                return service.build_vps_detail(str(context.get("token") or ""), hostname)
+            except ValueError as exc:
+                if str(exc).startswith("Unknown VPS:"):
+                    context["view"] = "overview"
+                    context["hostname"] = ""
+                    return None
+                raise
     return None
 
 
@@ -614,7 +621,14 @@ def _build_quick_detail_for_context(service: VPSManagerService, context: dict[st
     if view in VPS_CONTEXT_VIEWS:
         hostname = str(context.get("hostname") or "")
         if hostname:
-            return service.build_vps_detail(str(context.get("token") or ""), hostname, quick=True)
+            try:
+                return service.build_vps_detail(str(context.get("token") or ""), hostname, quick=True)
+            except ValueError as exc:
+                if str(exc).startswith("Unknown VPS:"):
+                    context["view"] = "overview"
+                    context["hostname"] = ""
+                    return None
+                raise
     return None
 
 

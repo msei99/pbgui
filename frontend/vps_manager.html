@@ -4001,6 +4001,28 @@
       return getOverviewRows().filter(function (row) { return row.nav === 'vps'; });
     }
 
+    function hasManagedOverviewHost(state, hostname) {
+      const host = normalizeOverviewHostname(hostname);
+      if (!host) return false;
+      const rows = ((((state || store.state || {}).overview) || {}).rows) || [];
+      return rows.some(function (row) {
+        return row && row.nav === 'vps' && normalizeOverviewHostname(row.hostname) === host;
+      });
+    }
+
+    function reconcileCurrentVpsContext(nextState) {
+      if (!isVpsContextView() || !store.hostname) return false;
+      if (hasManagedOverviewHost(nextState, store.hostname)) return false;
+      store.hostname = '';
+      store.view = 'overview';
+      store.detail = null;
+      store._pendingView = '';
+      store._pendingHostname = '';
+      history.replaceState(null, '', viewUrl('overview'));
+      sendContext();
+      return true;
+    }
+
     function getSidebarActionsSignature() {
       const overview = ((store.state || {}).overview) || {};
       if (isVpsContextView()) {
@@ -6747,6 +6769,7 @@
         const nextState = msg.data || null;
         filterDeletedOverviewHosts(nextState);
         maybeRefreshCompletedVpsTask(nextState);
+        const contextChanged = reconcileCurrentVpsContext(nextState);
         store.state = nextState;
         const deploysState = (((store.state || {}).deploys) || {});
         const deployHistory = deploysState.history || deploysState.vps_logging_history;
@@ -6756,7 +6779,7 @@
         store.state.deploys = store.state.deploys || {};
         store.state.deploys.progress_rows = store.state.deploys.progress_rows || store.state.deploys.vps_logging_progress_rows || [];
         store.state.deploys.vps_logging_progress_rows = store.state.deploys.vps_logging_progress_rows || store.state.deploys.progress_rows || [];
-        renderUi();
+        renderUi(contextChanged ? { forceSidebarActions: true, forceSidebarList: true, forceView: true } : undefined);
         return;
       }
       if (msg.type === 'detail') {
@@ -6858,6 +6881,14 @@
         return;
       }
       if (msg.type === 'error') {
+        if (msg.cmd === 'set_context' && String(msg.error || '').indexOf('Unknown VPS:') === 0) {
+          store.hostname = '';
+          store.view = 'overview';
+          store.detail = null;
+          history.replaceState(null, '', viewUrl('overview'));
+          renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
+          return;
+        }
         if (msg.cmd === 'validate_and_stage_vps_deploy_host') {
           const flow = store.pendingOverviewDeploy;
           if (flow) {
