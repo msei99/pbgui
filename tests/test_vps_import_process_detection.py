@@ -14,6 +14,7 @@ import pytest
 import api.v7_instances as v7_instances
 import master.async_monitor as monitor_mod
 import master.async_logs as async_logs
+import monitor_agent
 from master.async_monitor import INSTANCE_COLLECT_SCRIPT, CpuHistoryStore, VPSMonitor, collect_live_alerts
 from master.async_store import SystemMetrics
 import vps_manager_core as core
@@ -1208,6 +1209,38 @@ def test_auto_heal_skips_disabled_optional_service() -> None:
     assert result["manibot01"]["PBRun"]["status"] == monitor_mod.ServiceStatus.DISABLED.value
 
 
+def test_auto_heal_does_not_restart_remote_services() -> None:
+    """Remote service checks alert without restarting services owned by another host."""
+
+    monitor = object.__new__(VPSMonitor)
+    monitor._auto_restart = True
+    restarted: list[str] = []
+
+    async def fake_restart(hostname: str, service_name: str) -> bool:
+        restarted.append(f"{hostname}:{service_name}")
+        return True
+
+    async def fake_read_agent_json(hostname: str, filename: str, **kwargs) -> dict:
+        del hostname, filename, kwargs
+        return {"services": {
+            "PBCluster": {"status": monitor_mod.ServiceStatus.RUNNING.value, "pid": 1, "error": None, "was_restarted": False},
+            "PBRun": {"status": monitor_mod.ServiceStatus.RUNNING.value, "pid": 2, "error": None, "was_restarted": False},
+            "PBData": {"status": monitor_mod.ServiceStatus.STOPPED.value, "pid": None, "error": "down", "was_restarted": False},
+            "PBCoinData": {"status": monitor_mod.ServiceStatus.RUNNING.value, "pid": 3, "error": None, "was_restarted": False},
+        }}
+
+    monitor._local_master_hostname = lambda: "local-master"
+    monitor._read_monitor_agent_json = fake_read_agent_json
+    monitor._optional_service_expected = lambda hostname, service_name: True
+    monitor._restart_service = fake_restart
+
+    result = asyncio.run(monitor._check_and_heal_services(["manibot02"]))
+
+    assert restarted == []
+    assert result["manibot02"]["PBData"]["status"] == monitor_mod.ServiceStatus.STOPPED.value
+    assert result["manibot02"]["PBData"]["was_restarted"] is False
+
+
 def test_pbcluster_expected_only_for_sync_enabled_nodes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """PBCluster service alerts are tied to explicit Cluster Sync membership."""
     cluster_dir = tmp_path / "data" / "cluster"
@@ -1327,6 +1360,89 @@ def test_monitor_agent_service_requires_systemd_unit() -> None:
     assert result["unit"] == "pbgui-monitor-agent.service"
     assert "systemd user unit" in result["error"]
     assert not any("data/pid/pbmonitoragent.pid" in command for command in commands)
+
+
+def test_monitor_agent_prefers_live_legacy_process_over_inactive_systemd(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A live legacy PBData process must not be reported down because its unit is inactive."""
+
+    monkeypatch.setattr(
+        monitor_agent,
+        "_systemd_service_status",
+        lambda unit: {
+            "status": "stopped",
+            "pid": None,
+            "error": "systemd inactive",
+            "was_restarted": False,
+            "manager": "systemd",
+            "unit": unit,
+        },
+    )
+    monkeypatch.setattr(
+        monitor_agent,
+        "_pid_file_service_status",
+        lambda pid_file, process_match: {
+            "status": "running",
+            "pid": 123,
+            "error": None,
+            "was_restarted": False,
+        },
+    )
+
+    status = monitor_agent._service_status("pbgui-pbdata.service", "data/pid/pbdata.pid", "pbdata.py")
+
+    assert status["status"] == "running"
+    assert status["pid"] == 123
+    assert status["manager"] == "legacy"
+    assert status["unit"] == "pbgui-pbdata.service"
+
+
+def test_monitor_agent_locally_restarts_expected_service(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """PBMonitorAgent heals expected local app services and disables unconfigured ones."""
+
+    (tmp_path / "pbgui.ini").write_text(
+        "[main]\npbname=local-node\n[pbdata]\nfetch_users=['user1']\n[vps_monitor]\nauto_restart=true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(monitor_agent, "PBGDIR", tmp_path)
+    monkeypatch.setattr(monitor_agent, "DATA_DIR", tmp_path / "data" / "monitor_agent")
+
+    def fake_status(unit: str, pid_file: str, process_match: str) -> dict:
+        del pid_file, process_match
+        if unit == "pbgui-monitor-agent.service":
+            return {"status": "running", "pid": 10, "error": None, "was_restarted": False, "manager": "systemd", "unit": unit}
+        return {"status": "stopped", "pid": None, "error": "down", "was_restarted": False, "manager": "systemd", "unit": unit}
+
+    restarted: list[str] = []
+
+    def fake_restart(service_name: str, unit: str) -> tuple[bool, str]:
+        restarted.append(f"{service_name}:{unit}")
+        return True, ""
+
+    monkeypatch.setattr(monitor_agent, "_service_status", fake_status)
+    monkeypatch.setattr(monitor_agent, "_restart_systemd_service", fake_restart)
+
+    monitor_agent._run_service_status()
+
+    payload = json.loads((tmp_path / "data" / "monitor_agent" / "service_status.json").read_text(encoding="utf-8"))
+    services = payload["services"]
+
+    assert restarted == ["PBData:pbgui-pbdata.service"]
+    assert services["PBData"]["status"] == "restarting"
+    assert services["PBData"]["was_restarted"] is True
+    assert services["PBRun"]["status"] == "disabled"
+    assert services["PBCoinData"]["status"] == "disabled"
+    assert services["PBMonitorAgent"]["status"] == "running"
+
+
+def test_monitor_agent_first_local_restart_is_immediate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The first detected local service failure is not delayed by cooldown."""
+
+    monkeypatch.setattr(monitor_agent, "_SERVICE_RESTART_HISTORY", {})
+
+    allowed, reason = monitor_agent._restart_allowed("PBData", now=1000.0)
+
+    assert allowed is True
+    assert reason == ""
 
 
 def test_pbcluster_restart_does_not_use_legacy_starter_fallback() -> None:

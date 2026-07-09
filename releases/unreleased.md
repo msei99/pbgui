@@ -12,3 +12,6 @@
 - Restored the VPS Manager monitor snapshot into the live store on startup so Overview can show the last known host data immediately after an API restart.
 - Loaded the VPS Manager monitor snapshot during monitor construction so WebSocket clients can receive cached host data before deferred SSH startup finishes.
 - Labeled cached VPS Manager Overview telemetry as `Cached` instead of `Stale` while live SSH metrics are still warming up.
+- Prevented VPS monitors from auto-restarting services on remote hosts so multiple masters cannot race to restart the same PBData/PBRun/PBCoinData service.
+- Fixed PBMonitorAgent service status detection so a live legacy PBData/PBRun/PBCoinData process is not reported down just because an installed systemd unit is inactive.
+- Added local PBMonitorAgent service healing for expected PBGui services so restart decisions happen on the VPS that owns the service.

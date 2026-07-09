@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Local PBGui VPS monitor agent.
 
-The agent performs local, high-frequency measurements once per VPS and writes
-cache files that PBGui masters can read over SSH. It does not control bots,
-write cluster state, or perform remote actions.
+The agent performs local, high-frequency measurements once per VPS, writes
+cache files that PBGui masters can read over SSH, and heals local PBGui
+services that this host is responsible for. It does not control bots, write
+cluster state, or perform remote actions.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import socket
 import subprocess
 import threading
 import time
+import configparser
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -33,6 +35,8 @@ NDJSON_RETENTION_SECONDS = 300.0
 HISTORY_SECONDS = 62.0
 CPU_TICKS_PER_SECOND = os.sysconf(os.sysconf_names.get("SC_CLK_TCK", "SC_CLK_TCK")) or 100
 MONITOR_CACHE_VERSION = 2
+SERVICE_RESTART_COOLDOWN_SECONDS = 60.0
+SERVICE_RESTART_MAX_PER_HOUR = 3
 
 
 def _pbgui_dir() -> Path:
@@ -44,6 +48,15 @@ def _pbgui_dir() -> Path:
 PBGDIR = _pbgui_dir()
 DATA_DIR = PBGDIR / "data" / "monitor_agent"
 _STATUS_LOCK = threading.Lock()
+_SERVICE_RESTART_HISTORY: dict[str, list[float]] = {}
+
+PBGUI_SERVICES = {
+    "PBCluster": ("pbgui-pbcluster.service", "data/pid/pbcluster.pid", "pbcluster.py"),
+    "PBRun": ("pbgui-pbrun.service", "data/pid/pbrun.pid", "pbrun.py"),
+    "PBData": ("pbgui-pbdata.service", "data/pid/pbdata.pid", "pbdata.py"),
+    "PBCoinData": ("pbgui-pbcoindata.service", "data/pid/pbcoindata.pid", "pbcoindata.py"),
+    "PBMonitorAgent": ("pbgui-monitor-agent.service", "data/pid/pbmonitoragent.pid", "monitor_agent.py"),
+}
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -62,6 +75,126 @@ def _read_json(path: Path, default: Any = None) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return default
+
+
+def _read_ini() -> configparser.ConfigParser:
+    """Read the local PBGui config file."""
+
+    cfg = configparser.ConfigParser()
+    cfg.read(PBGDIR / "pbgui.ini")
+    return cfg
+
+
+def _parsed_list_config(text: str) -> list[str]:
+    """Parse a PBGui list setting stored as CSV or Python-style list."""
+
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+    try:
+        import ast
+
+        parsed = ast.literal_eval(raw)
+        if isinstance(parsed, (list, tuple, set)):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    except Exception:
+        pass
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _configured_text(value: Any) -> bool:
+    """Return whether a config value is explicitly configured."""
+
+    normalized = str(value or "").strip()
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if lowered in {"none", "null", "false", "<api_key>"}:
+        return False
+    return not (normalized.startswith("<") and normalized.endswith(">"))
+
+
+def _local_pbname(cfg: configparser.ConfigParser | None = None) -> str:
+    """Return the local PBGui node name."""
+
+    cfg = cfg or _read_ini()
+    return str(cfg.get("main", "pbname", fallback="") or socket.gethostname() or "").strip() or socket.gethostname()
+
+
+def _pbrun_required_for_host(pbname: str) -> bool:
+    """Return whether this host has local V7 run configs assigned."""
+
+    target = str(pbname or "").strip()
+    run_root = PBGDIR / "data" / "run_v7"
+    if not target or not run_root.is_dir():
+        return False
+    for cfg_path in run_root.glob("*/config.json"):
+        try:
+            payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        pbgui = payload.get("pbgui") if isinstance(payload, dict) else None
+        enabled_on = str((pbgui or {}).get("enabled_on") or "").strip()
+        if enabled_on and enabled_on != "disabled" and enabled_on == target:
+            return True
+    return False
+
+
+def _pbdata_required(cfg: configparser.ConfigParser | None = None) -> bool:
+    """Return whether PBData has local users to poll."""
+
+    cfg = cfg or _read_ini()
+    if not cfg.has_section("pbdata"):
+        return False
+    fetch_users = _parsed_list_config(cfg.get("pbdata", "fetch_users", fallback=""))
+    trades_users = _parsed_list_config(cfg.get("pbdata", "trades_users", fallback=""))
+    return bool(fetch_users or trades_users)
+
+
+def _pbcluster_required_for_host(pbname: str) -> bool:
+    """Return whether local Cluster Sync expects PBCluster on this host."""
+
+    nodes = _read_json(PBGDIR / "data" / "cluster" / "cluster_nodes.json", {})
+    node_map = nodes.get("nodes") if isinstance(nodes, dict) else None
+    if not isinstance(node_map, dict):
+        return False
+    target = str(pbname or "").strip()
+    for node in node_map.values():
+        if not isinstance(node, dict):
+            continue
+        names = {str(node.get("hostname") or "").strip(), str(node.get("pbname") or "").strip()}
+        if target not in names:
+            continue
+        if node.get("enabled") is False:
+            return False
+        return bool(node.get("sync_enabled"))
+    return False
+
+
+def _service_expected(service_name: str) -> bool:
+    """Return whether this host should run one PBGui service."""
+
+    cfg = _read_ini()
+    pbname = _local_pbname(cfg)
+    if service_name == "PBCluster":
+        return _pbcluster_required_for_host(pbname)
+    if service_name == "PBRun":
+        return _pbrun_required_for_host(pbname)
+    if service_name == "PBData":
+        return _pbdata_required(cfg)
+    if service_name == "PBCoinData":
+        return _configured_text(cfg.get("coinmarketcap", "api_key", fallback=""))
+    if service_name == "PBMonitorAgent":
+        return True
+    return True
+
+
+def _auto_heal_enabled() -> bool:
+    """Return whether local service auto-healing is enabled."""
+
+    cfg = _read_ini()
+    raw = str(cfg.get("vps_monitor", "auto_restart", fallback="true") or "true").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _embedded_monitor_script(name: str) -> str:
@@ -198,6 +331,60 @@ def _systemd_user_env() -> dict[str, str]:
     return env
 
 
+def _disabled_service_status(service_name: str) -> dict[str, Any]:
+    """Return a disabled service payload for unconfigured local services."""
+
+    return {
+        "status": "disabled",
+        "pid": None,
+        "error": None,
+        "was_restarted": False,
+        "expected": False,
+        "reason": "Service is not configured on this host",
+        "service": service_name,
+    }
+
+
+def _restart_allowed(service_name: str, now: float | None = None) -> tuple[bool, str]:
+    """Return whether the monitor agent may restart a service now."""
+
+    if service_name == "PBMonitorAgent":
+        return False, "PBMonitorAgent is supervised by systemd"
+    now = float(now or time.time())
+    history = [ts for ts in _SERVICE_RESTART_HISTORY.get(service_name, []) if now - ts < 3600.0]
+    _SERVICE_RESTART_HISTORY[service_name] = history
+    if history and now - history[-1] < SERVICE_RESTART_COOLDOWN_SECONDS:
+        return False, "restart cooldown active"
+    if len(history) >= SERVICE_RESTART_MAX_PER_HOUR:
+        return False, "restart rate limit reached"
+    return True, ""
+
+
+def _restart_systemd_service(service_name: str, unit: str) -> tuple[bool, str]:
+    """Restart a local systemd user service."""
+
+    allowed, reason = _restart_allowed(service_name)
+    if not allowed:
+        return False, reason
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "restart", unit],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=20,
+            env=_systemd_user_env(),
+        )
+    except Exception as exc:
+        return False, str(exc)
+    if result.returncode != 0:
+        stderr = (result.stderr or result.stdout or "").strip()
+        return False, stderr or f"systemctl restart exited {result.returncode}"
+    _SERVICE_RESTART_HISTORY.setdefault(service_name, []).append(time.time())
+    _log(SERVICE, f"[service] Restarted local {service_name} via {unit}", level="WARNING")
+    return True, ""
+
+
 def _systemd_service_status(unit: str) -> dict[str, Any] | None:
     """Return systemd status for one user service unit."""
 
@@ -274,36 +461,55 @@ def _pid_file_service_status(pid_file: str, process_match: str) -> dict[str, Any
     }
 
 
+def _service_status(unit: str, pid_file: str, process_match: str) -> dict[str, Any]:
+    """Return service status, accepting a live legacy process over inactive systemd."""
+
+    systemd_status = _systemd_service_status(unit)
+    legacy_status = _pid_file_service_status(pid_file, process_match)
+    if legacy_status.get("status") == "running":
+        if systemd_status is not None:
+            legacy_status = dict(legacy_status)
+            legacy_status["manager"] = "legacy"
+            legacy_status["unit"] = unit
+        return legacy_status
+    if systemd_status is not None:
+        return systemd_status
+    return legacy_status
+
+
 def _run_service_status() -> None:
     """Write PBGui service status cache."""
 
-    services = {
-        "PBCluster": ("pbgui-pbcluster.service", "data/pid/pbcluster.pid", "pbcluster.py"),
-        "PBRun": ("pbgui-pbrun.service", "data/pid/pbrun.pid", "pbrun.py"),
-        "PBData": ("pbgui-pbdata.service", "data/pid/pbdata.pid", "pbdata.py"),
-        "PBCoinData": ("pbgui-pbcoindata.service", "data/pid/pbcoindata.pid", "pbcoindata.py"),
-        "PBMonitorAgent": ("pbgui-monitor-agent.service", "data/pid/pbmonitoragent.pid", "monitor_agent.py"),
-    }
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": time.time(),
         "source": "monitor-agent",
         "services": {},
     }
-    for service_name, (unit, pid_file, process_match) in services.items():
-        status = _systemd_service_status(unit)
-        if status is None:
-            if service_name in {"PBCluster", "PBMonitorAgent"}:
-                status = {
-                    "status": "stopped",
-                    "pid": None,
-                    "error": f"{service_name} systemd user unit is missing or unavailable",
-                    "was_restarted": False,
-                    "manager": "systemd",
-                    "unit": unit,
-                }
-            else:
-                status = _pid_file_service_status(pid_file, process_match)
+    heal_enabled = _auto_heal_enabled()
+    for service_name, (unit, pid_file, process_match) in PBGUI_SERVICES.items():
+        if not _service_expected(service_name):
+            payload["services"][service_name] = _disabled_service_status(service_name)
+            continue
+        status = _service_status(unit, pid_file, process_match)
+        if status.get("status") != "running" and service_name in {"PBCluster", "PBMonitorAgent"} and status.get("manager") != "systemd":
+            status = {
+                "status": "stopped",
+                "pid": None,
+                "error": f"{service_name} systemd user unit is missing or unavailable",
+                "was_restarted": False,
+                "manager": "systemd",
+                "unit": unit,
+            }
+        if status.get("status") == "stopped" and heal_enabled and service_name != "PBMonitorAgent":
+            restarted, restart_error = _restart_systemd_service(service_name, unit)
+            status = dict(status)
+            status["was_restarted"] = bool(restarted)
+            status["restart_error"] = restart_error or None
+            if restarted:
+                status["status"] = "restarting"
+                status["error"] = None
+        status["expected"] = True
         payload["services"][service_name] = status
     _atomic_write_json(DATA_DIR / "service_status.json", payload)
 

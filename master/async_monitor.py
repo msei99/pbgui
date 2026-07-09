@@ -2798,6 +2798,11 @@ class VPSMonitor:
             "reason": PBCLUSTER_DISABLED_REASON if service_name == "PBCluster" else str(requirement.get("reason") or "Service is not configured"),
         }
 
+    def _auto_restart_allowed_for_host(self, hostname: str, service_name: str) -> bool:
+        """Return whether this monitor may auto-restart a service on a host."""
+        del service_name
+        return str(hostname or "").strip() == self._local_master_hostname()
+
     @property
     def telegram_token(self):
         if not self._telegram_token:
@@ -4630,7 +4635,11 @@ class VPSMonitor:
 
                 status_val = check["status"]
 
-                if status_val == ServiceStatus.STOPPED.value and self.auto_restart:
+                if (
+                    status_val == ServiceStatus.STOPPED.value
+                    and self.auto_restart
+                    and self._auto_restart_allowed_for_host(hostname, svc_name)
+                ):
                     _log(SERVICE, f"[service] {svc_name} down on {hostname}, "
                          "attempting restart")
                     restarted = await self._restart_service(hostname, svc_name)
