@@ -2514,7 +2514,7 @@ textarea.json-invalid:focus {
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=10"></script>
-<script src="/app/js/suite_editor.js?v=5"></script>
+<script src="/app/js/suite_editor.js?v=7"></script>
 <script src="/app/js/log_viewer_panel.js?v=25"></script>
 <script src="/app/js/pbgui_dialogs.js?v=4"></script>
 <script>
@@ -2577,6 +2577,7 @@ var state = {
   paretoScenario: 'Aggregated',
   paretoStatistic: 'mean',
   paretoStatisticEnabled: true,
+  paretoLoadSeq: 0,
   paretoSortKey: 'name',
   paretoSortDir: 'asc',
   returnRefreshInFlight: false,
@@ -8125,7 +8126,7 @@ function populateOptimizeEditor(config, opts) {
     });
   }
   if (typeof suiteInit === 'function') {
-    suiteInit('suite-container', { apiBase: API_BASE });
+    suiteInit('suite-container', { apiBase: API_BASE, aggregateMetrics: currentLimitsMeta().all_valid_metrics });
     suiteLoad(cfg, { preserveEdit: false });
   }
   setScoringEntries(optimize.scoring, { suppressSync: true });
@@ -10984,6 +10985,7 @@ function refreshOptimizePageOnReturn() {
 }
 
 async function loadParetos(path, name) {
+  var loadSeq = ++state.paretoLoadSeq;
   if (path) {
     if (path !== state.selectedResultPath) {
       state.selectedParetos.clear();
@@ -10999,14 +11001,18 @@ async function loadParetos(path, name) {
     renderParetos();
     return;
   }
+  var requestPath = state.selectedResultPath;
+  var requestStatistic = normalizeParetoStatistic(state.paretoStatistic);
+  var requestScenario = state.paretoScenario || 'Aggregated';
   var query = [
-    'result_path=' + encodeURIComponent(state.selectedResultPath),
-    'statistic=' + encodeURIComponent(normalizeParetoStatistic(state.paretoStatistic))
+    'result_path=' + encodeURIComponent(requestPath),
+    'statistic=' + encodeURIComponent(requestStatistic)
   ];
-  if (state.paretoMode === 'suite' || state.paretoScenario !== 'Aggregated') {
-    query.push('scenario=' + encodeURIComponent(state.paretoScenario || 'Aggregated'));
+  if (state.paretoMode === 'suite' || requestScenario !== 'Aggregated') {
+    query.push('scenario=' + encodeURIComponent(requestScenario));
   }
   var data = await apiFetch('/paretos?' + query.join('&'));
+  if (loadSeq !== state.paretoLoadSeq || requestPath !== state.selectedResultPath) return;
   state.paretos = data.paretos || [];
   applyParetoMeta(data.meta || {});
   renderParetos();

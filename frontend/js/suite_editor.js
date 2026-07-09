@@ -16,6 +16,7 @@ var _suiteState = {
   editIdx: -1,         // index of scenario being edited (-1 = none)
   aggregate: { default: 'mean' },
   botParams: [],       // [{key, type, default}] loaded from API
+  aggregateMetrics: [],
   containerId: '',
   apiBase: '',
   exchanges: ['binance','bybit','bitget','okx','hyperliquid','kucoin'],
@@ -60,7 +61,7 @@ var _suiteTemplates = {
 };
 
 /* ── Aggregate metric names ─────────────────────────────────── */
-var _suiteAggMetrics = [
+var _suiteAggMetricFallbacks = [
   'adg_strategy_eq', 'drawdown_worst_strategy_eq', 'drawdown_worst_mean_1pct_strategy_eq',
   'peak_recovery_days_strategy_eq', 'peak_recovery_hours_strategy_eq', 'position_held_days_max',
   'position_held_hours_max', 'sharpe_ratio_strategy_eq', 'sortino_ratio_strategy_eq',
@@ -78,9 +79,29 @@ var _suiteInlineSelectStyle = _suiteInlineInputStyle + ';appearance:none;-webkit
 
 /* ── Init ───────────────────────────────────────────────────── */
 function suiteInit(containerId, opts) {
+  opts = opts || {};
   _suiteState.containerId = containerId;
-  _suiteState.apiBase = (opts && opts.apiBase) || '';
+  _suiteState.apiBase = opts.apiBase || '';
+  _suiteState.aggregateMetrics = _suiteNormalizeAggMetrics(opts.aggregateMetrics);
   _suiteLoadBotParams();
+}
+
+function _suiteNormalizeAggMetrics(metrics) {
+  var source = Array.isArray(metrics) && metrics.length ? metrics : _suiteAggMetricFallbacks;
+  var seen = {};
+  var result = [];
+  for (var i = 0; i < source.length; i++) {
+    var value = String(source[i] == null ? '' : source[i]).trim();
+    if (!value || seen[value]) continue;
+    seen[value] = true;
+    result.push(value);
+  }
+  return result.length ? result : _suiteAggMetricFallbacks.slice();
+}
+
+function _suiteAggMetricOptions(extraMetrics) {
+  var source = (_suiteState.aggregateMetrics || []).concat(extraMetrics || []);
+  return _suiteNormalizeAggMetrics(source);
 }
 
 /* ── Load config into suite editor ──────────────────────────── */
@@ -801,15 +822,17 @@ function _suiteRenderAggregate() {
 
   /* Default method */
   h += '\x3Cdiv class="form-row cols-4" style="margin-bottom:var(--sp-sm)">';
-  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Default aggregation method for all metrics.\nmean = average across scenarios.\nmax = worst-case across scenarios.">default method\x3C/span>\x3C/label>';
+  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Default aggregation method for all metrics.\nmean = average across scenarios.\nmin = lowest value across scenarios.\nmax = highest value across scenarios.">default method\x3C/span>\x3C/label>';
   h += '\x3Cselect id="suite-agg-default" onchange="_suiteUpdateAggDefault()">';
   h += '\x3Coption value="mean"' + (agg.default === 'mean' ? ' selected' : '') + '>mean\x3C/option>';
+  h += '\x3Coption value="min"' + (agg.default === 'min' ? ' selected' : '') + '>min\x3C/option>';
   h += '\x3Coption value="max"' + (agg.default === 'max' ? ' selected' : '') + '>max\x3C/option>';
   h += '\x3C/select>\x3C/div>';
   h += '\x3C/div>';
 
   /* Per-metric overrides */
   var metricKeys = Object.keys(agg).filter(function(k) { return k !== 'default'; });
+  var metricOptions = _suiteAggMetricOptions(metricKeys);
   h += '\x3Cdiv style="margin-bottom:var(--sp-xs)">';
   h += '\x3Cdiv style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--sp-xs)">';
   h += '\x3Clabel style="font-size:var(--fs-xs);color:var(--text-dim)">Metric overrides (' + metricKeys.length + ')\x3C/label>';
@@ -823,6 +846,7 @@ function _suiteRenderAggregate() {
       h += '\x3Cspan style="font-size:var(--fs-xs);flex:1">' + esc(mk) + '\x3C/span>';
       h += '\x3Cselect id="suite-agg-m-' + mi + '" style="' + _suiteInlineSelectStyle + ';width:90px" onchange="_suiteUpdateAggMetric(\'' + mk.replace(/'/g, "\\'") + '\',' + mi + ')">';
       h += '\x3Coption value="mean"' + (agg[mk] === 'mean' ? ' selected' : '') + '>mean\x3C/option>';
+      h += '\x3Coption value="min"' + (agg[mk] === 'min' ? ' selected' : '') + '>min\x3C/option>';
       h += '\x3Coption value="max"' + (agg[mk] === 'max' ? ' selected' : '') + '>max\x3C/option>';
       h += '\x3C/select>';
       h += '\x3Cbutton type="button" class="act-btn act-btn-danger" onclick="_suiteRemoveAggMetric(\'' + mk.replace(/'/g, "\\'") + '\')">\u00d7\x3C/button>';
@@ -834,12 +858,12 @@ function _suiteRenderAggregate() {
   h += '\x3Cdiv id="suite-add-agg-row" style="display:none;margin-top:var(--sp-xs)">';
   h += '\x3Cdiv style="display:flex;gap:var(--sp-sm);align-items:end">';
   h += '\x3Cdiv class="form-group" style="flex:1">\x3Clabel>Metric\x3C/label>\x3Cselect id="suite-agg-sel">';
-  for (var ami = 0; ami < _suiteAggMetrics.length; ami++) {
-    h += '\x3Coption value="' + _suiteAggMetrics[ami] + '">' + _suiteAggMetrics[ami] + '\x3C/option>';
+  for (var ami = 0; ami < metricOptions.length; ami++) {
+    h += '\x3Coption value="' + esc(metricOptions[ami]) + '">' + esc(metricOptions[ami]) + '\x3C/option>';
   }
   h += '\x3C/select>\x3C/div>';
   h += '\x3Cdiv class="form-group">\x3Clabel>Method\x3C/label>\x3Cselect id="suite-agg-method">';
-  h += '\x3Coption value="mean">mean\x3C/option>\x3Coption value="max" selected>max\x3C/option>';
+  h += '\x3Coption value="mean">mean\x3C/option>\x3Coption value="min">min\x3C/option>\x3Coption value="max" selected>max\x3C/option>';
   h += '\x3C/select>\x3C/div>';
   h += '\x3Cbutton type="button" class="act-btn" onclick="_suiteConfirmAggMetric()" style="height:var(--btn-h)">Add\x3C/button>';
   h += '\x3C/div>\x3C/div>';

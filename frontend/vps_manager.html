@@ -3004,6 +3004,8 @@
       pendingWsMessages: [],
       connected: false,
       state: null,
+      deletedOverviewHosts: {},
+      pendingDeleteVpsHostname: '',
       detail: null,
       view: 'overview',
       hostname: '',
@@ -3966,6 +3968,33 @@
     function getOverviewRows() {
       const overview = ((store.state || {}).overview) || {};
       return Array.isArray(overview.rows) ? overview.rows : [];
+    }
+
+    function normalizeOverviewHostname(hostname) {
+      return String(hostname || '').trim();
+    }
+
+    function forgetDeletedOverviewHost(hostname) {
+      const key = normalizeOverviewHostname(hostname);
+      if (key && store.deletedOverviewHosts) delete store.deletedOverviewHosts[key];
+    }
+
+    function filterDeletedOverviewHosts(state) {
+      const deleted = store.deletedOverviewHosts || {};
+      if (!state || !state.overview || !Array.isArray(state.overview.rows) || !Object.keys(deleted).length) return state;
+      state.overview.rows = state.overview.rows.filter(function (row) {
+        return !deleted[normalizeOverviewHostname((row || {}).hostname)];
+      });
+      return state;
+    }
+
+    function markDeletedOverviewHost(hostname) {
+      const key = normalizeOverviewHostname(hostname);
+      if (!key) return;
+      store.deletedOverviewHosts = store.deletedOverviewHosts || {};
+      store.deletedOverviewHosts[key] = true;
+      if (store.state) filterDeletedOverviewHosts(store.state);
+      setSelectedOverviewHosts(getSelectedOverviewHosts().filter(function (item) { return normalizeOverviewHostname(item) !== key; }));
     }
 
     function getManagedRows() {
@@ -6716,6 +6745,7 @@
       if (msg.type === 'state') {
         const previousState = store.state;
         const nextState = msg.data || null;
+        filterDeletedOverviewHosts(nextState);
         maybeRefreshCompletedVpsTask(nextState);
         store.state = nextState;
         const deploysState = (((store.state || {}).deploys) || {});
@@ -7068,6 +7098,7 @@
       } else if (cmd === 'save_vps') {
         toast('VPS saved.', 'success');
         if (msg.data && msg.data.hostname) {
+          forgetDeletedOverviewHost(msg.data.hostname);
           store.hostname = msg.data.hostname;
           store.view = 'vps';
           sendContext();
@@ -7272,6 +7303,9 @@
         renderUi({ forceView: true });
         return;
       } else if (cmd === 'delete_vps') {
+        const deletedHostname = store.pendingDeleteVpsHostname || store.hostname;
+        store.pendingDeleteVpsHostname = '';
+        markDeletedOverviewHost(deletedHostname);
         toast('VPS deleted.', 'success');
         store.view = 'overview';
         store.hostname = '';
@@ -9174,6 +9208,7 @@
         'Delete VPS',
         'Delete VPS ' + hostname + '? This only removes the saved VPS Manager record from PBGui. It does not delete files on the VPS.',
         function () {
+          store.pendingDeleteVpsHostname = String(hostname || '').trim();
           send({ cmd: 'delete_vps', hostname: hostname });
         }
       );
@@ -9271,7 +9306,7 @@
           return `${target}${row.nav === 'vps' ? renderOverviewTaskSummary(row) : ''}`;
         }
         if (column.key === 'role') return `${esc(row.role_icon || '')} ${esc(row.role || '')}`;
-        if (column.key === 'online') return row.online ? levelTag('ok', 'Online') : levelTag('error', row.telemetry_stale ? 'Stale' : 'Offline');
+        if (column.key === 'online') return row.online ? levelTag('ok', 'Online') : (row.telemetry_cached ? levelTag('warning', 'Cached') : levelTag('error', row.telemetry_stale ? 'Stale' : 'Offline'));
         if (column.key === 'running_bots') return esc(row.running_bots == null ? '-' : String(row.running_bots));
         if (column.key === 'start') return esc(row.start || '-');
         if (column.key === 'updates') return `${esc(row.updates || '-')} ${row.reboot_required ? levelTag('warning', 'Reboot') : ''}`;

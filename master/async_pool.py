@@ -87,6 +87,9 @@ class VPSConnection:
 # ── Constants ───────────────────────────────────────────────
 
 CONNECT_TIMEOUT = 10        # seconds
+REMOTE_PROBE_TIMEOUT = 10   # seconds per lightweight remote probe
+REMOTE_INI_TIMEOUT = 10     # seconds for remote pbgui.ini SFTP reads
+REMOTE_CACHE_TIMEOUT = 25   # seconds total budget for connect-time remote metadata
 KEEPALIVE_INTERVAL = 10     # seconds — lower = faster dead-connection detection (~30s worst-case)
 RECONNECT_COOLDOWN = 30     # seconds
 MAX_RECONNECT_ATTEMPTS = 5
@@ -259,7 +262,19 @@ class AsyncSSHPool:
                 entry.last_error = None
                 entry.reconnect_attempts = 0
                 # Auto-read remote pbgui.ini and cache paths on the fresh connection.
-                await self._cache_remote_ini(entry, conn)
+                # Keep this bounded so one stuck remote probe cannot block monitor startup.
+                try:
+                    await asyncio.wait_for(
+                        self._cache_remote_ini(entry, conn),
+                        timeout=REMOTE_CACHE_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    _log(SERVICE, f"[ini] Remote metadata probe timed out for {hostname}",
+                         level="WARNING")
+                    entry.data.setdefault('remote_pbgui_dir', cfg.remote_pbgui_dir or REMOTE_PBGUI_DIR)
+                    entry.data['ini'] = None
+                    entry.data['pb7dir'] = None
+                    entry.data['pbname'] = hostname
                 if previous_conn and previous_conn is not conn:
                     previous_conn.close()
                 _log(SERVICE, f"SSH connected to {hostname} ({cfg.ip})", level="DEBUG")
@@ -728,11 +743,20 @@ class AsyncSSHPool:
         return raw or None
 
     async def _run_conn_command(self, entry: VPSConnection, command: str,
-                                conn: Optional[asyncssh.SSHClientConnection] = None):
+                                conn: Optional[asyncssh.SSHClientConnection] = None,
+                                timeout: int = REMOTE_PROBE_TIMEOUT):
         ssh_conn = conn or entry.conn
         if ssh_conn is None:
             return None
-        return await ssh_conn.run(command, check=False)
+        try:
+            return await asyncio.wait_for(
+                ssh_conn.run(command, check=False),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            _log(SERVICE, f"[cmd] {entry.config.hostname}: remote probe timed out",
+                 level="WARNING")
+            return None
 
     async def _is_valid_remote_pbgui_dir(self, entry: VPSConnection, remote_pbgui_dir: str,
                                          conn: Optional[asyncssh.SSHClientConnection] = None) -> bool:
@@ -824,12 +848,18 @@ class AsyncSSHPool:
         ssh_conn = conn or entry.conn
         if ssh_conn is None:
             raise ConnectionError("SSH connection closed")
-        sftp = await ssh_conn.start_sftp_client()
-        try:
-            async with sftp.open(remote_path, 'r') as f:
-                content = await f.read()
-        finally:
-            sftp.exit()
+        async def _read_remote_ini():
+            sftp = await ssh_conn.start_sftp_client()
+            try:
+                async with sftp.open(remote_path, 'r') as f:
+                    return await f.read()
+            finally:
+                sftp.exit()
+
+        content = await asyncio.wait_for(
+            _read_remote_ini(),
+            timeout=REMOTE_INI_TIMEOUT,
+        )
         cfg = configparser.ConfigParser()
         cfg.read_string(content if isinstance(content, str)
                         else content.decode('utf-8'))

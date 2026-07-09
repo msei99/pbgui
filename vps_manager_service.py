@@ -2548,6 +2548,8 @@ class VPSManagerService:
         ssh_online = self._host_online(host_state)
         telemetry_fresh = self._host_telemetry_fresh(host_state)
         telemetry_age = self._host_telemetry_age(host_state)
+        stream = (host_state or {}).get("stream") or {}
+        telemetry_cached = bool(stream.get("cached")) and not telemetry_fresh
         online = ssh_online and telemetry_fresh
         meta = self._host_meta(host_state)
         role = str(meta.get("role") or "slave")
@@ -2574,7 +2576,8 @@ class VPSManagerService:
             "online": online,
             "ssh_online": ssh_online,
             "telemetry_fresh": telemetry_fresh,
-            "telemetry_stale": ssh_online and not telemetry_fresh,
+            "telemetry_stale": ssh_online and not telemetry_fresh and not telemetry_cached,
+            "telemetry_cached": telemetry_cached,
             "telemetry_age": round(telemetry_age, 1) if telemetry_age is not None else None,
             "role": role,
             "role_icon": role_icon,

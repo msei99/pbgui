@@ -166,8 +166,8 @@ def test_bitget_best_1m_queue_keeps_hyundai_mapping_coin(monkeypatch, tmp_path) 
     assert popen_calls
 
 
-def test_copy_data_queue_payload_defaults_to_missing_only() -> None:
-    """Copy Data queue payloads normalize safe rsync defaults."""
+def test_copy_data_queue_payload_updates_changed_files() -> None:
+    """Copy Data queue payloads always update changed files."""
 
     payload = market_data_api._build_copy_data_queue_payload(
         {
@@ -178,7 +178,7 @@ def test_copy_data_queue_payload_defaults_to_missing_only() -> None:
     )
 
     assert payload["target"] == "localhost"
-    assert payload["mode"] == "missing_only"
+    assert payload["mode"] == "update"
     assert payload["exchanges"] == ["binance", "bybit"]
     assert payload["exchange_storage"]["binance"] == "binanceusdm"
     assert payload["destination_root"].endswith("/data/ohlcv")
@@ -321,7 +321,7 @@ def test_copy_data_dry_run_queue_uses_dry_run_job_type(monkeypatch) -> None:
     assert enqueued[0]["exchange"] == "ohlcv"
     assert enqueued[0]["manual_parallel"] is True
     assert enqueued[0]["payload"]["dry_run"] is True
-    assert enqueued[0]["payload"]["mode"] == "missing_only"
+    assert enqueued[0]["payload"]["mode"] == "update"
     assert enqueued[0]["payload"]["exchanges"] == ["bybit"]
     assert popen_calls
     assert popen_calls[0][1].endswith("task_worker.py")

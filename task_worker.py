@@ -111,7 +111,7 @@ def _fmt_bytes_short(value: Any) -> str:
         return f"{int(size)} B"
     return f"{size:.2f} {unit}"
 
-OHLCV_COPY_MODES = {"missing_only", "update"}
+OHLCV_COPY_MODE = "update"
 OHLCV_COPY_TARGET_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-@")
 OHLCV_COPY_REMOTE_PATH_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-")
 OHLCV_COPY_RSYNC_STAT_LABELS = (
@@ -558,8 +558,6 @@ def _build_ohlcv_copy_rsync_command(
     ]
     if dry_run:
         cmd.extend(["--dry-run", "--stats", "--itemize-changes"])
-    if str(mode or "").strip().lower() == "missing_only":
-        cmd.append("--ignore-existing")
     cmd.extend([
         "-e",
         shlex.join(list(ssh_args)),
@@ -784,9 +782,7 @@ def _run_ohlcv_copy(job_path: Path, payload: dict[str, Any], *, dry_run: bool = 
     ssh_args = _parse_ohlcv_copy_ssh_args(payload.get("ssh_command"))
     if len(ssh_args) > 1 and ssh_args[-1] == target:
         raise ValueError("SSH command must not include the target host")
-    mode = str(payload.get("mode") or "missing_only").strip().lower()
-    if mode not in OHLCV_COPY_MODES:
-        raise ValueError("Invalid OHLCV copy mode")
+    mode = OHLCV_COPY_MODE
     exchanges = _normalize_ohlcv_copy_exchanges(payload.get("exchanges"))
     if shutil.which("rsync") is None:
         raise RuntimeError("rsync is not installed or not available in PATH")
@@ -812,7 +808,7 @@ def _run_ohlcv_copy(job_path: Path, payload: dict[str, Any], *, dry_run: bool = 
         job_id,
         f"job started  target={target}  destination_root={destination_root}  exchanges={exchanges}  mode={mode}  dry_run={1 if dry_run else 0}",
     )
-    _append_to_job_log(job_id, "safety  delete=disabled  missing_only=" + ("1" if mode == "missing_only" else "0") + "  writes=" + ("0" if dry_run else "1"))
+    _append_to_job_log(job_id, "safety  delete=disabled  update_changed=1  writes=" + ("0" if dry_run else "1"))
 
     def update_progress(**kw: Any) -> None:
         def mut(o: dict[str, Any]) -> None:

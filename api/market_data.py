@@ -848,10 +848,7 @@ COPY_DATA_EXCHANGES: dict[str, dict[str, str]] = {
     "hyperliquid": {"label": "Hyperliquid", "storage": "hyperliquid"},
 }
 
-COPY_DATA_MODES: dict[str, str] = {
-    "missing_only": "Missing files only",
-    "update": "Update changed files",
-}
+COPY_DATA_MODE = "update"
 COPY_DATA_TARGET_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-@")
 COPY_DATA_REMOTE_PATH_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-")
 
@@ -1031,16 +1028,12 @@ def _build_copy_data_queue_payload(request: dict[str, Any]) -> dict[str, Any]:
     """Build the sanitized task-queue payload for an OHLCV copy job."""
 
     payload = _build_copy_data_test_payload(request)
-    mode = str(request.get("mode") or "missing_only").strip().lower()
-    if mode not in COPY_DATA_MODES:
-        raise ValueError("Invalid copy mode.")
-
     exchanges = _normalize_copy_data_exchanges(request.get("exchanges"))
     payload.update(
         {
             "exchanges": exchanges,
             "exchange_storage": {ex: COPY_DATA_EXCHANGES[ex]["storage"] for ex in exchanges},
-            "mode": mode,
+            "mode": COPY_DATA_MODE,
         }
     )
     return payload

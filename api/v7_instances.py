@@ -1213,6 +1213,11 @@ def _highest_backup_version(name: str) -> int:
     return highest
 
 
+def _next_instance_config_version(name: str) -> int:
+    """Return the next config version after local state and Cluster history."""
+    return max(_instance_config_version(name), _highest_cluster_instance_version(name)) + 1
+
+
 def _backup_config_payload(name: str, timestamp: str) -> tuple[Path, dict]:
     """Return backup directory and parsed config.json for a backup."""
     backup_dir = Path(PBGDIR) / "data" / "backup" / "v7" / name / timestamp
@@ -1509,6 +1514,16 @@ def get_instance_config(
     return {"name": name, "config": cfg, "param_status": param_status}
 
 
+@router.get("/instances/{name}/next-version")
+def get_instance_next_version(
+    name: str,
+    session: SessionToken = Depends(require_auth),
+):
+    """Return the next pbgui.version for an existing or pending v7 instance."""
+    _validate_name(name)
+    return {"name": name, "next_version": _next_instance_config_version(name)}
+
+
 @router.put("/instances/{name}/config")
 async def save_instance_config(
     name: str,
@@ -1594,16 +1609,8 @@ async def _save_instance_config_payload(
             except HTTPException:
                 backup_src_dir = None
 
-    # Increment version. Backup drafts are already opened as the next version;
-    # keep that value unless the live config advanced while the editor was open.
-    if is_backup_draft:
-        try:
-            draft_version = int(cfg["pbgui"].get("version", 0) or 0)
-        except (TypeError, ValueError):
-            draft_version = 0
-        cfg["pbgui"]["version"] = max(draft_version, version_base + 1)
-    else:
-        cfg["pbgui"]["version"] = max(_coerce_config_version(cfg["pbgui"].get("version", 0)), version_base) + 1
+    # The submitted version is display-only. Always write exactly the next local/cluster version.
+    cfg["pbgui"]["version"] = version_base + 1
 
     # Set backtest.exchange from user→exchange mapping
     live_user = cfg.get("live", {}).get("user", "")

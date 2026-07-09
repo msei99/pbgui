@@ -2617,6 +2617,7 @@ class VPSMonitor:
         self._cache_path = Path(PBGDIR) / 'data' / 'state' / 'vps_monitor' / 'cache.json'
         self._legacy_cache_path = Path(PBGDIR) / 'data' / 'monitor_cache.json'
         self._monitor_cache: dict[str, dict[str, dict]] = {}
+        self._load_monitor_cache()
         history_dir = Path(PBGDIR) / 'data' / 'state' / 'vps_monitor' / 'history'
         self._host_metric_history = {
             'cpu': CpuHistoryStore(history_dir, 'hosts_cpu_24h'),
@@ -3200,7 +3201,6 @@ class VPSMonitor:
         self.pool.load_vps_configs()
         self.store.load_ui_settings()
         self._ini_watcher.start()
-        self._load_monitor_cache()
         self._load_alert_routes()
         self._load_alert_state()
         for store in self._host_metric_history.values():
@@ -3230,6 +3230,10 @@ class VPSMonitor:
             for hostname, success in results.items():
                 if success:
                     self._start_metrics_stream(hostname)
+                    asyncio.create_task(
+                        self.collect_host_meta_now(hostname, include_package_status=True),
+                        name=f"host-meta-startup-{hostname}",
+                    )
 
         # Launch main loop as background task
         self._tasks.append(asyncio.create_task(
@@ -3337,15 +3341,19 @@ class VPSMonitor:
                 self._start_metrics_stream(hostname)
                 self._last_host_meta_collect.pop(hostname, None)
                 self._last_package_status_collect.pop(hostname, None)
+                asyncio.create_task(
+                    self.collect_host_meta_now(hostname, include_package_status=True),
+                    name=f"host-meta-reconnect-{hostname}",
+                )
 
         # 3. Restart dead or stale metric streams
         await self._restart_dead_streams()
 
-        # 4. Collect instances (every ~30s)
-        await self._collect_instances_all()
-
-        # 4b. Collect host metadata on the same SSH channel
+        # 4. Collect host metadata before slower optional snapshots.
         await self._collect_host_meta_all()
+
+        # 4b. Collect instances (every ~30s)
+        await self._collect_instances_all()
 
         # 5. Service monitoring (every N iterations)
         if loop_count % SERVICE_CHECK_EVERY == 0:
@@ -3394,6 +3402,10 @@ class VPSMonitor:
                 if h in self.pool.hostnames():
                     if await self.pool.connect(h):
                         self._start_metrics_stream(h)
+                        asyncio.create_task(
+                            self.collect_host_meta_now(h, include_package_status=True),
+                            name=f"host-meta-enable-{h}",
+                        )
 
     async def refresh_enabled_host(self, hostname: str) -> bool:
         """Reload config and reconnect one enabled host after credentials change."""
@@ -3413,6 +3425,10 @@ class VPSMonitor:
             self._start_metrics_stream(host)
             self._last_host_meta_collect.pop(host, None)
             self._last_package_status_collect.pop(host, None)
+            asyncio.create_task(
+                self.collect_host_meta_now(host, include_package_status=True),
+                name=f"host-meta-refresh-{host}",
+            )
             _log(SERVICE, f"Refreshed monitor connection for {host}")
             return True
         return False
@@ -4155,6 +4171,7 @@ class VPSMonitor:
             self.store.update_instances(hostname, enriched_monitors)
             self.store.update_v7_instances(hostname, v7_list)
             self.store.update_bot_logs(hostname, bot_logs if isinstance(bot_logs, dict) else {})
+            self._cache_host_snapshot(hostname)
             if self.debug_logging:
                 _log(SERVICE, f"[instances] Read {len(monitors)} monitors and {len(v7_list)} v7 instances from agent cache on {hostname}", level="DEBUG")
 
@@ -4177,8 +4194,72 @@ class VPSMonitor:
                         continue
                     cleaned[hostname] = host_cache
                 self._monitor_cache = cleaned
+                self._hydrate_monitor_cache()
         except Exception:
             self._monitor_cache = {}
+
+    def _hydrate_monitor_cache(self) -> None:
+        """Restore the last known monitor snapshot into the live store."""
+        changed = False
+        metric_fields = set(SystemMetrics.__dataclass_fields__)
+        for hostname, host_cache in self._monitor_cache.items():
+            if not isinstance(host_cache, dict):
+                continue
+            system = host_cache.get('system')
+            if isinstance(system, dict):
+                values = {key: system.get(key) for key in metric_fields if key in system}
+                try:
+                    self.store.system[hostname] = SystemMetrics(**values)
+                    changed = True
+                except Exception:
+                    pass
+            instances = host_cache.get('instances')
+            if isinstance(instances, list):
+                self.store.instances[hostname] = instances
+                changed = True
+            v7_instances = host_cache.get('v7_instances')
+            if isinstance(v7_instances, list):
+                self.store.v7_instances[hostname] = v7_instances
+                changed = True
+            host_meta = host_cache.get('host_meta')
+            if isinstance(host_meta, dict):
+                self.store.host_meta[hostname] = host_meta
+                changed = True
+            streams = host_cache.get('streams')
+            if isinstance(streams, dict):
+                cached_stream = dict(streams)
+                cached_stream['cached'] = True
+                self.store.streams[hostname] = cached_stream
+                changed = True
+            bot_logs = host_cache.get('bot_logs')
+            if isinstance(bot_logs, dict):
+                self.store.bot_logs[hostname] = bot_logs
+                changed = True
+        if changed:
+            self.store.changed.set()
+
+    def _cache_host_snapshot(self, hostname: str) -> None:
+        """Persist the last known data needed for a fast Overview after restart."""
+        host = str(hostname or '').strip()
+        if not host:
+            return
+        payload = dict(self._monitor_cache.get(host) or {})
+        payload['_version'] = MONITOR_CACHE_VERSION
+        metrics = self.store.system.get(host)
+        if metrics:
+            payload['system'] = metrics.to_dict()
+        if host in self.store.instances:
+            payload['instances'] = self.store.instances.get(host) or []
+        if host in self.store.v7_instances:
+            payload['v7_instances'] = self.store.v7_instances.get(host) or []
+        if host in self.store.host_meta:
+            payload['host_meta'] = self.store.host_meta.get(host) or {}
+        if host in self.store.streams:
+            payload['streams'] = self.store.streams.get(host) or {}
+        if host in self.store.bot_logs:
+            payload['bot_logs'] = self.store.bot_logs.get(host) or {}
+        self._monitor_cache[host] = payload
+        self._save_monitor_cache()
 
     def _save_monitor_cache(self) -> None:
         try:
@@ -4266,6 +4347,7 @@ class VPSMonitor:
             if parsed:
                 self.store.update_host_meta(hostname, parsed)
                 self._last_host_meta_collect[hostname] = now
+                self._cache_host_snapshot(hostname)
                 if self.debug_logging:
                     _log(SERVICE, f"[host-meta] Read agent cache for {hostname}", level="DEBUG")
 
@@ -4283,6 +4365,7 @@ class VPSMonitor:
                     package_data['upgrades'] = current_meta.get('upgrades')
                 self.store.update_host_meta(hostname, package_data)
                 self._last_package_status_collect[hostname] = now
+                self._cache_host_snapshot(hostname)
 
     # ── Service monitoring ──────────────────────────────────
 

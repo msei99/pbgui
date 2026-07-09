@@ -252,6 +252,46 @@ def test_save_after_deleted_instance_uses_highest_cluster_version(monkeypatch, t
     assert payload["parent_version"] == "5"
 
 
+def test_save_imported_config_ignores_submitted_version(monkeypatch, tmp_path: Path) -> None:
+    """Saving an imported config writes exactly highest local/cluster version + 1."""
+
+    (tmp_path / "pbgui.ini").write_text("[main]\npbname=master\n", encoding="utf-8")
+    instance_dir = tmp_path / "data" / "run_v7" / "test_inst"
+    _write_config(instance_dir, 4, "disabled")
+    monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(v7_instances, "_monitor", None)
+    monkeypatch.setattr(v7_instances, "save_pb7_config", lambda cfg, path: path.write_text(json.dumps(cfg), encoding="utf-8"))
+
+    async def noop_runtime_check(name: str, cfg: dict) -> None:
+        return None
+
+    async def noop_ssh_sync(name: str) -> dict:
+        return {"ok": 0, "failed": 0, "hosts": []}
+
+    class FakeUsers:
+        """Minimal Users replacement for save_instance_config."""
+
+        def find_exchange(self, user: str) -> str:
+            return ""
+
+    v7_instances._record_cluster_config_upsert("test_inst", instance_dir, _write_config(instance_dir, 9, "disabled"), parent_version=8)
+
+    async def request_json() -> dict:
+        return {"config": {"live": {"user": "test_inst"}, "pbgui": {"version": 999, "enabled_on": "disabled"}}}
+
+    monkeypatch.setattr(v7_instances, "_ensure_target_runtime_compatible", noop_runtime_check)
+    monkeypatch.setattr(v7_instances, "_ssh_sync_instance", noop_ssh_sync)
+    monkeypatch.setitem(sys.modules, "User", SimpleNamespace(Users=lambda: FakeUsers()))
+
+    next_version = v7_instances.get_instance_next_version("test_inst", session=None)
+    result = asyncio.run(v7_instances.save_instance_config("test_inst", SimpleNamespace(json=request_json), session=None))
+    saved = _read_json(instance_dir / "config.json")
+
+    assert next_version == {"name": "test_inst", "next_version": 10}
+    assert result["version"] == 10
+    assert saved["pbgui"]["version"] == 10
+
+
 def test_copy_instance_config_copies_referenced_override_files(monkeypatch, tmp_path: Path) -> None:
     """Copying an instance config writes target config and referenced override files."""
 

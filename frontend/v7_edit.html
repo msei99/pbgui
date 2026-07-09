@@ -1170,6 +1170,11 @@ async function prepareConfigForRunEditor(config) {
   return fetchPreparedDraftConfig(data.draft_id);
 }
 
+async function fetchNextInstanceVersion(name) {
+  var data = await window.PBGuiEditorShared.resolveJsonResult(apiFetch('/instances/' + encodeURIComponent(name) + '/next-version'));
+  return parseInt((data || {}).next_version, 10) || 1;
+}
+
 function formatJsonParseMessage(message) {
   return window.PBGuiEditorShared.formatJsonParseMessage(message);
 }
@@ -2555,6 +2560,12 @@ async function doImport() {
   var prepared;
   try {
     prepared = await prepareConfigForRunEditor(parsed);
+    if (IS_NEW !== 'true') {
+      if (!prepared.config.pbgui || typeof prepared.config.pbgui !== 'object' || Array.isArray(prepared.config.pbgui)) {
+        prepared.config.pbgui = {};
+      }
+      prepared.config.pbgui.version = await fetchNextInstanceVersion(INSTANCE_NAME);
+    }
   } catch (e) {
     window.PBGuiEditorShared.setInlineStatusError(errEl, {
       baseClassName: 'field-status field-status-inline',

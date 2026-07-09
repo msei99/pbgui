@@ -3113,12 +3113,12 @@
             <div>
               <div class="eyebrow">OHLCV Copy</div>
               <h2>Copy Data</h2>
-              <p class="note">Queue an rsync copy from this local PBGui data/ohlcv tree to a remote PBGui host over SSH.</p>
+              <p class="note">Queue an rsync copy from this local PBGui data/ohlcv tree to a remote PBGui host over SSH. Changed files are always updated.</p>
             </div>
           </div>
           <div id="copy-data-feedback" class="callout" hidden></div>
           <div class="callout warning">
-            This job never uses --delete. Use Dry run first to see the target path and rsync transfer stats without creating directories or writing files.
+            This job updates changed files and never uses --delete. Use Dry run first to see the target path and rsync transfer stats without creating directories or writing files.
           </div>
           <div class="copy-data-form-grid">
             <div class="settings-grid settings-grid-wide">
@@ -3133,13 +3133,6 @@
               <label class="settings-field">
                 <span class="field-label" data-tip="Absolute data/ohlcv root on the remote host. Leave empty when the target PBGui uses the same path as this machine. The copy job creates missing exchange subdirectories below this root.">Destination data/ohlcv root</span>
                 <input id="copy-data-destination-root" type="text" placeholder="Leave empty to use this PBGui path on the target" autocomplete="off">
-              </label>
-              <label class="settings-field">
-                <span class="field-label" data-tip="Missing files only adds --ignore-existing and leaves target files untouched. Update changed files lets rsync replace changed files. Neither mode uses --delete.">Copy mode</span>
-                <select id="copy-data-mode">
-                  <option value="missing_only" selected>Missing files only</option>
-                  <option value="update">Update changed files</option>
-                </select>
               </label>
             </div>
             <div>
@@ -3970,7 +3963,6 @@
           target: readFieldValue('copy-data-target'),
           ssh_command: readFieldValue('copy-data-ssh-command') || 'ssh',
           destination_root: readFieldValue('copy-data-destination-root'),
-          mode: readFieldValue('copy-data-mode') || 'missing_only',
           exchanges: getSelectedCopyDataExchanges()
         };
       }

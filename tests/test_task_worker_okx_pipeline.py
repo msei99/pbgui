@@ -111,8 +111,8 @@ def test_run_job_records_actual_run_timestamps(monkeypatch, tmp_path) -> None:
     assert obj["finished_ts"] >= obj["run_started_ts"]
 
 
-def test_ohlcv_copy_rsync_command_uses_safe_missing_only_defaults(tmp_path) -> None:
-    """OHLCV copy rsync command skips existing files and never deletes target files."""
+def test_ohlcv_copy_rsync_command_updates_changed_files(tmp_path) -> None:
+    """OHLCV copy rsync command updates changed files and never deletes target files."""
 
     source_dir = tmp_path / "bybit"
     cmd = task_worker._build_ohlcv_copy_rsync_command(
@@ -121,19 +121,19 @@ def test_ohlcv_copy_rsync_command_uses_safe_missing_only_defaults(tmp_path) -> N
         destination_root="/home/mani/software/pbgui/data/ohlcv",
         storage_name="bybit",
         ssh_args=["ssh", "-J", "user@jump-host", "-p", "2222"],
-        mode="missing_only",
+        mode="update",
     )
 
     assert cmd[0] == "rsync"
-    assert "--ignore-existing" in cmd
+    assert "--ignore-existing" not in cmd
     assert "--delete" not in cmd
     assert cmd[cmd.index("-e") + 1] == "ssh -J user@jump-host -p 2222"
     assert f"{source_dir}/" in cmd
     assert "localhost:/home/mani/software/pbgui/data/ohlcv/bybit/" in cmd
 
 
-def test_ohlcv_copy_rsync_command_update_mode_can_overwrite_changed_files(tmp_path) -> None:
-    """Update mode omits --ignore-existing without enabling remote deletion."""
+def test_ohlcv_copy_rsync_command_ignores_legacy_missing_only_mode(tmp_path) -> None:
+    """Legacy missing_only payloads are treated as changed-file updates."""
 
     cmd = task_worker._build_ohlcv_copy_rsync_command(
         source_dir=tmp_path / "okx",
@@ -141,7 +141,7 @@ def test_ohlcv_copy_rsync_command_update_mode_can_overwrite_changed_files(tmp_pa
         destination_root="/srv/pbgui/data/ohlcv",
         storage_name="okx",
         ssh_args=["ssh"],
-        mode="update",
+        mode="missing_only",
     )
 
     assert "--ignore-existing" not in cmd
@@ -165,7 +165,7 @@ def test_ohlcv_copy_dry_run_command_reports_without_writes(tmp_path) -> None:
     assert "--dry-run" in cmd
     assert "--stats" in cmd
     assert "--itemize-changes" in cmd
-    assert "--ignore-existing" in cmd
+    assert "--ignore-existing" not in cmd
     assert "--delete" not in cmd
     assert "optimizer:/srv/pbgui/data/ohlcv/bybit/" in cmd
 
@@ -222,7 +222,7 @@ def test_ohlcv_copy_dry_run_skips_remote_mkdir(monkeypatch, tmp_path) -> None:
             "ssh_command": "ssh -J user@jump-host -p 2222",
             "destination_root": "/srv/pbgui/data/ohlcv",
             "exchanges": ["bybit"],
-            "mode": "missing_only",
+            "mode": "update",
         },
         dry_run=True,
     )

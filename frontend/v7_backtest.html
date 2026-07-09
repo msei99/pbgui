@@ -722,6 +722,7 @@ textarea.json-invalid:focus {
         <button class="sb-btn" id="archive-btn-retest-replace" onclick="retestReplaceSelectedArchive()" style="display:none">♻ Retest &amp; Replace</button>
         <button class="sb-btn" id="archive-btn-add-run" onclick="addToRunFromArchive()">▶ Add to Run</button>
         <button class="sb-btn" id="archive-btn-compare" onclick="compareSelectedArchive()">📈 Compare</button>
+        <button class="sb-btn" id="archive-btn-balance-calc" onclick="goBalanceCalculatorFromArchive()">💰 Balance Calculator</button>
         <button class="sb-btn" id="archive-btn-score-preview" onclick="previewArchiveScores()" style="display:none">⭐ Score Preview</button>
         <button class="sb-btn" id="archive-btn-opt-view" onclick="viewSelectedArchiveOptimizeConfig()" style="display:none">📄 View Config</button>
         <button class="sb-btn" id="archive-btn-opt-open" onclick="optimizeSelectedArchiveConfig()" style="display:none">🧬 Optimize from Config</button>
@@ -7438,6 +7439,24 @@ function goBalanceCalculatorFromResult() {
   }).catch(function(e) { toast('Failed to load config: ' + e.message, 'err'); });
 }
 
+function goBalanceCalculatorFromArchive() {
+  var sel = getSelectedArchiveResults();
+  if (sel.length !== 1) { toast('Select exactly 1 result', 'err'); return; }
+  var path = sel[0];
+  var resultData = archiveResults.find(function(r) { return r.path === path; });
+  var defaultExchange = '';
+  if (resultData && Array.isArray(resultData.exchanges) && resultData.exchanges[0]) {
+    defaultExchange = String(resultData.exchanges[0]).toLowerCase();
+  } else if (resultData && resultData.exchange) {
+    defaultExchange = String(resultData.exchange).split(',')[0].trim().toLowerCase();
+  }
+
+  toast('Loading\u2026', 'ok');
+  apiFetch('/results/config?path=' + encodeURIComponent(path)).then(function(cfg) {
+    openBalanceCalculatorWithConfig(cfg, defaultExchange || getConfigDefaultExchange(cfg));
+  }).catch(function(e) { toast('Failed to load config: ' + e.message, 'err'); });
+}
+
 function calcBalanceFromResult() {
   var sel = getSelectedResults();
   if (sel.length !== 1) { toast('Select exactly 1 result', 'err'); return; }
@@ -7811,7 +7830,7 @@ function updateArchiveActionVisibility() {
   var isBacktests = archiveResultsMode === 'backtests';
   var isOptimize = archiveResultsMode === 'optimize';
   var own = selectedArchiveIsOwn();
-  ['archive-btn-rebacktest', 'archive-btn-add-run', 'archive-btn-compare', 'archive-btn-delete'].forEach(function(id) {
+  ['archive-btn-rebacktest', 'archive-btn-add-run', 'archive-btn-compare', 'archive-btn-balance-calc', 'archive-btn-delete'].forEach(function(id) {
     var node = document.getElementById(id);
     if (node) node.style.display = isBacktests ? '' : 'none';
   });
@@ -8829,7 +8848,7 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/suite_editor.js?v=5"></script>
+<script src="/app/js/suite_editor.js?v=7"></script>
 <script src="/app/js/coin_overrides_editor.js?v=12"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */

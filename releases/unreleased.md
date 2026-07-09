@@ -1,1 +1,14 @@
 # Unreleased
+
+- Fixed PBv7 config imports for existing bots so the editor and save path use exactly the next local/cluster config version instead of the imported version.
+- Added the Balance Calculator sidebar action for archived PBv7 backtest results.
+- Removed the unsafe OHLCV Copy "missing files only" mode so Copy Data always updates changed files without deleting remote files.
+- Added the missing `min` option to Suite Mode aggregate method selectors.
+- Loaded Suite Mode aggregate metric choices from PB7 optimize metadata instead of a PBGui hardcoded subset.
+- Fixed Suite result scenario switching so stale Pareto responses can no longer overwrite the newly selected scenario table.
+- Hid deleted VPS Manager hosts immediately and filtered stale overview state updates during the current browser session.
+- Bounded VPS Manager SSH remote metadata probes so one stuck host can no longer block monitor startup after an API restart.
+- Started VPS Manager host metadata collection immediately after SSH connect so Overview version/update columns populate without waiting for slower snapshot polling.
+- Restored the VPS Manager monitor snapshot into the live store on startup so Overview can show the last known host data immediately after an API restart.
+- Loaded the VPS Manager monitor snapshot during monitor construction so WebSocket clients can receive cached host data before deferred SSH startup finishes.
+- Labeled cached VPS Manager Overview telemetry as `Cached` instead of `Stale` while live SSH metrics are still warming up.
