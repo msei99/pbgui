@@ -6056,7 +6056,7 @@ function collectOptimizeRuntimeOverrides(opts) {
       } else if (Object.prototype.hasOwnProperty.call(fallback, field.key)) {
         result[field.key] = normalizeOptimizeRuntimeOverrideBooleanValue(fallback[field.key], !!field.defaultValue);
       } else {
-        result[field.key] = !!field.defaultValue;
+        result[field.key] = getOptimizeConfigBotHslEnabled(field.side);
       }
       return;
     }

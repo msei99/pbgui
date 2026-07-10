@@ -37,6 +37,9 @@ from api import pb7_bridge
 from pbgui_purefunc import pb7_suite_preflight_errors
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 def build_hsl_preflight_config() -> dict:
     """Build a minimal optimize config for HSL preflight tests."""
     return {
@@ -198,6 +201,17 @@ def test_pb7_preflight_uses_runtime_hsl_enabled_override() -> None:
     errors = pb7_suite_preflight_errors(cfg)
 
     assert "optimize.bounds.long_hsl_red_threshold lower bound must be > 0.0" in errors[0]
+
+
+def test_optimize_editor_missing_hsl_override_falls_back_to_visible_bot_value() -> None:
+    """Saving must not disable HSL when an absent override displays as enabled."""
+    source = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    start = source.index("function collectOptimizeRuntimeOverrides(")
+    end = source.index("function toNullableNumber(", start)
+    collector = source[start:end]
+
+    assert "result[field.key] = getOptimizeConfigBotHslEnabled(field.side);" in collector
+    assert "result[field.key] = !!field.defaultValue;" not in collector
 
 
 def test_pb7_preflight_allows_fixed_zero_bound_with_positive_active_hsl_config() -> None:
