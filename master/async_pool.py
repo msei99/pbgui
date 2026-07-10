@@ -34,6 +34,12 @@ SERVICE = "SSH"
 REMOTE_PBGUI_DIR = "software/pbgui"
 
 
+def known_hosts_files() -> list[str]:
+    """Return existing OpenSSH host-key files; an empty list trusts no hosts."""
+    paths = [Path.home() / ".ssh" / "known_hosts", Path("/etc/ssh/ssh_known_hosts")]
+    return [str(path) for path in paths if path.is_file()]
+
+
 def remote_path_join(base: str | None, *parts: str) -> str:
     """Join a remote base path with path parts without changing absolute paths."""
     base_path = str(base or REMOTE_PBGUI_DIR).strip().rstrip("/") or REMOTE_PBGUI_DIR
@@ -250,7 +256,8 @@ class AsyncSSHPool:
                         host=cfg.ip,
                         port=cfg.ssh_port,
                         username=cfg.user,
-                        known_hosts=None,  # Accept any host key (same as Paramiko AutoAddPolicy)
+                        known_hosts=known_hosts_files(),
+                        host_key_alias=cfg.hostname,
                         keepalive_interval=KEEPALIVE_INTERVAL,
                     ),
                     timeout=CONNECT_TIMEOUT,

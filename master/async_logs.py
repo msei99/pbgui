@@ -15,7 +15,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from master.async_pool import AsyncSSHPool, remote_path_join, remote_shell_path
@@ -39,10 +39,64 @@ SERVICE_LOGS: dict[str, str] = {
     "VPSManagerApi": "data/logs/VPSManagerApi.log",
 }
 
+MAX_REMOTE_LOG_LINES = 50_000
+_REMOTE_LOG_FILE_RE = re.compile(r"^[^/\\\x00]+\.log(?:\.\d+)?$")
+
+
+def normalize_remote_log_lines(value: object, default: int = 200) -> int:
+    """Return a safe line count for remote shell log commands."""
+    raw = default if value is None else value
+    if isinstance(raw, bool):
+        raise ValueError("lines must be an integer")
+    if isinstance(raw, int):
+        lines = raw
+    elif isinstance(raw, str) and raw.strip().isdecimal():
+        lines = int(raw.strip())
+    else:
+        raise ValueError("lines must be an integer")
+    if lines < 0 or lines > MAX_REMOTE_LOG_LINES:
+        raise ValueError(f"lines must be between 0 and {MAX_REMOTE_LOG_LINES}")
+    return lines
+
+
+def _validate_remote_log_instance_name(value: object) -> str:
+    """Return a bot instance name which cannot escape its log directory."""
+    name = str(value or "").strip()
+    if (not name or len(name) > 255 or name in {".", ".."}
+            or "/" in name or "\\" in name or "\x00" in name
+            or any(ord(char) < 32 or ord(char) == 127 for char in name)):
+        raise ValueError("Invalid bot instance name")
+    return name
+
+
+def _validate_remote_log_path(value: object) -> str:
+    """Return a normalized log path restricted to supported remote log roots."""
+    raw = str(value or "").strip()
+    if not raw or raw.startswith(("/", "~")) or "\\" in raw or "\x00" in raw:
+        raise ValueError("Invalid remote log path")
+    raw_parts = raw.split("/")
+    if any(part in {"", ".", ".."} for part in raw_parts):
+        raise ValueError("Invalid remote log path")
+
+    parts = PurePosixPath(raw).parts
+    filename = parts[-1] if parts else ""
+    valid_root = (
+        (len(parts) == 3 and parts[:2] == ("data", "logs"))
+        or (len(parts) == 4 and parts[:2] == ("data", "run_v7")
+            and filename == "passivbot_err.log")
+        or (len(parts) == 3 and parts[:2] == ("pb7", "logs"))
+        or (len(parts) == 4 and parts[:3] == ("software", "pb7", "logs"))
+    )
+    if not valid_root or not _REMOTE_LOG_FILE_RE.fullmatch(filename):
+        raise ValueError("Remote log path is not allowed")
+    if parts[:2] == ("data", "run_v7"):
+        _validate_remote_log_instance_name(parts[2])
+    return "/".join(parts)
+
 
 def _resolve_log_path(service_or_path: str) -> str:
-    """Resolve a service name to a relative log file path, or return as-is."""
-    return SERVICE_LOGS.get(service_or_path, service_or_path)
+    """Resolve a service name to a validated remote log path."""
+    return _validate_remote_log_path(SERVICE_LOGS.get(service_or_path, service_or_path))
 
 
 def _is_home_relative_log_path(log_path: str) -> bool:
@@ -53,11 +107,13 @@ def _is_home_relative_log_path(log_path: str) -> bool:
 
 def resolve_bot_log_path(instance_name: str, pb_version: str) -> str:
     """Resolve a bot instance to its remote log file path (passivbot's own log)."""
-    return f"software/pb7/logs/{instance_name}.log"
+    name = _validate_remote_log_instance_name(instance_name)
+    return _validate_remote_log_path(f"software/pb7/logs/{name}.log")
 
 
 def _bot_log_path_from_pb7dir(pb7dir_value: str | None, instance_name: str) -> str:
     """Return the remote bot log path using cached pb7dir when available."""
+    instance_name = _validate_remote_log_instance_name(instance_name)
     if pb7dir_value:
         return remote_path_join(pb7dir_value, "logs", f"{instance_name}.log")
     return resolve_bot_log_path(instance_name, "7")
@@ -309,6 +365,7 @@ class AsyncLogStreamer:
     async def get_recent_logs(self, hostname: str, service_or_path: str,
                               lines: int = 100) -> Optional[str]:
         """Fetch the last N lines of a remote log file."""
+        lines = normalize_remote_log_lines(lines, default=100)
         log_path = _resolve_log_path(service_or_path)
         result = None
 
@@ -352,6 +409,7 @@ class AsyncLogStreamer:
         manages rotation internally; the stable filename always points to the
         current run.
         """
+        lines = normalize_remote_log_lines(lines, default=100)
         log_path = remote_shell_path(
             _bot_log_path_from_pb7dir(_pb7dir_for_host(self._pool, hostname), instance_name)
         )

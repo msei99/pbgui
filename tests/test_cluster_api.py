@@ -874,7 +874,7 @@ def test_repair_node_cluster_ssh_falls_back_to_node_ssh_metadata(monkeypatch, tm
     assert connect_calls[0]["username"] == "bot"
     assert connect_calls[0]["port"] == 2222
     assert connect_calls[0]["password"] == "secret"
-    assert connect_calls[0]["known_hosts"] is None
+    assert connect_calls[0]["known_hosts"] is not None
     assert any("ensure-local" in command for command in commands)
     assert any("install-authorized-key" in command for command in commands)
 

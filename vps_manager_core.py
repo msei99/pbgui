@@ -25,6 +25,38 @@ PB7VENV = pb7venv()
 TASK_LOG_HISTORY_DEFAULT = 10
 
 
+def _vps_hosts_root() -> Path:
+    """Return the canonical VPS inventory root."""
+    return (Path(PBGDIR) / "data" / "vpsmanager" / "hosts").resolve(strict=False)
+
+
+def _validate_vps_hostname(value) -> str:
+    """Return a hostname which maps to exactly one inventory child directory."""
+    hostname = str(value or "").strip()
+    if (not hostname or len(hostname) > 255 or hostname in {".", ".."}
+            or "/" in hostname or "\\" in hostname or "\x00" in hostname
+            or any(ord(char) < 32 or ord(char) == 127 for char in hostname)):
+        raise ValueError("Hostname contains invalid characters.")
+    root = _vps_hosts_root()
+    candidate = (root / hostname).resolve(strict=False)
+    if candidate.parent != root:
+        raise ValueError("Hostname escapes the VPS inventory directory.")
+    return hostname
+
+
+def _vps_host_path(value) -> Path:
+    """Return the canonical inventory path for a validated VPS hostname."""
+    return (_vps_hosts_root() / _validate_vps_hostname(value)).resolve(strict=False)
+
+
+def _strict_ssh_client() -> paramiko.SSHClient:
+    """Return a Paramiko client which only accepts known SSH host keys."""
+    client = paramiko.SSHClient()
+    client.load_system_host_keys()
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    return client
+
+
 def _ansible_envvars() -> dict[str, str]:
     envvars = dict(os.environ)
     candidate_bins = [
@@ -256,15 +288,15 @@ class VPS:
 
     @hostname.setter
     def hostname(self, new_hostname):
-        self._hostname = new_hostname
-        self.path = Path(f"{PBGDIR}/data/vpsmanager/hosts/{self.hostname}")
+        self._hostname = _validate_vps_hostname(new_hostname)
+        self.path = _vps_host_path(self._hostname)
 
     def _task_log_path(self, task_name: str | None = None, fallback: str = "vps-update") -> Path:
-        base_dir = self.path or Path(f"{PBGDIR}/data/vpsmanager/hosts/{self.hostname}")
+        base_dir = _vps_host_path(self.hostname)
         return _task_run_log_path(base_dir, task_name or self.command, self.command_run_id, fallback)
 
     def _task_log_alias_path(self, task_name: str | None = None, fallback: str = "vps-update") -> Path:
-        base_dir = self.path or Path(f"{PBGDIR}/data/vpsmanager/hosts/{self.hostname}")
+        base_dir = _vps_host_path(self.hostname)
         return _task_log_path(base_dir, task_name or self.command, fallback)
 
     def _rotate_task_log(self, task_name: str | None = None, fallback: str = "vps-update") -> None:
@@ -297,8 +329,7 @@ class VPS:
         with open(file_path, "r", encoding="utf-8") as handle:
             config = json.load(handle)
         if "_hostname" in config:
-            self._hostname = config["_hostname"] or Path(file_path).stem
-            self.path = Path(f"{PBGDIR}/data/vpsmanager/hosts/{self.hostname}")
+            self.hostname = config["_hostname"] or Path(file_path).stem
         if "ip" in config:
             self.ip = config["ip"]
         if "user" in config:
@@ -409,7 +440,7 @@ class VPS:
                     self.user_pw,
                     "ssh-copy-id",
                     "-o",
-                    "StrictHostKeyChecking=no",
+                    "StrictHostKeyChecking=yes",
                     target,
                 ],
                 capture_output=True,
@@ -433,8 +464,7 @@ class VPS:
             _log("VPSManager", "Missing SSH credentials (IP or username).", level="WARNING")
             return False
 
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh = _strict_ssh_client()
 
         try:
             _log("VPSManager", f"Trying SSH connection to {self.user}@{self.ip} with key authentication...", level="INFO")
@@ -508,8 +538,7 @@ class VPS:
 
         try:
             _log("VPSManager", f"Connecting to VPS {self.hostname} ({self.ip})...", level="INFO")
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh = _strict_ssh_client()
             ssh.connect(self.ip, username=self.user, password=self.user_pw, timeout=5)
 
             try:
@@ -588,8 +617,7 @@ class VPS:
             _log("VPSManager", "Missing VPS IP or username.", level="WARNING")
             return False
         try:
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh = _strict_ssh_client()
             ssh.connect(self.ip, username=self.user, password=self.user_pw, timeout=5)
             sftp = ssh.open_sftp()
             try:
@@ -671,8 +699,7 @@ PY"""
             _log("VPSManager", "Missing SSH credentials (IP, username, or sudo password).", level="WARNING")
             return fw_enabled, ""
 
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh = _strict_ssh_client()
         try:
             _log("VPSManager", f"Connecting to {self.user}@{self.ip} to fetch UFW settings...", level="INFO")
             ssh.connect(
@@ -780,8 +807,7 @@ PY"""
         if not all([self.ip, self.user, self.user_pw]):
             return None
 
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh = _strict_ssh_client()
         try:
             ssh.connect(
                 hostname=self.ip,
@@ -933,9 +959,9 @@ PY"""
 
     def save(self):
         if self.hostname:
-            self.path = Path(f"{PBGDIR}/data/vpsmanager/hosts/{self.hostname}")
+            self.path = _vps_host_path(self.hostname)
             self.path.mkdir(parents=True, exist_ok=True)
-            file_path = f"{self.path}/{self.hostname}.json"
+            file_path = self.path / f"{self.hostname}.json"
             # Never persist credentials or bootstrap secrets here. VPS passwords,
             # sudo credentials, and init private-key fields must stay session-only
             # in memory. Re-introducing them into host JSON would recreate the
@@ -966,7 +992,7 @@ PY"""
                 json.dump(config, handle, indent=4)
 
     def delete(self):
-        vps_path = Path(f"{PBGDIR}/data/vpsmanager/hosts/{self.hostname}")
+        vps_path = _vps_host_path(self.hostname)
         shutil.rmtree(vps_path, ignore_errors=True)
 
 
@@ -1039,7 +1065,11 @@ class VPSManager:
         if hosts:
             for host in hosts:
                 vps = VPS()
-                vps.load(host)
+                try:
+                    vps.load(host)
+                except (OSError, ValueError, json.JSONDecodeError) as exc:
+                    _log("VPSManager", f"Skipping invalid VPS inventory file {host}: {exc}", level="WARNING")
+                    continue
                 self.vpss.append(vps)
         if self.vpss:
             self.vpss.sort(key=lambda item: item.hostname)

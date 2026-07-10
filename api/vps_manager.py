@@ -274,6 +274,20 @@ async def ws_vps_manager(websocket: WebSocket):
                         msg.get("form") or {},
                     )
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                elif cmd == "probe_vps_host_key":
+                    data = await asyncio.to_thread(
+                        service.probe_vps_host_key,
+                        str(msg.get("hostname") or ""),
+                    )
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
+                elif cmd == "trust_vps_host_key":
+                    data = await asyncio.to_thread(
+                        service.trust_vps_host_key,
+                        str(msg.get("hostname") or ""),
+                        str(msg.get("expected_fingerprint") or ""),
+                        replace_existing=bool(msg.get("replace_existing")),
+                    )
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "save_vps_logging_config":
                     data = await asyncio.to_thread(service.save_vps_logging_config, msg.get("data") or {})
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
@@ -432,6 +446,7 @@ async def ws_vps_manager(websocket: WebSocket):
                             extra_vars=msg.get("extra_vars") or None,
                             entry_id=str(msg.get("entry_id") or "") or None,
                             accept_unknown_host=bool(msg.get("accept_unknown_host")),
+                            accepted_host_key_fingerprint=str(msg.get("accepted_host_key_fingerprint") or ""),
                         )
                         await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                     except UnknownHostKeyError as exc:
@@ -441,6 +456,8 @@ async def ws_vps_manager(websocket: WebSocket):
                             "hostname": exc.hostname,
                             "ssh_host": exc.ssh_host,
                             "ip": exc.ip,
+                            "key_type": exc.key_type,
+                            "fingerprint": exc.fingerprint,
                             "error": str(exc),
                         })
                 elif cmd == "finalize_vps_deploy_session":

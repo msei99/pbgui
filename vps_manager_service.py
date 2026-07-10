@@ -34,7 +34,7 @@ from PBCoinData import CoinData
 from pb7_release import build_local_pb7_release_info, get_current_pb7_status, load_more_pb7_commits
 from pbgui_release import build_local_pbgui_release_info, load_more_pbgui_commits
 from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, load_ini_section, pb7dir as configured_pb7dir, save_ini, save_ini_section
-from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir, _register_vps_cluster_node, strip_ansi
+from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir, _register_vps_cluster_node, _strict_ssh_client, _validate_vps_hostname, strip_ansi
 
 SERVICE = "VPSManagerApi"
 
@@ -95,13 +95,16 @@ VPS_SYSTEMD_MIGRATION_SERVICES = ("pbcluster", "pbrun", "pbdata", "pbcoindata")
 VPS_SYSTEMD_MIGRATION_UNITS = tuple(f"pbgui-{service}.service" for service in VPS_SYSTEMD_MIGRATION_SERVICES)
 VPS_SYSTEMD_MIGRATION_STATUS_TTL_SECONDS = 90
 _PLAYBOOK_TASK_CACHE: dict[str, tuple[str, ...]] = {}
+_KNOWN_HOSTS_LOCK = threading.Lock()
 
 
 class UnknownHostKeyError(ValueError):
-    def __init__(self, *, hostname: str, ssh_host: str, ip: str) -> None:
+    def __init__(self, *, hostname: str, ssh_host: str, ip: str, key_type: str = "", fingerprint: str = "") -> None:
         self.hostname = str(hostname or "")
         self.ssh_host = str(ssh_host or "")
         self.ip = str(ip or "")
+        self.key_type = str(key_type or "")
+        self.fingerprint = str(fingerprint or "")
         target = self.ssh_host or self.ip or self.hostname
         super().__init__(f"Server '{target}' not found in known_hosts")
 
@@ -168,6 +171,55 @@ def _known_host_key_status(host: str, port: int, key: Any) -> str:
     return "known" if matched else "unknown"
 
 
+def _known_host_key_fingerprints(host: str, port: int, key_type: str) -> list[str]:
+    host_keys = _load_known_hosts()
+    fingerprints: list[str] = []
+    for name in _host_key_names(host, port):
+        entries = host_keys.lookup(name)
+        if not entries:
+            continue
+        known_key = entries.get(key_type)
+        if known_key is None:
+            continue
+        fingerprint = _ssh_fingerprint_sha256(known_key)
+        if fingerprint not in fingerprints:
+            fingerprints.append(fingerprint)
+    return fingerprints
+
+
+def _known_host_key_map(host: str, port: int, host_keys: Any | None = None) -> dict[str, str]:
+    keys = host_keys if host_keys is not None else _load_known_hosts()
+    result: dict[str, str] = {}
+    for name in _host_key_names(host, port):
+        entries = keys.lookup(name)
+        if not entries:
+            continue
+        for key_type, key in entries.items():
+            result[str(key_type)] = _ssh_fingerprint_sha256(key)
+    return result
+
+
+def _known_host_alias_status(hostname: str, ip: str, port: int, host_keys: Any | None = None) -> str:
+    hostname_keys = _known_host_key_map(hostname, port, host_keys)
+    ip_keys = _known_host_key_map(ip, port, host_keys)
+    if not hostname_keys:
+        return "unknown"
+
+    def key_priority(key_type: str) -> tuple[int, str]:
+        if key_type == "ssh-ed25519":
+            return 0, key_type
+        if key_type.startswith("ecdsa-"):
+            return 1, key_type
+        if "rsa" in key_type:
+            return 2, key_type
+        return 3, key_type
+
+    preferred_type = min(hostname_keys, key=key_priority)
+    if preferred_type not in ip_keys:
+        return "unknown"
+    return "known" if hostname_keys[preferred_type] == ip_keys[preferred_type] else "mismatch"
+
+
 def _fetch_remote_host_key(host: str, port: int = 22, timeout: int = 10) -> Any:
     import paramiko
 
@@ -180,37 +232,142 @@ def _fetch_remote_host_key(host: str, port: int = 22, timeout: int = 10) -> Any:
         transport.close()
 
 
-def _remember_known_host_key(host: str, port: int, key: Any) -> None:
-    import paramiko
-
-    names = _host_key_names(host, port)
-    if not names:
-        return
-    ssh_dir = Path.home() / ".ssh"
+def _save_user_known_hosts(host_keys: Any) -> None:
+    path = _user_known_hosts_path()
+    ssh_dir = path.parent
     ssh_dir.mkdir(mode=0o700, exist_ok=True)
     try:
         ssh_dir.chmod(0o700)
     except OSError:
         pass
-    path = _user_known_hosts_path()
-    host_keys = paramiko.HostKeys()
-    if path.exists():
-        host_keys.load(str(path))
-    host_keys.add(names[0], key.get_name(), key)
-    host_keys.save(str(path))
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        host_keys.save(str(temp_path))
+        temp_path.chmod(0o600)
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
     try:
         path.chmod(0o600)
     except OSError:
         pass
 
 
+def _remember_known_host_key(host: str, port: int, key: Any) -> None:
+    import paramiko
+
+    names = _host_key_names(host, port)
+    if not names:
+        return
+    with _KNOWN_HOSTS_LOCK:
+        path = _user_known_hosts_path()
+        host_keys = paramiko.HostKeys()
+        if path.exists():
+            host_keys.load(str(path))
+        host_keys.add(names[0], key.get_name(), key)
+        _save_user_known_hosts(host_keys)
+
+
+def _replace_known_host_keys(hosts: list[str], port: int, key: Any) -> None:
+    import paramiko
+
+    names = list(dict.fromkeys(
+        name
+        for host in hosts
+        for name in _host_key_names(host, port)
+    ))
+    if not names:
+        return
+    key_type = key.get_name()
+    with _KNOWN_HOSTS_LOCK:
+        path = _user_known_hosts_path()
+        host_keys = paramiko.HostKeys()
+        if path.exists():
+            host_keys.load(str(path))
+        for entry in host_keys._entries:
+            entry.hostnames = [
+                pattern
+                for pattern in entry.hostnames
+                if not any(
+                    pattern == name
+                    or (
+                        pattern.startswith("|1|")
+                        and not name.startswith("|1|")
+                        and paramiko.HostKeys.hash_host(name, pattern) == pattern
+                    )
+                    for name in names
+                )
+            ]
+        host_keys._entries = [entry for entry in host_keys._entries if entry.hostnames]
+        for host in hosts:
+            host_names = _host_key_names(host, port)
+            if host_names:
+                host_keys.add(host_names[0], key_type, key)
+        _save_user_known_hosts(host_keys)
+
+
+def _probe_host_key(host: str, port: int, aliases: list[str]) -> dict[str, Any]:
+    remote_key = _fetch_remote_host_key(host, port, timeout=8)
+    fingerprint = _ssh_fingerprint_sha256(remote_key)
+    targets = list(dict.fromkeys(str(item or "").strip() for item in [host, *aliases] if str(item or "").strip()))
+    statuses = {target: _known_host_key_status(target, port, remote_key) for target in targets}
+    stored_fingerprints = {
+        target: _known_host_key_fingerprints(target, port, remote_key.get_name())
+        for target in targets
+    }
+    if any(status == "mismatch" for status in statuses.values()):
+        status = "mismatch"
+    elif all(status == "known" for status in statuses.values()):
+        status = "known"
+    else:
+        status = "unknown"
+    return {
+        "host": host,
+        "port": int(port),
+        "key_type": remote_key.get_name(),
+        "fingerprint": fingerprint,
+        "status": status,
+        "known": status == "known",
+        "needs_confirmation": status != "known",
+        "target_statuses": statuses,
+        "stored_fingerprints": stored_fingerprints,
+        "_key": remote_key,
+    }
+
+
+def _probe_and_maybe_trust_host_key(
+    host: str,
+    port: int,
+    aliases: list[str],
+    *,
+    accept_unknown_host: bool = False,
+    expected_fingerprint: str = "",
+) -> dict[str, Any]:
+    """Probe one host key and trust it only after exact fingerprint confirmation."""
+    probe = _probe_host_key(host, port, aliases)
+    remote_key = probe.pop("_key")
+    fingerprint = str(probe.get("fingerprint") or "")
+    statuses = probe.get("target_statuses") or {}
+    if probe.get("status") == "mismatch":
+        raise ValueError("SSH host key mismatch. Fix known_hosts intentionally before connecting.")
+
+    known = any(status == "known" for status in statuses.values())
+    if not known and (
+        not accept_unknown_host
+        or not _ssh_fingerprints_match(expected_fingerprint, fingerprint)
+    ):
+        probe.update({"status": "unknown", "known": False, "needs_confirmation": True})
+        return probe
+
+    for target, status in statuses.items():
+        if status != "known":
+            _remember_known_host_key(target, port, remote_key)
+    probe.update({"status": "known", "known": True, "needs_confirmation": False})
+    return probe
+
+
 def _validate_import_hostname(value: Any) -> str:
-    hostname = str(value or "").strip()
-    if not hostname:
-        raise ValueError("Hostname is required.")
-    if hostname in {".", ".."} or any(ch in hostname for ch in ("/", "\\", "\x00")):
-        raise ValueError("Hostname contains invalid characters.")
-    return hostname
+    return _validate_vps_hostname(value)
 
 
 def _hosts_entry_lookup(hostname: str) -> dict[str, Any]:
@@ -2071,6 +2228,58 @@ class VPSManagerService:
         except Exception as exc:
             _log(SERVICE, f"monitor reconnect failed for {host}: {exc}", level="WARNING")
 
+    def probe_vps_host_key(self, hostname: str) -> dict[str, Any]:
+        """Read the current SSH host key for GUI review without trusting it."""
+        vps = self._require_vps(hostname)
+        host = str(getattr(vps, "ip", "") or hostname).strip()
+        port = _safe_int(getattr(vps, "firewall_ssh_port", 22), 22) or 22
+        probe = _probe_host_key(host, port, [hostname])
+        probe.pop("_key", None)
+        probe.update({"hostname": hostname, "ip": str(getattr(vps, "ip", "") or "")})
+        return probe
+
+    def trust_vps_host_key(
+        self,
+        hostname: str,
+        expected_fingerprint: str,
+        *,
+        replace_existing: bool = False,
+    ) -> dict[str, Any]:
+        """Trust an exactly confirmed VPS key and reconnect its monitor."""
+        vps = self._require_vps(hostname)
+        host = str(getattr(vps, "ip", "") or hostname).strip()
+        port = _safe_int(getattr(vps, "firewall_ssh_port", 22), 22) or 22
+        probe = _probe_host_key(host, port, [hostname])
+        remote_key = probe.pop("_key")
+        fingerprint = str(probe.get("fingerprint") or "")
+        if not _ssh_fingerprints_match(expected_fingerprint, fingerprint):
+            raise ValueError("SSH host key changed while the confirmation dialog was open. Review it again.")
+
+        status = str(probe.get("status") or "unknown")
+        targets = list(dict.fromkeys(item for item in (hostname, str(getattr(vps, "ip", "") or "")) if item))
+        if status == "mismatch":
+            if not replace_existing:
+                raise ValueError("Replacing a changed SSH host key requires explicit confirmation.")
+            _replace_known_host_keys(targets, port, remote_key)
+        elif status == "unknown":
+            for target in targets:
+                if (probe.get("target_statuses") or {}).get(target) != "known":
+                    _remember_known_host_key(target, port, remote_key)
+
+        verified = _probe_host_key(host, port, [hostname])
+        verified.pop("_key", None)
+        if verified.get("status") != "known":
+            raise ValueError("The SSH host key could not be updated because another known_hosts entry still conflicts.")
+
+        _log(SERVICE, f"trusted SSH host key for {hostname}: {fingerprint}", level="WARNING")
+        self._refresh_vps_monitor_connection(hostname)
+        verified.update({
+            "hostname": hostname,
+            "ip": str(getattr(vps, "ip", "") or ""),
+            "reconnect_requested": True,
+        })
+        return verified
+
     def _local_v7_dynamic_ignore_enabled_on(self, name: str, hostname: str) -> bool:
         safe_name = str(name or "").strip()
         host = str(hostname or "").strip()
@@ -2493,6 +2702,7 @@ class VPSManagerService:
     def _build_overview_rows(self, monitor_state: dict[str, Any]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = [self._build_master_overview_row()]
         managed_hostnames: set[str] = set()
+        known_host_keys = _load_known_hosts()
         for vps in sorted(self.vpsmanager.vpss, key=lambda item: item.hostname or ""):
             hostname = str(vps.hostname or "")
             if not hostname:
@@ -2500,7 +2710,7 @@ class VPSManagerService:
             managed_hostnames.add(hostname)
             host_state = self._get_host_telemetry(monitor_state, hostname)
             self._sync_vps_config_from_host_meta(vps, host_state)
-            rows.append(self._build_vps_overview_row(hostname, host_state))
+            rows.append(self._build_vps_overview_row(hostname, host_state, known_host_keys=known_host_keys))
         return rows
 
     def _build_master_overview_row(self) -> dict[str, Any]:
@@ -2520,6 +2730,7 @@ class VPSManagerService:
             "hostname": master_name,
             "nav": "master",
             "online": True,
+            "ssh_host_key_status": "local",
             "role": "master",
             "role_icon": "🧠",
             "start": datetime.fromtimestamp(boot_ts).strftime("%Y-%m-%d %H:%M:%S"),
@@ -2537,7 +2748,9 @@ class VPSManagerService:
 
     def _build_vps_overview_row(self,
                                 hostname: str,
-                                host_state: dict[str, Any]) -> dict[str, Any]:
+                                host_state: dict[str, Any],
+                                *,
+                                known_host_keys: Any | None = None) -> dict[str, Any]:
         vps = self.vpsmanager.find_vps_by_hostname(hostname)
         task_progress = _parse_ansible_task_progress(
             hostname,
@@ -2551,6 +2764,21 @@ class VPSManagerService:
         stream = (host_state or {}).get("stream") or {}
         telemetry_cached = bool(stream.get("cached")) and not telemetry_fresh
         online = ssh_online and telemetry_fresh
+        connection_error = str((((host_state or {}).get("connection") or {}).get("last_error")) or "")
+        if "host key" in connection_error.lower() and any(
+            marker in connection_error.lower()
+            for marker in ("not trusted", "mismatch", "does not match", "verification")
+        ):
+            ssh_host_key_status = "error"
+        elif vps:
+            ssh_host_key_status = _known_host_alias_status(
+                hostname,
+                str(getattr(vps, "ip", "") or ""),
+                _safe_int(getattr(vps, "firewall_ssh_port", 22), 22) or 22,
+                known_host_keys,
+            )
+        else:
+            ssh_host_key_status = "unknown"
         meta = self._host_meta(host_state)
         role = str(meta.get("role") or "slave")
         if role == "master":
@@ -2575,6 +2803,7 @@ class VPSManagerService:
             "nav": "vps",
             "online": online,
             "ssh_online": ssh_online,
+            "ssh_host_key_status": ssh_host_key_status,
             "telemetry_fresh": telemetry_fresh,
             "telemetry_stale": ssh_online and not telemetry_fresh and not telemetry_cached,
             "telemetry_cached": telemetry_cached,
@@ -2732,6 +2961,12 @@ class VPSManagerService:
         telemetry_age = self._host_telemetry_age(host_state)
         host_meta = self._host_meta(host_state)
         stream = (host_state or {}).get("stream") or {}
+        connection = (host_state or {}).get("connection") or {}
+        ssh_connection_error = str(connection.get("last_error") or "")
+        host_key_error = "host key" in ssh_connection_error.lower() and any(
+            marker in ssh_connection_error.lower()
+            for marker in ("not trusted", "mismatch", "does not match", "verification")
+        )
         monitor_agent = stream.get("monitor_agent") if isinstance(stream, dict) else None
         if not isinstance(monitor_agent, dict):
             monitor_agent = {
@@ -2762,6 +2997,9 @@ class VPSManagerService:
             "cmc_credits": host_meta.get("cmc_credits"),
             "online": ssh_online and telemetry_fresh,
             "ssh_online": ssh_online,
+            "ssh_connection_status": str(connection.get("status") or ""),
+            "ssh_connection_error": ssh_connection_error,
+            "host_key_error": host_key_error,
             "telemetry_fresh": telemetry_fresh,
             "telemetry_stale": ssh_online and not telemetry_fresh,
             "telemetry_age": round(telemetry_age, 1) if telemetry_age is not None else None,
@@ -3933,6 +4171,7 @@ class VPSManagerService:
         *,
         timeout: int = 10,
         accept_unknown_host: bool = False,
+        accepted_host_key_fingerprint: str = "",
     ) -> None:
         password_value = str(password or "")
         if not password_value:
@@ -3941,18 +4180,34 @@ class VPSManagerService:
         if not str(vps.ip or "").strip() or not str(vps.user or "").strip():
             raise ValueError(f"Cannot validate {hostname}: missing SSH host or username.")
         ssh_host = str(getattr(vps, "hostname", "") or "").strip() or str(vps.ip or "").strip()
+        ssh_port = _safe_int(getattr(vps, "firewall_ssh_port", 22), 22) or 22
         use_private_key = bool(
             str(getattr(vps, "init_methode", "") or "").strip() == "private_key"
             and str(getattr(vps, "private_key_file", "") or "").strip()
         )
         import paramiko
 
-        ssh = paramiko.SSHClient()
-        ssh.load_system_host_keys()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy() if accept_unknown_host else paramiko.RejectPolicy())
+        host_key = _probe_and_maybe_trust_host_key(
+            ssh_host,
+            ssh_port,
+            [str(vps.ip or "")],
+            accept_unknown_host=accept_unknown_host,
+            expected_fingerprint=accepted_host_key_fingerprint,
+        )
+        if host_key.get("needs_confirmation"):
+            raise UnknownHostKeyError(
+                hostname=hostname,
+                ssh_host=ssh_host,
+                ip=str(vps.ip or ""),
+                key_type=str(host_key.get("key_type") or ""),
+                fingerprint=str(host_key.get("fingerprint") or ""),
+            )
+
+        ssh = _strict_ssh_client()
         try:
             connect_kwargs = {
                 "hostname": ssh_host,
+                "port": ssh_port,
                 "username": vps.user,
                 "timeout": timeout,
                 "banner_timeout": timeout,
@@ -3990,8 +4245,6 @@ class VPSManagerService:
                 raise ValueError(f"Cannot connect to {hostname} via SSH with the configured private key.")
             raise ValueError(f"Cannot connect to {hostname} via SSH with the supplied password.")
         except paramiko.SSHException as exc:
-            if not accept_unknown_host and "not found in known_hosts" in str(exc):
-                raise UnknownHostKeyError(hostname=hostname, ssh_host=ssh_host, ip=str(vps.ip or "")) from exc
             raise ValueError(f"Failed to validate sudo password on {hostname}: {exc}") from exc
         except ValueError:
             raise
@@ -4218,6 +4471,7 @@ class VPSManagerService:
         extra_vars: dict[str, Any] | None = None,
         entry_id: str | None = None,
         accept_unknown_host: bool = False,
+        accepted_host_key_fingerprint: str = "",
     ) -> dict[str, Any]:
         normalized_command = _normalize_vps_deploy_command(command)
         normalized_mode = _normalize_vps_deploy_mode(mode)
@@ -4235,7 +4489,12 @@ class VPSManagerService:
         if not _vps_deploy_requires_user_password(normalized_command):
             raise ValueError("Password validation staging is only supported for commands that require VPS sudo access.")
 
-        self._validate_vps_user_password(clean_hostname, password, accept_unknown_host=accept_unknown_host)
+        self._validate_vps_user_password(
+            clean_hostname,
+            password,
+            accept_unknown_host=accept_unknown_host,
+            accepted_host_key_fingerprint=accepted_host_key_fingerprint,
+        )
         self._store_session_secrets(token, clean_hostname, {"user_pw": str(password or "")})
 
         deploy_settings = self.get_vps_deploy_settings()
@@ -4587,6 +4846,7 @@ class VPSManagerService:
         }
 
     def delete_vps(self, hostname: str) -> None:
+        hostname = _validate_import_hostname(hostname)
         vps = self._require_vps(hostname)
         vps.delete()
         self.vpsmanager.vpss = [item for item in self.vpsmanager.vpss if item.hostname != hostname]
@@ -4633,8 +4893,7 @@ class VPSManagerService:
         pbgui_dir = f"{install_dir.rstrip('/')}/pbgui"
         python_bin = f"{install_dir.rstrip('/')}/venv_pbgui/bin/python"
 
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh = _strict_ssh_client()
         try:
             try:
                 ssh.connect(
@@ -4946,9 +5205,7 @@ printf 'SECTION\tprocesses\tEND\n'
         return self._build_vps_config(token, vps)
 
     def prepare_import(self, hostname: Any) -> dict[str, Any]:
-        hostname = str(hostname or "").strip()
-        if not hostname:
-            raise ValueError("Hostname is required.")
+        hostname = _validate_import_hostname(hostname)
         if hostname in self.vpsmanager.list():
             raise ValueError("Hostname already exists.")
         temp = VPS()
@@ -5032,7 +5289,7 @@ printf 'SECTION\tprocesses\tEND\n'
             if host_key_status == "mismatch":
                 return False, "SSH host key mismatch. Fix known_hosts intentionally before importing."
             if host_key_status != "known":
-                _remember_known_host_key(ssh_host, 22, remote_key)
+                return False, "SSH host key fingerprint confirmation is required before importing."
         except Exception as exc:
             return False, f"Cannot verify SSH host key for {ssh_host}: {exc}"
 
@@ -5782,9 +6039,7 @@ done"""
         return {"filename": filename, "size_kb": int(size_kb), "content": content}
 
     def _hydrate_vps_from_form(self, token: str, form: dict[str, Any], *, allow_create: bool) -> tuple[VPS, bool]:
-        hostname = str(form.get("hostname") or "").strip()
-        if not hostname:
-            raise ValueError("Hostname is required.")
+        hostname = _validate_import_hostname(form.get("hostname"))
         vps = self.vpsmanager.find_vps_by_hostname(hostname)
         is_new = vps is None
         if is_new:
@@ -5800,7 +6055,7 @@ done"""
         ip = str(form.get("ip") or "").strip()
         if ip and not _valid_ipv4(ip):
             raise ValueError("IP address is not valid.")
-        hostname = str(form.get("hostname") or vps.hostname or "").strip()
+        hostname = _validate_import_hostname(form.get("hostname") or vps.hostname)
         if hostname == master_name:
             raise ValueError("Hostname is equal to master, use another hostname.")
         if is_new and hostname in self.vpsmanager.list():
@@ -6040,7 +6295,7 @@ done"""
         hostname = str(form.get("hostname") or "").strip()
         init_method = str(form.get("init_methode") or "root")
 
-        result = {"hostname": hostname, "hosts_ok": False, "hosts_has_hostname": False, "hosts_current_ip": "", "ssh_ok": False, "ssh_error": ""}
+        result = {"hostname": hostname, "hosts_ok": False, "hosts_has_hostname": False, "hosts_current_ip": "", "ssh_ok": False, "ssh_error": "", "host_key": {}}
 
         if not hostname:
             result["ssh_error"] = "Hostname required"
@@ -6092,10 +6347,26 @@ done"""
             result["ssh_error"] = "SSH password not entered"
             return result
 
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh_port = 22
         try:
-            kwargs = {"hostname": ip, "username": ssh_user, "timeout": 8, "banner_timeout": 8, "auth_timeout": 8}
+            host_key = _probe_and_maybe_trust_host_key(
+                ip,
+                ssh_port,
+                [hostname],
+                accept_unknown_host=bool(form.get("accept_unknown_host")),
+                expected_fingerprint=str(form.get("accepted_host_key_fingerprint") or ""),
+            )
+            result["host_key"] = host_key
+            if host_key.get("needs_confirmation"):
+                result["ssh_error"] = "SSH host key fingerprint confirmation required"
+                return result
+        except (OSError, ValueError, paramiko.SSHException) as exc:
+            result["ssh_error"] = str(exc) or "SSH host key verification failed"
+            return result
+
+        ssh = _strict_ssh_client()
+        try:
+            kwargs = {"hostname": ip, "port": ssh_port, "username": ssh_user, "timeout": 8, "banner_timeout": 8, "auth_timeout": 8}
             if init_method == "private_key":
                 kwargs["key_filename"] = ssh_key
             else:

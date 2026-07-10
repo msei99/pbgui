@@ -29,7 +29,8 @@ from logging_helpers import human_log as _log
 from master.async_monitor import VPSMonitor
 from master.async_logs import (
     AsyncLogStreamer, LocalLogSub, resolve_bot_log_path,
-    local_logs_dir, tail_file, resolve_local_log_path,
+    local_logs_dir, normalize_remote_log_lines, tail_file,
+    resolve_local_log_path,
 )
 
 SERVICE = "VPSMonitor"
@@ -674,20 +675,26 @@ async def _local_kill_instance(name: str, pb_version: str) -> dict:
 async def _cmd_get_logs(request: dict) -> dict:
     host = request.get("host", "")
     service = request.get("service", "")
-    lines_n = request.get("lines", 200)
     sid = request.get("sid")
     if not host or not service or not _streamer:
         return {"type": "error", "error": "host and service required"}
+    try:
+        lines_n = normalize_remote_log_lines(request.get("lines"), default=200)
+    except ValueError as exc:
+        return {"type": "error", "error": str(exc)}
 
-    if service.startswith("Bot:"):
-        parts = service[4:].strip().split(":")
-        bot_name = parts[0]
-        pb_version = parts[1] if len(parts) > 1 else None
-        content = await _streamer.get_bot_log(
-            host, bot_name, lines_n, pb_version
-        )
-    else:
-        content = await _streamer.get_recent_logs(host, service, lines_n)
+    try:
+        if service.startswith("Bot:"):
+            parts = service[4:].strip().split(":")
+            bot_name = parts[0]
+            pb_version = parts[1] if len(parts) > 1 else None
+            content = await _streamer.get_bot_log(
+                host, bot_name, lines_n, pb_version
+            )
+        else:
+            content = await _streamer.get_recent_logs(host, service, lines_n)
+    except ValueError as exc:
+        return {"type": "error", "error": str(exc)}
 
     resp: dict = {
         "type": "logs", "host": host, "service": service,
@@ -703,7 +710,10 @@ async def _cmd_get_log_info(request: dict) -> dict:
     service = request.get("service", "")
     if not host or not service or not _streamer:
         return {"type": "error", "error": "host and service required"}
-    info = await _streamer.get_log_info(host, service)
+    try:
+        info = await _streamer.get_log_info(host, service)
+    except ValueError as exc:
+        return {"type": "error", "error": str(exc)}
     return {
         "type": "log_info", "host": host, "service": service,
         "size": info["size"] if info else None,
@@ -720,18 +730,27 @@ async def _cmd_subscribe_logs(ws: WebSocket,
         await ws.send_json({"type": "error",
                             "error": "host and service required"})
         return None, None
+    try:
+        lines_n = normalize_remote_log_lines(request.get("lines"), default=200)
+    except ValueError as exc:
+        await ws.send_json({"type": "error", "error": str(exc)})
+        return None, None
 
-    # Resolve bot log path if needed
-    resolved_service = service
-    if service.startswith("Bot:"):
-        parts = service[4:].strip().split(":")
-        bot_name = parts[0]
-        pb_version = parts[1] if len(parts) > 1 else None
-        resolved_service = resolve_bot_log_path(
-            bot_name, pb_version or "7"
-        )
+    try:
+        # Resolve bot log path if needed
+        resolved_service = service
+        if service.startswith("Bot:"):
+            parts = service[4:].strip().split(":")
+            bot_name = parts[0]
+            pb_version = parts[1] if len(parts) > 1 else None
+            resolved_service = resolve_bot_log_path(
+                bot_name, pb_version or "7"
+            )
 
-    stream_id = await _streamer.start_stream(host, resolved_service)
+        stream_id = await _streamer.start_stream(host, resolved_service)
+    except ValueError as exc:
+        await ws.send_json({"type": "error", "error": str(exc)})
+        return None, None
     if not stream_id:
         await ws.send_json({
             "type": "error",
@@ -740,7 +759,6 @@ async def _cmd_subscribe_logs(ws: WebSocket,
         return None, None
 
     # Send initial chunk
-    lines_n = int(request.get("lines", 200))
     start_at_end = bool(request.get("start_at_end"))
     if service.startswith("Bot:"):
         if start_at_end:

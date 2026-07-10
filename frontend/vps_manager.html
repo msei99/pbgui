@@ -607,6 +607,22 @@
       line-height: 1.45;
     }
 
+    .ssh-host-key-targets {
+      display: grid;
+      gap: 12px;
+    }
+
+    .ssh-host-key-target {
+      min-width: 0;
+    }
+
+    .ssh-host-key-fingerprint {
+      min-width: 0;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-all;
+    }
+
     .dot {
       width: 10px;
       height: 10px;
@@ -3062,6 +3078,7 @@
       { key: 'name', label: 'Name', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).name || ''); } },
       { key: 'role', label: 'Role', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).role || ''); } },
       { key: 'online', label: 'Online', defaultVisible: true, sortable: true, getValue: function (row) { return !!((row || {}).online); } },
+      { key: 'ssh_key', label: 'SSH Key', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).ssh_host_key_status || 'unknown'); } },
       { key: 'running_bots', label: 'Bots', defaultVisible: true, sortable: true, getValue: function (row) { return Number((row || {}).running_bots); } },
       { key: 'start', label: 'Started', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).start || ''); } },
       { key: 'updates', label: 'Updates', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).updates || ''); } },
@@ -4035,7 +4052,9 @@
           pbgui_up: !!st.pbgui_update_available,
           pb7_up: !!st.pb7_update_available,
           pending_updates: st.pending_updates == null ? String(((st.summary_row || {}).updates) || '') : String(st.pending_updates),
-          reboot_required: !!((st.summary_row || {}).reboot_required)
+          reboot_required: !!((st.summary_row || {}).reboot_required),
+          host_key_error: !!st.host_key_error,
+          ssh_host_key_status: String(((st.summary_row || {}).ssh_host_key_status) || '')
         });
       }
       if (isMasterContextView()) {
@@ -4556,6 +4575,78 @@
           <div class='status-item' data-field='last-update'><div class='status-label'>Last update</div><div class='status-value'>${esc(status.last_update || '-')}</div></div>
           <div class='status-item' data-field='last-command'><div class='status-label'>Last command</div><div class='status-value code'>${esc(status.last_command || '-')}</div></div>
         </div>`;
+    }
+
+    function renderSshHostKeyNotice(status) {
+      if (!(status || {}).host_key_error) return '';
+      return `
+        <div class='notice error'>
+          <strong>SSH host key verification failed.</strong>
+          <div style='margin-top:6px'>${esc(status.ssh_connection_error || 'The stored SSH host key does not match the server.')}</div>
+          <div style='margin-top:6px'>Use <strong>Review SSH Host Key</strong> in the sidebar to inspect and repair it.</div>
+        </div>`;
+    }
+
+    function reviewVpsSshHostKey(hostname) {
+      const host = String(hostname || '').trim();
+      if (!host) return;
+      openAlertModal('Review SSH Host Key', 'Reading the current SSH host key from ' + host + '...', 'info');
+      send({ cmd: 'probe_vps_host_key', hostname: host });
+    }
+
+    function openSshHostKeyReviewModal(data) {
+      const payload = data || {};
+      const hostname = String(payload.hostname || store.hostname || '');
+      const fingerprint = String(payload.fingerprint || '');
+      const status = String(payload.status || 'unknown');
+      const targetStatuses = payload.target_statuses || {};
+      const storedFingerprints = payload.stored_fingerprints || {};
+      const targets = Object.keys(targetStatuses);
+      const statusTone = status === 'known' ? 'ok' : (status === 'mismatch' ? 'error' : 'warning');
+      const statusLabel = status === 'known' ? 'Trusted' : (status === 'mismatch' ? 'Changed' : 'Unknown');
+      const rows = targets.map(function (target) {
+        const targetStatus = String(targetStatuses[target] || 'unknown');
+        const known = Array.isArray(storedFingerprints[target]) ? storedFingerprints[target] : [];
+        const tone = targetStatus === 'known' ? 'ok' : (targetStatus === 'mismatch' ? 'error' : 'warning');
+        return `<div class='status-item ssh-host-key-target'><div class='status-label'>${esc(target)}</div><div class='status-value'><span class='tag ${tone}'>${esc(targetStatus)}</span></div><div class='status-sub code ssh-host-key-fingerprint'>${known.length ? esc(known.join(', ')) : 'No stored fingerprint'}</div></div>`;
+      }).join('');
+      const warning = status === 'mismatch'
+        ? `<div class='notice error'><strong>The server key changed.</strong><br>Only replace it if you have verified this fingerprint through a trusted channel. Replacing it removes the conflicting user known_hosts entries for this VPS.</div>`
+        : (status === 'unknown'
+          ? `<div class='notice warning'>This key is not fully stored for the VPS hostname and IP. Verify the fingerprint before trusting it.</div>`
+          : `<div class='notice ok'>The presented key matches the stored entries. You can reconnect the monitor without changing known_hosts.</div>`);
+
+      resetAlertModalWindow();
+      document.getElementById('alertModalTitle').textContent = 'Review SSH Host Key';
+      const box = document.getElementById('alertModalBody');
+      box.className = 'notice';
+      box.innerHTML = `
+        <div class='stack'>
+          <div class='status-grid'>
+            <div class='status-item'><div class='status-label'>VPS</div><div class='status-value'>${esc(hostname)}</div><div class='status-sub'>${esc(payload.host || payload.ip || '')}:${esc(payload.port || 22)}</div></div>
+            <div class='status-item'><div class='status-label'>Presented key</div><div class='status-value'><span class='tag ${statusTone}'>${esc(statusLabel)}</span></div><div class='status-sub'>${esc(payload.key_type || 'SSH key')}</div></div>
+          </div>
+          <div class='notice info'><strong>Current SHA-256 fingerprint</strong><div class='code' style='margin-top:6px;word-break:break-all'>${esc(fingerprint)}</div></div>
+          ${warning}
+          ${rows ? `<div class='ssh-host-key-targets'>${rows}</div>` : ''}
+        </div>`;
+      const actionLabel = status === 'mismatch' ? 'Replace Key & Reconnect' : (status === 'unknown' ? 'Trust Key & Reconnect' : 'Reconnect');
+      const actionClass = status === 'mismatch' ? 'btn danger' : 'btn primary';
+      document.getElementById('alertModalBtnRow').innerHTML = `<button class='btn ghost' type='button' onclick='closeAlertModal()'>Cancel</button> <button class='${actionClass}' type='button' id='ssh-host-key-confirm'>${esc(actionLabel)}</button>`;
+      document.getElementById('alertModalOverlay').classList.add('visible');
+      const confirm = document.getElementById('ssh-host-key-confirm');
+      if (confirm) {
+        confirm.onclick = function () {
+          confirm.disabled = true;
+          confirm.textContent = 'Applying...';
+          send({
+            cmd: 'trust_vps_host_key',
+            hostname: hostname,
+            expected_fingerprint: fingerprint,
+            replace_existing: status === 'mismatch'
+          });
+        };
+      }
     }
 
     function markVpsFieldDirtyState(ui, name, value) {
@@ -6919,6 +7010,10 @@
           }
           renderUi({ forceView: true });
         }
+        if (msg.cmd === 'probe_vps_host_key' || msg.cmd === 'trust_vps_host_key') {
+          openAlertModal('SSH Host Key Error', String(msg.error || 'SSH host key operation failed.'), 'error');
+          return;
+        }
         toast(msg.error || 'Unknown error', 'error');
         return;
       }
@@ -6942,7 +7037,7 @@
         setPasswordPromptBusy(false, 'Validate and Start');
         openConfirmModal(
           'Unknown SSH Host Key',
-          'The SSH host key for ' + String(msg.ssh_host || msg.hostname || '') + (String(msg.ip || '').trim() ? ' (' + String(msg.ip || '') + ')' : '') + ' is not in known_hosts yet. Add it and continue with Update Linux?',
+          'Trust ' + String(msg.key_type || 'SSH key') + ' ' + String(msg.fingerprint || '') + ' for ' + String(msg.ssh_host || msg.hostname || '') + (String(msg.ip || '').trim() ? ' (' + String(msg.ip || '') + ')' : '') + ' and continue with Update Linux?',
           function () {
             flow.accept_unknown_host = true;
             flow.validating = true;
@@ -6956,7 +7051,8 @@
               debug: !!flow.debug,
               extra_vars: flow.extra_vars || null,
               entry_id: String(flow.entry_id || ''),
-              accept_unknown_host: true
+              accept_unknown_host: true,
+              accepted_host_key_fingerprint: String(msg.fingerprint || '')
             });
           }
         );
@@ -7043,6 +7139,24 @@
           sshError: String(data.ssh_error || ''),
           loading: false
         };
+        const hostKey = data.host_key || {};
+        const fingerprint = String(hostKey.fingerprint || '').trim();
+        const hostKeyTarget = String(hostKey.host || expectedHostname || '');
+        const hostKeyPromptToken = hostKeyTarget + '|' + fingerprint;
+        if (hostKey.needs_confirmation && fingerprint && store.addHostKeyPromptToken !== hostKeyPromptToken) {
+          store.addHostKeyPromptToken = hostKeyPromptToken;
+          openConfirmModal(
+            'Unknown SSH Host Key',
+            'Trust ' + String(hostKey.key_type || 'SSH key') + ' ' + fingerprint + ' for ' + hostKeyTarget + '?',
+            function () {
+              store.addForm.accept_unknown_host = true;
+              store.addForm.accepted_host_key_fingerprint = fingerprint;
+              send({ cmd: 'check_vps_ready', form: Object.assign({}, store.addForm) });
+            }
+          );
+        } else if (hostKey.known) {
+          store.addHostKeyPromptToken = '';
+        }
         if (store.view === 'add') {
           setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
           setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
@@ -7125,6 +7239,15 @@
       let shouldForceRefresh = false;
       if (cmd === 'prepare_import') {
         applyPreparedImport(msg.data || {});
+        return;
+      } else if (cmd === 'probe_vps_host_key') {
+        openSshHostKeyReviewModal(msg.data || {});
+        return;
+      } else if (cmd === 'trust_vps_host_key') {
+        closeAlertModal();
+        toast('SSH host key saved. Monitor reconnect requested.', 'success');
+        if (store.hostname) scheduleVpsDetailFetch(store.hostname);
+        send({ cmd: 'refresh' });
         return;
       } else if (cmd === 'save_vps') {
         toast('VPS saved.', 'success');
@@ -9338,6 +9461,14 @@
         }
         if (column.key === 'role') return `${esc(row.role_icon || '')} ${esc(row.role || '')}`;
         if (column.key === 'online') return row.online ? levelTag('ok', 'Online') : (row.telemetry_cached ? levelTag('warning', 'Cached') : levelTag('error', row.telemetry_stale ? 'Stale' : 'Offline'));
+        if (column.key === 'ssh_key') {
+          const keyStatus = String(row.ssh_host_key_status || 'unknown');
+          if (keyStatus === 'local') return levelTag('ok', 'Local');
+          if (keyStatus === 'known') return levelTag('ok', 'Trusted');
+          if (keyStatus === 'mismatch') return levelTag('error', 'Changed');
+          if (keyStatus === 'error') return levelTag('error', 'Failed');
+          return levelTag('warning', 'Unknown');
+        }
         if (column.key === 'running_bots') return esc(row.running_bots == null ? '-' : String(row.running_bots));
         if (column.key === 'start') return esc(row.start || '-');
         if (column.key === 'updates') return `${esc(row.updates || '-')} ${row.reboot_required ? levelTag('warning', 'Reboot') : ''}`;
@@ -9911,6 +10042,8 @@
         const linuxUpdateBtnClass = hasLinuxUpdates ? 'sb-btn warning' : 'sb-btn ok';
         const needsReboot = !!(st.summary_row || {}).reboot_required;
         const rebootBtnClass = needsReboot ? 'sb-btn warning' : 'sb-btn ok';
+        const hostKeyStatus = String(((st.summary_row || {}).ssh_host_key_status) || 'unknown');
+        const hostKeyBtnClass = st.host_key_error || (hostKeyStatus !== 'known' && hostKeyStatus !== 'local') ? 'sb-btn warning' : 'sb-btn';
         const systemdMigrationBtn = getVpsSystemdMigrationButtonModel(selectedHost, detail, ui);
         const clusterNode = (st.cluster_node || {});
         const clusterNodeAction = String(clusterNode.action || '');
@@ -9929,6 +10062,7 @@
           ${store.view !== 'vps' ? `<button class='sb-btn' type='button' onclick='selectView("vps", ${js(selectedHost)})'>Back</button>` : ''}
           <button class='sb-btn' type='button' onclick='openVpsTaskLogs(${js(selectedHost)})'>Task Logs</button>
           <button class='sb-btn' type='button' onclick='openVpsHostLogs(${js(selectedHost)})'>Host Logs</button>
+          <button class='${hostKeyBtnClass}' type='button' onclick='reviewVpsSshHostKey(${js(selectedHost)})'>Review SSH Host Key</button>
           ${isRemoteMaster ? `<button class='sb-btn' type='button' onclick='selectView("vps-ufw", ${js(selectedHost)})'>Change UFW</button>` : ''}
           ${!isRemoteMaster ? `<button class='sb-btn' type='button' onclick='selectView("vps-setup", ${js(selectedHost)})'>Change VPS</button>` : ''}
           <button class='sb-btn' type='button' onclick='selectView("vps-pbgui-branch", ${js(selectedHost)})'>PBGui Branch</button>
@@ -11578,6 +11712,7 @@
 
         <div class='view-stack'>
           <div id='vps-reboot-banner'>${renderRebootBanner(status)}</div>
+          ${renderSshHostKeyNotice(status)}
           <div id='vps-system-header'>${renderSystemHeader(status, summary, false, vpsRtd)}</div>
         </div>
         <div class='panel'>

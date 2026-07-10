@@ -30,7 +30,7 @@ from api.auth import SessionToken, require_auth
 from api.vps import get_monitor, get_monitor_state_snapshot
 from cluster_sync_command import _materialize_v7_configs
 from logging_helpers import human_log as _log
-from master.async_pool import remote_shell_path
+from master.async_pool import known_hosts_files, remote_shell_path
 from master.cluster_state import (
     append_operation,
     build_config_manifest,
@@ -95,7 +95,7 @@ class _SelfJoinPasswordSSHRunner:
                     port=self.ssh_port,
                     username=self.ssh_user,
                     password=self._ssh_password,
-                    known_hosts=None,
+                    known_hosts=known_hosts_files(),
                     keepalive_interval=10,
                 ),
                 timeout=10,
@@ -2398,7 +2398,7 @@ async def _run_direct_cluster_ssh_setup(node: dict[str, Any], command: str, *, t
                 port=ssh_port,
                 username=ssh_user,
                 password=str(ssh_password or "") or None,
-                known_hosts=None,
+                known_hosts=known_hosts_files(),
                 keepalive_interval=10,
             ),
             timeout=10,

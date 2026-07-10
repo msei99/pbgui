@@ -15,16 +15,6 @@
     ip: "{{ ip }}"
 
   tasks:
-    - name: remove {{ip}} from known_hosts entries
-      known_hosts:
-        name: "{{ ip }}"
-        state: absent
-
-    - name: remove {{hostname}} from known_hosts entries
-      known_hosts:
-        name: "{{ hostname }}"
-        state: absent
-
     - name: check if ssh-key exists
       stat:
         path: "{{ lookup('env', 'HOME') + '/.ssh/id_rsa.pub' }}"
@@ -40,7 +30,7 @@
   gather_facts: "{{ debug }}"
 
   vars:
-    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=yes'
     ansible_ssh_pass: "{{ initial_root_pw }}"
     ansible_become_password: "{{ initial_root_pw }}"
     ansible_ssh_private_key_file: "{{ privatel_key_file }}"

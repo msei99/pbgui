@@ -15,12 +15,21 @@ import api.v7_instances as v7_instances
 import api.vps_manager as vps_manager_api
 import master.async_monitor as monitor_mod
 import master.async_logs as async_logs
+import master.async_pool as async_pool
 import monitor_agent
 from master.async_monitor import INSTANCE_COLLECT_SCRIPT, CpuHistoryStore, VPSMonitor, collect_live_alerts
 from master.async_store import SystemMetrics
 import vps_manager_core as core
 import vps_manager_service as service_mod
 from vps_manager_service import VPSManagerService, _ensure_import_public_key, _import_process_line_is_legacy, _set_import_key_check
+
+
+def test_async_pool_verifies_ip_connections_with_inventory_hostname() -> None:
+    """Use the confirmed VPS hostname key while connecting to its configured IP."""
+    source = Path(async_pool.__file__).read_text(encoding="utf-8")
+
+    assert "host=cfg.ip" in source
+    assert "host_key_alias=cfg.hostname" in source
 
 
 class _FakeStdout:
@@ -59,6 +68,10 @@ class _FakeUfwSshClient:
     command = ""
     kwargs: dict[str, object] = {}
     stdin = _FakeStdin()
+
+    def load_system_host_keys(self) -> None:
+        """No-op known-hosts load."""
+        return None
 
     def set_missing_host_key_policy(self, policy) -> None:
         """Accept the configured host-key policy."""
@@ -123,6 +136,10 @@ class _FakeSshClient:
     """Paramiko SSHClient double for fetch_vps_info()."""
 
     config_content = ""
+
+    def load_system_host_keys(self) -> None:
+        """No-op known-hosts load."""
+        return None
 
     def set_missing_host_key_policy(self, policy) -> None:
         """Accept the configured host-key policy."""
@@ -235,8 +252,8 @@ def test_existing_vps_probe_allows_missing_local_hosts_entry(monkeypatch: pytest
     assert any("saving the import will add it" in warning for warning in result["warnings"])
 
 
-def test_install_import_monitoring_key_remembers_unknown_host_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Monitoring key install trusts an unknown host key before password SSH connects."""
+def test_install_import_monitoring_key_rejects_unknown_host_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Monitoring key install requires prior fingerprint confirmation."""
 
     import paramiko
 
@@ -308,10 +325,10 @@ def test_install_import_monitoring_key_remembers_unknown_host_key(monkeypatch: p
 
     ok, detail = service._install_import_monitoring_key(ssh_host="85.215.157.244", user="mani", user_pw="secret")
 
-    assert ok is True
-    assert "key authentication succeeded" in detail.lower()
-    assert remembered == [("85.215.157.244", 22)]
-    assert connects and connects[0]["hostname"] == "85.215.157.244"
+    assert ok is False
+    assert "fingerprint confirmation" in detail.lower()
+    assert remembered == []
+    assert connects == []
 
 
 def test_install_import_monitoring_key_blocks_host_key_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -330,6 +347,207 @@ def test_install_import_monitoring_key_blocks_host_key_mismatch(monkeypatch: pyt
 
     assert ok is False
     assert "host key mismatch" in detail.lower()
+
+
+def test_host_key_probe_requires_exact_fingerprint_before_trust(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Do not add an unknown host key without exact fingerprint confirmation."""
+    remembered: list[tuple[str, int]] = []
+
+    class FakeKey:
+        """Minimal SSH host-key double."""
+
+        def get_name(self) -> str:
+            """Return a deterministic key type."""
+            return "ssh-ed25519"
+
+    monkeypatch.setattr(service_mod, "_fetch_remote_host_key", lambda host, port, timeout=8: FakeKey())
+    monkeypatch.setattr(service_mod, "_ssh_fingerprint_sha256", lambda key: "SHA256:expected")
+    monkeypatch.setattr(service_mod, "_known_host_key_status", lambda host, port, key: "unknown")
+    monkeypatch.setattr(service_mod, "_remember_known_host_key", lambda host, port, key: remembered.append((host, port)))
+
+    result = service_mod._probe_and_maybe_trust_host_key(
+        "192.0.2.10",
+        22,
+        ["test-vps"],
+        accept_unknown_host=True,
+        expected_fingerprint="SHA256:wrong",
+    )
+
+    assert result["needs_confirmation"] is True
+    assert result["fingerprint"] == "SHA256:expected"
+    assert remembered == []
+
+
+def test_host_key_probe_trusts_confirmed_fingerprint_and_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Persist a confirmed key for both the connection address and hostname."""
+    remembered: list[tuple[str, int]] = []
+
+    class FakeKey:
+        """Minimal SSH host-key double."""
+
+        def get_name(self) -> str:
+            """Return a deterministic key type."""
+            return "ssh-ed25519"
+
+    monkeypatch.setattr(service_mod, "_fetch_remote_host_key", lambda host, port, timeout=8: FakeKey())
+    monkeypatch.setattr(service_mod, "_ssh_fingerprint_sha256", lambda key: "SHA256:expected")
+    monkeypatch.setattr(service_mod, "_known_host_key_status", lambda host, port, key: "unknown")
+    monkeypatch.setattr(service_mod, "_remember_known_host_key", lambda host, port, key: remembered.append((host, port)))
+
+    result = service_mod._probe_and_maybe_trust_host_key(
+        "192.0.2.10",
+        2222,
+        ["test-vps"],
+        accept_unknown_host=True,
+        expected_fingerprint="SHA256:expected",
+    )
+
+    assert result["known"] is True
+    assert remembered == [("192.0.2.10", 2222), ("test-vps", 2222)]
+
+
+def test_host_key_probe_never_replaces_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reject a changed known host key even when confirmation flags are supplied."""
+
+    class FakeKey:
+        """Minimal SSH host-key double."""
+
+        def get_name(self) -> str:
+            """Return a deterministic key type."""
+            return "ssh-ed25519"
+
+    monkeypatch.setattr(service_mod, "_fetch_remote_host_key", lambda host, port, timeout=8: FakeKey())
+    monkeypatch.setattr(service_mod, "_ssh_fingerprint_sha256", lambda key: "SHA256:changed")
+    monkeypatch.setattr(service_mod, "_known_host_key_status", lambda host, port, key: "mismatch")
+
+    with pytest.raises(ValueError, match="host key mismatch"):
+        service_mod._probe_and_maybe_trust_host_key(
+            "192.0.2.10",
+            22,
+            ["test-vps"],
+            accept_unknown_host=True,
+            expected_fingerprint="SHA256:changed",
+        )
+
+
+def test_replace_known_host_keys_updates_vps_aliases_atomically(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace stale hostname and IP entries without changing unrelated hosts."""
+    import paramiko
+
+    known_hosts_path = tmp_path / ".ssh" / "known_hosts"
+    old_key = paramiko.RSAKey.generate(1024)
+    new_key = paramiko.RSAKey.generate(1024)
+    other_key = paramiko.RSAKey.generate(1024)
+    stale_alternative_key = paramiko.ECDSAKey.generate(bits=256)
+    host_keys = paramiko.HostKeys()
+    host_keys.add("repair-vps", old_key.get_name(), old_key)
+    host_keys.add("repair-vps", stale_alternative_key.get_name(), stale_alternative_key)
+    host_keys.add("192.0.2.10", old_key.get_name(), old_key)
+    host_keys.add("192.0.2.10", stale_alternative_key.get_name(), stale_alternative_key)
+    host_keys.add("other-vps", other_key.get_name(), other_key)
+    monkeypatch.setattr(service_mod, "_user_known_hosts_path", lambda: known_hosts_path)
+    service_mod._save_user_known_hosts(host_keys)
+
+    service_mod._replace_known_host_keys(["repair-vps", "192.0.2.10"], 22, new_key)
+
+    loaded = paramiko.HostKeys(str(known_hosts_path))
+    assert loaded.lookup("repair-vps")[new_key.get_name()].asbytes() == new_key.asbytes()
+    assert loaded.lookup("192.0.2.10")[new_key.get_name()].asbytes() == new_key.asbytes()
+    assert stale_alternative_key.get_name() not in loaded.lookup("repair-vps")
+    assert stale_alternative_key.get_name() not in loaded.lookup("192.0.2.10")
+    assert loaded.lookup("other-vps")[other_key.get_name()].asbytes() == other_key.asbytes()
+    assert not list(known_hosts_path.parent.glob(".known_hosts.*.tmp"))
+
+
+def test_known_host_alias_status_reports_changed_unknown_and_trusted() -> None:
+    """Overview distinguishes stale, missing, and matching IP aliases."""
+    import paramiko
+
+    current_key = paramiko.RSAKey.generate(1024)
+    stale_key = paramiko.RSAKey.generate(1024)
+    preferred_key = paramiko.ECDSAKey.generate(bits=256)
+    stale_alternative_key = paramiko.RSAKey.generate(1024)
+    host_keys = paramiko.HostKeys()
+    host_keys.add("changed-vps", current_key.get_name(), current_key)
+    host_keys.add("192.0.2.10", stale_key.get_name(), stale_key)
+    host_keys.add("unknown-vps", current_key.get_name(), current_key)
+    host_keys.add("trusted-vps", current_key.get_name(), current_key)
+    host_keys.add("192.0.2.30", current_key.get_name(), current_key)
+    host_keys.add("preferred-vps", preferred_key.get_name(), preferred_key)
+    host_keys.add("preferred-vps", current_key.get_name(), current_key)
+    host_keys.add("192.0.2.40", preferred_key.get_name(), preferred_key)
+    host_keys.add("192.0.2.40", stale_alternative_key.get_name(), stale_alternative_key)
+
+    assert service_mod._known_host_alias_status("changed-vps", "192.0.2.10", 22, host_keys) == "mismatch"
+    assert service_mod._known_host_alias_status("unknown-vps", "192.0.2.20", 22, host_keys) == "unknown"
+    assert service_mod._known_host_alias_status("trusted-vps", "192.0.2.30", 22, host_keys) == "known"
+    assert service_mod._known_host_alias_status("preferred-vps", "192.0.2.40", 22, host_keys) == "known"
+
+
+def test_trust_vps_host_key_replaces_confirmed_mismatch_and_reconnects(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GUI confirmation replaces an exact changed key and reconnects monitoring."""
+    service = object.__new__(VPSManagerService)
+    vps = SimpleNamespace(hostname="repair-vps", ip="192.0.2.10", firewall_ssh_port=22)
+    service._require_vps = lambda hostname: vps
+    refreshed: list[str] = []
+    replaced: list[tuple[list[str], int, object]] = []
+
+    class FakeKey:
+        """Minimal SSH key used by the trust flow."""
+
+    key = FakeKey()
+    probes = [
+        {
+            "status": "mismatch",
+            "fingerprint": "SHA256:confirmed",
+            "target_statuses": {"repair-vps": "mismatch", "192.0.2.10": "mismatch"},
+            "_key": key,
+        },
+        {
+            "status": "known",
+            "fingerprint": "SHA256:confirmed",
+            "target_statuses": {"repair-vps": "known", "192.0.2.10": "known"},
+            "_key": key,
+        },
+    ]
+    monkeypatch.setattr(service_mod, "_probe_host_key", lambda host, port, aliases: dict(probes.pop(0)))
+    monkeypatch.setattr(service_mod, "_replace_known_host_keys", lambda hosts, port, remote_key: replaced.append((hosts, port, remote_key)))
+    service._refresh_vps_monitor_connection = lambda hostname: refreshed.append(hostname)
+
+    result = service.trust_vps_host_key(
+        "repair-vps",
+        "SHA256:confirmed",
+        replace_existing=True,
+    )
+
+    assert replaced == [(["repair-vps", "192.0.2.10"], 22, key)]
+    assert refreshed == ["repair-vps"]
+    assert result["status"] == "known"
+    assert result["reconnect_requested"] is True
+
+
+def test_trust_vps_host_key_rejects_changed_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Do not write known_hosts when the key changed after GUI review."""
+    service = object.__new__(VPSManagerService)
+    vps = SimpleNamespace(hostname="repair-vps", ip="192.0.2.10", firewall_ssh_port=22)
+    service._require_vps = lambda hostname: vps
+    replaced: list[object] = []
+    monkeypatch.setattr(service_mod, "_probe_host_key", lambda host, port, aliases: {
+        "status": "mismatch",
+        "fingerprint": "SHA256:new",
+        "target_statuses": {"repair-vps": "mismatch"},
+        "_key": object(),
+    })
+    monkeypatch.setattr(service_mod, "_replace_known_host_keys", lambda *args: replaced.append(args))
+
+    with pytest.raises(ValueError, match="changed while the confirmation dialog was open"):
+        service.trust_vps_host_key(
+            "repair-vps",
+            "SHA256:reviewed",
+            replace_existing=True,
+        )
+
+    assert replaced == []
 
 
 def test_vps_monitor_refresh_enabled_host_reconnects_after_auth_fix(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -851,7 +1069,7 @@ def test_validate_and_stage_vps_deploy_host_skips_active_host() -> None:
     service = object.__new__(VPSManagerService)
     service._deploy_sessions = {}
     service._deploy_sessions_lock = threading.Lock()
-    service._validate_vps_user_password = lambda hostname, password, accept_unknown_host=False: None
+    service._validate_vps_user_password = lambda hostname, password, **kwargs: None
     service._store_session_secrets = lambda token, hostname, values: None
     service.get_vps_deploy_settings = lambda: {}
     service._vps_deploy_extra_vars = lambda command, settings: {}
@@ -1852,6 +2070,59 @@ def test_vps_load_recovers_missing_hostname_from_file_path(tmp_path: Path) -> No
 
     assert vps.hostname == "manibot90"
     assert vps.ip == "23.94.74.212"
+
+
+@pytest.mark.parametrize("hostname", ["../outside", "a/b", "a\\b", ".", "..", "bad\x00host", "bad\nhost"])
+def test_vps_hostname_rejects_inventory_traversal(hostname: str) -> None:
+    """Reject hostnames which cannot map to one inventory child directory."""
+    vps = core.VPS()
+
+    with pytest.raises(ValueError):
+        vps.hostname = hostname
+
+
+def test_vps_save_and_delete_revalidate_tampered_hostname(monkeypatch, tmp_path: Path) -> None:
+    """Protect persistence even if an internal caller bypasses the hostname setter."""
+    monkeypatch.setattr(core, "PBGDIR", tmp_path)
+    outside = tmp_path / "data" / "outside"
+    outside.mkdir(parents=True)
+    sentinel = outside / "keep.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    vps = core.VPS()
+    vps._hostname = "../outside"
+    vps.path = outside
+
+    with pytest.raises(ValueError):
+        vps.save()
+    with pytest.raises(ValueError):
+        vps.delete()
+
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_vps_service_hostname_validation_uses_inventory_guard(monkeypatch, tmp_path: Path) -> None:
+    """Apply the same traversal guard before service-level VPS creation."""
+    monkeypatch.setattr(core, "PBGDIR", tmp_path)
+
+    with pytest.raises(ValueError):
+        service_mod._validate_import_hostname("../../outside")
+
+
+def test_vps_manager_skips_inventory_with_traversal_hostname(monkeypatch, tmp_path: Path) -> None:
+    """Do not hydrate persisted inventory entries containing unsafe hostnames."""
+    monkeypatch.setattr(core, "PBGDIR", tmp_path)
+    host_dir = tmp_path / "data" / "vpsmanager" / "hosts" / "safe-name"
+    host_dir.mkdir(parents=True)
+    (host_dir / "safe-name.json").write_text(
+        json.dumps({"_hostname": "../../outside", "ip": "192.0.2.10"}),
+        encoding="utf-8",
+    )
+    manager = object.__new__(core.VPSManager)
+    manager.vpss = []
+
+    manager.find_vps()
+
+    assert manager.vpss == []
 
 
 def test_vps_manager_context_detail_uses_quick_detail_for_fluid_switching() -> None:

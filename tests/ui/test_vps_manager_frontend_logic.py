@@ -12,6 +12,15 @@ HTML_PATH = ROOT / "frontend" / "vps_manager.html"
 LOG_VIEWER_PATH = ROOT / "frontend" / "js" / "log_viewer_panel.js"
 
 
+def test_unknown_ssh_host_confirmation_uses_exact_fingerprint() -> None:
+    """Display and resubmit the exact SSH host-key fingerprint before trust."""
+    source = HTML_PATH.read_text(encoding="utf-8")
+
+    assert "hostKey.needs_confirmation" in source
+    assert "accepted_host_key_fingerprint = fingerprint" in source
+    assert "accepted_host_key_fingerprint: String(msg.fingerprint || '')" in source
+
+
 def _extract_function(source: str, name: str) -> str:
     """Extract a named JavaScript function from the inline VPS manager script."""
     marker = f"function {name}("
@@ -108,6 +117,36 @@ class TestVpsManagerFrontendLogic:
         assert "function confirmPurgeVpsInstall(hostname)" in source
         assert "vpsActionWithPw(hostname, 'vps-purge-install', 'Purge VPS Install')" in source
         assert "onclick='confirmPurgeVpsInstall(${js(selectedHost)})'>Purge VPS Install</button>" in source
+
+    def test_existing_vps_host_key_can_be_repaired_in_gui(self) -> None:
+        """Expose review, exact confirmation, replacement, and reconnect in the VPS sidebar."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        sidebar_source = _extract_function(source, "renderSidebarActions")
+        main_source = _extract_function(source, "renderVpsView")
+
+        assert "function reviewVpsSshHostKey(hostname)" in source
+        assert "function openSshHostKeyReviewModal(data)" in source
+        assert "const hostKeyBtnClass = st.host_key_error || (hostKeyStatus !== 'known' && hostKeyStatus !== 'local') ? 'sb-btn warning' : 'sb-btn'" in sidebar_source
+        assert "onclick='reviewVpsSshHostKey(${js(selectedHost)})'>Review SSH Host Key</button>" in sidebar_source
+        assert "reviewVpsSshHostKey" not in main_source
+        assert "Replace Key & Reconnect" in source
+        assert "expected_fingerprint: fingerprint" in source
+        assert "replace_existing: status === 'mismatch'" in source
+        assert "Monitor reconnect requested" in source
+        assert "class='ssh-host-key-targets'" in source
+        assert "class='status-sub code ssh-host-key-fingerprint'" in source
+        assert "overflow-wrap: anywhere" in source
+
+    def test_overview_shows_ssh_host_key_status(self) -> None:
+        """Show trusted, unknown, changed, and failed SSH keys in Overview."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        table_source = _extract_function(source, "renderOverviewTable")
+
+        assert "{ key: 'ssh_key', label: 'SSH Key', defaultVisible: true" in source
+        assert "levelTag('ok', 'Trusted')" in table_source
+        assert "levelTag('warning', 'Unknown')" in table_source
+        assert "levelTag('error', 'Changed')" in table_source
+        assert "levelTag('error', 'Failed')" in table_source
 
     def test_vps_manager_add_to_cluster_is_local_metadata_only(self) -> None:
         """VPS Manager exposes Add to Cluster without remote side effects."""

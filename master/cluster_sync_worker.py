@@ -571,8 +571,6 @@ class SshClusterPeerClient:
             port = 22
         key = ensure_cluster_ssh_key(self.cluster_root)
         private_key = str(key.get("private_key_path") or "")
-        ssh_dir = Path(private_key).parent if private_key else self.cluster_root / "ssh"
-        known_hosts = str(ssh_dir / "known_hosts")
         command = str(command_text or "")
         if str(peer.get("cluster_ssh_mode") or "forced").strip().lower() == "direct":
             command = _remote_cluster_command(str(peer.get("remote_pbgui_dir") or "software/pbgui"), local_node_id, command)
@@ -581,8 +579,7 @@ class SshClusterPeerClient:
             "-i", private_key,
             "-o", "IdentitiesOnly=yes",
             "-o", "BatchMode=yes",
-            "-o", f"UserKnownHostsFile={known_hosts}",
-            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "StrictHostKeyChecking=yes",
             "-o", f"ConnectTimeout={self.connect_timeout}",
             "-p", str(port),
             target,

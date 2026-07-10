@@ -12,7 +12,6 @@
   gather_facts: yes
 
   vars:
-    # ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
     ansible_ssh_pass: "{{ user_pw }}"
     ansible_become_password: "{{ user_pw }}"
     user: "{{ user }}"

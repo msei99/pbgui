@@ -4737,21 +4737,33 @@ class VPSMonitor:
     async def kill_instance(self, hostname: str, name: str,
                             pb_version: str = "") -> dict:
         """Kill a bot instance on a VPS."""
-        grep_pattern = f"main.py.*{name}"
+        name = str(name or "").strip()
+        if (not name or len(name) > 255 or name in {".", ".."}
+                or "/" in name or "\\" in name or "\x00" in name
+                or any(ord(char) < 32 or ord(char) == 127 for char in name)):
+            return {"success": False, "pid": ""}
 
-        kill_cmd = (
-            f"pid=$(ps aux | grep -E '{grep_pattern}' | grep -v grep "
-            f"| awk '{{print $2}}' | head -1) && "
-            f'[ -n "$pid" ] && kill $pid && echo "killed:$pid" '
-            f'|| echo "not_found"'
-        )
-
-        result = await self.pool.run(hostname, kill_cmd, timeout=15)
-        success = (result and result.exit_status == 0
-                   and "killed:" in (result.stdout or ""))
+        result = await self.pool.run(hostname, "ps -eo pid=,args=", timeout=15)
         killed_pid = ""
-        if success:
-            killed_pid = result.stdout.split("killed:")[1].strip()
+        config_marker = f"/data/run_v7/{name}/config_run.json"
+        if result and result.exit_status == 0:
+            for line in (result.stdout or "").splitlines():
+                match = re.match(r"^\s*(\d+)\s+(.+)$", line)
+                if not match:
+                    continue
+                pid, command = match.groups()
+                if int(pid) > 1 and "main.py" in command and config_marker in command:
+                    killed_pid = pid
+                    break
+
+        success = False
+        if killed_pid:
+            kill_result = await self.pool.run(
+                hostname, f"kill -- {int(killed_pid)}", timeout=15
+            )
+            success = bool(kill_result and kill_result.exit_status == 0)
+            if not success:
+                killed_pid = ""
 
         _log(SERVICE,
              f"[cmd] Kill instance {name} on {hostname}: "
