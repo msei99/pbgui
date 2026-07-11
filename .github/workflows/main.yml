@@ -1,15 +1,114 @@
 name: PBGui GitHub Telegram Bot
+
 on:
   push:
     branches:
       - '**'
+
+permissions: {}
+
 jobs:
   notification:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
     steps:
-    - name: Notify the commit on Telegram
-      uses: EverythingSuckz/github-telegram-notify@main
-      with:
-        bot_token: '${{ secrets.BOT_TOKEN }}'
-        chat_id: '${{ secrets.CHAT_ID }}'
-        topic_id: '${{ secrets.TOPIC_ID }}'
+      - name: Notify the commit on Telegram
+        shell: bash
+        env:
+          TELEGRAM_BOT_TOKEN: '${{ secrets.BOT_TOKEN }}'
+          TELEGRAM_CHAT_ID: '${{ secrets.CHAT_ID }}'
+          TELEGRAM_TOPIC_ID: '${{ secrets.TOPIC_ID }}'
+        run: |
+          python3 - <<'PY'
+          import html
+          import json
+          import os
+          from pathlib import Path
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import quote
+          from urllib.request import Request, urlopen
+
+
+          def escaped(value: object) -> str:
+              return html.escape(str(value or ""), quote=True)
+
+
+          token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+          chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+          topic_id = os.environ.get("TELEGRAM_TOPIC_ID", "").strip()
+          if not token or not chat_id:
+              raise SystemExit("Telegram commit-feed secrets are not configured")
+
+          event_path = Path(os.environ["GITHUB_EVENT_PATH"])
+          event = json.loads(event_path.read_text(encoding="utf-8"))
+          repository = event.get("repository") or {}
+          commits = event.get("commits") or []
+          repository_name = repository.get("full_name") or os.environ.get("GITHUB_REPOSITORY", "unknown")
+          repository_url = repository.get("html_url") or f"https://github.com/{repository_name}"
+          branch = str(event.get("ref") or "").removeprefix("refs/heads/")
+
+          lines = [
+              f"<b>🔨 {len(commits)} new commit(s) to</b> "
+              f"<a href='{escaped(repository_url)}'>{escaped(repository_name)}</a>"
+              f"[<code>{escaped(branch)}</code>]",
+              "",
+          ]
+          omitted = 0
+          for index, commit in enumerate(commits):
+              commit_url = str(commit.get("url") or repository_url)
+              commit_id = str(commit.get("id") or "unknown")[:7]
+              commit_message = " ".join(str(commit.get("message") or "(no message)").split())
+              if len(commit_message) > 500:
+                  commit_message = commit_message[:497] + "..."
+              author = commit.get("author") or {}
+              author_name = author.get("name") or author.get("username") or "unknown"
+              username = str(author.get("username") or "").strip()
+              author_url = f"https://github.com/{quote(username, safe='')}" if username else commit_url
+              line = (
+                  f"• <a href='{escaped(commit_url)}'>{escaped(commit_id)}</a> - "
+                  f"{escaped(commit_message)} by "
+                  f"<a href='{escaped(author_url)}'>{escaped(author_name)}</a>"
+              )
+              if len("\n".join(lines + [line])) > 3900:
+                  omitted = len(commits) - index
+                  break
+              lines.append(line)
+
+          if omitted:
+              lines.extend(["", f"... and {omitted} more commit(s)"])
+
+          payload = {
+              "chat_id": chat_id,
+              "text": "\n".join(lines),
+              "disable_web_page_preview": True,
+              "parse_mode": "HTML",
+          }
+          if topic_id:
+              try:
+                  payload["message_thread_id"] = int(topic_id)
+              except ValueError as exc:
+                  raise SystemExit("Telegram topic ID must be an integer") from exc
+
+          compare_url = str(event.get("compare") or "").strip()
+          if compare_url:
+              payload["reply_markup"] = {
+                  "inline_keyboard": [[{"text": "Open Changes", "url": compare_url}]],
+              }
+
+          request = Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              with urlopen(request, timeout=15) as response:
+                  result = json.loads(response.read().decode("utf-8"))
+          except HTTPError as exc:
+              raise SystemExit(f"Telegram notification failed with HTTP {exc.code}") from exc
+          except URLError as exc:
+              raise SystemExit("Telegram notification failed due to a network error") from exc
+
+          if not result.get("ok"):
+              raise SystemExit("Telegram rejected the commit notification")
+          PY
