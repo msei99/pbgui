@@ -546,7 +546,7 @@ var wsReconnectDelay = 1000;
 
 function connectWS() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-  var url = WS_BASE + '/api/v7/ws/v7?token=' + encodeURIComponent(TOKEN);
+  var url = WS_BASE + '/api/v7/ws/v7';
   ws = new WebSocket(url);
 
   ws.onopen = function() {
@@ -770,13 +770,13 @@ function esc(s) {
 
 /* ─── Edit (navigate to FastAPI edit page) ────────────────── */
 function editInstance(name) {
-  var url = API_BASE + '/edit_page?name=' + encodeURIComponent(name) + '&token=' + encodeURIComponent(TOKEN);
+  var url = API_BASE + '/edit_page?name=' + encodeURIComponent(name);
   window.location.href = url;
 }
 
 /* ─── Add Instance (navigate to FastAPI edit page) ────────── */
 function addInstance() {
-  var url = API_BASE + '/edit_page?new=1&token=' + encodeURIComponent(TOKEN);
+  var url = API_BASE + '/edit_page?new=1';
   window.location.href = url;
 }
 
@@ -1177,7 +1177,13 @@ function loadBackupInEditor(name, ts) {
   });
 }
 
-function doDeleteBackup(name, ts) {
+async function doDeleteBackup(name, ts) {
+  if (!(await window.PBGuiDialogs.confirm({
+    title: 'Delete backup',
+    message: "Delete backup '" + name + '/' + ts + "'?",
+    detail: 'This cannot be undone.',
+    confirmText: 'Delete'
+  }))) return;
   var url = '/backups/' + encodeURIComponent(name) + '/' + encodeURIComponent(ts);
   apiFetch(url, { method: 'DELETE' }).then(function(res) {
     if (!res.ok) {

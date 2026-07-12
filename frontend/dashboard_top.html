@@ -22,6 +22,12 @@
     /* mutable current values — changed by inline controls but not persisted */
     var currentPeriod = PERIOD;
     var currentTop    = TOP;
+    var generation = (window._dtGeneration || 0) + 1;
+    window._dtGeneration = generation;
+
+    function isCurrentGeneration() {
+        return window._dtGeneration === generation;
+    }
 
     var PERIODS = ['TODAY','YESTERDAY','THIS_WEEK','LAST_WEEK','LAST_WEEK_NOW',
                    'THIS_MONTH','LAST_MONTH','LAST_MONTH_NOW',
@@ -30,18 +36,24 @@
                    'THIS_YEAR','LAST_YEAR','LAST_YEAR_NOW','ALL_TIME','CUSTOM'];
 
     /* Kill any previous WS + reconnect timer from a prior render */
-    if (window._dtWs) { try { window._dtWs.close(); } catch (_) {} window._dtWs = null; }
+    if (window._dtWs) {
+        window._dtWs.onopen = window._dtWs.onmessage = window._dtWs.onclose = window._dtWs.onerror = null;
+        try { window._dtWs.close(); } catch (_) {}
+        window._dtWs = null;
+    }
     if (window._dtReconnTimer) { clearTimeout(window._dtReconnTimer); window._dtReconnTimer = null; }
 
     var ws          = null;
     var reconnTimer = null;
     var reconnDelay = 1000;
     var container   = document.getElementById('dt-container');
+    var loadSeq     = 0;
 
     function reportHeight() {
     }
 
     function load() {
+        var seq = ++loadSeq;
         var usersParam = (Array.isArray(USERS) && USERS.length > 0) ? USERS.join(',') : 'ALL';
         /* parse CUSTOM:from:to */
         var isCustom = currentPeriod.indexOf('CUSTOM:') === 0;
@@ -59,6 +71,7 @@
         fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (d) {
+                if (seq !== loadSeq || !isCurrentGeneration()) return;
                 /* ── Top N control ── */
                 var topNCtrl = document.createElement('input');
                 topNCtrl.type = 'number'; topNCtrl.min = 1; topNCtrl.max = 500; topNCtrl.step = 1;
@@ -143,6 +156,7 @@
                 reportHeight();
             })
             .catch(function (e) {
+                if (seq !== loadSeq || !isCurrentGeneration()) return;
                 container.innerHTML = '';
                 var st = document.createElement('div');
                 st.className = 'dt-status';
@@ -153,13 +167,19 @@
     }
 
     function connect() {
-        if (!TOKEN || !API_HOST) return;
+        if (!isCurrentGeneration() || !TOKEN || !API_HOST) return;
         clearTimeout(reconnTimer);
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
-        ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard?token=' + TOKEN);
-        window._dtWs = ws;
-        ws.onopen = function () { reconnDelay = 1000; load(); };
-        ws.onmessage = function (evt) {
+        var socket = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard');
+        ws = socket;
+        window._dtWs = socket;
+        socket.onopen = function () {
+            if (window._dtWs !== socket) return;
+            reconnDelay = 1000;
+            load();
+        };
+        socket.onmessage = function (evt) {
+            if (window._dtWs !== socket) return;
             try {
                 var m = JSON.parse(evt.data);
                 if (m.type === 'income_updated') {
@@ -169,12 +189,16 @@
                 }
             } catch (_) {}
         };
-        ws.onclose = function () {
+        socket.onclose = function () {
+            if (window._dtWs !== socket) return;
+            window._dtWs = null;
             reconnTimer = setTimeout(connect, reconnDelay);
             reconnDelay = Math.min(reconnDelay * 2, 30000);
             window._dtReconnTimer = reconnTimer;
         };
-        ws.onerror = function () { ws.close(); };
+        socket.onerror = function () {
+            if (window._dtWs === socket) socket.close();
+        };
     }
 
     function waitForPlotly(cb) {

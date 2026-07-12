@@ -696,6 +696,14 @@ def _valid_ipv4(value: str) -> bool:
     )
 
 
+def _valid_ipv4_or_cidr(value: str) -> bool:
+    try:
+        parsed = ipaddress.ip_network(str(value or "").strip(), strict=False)
+    except ValueError:
+        return False
+    return isinstance(parsed, ipaddress.IPv4Network)
+
+
 def _short_commit(value: str | None) -> str:
     return str(value or "")[:7]
 
@@ -1160,7 +1168,9 @@ class VPSManagerService:
         self._deploy_threads: dict[str, threading.Thread] = {}
         self._deploy_sessions: dict[str, dict[str, Any]] = {}
         self._deploy_sessions_lock = threading.Lock()
+        self._deploy_shutdown = threading.Event()
         self._cluster_import_jobs: dict[str, dict[str, Any]] = {}
+        self._cluster_import_threads: dict[str, threading.Thread] = {}
         self._cluster_import_jobs_lock = threading.Lock()
         self._host_task_start_locks: dict[str, threading.Lock] = {}
         self._host_task_start_locks_lock = threading.Lock()
@@ -1168,6 +1178,10 @@ class VPSManagerService:
         self._deploy_progress_cache_lock = threading.Lock()
         self._deploy_progress_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._recover_interrupted_vps_runs()
+
+    def _deploy_shutdown_requested(self) -> bool:
+        event = getattr(self, "_deploy_shutdown", None)
+        return isinstance(event, threading.Event) and event.is_set()
 
     def _is_vps_playbook_process_running(self, vps: VPS) -> bool:
         if not self._should_treat_vps_process_as_active(vps):
@@ -1373,6 +1387,22 @@ class VPSManagerService:
                 "phase": "master",
                 "status": master_status or "running",
                 "command_text": str(getattr(self.vpsmanager, "command_text", "") or "Master Task"),
+            })
+        cluster_imports: list[dict[str, Any]] = []
+        cluster_import_lock = getattr(self, "_cluster_import_jobs_lock", None)
+        if cluster_import_lock is not None:
+            with cluster_import_lock:
+                cluster_imports = [
+                    dict(job)
+                    for job in getattr(self, "_cluster_import_jobs", {}).values()
+                    if str(job.get("status") or "") in {"queued", "running"}
+                ]
+        for job in cluster_imports:
+            items.append({
+                "hostname": str(job.get("hostname") or "cluster"),
+                "phase": "cluster-import",
+                "status": str(job.get("status") or "running"),
+                "command_text": "Cluster Nodes Import",
             })
         return {
             "active": bool(items),
@@ -1812,10 +1842,18 @@ class VPSManagerService:
             "percent": 0,
         })
         try:
+            if self._deploy_shutdown_requested():
+                raise InterruptedError("Cluster node import interrupted by API shutdown")
+
+            def _progress(update: dict[str, Any]) -> dict[str, Any]:
+                if self._deploy_shutdown_requested():
+                    raise InterruptedError("Cluster node import interrupted by API shutdown")
+                return self._update_cluster_import_job(job_id, update)
+
             result = self.import_cluster_nodes(
                 token,
                 form,
-                progress=lambda update: self._update_cluster_import_job(job_id, update),
+                progress=_progress,
             )
             self._update_cluster_import_job(job_id, {
                 "status": "successful",
@@ -1823,6 +1861,13 @@ class VPSManagerService:
                 "percent": 100,
                 "result": result,
                 "error": "",
+            })
+        except InterruptedError as exc:
+            self._update_cluster_import_job(job_id, {
+                "status": "error",
+                "label": str(exc),
+                "percent": 100,
+                "error": str(exc),
             })
         except Exception as exc:
             _log(SERVICE, f"Cluster node import job failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
@@ -1832,10 +1877,15 @@ class VPSManagerService:
                 "percent": 100,
                 "error": str(exc) or "Cluster node import failed.",
             })
+        finally:
+            with self._cluster_import_jobs_lock:
+                self._cluster_import_threads.pop(job_id, None)
 
     def start_cluster_nodes_import(self, token: str, form: dict[str, Any] | None = None) -> dict[str, Any]:
         """Start Cluster node import in the background and return its progress handle."""
 
+        if self._deploy_shutdown_requested():
+            raise ValueError("VPS deployment controller is shutting down.")
         self._prune_cluster_import_jobs()
         job_id = secrets.token_urlsafe(12)
         now = time.time()
@@ -1858,9 +1908,18 @@ class VPSManagerService:
             target=self._run_cluster_nodes_import_job,
             args=(job_id, token, dict(form or {})),
             name=f"cluster-import-{job_id[:8]}",
-            daemon=True,
         )
-        thread.start()
+        with self._cluster_import_jobs_lock:
+            self._cluster_import_threads[job_id] = thread
+            try:
+                thread.start()
+            except Exception as exc:
+                self._cluster_import_threads.pop(job_id, None)
+                job = self._cluster_import_jobs[job_id]
+                job["status"] = "error"
+                job["error"] = str(exc)
+                job["label"] = str(exc)
+                raise
         return self.get_cluster_nodes_import_progress(job_id)
 
     def import_cluster_nodes(
@@ -3984,6 +4043,8 @@ class VPSManagerService:
         deadline = time.time() + max(1, int(timeout_seconds))
         run_appear_deadline = time.time() + DEPLOY_RUN_APPEAR_TIMEOUT_SECONDS
         while time.time() < deadline:
+            if self._deploy_shutdown_requested():
+                return
             vps = self._require_vps(hostname)
             current_run_id = str(getattr(vps, "command_run_id", "") or "")
             current_status = str(getattr(vps, "update_status", "") or "")
@@ -4053,6 +4114,8 @@ class VPSManagerService:
         normalized_command = _normalize_vps_deploy_command(command)
         command_text = _vps_deploy_command_text(normalized_command)
         with self._host_task_start_lock(hostname):
+            if self._deploy_shutdown_requested():
+                raise ValueError("VPS deployment controller is shutting down.")
             vps = self._require_vps(hostname)
             self._apply_session_secrets_to_vps(token, vps)
             if _vps_deploy_requires_user_password(normalized_command) and not getattr(vps, "user_pw", None):
@@ -4075,6 +4138,8 @@ class VPSManagerService:
         target_id = str(entry_id or "").strip()
         if not target_id:
             return
+        if self._deploy_shutdown_requested():
+            raise ValueError("VPS deployment controller is shutting down.")
         thread: threading.Thread | None = None
         with self._deploy_sessions_lock:
             session = self._deploy_sessions.get(target_id)
@@ -4086,15 +4151,20 @@ class VPSManagerService:
             thread = threading.Thread(
                 target=self._run_vps_deploy_session_worker,
                 kwargs={"entry_id": target_id},
-                daemon=True,
                 name=f"vps-deploy-session-{target_id}",
             )
             session["worker"] = thread
-        thread.start()
+            try:
+                thread.start()
+            except Exception:
+                session.pop("worker", None)
+                raise
 
     def _run_vps_deploy_session_worker(self, *, entry_id: str) -> None:
         target_id = str(entry_id or "").strip()
         while True:
+            if self._deploy_shutdown_requested():
+                return
             with self._deploy_sessions_lock:
                 session = self._deploy_sessions.get(target_id)
                 if not session:
@@ -4113,6 +4183,8 @@ class VPSManagerService:
                         if session and str(session.get("current_host") or "") == current_host and str(session.get("current_run_id") or "") == current_run_id:
                             session["current_host"] = ""
                             session["current_run_id"] = ""
+                if self._deploy_shutdown_requested():
+                    return
                 continue
 
             next_host = ""
@@ -4270,6 +4342,8 @@ class VPSManagerService:
         try:
             if mode == "sequential":
                 for hostname in hostnames:
+                    if self._deploy_shutdown_requested():
+                        break
                     try:
                         host_log = self._start_vps_deploy_host(
                             token,
@@ -4287,10 +4361,13 @@ class VPSManagerService:
                     self._update_vps_deploy_entry(entry_id, host_logs={hostname: host_log})
                     run_id = str(host_log.get("run_id") or "").strip()
                     self._wait_for_vps_command_finish(hostname, run_id)
+                    if self._deploy_shutdown_requested():
+                        break
         except Exception as exc:
             _log(SERVICE, f"vps deploy batch failed for {command}: {exc}", level="WARNING")
         finally:
-            self._deploy_threads.pop(entry_id, None)
+            with self._deploy_sessions_lock:
+                self._deploy_threads.pop(entry_id, None)
 
     def get_vps_logging_config(self) -> dict[str, Any]:
         section = load_ini_section("vps_logging")
@@ -4365,6 +4442,8 @@ class VPSManagerService:
         extra_vars: dict[str, Any] | None = None,
         record_history: bool = True,
     ) -> dict[str, Any]:
+        if self._deploy_shutdown_requested():
+            raise ValueError("VPS deployment controller is shutting down.")
         normalized_command = _normalize_vps_deploy_command(command)
         normalized_mode = _normalize_vps_deploy_mode(mode)
         unique_hosts: list[str] = []
@@ -4437,11 +4516,15 @@ class VPSManagerService:
                     "extra_vars": base_extra_vars or None,
                     "entry_id": str(entry.get("id") or ""),
                 },
-                daemon=True,
                 name=f"vps-deploy-{entry.get('id') or int(time.time())}",
             )
-            self._deploy_threads[str(entry.get("id") or "")] = thread
-            thread.start()
+            with self._deploy_sessions_lock:
+                self._deploy_threads[str(entry.get("id") or "")] = thread
+                try:
+                    thread.start()
+                except Exception:
+                    self._deploy_threads.pop(str(entry.get("id") or ""), None)
+                    raise
 
         return {
             "command": normalized_command,
@@ -4457,6 +4540,41 @@ class VPSManagerService:
             ],
             "entry": entry,
         }
+
+    def prepare_startup(self) -> None:
+        """Allow deployment controllers for a new API lifespan."""
+        if not isinstance(getattr(self, "_deploy_shutdown", None), threading.Event):
+            self._deploy_shutdown = threading.Event()
+        self._deploy_shutdown.clear()
+
+    def shutdown(self) -> None:
+        """Stop API-owned deploy controllers without terminating Ansible children."""
+        if not isinstance(getattr(self, "_deploy_shutdown", None), threading.Event):
+            self._deploy_shutdown = threading.Event()
+        self._deploy_shutdown.set()
+        with self._deploy_sessions_lock:
+            workers = list(self._deploy_threads.values())
+            for session in self._deploy_sessions.values():
+                wake_event = session.get("wake_event")
+                if isinstance(wake_event, threading.Event):
+                    wake_event.set()
+                worker = session.get("worker")
+                if isinstance(worker, threading.Thread):
+                    workers.append(worker)
+        cluster_import_lock = getattr(self, "_cluster_import_jobs_lock", None)
+        if cluster_import_lock is not None:
+            with cluster_import_lock:
+                workers.extend(getattr(self, "_cluster_import_threads", {}).values())
+        for worker in set(workers):
+            if worker is threading.current_thread():
+                continue
+            worker.join()
+        with self._deploy_sessions_lock:
+            self._deploy_threads.clear()
+            self._deploy_sessions.clear()
+        if cluster_import_lock is not None:
+            with cluster_import_lock:
+                self._cluster_import_threads.clear()
 
     def validate_and_stage_vps_deploy_host(
         self,
@@ -6088,8 +6206,8 @@ done"""
         firewall_ips = str(form.get("firewall_ssh_ips") or "").strip()
         if firewall_ips:
             for ip in [part.strip() for part in firewall_ips.split(",") if part.strip()]:
-                if not _valid_ipv4(ip):
-                    raise ValueError("IP-Addresses to allow contains an invalid IPv4 address.")
+                if not _valid_ipv4_or_cidr(ip):
+                    raise ValueError("IP-Addresses to allow contains an invalid IPv4 address or CIDR network.")
         vps.user_pw = user_pw or None
         vps.swap = swap
         coinmarketcap_api_key = form.get("coinmarketcap_api_key") if "coinmarketcap_api_key" in form else vps.coinmarketcap_api_key

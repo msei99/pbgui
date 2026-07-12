@@ -7,6 +7,7 @@ import pytest
 
 from master import async_logs
 from master.async_monitor import VPSMonitor
+from Exchange import Exchange
 
 
 class FakePool:
@@ -36,6 +37,32 @@ class FakeMonitorPool:
         if command == "ps -eo pid=,args=":
             return SimpleNamespace(exit_status=0, stdout=self.process_output)
         return SimpleNamespace(exit_status=0, stdout="")
+
+
+class FakeTask:
+    """Minimal cancellable task used to verify stream registry cleanup."""
+
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    def done(self) -> bool:
+        """Report the task as running until cancellation."""
+        return self.cancelled
+
+    def cancel(self) -> None:
+        """Record cancellation without requiring an event loop."""
+        self.cancelled = True
+
+
+class FakeWsClient:
+    """Track asynchronous CCXT-Pro close calls."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def close(self) -> None:
+        """Record that the shared client was released."""
+        self.closed = True
 
 
 def test_pb7_logs_path_is_home_relative():
@@ -156,3 +183,78 @@ def test_kill_instance_uses_only_parsed_numeric_pid():
 
     assert result == {"success": True, "pid": "123"}
     assert pool.commands == ["ps -eo pid=,args=", "kill -- 123"]
+
+
+def test_stop_stream_removes_registry_entry_immediately():
+    """A disconnected remote-log subscriber must not leave its stream object cached."""
+    streamer = async_logs.AsyncLogStreamer(FakePool())
+    task = FakeTask()
+    stream = async_logs.LogStream("stream-1", "host", "data/logs/PBRun.log", task=task)
+    streamer._streams[stream.stream_id] = stream
+
+    streamer.stop_stream(stream.stream_id)
+
+    assert stream.stream_id not in streamer._streams
+    assert stream.active is False
+    assert task.cancelled is True
+
+
+def test_stop_all_streams_clears_registry_immediately():
+    """Shutdown of remote-log streaming must release every cached stream object."""
+    streamer = async_logs.AsyncLogStreamer(FakePool())
+    tasks = [FakeTask(), FakeTask()]
+    for index, task in enumerate(tasks):
+        stream = async_logs.LogStream(f"stream-{index}", "host", "data/logs/PBRun.log", task=task)
+        streamer._streams[stream.stream_id] = stream
+
+    streamer.stop_all_streams()
+
+    assert streamer._streams == {}
+    assert all(task.cancelled for task in tasks)
+
+
+def test_private_ws_client_closes_only_after_last_owner_releases(monkeypatch):
+    """Dashboard disconnects must not close a private client still used by Live SSE."""
+    client = FakeWsClient()
+    user = SimpleNamespace(name="alice")
+    monkeypatch.setattr(Exchange, "_private_ws_clients", {"bybit:alice": client})
+    monkeypatch.setattr(Exchange, "_private_ws_owners", {"bybit:alice": {"dashboard_positions", "live_session.positions"}})
+    monkeypatch.setattr(Exchange, "_private_ws_locks", {"bybit:alice": object()})
+
+    async def release_owners():
+        first = await Exchange.release_private_ws_client("bybit", user, caller="dashboard_positions")
+        second = await Exchange.release_private_ws_client("bybit", user, caller="live_session.positions")
+        return first, second
+
+    first, second = asyncio.run(release_owners())
+
+    assert first is False
+    assert client.closed is True
+    assert second is True
+    assert Exchange._private_ws_clients == {}
+    assert Exchange._private_ws_owners == {}
+    assert Exchange._private_ws_locks == {}
+
+
+def test_shared_ws_client_closes_only_after_last_owner_releases(monkeypatch):
+    """One candle watcher must not close a shared client used by another chart."""
+    client = FakeWsClient()
+    monkeypatch.setattr(Exchange, "_shared_ws_clients", {"bybit": client})
+    monkeypatch.setattr(Exchange, "_shared_ws_owners", {"bybit": {"chart-a", "chart-b"}})
+    monkeypatch.setattr(Exchange, "_shared_ws_markets_loaded", {"bybit"})
+    monkeypatch.setattr(Exchange, "_shared_ws_locks", {"bybit": object()})
+
+    async def release_owners():
+        first = await Exchange.release_shared_ws_client("bybit", caller="chart-a")
+        second = await Exchange.release_shared_ws_client("bybit", caller="chart-b")
+        return first, second
+
+    first, second = asyncio.run(release_owners())
+
+    assert first is False
+    assert client.closed is True
+    assert second is True
+    assert Exchange._shared_ws_clients == {}
+    assert Exchange._shared_ws_owners == {}
+    assert Exchange._shared_ws_markets_loaded == set()
+    assert Exchange._shared_ws_locks == {}

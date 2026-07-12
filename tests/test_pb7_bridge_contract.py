@@ -214,6 +214,22 @@ def test_optimize_editor_missing_hsl_override_falls_back_to_visible_bot_value() 
     assert "result[field.key] = !!field.defaultValue;" not in collector
 
 
+def test_optimize_websocket_reconnect_retires_stale_socket() -> None:
+    """Optimize reconnects must not let a replaced socket schedule another reconnect."""
+    source = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    start = source.index("function connectWS(")
+    end = source.index("function handleError(", start)
+    connect_source = source[start:end]
+
+    assert "wsReconnectTimer: null" in source
+    assert "state.ws.onopen = state.ws.onmessage = state.ws.onclose = state.ws.onerror = null;" in connect_source
+    assert connect_source.count("if (state.ws !== socket) return;") == 3
+    assert "state.ws = null;" in connect_source
+    assert "if (!state.wsReconnectTimer)" in connect_source
+    assert "if (state.wsReconnectTimer !== reconnectTimer) return;" in connect_source
+    assert "state.wsReconnectTimer = null;\n        connectWS();" in connect_source
+
+
 def test_pb7_preflight_allows_fixed_zero_bound_with_positive_active_hsl_config() -> None:
     """A fixed red-threshold bound is safe when PB7 will use the positive current config value."""
     cfg = build_hsl_preflight_config()

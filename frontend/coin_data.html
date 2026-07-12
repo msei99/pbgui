@@ -2033,7 +2033,6 @@
 
     function buildRefreshJobUrl(jobId) {
       var params = new URLSearchParams();
-      params.set('token', TOKEN);
       return API_BASE + '/refresh/jobs/' + encodeURIComponent(jobId) + '?' + params.toString();
     }
 
@@ -2130,7 +2129,6 @@
       params.set('vol_mcap', String(filters.vol_mcap || 0));
       if (filters.only_cpt && supportsCopyTradingFilter(exchange)) params.set('only_cpt', 'true');
       filters.tags.forEach(function (tag) { params.append('tags', tag); });
-      params.set('token', TOKEN);
       return API_BASE + '/state?' + params.toString();
     }
 

@@ -1,30 +1,240 @@
 """Authentication, welcome page, and setup helpers for FastAPI endpoints."""
 
+import asyncio
+from collections import deque
+from dataclasses import dataclass, field
+import hmac
 import json
-import os
+import math
+import re
+import threading
 import time
 import toml
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlencode
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Request, WebSocket
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel
+from starlette.websockets import WebSocketState
 
+from logging_helpers import human_log as _log
 from pbgui_purefunc import (
     PBGDIR,
     PBGUI_SERIAL,
     PBGUI_VERSION,
     legacy_auth_secrets_path,
+    load_ini,
     pb7_runtime_status,
     pbgui_auth_secrets_path,
     save_ini,
 )
+from secure_files import atomic_write_private_text, ensure_private_directory
 
 router = APIRouter()
+SERVICE = "Auth"
 _DEFAULT_PASSWORD = "PBGui$Bot!"
+SESSION_COOKIE_NAME = "pbgui_session"
+_websocket_sessions: dict[str, set[WebSocket]] = {}
+_websocket_watchdogs: dict[WebSocket, asyncio.Task] = {}
+_LOGIN_FAILURE_WINDOW_SECONDS = 5 * 60
+_LOGIN_FAILURE_LIMIT = 5
+_LOGIN_INITIAL_LOCK_SECONDS = 30
+_LOGIN_MAX_LOCK_SECONDS = 15 * 60
+_LOGIN_STATE_TTL_SECONDS = 60 * 60
+_LOGIN_STATE_MAX_ENTRIES = 4096
+_PASSWORDLESS_SESSION_LIMIT = 4096
+_LOGIN_BLOCK_LOG_RE = re.compile(
+    r"^(?P<timestamp>\S+) \[Auth\] \[WARNING\] Login temporarily blocked for client "
+    r"(?P<client>.+?) after repeated failures; retry in (?P<retry>\d+)s"
+    r"(?:; event (?P<event_id>[a-f0-9]+))?$"
+)
+
+
+@dataclass
+class _LoginAttemptState:
+    """Process-local failed-login history for one direct client address."""
+
+    failures: deque[float] = field(default_factory=deque)
+    lock_until: float = 0.0
+    lock_level: int = 0
+    last_seen: float = 0.0
+
+
+_login_attempts: dict[str, _LoginAttemptState] = {}
+_login_attempts_lock = threading.Lock()
+_login_block_count = 0
+_login_last_block: dict[str, object] | None = None
+_login_security_history_loaded = False
+_passwordless_sessions_lock = threading.Lock()
+
+
+def _login_now() -> float:
+    """Return the wall-clock timestamp used by login-throttle calculations."""
+    return time.time()
+
+
+def _prune_login_attempts(now: float) -> None:
+    """Remove inactive throttle entries while the registry lock is held."""
+    expired = [
+        host for host, state in _login_attempts.items()
+        if now - state.last_seen >= _LOGIN_STATE_TTL_SECONDS
+    ]
+    for host in expired:
+        _login_attempts.pop(host, None)
+
+
+def _ensure_login_security_history() -> None:
+    """Load retained login-lock history once while the throttle lock is held."""
+    global _login_block_count, _login_last_block, _login_security_history_loaded
+    if _login_security_history_loaded:
+        return
+    count = 0
+    last_block = None
+    log_dir = Path(PBGDIR) / "data" / "logs"
+    for path in (log_dir / "Auth.log.1", log_dir / "Auth.log"):
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    match = _LOGIN_BLOCK_LOG_RE.match(line.strip())
+                    if not match:
+                        continue
+                    count += 1
+                    last_block = {
+                        "blocked_at": match.group("timestamp"),
+                        "client": match.group("client"),
+                        "retry_seconds": int(match.group("retry")),
+                    }
+                    if match.group("event_id"):
+                        last_block["event_id"] = match.group("event_id")
+        except OSError:
+            continue
+    _login_block_count = count
+    _login_last_block = last_block
+    _login_security_history_loaded = True
+
+
+def _login_security_ack_path() -> Path:
+    """Return the private persisted login-security acknowledgement path."""
+    return Path(PBGDIR) / "data" / "auth" / "login_security_ack.json"
+
+
+def _load_login_security_ack() -> dict[str, object] | None:
+    """Load the last acknowledged block event, logging malformed state."""
+    path = _login_security_ack_path()
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        event = data.get("last_block") if isinstance(data, dict) else None
+        return dict(event) if isinstance(event, dict) else None
+    except (OSError, json.JSONDecodeError) as exc:
+        _log(SERVICE, f"Unable to read login security acknowledgement: {exc}", level="WARNING")
+        return None
+
+
+def _login_security_event_key(event: dict[str, object] | None) -> tuple[object, ...] | None:
+    """Return a restart-stable identity for a retained login block event."""
+    if not event:
+        return None
+    if event.get("event_id"):
+        return ("event_id", event["event_id"])
+    return (
+        "legacy",
+        event.get("blocked_at"),
+        event.get("client"),
+        event.get("retry_seconds"),
+    )
+
+
+def _login_security_status(now: float | None = None) -> dict[str, object]:
+    """Return authenticated login-lock status from memory and retained Auth logs."""
+    current_time = _login_now() if now is None else now
+    with _login_attempts_lock:
+        _ensure_login_security_history()
+        _prune_login_attempts(current_time)
+        active_blocks = sum(1 for state in _login_attempts.values() if state.lock_until > current_time)
+        last_block = dict(_login_last_block) if _login_last_block else None
+        return {
+            "active_blocks": active_blocks,
+            "blocked_attempts": _login_block_count,
+            "last_block": last_block,
+            "acknowledged": last_block is None or (
+                _login_security_event_key(_load_login_security_ack()) == _login_security_event_key(last_block)
+            ),
+        }
+
+
+def _login_retry_after(client_host: str, now: float) -> int:
+    """Return remaining lock seconds for a client, or zero when login may proceed."""
+    with _login_attempts_lock:
+        _prune_login_attempts(now)
+        state = _login_attempts.get(client_host)
+        if state is None:
+            return 0
+        state.last_seen = now
+        if state.lock_until > now:
+            return max(1, math.ceil(state.lock_until - now))
+        state.lock_until = 0.0
+        return 0
+
+
+def _record_login_failure(client_host: str, now: float) -> int:
+    """Record a failed login and return lock seconds when the threshold is reached."""
+    global _login_block_count, _login_last_block
+    with _login_attempts_lock:
+        _ensure_login_security_history()
+        _prune_login_attempts(now)
+        if client_host not in _login_attempts and len(_login_attempts) >= _LOGIN_STATE_MAX_ENTRIES:
+            oldest_host = min(_login_attempts, key=lambda host: _login_attempts[host].last_seen)
+            _login_attempts.pop(oldest_host, None)
+        state = _login_attempts.setdefault(client_host, _LoginAttemptState())
+        state.last_seen = now
+        if state.lock_until > now:
+            return max(1, math.ceil(state.lock_until - now))
+        cutoff = now - _LOGIN_FAILURE_WINDOW_SECONDS
+        while state.failures and state.failures[0] <= cutoff:
+            state.failures.popleft()
+        state.failures.append(now)
+        if len(state.failures) < _LOGIN_FAILURE_LIMIT:
+            return 0
+        lock_seconds = min(
+            _LOGIN_INITIAL_LOCK_SECONDS * (2 ** min(state.lock_level, 5)),
+            _LOGIN_MAX_LOCK_SECONDS,
+        )
+        state.lock_level += 1
+        state.lock_until = now + lock_seconds
+        _login_block_count += 1
+        event_id = uuid4().hex
+        _login_last_block = {
+            "blocked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+            "client": client_host,
+            "retry_seconds": lock_seconds,
+            "event_id": event_id,
+        }
+        _log(
+            SERVICE,
+            f"Login temporarily blocked for client {client_host} after repeated failures; "
+            f"retry in {lock_seconds}s; event {event_id}",
+            level="WARNING",
+        )
+        return lock_seconds
+
+
+def _reset_login_attempts(client_host: str) -> None:
+    """Forget all failures and lock escalation for one client."""
+    with _login_attempts_lock:
+        _login_attempts.pop(client_host, None)
+
+
+def _raise_login_throttled(retry_after: int) -> None:
+    """Raise the standard HTTP response for a temporarily blocked login."""
+    raise HTTPException(
+        status_code=429,
+        detail=f"Too many login attempts. Try again in {retry_after} seconds.",
+        headers={"Retry-After": str(retry_after)},
+    )
 
 
 def _clear_vps_manager_secrets(token: str) -> None:
@@ -60,6 +270,7 @@ class LoginRequest(BaseModel):
 class PasswordChangeRequest(BaseModel):
     current_password: str = ""
     new_password: str = ""
+    disable_auth: bool = False
 
 
 class SetupConfigRequest(BaseModel):
@@ -90,31 +301,24 @@ def _resolve_browse_path(raw_path: str) -> tuple[Path, str]:
 
 def get_tokens_dir() -> Path:
     """Return directory where API tokens are stored."""
-    tokens_dir = Path(PBGDIR) / "data" / "api_tokens"
-    tokens_dir.mkdir(parents=True, exist_ok=True)
-    return tokens_dir
+    return ensure_private_directory(Path(PBGDIR) / "data" / "api_tokens")
 
 
 def _write_auth_secrets_toml(secrets: dict) -> None:
     secrets_path = pbgui_auth_secrets_path()
-    secrets_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = secrets_path.with_suffix(".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as handle:
-        toml.dump(secrets, handle)
-    os.replace(str(tmp_path), str(secrets_path))
+    ensure_private_directory(secrets_path.parent)
+    atomic_write_private_text(secrets_path, toml.dumps(secrets))
 
 
 def _ensure_auth_secrets_file() -> Path:
     secrets_path = pbgui_auth_secrets_path()
-    secrets_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_directory(secrets_path.parent)
     if not secrets_path.exists():
         legacy_path = legacy_auth_secrets_path()
         if legacy_path.exists():
-            tmp_path = secrets_path.with_suffix(".tmp")
-            tmp_path.write_bytes(legacy_path.read_bytes())
-            os.replace(str(tmp_path), str(secrets_path))
+            atomic_write_private_text(secrets_path, legacy_path.read_text(encoding="utf-8"))
         else:
-            _write_auth_secrets_toml({"password": _DEFAULT_PASSWORD})
+            _write_auth_secrets_toml({"auth_mode": "password", "password": _DEFAULT_PASSWORD})
     return secrets_path
 
 
@@ -129,13 +333,59 @@ def _load_auth_secrets() -> tuple[dict, str | None]:
 def _password_state() -> dict:
     secrets, error = _load_auth_secrets()
     password_value = str(secrets.get("password", "")) if not error else ""
-    password_required = bool(password_value) and not error
-    password_missing = (not password_required) and not error
+    configured_mode = str(secrets.get("auth_mode", "")).strip().lower() if not error else ""
+    if not configured_mode:
+        configured_mode = "password" if password_value else "disabled"
+    if configured_mode not in {"password", "disabled"}:
+        error = f"Invalid authentication mode: {configured_mode}"
+    if configured_mode == "password" and not password_value and not error:
+        error = "Password authentication is enabled but no password is configured"
+    auth_mode = configured_mode if not error else "error"
+    password_required = auth_mode == "password"
+    password_missing = auth_mode == "disabled"
+    try:
+        bind_host = str(load_ini("api_server", "host") or "0.0.0.0").strip()
+    except Exception:
+        bind_host = "0.0.0.0"
+    uses_legacy_default = password_value == _DEFAULT_PASSWORD and not error
+    wildcard_bind = bind_host in {"", "0.0.0.0", "::", "[::]"}
+    security_warnings = []
+    if auth_mode == "disabled":
+        if wildcard_bind:
+            security_warnings.append(
+                "Authentication is disabled while PBGui listens on all network interfaces. "
+                "Anyone who can reach the API port has full PBGui access; verify VPN and firewall restrictions."
+            )
+        else:
+            security_warnings.append(
+                f"Authentication is disabled. Anyone who can reach PBGui on {bind_host} has full access."
+            )
+    elif uses_legacy_default and wildcard_bind:
+        security_warnings.append(
+            "PBGui listens on all network interfaces and still uses the known legacy default password. "
+            "Verify that the API port is restricted to VPN or trusted networks, or set an individual password."
+        )
     return {
         "error": error,
+        "mode": auth_mode,
         "required": password_required,
         "missing": password_missing,
         "password": password_value,
+        "bind_host": bind_host,
+        "wildcard_bind": wildcard_bind,
+        "security_warnings": security_warnings,
+    }
+
+
+def auth_runtime_status() -> dict[str, object]:
+    """Return non-secret authentication mode details for global UI status."""
+    state = _password_state()
+    return {
+        "mode": state["mode"],
+        "disabled": state["mode"] == "disabled",
+        "bind_host": state["bind_host"],
+        "wildcard_bind": state["wildcard_bind"],
+        "error": state["error"],
     }
 
 
@@ -150,12 +400,8 @@ def _request_origin(request: Request) -> str:
     return f"{scheme}://{host}" + (f":{port}" if port else "")
 
 
-def _main_page_url(token: str = "") -> str:
-    params: dict[str, str] = {}
-    if token:
-        params["token"] = token
-    query = urlencode(params)
-    return "/api/auth/main_page" + (f"?{query}" if query else "")
+def _main_page_url() -> str:
+    return "/api/auth/main_page"
 
 
 def _root_url() -> str:
@@ -174,8 +420,7 @@ def build_root_entry_response(
     auth_state = _password_state()
 
     if auth_state["error"] or session is not None or not auth_state["required"]:
-        token = session.token if session else ""
-        return RedirectResponse(url=_main_page_url(token=token))
+        return RedirectResponse(url=_main_page_url())
 
     html = _frontend_template_path("root_login.html").read_text(encoding="utf-8")
     html = html.replace('"%%API_ORIGIN%%"', json.dumps(_request_origin(request)))
@@ -189,9 +434,12 @@ def _bootstrap_payload(session: SessionToken | None = None) -> dict:
         "serial": PBGUI_SERIAL,
         "auth": {
             "authenticated": session is not None,
+            "auth_mode": auth_state["mode"],
             "password_required": auth_state["required"],
             "password_missing": auth_state["missing"],
             "error": auth_state["error"],
+            "security_warnings": auth_state["security_warnings"] if session is not None else [],
+            "login_security": _login_security_status() if session is not None else {},
             "token": session.token if session else "",
             "user_id": session.user_id if session else "",
             "expires_at": session.expires_at if session else 0,
@@ -222,12 +470,56 @@ def generate_token(user_id: str, expires_in_seconds: int = 86400) -> SessionToke
     
     # Save token to file
     token_file = get_tokens_dir() / f"{token}.json"
-    token_file.write_text(
+    atomic_write_private_text(
+        token_file,
         json.dumps(session.model_dump(), indent=2),
-        encoding="utf-8"
     )
     
     return session
+
+
+def _get_or_create_passwordless_session(client_host: str) -> SessionToken:
+    """Reuse one bounded passwordless session per direct client address."""
+    user_id = f"passwordless:{client_host}"
+    with _passwordless_sessions_lock:
+        now = time.time()
+        sessions: list[SessionToken] = []
+        for token_file in get_tokens_dir().glob("*.json"):
+            try:
+                session = SessionToken(**json.loads(token_file.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError, ValueError):
+                continue
+            if not session.user_id.startswith("passwordless:"):
+                continue
+            if session.expires_at <= now:
+                revoke_token(session.token)
+                continue
+            sessions.append(session)
+
+        matching = [session for session in sessions if session.user_id == user_id]
+        if matching:
+            keep = max(matching, key=lambda session: session.expires_at)
+            for duplicate in matching:
+                if duplicate.token != keep.token:
+                    revoke_token(duplicate.token)
+            return keep
+
+        if len(sessions) >= _PASSWORDLESS_SESSION_LIMIT:
+            oldest = min(sessions, key=lambda session: session.created_at)
+            revoke_token(oldest.token)
+
+        session = generate_token(user_id, expires_in_seconds=86400)
+        _log(SERVICE, f"Passwordless session issued for client {client_host}", level="INFO")
+        return session
+
+
+async def _revoke_all_sessions() -> int:
+    """Revoke all persisted sessions and close their active WebSockets."""
+    tokens = [path.stem for path in get_tokens_dir().glob("*.json")]
+    for token in tokens:
+        revoke_token(token)
+        await close_websocket_sessions(token)
+    return len(tokens)
 
 
 def validate_token(token: str) -> Optional[SessionToken]:
@@ -281,6 +573,104 @@ def revoke_token(token: str) -> bool:
     return False
 
 
+def set_session_cookie(response: Response, request: Request, session: SessionToken) -> None:
+    """Set the browser session cookie without exposing the token to JavaScript URLs."""
+    max_age = max(0, int(session.expires_at - time.time()))
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        session.token,
+        max_age=max_age,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="strict",
+        path="/",
+    )
+
+
+def unauthenticated_page_redirect(request: Request, status_code: int) -> Optional[RedirectResponse]:
+    """Redirect unauthenticated browser page loads to login without altering API 401s."""
+    accepts_html = "text/html" in request.headers.get("accept", "").lower()
+    if request.method == "GET" and status_code == 401 and accepts_html:
+        return RedirectResponse(url="/", status_code=303, headers={"Cache-Control": "no-store"})
+    return None
+
+
+def _unregister_websocket(websocket: WebSocket, token: str) -> None:
+    """Remove one WebSocket from the token-scoped active-session registry."""
+    sockets = _websocket_sessions.get(token)
+    if sockets is not None:
+        sockets.discard(websocket)
+        if not sockets:
+            _websocket_sessions.pop(token, None)
+    _websocket_watchdogs.pop(websocket, None)
+
+
+async def _websocket_auth_watchdog(websocket: WebSocket, token: str) -> None:
+    """Close an accepted WebSocket when its backing session is revoked or expires."""
+    try:
+        while websocket.client_state == WebSocketState.CONNECTED:
+            await asyncio.sleep(1)
+            if validate_token(token) is None:
+                await websocket.close(code=4001, reason="Session expired or revoked")
+                break
+    except (asyncio.CancelledError, RuntimeError):
+        pass
+    finally:
+        _unregister_websocket(websocket, token)
+
+
+async def authenticate_websocket(websocket: WebSocket) -> Optional[SessionToken]:
+    """Authenticate and track a browser WebSocket through its HttpOnly cookie."""
+    token = str(websocket.cookies.get(SESSION_COOKIE_NAME) or "").strip()
+    session = validate_token(token)
+    if session is None:
+        await websocket.close(code=4001)
+        return None
+    await websocket.accept()
+    _websocket_sessions.setdefault(token, set()).add(websocket)
+    _websocket_watchdogs[websocket] = asyncio.create_task(
+        _websocket_auth_watchdog(websocket, token),
+        name="websocket-auth-watchdog",
+    )
+    return session
+
+
+async def close_websocket_sessions(token: str) -> None:
+    """Immediately close every active WebSocket authenticated by *token*."""
+    sockets = list(_websocket_sessions.pop(str(token or "").strip(), set()))
+    tasks: list[asyncio.Task] = []
+    for websocket in sockets:
+        try:
+            await websocket.close(code=4001, reason="Session logged out")
+        except RuntimeError:
+            pass
+        task = _websocket_watchdogs.pop(websocket, None)
+        if task is not None:
+            task.cancel()
+            tasks.append(task)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def shutdown() -> None:
+    """Close authenticated WebSockets and await every session watchdog."""
+    sockets = {websocket for group in _websocket_sessions.values() for websocket in group}
+    sockets.update(_websocket_watchdogs)
+    _websocket_sessions.clear()
+    tasks = list(_websocket_watchdogs.values())
+    _websocket_watchdogs.clear()
+    for websocket in sockets:
+        try:
+            await websocket.close(code=1001, reason="API shutting down")
+        except RuntimeError:
+            pass
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def cleanup_expired_tokens() -> int:
     """Delete all expired tokens.
     
@@ -332,15 +722,7 @@ def refresh_token(token: str, extends_seconds: int = 86400) -> Optional[SessionT
             return None
 
         session.expires_at = time.time() + extends_seconds
-        tmp_path = token_file.with_name(f".{token_file.name}.{uuid4().hex}.tmp")
-        try:
-            tmp_path.write_text(
-                json.dumps(session.model_dump(), indent=4),
-                encoding="utf-8",
-            )
-            os.replace(str(tmp_path), str(token_file))
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        atomic_write_private_text(token_file, json.dumps(session.model_dump(), indent=4))
         return session
     except Exception:
         return None
@@ -349,26 +731,17 @@ def refresh_token(token: str, extends_seconds: int = 86400) -> Optional[SessionT
 # ── FastAPI Dependencies ──
 
 def get_token_from_request(
-    token: Optional[str] = Query(None, description="API token"),
-    authorization: Optional[str] = Header(None, description="Bearer token")
+    authorization: Optional[str] = Header(None, description="Bearer token"),
+    session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
 ) -> str:
-    """Extract token from request (query param or Authorization header).
-    
-    Supports both:
-    - ?token=xxx (for iframe URLs)
-    - Authorization: Bearer xxx (for API calls)
-    """
-    # Try query param first (iframe)
-    if token:
-        return token.strip()
-    
-    # Try Authorization header
+    """Extract a token from a Bearer header or the HttpOnly browser cookie."""
     if authorization and authorization.startswith("Bearer "):
         return authorization.replace("Bearer ", "").strip()
-    
+    if session_cookie:
+        return session_cookie.strip()
     raise HTTPException(
         status_code=401,
-        detail="Missing authentication token. Provide ?token=xxx or Authorization: Bearer xxx"
+        detail="Missing authentication token. Provide an Authorization Bearer header or session cookie."
     )
 
 
@@ -395,8 +768,8 @@ def require_auth(token_str: str = Depends(get_token_from_request)) -> SessionTok
 
 
 def optional_auth(
-    token: Optional[str] = Query(None),
-    authorization: Optional[str] = Header(None)
+    authorization: Optional[str] = Header(None),
+    session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
 ) -> Optional[SessionToken]:
     """FastAPI dependency for optional authentication.
     
@@ -405,11 +778,10 @@ def optional_auth(
     """
     # Try to extract token
     token_str = None
-    if token:
-        token_str = token.strip()
-    elif authorization and authorization.startswith("Bearer "):
+    if authorization and authorization.startswith("Bearer "):
         token_str = authorization.replace("Bearer ", "").strip()
-    
+    elif session_cookie:
+        token_str = session_cookie.strip()
     if not token_str:
         return None
     
@@ -422,50 +794,128 @@ def bootstrap(session: Optional[SessionToken] = Depends(optional_auth)) -> dict:
     return _bootstrap_payload(session)
 
 
+@router.post("/login-security/ack")
+def acknowledge_login_security(session: SessionToken = Depends(require_auth)) -> dict:
+    """Acknowledge the latest retained login-lock event for all browsers."""
+    del session
+    with _login_attempts_lock:
+        _ensure_login_security_history()
+        last_block = dict(_login_last_block) if _login_last_block else None
+    if last_block is not None:
+        path = _login_security_ack_path()
+        try:
+            ensure_private_directory(path.parent)
+            atomic_write_private_text(
+                path,
+                json.dumps(
+                    {
+                        "last_block": last_block,
+                        "acknowledged_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    },
+                    indent=4,
+                ),
+            )
+        except OSError as exc:
+            _log(SERVICE, f"Unable to save login security acknowledgement: {exc}", level="ERROR")
+            raise HTTPException(status_code=500, detail="Unable to save login security acknowledgement") from exc
+    return {"ok": True, "login_security": _login_security_status()}
+
+
 @router.post("/login")
-def login(payload: LoginRequest, request: Request) -> dict:
+def login(payload: LoginRequest, request: Request, response: Response) -> dict:
     """Authenticate the welcome page and return a fresh API token."""
     auth_state = _password_state()
     if auth_state["error"]:
         raise HTTPException(status_code=500, detail=auth_state["error"])
 
-    if auth_state["required"] and payload.password != auth_state["password"]:
-        raise HTTPException(status_code=401, detail="Password incorrect")
-
     client_host = request.client.host if request.client else "local"
+    now = _login_now()
+    if auth_state["required"]:
+        retry_after = _login_retry_after(client_host, now)
+        if retry_after:
+            _raise_login_throttled(retry_after)
+        password_matches = hmac.compare_digest(
+            payload.password.encode("utf-8"),
+            auth_state["password"].encode("utf-8"),
+        )
+        if not password_matches:
+            retry_after = _record_login_failure(client_host, now)
+            if retry_after:
+                _raise_login_throttled(retry_after)
+            raise HTTPException(status_code=401, detail="Password incorrect")
+
+    _reset_login_attempts(client_host)
     session = generate_token(f"welcome:{client_host}", expires_in_seconds=86400)
-    response = _bootstrap_payload(session)
-    response["message"] = "Authenticated"
-    return response
+    set_session_cookie(response, request, session)
+    result = _bootstrap_payload(session)
+    result["message"] = "Authenticated"
+    return result
 
 
 @router.post("/logout")
-def logout(session: SessionToken = Depends(require_auth)) -> dict:
+async def logout(response: Response, session: SessionToken = Depends(require_auth)) -> dict:
     """Revoke the current API token."""
     revoke_token(session.token)
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/", httponly=True, samesite="strict")
+    await close_websocket_sessions(session.token)
     return {"ok": True}
 
 
 @router.post("/change-password")
-def change_password(payload: PasswordChangeRequest, session: SessionToken = Depends(require_auth)) -> dict:
-    """Change the PBGui password from the FastAPI welcome page."""
+async def change_password(
+    payload: PasswordChangeRequest,
+    request: Request,
+    response: Response,
+    session: SessionToken = Depends(require_auth),
+) -> dict:
+    """Change password authentication mode and rotate every active session."""
+    del session
     auth_state = _password_state()
     if auth_state["error"]:
         raise HTTPException(status_code=500, detail=auth_state["error"])
 
-    if auth_state["required"] and payload.current_password != auth_state["password"]:
+    if payload.disable_auth and payload.new_password:
+        raise HTTPException(status_code=400, detail="New password must be empty when disabling authentication")
+    if not payload.disable_auth and not payload.new_password:
+        raise HTTPException(status_code=400, detail="Enter a new password or explicitly disable authentication")
+    if auth_state["required"] and not hmac.compare_digest(
+        payload.current_password.encode("utf-8"),
+        auth_state["password"].encode("utf-8"),
+    ):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
     secrets, error = _load_auth_secrets()
     if error:
         raise HTTPException(status_code=500, detail=error)
 
-    secrets["password"] = payload.new_password
+    new_mode = "disabled" if payload.disable_auth else "password"
+    secrets["auth_mode"] = new_mode
+    secrets["password"] = "" if payload.disable_auth else payload.new_password
     _write_auth_secrets_toml(secrets)
 
-    response = _bootstrap_payload(session)
-    response["message"] = "Password updated"
-    return response
+    revoked_count = await _revoke_all_sessions()
+    client_host = request.client.host if request.client else "local"
+    new_session = generate_token(f"welcome:{client_host}", expires_in_seconds=86400)
+    set_session_cookie(response, request, new_session)
+    if new_mode == "disabled":
+        _log(
+            SERVICE,
+            f"Authentication disabled by client {client_host}; revoked {revoked_count} existing sessions",
+            level="WARNING",
+        )
+        message = "Authentication disabled"
+    else:
+        action = "Password authentication enabled" if auth_state["mode"] == "disabled" else "Password updated"
+        _log(
+            SERVICE,
+            f"{action} by client {client_host}; revoked {revoked_count} existing sessions",
+            level="INFO",
+        )
+        message = action
+
+    result = _bootstrap_payload(new_session)
+    result["message"] = message
+    return result
 
 
 @router.post("/setup")
@@ -543,7 +993,7 @@ def main_page(
         return RedirectResponse(url=_root_url())
     if active_session is None and not auth_state["required"] and not auth_state["error"]:
         client_host = request.client.host if request.client else "local"
-        active_session = generate_token(f"welcome:{client_host}", expires_in_seconds=86400)
+        active_session = _get_or_create_passwordless_session(client_host)
 
     html_path = _frontend_template_path("welcome.html")
     html = html_path.read_text(encoding="utf-8")
@@ -559,4 +1009,10 @@ def main_page(
     nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION
     html = html.replace('%%NAV_HASH%%', nav_hash)
 
-    return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
+    response = HTMLResponse(
+        content=html,
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
+    if active_session is not None:
+        set_session_cookie(response, request, active_session)
+    return response

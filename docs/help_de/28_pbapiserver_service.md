@@ -41,22 +41,24 @@ Die Navigationsleiste zeigt einen orangefarbenen **Restart**-Button, wenn sich A
 
 PBAPIServer bietet mehrere Echtzeit-WebSocket-Streams:
 
-| Endpunkt | Zweck |
-|---|---|
-| `/ws/jobs` | Job-Queue-Updates (alle 2 s) |
-| `/ws/dashboard` | Balance- und Positions-Änderungsbenachrichtigungen (von PBData über interne Endpunkte gepusht) |
-| `/ws/candles` | Live-Chart-Candle-Daten via ccxtpro-Streams mit Polling-Fallback |
-| `/ws/market-data` | Datenpipeline-Status pro Exchange |
-| `/ws/vps` | VPS-Metriken, Logs, Service-Steuerung |
-| `/ws/heatmap-watch` | Benachrichtigungen bei Datei-Änderungen |
+| Endpunkt | Server-Nachrichtenformat | Client-Eingabe |
+|---|---|---|
+| `/ws/jobs` | `{"type":"jobs","data":[...],"timestamp":...}` mit bis zu 50 wartenden/laufenden Jobs | Keine |
+| `/ws/dashboard` | Envelopes `balance_updated`, `income_updated`, `positions_updated`, `nav_request` oder `dashboard_action` | Keine |
+| `/ws/candles` | Envelopes `candle`, `position`, `orders` oder `ping` | Query: `user`, `symbol`, optional `tf`, `side` |
+| `/ws/market-data` | Flaches `market_data_status`-Envelope mit Exchange, Running-/Queued-Status, Zählern und `coin_rows` | Query: `exchange` |
+| `/ws/vps` | `state`, `log_lines`, `local_log_lines`, Kommandoergebnisse oder `error` | JSON-Kommandos mit `cmd` |
+| `/ws/heatmap-watch` | `{"type":"updated","mtime":...}` | Query: `exchange`, `dataset`, `coin` |
+| `/api/v7/ws/v7` | `{"type":"instances","data":[...]}` | Empfangener Text wird ignoriert |
+| `/api/backtest-v7/ws/bt7` | `queue_update` oder `archive_update` | `{"type":"refresh"}` |
+| `/api/optimize-v7/ws/opt7` | `queue_update` | `{"type":"refresh"}` |
+| `/api/vps-manager/ws` | `state`, `detail`, `result`, `error` und kommandospezifische Envelopes | JSON-Kommandos mit `cmd` |
 
-Alle WebSocket-Verbindungen erfordern ein gültiges Authentifizierungs-Token.
+Browser-WebSockets authentifizieren sich über das HttpOnly-Cookie `pbgui_session`. Ungültige oder widerrufene Sessions werden mit Code `4001` geschlossen.
 
 ## Authentifizierung
 
-Alle API-Endpunkte und WebSocket-Verbindungen erfordern ein gültiges Token:
-- Query-Parameter: `?token=xxx`
-- Oder HTTP-Header: `Authorization: Bearer xxx`
+Browser-Seiten und WebSockets verwenden das HttpOnly-Cookie `pbgui_session`. API-Clients können für REST-Requests weiterhin `Authorization: Bearer xxx` verwenden.
 
 Tokens werden beim Login generiert und laufen nach 24 Stunden ab. Alle FastAPI-Seiten erneuern Tokens automatisch alle 30 Minuten. Bei abgelaufenem Token leitet die Seite zum Login-Bildschirm weiter.
 

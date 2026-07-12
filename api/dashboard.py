@@ -42,6 +42,10 @@ _pending_full_configs: dict[str, dict[str, Any]] = {}
 
 # Cache connected Exchange instances per user so CCXT init only runs once per user.
 _exchange_cache: dict[str, Any] = {}
+_exchange_cache_last_used: dict[str, float] = {}
+_exchange_cache_lock = threading.RLock()
+_EXCHANGE_CACHE_IDLE_SECONDS = 15 * 60
+_EXCHANGE_CACHE_MAX_SIZE = 64
 
 _PANIC_GLOBAL_MODE = "p"
 _PANIC_OVERRIDE_MODE = "panic"
@@ -682,15 +686,39 @@ async def _save_dashboard_panic_config(name: str, config_path: Path, cfg: dict) 
     return {"name": name, "version": version, "sync": sync_result}
 
 
+def _prune_exchange_cache(now: float, keep_key: str | None = None) -> None:
+    """Close idle or excess REST exchange clients without evicting the active key."""
+    stale_keys = [
+        key for key, last_used in _exchange_cache_last_used.items()
+        if key != keep_key and now - last_used >= _EXCHANGE_CACHE_IDLE_SECONDS
+    ]
+    remaining = len(_exchange_cache) - len(stale_keys)
+    if remaining >= _EXCHANGE_CACHE_MAX_SIZE:
+        candidates = sorted(
+            (last_used, key) for key, last_used in _exchange_cache_last_used.items()
+            if key != keep_key and key not in stale_keys
+        )
+        stale_keys.extend(key for _, key in candidates[:remaining - _EXCHANGE_CACHE_MAX_SIZE + 1])
+    for key in stale_keys:
+        exchange = _exchange_cache.pop(key, None)
+        _exchange_cache_last_used.pop(key, None)
+        if exchange:
+            exchange.close()
+
+
 def _get_exchange(user_obj):
     """Return a cached, connected Exchange instance for the given user object."""
     from Exchange import Exchange
     key = f"{user_obj.name}:{user_obj.exchange}"
-    if key not in _exchange_cache:
-        ex = Exchange(user_obj.exchange, user_obj)
-        ex.connect()
-        _exchange_cache[key] = ex
-    return _exchange_cache[key]
+    now = _time.time()
+    with _exchange_cache_lock:
+        _prune_exchange_cache(now, keep_key=key)
+        if key not in _exchange_cache:
+            ex = Exchange(user_obj.exchange, user_obj)
+            ex.connect()
+            _exchange_cache[key] = ex
+        _exchange_cache_last_used[key] = now
+        return _exchange_cache[key]
 
 
 def _market_close_params(exchange_id: str, side: str, hedged_symbol: bool = False) -> dict[str, Any]:
@@ -876,6 +904,8 @@ _OHLCV_TTL = 300  # 5 min
 _OHLCV_POLL_INTERVAL = 5  # seconds
 
 _ohlcv_poller_started = False
+_ohlcv_poller_thread: threading.Thread | None = None
+_ohlcv_poller_stop = threading.Event()
 
 
 def _symbol_to_ccxt(symbol: str) -> str:
@@ -923,8 +953,7 @@ def _ohlcv_poll_loop():
     """
     from logging_helpers import human_log as _log
     _log("Dashboard", "OHLCV poller thread started")
-    while True:
-        _time.sleep(_OHLCV_POLL_INTERVAL)
+    while not _ohlcv_poller_stop.wait(_OHLCV_POLL_INTERVAL):
         now = _time.time()
         # Copy keys to avoid mutation during iteration
         keys = list(_ohlcv_active.keys())
@@ -957,16 +986,22 @@ def _ohlcv_poll_loop():
                                           from_thread=True)
             except Exception as e:
                 _log("Dashboard", f"OHLCV poll error {key}: {e}", level="WARNING")
+    _log("Dashboard", "OHLCV poller thread stopped")
 
 
 def _start_ohlcv_poller():
     """Start the background poller thread (once)."""
-    global _ohlcv_poller_started
-    if _ohlcv_poller_started:
+    global _ohlcv_poller_started, _ohlcv_poller_thread
+    if _ohlcv_poller_thread is not None and _ohlcv_poller_thread.is_alive():
         return
+    _ohlcv_poller_stop.clear()
     _ohlcv_poller_started = True
-    t = threading.Thread(target=_ohlcv_poll_loop, daemon=True)
-    t.start()
+    _ohlcv_poller_thread = threading.Thread(
+        target=_ohlcv_poll_loop,
+        daemon=True,
+        name="dashboard-ohlcv-poller",
+    )
+    _ohlcv_poller_thread.start()
 
 
 # ── Event loop reference for cross-thread queue access (Phase 2) ──────────
@@ -1094,6 +1129,14 @@ def refresh_positions_for_user(user_name: str):
 _ws_ohlcv_tasks: dict[tuple[str, str, str], _asyncio.Task] = {}
 _ws_position_tasks: dict[str, _asyncio.Task] = {}   # per user
 _ws_order_tasks: dict[str, _asyncio.Task] = {}       # per user
+_stream_task_lock: _asyncio.Lock | None = None
+
+
+def _get_stream_task_lock() -> _asyncio.Lock:
+    global _stream_task_lock
+    if _stream_task_lock is None:
+        _stream_task_lock = _asyncio.Lock()
+    return _stream_task_lock
 
 
 async def _watch_ohlcv_stream(user_name: str, symbol: str, tf: str):
@@ -1105,8 +1148,9 @@ async def _watch_ohlcv_stream(user_name: str, symbol: str, tf: str):
     if not user_obj:
         return
     ex_id = "kucoinfutures" if user_obj.exchange == "kucoin" else user_obj.exchange
+    caller = f"dashboard_ohlcv:{user_name}:{symbol}:{tf}"
     try:
-        ws_client = await Exchange.get_shared_ws_client(ex_id, user_obj)
+        ws_client = await Exchange.get_shared_ws_client(ex_id, user_obj, caller=caller)
     except Exception as e:
         _log("Dashboard", f"ccxt.pro unavailable for {ex_id}: {e}", level="WARNING")
         return
@@ -1130,6 +1174,8 @@ async def _watch_ohlcv_stream(user_name: str, symbol: str, tf: str):
                 await _asyncio.sleep(5)
     except _asyncio.CancelledError:
         _log("Dashboard", f"watchOHLCV stopped: {user_name} {symbol} {tf}")
+    finally:
+        await Exchange.release_shared_ws_client(ex_id, caller=caller)
 
 
 async def _watch_positions_stream(user_name: str):
@@ -1140,9 +1186,10 @@ async def _watch_positions_stream(user_name: str):
     if not user_obj:
         return
     ex_id = "kucoinfutures" if user_obj.exchange == "kucoin" else user_obj.exchange
+    caller = "dashboard_positions"
     try:
         ws_client = await Exchange.get_private_ws_client(ex_id, user_obj,
-                                                         caller="dashboard_positions")
+                                                         caller=caller)
     except Exception as e:
         _log("Dashboard", f"ccxt.pro private unavailable for {ex_id}/{user_name}: {e}",
              level="WARNING")
@@ -1182,6 +1229,8 @@ async def _watch_positions_stream(user_name: str):
                 await _asyncio.sleep(5)
     except _asyncio.CancelledError:
         _log("Dashboard", f"watchPositions stopped: {user_name}")
+    finally:
+        await Exchange.release_private_ws_client(ex_id, user_obj, caller=caller)
 
 
 async def _watch_orders_stream(user_name: str):
@@ -1192,9 +1241,10 @@ async def _watch_orders_stream(user_name: str):
     if not user_obj:
         return
     ex_id = "kucoinfutures" if user_obj.exchange == "kucoin" else user_obj.exchange
+    caller = "dashboard_orders"
     try:
         ws_client = await Exchange.get_private_ws_client(ex_id, user_obj,
-                                                         caller="dashboard_orders")
+                                                         caller=caller)
     except Exception as e:
         _log("Dashboard", f"ccxt.pro private unavailable for {ex_id}/{user_name}: {e}",
              level="WARNING")
@@ -1233,6 +1283,8 @@ async def _watch_orders_stream(user_name: str):
                 await _asyncio.sleep(5)
     except _asyncio.CancelledError:
         _log("Dashboard", f"watchOrders stopped: {user_name}")
+    finally:
+        await Exchange.release_private_ws_client(ex_id, user_obj, caller=caller)
 
 
 async def register_chart_client(user_name: str, symbol: str, tf: str, side: str,
@@ -1278,38 +1330,39 @@ async def register_chart_client(user_name: str, symbol: str, tf: str, side: str,
     except Exception:
         pass
 
-    # Try to start ccxt.pro OHLCV stream
-    if candle_key not in _ws_ohlcv_tasks or _ws_ohlcv_tasks[candle_key].done():
-        try:
-            task = _asyncio.create_task(
-                _watch_ohlcv_stream(user_name, symbol, tf),
-                name=f"watchOHLCV-{user_name}-{symbol}-{tf}"
-            )
-            _ws_ohlcv_tasks[candle_key] = task
-        except Exception as e:
-            _log("Dashboard", f"Failed to start watchOHLCV: {e}", level="WARNING")
+    async with _get_stream_task_lock():
+        # Try to start ccxt.pro OHLCV stream
+        if candle_key not in _ws_ohlcv_tasks or _ws_ohlcv_tasks[candle_key].done():
+            try:
+                task = _asyncio.create_task(
+                    _watch_ohlcv_stream(user_name, symbol, tf),
+                    name=f"watchOHLCV-{user_name}-{symbol}-{tf}"
+                )
+                _ws_ohlcv_tasks[candle_key] = task
+            except Exception as e:
+                _log("Dashboard", f"Failed to start watchOHLCV: {e}", level="WARNING")
 
-    # Try to start ccxt.pro position stream (one per user)
-    if user_name not in _ws_position_tasks or _ws_position_tasks[user_name].done():
-        try:
-            task = _asyncio.create_task(
-                _watch_positions_stream(user_name),
-                name=f"watchPositions-{user_name}"
-            )
-            _ws_position_tasks[user_name] = task
-        except Exception as e:
-            _log("Dashboard", f"Failed to start watchPositions: {e}", level="WARNING")
+        # Try to start ccxt.pro position stream (one per user)
+        if user_name not in _ws_position_tasks or _ws_position_tasks[user_name].done():
+            try:
+                task = _asyncio.create_task(
+                    _watch_positions_stream(user_name),
+                    name=f"watchPositions-{user_name}"
+                )
+                _ws_position_tasks[user_name] = task
+            except Exception as e:
+                _log("Dashboard", f"Failed to start watchPositions: {e}", level="WARNING")
 
-    # Try to start ccxt.pro order stream (one per user)
-    if user_name not in _ws_order_tasks or _ws_order_tasks[user_name].done():
-        try:
-            task = _asyncio.create_task(
-                _watch_orders_stream(user_name),
-                name=f"watchOrders-{user_name}"
-            )
-            _ws_order_tasks[user_name] = task
-        except Exception as e:
-            _log("Dashboard", f"Failed to start watchOrders: {e}", level="WARNING")
+        # Try to start ccxt.pro order stream (one per user)
+        if user_name not in _ws_order_tasks or _ws_order_tasks[user_name].done():
+            try:
+                task = _asyncio.create_task(
+                    _watch_orders_stream(user_name),
+                    name=f"watchOrders-{user_name}"
+                )
+                _ws_order_tasks[user_name] = task
+            except Exception as e:
+                _log("Dashboard", f"Failed to start watchOrders: {e}", level="WARNING")
 
     # Ensure polling fallback is running
     _start_ohlcv_poller()
@@ -1340,29 +1393,83 @@ async def unregister_chart_client(user_name: str, symbol: str, tf: str, side: st
             if not subs:
                 _order_subscribers.pop(pos_key, None)
 
-    # Stop OHLCV stream if no more candle subscribers for this key
+    tasks_to_stop: list[_asyncio.Task] = []
+    async with _get_stream_task_lock():
+        # Stop OHLCV stream if no more candle subscribers for this key
+        with _candle_sub_lock:
+            has_candle_subs = bool(_candle_subscribers.get(candle_key))
+        if not has_candle_subs:
+            task = _ws_ohlcv_tasks.get(candle_key)
+            if task is not None:
+                tasks_to_stop.append(task)
+
+        # Stop position stream if no more position subscribers for this user
+        with _position_sub_lock:
+            has_pos_subs = any(k[0] == user_name for k in _position_subscribers)
+        if not has_pos_subs:
+            task = _ws_position_tasks.get(user_name)
+            if task is not None:
+                tasks_to_stop.append(task)
+
+        # Stop order stream if no more order subscribers for this user
+        with _order_sub_lock:
+            has_ord_subs = any(k[0] == user_name for k in _order_subscribers)
+        if not has_ord_subs:
+            task = _ws_order_tasks.get(user_name)
+            if task is not None:
+                tasks_to_stop.append(task)
+
+        for task in tasks_to_stop:
+            if not task.done():
+                task.cancel()
+        if tasks_to_stop:
+            await _asyncio.gather(*tasks_to_stop, return_exceptions=True)
+        if not has_candle_subs:
+            _ws_ohlcv_tasks.pop(candle_key, None)
+        if not has_pos_subs:
+            _ws_position_tasks.pop(user_name, None)
+        if not has_ord_subs:
+            _ws_order_tasks.pop(user_name, None)
+
+
+async def shutdown() -> None:
+    """Stop dashboard polling and shared streams owned by the API process."""
+    global _event_loop, _ohlcv_poller_started, _ohlcv_poller_thread, _stream_task_lock
+    _ohlcv_poller_stop.set()
+    poller_thread = _ohlcv_poller_thread
+    if poller_thread is not None and poller_thread.is_alive():
+        await _asyncio.to_thread(poller_thread.join)
+    _ohlcv_poller_thread = None
+    _ohlcv_poller_started = False
+
+    lock = _get_stream_task_lock()
+    async with lock:
+        tasks = list({*list(_ws_ohlcv_tasks.values()), *list(_ws_position_tasks.values()), *list(_ws_order_tasks.values())})
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await _asyncio.gather(*tasks, return_exceptions=True)
+        _ws_ohlcv_tasks.clear()
+        _ws_position_tasks.clear()
+        _ws_order_tasks.clear()
     with _candle_sub_lock:
-        has_candle_subs = bool(_candle_subscribers.get(candle_key))
-    if not has_candle_subs:
-        task = _ws_ohlcv_tasks.pop(candle_key, None)
-        if task and not task.done():
-            task.cancel()
-
-    # Stop position stream if no more position subscribers for this user
+        _candle_subscribers.clear()
     with _position_sub_lock:
-        has_pos_subs = any(k[0] == user_name for k in _position_subscribers)
-    if not has_pos_subs:
-        task = _ws_position_tasks.pop(user_name, None)
-        if task and not task.done():
-            task.cancel()
-
-    # Stop order stream if no more order subscribers for this user
+        _position_subscribers.clear()
     with _order_sub_lock:
-        has_ord_subs = any(k[0] == user_name for k in _order_subscribers)
-    if not has_ord_subs:
-        task = _ws_order_tasks.pop(user_name, None)
-        if task and not task.done():
-            task.cancel()
+        _order_subscribers.clear()
+    with _exchange_cache_lock:
+        exchanges = list(_exchange_cache.values())
+        _exchange_cache.clear()
+        _exchange_cache_last_used.clear()
+    if exchanges:
+        await _asyncio.gather(
+            *(_asyncio.to_thread(exchange.close) for exchange in exchanges),
+            return_exceptions=True,
+        )
+    _event_loop = None
+    _stream_task_lock = None
 
 
 # --------------------------------------------------------------------------- helpers

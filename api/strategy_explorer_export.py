@@ -536,7 +536,7 @@ def export_plotly_animation_to_mp4(
             except Exception:
                 pass
 
-        stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+        stderr_thread = threading.Thread(target=_read_stderr, daemon=True, name="strategy-export-ffmpeg-stderr")
         stderr_thread.start()
         stderr_lines: list[str] = []
         stderr_buf = ""
@@ -624,15 +624,22 @@ def export_plotly_animation_to_mp4(
             raise RuntimeError(f"ffmpeg closed pipe during Movie export:\n{stderr_output}") from exc
         finally:
             try:
-                if proc.stderr is not None:
-                    proc.stderr.close()
+                if proc.stdin is not None and not proc.stdin.closed:
+                    proc.stdin.close()
             except Exception:
                 pass
             try:
                 if proc.poll() is None:
                     proc.kill()
+                proc.wait(timeout=5)
             except Exception:
                 pass
+            try:
+                if proc.stderr is not None:
+                    proc.stderr.close()
+            except Exception:
+                pass
+            stderr_thread.join(timeout=5)
 
         _export_progress(progress_cb, 1.0, "Movie export ready.")
         return out_mp4.read_bytes(), {"codec": codec, "preset": preset, "ffmpeg": ffmpeg_source, "frames": len(frames), "options": opts}

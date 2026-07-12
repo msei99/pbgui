@@ -2,7 +2,26 @@
 
 from __future__ import annotations
 
+import json
+
 import market_data_sources as sources
+import market_data_tradfi as tradfi
+
+
+class _JsonResponse:
+    """Minimal urllib response context manager for Tiingo tests."""
+
+    def __init__(self, payload) -> None:
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
 
 
 def test_non_hyperliquid_other_code_is_reported_as_api(monkeypatch, tmp_path) -> None:
@@ -45,3 +64,77 @@ def test_hyperliquid_other_code_stays_other_exchange(monkeypatch, tmp_path) -> N
     assert minutes["20240101"]["00"] == {0: "other_exchange"}
     assert counts["20240101"]["api"] == 0
     assert counts["20240101"]["other_exchange"] == 1
+
+
+def test_tiingo_refresh_preserves_valid_cache_when_requests_fail(monkeypatch, tmp_path) -> None:
+    """Transient Tiingo failures must not replace valid mapped quotes with an empty cache."""
+    cache_path = tmp_path / "tradfi_quote_cache.json"
+    cache_path.write_text(
+        json.dumps(
+            {
+                "fetched_at": "2026-07-10T12:00:00+00:00",
+                "quotes": {
+                    "AAPL": {"price": 200.0, "source": "iex_all"},
+                    "eurusd": {"price": 1.17, "source": "fx_top"},
+                    "REMOVED": {"price": 5.0, "source": "iex_all"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tradfi, "tradfi_quote_cache_path", lambda: cache_path)
+
+    def fail_request(*args, **kwargs):
+        raise OSError("Tiingo unavailable")
+
+    monkeypatch.setattr("urllib.request.urlopen", fail_request)
+
+    result = tradfi.refresh_tradfi_quote_cache(
+        api_key="test-key",
+        records=[{"tiingo_ticker": "AAPL"}, {"tiingo_fx_ticker": "EURUSD"}],
+    )
+
+    saved = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert saved["fetched_at"] == "2026-07-10T12:00:00+00:00"
+    assert saved["quotes"] == {
+        "AAPL": {"price": 200.0, "source": "iex_all"},
+        "eurusd": {"price": 1.17, "source": "fx_top"},
+    }
+    assert result["quotes_saved"] == 2
+
+
+def test_tiingo_refresh_merges_fresh_quotes_with_cached_failed_provider(monkeypatch, tmp_path) -> None:
+    """A successful equity refresh must retain cached FX quotes when only FX fails."""
+    cache_path = tmp_path / "tradfi_quote_cache.json"
+    cache_path.write_text(
+        json.dumps(
+            {
+                "fetched_at": "2026-07-10T12:00:00+00:00",
+                "quotes": {
+                    "AAPL": {"price": 190.0, "source": "iex_all"},
+                    "eurusd": {"price": 1.17, "source": "fx_top"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tradfi, "tradfi_quote_cache_path", lambda: cache_path)
+
+    def partial_response(request, timeout):
+        if request.full_url.startswith("https://api.tiingo.com/iex?"):
+            return _JsonResponse([{"ticker": "AAPL", "tngoLast": 205.0, "timestamp": "fresh"}])
+        raise OSError("Tiingo FX unavailable")
+
+    monkeypatch.setattr("urllib.request.urlopen", partial_response)
+
+    result = tradfi.refresh_tradfi_quote_cache(
+        api_key="test-key",
+        records=[{"tiingo_ticker": "AAPL"}, {"tiingo_fx_ticker": "EURUSD"}],
+    )
+
+    saved = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert saved["quotes"]["AAPL"]["price"] == 205.0
+    assert saved["quotes"]["AAPL"]["quote_timestamp"] == "fresh"
+    assert saved["quotes"]["eurusd"] == {"price": 1.17, "source": "fx_top"}
+    assert saved["fetched_at"] != "2026-07-10T12:00:00+00:00"
+    assert result["quotes_saved"] == 2

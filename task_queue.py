@@ -4,21 +4,39 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from market_data import get_market_data_root_dir
+from file_lock import advisory_file_lock
+
+
+def _task_queue_lock():
+    """Return the global task queue transaction lock."""
+    return advisory_file_lock(get_tasks_root_dir() / ".queue")
+
+
+def _serialized_task_write(func):
+    """Hold the queue lock across a complete task state transition."""
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        with _task_queue_lock():
+            return func(*args, **kwargs)
+
+    return wrapped
 
 
 def _atomic_write_json(path: Path, obj: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(json.dumps(obj, indent=2, sort_keys=True))
-        f.flush()
-        os.fsync(f.fileno())  # ensure bytes hit disk before rename
-    os.replace(tmp, path)
+    with _task_queue_lock():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(json.dumps(obj, indent=2, sort_keys=True))
+            f.flush()
+            os.fsync(f.fileno())  # ensure bytes hit disk before rename
+        os.replace(tmp, path)
 
 
 def get_tasks_root_dir() -> Path:
@@ -50,6 +68,7 @@ class EnqueueResult:
     path: str
 
 
+@_serialized_task_write
 def enqueue_job(*, job_type: str, payload: dict[str, Any], exchange: str = "") -> EnqueueResult:
     ensure_task_dirs()
     jid = f"{int(time.time())}-{uuid4().hex[:10]}"
@@ -69,6 +88,7 @@ def enqueue_job(*, job_type: str, payload: dict[str, Any], exchange: str = "") -
     return EnqueueResult(job_id=jid, path=str(path))
 
 
+@_serialized_task_write
 def enqueue_running_job(*, job_type: str, payload: dict[str, Any], exchange: str = "", manual_parallel: bool = True) -> EnqueueResult:
     """Create a job directly in running/ for an immediate one-shot worker."""
 
@@ -126,6 +146,7 @@ def _iter_job_paths(states: list[str]) -> list[Path]:
     return out
 
 
+@_serialized_task_write
 def request_cancel_job(job_id: str, *, reason: str = "cancel requested") -> bool:
     """Mark a job for cancellation.
 
@@ -155,6 +176,7 @@ def request_cancel_job(job_id: str, *, reason: str = "cancel requested") -> bool
     return False
 
 
+@_serialized_task_write
 def request_run_job(job_id: str) -> bool:
     """Request that one pending job starts with manual priority.
 
@@ -187,6 +209,7 @@ def request_run_job(job_id: str) -> bool:
     return False
 
 
+@_serialized_task_write
 def force_fail_job(job_id: str, *, error: str = "cancelled") -> bool:
     """Immediately mark job failed and move it to failed/.
 
@@ -220,6 +243,7 @@ def force_fail_job(job_id: str, *, error: str = "cancelled") -> bool:
     return False
 
 
+@_serialized_task_write
 def retry_failed_job(job_id: str) -> bool:
     """Move a failed job back to pending for retry.
 
@@ -251,6 +275,7 @@ def retry_failed_job(job_id: str) -> bool:
     return False
 
 
+@_serialized_task_write
 def requeue_done_job(job_id: str) -> bool:
     """Create a new pending job with the same payload as a done job.
 
@@ -278,6 +303,7 @@ def requeue_done_job(job_id: str) -> bool:
     return False
 
 
+@_serialized_task_write
 def delete_job(job_id: str, *, states: list[str] | None = None) -> bool:
     """Delete a job file from selected states.
 
@@ -289,25 +315,27 @@ def delete_job(job_id: str, *, states: list[str] | None = None) -> bool:
     if not jid:
         return False
 
-    search_states = states or ["pending", "done", "failed"]
-    for p in _iter_job_paths(search_states):
-        if p.stem != jid:
-            continue
-        try:
-            p.unlink(missing_ok=True)  # type: ignore[arg-type]
-            get_job_log_path(jid).unlink(missing_ok=True)
-            return True
-        except Exception:
+    with _task_queue_lock():
+        search_states = states or ["pending", "done", "failed"]
+        for p in _iter_job_paths(search_states):
+            if p.stem != jid:
+                continue
             try:
-                if p.exists():
-                    p.unlink()
+                p.unlink(missing_ok=True)  # type: ignore[arg-type]
                 get_job_log_path(jid).unlink(missing_ok=True)
                 return True
             except Exception:
-                return False
+                try:
+                    if p.exists():
+                        p.unlink()
+                    get_job_log_path(jid).unlink(missing_ok=True)
+                    return True
+                except Exception:
+                    return False
     return False
 
 
+@_serialized_task_write
 def delete_jobs_by_ids(job_ids: list[str], *, states: list[str] | None = None) -> int:
     """Delete multiple jobs and return number of successfully deleted files."""
 
@@ -323,27 +351,29 @@ def delete_jobs_by_ids(job_ids: list[str], *, states: list[str] | None = None) -
 
 
 def move_job_file(src: Path, dst_state: str) -> Path:
-    ensure_task_dirs()
-    dst = get_task_state_dir(dst_state) / src.name
-    os.replace(src, dst)
-    return dst
+    with _task_queue_lock():
+        ensure_task_dirs()
+        dst = get_task_state_dir(dst_state) / src.name
+        os.replace(src, dst)
+        return dst
 
 
 def update_job_file(path: Path, *, mutate: callable) -> None:
-    try:
-        obj = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(obj, dict):
+    with _task_queue_lock():
+        try:
+            obj = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(obj, dict):
+                return
+        except Exception:
             return
-    except Exception:
-        return
 
-    try:
-        mutate(obj)
-    except Exception:
-        return
+        try:
+            mutate(obj)
+        except Exception:
+            return
 
-    obj["updated_ts"] = int(time.time())
-    _atomic_write_json(path, obj)
+        obj["updated_ts"] = int(time.time())
+        _atomic_write_json(path, obj)
 
 
 def get_worker_pid_path() -> Path:

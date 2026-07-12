@@ -5,25 +5,32 @@ data/*
 caches/
 .cache/
 pbgui.ini
+pbgui.ini.lock
 start.sh
 .streamlit/secrets.toml
 .streamlit/config.toml
 binance_markets.json
 todo.txt
 pbgui.log
+api_server.log
 PBRun_test.py
 pbgui.code-workspace
 *.pyc
 test_results/
 test-results/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+tests/_archive/
+tests/run_tests.sh
+tests/compare_legacy_vs_mapping.py
 .vscode/
 scripts/*
 !scripts/
 !scripts/probe_bybit_data.py
 !setup/installer/scripts/
 !setup/installer/scripts/remote_master_bootstrap.sh
-pytest.ini
-
 # Local-only benchmarking helpers (do not commit)
 tools/bench_msgpack_decode.py
 

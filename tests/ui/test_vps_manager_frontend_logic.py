@@ -91,6 +91,19 @@ def _run_node_assertions(function_names: list[str], *, bootstrap: str, assertion
 class TestVpsManagerFrontendLogic:
     """Lock down VPS Manager form behavior against live metadata refreshes."""
 
+    def test_firewall_validation_accepts_ipv4_cidr_networks(self) -> None:
+        """Allow the IPv4 CIDR sources that remote UFW discovery stores locally."""
+        _run_node_assertions(
+            ["isValidIPv4", "validateFirewallIps"],
+            bootstrap="",
+            assertions="""
+            assert.equal(validateFirewallIps('198.51.100.1,10.8.0.0/24').ok, true);
+            assert.equal(validateFirewallIps('0.0.0.0/0').ok, true);
+            assert.equal(validateFirewallIps('10.8.0.0/33').ok, false);
+            assert.equal(validateFirewallIps('2001:db8::/32').ok, false);
+            """,
+        )
+
     def test_log_viewer_restart_waits_for_websocket_reconnect(self) -> None:
         """Restart commands must not be dropped when the log WebSocket reconnects."""
         source = LOG_VIEWER_PATH.read_text(encoding="utf-8")

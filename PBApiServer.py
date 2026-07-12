@@ -40,29 +40,50 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.auth import SessionToken, build_root_entry_response, optional_auth, require_auth, router as auth_router
+from secure_files import harden_sensitive_paths
+
+from api.auth import (
+    SessionToken,
+    auth_runtime_status,
+    authenticate_websocket,
+    build_root_entry_response,
+    optional_auth,
+    require_auth,
+    router as auth_router,
+    shutdown as auth_shutdown,
+    unauthenticated_page_redirect,
+)
 from api.api_keys import router as api_keys_router
-from api.dashboard import router as dashboard_router
+from api.dashboard import router as dashboard_router, shutdown as dashboard_shutdown
 from api.dashboards import router as dashboards_router
-from api.db_tools import init as db_tools_init
+from api.db_tools import init as db_tools_init, shutdown as db_tools_shutdown
 from api.db_tools import router as db_tools_router
 from api.jobs import router as jobs_router
 from api.logging import router as logging_router
 from api.market_data import router as market_data_router
-from api.heatmap import router as heatmap_router
+from api.heatmap import router as heatmap_router, shutdown as heatmap_shutdown
 from api.vps import router as vps_router
-from api.vps_manager import router as vps_manager_router
+from api.vps_manager import (
+    router as vps_manager_router,
+    shutdown as vps_manager_shutdown,
+    startup as vps_manager_startup,
+)
 from api.services import router as services_router
-from api.live import router as live_router
+from api.live import router as live_router, shutdown as live_shutdown
 from api.v7_instances import router as v7_router
 from api.balance_calc import router as balance_calc_router
-from api.coin_data import router as coin_data_router
+from api.coin_data import (
+    router as coin_data_router,
+    shutdown as coin_data_shutdown,
+    startup as coin_data_startup,
+)
 from api.backtest_v7 import router as backtest_v7_router
 from api.backtest_v7 import startup as bt7_startup, shutdown as bt7_shutdown
-from api.cluster import router as cluster_router
+from api.cluster import router as cluster_router, shutdown as cluster_shutdown
 from api.optimize_v7 import router as optimize_v7_router
 from api.optimize_v7 import startup as opt7_startup, shutdown as opt7_shutdown
-from api.pareto_explorer import router as pareto_explorer_router
+from api.pareto_explorer import router as pareto_explorer_router, shutdown as pareto_explorer_shutdown
+from api.pb7_ohlcv_tools import startup as ohlcv_preload_startup
 from api.strategy_explorer import router as strategy_explorer_router
 from logging_helpers import human_log as _log, set_service_min_level
 from pb7_config import PB7ConfigurationError
@@ -95,7 +116,24 @@ def _refresh_restart_state() -> bool:
 
 
 async def _restart_block_state() -> tuple[bool, str]:
-    """Return whether API restart should be blocked by active VPS tasks."""
+    """Return whether API restart should wait for API-owned mutable operations."""
+    from api.cluster import restart_block_reason as cluster_restart_block_reason
+    from api.coin_data import restart_block_reason as coin_data_restart_block_reason
+    from api.db_tools import restart_block_reason as db_tools_restart_block_reason
+    from api.pareto_explorer import restart_block_reason as pareto_restart_block_reason
+
+    local_reasons = [
+        reason
+        for reason in (
+            db_tools_restart_block_reason(),
+            cluster_restart_block_reason(),
+            coin_data_restart_block_reason(),
+            pareto_restart_block_reason(),
+        )
+        if reason
+    ]
+    if local_reasons:
+        return True, "; ".join(local_reasons)
     try:
         from api.vps_manager import get_service_instance as get_vps_manager_service
         deploy_state = await asyncio.wait_for(
@@ -163,17 +201,6 @@ def _configured_cors() -> tuple[list[str], bool]:
     if "*" in origins:
         return ["*"], False
     return origins, True
-
-
-def _request_token(request: Request, token: str = "") -> str:
-    """Extract an API token from query param or Authorization header."""
-    value = str(token or "").strip()
-    if value:
-        return value
-    authorization = request.headers.get("Authorization", "")
-    if authorization.startswith("Bearer "):
-        return authorization.replace("Bearer ", "", 1).strip()
-    return ""
 
 
 def _restart_current_api_systemd_unit() -> bool:
@@ -395,6 +422,12 @@ async def _lifespan(app: FastAPI):
     """FastAPI lifespan: startup and graceful shutdown of VPS monitoring."""
     global _vps_monitor
     _setup_api_logging()
+    try:
+        configured_pb7 = str(load_ini("main", "pb7dir") or "").strip()
+        harden_sensitive_paths(_PBGUI_ROOT, Path(configured_pb7) if configured_pb7 else None)
+    except Exception as exc:
+        _log(SERVICE, f"[security] failed to harden sensitive file permissions: {exc}", level="CRITICAL")
+        raise
     from master.async_monitor import VPSMonitor
     from master.async_logs import AsyncLogStreamer
     from api.vps import init as vps_init
@@ -413,41 +446,81 @@ async def _lifespan(app: FastAPI):
     except Exception:
         pass
 
-    monitor = VPSMonitor()
-    streamer = AsyncLogStreamer(monitor.pool)
-    vps_init(monitor, streamer)
-    v7_init(monitor)
-    db_tools_init(monitor)
+    _vps_monitor = None
+    lifecycle_tasks: list[asyncio.Task] = []
+    try:
+        monitor = VPSMonitor()
+        streamer = AsyncLogStreamer(monitor.pool)
+        vps_init(monitor, streamer)
+        v7_init(monitor)
+        db_tools_init(monitor)
+        _vps_monitor = monitor
 
-    _vps_monitor = monitor
+        # Start SSH connections + watchers in background so the server
+        # can accept requests immediately (connections take ~2 min).
+        async def _deferred_startup():
+            await monitor.start()
+            _log(SERVICE, "[lifespan] deferred startup complete", level="INFO")
 
-    # Start SSH connections + watchers in background so the server
-    # can accept requests immediately (connections take ~2 min).
-    async def _deferred_startup():
-        await monitor.start()
-        _log(SERVICE, "[lifespan] deferred startup complete", level="INFO")
+        bt7_startup()
+        opt7_startup()
+        coin_data_startup()
+        ohlcv_preload_startup()
+        vps_manager_startup()
 
-    bt7_startup()
-    opt7_startup()
+        lifecycle_tasks = [
+            asyncio.create_task(_deferred_startup(), name="deferred-startup"),
+            asyncio.create_task(_worker_watchdog_loop(), name="worker-watchdog"),
+            asyncio.create_task(_serial_watcher_loop(), name="serial-watcher"),
+        ]
+        yield  # app runs here
+    finally:
+        for task in lifecycle_tasks:
+            if not task.done():
+                task.cancel()
+        if lifecycle_tasks:
+            await asyncio.gather(*lifecycle_tasks, return_exceptions=True)
 
-    deferred_task = asyncio.create_task(_deferred_startup(), name="deferred-startup")
-    watchdog_task = asyncio.create_task(_worker_watchdog_loop(), name="worker-watchdog")
-    serial_task = asyncio.create_task(_serial_watcher_loop(), name="serial-watcher")
+        shutdown_steps = (
+            ("auth", auth_shutdown),
+            ("live", live_shutdown),
+            ("dashboard", dashboard_shutdown),
+            ("heatmap", heatmap_shutdown),
+            ("pareto-explorer", pareto_explorer_shutdown),
+            ("coin-data", coin_data_shutdown),
+            ("vps-manager", vps_manager_shutdown),
+            ("cluster", cluster_shutdown),
+            ("db-tools", db_tools_shutdown),
+            ("backtest-v7", bt7_shutdown),
+            ("optimize-v7", opt7_shutdown),
+        )
 
-    yield  # app runs here
-
-    deferred_task.cancel()
-    watchdog_task.cancel()
-    serial_task.cancel()
-    for t in (deferred_task, watchdog_task, serial_task):
-        try:
-            await t
-        except asyncio.CancelledError:
-            pass
-    bt7_shutdown()
-    opt7_shutdown()
-    if _vps_monitor:
-        await _vps_monitor.stop()
+        async def _run_shutdown(name, shutdown_step):
+            try:
+                await shutdown_step()
+            except Exception as exc:
+                _log(
+                    SERVICE,
+                    f"[lifespan] {name} shutdown failed: {exc}",
+                    level="ERROR",
+                    meta={"traceback": traceback.format_exc()},
+                )
+        await asyncio.gather(
+            *(_run_shutdown(name, shutdown_step) for name, shutdown_step in shutdown_steps),
+            return_exceptions=True,
+        )
+        if _vps_monitor:
+            try:
+                await _vps_monitor.stop()
+            except Exception as exc:
+                _log(
+                    SERVICE,
+                    f"[lifespan] VPS monitor shutdown failed: {exc}",
+                    level="ERROR",
+                    meta={"traceback": traceback.format_exc()},
+                )
+            finally:
+                _vps_monitor = None
 
 
 # ── FastAPI app ───────────────────────────────────────────────
@@ -458,7 +531,7 @@ app = FastAPI(
     description=(
         "REST API + WebSocket for PBGui backend services.\n\n"
         "## Authentication\n"
-        "All endpoints require an API token, passed as `?token=xxx` query param "
+        "All endpoints require an API token, passed through the HttpOnly browser session cookie "
         "or `Authorization: Bearer xxx` header.\n\n"
         "---\n\n"
         "## WebSocket — VPS Monitor (`/ws/vps`)\n"
@@ -475,18 +548,25 @@ app = FastAPI(
         "- `{\"cmd\": \"list_local_logs\"}` / `get_local_logs` / `subscribe_local_logs` / `unsubscribe_local_logs`\n\n"
         "---\n\n"
         "## WebSocket — Jobs (`/ws/jobs`)\n"
-        "Pushes job queue state every 2 s. Auth via `?token=xxx`.\n\n"
-        "**Server → Client:** `{\"jobs\": [...]}` — full list of jobs (pending, running, done, failed).\n\n"
+        "Pushes job queue state every 2 s. Auth via HttpOnly session cookie.\n\n"
+        "**Server → Client:** `{\"type\": \"jobs\", \"data\": [...], \"timestamp\": ...}` — up to 50 pending/running jobs.\n\n"
         "---\n\n"
         "## WebSocket — Market Data (`/ws/market-data`)\n"
-        "Pushes per-exchange status every 2 s. Auth via `?token=xxx`.\n\n"
+        "Pushes per-exchange status every 2 s. Auth via HttpOnly session cookie.\n\n"
         "**Query params:** `exchange` (required).\n\n"
-        "**Server → Client:** `{\"status\": {…}}` — daemon status, progress, cycle info.\n\n"
+        "**Server → Client:** `{\"type\": \"market_data_status\", \"exchange\": \"...\", \"running\": false, \"queued\": false, \"coins_done\": 0, \"coins_total\": 0, \"current_coin\": \"\", \"interval_seconds\": 0, \"coin_rows\": [...], \"timestamp\": ...}`.\n\n"
         "---\n\n"
         "## WebSocket — Heatmap Watch (`/ws/heatmap-watch`)\n"
-        "Watches data file mtimes and notifies when heatmap data changes. Auth via `?token=xxx`.\n\n"
+        "Watches data file mtimes and notifies when heatmap data changes. Auth via HttpOnly session cookie.\n\n"
         "**Query params:** `exchange`, `dataset`, `coin` (all required).\n\n"
-        "**Server → Client:** `{\"type\": \"updated\", \"mtime\": …}` — sent when the underlying data files change (polls every 5 s).\n"
+        "**Server → Client:** `{\"type\": \"updated\", \"mtime\": ...}` — sent when the underlying data files change (polls every 5 s).\n\n"
+        "---\n\n"
+        "## Additional WebSockets\n"
+        "- `/ws/dashboard`: `balance_updated`, `income_updated`, `positions_updated`, `nav_request`, or `dashboard_action`.\n"
+        "- `/ws/candles`: `candle`, `position`, `orders`, or `ping`. Query params: `user`, `symbol`, `tf`, `side`.\n"
+        "- `/api/v7/ws/v7`: `{\"type\": \"instances\", \"data\": [...]}`.\n"
+        "- `/api/backtest-v7/ws/bt7` and `/api/optimize-v7/ws/opt7`: `queue_update`; Backtest may also send `archive_update`.\n"
+        "- `/api/vps-manager/ws`: `state`, `detail`, `result`, `error`, and command-specific response envelopes.\n"
     ),
     version=PBGUI_VERSION,
     openapi_tags=[
@@ -505,6 +585,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def redirect_unauthenticated_page(request: Request, call_next):
+    """Send expired browser page loads to login while preserving API 401 responses."""
+    response = await call_next(request)
+    redirect = unauthenticated_page_redirect(request, response.status_code)
+    return redirect or response
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(api_keys_router, prefix="/api/api-keys", tags=["api-keys"])
@@ -590,12 +678,8 @@ dashboard_ws_clients: set[WebSocket] = set()
 @app.websocket("/ws/jobs")
 async def websocket_jobs(websocket: WebSocket):
     """WebSocket endpoint for real-time job updates."""
-    from api.auth import validate_token
-    token = websocket.query_params.get("token", "")
-    if not validate_token(token):
-        await websocket.close(code=4001)
+    if await authenticate_websocket(websocket) is None:
         return
-    await websocket.accept()
     active_connections.append(websocket)
     try:
         while True:
@@ -619,12 +703,8 @@ async def websocket_jobs(websocket: WebSocket):
 @app.websocket("/ws/market-data")
 async def websocket_market_data(websocket: WebSocket):
     """WebSocket endpoint for real-time market data status updates."""
-    from api.auth import validate_token
-    token = websocket.query_params.get("token", "")
-    if not validate_token(token):
-        await websocket.close(code=4001)
+    if await authenticate_websocket(websocket) is None:
         return
-    await websocket.accept()
     exchange = websocket.query_params.get("exchange", "").lower().strip()
     if not exchange:
         await websocket.send_json({"error": "Missing exchange parameter"})
@@ -699,16 +779,12 @@ async def websocket_market_data(websocket: WebSocket):
 @app.websocket("/ws/heatmap-watch")
 async def websocket_heatmap_watch(websocket: WebSocket):
     """WebSocket endpoint: sends {type: 'updated', mtime: float} when data files change."""
-    from api.auth import validate_token
     from api.heatmap import _latest_mtime
-    token = websocket.query_params.get("token", "")
-    if not validate_token(token):
-        await websocket.close(code=4001)
+    if await authenticate_websocket(websocket) is None:
         return
     exchange = websocket.query_params.get("exchange", "")
     dataset = websocket.query_params.get("dataset", "")
     coin = websocket.query_params.get("coin", "")
-    await websocket.accept()
     last_mtime: float = 0.0
     try:
         while True:
@@ -730,12 +806,8 @@ async def websocket_dashboard(websocket: WebSocket):
     Clients receive {"type": "balance_updated"} whenever PBData writes
     fresh balance/position data to the database.
     """
-    from api.auth import validate_token
-    token = websocket.query_params.get("token", "")
-    if not validate_token(token):
-        await websocket.close(code=4001)
+    if await authenticate_websocket(websocket) is None:
         return
-    await websocket.accept()
     dashboard_ws_clients.add(websocket)
     try:
         while True:
@@ -752,19 +824,16 @@ async def websocket_dashboard(websocket: WebSocket):
 async def websocket_candles(websocket: WebSocket):
     """WebSocket endpoint for live chart updates (Phase 2).
 
-    Clients subscribe by connecting with ?token=...&user=...&symbol=...&tf=...&side=...
+    Clients authenticate with the session cookie and subscribe with user/symbol/tf/side query parameters.
     They receive pre-formatted messages:
       {"type": "candle",   "candle":   [t,o,h,l,c,v]}
       {"type": "position", "position": {entry,size,upnl,side} | null}
       {"type": "orders",   "orders":   [{price,amount,side}, ...], "orders_unknown": bool}
     Data comes from ccxt.pro live streams when available, with polling fallback.
     """
-    from api.auth import validate_token
     from api.dashboard import (register_chart_client, unregister_chart_client,
                                 _set_event_loop)
-    token = websocket.query_params.get("token", "")
-    if not validate_token(token):
-        await websocket.close(code=4001)
+    if await authenticate_websocket(websocket) is None:
         return
 
     user = websocket.query_params.get("user", "")
@@ -775,8 +844,6 @@ async def websocket_candles(websocket: WebSocket):
     if not user or not symbol:
         await websocket.close(code=4002)
         return
-
-    await websocket.accept()
 
     # Store event loop reference for the polling thread
     _set_event_loop(asyncio.get_running_loop())
@@ -942,17 +1009,13 @@ async def nav_request(request: Request):
 # ── Docs endpoints ────────────────────────────────────────────
 
 @app.get("/api/docs/index")
-async def docs_index(request: Request, lang: str = "EN", token: str = ""):
+async def docs_index(lang: str = "EN", session: SessionToken = Depends(require_auth)):
     """Return the list of help topics for the given language.
 
     Returns ``[{title: str, file: str}, ...]`` where ``file`` is the bare
     filename (e.g. ``00_overview.md``) and ``title`` is the first ``#``
     heading or the filename.
     """
-    from api.auth import validate_token
-    if not validate_token(_request_token(request, token)):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
     ln = str(lang or "EN").strip().upper()
     root = Path(__file__).parent / "docs"
     folder = "help_de" if ln == "DE" else "help"
@@ -975,16 +1038,12 @@ async def docs_index(request: Request, lang: str = "EN", token: str = ""):
 
 
 @app.get("/api/docs/content")
-async def docs_content(request: Request, file: str, lang: str = "EN", token: str = ""):
+async def docs_content(file: str, lang: str = "EN", session: SessionToken = Depends(require_auth)):
     """Return the raw Markdown text for a help file.
 
     ``file`` must be a bare filename (no path separators), ``*.md`` only,
     and must exist in the appropriate ``docs/help[_de]/`` directory.
     """
-    from api.auth import validate_token
-    if not validate_token(_request_token(request, token)):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
     # Reject path traversal and non-markdown files
     safe_name = Path(file).name
     if safe_name != file or not safe_name.endswith(".md") or "/" in file or "\\" in file:
@@ -1013,17 +1072,13 @@ async def docs_content(request: Request, file: str, lang: str = "EN", token: str
 # ── Help endpoints (FastAPI page, includes Strategy Explorer) ────────────────────────
 
 @app.get("/api/help/index")
-async def help_index(request: Request, lang: str = "EN", token: str = ""):
+async def help_index(lang: str = "EN", session: SessionToken = Depends(require_auth)):
     """Return the list of help topics for the given language.
     
     Includes both general help docs and Strategy Explorer docs.
     Returns ``[{title: str, file: str, category: str}, ...]`` where ``category``
     is either "Help" or "Strategy Explorer".
     """
-    from api.auth import validate_token
-    if not validate_token(_request_token(request, token)):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
     ln = str(lang or "EN").strip().upper()
     root = Path(__file__).parent / "docs"
 
@@ -1054,26 +1109,18 @@ async def help_index(request: Request, lang: str = "EN", token: str = ""):
 
 
 @app.get("/api/help/meta")
-async def help_meta(request: Request, token: str = ""):
+async def help_meta(session: SessionToken = Depends(require_auth)):
     """Return PBGui version metadata for the shared Help page."""
-    from api.auth import validate_token
-    if not validate_token(_request_token(request, token)):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
     return {"version": PBGUI_VERSION, "serial": PBGUI_SERIAL}
 
 
 @app.get("/api/help/content")
-async def help_content(request: Request, file: str, lang: str = "EN", token: str = ""):
+async def help_content(file: str, lang: str = "EN", session: SessionToken = Depends(require_auth)):
     """Return the raw Markdown text for a help file.
     
     Automatically determines if file is in help or strategy_explorer directory.
     ``file`` must be a bare filename (no path separators), ``*.md`` only.
     """
-    from api.auth import validate_token
-    if not validate_token(_request_token(request, token)):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
     # Reject path traversal and non-markdown files
     safe_name = Path(file).name
     if safe_name != file or not safe_name.endswith(".md") or "/" in file or "\\" in file:
@@ -1131,12 +1178,8 @@ def health():
 
 
 @app.get("/api/server-status/stream")
-async def server_status_stream(token: str = ""):
+async def server_status_stream(session: SessionToken = Depends(require_auth)):
     """SSE stream: pushes {needs_restart: bool} immediately, then on every serial change."""
-    from api.auth import validate_token
-    if not validate_token(token):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
     queue: asyncio.Queue = asyncio.Queue()
     _sse_subscribers.append(queue)
 
@@ -1144,7 +1187,7 @@ async def server_status_stream(token: str = ""):
         try:
             # Send initial state immediately
             last_sent = _refresh_restart_state()
-            yield f"data: {json.dumps({'needs_restart': last_sent})}\n\n"
+            yield f"data: {json.dumps({'needs_restart': last_sent, 'auth': auth_runtime_status()})}\n\n"
             while True:
                 force_send = False
                 try:
@@ -1157,7 +1200,7 @@ async def server_status_stream(token: str = ""):
                 current_state = _refresh_restart_state()
                 if force_send or current_state != last_sent:
                     last_sent = current_state
-                    yield f"data: {json.dumps({'needs_restart': current_state})}\n\n"
+                    yield f"data: {json.dumps({'needs_restart': current_state, 'auth': auth_runtime_status()})}\n\n"
                 else:
                     # keepalive comment so proxies don't close the connection
                     yield ": keepalive\n\n"
@@ -1189,6 +1232,7 @@ async def server_status(session: SessionToken = Depends(require_auth)):
         "restart_blocked": restart_blocked,
         "restart_block_reason": restart_block_reason,
         "master_name": _local_master_name(),
+        "auth": auth_runtime_status(),
     }
 
 

@@ -41,22 +41,24 @@ The nav bar shows an orange **Restart** button when the API code has changed (de
 
 PBAPIServer provides several real-time WebSocket streams:
 
-| Endpoint | Purpose |
-|---|---|
-| `/ws/jobs` | Job queue updates (every 2s) |
-| `/ws/dashboard` | Balance and position change notifications (pushed by PBData via internal endpoints) |
-| `/ws/candles` | Live chart candle data via ccxtpro streams with polling fallback |
-| `/ws/market-data` | Per-exchange data pipeline status |
-| `/ws/vps` | VPS metrics, logs, service control |
-| `/ws/heatmap-watch` | Data file change notifications |
+| Endpoint | Server message format | Client input |
+|---|---|---|
+| `/ws/jobs` | `{"type":"jobs","data":[...],"timestamp":...}` with up to 50 pending/running jobs | None |
+| `/ws/dashboard` | `balance_updated`, `income_updated`, `positions_updated`, `nav_request`, or `dashboard_action` envelopes | None |
+| `/ws/candles` | `candle`, `position`, `orders`, or `ping` envelopes | Query: `user`, `symbol`, optional `tf`, `side` |
+| `/ws/market-data` | Flat `market_data_status` envelope with exchange, running/queued state, counters and `coin_rows` | Query: `exchange` |
+| `/ws/vps` | `state`, `log_lines`, `local_log_lines`, command results, or `error` | JSON commands with `cmd` |
+| `/ws/heatmap-watch` | `{"type":"updated","mtime":...}` | Query: `exchange`, `dataset`, `coin` |
+| `/api/v7/ws/v7` | `{"type":"instances","data":[...]}` | Received text is ignored |
+| `/api/backtest-v7/ws/bt7` | `queue_update` or `archive_update` | `{"type":"refresh"}` |
+| `/api/optimize-v7/ws/opt7` | `queue_update` | `{"type":"refresh"}` |
+| `/api/vps-manager/ws` | `state`, `detail`, `result`, `error`, and command-specific envelopes | JSON commands with `cmd` |
 
-All WebSocket connections require a valid authentication token.
+Browser WebSocket connections authenticate through the HttpOnly `pbgui_session` cookie. Invalid or revoked sessions are closed with code `4001`.
 
 ## Authentication
 
-All API endpoints and WebSocket connections require a valid token:
-- Query parameter: `?token=xxx`
-- Or HTTP header: `Authorization: Bearer xxx`
+Browser pages and WebSockets use the HttpOnly `pbgui_session` cookie. API clients may continue to use `Authorization: Bearer xxx` for REST requests.
 
 Tokens are generated at login and expire after 24 hours. All FastAPI pages automatically refresh tokens every 30 minutes. If a token expires, the page redirects to the login screen.
 

@@ -1287,19 +1287,19 @@ async def _stop_worker(worker_id: str) -> None:
         return
     if worker_id == "backtest-queue":
         import api.backtest_v7 as bt7
-        bt7._worker.stop()
+        await bt7._worker.stop()
         return
     if worker_id == "optimize-queue":
         import api.optimize_v7 as opt7
-        opt7._worker.stop()
+        await opt7._worker.stop()
         return
     if worker_id == "archive-sync":
         import api.backtest_v7 as bt7
-        bt7._archive_sync_worker.stop()
+        await bt7._archive_sync_worker.stop()
         return
     if worker_id == "hlcvs-cleanup":
         import api.backtest_v7 as bt7
-        bt7._hlcvs_cleanup_worker.stop()
+        await bt7._hlcvs_cleanup_worker.stop()
         return
     raise HTTPException(status_code=404, detail=f"Unknown worker: {worker_id}")
 
@@ -1515,6 +1515,8 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
         _log(SERVICE, "[restart] restart requested by user", level="WARNING")
         threading.Thread(target=_do_restart, daemon=True).start()
         return {"ok": True, "message": "Restarting\u2026"}
+    except HTTPException:
+        raise
     except Exception as e:
         _log(SERVICE, f"restart api-server failed: {e}\n{traceback.format_exc()}", level="ERROR")
         raise HTTPException(status_code=500, detail=str(e))

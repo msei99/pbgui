@@ -632,8 +632,7 @@
     if (!exchange) throw new Error('Missing exchange');
     var apiBase = getBalanceCalcApiBase(opts && opts.apiBase);
     var draftId = await createBalanceCalcDraft(opts);
-    var url = apiBase + '/main_page?token=' + encodeURIComponent((opts && opts.token) || '') +
-      '&draft_id=' + encodeURIComponent(draftId) +
+    var url = apiBase + '/main_page?draft_id=' + encodeURIComponent(draftId) +
       '&exchange=' + encodeURIComponent(exchange);
     if (!opts || opts.navigate !== false) {
       window.location.href = url;

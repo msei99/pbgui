@@ -545,7 +545,7 @@
 
   <script>
     var _query = new URLSearchParams(window.location.search);
-    var TOKEN = _query.get('token') || '%%TOKEN%%';
+    var TOKEN = '';
     var API_BASE = '%%API_BASE%%';
     var WS_BASE = '%%WS_BASE%%';
     var PBGUI_VERSION = '%%VERSION%%';
@@ -553,6 +553,12 @@
     var TOPIC = _query.get('topic') || '';
     function hasInjectedPlaceholder(value) {
       return typeof value === 'string' && value.indexOf('%%') !== -1;
+    }
+
+    function authHeaders() {
+      return TOKEN && !hasInjectedPlaceholder(TOKEN)
+        ? { 'Authorization': 'Bearer ' + TOKEN }
+        : {};
     }
 
     function syncNavMeta() {
@@ -590,10 +596,8 @@
 
     async function ensurePageMeta() {
       if (!hasInjectedPlaceholder(PBGUI_VERSION) && !hasInjectedPlaceholder(PBGUI_SERIAL)) return;
-      if (!TOKEN || hasInjectedPlaceholder(TOKEN)) return;
-
       try {
-        var response = await fetch('/api/help/meta', { cache: 'no-store', headers: { 'Authorization': 'Bearer ' + TOKEN } });
+        var response = await fetch('/api/help/meta', { cache: 'no-store', headers: authHeaders() });
         if (!response.ok) return;
 
         var data = await response.json();
@@ -711,7 +715,7 @@
           callback('');
           return;
         }
-        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: authHeaders() })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
@@ -830,7 +834,7 @@
         searchIndex = -1;
         helpSearchCount.textContent = '';
         helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: authHeaders() })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
@@ -849,7 +853,7 @@
 
       function loadHelpIndex(keyword) {
         helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch('/api/help/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+        fetch('/api/help/index?lang=' + helpLang, { headers: authHeaders() })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
@@ -944,6 +948,13 @@
 
       function closeLocalHelp() {
         setOverlayVisible(false);
+        document.body.classList.remove('pbgui-help-open');
+        try {
+          var previous = document.referrer ? new URL(document.referrer) : null;
+          if (previous && previous.origin === window.location.origin && previous.pathname !== window.location.pathname) {
+            window.history.back();
+          }
+        } catch (_) {}
       }
 
       function openHelp(keyword) {
@@ -1088,6 +1099,6 @@
       serial: PBGUI_SERIAL
     };
   </script>
-  <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+  <script src="/app/pbgui_nav.js?v=1773"></script>
 </body>
 </html>

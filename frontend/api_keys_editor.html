@@ -1087,8 +1087,32 @@
         history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash);
     }
 
+    function handleUserTableClick(e) {
+        const userTableBody = document.getElementById("userTableBody");
+        const row = e.target.closest("tr[data-user-name]");
+        if (!row || !userTableBody.contains(row)) return;
+        const action = e.target.closest("[data-user-action]");
+        if (action) {
+            e.stopPropagation();
+            if (action.dataset.userAction === "delete") confirmDelete(row.dataset.userName);
+            else editUser(row.dataset.userName);
+            return;
+        }
+        editUser(row.dataset.userName);
+    }
+
+    function handleUserTableKeydown(e) {
+        if (e.target.closest("button")) return;
+        const userTableBody = document.getElementById("userTableBody");
+        const row = e.target.closest("tr[data-user-name]");
+        if (row && userTableBody.contains(row)) handleRowKey(e, row.dataset.userName);
+    }
+
     // ── Init ────────────────────────────────────────────────
     document.addEventListener("DOMContentLoaded", async () => {
+        const userTableBody = document.getElementById("userTableBody");
+        userTableBody.addEventListener("click", handleUserTableClick);
+        userTableBody.addEventListener("keydown", handleUserTableKeydown);
         await loadExchanges();
         restoreUrlParams();
         // Escape closes any open panel and returns to the list
@@ -1320,16 +1344,16 @@
                 ? '<span class="badge-in-use active">In Use</span>'
                 : '<span class="badge-in-use">Unused</span>';
 
-            html += '<tr tabindex="0" onclick="editUser(\'' + escapeAttr(u.name) + '\')" onkeydown="handleRowKey(event,\'' + escapeAttr(u.name) + '\')" style="cursor:pointer;">';
+            html += '<tr tabindex="0" data-user-name="' + escapeAttr(u.name) + '" style="cursor:pointer;">';
             html += '<td><strong>' + escapeHtml(u.name) + '</strong></td>';
-            html += '<td><span class="badge-exchange ' + exchClass + '">' + escapeHtml(u.exchange) + '</span></td>';
+            html += '<td><span class="badge-exchange ' + escapeAttr(exchClass) + '">' + escapeHtml(u.exchange) + '</span></td>';
             html += '<td>' + credStr + '</td>';
             html += '<td>' + expiryHtml + '</td>';
             html += '<td>' + inUseHtml + '</td>';
             html += '<td>';
-            html += '<button class="btn btn-sm btn-info" onclick="event.stopPropagation();editUser(\'' + escapeAttr(u.name) + '\')">Edit</button> ';
+            html += '<button class="btn btn-sm btn-info" data-user-action="edit">Edit</button> ';
             if (!u.in_use) {
-                html += '<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();confirmDelete(\'' + escapeAttr(u.name) + '\')">Delete</button>';
+                html += '<button class="btn btn-sm btn-danger" data-user-action="delete">Delete</button>';
             }
             html += '</td>';
             html += '</tr>';
@@ -1386,11 +1410,11 @@
     function renderExpiryBadge(exp) {
         if (!exp) return "-";
         if (exp.status === "ok") {
-            return '<span class="badge-expiry ok">' + exp.days_remaining + 'd</span>';
+            return '<span class="badge-expiry ok">' + escapeHtml(exp.days_remaining) + 'd</span>';
         } else if (exp.status === "expiring_soon") {
-            return '<span class="badge-expiry expiring_soon">⚠ ' + exp.days_remaining + 'd</span>';
+            return '<span class="badge-expiry expiring_soon">⚠ ' + escapeHtml(exp.days_remaining) + 'd</span>';
         } else if (exp.status === "critical") {
-            return '<span class="badge-expiry critical">⚠ ' + exp.days_remaining + 'd</span>';
+            return '<span class="badge-expiry critical">⚠ ' + escapeHtml(exp.days_remaining) + 'd</span>';
         } else if (exp.status === "expired") {
             return '<span class="badge-expiry expired">EXPIRED</span>';
         } else if (exp.status === "no_expiry") {
@@ -1542,14 +1566,13 @@
         btn.disabled = true;
         btn.textContent = "Checking…";
         try {
-            // If a new (unsaved) private key is present in the field, pass it as
-            // an override so the user can verify the new key before saving.
+            // Send unsaved private keys only in a POST body so they never enter URLs.
             const unsavedKey = getMaskedFieldValue("editPrivateKey");
-            let url = "/" + encodeURIComponent(editingName) + "/hl-expiry";
-            if (unsavedKey) {
-                url += "?private_key=" + encodeURIComponent(unsavedKey);
-            }
-            const data = await apiFetch(url);
+            const url = "/" + encodeURIComponent(editingName) + "/hl-expiry";
+            const data = await apiFetch(url, unsavedKey ? {
+                method: "POST",
+                body: JSON.stringify({ private_key: unsavedKey }),
+            } : {});
             // Only update the persistent cache when checking the saved key.
             // For unsaved overrides we just show the result inline.
             if (!unsavedKey) {
@@ -1994,8 +2017,8 @@
             html += "<tr>";
             html += "<td><strong>" + escapeHtml(exp.name) + "</strong></td>";
             html += "<td>" + (exp.is_vault ? "Vault" : "Wallet") + "</td>";
-            html += "<td>" + (exp.valid_until_iso ? exp.valid_until_iso.split("T")[0] : "-") + "</td>";
-            html += "<td>" + (exp.days_remaining !== null && exp.days_remaining !== undefined ? exp.days_remaining : "-") + "</td>";
+            html += "<td>" + escapeHtml(exp.valid_until_iso ? exp.valid_until_iso.split("T")[0] : "-") + "</td>";
+            html += "<td>" + escapeHtml(exp.days_remaining !== null && exp.days_remaining !== undefined ? exp.days_remaining : "-") + "</td>";
             html += "<td>" + renderExpiryBadge(exp) + "</td>";
             html += "</tr>";
         }
@@ -2093,7 +2116,12 @@
     }
 
     function escapeAttr(str) {
-        return (str || "").replace(/'/g, "\\'").replace(/"/g, "&quot;");
+        return String(str == null ? "" : str)
+            .split("&").join("&amp;")
+            .split('"').join("&quot;")
+            .split("'").join("&#39;")
+            .split("<").join("&lt;")
+            .split(">").join("&gt;");
     }
 
     function showToast(message, type = "success") {

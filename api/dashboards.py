@@ -9,18 +9,30 @@ All endpoints require auth (Bearer token).
 from __future__ import annotations
 
 import json
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from api.auth import SessionToken, require_auth
+from file_lock import advisory_file_lock
 
 import re
 
 router = APIRouter()
 
 _VALID_DASHBOARD_NAME = re.compile(r'^[^\x00-\x1f/\\]+$')
+
+
+def _serialized_dashboard_write(func):
+    """Serialize dashboard and template transactions within the data directory."""
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        with advisory_file_lock(_dashboards_dir() / ".write"):
+            return func(*args, **kwargs)
+
+    return wrapped
 
 
 # --------------------------------------------------------------------------- helpers
@@ -95,6 +107,7 @@ def list_templates(
 
 
 @router.post("/templates/{name}")
+@_serialized_dashboard_write
 def save_template(
     name: str,
     payload: dict[str, Any],
@@ -119,6 +132,7 @@ def save_template(
 
 
 @router.delete("/templates/{name}")
+@_serialized_dashboard_write
 def delete_template(
     name: str,
     session: SessionToken = Depends(require_auth),
@@ -134,6 +148,7 @@ def delete_template(
 
 
 @router.patch("/templates/{name}")
+@_serialized_dashboard_write
 def rename_template(
     name: str,
     payload: dict[str, Any],
@@ -159,6 +174,7 @@ def rename_template(
 
 
 @router.post("/from_template")
+@_serialized_dashboard_write
 def dashboards_from_template(
     payload: dict[str, Any],
     session: SessionToken = Depends(require_auth),
@@ -264,6 +280,7 @@ def get_dashboard(
 
 
 @router.post("/{name}")
+@_serialized_dashboard_write
 def save_dashboard(
     name: str,
     payload: dict[str, Any],
@@ -292,6 +309,7 @@ def save_dashboard(
 
 
 @router.delete("/{name}")
+@_serialized_dashboard_write
 def delete_dashboard(
     name: str,
     session: SessionToken = Depends(require_auth),

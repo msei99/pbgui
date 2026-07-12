@@ -11,6 +11,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import threading
@@ -37,8 +38,10 @@ COINDATA_DIR = PBGDIR / "data" / "coindata"
 SUPPORTED_EXCHANGES = V7.list()
 _CMC_METADATA_CACHE_SIG: tuple[int, int] | None = None
 _CMC_LINK_BY_ID_CACHE: dict[str, str] = {}
-_REFRESH_JOBS_LOCK = threading.Lock()
+_REFRESH_JOBS_LOCK = threading.RLock()
 _REFRESH_JOBS: dict[str, dict[str, Any]] = {}
+_REFRESH_THREADS: dict[str, threading.Thread] = {}
+_REFRESH_ACCEPTING = True
 _REFRESH_JOB_TTL_SECONDS = 900.0
 _REFRESH_JOB_LIMIT = 64
 
@@ -95,7 +98,8 @@ def _prune_refresh_jobs_locked(now: float | None = None) -> None:
     stale_ids = [
         job_id
         for job_id, job in _REFRESH_JOBS.items()
-        if current - float(job.get("updated_at") or current) > _REFRESH_JOB_TTL_SECONDS
+        if str(job.get("status") or "") in {"completed", "error"}
+        and current - float(job.get("updated_at") or current) > _REFRESH_JOB_TTL_SECONDS
     ]
     for job_id in stale_ids:
         _REFRESH_JOBS.pop(job_id, None)
@@ -185,7 +189,10 @@ def _get_refresh_job(job_id: str) -> dict[str, Any] | None:
 
 
 def _start_refresh_job(title: str, message: str, total_steps: int, runner: Any) -> str:
-    job_id = _create_refresh_job(title, message, total_steps)
+    with _REFRESH_JOBS_LOCK:
+        if not _REFRESH_ACCEPTING:
+            raise HTTPException(status_code=503, detail="Coin Data refresh is shutting down")
+        job_id = _create_refresh_job(title, message, total_steps)
 
     def _worker() -> None:
         try:
@@ -193,10 +200,51 @@ def _start_refresh_job(title: str, message: str, total_steps: int, runner: Any) 
             _complete_refresh_job(job_id, result_message, state)
         except Exception as exc:
             _fail_refresh_job(job_id, str(exc))
+        finally:
+            with _REFRESH_JOBS_LOCK:
+                _REFRESH_THREADS.pop(job_id, None)
 
-    thread = threading.Thread(target=_worker, name=f"coin-data-refresh-{job_id[:8]}", daemon=True)
-    thread.start()
+    thread = threading.Thread(target=_worker, name=f"coin-data-refresh-{job_id[:8]}")
+    with _REFRESH_JOBS_LOCK:
+        _REFRESH_THREADS[job_id] = thread
+        try:
+            thread.start()
+        except Exception as exc:
+            _REFRESH_THREADS.pop(job_id, None)
+            _fail_refresh_job(job_id, str(exc))
+            raise
     return job_id
+
+
+def startup() -> None:
+    """Allow Coin Data refresh jobs for a newly started API lifespan."""
+    global _REFRESH_ACCEPTING
+    with _REFRESH_JOBS_LOCK:
+        _REFRESH_ACCEPTING = True
+
+
+def restart_block_reason() -> str:
+    """Return a reason while Coin Data is writing refreshed files."""
+    with _REFRESH_JOBS_LOCK:
+        active = sum(1 for thread in _REFRESH_THREADS.values() if thread.is_alive())
+    if active:
+        return f"Coin Data has {active} active refresh job(s)"
+    return ""
+
+
+async def shutdown() -> None:
+    """Stop accepting refreshes and join active file-mutating workers."""
+    global _REFRESH_ACCEPTING
+    with _REFRESH_JOBS_LOCK:
+        _REFRESH_ACCEPTING = False
+        threads = [thread for thread in _REFRESH_THREADS.values() if thread.ident is not None]
+    if threads:
+        await asyncio.gather(
+            *(asyncio.to_thread(thread.join) for thread in threads),
+            return_exceptions=True,
+        )
+    with _REFRESH_JOBS_LOCK:
+        _REFRESH_THREADS.clear()
 
 
 def _make_refresh_progress_cb(job_id: str) -> Any:

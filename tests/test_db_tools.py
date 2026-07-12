@@ -7,10 +7,17 @@ import json
 import sqlite3
 import subprocess
 import sys
+import threading
 from types import SimpleNamespace
 from pathlib import Path
 
+import pytest
+
+import Database as database_mod
+from PBData import PBData
 from api import db_tools
+from master import async_pool as async_pool_mod
+import task_worker
 
 
 def _bundle(tmp_path: Path, name: str) -> dict[str, Path]:
@@ -763,3 +770,227 @@ def test_known_targets_falls_back_to_monitor_snapshot(tmp_path: Path, monkeypatc
         monkeypatch.setattr(db_tools, "_monitor", original_monitor)
 
     assert any(target["id"] == "manibot01" and target["role"] == "master" for target in targets)
+
+
+class _FailingPriceDatabase:
+    """Database stub that exposes and then fails a batch write."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def batch_upsert_prices(self, rows: list) -> None:
+        """Block until released, then simulate a database failure."""
+        self.started.set()
+        self.release.wait(timeout=2)
+        raise RuntimeError("database unavailable")
+
+
+def _pbdata_with_failing_price_database() -> PBData:
+    """Build the price-buffer state without initializing runtime services."""
+    pbdata = PBData.__new__(PBData)
+    pbdata.db = _FailingPriceDatabase()
+    pbdata.users = SimpleNamespace(find_user=lambda _name: None)
+    pbdata._price_buffer = {}
+    pbdata._price_buffer_lock = asyncio.Lock()
+    return pbdata
+
+
+def test_batch_upsert_prices_propagates_database_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The batch writer reports a failed transaction to its caller."""
+    database = database_mod.Database.__new__(database_mod.Database)
+    database._write_lock = threading.Lock()
+    database._connect = lambda: sqlite3.connect(":memory:")
+    monkeypatch.setattr(database_mod, "_human_log", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(sqlite3.OperationalError, match="no such table"):
+        database.batch_upsert_prices([("alice", "BTCUSDT", 1000, 50_000.0)])
+
+
+def test_failed_price_flush_restores_buffered_prices() -> None:
+    """A failed database write puts the detached price snapshot back."""
+
+    async def exercise() -> None:
+        pbdata = _pbdata_with_failing_price_database()
+        pbdata._price_buffer[("alice", "BTCUSDT")] = (1000, 50_000.0)
+        pbdata.db.release.set()
+
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            await pbdata._flush_price_buffer()
+
+        assert pbdata._price_buffer == {("alice", "BTCUSDT"): (1000, 50_000.0)}
+
+    asyncio.run(exercise())
+
+
+def test_failed_price_flush_keeps_tick_buffered_during_write() -> None:
+    """A newer tick buffered during a failed write wins over the snapshot."""
+
+    async def exercise() -> None:
+        pbdata = _pbdata_with_failing_price_database()
+        pbdata._price_buffer[("alice", "BTCUSDT")] = (1000, 50_000.0)
+
+        flush_task = asyncio.create_task(pbdata._flush_price_buffer())
+        assert await asyncio.to_thread(pbdata.db.started.wait, 1)
+        await pbdata.buffer_price(SimpleNamespace(name="alice"), "BTCUSDT", 1001, 50_100.0)
+        pbdata.db.release.set()
+
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            await flush_task
+
+        assert pbdata._price_buffer == {("alice", "BTCUSDT"): (1001, 50_100.0)}
+
+    asyncio.run(exercise())
+
+
+def test_db_tools_shutdown_cancels_and_awaits_owned_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shutdown stops the scheduler and marks an interrupted operation terminal."""
+    monkeypatch.setattr(db_tools, "_operations", {})
+    monkeypatch.setattr(db_tools, "_background_tasks", set())
+    monkeypatch.setattr(db_tools, "_sync_scheduler_task", None)
+    monkeypatch.setattr(db_tools, "_sync_job_locks", {"job-a"})
+    monkeypatch.setattr(db_tools, "_log", lambda *_args, **_kwargs: None)
+
+    async def exercise() -> tuple[db_tools.OperationProgress, asyncio.Task]:
+        blocker = asyncio.Event()
+
+        async def runner(_operation: db_tools.OperationProgress) -> dict:
+            await blocker.wait()
+            return {"ok": True}
+
+        operation = db_tools._start_operation("test", 1, runner)
+        scheduler = asyncio.create_task(blocker.wait(), name="test-db-tools-scheduler")
+        db_tools._sync_scheduler_task = scheduler
+        await asyncio.sleep(0)
+        assert "DB Tools operation" in db_tools.restart_block_reason()
+
+        await db_tools.shutdown()
+        return operation, scheduler
+
+    operation, scheduler = asyncio.run(exercise())
+
+    assert scheduler.cancelled()
+    assert operation.status == "error"
+    assert operation.error == "Interrupted by API shutdown"
+    assert db_tools._background_tasks == set()
+    assert db_tools._sync_scheduler_task is None
+    assert db_tools._sync_job_locks == set()
+    assert db_tools.restart_block_reason() == ""
+
+
+def test_api_lifespan_awaits_db_tools_and_cluster_shutdown() -> None:
+    """FastAPI shutdown invokes both newly tracked module lifecycles."""
+    source = Path("PBApiServer.py").read_text(encoding="utf-8")
+
+    assert '("cluster", cluster_shutdown)' in source
+    assert '("db-tools", db_tools_shutdown)' in source
+    assert "await shutdown_step()" in source
+    assert "db_tools_restart_block_reason()" in source
+    assert "cluster_restart_block_reason()" in source
+    assert source.index('("cluster", cluster_shutdown)') < source.index("await _vps_monitor.stop()")
+    assert source.index('("db-tools", db_tools_shutdown)') < source.index("await _vps_monitor.stop()")
+
+
+def test_dispatch_sync_job_uses_persistent_task_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Manual and scheduled DB Sync runs persist work outside the API process."""
+    job = {
+        "id": "sync-a",
+        "name": "Sync A",
+        "source": "local",
+        "targets": ["master-b"],
+        "users": ["alice"],
+        "interval_seconds": 60,
+        "enabled": True,
+        "running": False,
+    }
+    queued_item = {
+        "id": "task-a",
+        "type": "db_sync",
+        "status": "pending",
+        "progress": {"total": 10},
+    }
+    queued = {"created": False}
+
+    def fake_enqueue(**_kwargs):
+        queued["created"] = True
+        return SimpleNamespace(job_id="task-a", path="/tmp/task-a.json")
+
+    monkeypatch.setattr(db_tools, "enqueue_running_job", fake_enqueue)
+    monkeypatch.setattr(db_tools, "_start_db_sync_worker", lambda _path: None)
+    monkeypatch.setattr(db_tools, "_task_jobs_by_id", lambda: {"task-a": queued_item} if queued["created"] else {})
+    monkeypatch.setattr(db_tools, "_save_sync_jobs", lambda: None)
+
+    operation = db_tools._dispatch_sync_job(job, manual=True)
+
+    assert operation["id"] == "task-a"
+    assert operation["status"] == "running"
+    assert job["worker_job_id"] == "task-a"
+    assert job["running"] is True
+    assert job["next_run"] == ""
+
+
+def test_reconcile_completed_worker_job_schedules_next_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The API imports persistent worker completion after any intervening restart."""
+    job = {
+        "id": "sync-a",
+        "enabled": True,
+        "interval_seconds": 60,
+        "running": True,
+        "worker_job_id": "task-a",
+    }
+    monkeypatch.setattr(db_tools, "_sync_jobs", {"sync-a": job})
+    monkeypatch.setattr(
+        db_tools,
+        "_task_jobs_by_id",
+        lambda: {"task-a": {"id": "task-a", "type": "db_sync", "status": "done", "result": {"ok": True}}},
+    )
+    saved = []
+    monkeypatch.setattr(db_tools, "_save_sync_jobs", lambda: saved.append(True))
+
+    db_tools._reconcile_sync_worker_jobs()
+
+    assert job["running"] is False
+    assert job["worker_job_id"] == ""
+    assert job["last_result"] == {"ok": True}
+    assert job["last_error"] == ""
+    assert job["next_run"]
+    assert saved == [True]
+
+
+def test_db_sync_worker_uses_own_ssh_pool_and_persists_result(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A task_worker DB Sync executes independently from FastAPI's monitor pool."""
+    task_obj = {"id": "task-a", "status": "running", "progress": {}}
+    disconnected = []
+
+    def fake_update(_path: Path, mutate) -> None:
+        mutate(task_obj)
+
+    class FakePool:
+        def load_vps_configs(self) -> list[str]:
+            return []
+
+        async def connect(self, _hostname: str) -> bool:
+            return True
+
+        async def disconnect_all(self) -> None:
+            disconnected.append(True)
+
+    async def fake_run(job: dict, operation) -> dict:
+        assert job["id"] == "sync-a"
+        operation.advance("Synced", {"rows": 2})
+        return {"ok": True, "rows": 2}
+
+    monkeypatch.setattr(task_worker, "update_job_file", fake_update)
+    monkeypatch.setattr(task_worker, "_is_cancel_requested", lambda _path: False)
+    monkeypatch.setattr(async_pool_mod, "AsyncSSHPool", FakePool)
+    monkeypatch.setattr(db_tools, "run_sync_job_snapshot", fake_run)
+
+    task_worker._run_db_sync(
+        tmp_path / "task-a.json",
+        {"job": {"id": "sync-a", "source": "local", "targets": [], "users": ["alice"]}, "total": 2},
+    )
+
+    assert task_obj["result"] == {"ok": True, "rows": 2}
+    assert task_obj["progress"]["completed"] == 2
+    assert task_obj["progress"]["current"] == "Completed"
+    assert disconnected == [True]

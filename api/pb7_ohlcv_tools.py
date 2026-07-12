@@ -8,11 +8,13 @@ Provides:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import platform
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -22,15 +24,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import psutil
+
 from api.pb7_bridge import ensure_pb7_src_importable
 from logging_helpers import human_log as _log
 from pb7_config import prepare_pb7_config_dict, save_pb7_config, strip_pbgui_param_status
 from pbgui_purefunc import PBGDIR, pb7dir, pb7venv
+from secure_files import atomic_write_private_text
 
 SERVICE = "PB7OhlcvAPI"
 
 _PRELOAD_JOBS: dict[str, dict[str, Any]] = {}
-_PRELOAD_LOCK = threading.Lock()
+_PRELOAD_LOCK = threading.RLock()
+_PRELOAD_REAPERS: dict[str, threading.Thread] = {}
 _PRELOAD_JOB_TTL_SECONDS = 24 * 60 * 60
 _SAMPLE_LIMIT = 6
 
@@ -802,7 +808,7 @@ def _cleanup_preload_jobs() -> None:
             job = _PRELOAD_JOBS.pop(job_id, None)
             if not job:
                 continue
-            for key in ("config_path", "log_path"):
+            for key in ("config_path", "log_path", "state_path"):
                 raw_path = str(job.get(key) or "").strip()
                 if raw_path:
                     stale_paths.append(Path(raw_path))
@@ -836,6 +842,110 @@ def _preload_log_path(job_id: str) -> Path:
     return log_dir / f"preload_{job_id}.log"
 
 
+def _preload_state_path(job_id: str) -> Path:
+    return Path(PBGDIR) / "data" / "ohlcv_preload" / f"preload_{job_id}.state.json"
+
+
+def _persist_preload_job_locked(job: dict[str, Any]) -> None:
+    state_path = Path(str(job.get("state_path") or _preload_state_path(str(job["job_id"]))))
+    job["state_path"] = str(state_path)
+    payload = {
+        key: value
+        for key, value in job.items()
+        if isinstance(value, (str, int, float, bool, list, dict)) or value is None
+    }
+    atomic_write_private_text(state_path, json.dumps(payload, indent=4) + "\n")
+
+
+def _refresh_preload_job_from_disk_locked(job: dict[str, Any]) -> None:
+    state_path = Path(str(job.get("state_path") or ""))
+    try:
+        persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return
+    if str(persisted.get("job_id") or "") == str(job.get("job_id") or ""):
+        job.update(persisted)
+
+
+def _preload_process_identity(job: dict[str, Any]) -> bool | None:
+    try:
+        pid = int(job.get("pid") or 0)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0 or not psutil.pid_exists(pid):
+        return False
+    try:
+        process = psutil.Process(pid)
+        cmdline = [str(part) for part in process.cmdline()]
+        expected_created_at = float(job.get("process_created_at") or 0.0)
+        if expected_created_at and abs(process.create_time() - expected_created_at) > 0.01:
+            return False
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return False
+    except psutil.AccessDenied:
+        return None
+    state_path = str(Path(str(job.get("state_path") or "")).resolve())
+    return any(part.endswith("ohlcv_preload_worker.py") for part in cmdline) and state_path in cmdline
+
+
+def _discover_preload_worker_locked(job: dict[str, Any]) -> bool:
+    state_path = str(Path(str(job.get("state_path") or "")).resolve())
+    for process in psutil.process_iter(["pid", "cmdline", "create_time"]):
+        try:
+            cmdline = [str(part) for part in process.info.get("cmdline") or []]
+        except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
+            continue
+        if any(part.endswith("ohlcv_preload_worker.py") for part in cmdline) and state_path in cmdline:
+            job["pid"] = int(process.info["pid"])
+            job["process_created_at"] = float(process.info.get("create_time") or 0.0)
+            job["status"] = "running"
+            _persist_preload_job_locked(job)
+            return True
+    return False
+
+
+def _reconcile_preload_job_locked(job: dict[str, Any]) -> None:
+    _refresh_preload_job_from_disk_locked(job)
+    status = str(job.get("status") or "")
+    if status not in {"launching", "running"}:
+        return
+    identity = _preload_process_identity(job)
+    if identity is True or identity is None:
+        return
+    if status == "launching" and _discover_preload_worker_locked(job):
+        return
+    job["status"] = "stopped" if job.get("stop_requested") else "error"
+    job["returncode"] = -1
+    job["finished_at"] = job.get("finished_at") or _utc_ms()
+    if not job.get("stop_requested"):
+        job["error"] = "OHLCV preload supervisor exited without a terminal status"
+    _persist_preload_job_locked(job)
+
+
+def startup() -> None:
+    """Restore persisted preload jobs and restart jobs not yet launched."""
+    work_dir = Path(PBGDIR) / "data" / "ohlcv_preload"
+    queued_ids: list[str] = []
+    with _PRELOAD_LOCK:
+        if work_dir.exists():
+            for state_path in work_dir.glob("preload_*.state.json"):
+                try:
+                    job = json.loads(state_path.read_text(encoding="utf-8"))
+                    job_id = str(job.get("job_id") or "").strip()
+                    if not job_id:
+                        continue
+                    job["state_path"] = str(state_path)
+                    _PRELOAD_JOBS[job_id] = job
+                except (OSError, json.JSONDecodeError, TypeError) as exc:
+                    _log(SERVICE, f"Failed to restore OHLCV preload state {state_path.name}: {exc}", level="WARNING")
+        for job_id, job in _PRELOAD_JOBS.items():
+            _reconcile_preload_job_locked(job)
+            if str(job.get("status") or "") == "queued" and not job.get("stop_requested"):
+                queued_ids.append(job_id)
+    for job_id in queued_ids:
+        _spawn_preload_worker(job_id)
+
+
 def _preload_command(config_path: Path) -> list[str]:
     return [
         pb7venv(),
@@ -846,93 +956,75 @@ def _preload_command(config_path: Path) -> list[str]:
 
 
 def _spawn_preload_worker(job_id: str) -> None:
-    def runner() -> None:
-        with _PRELOAD_LOCK:
-            job = _PRELOAD_JOBS.get(job_id)
+    with _PRELOAD_LOCK:
+        job = _PRELOAD_JOBS.get(job_id)
         if not job:
             return
         if job.get("stop_requested"):
-            with _PRELOAD_LOCK:
-                if job_id in _PRELOAD_JOBS:
-                    _PRELOAD_JOBS[job_id]["status"] = "stopped"
-                    _PRELOAD_JOBS[job_id]["finished_at"] = _utc_ms()
-                    _PRELOAD_JOBS[job_id]["returncode"] = -1
+            job["status"] = "stopped"
+            job["finished_at"] = _utc_ms()
+            job["returncode"] = -1
+            _persist_preload_job_locked(job)
             return
+        job["status"] = "launching"
+        job["pid"] = None
+        job["process_created_at"] = None
+        _persist_preload_job_locked(job)
+        state_path = Path(str(job["state_path"])).resolve()
 
-        cmd = list(job["command"])
-        log_path = Path(job["log_path"])
-        cwd = Path(job["cwd"])
-        env = os.environ.copy()
-        env["PATH"] = os.path.dirname(pb7venv()) + os.pathsep + env.get("PATH", "")
+    worker_script = Path(__file__).with_name("ohlcv_preload_worker.py")
+    command = [sys.executable, "-u", str(worker_script), str(state_path)]
+    try:
         popen_kwargs: dict[str, Any] = {
-            "cwd": str(cwd),
-            "env": env,
+            "cwd": str(PBGDIR),
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL,
         }
+        if platform.system() == "Windows":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+            proc = subprocess.Popen(command, **popen_kwargs)
+        else:
+            proc = subprocess.Popen(command, start_new_session=True, **popen_kwargs)
+        created_at = psutil.Process(proc.pid).create_time()
+        with _PRELOAD_LOCK:
+            current = _PRELOAD_JOBS.get(job_id)
+            if current is not None:
+                _refresh_preload_job_from_disk_locked(current)
+                if str(current.get("status") or "") in {"launching", "running"}:
+                    current["status"] = "running"
+                    current["pid"] = proc.pid
+                    current["process_created_at"] = created_at
+                    _persist_preload_job_locked(current)
 
-        try:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            with log_path.open("a", encoding="utf-8") as handle:
-                handle.write("$ " + " ".join(cmd) + "\n")
-                handle.flush()
-                with _PRELOAD_LOCK:
-                    current = _PRELOAD_JOBS.get(job_id)
-                    if not current:
-                        return
-                    if current.get("stop_requested"):
-                        _PRELOAD_JOBS[job_id]["status"] = "stopped"
-                        _PRELOAD_JOBS[job_id]["finished_at"] = _utc_ms()
-                        _PRELOAD_JOBS[job_id]["returncode"] = -1
-                        return
-                popen_kwargs["stdout"] = handle
-                popen_kwargs["stderr"] = subprocess.STDOUT
-                if platform.system() == "Windows":
-                    popen_kwargs["creationflags"] = (
-                        subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-                    )
-                    proc = subprocess.Popen(cmd, **popen_kwargs)
-                else:
-                    proc = subprocess.Popen(cmd, start_new_session=True, **popen_kwargs)
-                with _PRELOAD_LOCK:
-                    if job_id in _PRELOAD_JOBS:
-                        _PRELOAD_JOBS[job_id]["status"] = "running"
-                        _PRELOAD_JOBS[job_id]["pid"] = proc.pid
-                _log(SERVICE, f"Started OHLCV preload job {job_id} (pid={proc.pid})", level="INFO")
-                returncode = proc.wait()
-                finished_at = _utc_ms()
-                stop_requested = False
-                with _PRELOAD_LOCK:
-                    if job_id in _PRELOAD_JOBS:
-                        stop_requested = bool(_PRELOAD_JOBS[job_id].get("stop_requested"))
-                        _PRELOAD_JOBS[job_id]["returncode"] = returncode
-                        _PRELOAD_JOBS[job_id]["finished_at"] = finished_at
-                        _PRELOAD_JOBS[job_id]["status"] = "stopped" if stop_requested else ("completed" if returncode == 0 else "error")
-                if stop_requested:
-                    _log(SERVICE, f"Stopped OHLCV preload job {job_id}", level="INFO")
-                elif returncode == 0:
-                    _log(SERVICE, f"Finished OHLCV preload job {job_id}", level="INFO")
-                else:
-                    _log(
-                        SERVICE,
-                        f"OHLCV preload job {job_id} failed with return code {returncode}",
-                        level="WARNING",
-                    )
-        except Exception as exc:
-            finished_at = _utc_ms()
-            try:
-                with log_path.open("a", encoding="utf-8") as handle:
-                    handle.write(f"\nERROR: {type(exc).__name__}: {exc}\n")
-            except Exception:
-                pass
+        def _reap() -> None:
+            returncode = proc.wait()
             with _PRELOAD_LOCK:
-                if job_id in _PRELOAD_JOBS:
-                    _PRELOAD_JOBS[job_id]["status"] = "error"
-                    _PRELOAD_JOBS[job_id]["error"] = str(exc)
-                    _PRELOAD_JOBS[job_id]["finished_at"] = finished_at
-            _log(SERVICE, f"Failed to start OHLCV preload job {job_id}: {exc}", level="WARNING")
+                current = _PRELOAD_JOBS.get(job_id)
+                if current is not None and int(current.get("pid") or 0) == proc.pid:
+                    _refresh_preload_job_from_disk_locked(current)
+                    if str(current.get("status") or "") in {"launching", "running"}:
+                        current["status"] = "stopped" if current.get("stop_requested") else "error"
+                        current["returncode"] = returncode
+                        current["finished_at"] = _utc_ms()
+                        if not current.get("stop_requested"):
+                            current["error"] = f"OHLCV preload supervisor exited with code {returncode} without terminal state"
+                        _persist_preload_job_locked(current)
+                _PRELOAD_REAPERS.pop(job_id, None)
 
-    threading.Thread(target=runner, daemon=True, name=f"ohlcv-preload-{job_id}").start()
+        reaper = threading.Thread(target=_reap, daemon=True, name=f"ohlcv-preload-reaper-{job_id}")
+        with _PRELOAD_LOCK:
+            _PRELOAD_REAPERS[job_id] = reaper
+        reaper.start()
+        _log(SERVICE, f"Started persistent OHLCV preload job {job_id} (pid={proc.pid})", level="INFO")
+    except Exception as exc:
+        with _PRELOAD_LOCK:
+            current = _PRELOAD_JOBS.get(job_id)
+            if current is not None:
+                current["status"] = "error"
+                current["error"] = str(exc)
+                current["finished_at"] = _utc_ms()
+                _persist_preload_job_locked(current)
+        _log(SERVICE, f"Failed to start OHLCV preload job {job_id}: {exc}", level="WARNING")
 
 
 async def build_ohlcv_preflight(raw_config: dict[str, Any]) -> dict[str, Any]:
@@ -1226,9 +1318,11 @@ def start_ohlcv_preload_job(raw_config: dict[str, Any]) -> dict[str, Any]:
         "log_path": str(log_path),
         "target_end_ms": target_end_ms,
         "skipped_notes": skipped_notes,
+        "state_path": str(_preload_state_path(job_id)),
     }
     with _PRELOAD_LOCK:
         _PRELOAD_JOBS[job_id] = job
+        _persist_preload_job_locked(job)
     _spawn_preload_worker(job_id)
     return _preload_job_payload(job)
 
@@ -1239,16 +1333,29 @@ def stop_ohlcv_preload_job(job_id: str) -> dict[str, Any] | None:
         job = _PRELOAD_JOBS.get(job_id)
         if not job:
             return None
+        _refresh_preload_job_from_disk_locked(job)
         job["stop_requested"] = True
+        _persist_preload_job_locked(job)
         pid = job.get("pid")
         status = str(job.get("status") or "")
         if status == "queued" and not pid:
             job["status"] = "stopped"
             job["finished_at"] = _utc_ms()
             job["returncode"] = -1
+            _persist_preload_job_locked(job)
             return _preload_job_payload(deepcopy(job))
 
-    if status not in ("queued", "running") or not pid:
+        identity = _preload_process_identity(job)
+
+    if status not in ("queued", "launching", "running") or not pid:
+        return get_ohlcv_preload_job(job_id)
+    if identity is not True:
+        with _PRELOAD_LOCK:
+            current = _PRELOAD_JOBS.get(job_id)
+            if current is not None:
+                _reconcile_preload_job_locked(current)
+        if identity is None:
+            _log(SERVICE, f"Refused to signal OHLCV preload PID {pid}: process identity could not be verified", level="WARNING")
         return get_ohlcv_preload_job(job_id)
 
     try:
@@ -1274,6 +1381,10 @@ def stop_ohlcv_preload_job(job_id: str) -> dict[str, Any] | None:
         time.sleep(0.1)
     else:
         try:
+            with _PRELOAD_LOCK:
+                current = _PRELOAD_JOBS.get(job_id)
+                if current is None or _preload_process_identity(current) is not True:
+                    raise ProcessLookupError
             if platform.system() == "Windows":
                 os.kill(pid, signal.SIGKILL)
             else:
@@ -1287,10 +1398,12 @@ def stop_ohlcv_preload_job(job_id: str) -> dict[str, Any] | None:
         current = _PRELOAD_JOBS.get(job_id)
         if not current:
             return None
-        if current.get("status") in ("queued", "running"):
+        _refresh_preload_job_from_disk_locked(current)
+        if current.get("status") in ("queued", "launching", "running"):
             current["status"] = "stopped"
             current["finished_at"] = current.get("finished_at") or _utc_ms()
             current["returncode"] = -1
+        _persist_preload_job_locked(current)
         payload = _preload_job_payload(deepcopy(current))
     return payload
 
@@ -1298,6 +1411,9 @@ def stop_ohlcv_preload_job(job_id: str) -> dict[str, Any] | None:
 def get_ohlcv_preload_job(job_id: str) -> dict[str, Any] | None:
     _cleanup_preload_jobs()
     with _PRELOAD_LOCK:
+        current = _PRELOAD_JOBS.get(job_id)
+        if current is not None:
+            _reconcile_preload_job_locked(current)
         job = deepcopy(_PRELOAD_JOBS.get(job_id))
     if not job:
         return None

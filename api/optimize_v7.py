@@ -34,7 +34,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from fastapi.responses import HTMLResponse, Response
 
 from api.archive_helpers import ensure_config_version
-from api.auth import SessionToken, require_auth, validate_token
+from api.auth import SessionToken, authenticate_websocket, require_auth
 from api.pb7_bridge import (
     get_bot_param_keys,
     get_hsl_signal_modes,
@@ -111,6 +111,7 @@ _PARETO_DASH_PROXY_RESP_DROP = {"content-length", "connection", "transfer-encodi
 _PARETO_DASH_PROXY_TEXT_TYPES = ("text/html", "text/javascript", "application/javascript", "application/json")
 _pareto_dash_sessions: dict[str, dict] = {}
 _pareto_dash_lock = threading.RLock()
+_pareto_dash_accepting = True
 _config_list_cache_lock = threading.RLock()
 _config_summary_cache: dict[str, tuple[int, int, dict]] = {}
 _backtest_count_cache: dict[str, tuple[object, int]] = {}
@@ -1815,6 +1816,16 @@ def _stop_pareto_dash_session(session_id: str) -> None:
     _log(SERVICE, f"Stopped Pareto Dash session {session_id}")
 
 
+def _stop_all_pareto_dash_sessions() -> None:
+    """Terminate every API-owned Pareto Dash process and remove its staging data."""
+    with _pareto_dash_lock:
+        sessions = list(_pareto_dash_sessions.values())
+        _pareto_dash_sessions.clear()
+    for session in sessions:
+        _terminate_process(session.get("process"))
+        _cleanup_pareto_dash_stage(session.get("stage_root"))
+
+
 def _wait_for_pareto_dash_ready(proc: subprocess.Popen, port: int, target_path: str = "/", *, timeout: float = 8.0) -> tuple[bool, str]:
     target_url = f"http://127.0.0.1:{port}{target_path or '/'}"
     deadline = time.time() + timeout
@@ -1833,6 +1844,9 @@ def _wait_for_pareto_dash_ready(proc: subprocess.Popen, port: int, target_path: 
 
 
 def _launch_pareto_dash_session(session_id: str, result_dir: Path, pathname_prefix: str) -> dict:
+    with _pareto_dash_lock:
+        if not _pareto_dash_accepting:
+            raise HTTPException(503, "Pareto Dash is shutting down")
     if not (result_dir / "pareto").is_dir():
         raise HTTPException(400, "Result has no pareto directory")
 
@@ -1906,6 +1920,10 @@ def _launch_pareto_dash_session(session_id: str, result_dir: Path, pathname_pref
         "started_at": time.time(),
     }
     with _pareto_dash_lock:
+        if not _pareto_dash_accepting:
+            _terminate_process(proc)
+            _cleanup_pareto_dash_stage(stage_root)
+            raise HTTPException(503, "Pareto Dash is shutting down")
         _pareto_dash_sessions[session_id] = session
 
     _log(SERVICE, f"Started Pareto Dash session {session_id} for {result_dir.name} on port {port}")
@@ -2183,10 +2201,16 @@ class OptimizeWorker:
             self._task = asyncio.create_task(self._loop(), name="optimize-v7-worker")
             _log(SERVICE, "Optimize worker started", level="INFO")
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         self._running = False
-        if self._task and not self._task.done():
-            self._task.cancel()
+        task = self._task
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if self._task is task:
+            self._task = None
 
     async def _loop(self) -> None:
         try:
@@ -2370,11 +2394,8 @@ async def _ws_push_loop(ws: WebSocket) -> None:
 
 @router.websocket("/ws/opt7")
 async def ws_optimize(websocket: WebSocket):
-    token = websocket.query_params.get("token", "")
-    if not validate_token(token):
-        await websocket.close(code=4001)
+    if await authenticate_websocket(websocket) is None:
         return
-    await websocket.accept()
     _ws_clients.add(websocket)
     push_task = asyncio.create_task(_ws_push_loop(websocket))
     try:
@@ -2399,11 +2420,18 @@ async def ws_optimize(websocket: WebSocket):
 
 
 def startup() -> None:
+    global _pareto_dash_accepting
+    with _pareto_dash_lock:
+        _pareto_dash_accepting = True
     _worker.start()
 
 
-def shutdown() -> None:
-    _worker.stop()
+async def shutdown() -> None:
+    global _pareto_dash_accepting
+    with _pareto_dash_lock:
+        _pareto_dash_accepting = False
+    await _worker.stop()
+    await asyncio.to_thread(_stop_all_pareto_dash_sessions)
 
 
 @router.get("/main_page", response_class=HTMLResponse)
@@ -2603,11 +2631,8 @@ def get_config(name: str, session: SessionToken = Depends(require_auth)):
 
 
 @router.put("/configs/{name}")
-def save_config(name: str, body: dict, source_name: str | None = None,
-                session: SessionToken = Depends(require_auth)):
+def save_config(name: str, body: dict, session: SessionToken = Depends(require_auth)):
     _validate_name(name)
-    if source_name:
-        _validate_name(source_name)
     cfg = dict(body or {})
     cfg = ensure_config_version(cfg, _get_new_optimize_template)
     backtest = dict(cfg.get("backtest") or {})
@@ -2622,16 +2647,13 @@ def save_config(name: str, body: dict, source_name: str | None = None,
             optimize["n_cpus"] = multiprocessing.cpu_count()
         cfg["optimize"] = optimize
     cfg_file = _opt_configs_dir() / f"{name}.json"
-    source_file = _opt_configs_dir() / f"{source_name}.json" if source_name and source_name != name else None
     save_pb7_config(cfg, cfg_file)
     _update_queue_config_references(
-        [path for path in (source_file, cfg_file) if path is not None],
+        [cfg_file],
         target_path=cfg_file,
         target_name=name,
         config_snapshot=cfg,
     )
-    if source_file is not None and source_file.exists():
-        source_file.unlink()
     return {"ok": True, "name": name}
 
 
@@ -3091,7 +3113,6 @@ def launch_result_pareto_dash(body: dict, request: Request, session: SessionToke
     pathname_prefix = request.app.url_path_for(
         "optimize_result_pareto_dash_proxy_root",
         session_id=session_id,
-        access_token=session.token,
     )
     launched = _launch_pareto_dash_session(session_id, result_dir, str(pathname_prefix))
     launched["url"] = str(pathname_prefix)
@@ -3104,24 +3125,21 @@ def launch_result_pareto_dash(body: dict, request: Request, session: SessionToke
 
 
 @router.api_route(
-    "/results/pareto-dash/{session_id}/{access_token}/",
+    "/results/pareto-dash/{session_id}/",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     name="optimize_result_pareto_dash_proxy_root",
 )
 @router.api_route(
-    "/results/pareto-dash/{session_id}/{access_token}/{dash_path:path}",
+    "/results/pareto-dash/{session_id}/{dash_path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     name="optimize_result_pareto_dash_proxy_path",
 )
 async def proxy_result_pareto_dash(
     session_id: str,
-    access_token: str,
     request: Request,
     dash_path: str = "",
+    session: SessionToken = Depends(require_auth),
 ):
-    if not validate_token(access_token):
-        raise HTTPException(401, "Invalid or expired token")
-
     launched = _get_pareto_dash_session(session_id)
     if not launched:
         raise HTTPException(404, "Pareto Dash session not found")
@@ -3161,7 +3179,6 @@ async def proxy_result_pareto_dash(
         request.app.url_path_for(
             "optimize_result_pareto_dash_proxy_root",
             session_id=session_id,
-            access_token=access_token,
         )
     )
     upstream_base = f"http://127.0.0.1:{launched['port']}"

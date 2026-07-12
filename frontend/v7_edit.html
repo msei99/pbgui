@@ -1490,7 +1490,7 @@ function ensureRawJsonValidForSave() {
 /* ─── Navigation ───────────────────────────────────────────── */
 function goBack() {
   window.PBGuiEditorShared.clearFixedValidationStatus();
-  window.location.href = API_BASE + '/main_page?token=' + encodeURIComponent(TOKEN);
+  window.location.href = API_BASE + '/main_page';
 }
 
 function goBacktest() {
@@ -1506,8 +1506,7 @@ function goBacktest() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }).then(function(data) {
-    var url = window.location.origin + '/api/backtest-v7/main_page?token=' + encodeURIComponent(TOKEN)
-      + '&draft_id=' + encodeURIComponent(data.draft_id)
+    var url = window.location.origin + '/api/backtest-v7/main_page?draft_id=' + encodeURIComponent(data.draft_id)
       + '&draft_name=' + encodeURIComponent(INSTANCE_NAME || config.live.user || 'draft');
     window.location.href = url;
   }).catch(function(e) {
@@ -1536,8 +1535,7 @@ function goStrategyExplorer() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }).then(function(data) {
-    var url = explorerBase + '/main_page?token=' + encodeURIComponent(TOKEN)
-      + '&draft_id=' + encodeURIComponent(data.draft_id || '');
+    var url = explorerBase + '/main_page?draft_id=' + encodeURIComponent(data.draft_id || '');
     window.location.href = url;
   }).catch(function(e) {
     toast('Failed to open Strategy Explorer: ' + e.message, 'err');

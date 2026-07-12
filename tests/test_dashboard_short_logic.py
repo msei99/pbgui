@@ -5,10 +5,220 @@ snapshot and live API paths for DCA counting plus nearest DCA/TP prices.
 """
 
 import asyncio
+import json
+import subprocess
+import textwrap
+from pathlib import Path
 
 import pytest
 
 from api import dashboard, live
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DASHBOARD_WS_FRAGMENTS = [
+    "dashboard_top.html",
+    "dashboard_income.html",
+    "dashboard_pnl.html",
+    "dashboard_adg.html",
+    "dashboard_ppl.html",
+    "dashboard_positions.html",
+    "dashboard_orders.html",
+]
+DASHBOARD_REQUEST_FRAGMENTS = [
+    "dashboard_top.html",
+    "dashboard_pnl.html",
+    "dashboard_adg.html",
+    "dashboard_ppl.html",
+    "dashboard_orders.html",
+]
+
+
+@pytest.mark.parametrize("filename", DASHBOARD_WS_FRAGMENTS)
+def test_dashboard_websocket_fragments_reject_stale_generations(filename: str) -> None:
+    """Every rerenderable dashboard fragment must retire stale socket callbacks."""
+    source = (ROOT / "frontend" / filename).read_text(encoding="utf-8")
+
+    assert "function isCurrentGeneration()" in source
+    assert "if (!isCurrentGeneration() || !TOKEN || !API_HOST) return;" in source
+    assert ".onmessage = window[" in source or ".onmessage = window._dtWs.onclose" in source
+    assert "!== socket) return;" in source
+    assert "=== socket) socket.close();" in source
+
+
+def test_dashboard_top_dequeued_old_reconnect_cannot_create_socket() -> None:
+    """A reconnect callback already dequeued before rerender must not revive its old fragment."""
+    html = (ROOT / "frontend" / "dashboard_top.html").read_text(encoding="utf-8")
+    source = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+    for placeholder, value in {
+        "%%TOKEN%%": "test-token",
+        "%%API_BASE%%": "/api",
+        "%%API_HOST%%": "localhost",
+        "%%USERS%%": "[]",
+        "%%PERIOD%%": "TODAY",
+        "%%TOP%%": "10",
+        "%%HEIGHT%%": "0",
+        "%%POSITION%%": "0",
+    }.items():
+        source = source.replace(placeholder, value)
+
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const vm = require('node:vm');
+        const fragment = {json.dumps(source)};
+        const sockets = [];
+        const timers = [];
+
+        global.window = global;
+        window.location = {{ protocol: 'http:' }};
+        global.document = {{ getElementById: function () {{ return {{}}; }} }};
+        global.DashRender = {{
+            VERSION: '20260610l',
+            injectCSS: function () {{}}
+        }};
+        window.DashRender = global.DashRender;
+        global.Plotly = {{}};
+        global.WebSocket = class {{
+            constructor(url) {{ this.url = url; sockets.push(this); }}
+            close() {{}}
+        }};
+        global.setTimeout = function (callback) {{ timers.push(callback); return timers.length; }};
+        global.clearTimeout = function () {{}};
+
+        vm.runInThisContext(fragment);
+        assert.equal(sockets.length, 1);
+        sockets[0].onclose();
+        assert.equal(timers.length, 1);
+        const staleReconnect = timers[0];
+
+        vm.runInThisContext(fragment);
+        assert.equal(sockets.length, 2);
+        staleReconnect();
+        assert.equal(sockets.length, 2);
+        """
+    )
+    result = subprocess.run(
+        ["node", "-e", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        "Dashboard WebSocket lifecycle regression failed\n"
+        f"STDOUT:\n{result.stdout}\n"
+        f"STDERR:\n{result.stderr}"
+    )
+
+
+@pytest.mark.parametrize("filename", DASHBOARD_REQUEST_FRAGMENTS)
+def test_dashboard_fetch_fragments_reject_stale_responses(filename: str) -> None:
+    """Repeated dashboard loaders must only render their newest HTTP response."""
+    source = (ROOT / "frontend" / filename).read_text(encoding="utf-8")
+
+    assert "var loadSeq" in source
+    assert "var seq = ++loadSeq;" in source
+    assert "seq !== loadSeq || !isCurrentGeneration()" in source
+
+
+def test_dashboard_editor_orders_rejects_stale_position_response() -> None:
+    """The inline Orders preview must bind responses to its latest selected position."""
+    source = (ROOT / "frontend" / "dashboard_editor.html").read_text(encoding="utf-8")
+    start = source.index("function buildOrdersInline(")
+    end = source.index("/* \u2500\u2500 drag & drop state", start)
+    orders_source = source[start:end]
+
+    assert "var _loadSeqKey = '_ordInlineLoadSeq_' + pos;" in orders_source
+    assert "var seq = ++window[_loadSeqKey];" in orders_source
+    assert "if (seq !== window[_loadSeqKey]) return;" in orders_source
+    assert "if (expectedSeq != null && expectedSeq !== window[_loadSeqKey]) return;" in orders_source
+
+
+def test_dashboard_top_older_fetch_cannot_overwrite_newer_render() -> None:
+    """Resolve two Top requests in reverse order and render only the newer payload."""
+    html = (ROOT / "frontend" / "dashboard_top.html").read_text(encoding="utf-8")
+    source = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+    for placeholder, value in {
+        "%%TOKEN%%": "test-token",
+        "%%API_BASE%%": "/api",
+        "%%API_HOST%%": "localhost",
+        "%%USERS%%": "[]",
+        "%%PERIOD%%": "TODAY",
+        "%%TOP%%": "10",
+        "%%HEIGHT%%": "0",
+        "%%POSITION%%": "0",
+    }.items():
+        source = source.replace(placeholder, value)
+
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const vm = require('node:vm');
+        const fragment = {json.dumps(source)};
+        const sockets = [];
+        const requests = [];
+        const renders = [];
+        const container = {{ appendChild: function () {{}}, innerHTML: '' }};
+
+        global.window = global;
+        window.location = {{ protocol: 'http:' }};
+        global.document = {{
+            getElementById: function () {{ return container; }},
+            createElement: function () {{
+                return {{ addEventListener: function () {{}}, appendChild: function () {{}} }};
+            }},
+            createTextNode: function () {{ return {{}}; }}
+        }};
+        global.DashRender = {{
+            VERSION: '20260610l',
+            injectCSS: function () {{}},
+            buildTop: function (target, data) {{ renders.push(data.id); }}
+        }};
+        window.DashRender = global.DashRender;
+        global.Plotly = {{}};
+        global.WebSocket = class {{
+            constructor(url) {{ this.url = url; sockets.push(this); }}
+            close() {{}}
+        }};
+        global.fetch = function () {{
+            return new Promise(function (resolve) {{ requests.push(resolve); }});
+        }};
+        global.setTimeout = function () {{ return 1; }};
+        global.clearTimeout = function () {{}};
+
+        (async function () {{
+            vm.runInThisContext(fragment);
+            sockets[0].onopen();
+            sockets[0].onmessage({{ data: JSON.stringify({{ type: 'income_updated' }}) }});
+            assert.equal(requests.length, 2);
+
+            requests[1]({{ ok: true, json: async function () {{ return {{ id: 'new' }}; }} }});
+            await new Promise(setImmediate);
+            await new Promise(setImmediate);
+            requests[0]({{ ok: true, json: async function () {{ return {{ id: 'old' }}; }} }});
+            await new Promise(setImmediate);
+            await new Promise(setImmediate);
+
+            assert.deepEqual(renders, ['new']);
+        }})().catch(function (error) {{
+            console.error(error);
+            process.exitCode = 1;
+        }});
+        """
+    )
+    result = subprocess.run(
+        ["node", "-e", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        "Dashboard request-order regression failed\n"
+        f"STDOUT:\n{result.stdout}\n"
+        f"STDERR:\n{result.stderr}"
+    )
 
 
 class _TickerExchange:
@@ -57,6 +267,33 @@ class _DbStub:
     def fetch_orders_by_symbol(self, user, symbol):
         """Return no open orders for DCA/TP classification."""
         return []
+
+
+class _CachedExchangeStub:
+    """Track REST exchange cache eviction without opening network clients."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        """Record cache eviction."""
+        self.closed = True
+
+
+def test_dashboard_exchange_cache_closes_idle_clients(monkeypatch):
+    """Idle REST clients must be closed and removed while active clients remain cached."""
+    stale = _CachedExchangeStub()
+    active = _CachedExchangeStub()
+    monkeypatch.setattr(dashboard, "_exchange_cache", {"stale": stale, "active": active})
+    monkeypatch.setattr(dashboard, "_exchange_cache_last_used", {"stale": 0.0, "active": 950.0})
+    monkeypatch.setattr(dashboard, "_EXCHANGE_CACHE_IDLE_SECONDS", 100)
+
+    dashboard._prune_exchange_cache(1000.0, keep_key="active")
+
+    assert dashboard._exchange_cache == {"active": active}
+    assert dashboard._exchange_cache_last_used == {"active": 950.0}
+    assert stale.closed is True
+    assert active.closed is False
 
 
 def _order(price: float, side: str) -> list:

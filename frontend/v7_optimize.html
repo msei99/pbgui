@@ -2607,6 +2607,7 @@ var state = {
   limitAddForm: null,
   limitAddVisible: false,
   ws: null,
+  wsReconnectTimer: null,
   logViewer: null,
   logFile: '',
   logFilename: '',
@@ -8954,7 +8955,6 @@ function openFastApiParetoExplorer(resultPath) {
     return;
   }
   var params = new URLSearchParams();
-  params.set('token', TOKEN);
   params.set('result_path', path);
   window.location.href = apiRoot + '/api/pareto-explorer/main_page?' + params.toString();
 }
@@ -10554,7 +10554,6 @@ async function openParetoSeedDraft(path, suggestedName) {
 function buildBacktestMainPageUrl(extraParams) {
   var base = window.location.origin + '/api/backtest-v7/main_page';
   var params = new URLSearchParams();
-  params.set('token', TOKEN);
   Object.keys(extraParams || {}).forEach(function(key) {
     var value = extraParams[key];
     if (value != null && value !== '') params.set(key, String(value));
@@ -10710,11 +10709,8 @@ async function saveEditor(andQueue) {
     }
     configPayload = parsed.value;
   }
-  var sourceQuery = !queueAfterSave && state.editorSourceName && state.editorSourceName !== name
-    ? '?source_name=' + encodeURIComponent(state.editorSourceName)
-    : '';
   isNewName = !!(state.editorSourceName && state.editorSourceName !== name);
-  await apiFetch('/configs/' + encodeURIComponent(name) + sourceQuery, {
+  await apiFetch('/configs/' + encodeURIComponent(name), {
     method: 'PUT',
     body: JSON.stringify(configPayload)
   });
@@ -11697,16 +11693,24 @@ function initSelections() {
 }
 
 function connectWS() {
+  if (state.wsReconnectTimer) {
+    window.clearTimeout(state.wsReconnectTimer);
+    state.wsReconnectTimer = null;
+  }
   if (state.ws) {
+    state.ws.onopen = state.ws.onmessage = state.ws.onclose = state.ws.onerror = null;
     try { state.ws.close(); } catch (error) {}
   }
   setBanner('conn-waiting', 'Connecting to Optimize queue...');
-  var wsUrl = WS_BASE + '/api/optimize-v7/ws/opt7?token=' + encodeURIComponent(TOKEN);
-  state.ws = new WebSocket(wsUrl);
-  state.ws.onopen = function() {
+  var wsUrl = WS_BASE + '/api/optimize-v7/ws/opt7';
+  var socket = new WebSocket(wsUrl);
+  state.ws = socket;
+  socket.onopen = function() {
+    if (state.ws !== socket) return;
     setBanner('conn-ok', 'Connected');
   };
-  state.ws.onmessage = function(event) {
+  socket.onmessage = function(event) {
+    if (state.ws !== socket) return;
     var msg = JSON.parse(event.data);
     if (msg.type === 'queue_update') {
       var hadActiveOptimizeRuns = state.hadActiveOptimizeRuns;
@@ -11745,9 +11749,18 @@ function connectWS() {
       refreshLiveResultsDuringRun(state.hadActiveOptimizeRuns || hadActiveOptimizeRuns).catch(handleError);
     }
   };
-  state.ws.onclose = function() {
+  socket.onclose = function() {
+    if (state.ws !== socket) return;
+    state.ws = null;
     setBanner('conn-lost', 'Queue connection lost. Reconnecting...');
-    window.setTimeout(connectWS, 2000);
+    if (!state.wsReconnectTimer) {
+      var reconnectTimer = window.setTimeout(function() {
+        if (state.wsReconnectTimer !== reconnectTimer) return;
+        state.wsReconnectTimer = null;
+        connectWS();
+      }, 2000);
+      state.wsReconnectTimer = reconnectTimer;
+    }
   };
 }
 

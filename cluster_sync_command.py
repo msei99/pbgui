@@ -36,6 +36,7 @@ from master.cluster_state import (
 )
 from master.cluster_ssh_keys import ensure_cluster_ssh_key
 from pbgui_purefunc import PBGDIR, pb7dir
+from secure_files import atomic_write_private_bytes, ensure_private_directory_tree
 
 PROTOCOL_VERSION = 1
 MAX_COMMAND_BYTES = 4096
@@ -1025,6 +1026,8 @@ def _write_blob(base_dir: Path, blob_hash: str, raw: bytes, max_size: int, *, se
     if digest != expected:
         raise ClusterSyncCommandError("blob hash mismatch")
     target = Path(base_dir) / "sha256" / expected[:2] / f"{expected}.json"
+    if secret:
+        ensure_private_directory_tree(Path(base_dir), target.parent)
     _atomic_write_bytes(target, raw, mode=0o600 if secret else 0o644)
     return target
 
@@ -1032,6 +1035,9 @@ def _write_blob(base_dir: Path, blob_hash: str, raw: bytes, max_size: int, *, se
 def _atomic_write_bytes(path: Path, raw: bytes, *, mode: int) -> None:
     """Atomically write bytes with final file permissions."""
 
+    if mode == 0o600:
+        atomic_write_private_bytes(path, raw)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:

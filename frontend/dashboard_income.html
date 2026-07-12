@@ -26,6 +26,13 @@
     /* Position-scoped keys for window-level WS/timer refs. */
     var _wsKey    = '_diWs_' + POSITION;
     var _timerKey = '_diReconnTimer_' + POSITION;
+    var _generationKey = '_diGeneration_' + POSITION;
+    var generation = (window[_generationKey] || 0) + 1;
+    window[_generationKey] = generation;
+
+    function isCurrentGeneration() {
+        return window[_generationKey] === generation;
+    }
 
     /* mutable current values — changed by inline controls but not persisted */
     var currentPeriod = PERIOD;
@@ -39,7 +46,11 @@
                    'THIS_YEAR','LAST_YEAR','LAST_YEAR_NOW','ALL_TIME','CUSTOM'];
 
     /* Kill any previous WS + reconnect timer from a prior render of THIS position */
-    if (window[_wsKey]) { try { window[_wsKey].close(); } catch (_) {} window[_wsKey] = null; }
+    if (window[_wsKey]) {
+        window[_wsKey].onopen = window[_wsKey].onmessage = window[_wsKey].onclose = window[_wsKey].onerror = null;
+        try { window[_wsKey].close(); } catch (_) {}
+        window[_wsKey] = null;
+    }
     if (window[_timerKey]) { clearTimeout(window[_timerKey]); window[_timerKey] = null; }
 
     var ws          = null;
@@ -245,13 +256,19 @@
     }
 
     function connect() {
-        if (!TOKEN || !API_HOST) return;
+        if (!isCurrentGeneration() || !TOKEN || !API_HOST) return;
         clearTimeout(reconnTimer);
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
-        ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard?token=' + TOKEN);
-        window[_wsKey] = ws;
-        ws.onopen = function () { reconnDelay = 1000; load(); };
-        ws.onmessage = function (evt) {
+        var socket = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard');
+        ws = socket;
+        window[_wsKey] = socket;
+        socket.onopen = function () {
+            if (window[_wsKey] !== socket) return;
+            reconnDelay = 1000;
+            load();
+        };
+        socket.onmessage = function (evt) {
+            if (window[_wsKey] !== socket) return;
             try {
                 var m = JSON.parse(evt.data);
                 if (m.type === 'income_updated') {
@@ -261,12 +278,16 @@
                 }
             } catch (_) {}
         };
-        ws.onclose = function () {
+        socket.onclose = function () {
+            if (window[_wsKey] !== socket) return;
+            window[_wsKey] = null;
             reconnTimer = setTimeout(connect, reconnDelay);
             reconnDelay = Math.min(reconnDelay * 2, 30000);
             window[_timerKey] = reconnTimer;
         };
-        ws.onerror = function () { ws.close(); };
+        socket.onerror = function () {
+            if (window[_wsKey] === socket) socket.close();
+        };
     }
 
     function waitForPlotly(cb) {

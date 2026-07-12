@@ -368,6 +368,9 @@ def test_put_secret_blob_uses_owner_only_permissions(tmp_path: Path) -> None:
     assert path.read_bytes() == raw
     assert payload["path"].startswith("secret_blobs/sha256/")
     assert mode == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE((root / "secret_blobs" / "sha256").stat().st_mode) == 0o700
+    assert stat.S_IMODE((root / "secret_blobs").stat().st_mode) == 0o700
 
     fetched = run_command(root, NODE_B, f"get-secret-blob {blob_hash}")
     assert fetched["hash"] == blob_hash

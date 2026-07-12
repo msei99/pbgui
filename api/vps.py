@@ -22,7 +22,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, Request, HTTPException
 from fastapi.responses import HTMLResponse
 
-from api.auth import validate_token, require_auth, SessionToken
+from api.auth import SessionToken, authenticate_websocket, require_auth, validate_token
 from MonitorConfig import MonitorConfig
 from pbgui_purefunc import load_ini, save_ini
 from logging_helpers import human_log as _log
@@ -335,7 +335,7 @@ async def ws_vps(websocket: WebSocket):
     """
     Main VPS monitoring WebSocket.
 
-    Query params: ``?token=xxx``
+    Authentication uses the HttpOnly session cookie.
 
     Push messages (server → client):
         - ``{"type": "state", "data": {…}}`` — full state
@@ -350,12 +350,8 @@ async def ws_vps(websocket: WebSocket):
         - ``{"cmd": "kill_instance", "host": …, "name": …}``
         - etc.
     """
-    # ── Auth (validate before accepting) ──
-    token = websocket.query_params.get("token", "")
-    if not validate_token(token):
-        await websocket.close(code=4001)
+    if await authenticate_websocket(websocket) is None:
         return
-    await websocket.accept()
 
     _clients.add(websocket)
     _log(SERVICE, f"[ws] Client connected: {websocket.client}")
@@ -473,9 +469,10 @@ async def ws_vps(websocket: WebSocket):
              meta={'traceback': traceback.format_exc()})
     finally:
         _clients.discard(websocket)
-        push_state_task.cancel()
-        push_log_task.cancel()
-        push_local_log_task.cancel()
+        push_tasks = (push_state_task, push_log_task, push_local_log_task)
+        for task in push_tasks:
+            task.cancel()
+        await asyncio.gather(*push_tasks, return_exceptions=True)
         # Cleanup remote log subscription
         if log_stream_id and _streamer:
             _streamer.stop_stream(log_stream_id)

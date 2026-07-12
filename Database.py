@@ -1031,13 +1031,9 @@ class Database():
                     with self._connect() as conn:
                         cur = conn.cursor()
                         for user, symbol, timestamp, price in rows:
-                            try:
-                                cur.execute('UPDATE prices SET timestamp = ?, price = ? WHERE symbol = ? AND user = ?', (timestamp, price, symbol, user))
-                                if cur.rowcount == 0:
-                                    cur.execute('INSERT INTO prices(timestamp,price,symbol,user) VALUES(?,?,?,?)', (timestamp, price, symbol, user))
-                            except sqlite3.Error as e:
-                                # Log and continue with other rows
-                                _human_log('Database', f"DB batch_upsert_prices row error {e} user={user} symbol={symbol} price={price}", level='ERROR', user=user)
+                            cur.execute('UPDATE prices SET timestamp = ?, price = ? WHERE symbol = ? AND user = ?', (timestamp, price, symbol, user))
+                            if cur.rowcount == 0:
+                                cur.execute('INSERT INTO prices(timestamp,price,symbol,user) VALUES(?,?,?,?)', (timestamp, price, symbol, user))
                         conn.commit()
                     break
                 except sqlite3.OperationalError as e:
@@ -1046,10 +1042,10 @@ class Database():
                         time.sleep(0.05 * attempts)
                         continue
                     _human_log('Database', f"DB batch_upsert_prices error {e} attempts={attempts}", level='ERROR')
-                    break
+                    raise
                 except sqlite3.Error as e:
                     _human_log('Database', f"DB batch_upsert_prices error {e} attempts={attempts}", level='ERROR')
-                    break
+                    raise
 
     def update_balance(self, conn: sqlite3.Connection, balance: list):
         sql = '''INSERT OR REPLACE INTO balances(timestamp,balance,user)

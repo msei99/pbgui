@@ -16,6 +16,7 @@ from .core import (
     default_remote_install_dir,
     default_target_user,
     detect_public_ip,
+    generate_pbgui_password,
     local_prerequisite_status,
     run_local_master_install,
     run_remote_master_install,
@@ -102,7 +103,10 @@ def _run_remote_cli() -> int:
         print("SSH host key is already known.")
     hostname = _ask("Remote hostname / OpenVPN profile name", "pbgui-master")
     swap_size = _ask("Swap size", "6G")
-    pbgui_password = _ask_password("PBGui web password", "PBGui$Bot!")
+    pbgui_password = _ask_password("PBGui web password (leave empty to generate one)")
+    if not pbgui_password:
+        pbgui_password = generate_pbgui_password()
+        print(f"Generated PBGui web password (store this now): {pbgui_password}")
     pbgui_bind_host = _ask("PBGui bind address", "0.0.0.0")
     pbgui_port = int(_ask("PBGui port", "8000"))
     openvpn_cidr = _ask("OpenVPN network CIDR", "10.8.0.0/24")
@@ -186,7 +190,10 @@ def _run_local_cli() -> int:
     if prereqs.get("sudo_password_useful"):
         local_sudo_password = _ask_password("Local sudo password for apt prerequisites (leave empty to use an existing sudo session)")
     master_name = _ask("Master name", default_local_master_name())
-    pbgui_password = _ask_password("PBGui web password", "PBGui$Bot!")
+    pbgui_password = _ask_password("PBGui web password (leave empty to generate one)")
+    if not pbgui_password:
+        pbgui_password = generate_pbgui_password()
+        print(f"Generated PBGui web password (store this now): {pbgui_password}")
     pbgui_bind_host = _ask("PBGui bind address", "127.0.0.1")
     pbgui_port = int(_ask("PBGui port", "8000"))
     cfg = LocalMasterConfig.from_mapping(

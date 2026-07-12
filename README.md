@@ -79,7 +79,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/msei99/pbgui/refs/heads/main
 
 The command starts a local browser wizard at `http://127.0.0.1:8088/`. It can install a PBGui master either on a fresh remote VPS or on the local machine.
 
-Remote Master VPS mode is the recommended production setup. It installs a fresh VPS over SSH, confirms the SSH host-key fingerprint before connecting, configures OpenVPN and TOTP, installs PBGui/PB7, creates systemd user services, and starts PBGui. PBGui is opened to the VPN network only; SSH can be restricted to specific IPs plus VPN, VPN-only, or explicitly left open with a warning. Keep the PBGui bind address at `0.0.0.0` for remote masters; the firewall limits access to the configured OpenVPN network. If you install multiple remote masters, choose a different private OpenVPN CIDR for each one, for example `10.8.0.0/24`, `10.9.0.0/24`, or `10.10.0.0/24`. When importing the `.ovpn` profile with NetworkManager, enable `Use this connection only for resources on its network` and disable IPv6, or use the installer's NetworkManager import button to apply these settings automatically.
+Remote Master VPS mode is the recommended production setup. It installs a fresh VPS over SSH, confirms the SSH host-key fingerprint before connecting, configures OpenVPN and TOTP, installs PBGui/PB7, creates systemd user services, and starts PBGui. The installer generates an individual PBGui web password; reveal and store it before starting the installation. PBGui is opened to the VPN network only; SSH can be restricted to specific IPs plus VPN, VPN-only, or explicitly left open with a warning. Keep the PBGui bind address at `0.0.0.0` for remote masters; the firewall limits the configured PBGui port to the OpenVPN network. If you install multiple remote masters, choose a different private OpenVPN CIDR for each one, for example `10.8.0.0/24`, `10.9.0.0/24`, or `10.10.0.0/24`. When importing the `.ovpn` profile with NetworkManager, enable `Use this connection only for resources on its network` and disable IPv6, or use the installer's NetworkManager import button to apply these settings automatically.
 
 Local Master Install mode installs PBGui/PB7 under a configurable local parent directory, for example `~/software`. It creates systemd user services for PBGui. The installer checks local prerequisites first and only uses `apt`/`sudo` when required packages such as `git`, `curl`, `gcc`, `pkg-config`, or `python3.12-venv` are missing. If everything is already installed, no sudo password is needed.
 
@@ -135,9 +135,9 @@ pbgui-pbcoindata.service
 
 Local Master installs open PBGui on `http://127.0.0.1:8000/` by default. Remote Master VPS installs are intended to be used through the generated OpenVPN profile, usually at `http://10.8.0.1:8000/` unless you selected a different OpenVPN CIDR.
 
-Default password: `PBGui$Bot!`
+New Master Installer runs generate an individual PBGui web password instead of using a shared default. Reveal and store the generated password in the browser wizard, or note the generated password printed by CLI mode. You can change it later on the Welcome page or in `data/auth/secrets.toml`.
 
-Change the password on the Welcome page or in `data/auth/secrets.toml`.
+Legacy or manual installations may still use the former default password. When PBGui detects that credential together with a wildcard bind address, the authenticated Welcome page shows a persistent warning. Verify that the API port is restricted to VPN or trusted networks and replace the legacy password when broader network access is possible.
 
 For manual development runs only, you can still start the API directly from an activated PBGui virtualenv:
 

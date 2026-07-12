@@ -34,6 +34,8 @@ Displays all entries from `api-keys.json`.
 - **Keyboard navigation** — ArrowDown from the filter box selects the first row; ArrowUp/ArrowDown move between rows; Enter opens the selected user
 - **In Use badge** — shown when the user is referenced by a live bot
 
+Usernames are rendered strictly as text and row actions use delegated browser events. Names imported from backups or Cluster Sync therefore cannot be interpreted as page markup or JavaScript; row clicks, keyboard navigation, Edit, and Delete behave as before.
+
 ### Expiry columns
 
 - **HL Expiry** — shows days remaining / expiry date for Hyperliquid users (read from local cache, no API call); sortable ascending (soonest expiry first)
@@ -84,6 +86,8 @@ Both buttons use the **currently typed credentials** from the form — not just 
 
 - **Check Expiry** (HL / Bybit) — result is preview-only; not persisted until you click Save
 - **Test Connection** — tests the connection live; also uses unsaved credentials
+
+Unsaved Hyperliquid private keys used by **Check Expiry** are sent only in an authenticated POST request body. They are never added to the request URL; checks without an unsaved override continue to use the stored key.
 
 ---
 

@@ -494,6 +494,17 @@
             border-color: #4a5568;
         }
 
+        .btn-danger {
+            background: rgba(127, 29, 29, 0.42);
+            border-color: rgba(248, 113, 113, 0.35);
+            color: #fecaca;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: rgba(153, 27, 27, 0.58);
+            border-color: rgba(248, 113, 113, 0.6);
+        }
+
         .actions {
             display: flex;
             flex-wrap: wrap;
@@ -555,6 +566,21 @@
             background: rgba(120, 53, 15, 0.38);
             border: 1px solid rgba(245, 158, 11, 0.22);
             color: #fde68a;
+        }
+
+        .login-security-warning {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--sp-md);
+        }
+
+        .login-security-warning span {
+            min-width: 0;
+        }
+
+        .login-security-ack {
+            flex-shrink: 0;
         }
 
         .route-grid {
@@ -828,8 +854,8 @@
                     <p class="section-copy">The password form now lives behind the sidebar action instead of sitting inline on the access card.</p>
                 </div>
                 <div class="panel">
-                    <h2 class="panel-title">Change Password</h2>
-                    <p class="panel-copy">Leave the new password empty if you want to disable password protection.</p>
+                    <h2 class="panel-title" id="password-panel-title">Change Password</h2>
+                    <p class="panel-copy" id="password-panel-copy">Changing the password signs out every other active session.</p>
                     <div class="field-grid">
                         <div class="field">
                             <label for="current-password">Current password</label>
@@ -848,6 +874,7 @@
                     </div>
                     <div class="actions">
                         <button id="change-password-btn" class="btn btn-secondary">Change Password</button>
+                        <button id="disable-auth-btn" class="btn btn-danger" type="button">Disable Authentication</button>
                     </div>
                 </div>
             </section>
@@ -871,6 +898,7 @@
         </div>
     </div>
 
+    <script src="/app/js/pbgui_dialogs.js?v=4"></script>
     <script>
         var TOKEN = "%%TOKEN%%";
         var API_ORIGIN = "%%API_ORIGIN%%";
@@ -884,7 +912,6 @@
 
         var API_BASE = API_ORIGIN + "/api";
         var query = new URLSearchParams(window.location.search);
-        if (!TOKEN) TOKEN = query.get("token") || "";
         var NEXT_PATH = query.get("next") || "";
         if (NEXT_PATH && !NEXT_PATH.startsWith("/")) NEXT_PATH = "";
 
@@ -960,8 +987,7 @@
 
         function syncUrl() {
             var nextUrl = new URL(window.location.href);
-            if (TOKEN) nextUrl.searchParams.set("token", TOKEN);
-            else nextUrl.searchParams.delete("token");
+            nextUrl.searchParams.delete("token");
             if (NEXT_PATH) nextUrl.searchParams.set("next", NEXT_PATH);
             window.history.replaceState(null, "", nextUrl.toString());
             syncNavConfig();
@@ -1128,13 +1154,35 @@
                 return;
             }
             var nextUrl = new URL(path, window.location.origin);
-            nextUrl.searchParams.set("token", TOKEN);
             window.location.href = nextUrl.toString();
         }
 
-        function renderIssues(setup) {
+        function renderIssues(auth, setup) {
             var issues = document.getElementById("issues");
             issues.innerHTML = "";
+            var loginSecurity = auth.login_security || {};
+            if (Number(loginSecurity.blocked_attempts || 0) > 0 && !loginSecurity.acknowledged) {
+                var securityItem = document.createElement("div");
+                securityItem.className = "issue warning login-security-warning";
+                var securityMessage = document.createElement("span");
+                securityMessage.textContent = loginSecuritySummary(loginSecurity);
+                var acknowledgeButton = document.createElement("button");
+                acknowledgeButton.type = "button";
+                acknowledgeButton.className = "btn btn-secondary login-security-ack";
+                acknowledgeButton.textContent = "Acknowledge";
+                acknowledgeButton.addEventListener("click", function () {
+                    acknowledgeLoginSecurity(acknowledgeButton);
+                });
+                securityItem.appendChild(securityMessage);
+                securityItem.appendChild(acknowledgeButton);
+                issues.appendChild(securityItem);
+            }
+            (auth.security_warnings || []).forEach(function (message) {
+                var item = document.createElement("div");
+                item.className = "issue error";
+                item.textContent = message;
+                issues.appendChild(item);
+            });
             (setup.errors || []).forEach(function (message) {
                 var item = document.createElement("div");
                 item.className = "issue error";
@@ -1155,8 +1203,49 @@
             }
         }
 
-        function renderStatus(setup) {
+        function loginSecuritySummary(security) {
+            var blockedAttempts = Number(security.blocked_attempts || 0);
+            var activeBlocks = Number(security.active_blocks || 0);
+            if (!blockedAttempts) return "No temporary login lockouts detected in retained Auth logs.";
+            var message = blockedAttempts + " temporary login lockout" + (blockedAttempts === 1 ? "" : "s") + " detected in retained Auth logs.";
+            var lastBlock = security.last_block || {};
+            if (lastBlock.client) message += " Last client: " + String(lastBlock.client) + ".";
+            if (lastBlock.blocked_at) {
+                var parsed = new Date(lastBlock.blocked_at);
+                message += " Last event: " + (isNaN(parsed.getTime()) ? String(lastBlock.blocked_at) : parsed.toLocaleString()) + ".";
+            }
+            if (activeBlocks) message += " Active blocks: " + activeBlocks + ".";
+            if (security.acknowledged) message += " Alert acknowledged.";
+            return message;
+        }
+
+        async function acknowledgeLoginSecurity(button) {
+            button.disabled = true;
+            try {
+                var data = await fetchJson(API_ORIGIN + "/api/auth/login-security/ack", {
+                    method: "POST",
+                    headers: authHeaders(false)
+                });
+                var auth = (state.bootstrap && state.bootstrap.auth) || {};
+                auth.login_security = data.login_security || {};
+                renderStatus(auth, (state.bootstrap && state.bootstrap.setup) || {});
+                setBanner("Login security alert acknowledged.", "success");
+            } catch (error) {
+                button.disabled = false;
+                setBanner(error.message, "error");
+            }
+        }
+
+        function renderStatus(auth, setup) {
+            var loginSecurity = auth.login_security || {};
+            var blockedAttempts = Number(loginSecurity.blocked_attempts || 0);
+            var activeBlocks = Number(loginSecurity.active_blocks || 0);
             var rows = [
+                {
+                    label: "Login security",
+                    state: activeBlocks ? "blocked" : (blockedAttempts ? (loginSecurity.acknowledged ? "acknowledged" : "observed") : "clear"),
+                    detail: loginSecuritySummary(loginSecurity)
+                },
                 { label: "PB7 source", state: setup.import_ready ? "ready" : "missing", detail: setup.src_dir || "No PB7 path configured" },
                 { label: "PB7 config", state: setup.config_load_exists ? "available" : "missing", detail: setup.config_load_file || "No config/load.py path" },
                 { label: "PB7 python", state: setup.venv_ready ? "ready" : "missing", detail: setup.pb7venv || "No interpreter configured" },
@@ -1167,13 +1256,19 @@
             rows.forEach(function (row) {
                 var el = document.createElement("div");
                 el.className = "status-row";
-                el.innerHTML =
-                    '<div class="status-label">' + row.label + '</div>' +
-                    '<div class="status-value">' + row.state + '</div>' +
-                    '<div class="status-detail">' + row.detail + '</div>';
+                [
+                    ["status-label", row.label],
+                    ["status-value", row.state],
+                    ["status-detail", row.detail]
+                ].forEach(function (part) {
+                    var cell = document.createElement("div");
+                    cell.className = part[0];
+                    cell.textContent = part[1];
+                    el.appendChild(cell);
+                });
                 list.appendChild(el);
             });
-            renderIssues(setup);
+            renderIssues(auth, setup);
         }
 
         function renderSummary(auth, setup) {
@@ -1220,6 +1315,14 @@
             document.getElementById("sidebar-password-btn").disabled = !auth.authenticated;
             document.getElementById("sb-auth-state").textContent = auth.authenticated ? "Authenticated" : "Guest";
             document.getElementById("sb-ready-state").textContent = setup.ready ? "PB7 ready" : (setup.import_ready ? "Import only" : "PB7 blocked");
+            var authDisabled = auth.auth_mode === "disabled";
+            document.getElementById("current-password").disabled = authDisabled;
+            document.getElementById("disable-auth-btn").hidden = authDisabled;
+            document.getElementById("change-password-btn").textContent = authDisabled ? "Enable Password Authentication" : "Change Password";
+            document.getElementById("password-panel-title").textContent = authDisabled ? "Enable Authentication" : "Change Password";
+            document.getElementById("password-panel-copy").textContent = authDisabled
+                ? "Set a password to enable authentication. All existing passwordless sessions will be signed out."
+                : "Changing the password signs out every other active session. Disabling authentication requires a separate explicit confirmation.";
 
             if (!auth.authenticated) {
                 state.passwordOpen = false;
@@ -1252,7 +1355,7 @@
 
             renderSummary(auth, setup);
             renderAuth(auth, setup);
-            renderStatus(setup);
+            renderStatus(auth, setup);
             syncUrl();
             updateActiveSectionFromScroll();
         }
@@ -1290,27 +1393,48 @@
             }
         }
 
-        async function changePassword() {
+        async function submitAuthenticationChange(disableAuth) {
             try {
                 var data = await fetchJson(API_ORIGIN + "/api/auth/change-password", {
                     method: "POST",
                     headers: authHeaders(true),
                     body: JSON.stringify({
                         current_password: document.getElementById("current-password").value,
-                        new_password: document.getElementById("new-password").value
+                        new_password: disableAuth ? "" : document.getElementById("new-password").value,
+                        disable_auth: disableAuth
                     })
                 });
                 document.getElementById("current-password").value = "";
                 document.getElementById("new-password").value = "";
                 resetPasswordFieldVisibility("current-password");
                 resetPasswordFieldVisibility("new-password");
-                render(data);
                 setBanner(data.message || "Password updated.", "success");
-                focusSection("password");
+                window.setTimeout(function () { window.location.reload(); }, 250);
             } catch (error) {
                 setBanner(error.message, "error");
                 focusSection("password");
             }
+        }
+
+        async function changePassword() {
+            if (!document.getElementById("new-password").value) {
+                setBanner("Enter a new password. Use Disable Authentication for intentional no-login operation.", "error");
+                focusSection("password");
+                return;
+            }
+            await submitAuthenticationChange(false);
+        }
+
+        async function disableAuthentication() {
+            var confirmed = await window.PBGuiDialogs.confirm({
+                title: "Disable authentication?",
+                message: "Anyone who can reach PBGui will receive full administrative access without a login.",
+                detail: "Existing sessions will be revoked. PBGui cannot verify external firewall or VPN restrictions.",
+                confirmText: "Disable Authentication",
+                cancelText: "Keep Authentication"
+            });
+            if (!confirmed) return;
+            await submitAuthenticationChange(true);
         }
 
         function openPasswordSection() {
@@ -1334,6 +1458,7 @@
         document.getElementById("save-setup-btn").addEventListener("click", saveSetup);
         document.getElementById("sidebar-password-btn").addEventListener("click", openPasswordSection);
         document.getElementById("change-password-btn").addEventListener("click", changePassword);
+        document.getElementById("disable-auth-btn").addEventListener("click", disableAuthentication);
         document.getElementById("browse-pb7dir-btn").addEventListener("click", function () {
             openFileBrowser("pb7dir", "directory");
         });

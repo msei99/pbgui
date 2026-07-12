@@ -1,8 +1,10 @@
 """Regression tests for local PBCluster service integration."""
 
 import asyncio
+import json
 from pathlib import Path
 import subprocess
+import sys
 
 import api.services as services
 import PBApiServer
@@ -129,6 +131,42 @@ def test_restart_service_route_preserves_api_restart_handler(monkeypatch) -> Non
     monkeypatch.setattr(services, "restart_api_server", lambda session=None: {"ok": True, "message": "Restarting..."})
 
     assert services.restart_service("api-server") == {"ok": True, "message": "Restarting..."}
+
+
+def test_api_restart_conflict_preserves_http_409(monkeypatch) -> None:
+    """An active mutable operation is a conflict, not an internal server error."""
+    import api.vps_manager as vps_manager
+
+    class FakeService:
+        def active_vps_deploy_summary(self) -> dict[str, object]:
+            return {"active": True, "summary": "node-a Update PBGui (running)"}
+
+    monkeypatch.setattr(vps_manager, "get_service_instance", lambda: FakeService())
+
+    try:
+        services.restart_api_server(session=None)
+    except services.HTTPException as exc:
+        assert exc.status_code == 409
+        assert "node-a Update PBGui" in str(exc.detail)
+    else:
+        raise AssertionError("Expected restart conflict")
+
+
+def test_websocket_protocol_documentation_matches_payload_envelopes() -> None:
+    """OpenAPI and guides document the message envelopes emitted by active sockets."""
+    source = Path("PBApiServer.py").read_text(encoding="utf-8")
+    guide = Path("docs/help/28_pbapiserver_service.md").read_text(encoding="utf-8")
+    guide_de = Path("docs/help_de/28_pbapiserver_service.md").read_text(encoding="utf-8")
+
+    assert '`{\\"type\\": \\"jobs\\", \\"data\\": [...], \\"timestamp\\": ...}`' in source
+    assert '`{\\"type\\": \\"market_data_status\\"' in source
+    for text in (guide, guide_de):
+        assert '{"type":"jobs","data":[...],"timestamp":...}' in text
+        assert "market_data_status" in text
+        assert "/api/backtest-v7/ws/bt7" in text
+        assert "/api/optimize-v7/ws/opt7" in text
+        assert "/api/vps-manager/ws" in text
+        assert "pbgui_session" in text
 
 
 def test_services_api_restart_uses_transient_systemd_unit(monkeypatch) -> None:
@@ -402,3 +440,176 @@ def test_market_data_worker_stop_timeout_reports_error(monkeypatch) -> None:
         assert "did not stop" in str(exc.detail)
     else:
         raise AssertionError("Expected HTTPException")
+
+
+def test_live_unsubscribe_awaits_watcher_cleanup() -> None:
+    """The final live subscriber must wait until the shared WS client is released."""
+    from api import live
+
+    async def scenario() -> None:
+        released = asyncio.Event()
+        queue = asyncio.Queue()
+        key = live._wkey("alice", "positions")
+
+        async def watcher() -> None:
+            try:
+                await asyncio.sleep(60)
+            finally:
+                released.set()
+
+        live._watcher_lock = None
+        live._watcher_subs[key] = {queue}
+        live._watcher_tasks[key] = asyncio.create_task(watcher())
+        await asyncio.sleep(0)
+        await live._unsubscribe("alice", "positions", queue)
+
+        assert released.is_set()
+        assert key not in live._watcher_tasks
+        assert key not in live._watcher_subs
+        await live.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_dashboard_shutdown_drains_shared_stream_tasks() -> None:
+    """Dashboard shutdown cancels and awaits every shared stream registry."""
+    from api import dashboard
+
+    async def scenario() -> None:
+        released = asyncio.Event()
+
+        async def watcher() -> None:
+            try:
+                await asyncio.sleep(60)
+            finally:
+                released.set()
+
+        task = asyncio.create_task(watcher())
+        dashboard._stream_task_lock = None
+        dashboard._ws_position_tasks["alice"] = task
+        await asyncio.sleep(0)
+        await dashboard.shutdown()
+
+        assert released.is_set()
+        assert dashboard._ws_position_tasks == {}
+
+    asyncio.run(scenario())
+
+
+def test_ohlcv_preload_refuses_reused_pid(tmp_path, monkeypatch) -> None:
+    """Stopping a restored preload never signals a PID whose identity changed."""
+    from api import pb7_ohlcv_tools
+
+    monkeypatch.setattr(pb7_ohlcv_tools, "PBGDIR", tmp_path)
+    job_id = "reusedpid"
+    job = {
+        "job_id": job_id,
+        "status": "running",
+        "started_at": 1,
+        "finished_at": None,
+        "pid": 4242,
+        "process_created_at": 1.0,
+        "returncode": None,
+        "error": None,
+        "command": ["python", "ohlcv_download.py"],
+        "cwd": str(tmp_path),
+        "config_path": str(tmp_path / "config.json"),
+        "log_path": str(tmp_path / "preload.log"),
+        "state_path": str(tmp_path / "data" / "ohlcv_preload" / f"preload_{job_id}.state.json"),
+        "target_end_ms": None,
+    }
+    with pb7_ohlcv_tools._PRELOAD_LOCK:
+        pb7_ohlcv_tools._PRELOAD_JOBS.clear()
+        pb7_ohlcv_tools._PRELOAD_JOBS[job_id] = job
+        pb7_ohlcv_tools._persist_preload_job_locked(job)
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(pb7_ohlcv_tools, "_preload_process_identity", lambda _job: False)
+    monkeypatch.setattr(pb7_ohlcv_tools.os, "killpg", lambda pid, sig: killed.append((pid, sig)))
+
+    payload = pb7_ohlcv_tools.stop_ohlcv_preload_job(job_id)
+
+    assert killed == []
+    assert payload["status"] == "stopped"
+
+
+def test_ohlcv_preload_worker_persists_real_exit_code(tmp_path, monkeypatch) -> None:
+    """The detached supervisor writes an authoritative failed terminal status."""
+    from api import ohlcv_preload_worker
+
+    state_path = tmp_path / "preload.state.json"
+    state_path.write_text(json.dumps({
+        "job_id": "job",
+        "status": "launching",
+        "command": [sys.executable, "-c", "raise SystemExit(7)"],
+        "cwd": str(tmp_path),
+        "log_path": str(tmp_path / "preload.log"),
+    }), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["ohlcv_preload_worker.py", str(state_path)])
+
+    returncode = ohlcv_preload_worker.main()
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert returncode == 7
+    assert state["status"] == "error"
+    assert state["returncode"] == 7
+
+
+def test_lifespan_startup_failure_still_runs_all_shutdown_hooks(monkeypatch) -> None:
+    """A partial API startup failure must not bypass unrelated resource cleanup."""
+    import api.auth
+    import api.v7_instances
+    import api.vps
+    import master.async_logs
+    import master.async_monitor
+
+    calls: list[str] = []
+
+    class FakeMonitor:
+        def __init__(self):
+            self.pool = object()
+
+        async def start(self):
+            calls.append("monitor-start")
+
+        async def stop(self):
+            calls.append("monitor-stop")
+
+    monkeypatch.setattr(PBApiServer, "_setup_api_logging", lambda: None)
+    monkeypatch.setattr(PBApiServer, "load_ini", lambda *_args: "")
+    monkeypatch.setattr(PBApiServer, "harden_sensitive_paths", lambda *_args: None)
+    monkeypatch.setattr(master.async_monitor, "VPSMonitor", FakeMonitor)
+    monkeypatch.setattr(master.async_logs, "AsyncLogStreamer", lambda _pool: object())
+    monkeypatch.setattr(api.vps, "init", lambda *_args: None)
+    monkeypatch.setattr(api.v7_instances, "init", lambda *_args: None)
+    monkeypatch.setattr(api.auth, "cleanup_expired_tokens", lambda: 0)
+    monkeypatch.setattr(PBApiServer, "db_tools_init", lambda _monitor: None)
+    monkeypatch.setattr(PBApiServer, "bt7_startup", lambda: (_ for _ in ()).throw(RuntimeError("startup failed")))
+
+    async def fake_shutdown(name: str) -> None:
+        calls.append(name)
+
+    for name in (
+        "auth_shutdown", "live_shutdown", "dashboard_shutdown", "heatmap_shutdown",
+        "pareto_explorer_shutdown", "coin_data_shutdown", "vps_manager_shutdown",
+        "cluster_shutdown", "db_tools_shutdown", "bt7_shutdown", "opt7_shutdown",
+    ):
+        monkeypatch.setattr(PBApiServer, name, lambda name=name: fake_shutdown(name))
+
+    async def scenario() -> None:
+        try:
+            async with PBApiServer._lifespan(PBApiServer.app):
+                pass
+        except RuntimeError as exc:
+            assert str(exc) == "startup failed"
+        else:
+            raise AssertionError("Expected startup failure")
+
+    asyncio.run(scenario())
+
+    assert "monitor-stop" in calls
+    for name in (
+        "auth_shutdown", "live_shutdown", "dashboard_shutdown", "heatmap_shutdown",
+        "pareto_explorer_shutdown", "coin_data_shutdown", "vps_manager_shutdown",
+        "cluster_shutdown", "db_tools_shutdown", "bt7_shutdown", "opt7_shutdown",
+    ):
+        assert name in calls

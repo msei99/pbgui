@@ -11,6 +11,8 @@ from datetime import date as _date, datetime as _datetime, timedelta as _timedel
 from pathlib import Path
 from typing import Any
 
+from file_lock import advisory_file_lock
+
 try:
     from zoneinfo import ZoneInfo as _ZoneInfo
 except ImportError:
@@ -41,10 +43,11 @@ def load_tradfi_map() -> list:
 def save_tradfi_map(records: list) -> None:
     """Save the TradFi symbol map atomically."""
     path = tradfi_map_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(records or [], indent=4, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    with advisory_file_lock(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(records or [], indent=4, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
 
 
 TRADFI_CANONICAL_TYPES = [
@@ -393,19 +396,20 @@ def normalize_tradfi_map_entry(entry: dict) -> dict:
 def upsert_tradfi_map_entry(entry: dict) -> dict:
     normalized = normalize_tradfi_map_entry(entry)
     key = normalized["xyz_coin"]
-    records = load_tradfi_map()
-    replaced = False
-    for index, row in enumerate(records):
-        if str((row or {}).get("xyz_coin") or "").strip().upper() == key:
-            preserved = dict(row)
-            preserved.update(normalized)
-            records[index] = preserved
-            replaced = True
-            break
-    if not replaced:
-        records.append(normalized)
-    records.sort(key=lambda row: str((row or {}).get("xyz_coin") or "").strip().upper())
-    save_tradfi_map(records)
+    with advisory_file_lock(tradfi_map_path()):
+        records = load_tradfi_map()
+        replaced = False
+        for index, row in enumerate(records):
+            if str((row or {}).get("xyz_coin") or "").strip().upper() == key:
+                preserved = dict(row)
+                preserved.update(normalized)
+                records[index] = preserved
+                replaced = True
+                break
+        if not replaced:
+            records.append(normalized)
+        records.sort(key=lambda row: str((row or {}).get("xyz_coin") or "").strip().upper())
+        save_tradfi_map(records)
     return normalized
 
 
@@ -813,7 +817,7 @@ def refresh_tradfi_quote_cache(api_key: str, records: list[dict] | None = None) 
         if str(row.get("tiingo_fx_ticker") or "").strip()
     }
 
-    out_quotes: dict[str, dict] = {}
+    fresh_quotes: dict[str, dict] = {}
     iex_payload: list[dict] = []
     fx_payload: list[dict] = []
 
@@ -834,7 +838,7 @@ def refresh_tradfi_quote_cache(api_key: str, records: list[dict] | None = None) 
         price, field = _tiingo_pick_iex_price(quote)
         if price is None:
             continue
-        out_quotes[ticker] = {
+        fresh_quotes[ticker] = {
             "price": price,
             "source": "iex_all",
             "field": field,
@@ -863,18 +867,35 @@ def refresh_tradfi_quote_cache(api_key: str, records: list[dict] | None = None) 
         price, field = _tiingo_pick_fx_price(quote)
         if price is None:
             continue
-        out_quotes[ticker] = {
+        fresh_quotes[ticker] = {
             "price": price,
             "source": "fx_top",
             "field": field,
             "quote_timestamp": str(quote.get("quoteTimestamp") or ""),
         }
 
-    cache = {
-        "fetched_at": _datetime.now(_timezone.utc).isoformat(),
-        "quotes": out_quotes,
-    }
-    _save_tradfi_quote_cache(cache)
+    cache_path = tradfi_quote_cache_path()
+    with advisory_file_lock(cache_path):
+        existing_cache = load_tradfi_quote_cache()
+        existing_quotes = existing_cache.get("quotes") if isinstance(existing_cache, dict) else {}
+        existing_quotes = existing_quotes if isinstance(existing_quotes, dict) else {}
+        requested_tickers = equity_tickers | fx_tickers
+        out_quotes: dict[str, dict] = {}
+        for ticker in requested_tickers:
+            quote = existing_quotes.get(ticker)
+            if not isinstance(quote, dict):
+                continue
+            try:
+                float(quote.get("price"))
+            except (TypeError, ValueError):
+                continue
+            out_quotes[ticker] = quote
+        out_quotes.update(fresh_quotes)
+
+        fetched_at = str(existing_cache.get("fetched_at") or "") if isinstance(existing_cache, dict) else ""
+        if fresh_quotes:
+            fetched_at = _datetime.now(_timezone.utc).isoformat()
+        _save_tradfi_quote_cache({"fetched_at": fetched_at, "quotes": out_quotes})
     return {
         "mapped_equity_tickers": len(equity_tickers),
         "mapped_fx_tickers": len(fx_tickers),
@@ -923,25 +944,26 @@ def update_tiingo_start_date_for_selected(*, selected_entry: dict | None, api_ke
     if not start_date:
         return {"updated": 0, "reason": f"no startDate for {ticker}"}
 
-    records = load_tradfi_map()
-    index = next(
-        (i for i, row in enumerate(records) if str(row.get("xyz_coin") or "").strip().upper() == xyz),
-        None,
-    )
+    with advisory_file_lock(tradfi_map_path()):
+        records = load_tradfi_map()
+        index = next(
+            (i for i, row in enumerate(records) if str(row.get("xyz_coin") or "").strip().upper() == xyz),
+            None,
+        )
 
-    if index is None:
-        row = dict(selected_entry)
-        row.pop("_in_map", None)
-        row["tiingo_start_date"] = start_date
-        row["last_verified"] = _datetime.now(_timezone.utc).isoformat()
-        records.append(normalize_tradfi_map_entry(row))
-    else:
-        updated_row = dict(records[index])
-        updated_row["tiingo_start_date"] = start_date
-        updated_row["last_verified"] = _datetime.now(_timezone.utc).isoformat()
-        records[index] = normalize_tradfi_map_entry(updated_row)
+        if index is None:
+            row = dict(selected_entry)
+            row.pop("_in_map", None)
+            row["tiingo_start_date"] = start_date
+            row["last_verified"] = _datetime.now(_timezone.utc).isoformat()
+            records.append(normalize_tradfi_map_entry(row))
+        else:
+            updated_row = dict(records[index])
+            updated_row["tiingo_start_date"] = start_date
+            updated_row["last_verified"] = _datetime.now(_timezone.utc).isoformat()
+            records[index] = normalize_tradfi_map_entry(updated_row)
 
-    save_tradfi_map(records)
+        save_tradfi_map(records)
     return {
         "updated": 1,
         "xyz_coin": xyz,
@@ -951,15 +973,10 @@ def update_tiingo_start_date_for_selected(*, selected_entry: dict | None, api_ke
 
 
 def update_tiingo_start_dates_for_all(*, api_key: str, rows: list[dict]) -> dict[str, Any]:
-    by_xyz: dict[str, dict] = {
-        str(row.get("xyz_coin") or "").strip().upper(): dict(row)
-        for row in load_tradfi_map()
-        if str(row.get("xyz_coin") or "").strip()
-    }
-
     updated = 0
     skipped = 0
     errors = 0
+    resolved: dict[str, tuple[dict, str]] = {}
 
     for row in rows:
         xyz = str(row.get("xyz_coin") or "").strip().upper()
@@ -978,20 +995,22 @@ def update_tiingo_start_dates_for_all(*, api_key: str, rows: list[dict]) -> dict
             errors += 1
             continue
 
-        if xyz in by_xyz:
-            updated_row = dict(by_xyz[xyz])
+        resolved[xyz] = (dict(row), start_date)
+        updated += 1
+
+    with advisory_file_lock(tradfi_map_path()):
+        by_xyz: dict[str, dict] = {
+            str(row.get("xyz_coin") or "").strip().upper(): dict(row)
+            for row in load_tradfi_map()
+            if str(row.get("xyz_coin") or "").strip()
+        }
+        for xyz, (source_row, start_date) in resolved.items():
+            updated_row = dict(by_xyz.get(xyz) or source_row)
+            updated_row.pop("_in_map", None)
             updated_row["tiingo_start_date"] = start_date
             updated_row["last_verified"] = _datetime.now(_timezone.utc).isoformat()
             by_xyz[xyz] = normalize_tradfi_map_entry(updated_row)
-        else:
-            new_row = dict(row)
-            new_row.pop("_in_map", None)
-            new_row["tiingo_start_date"] = start_date
-            new_row["last_verified"] = _datetime.now(_timezone.utc).isoformat()
-            by_xyz[xyz] = normalize_tradfi_map_entry(new_row)
-        updated += 1
-
-    save_tradfi_map(list(by_xyz.values()))
+        save_tradfi_map(list(by_xyz.values()))
     return {"updated": updated, "skipped": skipped, "errors": errors}
 
 

@@ -56,6 +56,7 @@ router = APIRouter()
 _REMOTE_PUSH_JOBS: dict[str, dict[str, Any]] = {}
 _SELF_JOIN_JOBS: dict[str, dict[str, Any]] = {}
 _REPAIR_ALL_SSH_JOBS: dict[str, dict[str, Any]] = {}
+_BACKGROUND_JOBS: dict[asyncio.Task, tuple[str, str]] = {}
 _REMOTE_PUSH_JOB_TTL_SECONDS = 3600
 _REMOTE_PUSH_ACTIVE_STATES = frozenset({"queued", "running"})
 _SELF_JOIN_ACTIVE_STATES = frozenset({"queued", "running"})
@@ -547,6 +548,58 @@ def _update_repair_all_ssh_job(job_id: str, **updates: Any) -> dict[str, Any]:
         job["remaining"] = max(0, int(job.get("total") or 0) - int(job.get("done") or 0))
     job["updated_at"] = int(time.time())
     return job
+
+
+def _mark_background_job_interrupted(kind: str, job_id: str) -> None:
+    """Move a cancelled API-owned Cluster job to a terminal UI state."""
+    message = "Interrupted by API shutdown"
+    if kind == "remote_push":
+        job = _REMOTE_PUSH_JOBS.get(job_id)
+        if job and str(job.get("status") or "") in _REMOTE_PUSH_ACTIVE_STATES:
+            _update_remote_push_job(job_id, status="error", phase="interrupted", error=message)
+    elif kind == "self_join":
+        job = _SELF_JOIN_JOBS.get(job_id)
+        if job and str(job.get("status") or "") in _SELF_JOIN_ACTIVE_STATES:
+            _update_self_join_job(job_id, status="error", phase="interrupted", error=message)
+    elif kind == "repair_all_ssh":
+        job = _REPAIR_ALL_SSH_JOBS.get(job_id)
+        if job and str(job.get("status") or "") in _REPAIR_ALL_SSH_ACTIVE_STATES:
+            _update_repair_all_ssh_job(job_id, status="error", phase="interrupted", error=message)
+
+
+def _track_background_job(kind: str, job_id: str, coroutine: Any) -> asyncio.Task:
+    """Create and retain one Cluster job until completion or cancellation."""
+    task = asyncio.create_task(coroutine, name=f"cluster-{kind}-{job_id[:8]}")
+    _BACKGROUND_JOBS[task] = (kind, job_id)
+
+    def _done(completed: asyncio.Task) -> None:
+        metadata = _BACKGROUND_JOBS.pop(completed, None)
+        if metadata and completed.cancelled():
+            _mark_background_job_interrupted(*metadata)
+
+    task.add_done_callback(_done)
+    return task
+
+
+async def shutdown() -> None:
+    """Cancel and await API-owned Cluster jobs without touching PBCluster daemons."""
+    jobs = list(_BACKGROUND_JOBS.items())
+    for task, _metadata in jobs:
+        task.cancel()
+    if jobs:
+        await asyncio.gather(*(task for task, _metadata in jobs), return_exceptions=True)
+    for _task, metadata in jobs:
+        _mark_background_job_interrupted(*metadata)
+    _BACKGROUND_JOBS.clear()
+    _log(SERVICE, f"Cluster shutdown completed; stopped {len(jobs)} background job(s)", level="INFO")
+
+
+def restart_block_reason() -> str:
+    """Describe API-owned Cluster jobs that must finish before restart."""
+    if not _BACKGROUND_JOBS:
+        return ""
+    kinds = ", ".join(sorted({kind for kind, _job_id in _BACKGROUND_JOBS.values()}))
+    return f"Cluster operation(s) still running: {kinds}"
 
 
 def _get_master_pbname() -> str:
@@ -1569,6 +1622,12 @@ def _write_cluster_blob(base_dir: Path, blob_hash: str, raw: bytes, *, secret: b
     if hashlib.sha256(raw).hexdigest() != text.removeprefix("sha256:"):
         raise HTTPException(status_code=409, detail="Remote blob hash mismatch")
     path = _cluster_blob_path(base_dir, text)
+    if secret:
+        from secure_files import atomic_write_private_bytes, ensure_private_directory_tree
+
+        ensure_private_directory_tree(Path(base_dir), path.parent)
+        atomic_write_private_bytes(path, raw)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     tmp.write_bytes(raw)
@@ -3938,7 +3997,11 @@ async def start_repair_all_cluster_ssh(request: Request, session: SessionToken =
     request_payload = await _optional_json_payload(request)
     ssh_passwords = _normalize_ssh_passwords(request_payload)
     job = _create_repair_all_ssh_job()
-    asyncio.create_task(_run_repair_all_ssh_job(str(job["job_id"]), ssh_passwords))
+    _track_background_job(
+        "repair_all_ssh",
+        str(job["job_id"]),
+        _run_repair_all_ssh_job(str(job["job_id"]), ssh_passwords),
+    )
     return _public_repair_all_ssh_job(job)
 
 
@@ -4016,7 +4079,11 @@ async def start_self_join_existing_cluster(
         raise HTTPException(status_code=400, detail="Request body must be valid JSON") from exc
     settings = _validate_self_join_payload(payload)
     job = _create_self_join_job(settings)
-    asyncio.create_task(_run_self_join_job(str(job["job_id"]), settings))
+    _track_background_job(
+        "self_join",
+        str(job["job_id"]),
+        _run_self_join_job(str(job["job_id"]), settings),
+    )
     return _public_self_join_job(job)
 
 
@@ -4066,7 +4133,11 @@ async def start_remote_push_operations(node_id: str, session: SessionToken = Dep
     if not node:
         raise HTTPException(status_code=404, detail="Cluster node not found")
     job = _create_remote_push_job(node)
-    asyncio.create_task(_run_remote_push_job(str(job["job_id"]), node, dict(snapshot["identity"])))
+    _track_background_job(
+        "remote_push",
+        str(job["job_id"]),
+        _run_remote_push_job(str(job["job_id"]), node, dict(snapshot["identity"])),
+    )
     return _public_remote_push_job(job)
 
 

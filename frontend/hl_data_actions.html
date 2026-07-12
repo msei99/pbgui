@@ -1543,11 +1543,7 @@
             }));
             var data = await resp.json();
             if (data.error) { showMsg('dl','error',data.error); }
-            else {
-                var txt='Queued job \x3Cstrong\x3E' + data.job_id + '\x3C/strong\x3E — ' + data.coins_count + ' coins, ' + fmtDay(data.start_day) + ' → ' + fmtDay(data.end_day);
-                if (data.missing_coins && data.missing_coins.length) txt+='\x3Cbr\x3E\x3Csmall style="color:var(--hlda-warn);"\x3ESkipped (not in archive): ' + data.missing_coins.join(', ') + '\x3C/small\x3E';
-                showMsg('dl','success',txt);
-            }
+            else showQueuedMsg('dl', data);
         } catch(e) { showMsg('dl','error','Request failed: ' + e.message); }
         finally { btn.disabled=false; lo.classList.remove('active'); }
     }
@@ -1566,18 +1562,29 @@
             }));
             var data = await resp.json();
             if (data.error) { showMsg('build','error',data.error); }
-            else {
-                var txt='Queued job \x3Cstrong\x3E' + data.job_id + '\x3C/strong\x3E — ' + data.coins_count + ' coins';
-                if (data.start_day) txt+=', ' + fmtDay(data.start_day) + ' → ' + fmtDay(data.end_day);
-                else txt+=', end: ' + fmtDay(data.end_day);
-                if (data.refetch) txt+=' (refetch)';
-                showMsg('build','success',txt);
-            }
+            else showQueuedMsg('build', data);
         } catch(e) { showMsg('build','error','Request failed: ' + e.message); }
         finally { btn.disabled=false; lo.classList.remove('active'); }
     }
 
-    function showMsg(ns,type,html) { var m=$(ns+'-msg'); if(!m)return; m.className='hlda-msg '+type; m.innerHTML=html; m.style.display='block'; }
+    function showMsg(ns,type,text) { var m=$(ns+'-msg'); if(!m)return; m.className='hlda-msg '+type; m.textContent=String(text==null?'':text); m.style.display='block'; }
+    function showQueuedMsg(ns,data) {
+        var m=$(ns+'-msg'); if(!m)return;
+        m.className='hlda-msg success'; m.textContent='Queued job ';
+        var strong=document.createElement('strong'); strong.textContent=String(data.job_id||''); m.appendChild(strong);
+        var suffix=' — '+String(data.coins_count||0)+' coins';
+        if(ns==='dl') suffix+=', '+fmtDay(data.start_day)+' → '+fmtDay(data.end_day);
+        else if(data.start_day) suffix+=', '+fmtDay(data.start_day)+' → '+fmtDay(data.end_day);
+        else suffix+=', end: '+fmtDay(data.end_day);
+        if(data.refetch) suffix+=' (refetch)';
+        m.appendChild(document.createTextNode(suffix));
+        if(ns==='dl'&&data.missing_coins&&data.missing_coins.length){
+            m.appendChild(document.createElement('br'));
+            var small=document.createElement('small'); small.style.color='var(--hlda-warn)';
+            small.textContent='Skipped (not in archive): '+data.missing_coins.join(', '); m.appendChild(small);
+        }
+        m.style.display='block';
+    }
     function hideMsg(ns) { var m=$(ns+'-msg'); if(m){m.className='hlda-msg';m.style.display='none';} }
 
     // ══════════════════════════════════════════════════════════════
@@ -1612,7 +1619,7 @@
 
     function connectWS() {
         var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        var wsUrl = proto + '//' + API_HOST + '/ws/jobs?token=' + TOKEN;
+        var wsUrl = proto + '//' + API_HOST + '/ws/jobs';
         try {
             ws = new WebSocket(wsUrl);
             ws.onopen = function() {
@@ -1680,7 +1687,7 @@
             '\x3Cdiv class="hlda-jh"\x3E' +
                 '\x3Cdiv class="hlda-ji"\x3E' +
                     '\x3Cspan class="jid"\x3E' + escHtml(job.id) + '\x3C/span\x3E' +
-                    '\x3Cspan class="hlda-sbadge ' + sc + '"\x3E' + job.status + '\x3C/span\x3E' +
+                    '\x3Cspan class="hlda-sbadge ' + sc + '"\x3E' + escHtml(job.status) + '\x3C/span\x3E' +
                     '\x3Cspan class="jtype"\x3E' + escHtml(job.type) + '\x3C/span\x3E' +
                 '\x3C/div\x3E' +
                 '\x3Cdiv class="hlda-ja"\x3E' +
@@ -1692,14 +1699,14 @@
             '\x3C/div\x3E' +
             '\x3Cdiv class="hlda-jd"\x3E' +
                 (coin ? '\x3Cspan\x3ECoin: ' + escHtml(coin) + '\x3C/span\x3E' : '') +
-                (chunk ? '\x3Cspan\x3EChunk: ' + chunk + '\x3C/span\x3E' : '') +
-                '\x3Cspan\x3EUpdated: ' + fmtTS(job.updated_ts) + '\x3C/span\x3E' +
+                (chunk ? '\x3Cspan\x3EChunk: ' + escHtml(chunk) + '\x3C/span\x3E' : '') +
+                '\x3Cspan\x3EUpdated: ' + escHtml(fmtTS(job.updated_ts)) + '\x3C/span\x3E' +
             '\x3C/div\x3E' +
             '\x3Cdiv class="hlda-pb"\x3E\x3Cdiv class="hlda-pf" style="width:' + pct + '%"\x3E\x3C/div\x3E\x3Cdiv class="hlda-pt"\x3E' + pct + '%\x3C/div\x3E\x3C/div\x3E';
         if (total>0) {
             h += '\x3Cdiv class="hlda-pd"\x3E' +
-                '\x3Cspan\x3EStep: ' + step + '/' + total + '\x3C/span\x3E' +
-                (chT>0 ? '\x3Cspan\x3EChunk: ' + chD + '/' + chT + '\x3C/span\x3E' : '') +
+                '\x3Cspan\x3EStep: ' + escHtml(String(step)) + '/' + escHtml(String(total)) + '\x3C/span\x3E' +
+                (chT>0 ? '\x3Cspan\x3EChunk: ' + escHtml(String(chD)) + '/' + escHtml(String(chT)) + '\x3C/span\x3E' : '') +
                 (stage ? '\x3Cspan\x3EStage: ' + escHtml(stage) + '\x3C/span\x3E' : '') +
                 (mode ? '\x3Cspan\x3EMode: ' + escHtml(mode) + '\x3C/span\x3E' : '') +
             '\x3C/div\x3E';
@@ -1707,10 +1714,10 @@
         if (dl+sk+fl>0) {
             h += '\x3Cdiv class="hlda-exp"\x3E' +
                 '\x3Cbutton class="hlda-exp-toggle" data-action="tog-exp" data-ns="' + ns + '" data-job="' + escAttr(job.id) + '"\x3E' + (isExp?'▼':'▶') + ' Details\x3C/button\x3E' +
-                '\x3Cdiv class="hlda-exp-body ' + (isExp?'open':'') + '" id="' + P + 'exp-' + ns + '-' + job.id + '"\x3E' +
-                    '\x3Cdiv class="dr"\x3E\x3Cstrong\x3EDownloads:\x3C/strong\x3E ' + dl + ' files (' + fmtBytes(pr.downloaded_bytes_total) + ')\x3C/div\x3E' +
-                    '\x3Cdiv class="dr"\x3E\x3Cstrong\x3ESkipped:\x3C/strong\x3E ' + sk + ' files (' + fmtBytes(pr.skipped_existing_bytes_total) + ')\x3C/div\x3E' +
-                    '\x3Cdiv class="dr"\x3E\x3Cstrong\x3EFailed:\x3C/strong\x3E ' + fl + ' files (' + fmtBytes(pr.failed_bytes_total) + ')\x3C/div\x3E' +
+                '\x3Cdiv class="hlda-exp-body ' + (isExp?'open':'') + '" data-expander-job="' + escAttr(job.id) + '"\x3E' +
+                    '\x3Cdiv class="dr"\x3E\x3Cstrong\x3EDownloads:\x3C/strong\x3E ' + escHtml(String(dl)) + ' files (' + escHtml(fmtBytes(pr.downloaded_bytes_total)) + ')\x3C/div\x3E' +
+                    '\x3Cdiv class="dr"\x3E\x3Cstrong\x3ESkipped:\x3C/strong\x3E ' + escHtml(String(sk)) + ' files (' + escHtml(fmtBytes(pr.skipped_existing_bytes_total)) + ')\x3C/div\x3E' +
+                    '\x3Cdiv class="dr"\x3E\x3Cstrong\x3EFailed:\x3C/strong\x3E ' + escHtml(String(fl)) + ' files (' + escHtml(fmtBytes(pr.failed_bytes_total)) + ')\x3C/div\x3E' +
                 '\x3C/div\x3E' +
             '\x3C/div\x3E';
         }
@@ -1766,19 +1773,19 @@
                 '\x3C/div\x3E' +
             '\x3C/div\x3E' +
             '\x3Cdiv class="hlda-jd"\x3E' +
-                '\x3Cspan\x3E' + fmtTS(job.updated_ts) + '\x3C/span\x3E' +
-                (rangeStr ? '\x3Cspan\x3ERange: ' + rangeStr + '\x3C/span\x3E' : '') +
+                '\x3Cspan\x3E' + escHtml(fmtTS(job.updated_ts)) + '\x3C/span\x3E' +
+                (rangeStr ? '\x3Cspan\x3ERange: ' + escHtml(rangeStr) + '\x3C/span\x3E' : '') +
             '\x3C/div\x3E';
         if (job.error) h += '\x3Cdiv class="hlda-jerr"\x3E' + escHtml(job.error) + '\x3C/div\x3E';
         if (hasStats||coinPrev) {
             h += '\x3Cdiv class="hlda-exp"\x3E' +
                 '\x3Cbutton class="hlda-exp-toggle" data-action="tog-exp" data-ns="' + ns + '" data-job="' + escAttr(job.id) + '"\x3E' + (isExp?'▼':'▶') + ' Details\x3C/button\x3E' +
-                '\x3Cdiv class="hlda-exp-body ' + (isExp?'open':'') + '" id="' + P + 'exp-' + ns + '-' + job.id + '"\x3E' +
+                '\x3Cdiv class="hlda-exp-body ' + (isExp?'open':'') + '" data-expander-job="' + escAttr(job.id) + '"\x3E' +
                     (coinPrev ? '\x3Cdiv class="dr"\x3E\x3Cstrong\x3ECoins:\x3C/strong\x3E ' + escHtml(coinPrev) + '\x3C/div\x3E' : '') +
                     (payload.only_missing_1m_src_hours!==undefined ? '\x3Cdiv class="dr"\x3E\x3Cstrong\x3EOnly missing 1m_src hours:\x3C/strong\x3E ' + (payload.only_missing_1m_src_hours?'Yes':'No') + '\x3C/div\x3E' : '') +
-                    (hasStats ? '\x3Cdiv class="dr"\x3E\x3Cstrong\x3EDownloaded:\x3C/strong\x3E ' + dl + ' files (' + fmtBytes(pr.downloaded_bytes_total||lr.downloaded_bytes||0) + ')\x3C/div\x3E' +
-                        '\x3Cdiv class="dr"\x3E\x3Cstrong\x3ESkipped:\x3C/strong\x3E ' + sk + ' files (' + fmtBytes(pr.skipped_existing_bytes_total||lr.skipped_existing_bytes||0) + ')\x3C/div\x3E' +
-                        '\x3Cdiv class="dr"\x3E\x3Cstrong\x3EFailed:\x3C/strong\x3E ' + fl + ' files (' + fmtBytes(pr.failed_bytes_total||lr.failed_bytes||0) + ')\x3C/div\x3E' : '') +
+                    (hasStats ? '\x3Cdiv class="dr"\x3E\x3Cstrong\x3EDownloaded:\x3C/strong\x3E ' + escHtml(String(dl)) + ' files (' + escHtml(fmtBytes(pr.downloaded_bytes_total||lr.downloaded_bytes||0)) + ')\x3C/div\x3E' +
+                        '\x3Cdiv class="dr"\x3E\x3Cstrong\x3ESkipped:\x3C/strong\x3E ' + escHtml(String(sk)) + ' files (' + escHtml(fmtBytes(pr.skipped_existing_bytes_total||lr.skipped_existing_bytes||0)) + ')\x3C/div\x3E' +
+                        '\x3Cdiv class="dr"\x3E\x3Cstrong\x3EFailed:\x3C/strong\x3E ' + escHtml(String(fl)) + ' files (' + escHtml(fmtBytes(pr.failed_bytes_total||lr.failed_bytes||0)) + ')\x3C/div\x3E' : '') +
                 '\x3C/div\x3E' +
             '\x3C/div\x3E';
         }
@@ -1978,7 +1985,8 @@
     }
 
     function togExp(ns, jobId, btn) {
-        var el = $('exp-' + ns + '-' + jobId);
+        var expander = btn ? btn.closest('.hlda-exp') : null;
+        var el = expander ? expander.querySelector('.hlda-exp-body') : null;
         if (!el) return;
         if (el.classList.contains('open')) {
             el.classList.remove('open'); expandedJobs[ns].delete(jobId);
@@ -2018,8 +2026,8 @@
         if (aCreated !== bCreated) return aCreated - bCreated;
         return String(a && a.id || '').localeCompare(String(b && b.id || ''));
     }
-    function escHtml(t) { var d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
-    function escAttr(t) { return String(t).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\x3C/g,'&lt;').replace(/\x3E/g,'&gt;'); }
+    function escHtml(t) { var d=document.createElement('div'); d.textContent=String(t==null?'':t); return d.innerHTML; }
+    function escAttr(t) { return String(t==null?'':t).split('&').join('&amp;').split('"').join('&quot;').split("'").join('&#39;').split('\x3C').join('&lt;').split('\x3E').join('&gt;'); }
 })();
 
 </script>

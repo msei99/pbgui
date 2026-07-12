@@ -1141,7 +1141,7 @@ function setBanner(state) {
    ════════════════════════════════════════════════ */
 function connectWS() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-  var url = WS_BASE + '/api/backtest-v7/ws/bt7?token=' + encodeURIComponent(TOKEN);
+  var url = WS_BASE + '/api/backtest-v7/ws/bt7';
   ws = new WebSocket(url);
   ws.onopen = function() { wsReconnectDelay = 1000; setBanner('ok'); };
   ws.onmessage = function(ev) {
@@ -1605,8 +1605,7 @@ function goStrategyExplorer() {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.json();
     }).then(function(data) {
-      var url = explorerBase + '/main_page?token=' + encodeURIComponent(TOKEN)
-        + '&draft_id=' + encodeURIComponent(data.draft_id || '');
+      var url = explorerBase + '/main_page?draft_id=' + encodeURIComponent(data.draft_id || '');
       window.location.href = url;
     }).catch(function(e) {
       toast('Failed to open Strategy Explorer: ' + e.message, 'err');
@@ -6464,7 +6463,7 @@ function loadPlotImages(cd) {
       var html = '';
       files.forEach(function(f) {
         var url = API_BASE + '/results/image?path=' + encodeURIComponent(cd.path) +
-          '&filename=' + encodeURIComponent(f) + '&token=' + encodeURIComponent(TOKEN);
+          '&filename=' + encodeURIComponent(f);
         html += '<img src="' + url + '" style="width:100%;margin-bottom:var(--sp-sm);border-radius:4px" onerror="this.style.display=\'none\'" alt="' + esc(f) + '">';
       });
       el.innerHTML = html;
@@ -6482,7 +6481,7 @@ function loadFillsImages(cd) {
       var html = '';
       files.forEach(function(f) {
         var url = API_BASE + '/results/image?path=' + encodeURIComponent(cd.path) +
-          '&filename=' + encodeURIComponent(f) + '&token=' + encodeURIComponent(TOKEN);
+          '&filename=' + encodeURIComponent(f);
         html += '<img src="' + url + '" style="width:100%;margin-bottom:var(--sp-sm);border-radius:4px" onerror="this.style.display=\'none\'" alt="' + esc(f) + '">';
       });
       el.innerHTML = html;
@@ -7147,8 +7146,7 @@ function addConfigToRunByName(name) {
       headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: cfgToSend })
     }).then(function(r) { return r.json(); }).then(function(d) {
-      var editUrl = v7Base + '/edit_page?token=' + encodeURIComponent(TOKEN) +
-        '&new=1&draft_id=' + encodeURIComponent(d.draft_id);
+      var editUrl = v7Base + '/edit_page?new=1&draft_id=' + encodeURIComponent(d.draft_id);
       window.location.href = editUrl;
     });
   }
@@ -7209,8 +7207,7 @@ function addToRun() {
       headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: cfgToSend })
     }).then(function(r) { return r.json(); }).then(function(d) {
-      var editUrl = v7Base + '/edit_page?token=' + encodeURIComponent(TOKEN) +
-        '&new=1&draft_id=' + encodeURIComponent(d.draft_id);
+      var editUrl = v7Base + '/edit_page?new=1&draft_id=' + encodeURIComponent(d.draft_id);
       window.location.href = editUrl;
     });
   }
@@ -7275,8 +7272,7 @@ function addToRunFromArchive() {
       headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: cfgToSend })
     }).then(function(r) { return r.json(); }).then(function(d) {
-      var editUrl = v7Base + '/edit_page?token=' + encodeURIComponent(TOKEN) +
-        '&new=1&draft_id=' + encodeURIComponent(d.draft_id);
+      var editUrl = v7Base + '/edit_page?new=1&draft_id=' + encodeURIComponent(d.draft_id);
       window.location.href = editUrl;
     });
   }
@@ -7329,8 +7325,7 @@ function addToRunFromLegacy() {
       headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: cfgToSend })
     }).then(function(r) { return r.json(); }).then(function(d) {
-      var editUrl = v7Base + '/edit_page?token=' + encodeURIComponent(TOKEN) +
-        '&new=1&draft_id=' + encodeURIComponent(d.draft_id);
+      var editUrl = v7Base + '/edit_page?new=1&draft_id=' + encodeURIComponent(d.draft_id);
       window.location.href = editUrl;
     });
   }
@@ -7416,8 +7411,7 @@ function strategyExplorerFromResult() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }).then(function(data) {
-    var url = explorerBase + '/main_page?token=' + encodeURIComponent(TOKEN)
-      + '&draft_id=' + encodeURIComponent(data.draft_id || '')
+    var url = explorerBase + '/main_page?draft_id=' + encodeURIComponent(data.draft_id || '')
       + '&result_path=' + encodeURIComponent(path);
     window.location.href = url;
   }).catch(function(e) {
@@ -7559,8 +7553,7 @@ function optimizeFromResult() {
       if (parts.length) draftName = parts[parts.length - 1];
     }
     var targetUrl = window.location.origin + '/api/optimize-v7/main_page'
-      + '?token=' + encodeURIComponent(TOKEN)
-      + '&opt_draft_id=' + encodeURIComponent(draft.draft_id || '');
+      + '?opt_draft_id=' + encodeURIComponent(draft.draft_id || '');
     if (draftName) targetUrl += '&draft_name=' + encodeURIComponent(draftName);
     window.location.href = targetUrl;
   }).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
@@ -8181,7 +8174,7 @@ function requestArchiveOptimizeImport(path, importName, overwrite) {
 }
 
 function openOptimizeEditorForConfig(configName) {
-  window.location.href = '/api/optimize-v7/main_page?token=' + encodeURIComponent(TOKEN) + '&open_config=' + encodeURIComponent(configName);
+  window.location.href = '/api/optimize-v7/main_page?open_config=' + encodeURIComponent(configName);
 }
 
 function optimizeFromArchiveOptimizeConfig(path, name) {

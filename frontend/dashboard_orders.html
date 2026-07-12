@@ -24,10 +24,27 @@
     var _wsKey       = '_dordWs_' + POSITION;
     var _candleWsKey = '_dordCandWs_' + POSITION;
     var _timerKey    = '_dordReconnTimer_' + POSITION;
+    var _candleTimerKey = '_dordCandReconnTimer_' + POSITION;
+    var _generationKey = '_dordGeneration_' + POSITION;
+    var generation = (window[_generationKey] || 0) + 1;
+    window[_generationKey] = generation;
 
-    if (window[_wsKey]) { try { window[_wsKey].close(); } catch (_) {} window[_wsKey] = null; }
-    if (window[_candleWsKey]) { try { window[_candleWsKey].close(); } catch (_) {} window[_candleWsKey] = null; }
+    function isCurrentGeneration() {
+        return window[_generationKey] === generation;
+    }
+
+    if (window[_wsKey]) {
+        window[_wsKey].onopen = window[_wsKey].onmessage = window[_wsKey].onclose = window[_wsKey].onerror = null;
+        try { window[_wsKey].close(); } catch (_) {}
+        window[_wsKey] = null;
+    }
+    if (window[_candleWsKey]) {
+        window[_candleWsKey].onopen = window[_candleWsKey].onmessage = window[_candleWsKey].onclose = window[_candleWsKey].onerror = null;
+        try { window[_candleWsKey].close(); } catch (_) {}
+        window[_candleWsKey] = null;
+    }
     if (window[_timerKey]) { clearTimeout(window[_timerKey]); window[_timerKey] = null; }
+    if (window[_candleTimerKey]) { clearTimeout(window[_candleTimerKey]); window[_candleTimerKey] = null; }
 
     var ws            = null;
     var candleWs      = null;
@@ -39,6 +56,7 @@
     var selectedPosition = null;
     var chartCtrl        = null;   /* returned by buildOrders / renderOrders */
     var _tfFetchId       = 0;     /* monotonic counter to discard stale timeframe fetches */
+    var loadSeq          = 0;
 
     /* Extract linked positions grid position */
     var linkedGridPos = '';
@@ -89,20 +107,27 @@
 
     /* ── Candle WebSocket ── */
     var candleReconnDelay = 1000;
+    var candleReconnTimer = null;
     function connectCandleWs() {
-        if (!TOKEN || !API_HOST || !selectedPosition) return;
-        /* Close existing */
-        if (candleWs) { try { candleWs.close(); } catch (_) {} }
+        if (!isCurrentGeneration() || !TOKEN || !API_HOST || !selectedPosition) return;
+        clearTimeout(candleReconnTimer);
+        candleReconnTimer = null;
+        window[_candleTimerKey] = null;
+        if (candleWs) {
+            candleWs.onopen = candleWs.onmessage = candleWs.onclose = candleWs.onerror = null;
+            try { candleWs.close(); } catch (_) {}
+        }
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
         var url = proto + '://' + API_HOST + '/ws/candles'
-            + '?token=' + encodeURIComponent(TOKEN)
-            + '&user='  + encodeURIComponent(selectedPosition.user)
+            + '?user='  + encodeURIComponent(selectedPosition.user)
             + '&symbol=' + encodeURIComponent(selectedPosition.symbol)
             + '&side='  + encodeURIComponent(selectedPosition.side || 'long')
             + '&tf='    + encodeURIComponent(currentTimeframe);
-        candleWs = new WebSocket(url);
-        window[_candleWsKey] = candleWs;
-        candleWs.onmessage = function (evt) {
+        var socket = new WebSocket(url);
+        candleWs = socket;
+        window[_candleWsKey] = socket;
+        socket.onmessage = function (evt) {
+            if (window[_candleWsKey] !== socket) return;
             try {
                 var m = JSON.parse(evt.data);
                 if (!chartCtrl) return;
@@ -118,14 +143,20 @@
             } catch (_) {}
             candleReconnDelay = 1000;
         };
-        candleWs.onclose = function () {
-            /* reconnect with backoff if still relevant */
-            setTimeout(function () {
+        socket.onclose = function () {
+            if (window[_candleWsKey] !== socket) return;
+            window[_candleWsKey] = null;
+            candleReconnTimer = setTimeout(function () {
+                candleReconnTimer = null;
+                window[_candleTimerKey] = null;
                 if (selectedPosition) connectCandleWs();
             }, candleReconnDelay);
+            window[_candleTimerKey] = candleReconnTimer;
             candleReconnDelay = Math.min(candleReconnDelay * 2, 30000);
         };
-        candleWs.onerror = function () { candleWs.close(); };
+        socket.onerror = function () {
+            if (window[_candleWsKey] === socket) socket.close();
+        };
     }
 
     /* Timeframe-appropriate candle limits:
@@ -135,6 +166,8 @@
     }
 
     function load(onDone) {
+        var seq = ++loadSeq;
+        ++_tfFetchId;
         if (!selectedPosition) {
             if (chartCtrl && chartCtrl.destroy) chartCtrl.destroy();
             chartCtrl = null;
@@ -145,6 +178,8 @@
             reportHeight();
             return;
         }
+        var requestPosition = selectedPosition;
+        var requestTimeframe = currentTimeframe;
 
         /* Show loading feedback immediately */
         if (chartCtrl && chartCtrl.destroy) chartCtrl.destroy();
@@ -156,18 +191,19 @@
         reportHeight();
 
         var url = API_BASE + '/dashboard/orders_data'
-            + '?user='      + encodeURIComponent(selectedPosition.user)
-            + '&symbol='    + encodeURIComponent(selectedPosition.symbol)
-            + '&side='      + encodeURIComponent(selectedPosition.side || 'long')
-            + '&timeframe=' + encodeURIComponent(currentTimeframe)
-            + '&limit='     + _tfLimit(currentTimeframe);
+            + '?user='      + encodeURIComponent(requestPosition.user)
+            + '&symbol='    + encodeURIComponent(requestPosition.symbol)
+            + '&side='      + encodeURIComponent(requestPosition.side || 'long')
+            + '&timeframe=' + encodeURIComponent(requestTimeframe)
+            + '&limit='     + _tfLimit(requestTimeframe);
 
         fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (d) {
+                if (seq !== loadSeq || !isCurrentGeneration()) return;
                 chartCtrl = DashRender.buildOrders(container, d, {
                     position:  POSITION,
-                    timeframe: currentTimeframe,
+                    timeframe: requestTimeframe,
                     onTimeframeChange: function (tf) {
                         currentTimeframe = tf;
                         /* In-place update: fetch new candles and swap series data
@@ -183,7 +219,7 @@
                             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
                             .then(function (d) {
                                 /* Discard if user switched again while this fetch was in flight */
-                                if (_fetchId !== _tfFetchId) return;
+                                if (_fetchId !== _tfFetchId || seq !== loadSeq || !isCurrentGeneration()) return;
                                 if (chartCtrl && chartCtrl.setData && d.candles) {
                                     chartCtrl.setData(d.candles);
                                     /* Reconnect WS for the new timeframe */
@@ -193,7 +229,9 @@
                                     load();
                                 }
                             })
-                            .catch(function () { if (_fetchId === _tfFetchId) load(); });
+                            .catch(function () {
+                                if (_fetchId === _tfFetchId && seq === loadSeq && isCurrentGeneration()) load();
+                            });
                     },
                     onLoadMore: function (oldestTs, done) {
                         /* Fetch candles ending right before oldestTs.
@@ -213,7 +251,7 @@
                             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
                             .then(function (older) {
                                 /* Discard if timeframe changed while fetch was in flight */
-                                if (currentTimeframe !== fetchTf) { done(); return; }
+                                if (seq !== loadSeq || !isCurrentGeneration() || currentTimeframe !== fetchTf) { done(); return; }
                                 if (older.candles && older.candles.length > 0 && chartCtrl) {
                                     chartCtrl.prependData(older.candles, fetchGen);
                                 }
@@ -228,6 +266,7 @@
                 if (onDone) onDone();
             })
             .catch(function (e) {
+                if (seq !== loadSeq || !isCurrentGeneration()) return;
                 container.innerHTML = '';
                 var st = document.createElement('div');
                 st.className = 'dt-status';
@@ -239,22 +278,32 @@
 
     /* ── Dashboard WS (income_updated trigger) ── */
     function connect() {
-        if (!TOKEN || !API_HOST) return;
+        if (!isCurrentGeneration() || !TOKEN || !API_HOST) return;
         clearTimeout(reconnTimer);
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
-        ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard?token=' + TOKEN);
-        window[_wsKey] = ws;
-        ws.onopen = function () { reconnDelay = 1000; load(); };
-        ws.onmessage = function (evt) {
+        var socket = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard');
+        ws = socket;
+        window[_wsKey] = socket;
+        socket.onopen = function () {
+            if (window[_wsKey] !== socket) return;
+            reconnDelay = 1000;
+            load();
+        };
+        socket.onmessage = function (evt) {
+            if (window[_wsKey] !== socket) return;
             /* income_updated is ignored — live candle WS handles updates
                without rebuilding the chart (preserves zoom & fullscreen) */
         };
-        ws.onclose = function () {
+        socket.onclose = function () {
+            if (window[_wsKey] !== socket) return;
+            window[_wsKey] = null;
             reconnTimer = setTimeout(connect, reconnDelay);
             reconnDelay = Math.min(reconnDelay * 2, 30000);
             window[_timerKey] = reconnTimer;
         };
-        ws.onerror = function () { ws.close(); };
+        socket.onerror = function () {
+            if (window[_wsKey] === socket) socket.close();
+        };
     }
 
     var DR_VERSION = '20260610l';

@@ -6,6 +6,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -26,6 +27,22 @@ NODE_C = "pbgui-node-00000000-0000-4000-8000-00000000000c"
 HASH_A = "sha256:" + "a" * 64
 LOCAL_CLUSTER_PUBLIC_KEY = "ssh-ed25519 aGVsbG8= pbgui-cluster:local"
 REMOTE_CLUSTER_PUBLIC_KEY = "ssh-ed25519 d29ybGQ= pbgui-cluster:remote"
+
+
+def test_pulled_secret_blob_uses_owner_only_tree(tmp_path: Path) -> None:
+    """API-pulled secret blobs are private from directory creation onward."""
+    base = tmp_path / "secret_blobs"
+    raw = b'{"secret":"value"}'
+    blob_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+
+    cluster._write_cluster_blob(base, blob_hash, raw, secret=True)
+
+    digest = blob_hash.removeprefix("sha256:")
+    path = base / "sha256" / digest[:2] / f"{digest}.json"
+    assert path.read_bytes() == raw
+    assert stat.S_IMODE(base.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def _init_cluster(tmp_path: Path) -> Path:
@@ -2401,12 +2418,14 @@ def test_remote_push_job_reports_progress_without_splitting_frontend_batches(mon
                 raise AssertionError(f"unexpected command: {command}")
             return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
 
-    def fake_create_task(coro):
+    def fake_track_background_job(kind: str, job_id: str, coro):
+        assert kind == "remote_push"
+        assert job_id
         scheduled.append(coro)
         return SimpleNamespace()
 
     monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
-    monkeypatch.setattr(cluster.asyncio, "create_task", fake_create_task)
+    monkeypatch.setattr(cluster, "_track_background_job", fake_track_background_job)
 
     start = asyncio.run(cluster.start_remote_push_operations(NODE_B, session=None))
     assert start["status"] == "queued"
@@ -2426,6 +2445,42 @@ def test_remote_push_job_reports_progress_without_splitting_frontend_batches(mon
     assert "put-ops" in calls[1]
     assert "rebuild" in calls[-1]
     cluster._REMOTE_PUSH_JOBS.clear()
+
+
+def test_cluster_shutdown_cancels_jobs_and_marks_them_interrupted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shutdown awaits all API-owned Cluster jobs and leaves terminal poll states."""
+    monkeypatch.setattr(cluster, "_REMOTE_PUSH_JOBS", {})
+    monkeypatch.setattr(cluster, "_SELF_JOIN_JOBS", {})
+    monkeypatch.setattr(cluster, "_REPAIR_ALL_SSH_JOBS", {})
+    monkeypatch.setattr(cluster, "_BACKGROUND_JOBS", {})
+    monkeypatch.setattr(cluster, "_log", lambda *_args, **_kwargs: None)
+
+    async def exercise() -> list[asyncio.Task]:
+        blocker = asyncio.Event()
+        remote = cluster._create_remote_push_job({"node_id": NODE_B, "hostname": "remote"})
+        self_join = cluster._create_self_join_job({"hostname": "upstream"})
+        repair = cluster._create_repair_all_ssh_job()
+        tasks = [
+            cluster._track_background_job("remote_push", remote["job_id"], blocker.wait()),
+            cluster._track_background_job("self_join", self_join["job_id"], blocker.wait()),
+            cluster._track_background_job("repair_all_ssh", repair["job_id"], blocker.wait()),
+        ]
+        await asyncio.sleep(0)
+        assert "Cluster operation" in cluster.restart_block_reason()
+
+        await cluster.shutdown()
+        return tasks
+
+    tasks = asyncio.run(exercise())
+
+    assert all(task.cancelled() for task in tasks)
+    assert cluster._BACKGROUND_JOBS == {}
+    assert cluster.restart_block_reason() == ""
+    for jobs in (cluster._REMOTE_PUSH_JOBS, cluster._SELF_JOIN_JOBS, cluster._REPAIR_ALL_SSH_JOBS):
+        job = next(iter(jobs.values()))
+        assert job["status"] == "error"
+        assert job["phase"] == "interrupted"
+        assert job["error"] == "Interrupted by API shutdown"
 
 
 def test_bootstrap_preview_reports_known_vps_without_local_configs(monkeypatch, tmp_path: Path) -> None:

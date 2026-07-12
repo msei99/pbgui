@@ -126,11 +126,30 @@ async def _unsubscribe(user_name: str, kind: str, queue: asyncio.Queue) -> None:
         if subs:
             subs.discard(queue)
             if not subs:
-                task = _watcher_tasks.pop(key, None)
+                task = _watcher_tasks.get(key)
                 if task and not task.done():
                     task.cancel()
+                if task is not None:
+                    await asyncio.gather(task, return_exceptions=True)
+                _watcher_tasks.pop(key, None)
                 _watcher_subs.pop(key, None)
                 _log(_SERVICE, f"[live] Stopped {kind} watcher for {user_name!r} (no more subscribers)", level="INFO")
+
+
+async def shutdown() -> None:
+    """Stop every shared live watcher and reset loop-bound module state."""
+    global _watcher_lock
+    lock = _get_lock()
+    async with lock:
+        tasks = list(_watcher_tasks.values())
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        _watcher_tasks.clear()
+        _watcher_subs.clear()
+    _watcher_lock = None
 
 
 # ── DB polling fallback ───────────────────────────────────────────────────────
@@ -202,12 +221,14 @@ async def _watcher_loop(user: Any, kind: str) -> None:
     from Database import Database
 
     key = _wkey(user.name, kind)
+    caller = f"live_session.{kind}"
+    client = None
     _log(_SERVICE, f"[live] Starting {kind} watcher for {user.name} ({user.exchange})", level="INFO")
     db = Database()
 
     try:
         client = await Exchange.get_private_ws_client(
-            user.exchange, user, caller=f"live_session.{kind}"
+            user.exchange, user, caller=caller
         )
         if client is None:
             _log(
@@ -284,6 +305,8 @@ async def _watcher_loop(user: Any, kind: str) -> None:
             meta={"traceback": traceback.format_exc()},
         )
     finally:
+        if client is not None:
+            await Exchange.release_private_ws_client(user.exchange, user, caller=caller)
         _log(_SERVICE, f"[live] {kind} watcher stopped for {user.name}", level="DEBUG")
 
 

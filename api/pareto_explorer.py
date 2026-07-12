@@ -7,6 +7,7 @@ validation for the Pareto Explorer.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import math
@@ -33,6 +34,10 @@ _DEFAULT_MAX_CONFIGS = 2000
 _LOAD_JOB_TTL_SECONDS = 900
 _LOAD_JOBS: dict[str, dict] = {}
 _LOAD_JOBS_LOCK = threading.Lock()
+_LOAD_WORKERS: dict[str, threading.Thread] = {}
+_LOAD_CANCEL_EVENTS: dict[str, threading.Event] = {}
+_LOAD_KEYS: dict[str, str] = {}
+_LOAD_WORKERS_LOCK = threading.RLock()
 _LOADER_CACHE: dict[str, dict] = {}
 _LOADER_CACHE_LOCK = threading.Lock()
 
@@ -42,7 +47,7 @@ def _prune_load_jobs() -> None:
     stale_ids = []
     for job_id, job in _LOAD_JOBS.items():
         updated_at = float(job.get("updated_at") or 0.0)
-        if updated_at < cutoff and str(job.get("status") or "") in {"complete", "error", "loading"}:
+        if updated_at < cutoff and str(job.get("status") or "") in {"complete", "error"}:
             stale_ids.append(job_id)
     for job_id in stale_ids:
         _LOAD_JOBS.pop(job_id, None)
@@ -260,11 +265,50 @@ def _refresh_options_from_body(body: dict | None, *, view_range: object = None) 
 
 
 def _start_full_load_job(result_path: str, *, load_strategy: list[str], max_configs: int, refresh_options: dict | None = None) -> dict:
-    job = _create_load_job(result_path=result_path, load_strategy=load_strategy, max_configs=max_configs)
-    _update_load_job(job["job_id"], refresh_options=dict(refresh_options or {}))
-    thread = threading.Thread(target=_run_full_load_job, args=(job["job_id"],), daemon=True)
-    thread.start()
-    return job
+    normalized_options = dict(refresh_options or {})
+    dedupe_key = json.dumps(
+        [str(result_path), list(load_strategy), int(max_configs), normalized_options],
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+    with _LOAD_WORKERS_LOCK:
+        existing_id = _LOAD_KEYS.get(dedupe_key)
+        if existing_id:
+            existing = _get_load_job(existing_id)
+            thread = _LOAD_WORKERS.get(existing_id)
+            if existing and existing.get("status") == "loading" and thread is not None and thread.is_alive():
+                return _serialize_load_job(existing)
+            _LOAD_KEYS.pop(dedupe_key, None)
+
+        job = _create_load_job(result_path=result_path, load_strategy=load_strategy, max_configs=max_configs)
+        job_id = str(job["job_id"])
+        _update_load_job(job_id, refresh_options=normalized_options, dedupe_key=dedupe_key)
+        cancel_event = threading.Event()
+        thread = threading.Thread(
+            target=_run_full_load_job,
+            args=(job_id,),
+            name=f"pareto-full-load-{job_id[:8]}",
+        )
+        _LOAD_CANCEL_EVENTS[job_id] = cancel_event
+        _LOAD_WORKERS[job_id] = thread
+        _LOAD_KEYS[dedupe_key] = job_id
+        try:
+            thread.start()
+        except Exception as exc:
+            _LOAD_CANCEL_EVENTS.pop(job_id, None)
+            _LOAD_WORKERS.pop(job_id, None)
+            _LOAD_KEYS.pop(dedupe_key, None)
+            _update_load_job(
+                job_id,
+                status="error",
+                stage="error",
+                message=f"Failed to start full load: {exc}",
+                error=str(exc),
+            )
+            raise
+        return _serialize_load_job(_get_load_job(job_id) or job)
 
 
 def _background_full_load_response(result_path: str, *, load_strategy: list[str], max_configs: int, body: dict | None = None) -> dict:
@@ -2566,17 +2610,25 @@ def _run_full_load_job(job_id: str) -> None:
     job = _get_load_job(job_id)
     if job is None:
         return
+    with _LOAD_WORKERS_LOCK:
+        cancel_event = _LOAD_CANCEL_EVENTS.get(job_id)
+    if cancel_event is None:
+        cancel_event = threading.Event()
 
     result_path = str(job.get("result_path") or "")
     load_strategy = [str(item) for item in list(job.get("load_strategy") or []) if str(item).strip()]
     max_configs = _normalize_max_configs(job.get("max_configs"))
 
     try:
+        if cancel_event.is_set():
+            raise InterruptedError("Full load interrupted by API shutdown")
         result_dir = _resolve_result_dir(result_path)
         if result_dir is None:
             raise HTTPException(status_code=404, detail="Invalid optimize result path")
 
         def _progress_callback(current: object, total: object, message: object) -> None:
+            if cancel_event.is_set():
+                raise InterruptedError("Full load interrupted by API shutdown")
             try:
                 current_num = float(current or 0)
             except Exception:
@@ -2607,6 +2659,8 @@ def _run_full_load_job(job_id: str) -> None:
             max_configs=max_configs,
             progress_callback=_progress_callback,
         )
+        if cancel_event.is_set():
+            raise InterruptedError("Full load interrupted by API shutdown")
         payload = _serialize_load_result_from_loader(
             result_dir,
             loader,
@@ -2615,6 +2669,8 @@ def _run_full_load_job(job_id: str) -> None:
             max_configs=max_configs,
             view_range=(job.get("refresh_options") or {}).get("view_range"),
         )
+        if cancel_event.is_set():
+            raise InterruptedError("Full load interrupted by API shutdown")
         payload["refresh_bundle"] = _build_server_refresh_bundle(
             loader,
             all_results_loaded=True,
@@ -2632,6 +2688,15 @@ def _run_full_load_job(job_id: str) -> None:
             error=None,
         )
     except HTTPException as exc:
+        if cancel_event.is_set():
+            _update_load_job(
+                job_id,
+                status="error",
+                stage="interrupted",
+                message="Full load interrupted by API shutdown.",
+                error="Full load interrupted by API shutdown.",
+            )
+            return
         _update_load_job(
             job_id,
             status="error",
@@ -2639,6 +2704,14 @@ def _run_full_load_job(job_id: str) -> None:
             message=str(exc.detail),
             error=str(exc.detail),
             progress=0,
+        )
+    except InterruptedError as exc:
+        _update_load_job(
+            job_id,
+            status="error",
+            stage="interrupted",
+            message=str(exc),
+            error=str(exc),
         )
     except Exception as exc:
         _update_load_job(
@@ -2649,6 +2722,41 @@ def _run_full_load_job(job_id: str) -> None:
             error=str(exc),
             progress=0,
         )
+    finally:
+        dedupe_key = str(job.get("dedupe_key") or "")
+        with _LOAD_WORKERS_LOCK:
+            _LOAD_WORKERS.pop(job_id, None)
+            _LOAD_CANCEL_EVENTS.pop(job_id, None)
+            if dedupe_key and _LOAD_KEYS.get(dedupe_key) == job_id:
+                _LOAD_KEYS.pop(dedupe_key, None)
+
+
+def restart_block_reason() -> str:
+    """Return a reason while a full Pareto result load is active."""
+    with _LOAD_WORKERS_LOCK:
+        active = sum(1 for thread in _LOAD_WORKERS.values() if thread.is_alive())
+    if active:
+        return f"Pareto Explorer has {active} active full-load job(s)"
+    return ""
+
+
+async def shutdown() -> None:
+    """Interrupt and join every API-owned Pareto full-load thread."""
+    with _LOAD_WORKERS_LOCK:
+        workers = [(job_id, thread) for job_id, thread in _LOAD_WORKERS.items() if thread.ident is not None]
+        for job_id, _thread in workers:
+            cancel_event = _LOAD_CANCEL_EVENTS.get(job_id)
+            if cancel_event is not None:
+                cancel_event.set()
+    if workers:
+        await asyncio.gather(
+            *(asyncio.to_thread(thread.join) for _job_id, thread in workers),
+            return_exceptions=True,
+        )
+    with _LOAD_WORKERS_LOCK:
+        _LOAD_WORKERS.clear()
+        _LOAD_CANCEL_EVENTS.clear()
+        _LOAD_KEYS.clear()
 
 
 def _build_load_messages(result_dir: Path, load_stats: dict, all_results_loaded: bool) -> list[dict]:

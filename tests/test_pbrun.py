@@ -41,6 +41,22 @@ pbrun_spec.loader.exec_module(PBRun_mod)
 DynamicIgnore = PBRun_mod.DynamicIgnore
 
 
+def test_find_high_memory_bot_uses_run_v7_process_memory() -> None:
+    """PBRun must rank bots by stats attached to RunV7, not monitor payloads."""
+    run = PBRun_mod.PBRun.__new__(PBRun_mod.PBRun)
+    actual_low = SimpleNamespace(
+        memory=SimpleNamespace(rss=10, uss=5),
+        monitor=SimpleNamespace(memory=SimpleNamespace(rss=1000, uss=1000)),
+    )
+    actual_high = SimpleNamespace(
+        memory=SimpleNamespace(rss=100, uss=50),
+        monitor=SimpleNamespace(memory=SimpleNamespace(rss=1, uss=1)),
+    )
+    run.run_v7 = [actual_low, actual_high]
+
+    assert run.find_high_memory_bot() is actual_high
+
+
 def _write_v7_config(instance_dir: Path, *, enabled_on: str = "test-vps", version: int = 3) -> None:
     """Write a minimal PB7 config with PBGui metadata."""
 

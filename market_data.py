@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 
 from logging_helpers import human_log
+from file_lock import advisory_file_lock
 from market_data_sources import get_source_minutes_for_range
 from PBCoinData import CoinData, compute_coin_name, get_symbol_for_coin
 from pbgui_purefunc import load_symbols_from_ini
@@ -352,34 +353,39 @@ def load_market_data_config() -> MarketDataConfig:
 def save_market_data_config(cfg: MarketDataConfig) -> None:
     path = get_market_data_config_path()
     payload = json.dumps(cfg.to_dict(), indent=2, sort_keys=True)
-    _atomic_write_text(path, payload)
+    with advisory_file_lock(path):
+        _atomic_write_text(path, payload)
 
 
 def set_enabled_coins(exchange: str, coins: list[str]) -> MarketDataConfig:
-    cfg = load_market_data_config()
-    ex = _normalize_market_data_exchange(exchange)
-    if not ex:
-        raise ValueError("exchange is empty")
-    norm_coins = sorted(
-        {
-            _canonical_enabled_coin(ex, c)
-            for c in (coins or [])
-            if _canonical_enabled_coin(ex, c)
-        }
-    )
-    cfg.enabled_coins[ex] = norm_coins
-    save_market_data_config(cfg)
-    return cfg
+    path = get_market_data_config_path()
+    with advisory_file_lock(path):
+        cfg = load_market_data_config()
+        ex = _normalize_market_data_exchange(exchange)
+        if not ex:
+            raise ValueError("exchange is empty")
+        norm_coins = sorted(
+            {
+                _canonical_enabled_coin(ex, c)
+                for c in (coins or [])
+                if _canonical_enabled_coin(ex, c)
+            }
+        )
+        cfg.enabled_coins[ex] = norm_coins
+        save_market_data_config(cfg)
+        return cfg
 
 
 def set_auto_enable_new_coins(exchange: str, enabled: bool) -> MarketDataConfig:
-    cfg = load_market_data_config()
-    ex = _normalize_market_data_exchange(exchange)
-    if not ex:
-        raise ValueError("exchange is empty")
-    cfg.auto_enable_new_coins[ex] = bool(enabled)
-    save_market_data_config(cfg)
-    return cfg
+    path = get_market_data_config_path()
+    with advisory_file_lock(path):
+        cfg = load_market_data_config()
+        ex = _normalize_market_data_exchange(exchange)
+        if not ex:
+            raise ValueError("exchange is empty")
+        cfg.auto_enable_new_coins[ex] = bool(enabled)
+        save_market_data_config(cfg)
+        return cfg
 
 
 def get_market_data_coin_options(exchange: str) -> list[str]:
@@ -1507,18 +1513,19 @@ def save_aws_profile_credentials(
     path = get_aws_credentials_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    cp = configparser.RawConfigParser()
-    if path.exists():
-        cp.read(path)
-    if not cp.has_section(prof):
-        cp.add_section(prof)
-    cp.set(prof, "aws_access_key_id", str(aws_access_key_id).strip())
-    cp.set(prof, "aws_secret_access_key", str(aws_secret_access_key).strip())
+    with advisory_file_lock(path):
+        cp = configparser.RawConfigParser()
+        if path.exists():
+            cp.read(path)
+        if not cp.has_section(prof):
+            cp.add_section(prof)
+        cp.set(prof, "aws_access_key_id", str(aws_access_key_id).strip())
+        cp.set(prof, "aws_secret_access_key", str(aws_secret_access_key).strip())
 
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        cp.write(f)
-    os.replace(tmp, path)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            cp.write(f)
+        os.replace(tmp, path)
 
 
 def load_aws_profile_region(profile: str) -> str:
@@ -1559,19 +1566,20 @@ def save_aws_profile_region(*, profile: str, region: str) -> None:
     path = get_aws_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    cp = configparser.RawConfigParser()
-    if path.exists():
-        cp.read(path)
+    with advisory_file_lock(path):
+        cp = configparser.RawConfigParser()
+        if path.exists():
+            cp.read(path)
 
-    section = "default" if prof == "default" else f"profile {prof}"
-    if not cp.has_section(section):
-        cp.add_section(section)
-    cp.set(section, "region", reg)
+        section = "default" if prof == "default" else f"profile {prof}"
+        if not cp.has_section(section):
+            cp.add_section(section)
+        cp.set(section, "region", reg)
 
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        cp.write(f)
-    os.replace(tmp, path)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            cp.write(f)
+        os.replace(tmp, path)
 
 
 def load_l2book_archive_dir() -> str:

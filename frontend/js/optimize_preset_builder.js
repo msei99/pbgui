@@ -120,7 +120,6 @@
       body: JSON.stringify({ config: extractConfigSections(config) })
     }).then(function (draft) {
       var params = new URLSearchParams();
-      params.set('token', token);
       params.set('opt_draft_id', draft && draft.draft_id ? draft.draft_id : '');
       if (draftName) params.set('draft_name', draftName);
       window.location.href = window.location.origin + '/api/optimize-v7/main_page?' + params.toString();

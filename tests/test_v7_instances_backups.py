@@ -11,6 +11,17 @@ from urllib.parse import parse_qs, urlparse
 from api import v7_instances
 
 
+def test_backup_delete_requires_confirmation() -> None:
+    """The permanent backup delete request runs only after confirmation."""
+
+    source = Path("frontend/v7_run.html").read_text(encoding="utf-8")
+    function_source = source.split("async function doDeleteBackup", 1)[1].split("/* ─── Toast", 1)[0]
+
+    assert "window.PBGuiDialogs.confirm" in function_source
+    assert "detail: 'This cannot be undone.'" in function_source
+    assert function_source.index("window.PBGuiDialogs.confirm") < function_source.index("method: 'DELETE'")
+
+
 def test_list_backups_skips_dirs_without_config_json(monkeypatch, tmp_path: Path) -> None:
     """Only restoreable backup directories are returned to the UI."""
 

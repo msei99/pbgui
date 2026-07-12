@@ -24,6 +24,22 @@ from api.auth import SessionToken, require_auth
 from hyperliquid_api import normalize_hyperliquid_coin
 
 router = APIRouter()
+_STREAM_TASKS: dict[asyncio.Task, Any] = {}
+
+
+def _track_stream_task(task: asyncio.Task, cancel_event: Any) -> None:
+    _STREAM_TASKS[task] = cancel_event
+    task.add_done_callback(lambda completed: _STREAM_TASKS.pop(completed, None))
+
+
+async def shutdown() -> None:
+    """Signal and await executor-backed heatmap streams still owned by the API."""
+    tasks = list(_STREAM_TASKS)
+    for cancel_event in list(_STREAM_TASKS.values()):
+        cancel_event.set()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _STREAM_TASKS.clear()
 
 # --------------------------------------------------------------------------- helpers
 
@@ -588,11 +604,16 @@ async def get_heatmap_overview_stream(
 
     is_candles = ds_l in ("1m", "candles_1m", "1m_api", "candles_1m_api")
 
+    import threading
+
     queue: asyncio.Queue = asyncio.Queue()
+    cancel_event = threading.Event()
 
     def _make_progress_cb(loop: asyncio.AbstractEventLoop):
         """Return a thread-safe progress callback that posts into the asyncio queue."""
         def progress_cb(msg: str, current: int, total: int) -> None:
+            if cancel_event.is_set() or loop.is_closed():
+                raise InterruptedError("Heatmap overview stream closed")
             loop.call_soon_threadsafe(
                 queue.put_nowait,
                 {"type": "progress", "msg": msg, "current": current, "total": total},
@@ -600,6 +621,8 @@ async def get_heatmap_overview_stream(
         return progress_cb
 
     def _run_sync(loop: asyncio.AbstractEventLoop) -> dict[str, Any]:
+        if cancel_event.is_set():
+            raise InterruptedError("Heatmap overview stream closed")
         cb = _make_progress_cb(loop)
         if not is_candles:
             return _build_coverage_heatmap(ex, ds, cn, progress_cb=cb)
@@ -614,10 +637,21 @@ async def get_heatmap_overview_stream(
         loop = asyncio.get_event_loop()
 
         async def _worker():
-            result = await loop.run_in_executor(None, _run_sync, loop)
-            await queue.put({"type": "result", "payload": result})
+            try:
+                result = await loop.run_in_executor(None, _run_sync, loop)
+                if not cancel_event.is_set():
+                    await queue.put({"type": "result", "payload": result})
+            except InterruptedError:
+                pass
+            except Exception as exc:
+                if not cancel_event.is_set():
+                    await queue.put({
+                        "type": "result",
+                        "payload": {"figure": None, "legend_html": "", "error": str(exc)},
+                    })
 
         task = asyncio.create_task(_worker())
+        _track_stream_task(task, cancel_event)
         try:
             while True:
                 try:
@@ -630,9 +664,10 @@ async def get_heatmap_overview_stream(
                     break
                 else:
                     yield f"event: progress\ndata: {_json.dumps(msg)}\n\n"
-            await task
-        except Exception:
-            await task
+        finally:
+            cancel_event.set()
+            if task.done():
+                await asyncio.gather(task, return_exceptions=True)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -1166,6 +1201,8 @@ async def get_heatmap_minutes_stream(
 
     def _make_progress_cb(loop: asyncio.AbstractEventLoop):
         def progress_cb(msg: str, current: int, total: int) -> None:
+            if cancel_event.is_set() or loop.is_closed():
+                return
             loop.call_soon_threadsafe(
                 queue.put_nowait,
                 {"type": "progress", "msg": msg, "current": current, "total": total},
@@ -1186,10 +1223,19 @@ async def get_heatmap_minutes_stream(
         loop = asyncio.get_event_loop()
 
         async def _worker():
-            result = await loop.run_in_executor(None, _run_sync, loop)
-            await queue.put({"type": "result", "payload": result})
+            try:
+                result = await loop.run_in_executor(None, _run_sync, loop)
+                if not cancel_event.is_set():
+                    await queue.put({"type": "result", "payload": result})
+            except Exception as exc:
+                if not cancel_event.is_set():
+                    await queue.put({
+                        "type": "result",
+                        "payload": {"figure": None, "legend_html": "", "error": str(exc)},
+                    })
 
         task = asyncio.create_task(_worker())
+        _track_stream_task(task, cancel_event)
         try:
             while True:
                 try:
@@ -1202,13 +1248,10 @@ async def get_heatmap_minutes_stream(
                     break
                 else:
                     yield f"event: progress\ndata: {_json.dumps(msg)}\n\n"
-            await task
-        except (asyncio.CancelledError, GeneratorExit):
+        finally:
             cancel_event.set()
-            await task
-        except Exception:
-            cancel_event.set()
-            await task
+            if task.done():
+                await asyncio.gather(task, return_exceptions=True)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

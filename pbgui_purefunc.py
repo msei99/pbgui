@@ -2,12 +2,15 @@ import json
 import hjson
 import pprint
 import configparser
+import io
 import os
 import platform
 import tempfile
 from pathlib import Path, PurePath
 import subprocess
 import re
+
+from secure_files import atomic_write_private_text
 
 
 def coin_from_symbol_code(symbol_code: str) -> str:
@@ -88,28 +91,32 @@ def _normalize_ini_value(parameter: str, value: str) -> str:
 
 def _write_ini_config(pb_config: configparser.ConfigParser) -> None:
     ini_path = pbgui_ini_path()
-    ini_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = ini_path.with_suffix(".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as pbgui_configfile:
-        pb_config.write(pbgui_configfile)
-    os.replace(str(tmp_path), str(ini_path))
+    buffer = io.StringIO()
+    pb_config.write(buffer)
+    atomic_write_private_text(ini_path, buffer.getvalue())
 
 def save_ini(section : str, parameter : str, value : str):
-    pb_config = configparser.ConfigParser()
-    pb_config.read(pbgui_ini_path())
-    if not pb_config.has_section(section):
-        pb_config.add_section(section)
-    pb_config.set(section, parameter, _normalize_ini_value(parameter, value))
-    _write_ini_config(pb_config)
+    from file_lock import advisory_file_lock
+
+    with advisory_file_lock(pbgui_ini_path()):
+        pb_config = configparser.ConfigParser()
+        pb_config.read(pbgui_ini_path())
+        if not pb_config.has_section(section):
+            pb_config.add_section(section)
+        pb_config.set(section, parameter, _normalize_ini_value(parameter, value))
+        _write_ini_config(pb_config)
 
 def save_ini_section(section: str, values: dict[str, str]) -> None:
-    pb_config = configparser.ConfigParser()
-    pb_config.read(pbgui_ini_path())
-    if not pb_config.has_section(section):
-        pb_config.add_section(section)
-    for parameter, value in (values or {}).items():
-        pb_config.set(section, str(parameter), _normalize_ini_value(str(parameter), str(value)))
-    _write_ini_config(pb_config)
+    from file_lock import advisory_file_lock
+
+    with advisory_file_lock(pbgui_ini_path()):
+        pb_config = configparser.ConfigParser()
+        pb_config.read(pbgui_ini_path())
+        if not pb_config.has_section(section):
+            pb_config.add_section(section)
+        for parameter, value in (values or {}).items():
+            pb_config.set(section, str(parameter), _normalize_ini_value(str(parameter), str(value)))
+        _write_ini_config(pb_config)
 
 def load_ini_section(section: str) -> dict[str, str]:
     pb_config = configparser.ConfigParser()
@@ -251,7 +258,7 @@ def import_passivbot_rust():
     return pbr
 
 PBGDIR = Path(__file__).resolve().parent
-PBGUI_VERSION = "v1.90.10"
+PBGUI_VERSION = "v1.91"
 _serial_path = PBGDIR / 'api' / 'serial.txt'
 PBGUI_SERIAL = _serial_path.read_text().strip() if _serial_path.exists() else ''
 

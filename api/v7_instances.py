@@ -30,7 +30,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
-from api.auth import SessionToken, require_auth, validate_token
+from api.auth import SessionToken, authenticate_websocket, require_auth, validate_token
 from api.pb7_bridge import get_allowed_override_params, get_template_config
 from logging_helpers import human_log as _log
 from master.cluster_state import (
@@ -2325,14 +2325,11 @@ _ws_clients: set[WebSocket] = set()
 async def ws_v7(websocket: WebSocket):
     """WebSocket for real-time v7 instance updates.
 
-    Query param: ``?token=xxx``
+    Authentication: HttpOnly session cookie.
     Push: ``{"type": "instances", "data": [...]}`` on every store change.
     """
-    token = websocket.query_params.get("token", "")
-    if not validate_token(token):
-        await websocket.close(code=4001)
+    if await authenticate_websocket(websocket) is None:
         return
-    await websocket.accept()
     _ws_clients.add(websocket)
     _log(SERVICE, f"[ws] v7 client connected: {websocket.client}")
 
@@ -2350,6 +2347,7 @@ async def ws_v7(websocket: WebSocket):
     finally:
         _ws_clients.discard(websocket)
         push_task.cancel()
+        await asyncio.gather(push_task, return_exceptions=True)
         _log(SERVICE, f"[ws] v7 client disconnected: {websocket.client}")
 
 

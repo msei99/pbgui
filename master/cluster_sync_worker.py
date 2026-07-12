@@ -41,6 +41,7 @@ from master.cluster_state import (
     validate_operation,
     write_operation,
 )
+from secure_files import atomic_write_private_bytes, ensure_private_directory_tree
 from master.cluster_ssh_keys import ensure_cluster_ssh_key
 from pbgui_purefunc import PBGDIR
 
@@ -876,6 +877,10 @@ def _write_local_blob(base_dir: Path, blob_hash: str, raw: bytes, *, secret: boo
     if hashlib.sha256(raw).hexdigest() != validated.removeprefix("sha256:"):
         raise ClusterSyncWorkerError("blob hash mismatch")
     path = _local_blob_path(base_dir, validated)
+    if secret:
+        ensure_private_directory_tree(Path(base_dir), path.parent)
+        atomic_write_private_bytes(path, raw)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     tmp.write_bytes(raw)

@@ -20,8 +20,15 @@ Der Standardbereich **Overview** fasst den aktuellen lokalen Zustand zusammen:
 - **PB7**: ob die konfigurierte PBv7-Runtime verwendbar aussieht
 - **Identity**: aktuelle Host-Rolle und konfigurierter Bot-Name
 - **Runtime Status**: detaillierte Readiness-Pruefungen aus dem Backend
+- **Login security**: aktive Login-Sperren und behaltene Brute-Force-Lockout-Historie
 
 Dieser Bereich ist als schneller Kontrollpunkt nach dem ersten Start, nach Passwortwechseln oder nach Pfad-Anpassungen gedacht.
+
+Die Problemliste zeigt ausserdem dauerhaft eine Sicherheitswarnung, wenn PBGui auf allen Interfaces lauscht und noch das bekannte alte Standardpasswort verwendet. PBGui kann externe NAT- oder Firewall-Regeln nicht selbst pruefen. Stelle daher sicher, dass der API-Port nur ueber VPN oder vertrauenswuerdige Netze erreichbar ist, oder setze ein individuelles Passwort. Neue Installer-Laeufe erzeugen automatisch ein individuelles Passwort; bei Remote-Installationen ist der PBGui-Port standardmaessig nur fuer das konfigurierte OpenVPN-Netz freigegeben.
+
+Wenn wiederholte fehlgeschlagene Logins eine temporaere Sperre ausloesen, zeigt die Problemliste eine Warnung mit der letzten direkten Client-Adresse und dem Ereigniszeitpunkt. **Acknowledge** blendet diese Warnung global aus, waehrend Login-Sicherheitsstatus und behaltene Historie sichtbar bleiben. Ein neuerer Lockout aktiviert die Warnung automatisch erneut.
+
+Wenn die Authentifizierung bewusst deaktiviert ist, zeigt jede Standalone-Seite dauerhaft einen roten Hinweis **NO LOGIN**. PBGui kann externe Firewall-Regeln nicht pruefen: Jeder, der die konfigurierte API-Adresse erreichen kann, besitzt vollen administrativen Zugriff.
 
 ## Bereich Setup
 
@@ -45,9 +52,10 @@ Die Aktion **Password** in der linken Sidebar oeffnet das Passwort-Formular.
 Damit kannst du:
 
 - das aktuelle Login-Passwort ersetzen
-- den Passwortschutz entfernen, indem du das neue Passwort leer laesst
+- den No-Login-Modus bewusst ueber **Disable Authentication** und dessen Sicherheitsbestaetigung aktivieren
+- die Passwort-Authentifizierung durch Eingabe eines neuen Passworts wieder aktivieren
 
-Zum Aendern des Passworts musst du eingeloggt sein.
+Ein leeres Passwort allein wird abgelehnt. Jeder Passwort- oder Auth-Modus-Wechsel widerruft bestehende Sessions und stellt dem aktuellen Browser eine neue Session aus. Zum Aendern dieser Einstellung musst du authentifiziert sein.
 
 ## Typischer Ablauf beim ersten Einrichten
 

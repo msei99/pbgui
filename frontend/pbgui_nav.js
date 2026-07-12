@@ -128,6 +128,10 @@
     '#pbgui-master-pill.visible{display:inline-flex;}',
     '.pbgui-master-label{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#64748b;}',
     '#pbgui-master-name{overflow:hidden;text-overflow:ellipsis;color:#e2e8f0;font-weight:600;}',
+    '#pbgui-auth-mode-pill{display:none;align-items:center;height:30px;padding:0 .65rem;border-radius:999px;',
+    'border:1px solid rgba(248,113,113,.5);background:rgba(127,29,29,.38);color:#fecaca;',
+    'font-size:var(--fs-xs);font-weight:800;letter-spacing:.05em;white-space:nowrap;}',
+    '#pbgui-auth-mode-pill.visible{display:inline-flex;}',
     '@media(max-width:920px){#pbgui-master-pill{display:none!important;}}',
     '.nav-action-btn{display:flex;align-items:center;gap:0.35rem;padding:0.3rem 0.75rem;',
     'border-radius:6px;background:transparent;border:1px solid transparent;',
@@ -330,6 +334,7 @@
     /* spacer + right buttons */
     html += '<div id="nav-spacer"></div>';
     html += '<div id="nav-right">'
+          + '<span id="pbgui-auth-mode-pill" role="status">NO LOGIN</span>'
           + '<span id="pbgui-master-pill"><span class="pbgui-master-label">Master</span><span id="pbgui-master-name"></span></span>'
           + '<button class="nav-action-btn restart" id="pbgui-restart-btn"><span class="nav-restart-dot"></span>Restart</button>'
           + '<button class="nav-action-btn notify" id="pbgui-notify-btn" title="Notification log">&#128276;</button>'
@@ -611,7 +616,7 @@
           if (m) apiOrigin = m[1];
         }
         if (!apiOrigin) apiOrigin = window.location.origin;
-        var url = apiOrigin + '/api/vps/main_page?token=' + encodeURIComponent(c.token || '');
+        var url = apiOrigin + '/api/vps/main_page';
         window.location.href = url;
       };
     }
@@ -694,7 +699,6 @@
 
   function fetchAlerts() {
     var c = cfg();
-    if (!c.token) return;
     var apiOrigin = '';
     if (c.apiBase) {
       var m = c.apiBase.match(/^(https?:\/\/[^/]+)/);
@@ -977,7 +981,7 @@
     'system_vps_monitor': '/api/vps/main_page',
     'system_services':    '/api/services/main_page',
     'system_db_tools':    '/api/db-tools/main_page',
-    'help':               '/app/help.html',
+    'help':               '/app/help.html?v=1765',
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',
     'v7_optimize':        '/api/optimize-v7/main_page',
@@ -1115,14 +1119,9 @@
     function navTo(page) {
       if (!page) return;
 
-      if (!TOKEN && page !== '/') {
-        return;
-      }
-
       /* Direct FastAPI page */
       if (FASTAPI_PAGES[page] && apiOrigin) {
-        var faUrl = apiOrigin + FASTAPI_PAGES[page]
-                  + '?token=' + encodeURIComponent(TOKEN);
+        var faUrl = apiOrigin + FASTAPI_PAGES[page];
         window.location.href = faUrl;
         return;
       }
@@ -1166,7 +1165,7 @@
 
     ensureSharedHelpOverlay();
 
-    /* Guide button → open page-local help when available, else navigate to Help page */
+    /* Guide button → keep the current page and lazy-load the shared Help overlay. */
     var guideBtn = document.getElementById('pbgui-guide-btn');
     if (guideBtn) guideBtn.addEventListener('click', function () {
       var opener = window.PBGUI_HELP_OPENER;
@@ -1176,7 +1175,27 @@
         ensureSharedHelpOverlay();
         return;
       }
-      navTo('help');
+      if (window.PBGuiSharedHelp && typeof window.PBGuiSharedHelp.open === 'function') {
+        window.PBGuiSharedHelp.open('overview', { token: TOKEN });
+        return;
+      }
+
+      guideBtn.disabled = true;
+      var script = document.createElement('script');
+      script.src = '/app/js/shared_help_overlay.js?v=6';
+      script.onload = function () {
+        guideBtn.disabled = false;
+        if (window.PBGuiSharedHelp && typeof window.PBGuiSharedHelp.open === 'function') {
+          window.PBGuiSharedHelp.open('overview', { token: TOKEN });
+          return;
+        }
+        navTo('help');
+      };
+      script.onerror = function () {
+        guideBtn.disabled = false;
+        navTo('help');
+      };
+      document.head.appendChild(script);
     });
 
     /* Notify button → open inline floating log panel */
@@ -1337,6 +1356,7 @@
 
   function updateRestartButtonState(state) {
     if (state && state.master_name !== undefined) updateMasterName(state.master_name);
+    updateAuthModeState(state && state.auth ? state.auth : {});
     var btn = document.getElementById('pbgui-restart-btn');
     if (!btn) return;
     var visible = !!(state && state.needs_restart);
@@ -1351,8 +1371,23 @@
     btn.title = blocked ? ('Restart blocked: ' + (reason || 'Active VPS tasks are still running.')) : 'Restart API server';
   }
 
+  function updateAuthModeState(auth) {
+    var pill = document.getElementById('pbgui-auth-mode-pill');
+    if (!pill) return;
+    var disabled = !!(auth && auth.disabled);
+    pill.classList.toggle('visible', disabled);
+    if (!disabled) {
+      pill.title = '';
+      return;
+    }
+    var bindHost = String(auth.bind_host || 'configured interface');
+    pill.title = auth.wildcard_bind
+      ? 'Authentication disabled. Anyone who can reach the PBGui API port has full access.'
+      : 'Authentication disabled on ' + bindHost + '. Anyone who can reach this address has full access.';
+  }
+
   function fetchRestartStatus(token, apiOrigin) {
-    if (!token || !apiOrigin) return;
+    if (!apiOrigin) return;
     fetch(apiOrigin + '/api/server-status', authOptions(token, { cache: 'no-store' }))
       .then(function (resp) {
         if (!resp.ok) throw new Error('server-status failed');
@@ -1365,9 +1400,9 @@
   }
 
   function setupRestartSSE(token, apiOrigin) {
-    if (!token || !apiOrigin) return;
-    var url = apiOrigin + '/api/server-status/stream?token=' + encodeURIComponent(token);
-    var es = new EventSource(url);
+    if (!apiOrigin) return;
+    var url = apiOrigin + '/api/server-status/stream';
+    var es = new EventSource(url, { withCredentials: true });
     es.onmessage = function (e) {
       try {
         var data = JSON.parse(e.data);
@@ -1422,15 +1457,9 @@
       window.location.replace(url.toString());
     };
 
-    if (!c.token) {
-      redirect();
-      return;
-    }
-
-    fetch(origin + '/api/auth/logout', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + c.token }
-    }).finally(function () {
+    fetch(origin + '/api/auth/logout', authOptions(c.token, {
+      method: 'POST'
+    })).finally(function () {
       redirect();
     });
   }
@@ -1439,24 +1468,20 @@
      Interval: 30 minutes.  If the refresh itself returns 401 we redirect. */
   var _refreshTimer = null;
   var _authCheckPending = false;
-  function tokenRefreshUrl(token) {
+  function tokenRefreshUrl() {
     var apiRoot = '';
     if (window.API_BASE) {
       var m = String(window.API_BASE).match(/^(https?:\/\/[^/]+)/);
       apiRoot = m ? m[1] : '';
     }
-    return apiRoot + '/api/token-refresh?token=' + encodeURIComponent(token || '');
+    return apiRoot + '/api/token-refresh';
   }
 
   function confirmTokenStillValid() {
     if (_authCheckPending) return;
     var c = cfg();
-    if (!c.token) {
-      redirectToLogin();
-      return;
-    }
     _authCheckPending = true;
-    _origFetch(tokenRefreshUrl(c.token), { method: 'POST' })
+    _origFetch(tokenRefreshUrl(), authOptions(c.token, { method: 'POST' }))
       .then(function (r) {
         if (r.status === 401) {
           redirectToLogin();
@@ -1470,9 +1495,8 @@
   function startTokenRefresh() {
     if (_refreshTimer) return;
     var c = cfg();
-    if (!c.token) return;
     function doRefresh() {
-      _origFetch(tokenRefreshUrl(c.token), { method: 'POST' })
+      _origFetch(tokenRefreshUrl(), authOptions(c.token, { method: 'POST' }))
         .then(function (r) {
           if (r.status === 401) { redirectToLogin(); }
         })

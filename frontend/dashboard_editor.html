@@ -2021,6 +2021,8 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     var chartCtrl = null;
     var currentTimeframe = '4h';
     var _tfFetchId = 0;
+    var _loadSeqKey = '_ordInlineLoadSeq_' + pos;
+    window[_loadSeqKey] = (window[_loadSeqKey] || 0) + 1;
 
     function _tfMs(tf) {
       var map = { '1m':60000, '5m':300000, '15m':900000, '30m':1800000,
@@ -2033,8 +2035,9 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       return (tf === '1w' || tf === '1d') ? 1500 : 500;
     }
 
-    function showMessage(msg) {
+    function showMessage(msg, expectedSeq) {
       _ensureRenderScript(function () {
+        if (expectedSeq != null && expectedSeq !== window[_loadSeqKey]) return;
         if (chartCtrl && chartCtrl.destroy) chartCtrl.destroy();
         chartCtrl = null;
         DashRender.buildOrders(container, null, {
@@ -2047,25 +2050,31 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     }
 
     function loadOrders() {
+      var seq = ++window[_loadSeqKey];
+      ++_tfFetchId;
       if (!selectedPosition) {
-        showMessage('Select a position in the linked Positions widget');
+        showMessage('Select a position in the linked Positions widget', seq);
         return;
       }
-      showMessage('Loading\u2026');
+      var requestPosition = selectedPosition;
+      var requestTimeframe = currentTimeframe;
+      showMessage('Loading\u2026', seq);
       var url = API_BASE + '/dashboard/orders_data'
-        + '?user='      + encodeURIComponent(selectedPosition.user)
-        + '&symbol='    + encodeURIComponent(selectedPosition.symbol)
-        + '&side='      + encodeURIComponent(selectedPosition.side || 'long')
-        + '&timeframe=' + encodeURIComponent(currentTimeframe)
-        + '&limit='     + _tfLimit(currentTimeframe)
+        + '?user='      + encodeURIComponent(requestPosition.user)
+        + '&symbol='    + encodeURIComponent(requestPosition.symbol)
+        + '&side='      + encodeURIComponent(requestPosition.side || 'long')
+        + '&timeframe=' + encodeURIComponent(requestTimeframe)
+        + '&limit='     + _tfLimit(requestTimeframe)
         + '&live=1';
       fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
         .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
         .then(function (d) {
+          if (seq !== window[_loadSeqKey]) return;
           _ensureRenderScript(function () {
+            if (seq !== window[_loadSeqKey]) return;
             chartCtrl = DashRender.buildOrders(container, d, {
               position: pos,
-              timeframe: currentTimeframe,
+              timeframe: requestTimeframe,
               icon: _widgetIcon('ORDERS'), onDelete: _makeDeleteCb(r, c),
               onTimeframeChange: function (tf) {
                 currentTimeframe = tf;
@@ -2080,14 +2089,16 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
                 fetch(tfUrl, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
                   .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
                   .then(function (d2) {
-                    if (_fid !== _tfFetchId) return;
+                    if (_fid !== _tfFetchId || seq !== window[_loadSeqKey]) return;
                     if (chartCtrl && chartCtrl.setData && d2.candles) {
                       chartCtrl.setData(d2.candles);
                     } else {
                       loadOrders();
                     }
                   })
-                  .catch(function () { if (_fid === _tfFetchId) loadOrders(); });
+                  .catch(function () {
+                    if (_fid === _tfFetchId && seq === window[_loadSeqKey]) loadOrders();
+                  });
               },
               onLoadMore: function (oldestTs, done) {
                 var fetchTf = currentTimeframe;
@@ -2104,7 +2115,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
                 fetch(moreUrl, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
                   .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
                   .then(function (older) {
-                    if (currentTimeframe !== fetchTf) { done(); return; }
+                    if (seq !== window[_loadSeqKey] || currentTimeframe !== fetchTf) { done(); return; }
                     if (older.candles && older.candles.length > 0 && chartCtrl) {
                       chartCtrl.prependData(older.candles, fetchGen);
                     }
@@ -2118,7 +2129,8 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
           });
         })
         .catch(function (e) {
-          showMessage('\u26A0 Data unavailable');
+          if (seq !== window[_loadSeqKey]) return;
+          showMessage('\u26A0 Data unavailable', seq);
         });
     }
 
@@ -2137,7 +2149,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       selectedPosition = window['_dashPosSelected_' + linkedGridPos];
       loadOrders();
     } else {
-      showMessage('Select a position in the linked Positions widget');
+      showMessage('Select a position in the linked Positions widget', window[_loadSeqKey]);
     }
   }
 
@@ -2775,7 +2787,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       var wsBase = API_BASE.replace(/\/api$/, '')
                            .replace(/^http:/, 'ws:')
                            .replace(/^https:/, 'wss:');
-      _ws = new WebSocket(wsBase + '/ws/dashboard?token=' + encodeURIComponent(TOKEN));
+      _ws = new WebSocket(wsBase + '/ws/dashboard');
       _ws.onopen    = function () { _reconnDelay = 1000; };
       _ws.onmessage = function (evt) {
         try {

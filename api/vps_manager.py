@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from api.auth import SessionToken, require_auth, validate_token
+from api.auth import SessionToken, authenticate_websocket, require_auth, validate_token
 from api.vps import get_bot_log_matches
 from logging_helpers import human_log as _log
 from vps_manager_service import UnknownHostKeyError, VPSManagerService
@@ -66,6 +66,18 @@ def _get_service() -> VPSManagerService:
 
 def get_service_instance() -> VPSManagerService:
     return _get_service()
+
+
+def startup() -> None:
+    """Prepare an existing VPS Manager service for a new API lifespan."""
+    if _service is not None:
+        _service.prepare_startup()
+
+
+async def shutdown() -> None:
+    """Join API-owned deploy controllers while leaving Ansible processes alive."""
+    if _service is not None:
+        await asyncio.to_thread(_service.shutdown)
 
 
 @router.get("/main_page", response_class=HTMLResponse)
@@ -233,12 +245,11 @@ def get_cluster_nodes_import_progress(
 
 @router.websocket("/ws")
 async def ws_vps_manager(websocket: WebSocket):
-    token = websocket.query_params.get("token", "")
-    if not validate_token(token):
-        await websocket.close(code=4001)
+    session = await authenticate_websocket(websocket)
+    if session is None:
         return
 
-    await websocket.accept()
+    token = session.token
     service = _get_service()
     context: dict[str, str] = {"view": "overview", "hostname": "", "token": token}
     push_task = asyncio.create_task(_push_loop(websocket, service, context), name="vps-manager-push")

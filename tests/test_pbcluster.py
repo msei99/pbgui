@@ -2,6 +2,7 @@
 
 import json
 import hashlib
+import stat
 import threading
 import time
 from pathlib import Path
@@ -14,12 +15,28 @@ from master.cluster_state import (
     default_cluster_root,
     ensure_local_identity,
 )
-from master.cluster_sync_worker import ClusterSyncWorker, SshClusterPeerClient
+from master.cluster_sync_worker import ClusterSyncWorker, SshClusterPeerClient, _write_local_blob
 
 
 CLUSTER_ID = "pbgui-cluster-00000000-0000-4000-8000-000000000010"
 NODE_ID = "pbgui-node-00000000-0000-4000-8000-000000000010"
 NODE_B = "pbgui-node-00000000-0000-4000-8000-000000000011"
+
+
+def test_worker_pulled_secret_blob_uses_owner_only_tree(tmp_path: Path) -> None:
+    """Worker-pulled secret blobs are private from directory creation onward."""
+    base = tmp_path / "secret_blobs"
+    raw = b'{"secret":"value"}'
+    blob_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+
+    _write_local_blob(base, blob_hash, raw, secret=True)
+
+    digest = blob_hash.removeprefix("sha256:")
+    path = base / "sha256" / digest[:2] / f"{digest}.json"
+    assert path.read_bytes() == raw
+    assert stat.S_IMODE(base.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def _node_id(index: int) -> str:

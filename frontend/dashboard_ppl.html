@@ -23,6 +23,13 @@
 
     var _wsKey    = '_dplWs_' + POSITION;
     var _timerKey = '_dplReconnTimer_' + POSITION;
+    var _generationKey = '_dplGeneration_' + POSITION;
+    var generation = (window[_generationKey] || 0) + 1;
+    window[_generationKey] = generation;
+
+    function isCurrentGeneration() {
+        return window[_generationKey] === generation;
+    }
 
     var currentPeriod    = PERIOD;
 
@@ -35,7 +42,11 @@
     /* Normalize: legacy configs may store 'ALL_TIME' or 'YEAR' — clamp to valid PPL_SUM value */
     var currentSumPeriod = PPL_SUM.indexOf(SUM_PERIOD) >= 0 ? SUM_PERIOD : PPL_SUM[0];
 
-    if (window[_wsKey]) { try { window[_wsKey].close(); } catch (_) {} window[_wsKey] = null; }
+    if (window[_wsKey]) {
+        window[_wsKey].onopen = window[_wsKey].onmessage = window[_wsKey].onclose = window[_wsKey].onerror = null;
+        try { window[_wsKey].close(); } catch (_) {}
+        window[_wsKey] = null;
+    }
     if (window[_timerKey]) { clearTimeout(window[_timerKey]); window[_timerKey] = null; }
 
     var ws          = null;
@@ -43,6 +54,7 @@
     var reconnDelay = 1000;
     var container   = document.getElementById('dp-container-' + POSITION);
     var _savedZoom  = null;
+    var loadSeq     = 0;
 
     function _getZoom() {
         var el = container ? container.querySelector('.dt-chart') : null;
@@ -75,6 +87,7 @@
     }
 
     function load() {
+        var seq = ++loadSeq;
         var zoom = _savedZoom; _savedZoom = null;
         var usersParam = (Array.isArray(USERS) && USERS.length > 0) ? USERS.join(',') : 'ALL';
         var isCustom = currentPeriod.indexOf('CUSTOM:') === 0;
@@ -93,6 +106,7 @@
         fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (d) {
+                if (seq !== loadSeq || !isCurrentGeneration()) return;
                 /* ── Sum Period select ── */
                 var sumCtrl = document.createElement('select');
                 sumCtrl.className = 'dt-ctrl-sel';
@@ -184,6 +198,7 @@
                 reportHeight();
             })
             .catch(function (e) {
+                if (seq !== loadSeq || !isCurrentGeneration()) return;
                 container.innerHTML = '';
                 var st = document.createElement('div');
                 st.className = 'dt-status';
@@ -194,13 +209,19 @@
     }
 
     function connect() {
-        if (!TOKEN || !API_HOST) return;
+        if (!isCurrentGeneration() || !TOKEN || !API_HOST) return;
         clearTimeout(reconnTimer);
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
-        ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard?token=' + TOKEN);
-        window[_wsKey] = ws;
-        ws.onopen = function () { reconnDelay = 1000; load(); };
-        ws.onmessage = function (evt) {
+        var socket = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard');
+        ws = socket;
+        window[_wsKey] = socket;
+        socket.onopen = function () {
+            if (window[_wsKey] !== socket) return;
+            reconnDelay = 1000;
+            load();
+        };
+        socket.onmessage = function (evt) {
+            if (window[_wsKey] !== socket) return;
             try {
                 var m = JSON.parse(evt.data);
                 if (m.type === 'income_updated') {
@@ -210,12 +231,16 @@
                 }
             } catch (_) {}
         };
-        ws.onclose = function () {
+        socket.onclose = function () {
+            if (window[_wsKey] !== socket) return;
+            window[_wsKey] = null;
             reconnTimer = setTimeout(connect, reconnDelay);
             reconnDelay = Math.min(reconnDelay * 2, 30000);
             window[_timerKey] = reconnTimer;
         };
-        ws.onerror = function () { ws.close(); };
+        socket.onerror = function () {
+            if (window[_wsKey] === socket) socket.close();
+        };
     }
 
     function waitForPlotly(cb) {

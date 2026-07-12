@@ -815,8 +815,7 @@
         if (!TOKEN || !EXCHANGE) return;
         wsSetState('reconnecting');
         var wsBase = API_ORIGIN.replace(/^http/, 'ws');
-        var url = wsBase + '/ws/heatmap-watch?token=' + encodeURIComponent(TOKEN) +
-                  '&exchange=' + encodeURIComponent(EXCHANGE) +
+        var url = wsBase + '/ws/heatmap-watch?exchange=' + encodeURIComponent(EXCHANGE) +
                   '&dataset='  + encodeURIComponent(DATASET)  +
                   '&coin='     + encodeURIComponent(COIN);
         try {

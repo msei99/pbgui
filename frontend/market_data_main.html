@@ -3761,22 +3761,19 @@
       }
 
       function apiUrl(path) {
-        var joiner = path.indexOf('?') === -1 ? '?' : '&';
-        return API_BASE + path + joiner + 'token=' + encodeURIComponent(TOKEN);
+        return API_BASE + path;
       }
 
       function jobsApiUrl(path) {
-        var joiner = path.indexOf('?') === -1 ? '?' : '&';
         var root = String(API_BASE || '').replace(/\/market-data\/?$/, '');
-        return root + path + joiner + 'token=' + encodeURIComponent(TOKEN);
+        return root + path;
       }
 
       function buildBest1mJobMonitorUrl(exchangeKey, forceReload) {
         var meta = getExchangeMeta(exchangeKey);
         var jobMeta = best1mJobMonitorMeta[meta.key];
         if (!jobMeta) return '';
-        var url = '/app/jobs_monitor.html?token=' + encodeURIComponent(TOKEN)
-          + '&v=' + encodeURIComponent(PBGUI_SERIAL || '0')
+        var url = '/app/jobs_monitor.html?v=' + encodeURIComponent(PBGUI_SERIAL || '0')
           + '&embed=1'
           + '&exchange=' + encodeURIComponent(jobMeta.exchange)
           + '&job_type=' + encodeURIComponent(jobMeta.jobType);
@@ -3803,8 +3800,7 @@
       }
 
       function buildCopyDataJobMonitorUrl(forceReload) {
-        var url = '/app/jobs_monitor.html?token=' + encodeURIComponent(TOKEN)
-          + '&v=' + encodeURIComponent(PBGUI_SERIAL || '0')
+        var url = '/app/jobs_monitor.html?v=' + encodeURIComponent(PBGUI_SERIAL || '0')
           + '&embed=1'
           + '&exchange=ohlcv'
           + '&job_type=' + encodeURIComponent('ohlcv_copy,ohlcv_copy_dry_run');
@@ -3827,8 +3823,7 @@
       }
 
       function heatmapApiUrl(path) {
-        var joiner = path.indexOf('?') === -1 ? '?' : '&';
-        return heatmapApiBase() + path + joiner + 'token=' + encodeURIComponent(TOKEN);
+        return heatmapApiBase() + path;
       }
 
       async function fetchJson(path, options) {

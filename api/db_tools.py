@@ -8,6 +8,7 @@ import shlex
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import traceback
 import uuid
@@ -24,6 +25,7 @@ from api.auth import SessionToken, require_auth
 from logging_helpers import human_log as _log
 from master.async_pool import remote_path_join
 from pbgui_purefunc import PBGDIR
+from task_queue import enqueue_running_job, force_fail_job, is_pid_running, list_jobs, retry_failed_job
 
 SERVICE = "DbTools"
 
@@ -33,6 +35,7 @@ _monitor = None
 _operations: dict[str, "OperationProgress"] = {}
 _sync_jobs: dict[str, dict[str, Any]] = {}
 _sync_scheduler_task: asyncio.Task | None = None
+_background_tasks: set[asyncio.Task] = set()
 _sync_job_locks: set[str] = set()
 
 MAIN_DB_NAME = "pbgui.db"
@@ -274,6 +277,42 @@ def init(monitor) -> None:
     _ensure_sync_scheduler()
 
 
+def _track_background_task(coroutine: Any, *, name: str) -> asyncio.Task:
+    """Create and retain one API-owned task until it finishes."""
+    task = asyncio.create_task(coroutine, name=name)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
+async def shutdown() -> None:
+    """Cancel and await all DB Tools scheduler and operation tasks."""
+    global _sync_scheduler_task
+    tasks = set(_background_tasks)
+    if _sync_scheduler_task is not None and not _sync_scheduler_task.done():
+        tasks.add(_sync_scheduler_task)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    for operation in _operations.values():
+        if operation.status == "running":
+            operation.fail("Interrupted by API shutdown")
+    _background_tasks.clear()
+    _sync_job_locks.clear()
+    _sync_scheduler_task = None
+    _log(SERVICE, f"DB Tools shutdown completed; stopped {len(tasks)} background task(s)", level="INFO")
+
+
+def restart_block_reason() -> str:
+    """Describe API-owned DB operations that must finish before restart."""
+    running = [operation.kind for operation in _operations.values() if operation.status == "running"]
+    if not running:
+        return ""
+    labels = ", ".join(sorted(set(running)))
+    return f"DB Tools operation(s) still running: {labels}"
+
+
 def _operation_total(kind: str, item_count: int = 0, *, replace: bool = False, remote_target: bool = False) -> int:
     """Return the number of concrete progress steps for an operation type."""
 
@@ -306,6 +345,9 @@ def _start_operation(kind: str, total: int, runner) -> OperationProgress:
         try:
             result = await runner(operation)
             operation.finish(result)
+        except asyncio.CancelledError:
+            operation.fail("Interrupted by API shutdown")
+            raise
         except HTTPException as exc:
             operation.fail(str(exc.detail))
             _log(SERVICE, f"operation {operation.kind} failed: {exc.detail}", level="WARNING")
@@ -313,7 +355,7 @@ def _start_operation(kind: str, total: int, runner) -> OperationProgress:
             operation.fail(str(exc))
             _log(SERVICE, f"operation {operation.kind} failed: {exc}", level="ERROR", meta={"traceback": traceback.format_exc()})
 
-    asyncio.create_task(_run(), name=f"db-tools-{kind}-{operation.id[:8]}")
+    _track_background_task(_run(), name=f"db-tools-{kind}-{operation.id[:8]}")
     return operation
 
 
@@ -943,6 +985,10 @@ def _load_sync_jobs() -> None:
             continue
         job_id = str(item.get("id") or "").strip()
         if job_id:
+            if item.get("running") and not item.get("worker_job_id"):
+                item["running"] = False
+                item["last_error"] = "Interrupted before persistent worker migration"
+                item["next_run"] = datetime.now(timezone.utc).isoformat() if item.get("enabled") else ""
             _sync_jobs[job_id] = item
 
 
@@ -1184,17 +1230,25 @@ def _next_sync_run_iso(interval_seconds: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=max(30, int(interval_seconds or 60)))).isoformat()
 
 
-async def _run_sync_job(job_id: str, *, manual: bool = False, operation: OperationProgress | None = None) -> dict[str, Any]:
-    job = _sync_jobs.get(job_id)
+async def _run_sync_job(
+    job_id: str,
+    *,
+    manual: bool = False,
+    operation: OperationProgress | None = None,
+    job_override: dict[str, Any] | None = None,
+    persist_state: bool = True,
+) -> dict[str, Any]:
+    job = job_override if job_override is not None else _sync_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Sync job not found")
-    if job_id in _sync_job_locks:
+    if persist_state and job_id in _sync_job_locks:
         raise HTTPException(status_code=409, detail="Sync job is already running")
-    _sync_job_locks.add(job_id)
-    job["running"] = True
-    job["last_run"] = datetime.now(timezone.utc).isoformat()
-    job["updated_at"] = job["last_run"]
-    _save_sync_jobs()
+    if persist_state:
+        _sync_job_locks.add(job_id)
+        job["running"] = True
+        job["last_run"] = datetime.now(timezone.utc).isoformat()
+        job["updated_at"] = job["last_run"]
+        _save_sync_jobs()
     try:
         users = _clean_users(list(job.get("users") or []))
         source = _target_id(str(job.get("source") or "local"))
@@ -1238,6 +1292,8 @@ async def _run_sync_job(job_id: str, *, manual: bool = False, operation: Operati
             "results": results,
             "verify_failed": verify_failed,
         }
+        if not persist_state:
+            return result
         now = datetime.now(timezone.utc).isoformat()
         if verify_failed:
             err = f"Sync verify failed for target(s): {', '.join(verify_failed)}"
@@ -1250,6 +1306,8 @@ async def _run_sync_job(job_id: str, *, manual: bool = False, operation: Operati
         _log(SERVICE, f"sync job {job.get('name')} source={source} targets={targets} users={users}", level="INFO")
         return result
     except Exception as exc:
+        if not persist_state:
+            raise
         err = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
         job.update({"last_error": err, "next_run": _next_sync_run_iso(int(job.get("interval_seconds") or 60))})
         _log_sync_job(job_id, "run_error", error=err)
@@ -1258,10 +1316,158 @@ async def _run_sync_job(job_id: str, *, manual: bool = False, operation: Operati
             raise
         return {"ok": False, "error": err}
     finally:
+        if persist_state:
+            job["running"] = False
+            job["updated_at"] = datetime.now(timezone.utc).isoformat()
+            _sync_job_locks.discard(job_id)
+            _save_sync_jobs()
+
+
+async def run_sync_job_snapshot(job: dict[str, Any], operation: Any = None) -> dict[str, Any]:
+    """Execute an immutable sync-job snapshot inside a persistent worker."""
+    job_id = str(job.get("id") or "").strip()
+    if not job_id:
+        raise ValueError("Sync job ID is missing")
+    return await _run_sync_job(
+        job_id,
+        manual=bool(job.get("manual")),
+        operation=operation,
+        job_override=dict(job),
+        persist_state=False,
+    )
+
+
+def _task_jobs_by_id() -> dict[str, dict[str, Any]]:
+    return {
+        str(item.get("id") or ""): item
+        for item in list_jobs(states=["pending", "running", "done", "failed"], limit=0)
+        if str(item.get("type") or "") == "db_sync"
+    }
+
+
+def _start_db_sync_worker(job_path: str) -> None:
+    """Launch one detached DB Sync worker that survives FastAPI restarts."""
+    subprocess.Popen(
+        [sys.executable, str(Path(PBGDIR) / "task_worker.py"), "--run-job", str(job_path)],
+        cwd=str(PBGDIR),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        start_new_session=True,
+    )
+
+
+def _recover_db_sync_task(task: dict[str, Any]) -> None:
+    """Restart a persisted DB Sync whose one-shot worker died unexpectedly."""
+    if str(task.get("status") or "") != "running":
+        return
+    worker_pid = int(task.get("worker_pid") or 0)
+    if worker_pid > 0 and is_pid_running(worker_pid):
+        return
+    started = int(task.get("run_started_ts") or task.get("created_ts") or 0)
+    if int(datetime.now(timezone.utc).timestamp()) - started < 10:
+        return
+    job_id = str(task.get("id") or "")
+    if not force_fail_job(job_id, error="DB Sync worker interrupted") or not retry_failed_job(job_id):
+        return
+    from task_worker import start_pending_job
+
+    started_ok, message = start_pending_job(job_id)
+    if not started_ok:
+        _log(SERVICE, f"failed to recover DB Sync worker {job_id}: {message}", level="WARNING")
+
+
+def _task_job_operation(item: dict[str, Any]) -> dict[str, Any]:
+    progress = item.get("progress") if isinstance(item.get("progress"), dict) else {}
+    state = str(item.get("status") or "pending")
+    status = "done" if state == "done" else "error" if state == "failed" else "running"
+    total = max(1, int(progress.get("total") or 1))
+    completed = min(total, int(progress.get("completed") or 0))
+    return {
+        "id": str(item.get("id") or ""),
+        "kind": "sync-job",
+        "status": status,
+        "completed": completed,
+        "total": total,
+        "percent": int((completed / total) * 100),
+        "current": str(progress.get("current") or ("Queued" if status == "running" else status.title())),
+        "steps": list(progress.get("steps") or []),
+        "result": item.get("result") if isinstance(item.get("result"), dict) else None,
+        "error": str(item.get("error") or ""),
+        "created_at": str(item.get("created_ts") or ""),
+        "updated_at": str(item.get("updated_ts") or ""),
+    }
+
+
+def _reconcile_sync_worker_jobs() -> None:
+    tasks = _task_jobs_by_id()
+    for task in tasks.values():
+        _recover_db_sync_task(task)
+    tasks = _task_jobs_by_id()
+    changed = False
+    for job in _sync_jobs.values():
+        worker_job_id = str(job.get("worker_job_id") or "")
+        if not worker_job_id:
+            active_matches = [
+                task
+                for task in tasks.values()
+                if str(task.get("status") or "") in {"pending", "running", "cancelling"}
+                and str((((task.get("payload") or {}).get("job") or {}).get("id") or "")) == str(job.get("id") or "")
+            ]
+            if active_matches:
+                active = max(active_matches, key=lambda task: int(task.get("created_ts") or 0))
+                worker_job_id = str(active.get("id") or "")
+                job["worker_job_id"] = worker_job_id
+                job["running"] = True
+                changed = True
+        if not worker_job_id:
+            continue
+        task = tasks.get(worker_job_id)
+        state = str((task or {}).get("status") or "missing")
+        if state in {"pending", "running", "cancelling"}:
+            job["running"] = True
+            continue
         job["running"] = False
+        job["worker_job_id"] = ""
         job["updated_at"] = datetime.now(timezone.utc).isoformat()
-        _sync_job_locks.discard(job_id)
+        job["next_run"] = _next_sync_run_iso(int(job.get("interval_seconds") or 60)) if job.get("enabled") else ""
+        if state == "done":
+            job["last_ok"] = job["updated_at"]
+            job["last_error"] = ""
+            job["last_result"] = task.get("result") if isinstance(task, dict) else None
+        else:
+            job["last_error"] = str((task or {}).get("error") or "Persistent DB Sync job disappeared")
+        changed = True
+    if changed:
         _save_sync_jobs()
+
+
+def _dispatch_sync_job(job: dict[str, Any], *, manual: bool) -> dict[str, Any]:
+    if job.get("running") or job.get("worker_job_id"):
+        raise HTTPException(status_code=409, detail="Sync job is already running")
+    target_steps = sum(len(TABLE_SPECS) + 1 for _target in job.get("targets") or [])
+    total = _operation_total("sync-job", target_steps)
+    snapshot = dict(job)
+    snapshot["manual"] = manual
+    active = [
+        task for task in _task_jobs_by_id().values()
+        if str(task.get("status") or "") in {"pending", "running", "cancelling"}
+    ]
+    if active:
+        raise HTTPException(status_code=409, detail="Another DB Sync worker is already running")
+    queued = enqueue_running_job(job_type="db_sync", payload={"job": snapshot, "total": total})
+    try:
+        _start_db_sync_worker(queued.path)
+    except OSError as exc:
+        force_fail_job(queued.job_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="Unable to start persistent DB Sync worker") from exc
+    job["running"] = True
+    job["worker_job_id"] = queued.job_id
+    job["last_run"] = datetime.now(timezone.utc).isoformat()
+    job["updated_at"] = job["last_run"]
+    job["next_run"] = ""
+    _save_sync_jobs()
+    return _task_job_operation(_task_jobs_by_id().get(queued.job_id, {"id": queued.job_id, "status": "pending", "progress": {"total": total}}))
 
 
 def _ensure_sync_scheduler() -> None:
@@ -1278,6 +1484,7 @@ def _ensure_sync_scheduler() -> None:
 async def _sync_scheduler_loop() -> None:
     while True:
         try:
+            _reconcile_sync_worker_jobs()
             now_ts = datetime.now(timezone.utc).timestamp()
             changed = False
             for job_id, job in list(_sync_jobs.items()):
@@ -1293,8 +1500,12 @@ async def _sync_scheduler_loop() -> None:
                     next_ts = 0
                 if next_ts and next_ts > now_ts:
                     continue
-                asyncio.create_task(_run_sync_job(job_id), name=f"db-tools-sync-{job_id[:8]}")
-                job["next_run"] = _next_sync_run_iso(int(job.get("interval_seconds") or 60))
+                if any(
+                    str(task.get("status") or "") in {"pending", "running", "cancelling"}
+                    for task in _task_jobs_by_id().values()
+                ):
+                    continue
+                _dispatch_sync_job(job, manual=False)
                 changed = True
             if changed:
                 _save_sync_jobs()
@@ -2470,9 +2681,12 @@ def get_operation(operation_id: str, session: SessionToken = Depends(require_aut
 
     del session
     operation = _operations.get(operation_id)
-    if operation is None:
+    if operation is not None:
+        return {"operation": operation.to_dict()}
+    task = _task_jobs_by_id().get(operation_id)
+    if task is None:
         raise HTTPException(status_code=404, detail="Operation not found")
-    return {"operation": operation.to_dict()}
+    return {"operation": _task_job_operation(task)}
 
 
 @router.get("/backups")
@@ -2525,6 +2739,7 @@ async def get_sync_jobs(session: SessionToken = Depends(require_auth)) -> dict[s
 
     del session
     _ensure_sync_scheduler()
+    _reconcile_sync_worker_jobs()
     return {"jobs": [_sync_job_public(job) for job in sorted(_sync_jobs.values(), key=lambda item: str(item.get("name") or "").lower())]}
 
 
@@ -2562,6 +2777,10 @@ async def save_sync_job(payload: SyncJobRequest, session: SessionToken = Depends
     """Create or update a one-way row-level user sync job."""
 
     del session
+    _reconcile_sync_worker_jobs()
+    existing = _sync_jobs.get(str(payload.id or "").strip())
+    if existing and existing.get("running"):
+        raise HTTPException(status_code=409, detail="Sync job is running")
     job = _validate_sync_job_payload(payload)
     await _validate_sync_job_safety(job)
     if job.get("enabled") and not job.get("next_run"):
@@ -2579,7 +2798,8 @@ async def delete_sync_job(job_id: str, session: SessionToken = Depends(require_a
     """Delete a configured sync job."""
 
     del session
-    if job_id in _sync_job_locks:
+    _reconcile_sync_worker_jobs()
+    if job_id in _sync_job_locks or bool((_sync_jobs.get(job_id) or {}).get("running")):
         raise HTTPException(status_code=409, detail="Sync job is running")
     removed = _sync_jobs.pop(job_id, None)
     if not removed:
@@ -2592,21 +2812,14 @@ async def delete_sync_job(job_id: str, session: SessionToken = Depends(require_a
 
 @router.post("/sync/jobs/{job_id}/run")
 async def run_sync_job(job_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
-    """Run a configured sync job immediately and return operation progress."""
+    """Queue a persistent sync job and return worker-backed operation progress."""
 
     del session
+    _reconcile_sync_worker_jobs()
     job = _sync_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Sync job not found")
-    target_steps = 0
-    for _target in job.get("targets") or []:
-        target_steps += len(TABLE_SPECS) + 1
-
-    async def runner(operation: OperationProgress) -> dict[str, Any]:
-        return await _run_sync_job(job_id, manual=True, operation=operation)
-
-    operation = _start_operation("sync-job", _operation_total("sync-job", target_steps), runner)
-    return {"operation": operation.to_dict()}
+    return {"operation": _dispatch_sync_job(job, manual=True)}
 
 
 @router.get("/users")

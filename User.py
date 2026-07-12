@@ -4,12 +4,17 @@ import hashlib
 import os
 import uuid
 import configparser
-from pathlib import Path, PurePath
+from pathlib import Path
 from datetime import datetime, timezone
 from api_key_state import strip_runtime_extra
 from logging_helpers import human_log as _log
 from pbgui_purefunc import pb7dir, PBGDIR, is_pb7_installed
-import shutil
+from secure_files import (
+    atomic_write_private_bytes,
+    copy_private_file,
+    ensure_private_directory,
+    ensure_private_directory_tree,
+)
 
 SERVICE = "User"
 
@@ -338,16 +343,17 @@ class Users:
                         save_users[user.name][k] = v
         # Backup api-keys and save new version
         date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        if not self.api_backup.exists():
-            self.api_backup.mkdir(parents=True)
+        ensure_private_directory(self.api_backup)
 
         # Backup api-keys7 and save new version
         if is_pb7_installed():
             destination = Path(f'{self.api_backup}/api-keys7_{date}.json')
             if Path(self.api7_path).exists():
-                shutil.copy(PurePath(self.api7_path), destination)
-            with Path(f'{self.api7_path}').open("w", encoding="UTF-8") as f:
-                json.dump(save_users, f, indent=4)
+                copy_private_file(Path(self.api7_path), destination)
+            atomic_write_private_bytes(
+                Path(self.api7_path),
+                json.dumps(save_users, indent=4).encode("UTF-8"),
+            )
             _record_cluster_api_keys_update(save_users)
 
 
@@ -405,6 +411,10 @@ def _write_cluster_blob(base_dir: Path, raw: bytes, *, secret: bool) -> str:
 
     digest = hashlib.sha256(raw).hexdigest()
     target = Path(base_dir) / "sha256" / digest[:2] / f"{digest}.json"
+    if secret:
+        ensure_private_directory_tree(Path(base_dir), target.parent)
+        atomic_write_private_bytes(target, raw)
+        return f"sha256:{digest}"
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f"{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     mode = 0o600 if secret else 0o644

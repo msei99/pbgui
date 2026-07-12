@@ -512,7 +512,7 @@ class AsyncLogStreamer:
 
     def stop_stream(self, stream_id: str):
         """Stop an active log stream."""
-        stream = self._streams.get(stream_id)
+        stream = self._streams.pop(stream_id, None)
         if stream:
             stream.active = False
             if stream.task and not stream.task.done():
@@ -521,7 +521,9 @@ class AsyncLogStreamer:
 
     def stop_all_streams(self):
         """Stop all active log streams."""
-        for stream in self._streams.values():
+        streams = list(self._streams.values())
+        self._streams.clear()
+        for stream in streams:
             stream.active = False
             if stream.task and not stream.task.done():
                 stream.task.cancel()
@@ -656,6 +658,8 @@ class AsyncLogStreamer:
                 except Exception:
                     pass
             stream.active = False
+            if self._streams.get(stream.stream_id) is stream:
+                self._streams.pop(stream.stream_id, None)
             _log(SERVICE, f"[log] Stream worker ended for "
                  f"{stream.stream_id}")
 

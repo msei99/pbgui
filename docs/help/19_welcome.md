@@ -20,8 +20,15 @@ The default **Overview** section summarizes the current local state:
 - **PB7**: whether the configured PBv7 runtime looks usable
 - **Identity**: the current host role and configured bot name
 - **Runtime Status**: detailed readiness checks from the backend
+- **Login security**: active login blocks and retained brute-force lockout history
 
 This section is intended as a quick sanity check after first startup, password changes, or path updates.
+
+The issue list also shows a persistent security warning when PBGui listens on all interfaces while still using the known legacy default password. PBGui cannot inspect external NAT or firewall rules, so either verify that the API port is limited to VPN or trusted networks, or set an individual password. New installer runs generate an individual password automatically, and remote installs expose the PBGui port only to the configured OpenVPN network by default.
+
+When repeated failed logins trigger a temporary block, the issue list shows a warning with the last direct client address and event time. **Acknowledge** hides that warning globally while keeping the Login security status and retained history visible. A newer lockout automatically raises the warning again.
+
+When authentication is intentionally disabled, every standalone page shows a persistent red **NO LOGIN** indicator. PBGui cannot inspect external firewall rules: anyone who can reach the configured API address has full administrative access.
 
 ## Setup section
 
@@ -45,9 +52,10 @@ The **Password** action in the left sidebar opens the password form.
 Use it to:
 
 - replace the current login password
-- remove password protection by leaving the new password empty
+- deliberately enter No-Login mode with **Disable Authentication** and its security confirmation
+- enable password authentication again by entering a new password
 
-You must be logged in before you can change the password.
+An empty password by itself is rejected. Every password or authentication-mode change revokes existing sessions and issues a new session to the current browser. You must be authenticated before changing this setting.
 
 ## Typical first-time workflow
 

@@ -153,9 +153,8 @@
             return data;
         }
 
-        function redirectToWelcome(token) {
+        function redirectToWelcome() {
             var target = new URL(API_ORIGIN + "/api/auth/main_page");
-            if (token) target.searchParams.set("token", token);
             window.location.replace(target.toString());
         }
 
@@ -171,7 +170,7 @@
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ password: password })
                 });
-                redirectToWelcome((data.auth && data.auth.token) || "");
+                redirectToWelcome();
             } catch (error) {
                 setBanner(error.message);
             }

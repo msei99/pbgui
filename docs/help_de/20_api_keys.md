@@ -34,6 +34,8 @@ Zeigt alle Einträge aus `api-keys.json`.
 - **Tastaturnavigation** — ArrowDown aus dem Filterfeld wählt die erste Zeile; ArrowUp/ArrowDown navigiert zwischen Zeilen; Enter öffnet den gewählten User
 - **In Use-Badge** — wird angezeigt, wenn der User einem laufenden Bot zugeordnet ist
 
+Benutzernamen werden strikt als Text gerendert und Zeilenaktionen verwenden delegierte Browser-Events. Aus Backups oder Cluster Sync importierte Namen koennen daher nicht als Seiten-Markup oder JavaScript interpretiert werden; Zeilenklick, Tastaturnavigation, Edit und Delete funktionieren unveraendert.
+
 ### Ablauf-Spalten
 
 - **HL Expiry** — zeigt verbleibende Tage / Ablaufdatum für Hyperliquid-User (aus lokalem Cache, kein API-Call); sortierbar aufsteigend (nächster Ablauf zuerst)
@@ -84,6 +86,8 @@ Beide Buttons verwenden die **aktuell eingegebenen Credentials** aus dem Formula
 
 - **Check Expiry** (HL / Bybit) — Ergebnis ist eine Vorschau; erst nach Save persistent
 - **Test Connection** — testet die Verbindung live; verwendet ebenfalls ungespeicherte Credentials
+
+Ungespeicherte Hyperliquid Private Keys fuer **Check Expiry** werden ausschliesslich im Body eines authentifizierten POST-Requests uebertragen. Sie werden nie an die Request-URL angehaengt; Pruefungen ohne ungespeicherten Override verwenden weiterhin den gespeicherten Key.
 
 ---
 

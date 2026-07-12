@@ -9,6 +9,7 @@ All endpoints require auth (Bearer token).
 from __future__ import annotations
 
 import json
+from functools import wraps
 import threading
 import time
 import traceback
@@ -31,11 +32,23 @@ from api_key_state import (
     update_user_state,
 )
 from logging_helpers import human_log as _log
+from file_lock import advisory_file_lock
 from pbgui_purefunc import PBGDIR as _PBGDIR
 
 SERVICE = "ApiKeys"
 
 router = APIRouter()
+
+
+def _serialized_api_keys_write(func):
+    """Hold the API-key transaction lock across load, validation, and save."""
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        lock_target = _Path(_PBGDIR) / "data" / "api-keys" / ".write"
+        with advisory_file_lock(lock_target):
+            return func(*args, **kwargs)
+
+    return wrapped
 
 # ── Pydantic models ───────────────────────────────────────────
 
@@ -101,6 +114,11 @@ class TestOverride(BaseModel):
     secret: Optional[str] = None
     passphrase: Optional[str] = None
     wallet_address: Optional[str] = None
+    private_key: Optional[str] = None
+
+
+class HLExpiryOverride(BaseModel):
+    """Optional unsaved private key used only for an expiry preview."""
     private_key: Optional[str] = None
 
 
@@ -688,13 +706,14 @@ def list_backups(
 
 
 @router.post("/backups/restore")
+@_serialized_api_keys_write
 def restore_backup(
     filename: str = Body(..., embed=True),
     session: SessionToken = Depends(require_auth),
 ) -> dict:
     """Restore api-keys.json from a backup file. Creates a pre-restore snapshot first."""
-    import shutil
     from datetime import datetime
+    from secure_files import copy_private_file, ensure_private_directory
 
     # Security: prevent path traversal and unknown file patterns
     if "/" in filename or "\\" in filename or ".." in filename:
@@ -705,6 +724,7 @@ def restore_backup(
         raise HTTPException(status_code=400, detail="Invalid backup filename")
 
     backup_dir = _Path(_PBGDIR) / "data" / "api-keys"
+    ensure_private_directory(backup_dir)
     backup_file = backup_dir / filename
     if not backup_file.exists():
         raise HTTPException(status_code=404, detail=f"Backup file not found: {filename}")
@@ -720,8 +740,8 @@ def restore_backup(
             raise HTTPException(status_code=400, detail="pb7 is not installed/configured")
         target_path = _Path(pb7dir()) / "api-keys.json"
         if target_path.exists():
-            shutil.copy(target_path, backup_dir / f"api-keys7_pre-restore_{date}.json")
-        shutil.copy(backup_file, target_path)
+            copy_private_file(target_path, backup_dir / f"api-keys7_pre-restore_{date}.json")
+        copy_private_file(backup_file, target_path)
         restored_to.append("pb7")
 
     _log(SERVICE, f"Restored api-keys.json ({restored_to[0]}) from backup: {filename}")
@@ -810,6 +830,7 @@ def get_user(
 
 
 @router.post("/")
+@_serialized_api_keys_write
 def create_user(
     name: str = Body(..., embed=True),
     data: UserCreateUpdate = Body(..., embed=True),
@@ -864,6 +885,7 @@ def create_user(
 
 
 @router.put("/{name}")
+@_serialized_api_keys_write
 def update_user(
     data: UserCreateUpdate,
     name: str = PathParam(..., description="User name"),
@@ -942,6 +964,7 @@ class RenameRequest(BaseModel):
 
 
 @router.patch("/{name}/rename")
+@_serialized_api_keys_write
 def rename_user(
     data: RenameRequest,
     name: str = PathParam(..., description="Current user name"),
@@ -987,6 +1010,7 @@ def rename_user(
 
 
 @router.delete("/{name}")
+@_serialized_api_keys_write
 def delete_user(
     name: str = PathParam(..., description="User name"),
     session: SessionToken = Depends(require_auth),
@@ -1142,17 +1166,8 @@ def test_connection(
     return result
 
 
-@router.get("/{name}/hl-expiry")
-def get_hl_expiry_single(
-    name: str = PathParam(..., description="User name"),
-    private_key: Optional[str] = Query(None, description="Override private key (unsaved, not persisted)"),
-    session: SessionToken = Depends(require_auth),
-) -> HLExpiryInfo:
-    """Fetch Hyperliquid API key expiry from exchange API.
-
-    If private_key is supplied it overrides the persisted key and the result
-    is NOT written to disk (preview-only for verifying a new key before saving).
-    """
+def _get_hl_expiry_for_user(name: str, private_key: Optional[str] = None) -> HLExpiryInfo:
+    """Check one user's saved key or an unsaved preview override."""
     users = _get_users()
     user = users.find_user(name)
     if not user:
@@ -1169,6 +1184,25 @@ def get_hl_expiry_single(
         return _check_hl_expiry_single(user_copy, users_obj=None)
 
     return _check_hl_expiry_single(user, users_obj=users)
+
+
+@router.get("/{name}/hl-expiry")
+def get_hl_expiry_single(
+    name: str = PathParam(..., description="User name"),
+    session: SessionToken = Depends(require_auth),
+) -> HLExpiryInfo:
+    """Fetch Hyperliquid API key expiry using the persisted private key."""
+    return _get_hl_expiry_for_user(name)
+
+
+@router.post("/{name}/hl-expiry")
+def preview_hl_expiry_single(
+    override: Optional[HLExpiryOverride] = Body(None),
+    name: str = PathParam(..., description="User name"),
+    session: SessionToken = Depends(require_auth),
+) -> HLExpiryInfo:
+    """Preview Hyperliquid expiry with an unsaved private key in the request body."""
+    return _get_hl_expiry_for_user(name, override.private_key if override else None)
 
 
 @router.get("/{name}/bybit-expiry")
@@ -1213,6 +1247,7 @@ def list_comments(
 
 
 @router.post("/comments/list")
+@_serialized_api_keys_write
 def create_comment(
     field: CommentField,
     session: SessionToken = Depends(require_auth),
@@ -1239,6 +1274,7 @@ def create_comment(
 
 
 @router.put("/comments/list/{key}")
+@_serialized_api_keys_write
 def update_comment(
     key: str = PathParam(..., description="Comment key"),
     value: str = Body(..., embed=True),
@@ -1257,6 +1293,7 @@ def update_comment(
 
 
 @router.delete("/comments/list/{key}")
+@_serialized_api_keys_write
 def delete_comment(
     key: str = PathParam(..., description="Comment key"),
     session: SessionToken = Depends(require_auth),
@@ -1340,6 +1377,7 @@ def get_tradfi_config(
 
 
 @router.put("/tradfi/config")
+@_serialized_api_keys_write
 def update_tradfi_config(
     config: TradFiConfig,
     session: SessionToken = Depends(require_auth),
@@ -1368,6 +1406,7 @@ def update_tradfi_config(
 
 
 @router.delete("/tradfi/config")
+@_serialized_api_keys_write
 def clear_tradfi_config(
     session: SessionToken = Depends(require_auth),
 ) -> dict:

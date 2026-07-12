@@ -32,7 +32,10 @@ TARGET_PASSWORD="${TARGET_PASSWORD:-}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-}"
 HOSTNAME="${HOSTNAME:-pbgui-master}"
 SWAP_SIZE="${SWAP_SIZE:-6G}"
-PBG_PASSWORD="${PBGUI_PASSWORD:-PBGui\$Bot!}"
+PBG_PASSWORD="${PBGUI_PASSWORD:-}"
+if [[ -z "$PBG_PASSWORD" ]]; then
+  PBG_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(18))')"
+fi
 PBG_BIND="${PBGUI_BIND_HOST:-0.0.0.0}"
 PBG_PORT="${PBGUI_PORT:-8000}"
 OPENVPN_CIDR="${OPENVPN_CIDR:-10.8.0.0/24}"
@@ -262,21 +265,28 @@ cfg['main'] = {
 cfg['api_server'] = {'host': bind_host, 'port': port}
 cfg['coinmarketcap'] = {'api_key': os.environ.get('COINMARKETCAP_API_KEY', ''), 'fetch_limit': '1000', 'fetch_interval': '4'}
 tmp = path + '.tmp'
-with open(tmp, 'w', encoding='utf-8') as handle:
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, 'w', encoding='utf-8') as handle:
     cfg.write(handle)
 os.replace(tmp, path)
 PY
 chown "$TARGET_USER:$TARGET_GROUP" "$INSTALL_DIR/pbgui/pbgui.ini"
+chmod 600 "$INSTALL_DIR/pbgui/pbgui.ini"
 PBG_PASSWORD_ENV="$PBG_PASSWORD" python3 - "$INSTALL_DIR/pbgui/data/auth/secrets.toml" <<'PY'
 import os, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 path.parent.mkdir(parents=True, exist_ok=True)
-password = os.environ.get('PBG_PASSWORD_ENV', 'PBGui$Bot!').replace('\\', '\\\\').replace('"', '\\"')
+path.parent.chmod(0o700)
+password = os.environ['PBG_PASSWORD_ENV'].replace('\\', '\\\\').replace('"', '\\"')
 tmp = path.with_suffix('.tmp')
-tmp.write_text(f'password = "{password}"\n', encoding='utf-8')
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+    handle.write(f'auth_mode = "password"\npassword = "{password}"\n')
 tmp.replace(path)
 PY
 chown -R "$TARGET_USER:$TARGET_GROUP" "$INSTALL_DIR/pbgui/data/auth"
+chmod 700 "$INSTALL_DIR/pbgui/data/auth"
+chmod 600 "$INSTALL_DIR/pbgui/data/auth/secrets.toml"
 
 info "Setting up OpenVPN and TOTP..."
 SERVER_NAME="$HOSTNAME"

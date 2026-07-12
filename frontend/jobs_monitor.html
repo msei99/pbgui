@@ -500,9 +500,8 @@
     <script>
         const API_BASE = window.location.origin + '/api';
         
-        // Extract token and exchange filter from URL query parameters
+        // Browser authentication is carried by the same-origin session cookie.
         const urlParams = new URLSearchParams(window.location.search);
-        const API_TOKEN = urlParams.get('token');
         const EMBED_MODE = urlParams.get('embed') === '1';
         const EXCHANGE_FILTER = (urlParams.get('exchange') || '').trim().toLowerCase();
         const JOB_TYPE_FILTER = (urlParams.get('job_type') || '').trim().toLowerCase();
@@ -511,8 +510,7 @@
             return {
                 ...options,
                 headers: {
-                    ...(options.headers || {}),
-                    'Authorization': `Bearer ${API_TOKEN || ''}`
+                    ...(options.headers || {})
                 }
             };
         }
@@ -609,13 +607,8 @@
             void _;
         }
         
-        if (!API_TOKEN) {
-            document.body.innerHTML = '<div style="padding:40px;text-align:center;color:#ff4b4b;">Error: No authentication token provided</div>';
-            throw new Error('Missing token');
-        }
-        
         const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const WS_URL = `${wsProto}//${window.location.host}/ws/jobs?token=${API_TOKEN}`;
+        const WS_URL = `${wsProto}//${window.location.host}/ws/jobs`;
         
         let ws = null;
         let currentTab = 'running';
@@ -631,10 +624,10 @@
 
         function logUiNotification(message, type) {
             const text = String(message == null ? '' : message).trim();
-            if (!text || !API_TOKEN) return;
+            if (!text) return;
             fetch('/api/notify_log', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + API_TOKEN },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ msg: text, level: type || 'info' })
             }).catch(function () {});
         }
@@ -848,6 +841,8 @@
             const pct = calculateProgress(progress);
             const coin = progress.coin || '';
             const chunk = progress.chunk_start ? `${progress.chunk_start}→${progress.chunk_end}` : '';
+            const jobId = String(job.id || '');
+            const jobIdAttr = escapeAttr(jobId);
             const isExpanded = expandedJobs.has(job.id);
             const durationStr = formatJobDuration(job);
             
@@ -873,22 +868,22 @@
                 <div class="job-card">
                     <div class="job-header">
                         <div class="job-info">
-                            <strong class="job-id">${job.id}</strong>
-                            <span class="badge ${statusClass}">${job.status}</span>
-                            <span class="job-type">${job.type}</span>
-                            ${durationStr ? `<span class="detail" style="color:#8899aa;">${durationStr}</span>` : ''}
+                            <strong class="job-id">${escapeHtml(jobId)}</strong>
+                            <span class="badge ${statusClass}">${escapeHtml(job.status || '')}</span>
+                            <span class="job-type">${escapeHtml(job.type || '')}</span>
+                            ${durationStr ? `<span class="detail" style="color:#8899aa;">${escapeHtml(durationStr)}</span>` : ''}
                         </div>
                         <div class="job-actions">
-                            ${job.status === 'pending' ? `<button class="btn btn-run" onclick="runJob('${job.id}')">Run</button>` : ''}
-                            <button class="btn btn-view" onclick="showJobDetails('${job.id}')">View</button>
-                            <button class="btn btn-info" onclick="showLog('${job.id}')">Log</button>
-                            <button class="btn btn-danger" onclick="cancelJob('${job.id}')">Cancel</button>
+                            ${job.status === 'pending' ? `<button class="btn btn-run" data-job-action="run" data-job-id="${jobIdAttr}">Run</button>` : ''}
+                            <button class="btn btn-view" data-job-action="view" data-job-id="${jobIdAttr}">View</button>
+                            <button class="btn btn-info" data-job-action="log" data-job-id="${jobIdAttr}">Log</button>
+                            <button class="btn btn-danger" data-job-action="cancel" data-job-id="${jobIdAttr}">Cancel</button>
                         </div>
                     </div>
                     <div class="job-details">
-                        ${coin ? `<span class="detail">Coin: ${coin}</span>` : ''}
-                        ${chunk ? `<span class="detail">Chunk: ${chunk}</span>` : ''}
-                        <span class="detail">Updated: ${formatTimestamp(job.updated_ts)}</span>
+                        ${coin ? `<span class="detail">Coin: ${escapeHtml(coin)}</span>` : ''}
+                        ${chunk ? `<span class="detail">Chunk: ${escapeHtml(chunk)}</span>` : ''}
+                        <span class="detail">Updated: ${escapeHtml(formatTimestamp(job.updated_ts))}</span>
                     </div>
                     <div class="progress-bar">
                         <div class="progress-fill" style="width: ${pct}%">
@@ -897,21 +892,21 @@
                     </div>
                     ${total > 0 ? `
                         <div class="progress-details">
-                            <span class="detail">Step: ${step}/${total}</span>
-                            ${chunkTotal > 0 ? `<span class="detail">Chunk: ${chunkDone}/${chunkTotal}</span>` : ''}
-                            ${stage ? `<span class="detail">Stage: ${stage}</span>` : ''}
-                            ${mode ? `<span class="detail">Mode: ${mode}</span>` : ''}
+                            <span class="detail">Step: ${escapeHtml(String(step))}/${escapeHtml(String(total))}</span>
+                            ${chunkTotal > 0 ? `<span class="detail">Chunk: ${escapeHtml(String(chunkDone))}/${escapeHtml(String(chunkTotal))}</span>` : ''}
+                            ${stage ? `<span class="detail">Stage: ${escapeHtml(stage)}</span>` : ''}
+                            ${mode ? `<span class="detail">Mode: ${escapeHtml(mode)}</span>` : ''}
                         </div>
                     ` : ''}
                     ${(downloaded + skipped + failed > 0) ? `
                         <div class="job-expander">
-                            <button class="expander-toggle" onclick="toggleExpander('${job.id}', event)">
+                            <button class="expander-toggle" data-job-action="toggle" data-job-id="${jobIdAttr}">
                                 ${isExpanded ? '▼' : '▶'} Details
                             </button>
-                            <div class="expander-content ${isExpanded ? 'open' : ''}" id="expander-${job.id}">
-                                <div class="detail-row"><strong>Downloads:</strong> ${downloaded} files (${dlBytes})</div>
-                                <div class="detail-row"><strong>Skipped:</strong> ${skipped} files (${skBytes})</div>
-                                <div class="detail-row"><strong>Failed:</strong> ${failed} files (${flBytes})</div>
+                            <div class="expander-content ${isExpanded ? 'open' : ''}" data-expander-job-id="${jobIdAttr}">
+                                <div class="detail-row"><strong>Downloads:</strong> ${escapeHtml(String(downloaded))} files (${escapeHtml(dlBytes)})</div>
+                                <div class="detail-row"><strong>Skipped:</strong> ${escapeHtml(String(skipped))} files (${escapeHtml(skBytes)})</div>
+                                <div class="detail-row"><strong>Failed:</strong> ${escapeHtml(String(failed))} files (${escapeHtml(flBytes)})</div>
                             </div>
                         </div>
                     ` : ''}
@@ -951,6 +946,8 @@
             const hasStats = (downloaded + skipped + failed) > 0;
 
             const durationStr = formatJobDuration(job);
+            const jobId = String(job.id || '');
+            const jobIdAttr = escapeAttr(jobId);
 
             const isExpanded = expandedJobs.has(job.id);
             const downloaderDetails = renderDownloaderDetails(job, { compact: true, open: expandedDownloaderJobs.has(job.id) });
@@ -959,35 +956,35 @@
                 <div class="job-card simple">
                     <div class="job-header">
                         <div class="job-info">
-                            <strong class="job-id">${job.id}</strong>
-                            <span class="job-type">${job.type}</span>
-                            ${durationStr ? `<span class="detail" style="color:#8899aa;">${durationStr}</span>` : ''}
+                            <strong class="job-id">${escapeHtml(jobId)}</strong>
+                            <span class="job-type">${escapeHtml(job.type || '')}</span>
+                            ${durationStr ? `<span class="detail" style="color:#8899aa;">${escapeHtml(durationStr)}</span>` : ''}
                         </div>
                         <div class="job-actions">
-                            <button class="btn btn-view" onclick="showJobDetails('${job.id}')">View</button>
-                            <button class="btn btn-info" onclick="showLog('${job.id}')">Log</button>
-                            ${isFailed ? `<button class="btn btn-secondary" onclick="retryJob('${job.id}')">Retry</button>` : ''}
-                            ${isDone ? `<button class="btn btn-secondary" onclick="requeueJob('${job.id}')">Requeue</button>` : ''}
-                            <button class="btn btn-danger" onclick="deleteJob('${job.id}')">Delete</button>
+                            <button class="btn btn-view" data-job-action="view" data-job-id="${jobIdAttr}">View</button>
+                            <button class="btn btn-info" data-job-action="log" data-job-id="${jobIdAttr}">Log</button>
+                            ${isFailed ? `<button class="btn btn-secondary" data-job-action="retry" data-job-id="${jobIdAttr}">Retry</button>` : ''}
+                            ${isDone ? `<button class="btn btn-secondary" data-job-action="requeue" data-job-id="${jobIdAttr}">Requeue</button>` : ''}
+                            <button class="btn btn-danger" data-job-action="delete" data-job-id="${jobIdAttr}">Delete</button>
                         </div>
                     </div>
                     <div class="job-details">
-                        <span class="detail">${formatTimestamp(job.updated_ts)}</span>
-                        ${rangeStr ? `<span class="detail" style="margin-left:0.8rem;">Range: ${rangeStr}</span>` : ''}
+                        <span class="detail">${escapeHtml(formatTimestamp(job.updated_ts))}</span>
+                        ${rangeStr ? `<span class="detail" style="margin-left:0.8rem;">Range: ${escapeHtml(rangeStr)}</span>` : ''}
                     </div>
-                    ${job.error ? `<div class="job-error" style="margin-top:0.5rem;color:#ef4444;font-size:var(--fs-sm);">${job.error}</div>` : ''}
+                    ${job.error ? `<div class="job-error" style="margin-top:0.5rem;color:#ef4444;font-size:var(--fs-sm);">${escapeHtml(job.error)}</div>` : ''}
                     ${(hasStats || coinPreview) ? `
                         <div class="job-expander">
-                            <button class="expander-toggle" onclick="toggleExpander('${job.id}', event)">
+                            <button class="expander-toggle" data-job-action="toggle" data-job-id="${jobIdAttr}">
                                 ${isExpanded ? '▼' : '▶'} Details
                             </button>
-                            <div class="expander-content ${isExpanded ? 'open' : ''}" id="expander-${job.id}">
-                                ${coinPreview ? `<div class="detail-row"><strong>Coins:</strong> ${coinPreview}</div>` : ''}
+                            <div class="expander-content ${isExpanded ? 'open' : ''}" data-expander-job-id="${jobIdAttr}">
+                                ${coinPreview ? `<div class="detail-row"><strong>Coins:</strong> ${escapeHtml(coinPreview)}</div>` : ''}
                                 ${payload.only_missing_1m_src_hours !== undefined ? `<div class="detail-row"><strong>Only missing 1m_src hours:</strong> ${payload.only_missing_1m_src_hours ? 'Yes' : 'No'}</div>` : ''}
                                 ${hasStats ? `
-                                    <div class="detail-row"><strong>Downloaded:</strong> ${downloaded} files (${dlBytes})</div>
-                                    <div class="detail-row"><strong>Skipped:</strong> ${skipped} files (${skBytes})</div>
-                                    <div class="detail-row"><strong>Failed:</strong> ${failed} files (${flBytes})</div>
+                                    <div class="detail-row"><strong>Downloaded:</strong> ${escapeHtml(String(downloaded))} files (${escapeHtml(dlBytes)})</div>
+                                    <div class="detail-row"><strong>Skipped:</strong> ${escapeHtml(String(skipped))} files (${escapeHtml(skBytes)})</div>
+                                    <div class="detail-row"><strong>Failed:</strong> ${escapeHtml(String(failed))} files (${escapeHtml(flBytes)})</div>
                                 ` : ''}
                             </div>
                         </div>
@@ -1212,7 +1209,7 @@
                             <div class="downloader-name">${escapeHtml(row.host)}</div>
                             <span class="downloader-badge${statusClass}">${escapeHtml(badge)}</span>
                         </div>
-                        <div class="downloader-meter" title="${escapeHtml(formatBytes(row.payloadBytes))}">
+                        <div class="downloader-meter" title="${escapeAttr(formatBytes(row.payloadBytes))}">
                             <div class="downloader-meter-fill${score > 0 ? '' : ' empty'}" style="width:${score > 0 ? pct : 100}%"></div>
                         </div>
                         <div class="downloader-stats">
@@ -1222,7 +1219,7 @@
                             <div title="Chunks assigned; default is 30d per coin."><span class="downloader-stat-label">Segments</span><span class="downloader-stat-value">${escapeHtml(formatCount(row.segments))}</span></div>
                             <div title="Unique 1m candles written, in days."><span class="downloader-stat-label">Written</span><span class="downloader-stat-value">${escapeHtml(formatDaysFromMinutes(row.minutesWritten))} days</span></div>
                             <div title="Downloader state."><span class="downloader-stat-label">Status</span><span class="downloader-stat-value">${escapeHtml(row.status || 'active')}</span></div>
-                            ${currentText ? `<div class="downloader-current" title="${escapeHtml(currentText)}">Current: ${escapeHtml(currentText)}</div>` : ''}
+                            ${currentText ? `<div class="downloader-current" title="${escapeAttr(currentText)}">Current: ${escapeHtml(currentText)}</div>` : ''}
                         </div>
                     </div>
                 `;
@@ -1233,10 +1230,10 @@
             const hint = totalPayload + totalRows + totalPages + totalSegments > 0
                 ? ''
                 : '<div class="details-empty" style="padding:0 0.9rem 0.9rem;">No per-downloader contribution has been recorded for this job yet.' + (hasLogFallback ? ' The log did not contain segment summary lines.' : ' New distributed Bitget runs fill these cards live.') + '</div>';
-            const jobId = String(options.jobId || (job && job.id) || '').replace(/'/g, "\\'");
-            const toggleAttr = jobId ? ` ontoggle="rememberDownloaderDetails('${jobId}', this.open)"` : '';
+            const jobId = String(options.jobId || (job && job.id) || '');
+            const jobAttr = jobId ? ` data-downloader-job-id="${escapeAttr(jobId)}"` : '';
             return `
-                <details class="downloader-details"${toggleAttr} ${options.open ? 'open' : ''}>
+                <details class="downloader-details"${jobAttr} ${options.open ? 'open' : ''}>
                     <summary><span>${title}</span><span class="downloader-total">${escapeHtml(totalText)}</span></summary>
                     ${hint}
                     <div class="downloader-grid">${cards}</div>
@@ -1298,8 +1295,10 @@
 
         function toggleExpander(jobId, event) {
             event.stopPropagation();
-            const content = document.getElementById(`expander-${jobId}`);
-            const btn = event.target;
+            const btn = event.target.closest('[data-job-action="toggle"]');
+            const expander = btn ? btn.closest('.job-expander') : null;
+            const content = expander ? expander.querySelector('.expander-content') : null;
+            if (!btn || !content) return;
             if (content.classList.contains('open')) {
                 content.classList.remove('open');
                 btn.textContent = '▶ Details';
@@ -1514,8 +1513,17 @@
 
         function escapeHtml(text) {
             const div = document.createElement('div');
-            div.textContent = text;
+            div.textContent = String(text == null ? '' : text);
             return div.innerHTML;
+        }
+
+        function escapeAttr(text) {
+            return String(text == null ? '' : text)
+                .split('&').join('&amp;')
+                .split('"').join('&quot;')
+                .split("'").join('&#39;')
+                .split('<').join('&lt;')
+                .split('>').join('&gt;');
         }
 
         function formatJsonBlock(value) {
@@ -1701,16 +1709,39 @@
                 filteredJobs.sort((a, b) => (b.updated_ts || 0) - (a.updated_ts || 0));
                 
                 if (filteredJobs.length === 0) {
-                    container.innerHTML = `<p class="no-jobs">No ${tab} jobs${EXCHANGE_FILTER ? ' for ' + EXCHANGE_FILTER : ''}.</p>`;
+                    container.innerHTML = `<p class="no-jobs">No ${escapeHtml(tab)} jobs${EXCHANGE_FILTER ? ' for ' + escapeHtml(EXCHANGE_FILTER) : ''}.</p>`;
                     return;
                 }
                 
                 container.innerHTML = filteredJobs.map(renderJob).join('');
             } catch (e) {
                 console.error(`Load ${tab} error:`, e);
-                container.innerHTML = `<p class="error">Failed to load ${tab} jobs.</p>`;
+                container.innerHTML = `<p class="error">Failed to load ${escapeHtml(tab)} jobs.</p>`;
             }
         }
+
+        function handleJobActionClick(e) {
+            const actionEl = e.target.closest('[data-job-action]');
+            if (!actionEl) return;
+            const action = actionEl.dataset.jobAction;
+            const jobId = actionEl.dataset.jobId || '';
+            if (action === 'run') runJob(jobId);
+            else if (action === 'view') showJobDetails(jobId);
+            else if (action === 'log') showLog(jobId);
+            else if (action === 'cancel') cancelJob(jobId);
+            else if (action === 'retry') retryJob(jobId);
+            else if (action === 'requeue') requeueJob(jobId);
+            else if (action === 'delete') deleteJob(jobId);
+            else if (action === 'toggle') toggleExpander(jobId, e);
+        }
+
+        function handleDownloaderToggle(e) {
+            const details = e.target.closest('details[data-downloader-job-id]');
+            if (details) rememberDownloaderDetails(details.dataset.downloaderJobId, details.open);
+        }
+
+        document.addEventListener('click', handleJobActionClick);
+        document.addEventListener('toggle', handleDownloaderToggle, true);
 
         // Close modal on outside click
         document.getElementById('log-modal').addEventListener('click', (e) => {

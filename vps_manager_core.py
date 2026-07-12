@@ -809,8 +809,11 @@ PY"""
 
         ssh = _strict_ssh_client()
         try:
+            ssh_host = str(self.hostname or self.ip)
+            ssh_port = int(self.firewall_ssh_port or 22)
             ssh.connect(
-                hostname=self.ip,
+                hostname=ssh_host,
+                port=ssh_port,
                 username=self.user,
                 password=self.user_pw,
                 timeout=timeout,

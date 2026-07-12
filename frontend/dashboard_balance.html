@@ -395,7 +395,7 @@
         if (!TOKEN || !API_HOST) return;
         clearTimeout(reconnTimer);
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
-        ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard?token=' + TOKEN);
+        ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard');
         window._dbBalanceWs = ws;
         ws.onopen    = function() { if (isStale()) { ws.close(); return; } reconnDelay = 1000; };
         ws.onmessage = function(evt) {

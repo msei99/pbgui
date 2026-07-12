@@ -6594,7 +6594,7 @@
     function connectWs() {
       clearTimeout(store.reconnectTimer);
       store.reconnectTimer = 0;
-      const url = WS_BASE + '/api/vps-manager/ws?token=' + encodeURIComponent(TOKEN);
+      const url = WS_BASE + '/api/vps-manager/ws';
       const ws = new WebSocket(url);
       store.ws = ws;
       ws.onopen = function () {
@@ -9258,8 +9258,11 @@
       for (let i = 0; i < parts.length; i++) {
         const ip = parts[i].trim();
         if (!ip) continue;
-        if (!isValidIPv4(ip)) {
-          return { ok: false, error: 'Invalid IPv4: ' + ip };
+        const cidrParts = ip.split('/');
+        const prefix = cidrParts.length === 2 ? cidrParts[1] : '';
+        const validPrefix = cidrParts.length === 1 || /^(?:[0-9]|[12][0-9]|3[0-2])$/.test(prefix);
+        if (cidrParts.length > 2 || !isValidIPv4(cidrParts[0]) || !validPrefix) {
+          return { ok: false, error: 'Invalid IPv4 or CIDR: ' + ip };
         }
       }
       return { ok: true, error: '' };

@@ -838,8 +838,7 @@ html, body {
     var url = API_BASE + '/dashboard/editor_page'
       + '?name='      + encodeURIComponent(name)
       + '&api_base='  + encodeURIComponent(API_BASE)
-      + '&view_only=1'
-      + '&token='     + encodeURIComponent(TOKEN);
+      + '&view_only=1';
     contentFrame.src = url;
     contentFrame.onload = function () {
       contentLoading.style.display = 'none';
@@ -859,8 +858,7 @@ html, body {
     var url = API_BASE + '/dashboard/editor_page'
       + '?name='       + encodeURIComponent(name || '')
       + '&api_base='   + encodeURIComponent(API_BASE)
-      + '&standalone=1'
-      + '&token='      + encodeURIComponent(TOKEN);
+      + '&standalone=1';
     contentFrame.src = url;
     contentFrame.onload = function () {
       contentLoading.style.display = 'none';
@@ -1285,8 +1283,7 @@ html, body {
   function openTemplates() {
     var url = API_BASE + '/dashboard/templates_page'
       + '?current='  + encodeURIComponent(currentDash)
-      + '&api_base=' + encodeURIComponent(API_BASE)
-      + '&token='    + encodeURIComponent(TOKEN);
+      + '&api_base=' + encodeURIComponent(API_BASE);
     tplIframe.src = url;
     tplOverlay.classList.add('visible');
   }

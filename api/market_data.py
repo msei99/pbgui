@@ -2904,7 +2904,6 @@ def get_inventory_ohlcv_chart(
                 "coin": actual_coin,
                 "start_day": str(start_day or "").strip(),
                 "end_day": str(end_day or "").strip(),
-                "token": session.token,
             }
         )
         lazy_url = f"{request.url_for('get_inventory_ohlcv_chart_layers')}?{lazy_query}"

@@ -954,7 +954,7 @@ let cpuHistoryRequestId = 0;
 
 // ── WebSocket ──────────────────────────────────────────────
 function connect() {
-  const url = WS_BASE + `/ws/vps?token=${TOKEN}`;
+  const url = WS_BASE + '/ws/vps';
   
   ws = new WebSocket(url);
   

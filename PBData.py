@@ -2486,59 +2486,50 @@ class PBData():
 
     async def _flush_price_buffer(self):
         """Snapshot buffer and flush via blocking batch DB call."""
+        lock = getattr(self, '_price_buffer_lock', None)
+        if lock is None:
+            self._price_buffer_lock = asyncio.Lock()
+            lock = self._price_buffer_lock
+        if hasattr(lock, '__aenter__'):
+            async with lock:
+                if not self._price_buffer:
+                    return
+                snapshot = [(uname, sym, ts, pr) for (uname, sym), (ts, pr) in self._price_buffer.items()]
+                self._price_buffer = {}
+        else:
+            with lock:
+                if not self._price_buffer:
+                    return
+                snapshot = [(uname, sym, ts, pr) for (uname, sym), (ts, pr) in self._price_buffer.items()]
+                self._price_buffer = {}
         try:
-            lock = getattr(self, '_price_buffer_lock', None)
-            if lock is None:
-                self._price_buffer_lock = asyncio.Lock()
-                lock = self._price_buffer_lock
+            await asyncio.to_thread(self._write_prices_batch_sync, snapshot)
+        except BaseException:
+            failed = {(uname, sym): (ts, pr) for uname, sym, ts, pr in snapshot}
             if hasattr(lock, '__aenter__'):
                 async with lock:
-                    if not self._price_buffer:
-                        return
-                    snapshot = [(uname, sym, ts, pr) for (uname, sym), (ts, pr) in self._price_buffer.items()]
-                    self._price_buffer = {}
+                    for key, value in failed.items():
+                        self._price_buffer.setdefault(key, value)
             else:
                 with lock:
-                    if not self._price_buffer:
-                        return
-                    snapshot = [(uname, sym, ts, pr) for (uname, sym), (ts, pr) in self._price_buffer.items()]
-                    self._price_buffer = {}
-            # Perform blocking DB batch write in thread
-            await asyncio.to_thread(self._write_prices_batch_sync, snapshot)
-        except Exception as e:
-            try:
-                _human_log('PBData', f"[price_writer] _flush_price_buffer error: {e}", level='ERROR')
-            except Exception:
-                pass
+                    for key, value in failed.items():
+                        self._price_buffer.setdefault(key, value)
+            raise
 
     def _write_prices_batch_sync(self, rows: list):
         """Blocking function run in thread to write batch rows to DB.
 
         rows: list of (user_name, symbol, timestamp, price)
         """
-        try:
-            # Database.batch_upsert_prices expects rows as (user, symbol, timestamp, price)
-            formatted = [(r[0], r[1], r[2], r[3]) for r in rows]
-            try:
-                # Use batch method if available
-                if hasattr(self.db, 'batch_upsert_prices'):
-                    self.db.batch_upsert_prices(formatted)
-                else:
-                    # Fallback: call upsert_price per row
-                    for user, symbol, ts, pr in formatted:
-                        try:
-                            u = self.users.find_user(user)
-                            if u:
-                                self.db.upsert_price(u, symbol, ts, pr)
-                        except Exception:
-                            pass
-            except Exception as e:
-                try:
-                    _human_log('PBData', f"[price_writer] DB batch write failed: {e}", level='ERROR')
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        # Database.batch_upsert_prices expects rows as (user, symbol, timestamp, price)
+        formatted = [(r[0], r[1], r[2], r[3]) for r in rows]
+        if hasattr(self.db, 'batch_upsert_prices'):
+            self.db.batch_upsert_prices(formatted)
+            return
+        for user, symbol, ts, pr in formatted:
+            u = self.users.find_user(user)
+            if u:
+                self.db.upsert_price(u, symbol, ts, pr)
 
     @property
     def fetch_users(self):

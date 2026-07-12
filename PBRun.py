@@ -1274,7 +1274,7 @@ class PBRun():
         high_mem = 0
         high_bot = None
         for v7 in self.run_v7:
-            mem = _memory_usage_bytes(v7.monitor.memory)
+            mem = _memory_usage_bytes(v7.memory)
             if mem > high_mem:
                 high_mem = mem
                 high_bot = v7

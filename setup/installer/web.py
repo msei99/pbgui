@@ -28,6 +28,7 @@ from .core import (
     default_remote_install_dir,
     default_target_user,
     detect_public_ip,
+    generate_pbgui_password,
     local_prerequisite_status,
     run_local_master_install,
     run_local_master_uninstall,
@@ -212,6 +213,7 @@ def _new_job(payload: dict) -> str:
 
 def _html() -> str:
     target_user = default_target_user()
+    pbgui_password = generate_pbgui_password()
     prereqs = local_prerequisite_status()
     missing_prereqs = [str(item) for item in prereqs.get("missing") or []]
     if missing_prereqs:
@@ -343,9 +345,10 @@ def _html() -> str:
       <input type="hidden" name="swap_size" id="swap-size-value" value="6G">
       <label class="install-only">PBGui login password
         <span class="password-wrap">
-          <input id="pbgui-password" name="pbgui_password" type="password" value="PBGui$Bot!" autocomplete="new-password">
+          <input id="pbgui-password" name="pbgui_password" type="password" value="%%PBGUI_PASSWORD%%" autocomplete="new-password">
           <button class="password-toggle" type="button" data-target="pbgui-password" aria-label="Show PBGui login password" aria-pressed="false">&#128065;</button>
         </span>
+        <span>Generated uniquely for this installation. Reveal and store it before starting.</span>
       </label>
       <label class="install-only">PBGui bind address <input name="pbgui_bind_host" id="pbgui-bind-host" value="0.0.0.0"></label>
       <label class="install-only">PBGui port <input name="pbgui_port" type="number" value="8000" min="1024" max="65535"></label>
@@ -869,7 +872,7 @@ form.addEventListener('submit', ev => {
 </script>
 </body>
 </html>
-""".replace("%%TARGET_USER%%", html.escape(target_user, quote=True)).replace("%%TARGET_USER_JSON%%", json.dumps(target_user)).replace("%%INSTALL_DIR%%", html.escape(default_remote_install_dir(target_user), quote=True)).replace("%%LOCAL_INSTALL_DIR_JSON%%", json.dumps(default_local_install_dir())).replace("%%LOCAL_MASTER_NAME_JSON%%", json.dumps(default_local_master_name())).replace("%%LOCAL_PREREQ_STATUS%%", local_prereq_status_html).replace("%%LOCAL_SUDO_PASSWORD_USEFUL_JSON%%", json.dumps(bool(prereqs.get("sudo_password_useful"))))
+""".replace("%%TARGET_USER%%", html.escape(target_user, quote=True)).replace("%%TARGET_USER_JSON%%", json.dumps(target_user)).replace("%%INSTALL_DIR%%", html.escape(default_remote_install_dir(target_user), quote=True)).replace("%%LOCAL_INSTALL_DIR_JSON%%", json.dumps(default_local_install_dir())).replace("%%LOCAL_MASTER_NAME_JSON%%", json.dumps(default_local_master_name())).replace("%%LOCAL_PREREQ_STATUS%%", local_prereq_status_html).replace("%%LOCAL_SUDO_PASSWORD_USEFUL_JSON%%", json.dumps(bool(prereqs.get("sudo_password_useful")))).replace("%%PBGUI_PASSWORD%%", html.escape(pbgui_password, quote=True))
 
 
 class InstallerHandler(BaseHTTPRequestHandler):

@@ -1573,8 +1573,7 @@ window.PBGUI_NAV_CONFIG = {
 
   function getWorkerMonitorUrl(item) {
     if (!item || !item.monitor_path) return '';
-    var sep = item.monitor_path.indexOf('?') === -1 ? '?' : '&';
-    return item.monitor_path + sep + 'token=' + encodeURIComponent(TOKEN);
+    return item.monitor_path;
   }
 
   function updateWorkerLog(item) {

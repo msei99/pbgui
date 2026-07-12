@@ -1792,7 +1792,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   function buildBacktestMainPageUrl(extraParams) {
     var base = window.location.origin + '/api/backtest-v7/main_page';
     var params = new URLSearchParams();
-    params.set('token', TOKEN);
     Object.keys(extraParams || {}).forEach(function(key) {
       var value = extraParams[key];
       if (value != null && value !== '') params.set(key, String(value));
@@ -1803,7 +1802,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   function buildOptimizeMainPageUrl(extraParams) {
     var base = window.location.origin + '/api/optimize-v7/main_page';
     var params = new URLSearchParams();
-    params.set('token', TOKEN);
     Object.keys(extraParams || {}).forEach(function(key) {
       var value = extraParams[key];
       if (value != null && value !== '') params.set(key, String(value));
@@ -4356,7 +4354,6 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     el('btn-back-optimize').addEventListener('click', function() {
       var target = window.location.origin + '/api/optimize-v7/main_page';
       var params = new URLSearchParams();
-      params.set('token', TOKEN);
       params.set('panel', 'results');
       window.location.href = target + '?' + params.toString() + '#results';
     });

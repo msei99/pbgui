@@ -291,8 +291,10 @@ class Passphrase(Enum):
 class Exchange:
     # Shared ccxt.pro websocket clients per exchange id
     _shared_ws_clients = {}
+    _shared_ws_owners = {}
     # Per-user private websocket clients keyed by "<exchange>:<user.name>"
     _private_ws_clients = {}
+    _private_ws_owners = {}
     # Track which exchanges have successfully loaded markets for shared ws clients
     _shared_ws_markets_loaded = set()
     # Per-exchange async locks to serialize shared ws client initialization
@@ -403,7 +405,7 @@ class Exchange:
                 _log('Exchange', f'Error closing exchange {self.id}: {e}', level='debug')
 
     @classmethod
-    async def get_shared_ws_client(cls, id: str, user: User = None):
+    async def get_shared_ws_client(cls, id: str, user: User = None, caller: str = None):
         """Return a shared ccxt.pro client per (exchange id, api key).
 
         Markets are loaded once per shared client to avoid excessive load_markets
@@ -413,10 +415,12 @@ class Exchange:
         import asyncio as _asyncio
         key = "kucoinfutures" if id == "kucoin" else id
         uname = getattr(user, 'name', None)
+        owner = str(caller or "__process__")
 
         # Fast path: client already initialized and markets loaded
         client = cls._shared_ws_clients.get(key)
         if client is not None and key in cls._shared_ws_markets_loaded:
+            cls._shared_ws_owners.setdefault(key, set()).add(owner)
             return client
 
         # Ensure one async lock per exchange key
@@ -428,6 +432,7 @@ class Exchange:
             # Re-check inside lock in case another task finished while we were waiting
             client = cls._shared_ws_clients.get(key)
             if client is not None and key in cls._shared_ws_markets_loaded:
+                cls._shared_ws_owners.setdefault(key, set()).add(owner)
                 return client
             ex_id = "kucoinfutures" if id == "kucoin" else id
             if not hasattr(ccxt_pro, ex_id):
@@ -486,6 +491,7 @@ class Exchange:
                         await asyncio.to_thread(ex.load_markets)
                     cls._shared_ws_clients[key] = ex
                     cls._shared_ws_markets_loaded.add(key)
+                    cls._shared_ws_owners.setdefault(key, set()).add(owner)
                     try:
                         _log(
                             'Exchange',
@@ -547,10 +553,12 @@ class Exchange:
             return None
         base_key = "kucoinfutures" if id == "kucoin" else id
         key = f"{base_key}:{user.name}"
+        owner = str(caller or "__process__")
 
         # Fast path
         client = cls._private_ws_clients.get(key)
         if client is not None:
+            cls._private_ws_owners.setdefault(key, set()).add(owner)
             return client
 
         # Ensure one async lock per exchange to serialize creation attempts
@@ -566,6 +574,7 @@ class Exchange:
             # Re-check fast path inside creation lock
             client = cls._private_ws_clients.get(key)
             if client is not None:
+                cls._private_ws_owners.setdefault(key, set()).add(owner)
                 return client
 
             # Ensure one async lock per private key
@@ -576,6 +585,7 @@ class Exchange:
             async with lock:
                 client = cls._private_ws_clients.get(key)
                 if client is not None:
+                    cls._private_ws_owners.setdefault(key, set()).add(owner)
                     return client
                 ex_id = "kucoinfutures" if id == "kucoin" else id
                 # Enforce per-exchange private-ws client caps to avoid resource
@@ -671,6 +681,7 @@ class Exchange:
                         pass
 
                     cls._private_ws_clients[key] = ex
+                    cls._private_ws_owners.setdefault(key, set()).add(owner)
                     return ex
                 finally:
                     # Always remove in-flight marker so counts remain correct
@@ -730,6 +741,8 @@ class Exchange:
             for k in to_close:
                 try:
                     client = cls._private_ws_clients.pop(k, None)
+                    cls._private_ws_owners.pop(k, None)
+                    cls._private_ws_locks.pop(k, None)
                     if client:
                         try:
                             await client.close()
@@ -754,11 +767,59 @@ class Exchange:
         """Close and remove the shared ws client for an exchange id."""
         base_key = "kucoinfutures" if id == "kucoin" else id
         client = cls._shared_ws_clients.pop(base_key, None)
+        cls._shared_ws_owners.pop(base_key, None)
+        cls._shared_ws_markets_loaded.discard(base_key)
+        cls._shared_ws_locks.pop(base_key, None)
         if client:
             try:
                 await client.close()
             except Exception:
                 pass
+
+    @classmethod
+    async def release_shared_ws_client(cls, id: str, caller: str = None):
+        """Release one owner and close the shared client after its last owner leaves."""
+        base_key = "kucoinfutures" if id == "kucoin" else id
+        owner = str(caller or "__process__")
+        owners = cls._shared_ws_owners.get(base_key)
+        if owners:
+            owners.discard(owner)
+            if owners:
+                return False
+        client = cls._shared_ws_clients.pop(base_key, None)
+        cls._shared_ws_owners.pop(base_key, None)
+        cls._shared_ws_markets_loaded.discard(base_key)
+        cls._shared_ws_locks.pop(base_key, None)
+        if client:
+            try:
+                await client.close()
+            except Exception:
+                pass
+        return client is not None
+
+    @classmethod
+    async def release_private_ws_client(cls, id: str, user: User, caller: str = None):
+        """Release one owner and close the private client after its last owner leaves."""
+        if not user:
+            return False
+        base_key = "kucoinfutures" if id == "kucoin" else id
+        key = f"{base_key}:{user.name}"
+        owner = str(caller or "__process__")
+        owners = cls._private_ws_owners.get(key)
+        if owners:
+            owners.discard(owner)
+            if owners:
+                return False
+        client = cls._private_ws_clients.pop(key, None)
+        cls._private_ws_owners.pop(key, None)
+        cls._private_ws_locks.pop(key, None)
+        if client:
+            try:
+                await client.close()
+            except Exception:
+                pass
+            _notify_private_client_closed(base_key, user.name)
+        return client is not None
 
     @classmethod
     async def close_all_ws_clients(cls):
@@ -779,6 +840,8 @@ class Exchange:
                     _notify_private_client_closed(exch, uname)
                 except Exception:
                     pass
+        cls._private_ws_owners.clear()
+        cls._private_ws_locks.clear()
         # Close shared clients
         keys = list(cls._shared_ws_clients.keys())
         for k in keys:
@@ -788,6 +851,9 @@ class Exchange:
                     await client.close()
                 except Exception:
                     pass
+        cls._shared_ws_owners.clear()
+        cls._shared_ws_markets_loaded.clear()
+        cls._shared_ws_locks.clear()
 
     @classmethod
     def get_client_metrics(cls):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import select
@@ -14,6 +15,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from hyperliquid_aws import (
@@ -285,6 +287,89 @@ def _hours_missing_in_1m_src(*, coin: str, day: str) -> list[int]:
     return out
 
 
+class _DbSyncProgress:
+    """Persist DB Sync progress in the shared task job file."""
+
+    def __init__(self, job_path: Path, total: int) -> None:
+        self.job_path = job_path
+        self.total = max(1, int(total))
+        self.completed = 0
+        self.current = "Queued"
+        self.steps: list[dict[str, Any]] = []
+        self._publish()
+
+    def _publish(self) -> None:
+        update_job_file(
+            self.job_path,
+            mutate=lambda obj: obj.update(
+                {
+                    "progress": {
+                        "total": self.total,
+                        "completed": self.completed,
+                        "current": self.current,
+                        "steps": list(self.steps),
+                    }
+                }
+            ),
+        )
+        if _is_cancel_requested(self.job_path):
+            raise RuntimeError("cancelled")
+
+    def set_current(self, label: str) -> None:
+        self.current = str(label)
+        self._publish()
+
+    def advance(self, label: str, detail: Any = None) -> None:
+        self.completed = min(self.total, self.completed + 1)
+        self.current = str(label)
+        self.steps.append({"label": self.current, "detail": detail, "completed": self.completed, "total": self.total})
+        self._publish()
+
+
+def _run_db_sync(job_path: Path, payload: dict[str, Any]) -> None:
+    """Execute one DB Sync with a worker-owned short-lived SSH pool."""
+    from api import db_tools
+    from master.async_pool import AsyncSSHPool
+
+    job = payload.get("job") if isinstance(payload.get("job"), dict) else {}
+    if not job:
+        raise ValueError("DB Sync job snapshot is missing")
+    progress = _DbSyncProgress(job_path, int(payload.get("total") or 1))
+
+    async def execute() -> dict[str, Any]:
+        pool = AsyncSSHPool()
+        pool.load_vps_configs()
+        db_tools._monitor = SimpleNamespace(pool=pool, store=SimpleNamespace(host_meta={}))
+        remote_hosts = {
+            str(target)
+            for target in [job.get("source"), *(job.get("targets") or [])]
+            if str(target or "") and str(target) != "local"
+        }
+        try:
+            for hostname in sorted(remote_hosts):
+                if not await pool.connect(hostname):
+                    raise ConnectionError(f"Unable to connect to DB Sync target {hostname}")
+            return await db_tools.run_sync_job_snapshot(job, progress)
+        finally:
+            await pool.disconnect_all()
+
+    result = asyncio.run(execute())
+    update_job_file(
+        job_path,
+        mutate=lambda obj: obj.update(
+            {
+                "result": result,
+                "progress": {
+                    "total": progress.total,
+                    "completed": progress.total,
+                    "current": "Completed",
+                    "steps": list(progress.steps),
+                },
+            }
+        ),
+    )
+
+
 def _run_job(job_path: Path) -> None:
     obj = _load_job(job_path)
     if not obj:
@@ -326,6 +411,8 @@ def _run_job(job_path: Path) -> None:
             _run_ohlcv_copy(job_path, payload)
         elif jtype == "ohlcv_copy_dry_run":
             _run_ohlcv_copy(job_path, payload, dry_run=True)
+        elif jtype == "db_sync":
+            _run_db_sync(job_path, payload)
         else:
             raise RuntimeError(f"Unknown job type: {jtype}")
 

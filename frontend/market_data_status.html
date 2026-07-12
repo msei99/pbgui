@@ -389,7 +389,7 @@
     function connectWebSocket() {
         if (destroyed) return;
         var wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        var wsUrl = wsProtocol + '//' + API_HOST + '/ws/market-data?token=' + API_TOKEN + '&exchange=' + EXCHANGE;
+        var wsUrl = wsProtocol + '//' + API_HOST + '/ws/market-data?exchange=' + encodeURIComponent(EXCHANGE);
 
         ws = new WebSocket(wsUrl);
 

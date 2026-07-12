@@ -24,6 +24,18 @@ import vps_manager_service as service_mod
 from vps_manager_service import VPSManagerService, _ensure_import_public_key, _import_process_line_is_legacy, _set_import_key_check
 
 
+@pytest.mark.parametrize("value", ["198.51.100.1", "10.8.0.0/24", "10.8.0.1/32", "0.0.0.0/0"])
+def test_firewall_source_accepts_ipv4_addresses_and_cidr_networks(value: str) -> None:
+    """Accept individual IPv4 addresses and CIDR sources supported by UFW."""
+    assert service_mod._valid_ipv4_or_cidr(value) is True
+
+
+@pytest.mark.parametrize("value", ["", "10.8.0.0/33", "10.8.0/24", "2001:db8::/32", "not-an-ip"])
+def test_firewall_source_rejects_invalid_or_non_ipv4_values(value: str) -> None:
+    """Reject malformed, out-of-range, and IPv6 firewall sources."""
+    assert service_mod._valid_ipv4_or_cidr(value) is False
+
+
 def test_async_pool_verifies_ip_connections_with_inventory_hostname() -> None:
     """Use the confirmed VPS hostname key while connecting to its configured IP."""
     source = Path(async_pool.__file__).read_text(encoding="utf-8")
@@ -58,6 +70,42 @@ class _FakeStdin:
     def flush(self) -> None:
         """No-op flush."""
         return None
+
+
+def test_fetch_package_status_uses_trusted_inventory_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify live package probes against the inventory alias instead of a stale IP key."""
+    connect_kwargs: dict[str, object] = {}
+
+    class FakeSshClient:
+        """SSH double returning a current package status."""
+
+        def connect(self, **kwargs) -> None:
+            """Capture the host identity used for verification."""
+            connect_kwargs.update(kwargs)
+
+        def exec_command(self, command: str, **kwargs):
+            """Return package or reboot status according to the command."""
+            del kwargs
+            output = b"0 upgraded, 0 newly installed, 0 to remove\n" if "dist-upgrade" in command else b"no\n"
+            return _FakeStdin(), _FakeStdout(output), _FakeStdout(b"")
+
+        def close(self) -> None:
+            """No-op close."""
+            return None
+
+    monkeypatch.setattr(core, "_strict_ssh_client", lambda: FakeSshClient())
+    vps = core.VPS()
+    vps.hostname = "trusted-vps"
+    vps.ip = "192.0.2.10"
+    vps.user = "mani"
+    vps.user_pw = "secret"
+    vps.firewall_ssh_port = 2222
+
+    result = vps.fetch_package_status()
+
+    assert result == {"upgrades": 0, "reboot": False}
+    assert connect_kwargs["hostname"] == "trusted-vps"
+    assert connect_kwargs["port"] == 2222
 
 
 class _FakeUfwSshClient:
@@ -2708,3 +2756,33 @@ def test_v7_dynamic_ignore_blocks_unknown_cmc_status(tmp_path: Path, monkeypatch
     assert detail["coinmarketcap_configured"] is None
     assert detail["dynamic_ignore_allowed"] is False
     assert "has no confirmed CoinMarketCap API key" in message
+
+
+def test_vps_deploy_shutdown_joins_controller_without_stopping_remote_job() -> None:
+    """VPS Manager shutdown joins API controllers and blocks new Ansible launches."""
+    service = object.__new__(VPSManagerService)
+    service._deploy_shutdown = threading.Event()
+    service._deploy_sessions_lock = threading.Lock()
+    service._deploy_sessions = {}
+    worker = threading.Thread(target=service._deploy_shutdown.wait)
+    cluster_worker = threading.Thread(target=service._deploy_shutdown.wait)
+    service._deploy_threads = {"deploy": worker}
+    service._cluster_import_jobs_lock = threading.Lock()
+    service._cluster_import_threads = {"cluster": cluster_worker}
+    worker.start()
+    cluster_worker.start()
+
+    service.shutdown()
+
+    assert not worker.is_alive()
+    assert not cluster_worker.is_alive()
+    assert service._deploy_threads == {}
+    assert service._cluster_import_threads == {}
+    with pytest.raises(ValueError, match="shutting down"):
+        service._start_vps_deploy_host(
+            "token",
+            hostname="host",
+            command="update",
+            debug=False,
+            extra_vars=None,
+        )

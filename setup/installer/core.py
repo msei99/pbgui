@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import configparser
 import getpass
+import io
 import ipaddress
 import json
 import os
@@ -18,6 +19,8 @@ import subprocess
 import time
 from typing import Callable
 from urllib.request import urlopen
+
+from secure_files import atomic_write_private_text, ensure_private_directory
 
 from .ssh import SSHConnection
 
@@ -62,6 +65,11 @@ PBGUI_SERVICE_SCRIPTS = {
     "PBCoinData.py",
     "monitor_agent.py",
 }
+
+
+def generate_pbgui_password() -> str:
+    """Generate an individual password suitable for a fresh PBGui install."""
+    return secrets.token_urlsafe(18)
 
 
 class RemoteInstallError(RuntimeError):
@@ -180,7 +188,7 @@ class LocalMasterConfig:
     install_dir: str = field(default_factory=default_local_install_dir)
     local_sudo_password: str = ""
     master_name: str = field(default_factory=default_local_master_name)
-    pbgui_password: str = "PBGui$Bot!"
+    pbgui_password: str = field(default_factory=generate_pbgui_password)
     pbgui_bind_host: str = "127.0.0.1"
     pbgui_port: int = 8000
     start_services: bool = True
@@ -192,7 +200,7 @@ class LocalMasterConfig:
             install_dir=str(data.get("install_dir") or default_local_install_dir()).strip(),
             local_sudo_password=str(data.get("local_sudo_password") or ""),
             master_name=str(data.get("master_name") or data.get("hostname") or default_local_master_name()).strip(),
-            pbgui_password=str(data.get("pbgui_password") or "PBGui$Bot!"),
+            pbgui_password=str(data.get("pbgui_password") or generate_pbgui_password()),
             pbgui_bind_host=str(data.get("pbgui_bind_host") or "127.0.0.1").strip(),
             pbgui_port=int(data.get("pbgui_port") or 8000),
             start_services=bool(data.get("start_services", True)),
@@ -244,7 +252,7 @@ class RemoteMasterConfig:
     target_password: str = ""
     hostname: str = "pbgui-master"
     swap_size: str = "6G"
-    pbgui_password: str = "PBGui$Bot!"
+    pbgui_password: str = field(default_factory=generate_pbgui_password)
     pbgui_bind_host: str = "0.0.0.0"
     pbgui_port: int = 8000
     openvpn_cidr: str = "10.8.0.0/24"
@@ -284,7 +292,7 @@ class RemoteMasterConfig:
             target_password=target_password,
             hostname=str(data.get("hostname") or "pbgui-master").strip(),
             swap_size=str(data.get("swap_size") or "6G").strip(),
-            pbgui_password=str(data.get("pbgui_password") or "PBGui$Bot!"),
+            pbgui_password=str(data.get("pbgui_password") or generate_pbgui_password()),
             pbgui_bind_host=str(data.get("pbgui_bind_host") or "0.0.0.0").strip(),
             pbgui_port=int(data.get("pbgui_port") or 8000),
             openvpn_cidr=str(data.get("openvpn_cidr") or "10.8.0.0/24").strip(),
@@ -523,20 +531,17 @@ def _write_pbgui_config(config: LocalMasterConfig, install_dir: Path, pbgui_dir:
     cfg["api_server"] = {"host": config.pbgui_bind_host, "port": str(config.pbgui_port)}
     cfg["coinmarketcap"] = {"api_key": "", "fetch_limit": "1000", "fetch_interval": "4"}
     path = pbgui_dir / "pbgui.ini"
-    tmp = path.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8") as handle:
-        cfg.write(handle)
-    os.replace(tmp, path)
+    buffer = io.StringIO()
+    cfg.write(buffer)
+    atomic_write_private_text(path, buffer.getvalue())
 
 
 def _write_auth_secret(config: LocalMasterConfig, pbgui_dir: Path) -> None:
     """Write the local PBGui auth secret atomically."""
     path = pbgui_dir / "data" / "auth" / "secrets.toml"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_directory(path.parent)
     password = config.pbgui_password.replace("\\", "\\\\").replace('"', '\\"')
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(f'password = "{password}"\n', encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_private_text(path, f'auth_mode = "password"\npassword = "{password}"\n')
 
 
 def _local_url(bind_host: str, port: int) -> str:

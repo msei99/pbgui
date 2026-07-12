@@ -30,7 +30,7 @@ import traceback
 import uuid
 from pathlib import Path, PurePath
 from shutil import rmtree
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import psutil
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -66,7 +66,7 @@ from api.archive_helpers import (
     utc_now_iso,
     write_optimize_meta,
 )
-from api.auth import SessionToken, require_auth, validate_token
+from api.auth import SessionToken, authenticate_websocket, require_auth, validate_token
 from api.pb7_bridge import (
     get_allowed_override_params,
     get_bot_param_keys,
@@ -945,10 +945,16 @@ class BacktestWorker:
             self._task = asyncio.create_task(self._loop(), name="backtest-worker")
             _log(SERVICE, "Backtest worker started", level="INFO")
 
-    def stop(self):
+    async def stop(self):
         self._running = False
-        if self._task and not self._task.done():
-            self._task.cancel()
+        task = self._task
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if self._task is task:
+            self._task = None
 
     async def _loop(self):
         """Main worker loop: checks queue, launches backtests respecting CPU limit."""
@@ -1181,58 +1187,75 @@ def _run_archive_git_stream_step(
                 if not chunk:
                     break
                 output_queue.put(chunk)
+        except (OSError, ValueError):
+            pass
         finally:
             output_queue.put(None)
 
-    reader = threading.Thread(target=read_output, daemon=True)
+    reader = threading.Thread(target=read_output, name=f"archive-git-{name}")
     reader.start()
     deadline = time.monotonic() + timeout
     reader_done = False
     timed_out = False
 
-    while True:
-        wait_time = max(0.05, min(0.25, deadline - time.monotonic()))
-        try:
-            chunk = output_queue.get(timeout=wait_time)
-        except queue.Empty:
-            chunk = ""
-        if chunk is None:
-            reader_done = True
-        elif chunk:
-            output_parts.append(chunk)
-            if stream_output:
-                visible = _mask_archive_secret(chunk, secret).replace("\r", "\n")
-                if visible:
-                    yield _archive_stream_event("output", archive=name, message=visible)
+    try:
+        while True:
+            wait_time = max(0.05, min(0.25, deadline - time.monotonic()))
+            try:
+                chunk = output_queue.get(timeout=wait_time)
+            except queue.Empty:
+                chunk = ""
+            if chunk is None:
+                reader_done = True
+            elif chunk:
+                output_parts.append(chunk)
+                if stream_output:
+                    visible = _mask_archive_secret(chunk, secret).replace("\r", "\n")
+                    if visible:
+                        yield _archive_stream_event("output", archive=name, message=visible)
 
-        if proc.poll() is not None and reader_done and output_queue.empty():
-            break
-        if time.monotonic() >= deadline:
-            timed_out = True
-            proc.kill()
-            break
+            if proc.poll() is not None and reader_done and output_queue.empty():
+                break
+            if time.monotonic() >= deadline:
+                timed_out = True
+                proc.kill()
+                break
 
-    if timed_out:
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
+        if timed_out:
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            output = _mask_archive_secret("".join(output_parts), secret)
+            _log_archive(f"[{name}] {label} timed out after {timeout}s", level="ERROR")
+            yield _archive_stream_event("error", archive=name, message=f"{label} timed out after {timeout}s")
+            raise subprocess.TimeoutExpired(cmd, timeout, output=output)
+
+        returncode = proc.wait()
         output = _mask_archive_secret("".join(output_parts), secret)
-        _log_archive(f"[{name}] {label} timed out after {timeout}s", level="ERROR")
-        yield _archive_stream_event("error", archive=name, message=f"{label} timed out after {timeout}s")
-        raise subprocess.TimeoutExpired(cmd, timeout, output=output)
-
-    returncode = proc.wait()
-    output = _mask_archive_secret("".join(output_parts), secret)
-    result = subprocess.CompletedProcess(cmd, returncode, stdout=output, stderr="")
-    if returncode in ok_returncodes:
-        suffix = "" if returncode == 0 else f" (return code {returncode})"
-        _log_archive(f"[{name}] {label} complete{suffix}: {output.strip() or 'ok'}")
-        yield _archive_stream_event("status", archive=name, message=f"{label} complete")
-    else:
-        _log_archive(f"[{name}] {label} failed ({returncode}): {output.strip() or 'no output'}", level="ERROR")
-        yield _archive_stream_event("status", archive=name, message=f"{label} failed")
-    return result, output.strip()
+        result = subprocess.CompletedProcess(cmd, returncode, stdout=output, stderr="")
+        if returncode in ok_returncodes:
+            suffix = "" if returncode == 0 else f" (return code {returncode})"
+            _log_archive(f"[{name}] {label} complete{suffix}: {output.strip() or 'ok'}")
+            yield _archive_stream_event("status", archive=name, message=f"{label} complete")
+        else:
+            _log_archive(f"[{name}] {label} failed ({returncode}): {output.strip() or 'no output'}", level="ERROR")
+            yield _archive_stream_event("status", archive=name, message=f"{label} failed")
+        return result, output.strip()
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        if proc.stdout is not None:
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
+        reader.join()
 
 
 def _archive_push_url(dest: Path, access_token: str) -> str | None:
@@ -1923,16 +1946,26 @@ class ArchiveSyncWorker:
     def __init__(self):
         self._task: Optional[asyncio.Task] = None
         self._running = False
+        self._active_work: Optional[asyncio.Future] = None
 
     def start(self):
         if self._task is None or self._task.done():
             self._running = True
             self._task = asyncio.create_task(self._loop(), name="archive-sync-worker")
 
-    def stop(self):
+    async def stop(self):
         self._running = False
-        if self._task and not self._task.done():
-            self._task.cancel()
+        task = self._task
+        if task is None:
+            return
+        active_work = self._active_work
+        if active_work is not None and not active_work.done():
+            await asyncio.gather(asyncio.shield(active_work), return_exceptions=True)
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if self._task is task:
+            self._task = None
 
     async def _loop(self):
         try:
@@ -1942,7 +1975,11 @@ class ArchiveSyncWorker:
                     await asyncio.sleep(60)
                     continue
                 _log_archive(f"Auto-pulling all archives (interval={interval}min)…")
-                await asyncio.get_event_loop().run_in_executor(None, _pull_all_archives_sync)
+                self._active_work = asyncio.get_running_loop().run_in_executor(None, _pull_all_archives_sync)
+                try:
+                    await asyncio.shield(self._active_work)
+                finally:
+                    self._active_work = None
                 # Sleep interval minutes, checking for stop/config changes every 30s
                 remaining = interval * 60
                 while remaining > 0 and self._running:
@@ -2185,22 +2222,41 @@ class ArchiveRetestWorker:
     def __init__(self):
         self._task: Optional[asyncio.Task] = None
         self._running = False
+        self._active_work: Optional[asyncio.Future] = None
 
     def start(self):
         if self._task is None or self._task.done():
             self._running = True
             self._task = asyncio.create_task(self._loop(), name="archive-retest-worker")
 
-    def stop(self):
+    async def stop(self):
         self._running = False
-        if self._task and not self._task.done():
-            self._task.cancel()
+        task = self._task
+        if task is None:
+            return
+        active_work = self._active_work
+        if active_work is not None and not active_work.done():
+            await asyncio.gather(asyncio.shield(active_work), return_exceptions=True)
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if self._task is task:
+            self._task = None
+
+    async def _run_sync(self, func: Callable[[], None]) -> None:
+        self._active_work = asyncio.get_running_loop().run_in_executor(None, func)
+        try:
+            await asyncio.shield(self._active_work)
+        finally:
+            self._active_work = None
 
     async def _loop(self):
         try:
             while self._running:
-                await asyncio.get_event_loop().run_in_executor(None, _process_archive_retest_completions)
-                await asyncio.get_event_loop().run_in_executor(None, _queue_due_archive_retest_schedules)
+                await self._run_sync(_process_archive_retest_completions)
+                if not self._running:
+                    break
+                await self._run_sync(_queue_due_archive_retest_schedules)
                 await asyncio.sleep(30)
         except asyncio.CancelledError:
             pass
@@ -2373,11 +2429,8 @@ async def _ws_push_loop(ws: WebSocket):
 
 @router.websocket("/ws/bt7")
 async def ws_backtest(websocket: WebSocket):
-    token = websocket.query_params.get("token", "")
-    if not validate_token(token):
-        await websocket.close(code=4001)
+    if await authenticate_websocket(websocket) is None:
         return
-    await websocket.accept()
     _ws_clients.add(websocket)
     push_task = asyncio.create_task(_ws_push_loop(websocket))
     try:
@@ -2410,6 +2463,7 @@ class HLCVSCleanupWorker:
     def __init__(self):
         self._task: Optional[asyncio.Task] = None
         self._running = False
+        self._active_work: Optional[asyncio.Future] = None
 
     def start(self):
         if self._task is None or self._task.done():
@@ -2417,10 +2471,19 @@ class HLCVSCleanupWorker:
             self._task = asyncio.create_task(self._loop(), name="hlcvs-cleanup")
             _log(CLEANUP_SERVICE, "HLCVS cleanup worker started", level="INFO")
 
-    def stop(self):
+    async def stop(self):
         self._running = False
-        if self._task and not self._task.done():
-            self._task.cancel()
+        task = self._task
+        if task is None:
+            return
+        active_work = self._active_work
+        if active_work is not None and not active_work.done():
+            await asyncio.gather(asyncio.shield(active_work), return_exceptions=True)
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if self._task is task:
+            self._task = None
 
     async def _loop(self):
         try:
@@ -2431,7 +2494,11 @@ class HLCVSCleanupWorker:
                     interval_h = max(1, int(settings.get("hlcvs_cleanup_interval_h", "24")))
                     if enabled:
                         days = max(1, int(settings.get("hlcvs_cleanup_days", "7")))
-                        await asyncio.to_thread(self._do_cleanup, days)
+                        self._active_work = asyncio.get_running_loop().run_in_executor(None, self._do_cleanup, days)
+                        try:
+                            await asyncio.shield(self._active_work)
+                        finally:
+                            self._active_work = None
                     await asyncio.sleep(interval_h * 3600)
                 except asyncio.CancelledError:
                     raise
@@ -2533,15 +2600,22 @@ def startup():
     )
 
 
-def shutdown():
+async def shutdown():
     """Called from PBApiServer lifespan to stop the worker."""
     global _archive_watcher_task
-    _worker.stop()
-    _archive_sync_worker.stop()
-    _archive_retest_worker.stop()
-    _hlcvs_cleanup_worker.stop()
-    if _archive_watcher_task and not _archive_watcher_task.done():
-        _archive_watcher_task.cancel()
+    watcher_task = _archive_watcher_task
+    if watcher_task and not watcher_task.done():
+        watcher_task.cancel()
+    await asyncio.gather(
+        _worker.stop(),
+        _archive_sync_worker.stop(),
+        _archive_retest_worker.stop(),
+        _hlcvs_cleanup_worker.stop(),
+        *([watcher_task] if watcher_task is not None else []),
+        return_exceptions=True,
+    )
+    if _archive_watcher_task is watcher_task:
+        _archive_watcher_task = None
 
 
 # ── REST: Main page ───────────────────────────────────────────

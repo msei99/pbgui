@@ -603,7 +603,7 @@ class LogViewerPanel {
             this._reconnectTimer = 0;
         }
         this._disconnect();
-        var url = this._wsBase + '/ws/vps?token=' + encodeURIComponent(this._token);
+        var url = this._wsBase + '/ws/vps';
         var ws  = new WebSocket(url);
         this._ws  = ws;
         var me  = this;
