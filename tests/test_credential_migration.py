@@ -1095,9 +1095,10 @@ def test_waiting_for_upgrade_does_not_block_required_api_restart(tmp_path: Path)
     "Waiting for credential materialization ACK from active Cluster nodes: node-a",
     "Waiting for credential cutoff cleanup ACK from active Cluster nodes: node-a",
     "Waiting for credential scan ACK from active Cluster nodes: node-a",
+    "Credential scan findings block unfreeze: node-a:data/vpsmanager/hosts/node.json:migrated-value",
 ])
 def test_passive_cluster_ack_wait_does_not_block_api_restart(tmp_path: Path, reason: str) -> None:
-    """Persisted remote-ACK waits are restart-safe and resume from migration state."""
+    """Persisted remote waits and scan findings resume safely after an API restart."""
 
     state_path = tmp_path / "data" / "credentials" / "migration" / "state.json"
     state_path.parent.mkdir(parents=True)

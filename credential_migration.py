@@ -2338,6 +2338,7 @@ def credential_migration_restart_block_reason(pbgdir: Path | str | None = None) 
         "Waiting for credential materialization ACK from active Cluster nodes:",
         "Waiting for credential cutoff cleanup ACK from active Cluster nodes:",
         "Waiting for credential scan ACK from active Cluster nodes:",
+        "Credential scan findings block unfreeze:",
     )
     if blocker_reason.startswith(passive_wait_prefixes):
         return ""
