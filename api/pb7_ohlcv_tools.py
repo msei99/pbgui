@@ -837,7 +837,7 @@ def _write_preload_config(job_id: str, config: dict[str, Any]) -> Path:
 
 
 def _preload_log_path(job_id: str) -> Path:
-    log_dir = Path(PBGDIR) / "data" / "ohlcv_preload" / "logs"
+    log_dir = Path(PBGDIR) / "data" / "logs" / "ohlcv-preloads"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir / f"preload_{job_id}.log"
 

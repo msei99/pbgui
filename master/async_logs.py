@@ -34,7 +34,6 @@ SERVICE_LOGS: dict[str, str] = {
     "PBData":    "data/logs/PBData.log",
     "PBGui":     "data/logs/PBGui.log",
     "PBApiServer": "data/logs/PBApiServer.log",
-    "FastAPI":   "data/logs/FastAPI.log",
     "VPSMonitor": "data/logs/VPSMonitor.log",
     "VPSManagerApi": "data/logs/VPSManagerApi.log",
 }
@@ -206,23 +205,38 @@ def _task_action_from_filename(filename: str) -> Optional[str]:
 
 def _list_vps_task_log_aliases() -> list[str]:
     result: list[str] = []
-    root = _project_root() / "data" / "vpsmanager"
-    if root.exists():
+    seen: set[str] = set()
+    project = _project_root()
+    canonical = project / "data" / "logs" / "vps-manager"
+    legacy = project / "data" / "vpsmanager"
+    for root in (canonical / "master", legacy):
+        if not root.exists():
+            continue
         for fp in sorted(root.glob("*.log*")):
             if not fp.is_file():
                 continue
             action = _task_action_from_filename(fp.name)
-            if action:
-                result.append(f"MasterAction:{action}")
-    hosts_root = root / "hosts"
-    if hosts_root.exists():
-        for host_dir in sorted(path for path in hosts_root.iterdir() if path.is_dir()):
+            alias = f"MasterAction:{action}" if action else ""
+            if alias and alias not in seen:
+                seen.add(alias)
+                result.append(alias)
+    host_names = sorted({
+        host_dir.name
+        for hosts_root in (canonical / "hosts", legacy / "hosts") if hosts_root.exists()
+        for host_dir in hosts_root.iterdir() if host_dir.is_dir()
+    })
+    for host_name in host_names:
+        for host_dir in (canonical / "hosts" / host_name, legacy / "hosts" / host_name):
+            if not host_dir.exists():
+                continue
             for fp in sorted(host_dir.glob("*.log*")):
                 if not fp.is_file():
                     continue
                 action = _task_action_from_filename(fp.name)
-                if action:
-                    result.append(f"VPSAction:{host_dir.name}:{action}")
+                alias = f"VPSAction:{host_name}:{action}" if action else ""
+                if alias and alias not in seen:
+                    seen.add(alias)
+                    result.append(alias)
     return result
 
 
@@ -246,22 +260,24 @@ def _resolve_vps_action_log_path(filename: str) -> Optional[Path]:
             resolved_name = action
         if not hostname or not resolved_name:
             return None
-        fp = root / "data" / "vpsmanager" / "hosts" / hostname / resolved_name
-        allowed_root = (root / "data" / "vpsmanager" / "hosts").resolve()
-        if not fp.resolve().is_relative_to(allowed_root):
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", hostname) or hostname in {".", ".."}:
             return None
-        return fp
+        candidates = (
+            root / "data" / "logs" / "vps-manager" / "hosts" / hostname / resolved_name,
+            root / "data" / "vpsmanager" / "hosts" / hostname / resolved_name,
+        )
+        return next((path for path in candidates if path.is_file()), candidates[0])
     if filename.startswith("MasterAction:"):
         action = filename.split(":", 1)[1].strip()
         action_files = {"update": "vps_update.log"}
         resolved_name = _task_log_filename_from_action(action, "master-", action_files)
         if not resolved_name:
             return None
-        fp = root / "data" / "vpsmanager" / resolved_name
-        allowed_root = (root / "data" / "vpsmanager").resolve()
-        if not fp.resolve().is_relative_to(allowed_root):
-            return None
-        return fp
+        candidates = (
+            root / "data" / "logs" / "vps-manager" / "master" / resolved_name,
+            root / "data" / "vpsmanager" / resolved_name,
+        )
+        return next((path for path in candidates if path.is_file()), candidates[0])
     return None
 
 

@@ -29,10 +29,11 @@ when pbgui.ini is modified — giving sub-second reaction time without
 any busy-polling in the main loop.
 """
 
+import asyncio
 import threading
 from pathlib import Path
 
-from pbgui_purefunc import PBGDIR
+from pbgui_purefunc import IniSignature, PBGDIR
 
 # Default check interval for mtime polling (seconds).
 # One stat() syscall every 0.5s is essentially zero overhead.
@@ -66,50 +67,103 @@ class IniWatcher:
         # Internal stop signal
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._lifecycle_lock = threading.RLock()
+        self._signature = IniSignature(False, None, None, None)
+        self._async_loop: asyncio.AbstractEventLoop | None = None
+        self._async_changed: asyncio.Event | None = None
 
     # ── Lifecycle ──
 
     def start(self):
         """Start the watcher thread. Safe to call multiple times."""
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self.changed.clear()
-        self._thread = threading.Thread(
-            target=self._watch_loop, daemon=True, name="ini-watcher"
-        )
-        self._thread.start()
+        with self._lifecycle_lock:
+            if self._thread is not None:
+                if self._thread.is_alive():
+                    return
+                self._thread = None
+            self._signature = self._read_signature()
+            self._stop.clear()
+            self.changed.clear()
+            if self._async_changed is not None:
+                self._async_changed.clear()
+            self._thread = threading.Thread(
+                target=self._watch_loop, daemon=True, name="ini-watcher"
+            )
+            self._thread.start()
 
-    def stop(self):
+    def stop(self, timeout: float = 2.0):
         """Stop the watcher thread (blocks up to 2s)."""
-        self._stop.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2)
-        self._thread = None
+        with self._lifecycle_lock:
+            thread = self._thread
+            self._stop.set()
+            self.changed.set()
+            if self._async_loop is not None and self._async_changed is not None:
+                try:
+                    self._async_loop.call_soon_threadsafe(self._async_changed.set)
+                except RuntimeError:
+                    pass
+            if thread is None:
+                return
+            thread.join(timeout=max(0.0, timeout))
+            if not thread.is_alive() and self._thread is thread:
+                self._thread = None
+
+    def bind_asyncio(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        changed: asyncio.Event,
+    ) -> None:
+        """Route generation notifications to an owner-loop asyncio event."""
+        with self._lifecycle_lock:
+            self._async_loop = loop
+            self._async_changed = changed
+            if self.changed.is_set():
+                loop.call_soon_threadsafe(changed.set)
+
+    def unbind_asyncio(self) -> None:
+        """Detach the asynchronous notification owner."""
+        with self._lifecycle_lock:
+            self._async_loop = None
+            self._async_changed = None
 
     @property
     def is_running(self) -> bool:
         """True if the watcher thread is alive."""
-        return self._thread is not None and self._thread.is_alive()
+        with self._lifecycle_lock:
+            return self._thread is not None and self._thread.is_alive()
 
     # ── Internal ──
 
-    def _watch_loop(self):
-        """Poll mtime; set ``changed`` event when file is modified."""
-        last_mtime = 0.0
+    def _read_signature(self) -> IniSignature:
         try:
-            last_mtime = self._ini_path.stat().st_mtime
+            stat_result = self._ini_path.stat()
+        except FileNotFoundError:
+            return IniSignature(False, None, None, None)
         except OSError:
-            pass
+            return self._signature
+        return IniSignature(
+            True,
+            stat_result.st_mtime_ns,
+            stat_result.st_size,
+            getattr(stat_result, "st_ino", None),
+        )
 
-        while not self._stop.is_set():
-            self._stop.wait(self._poll_interval)
-            if self._stop.is_set():
-                break
+    def _notify_changed(self) -> None:
+        self.changed.set()
+        loop = self._async_loop
+        changed = self._async_changed
+        if loop is not None and changed is not None:
             try:
-                cur_mtime = self._ini_path.stat().st_mtime
-                if cur_mtime != last_mtime:
-                    last_mtime = cur_mtime
-                    self.changed.set()
-            except OSError:
+                loop.call_soon_threadsafe(changed.set)
+            except RuntimeError:
                 pass
+
+    def _watch_loop(self):
+        """Poll the generation signature and publish level-triggered changes."""
+        last_signature = self._signature
+        while not self._stop.wait(self._poll_interval):
+            current_signature = self._read_signature()
+            if current_signature != last_signature:
+                last_signature = current_signature
+                self._signature = current_signature
+                self._notify_changed()

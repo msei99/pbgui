@@ -335,6 +335,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
       </div>
 
       <div class="settings-section">
+        <h3>Managed Logs</h3>
+        <p style="font-size:var(--fs-sm);color:#a0a4ab;margin-bottom:12px;">Settings for log families that may not currently contain files.</p>
+        <table class="per-service-table">
+          <thead><tr><th>Scope</th><th>Path</th><th>Max MB</th><th>Copies</th><th>Action</th><th></th></tr></thead>
+          <tbody id="managed-scope-body"></tbody>
+        </table>
+      </div>
+
+      <div class="settings-section">
         <h3>Per-Log Rotation</h3>
         <p style="font-size:var(--fs-sm);color:#a0a4ab;margin-bottom:12px;">
           Each log file can override the default size and number of rotated copies. Set copies to `0` to keep a single capped log file with no rotated generations.
@@ -364,12 +373,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
      Page configuration (injected server-side)
      ════════════════════════════════════════════════════════ -->
 <script>
-  var TOKEN          = "%%TOKEN%%";
   var API_BASE       = "%%API_BASE%%";    // e.g. http://127.0.0.1:8600/api/logging
   var PBGUI_VERSION  = "%%VERSION%%";
   var PBGUI_SERIAL   = "%%SERIAL%%";
 </script>
-<script src="/app/js/log_viewer_panel.js?v=25"></script>
+<script src="/app/js/log_viewer_panel.js?v=26"></script>
 <script src="/app/js/pbgui_dialogs.js?v=4"></script>
 <script src="/app/js/shared_help_overlay.js?v=6"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
@@ -379,19 +387,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
      ════════════════════════════════════════════════════════ -->
 <script>
 /* ── Nav config ─────────────────────────────────────────── */
-window.PBGUI_NAV_CONFIG = { subtitle: 'Logging', current: 'system_logging', token: TOKEN, apiBase: API_BASE, version: PBGUI_VERSION, serial: PBGUI_SERIAL };
+window.PBGUI_NAV_CONFIG = { subtitle: 'Logging', current: 'system_logging', apiBase: API_BASE, version: PBGUI_VERSION, serial: PBGUI_SERIAL };
 
 
 /* ── HTTP helpers ────────────────────────────────────────── */
 function apiGet(path) {
-  return fetch(API_BASE + path, {
-    headers: { 'Authorization': 'Bearer ' + TOKEN }
-  }).then(function(r) { return r.json(); });
+  return fetch(API_BASE + path).then(function(r) { return r.json(); });
 }
 function apiPost(path, body) {
   return fetch(API_BASE + path, {
     method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   }).then(function(r) { return r.json(); });
 }
@@ -541,6 +547,39 @@ function loadRotationSettings() {
     document.getElementById('def-max-mb').value = numberOrDefault(def.max_mb, 10, 1);
     document.getElementById('def-backup-count').value = numberOrDefault(def.backup_count, 0, 0);
 
+    var managedBody = document.getElementById('managed-scope-body');
+    managedBody.replaceChildren();
+    Object.keys(data.managed_scopes || {}).sort().forEach(function(scopeId) {
+      var scope = data.managed_scopes[scopeId] || {};
+      var row = document.createElement('tr');
+      var labelCell = document.createElement('td');
+      labelCell.className = 'per-svc-name';
+      labelCell.textContent = String(scope.label || scopeId);
+      var pathCell = document.createElement('td');
+      pathCell.textContent = String(scope.description || '');
+      var maxCell = document.createElement('td');
+      var maxInput = document.createElement('input');
+      maxInput.className = 'per-svc-input'; maxInput.type = 'number'; maxInput.min = '1'; maxInput.max = '10240';
+      maxInput.value = numberOrDefault(scope.max_mb, 10, 1); maxInput.id = 'managed-mb-' + scopeId;
+      maxCell.appendChild(maxInput);
+      var copiesCell = document.createElement('td');
+      var copiesInput = document.createElement('input');
+      copiesInput.className = 'per-svc-input'; copiesInput.type = 'number'; copiesInput.min = '0'; copiesInput.max = '20';
+      copiesInput.value = numberOrDefault(scope.backup_count, 0, 0); copiesInput.id = 'managed-bc-' + scopeId;
+      copiesCell.appendChild(copiesInput);
+      var actionCell = document.createElement('td');
+      var saveButton = document.createElement('button');
+      saveButton.className = 'per-svc-save'; saveButton.type = 'button'; saveButton.textContent = 'Save';
+      saveButton.addEventListener('click', function() { saveManagedScope(scopeId); });
+      actionCell.appendChild(saveButton);
+      var messageCell = document.createElement('td');
+      var message = document.createElement('span');
+      message.className = 'per-svc-msg'; message.id = 'managed-msg-' + scopeId; message.textContent = 'Saved';
+      messageCell.appendChild(message);
+      row.append(labelCell, pathCell, maxCell, copiesCell, actionCell, messageCell);
+      managedBody.appendChild(row);
+    });
+
     var services = Object.keys(data.per_service || {}).sort();
     if (services.length === 0) {
       var tr = document.createElement('tr');
@@ -549,17 +588,23 @@ function loadRotationSettings() {
     } else {
       services.forEach(function(svc) {
         var s = data.per_service[svc];
-        var svcHtml = htmlEscape(svc);
-        var svcJs = jsStringEscape(svc);
         var serviceMaxMb = numberOrDefault(s.max_mb, 10, 1);
         var serviceBackupCount = numberOrDefault(s.backup_count, 0, 0);
         var tr = document.createElement('tr');
-        tr.innerHTML =
-          '<td class="per-svc-name">' + svcHtml + '</td>' +
-          '<td><input class="per-svc-input" type="number" id="svc-mb-' + svcHtml + '" min="1" max="10240" value="' + serviceMaxMb + '"></td>' +
-          '<td><input class="per-svc-input" type="number" id="svc-bc-' + svcHtml + '" min="0" max="20" value="' + serviceBackupCount + '"></td>' +
-          '<td><button class="per-svc-save" onclick="saveService(\'' + svcJs + '\')">Save</button></td>' +
-          '<td><span class="per-svc-msg" id="svc-msg-' + svcHtml + '">✓ Saved</span></td>';
+        var nameCell = document.createElement('td'); nameCell.className = 'per-svc-name'; nameCell.textContent = svc;
+        var maxCell = document.createElement('td');
+        var maxInput = document.createElement('input'); maxInput.className = 'per-svc-input'; maxInput.type = 'number'; maxInput.min = '1'; maxInput.max = '10240'; maxInput.value = serviceMaxMb;
+        maxCell.appendChild(maxInput);
+        var copiesCell = document.createElement('td');
+        var copiesInput = document.createElement('input'); copiesInput.className = 'per-svc-input'; copiesInput.type = 'number'; copiesInput.min = '0'; copiesInput.max = '20'; copiesInput.value = serviceBackupCount;
+        copiesCell.appendChild(copiesInput);
+        var actionCell = document.createElement('td');
+        var saveButton = document.createElement('button'); saveButton.className = 'per-svc-save'; saveButton.type = 'button'; saveButton.textContent = 'Save';
+        actionCell.appendChild(saveButton);
+        var messageCell = document.createElement('td');
+        var message = document.createElement('span'); message.className = 'per-svc-msg'; message.textContent = 'Saved'; messageCell.appendChild(message);
+        saveButton.addEventListener('click', function() { saveService(svc, maxInput, copiesInput, message); });
+        tr.append(nameCell, maxCell, copiesCell, actionCell, messageCell);
         tbody.appendChild(tr);
       });
     }
@@ -570,6 +615,18 @@ function loadRotationSettings() {
   });
 }
 
+function saveManagedScope(scopeId) {
+  var maxMb = numberOrDefault(document.getElementById('managed-mb-' + scopeId).value, 10, 1);
+  var copies = numberOrDefault(document.getElementById('managed-bc-' + scopeId).value, 0, 0);
+  apiPost('/rotation', { scope: 'managed:' + scopeId, max_mb: maxMb, backup_count: copies }).then(function(data) {
+    if (!data.success) return;
+    var message = document.getElementById('managed-msg-' + scopeId);
+    message.textContent = data.apply && data.apply.message ? data.apply.message : 'Saved';
+    message.classList.add('visible');
+    setTimeout(function() { message.classList.remove('visible'); }, 2000);
+  });
+}
+
 function saveDefault() {
   var maxMb = numberOrDefault(document.getElementById('def-max-mb').value, 10, 1);
   var bc    = numberOrDefault(document.getElementById('def-backup-count').value, 0, 0);
@@ -577,7 +634,7 @@ function saveDefault() {
   apiPost('/rotation', { scope: 'default', max_mb: maxMb, backup_count: bc })
     .then(function(data) {
       if (data.success) {
-        msg.textContent = '✓ Saved'; msg.className = 'settings-msg ok';
+        msg.textContent = data.apply && data.apply.message ? data.apply.message : 'Saved'; msg.className = 'settings-msg ok';
         setTimeout(function() { msg.className = 'settings-msg'; }, 2500);
       } else {
         msg.textContent = 'Error'; msg.className = 'settings-msg err';
@@ -586,13 +643,13 @@ function saveDefault() {
     .catch(function() { msg.textContent = 'Error'; msg.className = 'settings-msg err'; });
 }
 
-function saveService(svc) {
-  var maxMb = numberOrDefault(document.getElementById('svc-mb-' + svc).value, 10, 1);
-  var bc    = numberOrDefault(document.getElementById('svc-bc-' + svc).value, 0, 0);
-  var msgEl = document.getElementById('svc-msg-' + svc);
+function saveService(svc, maxInput, copiesInput, msgEl) {
+  var maxMb = numberOrDefault(maxInput.value, 10, 1);
+  var bc    = numberOrDefault(copiesInput.value, 0, 0);
   apiPost('/rotation', { scope: svc, max_mb: maxMb, backup_count: bc })
     .then(function(data) {
       if (data.success) {
+        msgEl.textContent = data.apply && data.apply.message ? data.apply.message : 'Saved';
         msgEl.classList.add('visible');
         setTimeout(function() { msgEl.classList.remove('visible'); }, 2000);
       }
@@ -608,7 +665,6 @@ function wsBase() {
 viewer = new LogViewerPanel({
   containerId: 'log-viewer-target',
   wsBase: wsBase(),
-  token: TOKEN,
   defaultHost: 'local',
   presets: 'system',
   showRestart: true,
@@ -694,7 +750,7 @@ loadRotationData();
   function _ensureTopicCached(idx, cb) {
     if (_topicCache[idx] !== undefined) { cb(_topicCache[idx]); return; }
     var t = helpTopics[idx]; if (!t) { cb(''); return; }
-    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang)
       .then(function(r) { return r.json(); })
       .then(function(d) { _topicCache[idx] = mdToHtml(d.content || ''); cb(_topicCache[idx]); })
       .catch(function() { _topicCache[idx] = ''; cb(''); });
@@ -762,14 +818,14 @@ loadRotationData();
     var t = helpTopics[idx]; if (!t) return;
     _rawHtml = null; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = '';
     helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang)
       .then(function(r) { return r.json(); })
       .then(function(d) { _rawHtml = mdToHtml(d.content || ''); _topicCache[idx] = _rawHtml; helpContent.innerHTML = _rawHtml; helpContent.scrollTop = 0; var st = helpSearch.value.trim(); if (st) _applySearch(st); })
       .catch(function() { helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>'; });
   }
   function loadHelpIndex(keyword) {
     helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/docs/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(docsBase + '/docs/index?lang=' + helpLang)
       .then(function(r) { return r.json(); })
       .then(function(data) {
         helpTopics = data || []; renderToc();
@@ -798,7 +854,7 @@ loadRotationData();
   }());
   window._openLoggingHelp = function() {
     if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
-    window.PBGuiSharedHelp.open('logging', { token: TOKEN });
+    window.PBGuiSharedHelp.open('logging');
   };
   window.PBGUI_HELP_OPENER = window._openLoggingHelp;
 }());

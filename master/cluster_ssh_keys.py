@@ -8,7 +8,6 @@ command that only runs cluster_sync_command.py.
 from __future__ import annotations
 
 import base64
-import configparser
 import hashlib
 import json
 import os
@@ -19,8 +18,9 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from file_lock import advisory_file_lock
 from master.cluster_state import default_cluster_root, ensure_local_identity, read_local_identity
-from pbgui_purefunc import PBGDIR
+from pbgui_purefunc import PBGDIR, load_ini_snapshot
 
 KEY_DIR_NAME = "ssh"
 KEY_BASENAME = "pbgui_cluster_ed25519"
@@ -103,25 +103,63 @@ def install_authorized_cluster_key(
 
     path.parent.mkdir(parents=True, exist_ok=True)
     _chmod_best_effort(path.parent, 0o700)
-    existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    matching = [item for item in existing if marker in item]
-    if matching == [line]:
-        kept = existing
-        changed = False
-    else:
-        kept = [item for item in existing if marker not in item]
-        kept.append(line)
-        changed = True
-    if changed:
-        _atomic_write_text(path, "\n".join(kept).rstrip() + "\n", mode=0o600)
-    else:
-        _chmod_best_effort(path, 0o600)
+    with advisory_file_lock(path):
+        existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        matching = [item for item in existing if marker in item]
+        if matching == [line]:
+            kept = existing
+            changed = False
+        else:
+            kept = [item for item in existing if marker not in item]
+            kept.append(line)
+            changed = True
+        if changed:
+            _atomic_write_text(path, "\n".join(kept).rstrip() + "\n", mode=0o600)
+        else:
+            _chmod_best_effort(path, 0o600)
     return {
         "ok": True,
         "changed": changed,
         "authorized_keys_path": str(path),
         "source_node_id": source_node,
         "fingerprint": public_key_fingerprint(public_key),
+    }
+
+
+def remove_authorized_cluster_key(
+    *,
+    pbgdir: Path | str,
+    source_node_id: str,
+    source_public_key: str,
+    authorized_keys_path: Path | str | None = None,
+) -> dict[str, Any]:
+    """Atomically remove only the exact forced-command entry for one node key."""
+
+    source_node = _validate_source_node_id(source_node_id)
+    public_key = _normalize_public_key(source_public_key, source_node)
+    expected_line = build_authorized_key_line(Path(pbgdir), source_node, public_key)
+    path = Path(authorized_keys_path) if authorized_keys_path else Path.home() / ".ssh" / "authorized_keys"
+    if not path.exists():
+        return {
+            "ok": True,
+            "changed": False,
+            "authorized_keys_path": str(path),
+            "source_node_id": source_node,
+        }
+    with advisory_file_lock(path):
+        existing = path.read_text(encoding="utf-8").splitlines()
+        kept = [line for line in existing if line != expected_line]
+        changed = len(kept) != len(existing)
+        if changed:
+            content = "\n".join(kept)
+            _atomic_write_text(path, content + ("\n" if content else ""), mode=0o600)
+        else:
+            _chmod_best_effort(path, 0o600)
+    return {
+        "ok": True,
+        "changed": changed,
+        "authorized_keys_path": str(path),
+        "source_node_id": source_node,
     }
 
 
@@ -226,10 +264,9 @@ def _validate_source_node_id(node_id: str) -> str:
 
 
 def _pbname_from_ini(pbgdir: Path) -> str:
-    cfg = configparser.ConfigParser()
     try:
-        cfg.read(pbgdir / "pbgui.ini")
-        value = cfg.get("main", "pbname", fallback="").strip()
+        snapshot = load_ini_snapshot(pbgdir / "pbgui.ini")
+        value = snapshot.get("main", "pbname").strip() if snapshot.has_option("main", "pbname") else ""
         if value:
             return value
     except Exception:

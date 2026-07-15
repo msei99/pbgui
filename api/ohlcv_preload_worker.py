@@ -11,6 +11,9 @@ import tempfile
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from logging_helpers import rotate_managed_log_before_open
+
 
 def _read_state(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -66,6 +69,7 @@ def main() -> int:
     env = os.environ.copy()
     env["PATH"] = os.path.dirname(command[0]) + os.pathsep + env.get("PATH", "")
     try:
+        rotate_managed_log_before_open(log_path, "ohlcv_preloads")
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write("$ " + " ".join(command) + "\n")
             handle.flush()

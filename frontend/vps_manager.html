@@ -2987,7 +2987,7 @@
     </main>
   </div>
 
-  <script src='/app/js/log_viewer_panel.js?v=25'></script>
+  <script src='/app/js/log_viewer_panel.js?v=26'></script>
   <script>
     const TOKEN = "%%TOKEN%%";
     const API_BASE = "%%API_BASE%%";
@@ -3018,6 +3018,8 @@
       ws: null,
       reconnectTimer: 0,
       pendingWsMessages: [],
+      detailRequestGeneration: 0,
+      detailAbortController: null,
       connected: false,
       state: null,
       deletedOverviewHosts: {},
@@ -3028,7 +3030,6 @@
       addDebug: false,
       addForm: defaultAddForm(),
       addVpsReady: { hostsOk: false, sshOk: false, sshError: '', loading: false },
-      addCmcCheck: { ok: false, error: '', loading: false, credit_limit_monthly: null, credits_used_day: null, credits_used_month: null, credits_left: null, credit_limit_monthly_reset_timestamp: null },
       addPublicIp: { ip: '', loading: false, requested: false, applied: false },
       importExistingVps: defaultExistingVpsImportState(),
       clusterNodesImport: defaultClusterNodesImportState(),
@@ -3121,7 +3122,6 @@
         install_dir: '',
         auto_ip: '',
         firewall_ssh_ips_auto: '',
-        coinmarketcap_api_key: '',
         firewall: false,
         firewall_ssh_port: 22,
         firewall_ssh_ips: ''
@@ -4207,7 +4207,6 @@
           hasV7Fallback: store.view === 'vps' ? (Array.isArray(monitor.v7_running) && monitor.v7_running.length > 0) : false,
           swapOptions: store.view === 'vps-setup' ? (Array.isArray(config.swap_options) ? config.swap_options : []) : [],
           uiSwap: store.view === 'vps-setup' && ui && ui.form ? String(ui.form.swap || '') : '',
-          uiCmc: store.view === 'vps-setup' && ui && ui.form ? String(ui.form.coinmarketcap_api_key || '') : '',
           uiFirewallIps: store.view === 'vps-setup' && ui && ui.form ? String(ui.form.firewall_ssh_ips || '') : '',
           userPwStored: store.view === 'vps-setup' ? !!(((secretStatus.user_pw) || {}).stored) : false,
           userPwRemaining: store.view === 'vps-setup' ? Number((((secretStatus.user_pw) || {}).remaining_seconds) || 0) : 0,
@@ -4383,8 +4382,7 @@
           if (!status.last_setup) tags.push(`<span class='tag warning'>Setup Pending</span>`);
         }
       } else {
-        const coindataConfigured = Object.prototype.hasOwnProperty.call(status, 'coindata_configured') ? !!status.coindata_configured : true;
-        tags.push(`<span class='tag ${coindataConfigured ? (status.coindata_ok ? 'ok' : 'warning') : ''}'>CoinData ${coindataConfigured ? (status.coindata_ok ? 'Ready' : 'Missing') : 'Skipped'}</span>`);
+        tags.push(`<span class='tag ${status.coindata_ok ? 'ok' : 'warning'}'>CoinData ${status.coindata_ok ? 'Ready' : 'Missing'}</span>`);
       }
 
       return {
@@ -4503,30 +4501,22 @@
     }
 
     function renderMasterSummaryTags(status) {
-      const coindataConfigured = Object.prototype.hasOwnProperty.call(status, 'coindata_configured') ? !!status.coindata_configured : true;
       return `
         <span class='tag ${status.online ? 'ok' : 'error'}'>${status.online ? 'Online' : 'Offline'}</span>
-        <span class='tag ${coindataConfigured ? (status.coindata_ok ? 'ok' : 'warning') : ''}'>CoinData ${coindataConfigured ? (status.coindata_ok ? 'Ready' : 'Missing') : 'Skipped'}</span>`;
+        <span class='tag ${status.coindata_ok ? 'ok' : 'warning'}'>CoinData ${status.coindata_ok ? 'Ready' : 'Missing'}</span>`;
     }
 
     function renderMasterStatusCards(status) {
       function masterFlagCard(key, label, ok, sub, valueHtml) {
         return `<div class='status-item' data-flag='${escAttr(key)}'><div class='status-label'>${esc(label)}</div><div class='status-value'>${valueHtml || boolDot(ok)}</div><div class='status-sub'>${esc(sub)}</div></div>`;
       }
-      const coindataConfigured = Object.prototype.hasOwnProperty.call(status, 'coindata_configured') ? !!status.coindata_configured : true;
-      const coindataSub = !coindataConfigured
-        ? 'CoinMarketCap API key not configured'
-        : status.coindata_ok
-        ? ((status.cmc_credits !== null && status.cmc_credits !== undefined && String(status.cmc_credits).trim() !== '')
-            ? asCountLabel(status.cmc_credits, 'credit left', 'credits left')
-            : 'CoinData API OK')
-        : 'CoinData API missing/invalid';
+      const coindataSub = status.coindata_ok ? 'CoinData API OK' : 'CoinData API missing/invalid';
       return `
         <div class='master-status-grid'>
           <div class='status-item' data-field='last-update'><div class='status-label'>Last update</div><div class='status-value'>${esc(status.last_update || '-')}</div></div>
           <div class='status-item' data-field='last-command'><div class='status-label'>Last command</div><div class='status-value code'>${esc(status.last_command || '-')}</div></div>
           ${masterFlagCard('online', 'Online', !!status.online, status.online ? 'Live telemetry received' : 'No current live telemetry')}
-          ${masterFlagCard('coindata_ok', 'CoinData Ready', !!status.coindata_ok, coindataSub, coindataConfigured ? '' : `<span class='dot info'></span>Skipped`)}
+          ${masterFlagCard('coindata_ok', 'CoinData Ready', !!status.coindata_ok, coindataSub)}
         </div>`;
     }
 
@@ -4687,14 +4677,13 @@
       const ui = ensureVpsUi(store.hostname, detail);
       const inputs = Array.from(document.querySelectorAll('.pw-wrap input[oninput]'));
       let changed = false;
-      ['user_pw', 'coinmarketcap_api_key'].forEach(function (fieldName) {
+      ['user_pw'].forEach(function (fieldName) {
         const input = inputs.find(function (node) {
           const handler = String(node.getAttribute('oninput') || '');
           if (handler.indexOf('setVpsField(') < 0) return false;
           const field = node.closest('.field');
           const label = String(field && field.querySelector('label') ? field.querySelector('label').textContent || '' : '').trim().toLowerCase();
           if (fieldName === 'user_pw') return label.indexOf('vps user password') >= 0;
-          if (fieldName === 'coinmarketcap_api_key') return label.indexOf('coinmarketcap api key') >= 0;
           return false;
         });
         if (!input) return;
@@ -4869,12 +4858,6 @@
           if (f.key === 'online' && status.telemetry_stale) {
             var telemetryAge = Number(status.telemetry_age);
             text = 'Telemetry stale' + (Number.isFinite(telemetryAge) && telemetryAge > 0 ? ' (' + formatLatency(telemetryAge * 1000) + ' ago)' : '');
-          }
-          if (f.key === 'coindata_ok') {
-            var credits = status.cmc_credits;
-            if (ok && credits !== null && credits !== undefined && String(credits).trim() !== '') {
-              text = asCountLabel(credits, 'credit left', 'credits left');
-            }
           }
           setNodeTextIfChanged(sub, text);
         }
@@ -5069,8 +5052,6 @@
         'data/logs/PBGui.log': 'PBGui',
         'logs/PBApiServer.log': 'PBApiServer',
         'data/logs/PBApiServer.log': 'PBApiServer',
-        'logs/FastAPI.log': 'FastAPI',
-        'data/logs/FastAPI.log': 'FastAPI',
         'logs/VPSMonitor.log': 'VPSMonitor',
         'data/logs/VPSMonitor.log': 'VPSMonitor',
         'logs/VPSManagerApi.log': 'VPSManagerApi',
@@ -5079,10 +5060,6 @@
         'data/logs/Exchange.log': 'data/logs/Exchange.log',
         'logs/PBRun.log.old': 'data/logs/PBRun.log.old',
         'data/logs/PBRun.log.old': 'data/logs/PBRun.log.old',
-        'logs/sync.log': 'data/logs/sync.log',
-        'data/logs/sync.log': 'data/logs/sync.log',
-        'logs/sync.log.old': 'data/logs/sync.log.old',
-        'data/logs/sync.log.old': 'data/logs/sync.log.old',
         'logs/tradfi_sync.log': 'data/logs/tradfi_sync.log',
         'data/logs/tradfi_sync.log': 'data/logs/tradfi_sync.log'
       };
@@ -5136,8 +5113,8 @@
     }
 
     function optionalServiceStatusFromDetail(status, service) {
-      if (service === 'PBCoinData' && Object.prototype.hasOwnProperty.call(status || {}, 'coindata_configured') && !status.coindata_configured) {
-        return { status: 'disabled', expected: false, reason: 'CoinMarketCap API key is not configured' };
+      if (service === 'PBCoinData' && (status || {}).credential_active === false) {
+        return { status: 'disabled', expected: false, reason: 'CMC credential capability is inactive' };
       }
       return null;
     }
@@ -6211,32 +6188,6 @@
       btn.textContent = showing ? '👁' : '🙈';
     }
 
-    function openCoinDataPrompt(hostname) {
-      const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
-      document.getElementById('alertModalTitle').textContent = 'Update CoinData API';
-      const box = document.getElementById('alertModalBody');
-      box.className = 'notice';
-      box.innerHTML = `
-        <div>
-          <label style="display:block;margin-bottom:6px">CoinMarketCap API Key</label>
-          <div class="pw-wrap">
-            <input type="password" id="cmc-key-input" value="${escAttr(ui.form.coinmarketcap_api_key || '')}" style="width:100%;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(6,12,20,0.85);color:var(--text);outline:none">
-            <button type="button" class="pw-eye-btn" onclick="(function(){const i=document.getElementById('cmc-key-input'); if(i){i.type=i.type==='password'?'text':'password';}})()" tabindex="-1" title="Show or hide CoinMarketCap API key" aria-label="Show or hide CoinMarketCap API key">&#128065;</button>
-          </div>
-        </div>`;
-      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Cancel</button> <button class="btn primary" type="button" id="cmc-confirm">Confirm</button>';
-      document.getElementById('alertModalOverlay').classList.add('visible');
-      document.getElementById('cmc-confirm').onclick = function () {
-        ui.form.coinmarketcap_api_key = document.getElementById('cmc-key-input').value || '';
-        closeAlertModal();
-        runVpsWithLog(hostname, 'vps-update-coindata', 'Update CoinData API');
-      };
-      setTimeout(function () {
-        const input = document.getElementById('cmc-key-input');
-        if (input) input.focus();
-      }, 100);
-    }
-
     function previewVpsSystemdMigration(hostname) {
       const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
       function sendPreview() {
@@ -6726,7 +6677,14 @@
     }
 
     function fetchVpsDetail(hostname) {
-      return fetch(API_BASE + '/detail/' + encodeURIComponent(hostname), { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+      const generation = ++store.detailRequestGeneration;
+      if (store.detailAbortController) store.detailAbortController.abort();
+      store.detailAbortController = new AbortController();
+      return fetch(API_BASE + '/detail/' + encodeURIComponent(hostname), {
+        headers: { 'Authorization': 'Bearer ' + TOKEN },
+        signal: store.detailAbortController.signal,
+        cache: 'no-store'
+      })
         .then(function (r) {
           if (!r.ok) {
             if (r.status === 404 && store.hostname === hostname) {
@@ -6742,6 +6700,7 @@
           return r.json();
         })
         .then(function (data) {
+          if (generation !== store.detailRequestGeneration) return;
           if (!data) return;
           if (!data || data.kind !== 'vps' || data.hostname !== hostname) return;
           if (store.hostname !== hostname) return;
@@ -6754,17 +6713,28 @@
           }
           renderUi();
         })
-        .catch(function () {});
+        .catch(function (error) {
+          if (generation !== store.detailRequestGeneration || error.name === 'AbortError') return;
+        });
     }
 
     function fetchMasterDetail() {
-      return fetch(API_BASE + '/detail-master', { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+      const generation = ++store.detailRequestGeneration;
+      if (store.detailAbortController) store.detailAbortController.abort();
+      store.detailAbortController = new AbortController();
+      return fetch(API_BASE + '/detail-master', {
+        headers: { 'Authorization': 'Bearer ' + TOKEN },
+        signal: store.detailAbortController.signal,
+        cache: 'no-store'
+      })
         .then(function (r) {
           if (!r.ok) throw new Error('master detail fetch failed');
           return r.json();
         })
         .then(function (data) {
+          if (generation !== store.detailRequestGeneration) return;
           if (!data || data.kind !== 'master') return;
+          if (!isMasterContextView()) return;
           var hadDetail = !!(store.detail && store.detail.kind === 'master');
           store.detail = data;
           ensureMasterUi(data);
@@ -6774,7 +6744,9 @@
           }
           renderUi();
         })
-        .catch(function () {});
+        .catch(function (error) {
+          if (generation !== store.detailRequestGeneration || error.name === 'AbortError') return;
+        });
     }
 
     function scheduleMasterDetailFetch() {
@@ -6874,7 +6846,13 @@
         return;
       }
       if (msg.type === 'detail') {
-        store.detail = msg.data || null;
+        const incomingDetail = msg.data || null;
+        if (incomingDetail && incomingDetail.kind === 'vps' && (!isVpsContextView() || incomingDetail.hostname !== store.hostname)) return;
+        if (incomingDetail && incomingDetail.kind === 'master' && !isMasterContextView()) return;
+        store.detailRequestGeneration += 1;
+        if (store.detailAbortController) store.detailAbortController.abort();
+        store.detailAbortController = null;
+        store.detail = incomingDetail;
         if (store.detail && store.detail.kind === 'vps') {
           ensureVpsUi(store.detail.hostname, store.detail);
           const progress = store.detail.progress || {};
@@ -7187,24 +7165,6 @@
           scheduleVpsReadyCheck();
         } else {
           toast('Failed to add to /etc/hosts: ' + String(data.error || ''), 'error');
-        }
-        return;
-      }
-      if (msg.type === 'cmc_check_result') {
-        const data = msg.data || {};
-        store.addCmcCheck = {
-          ok: !!data.ok,
-          error: String(data.error || ''),
-          loading: false,
-          credit_limit_monthly: data.credit_limit_monthly == null ? null : data.credit_limit_monthly,
-          credits_used_day: data.credits_used_day == null ? null : data.credits_used_day,
-          credits_used_month: data.credits_used_month == null ? null : data.credits_used_month,
-          credits_left: data.credits_left == null ? null : data.credits_left,
-          credit_limit_monthly_reset_timestamp: data.credit_limit_monthly_reset_timestamp == null ? null : data.credit_limit_monthly_reset_timestamp
-        };
-        if (store.view === 'add') {
-          setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
-          setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
         }
         return;
       }
@@ -7563,7 +7523,6 @@
         store.detail = null;
         ensureAddFormDefaults();
         scheduleVpsReadyCheck();
-        scheduleCmcCheck();
       }
       if (view !== 'master-task-log' && view !== 'vps-task-log') {
         store.taskLog = defaultTaskLog();
@@ -8086,7 +8045,15 @@
           <div class='status-item'><div class='status-label'>PBGui</div><div class='status-value'>${esc(detected.pbgui_dir || '')}</div><div class='status-sub'>Remote PBGui directory</div></div>
           <div class='status-item'><div class='status-label'>PB7</div><div class='status-value'>${esc(detected.pb7_dir || '')}</div><div class='status-sub'>From pbgui.ini or install path</div></div>
           <div class='status-item'><div class='status-label'>Swap</div><div class='status-value'>${esc(detected.swap || '0')}</div><div class='status-sub'>Detected /swapfile size</div></div>
-          <div class='status-item'><div class='status-label'>CoinMarketCap API</div><div class='status-value'>${detected.coinmarketcap_api_key ? boolDot(true) : boolDot(false)}</div><div class='status-sub'>${detected.coinmarketcap_api_key ? 'Detected' : 'Missing'}</div></div>
+          <div class='status-item'><div class='status-label'>Credential Protocol</div><div class='status-value'>${esc(capabilityValue(detected.credential_protocol_version))}</div><div class='status-sub'>Cluster protocol version</div></div>
+          <div class='status-item'><div class='status-label'>Credential Capability</div><div class='status-value'>${capabilityDot(detected.credential_active)}</div><div class='status-sub'>${esc(capabilityStateText(detected.credential_active))}</div></div>
+          <div class='status-item'><div class='status-label'>Credential Reason</div><div class='status-value'>${esc(detected.credential_reason || 'Unknown')}</div><div class='status-sub'>Reported capability diagnosis</div></div>
+          <div class='status-item'><div class='status-label'>CMC Generations</div><div class='status-value'>${esc(capabilityValue(detected.cmc_materialized_generation))} / ${esc(capabilityValue(detected.cmc_catalog_generation))}</div><div class='status-sub'>Materialized / catalog</div></div>
+          <div class='status-item'><div class='status-label'>CMC Provider Used / Limit</div><div class='status-value'>${esc(capabilityValue(detected.cmc_provider_used))} / ${esc(capabilityValue(detected.cmc_provider_limit))}</div><div class='status-sub'>Newest secret-free provider usage observation</div></div>
+          <div class='status-item'><div class='status-label'>CMC Provider Usage Age</div><div class='status-value'>${esc(detected.cmc_provider_usage_age_seconds == null ? 'Unknown' : formatLatency(Number(detected.cmc_provider_usage_age_seconds) * 1000))}</div><div class='status-sub'>Newest provider usage evidence</div></div>
+          <div class='status-item'><div class='status-label'>CMC Authority Reachable</div><div class='status-value'>${esc(detected.cmc_authority_reachable === true ? 'Yes' : detected.cmc_authority_reachable === false ? 'No' : 'Unknown')}</div><div class='status-sub'>Reported authority route state</div></div>
+          <div class='status-item'><div class='status-label'>CMC Authority State Age</div><div class='status-value'>${esc(detected.cmc_authority_state_age_seconds == null ? 'Unknown' : formatLatency(Number(detected.cmc_authority_state_age_seconds) * 1000))}</div><div class='status-sub'>Replicated authority assignment age</div></div>
+          <div class='status-item'><div class='status-label'>Active CMC Keys</div><div class='status-value'>${esc(capabilityValue(detected.cmc_active_key_count))}</div><div class='status-sub'>Secret-free pool count</div></div>
         </div>`;
       const hostKeyHtml = hostKey.fingerprint
         ? `<div class='notice ${payload.needs_host_key_confirmation ? 'warning' : (hostKey.mismatch ? 'error' : 'info')}'>SSH host key for <strong>${esc(hostKey.host || payload.hostname || '')}</strong>${hostKey.ip ? ' (' + esc(hostKey.ip) + ')' : ''}: <span class='code'>${esc(hostKey.key_type || '')} ${esc(hostKey.fingerprint || '')}</span>${payload.needs_host_key_confirmation ? '<div style="margin-top:8px"><button class="btn primary" type="button" onclick="trustExistingVpsImportHostKey()">Trust fingerprint and probe again</button></div>' : ''}</div>`
@@ -8330,9 +8297,6 @@
       if (['ip', 'hostname', 'init_methode', 'initial_root_pw', 'root_pw', 'user_sudo', 'user_sudo_pw', 'private_key_user', 'private_key_file'].indexOf(name) >= 0) {
         scheduleVpsReadyCheck();
       }
-      if (name === 'coinmarketcap_api_key') {
-        scheduleCmcCheck();
-      }
       if (name === 'firewall_ssh_ips') {
         if (store.view === 'add') {
           setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
@@ -8370,25 +8334,6 @@
       }, 600);
     }
 
-    let addCmcCheckTimer = 0;
-
-    function scheduleCmcCheck() {
-      if (addCmcCheckTimer) clearTimeout(addCmcCheckTimer);
-      addCmcCheckTimer = setTimeout(function () {
-        addCmcCheckTimer = 0;
-        if (store.view !== 'add') return;
-        const key = String(store.addForm.coinmarketcap_api_key || '').trim();
-        if (!key) {
-          store.addCmcCheck = { ok: false, error: '', loading: false, credit_limit_monthly: null, credits_used_day: null, credits_used_month: null, credits_left: null, credit_limit_monthly_reset_timestamp: null };
-          setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
-          return;
-        }
-        store.addCmcCheck = { ok: false, error: '', loading: true, credit_limit_monthly: null, credits_used_day: null, credits_used_month: null, credits_left: null, credit_limit_monthly_reset_timestamp: null };
-        setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
-        send({ cmd: 'check_cmc_api_key', api_key: key });
-      }, 600);
-    }
-
     function addHostsEntryAction() {
       const ip = String(store.addForm.ip || '').trim();
       const hostname = String(store.addForm.hostname || '').trim();
@@ -8420,10 +8365,6 @@
         store.addForm.user = String(config.local_user || '').trim();
         changed = true;
       }
-      if (!String(store.addForm.coinmarketcap_api_key || '').trim() && String(config.coinmarketcap_api_key || '').trim()) {
-        store.addForm.coinmarketcap_api_key = String(config.coinmarketcap_api_key || '').trim();
-        changed = true;
-      }
       const publicIp = store.addPublicIp || { ip: '', loading: false, requested: false, applied: false };
       if (!String(store.addForm.firewall_ssh_ips || '').trim() && String(publicIp.ip || '').trim() && !publicIp.applied) {
         store.addForm.firewall_ssh_ips = String(publicIp.ip || '').trim();
@@ -8442,7 +8383,6 @@
       if (changed && store.view === 'add') {
         setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
         setHtmlIfChanged('add-status-details', renderAddStatusDetails(store.addForm));
-        scheduleCmcCheck();
       }
     }
 
@@ -9409,10 +9349,7 @@
       }
       const hasSwap = !!String(form.swap || '').trim();
       const hasInstallDir = !!String(form.install_dir || '').trim();
-      const hasCmc = !!String(form.coinmarketcap_api_key || '').trim();
       if (!hasSwap || !hasInstallDir) return false;
-      const cmcCheckOk = !!(store.addCmcCheck || {}).ok;
-      if (hasCmc && !cmcCheckOk) return false;
       const fwCheck = validateFirewallIps(form.firewall_ssh_ips);
       return fwCheck.ok;
     }
@@ -10087,7 +10024,6 @@
           <button class='${rebootBtnClass}' type='button' onclick='vpsActionWithPw(${js(selectedHost)}, "vps-reboot", "Reboot VPS")'>Reboot VPS</button>
           <button class='sb-btn' type='button' onclick='vpsActionWithPw(${js(selectedHost)}, "vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>
           <button class='sb-btn danger' type='button' onclick='confirmPurgeVpsInstall(${js(selectedHost)})'>Purge VPS Install</button>
-          <button class='sb-btn' type='button' onclick='openCoinDataPrompt(${js(selectedHost)})'>Update CoinData API</button>
           <button class='${systemdMigrationBtn.className}' type='button' title='${escAttr(systemdMigrationBtn.title)}' onclick='previewVpsSystemdMigration(${js(selectedHost)})'>${esc(systemdMigrationBtn.text)}</button>`;
       } else if (store.view === 'add') {
         html = `
@@ -10408,43 +10344,12 @@
         ? `<div style='position:absolute;right:12px;top:50%;transform:translateY(-50%)'><button class='btn primary' type='button' onclick='addHostsEntryAction()'>${esc(addHostsBtnText)}</button></div>`
         : '';
 
-      const cmcCheck = store.addCmcCheck || {};
-      const hasCmc = !!String(store.addForm.coinmarketcap_api_key || '').trim();
-      const cmcOk = !hasCmc || cmcCheck.ok;
-      const cmcLoading = !!cmcCheck.loading;
-      const cmcError = String(cmcCheck.error || '');
-      const cmcLimit = cmcCheck.credit_limit_monthly;
-      const cmcUsedDay = cmcCheck.credits_used_day;
-      const cmcUsedMonth = cmcCheck.credits_used_month;
-      const cmcLeft = cmcCheck.credits_left;
-      const cmcResetTs = cmcCheck.credit_limit_monthly_reset_timestamp;
       const fwCheck = validateFirewallIps(store.addForm.firewall_ssh_ips);
       const fwOk = fwCheck.ok;
       const fwValue = boolDot(fwOk);
       const fwSub = fwOk
         ? (String(store.addForm.firewall_ssh_ips || '').trim() || 'Empty (any IP)')
         : (fwCheck.error || 'Invalid IP list');
-
-      let cmcLabel = 'CoinData API key (optional)';
-      let cmcValue;
-      let cmcSub;
-      if (!hasCmc) {
-        cmcValue = `<span class='dot info'></span>Skipped`;
-        cmcSub = 'PBCoinData will not be configured';
-      } else if (cmcLoading) {
-        cmcValue = boolDot('pending');
-        cmcSub = 'Checking API key...';
-      } else if (cmcOk) {
-        cmcValue = boolDot(true);
-        cmcSub = 'Month ' + formatCount(cmcUsedMonth) + ' / ' + formatCount(cmcLimit) + ' credits, left ' + formatCount(cmcLeft);
-      } else {
-        cmcValue = boolDot(false);
-        cmcSub = cmcError || 'API key check failed';
-      }
-
-      const cmcMeta = cmcOk
-        ? `<div class='status-sub'>Day used: ${esc(formatCount(cmcUsedDay))}</div><div class='status-sub'>Month reset: ${esc(formatTs(cmcResetTs))}</div>`
-        : '';
 
       return `
         <div class='status-grid'>
@@ -10456,7 +10361,6 @@
           </div>
           <div class='status-item'><div class='status-label'>${esc(sshLabel)}</div><div class='status-value'>${sshValue}</div><div class='status-sub'>${esc(sshSub)}</div></div>
           <div class='status-item'><div class='status-label'>Allowed SSH IPs</div><div class='status-value'>${fwValue}</div><div class='status-sub'>${esc(fwSub)}</div></div>
-          <div class='status-item'><div class='status-label'>${esc(cmcLabel)}</div><div class='status-value'>${cmcValue}</div><div class='status-sub'>${esc(cmcSub)}</div>${cmcMeta}</div>
         </div>`;
     }
 
@@ -10542,7 +10446,7 @@
           <div class='panel-head'>
             <div>
               <div class='panel-title'>Step 4: Initialize &amp; Setup your VPS</div>
-              <div class='panel-sub'>Run only one time after installation. Init creates the user, changes the root password, and installs the SSH key. Setup configures swap, firewall, and optional CoinData services.</div>
+              <div class='panel-sub'>Run only one time after installation. Init creates the user, changes the root password, and installs the SSH key. Setup configures swap, firewall, and capability-aware services.</div>
             </div>
           </div>
           <div class='panel-body'>
@@ -10576,10 +10480,6 @@
                     return `<option value='${escAttr(option)}'${String(option) === String(form.swap || '0') ? ' selected' : ''}>${esc(option)}</option>`;
                   }).join('')}
                 </select>
-              </div>
-              <div class='field'>
-                <label>CoinMarketCap API Key (optional)</label>
-                ${renderVisibilityInput('password', form.coinmarketcap_api_key || config.coinmarketcap_api_key || '', "setAddField('coinmarketcap_api_key', this.value)", 'Show or hide CoinMarketCap API key', 'add.coinmarketcap_api_key')}
               </div>
               <div class='field'>
                 <label>Firewall SSH Port</label>
@@ -10635,14 +10535,11 @@
       }
       const userPwInvalid = hasInvalidPasswordChars(currentForm.user_pw);
       const initPwInvalid = initMethod === 'password' ? hasInvalidPasswordChars(currentForm.user_sudo_pw) : (initMethod === 'private_key' ? false : (hasInvalidPasswordChars(currentForm.initial_root_pw) || hasInvalidPasswordChars(currentForm.root_pw)));
-      const cmcCheck = store.addCmcCheck || {};
-      const hasCmc = !!String(currentForm.coinmarketcap_api_key || '').trim();
-      const cmcOk = !hasCmc || cmcCheck.ok;
       const preflightReady = addVpsPreflightReady();
       const ready = store.addVpsReady || {};
       const fwCheck = validateFirewallIps(currentForm.firewall_ssh_ips);
       const fwOk = fwCheck.ok;
-      const setupReady = !!installDir && cmcOk && fwOk;
+      const setupReady = !!installDir && fwOk;
       let initReadySub;
       if (canInit) {
         initReadySub = 'All required fields are set';
@@ -10661,8 +10558,6 @@
       } else if (!setupReady) {
         if (!installDir) {
           initReadySub = 'Install path missing';
-        } else if (hasCmc && !cmcOk) {
-          initReadySub = String(cmcCheck.error || '') || 'CoinMarketCap API key check failed';
         } else if (!fwOk) {
           initReadySub = fwCheck.error || 'Invalid firewall IP';
         } else {
@@ -10691,6 +10586,18 @@
       return count + ' ' + (count === 1 ? singular : plural);
     }
 
+    function capabilityValue(value) {
+      return value === null || value === undefined || String(value).trim() === '' ? 'Unknown' : String(value);
+    }
+
+    function capabilityStateText(value) {
+      return value === true ? 'Active' : value === false ? 'Inactive' : 'Unknown';
+    }
+
+    function capabilityDot(value) {
+      return value === true ? boolDot(true) : value === false ? boolDot(false) : `<span class='dot info'></span>Unknown`;
+    }
+
     function renderDetailSnapshotTable(status, isMaster) {
       const row = status && status.summary_row ? status.summary_row : null;
       if (!row) return '';
@@ -10701,9 +10608,17 @@
         { label: 'Reboot', value: row.reboot_required ? '❌' : '✅' },
         { label: 'Updates', value: row.updates || '-' }
       ];
-      if (!isMaster && status && status.cmc_credits !== null && status.cmc_credits !== undefined && String(status.cmc_credits).trim() !== '') {
-        columns.push({ label: 'CMC Credits', value: status.cmc_credits });
-      }
+      columns.push(
+        { label: 'Credential Protocol', value: capabilityValue(status && status.credential_protocol_version) },
+        { label: 'Credential Capability', value: capabilityStateText(status && status.credential_active) },
+        { label: 'Credential Reason', value: capabilityValue(status && status.credential_reason) },
+        { label: 'CMC Generation', value: capabilityValue(status && status.cmc_materialized_generation) + ' / ' + capabilityValue(status && status.cmc_catalog_generation) },
+        { label: 'CMC Keys', value: capabilityValue(status && status.cmc_active_key_count) },
+        { label: 'Provider Used / Limit', value: capabilityValue(status && status.cmc_provider_used) + ' / ' + capabilityValue(status && status.cmc_provider_limit) },
+        { label: 'Provider Usage Age', value: status && status.cmc_provider_usage_age_seconds != null ? formatLatency(Number(status.cmc_provider_usage_age_seconds) * 1000) : 'Unknown' },
+        { label: 'Authority Reachable', value: status && status.cmc_authority_reachable === true ? 'Yes' : status && status.cmc_authority_reachable === false ? 'No' : 'Unknown' },
+        { label: 'Authority State Age', value: status && status.cmc_authority_state_age_seconds != null ? formatLatency(Number(status.cmc_authority_state_age_seconds) * 1000) : 'Unknown' }
+      );
       columns.push(
         { label: 'PBGui', value: row.pbgui || '-' },
         { label: 'PBGui Branch', value: row.pbgui_branch || '-' },
@@ -11379,15 +11294,57 @@
         cards.push({ key:'setup_ok', label: 'Setup Ready', ok: false, sub: 'No successful setup yet' });
       }
       if (Object.prototype.hasOwnProperty.call(status, 'coindata_ok')) {
-        const configured = Object.prototype.hasOwnProperty.call(status, 'coindata_configured') ? !!status.coindata_configured : true;
-        const credits = status.cmc_credits;
-        let sub = configured ? (status.coindata_ok ? 'CoinData API OK' : 'CoinData API missing/invalid') : 'CoinMarketCap API key not configured';
-        if (configured && credits !== null && credits !== undefined && String(credits).trim() !== '') {
-          sub = asCountLabel(credits, 'credit left', 'credits left');
-        }
-        cards.push(configured
-          ? { key:'coindata_ok', label: 'CoinData Ready', ok: !!status.coindata_ok, sub: sub }
-          : { key:'coindata_ok', label: 'CoinData Ready', valueHtml: `<span class='dot info'></span>Skipped`, sub: sub });
+        cards.push({ key:'coindata_ok', label: 'CoinData Ready', ok: !!status.coindata_ok, sub: status.coindata_ok ? 'CoinData API OK' : 'CoinData API missing/invalid' });
+      }
+      if (Object.prototype.hasOwnProperty.call(status, 'credential_active')) {
+        cards.push({
+          key: 'credential_active',
+          label: 'Credential Capability',
+          valueHtml: capabilityDot(status.credential_active),
+          sub: status.credential_reason || capabilityStateText(status.credential_active)
+        });
+        cards.push({
+          key: 'credential_protocol_version',
+          label: 'Credential Protocol',
+          valueHtml: esc(capabilityValue(status.credential_protocol_version)),
+          sub: 'Cluster protocol version'
+        });
+        cards.push({
+          key: 'cmc_generations',
+          label: 'CMC Generations',
+          valueHtml: esc(capabilityValue(status.cmc_materialized_generation)) + ' / ' + esc(capabilityValue(status.cmc_catalog_generation)),
+          sub: 'Materialized / catalog'
+        });
+        cards.push({
+          key: 'cmc_active_key_count',
+          label: 'Active CMC Keys',
+          valueHtml: esc(capabilityValue(status.cmc_active_key_count)),
+          sub: 'Secret-free pool count'
+        });
+        cards.push({
+          key: 'cmc_provider_usage',
+          label: 'CMC Provider Used / Limit',
+          valueHtml: esc(capabilityValue(status.cmc_provider_used)) + ' / ' + esc(capabilityValue(status.cmc_provider_limit)),
+          sub: 'Newest secret-free provider usage observation'
+        });
+        cards.push({
+          key: 'cmc_provider_usage_age_seconds',
+          label: 'CMC Provider Usage Age',
+          valueHtml: esc(status.cmc_provider_usage_age_seconds == null ? 'Unknown' : formatLatency(Number(status.cmc_provider_usage_age_seconds) * 1000)),
+          sub: 'Age of newest provider usage evidence'
+        });
+        cards.push({
+          key: 'cmc_authority_reachable',
+          label: 'CMC Authority Reachable',
+          valueHtml: capabilityDot(status.cmc_authority_reachable),
+          sub: status.cmc_authority_reachable === true ? 'Assigned authority is reachable' : status.cmc_authority_reachable === false ? 'Assigned authority is not reachable' : 'Authority reachability not reported'
+        });
+        cards.push({
+          key: 'cmc_authority_state_age_seconds',
+          label: 'CMC Authority State Age',
+          valueHtml: esc(status.cmc_authority_state_age_seconds == null ? 'Unknown' : formatLatency(Number(status.cmc_authority_state_age_seconds) * 1000)),
+          sub: 'Age of replicated authority assignment state'
+        });
       }
       if (Object.prototype.hasOwnProperty.call(status, 'online')) {
         const telemetryAge = Number(status.telemetry_age);
@@ -11768,7 +11725,6 @@
       const setupPending = !status.setup_ok && !(summary || {}).pbgui;
       const formHostAttr = `data-vps-host='${escAttr(detail.hostname)}'`;
       const vpsUserPwVisibilityKey = 'vps:' + detail.hostname + ':user_pw';
-      const vpsCoinmarketcapKeyVisibilityKey = 'vps:' + detail.hostname + ':coinmarketcap_api_key';
       return `
 
         <h2 class='page-section-title'>${esc(detail.hostname)} &mdash; Change VPS</h2>
@@ -11811,10 +11767,6 @@
                     return `<option value='${escAttr(option)}'${String(option) === String(ui.form.swap || '0') ? ' selected' : ''}>${esc(option)}</option>`;
                   }).join('')}
                 </select>
-              </div>
-              <div class='field'>
-                <label>CoinMarketCap API Key (optional)</label>
-                ${renderVisibilityInput('password', ui.form.coinmarketcap_api_key || '', `setVpsField(${js(detail.hostname)}, 'coinmarketcap_api_key', this.value)`, 'Show or hide CoinMarketCap API key', vpsCoinmarketcapKeyVisibilityKey, '', '', `data-vps-field='coinmarketcap_api_key' ${formHostAttr}`)}
               </div>
               <div class='field'>
                 <label>Firewall SSH Port</label>

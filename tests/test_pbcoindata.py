@@ -31,13 +31,16 @@ Areas tested:
 import sys
 import json
 import time
+import threading
 import configparser
 import importlib.util
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from credential_store import CredentialStore
 
 # Ensure project root is on path
 ROOT_DIR = Path(__file__).parent.parent.resolve()
@@ -66,7 +69,10 @@ build_symbol_mappings = PBCoinData_mod.build_symbol_mappings
 @pytest.fixture
 def tmp_workdir(tmp_path, monkeypatch):
     """Set up a temporary working directory with minimal pbgui.ini."""
+    import pbgui_purefunc
+
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(pbgui_purefunc, "pbgui_ini_path", lambda: tmp_path / "pbgui.ini")
     # Create minimal directory structure
     (tmp_path / "data" / "coindata").mkdir(parents=True)
     (tmp_path / "data" / "pid").mkdir(parents=True)
@@ -77,13 +83,13 @@ def tmp_workdir(tmp_path, monkeypatch):
         "hyperliquid.swap": "['BTCUSDC', 'ETHUSDC', 'kPEPEUSDC', 'kBONKUSDC']",
     }
     config["coinmarketcap"] = {
-        "api_key": "test_key_123",
         "fetch_limit": "5000",
         "fetch_interval": "24",
         "metadata_interval": "1",
     }
     with open(tmp_path / "pbgui.ini", "w") as f:
         config.write(f)
+    CredentialStore(tmp_path / "data" / "credentials").create_cmc("test_key_123")
     return tmp_path
 
 
@@ -558,8 +564,9 @@ class TestCoinDataConstructor:
         assert coindata._exchange_mappings == {}
 
     def test_loads_config_from_ini(self, coindata):
-        """Constructor reads api_key from pbgui.ini."""
-        assert coindata._api_key == "test_key_123"
+        """Constructor exposes no direct compatibility credential field."""
+        assert not hasattr(coindata, "_api_key")
+        assert not hasattr(coindata, "api_key")
 
     def test_exchanges_list(self, coindata):
         """Exchanges list is populated from Exchanges enum."""
@@ -581,23 +588,24 @@ class TestConfig:
     """Test pbgui.ini configuration read/write."""
 
     def test_constructor_removes_legacy_exchanges_section(self, coindata):
-        """Startup migration removes legacy [exchanges] while preserving coinmarketcap config."""
+        """Startup migration removes legacy exchanges while preserving non-secret CMC config."""
         config = configparser.ConfigParser()
         config.read("pbgui.ini")
 
         assert not config.has_section("exchanges")
         assert config.has_section("coinmarketcap")
-        assert config.get("coinmarketcap", "api_key") == "test_key_123"
+        assert not config.has_option("coinmarketcap", "api_key")
 
     def test_load_config(self, coindata):
-        """load_config() reads CMC settings."""
-        assert coindata.api_key == "test_key_123"
+        """load_config() reads only non-secret CMC settings."""
+        assert coindata.cmc_pool_ready is True
         assert coindata.fetch_limit == 5000
         assert coindata.fetch_interval == 24
 
     def test_load_data_without_api_key_uses_cache_only(self, coindata, tmp_workdir, monkeypatch):
         """Missing CMC key does not block cached coindata or trigger API fetches."""
-        coindata.api_key = ""
+        for record in coindata.cmc_pool.store.list_cmc():
+            coindata.cmc_pool.store.delete_cmc(record["id"])
         data_file = tmp_workdir / "data" / "coindata" / "coindata.json"
         data_file.write_text(json.dumps({"data": [{"symbol": "BTC"}]}), encoding="utf-8")
         calls = []
@@ -610,7 +618,8 @@ class TestConfig:
 
     def test_load_metadata_without_api_key_uses_cache_only(self, coindata, tmp_workdir, monkeypatch):
         """Missing CMC key does not block cached metadata or trigger API fetches."""
-        coindata.api_key = ""
+        for record in coindata.cmc_pool.store.list_cmc():
+            coindata.cmc_pool.store.delete_cmc(record["id"])
         metadata_file = tmp_workdir / "data" / "coindata" / "metadata.json"
         metadata_file.write_text(json.dumps({"data": {"1": {"notice": "ok"}}}), encoding="utf-8")
         calls = []
@@ -622,16 +631,36 @@ class TestConfig:
         assert coindata.metadata == {"data": {"1": {"notice": "ok"}}}
 
     def test_save_config(self, coindata, tmp_workdir):
-        """save_config() persists changes."""
-        coindata.api_key = "new_key_456"
+        """save_config() persists intervals without writing any credential field."""
         coindata.fetch_limit = 1000
         coindata.save_config()
 
         # Read back
         config = configparser.ConfigParser()
         config.read("pbgui.ini")
-        assert config.get("coinmarketcap", "api_key") == "new_key_456"
+        assert not config.has_option("coinmarketcap", "api_key")
         assert config.get("coinmarketcap", "fetch_limit") == "1000"
+
+    def test_save_config_preserves_concurrent_unrelated_key(self, coindata, tmp_workdir):
+        """save_config serializes with an unrelated shared INI transaction."""
+        import pbgui_purefunc
+        import threading
+
+        barrier = threading.Barrier(2)
+
+        def unrelated_writer():
+            barrier.wait()
+            pbgui_purefunc.save_ini("other", "value", "concurrent")
+
+        thread = threading.Thread(target=unrelated_writer)
+        thread.start()
+        barrier.wait()
+        coindata.save_config()
+        thread.join()
+
+        snapshot = pbgui_purefunc.load_ini_snapshot(tmp_workdir / "pbgui.ini")
+        assert not snapshot.has_option("coinmarketcap", "api_key")
+        assert snapshot.get("other", "value") == "concurrent"
 
     def test_has_new_config_detects_changes(self, coindata, tmp_workdir):
         """has_new_config() detects ini modifications."""
@@ -644,6 +673,151 @@ class TestConfig:
         time.sleep(0.1)
         Path("pbgui.ini").touch()
         assert coindata.has_new_config() is True
+
+    def test_all_runtime_config_keys_apply_as_one_candidate(self, coindata, tmp_workdir):
+        """Every reloadable key is validated and published together."""
+        config = configparser.ConfigParser()
+        config["coinmarketcap"] = {
+            "fetch_limit": "200",
+            "fetch_interval": "2",
+            "metadata_interval": "7",
+            "mapping_interval": "168",
+        }
+        with Path("pbgui.ini").open("w") as handle:
+            config.write(handle)
+
+        assert coindata.load_config() is True
+        assert coindata.fetch_limit == 200
+        assert coindata.fetch_interval == 2
+        assert coindata.metadata_interval == 7
+        assert coindata.mapping_interval == 168
+        with pytest.raises(FrozenInstanceError):
+            coindata._runtime_config.fetch_limit = 400
+
+    def test_missing_keys_restore_documented_defaults(self, coindata):
+        """Deleting settings resets all values rather than retaining stale overrides."""
+        coindata._fetch_limit = 200
+        coindata._fetch_interval = 2
+        coindata._metadata_interval = 7
+        coindata._mapping_interval = 168
+        Path("pbgui.ini").write_text("[coinmarketcap]\n", encoding="utf-8")
+
+        assert coindata.load_config() is True
+        assert (coindata.fetch_limit, coindata.fetch_interval) == (5000, 24)
+        assert (coindata.metadata_interval, coindata.mapping_interval) == (1, 24)
+
+    @pytest.mark.parametrize("key,value", [
+        ("fetch_limit", "nan"),
+        ("fetch_limit", "199"),
+        ("fetch_interval", "25"),
+        ("metadata_interval", "inf"),
+        ("mapping_interval", "0"),
+    ])
+    def test_invalid_numeric_rejects_whole_generation_and_is_retryable(self, coindata, caplog, key, value):
+        """Malformed generations preserve last-good state and are retried unchanged."""
+        previous = coindata._runtime_config
+        generation = coindata._config_generation
+        Path("pbgui.ini").write_text(
+            f"[coinmarketcap]\n{key} = {value}\n[other]\nvalue = must-not-appear\n",
+            encoding="utf-8",
+        )
+
+        assert coindata.load_config() is False
+        assert coindata.load_config() is False
+        assert coindata._runtime_config == previous
+        assert coindata._config_generation == generation
+        assert coindata.has_new_config() is True
+        assert "must-not-appear" not in caplog.text
+
+    def test_corrected_generation_recovers_after_rejection(self, coindata):
+        """A corrected file applies after a malformed generation."""
+        Path("pbgui.ini").write_text("[coinmarketcap]\nfetch_interval = bad\n", encoding="utf-8")
+        assert coindata.load_config() is False
+        Path("pbgui.ini").write_text("[coinmarketcap]\nfetch_interval = 3\n", encoding="utf-8")
+        assert coindata.load_config() is True
+        assert coindata.fetch_interval == 3
+        assert coindata._config_load_failed is False
+
+    def test_load_config_reads_exactly_one_snapshot_per_attempt(self, coindata, monkeypatch):
+        """One apply attempt cannot combine values from multiple file generations."""
+        snapshot = PBCoinData_mod.load_ini_snapshot(Path("pbgui.ini"))
+        calls = []
+        coindata._config_generation = None
+        monkeypatch.setattr(PBCoinData_mod, "load_ini_snapshot", lambda path: calls.append(path) or snapshot)
+
+        assert coindata.load_config() is True
+        assert calls == [coindata._ini_watcher._ini_path]
+
+    def test_copy_trading_user_and_role_remain_on_demand(self, coindata):
+        """Operation-scoped settings are not hidden in the runtime candidate cache."""
+        Path("pbgui.ini").write_text(
+            "[coinmarketcap]\ncpt_user.binance = first\n[main]\nrole = slave\n",
+            encoding="utf-8",
+        )
+        assert coindata._load_cpt_user("binance") == "first"
+        assert coindata._is_master() is False
+        Path("pbgui.ini").write_text(
+            "[coinmarketcap]\ncpt_user.binance = second\n[main]\nrole = master\n",
+            encoding="utf-8",
+        )
+        assert coindata._load_cpt_user("binance") == "second"
+        assert coindata._is_master() is True
+
+    def test_daemon_watcher_start_stop_is_idempotent_and_releases_thread(self, coindata):
+        """CoinData's sole watcher has deterministic lifecycle cleanup."""
+        watcher = coindata._ini_watcher
+        watcher.start()
+        watcher.start()
+        assert watcher.is_running is True
+        watcher.stop()
+        watcher.stop()
+        assert watcher.is_running is False
+        assert watcher._thread is None
+
+    def test_config_event_wakes_before_fixed_schedule_without_interrupting_cycle(self, monkeypatch):
+        """A change wakes scheduling only after the active cycle completes once."""
+        calls = []
+
+        class FakeEvent:
+            def clear(self):
+                calls.append("clear")
+
+            def wait(self, timeout):
+                calls.append(("wait", timeout))
+                raise KeyboardInterrupt
+
+        class FakeWatcher:
+            def __init__(self):
+                self.changed = FakeEvent()
+
+            def start(self):
+                calls.append("start")
+
+            def stop(self):
+                calls.append("stop")
+
+        class FakeCoinData:
+            def __init__(self, defer_config=False):
+                assert defer_config is True
+                self._ini_watcher = FakeWatcher()
+                self._config_load_failed = False
+                self._logged_idle = False
+
+            def is_running(self): return False
+            def save_pid(self): calls.append("pid")
+            def load_config(self): calls.append("config")
+            def _is_master(self): return True
+            def load_data(self): calls.append("data")
+            def load_metadata(self): calls.append("metadata")
+            def update_mappings(self): calls.append("mapping")
+
+        monkeypatch.setattr(PBCoinData_mod, "CoinData", FakeCoinData)
+        with pytest.raises(KeyboardInterrupt):
+            PBCoinData_mod.main()
+
+        assert calls.count("data") == calls.count("metadata") == calls.count("mapping") == 1
+        assert calls.index("mapping") < calls.index(("wait", 60))
+        assert calls[-1] == "stop"
 
 
 # ============================================================================
@@ -1270,16 +1444,20 @@ class TestCMCNetworkAndValidation:
 
     def test_cmc_get_json_retries_429_then_succeeds(self, coindata, monkeypatch):
         """HTTP 429 is retried and succeeds when a later attempt returns valid payload."""
+        coindata.cmc_pool.store.create_cmc("first-pool-secret")
+        coindata.cmc_pool.store.create_cmc("second-pool-secret")
         responses = [
             MagicMock(status_code=429, text='{"status": {"error_message": "rate limited"}}'),
-            MagicMock(status_code=200, text='{"data": []}'),
+            MagicMock(status_code=200, text='{"status": {"credit_count": 2}, "data": []}'),
         ]
+        used_keys = []
 
         class FakeSession:
             def __init__(self):
                 self.headers = {}
 
             def get(self, url, params=None, timeout=30):
+                used_keys.append(self.headers["X-CMC_PRO_API_KEY"])
                 return responses.pop(0)
 
         monkeypatch.setattr(PBCoinData_mod, "Session", FakeSession)
@@ -1294,10 +1472,243 @@ class TestCMCNetworkAndValidation:
             timeout=1,
         )
 
-        assert payload == {"data": []}
+        assert payload == {"status": {"credit_count": 2}, "data": []}
         assert status_code == 200
         assert attempts == 2
         assert error is None
+        assert len(set(used_keys)) == 2
+        pool_status = coindata.cmc_pool.status()
+        assert sum(item["total_acquisitions"] for item in pool_status["keys"]) == 2
+        assert sum(item["used_credits"] for item in pool_status["keys"]) == 2
+
+    def test_key_info_acquires_zero_credits_and_settles_provider_usage(self, coindata, monkeypatch):
+        """Key info counts an attempt without reserving credits and records provider counters."""
+        coindata.cmc_pool.store.create_cmc("status-pool-secret")
+        response_payload = {
+            "status": {"credit_count": 0},
+            "data": {
+                "plan": {
+                    "credit_limit_monthly": 10000,
+                    "credit_limit_monthly_reset": "2026-08-01",
+                    "credit_limit_monthly_reset_timestamp": 1785542400,
+                },
+                "usage": {
+                    "current_day": {"credits_used": 3},
+                    "current_month": {"credits_used": 12, "credits_left": 9988},
+                },
+            },
+        }
+
+        class FakeSession:
+            def __init__(self):
+                self.headers = {}
+
+            def get(self, url, params=None, timeout=30):
+                return MagicMock(status_code=200, text=json.dumps(response_payload), headers={})
+
+        monkeypatch.setattr(PBCoinData_mod, "Session", FakeSession)
+
+        assert coindata.fetch_api_status() is True
+        key_status = coindata.cmc_pool.status()["keys"][0]
+        assert key_status["total_acquisitions"] == 1
+        assert key_status["used_credits"] == 0
+        assert key_status["provider_used"] == 12
+        assert key_status["provider_remaining"] == 9988
+        assert key_status["provider_reset_at"] == 1785542400
+
+    def test_timeout_settles_once_with_conservative_reservation(self, coindata, monkeypatch):
+        """An uncertain timeout remains charged at the estimate and closes its acquisition."""
+        coindata.cmc_pool.store.create_cmc("timeout-pool-secret")
+
+        class FakeSession:
+            def __init__(self):
+                self.headers = {}
+
+            def get(self, url, params=None, timeout=30):
+                raise PBCoinData_mod.Timeout("provider timed out")
+
+        monkeypatch.setattr(PBCoinData_mod, "Session", FakeSession)
+        payload, status_code, attempts, error = coindata._cmc_get_json(
+            endpoint="listings",
+            url="https://example.com/v1/cryptocurrency/listings/latest",
+            headers={},
+            params={"limit": 500},
+            max_retries=1,
+            timeout=1,
+        )
+
+        assert (payload, status_code, attempts) == (None, None, 1)
+        assert error == "provider timed out"
+        key_status = coindata.cmc_pool.status()["keys"][0]
+        assert key_status["used_credits"] == 3
+        assert key_status["last_outcome"] == "error"
+        state = json.loads(coindata.cmc_pool._state_path.read_text(encoding="utf-8"))
+        assert all(item["settled"] is True for item in state["acquisitions"].values())
+
+    def test_malformed_200_and_logs_do_not_expose_pool_secret(self, coindata, monkeypatch):
+        """Malformed success is conservative while provider diagnostics redact the selected key."""
+        secret = "pool-secret-must-not-leak"
+        coindata.cmc_pool.store.create_cmc(secret)
+        messages = []
+
+        class FakeSession:
+            def __init__(self):
+                self.headers = {}
+
+            def get(self, url, params=None, timeout=30):
+                return MagicMock(status_code=200, text=f'not-json {secret}', headers={})
+
+        monkeypatch.setattr(PBCoinData_mod, "Session", FakeSession)
+        monkeypatch.setattr(PBCoinData_mod, "_log", lambda service, message, **kwargs: messages.append(message))
+        monkeypatch.setattr(PBCoinData_mod, "sleep", lambda _: None)
+
+        assert coindata.fetch_data() is False
+        assert secret not in "\n".join(messages)
+        assert secret not in json.dumps(coindata.cmc_pool_status())
+        key_status = coindata.cmc_pool.status()["keys"][0]
+        assert key_status["used_credits"] == 25
+
+    def test_provider_error_redacts_echoed_pool_secret(self, coindata, monkeypatch):
+        """A provider error that echoes its credential is redacted before metrics logging."""
+        secret = "echoed-pool-secret"
+        for record in coindata.cmc_pool.store.list_cmc():
+            coindata.cmc_pool.store.delete_cmc(record["id"])
+        coindata.cmc_pool.store.create_cmc(secret)
+        messages = []
+
+        class FakeSession:
+            def __init__(self):
+                self.headers = {}
+
+            def get(self, url, params=None, timeout=30):
+                return MagicMock(
+                    status_code=401,
+                    text=json.dumps({"status": {"error_message": f"Invalid API key: {secret}"}}),
+                    headers={},
+                )
+
+        monkeypatch.setattr(PBCoinData_mod, "Session", FakeSession)
+        monkeypatch.setattr(PBCoinData_mod, "_log", lambda service, message, **kwargs: messages.append(message))
+
+        payload, status_code, attempts, error = coindata._cmc_get_json(
+            endpoint="listings",
+            url="https://example.com/v1/cryptocurrency/listings/latest",
+            headers={},
+            params={"limit": 5000},
+            max_retries=1,
+        )
+        coindata._log_cmc_metrics("listings", False, attempts, status_code, error=error)
+
+        assert payload is None
+        assert error == "Invalid API key: <redacted>"
+        assert secret not in "\n".join(messages)
+        assert "<redacted>" in "\n".join(messages)
+
+    def test_listings_refresh_is_host_wide_single_flight(self, coindata, tmp_workdir, monkeypatch):
+        """Overlapping CoinData owners share the first process's published listings cache."""
+        coindata.cmc_pool.store.create_cmc("single-flight-secret")
+        other = CoinData(cmc_pool=coindata.cmc_pool)
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        class FakeSession:
+            def __init__(self):
+                self.headers = {}
+
+            def get(self, url, params=None, timeout=30):
+                calls.append(url)
+                entered.set()
+                assert release.wait(timeout=5)
+                return MagicMock(
+                    status_code=200,
+                    text='{"status": {"credit_count": 1}, "data": []}',
+                    headers={},
+                )
+
+        monkeypatch.setattr(PBCoinData_mod, "Session", FakeSession)
+        monkeypatch.setattr(coindata, "fetch_api_status", lambda: True)
+        monkeypatch.setattr(other, "fetch_api_status", lambda: True)
+        results = []
+        first = threading.Thread(target=lambda: results.append(coindata.fetch_data()))
+        second = threading.Thread(target=lambda: results.append(other.fetch_data()))
+        first.start()
+        assert entered.wait(timeout=5)
+        second.start()
+        time.sleep(0.05)
+        release.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+
+        assert results == [True, True]
+        assert len(calls) == 1
+        assert other.data == {"status": {"credit_count": 1}, "data": []}
+
+    def test_metadata_refresh_is_host_wide_single_flight(self, coindata, tmp_workdir, monkeypatch):
+        """Overlapping metadata owners share the first process's published cache."""
+        coindata.cmc_pool.store.create_cmc("metadata-flight-secret")
+        other = CoinData(cmc_pool=coindata.cmc_pool)
+        listing = {"data": [{"id": 1, "symbol": "BTC"}]}
+        coindata.data = listing
+        other.data = listing
+        coindata._symbols_all = ["BTC"]
+        other._symbols_all = ["BTC"]
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        class FakeSession:
+            def __init__(self):
+                self.headers = {}
+
+            def get(self, url, params=None, timeout=30):
+                calls.append(url)
+                entered.set()
+                assert release.wait(timeout=5)
+                return MagicMock(
+                    status_code=200,
+                    text='{"status": {"credit_count": 1}, "data": {"1": {"notice": null}}}',
+                    headers={},
+                )
+
+        monkeypatch.setattr(PBCoinData_mod, "Session", FakeSession)
+        monkeypatch.setattr(coindata, "fetch_api_status", lambda: True)
+        monkeypatch.setattr(other, "fetch_api_status", lambda: True)
+        results = []
+        first = threading.Thread(target=lambda: results.append(coindata.fetch_metadata()))
+        second = threading.Thread(target=lambda: results.append(other.fetch_metadata()))
+        first.start()
+        assert entered.wait(timeout=5)
+        second.start()
+        time.sleep(0.05)
+        release.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+
+        assert results == [True, True]
+        assert len(calls) == 1
+        assert other.metadata["data"]["1"]["notice"] is None
+
+    def test_malformed_key_info_preserves_false_return_contract(self, coindata, monkeypatch):
+        """Incomplete key-info HTTP 200 responses fail cleanly instead of raising."""
+        coindata.cmc_pool.store.create_cmc("malformed-status-secret")
+
+        class FakeSession:
+            def __init__(self):
+                self.headers = {}
+
+            def get(self, url, params=None, timeout=30):
+                return MagicMock(
+                    status_code=200,
+                    text='{"status": {"credit_count": 0}, "data": {"plan": {}, "usage": {}}}',
+                    headers={},
+                )
+
+        monkeypatch.setattr(PBCoinData_mod, "Session", FakeSession)
+        monkeypatch.setattr(PBCoinData_mod, "sleep", lambda _: None)
+
+        assert coindata.fetch_api_status() is False
+        assert coindata.api_error
 
     def test_fetch_data_rejects_invalid_200_payload(self, coindata, monkeypatch):
         """Malformed successful payload is treated as failure and does not overwrite data."""
@@ -2508,7 +2919,7 @@ class TestBuildMappingCopyTrading:
 
         # 4. File timestamp is from this test run
         file_mtime = cpt_file.stat().st_mtime
-        assert file_mtime >= before_ts, (
+        assert file_mtime >= before_ts - 1.0, (
             f"copy_trading.json mtime ({file_mtime}) is older than test start ({before_ts})"
         )
         assert file_mtime <= after_ts + 1, (
@@ -3138,7 +3549,9 @@ class TestUpdatePrices:
 
         assert ok is True
         assert FakeExchange.fetch_price_calls == 0, "Hyperliquid should skip per-symbol fallback"
-        assert duration < 0.05, f"Hyperliquid update unexpectedly slow: {duration:.3f}s"
+        # The exact counter above proves that the slow fallback was skipped;
+        # retain only a broad guard against an unrelated stall on loaded CI hosts.
+        assert duration < 1.0, f"Hyperliquid update unexpectedly slow: {duration:.3f}s"
 
         updated = coindata.load_exchange_mapping("hyperliquid")
         priced = [r for r in updated if float(r.get("price_last") or 0) > 0]

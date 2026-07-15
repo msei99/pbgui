@@ -386,6 +386,19 @@
         .backup-compare-table .backup-row.selected td:first-child {
             border-left: 3px solid #26a69a;
         }
+        .tradfi-profile-wrap { overflow-x:auto; border:1px solid #2d3748; border-radius:6px; margin:12px 0; }
+        .tradfi-profile-table { width:100%; min-width:980px; border-collapse:collapse; font-size:var(--fs-sm); }
+        .tradfi-profile-table th { position:sticky; top:0; background:#1a202c; color:#94a3b8; text-align:left; padding:8px 10px; border-bottom:2px solid #2d3748; white-space:nowrap; }
+        .tradfi-profile-table td { padding:8px 10px; border-bottom:1px solid #1e2533; white-space:nowrap; }
+        .tradfi-profile-table tbody tr { cursor:pointer; }
+        .tradfi-profile-table tbody tr:hover td { background:rgba(255,255,255,.03); }
+        .tradfi-profile-table tbody tr.selected td { background:rgba(77,166,255,.12); }
+        .tradfi-profile-table tbody tr.selected td:first-child { border-left:3px solid #26a69a; padding-left:7px; }
+        .tradfi-profile-id { font-family:monospace; color:#94a3b8; }
+        .tradfi-projection-status { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin:12px 0; padding:10px 12px; border:1px solid #2d3748; border-radius:6px; background:#151d2b; }
+        .tradfi-projection-copy { min-width:0; color:#94a3b8; font-size:var(--fs-sm); overflow-wrap:anywhere; }
+        .tradfi-active { color:#68d391; font-weight:700; }
+        .tradfi-inactive { color:#fbbf24; }
         /* Toast notifications (success only) */
         .toast {
             position: fixed;
@@ -494,6 +507,10 @@
         /* Responsive */
         @media (max-width: 768px) {
             .form-grid { grid-template-columns: 1fr; }
+            .tradfi-profile-wrap { max-width:calc(100vw - 32px); }
+            #tradfiPanel > div:first-child { flex-wrap:wrap; }
+            #tradfiActions { align-items:stretch; }
+            #tradfiActions .btn { flex:1 1 150px; }
         }
 
         /* ── Help overlay ── */
@@ -584,7 +601,7 @@
         .gs-topic { color:#93c5fd; font-weight:600; font-size: var(--fs-sm); margin-bottom:5px; }
         .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
     </style>
-    <script src="/app/js/log_viewer_panel.js?v=25"></script>
+    <script src="/app/js/log_viewer_panel.js?v=26"></script>
 </head>
 <body>
 
@@ -934,7 +951,25 @@
             <!-- Extended provider section -->
             <div style="border:1px solid #2d3748; border-radius:6px; padding:12px;">
                 <strong>Extended provider</strong> — optional, for backtests older than 7 days
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px;">
+                    <span style="font-size:var(--fs-sm);color:#94a3b8;">Select an exact vault profile. Active profiles are marked explicitly.</span>
+                    <button class="btn btn-sm btn-secondary" type="button" onclick="newTradfiProfile()">New Profile</button>
+                </div>
+                <div class="tradfi-profile-wrap">
+                    <table class="tradfi-profile-table">
+                        <thead><tr><th>Profile ID</th><th>Provider</th><th>Label</th><th>Local State</th><th>Replicated Selection</th><th>Pending</th><th>Shared</th><th>Generation</th><th>API Key</th><th>API Secret</th><th>Origin</th><th>Updated</th></tr></thead>
+                        <tbody id="tradfiProfilesBody"><tr><td colspan="12">Loading profiles...</td></tr></tbody>
+                    </table>
+                </div>
+                <div class="tradfi-projection-status">
+                    <div class="tradfi-projection-copy" id="tradfiProjectionStatus">PB7 projection status loading...</div>
+                    <button class="btn btn-sm btn-secondary" id="btnTradfiProjectionRetry" type="button" onclick="retryTradfiProjection()">Retry PB7 Projection</button>
+                </div>
                 <div class="form-grid" style="margin-top:12px;">
+                    <div class="form-group">
+                        <label>Selected Profile ID</label>
+                        <input type="text" id="tradfiProfileId" readonly placeholder="New profile" />
+                    </div>
                     <div class="form-group">
                         <label>Provider</label>
                         <select id="tradfiProvider" onchange="onTradfiProviderChange()"></select>
@@ -942,6 +977,14 @@
                            style="font-size:var(--fs-sm); color:#26a69a; text-decoration:none; display:none; margin-top:4px; display:flex; align-items:center; gap:4px;">
                             &#128279; <span id="tradfiProviderLinkLabel"></span>
                         </a>
+                    </div>
+                    <div class="form-group">
+                        <label>Label</label>
+                        <input type="text" id="tradfiLabel" maxlength="120" placeholder="Profile label" />
+                    </div>
+                    <div class="form-group" style="display:flex;gap:18px;align-items:center;padding-top:24px;">
+                        <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="tradfiShared" checked> Shared</label>
+                        <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="tradfiActive" checked> Active</label>
                     </div>
                     <div class="form-group">
                         <label>API Key</label>
@@ -959,10 +1002,13 @@
                     </div>
                 </div>
                 <p id="tradfiProviderNote" style="font-size:var(--fs-sm); color:#94a3b8; margin:4px 0 12px;"></p>
-                <div style="display:flex; gap:8px;">
+                <p id="tradfiProfileStatus" style="font-size:var(--fs-sm); color:#94a3b8; margin:4px 0 12px;"></p>
+                <div id="tradfiActions" style="display:flex; gap:8px; flex-wrap:wrap;">
                     <button class="btn btn-sm btn-info" onclick="tradfiTest()">Test Connection</button>
-                    <button class="btn btn-sm btn-primary" onclick="tradfiSave()">Save TradFi Config</button>
-                    <button class="btn btn-sm btn-danger" onclick="tradfiClear()">Clear TradFi Config</button>
+                    <button class="btn btn-sm btn-primary" onclick="tradfiSave(false)">Create / Update</button>
+                    <button class="btn btn-sm btn-secondary" id="btnTradfiRotate" onclick="tradfiSave(true)">Rotate Replacement</button>
+                    <button class="btn btn-sm btn-secondary" id="btnTradfiToggle" onclick="tradfiToggleActive()">Disable</button>
+                    <button class="btn btn-sm btn-danger" id="btnTradfiDelete" onclick="tradfiClear()">Delete Profile</button>
                 </div>
             </div>
         </div>
@@ -1037,7 +1083,7 @@
     var API_BASE       = "%%API_BASE%%";
     var PBGUI_VERSION  = "%%VERSION%%";
     var PBGUI_SERIAL   = "%%SERIAL%%";
-    if (TOKEN          === "%%" + "TOKEN%%")    TOKEN          = new URLSearchParams(window.location.search).get("token") || "";
+    if (TOKEN          === "%%" + "TOKEN%%")    TOKEN          = "";
     if (API_BASE       === "%%" + "API_BASE%%") API_BASE       = "/api/api-keys";
     if (PBGUI_VERSION  === "%%" + "VERSION%%")  PBGUI_VERSION  = "";
     if (PBGUI_SERIAL   === "%%" + "SERIAL%%")   PBGUI_SERIAL   = "";
@@ -1164,12 +1210,19 @@
         const url = API_BASE + path;
         const resp = await fetch(url, { headers: HEADERS, ...options });
         if (!resp.ok) {
-            let detail = "";
+            let detail = null;
             try {
                 const body = await resp.json();
-                detail = body.detail || JSON.stringify(body);
+                detail = body.detail != null ? body.detail : body;
             } catch { detail = resp.statusText; }
-            throw new Error(detail);
+            const message = detail && typeof detail === "object"
+                ? String(detail.message || detail.error || resp.statusText || ("HTTP " + resp.status))
+                : String(detail || resp.statusText || ("HTTP " + resp.status));
+            const error = new Error(message);
+            error.status = resp.status;
+            error.detail = detail;
+            error.operationId = detail && typeof detail === "object" ? String(detail.operation_id || "") : "";
+            throw error;
         }
         return resp.json();
     }
@@ -1581,7 +1634,9 @@
             }
             updateHLExpiryInline(data);
         } catch(e) {
-            document.getElementById("hlExpiryInlineBadge").innerHTML = `<span style="color:#fc8181;">Error: ${e.message}</span>`;
+            const badge = document.getElementById("hlExpiryInlineBadge");
+            badge.textContent = "Error: " + e.message;
+            badge.style.color = "#fc8181";
         } finally {
             btn.disabled = false;
             btn.textContent = "↻ Check Expiry";
@@ -1621,7 +1676,9 @@
             updateBybitExpiryInline(data, data.ips);
             renderUserTable();
         } catch(e) {
-            document.getElementById("bybitExpiryInlineBadge").innerHTML = `<span style="color:#fc8181;">Error: ${e.message}</span>`;
+            const badge = document.getElementById("bybitExpiryInlineBadge");
+            badge.textContent = "Error: " + e.message;
+            badge.style.color = "#fc8181";
         } finally {
             btn.disabled = false;
             btn.textContent = "↻ Check Expiry + IPs";
@@ -2352,15 +2409,115 @@
 
     // ── TradFi Section ──────────────────────────────────────
     let tradfiVisible = false;
-    let tradfiProfiles = {};
+    let tradfiProfiles = [];
     let tradfiProviders = [];
     let tradfiNeedsSecret = [];
     let tradfiProviderNotes = {};
     let tradfiProviderLinks = {};
+    let tradfiReplicatedProfiles = {};
+    let tradfiProjection = {};
     let tradfiKeySaved = false;
     let tradfiSecretSaved = false;
-    let tradfiSavedProvider = "";  // provider for which credentials are currently stored
+    let tradfiProfileId = "";
     let yfInstalled = false;
+    let tradfiLoadGeneration = 0;
+    let tradfiLoadController = null;
+    let tradfiActionGeneration = 0;
+    let tradfiActionController = null;
+    let tradfiActionBusy = false;
+    let tradfiPendingSaveIntent = null;
+
+    function invalidateTradfiAction() {
+        tradfiActionGeneration += 1;
+        if (tradfiActionController) tradfiActionController.abort();
+        tradfiActionController = null;
+        tradfiActionBusy = false;
+        updateTradfiActionButtons();
+    }
+
+    function updateTradfiActionButtons() {
+        const profile = tradfiProfiles.find(item => item && item.id === tradfiProfileId) || null;
+        ["btnTradfiRotate", "btnTradfiToggle", "btnTradfiDelete", "btnTradfiProjectionRetry"].forEach(id => {
+            const button = document.getElementById(id);
+            if (button) button.disabled = tradfiActionBusy || (id !== "btnTradfiProjectionRetry" && !profile);
+        });
+        document.querySelectorAll("#tradfiActions .btn").forEach(button => {
+            if (!button.id) button.disabled = tradfiActionBusy;
+        });
+    }
+
+    function beginTradfiAction() {
+        if (tradfiActionBusy) return null;
+        const context = {
+            generation: ++tradfiActionGeneration,
+            profileId: tradfiProfileId,
+            provider: document.getElementById("tradfiProvider").value,
+            apiKey: document.getElementById("tradfiApiKey").value,
+            apiSecret: document.getElementById("tradfiApiSecret").value,
+        };
+        tradfiActionController = new AbortController();
+        context.controller = tradfiActionController;
+        tradfiActionBusy = true;
+        updateTradfiActionButtons();
+        return context;
+    }
+
+    function finishTradfiAction(context, clearSecrets) {
+        if (!context || context.generation !== tradfiActionGeneration) return;
+        if (clearSecrets && tradfiProfileId === context.profileId && document.getElementById("tradfiProvider").value === context.provider) {
+            const keyInput = document.getElementById("tradfiApiKey");
+            const secretInput = document.getElementById("tradfiApiSecret");
+            if (keyInput.value === context.apiKey) keyInput.value = "";
+            if (secretInput.value === context.apiSecret) secretInput.value = "";
+        }
+        tradfiActionBusy = false;
+        tradfiActionController = null;
+        updateTradfiActionButtons();
+    }
+
+    function currentTradfiSaveIntent(rotateReplacement) {
+        return {
+            profileId: tradfiProfileId,
+            provider: document.getElementById("tradfiProvider").value,
+            label: document.getElementById("tradfiLabel").value,
+            active: document.getElementById("tradfiActive").checked,
+            shared: document.getElementById("tradfiShared").checked,
+            apiKey: document.getElementById("tradfiApiKey").value.trim(),
+            apiSecret: document.getElementById("tradfiApiSecret").value.trim(),
+            createNew: !tradfiProfileId,
+            rotateReplacement: !!rotateReplacement,
+        };
+    }
+
+    function sameTradfiSaveIntent(left, right) {
+        if (!left || !right) return false;
+        return ["profileId", "provider", "label", "active", "shared", "apiKey", "apiSecret", "createNew", "rotateReplacement"]
+            .every(key => left[key] === right[key]);
+    }
+
+    async function checkPendingTradfiSave(intent) {
+        if (!tradfiPendingSaveIntent) return { operationId: "", completedProfile: null, blocked: false };
+        const pending = tradfiPendingSaveIntent;
+        const status = await apiFetch("/tradfi/profiles", { cache: "no-store" });
+        const profile = (status.profiles || []).find(item => item
+            && (item.pending_operation_id === pending.operationId || item.last_operation_id === pending.operationId)) || null;
+        if (!sameTradfiSaveIntent(pending, intent)) {
+            if (profile && profile.pending) {
+                showToast("Operation " + pending.operationId + " is still pending for profile " + profile.id + ". Resolve or retry it before starting another save.", "warning");
+                return { operationId: pending.operationId, completedProfile: null, blocked: true };
+            }
+            tradfiPendingSaveIntent = null;
+            if (profile) {
+                showToast("Operation " + pending.operationId + " already completed for profile " + profile.id + ". Review that profile before saving another change.", "warning");
+                return { operationId: pending.operationId, completedProfile: null, blocked: true };
+            }
+            return { operationId: "", completedProfile: null, blocked: false };
+        }
+        if (profile && profile.last_operation_id === pending.operationId && !profile.pending) {
+            return { operationId: pending.operationId, completedProfile: profile, blocked: false };
+        }
+        return { operationId: pending.operationId, completedProfile: null, blocked: false };
+    }
 
     async function toggleTradfi() {
         if (tradfiVisible) { backToList(); return; }
@@ -2381,45 +2538,34 @@
     }
 
     async function loadTradfiData() {
-        // Load profiles + provider metadata
+        const generation = ++tradfiLoadGeneration;
+        if (tradfiLoadController) tradfiLoadController.abort();
+        tradfiLoadController = new AbortController();
+        const selectedBeforeLoad = tradfiProfileId;
         try {
-            const data = await apiFetch("/tradfi/profiles");
-            tradfiProviders = data.providers || [];
-            tradfiProviderNotes = data.provider_notes || {};
-            tradfiNeedsSecret = data.needs_secret || [];
-            tradfiProfiles = data.profiles || {};
-            populateTradfiProviders();
-        } catch (e) {
-            showToast("Failed to load TradFi profiles: " + e.message, "error");
-        }
-
-        // Load profiles + provider metadata
-        try {
-            const data = await apiFetch("/tradfi/profiles");
+            const data = await apiFetch("/tradfi/profiles", { signal: tradfiLoadController.signal, cache: "no-store" });
+            if (generation !== tradfiLoadGeneration) return;
             tradfiProviders = data.providers || [];
             tradfiProviderNotes = data.provider_notes || {};
             tradfiProviderLinks = data.provider_links || {};
             tradfiNeedsSecret = data.needs_secret || [];
-            tradfiProfiles = data.profiles || {};
+            tradfiProfiles = Array.isArray(data.profiles) ? data.profiles : [];
+            tradfiReplicatedProfiles = data.replicated_active_profiles || {};
+            tradfiProjection = data.projection || {};
             populateTradfiProviders();
+            renderTradfiProfiles();
+            renderTradfiProjection();
+            const retained = tradfiProfiles.find(item => item && item.id === selectedBeforeLoad);
+            const explicitActive = tradfiProfiles
+                .filter(item => item && item.active === true)
+                .sort((a, b) => String(a.id || "").localeCompare(String(b.id || "")))[0] || null;
+            selectTradfiProfile((retained || explicitActive || {}).id || "");
         } catch (e) {
+            if (generation !== tradfiLoadGeneration || e.name === "AbortError") return;
+            document.getElementById("tradfiProfilesBody").innerHTML = '<tr><td colspan="12" style="color:#ef4444;cursor:default;">Failed to load profiles: ' + escapeHtml(e.message) + '</td></tr>';
+            document.getElementById("tradfiProjectionStatus").textContent = "PB7 projection status unavailable: " + e.message;
             showToast("Failed to load TradFi profiles: " + e.message, "error");
         }
-
-        // Load current config
-        try {
-            const cfg = await apiFetch("/tradfi/config");
-            if (cfg.provider) {
-                document.getElementById("tradfiProvider").value = cfg.provider;
-                onTradfiProviderChange();
-            }
-            // Populate masked values so the eye-toggle reveals them
-            tradfiKeySaved    = !!cfg.api_key;
-            tradfiSecretSaved = !!cfg.api_secret;
-            tradfiSavedProvider = cfg.provider || "";
-            setupMaskedField("tradfiApiKey",    cfg.api_key    || "", cfg.api_key    ? "/tradfi/reveal?field=api_key"    : "");
-            setupMaskedField("tradfiApiSecret", cfg.api_secret || "", cfg.api_secret ? "/tradfi/reveal?field=api_secret" : "");
-        } catch (_) {}
 
         // Check yfinance
         await checkYfinanceStatus();
@@ -2434,29 +2580,27 @@
             opt.textContent = p;
             sel.appendChild(opt);
         });
-        onTradfiProviderChange();
     }
 
     function onTradfiProviderChange() {
+        invalidateTradfiAction();
         const prov = document.getElementById("tradfiProvider").value;
         const needsSecret = tradfiNeedsSecret.includes(prov);
         const secretGroup = document.getElementById("tradfiSecretGroup");
         const secretInput = document.getElementById("tradfiApiSecret");
-
-        // If the user switched to a different provider than the one with saved credentials,
-        // clear the key/secret fields so they don't accidentally use the old provider's key
-        if (tradfiSavedProvider && prov !== tradfiSavedProvider) {
-            setupMaskedField("tradfiApiKey", "");
-            setupMaskedField("tradfiApiSecret", "");
-            tradfiKeySaved = false;
-            tradfiSecretSaved = false;
-        }
+        const profile = tradfiProfiles.find(item => item && item.id === tradfiProfileId) || null;
+        tradfiKeySaved = !!(profile && profile.has_api_key);
+        tradfiSecretSaved = !!(profile && profile.has_api_secret);
+        const keyInput = document.getElementById("tradfiApiKey");
+        keyInput.value = "";
+        keyInput.placeholder = tradfiKeySaved ? "Stored in vault; enter only to replace" : "Enter API key";
+        secretInput.value = "";
         if (needsSecret) {
             secretGroup.style.display = "";
             secretInput.disabled = false;
+            secretInput.placeholder = tradfiSecretSaved ? "Stored in vault; enter only to replace" : "Enter API secret";
         } else {
             secretGroup.style.display = "";
-            secretInput.value = "";
             secretInput.disabled = true;
             secretInput.placeholder = "not required";
         }
@@ -2472,6 +2616,73 @@
         } else {
             linkEl.style.display = "none";
         }
+        document.getElementById("tradfiProfileStatus").textContent = profile
+            ? `Selected vault profile ${profile.id} · generation ${profile.generation} · ${profile.active ? "locally active" : "locally inactive"} · ${profile.replicated_active ? "replicated active selection generation " + profile.activation_generation : "not the replicated active selection"}${profile.pending_delete ? " · delete pending" : profile.pending ? " · pending " + (profile.pending_stage || "stored") : ""}`
+            : "New profile. Stored secrets are never loaded into this form.";
+        document.getElementById("btnTradfiToggle").textContent = profile && profile.active ? "Disable" : "Enable";
+        updateTradfiActionButtons();
+    }
+
+    function renderTradfiProjection() {
+        const projection = tradfiProjection || {};
+        const parts = [
+            "PB7 projection " + (projection.status || "unknown"),
+            "desired " + Number(projection.desired_generation || 0),
+            "applied " + Number(projection.applied_generation || 0),
+            "attempts " + Number(projection.attempts || 0),
+        ];
+        if (projection.last_error) parts.push("last error: " + projection.last_error);
+        document.getElementById("tradfiProjectionStatus").textContent = parts.join(" · ");
+        updateTradfiActionButtons();
+    }
+
+    function renderTradfiProfiles() {
+        const body = document.getElementById("tradfiProfilesBody");
+        if (!tradfiProfiles.length) {
+            body.innerHTML = '<tr><td colspan="12" style="color:#94a3b8;cursor:default;">No TradFi vault profiles configured.</td></tr>';
+            return;
+        }
+        body.innerHTML = tradfiProfiles.map(profile => {
+            const selected = profile.id === tradfiProfileId ? ' class="selected"' : '';
+            return '<tr' + selected + ' data-profile-id="' + escapeAttr(profile.id) + '" onclick="selectTradfiProfile(this.dataset.profileId)">'
+                + '<td class="tradfi-profile-id">' + escapeHtml(profile.id) + '</td>'
+                + '<td>' + escapeHtml(profile.provider || '-') + '</td>'
+                + '<td>' + escapeHtml(profile.label || '-') + '</td>'
+                + '<td class="' + (profile.active ? 'tradfi-active' : 'tradfi-inactive') + '">' + (profile.active ? 'Active' : 'Inactive') + '</td>'
+                + '<td class="' + (profile.replicated_active ? 'tradfi-active' : 'tradfi-inactive') + '">' + (profile.replicated_active ? 'Selected (gen ' + escapeHtml(profile.activation_generation) + ')' : 'Not selected') + '</td>'
+                + '<td>' + (profile.pending_delete ? 'Delete pending' : profile.pending ? 'Pending: ' + escapeHtml(profile.pending_stage || 'stored') + (profile.pending_operation_id ? ' (' + escapeHtml(profile.pending_operation_id) + ')' : '') : '-') + '</td>'
+                + '<td>' + (profile.shared ? 'Yes' : 'No') + '</td>'
+                + '<td>' + escapeHtml(profile.generation) + '</td>'
+                + '<td>' + (profile.has_api_key ? 'Stored' : 'Missing') + '</td>'
+                + '<td>' + (profile.has_api_secret ? 'Stored' : 'Not stored') + '</td>'
+                + '<td>' + escapeHtml(profile.origin || '-') + '</td>'
+                + '<td>' + escapeHtml(profile.updated_at || '-') + '</td>'
+                + '</tr>';
+        }).join('');
+    }
+
+    function selectTradfiProfile(profileId) {
+        invalidateTradfiAction();
+        const profile = tradfiProfiles.find(item => item && item.id === profileId) || null;
+        tradfiProfileId = profile ? String(profile.id) : "";
+        document.getElementById("tradfiProfileId").value = tradfiProfileId;
+        if (profile) {
+            document.getElementById("tradfiProvider").value = profile.provider || "";
+            document.getElementById("tradfiLabel").value = profile.label || "";
+            document.getElementById("tradfiShared").checked = !!profile.shared;
+            document.getElementById("tradfiActive").checked = !!profile.active;
+        } else {
+            document.getElementById("tradfiLabel").value = "";
+            document.getElementById("tradfiShared").checked = true;
+            document.getElementById("tradfiActive").checked = true;
+        }
+        renderTradfiProfiles();
+        onTradfiProviderChange();
+    }
+
+    function newTradfiProfile() {
+        selectTradfiProfile("");
+        document.getElementById("tradfiApiKey").focus();
     }
 
     async function checkYfinanceStatus() {
@@ -2547,70 +2758,169 @@
 
     async function tradfiTest() {
         const prov = document.getElementById("tradfiProvider").value;
-        // getMaskedFieldValue returns null if field is empty OR if revealed-but-unedited
-        const key    = getMaskedFieldValue("tradfiApiKey")    || "";
-        const secret = getMaskedFieldValue("tradfiApiSecret") || "";
+        const key = document.getElementById("tradfiApiKey").value.trim();
+        const secret = document.getElementById("tradfiApiSecret").value.trim();
         if (!key && !tradfiKeySaved) {
             showToast("Enter an API key first", "warning");
             return;
         }
         // Show "Testing..." in the modal and keep it open for the result
         showToast("Testing " + prov + "...", "warning");
+        const context = beginTradfiAction();
+        if (!context) return;
         try {
+            const body = key || secret
+                ? { provider: prov, api_key: key, api_secret: secret }
+                : { profile_id: tradfiProfileId };
             const data = await apiFetch("/tradfi/test", {
                 method: "POST",
-                body: JSON.stringify({ provider: prov, api_key: key, api_secret: secret }),
+                body: JSON.stringify(body),
+                signal: context.controller.signal,
             });
+            if (context.generation !== tradfiActionGeneration) return;
+            finishTradfiAction(context, true);
             if (data.success) {
                 updateAlertModal(data.message, "success");
             } else {
                 updateAlertModal(data.message, "error");
             }
         } catch (e) {
+            if (context.generation !== tradfiActionGeneration || e.name === "AbortError") return;
             updateAlertModal("Test failed: " + e.message, "error");
+        } finally {
+            finishTradfiAction(context);
         }
     }
 
-    async function tradfiSave() {
-        const prov = document.getElementById("tradfiProvider").value;
-        // getMaskedFieldValue returns null if field is empty OR if revealed-but-unedited
-        const key    = getMaskedFieldValue("tradfiApiKey")    || "";
-        const secret = getMaskedFieldValue("tradfiApiSecret") || "";
+    async function tradfiSave(rotateReplacement) {
+        const intent = currentTradfiSaveIntent(rotateReplacement);
+        const prov = intent.provider;
+        const key = intent.apiKey;
+        const secret = intent.apiSecret;
+        const profile = tradfiProfiles.find(item => item && item.id === tradfiProfileId) || null;
+        if (rotateReplacement && !profile) {
+            showToast("Select a profile to rotate", "warning");
+            return;
+        }
+        if (rotateReplacement && !key) {
+            showToast("Enter a replacement API key", "warning");
+            return;
+        }
         if (!key && !tradfiKeySaved) {
             showToast("Enter an API key first", "warning");
             return;
         }
+        const context = beginTradfiAction();
+        if (!context) return;
         try {
-            await apiFetch("/tradfi/config", {
+            const checked = await checkPendingTradfiSave(intent);
+            if (context.generation !== tradfiActionGeneration || checked.blocked) return;
+            if (checked.completedProfile) {
+                tradfiPendingSaveIntent = null;
+                tradfiProfileId = String(checked.completedProfile.id || "");
+                finishTradfiAction(context, true);
+                await loadTradfiData();
+                showToast("TradFi operation " + checked.operationId + " already completed.", "success");
+                return;
+            }
+            const operationId = checked.operationId || ((window.crypto && window.crypto.randomUUID)
+                ? window.crypto.randomUUID()
+                : "tradfi-" + Date.now() + "-" + Math.random().toString(16).slice(2));
+            tradfiPendingSaveIntent = { ...intent, operationId: operationId };
+            const data = await apiFetch("/tradfi/config", {
                 method: "PUT",
-                body: JSON.stringify({ provider: prov, api_key: key, api_secret: secret || null }),
+                body: JSON.stringify({
+                    profile_id: intent.profileId || null,
+                    provider: intent.provider,
+                    label: intent.label,
+                    active: intent.active,
+                    shared: intent.shared,
+                    api_key: key || null,
+                    api_secret: secret || null,
+                    operation_id: operationId,
+                    create_new: intent.createNew,
+                }),
+                signal: context.controller.signal,
             });
-            // Update saved flags
-            if (key) tradfiKeySaved = true;
-            if (secret) tradfiSecretSaved = true;
-            tradfiSavedProvider = prov;
-            showToast("TradFi config saved", "success");
+            if (context.generation !== tradfiActionGeneration) return;
+            tradfiPendingSaveIntent = null;
+            finishTradfiAction(context, true);
+            tradfiProfileId = String(((data || {}).profile || {}).id || tradfiProfileId || "");
+            await loadTradfiData();
+            showToast(data.status === "pending" ? "TradFi profile saved; replication pending" : "TradFi config saved", data.status === "pending" ? "warning" : "success");
         } catch (e) {
-            showToast("Save failed: " + e.message, "error");
+            if (context.generation !== tradfiActionGeneration || e.name === "AbortError") return;
+            if (tradfiPendingSaveIntent && e.operationId) tradfiPendingSaveIntent.operationId = e.operationId;
+            const operationText = (tradfiPendingSaveIntent || {}).operationId || e.operationId || "";
+            showToast("Save status is uncertain" + (operationText ? " for operation " + operationText : "") + ": " + e.message + ". Submitted secrets remain in the form for an exact retry.", "error");
+        } finally {
+            finishTradfiAction(context, false);
         }
+    }
+
+    async function tradfiToggleActive() {
+        const profile = tradfiProfiles.find(item => item && item.id === tradfiProfileId) || null;
+        if (!profile) return;
+        document.getElementById("tradfiActive").checked = !profile.active;
+        await tradfiSave(false);
     }
 
     async function tradfiClear() {
         if (!(await window.PBGuiDialogs.confirm({
-            title: "Clear TradFi config",
-            message: "Clear TradFi config?",
-            confirmText: "Clear"
+            title: "Delete TradFi profile",
+            message: "Delete profile " + tradfiProfileId + "? Stored credential generations cannot be revealed or restored from this UI.",
+            confirmText: "Delete"
         }))) return;
+        let context = null;
         try {
-            await apiFetch("/tradfi/config", { method: "DELETE" });
-            setupMaskedField("tradfiApiKey", "");
-            setupMaskedField("tradfiApiSecret", "");
+            if (!tradfiProfileId) {
+                showToast("No vault profile configured for this provider", "warning");
+                return;
+            }
+            context = beginTradfiAction();
+            if (!context) return;
+            const data = await apiFetch("/tradfi/config?profile_id=" + encodeURIComponent(tradfiProfileId), {
+                method: "DELETE",
+                signal: context.controller.signal,
+            });
+            if (context.generation !== tradfiActionGeneration) return;
+            finishTradfiAction(context, true);
             tradfiKeySaved = false;
             tradfiSecretSaved = false;
-            tradfiSavedProvider = "";
-            showToast("TradFi config cleared", "success");
+            tradfiProfileId = "";
+            await loadTradfiData();
+            showToast(data.status === "pending_delete" ? "TradFi profile delete is pending" : "TradFi profile deleted", data.status === "pending_delete" ? "warning" : "success");
         } catch (e) {
+            if (e.name === "AbortError") return;
             showToast("Failed: " + e.message, "error");
+        } finally {
+            finishTradfiAction(context);
+        }
+    }
+
+    async function retryTradfiProjection() {
+        const context = beginTradfiAction();
+        if (!context) return;
+        const operationId = (window.crypto && window.crypto.randomUUID)
+            ? window.crypto.randomUUID()
+            : "tradfi-projection-" + Date.now();
+        try {
+            const data = await apiFetch("/tradfi/projection/retry", {
+                method: "POST",
+                body: JSON.stringify({ operation_id: operationId }),
+                signal: context.controller.signal,
+            });
+            if (context.generation !== tradfiActionGeneration) return;
+            tradfiProjection = data.projection || {};
+            renderTradfiProjection();
+            await loadTradfiData();
+            showToast(data.ok ? "PB7 TradFi projection is current" : "PB7 TradFi projection remains pending", data.ok ? "success" : "warning");
+        } catch (e) {
+            if (context.generation !== tradfiActionGeneration || e.name === "AbortError") return;
+            showToast("Projection retry failed: " + e.message, "error");
+            await loadTradfiData();
+        } finally {
+            finishTradfiAction(context);
         }
     }
 

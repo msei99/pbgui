@@ -1277,11 +1277,10 @@
           restartBtn.disabled = true;
           restartBtn.classList.add('disabled');
           restartBtn.innerHTML = '<span class="nav-restart-dot"></span>Restarting...';
-          fetch(origin2 + '/api/server-restart', {
+          fetch(origin2 + '/api/server-restart', authOptions(c2.token, {
             method: 'POST',
-            headers: { 'Authorization': 'Bearer ' + c2.token, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: c2.token })
-          }).then(function(resp) {
+            credentials: 'same-origin'
+          })).then(function(resp) {
             if (!resp.ok) {
               return resp.json().catch(function () { return {}; }).then(function (data) {
                 var detail = (data && data.detail) ? String(data.detail) : 'Restart failed.';

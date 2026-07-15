@@ -1,6 +1,7 @@
 """Tests for market-data status API filtering."""
 
 from pathlib import Path
+import configparser
 import importlib
 import importlib.util
 import sys
@@ -70,7 +71,16 @@ def test_save_market_data_settings_queues_refresh_flag(monkeypatch, tmp_path) ->
     monkeypatch.setattr(market_data_api, "PBGDIR", tmp_path)
     monkeypatch.setattr(market_data_api, "set_enabled_coins", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(market_data_api, "set_auto_enable_new_coins", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(market_data_api, "save_ini", lambda section, key, value: saved_ini.append((section, key, value)))
+    def capture_update(mutator) -> None:
+        parser = configparser.ConfigParser()
+        mutator(parser)
+        saved_ini.extend(
+            (section, key, value)
+            for section in parser.sections()
+            for key, value in parser.items(section)
+        )
+
+    monkeypatch.setattr(market_data_api, "update_ini", capture_update)
     monkeypatch.setattr(
         market_data_api,
         "_build_market_data_settings_payload",

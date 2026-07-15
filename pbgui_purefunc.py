@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path, PurePath
 import subprocess
 import re
+from dataclasses import dataclass
+from typing import Callable, TypeVar
 
 from secure_files import atomic_write_private_text
 
@@ -65,6 +67,166 @@ def pbgui_ini_path() -> Path:
     return Path(__file__).resolve().parent / "pbgui.ini"
 
 
+@dataclass(frozen=True)
+class IniSignature:
+    """Identity and metadata for one published INI generation."""
+
+    exists: bool
+    mtime_ns: int | None
+    size: int | None
+    inode: int | None
+
+
+class IniMissingValueError(LookupError):
+    """Raised when a requested INI section or option is absent."""
+
+
+class IniInvalidValueError(ValueError):
+    """Raised when an existing INI option cannot be converted."""
+
+
+_T = TypeVar("_T")
+
+_RETIRED_CMC_INI_FIELDS = frozenset({
+    "api_key",
+    "credit_limit_monthly",
+    "credit_limit_monthly_reset",
+    "credit_limit_monthly_reset_timestamp",
+    "credits_used_day",
+    "credits_used_month",
+    "credits_left",
+})
+_RETIRED_TRADFI_INI_FIELDS = frozenset(
+    f"{provider}_{suffix}"
+    for provider in ("alpaca", "polygon", "finnhub", "alphavantage", "tiingo")
+    for suffix in (
+        "api_key",
+        "api_secret",
+        "api_key_id",
+        "api_secret_key",
+        "key",
+        "secret",
+        "secret_key",
+        "api_token",
+        "access_token",
+        "token",
+    )
+)
+
+
+def _reject_retired_credential_ini_field(section: str, parameter: str) -> None:
+    """Permanently reject exact legacy credential fields before any INI write."""
+
+    normalized_section = str(section).strip().lower()
+    normalized_parameter = str(parameter).strip().lower()
+    denied = (
+        normalized_section == "coinmarketcap"
+        and normalized_parameter in _RETIRED_CMC_INI_FIELDS
+    ) or (
+        normalized_section == "tradfi_profiles"
+        and normalized_parameter in _RETIRED_TRADFI_INI_FIELDS
+    )
+    if denied:
+        from credential_store import legacy_credential_writes_frozen
+
+        if legacy_credential_writes_frozen(Path(pbgui_ini_path()).parent):
+            raise ValueError(
+                f"Legacy credential INI field is frozen during migration: "
+                f"[{normalized_section}] {normalized_parameter}"
+            )
+        raise ValueError(
+            f"Legacy credential INI field is permanently read-only: "
+            f"[{normalized_section}] {normalized_parameter}"
+        )
+
+
+def _new_ini_parser() -> configparser.ConfigParser:
+    return configparser.ConfigParser()
+
+
+def _copy_ini_parser(source: configparser.ConfigParser) -> configparser.ConfigParser:
+    target = _new_ini_parser()
+    buffer = io.StringIO()
+    source.write(buffer)
+    target.read_string(buffer.getvalue())
+    return target
+
+
+@dataclass(frozen=True)
+class IniSnapshot:
+    """Read-only view of one coherently read INI file generation."""
+
+    path: Path
+    signature: IniSignature
+    _parser: configparser.ConfigParser
+
+    @property
+    def parser(self) -> configparser.ConfigParser:
+        """Return a mutable copy so the snapshot itself cannot be changed."""
+        return _copy_ini_parser(self._parser)
+
+    def has_option(self, section: str, option: str) -> bool:
+        return self._parser.has_option(section, option)
+
+    def get(self, section: str, option: str) -> str:
+        if not self._parser.has_option(section, option):
+            raise IniMissingValueError(f"Missing INI value [{section}] {option}")
+        return self._parser.get(section, option)
+
+    def get_typed(self, section: str, option: str, converter: Callable[[str], _T]) -> _T:
+        value = self.get(section, option)
+        try:
+            return converter(value)
+        except (TypeError, ValueError) as exc:
+            raise IniInvalidValueError(f"Invalid INI value [{section}] {option}") from exc
+
+
+def _canonical_ini_path(path: str | os.PathLike[str] | None = None) -> Path:
+    return Path(path if path is not None else pbgui_ini_path()).expanduser().resolve(strict=False)
+
+
+def _ini_signature(path: Path) -> IniSignature:
+    try:
+        stat_result = path.stat()
+    except FileNotFoundError:
+        return IniSignature(False, None, None, None)
+    return IniSignature(
+        True,
+        stat_result.st_mtime_ns,
+        stat_result.st_size,
+        getattr(stat_result, "st_ino", None),
+    )
+
+
+def load_ini_snapshot(
+    path: str | os.PathLike[str] | None = None,
+    *,
+    attempts: int = 5,
+) -> IniSnapshot:
+    """Read and parse one stable, atomically published INI generation."""
+    if attempts < 1:
+        raise ValueError("attempts must be at least 1")
+    ini_path = _canonical_ini_path(path)
+    for _ in range(attempts):
+        before = _ini_signature(ini_path)
+        if not before.exists:
+            after = _ini_signature(ini_path)
+            if before == after:
+                return IniSnapshot(ini_path, before, _new_ini_parser())
+            continue
+        try:
+            content = ini_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        after = _ini_signature(ini_path)
+        if before != after:
+            continue
+        parser = _new_ini_parser()
+        parser.read_string(content)
+        return IniSnapshot(ini_path, after, parser)
+    raise RuntimeError(f"INI file changed while being read: {ini_path}")
+
+
 def pbgui_auth_secrets_path() -> Path:
     return Path(__file__).resolve().parent / "data" / "auth" / "secrets.toml"
 
@@ -89,50 +251,67 @@ def _normalize_ini_value(parameter: str, value: str) -> str:
     return str(value)
 
 
-def _write_ini_config(pb_config: configparser.ConfigParser) -> None:
-    ini_path = pbgui_ini_path()
+def _write_ini_config(pb_config: configparser.ConfigParser, path: str | os.PathLike[str] | None = None) -> None:
+    ini_path = _canonical_ini_path(path)
     buffer = io.StringIO()
     pb_config.write(buffer)
     atomic_write_private_text(ini_path, buffer.getvalue())
 
-def save_ini(section : str, parameter : str, value : str):
+
+def update_ini(
+    mutator: Callable[[configparser.ConfigParser], _T],
+    path: str | os.PathLike[str] | None = None,
+) -> _T:
+    """Apply one locked read-modify-write transaction to an INI file."""
     from file_lock import advisory_file_lock
 
-    with advisory_file_lock(pbgui_ini_path()):
-        pb_config = configparser.ConfigParser()
-        pb_config.read(pbgui_ini_path())
+    ini_path = _canonical_ini_path(path)
+    with advisory_file_lock(ini_path):
+        pb_config = load_ini_snapshot(ini_path).parser
+        result = mutator(pb_config)
+        if path is None:
+            _write_ini_config(pb_config)
+        else:
+            _write_ini_config(pb_config, ini_path)
+        return result
+
+
+def save_ini(section : str, parameter : str, value : str):
+    _reject_retired_credential_ini_field(section, parameter)
+
+    def mutate(pb_config: configparser.ConfigParser) -> None:
         if not pb_config.has_section(section):
             pb_config.add_section(section)
         pb_config.set(section, parameter, _normalize_ini_value(parameter, value))
-        _write_ini_config(pb_config)
+
+    update_ini(mutate)
 
 def save_ini_section(section: str, values: dict[str, str]) -> None:
-    from file_lock import advisory_file_lock
+    for parameter in (values or {}):
+        _reject_retired_credential_ini_field(section, str(parameter))
 
-    with advisory_file_lock(pbgui_ini_path()):
-        pb_config = configparser.ConfigParser()
-        pb_config.read(pbgui_ini_path())
+    def mutate(pb_config: configparser.ConfigParser) -> None:
         if not pb_config.has_section(section):
             pb_config.add_section(section)
         for parameter, value in (values or {}).items():
             pb_config.set(section, str(parameter), _normalize_ini_value(str(parameter), str(value)))
-        _write_ini_config(pb_config)
+
+    update_ini(mutate)
 
 def load_ini_section(section: str) -> dict[str, str]:
-    pb_config = configparser.ConfigParser()
-    pb_config.read(pbgui_ini_path())
-    if not pb_config.has_section(section):
+    snapshot = load_ini_snapshot()
+    parser = snapshot.parser
+    if not parser.has_section(section):
         return {}
     return {
         key: _normalize_ini_value(key, value)
-        for key, value in pb_config.items(section)
+        for key, value in parser.items(section)
     }
 
 def load_ini(section : str, parameter : str):
-    pb_config = configparser.ConfigParser()
-    pb_config.read(pbgui_ini_path())
-    if pb_config.has_option(section, parameter):
-        return _normalize_ini_value(parameter, pb_config.get(section, parameter))
+    snapshot = load_ini_snapshot()
+    if snapshot.has_option(section, parameter):
+        return _normalize_ini_value(parameter, snapshot.get(section, parameter))
     else:
         return ""
 
@@ -146,18 +325,20 @@ def migrate_ini_sections():
     ini_path = pbgui_ini_path()
     if not ini_path.exists():
         return
-    cfg = configparser.ConfigParser()
-    cfg.read(str(ini_path))
-    changed = False
-    for old, new in [("pbmaster", "vps_monitor"), ("pbmaster_ui", "vps_monitor_ui")]:
-        if cfg.has_section(old) and not cfg.has_section(new):
-            cfg.add_section(new)
-            for key, val in cfg.items(old):
-                cfg.set(new, key, val)
-            cfg.remove_section(old)
-            changed = True
-    if changed:
-        _write_ini_config(cfg)
+    from file_lock import advisory_file_lock
+
+    with advisory_file_lock(ini_path):
+        cfg = load_ini_snapshot(ini_path).parser
+        changed = False
+        for old, new in [("pbmaster", "vps_monitor"), ("pbmaster_ui", "vps_monitor_ui")]:
+            if cfg.has_section(old) and not cfg.has_section(new):
+                cfg.add_section(new)
+                for key, val in cfg.items(old):
+                    cfg.set(new, key, val)
+                cfg.remove_section(old)
+                changed = True
+        if changed:
+            _write_ini_config(cfg, ini_path)
 
 def pb7dir(): return load_ini("main", "pb7dir")
 
@@ -258,7 +439,7 @@ def import_passivbot_rust():
     return pbr
 
 PBGDIR = Path(__file__).resolve().parent
-PBGUI_VERSION = "v1.91"
+PBGUI_VERSION = "v1.92"
 _serial_path = PBGDIR / 'api' / 'serial.txt'
 PBGUI_SERIAL = _serial_path.read_text().strip() if _serial_path.exists() else ''
 

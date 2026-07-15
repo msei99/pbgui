@@ -25,9 +25,20 @@ rustup update 1.90.0
 
 # get current directory
 DIR="$(pwd)"
+PB7_REF="befaa9b7aa89e00ee55704221b39621ad700ac36"
+if [[ ! "$PB7_REF" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Invalid embedded PB7 pin." >&2
+    exit 1
+fi
 
 # Clone the passivbot repository pb7
-git clone https://github.com/enarjord/passivbot.git pb7
+git clone --no-checkout https://github.com/enarjord/passivbot.git pb7
+PB7_VERSION="$(git -C pb7 show "$PB7_REF:src/passivbot_version.py")"
+if [[ "$PB7_VERSION" != *'__version__ = "7.'* ]]; then
+    echo "Pinned Passivbot checkout is not PB7; refusing installation." >&2
+    exit 1
+fi
+git -C pb7 checkout --detach "$PB7_REF"
 # Create a virtual environment for pb7
 python3.12 -m venv "$DIR/venv_pb7"
 # Activate the virtual environment

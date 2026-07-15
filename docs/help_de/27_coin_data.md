@@ -48,6 +48,12 @@ Coin Data zeigt den Frische-Status als eine gemeinsame Inline-Zeile neben `Filte
 - Sichtbar ist eine kompakte Zusammenfassung fuer den Refresh der gewaehlten Exchange und den letzten CMC-Refresh.
 - Hover auf diese Inline-Zeile zeigt die detaillierten Zeitstempel fuer Markets, Mapping, Preise, Copy-Trading-Cache, Listings und Metadaten.
 
+## CMC-Readiness
+
+CMC-Refresh-Aktionen benötigen mindestens eine aktive Credential-Generation im lokal materialisierten CMC-Pool. Coin Data prüft das vor dem Start eines CMC-Jobs und meldet bei fehlendem Pool einen direkten Fehler; reine Exchange-Refreshes bleiben verfügbar. Keys werden unter **System -> Services -> PBCoinData -> Pool** angelegt und geprüft, nicht in `pbgui.ini`.
+
+Auf VPS-Zielen besteht Readiness aus secret-freien Capability-Metadaten: Protokollversion, aktive Key-Anzahl sowie Katalog-/Materialisierungs-Generation. Ein Node ist erst bereit, nachdem die benötigte versiegelte Generation lokal materialisiert wurde.
+
 ## Filter und Tabellenverhalten
 
 Hauptfilter:
@@ -114,3 +120,4 @@ Coin Data liest und schreibt unter:
 
 - Erst CMC-Daten aktualisieren, dann die ausgewaehlte Exchange
 - Pruefen, ob Symbole neu gelistet sind oder Exchange-spezifische Namensvarianten verwenden
+- Wenn der CMC-Refresh blockiert ist, vor dem Retry die Readiness des PBCoinData-Pools prüfen

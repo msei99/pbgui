@@ -50,34 +50,12 @@
         state: directory
         mode: "0755"
 
-    - name: read PBGui optional service config
-      shell: |
-        PBGUI_CONFIG_PATH={{ pbgui_dir | quote }}/pbgui.ini python3 - <<'PY'
-        import configparser
-        import os
-
-        config = configparser.ConfigParser()
-        config.read(os.environ.get('PBGUI_CONFIG_PATH') or '')
-
-        def configured(value):
-            normalized = str(value or '').strip()
-            lowered = normalized.lower()
-            if not normalized or lowered in {'none', 'null', 'false', '<api_key>'}:
-                return False
-            return not normalized.startswith('<')
-
-        print('coindata_configured=' + ('yes' if configured(config.get('coinmarketcap', 'api_key', fallback='')) else 'no'))
-        PY
-      args:
-        executable: /bin/bash
-      register: optional_service_config
-      changed_when: false
-
     - name: build enabled PBGui migration service list
       set_fact:
-        pbgui_coindata_configured: "{{ 'coindata_configured=yes' in optional_service_config.stdout_lines }}"
-        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
-        systemd_units: "{{ ['pbgui-pbcluster.service', 'pbgui-pbrun.service', 'pbgui-monitor-agent.service'] + (['pbgui-pbcoindata.service'] if ('coindata_configured=yes' in optional_service_config.stdout_lines) else []) }}"
+        pbgui_credential_capability_known: "{{ credential_active is defined and credential_active is not none }}"
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if (credential_active | default(false)) else []) }}"
+        systemd_units: "{{ ['pbgui-pbcluster.service', 'pbgui-pbrun.service', 'pbgui-monitor-agent.service'] + (['pbgui-pbcoindata.service'] if (credential_active | default(false)) else []) }}"
+        migration_stop_units: "{{ all_systemd_units if (credential_active is defined and credential_active is not none) else (all_systemd_units | reject('equalto', 'pbgui-pbcoindata.service') | list) }}"
 
     - name: copy systemd setup helper
       copy:
@@ -93,25 +71,14 @@
 
     - name: preinstall PBGui systemd user units without starting services
       command:
-        argv:
-          - /bin/bash
-          - "{{ pbgui_dir }}/setup/setup_systemd.sh"
-          - --user
-          - "{{ user }}"
-          - --pbgui-dir
-          - "{{ pbgui_dir }}"
-          - --python
-          - "{{ python_bin }}"
-          - --enable
-          - "{{ pbgui_enabled_services | join(',') }}"
-          - --no-start
+        argv: "{{ ['/bin/bash', pbgui_dir + '/setup/setup_systemd.sh', '--user', user, '--pbgui-dir', pbgui_dir, '--python', python_bin, '--enable', pbgui_enabled_services | join(','), '--no-start'] + ([] if pbgui_credential_capability_known else ['--no-disable-excluded']) }}"
       become: yes
       register: systemd_preinstall_result
 
     - name: stop existing PBGui systemd user services before migration
       shell: |
         uid="$(id -u {{ user | quote }})"
-        for unit in {{ all_systemd_units | join(' ') }}; do
+        for unit in {{ migration_stop_units | join(' ') }}; do
           sudo -H -u {{ user | quote }} env XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user stop "$unit" >/dev/null 2>&1 || true
         done
       args:
@@ -121,7 +88,7 @@
 
     - name: stop remaining legacy PBGui processes
       shell: |
-        PBGUI_MIGRATION_DIR={{ pbgui_dir | quote }} python3 - <<'PY'
+        PBGUI_MIGRATION_DIR={{ pbgui_dir | quote }} PBGUI_CREDENTIAL_ACTIVE={{ credential_active | default('') | quote }} python3 - <<'PY'
         import os
         import signal
         import sys
@@ -137,6 +104,9 @@
             'PBCoinData.py': 'pbcoindata.pid',
             'PBRemote.py': 'pbremote.pid',
         }
+        if not str(os.environ.get('PBGUI_CREDENTIAL_ACTIVE') or '').strip():
+            scripts = tuple(script for script in scripts if script != 'PBCoinData.py')
+            pidfiles.pop('PBCoinData.py', None)
         current = os.getpid()
 
         def read_process(pid):
@@ -235,17 +205,7 @@
 
     - name: install and start PBGui systemd user services
       command:
-        argv:
-          - /bin/bash
-          - "{{ pbgui_dir }}/setup/setup_systemd.sh"
-          - --user
-          - "{{ user }}"
-          - --pbgui-dir
-          - "{{ pbgui_dir }}"
-          - --python
-          - "{{ python_bin }}"
-          - --enable
-          - "{{ pbgui_enabled_services | join(',') }}"
+        argv: "{{ ['/bin/bash', pbgui_dir + '/setup/setup_systemd.sh', '--user', user, '--pbgui-dir', pbgui_dir, '--python', python_bin, '--enable', pbgui_enabled_services | join(',')] + ([] if pbgui_credential_capability_known else ['--no-disable-excluded']) }}"
       become: yes
       register: systemd_setup_result
 

@@ -79,6 +79,10 @@ Wichtige Einstellungen im Bearbeitungsformular:
 | **Coin Overrides** | Coin-spezifische Parameterüberschreibungen (Bot-Parameter, Live-Modus, separate Config-Dateien) |
 | **Dynamic Ignore** | Vorschau der automatisch ignorierten Symbole basierend auf den Filter-Einstellungen |
 
+### Dynamic Ignore und der CMC-Pool
+
+Dynamic Ignore ist eine Capability des Ziel-Hosts und keine Key-Einstellung pro Instanz oder VPS. Vor Save, Sync oder Start prüft PBGui secret-freie Host-Metadaten auf Credential Protocol v2, einen aktiven lokalen CMC-Pool und passende Katalog-/Materialisierungs-Generationen. Meldet das Ziel keinen aktiven Pool oder ist sein Status noch unbekannt, wird die Aktion mit dem gemeldeten Grund blockiert. Zuerst den Cluster-CMC-Pool auf diesem Host materialisieren. Deaktivierte Instanzen benötigen keine Pool-Readiness.
+
 ---
 
 ## Typische Arbeitsabläufe

@@ -1,6 +1,6 @@
 # API Keys
 
-Manage exchange API credentials and TradFi provider settings. All credentials are stored in `api-keys.json` and read by PB7 for live trading.
+Manage exchange API credentials and TradFi provider profiles. Exchange users remain in `api-keys.json`; TradFi secrets are stored separately in PBGui's owner-only credential vault.
 
 ---
 
@@ -65,13 +65,15 @@ Press **Escape** to close without saving (confirms if there are unsaved changes)
 | **Options** | Optional JSON object (e.g. `{"defaultType": "swap"}`) |
 | **Extra** | Optional JSON passthrough for exchange-specific fields |
 
-### Eye-toggle (reveal stored credentials)
+### Eye-toggle (exchange credentials)
 
-All credential fields (Secret, Passphrase, Private Key, TradFi keys) have an 👁 button:
+Stored exchange fields (Secret, Passphrase, Private Key) have an 👁 button:
 
 - **Click** — fetches the real stored value from the server and shows it in plain text
 - **Click again** — hides and clears the field (saving with an empty field keeps the stored value unchanged)
 - To replace a credential, reveal it, clear it, type the new value, and save
+
+TradFi vault secrets are different: stored values are never returned to the browser. Their eye buttons can only show text entered during the current edit. Leave a field empty to keep the stored value, or enter a replacement and save.
 
 ### Validation
 
@@ -112,11 +114,13 @@ Compare any two entries side-by-side or unified:
 
 ## Cluster Sync
 
-The API Keys page edits the local `api-keys.json` only. Remote API-key writes are owned by **Cluster Sync**.
+Exchange users are projected into the local `api-keys.json`. Remote exchange API-key writes are owned by **Cluster Sync**.
 
-When you save credentials, PBGui records the updated API-key metadata and secret blob in cluster state. Use **System -> Cluster Sync** to preview and explicitly materialize `api-keys.json` on a reachable node.
+When you save exchange credentials, PBGui records the updated API-key metadata and restricted secret blob in cluster state. Use **System -> Cluster Sync** to preview and explicitly materialize `api-keys.json` on a reachable node.
 
 Cluster materialization creates replacement backups only on master nodes when the target file differs. These backups are stored with the normal API-key backups in `data/api-keys/`. VPS runner nodes skip local backups, write the verified secret blob atomically, and do not restart bots or deploy any other files.
+
+TradFi profiles use credential protocol v2 sealed envelopes instead. They are addressed only to active masters; VPS nodes may relay the ciphertext but cannot decrypt or project TradFi credentials.
 
 ---
 
@@ -171,7 +175,7 @@ Open via **TradFi** in the sidebar (URL hash: `#tradfi`).
 
 Stock-perp backtests for Hyperliquid XYZ symbols require 1-minute OHLCV data for traditional assets (stocks, FX).
 
-> 💡 **Recommended for full stock-perp history:** Use PBGui's **Market Data** module with **Tiingo** to build a comprehensive local 1-minute OHLCV archive. Configure Tiingo and run **Build best 1m OHLCV** in _Setup → Market Data_.
+> 💡 **Recommended for full stock-perp history:** Add a **Tiingo** profile here, then use PBGui's **Market Data** module to build a comprehensive local 1-minute OHLCV archive with **Build best 1m OHLCV**.
 
 ### yfinance (automatic default)
 
@@ -190,7 +194,9 @@ Stock-perp backtests for Hyperliquid XYZ symbols require 1-minute OHLCV data for
 
 A registration link is shown when a provider is selected.
 
-**Test Connection** fetches a test quote/candles for `AAPL` and shows the result in a modal. Works with already-saved credentials even if the fields are empty.
+Saved profiles show only metadata such as provider, active state, and generation. **Test Connection** uses the saved profile server-side when the fields are empty, or one-time credentials from the authenticated request body before saving. Stored TradFi values cannot be revealed.
+
+PBGui automatically projects the active master-side TradFi profiles into its reserved PB7 `api-keys.json` subtree with atomic merge and retry handling. Do not edit PB7 TradFi entries manually. Replacing a provider key creates a new vault generation; provider rotation is optional and is not required for credential migration.
 
 ---
 

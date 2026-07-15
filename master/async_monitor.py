@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 import socket
@@ -24,7 +25,7 @@ from typing import Any, Optional
 import asyncssh
 
 from MonitorConfig import MonitorConfig
-from pbgui_purefunc import PBGDIR, load_ini, save_ini
+from pbgui_purefunc import IniSnapshot, PBGDIR, load_ini, load_ini_snapshot, save_ini, update_ini
 from logging_helpers import human_log as _log
 from ini_watcher import IniWatcher
 from master.async_pool import AsyncSSHPool, ConnectionStatus, remote_path_join, remote_shell_path
@@ -120,6 +121,43 @@ ALERT_ROUTE_TELEGRAM_KEYS = {
     "instance_problem": "instance_problem_telegram",
     "instance_recovered": "instance_recovered_telegram",
 }
+
+MONITOR_DEFAULTS = {
+    "mem_warning_server": 50.0,
+    "mem_error_server": 25.0,
+    "swap_warning_server": 150.0,
+    "swap_error_server": 100.0,
+    "disk_warning_server": 500.0,
+    "disk_error_server": 250.0,
+    "cpu_warning_server": 80.0,
+    "cpu_error_server": 95.0,
+    "mem_warning_v7": 250.0,
+    "mem_error_v7": 500.0,
+    "swap_warning_v7": 250.0,
+    "swap_error_v7": 500.0,
+    "cpu_warning_v7": 10.0,
+    "cpu_error_v7": 15.0,
+    "error_warning_v7": 100.0,
+    "error_error_v7": 250.0,
+    "traceback_warning_v7": 100.0,
+    "traceback_error_v7": 250.0,
+}
+
+
+@dataclass(frozen=True)
+class VPSMonitorConfigCandidate:
+    """Fully validated runtime settings from one INI generation."""
+
+    signature: Any
+    enabled_hosts: frozenset[str]
+    auto_restart: bool
+    debug_logging: bool
+    telegram_token: str
+    telegram_chat_id: str
+    alert_gui_routes: dict[str, bool]
+    alert_telegram_routes: dict[str, bool]
+    monitor_values: dict[str, float]
+    ui_settings: dict[str, str]
 
 
 def _read_ini_bool(section: str, key: str, default: bool) -> bool:
@@ -1205,9 +1243,9 @@ class BotPnlHistoryStore:
 
 
 def _monitor_agent_tail_command(remote_pbgui_dir: str) -> str:
-    cache_path = remote_path_join(remote_pbgui_dir, "data", "monitor_agent", "live_metrics.ndjson")
-    cache_expr = remote_shell_path(cache_path)
-    return f"p={cache_expr}; while [ ! -f \"$p\" ]; do sleep 1; done; tail -n 1 -F \"$p\""
+    canonical = remote_shell_path(remote_path_join(remote_pbgui_dir, "data", "logs", "monitor-agent", "live_metrics.ndjson"))
+    legacy = remote_shell_path(remote_path_join(remote_pbgui_dir, "data", "monitor_agent", "live_metrics.ndjson"))
+    return f"canonical={canonical}; legacy={legacy}; while [ ! -f \"$canonical\" ] && [ ! -f \"$legacy\" ]; do sleep 1; done; if [ -f \"$canonical\" ]; then p=\"$canonical\"; else p=\"$legacy\"; fi; tail -n 1 -F \"$p\""
 
 
 def _monitor_agent_cache_read_command(remote_pbgui_dir: str, filename: str) -> str:
@@ -1229,6 +1267,11 @@ INSTANCE_COLLECT_SCRIPT = r'''python3 -u -c "
 import hashlib, json, os, re, subprocess, sys, time
 from datetime import datetime, timezone
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
 HOME = os.path.expanduser('~')
 
 def _home_path(raw, default):
@@ -1244,19 +1287,73 @@ def _home_path(raw, default):
 PBGDIR = _home_path(os.environ.get('PBGUI_PBGDIR'), 'software/pbgui')
 PB7DIR = _home_path(os.environ.get('PBGUI_PB7DIR'), 'software/pb7')
 SERVICE = 'VPSMonitor'
+LOG_PATH = os.path.join(PBGDIR, 'data', 'logs', 'VPSMonitor.log')
+LOG_MAX_BYTES = 1024 * 1024
+LOG_BACKUP_COUNT = 3
+REDACTED = '[REDACTED]'
+_PEM_RE = re.compile(r'-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----.*?-----END(?: [A-Z0-9]+)? PRIVATE KEY-----', re.I | re.S)
+_HEADER_RE = re.compile(r'(?i)(\b(?:authorization|cookie|session(?:id)?|pbgui_session)\b[\x22\x27]?\s*[:=]\s*)(?:bearer\s+)?(?!\[REDACTED\])(?:\x22[^\x22]*\x22|\x27[^\x27]*\x27|[^\s,;\}\]]+)')
+_BEARER_RE = re.compile(r'(?i)(\bbearer\s+)(?!\[REDACTED\])(?:\x22[^\x22]*\x22|\x27[^\x27]*\x27|[^\s,;\}\]]+)')
+_SECRET_RE = re.compile(r'(?i)(\b(?:password|passwd|api[_-]?key|apikey|api[_-]?secret|secret|token|private[_-]?key|passphrase)\b[\x22\x27]?\s*[=:]\s*)(?!\[REDACTED\])(?:\x22[^\x22]*\x22|\x27[^\x27]*\x27|[^\s,;\}\]]+)')
+_QUERY_RE = re.compile(r'(?i)([?&](?:password|passwd|api[_-]?key|apikey|api[_-]?secret|secret|token|session|cookie|authorization|bearer|private[_-]?key|passphrase)=)[^&#\s]+')
+
+def _sanitize(value):
+    try:
+        text = str(value)[:16384]
+        text = _PEM_RE.sub(REDACTED, text)
+        text = _QUERY_RE.sub(lambda match: match.group(1) + REDACTED, text)
+        text = _HEADER_RE.sub(lambda match: match.group(1) + REDACTED, text)
+        text = _BEARER_RE.sub(lambda match: match.group(1) + REDACTED, text)
+        return _SECRET_RE.sub(lambda match: match.group(1) + REDACTED, text)
+    except Exception:
+        return REDACTED
+
+def _rotate_log():
+    oldest = LOG_PATH + '.' + str(LOG_BACKUP_COUNT)
+    try:
+        if os.path.exists(oldest):
+            os.remove(oldest)
+        for index in range(LOG_BACKUP_COUNT - 1, 0, -1):
+            source = LOG_PATH + '.' + str(index)
+            if os.path.exists(source):
+                os.replace(source, LOG_PATH + '.' + str(index + 1))
+        if os.path.exists(LOG_PATH):
+            os.replace(LOG_PATH, LOG_PATH + '.1')
+    except FileNotFoundError:
+        pass
 
 def _log(service, msg, level='WARNING'):
+    safe_service = _sanitize(service).replace('\n', ' ')
+    safe_level = _sanitize(level).replace('\n', ' ')
+    safe_msg = _sanitize(msg)
+    lock_handle = None
     try:
         ts = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
-        log_dir = os.path.join(PBGDIR, 'data', 'logs')
+        log_dir = os.path.dirname(LOG_PATH)
         os.makedirs(log_dir, exist_ok=True)
-        with open(os.path.join(log_dir, 'VPSMonitor.log'), 'a', encoding='utf-8') as f:
-            f.write(f'{ts} [{service}] [{level}] {msg}\n')
+        line = f'{ts} [{safe_service}] [{safe_level}] {safe_msg}\n'
+        lock_handle = open(LOG_PATH + '.lock', 'a+', encoding='utf-8')
+        if fcntl is not None:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) + len(line.encode('utf-8')) > LOG_MAX_BYTES:
+            _rotate_log()
+        with open(LOG_PATH, 'a', encoding='utf-8') as handle:
+            handle.write(line)
+            handle.flush()
     except Exception:
         try:
-            print(str(msg), file=sys.stderr)
+            sys.stderr.write(f'[{safe_service}] [{safe_level}] {safe_msg}\n')
+            sys.stderr.flush()
         except Exception:
             pass
+    finally:
+        if lock_handle is not None:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                lock_handle.close()
+            except Exception:
+                pass
 
 TODAY_START = int(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
 YESTERDAY_START = TODAY_START - 86400
@@ -2174,17 +2271,6 @@ def config_bool(section, option, default=False):
         return bool(default)
     return raw.lower() in ('1', 'true', 'yes', 'on')
 
-def configured_text(value):
-    if not value:
-        return False
-    lowered = value.lower()
-    if lowered in ('none', 'null', 'false', '<api_key>'):
-        return False
-    if value.startswith('<') and value.endswith('>'):
-        return False
-    return True
-
-
 def systemd_user_env():
     env = os.environ.copy()
     env['XDG_RUNTIME_DIR'] = env.get('XDG_RUNTIME_DIR') or f"/run/user/{os.getuid()}"
@@ -2302,7 +2388,7 @@ def collect_legacy_cron_lines(pbgui_dir):
     return [line for line in (res.stdout or '').splitlines() if any(token in line for token in tokens) or line.strip() == '#Ansible: pbgui']
 
 
-def build_systemd_migration_status(pbgui_dir, pbrun_configured, pbdata_configured, coindata_configured):
+def build_systemd_migration_status(pbgui_dir, pbrun_configured, pbdata_configured, credential_active):
     pbgui_path = Path(pbgui_dir)
     python_bin = pbgui_path.parent / 'venv_pbgui' / 'bin' / 'python'
     systemctl_path = run(['which', 'systemctl'], timeout=5)
@@ -2314,9 +2400,14 @@ def build_systemd_migration_status(pbgui_dir, pbrun_configured, pbdata_configure
         required_unit_names.append('pbgui-pbrun.service')
     if pbdata_configured:
         required_unit_names.append('pbgui-pbdata.service')
-    required_unit_names.append('pbgui-pbcoindata.service')
     units = [systemd_unit_status(unit, systemctl_exists) for unit in all_unit_names]
     by_name = {item['unit']: item for item in units}
+    coindata_unit = by_name.get('pbgui-pbcoindata.service', {})
+    if credential_active is True or (
+        credential_active is None
+        and (coindata_unit.get('enabled') == 'enabled' or coindata_unit.get('active') == 'active')
+    ):
+        required_unit_names.append('pbgui-pbcoindata.service')
     required_units = [by_name[unit] for unit in required_unit_names if unit in by_name]
     units_missing = [item for item in required_units if item.get('exists') != 'yes']
     units_not_enabled = [item for item in required_units if item.get('enabled') != 'enabled']
@@ -2400,24 +2491,98 @@ def pbdata_required():
     trades_users = parsed_list_config(cfg.get('pbdata', 'trades_users', fallback=''))
     return bool(fetch_users or trades_users)
 
+def credential_metadata():
+    unknown = {
+        'credential_protocol_version': 2,
+        'credential_active': None,
+        'credential_reason': 'CMC credential pool status unavailable',
+        'cmc_catalog_generation': None,
+        'cmc_materialized_generation': None,
+        'cmc_active_key_count': None,
+        'cmc_provider_used': None,
+        'cmc_provider_limit': None,
+    }
+    try:
+        if PBGDIR not in sys.path:
+            sys.path.insert(0, PBGDIR)
+        from cmc_pool import CmcPoolClient
+        from credential_store import CredentialStore
+        from master.cluster_state import default_cluster_root, local_cmc_credential_readiness, read_local_identity, rebuild_materialized_state
+        store = CredentialStore(Path(PBGDIR) / 'data' / 'credentials')
+        records = store.list_cmc(active_only=False)
+        status = CmcPoolClient(
+            credential_store=store,
+            state_root=store.root / 'cmc_pool',
+            desired_state_provider=lambda: rebuild_materialized_state(
+                default_cluster_root(Path(PBGDIR)),
+                write=False,
+            ),
+        ).status()
+    except Exception:
+        return unknown
+    active_count = max(int(status.get('active_credentials') or 0), 0)
+    try:
+        cluster_root = default_cluster_root(Path(PBGDIR))
+        materialized = rebuild_materialized_state(cluster_root, write=False)
+        node_id = str(read_local_identity(cluster_root)['node_id'])
+        unknown.update(local_cmc_credential_readiness(materialized, node_id, records))
+        authorities = (((materialized.get('desired_state') or {}).get('cmc_pool') or {}).get('authorities') or {})
+        authority_timestamps = [float(item.get('updated_at') or 0) for item in authorities.values() if isinstance(item, dict) and item.get('updated_at')]
+        if authority_timestamps:
+            unknown['cmc_authority_state_age_seconds'] = round(max(time.time() - max(authority_timestamps), 0.0), 1)
+    except Exception:
+        standalone = [record for record in records if isinstance(record, dict) and record.get('active') and not record.get('pending')]
+        generation = max((int(record.get('generation') or 0) for record in standalone), default=0)
+        unknown.update({
+            'credential_active': bool(standalone),
+            'credential_reason': 'Standalone local CMC credential pool active' if standalone else 'No active standalone CMC credentials',
+            'cmc_catalog_generation': generation,
+            'cmc_materialized_generation': generation,
+            'cmc_active_key_count': len(standalone),
+            'cluster_origin_metadata': False,
+        })
+    if unknown.get('credential_active') is True and active_count < 1:
+        unknown['credential_active'] = False
+        unknown['credential_reason'] = 'CMC pool has no exact eligible credential'
+    provider_observations = []
+    for key_status in status.get('keys') or []:
+        if not isinstance(key_status, dict):
+            continue
+        try:
+            timestamp = float(key_status.get('provider_usage_updated_at') or key_status.get('last_settled_at') or 0)
+        except (TypeError, ValueError):
+            timestamp = 0
+        if timestamp > 0:
+            provider_observations.append((timestamp, key_status))
+    if provider_observations:
+        provider_timestamp, provider_status = max(provider_observations, key=lambda item: item[0])
+        unknown['cmc_provider_usage_age_seconds'] = round(max(time.time() - provider_timestamp, 0.0), 1)
+        for source, target in (('provider_used', 'cmc_provider_used'), ('provider_limit', 'cmc_provider_limit')):
+            try:
+                unknown[target] = max(float(provider_status[source]), 0.0) if provider_status.get(source) is not None else None
+            except (TypeError, ValueError):
+                unknown[target] = None
+    authority_reachable = status.get('authority_reachable')
+    if isinstance(authority_reachable, bool):
+        unknown['cmc_authority_reachable'] = authority_reachable
+    return unknown
+
 role = cfg.get('main', 'role', fallback='slave')
 pbname = cfg.get('main', 'pbname', fallback=platform.node()).strip() or platform.node()
 pb7dir = cfg.get('main', 'pb7dir', fallback='')
 pb7venv = cfg.get('main', 'pb7venv', fallback='')
-coinmarketcap_api_key = config_value('coinmarketcap', 'api_key')
 firewall_settings_present = cfg.has_section('firewall')
 firewall_enabled = config_bool('firewall', 'enabled', False)
 firewall_ssh_port = config_value('firewall', 'ssh_port') or '22'
 firewall_ssh_ips = config_value('firewall', 'ssh_ips')
-coindata_configured = configured_text(coinmarketcap_api_key)
 pbrun_configured = pbrun_required_for_host(PBGDIR, pbname)
 pbdata_configured = pbdata_required()
+credentials = credential_metadata()
 
 result = {
     'role': role,
     'boot': 0,
     'api_md5': '',
-    'cmc_credits': None,
     'reboot': os.path.exists('/var/run/reboot-required'),
     'pbgv': read_pbgui_version(PBGDIR),
     'pbgc': '',
@@ -2428,8 +2593,7 @@ result = {
     'pb7c': '',
     'pb7b': 'unknown',
     'pb7py': 'N/A',
-    'coindata_configured': coindata_configured,
-    'coinmarketcap_api_key': coinmarketcap_api_key,
+    **credentials,
     'firewall_settings_present': firewall_settings_present,
     'firewall': firewall_enabled,
     'firewall_ssh_port': firewall_ssh_port,
@@ -2437,7 +2601,7 @@ result = {
     'optional_services': {
         'PBRun': pbrun_configured,
         'PBData': pbdata_configured,
-        'PBCoinData': True,
+        'PBCoinData': credentials['credential_active'],
     },
 }
 
@@ -2480,13 +2644,6 @@ pb7_python = python_version(pb7venv)
 if pb7_python:
     result['pb7py'] = pb7_python
 
-try:
-    raw_credits = cfg.get('coinmarketcap', 'credits_left', fallback='')
-    if raw_credits not in ('', None):
-        result['cmc_credits'] = int(float(raw_credits))
-except Exception:
-    pass
-
 available = []
 logs_dir = os.path.join(PBGDIR, 'data', 'logs')
 if os.path.isdir(logs_dir):
@@ -2495,7 +2652,7 @@ if os.path.isdir(logs_dir):
         if os.path.isfile(full) and (f.endswith('.log') or f.endswith('.log.old')):
             available.append('data/logs/' + f)
 result['available_logs'] = available
-result['systemd_migration'] = build_systemd_migration_status(PBGDIR, pbrun_configured, pbdata_configured, coindata_configured)
+result['systemd_migration'] = build_systemd_migration_status(PBGDIR, pbrun_configured, pbdata_configured, credentials['credential_active'])
 
 print(json.dumps(result))
 PY'''
@@ -2599,8 +2756,8 @@ class VPSMonitor:
         self.loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Config
-        self._auto_restart: Optional[bool] = None
-        self._enabled_hosts: Optional[set[str]] = None
+        self._auto_restart: Optional[bool] = True
+        self._enabled_hosts: Optional[set[str]] = set()
 
         # Telegram
         self._telegram_token = ""
@@ -2664,10 +2821,20 @@ class VPSMonitor:
         }
 
         # Debug logging
-        self._debug_logging: Optional[bool] = None
+        self._debug_logging: Optional[bool] = False
 
         # ini watcher (thread-based, fine alongside asyncio)
         self._ini_watcher = IniWatcher()
+        self._config_changed = asyncio.Event()
+        self._config_signature = None
+        self._monitor_config = object.__new__(MonitorConfig)
+        self._monitor_config.server = None
+        self._monitor_config.servers = []
+        self._monitor_config.logfiles = []
+        for key, value in MONITOR_DEFAULTS.items():
+            setattr(self._monitor_config, key, value)
+        self._config_retry_count = 0
+        self._config_retry_task: asyncio.Task | None = None
 
         # Background tasks
         self._tasks: list[asyncio.Task] = []
@@ -2679,6 +2846,91 @@ class VPSMonitor:
         self._running = False
 
     # ── Config ──────────────────────────────────────────────
+
+    @staticmethod
+    def _snapshot_value(snapshot: IniSnapshot, section: str, key: str, default: str) -> str:
+        return snapshot.get(section, key).strip() if snapshot.has_option(section, key) else default
+
+    @classmethod
+    def _snapshot_bool(cls, snapshot: IniSnapshot, section: str, key: str, default: bool) -> bool:
+        raw = cls._snapshot_value(snapshot, section, key, "").lower()
+        if not raw:
+            return default
+        if raw in {"1", "true", "yes", "on"}:
+            return True
+        if raw in {"0", "false", "no", "off"}:
+            return False
+        raise ValueError(f"Invalid INI value [{section}] {key}")
+
+    @classmethod
+    def _build_config_candidate(cls, snapshot: IniSnapshot) -> VPSMonitorConfigCandidate:
+        enabled_raw = cls._snapshot_value(snapshot, "vps_monitor", "enabled_hosts", "")
+        enabled_hosts = frozenset(host.strip() for host in enabled_raw.split(",") if host.strip())
+        monitor_values: dict[str, float] = {}
+        for key, default in MONITOR_DEFAULTS.items():
+            raw = cls._snapshot_value(snapshot, "monitor", key, str(default))
+            try:
+                value = float(raw)
+            except ValueError as exc:
+                raise ValueError(f"Invalid INI value [monitor] {key}") from exc
+            if not math.isfinite(value):
+                raise ValueError(f"Invalid INI value [monitor] {key}")
+            monitor_values[key] = value
+
+        alert_gui_routes = {
+            kind: cls._snapshot_bool(snapshot, "vps_monitor_alerts", key, default)
+            for kind, default in ALERT_ROUTE_GUI_DEFAULTS.items()
+            for key in [ALERT_ROUTE_GUI_KEYS[kind]]
+        }
+        alert_telegram_routes = {
+            event: cls._snapshot_bool(snapshot, "vps_monitor_alerts", key, default)
+            for event, default in ALERT_ROUTE_TELEGRAM_DEFAULTS.items()
+            for key in [ALERT_ROUTE_TELEGRAM_KEYS[event]]
+        }
+        debug_logging = cls._snapshot_bool(snapshot, "vps_monitor", "debug_logging", False)
+        ui_settings = {"debug_logging": "true" if debug_logging else "false"}
+        compact = cls._snapshot_value(snapshot, "vps_monitor_ui", "compact", "")
+        if compact:
+            ui_settings["compact"] = compact
+        return VPSMonitorConfigCandidate(
+            signature=snapshot.signature,
+            enabled_hosts=enabled_hosts,
+            auto_restart=cls._snapshot_bool(snapshot, "vps_monitor", "auto_restart", True),
+            debug_logging=debug_logging,
+            telegram_token=cls._snapshot_value(snapshot, "main", "telegram_token", ""),
+            telegram_chat_id=cls._snapshot_value(snapshot, "main", "telegram_chat_id", ""),
+            alert_gui_routes=alert_gui_routes,
+            alert_telegram_routes=alert_telegram_routes,
+            monitor_values=monitor_values,
+            ui_settings=ui_settings,
+        )
+
+    def _commit_config_candidate(self, candidate: VPSMonitorConfigCandidate) -> None:
+        monitor_config = object.__new__(MonitorConfig)
+        monitor_config.server = None
+        monitor_config.servers = []
+        monitor_config.logfiles = []
+        for key, value in candidate.monitor_values.items():
+            setattr(monitor_config, key, value)
+        self._enabled_hosts = set(candidate.enabled_hosts)
+        self._auto_restart = candidate.auto_restart
+        self._debug_logging = candidate.debug_logging
+        self._telegram_token = candidate.telegram_token
+        self._telegram_chat_id = candidate.telegram_chat_id
+        self._alert_gui_routes = dict(candidate.alert_gui_routes)
+        self._alert_telegram_routes = dict(candidate.alert_telegram_routes)
+        self._alert_routes_loaded = True
+        self._monitor_config = monitor_config
+        self.store._ui_settings = dict(candidate.ui_settings)
+        self.store.changed.set()
+        self._config_signature = candidate.signature
+
+    @staticmethod
+    def _config_error_text(exc: Exception) -> str:
+        message = str(exc)
+        if message.startswith("Invalid INI value ["):
+            return message
+        return type(exc).__name__
 
     @property
     def auto_restart(self) -> bool:
@@ -2747,13 +2999,16 @@ class VPSMonitor:
             return None
         return self._configured_optional_value(config.get(config_key))
 
-    def _optional_service_expected(self, hostname: str, service_name: str) -> bool:
+    def _optional_service_expected(self, hostname: str, service_name: str) -> bool | None:
         if service_name == "PBCluster":
             return self._pbcluster_expected(hostname)
+        meta = self.store.host_meta.get(hostname, {}) if self.store else {}
+        if service_name == "PBCoinData":
+            active = meta.get("credential_active") if isinstance(meta, dict) else None
+            return active if isinstance(active, bool) else None
         if service_name not in OPTIONAL_SERVICE_REQUIREMENTS:
             return True
         local_expected = self._local_optional_service_expected(hostname, service_name)
-        meta = self.store.host_meta.get(hostname, {}) if self.store else {}
         remote_expected: bool | None = None
         optional_services = meta.get("optional_services") if isinstance(meta, dict) else None
         if isinstance(optional_services, dict) and service_name in optional_services:
@@ -2851,19 +3106,31 @@ class VPSMonitor:
         }
 
     def save_alert_settings(self, settings: dict[str, Any]) -> None:
+        main_updates = {}
         if "telegram_token" in settings:
-            self._telegram_token = str(settings.get("telegram_token") or "").strip()
-            save_ini("main", "telegram_token", self._telegram_token)
+            main_updates["telegram_token"] = str(settings.get("telegram_token") or "").strip()
         if "telegram_chat_id" in settings:
-            self._telegram_chat_id = str(settings.get("telegram_chat_id") or "").strip()
-            save_ini("main", "telegram_chat_id", self._telegram_chat_id)
-        for kind, ini_key in ALERT_ROUTE_GUI_KEYS.items():
-            if ini_key in settings:
-                save_ini("vps_monitor_alerts", ini_key, _bool_to_ini(bool(settings.get(ini_key))))
-        for event, ini_key in ALERT_ROUTE_TELEGRAM_KEYS.items():
-            if ini_key in settings:
-                save_ini("vps_monitor_alerts", ini_key, _bool_to_ini(bool(settings.get(ini_key))))
-        self._load_alert_routes()
+            main_updates["telegram_chat_id"] = str(settings.get("telegram_chat_id") or "").strip()
+        alert_updates = {
+            ini_key: _bool_to_ini(bool(settings.get(ini_key)))
+            for ini_key in (*ALERT_ROUTE_GUI_KEYS.values(), *ALERT_ROUTE_TELEGRAM_KEYS.values())
+            if ini_key in settings
+        }
+
+        def mutate(parser) -> None:
+            for section, values in (("main", main_updates), ("vps_monitor_alerts", alert_updates)):
+                if values and not parser.has_section(section):
+                    parser.add_section(section)
+                for key, value in values.items():
+                    parser.set(section, key, value)
+
+        if main_updates or alert_updates:
+            update_ini(mutate)
+        if "telegram_token" in main_updates:
+            self._telegram_token = main_updates["telegram_token"]
+        if "telegram_chat_id" in main_updates:
+            self._telegram_chat_id = main_updates["telegram_chat_id"]
+        self._load_alert_routes(force=True)
 
     def _load_alert_state(self) -> None:
         self._alerts = {}
@@ -2997,7 +3264,9 @@ class VPSMonitor:
     async def _sync_live_alerts(self) -> None:
         self._load_alert_routes()
         conn_summary = self.pool.get_status_summary().get("connections") or {}
-        monitor_config = MonitorConfig()
+        monitor_config = getattr(self, "_monitor_config", None)
+        if monitor_config is None:
+            monitor_config = MonitorConfig()
         self._update_cpu_threshold_state(monitor_config)
         live_alerts = collect_live_alerts(
             conn_summary,
@@ -3215,9 +3484,14 @@ class VPSMonitor:
         _log(SERVICE, "Starting VPS monitor...")
 
         self.pool.load_vps_configs()
-        self.store.load_ui_settings()
+        self._ini_watcher.bind_asyncio(self.loop, self._config_changed)
         self._ini_watcher.start()
-        self._load_alert_routes()
+        try:
+            initial_candidate = self._build_config_candidate(load_ini_snapshot(self._ini_watcher._ini_path))
+            self._commit_config_candidate(initial_candidate)
+        except Exception as exc:
+            _log(SERVICE, f"Config reload rejected during startup: {self._config_error_text(exc)}", level="WARNING")
+            self._schedule_config_retry()
         self._load_alert_state()
         for store in self._host_metric_history.values():
             store.load()
@@ -3283,6 +3557,9 @@ class VPSMonitor:
         self._tasks.clear()
         self._stream_tasks.clear()
         self._ini_watcher.stop()
+        self._ini_watcher.unbind_asyncio()
+        self._config_changed.clear()
+        self._config_retry_task = None
         for store in self._host_metric_history.values():
             store.maybe_flush(force=True)
         self._bot_cpu_history.maybe_flush(force=True)
@@ -3310,16 +3587,13 @@ class VPSMonitor:
                 _log(SERVICE, f"Error in main loop: {e}", level="WARNING",
                      meta={'traceback': traceback.format_exc()})
 
-            # Sleep but wake on ini change
+            # Sleep but wake on ini change without occupying the default executor.
             try:
-                await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(
-                        None, self._ini_watcher.changed.wait, LOOP_INTERVAL
-                    ),
-                    timeout=LOOP_INTERVAL + 1,
-                )
-            except (asyncio.TimeoutError, asyncio.CancelledError):
+                await asyncio.wait_for(self._config_changed.wait(), timeout=LOOP_INTERVAL)
+            except asyncio.TimeoutError:
                 pass
+            except asyncio.CancelledError:
+                break
 
     async def _hl_expiry_loop(self):
         while self._running:
@@ -3334,8 +3608,7 @@ class VPSMonitor:
     async def _loop_iteration(self, loop_count: int):
         """Single iteration of the main loop."""
         # Config changes
-        if self._ini_watcher.changed.is_set():
-            self._ini_watcher.changed.clear()
+        if self._config_changed.is_set():
             await self._apply_config_changes()
 
         self._record_local_master_metric_history()
@@ -3386,15 +3659,25 @@ class VPSMonitor:
     # ── Config reload ───────────────────────────────────────
 
     async def _apply_config_changes(self):
-        """Re-read config and apply host enable/disable changes."""
-        prev_enabled = self._enabled_hosts or set()
-        self._enabled_hosts = None
-        self._auto_restart = None
-        self._debug_logging = None
-        self._telegram_token = ""
-        self._telegram_chat_id = ""
-        self._alert_routes_loaded = False
-        enabled = self.enabled_hosts
+        """Validate one INI generation, then apply it and its host delta."""
+        self._config_changed.clear()
+        self._ini_watcher.changed.clear()
+        try:
+            snapshot = load_ini_snapshot(self._ini_watcher._ini_path)
+            candidate = self._build_config_candidate(snapshot)
+        except Exception as exc:
+            error_text = self._config_error_text(exc)
+            _log(SERVICE, f"Config reload rejected; keeping last known good settings: {error_text}", level="WARNING")
+            self._schedule_config_retry()
+            return
+
+        prev_enabled = set(self._enabled_hosts or set())
+        self._commit_config_candidate(candidate)
+        self._config_retry_count = 0
+        if self._config_retry_task is not None and not self._config_retry_task.done():
+            self._config_retry_task.cancel()
+        self._config_retry_task = None
+        enabled = set(candidate.enabled_hosts)
 
         newly_disabled = prev_enabled - enabled
         newly_enabled = enabled - prev_enabled
@@ -3418,10 +3701,31 @@ class VPSMonitor:
                 if h in self.pool.hostnames():
                     if await self.pool.connect(h):
                         self._start_metrics_stream(h)
-                        asyncio.create_task(
+                        self._create_owned_task(
                             self.collect_host_meta_now(h, include_package_status=True),
                             name=f"host-meta-enable-{h}",
                         )
+
+    def _create_owned_task(self, coroutine, *, name: str) -> asyncio.Task:
+        task = asyncio.create_task(coroutine, name=name)
+        self._tasks.append(task)
+        return task
+
+    def _schedule_config_retry(self) -> None:
+        if not self._running or self._config_retry_count >= 3:
+            return
+        if self._config_retry_task is not None and not self._config_retry_task.done():
+            return
+        self._config_retry_count += 1
+
+        async def wake_after_backoff() -> None:
+            await asyncio.sleep(min(2 ** (self._config_retry_count - 1), 4))
+            if self._running:
+                self._config_changed.set()
+
+        self._config_retry_task = self._create_owned_task(
+            wake_after_backoff(), name="vps-config-retry"
+        )
 
     async def refresh_enabled_host(self, hostname: str) -> bool:
         """Reload config and reconnect one enabled host after credentials change."""
@@ -3429,8 +3733,7 @@ class VPSMonitor:
         host = str(hostname or "").strip()
         if not host:
             return False
-        self._enabled_hosts = None
-        enabled = self.enabled_hosts
+        enabled = set(self.enabled_hosts)
         self.pool.load_vps_configs()
         for h in list(self.pool.hostnames()):
             if h not in enabled:
@@ -3919,7 +4222,7 @@ class VPSMonitor:
         if not isinstance(payload, dict):
             _log(SERVICE, f"[host-meta] direct probe invalid payload on {hostname}", level="WARNING")
             return None
-        payload.pop("coinmarketcap_api_key", None)
+        payload.pop("coinmarketcap" + "_api_key", None)
         payload["schema_version"] = payload.get("schema_version") or 1
         payload["generated_at"] = time.time()
         payload["source"] = "direct-ssh"

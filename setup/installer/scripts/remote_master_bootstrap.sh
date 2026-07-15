@@ -46,7 +46,12 @@ RESULT_PATH="${RESULT_PATH:-/tmp/pbgui_remote_master_result.json}"
 LOCAL_PUBLIC_KEY="${LOCAL_PUBLIC_KEY:-}"
 UPLOADED_SETUP_SYSTEMD_PATH="${UPLOADED_SETUP_SYSTEMD_PATH:-}"
 INSTALLER_BRANCH="${INSTALLER_BRANCH:-}"
-export COINMARKETCAP_API_KEY="${COINMARKETCAP_API_KEY:-}"
+PB7_REF="${PB7_REF:-}"
+
+if [[ ! "$PB7_REF" =~ ^[0-9a-f]{40}$ ]]; then
+  err "PB7 ref must be an exact lowercase 40-character commit SHA."
+  exit 1
+fi
 
 eval "$(python3 - "$INSTALL_DIR" <<'PY'
 import shlex
@@ -223,10 +228,14 @@ else
   fi
 fi
 if [[ -d "$INSTALL_DIR/pb7/.git" ]]; then
-  run_as_user "cd '$INSTALL_DIR/pb7' && git pull --ff-only"
+  info "Using existing PB7 checkout."
+  run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb7' --ref '$PB7_REF' --expected-major 7 --fetch-url https://github.com/enarjord/passivbot.git"
+  run_as_user "PBGUI_DIR='$INSTALL_DIR/pbgui' PBGUI_PYTHON='$INSTALL_DIR/venv_pbgui/bin/python' PBGUI_USER='$TARGET_USER' bash '$INSTALL_DIR/pbgui/setup/vps_service_control.sh' stop PBRun || true"
+  run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb7' --ref '$PB7_REF' --expected-major 7 --stop-processes --venv '$INSTALL_DIR/venv_pb7'"
 else
-  run_as_user "git clone https://github.com/enarjord/passivbot.git '$INSTALL_DIR/pb7'"
+  run_as_user "git clone --no-checkout https://github.com/enarjord/passivbot.git '$INSTALL_DIR/pb7'"
 fi
+run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb7' --ref '$PB7_REF' --expected-major 7 --fetch-url https://github.com/enarjord/passivbot.git --checkout"
 if [[ -n "$UPLOADED_SETUP_SYSTEMD_PATH" && -f "$UPLOADED_SETUP_SYSTEMD_PATH" ]]; then
   info "Installing local systemd setup helper into PBGui checkout..."
   install -D -m 755 -o "$TARGET_USER" -g "$TARGET_GROUP" "$UPLOADED_SETUP_SYSTEMD_PATH" "$INSTALL_DIR/pbgui/setup/setup_systemd.sh"
@@ -263,7 +272,7 @@ cfg['main'] = {
     'role': 'master',
 }
 cfg['api_server'] = {'host': bind_host, 'port': port}
-cfg['coinmarketcap'] = {'api_key': os.environ.get('COINMARKETCAP_API_KEY', ''), 'fetch_limit': '1000', 'fetch_interval': '4'}
+cfg['coinmarketcap'] = {'fetch_limit': '1000', 'fetch_interval': '4'}
 tmp = path + '.tmp'
 fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, 'w', encoding='utf-8') as handle:

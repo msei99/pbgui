@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from logging_helpers import human_log as _log
+from credential_process_registry import ProcessCapabilityHeartbeat
 from master.cluster_sync_worker import ClusterSyncWorker
 from pbgui_purefunc import PBGDIR
 
@@ -64,13 +65,14 @@ class PBCluster:
 
         signal.signal(signal.SIGTERM, _handle_stop)
         signal.signal(signal.SIGINT, _handle_stop)
-        try:
-            self.worker.run_forever()
-        finally:
+        with ProcessCapabilityHeartbeat(self.pbgdir, SERVICE):
             try:
-                self.pidfile.unlink(missing_ok=True)
-            except OSError:
-                pass
+                self.worker.run_forever()
+            finally:
+                try:
+                    self.pidfile.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def run_once(self) -> dict:
         """Run one local sync pass for diagnostics or tests."""
@@ -128,7 +130,8 @@ def main(argv: list[str] | None = None) -> int:
 
     service = PBCluster(interval=args.interval, boot_window=args.boot_window)
     if args.once:
-        result = service.run_once()
+        with ProcessCapabilityHeartbeat(service.pbgdir, SERVICE):
+            result = service.run_once()
         return 0 if result.get("ok") or result.get("status") == "not_configured" else 1
     service.run_foreground()
     return 0

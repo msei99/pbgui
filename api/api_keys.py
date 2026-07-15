@@ -10,9 +10,13 @@ from __future__ import annotations
 
 import json
 from functools import wraps
+import os
+import re
+import subprocess
 import threading
 import time
 import traceback
+import uuid
 from pathlib import Path as _Path
 from typing import Any, Optional
 
@@ -31,8 +35,14 @@ from api_key_state import (
     strip_runtime_extra,
     update_user_state,
 )
+from cluster_credential_publisher import ClusterCredentialPublisher
+from credential_store import CredentialNotFoundError, CredentialStore, credential_mutation_lock
+from credential_reconciler import reconcile_pending_credentials
 from logging_helpers import human_log as _log
 from file_lock import advisory_file_lock
+from master.cluster_state import default_cluster_root, ensure_local_identity, read_local_identity, rebuild_materialized_state
+from pb7_api_keys import PB7ApiKeysMergeWriter, project_active_tradfi_profiles
+import pbgui_purefunc
 from pbgui_purefunc import PBGDIR as _PBGDIR
 
 SERVICE = "ApiKeys"
@@ -172,6 +182,44 @@ def _get_users():
     """Instantiate a fresh Users object to avoid stale state."""
     from User import Users
     return Users()
+
+
+def _credential_store() -> CredentialStore:
+    """Return the local owner-only credential vault."""
+
+    from credential_rolling_bootstrap import bootstrap_local_legacy_credentials
+
+    bootstrap_local_legacy_credentials(_Path(_PBGDIR))
+    return CredentialStore(_Path(_PBGDIR) / "data" / "credentials")
+
+
+def _cluster_credential_publisher(store: CredentialStore) -> ClusterCredentialPublisher:
+    """Return a publisher for the local master, creating its identity if needed."""
+
+    cluster_root = default_cluster_root(_Path(_PBGDIR))
+    snapshot = pbgui_purefunc.load_ini_snapshot()
+    pbname = snapshot.get("main", "pbname", fallback="").strip() or os.uname().nodename
+    ensure_local_identity(cluster_root, role="master", pbname=pbname)
+    identity = read_local_identity(cluster_root)
+    if str(identity.get("role") or "").strip().lower() != "master":
+        raise HTTPException(status_code=409, detail="TradFi credentials can only be managed on a master")
+    return ClusterCredentialPublisher(cluster_root, store)
+
+
+def _project_local_tradfi(
+    store: CredentialStore,
+    pending_profile_id: str | None = None,
+) -> dict[str, Any]:
+    """Project active vault profiles into the reserved PB7 TradFi subtree."""
+
+    _py, pb7_dir = _get_pb7_paths()
+    if not pb7_dir:
+        raise HTTPException(status_code=409, detail="PB7 directory is not configured")
+    return project_active_tradfi_profiles(
+        store,
+        _Path(pb7_dir) / "api-keys.json",
+        pending_profile_id=pending_profile_id,
+    )
 
 
 def _is_user_in_use(user_name: str) -> bool:
@@ -713,7 +761,7 @@ def restore_backup(
 ) -> dict:
     """Restore api-keys.json from a backup file. Creates a pre-restore snapshot first."""
     from datetime import datetime
-    from secure_files import copy_private_file, ensure_private_directory
+    from secure_files import ensure_private_directory, secure_private_file
 
     # Security: prevent path traversal and unknown file patterns
     if "/" in filename or "\\" in filename or ".." in filename:
@@ -726,8 +774,17 @@ def restore_backup(
     backup_dir = _Path(_PBGDIR) / "data" / "api-keys"
     ensure_private_directory(backup_dir)
     backup_file = backup_dir / filename
+    if backup_file.is_symlink():
+        raise HTTPException(status_code=400, detail="Refusing symlinked backup file")
     if not backup_file.exists():
         raise HTTPException(status_code=404, detail=f"Backup file not found: {filename}")
+    secure_private_file(backup_file)
+    try:
+        backup_payload = json.loads(backup_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Backup file is not valid JSON") from exc
+    if not isinstance(backup_payload, dict):
+        raise HTTPException(status_code=400, detail="Backup file must contain a JSON object")
 
     is_pb7_backup = filename.startswith("api-keys7_")
     date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -739,9 +796,18 @@ def restore_backup(
         if not is_pb7_installed():
             raise HTTPException(status_code=400, detail="pb7 is not installed/configured")
         target_path = _Path(pb7dir()) / "api-keys.json"
-        if target_path.exists():
-            copy_private_file(target_path, backup_dir / f"api-keys7_pre-restore_{date}.json")
-        copy_private_file(backup_file, target_path)
+        store = _credential_store()
+        writer = PB7ApiKeysMergeWriter(target_path, store.root / "pb7_projection.json")
+        with credential_mutation_lock(store.root):
+            writer.restore_exchange_and_project(
+                backup_payload,
+                store,
+                backup_path=(
+                    backup_dir / f"api-keys7_pre-restore_{date}.json"
+                    if target_path.exists()
+                    else None
+                ),
+            )
         restored_to.append("pb7")
 
     _log(SERVICE, f"Restored api-keys.json ({restored_to[0]}) from backup: {filename}")
@@ -1040,22 +1106,6 @@ def delete_user(
     return {"deleted": name}
 
 
-# ── Reveal endpoints (must be before /{name}/… catch-alls to avoid shadowing) ──
-
-@router.get("/tradfi/reveal")
-def tradfi_reveal(
-    field: str = Query(..., description="api_key or api_secret"),
-    session: SessionToken = Depends(require_auth),
-) -> dict:
-    """Return the real (unmasked) TradFi credential for the eye-toggle."""
-    if field not in ("api_key", "api_secret"):
-        raise HTTPException(status_code=400, detail="field must be api_key or api_secret")
-    users = _get_users()
-    tradfi = users.tradfi or {}
-    value = tradfi.get(field) or ""
-    return {"value": value}
-
-
 @router.get("/{name}/reveal")
 def reveal_user_field(
     name: str = PathParam(..., description="User name"),
@@ -1076,9 +1126,10 @@ def reveal_user_field(
 # ── TradFi test (must be registered BEFORE /{name}/test to avoid shadowing) ──
 
 class TradFiTestRequest(BaseModel):
-    provider: str
-    api_key: str = ""
-    api_secret: str = ""
+    profile_id: Optional[str] = None
+    provider: str = ""
+    api_key: Optional[str] = None
+    api_secret: Optional[str] = None
 
 
 @router.post("/tradfi/test")
@@ -1088,27 +1139,40 @@ def tradfi_test_connection(
 ) -> dict:
     """Test a TradFi data provider connection.
 
-    If api_key is empty the stored config is used, so the user can test
-    without re-entering credentials that are already saved.
+    A saved profile ID and one-time request-body credentials are mutually
+    exclusive so stored secrets never need to round-trip through the browser.
 
     NOTE: This route must be registered BEFORE @router.post("/{name}/test")
     because /{name}/test would otherwise shadow /tradfi/test.
     """
-    py, pb7dir = _get_pb7_paths()
-    if not py or not pb7dir:
+    py, pb7_dir = _get_pb7_paths()
+    if not py or not pb7_dir:
         raise HTTPException(status_code=400, detail="pb7 venv/dir not configured")
-    api_key = req.api_key
-    api_secret = req.api_secret
-    if not api_key:
-        users = _get_users()
-        stored = users.tradfi or {}
-        if stored.get("provider") == req.provider:
-            api_key = stored.get("api_key", "")
-            api_secret = stored.get("api_secret", "")
-    # yfinance needs no API key — allow test without one
-    if not api_key and req.provider != "yfinance":
-        raise HTTPException(status_code=400, detail="No API key provided and none stored for this provider")
-    ok, msg = _run_tradfi_test(py, pb7dir, req.provider, api_key, api_secret)
+    has_unsaved_secret = req.api_key is not None or req.api_secret is not None
+    if req.profile_id and has_unsaved_secret:
+        raise HTTPException(status_code=400, detail="Use either profile_id or one-time credentials")
+
+    provider = req.provider.strip().lower()
+    api_key = str(req.api_key or "").strip()
+    api_secret = str(req.api_secret or "").strip()
+    if req.profile_id:
+        store = _credential_store()
+        try:
+            record = store.get_tradfi(req.profile_id)
+            credentials = store.load_tradfi_credentials(req.profile_id)
+        except (CredentialNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail="TradFi profile not found") from exc
+        provider = str(record.get("provider") or "").strip().lower()
+        api_key = _tradfi_api_key(credentials)
+        api_secret = _tradfi_api_secret(credentials)
+    elif not has_unsaved_secret and provider != "yfinance":
+        raise HTTPException(status_code=400, detail="Provide a stored profile_id or one-time credentials")
+
+    if provider not in {*TRADFI_PROVIDERS, "yfinance"}:
+        raise HTTPException(status_code=400, detail="Unknown TradFi provider")
+    if not api_key and provider != "yfinance":
+        raise HTTPException(status_code=400, detail="TradFi API key is required")
+    ok, msg = _run_tradfi_test(py, pb7_dir, provider, api_key, api_secret)
     return {"success": ok, "message": msg}
 
 
@@ -1357,75 +1421,350 @@ def update_hl_expiry_config(
 # ── TradFi provider endpoints ────────────────────────────────
 
 class TradFiConfig(BaseModel):
+    profile_id: Optional[str] = None
     provider: str = ""
+    label: str = ""
+    active: bool = True
+    shared: bool = True
     api_key: Optional[str] = None
     api_secret: Optional[str] = None
+    operation_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    create_new: bool = False
+
+
+class TradFiProfileMetadata(BaseModel):
+    id: Optional[str] = None
+    provider: str = ""
+    label: str = ""
+    active: bool = False
+    shared: bool = False
+    generation: int = 0
+    configured: bool = False
+    has_api_key: bool = False
+    has_api_secret: bool = False
+    origin: str = ""
+    pending: bool = False
+    pending_delete: bool = False
+    pending_stage: str = ""
+    pending_operation_id: str = ""
+    last_operation_id: str = ""
+    replicated_active: bool = False
+    activation_generation: int = 0
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class TradFiProjectionRetry(BaseModel):
+    operation_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+
+
+def _tradfi_api_key(credentials: dict[str, str]) -> str:
+    """Return a provider API key from supported vault field aliases."""
+
+    for key in ("api_key", "token", "key"):
+        value = str(credentials.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _tradfi_api_secret(credentials: dict[str, str]) -> str:
+    """Return a provider secret from supported vault field aliases."""
+
+    for key in ("api_secret", "secret"):
+        value = str(credentials.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _tradfi_profile_metadata(
+    store: CredentialStore,
+    record: dict[str, Any],
+    replicated_profiles: dict[str, dict[str, Any]] | None = None,
+) -> TradFiProfileMetadata:
+    """Convert one vault record to metadata and presence booleans only."""
+
+    credentials = store.load_tradfi_credentials(str(record["id"]))
+    replicated = (replicated_profiles or {}).get(str(record.get("provider") or "")) or {}
+    replicated_active = str(replicated.get("profile_id") or "") == str(record["id"])
+    return TradFiProfileMetadata(
+        id=str(record["id"]),
+        provider=str(record.get("provider") or ""),
+        label=str(record.get("label") or ""),
+        active=bool(record.get("active", True)) and not bool(record.get("pending")),
+        shared=bool(record.get("shared", False)),
+        generation=int(record.get("generation") or 0),
+        configured=bool(credentials),
+        has_api_key=bool(_tradfi_api_key(credentials)),
+        has_api_secret=bool(_tradfi_api_secret(credentials)),
+        origin=str(record.get("origin") or ""),
+        pending=bool(record.get("pending")),
+        pending_delete=bool(record.get("pending_delete")),
+        pending_stage=str(record.get("pending_stage") or ""),
+        pending_operation_id=str(record.get("pending_operation_id") or ""),
+        last_operation_id=str(record.get("last_operation_id") or ""),
+        replicated_active=replicated_active,
+        activation_generation=int(replicated.get("activation_generation") or 0) if replicated_active else 0,
+        created_at=str(record.get("created_at") or "") or None,
+        updated_at=str(record.get("updated_at") or "") or None,
+    )
+
+
+def _tradfi_replicated_selection() -> dict[str, dict[str, Any]]:
+    """Return the exact secret-free replicated active profile selection."""
+
+    try:
+        desired = rebuild_materialized_state(
+            default_cluster_root(_Path(_PBGDIR)), write=False
+        ).get("desired_state") or {}
+    except Exception:
+        return {}
+    selections = desired.get("tradfi_active_profiles")
+    if not isinstance(selections, dict):
+        return {}
+    return {
+        str(provider): {
+            "provider": str(provider),
+            "profile_id": str(item.get("profile_id") or "") or None,
+            "activation_generation": int(item.get("activation_generation") or 0),
+            "conflicted": bool(item.get("conflicted")),
+            "updated_at": item.get("updated_at"),
+        }
+        for provider, item in sorted(selections.items())
+        if isinstance(item, dict)
+    }
+
+
+def _tradfi_projection_status(store: CredentialStore) -> dict[str, Any]:
+    """Return the stable secret-free PB7 projection retry state."""
+
+    _py, pb7_dir = _get_pb7_paths()
+    if not pb7_dir:
+        return {
+            "status": "pending",
+            "desired_generation": 0,
+            "applied_generation": 0,
+            "attempts": 0,
+            "last_error": "PB7 directory is not configured",
+        }
+    status = PB7ApiKeysMergeWriter(
+        _Path(pb7_dir) / "api-keys.json",
+        store.root / "pb7_projection.json",
+    ).projection_status()
+    return {
+        "status": str(status.get("status") or "pending"),
+        "desired_generation": int(status.get("desired_generation") or 0),
+        "applied_generation": int(status.get("applied_generation") or 0),
+        "attempts": int(status.get("attempts") or 0),
+        "last_attempt_at": status.get("last_attempt_at"),
+        "applied_at": status.get("applied_at"),
+        "last_error": str(status.get("last_error") or "") or None,
+    }
 
 
 @router.get("/tradfi/config")
 def get_tradfi_config(
     session: SessionToken = Depends(require_auth),
-) -> TradFiConfig:
-    """Get current TradFi data provider config."""
-    users = _get_users()
-    tradfi = users.tradfi or {}
-    return TradFiConfig(
-        provider=tradfi.get("provider", ""),
-        api_key=_mask(tradfi.get("api_key")),
-        api_secret=_mask(tradfi.get("api_secret")),
+) -> TradFiProfileMetadata:
+    """Get the deterministic explicitly active TradFi profile without secrets."""
+
+    store = _credential_store()
+    publisher = _cluster_credential_publisher(store)
+    reconcile_pending_credentials(
+        _PBGDIR,
+        store=store,
+        tradfi_projector=lambda current, pending: _project_local_tradfi(current, pending),
+        publisher=publisher,
     )
+    records = sorted(store.list_tradfi(active_only=True), key=lambda item: str(item.get("id") or ""))
+    return _tradfi_profile_metadata(store, records[0]) if records else TradFiProfileMetadata()
 
 
 @router.put("/tradfi/config")
-@_serialized_api_keys_write
 def update_tradfi_config(
     config: TradFiConfig,
     session: SessionToken = Depends(require_auth),
 ) -> dict:
-    """Update TradFi data provider config.
+    """Create or version one vault profile, publish it, and project active profiles."""
 
-    If api_key / api_secret is an empty string the existing stored value is
-    preserved (allows saving provider change without re-entering credentials).
-    """
-    users = _get_users()
-    existing = users.tradfi or {}
-    effective_key = config.api_key if config.api_key else existing.get("api_key", "")
-    effective_secret = config.api_secret if config.api_secret else existing.get("api_secret", "")
-    if config.provider:
-        new_tradfi: dict = {"provider": config.provider, "api_key": effective_key}
-        if effective_secret:
-            new_tradfi["api_secret"] = effective_secret
-        users.tradfi = new_tradfi
-    else:
-        users.tradfi = {}
-    users.save()
-    _log(SERVICE, f"Updated TradFi config: provider={config.provider}")
-    if config.provider and effective_key:
-        _save_tradfi_profile(config.provider, effective_key, effective_secret or "")
-    return {"status": "saved"}
+    provider = config.provider.strip().lower()
+    if provider not in TRADFI_PROVIDERS:
+        raise HTTPException(status_code=400, detail="Unknown TradFi provider")
+    store = _credential_store()
+    publisher = _cluster_credential_publisher(store)
+    operation_id = config.operation_id or uuid.uuid4().hex
+    try:
+        with credential_mutation_lock(store.root):
+            existing = store.get_tradfi(config.profile_id) if config.profile_id else None
+            if existing is None and not config.create_new:
+                active_matches = [
+                    record
+                    for record in store.list_tradfi(active_only=True)
+                    if str(record.get("provider") or "").strip().lower() == provider
+                ]
+                matches = active_matches or [
+                    record
+                    for record in store.list_tradfi()
+                    if str(record.get("provider") or "").strip().lower() == provider
+                ]
+                if matches:
+                    existing = sorted(matches, key=lambda item: str(item.get("id") or ""))[0]
+
+            credentials = (
+                store.load_tradfi_credentials(str(existing["id"]))
+                if existing is not None
+                else {}
+            )
+            if config.api_key is not None:
+                credentials["api_key"] = config.api_key.strip()
+            if config.api_secret is not None:
+                credentials["api_secret"] = config.api_secret.strip()
+            if not _tradfi_api_key(credentials):
+                raise HTTPException(status_code=400, detail="TradFi API key is required")
+            if provider in TRADFI_NEEDS_SECRET and not _tradfi_api_secret(credentials):
+                raise HTTPException(status_code=400, detail=f"{provider} API secret is required")
+
+            if existing is None:
+                record = store.create_tradfi(
+                    provider,
+                    credentials,
+                    label=config.label,
+                    active=config.active,
+                    shared=config.shared,
+                    pending=True,
+                    operation_id=operation_id,
+                )
+            else:
+                record = store.update_tradfi(
+                    str(existing["id"]),
+                    provider=provider,
+                    credentials=credentials,
+                    label=config.label,
+                    active=config.active,
+                    shared=config.shared,
+                    pending=True,
+                    operation_id=operation_id,
+                )
+
+            profile_id = str(record["id"])
+            reconciliation = reconcile_pending_credentials(
+                _PBGDIR,
+                store=store,
+                tradfi_projector=lambda current, pending: _project_local_tradfi(current, pending),
+                publisher=publisher,
+            )
+            item = next(
+                (
+                    item for item in reconciliation.get("items") or []
+                    if item.get("kind") == "tradfi"
+                    and item.get("credential_id") == profile_id
+                    and item.get("operation_id") == operation_id
+                ),
+                {"status": "active"},
+            )
+            record = store.get_tradfi(profile_id)
+    except HTTPException as exc:
+        if isinstance(exc.detail, dict) and exc.detail.get("operation_id"):
+            raise
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"message": exc.detail, "operation_id": operation_id},
+        ) from exc
+    except (CredentialNotFoundError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": str(exc), "operation_id": operation_id},
+        ) from exc
+    except Exception as exc:
+        _log(
+            SERVICE,
+            f"TradFi vault update failed for provider={provider}: {type(exc).__name__}",
+            level="ERROR",
+            meta={"traceback": traceback.format_exc()},
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "TradFi profile could not be published or projected",
+                "operation_id": operation_id,
+            },
+        ) from exc
+
+    _log(SERVICE, f"Updated TradFi vault profile: id={record['id']} provider={provider}")
+    return {
+        "status": "saved" if item.get("status") == "active" else "pending",
+        "operation_id": operation_id,
+        "profile": _tradfi_profile_metadata(store, record).model_dump(),
+        "reconciliation": item,
+    }
 
 
 @router.delete("/tradfi/config")
-@_serialized_api_keys_write
 def clear_tradfi_config(
+    profile_id: Optional[str] = Query(None, description="Vault profile ID"),
     session: SessionToken = Depends(require_auth),
 ) -> dict:
-    """Clear TradFi data provider config from api-keys.json."""
-    users = _get_users()
-    users.tradfi = {}
-    users.save()
-    _log(SERVICE, "Cleared TradFi config")
-    return {"status": "cleared"}
+    """Tombstone one vault profile and reproject the remaining active profiles."""
+
+    store = _credential_store()
+    publisher = _cluster_credential_publisher(store)
+    try:
+        with credential_mutation_lock(store.root):
+            if profile_id:
+                record = store.get_tradfi(profile_id)
+            else:
+                records = store.list_tradfi(active_only=True)
+                if not records:
+                    raise HTTPException(status_code=404, detail="No active TradFi profile found")
+                record = sorted(records, key=lambda item: str(item.get("id") or ""))[0]
+            selected_id = str(record["id"])
+            operation_id = uuid.uuid4().hex
+            store.begin_tradfi_delete(selected_id, operation_id)
+            reconciliation = reconcile_pending_credentials(
+                _PBGDIR,
+                store=store,
+                tradfi_projector=lambda current, pending: _project_local_tradfi(current, pending),
+                publisher=publisher,
+            )
+            item = next(
+                item for item in reconciliation.get("items") or []
+                if item.get("credential_id") == selected_id
+                and item.get("operation_id") == operation_id
+            )
+    except HTTPException:
+        raise
+    except (CredentialNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="TradFi profile not found") from exc
+    except Exception as exc:
+        _log(
+            SERVICE,
+            f"TradFi vault delete failed: {type(exc).__name__}",
+            level="ERROR",
+            meta={"traceback": traceback.format_exc()},
+        )
+        raise HTTPException(status_code=500, detail="TradFi profile could not be tombstoned or projected") from exc
+
+    _log(SERVICE, f"Deleted TradFi vault profile: id={selected_id}")
+    return {
+        "status": "cleared" if item.get("status") == "deleted" else "pending_delete",
+        "operation_id": operation_id,
+        "deleted": selected_id,
+        "reconciliation": item,
+        "tombstone": {"status": item.get("tombstone_status")},
+        "projection": {"status": item.get("projection_status")},
+    }
 
 
 # ── TradFi helpers ────────────────────────────────────────────
 
-TRADFI_PROVIDERS = ["alpaca", "polygon", "finnhub", "alphavantage"]
+TRADFI_PROVIDERS = ["alpaca", "polygon", "finnhub", "alphavantage", "tiingo"]
 TRADFI_PROVIDER_NOTES = {
     "alpaca": "Free (IEX feed, 15-min delay — fine for backtesting), 5+ years of 1-minute data. Requires API key + secret. Recommended.",
     "polygon": "Free tier: 2 years of 1-minute data. Paid plans offer extended history.",
     "finnhub": "Free tier does NOT support 1-minute intraday — unusable for backtesting.",
     "alphavantage": "Free tier: 25 calls/day, very limited for backtesting.",
+    "tiingo": "IEX and FX data used by PBGui Market Data for local stock-perp archives.",
 }
 TRADFI_NEEDS_SECRET = {"alpaca"}
 TRADFI_PROVIDER_LINKS = {
@@ -1433,116 +1772,80 @@ TRADFI_PROVIDER_LINKS = {
     "polygon": ("https://polygon.io/dashboard/signup", "Sign up for Polygon.io"),
     "finnhub": ("https://finnhub.io/register", "Sign up for Finnhub (free)"),
     "alphavantage": ("https://www.alphavantage.co/support/#api-key", "Get free Alpha Vantage API key"),
+    "tiingo": ("https://www.tiingo.com/account/api/token", "Get a Tiingo API token"),
 }
 
 
 def _get_pb7_paths() -> tuple[Optional[str], Optional[str]]:
     """Return (pb7venv, pb7dir) from pbgui.ini."""
-    from pbgui_purefunc import load_ini
-    return load_ini("main", "pb7venv"), load_ini("main", "pb7dir")
-
-
-def _load_tradfi_profiles() -> dict[str, dict[str, str]]:
-    """Load all TradFi provider profiles from pbgui.ini."""
-    import configparser
-    from pathlib import Path
-    ini = Path("pbgui.ini")
-    parser = configparser.ConfigParser()
-    if ini.exists():
-        parser.read(ini)
-    out: dict[str, dict[str, str]] = {}
-    for p in TRADFI_PROVIDERS:
-        out[p] = {
-            "api_key": parser.get("tradfi_profiles", f"{p}_api_key", fallback=""),
-            "api_secret": parser.get("tradfi_profiles", f"{p}_api_secret", fallback=""),
-        }
-    return out
-
-
-def _save_tradfi_profile(provider: str, key: str, secret: str) -> None:
-    """Save a TradFi provider profile to pbgui.ini."""
-    import configparser, os, tempfile
-    from pathlib import Path
-    ini = Path("pbgui.ini")
-    parser = configparser.ConfigParser()
-    if ini.exists():
-        parser.read(ini)
-    if not parser.has_section("tradfi_profiles"):
-        parser.add_section("tradfi_profiles")
-    parser.set("tradfi_profiles", f"{provider}_api_key", key or "")
-    parser.set("tradfi_profiles", f"{provider}_api_secret", secret or "")
-    tmp = ini.with_suffix(".ini.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        parser.write(f)
-    os.replace(tmp, ini)
+    snapshot = pbgui_purefunc.load_ini_snapshot()
+    pb7venv = snapshot.get("main", "pb7venv") if snapshot.has_option("main", "pb7venv") else None
+    pb7dir = snapshot.get("main", "pb7dir") if snapshot.has_option("main", "pb7dir") else None
+    return pb7venv, pb7dir
 
 
 def _run_tradfi_test(py: str, pb7_dir: str, provider: str,
                      api_key: str = "", api_secret: str = "") -> tuple[bool, str]:
-    """Run TradFi connection test in pb7 venv. Returns (success, message)."""
-    import subprocess, tempfile, os, re as _re
+    """Run a PB7 provider test with secrets supplied only through the environment."""
 
-    kwargs_parts = []
-    if api_key:
-        kwargs_parts.append(f"api_key={repr(api_key)}")
-    if api_secret:
-        kwargs_parts.append(f"api_secret={repr(api_secret)}")
-    kw = (", " + ", ".join(kwargs_parts)) if kwargs_parts else ""
-
-    # Finnhub free tier does NOT support resolution=1 (1-min) for US stocks —
+    # Finnhub free tier does not support resolution=1 for US stocks;
     # use the /quote endpoint instead which is available on all plans.
     if provider == "finnhub":
-        script = f"""\
-import sys, asyncio, aiohttp
+        script = """\
+import os, asyncio, aiohttp
 async def _test():
     url = "https://finnhub.io/api/v1/quote"
-    params = {{"symbol": "AAPL", "token": {repr(api_key)}}}
+    params = {"symbol": "AAPL", "token": os.environ["PBGUI_TRADFI_API_KEY"]}
     async with aiohttp.ClientSession() as session:
         async with session.get(url, params=params) as resp:
             if resp.status == 403:
-                print("FAIL:403 Forbidden — check your Finnhub API key")
+                print("FAIL:403 Forbidden - check your Finnhub API key")
                 return
             resp.raise_for_status()
             data = await resp.json()
-    # "c" is current price — present if key is valid
     if data.get("c") is not None and data["c"] != 0:
-        print(f'OK:AAPL price={{data["c"]}}')
+        print(f'OK:AAPL price={data["c"]}')
     else:
-        print(f'FAIL:unexpected response: {{data}}')
+        print(f'FAIL:unexpected response: {data}')
 asyncio.run(_test())
 """
-    # Alpha Vantage TIME_SERIES_INTRADAY is premium — use GLOBAL_QUOTE (free tier)
+    # Alpha Vantage TIME_SERIES_INTRADAY is premium; GLOBAL_QUOTE is free.
     elif provider == "alphavantage":
-        script = f"""\
-import sys, asyncio, aiohttp
+        script = """\
+import os, asyncio, aiohttp
 async def _test():
     url = "https://www.alphavantage.co/query"
-    params = {{"function": "GLOBAL_QUOTE", "symbol": "AAPL", "apikey": {repr(api_key)}}}
+    params = {"function": "GLOBAL_QUOTE", "symbol": "AAPL", "apikey": os.environ["PBGUI_TRADFI_API_KEY"]}
     async with aiohttp.ClientSession() as session:
         async with session.get(url, params=params) as resp:
             resp.raise_for_status()
             data = await resp.json()
     if "Note" in data or "Information" in data:
         msg = data.get("Note") or data.get("Information") or "rate limit"
-        print(f"FAIL:{{msg}}")
+        print(f"FAIL:{msg}")
         return
-    quote = data.get("Global Quote", {{}})
+    quote = data.get("Global Quote", {})
     price = quote.get("05. price")
     if price:
-        print(f"OK:AAPL price={{price}}")
+        print(f"OK:AAPL price={price}")
     else:
-        print(f"FAIL:unexpected response: {{data}}")
+        print(f"FAIL:unexpected response: {data}")
 asyncio.run(_test())
 """
     else:
-        script = f"""\
-import sys, asyncio
-sys.path.insert(0, {repr(str(pb7_dir) + '/src')})
+        script = """\
+import os, sys, asyncio
+sys.path.insert(0, os.path.join(os.environ["PBGUI_PB7_DIR"], "src"))
 from tradfi_data import get_provider
 from datetime import datetime, timedelta, timezone
 
 async def _test():
-    p = get_provider({repr(provider)}{kw})
+    kwargs = {}
+    if os.environ.get("PBGUI_TRADFI_API_KEY"):
+        kwargs["api_key"] = os.environ["PBGUI_TRADFI_API_KEY"]
+    if os.environ.get("PBGUI_TRADFI_API_SECRET"):
+        kwargs["api_secret"] = os.environ["PBGUI_TRADFI_API_SECRET"]
+    p = get_provider(os.environ["PBGUI_TRADFI_PROVIDER"], **kwargs)
     async with p:
         end = datetime.now(timezone.utc) - timedelta(days=1)
         start = end - timedelta(days=7)
@@ -1551,45 +1854,62 @@ async def _test():
             int(start.timestamp() * 1000),
             int(end.timestamp() * 1000),
         )
-        print(f'OK:{{len(c)}}')
+        print(f'OK:{len(c)}')
 
 asyncio.run(_test())
 """
+    env = dict(os.environ)
+    env.update({
+        "PBGUI_TRADFI_PROVIDER": provider,
+        "PBGUI_TRADFI_API_KEY": api_key,
+        "PBGUI_TRADFI_API_SECRET": api_secret,
+        "PBGUI_PB7_DIR": str(pb7_dir),
+    })
     try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tf:
-            tf.write(script)
-            tmp = tf.name
-        result = subprocess.run([py, tmp], capture_output=True, text=True, timeout=30)
-        os.unlink(tmp)
-        out = (result.stdout or "").strip()
-        err = (result.stderr or "").strip()
+        result = subprocess.run(
+            [py, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+        out = _redact_tradfi_diagnostic((result.stdout or "").strip(), api_key, api_secret)
+        err = _redact_tradfi_diagnostic((result.stderr or "").strip(), api_key, api_secret)
         if result.returncode == 0 and out.startswith("OK:"):
             payload = out[3:]
-            # Numeric candle count or string (Finnhub quote)
             if payload.isdigit():
                 n = int(payload)
                 if n > 0:
-                    return True, f"Connection OK — {n} candles received (AAPL, last 7 days)."
+                    return True, f"Connection OK - {n} candles received (AAPL, last 7 days)."
                 err_hint = err.splitlines()[-1] if err else "unknown reason"
-                return False, f"0 candles — {err_hint}"
-            # Finnhub quote result
-            return True, f"Connection OK — {payload}"
+                return False, f"0 candles - {err_hint}"
+            return True, f"Connection OK - {payload}"
         if result.returncode == 0 and out.startswith("FAIL:"):
             return False, out[5:]
         if result.returncode == 0 and "OK:" in out:
-            m = _re.search(r"OK:(\d+)", out)
+            m = re.search(r"OK:(\d+)", out)
             if m:
                 n = int(m.group(1))
                 if n > 0:
-                    return True, f"Connection OK — {n} candles received (AAPL, last 7 days)."
+                    return True, f"Connection OK - {n} candles received (AAPL, last 7 days)."
             err_hint = err.splitlines()[-1] if err else "unknown reason"
-            return False, f"0 candles — {err_hint}"
+            return False, f"0 candles - {err_hint}"
         msg = err.splitlines()[-1] if err else out or "Unknown error"
         return False, f"Test failed: {msg}"
     except subprocess.TimeoutExpired:
         return False, "Test timed out (30s)."
-    except Exception as e:
-        return False, f"Test error: {e}"
+    except Exception as exc:
+        return False, f"Test error: {type(exc).__name__}"
+
+
+def _redact_tradfi_diagnostic(value: str, *secrets: str) -> str:
+    """Remove credentials and provider URLs from subprocess diagnostics."""
+
+    result = str(value or "")
+    for secret in secrets:
+        if secret:
+            result = result.replace(secret, "<redacted>")
+    return re.sub(r"https?://\S+", "<provider-url>", result)
 
 
 @router.get("/tradfi/yfinance/status")
@@ -1666,16 +1986,65 @@ def tradfi_yfinance_uninstall(
 def tradfi_get_profiles(
     session: SessionToken = Depends(require_auth),
 ) -> dict:
-    """Get saved TradFi provider profiles from pbgui.ini."""
-    profiles = _load_tradfi_profiles()
-    # Mask secrets
-    for p in profiles.values():
-        p["api_key"] = _mask(p.get("api_key")) if p.get("api_key") else ""
-        p["api_secret"] = _mask(p.get("api_secret")) if p.get("api_secret") else ""
+    """Get vault profile metadata and credential-presence booleans only."""
+
+    store = _credential_store()
+    replicated = _tradfi_replicated_selection()
+    profiles = [
+        _tradfi_profile_metadata(store, record, replicated).model_dump()
+        for record in store.list_tradfi()
+    ]
     return {
         "providers": TRADFI_PROVIDERS,
         "provider_notes": TRADFI_PROVIDER_NOTES,
         "provider_links": {p: {"url": url, "label": lbl} for p, (url, lbl) in TRADFI_PROVIDER_LINKS.items()},
         "needs_secret": list(TRADFI_NEEDS_SECRET),
         "profiles": profiles,
+        "replicated_active_profiles": replicated,
+        "projection": _tradfi_projection_status(store),
     }
+
+
+@router.post("/tradfi/projection/retry")
+def retry_tradfi_projection(
+    body: TradFiProjectionRetry,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Retry pending publication/projection and return only durable status metadata."""
+
+    operation_id = body.operation_id or uuid.uuid4().hex
+    store = _credential_store()
+    try:
+        with credential_mutation_lock(store.root):
+            reconciliation = reconcile_pending_credentials(
+                _PBGDIR,
+                store=store,
+                tradfi_projector=lambda current, pending: _project_local_tradfi(current, pending),
+                publisher=_cluster_credential_publisher(store),
+            )
+            if not any(item.get("kind") == "tradfi" for item in reconciliation.get("items") or []):
+                _project_local_tradfi(store)
+            projection = _tradfi_projection_status(store)
+        return {
+            "ok": projection.get("status") == "current",
+            "operation_id": operation_id,
+            "projection": projection,
+            "reconciliation": reconciliation,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log(
+            SERVICE,
+            f"TradFi projection retry failed: {type(exc).__name__}",
+            level="ERROR",
+            meta={"operation_id": operation_id, "traceback": traceback.format_exc()},
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "TradFi PB7 projection retry failed",
+                "operation_id": operation_id,
+                "projection": _tradfi_projection_status(store),
+            },
+        ) from exc

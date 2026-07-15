@@ -20,6 +20,8 @@ import hashlib
 import traceback
 from logging_helpers import human_log as _log
 
+SERVICE = "ParetoDataLoader"
+
 try:
     import msgspec  # type: ignore
 except Exception:

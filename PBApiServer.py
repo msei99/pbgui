@@ -22,10 +22,13 @@ import signal
 import shlex
 import subprocess
 import sys
+import traceback
 import warnings
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePath
+import re
 from time import sleep, time_ns
+from uuid import uuid4
 
 _PBGUI_ROOT = Path(__file__).resolve().parent
 try:
@@ -85,11 +88,26 @@ from api.optimize_v7 import startup as opt7_startup, shutdown as opt7_shutdown
 from api.pareto_explorer import router as pareto_explorer_router, shutdown as pareto_explorer_shutdown
 from api.pb7_ohlcv_tools import startup as ohlcv_preload_startup
 from api.strategy_explorer import router as strategy_explorer_router
-from logging_helpers import human_log as _log, set_service_min_level
+from logging_helpers import (
+    get_rotate_settings,
+    human_log as _log,
+    logging_context,
+    rotate_logfile_if_oversize,
+    set_service_min_level,
+)
+from startup_migrations import run_startup_migrations
+from credential_migration import (
+    credential_migration_restart_block_reason,
+    persist_credential_migration_error,
+    run_credential_migration,
+)
+from credential_rolling_bootstrap import bootstrap_local_legacy_credentials
+from credential_reconciler import reconcile_pending_credentials
 from pb7_config import PB7ConfigurationError
 from pbgui_purefunc import PBGDIR, load_ini, save_ini, PBGUI_SERIAL, PBGUI_VERSION
 
 SERVICE = "PBApiServer"
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 # ── Server-restart watchdog (serial.txt) ─────────────────────
 
@@ -97,7 +115,8 @@ _SERIAL_FILE = Path(__file__).parent / "api" / "serial.txt"
 _API_SYSTEMD_UNIT = "pbgui-api.service"
 _startup_serial: int = 0
 _needs_restart: bool = False
-_sse_subscribers: list[asyncio.Queue] = []
+_runtime_restart_reasons: list[str] = []
+_sse_subscribers: list[tuple[asyncio.Queue, asyncio.AbstractEventLoop]] = []
 
 
 def _read_serial() -> int:
@@ -111,8 +130,22 @@ def _read_serial() -> int:
 def _refresh_restart_state() -> bool:
     """Recompute whether the running API process needs a restart."""
     global _needs_restart
-    _needs_restart = _read_serial() != _startup_serial
+    _needs_restart = _read_serial() != _startup_serial or bool(_runtime_restart_reasons)
     return _needs_restart
+
+
+def mark_runtime_restart_required(reason: str) -> None:
+    """Mark this API process for restart and wake connected status streams."""
+    safe_reason = str(reason or "API settings changed").strip() or "API settings changed"
+    if safe_reason not in _runtime_restart_reasons:
+        _runtime_restart_reasons.append(safe_reason)
+    _refresh_restart_state()
+    for queue, loop in list(_sse_subscribers):
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, True)
+        except RuntimeError:
+            if (queue, loop) in _sse_subscribers:
+                _sse_subscribers.remove((queue, loop))
 
 
 async def _restart_block_state() -> tuple[bool, str]:
@@ -129,6 +162,7 @@ async def _restart_block_state() -> tuple[bool, str]:
             cluster_restart_block_reason(),
             coin_data_restart_block_reason(),
             pareto_restart_block_reason(),
+            credential_migration_restart_block_reason(Path(PBGDIR)),
         )
         if reason
     ]
@@ -251,7 +285,7 @@ async def _serial_watcher_loop() -> None:
             previous = _needs_restart
             if _refresh_restart_state() and not previous:
                 _log(SERVICE, f"[serial-watcher] serial changed {_startup_serial}→{current} — restart needed", level="WARNING")
-                for q in list(_sse_subscribers):
+                for q, _loop in list(_sse_subscribers):
                     try:
                         await q.put(True)
                     except Exception:
@@ -343,6 +377,8 @@ def _open_api_console_log():
     try:
         log_path = Path(PBGDIR) / "data" / "logs" / "PBApiServer.console.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        max_bytes, backup_count = get_rotate_settings(logfile=str(log_path))
+        rotate_logfile_if_oversize(str(log_path), max_bytes, backup_count)
         return log_path.open("a", encoding="utf-8", buffering=1)
     except Exception:
         return open(os.devnull, "w", encoding="utf-8")
@@ -420,14 +456,75 @@ async def _worker_watchdog_loop() -> None:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """FastAPI lifespan: startup and graceful shutdown of VPS monitoring."""
+    from credential_process_registry import ProcessCapabilityHeartbeat
+
     global _vps_monitor
-    _setup_api_logging()
+    capability_heartbeat = ProcessCapabilityHeartbeat(Path(PBGDIR), SERVICE)
+    capability_heartbeat.__enter__()
+    _runtime_restart_reasons.clear()
     try:
+        harden_sensitive_paths(_PBGUI_ROOT, None, Path.home() / ".aws")
         configured_pb7 = str(load_ini("main", "pb7dir") or "").strip()
-        harden_sensitive_paths(_PBGUI_ROOT, Path(configured_pb7) if configured_pb7 else None)
+        harden_sensitive_paths(
+            _PBGUI_ROOT,
+            Path(configured_pb7) if configured_pb7 else None,
+            Path.home() / ".aws",
+        )
     except Exception as exc:
         _log(SERVICE, f"[security] failed to harden sensitive file permissions: {exc}", level="CRITICAL")
         raise
+    _setup_api_logging()
+    try:
+        bootstrap_local_legacy_credentials(Path(PBGDIR))
+    except Exception as exc:
+        _log(
+            SERVICE,
+            f"[credential-bootstrap] local rolling bootstrap failed: {type(exc).__name__}",
+            level="ERROR",
+            meta={"traceback": traceback.format_exc()},
+        )
+    startup_migrations_skipped = False
+    try:
+        migration_result = run_startup_migrations(Path(PBGDIR))
+        startup_migrations_skipped = bool(migration_result.get("skipped"))
+        if migration_result["completed"]:
+            _log(SERVICE, f"[startup-migrations] completed: {', '.join(migration_result['completed'])}", level="INFO")
+    except Exception as exc:
+        _log(SERVICE, f"[startup-migrations] failed and will retry: {exc}", level="ERROR")
+    try:
+        if not startup_migrations_skipped:
+            credential_result = run_credential_migration(Path(PBGDIR))
+            if credential_result.get("phase") == "complete":
+                _log(SERVICE, "[credential-migration] complete", level="INFO")
+            elif credential_result.get("blocker_reason"):
+                _log(
+                    SERVICE,
+                    f"[credential-migration] blocked in {credential_result.get('phase')}: "
+                    f"{credential_result['blocker_reason']}",
+                    level="WARNING",
+                )
+    except Exception as exc:
+        reason = f"{type(exc).__name__}: {exc}"
+        try:
+            persist_credential_migration_error(reason, Path(PBGDIR))
+        except Exception as persist_exc:
+            _log(
+                SERVICE,
+                f"[credential-migration] failed to persist blocker: {persist_exc}",
+                level="ERROR",
+            )
+        _log(SERVICE, f"[credential-migration] failed and will retry: {reason}", level="ERROR")
+    try:
+        credential_reconciliation = reconcile_pending_credentials(Path(PBGDIR))
+        if credential_reconciliation.get("status") == "pending":
+            _log(SERVICE, "[credential-reconciler] pending remote acknowledgements", level="INFO")
+    except Exception as exc:
+        _log(
+            SERVICE,
+            f"[credential-reconciler] startup recovery failed: {type(exc).__name__}",
+            level="ERROR",
+            meta={"traceback": traceback.format_exc()},
+        )
     from master.async_monitor import VPSMonitor
     from master.async_logs import AsyncLogStreamer
     from api.vps import init as vps_init
@@ -521,6 +618,7 @@ async def _lifespan(app: FastAPI):
                 )
             finally:
                 _vps_monitor = None
+        capability_heartbeat.close()
 
 
 # ── FastAPI app ───────────────────────────────────────────────
@@ -589,10 +687,16 @@ app.add_middleware(
 
 @app.middleware("http")
 async def redirect_unauthenticated_page(request: Request, call_next):
-    """Send expired browser page loads to login while preserving API 401 responses."""
-    response = await call_next(request)
-    redirect = unauthenticated_page_redirect(request, response.status_code)
-    return redirect or response
+    """Bind request logging context and preserve browser login redirects."""
+    supplied_request_id = request.headers.get("X-Request-ID", "")
+    request_id = supplied_request_id if _REQUEST_ID_RE.fullmatch(supplied_request_id) else uuid4().hex
+    operation = f"{request.method} {request.url.path}"
+    with logging_context(request_id=request_id, operation=operation):
+        response = await call_next(request)
+        redirect = unauthenticated_page_redirect(request, response.status_code)
+        response = redirect or response
+        response.headers["X-Request-ID"] = request_id
+        return response
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(api_keys_router, prefix="/api/api-keys", tags=["api-keys"])
@@ -628,23 +732,19 @@ async def handle_pb7_configuration_error(request: Request, exc: PB7Configuration
     )
 
 
-# ── Central UI notification log ──────────────────────────────
-import datetime as _dt
-
 _notify_recent: dict[str, float] = {}
 _NOTIFY_DEDUPE_SECONDS = 2.0
 
 @app.post("/api/notify_log", tags=["ui"])
 async def append_notify_log(request: Request, session: SessionToken = Depends(require_auth)):
-    """Append a UI notification message to data/logs/PBV7UI.log."""
+    """Record a deduplicated UI notification through central logging."""
     try:
         body = await request.json()
         msg = str(body.get("msg", "")).strip()[:500]
         if not msg:
             return {"ok": True, "skipped": True}
         level = str(body.get("level", "info") or "info").strip().upper()[:12]
-        now = _dt.datetime.now()
-        now_ts = now.timestamp()
+        now_ts = time_ns() / 1_000_000_000
         key = f"{level}:{msg}"
         for old_key, old_ts in list(_notify_recent.items()):
             if now_ts - old_ts > _NOTIFY_DEDUPE_SECONDS:
@@ -652,13 +752,9 @@ async def append_notify_log(request: Request, session: SessionToken = Depends(re
         if now_ts - _notify_recent.get(key, 0) <= _NOTIFY_DEDUPE_SECONDS:
             return {"ok": True, "duplicate": True}
         _notify_recent[key] = now_ts
-        log_path = Path(PBGDIR) / "data" / "logs" / "PBV7UI.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        ts = now.strftime("%Y-%m-%d %H:%M:%S")
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(f"{ts} [{level:4}] {msg}\n")
-    except Exception:
-        pass
+        _log("PBV7UI", msg, level=level, meta={"operation": "append_notify_log"})
+    except Exception as exc:
+        _log(SERVICE, f"Failed to record UI notification: {exc}", level="WARNING", meta={"operation": "append_notify_log"})
     return {"ok": True}
 
 
@@ -1181,13 +1277,14 @@ def health():
 async def server_status_stream(session: SessionToken = Depends(require_auth)):
     """SSE stream: pushes {needs_restart: bool} immediately, then on every serial change."""
     queue: asyncio.Queue = asyncio.Queue()
-    _sse_subscribers.append(queue)
+    subscriber = (queue, asyncio.get_running_loop())
+    _sse_subscribers.append(subscriber)
 
     async def event_gen():
         try:
             # Send initial state immediately
             last_sent = _refresh_restart_state()
-            yield f"data: {json.dumps({'needs_restart': last_sent, 'auth': auth_runtime_status()})}\n\n"
+            yield f"data: {json.dumps({'needs_restart': last_sent, 'runtime_restart_reasons': list(_runtime_restart_reasons), 'auth': auth_runtime_status()})}\n\n"
             while True:
                 force_send = False
                 try:
@@ -1200,15 +1297,15 @@ async def server_status_stream(session: SessionToken = Depends(require_auth)):
                 current_state = _refresh_restart_state()
                 if force_send or current_state != last_sent:
                     last_sent = current_state
-                    yield f"data: {json.dumps({'needs_restart': current_state, 'auth': auth_runtime_status()})}\n\n"
+                    yield f"data: {json.dumps({'needs_restart': current_state, 'runtime_restart_reasons': list(_runtime_restart_reasons), 'auth': auth_runtime_status()})}\n\n"
                 else:
                     # keepalive comment so proxies don't close the connection
                     yield ": keepalive\n\n"
         except (GeneratorExit, asyncio.CancelledError):
             pass
         finally:
-            if queue in _sse_subscribers:
-                _sse_subscribers.remove(queue)
+            if subscriber in _sse_subscribers:
+                _sse_subscribers.remove(subscriber)
 
     return StreamingResponse(
         event_gen(),
@@ -1227,6 +1324,8 @@ async def server_status(session: SessionToken = Depends(require_auth)):
     restart_blocked, restart_block_reason = await _restart_block_state()
     return {
         "needs_restart": _refresh_restart_state(),
+        "serial_restart_required": current_serial != _startup_serial,
+        "runtime_restart_reasons": list(_runtime_restart_reasons),
         "startup_serial": _startup_serial,
         "current_serial": current_serial,
         "restart_blocked": restart_blocked,
@@ -1251,24 +1350,12 @@ async def token_refresh(session: SessionToken = Depends(require_auth)):
 
 
 @app.post("/api/server-restart")
-async def server_restart(request: Request):
+async def server_restart(session: SessionToken = Depends(require_auth)):
     """Restart the API server process. Auth required."""
-    from api.auth import validate_token
-    auth = request.headers.get("Authorization", "")
-    token = auth.replace("Bearer ", "") if auth.startswith("Bearer ") else ""
-    if not token:
-        try:
-            body = await request.json()
-            token = body.get("token", "") if isinstance(body, dict) else ""
-        except Exception:
-            pass
-    if not validate_token(token):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
     restart_blocked, restart_block_reason = await _restart_block_state()
     if restart_blocked:
-        detail = restart_block_reason or "Active VPS deploys are still running."
-        raise HTTPException(status_code=409, detail=f"Cannot restart API server while VPS tasks are running: {detail}")
+        detail = restart_block_reason or "An API-owned mutable operation is still running."
+        raise HTTPException(status_code=409, detail=f"Cannot restart API server: {detail}")
 
     _log(SERVICE, "[restart] restart requested by user", level="WARNING")
 

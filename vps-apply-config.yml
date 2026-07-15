@@ -15,26 +15,6 @@
         var: ansible_facts
       tags: debug,never
 
-    - name: Sync CoinMarketCap API key
-      ini_file:
-        path: "{{ install_dir }}/pbgui/pbgui.ini"
-        section: coinmarketcap
-        option: api_key
-        value: "{{ coinmarketcap_api_key | default('') | string | trim }}"
-      when: apply_optional_config | default(false) | bool
-
-    - name: Start or stop optional PBGui services
-      script: setup/vps_service_control.sh restart PBCoinData
-      environment:
-        PBGUI_DIR: "{{ install_dir }}/pbgui"
-        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
-        PBGUI_USER: "{{ user }}"
-      register: pbgui_process_health
-      retries: 8
-      delay: 3
-      until: pbgui_process_health.rc == 0
-      when: apply_optional_config | default(false) | bool
-
     - name: Check if swapfile exists
       stat:
         path: /swapfile
@@ -196,12 +176,6 @@
         - option: ssh_ips
           value: "{{ firewall_ssh_ips if firewall_ssh_ips is string else (firewall_ssh_ips | default([]) | reject('equalto', '') | list | join(',')) }}"
       when: apply_firewall | default(false) | bool
-
-    - name: print service control result
-      debug:
-        var: pbgui_process_health
-      tags: debug,never
-      when: apply_optional_config | default(false) | bool
 
     - name: Display ufw status
       debug:

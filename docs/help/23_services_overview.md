@@ -18,9 +18,8 @@ The Overview also includes a dedicated **Workers** card. It opens the admin-only
 |---|---|
 | **PBCluster** | Replicates Cluster Sync state and materializes approved V7/API-key changes to joined nodes |
 | **PBRun** | Starts/stops local Passivbot bot processes and manages dynamic coin filters |
-| **PBStat** | Collects spot trade statistics for the legacy v6 single bot only |
 | **PBData** | Fetches account data (balances, positions, orders, history, executions) via REST and live prices via public WebSocket |
-| **PBCoinData** | Fetches CoinMarketCap data and builds exchange symbol mappings for dynamic filters |
+| **PBCoinData** | Uses the shared CMC credential pool, fetches CoinMarketCap data, and builds exchange symbol mappings for dynamic filters |
 | **PBAPIServer** | Runs the FastAPI backend (REST + WebSocket) that powers the Dashboard, VPS Monitor, Job Queue, live alert handling, and all real-time features |
 
 ## Starting and stopping services
@@ -34,6 +33,7 @@ Click a service card (or its sidebar entry) to open a dedicated detail panel wit
 - A control strip showing the service status and action buttons
 - Tabs for different views (where available):
   - **Log**: Live filtered log viewer
+  - **Pool**: CMC key lifecycle, readiness, usage, cooldown and lease status (PBCoinData only)
   - **Settings**: Service-specific configuration
   - **Status**: Runtime status (PBData only)
 
@@ -64,15 +64,24 @@ Some workers expose a monitor instead of a dedicated local log. For example, the
 
 A healthy setup usually starts services in this order:
 
-1. **PBCoinData** — builds symbol mappings (required for dynamic ignore/approve lists)
+1. **PBCoinData** — builds symbol mappings; CMC-backed dynamic filters require an active materialized pool key
 2. **PBRun** — starts bot processes (uses mappings from PBCoinData)
 3. **PBData** — provides live market data for the Dashboard
-4. **PBStat** — collects spot trade statistics (v6 single bot only)
-5. **PBCluster** — handles Cluster Sync for joined nodes when cluster mode is enabled
-6. **PBAPIServer** — enables Dashboard, VPS Monitor, Job Queue, and real-time features
-7. **PBAPIServer VPS Monitoring Alerts** — configure Telegram routing and in-GUI alert visibility inside the API server settings when needed
+4. **PBCluster** — handles Cluster Sync for joined nodes when cluster mode is enabled
+5. **PBAPIServer** — enables Dashboard, VPS Monitor, Job Queue, and real-time features
+6. **PBAPIServer VPS Monitoring Alerts** — configure Telegram routing and in-GUI alert visibility inside the API server settings when needed
 
 ## Troubleshooting
+
+## When settings apply
+
+PBData and PBCoinData settings are validated and applied by their owner on the
+next scheduling cycle. VPS Monitor hosts, thresholds, Telegram routing, and UI
+settings are watched and applied live. API bind host, port, CORS, and SSH log
+wiring are startup invariants and require an API restart; PBRun identity and
+PB7 paths require the owning service to restart. PBCluster, Monitor Agent,
+remote INIs, request-local values, and job-local worker settings deliberately
+have no global INI watcher.
 
 - A service shows a red dot but should be running: check the corresponding log in the service's Log tab for errors
 - **PBRun** lists look stale: confirm **PBCoinData** built its mappings successfully first

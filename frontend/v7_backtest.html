@@ -1004,6 +1004,18 @@ var _btJsonSync = null;
 var _cfgBotParamStatus = { long: {}, short: {} };
 var ws = null;
 var BACKTEST_VIEW_STATE_KEY = 'pbgui:v7_backtest:view_state';
+var BACKTEST_SORT_DEFAULTS = {
+  configs: { col: 'modified', asc: false },
+  results: { col: 'modified', asc: false },
+  archive: { col: 'adg', asc: false },
+  legacy: { col: 'adg', asc: false }
+};
+var BACKTEST_SORT_COLUMNS = {
+  configs: ['name', 'exchanges', 'coins', 'twe_long', 'start_date', 'end_date', 'results', 'modified'],
+  results: ['config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
+  archive: ['config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
+  legacy: ['config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance']
+};
 var _archivesRefreshTimer = null;
 var _archivesRefreshInFlight = false;
 var _archiveRefreshTimer = null;
@@ -1232,14 +1244,57 @@ function parseBacktestViewHash() {
   return null;
 }
 
+function normalizeBacktestSortState(value) {
+  var source = value && typeof value === 'object' ? value : {};
+  var normalized = {};
+  Object.keys(BACKTEST_SORT_DEFAULTS).forEach(function(table) {
+    var fallback = BACKTEST_SORT_DEFAULTS[table];
+    var candidate = source[table] && typeof source[table] === 'object' ? source[table] : {};
+    var validCol = BACKTEST_SORT_COLUMNS[table].indexOf(candidate.col) >= 0;
+    var col = validCol ? candidate.col : fallback.col;
+    var asc = validCol && typeof candidate.asc === 'boolean' ? candidate.asc : fallback.asc;
+    normalized[table] = { col: col, asc: asc };
+  });
+  return normalized;
+}
+
+function applyBacktestSortState(value) {
+  var sorts = normalizeBacktestSortState(value);
+  sortCol = sorts.configs.col;
+  sortAsc = sorts.configs.asc;
+  _resSort = sorts.results.col;
+  _resSortAsc = sorts.results.asc;
+  _archResSort = sorts.archive.col;
+  _archResSortAsc = sorts.archive.asc;
+  _legacyResSort = sorts.legacy.col;
+  _legacyResSortAsc = sorts.legacy.asc;
+}
+
+function currentBacktestSortState() {
+  return normalizeBacktestSortState({
+    configs: { col: sortCol, asc: sortAsc },
+    results: { col: _resSort, asc: _resSortAsc },
+    archive: { col: _archResSort, asc: _archResSortAsc },
+    legacy: { col: _legacyResSort, asc: _legacyResSortAsc }
+  });
+}
+
 function loadStoredBacktestViewState() {
   var fromHash = parseBacktestViewHash();
-  if (fromHash) return fromHash;
+  var stored = null;
   try {
-    var stored = JSON.parse(localStorage.getItem(BACKTEST_VIEW_STATE_KEY) || 'null');
-    if (stored && ['configs', 'queue', 'results', 'archive', 'legacy'].indexOf(stored.panel) >= 0) return stored;
+    stored = JSON.parse(localStorage.getItem(BACKTEST_VIEW_STATE_KEY) || 'null');
   } catch (_e) {}
-  return { panel: 'configs' };
+  var sorts = normalizeBacktestSortState(stored && stored.sorts);
+  if (fromHash) {
+    fromHash.sorts = sorts;
+    return fromHash;
+  }
+  if (stored && ['configs', 'queue', 'results', 'archive', 'legacy'].indexOf(stored.panel) >= 0) {
+    stored.sorts = sorts;
+    return stored;
+  }
+  return { panel: 'configs', sorts: sorts };
 }
 
 function currentBacktestViewHash() {
@@ -1253,7 +1308,8 @@ function persistBacktestViewState() {
   var state = {
     panel: currentPanel || 'configs',
     archive: selectedArchiveName || '',
-    archiveMode: archiveModeFromValue(archiveResultsMode)
+    archiveMode: archiveModeFromValue(archiveResultsMode),
+    sorts: currentBacktestSortState()
   };
   try { localStorage.setItem(BACKTEST_VIEW_STATE_KEY, JSON.stringify(state)); } catch (_e) {}
   history.replaceState(null, '', window.location.pathname + window.location.search + '#' + currentBacktestViewHash());
@@ -1504,6 +1560,7 @@ function thSort(label, key) {
 function setSort(col) {
   if (sortCol === col) sortAsc = !sortAsc;
   else { sortCol = col; sortAsc = true; }
+  persistBacktestViewState();
   renderConfigs();
 }
 
@@ -4523,6 +4580,7 @@ var _resSort = 'modified', _resSortAsc = false;
 function setResSort(col) {
   if (_resSort === col) _resSortAsc = !_resSortAsc;
   else { _resSort = col; _resSortAsc = false; }
+  persistBacktestViewState();
   renderResults();
 }
 function rth(label, key, extraStyle) {
@@ -4537,6 +4595,7 @@ var _archResSort = 'adg', _archResSortAsc = false;
 function setArchResSort(col) {
   if (_archResSort === col) _archResSortAsc = !_archResSortAsc;
   else { _archResSort = col; _archResSortAsc = false; }
+  persistBacktestViewState();
   if (selectedArchiveName) renderArchiveResults(selectedArchiveName);
 }
 function _rthA(label, key) {
@@ -4550,6 +4609,7 @@ var _legacyResSort = 'adg', _legacyResSortAsc = false;
 function setLegacyResSort(col) {
   if (_legacyResSort === col) _legacyResSortAsc = !_legacyResSortAsc;
   else { _legacyResSort = col; _legacyResSortAsc = false; }
+  persistBacktestViewState();
   renderLegacyResults();
 }
 function _rthL(label, key) {
@@ -8815,13 +8875,13 @@ function fmtDate(iso) {
 /* ════════════════════════════════════════════════
    INIT
    ════════════════════════════════════════════════ */
+// Restore panel/archive state from URL hash or localStorage.
+var initialViewState = loadStoredBacktestViewState();
+applyBacktestSortState(initialViewState.sorts);
 loadSettings();
 initBacktestOhlcvPreflightController();
 loadConfigs();
 connectWS();
-
-// Restore panel/archive state from URL hash or localStorage.
-var initialViewState = loadStoredBacktestViewState();
 if (initialViewState.panel === 'archive' && initialViewState.archive) {
   selectedArchiveName = initialViewState.archive;
   archiveResultsMode = archiveModeFromValue(initialViewState.archiveMode);
@@ -8898,7 +8958,7 @@ window.PBGUI_NAV_CONFIG = {
   });
 })();
 </script>
-<script src="/app/js/log_viewer_panel.js?v=25"></script>
+<script src="/app/js/log_viewer_panel.js?v=26"></script>
 <script src="/app/js/shared_help_overlay.js?v=6"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 

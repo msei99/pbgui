@@ -48,6 +48,12 @@ Coin Data shows freshness information as one inline status next to `Filtered sym
 - The visible text is a compact summary for both the selected exchange refresh and the latest CMC refresh.
 - Hovering the inline status shows the detailed markets, mapping, prices, copy-trading cache, listings, and metadata timestamps.
 
+## CMC readiness
+
+CMC refresh actions require at least one active credential generation in the local materialized CMC pool. Coin Data checks this before starting a CMC job and reports a direct error when the pool is unavailable; exchange-only refreshes remain available. Add or inspect keys under **System -> Services -> PBCoinData -> Pool**. Do not add a key to `pbgui.ini`.
+
+On VPS targets, readiness is secret-free capability metadata: protocol version, active-key count, and catalog/materialized generations. A node is ready only after the required sealed generation is materialized locally.
+
 ## Filters and table behavior
 
 Main filters:
@@ -114,3 +120,4 @@ Coin Data reads and writes under:
 
 - Refresh CMC data first, then refresh the selected exchange
 - Check whether symbols are newly listed or use exchange-specific naming variants
+- If CMC refresh is blocked, confirm the PBCoinData Pool is ready before retrying

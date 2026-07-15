@@ -8,6 +8,7 @@ from collections import Counter
 import glob
 import json
 import importlib
+import math
 import os
 import pwd
 import re
@@ -18,17 +19,27 @@ import subprocess
 import sys
 import time
 import traceback
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from api.auth import require_auth, SessionToken
 from api.vps import get_monitor
-from pbgui_purefunc import PBGDIR, load_ini, save_ini
+from cluster_credential_publisher import ClusterCredentialPublisher, CredentialPublicationError
+from cmc_leases import CmcLeaseAuthority
+from cmc_pool import CmcPoolClient
+from cmc_runtime import build_cmc_pool_client, read_cmc_cluster_snapshot
+from credential_store import CredentialNotFoundError, CredentialStore, credential_mutation_lock
+from credential_reconciler import reconcile_pending_credentials
+from master.cluster_state import credential_lifecycle_status, default_cluster_root, read_local_identity, rebuild_materialized_state
+from pbgui_purefunc import PBGDIR, load_ini, load_ini_snapshot, save_ini, save_ini_section, update_ini
+from ini_settings import APPLY_GROUPS, apply_metadata, apply_metadata_for
 from logging_helpers import human_log as _log
+from operation_store import DurableOperationStore
 
 SERVICE = "Services"
 
@@ -593,8 +604,12 @@ def _pbdata_required() -> bool:
 
 
 def _pbcoindata_required() -> bool:
-    """Return whether PBCoinData should run to maintain exchange mappings."""
-    return True
+    """Return strict local CMC readiness for PBCoinData expected state."""
+
+    try:
+        return bool(_cmc_pool_payload().get("ready"))
+    except Exception:
+        return False
 
 
 def _migration_required_services(pbgdir: Path | None = None) -> set[str]:
@@ -764,6 +779,7 @@ def _stop_legacy_services(logs: list[str]) -> None:
 def _schedule_api_systemd_handoff(logs: list[str]) -> str:
     """Restart the API through systemd after the HTTP response is sent."""
     import threading
+    from logging_helpers import rotate_managed_log_before_open
 
     unit = _systemd_unit_for_service("api-server")
     if not unit:
@@ -771,6 +787,7 @@ def _schedule_api_systemd_handoff(logs: list[str]) -> str:
     status = _systemd_service_status("api-server")
     if status is not None and status.get("running"):
         handoff_log = Path(PBGDIR) / "data" / "logs" / "api-systemd-handoff.log"
+        rotate_managed_log_before_open(handoff_log, "api_handoff")
         restart_unit = f"pbgui-api-restart-{os.getpid()}.service"
         restart_cmd = f"""unit={shlex.quote(unit)}
 logfile={shlex.quote(str(handoff_log))}
@@ -806,6 +823,7 @@ logfile={shlex.quote(str(handoff_log))}
     current_pid = os.getpid()
     pidfile = Path(PBGDIR) / "data" / "pid" / "api_server.pid"
     handoff_log = Path(PBGDIR) / "data" / "logs" / "api-systemd-handoff.log"
+    rotate_managed_log_before_open(handoff_log, "api_handoff")
     handoff_cmd = f"""old_pid={current_pid}
 pidfile={shlex.quote(str(pidfile))}
 logfile={shlex.quote(str(handoff_log))}
@@ -1309,6 +1327,14 @@ async def _stop_worker(worker_id: str) -> None:
 @router.get("/status")
 def get_status(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
     """Return running status for all services."""
+    try:
+        reconcile_pending_credentials(PBGDIR)
+    except Exception as exc:
+        _log(
+            SERVICE,
+            f"Credential reconciliation remains pending: {type(exc).__name__}",
+            level="WARNING",
+        )
     result = {}
     for svc in _SERVICES:
         try:
@@ -1325,7 +1351,7 @@ def get_migration_status(session: SessionToken = Depends(require_auth)) -> Dict[
     try:
         return _migration_status_payload()
     except Exception as e:
-        _log(SERVICE, f"migration status failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        _log(SERVICE, f"migration status failed: {e}", level="ERROR", meta={"operation": "migration_status", "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1335,7 +1361,7 @@ def test_migration(session: SessionToken = Depends(require_auth)) -> Dict[str, A
     try:
         return _test_systemd_migration()
     except Exception as e:
-        _log(SERVICE, f"migration test failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        _log(SERVICE, f"migration test failed: {e}", level="ERROR", meta={"operation": "migration_test", "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1345,7 +1371,7 @@ def run_migration(session: SessionToken = Depends(require_auth)) -> Dict[str, An
     try:
         return _run_systemd_migration()
     except Exception as e:
-        _log(SERVICE, f"migration run failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        _log(SERVICE, f"migration run failed: {e}", level="ERROR", meta={"operation": "migration_run", "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1375,7 +1401,7 @@ def start_service(service: str, session: SessionToken = Depends(require_auth)) -
     try:
         return _service_action(service, "start")
     except Exception as e:
-        _log(SERVICE, f"start {service} failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        _log(SERVICE, f"start {service} failed: {e}", level="ERROR", meta={"operation": "start_service", "service": service, "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1386,7 +1412,7 @@ def stop_service(service: str, session: SessionToken = Depends(require_auth)) ->
     try:
         return _service_action(service, "stop")
     except Exception as e:
-        _log(SERVICE, f"stop {service} failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        _log(SERVICE, f"stop {service} failed: {e}", level="ERROR", meta={"operation": "stop_service", "service": service, "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1399,7 +1425,7 @@ def restart_service(service: str, session: SessionToken = Depends(require_auth))
     try:
         return _service_action(service, "restart")
     except Exception as e:
-        _log(SERVICE, f"restart {service} failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        _log(SERVICE, f"restart {service} failed: {e}", level="ERROR", meta={"operation": "restart_service", "service": service, "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1410,7 +1436,7 @@ def enable_service(service: str, session: SessionToken = Depends(require_auth)) 
     try:
         return _service_action(service, "enable")
     except Exception as e:
-        _log(SERVICE, f"enable {service} failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        _log(SERVICE, f"enable {service} failed: {e}", level="ERROR", meta={"operation": "enable_service", "service": service, "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1421,7 +1447,7 @@ def disable_service(service: str, session: SessionToken = Depends(require_auth))
     try:
         return _service_action(service, "disable")
     except Exception as e:
-        _log(SERVICE, f"disable {service} failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        _log(SERVICE, f"disable {service} failed: {e}", level="ERROR", meta={"operation": "disable_service", "service": service, "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1447,7 +1473,7 @@ async def worker_action(worker_id: str, action: str, session: SessionToken = Dep
     except HTTPException:
         raise
     except Exception as e:
-        _log(SERVICE, f"worker action failed ({worker_id}/{normalized_action}): {e}\n{traceback.format_exc()}", level="ERROR")
+        _log(SERVICE, f"worker action failed ({worker_id}/{normalized_action}): {e}", level="ERROR", meta={"operation": "worker_action", "worker": worker_id, "action": normalized_action, "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1467,11 +1493,11 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
     import time
 
     try:
-        from api.vps_manager import get_service_instance as get_vps_manager_service
-        deploy_state = get_vps_manager_service().active_vps_deploy_summary()
-        if deploy_state.get("active"):
-            detail = str(deploy_state.get("summary") or "Active VPS deploys are still running.")
-            raise HTTPException(status_code=409, detail=f"Cannot restart API server while VPS tasks are running: {detail}")
+        api_server = importlib.import_module("PBApiServer")
+        restart_blocked, restart_block_reason = asyncio.run(api_server._restart_block_state())
+        if restart_blocked:
+            detail = restart_block_reason or "An API-owned mutable operation is still running."
+            raise HTTPException(status_code=409, detail=f"Cannot restart API server: {detail}")
 
         systemd_unit = _systemd_unit_for_service("api-server")
         if systemd_unit:
@@ -1518,7 +1544,7 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
     except HTTPException:
         raise
     except Exception as e:
-        _log(SERVICE, f"restart api-server failed: {e}\n{traceback.format_exc()}", level="ERROR")
+        _log(SERVICE, f"restart api-server failed: {e}", level="ERROR", meta={"operation": "restart_api_server", "service": "api-server", "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1544,10 +1570,27 @@ def _save_monitor_config_values(values: Dict[str, float]) -> None:
     from MonitorConfig import MonitorConfig
 
     mc = MonitorConfig()
+    validated = _validated_monitor_values(values)
     for field in _MC_FIELDS:
-        if field in values:
-            setattr(mc, field, float(values[field]))
+        if field in validated:
+            setattr(mc, field, validated[field])
     mc.save_monitor_config()
+
+
+def _validated_monitor_values(values: Dict[str, float]) -> Dict[str, float]:
+    """Convert supplied monitor thresholds and reject non-finite values."""
+    validated = {}
+    for field in _MC_FIELDS:
+        if field not in values:
+            continue
+        try:
+            value = float(values[field])
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid monitor threshold: {field}") from exc
+        if not math.isfinite(value):
+            raise HTTPException(status_code=422, detail=f"Invalid monitor threshold: {field}")
+        validated[field] = value
+    return validated
 
 
 @router.get("/settings/monitor-config")
@@ -1564,6 +1607,8 @@ def save_monitor_config(
     try:
         _save_monitor_config_values(body)
         return {"ok": True}
+    except HTTPException:
+        raise
     except Exception as e:
         _log(SERVICE, f"save monitor config: {e}", level="ERROR")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1571,49 +1616,697 @@ def save_monitor_config(
 
 # ── Settings: PBCoinData ─────────────────────────────────────
 
+def _cmc_credential_store() -> CredentialStore:
+    """Return the local owner-only CMC credential store."""
+    return CredentialStore(Path(PBGDIR) / "data" / "credentials")
+
+
+def _cmc_pool_client() -> CmcPoolClient:
+    """Return a pool client bound to the same state used by PBCoinData."""
+    store = _cmc_credential_store()
+    return build_cmc_pool_client(PBGDIR, credential_store=store)
+
+
+def _cmc_credential_publisher(store: CredentialStore) -> ClusterCredentialPublisher:
+    """Return the Cluster Sync publisher for local credentials."""
+    return ClusterCredentialPublisher(Path(PBGDIR) / "data" / "cluster", store)
+
+
+def _cmc_operation_store(store: CredentialStore) -> DurableOperationStore:
+    """Return the durable idempotency journal shared by credential APIs."""
+
+    return DurableOperationStore(store.root)
+
+
+def _begin_cmc_operation(
+    store: CredentialStore,
+    operation_id: str,
+    action: str,
+    target: str = "",
+) -> tuple[DurableOperationStore, Dict[str, Any] | None]:
+    """Start one mutation or return its exact durable completed response."""
+
+    operations = _cmc_operation_store(store)
+    record = operations.begin(operation_id, action, target)
+    if record.get("status") == "complete" and isinstance(record.get("result"), dict):
+        return operations, dict(record["result"])
+    return operations, None
+
+
+def _cmc_lease_authority() -> CmcLeaseAuthority:
+    """Return the optional local CMC lease authority journal."""
+    return CmcLeaseAuthority(Path(PBGDIR) / "data" / "credentials" / "cmc_pool" / "leases")
+
+
+def _safe_cmc_key(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Whitelist public CMC key metadata and usage fields."""
+    source = str(record.get("origin") or record.get("source") or "local")
+    public_fields = (
+        "id", "label", "active", "shared", "generation", "created_at", "updated_at",
+        "status", "used_credits", "provider_remaining", "provider_limit", "provider_used",
+        "provider_reset_at", "total_acquisitions", "total_failures", "cooldown_remaining",
+        "exhausted_remaining", "last_outcome", "last_settled_at", "pending",
+        "desired_state", "desired_generation", "desired_eligible", "quota_domain_id",
+        "provider_plan", "minute_limit", "daily_limit", "monthly_limit", "authority_epoch",
+    )
+    payload = {field: record.get(field) for field in public_fields if field in record}
+    payload["source"] = source
+    payload["imported"] = source != "local"
+    payload["materialized_generation"] = int(record.get("generation") or 0)
+    if record.get("pending"):
+        payload["local_state"] = "pending"
+    elif not record.get("active", False):
+        payload["local_state"] = "disabled"
+    else:
+        payload["local_state"] = str(record.get("status") or "active")
+    timestamp = record.get("last_settled_at")
+    try:
+        payload["provider_stale_age_seconds"] = max(time.time() - float(timestamp), 0.0) if timestamp else None
+    except (TypeError, ValueError):
+        payload["provider_stale_age_seconds"] = None
+    return payload
+
+
+def _cmc_usage_payload() -> Dict[str, Any]:
+    """Return CMC pool usage directly from the shared pool client."""
+    status = _cmc_pool_client().status()
+    return {
+        "day": status.get("day"),
+        "soft_credit_limit": status.get("soft_credit_limit"),
+        "active_credentials": int(status.get("active_credentials") or 0),
+        "keys": [_safe_cmc_key(item) for item in status.get("keys") or [] if isinstance(item, dict)],
+    }
+
+
+def _cmc_pool_payload() -> Dict[str, Any]:
+    """Build a secret-free readiness and health summary for the local pool."""
+    payload = _cmc_usage_payload()
+    keys = payload["keys"]
+    active_count = int(payload["active_credentials"])
+    unhealthy = sum(
+        1 for item in keys
+        if item.get("active") and str(item.get("status") or "active") not in {"active", "ready"}
+    )
+    warnings = []
+    for item in keys:
+        label = str(item.get("label") or item.get("id") or "CMC key")
+        try:
+            day_used = float(item.get("used_credits") or 0)
+            daily_limit = float(item.get("daily_limit") or payload.get("soft_credit_limit") or 0)
+        except (TypeError, ValueError):
+            day_used = daily_limit = 0
+        if daily_limit > 0 and day_used >= daily_limit * 0.8:
+            warnings.append(f"{label}: daily CMC usage is at or above 80%")
+        try:
+            provider_used = float(item.get("provider_used") or 0)
+            monthly_limit = float(item.get("monthly_limit") or item.get("provider_limit") or 0)
+        except (TypeError, ValueError):
+            provider_used = monthly_limit = 0
+        if monthly_limit > 0 and provider_used >= monthly_limit * 0.8:
+            warnings.append(f"{label}: monthly CMC usage is at or above 80%")
+    payload.update({
+        "ready": active_count > 0,
+        "health": "unconfigured" if active_count == 0 else "degraded" if unhealthy else "healthy",
+        "total_credentials": len(keys),
+        "unhealthy_credentials": unhealthy,
+        "warnings": warnings,
+    })
+    snapshot = read_cmc_cluster_snapshot(PBGDIR)
+    if isinstance(snapshot, dict):
+        lifecycle = credential_lifecycle_status(snapshot)
+        payload["credential_lifecycle"] = lifecycle
+        pool = (snapshot.get("desired_state") or {}).get("cmc_pool") or {}
+        payload["authorities"] = list((pool.get("authorities") or {}).values())
+        nodes = (snapshot.get("cluster_nodes") or {}).get("nodes") or {}
+        payload["eligible_authority_nodes"] = [
+            {
+                "node_id": str(node_id),
+                "name": str(node.get("pbname") or node.get("hostname") or node_id),
+            }
+            for node_id, node in sorted(nodes.items())
+            if isinstance(node, dict)
+            and node.get("enabled", True) is not False
+            and node.get("state_replica", True) is not False
+            and str(node.get("role") or "") == "master"
+            and int(node.get("credential_protocol_version") or 0) >= 2
+            and node.get("credential_capable") is True
+        ]
+    return payload
+
+
+def _cmc_leases_payload() -> Dict[str, Any]:
+    """Transform the local authority journal into a compact secret-free status."""
+    state = _cmc_lease_authority().status()
+    requests = state.get("requests") if isinstance(state.get("requests"), dict) else {}
+    lease_states = state.get("leases") if isinstance(state.get("leases"), dict) else {}
+    leases: list[Dict[str, Any]] = []
+    for request_id, request in sorted(requests.items()):
+        lease = request.get("lease") if isinstance(request, dict) else None
+        if not isinstance(lease, dict):
+            continue
+        lease_id = str(lease.get("lease_id") or "")
+        lease_state = lease_states.get(lease_id) if isinstance(lease_states.get(lease_id), dict) else {}
+        settlement = lease_state.get("settlement") if isinstance(lease_state.get("settlement"), dict) else {}
+        leases.append({
+            "lease_id": lease_id,
+            "request_id": str(request_id),
+            "credential_id": lease.get("credential_id"),
+            "generation": lease.get("secret_generation"),
+            "quota_domain_id": lease.get("quota_domain_id"),
+            "authority_epoch": lease.get("authority_epoch"),
+            "recipient": lease.get("recipient"),
+            "credits": float(lease.get("credits_micros") or 0) / 1_000_000,
+            "request_count": lease.get("request_count"),
+            "granted_at": lease.get("granted_at"),
+            "expires_at": lease.get("expires_at"),
+            "terminal": bool(lease_state.get("terminal")),
+            "outcome": settlement.get("outcome"),
+            "actual_credits": float(settlement.get("actual_credits_micros") or 0) / 1_000_000,
+            "status_code": settlement.get("status_code"),
+            "settled_at": settlement.get("settled_at"),
+        })
+    terminal_count = sum(1 for item in leases if item["terminal"])
+    snapshot = read_cmc_cluster_snapshot(PBGDIR) or {}
+    desired = snapshot.get("desired_state") if isinstance(snapshot, dict) else {}
+    pool = desired.get("cmc_pool") if isinstance(desired, dict) else {}
+    authorities = pool.get("authorities") if isinstance(pool, dict) else {}
+    nodes = ((snapshot.get("cluster_nodes") or {}).get("nodes") or {}) if isinstance(snapshot, dict) else {}
+    try:
+        local_node_id = str(read_local_identity(default_cluster_root(Path(PBGDIR))).get("node_id") or "")
+    except Exception:
+        local_node_id = ""
+    monitor = get_monitor()
+    connected_hosts = None
+    if monitor and getattr(monitor, "pool", None) and hasattr(monitor.pool, "connected_hosts"):
+        try:
+            connected_hosts = set(monitor.pool.connected_hosts())
+        except Exception:
+            connected_hosts = None
+
+    def credits(value: Any) -> float:
+        return float(value or 0) / 1_000_000
+
+    domains = []
+    warnings = []
+    state_domains = state.get("domains") if isinstance(state.get("domains"), dict) else {}
+    authority_domains = authorities if isinstance(authorities, dict) else {}
+    for domain_id in sorted(set(state_domains) | set(authority_domains)):
+        domain = state_domains.get(domain_id) if isinstance(state_domains.get(domain_id), dict) else {}
+        route = authorities.get(domain_id) if isinstance(authorities, dict) and isinstance(authorities.get(domain_id), dict) else {}
+        authority_node_id = str(route.get("authority_node_id") or "")
+        node = nodes.get(authority_node_id) if isinstance(nodes, dict) and isinstance(nodes.get(authority_node_id), dict) else {}
+        authority_name = str(node.get("pbname") or node.get("hostname") or authority_node_id)
+        if not authority_node_id:
+            authority_reachable = None
+        elif authority_node_id == local_node_id:
+            authority_reachable = True
+        elif authority_name and connected_hosts is not None:
+            authority_reachable = authority_name in connected_hosts
+        else:
+            authority_reachable = None
+        limits = domain.get("limits") if isinstance(domain.get("limits"), dict) else {}
+        day_reserved = credits(domain.get("day_reserved_credits_micros"))
+        day_used = credits(domain.get("day_used_credits_micros"))
+        month_reserved = credits(domain.get("month_reserved_credits_micros"))
+        month_used = credits(domain.get("month_used_credits_micros"))
+        daily_limit = credits(limits.get("daily_credits_micros"))
+        monthly_limit = credits(limits.get("monthly_credits_micros"))
+        domain_warnings = []
+        if daily_limit and day_reserved + day_used >= daily_limit * 0.8:
+            domain_warnings.append("Daily CMC quota is at or above 80%")
+        if monthly_limit and month_reserved + month_used >= monthly_limit * 0.8:
+            domain_warnings.append("Monthly CMC quota is at or above 80%")
+        warnings.extend(f"{domain_id}: {warning}" for warning in domain_warnings)
+        provider_updated = domain.get("provider_usage_updated_at")
+        try:
+            provider_age = max(time.time() - float(provider_updated), 0.0) if provider_updated else None
+        except (TypeError, ValueError):
+            provider_age = None
+        authority_updated = route.get("updated_at")
+        try:
+            authority_age = max(time.time() - float(authority_updated), 0.0) if authority_updated else None
+        except (TypeError, ValueError):
+            authority_age = None
+        domains.append({
+            "quota_domain_id": str(domain_id),
+            "authority_node_id": authority_node_id or None,
+            "authority_node": authority_name or None,
+            "authority_epoch": route.get("authority_epoch", domain.get("authority_epoch")),
+            "authority_reachable": authority_reachable,
+            "authority_updated_at": authority_updated,
+            "authority_state_age_seconds": authority_age,
+            "day": domain.get("day"),
+            "month": domain.get("month"),
+            "day_reserved_credits": day_reserved,
+            "day_used_credits": day_used,
+            "month_reserved_credits": month_reserved,
+            "month_used_credits": month_used,
+            "uncertain_credits": credits(domain.get("uncertain_credits_micros")),
+            "daily_limit": daily_limit,
+            "monthly_limit": monthly_limit,
+            "concurrent_leases": int(domain.get("concurrent_leases") or 0),
+            "provider_remaining": credits(domain.get("provider_remaining_micros")) if domain.get("provider_remaining_micros") is not None else None,
+            "provider_limit": credits(domain.get("provider_limit_micros")) if domain.get("provider_limit_micros") is not None else None,
+            "provider_used": credits(domain.get("provider_used_micros")) if domain.get("provider_used_micros") is not None else None,
+            "provider_reset_at": domain.get("provider_reset_at"),
+            "provider_stale_age_seconds": provider_age,
+            "warnings": domain_warnings,
+        })
+
+    key_usage = []
+    for credential_id, key in sorted((state.get("keys") or {}).items()):
+        if not isinstance(key, dict):
+            continue
+        key_usage.append({
+            "credential_id": str(credential_id),
+            "generation": key.get("generation"),
+            "reserved_credits": credits(key.get("reserved_credits_micros")),
+            "reserved_requests": int(key.get("reserved_requests") or 0),
+            "used_credits": credits(key.get("used_credits_micros")),
+            "used_requests": int(key.get("used_requests") or 0),
+        })
+    return {
+        "authority": {
+            "available": True,
+            "key_count": len(state.get("keys") or {}),
+            "request_count": len(requests),
+            "lease_count": len(leases),
+            "active_leases": len(leases) - terminal_count,
+            "terminal_leases": terminal_count,
+            "provider_event_count": len(state.get("provider_events") or {}),
+        },
+        "domains": domains,
+        "key_usage": key_usage,
+        "warnings": warnings,
+        "leases": leases,
+    }
+
+
+def _raise_cmc_pool_error(
+    operation: str,
+    exc: Exception,
+    *,
+    operation_id: str | None = None,
+) -> None:
+    """Log a CMC pool failure and map it to a stable HTTP response."""
+    if isinstance(exc, HTTPException):
+        raise exc
+    _log(
+        SERVICE,
+        f"CMC pool {operation} failed: {exc}",
+        level="ERROR",
+        meta={"operation": f"cmc_pool_{operation}", "traceback": traceback.format_exc()},
+    )
+    def detail(message: str) -> Any:
+        return {"message": message, "operation_id": operation_id} if operation_id else message
+
+    if isinstance(exc, CredentialNotFoundError):
+        raise HTTPException(status_code=404, detail=detail(str(exc.args[0] if exc.args else exc))) from exc
+    if isinstance(exc, CredentialPublicationError):
+        raise HTTPException(status_code=409, detail=detail(str(exc))) from exc
+    if isinstance(exc, (TypeError, ValueError)):
+        raise HTTPException(status_code=422, detail=detail(str(exc))) from exc
+    raise HTTPException(status_code=500, detail=detail("CMC pool operation failed")) from exc
+
+
+class CmcPoolKeyCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str
+    label: str = ""
+    active: bool = True
+    imported: bool = False
+    shared: bool = False
+    operation_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    request_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+
+
+class CmcPoolKeyPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: Optional[str] = None
+    active: Optional[bool] = None
+    imported: Optional[bool] = None
+    shared: Optional[bool] = None
+    operation_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    request_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+
+
+class CmcPoolKeyRotate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str
+    operation_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    request_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+
+
+class CmcAuthorityTransfer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    quota_domain_id: str = Field(min_length=1, max_length=256)
+    authority_node_id: str = Field(min_length=1, max_length=128)
+    expected_epoch: Optional[int] = Field(default=None, ge=0)
+    operation_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    request_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+
+
+def _resume_cmc_mutation(
+    store: CredentialStore,
+    record: Dict[str, Any],
+    operation_id: str,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Resume a durable pending CMC publication without exposing it to the local pool."""
+
+    credential_id = str(record["id"])
+    reconciliation = reconcile_pending_credentials(
+        PBGDIR,
+        store=store,
+        publisher=_cmc_credential_publisher(store),
+    )
+    item = next(
+        (
+            item for item in reconciliation.get("items") or []
+            if item.get("kind") == "cmc"
+            and item.get("credential_id") == credential_id
+            and item.get("operation_id") == operation_id
+        ),
+        {"status": "active", "publication_status": "already_committed"},
+    )
+    return store.get_cmc(credential_id), {
+        "status": item.get("publication_status") or item.get("status"),
+        "activation_status": item.get("status"),
+        "operation_id": operation_id,
+    }
+
+
+@router.get("/cmc-pool")
+def get_cmc_pool(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    """Return local CMC pool readiness, metadata, health, and usage."""
+    try:
+        try:
+            reconcile_pending_credentials(PBGDIR)
+        except Exception as exc:
+            _log(
+                SERVICE,
+                f"Credential reconciliation remains pending: {type(exc).__name__}",
+                level="WARNING",
+            )
+        return _cmc_pool_payload()
+    except Exception as exc:
+        _raise_cmc_pool_error("status", exc)
+
+
+@router.post("/cmc-pool/keys")
+def create_cmc_pool_key(
+    body: CmcPoolKeyCreate,
+    session: SessionToken = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Store and publish a new CMC credential without returning its secret."""
+    operation_id = body.operation_id or body.request_id or uuid.uuid4().hex
+    try:
+        store = _cmc_credential_store()
+        operations, completed = _begin_cmc_operation(store, operation_id, "cmc_create")
+        if completed is not None:
+            return completed
+        with credential_mutation_lock(store.root):
+            record = store.create_cmc(
+                body.api_key,
+                label=body.label,
+                active=body.active,
+                origin="imported" if body.imported else "local",
+                shared=body.shared,
+                pending=True,
+                operation_id=operation_id,
+            )
+            record, publication = _resume_cmc_mutation(store, record, operation_id)
+        response = {
+            "ok": True,
+            "operation_id": operation_id,
+            "credential": _safe_cmc_key(record),
+            "publication_status": publication.get("status"),
+            "activation_status": publication.get("activation_status"),
+        }
+        operations.complete(operation_id, response)
+        return response
+    except Exception as exc:
+        _raise_cmc_pool_error("create", exc, operation_id=operation_id)
+
+
+@router.patch("/cmc-pool/keys/{key_id}")
+def patch_cmc_pool_key(
+    key_id: str,
+    body: CmcPoolKeyPatch,
+    session: SessionToken = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Update non-secret CMC metadata or active state."""
+    operation_id = body.operation_id or body.request_id or uuid.uuid4().hex
+    try:
+        store = _cmc_credential_store()
+        operations, completed = _begin_cmc_operation(store, operation_id, "cmc_patch", key_id)
+        if completed is not None:
+            return completed
+        with credential_mutation_lock(store.root):
+            fields_set = body.model_fields_set
+            changes: Dict[str, Any] = {}
+            if "label" in fields_set:
+                changes["label"] = body.label
+            if "shared" in fields_set:
+                changes["shared"] = body.shared
+            if "imported" in fields_set:
+                changes["origin"] = "imported" if body.imported else "local"
+            publication_status = "unchanged"
+            if "active" in fields_set:
+                changes.update({
+                    "active": body.active,
+                    "pending": True,
+                    "operation_id": operation_id,
+                })
+                record = store.update_cmc(key_id, **changes)
+                record, publication = _resume_cmc_mutation(store, record, operation_id)
+                publication_status = str(publication.get("status") or "updated")
+            else:
+                record = store.update_cmc(key_id, operation_id=operation_id, **changes)
+        response = {
+            "ok": True,
+            "operation_id": operation_id,
+            "credential": _safe_cmc_key(record),
+            "publication_status": publication_status,
+        }
+        operations.complete(operation_id, response)
+        return response
+    except Exception as exc:
+        _raise_cmc_pool_error("patch", exc, operation_id=operation_id)
+
+
+@router.post("/cmc-pool/keys/{key_id}/rotate")
+def rotate_cmc_pool_key(
+    key_id: str,
+    body: CmcPoolKeyRotate,
+    session: SessionToken = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Create and publish a new immutable generation for a CMC key."""
+    operation_id = body.operation_id or body.request_id or uuid.uuid4().hex
+    try:
+        store = _cmc_credential_store()
+        operations, completed = _begin_cmc_operation(store, operation_id, "cmc_rotate", key_id)
+        if completed is not None:
+            return completed
+        with credential_mutation_lock(store.root):
+            record = store.update_cmc(
+                key_id,
+                api_key=body.api_key,
+                active=True,
+                pending=True,
+                operation_id=operation_id,
+            )
+            record, publication = _resume_cmc_mutation(store, record, operation_id)
+        response = {
+            "ok": True,
+            "operation_id": operation_id,
+            "credential": _safe_cmc_key(record),
+            "publication_status": publication.get("status"),
+            "activation_status": publication.get("activation_status"),
+        }
+        operations.complete(operation_id, response)
+        return response
+    except Exception as exc:
+        _raise_cmc_pool_error("rotate", exc, operation_id=operation_id)
+
+
+@router.post("/cmc-pool/keys/{key_id}/disable")
+def disable_cmc_pool_key(
+    key_id: str,
+    session: SessionToken = Depends(require_auth),
+    operation_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Disable a local CMC key and publish the cluster state transition."""
+    operation_id = operation_id or request_id or uuid.uuid4().hex
+    try:
+        store = _cmc_credential_store()
+        operations, completed = _begin_cmc_operation(store, operation_id, "cmc_disable", key_id)
+        if completed is not None:
+            return completed
+        with credential_mutation_lock(store.root):
+            record = store.update_cmc(
+                key_id,
+                active=False,
+                pending=True,
+                operation_id=operation_id,
+            )
+            record, publication = _resume_cmc_mutation(store, record, operation_id)
+        response = {
+            "ok": True,
+            "operation_id": operation_id,
+            "credential": _safe_cmc_key(record),
+            "publication_status": publication.get("status"),
+        }
+        operations.complete(operation_id, response)
+        return response
+    except Exception as exc:
+        _raise_cmc_pool_error("disable", exc, operation_id=operation_id)
+
+
+@router.delete("/cmc-pool/keys/{key_id}")
+def delete_cmc_pool_key(
+    key_id: str,
+    session: SessionToken = Depends(require_auth),
+    operation_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Publish a cluster tombstone and soft-delete a local CMC credential."""
+    operation_id = operation_id or request_id or uuid.uuid4().hex
+    try:
+        store = _cmc_credential_store()
+        operations, completed = _begin_cmc_operation(store, operation_id, "cmc_delete", key_id)
+        if completed is not None:
+            return completed
+        with credential_mutation_lock(store.root):
+            publication = _cmc_credential_publisher(store).publish_tombstone(key_id, "cmc_api_key")
+            operations.checkpoint(operation_id, "published", {"publication": publication})
+            store.delete_cmc(key_id, operation_id=operation_id)
+        response = {
+            "ok": True,
+            "operation_id": operation_id,
+            "cluster_operation_id": str(publication.get("operation_id") or ""),
+            "key_id": key_id,
+            "publication_status": publication.get("status"),
+        }
+        operations.complete(operation_id, response)
+        return response
+    except Exception as exc:
+        _raise_cmc_pool_error("delete", exc, operation_id=operation_id)
+
+
+@router.get("/cmc-pool/usage")
+def get_cmc_pool_usage(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    """Return secret-free local usage from CmcPoolClient status."""
+    try:
+        return _cmc_usage_payload()
+    except Exception as exc:
+        _raise_cmc_pool_error("usage", exc)
+
+
+@router.get("/cmc-pool/leases")
+def get_cmc_pool_leases(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
+    """Return a secret-free view of the optional local lease authority."""
+    try:
+        return _cmc_leases_payload()
+    except Exception as exc:
+        _raise_cmc_pool_error("leases", exc)
+
+
+@router.get("/cmc-pool/operations/{operation_id}")
+def get_cmc_pool_operation(
+    operation_id: str,
+    session: SessionToken = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Return durable secret-free status for one CMC mutation request."""
+
+    try:
+        store = _cmc_credential_store()
+        record = _cmc_operation_store(store).get(operation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if record is None:
+        raise HTTPException(status_code=404, detail="CMC operation not found")
+    return record
+
+
+@router.post("/cmc-pool/authority/transfer")
+def transfer_cmc_pool_authority(
+    body: CmcAuthorityTransfer,
+    session: SessionToken = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Transfer a CMC quota domain immediately through signed epoch CAS."""
+
+    operation_id = body.operation_id or body.request_id or uuid.uuid4().hex
+    try:
+        store = _cmc_credential_store()
+        operations, completed = _begin_cmc_operation(
+            store,
+            operation_id,
+            "cmc_authority_transfer",
+            f"{body.quota_domain_id}:{body.authority_node_id}",
+        )
+        if completed is not None:
+            return completed
+        with credential_mutation_lock(store.root):
+            transfer = _cmc_credential_publisher(store).set_cmc_authority(
+                body.quota_domain_id,
+                body.authority_node_id,
+                expected_epoch=body.expected_epoch,
+            )
+        response = {
+            "ok": True,
+            "operation_id": operation_id,
+            "cluster_operation_id": str(transfer.get("operation_id") or ""),
+            "authority": transfer,
+            "cmc_pool": _cmc_pool_payload(),
+        }
+        operations.complete(operation_id, response)
+        return response
+    except Exception as exc:
+        _raise_cmc_pool_error("authority_transfer", exc, operation_id=operation_id)
+
 @router.get("/settings/pbcoindata/key-status")
 def get_pbcoindata_key_status(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    """Call CMC /v1/key/info and return usage stats."""
+    """Return pool status through the legacy secret-free compatibility route."""
     try:
-        from PBCoinData import CoinData
-        obj = CoinData()
-        if not obj.api_key:
-            return {"ok": False, "error": "No API key configured"}
-        ok = obj.fetch_api_status()
-        if ok:
-            return {
-                "ok": True,
-                "credit_limit_monthly": getattr(obj, "credit_limit_monthly", None),
-                "credits_used_day": getattr(obj, "credits_used_day", None),
-                "credits_used_month": getattr(obj, "credits_used_month", None),
-                "credits_left": getattr(obj, "credits_left", None),
-                "credit_limit_monthly_reset_timestamp": getattr(obj, "credit_limit_monthly_reset_timestamp", None),
-            }
-        return {"ok": False, "error": getattr(obj, "api_error", "unknown error")}
-    except Exception as e:
-        _log(SERVICE, f"pbcoindata key-status: {e}", level="ERROR")
-        raise HTTPException(status_code=500, detail=str(e))
+        payload = _cmc_pool_payload()
+        payload["ok"] = payload["ready"]
+        return payload
+    except Exception as exc:
+        _raise_cmc_pool_error("legacy_status", exc)
 
 
 @router.get("/settings/pbcoindata")
 def get_pbcoindata_settings(session: SessionToken = Depends(require_auth)) -> Dict[str, Any]:
-    from PBCoinData import CoinData
-    obj = CoinData()
-    return {
-        "api_key": obj.api_key or "",
-        "fetch_limit": obj.fetch_limit,
-        "fetch_interval": obj.fetch_interval,
-        "metadata_interval": obj.metadata_interval,
-        "mapping_interval": obj.mapping_interval,
-    }
+    try:
+        from PBCoinData import CoinData
+        obj = CoinData()
+        return {
+            "fetch_limit": obj.fetch_limit,
+            "fetch_interval": obj.fetch_interval,
+            "metadata_interval": obj.metadata_interval,
+            "mapping_interval": obj.mapping_interval,
+            "cmc_pool": _cmc_pool_payload(),
+            "apply": apply_metadata("pbcoindata"),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log(SERVICE, f"load pbcoindata settings failed: {exc}", level="ERROR", meta={"operation": "load_pbcoindata_settings", "traceback": traceback.format_exc()})
+        raise HTTPException(status_code=500, detail="Unable to load PBCoinData settings") from exc
 
 
 class PBCoinDataSettings(BaseModel):
-    api_key: str = ""
-    fetch_limit: int = 5000
-    fetch_interval: int = 24
-    metadata_interval: int = 1
-    mapping_interval: int = 24
+    model_config = ConfigDict(extra="forbid")
+
+    fetch_limit: int = Field(default=5000, ge=200, le=5000)
+    fetch_interval: int = Field(default=24, ge=1, le=24)
+    metadata_interval: int = Field(default=1, ge=1, le=7)
+    mapping_interval: int = Field(default=24, ge=1, le=168)
 
 
 @router.post("/settings/pbcoindata")
@@ -1623,16 +2316,21 @@ def save_pbcoindata_settings(
     try:
         from PBCoinData import CoinData
         obj = CoinData()
-        obj.api_key = body.api_key
         obj.fetch_limit = body.fetch_limit
         obj.fetch_interval = body.fetch_interval
         obj.metadata_interval = body.metadata_interval
         obj.mapping_interval = body.mapping_interval
         obj.save_config()
-        return {"ok": True}
+        return {
+            "ok": True,
+            "cmc_pool": _cmc_pool_payload(),
+            "apply": apply_metadata("pbcoindata"),
+        }
+    except HTTPException:
+        raise
     except Exception as e:
-        _log(SERVICE, f"save pbcoindata settings: {e}", level="ERROR")
-        raise HTTPException(status_code=500, detail=str(e))
+        _log(SERVICE, f"save pbcoindata settings: {e}", level="ERROR", meta={"operation": "save_pbcoindata_settings", "traceback": traceback.format_exc()})
+        raise HTTPException(status_code=500, detail="Unable to save PBCoinData settings") from e
 
 
 # ── Settings: PBAPIServer ────────────────────────────────────
@@ -1659,10 +2357,15 @@ def get_api_server_settings(session: SessionToken = Depends(require_auth)) -> Di
     obj = mod.PBApiServer()
     monitor = get_monitor()
 
-    auto_restart_val = load_ini("vps_monitor", "auto_restart")
+    snapshot = load_ini_snapshot()
+
+    def ini_value(section: str, key: str) -> str:
+        return snapshot.get(section, key) if snapshot.has_option(section, key) else ""
+
+    auto_restart_val = ini_value("vps_monitor", "auto_restart")
     auto_restart = auto_restart_val.lower() == "true" if auto_restart_val else True
 
-    enabled_hosts_val = load_ini("vps_monitor", "enabled_hosts")
+    enabled_hosts_val = ini_value("vps_monitor", "enabled_hosts")
     enabled_hosts: list[str] = []
     if enabled_hosts_val and enabled_hosts_val.strip():
         enabled_hosts = [h.strip() for h in enabled_hosts_val.split(",") if h.strip()]
@@ -1675,8 +2378,8 @@ def get_api_server_settings(session: SessionToken = Depends(require_auth)) -> Di
         "available_hosts": _available_vps_hosts(),
         "monitor_config": _load_monitor_config_values(),
         **(monitor.get_alert_settings() if monitor else {
-            "telegram_token": load_ini("main", "telegram_token") or "",
-            "telegram_chat_id": load_ini("main", "telegram_chat_id") or "",
+            "telegram_token": ini_value("main", "telegram_token"),
+            "telegram_chat_id": ini_value("main", "telegram_chat_id"),
             "offline_gui": True,
             "service_gui": True,
             "system_gui": True,
@@ -1691,6 +2394,7 @@ def get_api_server_settings(session: SessionToken = Depends(require_auth)) -> Di
             "instance_problem_telegram": True,
             "instance_recovered_telegram": True,
         }),
+        "apply": apply_metadata("api_server_full"),
     }
 
 
@@ -1723,19 +2427,40 @@ def save_api_server_settings(
 ) -> Dict[str, Any]:
     try:
         mod = importlib.import_module("PBApiServer")
-        obj = mod.PBApiServer()
-        obj.host = body.host
-        obj.port = body.port
-        save_ini("vps_monitor", "auto_restart", str(body.auto_restart))
-        save_ini("vps_monitor", "enabled_hosts", ",".join(sorted(body.enabled_hosts)))
-        _save_monitor_config_values(body.monitor_config)
-        monitor = get_monitor()
-        if monitor:
-            monitor.save_alert_settings(body.model_dump())
-        else:
-            save_ini("main", "telegram_token", body.telegram_token)
-            save_ini("main", "telegram_chat_id", body.telegram_chat_id)
-        return {"ok": True}
+        host = body.host.strip() if body.host else "0.0.0.0"
+        port = max(1024, min(65535, body.port))
+        current = mod.PBApiServer()
+        host_changed = host != current.host
+        port_changed = port != current.port
+        bind_changed = host_changed or port_changed
+        values = body.model_dump()
+        monitor_values = _validated_monitor_values(body.monitor_config)
+
+        def mutate_ini(parser) -> None:
+            updates = {
+                "api_server": {"host": host, "port": str(port)},
+                "vps_monitor": {"auto_restart": str(body.auto_restart), "enabled_hosts": ",".join(sorted(body.enabled_hosts))},
+                "monitor": {field: str(value) for field, value in monitor_values.items()},
+                "main": {"telegram_token": body.telegram_token.strip(), "telegram_chat_id": body.telegram_chat_id.strip()},
+                "vps_monitor_alerts": {key: "true" if bool(values[key]) else "false" for key in values if key.endswith("_gui") or key.endswith("_telegram")},
+            }
+            for section, section_values in updates.items():
+                if not parser.has_section(section):
+                    parser.add_section(section)
+                for key, value in section_values.items():
+                    parser.set(section, key, value)
+
+        update_ini(mutate_ini)
+        if bind_changed:
+            mod.mark_runtime_restart_required("API host or port settings changed")
+        apply_keys = list(APPLY_GROUPS["api_server_live"])
+        if host_changed:
+            apply_keys.append(("api_server", "host"))
+        if port_changed:
+            apply_keys.append(("api_server", "port"))
+        return {"ok": True, "apply": apply_metadata_for(apply_keys)}
+    except HTTPException:
+        raise
     except Exception as e:
         _log(SERVICE, f"save api-server settings: {e}", level="ERROR")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1743,18 +2468,22 @@ def save_api_server_settings(
 
 # ── Settings: PBData ─────────────────────────────────────────
 
-def _read_ini_int(section: str, key: str, default: int) -> int:
+def _read_ini_int(section: str, key: str, default: int, snapshot=None) -> int:
     try:
-        v = load_ini(section, key)
+        v = snapshot.get(section, key) if snapshot and snapshot.has_option(section, key) else ""
+        if snapshot is None:
+            v = load_ini(section, key)
         s = str(v).strip() if v is not None else ""
         return int(float(s)) if s else default
     except Exception:
         return default
 
 
-def _read_ini_float(section: str, key: str, default: float) -> float:
+def _read_ini_float(section: str, key: str, default: float, snapshot=None) -> float:
     try:
-        v = load_ini(section, key)
+        v = snapshot.get(section, key) if snapshot and snapshot.has_option(section, key) else ""
+        if snapshot is None:
+            v = load_ini(section, key)
         s = str(v).strip() if v is not None else ""
         return float(s) if s else default
     except Exception:
@@ -1775,10 +2504,15 @@ def get_pbdata_settings(session: SessionToken = Depends(require_auth)) -> Dict[s
         all_users = []
         valid = set()
 
+    snapshot = load_ini_snapshot()
+
+    def ini_value(key: str) -> str:
+        return snapshot.get("pbdata", key) if snapshot.has_option("pbdata", key) else ""
+
     # Read fetch_users and trades_users directly from ini (no PBData() instantiation)
     def _read_ini_list(key: str) -> list:
         try:
-            raw = load_ini('pbdata', key)
+            raw = ini_value(key)
             if not raw or not str(raw).strip():
                 return []
             users_list = _ast.literal_eval(str(raw).strip())
@@ -1794,7 +2528,7 @@ def get_pbdata_settings(session: SessionToken = Depends(require_auth)) -> Dict[s
     # per-exchange overrides: read JSON from ini, merge with defaults
     default_by_ex = {'hyperliquid': 3.0, 'bybit': 3.0}
     try:
-        raw = load_ini('pbdata', 'shared_rest_pause_by_exchange_json') or ''
+        raw = ini_value('shared_rest_pause_by_exchange_json')
         overrides = json.loads(raw) if raw.strip() else {}
         if isinstance(overrides, dict):
             default_by_ex.update({str(k): float(v) for k, v in overrides.items() if v is not None})
@@ -1805,18 +2539,19 @@ def get_pbdata_settings(session: SessionToken = Depends(require_auth)) -> Dict[s
         "fetch_users": fetch_users,
         "trades_users": trades_users,
         "all_users": all_users,
-        "log_level": load_ini("pbdata", "log_level") or "INFO",
-        "ws_max": _read_ini_int("pbdata", "ws_max", MAX_PRIVATE_WS_GLOBAL),
-        "pollers_delay_seconds": _read_ini_int("pbdata", "pollers_delay_seconds", 60),
-        "poll_interval_combined_seconds": _read_ini_int("pbdata", "poll_interval_combined_seconds", 90),
-        "poll_interval_balance_seconds": _read_ini_int("pbdata", "poll_interval_balance_seconds", 300),
-        "poll_interval_positions_seconds": _read_ini_int("pbdata", "poll_interval_positions_seconds", 300),
-        "poll_interval_orders_seconds": _read_ini_int("pbdata", "poll_interval_orders_seconds", 60),
-        "poll_interval_history_seconds": _read_ini_int("pbdata", "poll_interval_history_seconds", 300),
-        "poll_interval_executions_seconds": _read_ini_int("pbdata", "poll_interval_executions_seconds", 1800),
-        "shared_rest_user_pause_seconds": _read_ini_float("pbdata", "shared_rest_user_pause_seconds", 0.75),
+        "log_level": ini_value("log_level") or "INFO",
+        "ws_max": _read_ini_int("pbdata", "ws_max", MAX_PRIVATE_WS_GLOBAL, snapshot),
+        "pollers_delay_seconds": _read_ini_int("pbdata", "pollers_delay_seconds", 60, snapshot),
+        "poll_interval_combined_seconds": _read_ini_int("pbdata", "poll_interval_combined_seconds", 90, snapshot),
+        "poll_interval_balance_seconds": _read_ini_int("pbdata", "poll_interval_balance_seconds", 300, snapshot),
+        "poll_interval_positions_seconds": _read_ini_int("pbdata", "poll_interval_positions_seconds", 300, snapshot),
+        "poll_interval_orders_seconds": _read_ini_int("pbdata", "poll_interval_orders_seconds", 60, snapshot),
+        "poll_interval_history_seconds": _read_ini_int("pbdata", "poll_interval_history_seconds", 300, snapshot),
+        "poll_interval_executions_seconds": _read_ini_int("pbdata", "poll_interval_executions_seconds", 1800, snapshot),
+        "shared_rest_user_pause_seconds": _read_ini_float("pbdata", "shared_rest_user_pause_seconds", 0.75, snapshot),
         "shared_rest_pause_by_exchange": default_by_ex,
-        "latest_1m_coin_pause_seconds": _read_ini_float("pbdata", "latest_1m_coin_pause_seconds", 2.0),
+        "latest_1m_coin_pause_seconds": _read_ini_float("pbdata", "latest_1m_coin_pause_seconds", 2.0, snapshot),
+        "apply": apply_metadata("pbdata"),
     }
 
 
@@ -1842,40 +2577,31 @@ def save_pbdata_settings(
     body: PBDataSettings, session: SessionToken = Depends(require_auth)
 ) -> Dict[str, Any]:
     try:
-        from PBData import PBData
-        # Use a lightweight PBData instance only for save_fetch_users/save_trades_users
-        # (those methods write fetch_users/trades_users back to pbgui.ini).
-        # Suppress _load_settings() side-effects by deferring until after ini writes.
-        obj = PBData.__new__(PBData)
-        # Minimal init state needed for save_fetch_users / save_trades_users
-        obj._fetch_users = []
-        obj._trades_users = []
-        from User import Users
-        try:
-            obj.users = Users()
-        except Exception:
-            obj.users = None
-        obj.fetch_users = body.fetch_users
-        obj.trades_users = body.trades_users
-        save_ini("pbdata", "log_level", "" if body.log_level == "NONE" else body.log_level)
-        save_ini("pbdata", "ws_max", str(body.ws_max))
-        save_ini("pbdata", "pollers_delay_seconds", str(body.pollers_delay_seconds))
-        save_ini("pbdata", "poll_interval_combined_seconds", str(body.poll_interval_combined_seconds))
-        save_ini("pbdata", "poll_interval_balance_seconds", str(body.poll_interval_balance_seconds))
-        save_ini("pbdata", "poll_interval_positions_seconds", str(body.poll_interval_positions_seconds))
-        save_ini("pbdata", "poll_interval_orders_seconds", str(body.poll_interval_orders_seconds))
-        save_ini("pbdata", "poll_interval_history_seconds", str(body.poll_interval_history_seconds))
-        save_ini("pbdata", "poll_interval_executions_seconds", str(body.poll_interval_executions_seconds))
-        save_ini("pbdata", "shared_rest_user_pause_seconds", str(body.shared_rest_user_pause_seconds))
-        save_ini("pbdata", "latest_1m_coin_pause_seconds", str(body.latest_1m_coin_pause_seconds))
         # Only store exchanges that differ from the global pause (overrides only)
         global_pause = body.shared_rest_user_pause_seconds
         overrides = {
             ex: v for ex, v in body.shared_rest_pause_by_exchange.items()
             if abs(v - global_pause) > 1e-9
         }
-        save_ini("pbdata", "shared_rest_pause_by_exchange_json", json.dumps(overrides) if overrides else "{}")
-        return {"ok": True}
+        save_ini_section("pbdata", {
+            "fetch_users": str(body.fetch_users),
+            "trades_users": str(body.trades_users),
+            "log_level": "" if body.log_level == "NONE" else body.log_level,
+            "ws_max": str(body.ws_max),
+            "pollers_delay_seconds": str(body.pollers_delay_seconds),
+            "poll_interval_combined_seconds": str(body.poll_interval_combined_seconds),
+            "poll_interval_balance_seconds": str(body.poll_interval_balance_seconds),
+            "poll_interval_positions_seconds": str(body.poll_interval_positions_seconds),
+            "poll_interval_orders_seconds": str(body.poll_interval_orders_seconds),
+            "poll_interval_history_seconds": str(body.poll_interval_history_seconds),
+            "poll_interval_executions_seconds": str(body.poll_interval_executions_seconds),
+            "shared_rest_user_pause_seconds": str(body.shared_rest_user_pause_seconds),
+            "latest_1m_coin_pause_seconds": str(body.latest_1m_coin_pause_seconds),
+            "shared_rest_pause_by_exchange_json": json.dumps(overrides) if overrides else "{}",
+        })
+        return {"ok": True, "apply": apply_metadata("pbdata")}
+    except HTTPException:
+        raise
     except Exception as e:
         _log(SERVICE, f"save pbdata settings: {e}", level="ERROR")
         raise HTTPException(status_code=500, detail=str(e))

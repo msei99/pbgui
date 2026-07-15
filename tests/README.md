@@ -33,9 +33,10 @@ python -m pytest -m live_exchange --run-live -v -s
 ```
 
 These tests intentionally query current public exchange or market-data APIs.
-They may use the CoinMarketCap key from the local `pbgui.ini`, but they keep
-generated mappings, caches, and reports inside temporary directories. They do
-not use private exchange credentials.
+They may copy one active CoinMarketCap credential from the local owner-only
+vault into an isolated temporary store, but they keep generated mappings,
+caches, and reports inside temporary directories. They do not use private
+exchange credentials or read a CMC key from `pbgui.ini`.
 
 ## External PB7 Tests
 

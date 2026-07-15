@@ -23,6 +23,19 @@ _OPT_IN_MARKERS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def skip_production_startup_migrations(monkeypatch):
+    """Prevent ordinary lifespan tests from touching runtime migration state."""
+    monkeypatch.setenv("PBGUI_SKIP_STARTUP_MIGRATIONS", "1")
+    api_server = sys.modules.get("PBApiServer")
+    if api_server is not None:
+        monkeypatch.setattr(
+            api_server,
+            "bootstrap_local_legacy_credentials",
+            lambda _root: {"status": "test_skipped"},
+        )
+
+
 def _mock_normalize_symbol(symbol, symbol_mappings=None):
     """Return a lightweight normalized symbol for fallback test mocks."""
     base = str(symbol or "").strip().upper()

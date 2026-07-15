@@ -268,6 +268,8 @@
     .modal-input { width: 100%; min-height: 34px; border: 1px solid var(--border2); border-radius: 7px; background: #0f1724; color: var(--text); padding: 0.45rem 0.55rem; }
     .modal-input:disabled { color: var(--faint); background: #111827; }
     .modal-field-wide { grid-column: 1 / -1; }
+    .rotation-links { display: grid; gap: var(--sp-sm); }
+    .rotation-links a { color: var(--accent); font-weight: 700; }
     .peer-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 7px; }
     .peer-option { display: flex; align-items: center; gap: 7px; border: 1px solid var(--border2); border-radius: 7px; padding: 0.45rem 0.55rem; background: #0f1724; color: var(--muted); }
     .peer-option input { accent-color: var(--accent); }
@@ -285,6 +287,15 @@
     .preview-value { margin-top: 4px; color: var(--text); font-size: var(--fs-md); font-weight: 750; }
     .preview-section { display: grid; gap: var(--sp-sm); }
     .preview-list { color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; overflow-wrap: anywhere; }
+    .credential-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-sm); margin-bottom: var(--sp-md); }
+    .credential-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--sp-sm); }
+    .credential-card { border: 1px solid var(--border); border-radius: 10px; background: #101724; padding: var(--sp-sm); min-width: 0; }
+    .credential-card-title { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; }
+    .credential-card-value { margin-top: 5px; font-weight: 750; overflow-wrap: anywhere; }
+    .credential-detail { margin-top: 5px; color: var(--muted); font-size: var(--fs-sm); line-height: 1.4; }
+    .credential-blockers { display: grid; gap: var(--sp-sm); margin-top: var(--sp-md); }
+    .credential-blocker { border: 1px solid rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); color: #fcd34d; border-radius: 8px; padding: 0.55rem 0.75rem; overflow-wrap: anywhere; }
+    .cluster-section, main, .panel, .panel-body { min-width: 0; }
     #preview-modal table { min-width: 0; }
 
     @media (max-width: 980px) {
@@ -298,6 +309,14 @@
     @media (max-width: 560px) {
       .stats-grid { grid-template-columns: 1fr; }
       .hero-title { font-size: 22px; }
+      #main-content { padding: var(--sp-sm); }
+      .panel-body { padding: var(--sp-sm); }
+      .credential-grid { grid-template-columns:1fr; }
+      .credential-toolbar { align-items: stretch; }
+      .credential-toolbar .bootstrap-actions { width: 100%; }
+      .credential-toolbar .btn { flex: 1 1 145px; }
+      .credential-card, .credential-detail { max-width: 100%; overflow-wrap: anywhere; }
+      .table-wrap { max-width: 100%; }
     }
   </style>
 </head>
@@ -317,6 +336,9 @@
         </button>
         <button class="sb-section" type="button" data-cluster-section="nodes">
           Nodes <span class="sb-count" id="nav-nodes-count" style="margin-left:auto" hidden></span>
+        </button>
+        <button class="sb-section" type="button" data-cluster-section="credentials">
+          Credentials <span class="sb-count" id="nav-credentials-count" style="margin-left:auto" hidden></span>
         </button>
         <button class="sb-section" type="button" data-cluster-section="instances">
           V7 State <span class="sb-count" id="nav-instances-count" style="margin-left:auto" hidden></span>
@@ -451,6 +473,30 @@
                 <div class="panel-note" id="nodes-note"></div>
               </div>
               <div class="table-wrap" id="nodes-table"></div>
+            </section>
+          </div>
+
+          <div class="cluster-section" data-cluster-section-panel="credentials">
+            <section class="panel">
+              <div class="panel-head">
+                <div class="panel-title">Cluster Credentials</div>
+                <div class="panel-note">Signed recipient lifecycle and exact materialization acknowledgements. Secret values and ciphertext are never shown.</div>
+              </div>
+              <div class="panel-body">
+                <div class="credential-toolbar">
+                  <div class="panel-note" id="credentials-note">Loading credential lifecycle...</div>
+                  <div class="bootstrap-actions">
+                    <button class="btn warn" id="credential-rewrap-btn" data-credential-mutation type="button">Rewrap Current Secrets</button>
+                    <button class="btn" id="credential-rotate-btn" data-credential-mutation type="button">Rotate Local Crypto Key</button>
+                  </div>
+                </div>
+                <div class="credential-grid" id="credential-grid"></div>
+                <div class="credential-blockers" id="credential-blockers"></div>
+                <div class="table-wrap" id="credential-nodes-table" style="margin-top:var(--sp-md)"></div>
+                <div class="table-wrap" id="credential-ack-matrix" style="margin-top:var(--sp-md)"></div>
+                <div class="table-wrap" id="credential-catalog-table" style="margin-top:var(--sp-md)"></div>
+                <div class="table-wrap" id="credential-authority-table" style="margin-top:var(--sp-md)"></div>
+              </div>
             </section>
           </div>
 
@@ -652,6 +698,31 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" id="remove-node-modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="remove-node-title">
+      <div class="modal-head">
+        <div id="remove-node-title">Remove Cluster Node</div>
+        <button class="modal-close" id="remove-node-close-btn" type="button" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div id="remove-node-message"></div>
+        <div class="setup-state-note warn"><strong>Credential retention warning:</strong> removing membership does not erase the remote host. The removed node may retain learned CMC or TradFi plaintext.</div>
+        <div>Credential rotation is optional and is not automatic. If the removed host is no longer trusted, rotate the affected provider credentials after removal:</div>
+        <div class="rotation-links">
+          <a href="/api/services/main_page" target="_blank" rel="noopener noreferrer">Open PBGUI Services, select the CMC Pool key, then choose Rotate</a>
+          <a href="/api/api-keys/main_page#tradfi" target="_blank" rel="noopener noreferrer">Open API Keys, select the TradFi profile, then choose Rotate Replacement</a>
+        </div>
+        <div class="panel-note">The removal writes a REMOVE_NODE operation only. It does not delete remote files, stop services, or contact the removed host.</div>
+        <div class="modal-error" id="remove-node-error"></div>
+        <div class="setup-state-note" id="remove-node-result" hidden></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="remove-node-cancel-btn" type="button">Cancel</button>
+        <button class="btn warn" id="remove-node-confirm-btn" type="button">Remove Node</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     window.TOKEN = "%%TOKEN%%";
     window.API_BASE = "%%API_BASE%%";
@@ -696,6 +767,10 @@
       var lastOplogSignature = '';
       var clusterAutoRefreshTimer = null;
       var clusterAutoRefreshInFlight = false;
+      var clusterLoadGeneration = 0;
+      var credentialActionGeneration = 0;
+      var credentialActionBusy = false;
+      var credentialPendingAction = null;
       var nodesActionsBound = false;
       var pendingJoinNode = null;
       var pendingSelfJoinPayload = null;
@@ -704,6 +779,7 @@
       var pendingRepairPasswordMode = 'all';
       var repairSshPasswords = {};
       var pendingSettingsNode = null;
+      var pendingRemoveNode = null;
       var pendingPreviewNode = null;
       var lastPreviewPayload = null;
       var pushProgressTimer = null;
@@ -881,7 +957,22 @@
         options.cache = 'no-store';
         return fetch(API_BASE + path, options).then(function (res) {
           if (!res.ok) {
-            return res.text().then(function (body) { throw new Error(body || ('HTTP ' + res.status)); });
+            return res.text().then(function (body) {
+              var detail = body;
+              var operationId = '';
+              try {
+                var parsed = body ? JSON.parse(body) : {};
+                detail = parsed.detail != null ? parsed.detail : parsed;
+                if (detail && typeof detail === 'object') {
+                  operationId = String(detail.operation_id || '');
+                  detail = detail.message || JSON.stringify(detail);
+                }
+              } catch (_) {}
+              var error = new Error(String(detail || ('HTTP ' + res.status)));
+              error.status = res.status;
+              error.operationId = operationId;
+              throw error;
+            });
           }
           return res.json();
         });
@@ -1845,25 +1936,60 @@
 
       function removeClusterNode(node) {
         if (!node || !node.node_id) return;
-        if (typeof window.PBGuiConfirm !== 'function') {
-          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
-          return;
-        }
+        pendingRemoveNode = node;
         var label = node.pbname || node.hostname || node.node_id;
-        window.PBGuiConfirm({
-          title: 'Remove Cluster Node',
-          message: 'Remove disabled Cluster node ' + label + ' from the materialized node list?',
-          detail: 'This writes a REMOVE_NODE operation to the local oplog. It does not delete oplog history, remove files, stop services or touch the remote host. Nodes with active sync or assigned V7 configs are blocked by the API.',
-          confirmText: 'Remove Node'
-        }).then(function (accepted) {
-          if (!accepted) return;
-          setMessage('Removing Cluster node ' + label + '...', 'warn');
-          fetchJson('/nodes/' + encodeURIComponent(node.node_id) + '/remove', { method: 'POST' }).then(function () {
-            setMessage('Cluster node removed from materialized membership: ' + label + '.', 'ok');
-            return loadCluster();
-          }).catch(function (err) {
-            setMessage('Failed to remove Cluster node: ' + err.message, 'err');
+        document.getElementById('remove-node-message').textContent = 'Remove disabled Cluster node ' + label + ' from materialized membership?';
+        document.getElementById('remove-node-error').textContent = '';
+        document.getElementById('remove-node-error').className = 'modal-error';
+        document.getElementById('remove-node-result').hidden = true;
+        document.getElementById('remove-node-result').textContent = '';
+        document.getElementById('remove-node-confirm-btn').hidden = false;
+        document.getElementById('remove-node-confirm-btn').disabled = false;
+        document.getElementById('remove-node-confirm-btn').textContent = 'Remove Node';
+        document.getElementById('remove-node-cancel-btn').textContent = 'Cancel';
+        document.getElementById('remove-node-modal').hidden = false;
+        document.getElementById('remove-node-confirm-btn').focus();
+      }
+
+      function closeRemoveNodeModal() {
+        if (document.getElementById('remove-node-confirm-btn').disabled) return;
+        pendingRemoveNode = null;
+        document.getElementById('remove-node-modal').hidden = true;
+      }
+
+      function submitRemoveClusterNode() {
+        var node = pendingRemoveNode;
+        if (!node || !node.node_id) return;
+        var label = node.pbname || node.hostname || node.node_id;
+        var confirmButton = document.getElementById('remove-node-confirm-btn');
+        var closeButton = document.getElementById('remove-node-close-btn');
+        var cancelButton = document.getElementById('remove-node-cancel-btn');
+        confirmButton.disabled = true;
+        closeButton.disabled = true;
+        cancelButton.disabled = true;
+        confirmButton.textContent = 'Removing...';
+        setMessage('Removing Cluster node ' + label + '...', 'warn');
+        fetchJson('/nodes/' + encodeURIComponent(node.node_id) + '/remove', { method: 'POST' }).then(function (payload) {
+          var affected = (payload || {}).affected_credentials || {};
+          var result = document.getElementById('remove-node-result');
+          result.textContent = 'Removed ' + label + '. Affected current recipients: ' + Number(affected.cmc || 0) + ' CMC and ' + Number(affected.tradfi || 0) + ' TradFi credential(s). Rotation remains optional and was not performed automatically.';
+          result.hidden = false;
+          confirmButton.hidden = true;
+          cancelButton.textContent = 'Close';
+          setMessage('Cluster node removed from materialized membership: ' + label + '.', 'ok');
+          loadCluster().catch(function (refreshError) {
+            setMessage('Cluster node removed, but the page refresh failed: ' + refreshError.message, 'warn');
           });
+        }).catch(function (err) {
+          var error = document.getElementById('remove-node-error');
+          error.textContent = err.message;
+          error.className = 'modal-error visible';
+          confirmButton.textContent = 'Remove Node';
+          setMessage('Failed to remove Cluster node: ' + err.message, 'err');
+        }).finally(function () {
+          confirmButton.disabled = false;
+          closeButton.disabled = false;
+          cancelButton.disabled = false;
         });
       }
 
@@ -2341,6 +2467,301 @@
         document.getElementById('warning-list').innerHTML = warnings.map(function (text) {
           return '<div class="warning-item">' + esc(text) + '</div>';
         }).join('');
+      }
+
+      function credentialStatePill(ok) {
+        return '<span class="pill ' + (ok ? 'good' : 'warn') + '">' + (ok ? 'Current' : 'Pending') + '</span>';
+      }
+
+      function renderCredentials(credentials, nodes) {
+        credentials = credentials || {};
+        nodes = Array.isArray(nodes) ? nodes : [];
+        var barrier = credentials.protocol_barrier || {};
+        var migration = credentials.migration || {};
+        var cmc = (credentials.cmc || {}).catalog || {};
+        var tradfi = (credentials.tradfi || {}).catalog || {};
+        var rewrapNeeded = credentials.rewrap_needed === true;
+        var credentialNodes = credentials.nodes || {};
+        var nodeById = {};
+        nodes.forEach(function (node) { nodeById[String(node.node_id || '')] = node; });
+        var note = document.getElementById('credentials-note');
+        if (note) {
+          note.textContent = rewrapNeeded
+            ? 'Recipient state is stale for ' + ((credentials.rewrap_items || []).length) + ' secret(s).'
+            : 'Recipient state matches membership generation ' + Number(credentials.membership_generation || 0) + '.';
+        }
+        setNavCount('nav-credentials-count', Object.keys(cmc).length + Object.keys(tradfi).length);
+        var grid = document.getElementById('credential-grid');
+        if (grid) {
+          var outdatedIds = Array.isArray(migration.outdated_node_ids) ? migration.outdated_node_ids : [];
+          var outdatedServices = Array.isArray(migration.outdated_services) ? migration.outdated_services : [];
+          var outdatedNames = outdatedIds.map(shortId).concat(outdatedServices);
+          var migrationText = migration.status === 'waiting_for_upgrade'
+            ? ('Rolling upgrade active; waiting for ' + outdatedNames.length + ' node/service upgrade(s)')
+            : migration.frozen
+            ? ('Automatic cutover in progress, frozen generation ' + Number(migration.freeze_generation || 0))
+            : migration.status === 'complete'
+            ? 'Automatic credential cutover complete'
+            : 'Ready for automatic cutover';
+          grid.innerHTML = [
+            ['Protocol', 'v' + esc(credentials.protocol_version || 'n/a'), barrier.ready ? 'All active replicas explicitly advertise v2.' : esc((barrier.blockers || []).length) + ' active replica blocker(s).'],
+            ['Crypto Registration', credentialStatePill(barrier.ready === true), esc(nodes.filter(function (node) { return node.crypto_registered === true; }).length) + ' / ' + esc(nodes.length) + ' node registrations'],
+            ['Rolling Migration', '<span class="pill ' + (migration.status === 'complete' ? 'good' : migration.status === 'waiting_for_upgrade' ? 'warn' : 'blue') + '">' + esc(migration.status || 'ready') + '</span>', esc(migrationText) + (outdatedNames.length ? '; outdated: ' + esc(outdatedNames.join(', ')) : '')],
+            ['Cutoff / Unfreeze', '<span class="pill blue">' + esc(migration.cutoff_status || 'not_set') + '</span>', 'Cutoff generation ' + esc((migration.cutoff || {}).cutoff_generation || 'n/a') + '; minimum protocol ' + esc((migration.cutoff || {}).min_protocol || 'n/a') + '; unfreeze ' + esc(migration.unfreeze_status || 'unknown')],
+            ['CMC Authorities', esc((credentials.authorities || []).length) + ' quota domain(s)', (credentials.authorities || []).map(function (item) { return esc(shortId(item.authority_node_id)) + ' epoch ' + esc(item.authority_epoch || 0); }).join(', ') || 'No authority assignment.'],
+            ['Recipient Rewrap', '<span class="pill ' + (rewrapNeeded ? 'warn' : 'good') + '">' + (rewrapNeeded ? 'Required' : 'Current') + '</span>', rewrapNeeded ? esc((credentials.rewrap_items || []).map(function (item) { return shortId(item.secret_id); }).join(', ')) : 'Exact active recipients are wrapped.'],
+            ['CMC Materialization', esc(Object.keys(cmc).length) + ' current secret(s)', esc(nodes.filter(function (node) { return node.cmc_materialized === true; }).length) + ' node(s) acknowledged'],
+            ['TradFi Materialization', esc(Object.keys(tradfi).length) + ' current secret(s)', esc(nodes.filter(function (node) { return node.tradfi_status === 'materialized'; }).length) + ' master(s) materialized; VPS nodes are not recipients.']
+          ].map(function (item) {
+            return '<div class="credential-card"><div class="credential-card-title">' + esc(item[0]) + '</div>'
+              + '<div class="credential-card-value">' + item[1] + '</div>'
+              + '<div class="credential-detail">' + item[2] + '</div></div>';
+          }).join('');
+        }
+
+        var blockers = document.getElementById('credential-blockers');
+        if (blockers) {
+          var blockerDetails = (migration.blocker_details || []).map(function (item) {
+            var reason = item.reason || 'migration_blocker';
+            var ids = item.missing_node_ids || (item.node_id ? [item.node_id] : []);
+            var registrations = item.missing_registration_ids || [];
+            return '<div class="credential-blocker"><strong>' + esc(reason) + '</strong>'
+              + (ids.length ? ': missing nodes ' + ids.map(function (id) { return esc(id); }).join(', ') : '')
+              + (registrations.length ? '; missing registrations ' + registrations.map(esc).join(', ') : '')
+              + '</div>';
+          });
+          blockers.innerHTML = blockerDetails.join('');
+        }
+
+        var nodeTable = document.getElementById('credential-nodes-table');
+        if (nodeTable) {
+          var rows = nodes.map(function (node) {
+            var statusNode = credentialNodes[String(node.node_id || '')] || node;
+            var ack = statusNode.materialization_ack || {};
+            var candidate = statusNode.migration_candidate || null;
+            var scan = statusNode.migration_scan_ack || null;
+            var projection = statusNode.tradfi_projection_ack || null;
+            var migrationBlockers = Array.isArray(statusNode.migration_blockers) ? statusNode.migration_blockers : [];
+            var eligible = String(node.node_id || '') !== localNodeId
+              && node.enabled !== false
+              && node.state_replica !== false
+              && String(node.sync_mode || (node.sync_enabled === false ? 'disabled' : 'reachable')) === 'reachable'
+              && Number(node.credential_protocol_version || statusNode.protocol_version || 0) === 2
+              && node.credential_capable === true
+              && !!(node.signing_key_id || statusNode.signing_key_id)
+              && !!(node.encryption_key_id || statusNode.encryption_key_id)
+              && ack.current !== true
+              && (Object.keys(cmc).length + Object.keys(tradfi).length > 0);
+            return '<tr><td>' + esc(node.pbname || node.hostname || shortId(node.node_id)) + '</td>'
+              + '<td><span class="pill blue">' + esc(node.credential_protocol_version || statusNode.protocol_version || 'missing') + '</span></td>'
+              + '<td class="mono" title="' + esc(node.encryption_key_id || statusNode.encryption_key_id || '') + '">' + esc(shortId(node.encryption_key_id || statusNode.encryption_key_id || 'unregistered')) + '</td>'
+              + '<td>' + credentialStatePill(statusNode.credential_active === true) + '</td>'
+              + '<td>' + credentialStatePill(ack.current === true) + '</td>'
+              + '<td>' + (candidate ? '<span class="pill ' + (candidate.status === 'accepted' || candidate.status === 'none' ? 'good' : 'warn') + '">' + esc(candidate.status || 'unknown') + '</span><div class="credential-detail">' + esc(candidate.accepted_count || 0) + ' / ' + esc(candidate.submitted_count || 0) + ' accepted</div>' : '<span class="pill">Not reported</span>') + '</td>'
+              + '<td>' + (scan ? '<span class="pill ' + (scan.current && scan.status === 'clean' ? 'good' : scan.status === 'blocked' ? 'bad' : 'warn') + '">' + esc(scan.status || 'pending') + '</span><div class="credential-detail">' + esc(scan.finding_count || 0) + ' finding(s)</div>' : '<span class="pill">Not reported</span>') + '</td>'
+              + '<td>' + (String(node.role || '') !== 'master' ? '<span class="pill blue">Not recipient</span>' : projection ? '<span class="pill ' + (projection.current ? 'good' : 'warn') + '">' + esc(projection.projection_status || (projection.current ? 'current' : 'pending')) + '</span><div class="credential-detail">generation ' + esc(projection.projection_applied_generation || 0) + '</div>' : '<span class="pill">Not reported</span>') + '</td>'
+              + '<td>' + (migrationBlockers.length ? '<span class="pill bad">' + esc(migrationBlockers.length) + '</span><div class="credential-detail">' + esc(migrationBlockers.join(', ')) + '</div>' : '<span class="pill good">None</span>') + '</td>'
+              + '<td>' + (eligible ? '<button class="btn small warn" data-credential-mutation data-materialize-node="' + esc(node.node_id) + '" type="button">Materialize Credentials</button>' : '<span class="pill ' + (ack.current ? 'good' : 'warn') + '">' + (ack.current ? 'Current' : 'Not eligible') + '</span>') + '</td></tr>';
+          }).join('');
+          nodeTable.innerHTML = '<table><thead><tr><th>Node</th><th>Protocol</th><th>Crypto Registration</th><th>Credential Active</th><th>Materialization ACK</th><th>Migration Candidate</th><th>Scan ACK</th><th>TradFi Projection ACK</th><th>Migration Blockers</th><th>Action</th></tr></thead><tbody>' + rows + '</tbody></table>';
+          nodeTable.querySelectorAll('[data-materialize-node]').forEach(function (button) {
+            button.addEventListener('click', function () { confirmCredentialMaterialization(button.getAttribute('data-materialize-node')); });
+          });
+        }
+
+        var matrix = document.getElementById('credential-ack-matrix');
+        if (matrix) {
+          var matrixRows = [];
+          var catalogs = {};
+          Object.keys(cmc).forEach(function (id) { catalogs[id] = { kind:'CMC', item:cmc[id] }; });
+          Object.keys(tradfi).forEach(function (id) { catalogs[id] = { kind:'TradFi', item:tradfi[id] }; });
+          Object.keys(credentialNodes).sort().forEach(function (nodeId) {
+            var statusNode = credentialNodes[nodeId] || {};
+            var ack = statusNode.materialization_ack || {};
+            Object.keys(catalogs).sort().forEach(function (credentialId) {
+              var catalog = catalogs[credentialId];
+              if ((catalog.item.recipient_ids || []).indexOf(nodeId) < 0) return;
+              var acknowledgedSecret = Number((ack.credential_generations || {})[credentialId] || 0);
+              var acknowledgedRecipient = Number((ack.recipient_generations || {})[credentialId] || 0);
+              var desiredSecret = Number(catalog.item.generation || 0);
+              var desiredRecipient = Number(catalog.item.recipient_generation || 0);
+              var exact = Number(ack.membership_generation || 0) === Number(credentials.membership_generation || 0)
+                && acknowledgedSecret === desiredSecret && acknowledgedRecipient === desiredRecipient;
+              var sourceNode = nodeById[nodeId] || {};
+              matrixRows.push('<tr><td>' + esc(sourceNode.pbname || sourceNode.hostname || shortId(nodeId)) + '</td><td class="mono" title="' + esc(credentialId) + '">' + esc(shortId(credentialId)) + '</td><td>' + esc(catalog.kind) + '</td><td>' + esc(acknowledgedSecret) + ' / ' + esc(desiredSecret) + '</td><td>' + esc(acknowledgedRecipient) + ' / ' + esc(desiredRecipient) + '</td><td>' + esc(ack.membership_generation || 0) + ' / ' + esc(credentials.membership_generation || 0) + '</td><td>' + credentialStatePill(exact) + '</td></tr>');
+            });
+          });
+          matrix.innerHTML = matrixRows.length
+            ? '<table><thead><tr><th>Node</th><th>Credential</th><th>Kind</th><th>Acknowledged / Desired Secret Generation</th><th>Acknowledged / Desired Recipient Generation</th><th>ACK / Current Membership</th><th>Exact</th></tr></thead><tbody>' + matrixRows.join('') + '</tbody></table>'
+            : '<div class="empty">No credential recipient acknowledgements are expected.</div>';
+        }
+
+        var catalogTable = document.getElementById('credential-catalog-table');
+        if (catalogTable) {
+          var catalogRows = [];
+          Object.keys(cmc).sort().forEach(function (id) { catalogRows.push([id, 'CMC', cmc[id]]); });
+          Object.keys(tradfi).sort().forEach(function (id) { catalogRows.push([id, 'TradFi', tradfi[id]]); });
+          catalogTable.innerHTML = catalogRows.length
+            ? '<table><thead><tr><th>Credential</th><th>Kind</th><th>Catalog Generation</th><th>Desired Secret Generation</th><th>Desired Recipient Generation</th><th>Membership Generation</th><th>Recipients</th></tr></thead><tbody>'
+              + catalogRows.map(function (row) { return '<tr><td class="mono" title="' + esc(row[0]) + '">' + esc(shortId(row[0])) + '</td><td>' + esc(row[1]) + '</td><td>' + esc(row[2].catalog_generation || 'n/a') + '</td><td>' + esc(row[2].generation || 0) + '</td><td>' + esc(row[2].recipient_generation || 0) + '</td><td>' + esc(row[2].membership_generation || 0) + '</td><td>' + esc((row[2].recipient_ids || []).length) + '</td></tr>'; }).join('')
+              + '</tbody></table>'
+            : '<div class="empty">No CMC or TradFi credentials are published in Cluster state.</div>';
+        }
+        var authorityTable = document.getElementById('credential-authority-table');
+        if (authorityTable) {
+          var authorityRows = (credentials.authorities || []).map(function (item) {
+            var node = nodeById[String(item.authority_node_id || '')] || {};
+            return '<tr><td class="mono">' + esc(item.quota_domain_id || '-') + '</td><td title="' + esc(item.authority_node_id || '') + '">' + esc(node.pbname || node.hostname || shortId(item.authority_node_id) || '-') + '</td><td>' + esc(item.authority_epoch || 0) + '</td><td>' + esc(timeText(item.updated_at)) + '</td><td>' + (item.conflicted ? '<span class="pill bad">Conflicted</span>' : '<span class="pill good">Current</span>') + '</td></tr>';
+          });
+          authorityTable.innerHTML = authorityRows.length
+            ? '<table><thead><tr><th>Quota Domain</th><th>Assigned Authority</th><th>Epoch</th><th>Updated</th><th>Status</th></tr></thead><tbody>' + authorityRows.join('') + '</tbody></table>'
+            : '<div class="empty">No CMC quota-domain authority is assigned.</div>';
+        }
+        var rewrapButton = document.getElementById('credential-rewrap-btn');
+        if (rewrapButton) rewrapButton.classList.toggle('primary', rewrapNeeded);
+        setCredentialMutationBusy(credentialActionBusy);
+      }
+
+      function setCredentialMutationBusy(busy) {
+        credentialActionBusy = !!busy;
+        document.querySelectorAll('[data-credential-mutation]').forEach(function (button) {
+          button.disabled = credentialActionBusy;
+        });
+      }
+
+      function newCredentialRequestId() {
+        return (window.crypto && window.crypto.randomUUID)
+          ? window.crypto.randomUUID()
+          : 'credential-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+      }
+
+      function sameCredentialAction(left, right) {
+        return !!left && !!right
+          && left.action === right.action
+          && left.target === right.target
+          && left.path === right.path
+          && left.transport === right.transport;
+      }
+
+      function clearPendingCredentialAction(context) {
+        if (credentialPendingAction === context) credentialPendingAction = null;
+      }
+
+      function resolvePendingCredentialAction(candidate) {
+        var pending = credentialPendingAction;
+        if (!pending) {
+          credentialPendingAction = candidate;
+          return Promise.resolve({ context: candidate, payload: null });
+        }
+        var same = sameCredentialAction(pending, candidate);
+        return fetchJson('/credentials/operations/' + encodeURIComponent(pending.requestId)).then(function (record) {
+          if (record.status === 'complete' && record.result && typeof record.result === 'object') {
+            var result = record.result;
+            clearPendingCredentialAction(pending);
+            if (same) return { context: pending, payload: result };
+            loadCluster({ force: true });
+            throw new Error('Previous credential operation ' + pending.requestId + ' completed. Review refreshed state, then retry this action.');
+          }
+          if (same) return { context: pending, payload: null };
+          throw new Error('Credential operation ' + pending.requestId + ' is still pending. A different mutation cannot start until it completes.');
+        }).catch(function (error) {
+          if (error.status !== 404) throw error;
+          if (same) return { context: pending, payload: null };
+          clearPendingCredentialAction(pending);
+          credentialPendingAction = candidate;
+          return { context: candidate, payload: null };
+        });
+      }
+
+      function credentialActionRequest(context) {
+        var path = context.path;
+        var options = { method: 'POST' };
+        if (context.transport === 'query') {
+          path += (path.indexOf('?') >= 0 ? '&' : '?') + 'request_id=' + encodeURIComponent(context.requestId);
+        } else {
+          options.headers = { 'Content-Type': 'application/json' };
+          options.body = JSON.stringify({ request_id: context.requestId });
+        }
+        return fetchJson(path, options);
+      }
+
+      function runCredentialAction(path, pendingText, successText, action, target, transport) {
+        if (credentialActionBusy) return Promise.resolve();
+        var generation = ++credentialActionGeneration;
+        var candidate = {
+          requestId: newCredentialRequestId(),
+          action: action,
+          target: target || '',
+          path: path,
+          transport: transport || 'query'
+        };
+        setCredentialMutationBusy(true);
+        setMessage(pendingText, 'warn');
+        return resolvePendingCredentialAction(candidate).then(function (resolved) {
+          if (resolved.payload) return resolved.payload;
+          return credentialActionRequest(resolved.context);
+        }).then(function (payload) {
+          if (generation !== credentialActionGeneration) return;
+          clearPendingCredentialAction(credentialPendingAction);
+          setMessage(successText + (payload.operation_id ? ' Operation ' + payload.operation_id + '.' : ''), 'ok');
+          return loadCluster({ force: true });
+        }).catch(function (err) {
+          if (err.status && err.status < 500 && err.status !== 409) {
+            clearPendingCredentialAction(credentialPendingAction);
+          }
+          if (generation === credentialActionGeneration) {
+            var retained = credentialPendingAction ? ' Retry will check operation ' + credentialPendingAction.requestId + ' before sending anything.' : '';
+            setMessage(err.message + retained, 'err');
+          }
+        }).finally(function () {
+          if (generation === credentialActionGeneration) setCredentialMutationBusy(false);
+        });
+      }
+
+      function confirmCredentialMaterialization(nodeId) {
+        var node = nodeMap[String(nodeId || '')] || {};
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        window.PBGuiConfirm({
+          title: 'Materialize Cluster Credentials',
+          message: 'Materialize pending sealed credentials on ' + (node.pbname || node.hostname || nodeId) + '?',
+          detail: 'The node must be synchronized and an exact active recipient. No credential value is returned to this browser.',
+          confirmText: 'Materialize Credentials'
+        }).then(function (accepted) {
+          if (accepted) runCredentialAction('/remote-materialize-credentials/' + encodeURIComponent(nodeId), 'Materializing credentials on remote node...', 'Remote credentials materialized and acknowledged.', 'cluster_remote_materialize_credentials', String(nodeId || ''), 'query');
+        });
+      }
+
+      function confirmCredentialRewrap() {
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        window.PBGuiConfirm({
+          title: 'Rewrap Cluster Credentials',
+          message: 'Rewrap every current CMC and TradFi credential for the exact active recipient set?',
+          detail: 'Provider credentials and their generations are not rotated. A signed recipient-only CAS update is appended for stale wrappers.',
+          confirmText: 'Rewrap'
+        }).then(function (accepted) {
+          if (accepted) runCredentialAction('/credentials/rewrap', 'Rewrapping current credentials...', 'Credential recipients rewrapped.', 'cluster_credential_rewrap', '*', 'body');
+        });
+      }
+
+      function confirmCredentialKeyRotation() {
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        window.PBGuiConfirm({
+          title: 'Rotate Local Cluster Crypto Key',
+          message: 'Rotate this node\'s signing and encryption registrations?',
+          detail: 'The membership update is signed by the prior key. Historical keys remain verifiable and all current credentials are rewrapped before the rotation completes.',
+          confirmText: 'Rotate Key'
+        }).then(function (accepted) {
+          if (accepted) runCredentialAction('/credentials/rotate-local-key', 'Rotating local cluster crypto key...', 'Local cluster crypto key rotated.', 'cluster_rotate_local_credential_key', '', 'query');
+        });
       }
 
       function actionPill(action) {
@@ -2925,6 +3346,7 @@
         }
         if (nodesChanged || statusChanged) {
           renderNodes(parts[1]);
+          renderCredentials((parts[0] || {}).credentials || (parts[1] || {}).credentials, (parts[1] || {}).nodes);
         }
         if (nodesChanged) {
           lastNodesSignature = nodesSignature;
@@ -2943,6 +3365,7 @@
 
       function loadCluster(options) {
         options = options || {};
+        var requestGeneration = ++clusterLoadGeneration;
         var silent = options.silent === true;
         if (!silent) setMessage('Refreshing cluster state...', '');
         if (!options.keepProbes) remoteProbeMap = {};
@@ -2952,12 +3375,13 @@
           fetchJson('/desired-state'),
           fetchJson('/oplog?limit=50')
         ]).then(function (parts) {
+          if (requestGeneration !== clusterLoadGeneration) return parts;
           renderClusterParts(parts, { force: options.force === true });
           if (!silent) setMessage('Cluster state refreshed.', 'ok');
           if (!options.auto) loadBootstrapPreview(true).catch(function () {});
           return parts;
         }).catch(function (err) {
-          if (!silent) setMessage('Failed to load cluster state: ' + err.message, 'err');
+          if (!silent && requestGeneration === clusterLoadGeneration) setMessage('Failed to load cluster state: ' + err.message, 'err');
           throw err;
         });
       }
@@ -3014,6 +3438,8 @@
       document.getElementById('refresh-btn').addEventListener('click', function () { loadCluster({ force: true }); });
       document.getElementById('repair-all-ssh-btn').addEventListener('click', repairAllClusterSsh);
       document.getElementById('probe-btn').addEventListener('click', loadRemoteStatus);
+      document.getElementById('credential-rewrap-btn').addEventListener('click', confirmCredentialRewrap);
+      document.getElementById('credential-rotate-btn').addEventListener('click', confirmCredentialKeyRotation);
       document.getElementById('bootstrap-apply-btn').addEventListener('click', applyBootstrap);
       document.getElementById('bootstrap-unlock').addEventListener('change', function (event) {
         bootstrapUnlocked = event.target.checked;
@@ -3045,6 +3471,9 @@
       document.getElementById('node-settings-cancel-btn').addEventListener('click', closeNodeSettingsModal);
       document.getElementById('node-settings-save-btn').addEventListener('click', saveNodeSettings);
       document.getElementById('node-settings-mode').addEventListener('change', applyNodeSettingsMode);
+      document.getElementById('remove-node-close-btn').addEventListener('click', closeRemoveNodeModal);
+      document.getElementById('remove-node-cancel-btn').addEventListener('click', closeRemoveNodeModal);
+      document.getElementById('remove-node-confirm-btn').addEventListener('click', submitRemoveClusterNode);
       document.getElementById('preview-close-x-btn').addEventListener('click', closePreviewModal);
       document.getElementById('preview-close-btn').addEventListener('click', closePreviewModal);
       document.getElementById('preview-push-ops-btn').addEventListener('click', confirmAndPushRemoteOps);

@@ -18,6 +18,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from file_lock import advisory_file_lock
+from logging_helpers import append_managed_transcript_line, human_log as _log
+
+SERVICE = "TaskWorker"
+
 from hyperliquid_aws import (
     download_hyperliquid_l2book_aws,
     get_hyperliquid_archive_day_range_aws,
@@ -59,7 +64,7 @@ from market_data import (
     normalize_market_data_coin_dir,
 )
 from market_data_sources import get_source_codes_for_day, get_oldest_day_with_source_code, SOURCE_CODE_L2BOOK
-from pbgui_purefunc import load_ini
+import pbgui_purefunc
 from task_queue import (
     clear_worker_pid,
     ensure_task_dirs,
@@ -218,13 +223,11 @@ def _job_log(msg: str, level: str = "INFO") -> None:
 
 
 def _append_to_job_log(job_id: str, msg: str) -> None:
-    """Append one timestamped line to the per-job log file in _tasks/logs/."""
+    """Append one timestamped line to the canonical managed job transcript."""
     try:
         p = get_job_log_path(job_id)
-        p.parent.mkdir(parents=True, exist_ok=True)
         ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-        with open(p, "a", encoding="utf-8") as f:
-            f.write(f"{ts}  {msg}\n")
+        append_managed_transcript_line(p, f"{ts}  {msg}", "jobs")
     except Exception:
         pass
 
@@ -239,9 +242,11 @@ def _init_job_log(job_id: str) -> None:
     """
     try:
         p = get_job_log_path(job_id)
-        if p.exists():
-            prev = p.with_name(f"{job_id}.prev.log")
-            os.replace(p, prev)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with advisory_file_lock(p):
+            if p.exists():
+                prev = p.with_name(f"{job_id}.prev.log")
+                os.replace(p, prev)
     except Exception:
         pass
 
@@ -1025,8 +1030,8 @@ def _run_hl_aws_l2book_auto(job_path: Path, payload: dict[str, Any]) -> None:
     if not region:
         region = "us-east-2"
 
-    def _get_ini_int(section: str, key: str, default: int) -> int:
-        raw = load_ini(section, key)
+    def _get_ini_int(snapshot, section: str, key: str, default: int) -> int:
+        raw = snapshot.get(section, key) if snapshot.has_option(section, key) else ""
         try:
             val = int(str(raw).strip())
             if val >= 1:
@@ -1035,8 +1040,8 @@ def _run_hl_aws_l2book_auto(job_path: Path, payload: dict[str, Any]) -> None:
             pass
         return int(default)
 
-    def _get_ini_float(section: str, key: str, default: float) -> float:
-        raw = load_ini(section, key)
+    def _get_ini_float(snapshot, section: str, key: str, default: float) -> float:
+        raw = snapshot.get(section, key) if snapshot.has_option(section, key) else ""
         try:
             val = float(str(raw).strip())
             if val > 0:
@@ -1045,25 +1050,23 @@ def _run_hl_aws_l2book_auto(job_path: Path, payload: dict[str, Any]) -> None:
             pass
         return float(default)
 
-    l2book_timeout_s = _get_ini_float("market_data", "hl_l2book_scan_timeout_s", 5.0)
-    l2book_workers = _get_ini_int("market_data", "hl_l2book_scan_workers", 8)
-    ini_path = Path("pbgui.ini")
-    ini_mtime: float | None = None
+    ini_snapshot = pbgui_purefunc.load_ini_snapshot()
+    l2book_timeout_s = _get_ini_float(ini_snapshot, "market_data", "hl_l2book_scan_timeout_s", 5.0)
+    l2book_workers = _get_ini_int(ini_snapshot, "market_data", "hl_l2book_scan_workers", 8)
+    ini_signature = ini_snapshot.signature
 
     def _reload_l2book_settings() -> bool:
-        nonlocal ini_mtime, l2book_timeout_s, l2book_workers
+        nonlocal ini_signature, l2book_timeout_s, l2book_workers
         try:
-            if not ini_path.exists():
+            snapshot = pbgui_purefunc.load_ini_snapshot()
+            if snapshot.signature == ini_signature:
                 return False
-            mtime = ini_path.stat().st_mtime
-            if ini_mtime is not None and mtime == ini_mtime:
-                return False
-            ini_mtime = mtime
+            ini_signature = snapshot.signature
         except Exception:
             return False
 
-        new_timeout = _get_ini_float("market_data", "hl_l2book_scan_timeout_s", 5.0)
-        new_workers = _get_ini_int("market_data", "hl_l2book_scan_workers", 8)
+        new_timeout = _get_ini_float(snapshot, "market_data", "hl_l2book_scan_timeout_s", 5.0)
+        new_workers = _get_ini_int(snapshot, "market_data", "hl_l2book_scan_workers", 8)
         changed = (new_timeout != l2book_timeout_s) or (new_workers != l2book_workers)
         l2book_timeout_s = new_timeout
         l2book_workers = new_workers
@@ -2821,7 +2824,11 @@ def _run_okx_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
 
     def append_job_log(line: str) -> None:
         with log_lock:
-            _append_to_job_log(job_id, line)
+            try:
+                _append_to_job_log(job_id, line)
+            except Exception as exc:
+                _log(SERVICE, f"Failed to append job transcript: {exc}", level="WARNING", meta={"operation": "append_job_log", "job_id": job_id})
+                raise
 
     def update_progress(**kw):
         def mut(o):
@@ -3011,7 +3018,11 @@ def _run_cache_sweep_thread(interval_s: float = 600.0) -> None:
 
 
 def main() -> int:
+    from credential_process_registry import ProcessCapabilityHeartbeat
+
     ensure_task_dirs()
+    capability = ProcessCapabilityHeartbeat(Path(__file__).resolve().parent, "Market Data worker")
+    capability.__enter__()
 
     signal.signal(signal.SIGTERM, _handle_stop)
     signal.signal(signal.SIGINT, _handle_stop)
@@ -3178,9 +3189,13 @@ def main() -> int:
         return 0
     finally:
         clear_worker_pid()
+        capability.close()
 
 
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--run-job":
-        raise SystemExit(run_single_job_file(sys.argv[2]))
+        from credential_process_registry import ProcessCapabilityHeartbeat
+
+        with ProcessCapabilityHeartbeat(Path(__file__).resolve().parent, "Market Data worker"):
+            raise SystemExit(run_single_job_file(sys.argv[2]))
     raise SystemExit(main())

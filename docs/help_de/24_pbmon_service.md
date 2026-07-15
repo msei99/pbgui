@@ -50,6 +50,10 @@ So bleibt die UI kompakt, während Telegram trotzdem sehr gezielt steuerbar ist.
 - Behobene Alarme verschwinden automatisch
 - Wenn ein Problem später wieder auftritt, wird es wieder **new/unacknowledged**
 - Einzelne Alarme oder alle sichtbaren Alarme lassen sich im Nav-Overlay quittieren
+- Ein quittierter Alarm bleibt quittiert, solange dasselbe Problem aktiv bleibt,
+  auch wenn sich Severity oder Details ändern. PBGui eskaliert innerhalb einer
+  durchgehenden Episode bewusst nicht erneut; erst Resolve und späteres Reopen
+  starten eine neue Episode.
 
 ## Telegram einrichten
 

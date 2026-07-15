@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 import api.services as services
 import PBApiServer
 
@@ -150,6 +152,20 @@ def test_api_restart_conflict_preserves_http_409(monkeypatch) -> None:
         assert "node-a Update PBGui" in str(exc.detail)
     else:
         raise AssertionError("Expected restart conflict")
+
+
+def test_services_restart_uses_shared_pbapi_migration_blocker(monkeypatch) -> None:
+    """The Services restart route returns 409 for PBApiServer's persisted migration blocker."""
+
+    async def blocked() -> tuple[bool, str]:
+        return True, "Credential migration phase import_publish is active"
+
+    monkeypatch.setattr(PBApiServer, "_restart_block_state", blocked)
+
+    with pytest.raises(services.HTTPException) as exc_info:
+        services.restart_api_server(session=None)
+    assert exc_info.value.status_code == 409
+    assert "Credential migration" in str(exc_info.value.detail)
 
 
 def test_websocket_protocol_documentation_matches_payload_envelopes() -> None:
@@ -471,6 +487,143 @@ def test_live_unsubscribe_awaits_watcher_cleanup() -> None:
     asyncio.run(scenario())
 
 
+def test_live_status_reports_value_free_resource_counts(monkeypatch) -> None:
+    """The authenticated diagnostic reports counts without user or credential values."""
+    from api import live
+    from Exchange import Exchange
+    from api.auth import SessionToken
+
+    async def scenario() -> None:
+        task = asyncio.create_task(asyncio.sleep(60))
+        queue_one = asyncio.Queue()
+        queue_two = asyncio.Queue()
+        live._watcher_lock = None
+        live._watcher_tasks["positions:alice"] = task
+        live._watcher_subs["positions:alice"] = {queue_one, queue_two}
+        monkeypatch.setattr(Exchange, "_private_ws_clients", {"bybit:alice": object()})
+        monkeypatch.setattr(Exchange, "_private_ws_owners", {"bybit:alice": {"live_session.positions"}})
+        session = SessionToken(token="test", user_id="test", created_at=1, expires_at=2)
+
+        payload = await live.live_status(session)
+
+        assert payload == {
+            "max_live_users": 10,
+            "watcher_registry_count": 1,
+            "watcher_active_count": 1,
+            "subscriber_key_count": 1,
+            "subscriber_reference_count": 2,
+            "private_ws_client_count": 1,
+            "private_ws_owner_count": 1,
+            "cleanup_task_count": 0,
+        }
+        assert "alice" not in str(payload)
+        await live.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_live_stream_revalidates_session_and_cleans_up(monkeypatch) -> None:
+    """An expired or revoked SSE session stops and releases all subscriptions."""
+    from api import live
+    from api.auth import SessionToken
+
+    async def scenario() -> None:
+        subscribed = []
+        unsubscribed = []
+        checks = iter([object(), None])
+
+        async def fake_ensure(user_name, kind, queue, user=None) -> None:
+            del user
+            subscribed.append((user_name, kind, queue))
+
+        def fake_detach(user_name, kind, queue):
+            unsubscribed.append((user_name, kind, queue))
+            return None
+
+        monkeypatch.setattr(live, "_ensure_watcher", fake_ensure)
+        monkeypatch.setattr(live, "_detach_subscriber", fake_detach)
+        monkeypatch.setattr(live, "validate_token", lambda _token: next(checks))
+        monkeypatch.setattr(live, "SESSION_CHECK_INTERVAL_SECONDS", 0.01)
+        session = SessionToken(token="test", user_id="test", created_at=1, expires_at=2)
+        response = await live.live_stream(users="alice", session=session)
+        stream = response.body_iterator
+
+        assert "connected" in await anext(stream)
+        try:
+            await anext(stream)
+        except StopAsyncIteration:
+            pass
+        else:
+            raise AssertionError("Revoked SSE session remained open")
+        await asyncio.sleep(0)
+
+        assert [(user, kind) for user, kind, _queue in subscribed] == [
+            ("alice", "positions"),
+            ("alice", "balance"),
+        ]
+        assert [(user, kind) for user, kind, _queue in unsubscribed] == [
+            ("alice", "positions"),
+            ("alice", "balance"),
+        ]
+        await live.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_live_stream_disconnect_shields_complete_subscription_cleanup(monkeypatch) -> None:
+    """Transport cancellation cannot interrupt cleanup between two shared watchers."""
+    from api import live
+    from api.auth import SessionToken
+
+    async def scenario() -> None:
+        unsubscribed = []
+
+        async def fake_ensure(_user_name, _kind, _queue, user=None) -> None:
+            del user
+            return None
+
+        def fake_detach(user_name, kind, _queue):
+            unsubscribed.append((user_name, kind))
+            return None
+
+        monkeypatch.setattr(live, "_ensure_watcher", fake_ensure)
+        monkeypatch.setattr(live, "_detach_subscriber", fake_detach)
+        monkeypatch.setattr(live, "validate_token", lambda _token: object())
+        session = SessionToken(token="test", user_id="test", created_at=1, expires_at=2)
+        response = await live.live_stream(users="alice", session=session)
+        stream = response.body_iterator
+        assert "connected" in await anext(stream)
+
+        pending_read = asyncio.create_task(anext(stream))
+        await asyncio.sleep(0)
+        pending_read.cancel()
+        await asyncio.gather(pending_read, return_exceptions=True)
+        await asyncio.sleep(0)
+
+        assert unsubscribed == [("alice", "positions"), ("alice", "balance")]
+        await live.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_live_cleanup_collects_client_cycles_after_last_watcher(monkeypatch) -> None:
+    """The last detached watcher triggers collection of closed client cycles."""
+    from api import live
+
+    async def scenario() -> None:
+        collected = []
+
+        async def watcher() -> None:
+            return None
+
+        live._watcher_tasks.clear()
+        monkeypatch.setattr(live.gc, "collect", lambda: collected.append(True) or 0)
+        await live._finish_detached_watchers([asyncio.create_task(watcher())])
+        assert collected == [True]
+
+    asyncio.run(scenario())
+
+
 def test_dashboard_shutdown_drains_shared_stream_tasks() -> None:
     """Dashboard shutdown cancels and awaits every shared stream registry."""
     from api import dashboard
@@ -554,7 +707,7 @@ def test_ohlcv_preload_worker_persists_real_exit_code(tmp_path, monkeypatch) -> 
     assert state["returncode"] == 7
 
 
-def test_lifespan_startup_failure_still_runs_all_shutdown_hooks(monkeypatch) -> None:
+def test_lifespan_startup_failure_still_runs_all_shutdown_hooks(monkeypatch, tmp_path) -> None:
     """A partial API startup failure must not bypass unrelated resource cleanup."""
     import api.auth
     import api.v7_instances
@@ -563,6 +716,8 @@ def test_lifespan_startup_failure_still_runs_all_shutdown_hooks(monkeypatch) -> 
     import master.async_monitor
 
     calls: list[str] = []
+    migration_errors: list[str] = []
+    monkeypatch.setattr(PBApiServer, "PBGDIR", str(tmp_path))
 
     class FakeMonitor:
         def __init__(self):
@@ -577,6 +732,21 @@ def test_lifespan_startup_failure_still_runs_all_shutdown_hooks(monkeypatch) -> 
     monkeypatch.setattr(PBApiServer, "_setup_api_logging", lambda: None)
     monkeypatch.setattr(PBApiServer, "load_ini", lambda *_args: "")
     monkeypatch.setattr(PBApiServer, "harden_sensitive_paths", lambda *_args: None)
+    monkeypatch.setattr(
+        PBApiServer,
+        "run_startup_migrations",
+        lambda *_args: {"skipped": False, "completed": []},
+    )
+
+    def fail_credential_migration(*_args):
+        raise RuntimeError("credential recovery required")
+
+    monkeypatch.setattr(PBApiServer, "run_credential_migration", fail_credential_migration)
+    monkeypatch.setattr(
+        PBApiServer,
+        "persist_credential_migration_error",
+        lambda reason, *_args: migration_errors.append(reason),
+    )
     monkeypatch.setattr(master.async_monitor, "VPSMonitor", FakeMonitor)
     monkeypatch.setattr(master.async_logs, "AsyncLogStreamer", lambda _pool: object())
     monkeypatch.setattr(api.vps, "init", lambda *_args: None)
@@ -607,6 +777,7 @@ def test_lifespan_startup_failure_still_runs_all_shutdown_hooks(monkeypatch) -> 
     asyncio.run(scenario())
 
     assert "monitor-stop" in calls
+    assert migration_errors == ["RuntimeError: credential recovery required"]
     for name in (
         "auth_shutdown", "live_shutdown", "dashboard_shutdown", "heatmap_shutdown",
         "pareto_explorer_shutdown", "coin_data_shutdown", "vps_manager_shutdown",

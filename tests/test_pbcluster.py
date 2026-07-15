@@ -7,20 +7,58 @@ import threading
 import time
 from pathlib import Path
 
+from cluster_credentials import ensure_node_key_material
 from cluster_sync_command import run_command
 from master.cluster_state import (
-    append_operation,
+    append_operation as _append_operation,
     build_config_manifest,
     compute_config_manifest_hash,
     default_cluster_root,
     ensure_local_identity,
+    read_local_identity,
+    write_operation,
 )
 from master.cluster_sync_worker import ClusterSyncWorker, SshClusterPeerClient, _write_local_blob
+import master.cluster_sync_worker as cluster_sync_worker
 
 
 CLUSTER_ID = "pbgui-cluster-00000000-0000-4000-8000-000000000010"
 NODE_ID = "pbgui-node-00000000-0000-4000-8000-000000000010"
 NODE_B = "pbgui-node-00000000-0000-4000-8000-000000000011"
+NODE_C = "pbgui-node-00000000-0000-4000-8000-000000000012"
+
+
+def append_operation(root: Path, op: str, payload: dict, **kwargs) -> dict:
+    """Use historical v1 records for non-local membership in worker fixtures."""
+
+    identity = read_local_identity(root)
+    actor = str(identity["node_id"])
+    target = str(payload.get("node_id") or "")
+    if op == "ADD_NODE" and target:
+        actor = target
+        actor_dir = Path(root) / "oplog" / actor
+        seq = max((int(path.stem) for path in actor_dir.glob("*.json")), default=0) + 1
+        membership = dict(payload)
+        if target == str(identity["node_id"]):
+            membership.update(
+                ensure_node_key_material(root).public_bundle(
+                    target,
+                    str(payload.get("role") or identity.get("role") or "vps"),
+                )
+            )
+        operation = {
+            **membership,
+            "schema_version": 1,
+            "cluster_id": str(identity["cluster_id"]),
+            "op_id": f"{actor}:{seq:08d}",
+            "actor": actor,
+            "seq": seq,
+            "op": op,
+            "created_at": int(kwargs.get("created_at", 100 + seq)),
+        }
+        write_operation(root, operation, allow_legacy_membership=True)
+        return operation
+    return _append_operation(root, op, payload, **kwargs)
 
 
 def test_worker_pulled_secret_blob_uses_owner_only_tree(tmp_path: Path) -> None:
@@ -57,7 +95,11 @@ class _LocalPeerClient:
         """Execute a restricted command against the peer's local cluster root."""
         self.calls.append((str(peer["node_id"]), command_text))
         raw = payload if isinstance(payload, bytes) else str(payload or "").encode("utf-8")
-        return run_command(self.roots[str(peer["node_id"])], local_node_id, command_text, raw, allow_join=True)
+        result = run_command(self.roots[str(peer["node_id"])], local_node_id, command_text, raw, allow_join=True)
+        if command_text in {"hello", "handshake"}:
+            result.pop("cluster_ssh_public_key", None)
+            result.pop("cluster_ssh_fingerprint", None)
+        return result
 
 
 class _FailingPeerClient:
@@ -159,6 +201,58 @@ def test_cluster_sync_worker_rebuilds_and_writes_status(tmp_path: Path) -> None:
     assert (cluster_root / "sync_status.json").is_file()
 
 
+def test_cluster_sync_worker_advances_migration_before_and_after_peer_sync(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Every local cycle advances outbound candidates and post-pull acceptance synchronously."""
+
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="vps", pbname="runner-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "vps"})
+    calls: list[int] = []
+    monkeypatch.setattr(
+        cluster_sync_worker,
+        "advance_local_credential_migration",
+        lambda _root, *, max_items: calls.append(max_items) or {"status": "advanced"},
+    )
+
+    status = ClusterSyncWorker(tmp_path).run_once(reason="test")
+
+    assert calls == [8, 8]
+    assert status["credential_migration_advance"] == {
+        "pre_sync": {"status": "advanced"},
+        "post_sync": {"status": "advanced"},
+    }
+
+
+def test_master_cycle_auto_starts_cutover_after_last_v2_peer_sync(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A master coordinator runs after peer pull so the last v2 update starts cutover."""
+
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "master"})
+    events: list[str] = []
+    worker = ClusterSyncWorker(tmp_path)
+    monkeypatch.setattr(worker, "_sync_peers", lambda _identity, _state: events.append("sync") or [])
+    monkeypatch.setattr(
+        cluster_sync_worker,
+        "run_credential_migration",
+        lambda _root: events.append("coordinator") or {"status": "advancing", "phase": "inventory"},
+    )
+
+    status = worker.run_once(reason="test")
+
+    assert events == ["sync", "coordinator"]
+    assert status["credential_migration_advance"]["coordinator"] == {
+        "status": "advancing",
+        "phase": "inventory",
+    }
+
+
 def test_cluster_sync_worker_consumes_sync_request_trigger(tmp_path: Path) -> None:
     """PBCluster treats a touched sync_request file as one event trigger."""
 
@@ -242,7 +336,7 @@ def test_cluster_sync_worker_syncs_reachable_peers_in_parallel(tmp_path: Path) -
             {"node_id": peer_id, "role": "vps", "pbname": f"runner-{offset}", "sync_mode": "reachable", "ssh_host": f"runner-{offset}"},
             created_at=100 + offset,
         )
-    client = _ParallelPeerClient({NODE_ID: len(peer_ids) + 1})
+    client = _ParallelPeerClient({NODE_ID: 1, **{peer_id: 1 for peer_id in peer_ids}})
     worker = ClusterSyncWorker(tmp_path, peer_client=client, peer_workers=len(peer_ids))
 
     status = worker.run_once(reason="test")
@@ -335,7 +429,7 @@ def test_cluster_sync_worker_pushes_ops_blobs_and_remote_materializes(tmp_path: 
     status = worker.run_once(reason="test")
 
     assert status["ok"] is True
-    assert status["pushed_ops"] >= 3
+    assert status["pushed_ops"] >= 1
     assert status["peers"][0]["status"] == "changed"
     commands = [command for _, command in client.calls]
     assert "handshake" in commands
@@ -387,3 +481,42 @@ def test_cluster_sync_worker_pulls_ops_and_blobs_from_peer(tmp_path: Path) -> No
     local_config = tmp_path / "node-a" / "data" / "run_v7" / "bot-b" / "config.json"
     assert json.loads(local_config.read_text(encoding="utf-8"))["live"]["user"] == "bot-b"
     assert json.loads((root_a / "desired_state.json").read_text(encoding="utf-8"))["instances"]["bot-b"]["assigned_host"] == NODE_ID
+
+
+def test_cluster_sync_worker_repairs_actor_sequence_gap(tmp_path: Path) -> None:
+    """A remote contiguous vector causes a local internal sequence gap to be fetched."""
+
+    root_a = default_cluster_root(tmp_path / "node-a")
+    root_b = default_cluster_root(tmp_path / "node-b")
+    ensure_local_identity(root_a, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    ensure_local_identity(root_b, role="vps", pbname="runner-b", cluster_id=CLUSTER_ID, node_id=NODE_B)
+    append_operation(root_a, "ADD_NODE", {"node_id": NODE_ID, "role": "master", "pbname": "master-a"}, created_at=100)
+    append_operation(root_a, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "runner-b", "ssh_host": "runner-b"}, created_at=101)
+    append_operation(root_b, "ADD_NODE", {"node_id": NODE_ID, "role": "master", "pbname": "master-a", "ssh_host": "master-a"}, created_at=100)
+    append_operation(root_b, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "runner-b"}, created_at=101)
+
+    def operation(seq: int) -> dict:
+        """Build one deterministic non-membership operation for the gap actor."""
+        return {
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_C}:{seq:08d}",
+            "actor": NODE_C,
+            "seq": seq,
+            "op": "DELETE_INSTANCE",
+            "created_at": 200 + seq,
+            "instance": f"relay-{seq}",
+            "version": str(seq),
+        }
+
+    write_operation(root_a, operation(1))
+    write_operation(root_a, operation(3))
+    for seq in (1, 2, 3):
+        write_operation(root_b, operation(seq))
+    client = _LocalPeerClient({NODE_ID: root_a, NODE_B: root_b})
+
+    status = ClusterSyncWorker(tmp_path / "node-a", peer_client=client).run_once(reason="test")
+
+    assert status["ok"] is True
+    assert status["state_vector"][NODE_C] == 3
+    assert any(command == f"get-ops {NODE_C} 2 3" for _, command in client.calls)

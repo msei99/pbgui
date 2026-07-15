@@ -22,6 +22,8 @@ from typing import Any
 
 from logging_helpers import human_log as _log
 
+SERVICE = "TradFiSync"
+
 _MAP_FILE = "tradfi_symbol_map.json"
 _CACHE_FILE = "xyz_spec_cache.json"
 _XYZ_SPEC_CACHE_FILE = "xyz_spec.json"

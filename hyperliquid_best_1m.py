@@ -7,13 +7,14 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Callable
 from contextlib import contextmanager
-import configparser
 import hashlib
 import json
 import os
 import time
 import numpy as np
 import requests
+
+from credential_store import CredentialStore
 
 if os.name == "posix":
     import fcntl
@@ -252,22 +253,43 @@ def resolve_tradfi_symbol(xyz_coin: str) -> tuple[str | None, str | None, bool, 
     return tiingo_ticker, tiingo_fx_ticker, tiingo_fx_invert, tiingo_start_date
 
 
-def _load_tradfi_profiles_from_ini() -> dict[str, dict[str, str]]:
-    cfg = configparser.ConfigParser()
-    ini_path = Path(__file__).resolve().parent / "pbgui.ini"
-    cfg.read(ini_path)
-    sec = "tradfi_profiles"
+def _load_tradfi_profiles_from_ini(pbgdir: Path | str | None = None) -> dict[str, dict[str, str]]:
+    """Load active TradFi provider credentials from the local owner-only vault."""
+
     out: dict[str, dict[str, str]] = {
         "tiingo": {"api_key": "", "api_secret": "", "enabled": "0"},
     }
-    if not cfg.has_section(sec):
-        if cfg.has_section("market_data"):
-            out["tiingo"]["enabled"] = str(cfg.get("market_data", "tiingo_enabled", fallback="0") or "").strip()
+    try:
+        from credential_rolling_bootstrap import bootstrap_local_legacy_credentials
+
+        root = Path(pbgdir) if pbgdir is not None else Path(__file__).resolve().parent
+        bootstrap_local_legacy_credentials(root)
+        store = CredentialStore(root / "data" / "credentials")
+        records = sorted(
+            store.list_tradfi(active_only=True),
+            key=lambda item: (str(item.get("updated_at") or ""), str(item.get("id") or "")),
+        )
+        for record in records:
+            provider = str(record.get("provider") or "").strip().lower()
+            if not provider:
+                continue
+            credentials = store.load_tradfi_credentials(str(record["id"]))
+            profile = {str(key): str(value) for key, value in credentials.items()}
+            profile["api_key"] = str(
+                profile.get("api_key") or profile.get("token") or profile.get("key") or ""
+            ).strip()
+            profile["api_secret"] = str(
+                profile.get("api_secret") or profile.get("secret") or ""
+            ).strip()
+            profile["enabled"] = "1"
+            profile["profile_id"] = str(record["id"])
+            out[provider] = profile
+    except Exception as exc:
+        _log_tradfi_warning_throttled(
+            "tradfi_vault_load",
+            f"[hl_best_1m] TradFi vault load failed ({type(exc).__name__})",
+        )
         return out
-    out["tiingo"]["api_key"] = str(cfg.get(sec, "tiingo_api_key", fallback="") or "").strip()
-    out["tiingo"]["enabled"] = str(cfg.get(sec, "tiingo_enabled", fallback="") or "").strip()
-    if not out["tiingo"]["enabled"] and cfg.has_section("market_data"):
-        out["tiingo"]["enabled"] = str(cfg.get("market_data", "tiingo_enabled", fallback="0") or "").strip()
     return out
 
 
@@ -2084,7 +2106,7 @@ def _fill_missing_from_tradfi_1m(
     if not has_tiingo:
         append_exchange_download_log(
             "hyperliquid",
-            f"[hl_best_1m] {coin_u} tradfi_1m SKIP no tiingo api_key in pbgui.ini [tradfi_profiles]",
+            f"[hl_best_1m] {coin_u} tradfi_1m SKIP no active Tiingo vault profile",
         )
         return 0
 

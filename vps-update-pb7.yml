@@ -11,6 +11,7 @@
   vars:
     user: "{{ user }}"
     install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
+    pb7_ref: "{{ lookup('file', playbook_dir + '/pb7_ref.txt') | trim }}"
 
   tasks:
     - name: display facts
@@ -79,21 +80,68 @@
       register: pb7_disk_after_rust_update
       changed_when: false
 
-    - name: Get current pb7 branch
-      command: git rev-parse --abbrev-ref HEAD
-      args:
-        chdir: "{{ install_dir }}/pb7"
-      register: current_pb7_branch
+    - name: Validate pinned PB7 commit
+      assert:
+        that:
+          - pb7_ref is match('^[0-9a-f]{40}$')
+        fail_msg: "pb7_ref.txt must contain one exact lowercase 40-character commit SHA."
+
+    - name: Fetch and verify pinned Passivbot v7
+      command:
+        argv:
+          - "{{ install_dir }}/venv_pbgui/bin/python"
+          - "{{ install_dir }}/pbgui/pb7_guard.py"
+          - --repo
+          - "{{ install_dir }}/pb7"
+          - --ref
+          - "{{ pb7_ref }}"
+          - --expected-major
+          - "7"
+          - --fetch-url
+          - https://github.com/enarjord/passivbot.git
+      register: pb7_preflight
       changed_when: false
 
-    - name: clone passivbot repository for pb7
-      git:
-        repo: https://github.com/enarjord/passivbot.git
-        dest: "{{ install_dir }}/pb7"
-        version: "{{ current_pb7_branch.stdout }}"
-        update: yes
-        force: yes
+    - name: Stop PBRun before changing PB7 checkout
+      script: setup/vps_service_control.sh stop PBRun
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+        PBGUI_USER: "{{ user }}"
+      changed_when: false
+      when: "'checkout_required=true' in pb7_preflight.stdout"
+
+    - name: Stop PB7 processes before changing checkout
+      command:
+        argv:
+          - "{{ install_dir }}/venv_pbgui/bin/python"
+          - "{{ install_dir }}/pbgui/pb7_guard.py"
+          - --repo
+          - "{{ install_dir }}/pb7"
+          - --ref
+          - "{{ pb7_ref }}"
+          - --expected-major
+          - "7"
+          - --stop-processes
+          - --venv
+          - "{{ install_dir }}/venv_pb7"
+      changed_when: false
+      when: "'checkout_required=true' in pb7_preflight.stdout"
+
+    - name: Checkout verified pinned Passivbot v7
+      command:
+        argv:
+          - "{{ install_dir }}/venv_pbgui/bin/python"
+          - "{{ install_dir }}/pbgui/pb7_guard.py"
+          - --repo
+          - "{{ install_dir }}/pb7"
+          - --ref
+          - "{{ pb7_ref }}"
+          - --expected-major
+          - "7"
+          - --checkout
       register: pb7_repo
+      changed_when: "'checkout_changed=true' in pb7_repo.stdout"
       notify: restart pb7
 
     - name: print pb7_repo
@@ -102,6 +150,31 @@
       tags: debug,never
 
   handlers:
+    - name: Stop PBRun before PB7 rebuild
+      script: setup/vps_service_control.sh stop PBRun
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+        PBGUI_USER: "{{ user }}"
+      changed_when: false
+      listen: "restart pb7"
+      ignore_errors: yes
+
+    - name: kill all pb7 processes
+      shell: |
+        pids="$({
+          ps -ef | grep "{{ install_dir }}/pb7/src/main.py" | grep -v grep | awk '{print $2}'
+          ps -ef | grep "{{ install_dir }}/venv_pb7/bin/python" | grep -v grep | awk '{print $2}'
+        } | sort -u)"
+        if [ -n "$pids" ]; then
+          kill $pids
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      listen: "restart pb7"
+      ignore_errors: yes
+
     - name: Measure pb7 disk footprint before update
       shell: |
         path_mb() {
@@ -254,18 +327,6 @@
         free_after_build_mb: "{{ (pb7_disk_after_build.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
         free_after_cleanup_mb: "{{ (pb7_disk_after_cleanup.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int }}"
       listen: "restart pb7"
-
-    - name: kill all pb7 processes
-      shell: |
-        pids="$(ps -ef | grep "{{ install_dir }}/pb7/src/main.py" | grep -v grep | awk '{print $2}')"
-        if [ -n "$pids" ]; then
-          kill $pids
-        fi
-      args:
-        executable: /bin/bash
-      changed_when: false
-      listen: "restart pb7"
-      ignore_errors: yes
 
     - name: Make sure PBRun ist running
       script: setup/vps_service_control.sh start PBRun

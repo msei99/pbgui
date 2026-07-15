@@ -2905,14 +2905,8 @@
                   <button class="btn secondary" id="btn-test-tiingo" type="button">Test Tiingo</button>
                 </div>
               </div>
-              <div class="settings-grid settings-grid-wide">
-                <label class="settings-field">
-                  <span class="field-label">tiingo_api_key</span>
-                  <div class="pw-wrap">
-                    <input id="settings-tiingo-api-key" type="password">
-                    <button type="button" class="pw-eye-btn" onclick="togglePwVisible('settings-tiingo-api-key', this)" tabindex="-1">&#128065;</button>
-                  </div>
-                </label>
+              <div class="callout" id="settings-tiingo-credential-status">
+                Tiingo credentials are managed in Setup &gt; API Keys &gt; TradFi and are never sent to this page.
               </div>
               <div id="settings-tiingo-usage" class="stack"></div>
             </article>
@@ -3279,7 +3273,7 @@
   </script>
   <script src="/app/js/shared_help_overlay.js?v=6"></script>
   <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
-  <script src="/app/js/log_viewer_panel.js?v=25"></script>
+  <script src="/app/js/log_viewer_panel.js?v=26"></script>
   <script src="/app/js/pbgui_dialogs.js?v=4"></script>
   <script src="/app/js/editor_shared.js?v=10"></script>
   <script src="/app/plotly.min.js?v=1"></script>
@@ -4333,11 +4327,11 @@
         return secs + 's';
       }
 
-      function renderTiingoUsage(usage, apiKey) {
+      function renderTiingoUsage(usage, configured) {
         var container = document.getElementById('settings-tiingo-usage');
         if (!container) return;
-        if (!apiKey) {
-          container.innerHTML = '<div class="settings-empty">Set tiingo_api_key to view the PBGui-local Tiingo request tracker.</div>';
+        if (!configured) {
+          container.innerHTML = '<div class="settings-empty">Configure an active Tiingo vault profile in API Keys to use provider actions.</div>';
           return;
         }
         var hourUsed = Number((usage || {}).hour_requests || 0);
@@ -4382,8 +4376,8 @@
           + '</div>';
       }
 
-      function getCurrentTiingoApiKey() {
-        return readFieldValue('settings-tiingo-api-key');
+      function isTiingoConfigured() {
+        return Boolean(settingsState.tiingoConfigured);
       }
 
       function getSelectedTradfiRow() {
@@ -5047,7 +5041,7 @@
 
       function updateTradfiActionButtons() {
         var selectedRow = getSelectedTradfiRow();
-        var hasApiKey = Boolean(getCurrentTiingoApiKey());
+        var hasApiKey = isTiingoConfigured();
         var selectedHasEquityTicker = Boolean(selectedRow && String(selectedRow.tiingo_ticker || '').trim());
 
         var states = {
@@ -5311,7 +5305,6 @@
 
       async function runTradfiTickerSearch() {
         var row = getSelectedTradfiRow();
-        var apiKey = getCurrentTiingoApiKey();
         var input = document.getElementById('tradfi-search-window-query');
         if (!row) {
           showToast('Select a TradFi mapping row first.', 'error');
@@ -5325,7 +5318,7 @@
         tradfiMapState.searchResults = [];
         tradfiMapState.searchMessage = '';
         tradfiMapState.searchMessageLevel = 'info';
-        if (!apiKey) {
+        if (!isTiingoConfigured()) {
           tradfiMapState.searchLoading = false;
           tradfiMapState.searchMessage = 'No Tiingo API key configured. Please set it under TradFi / Tiingo.';
           tradfiMapState.searchMessageLevel = 'error';
@@ -5345,7 +5338,7 @@
         try {
           var result = await fetchJson('/settings/hyperliquid/tradfi-map/search-ticker', {
             method: 'POST',
-            body: JSON.stringify({ api_key: apiKey, xyz_coin: row.xyz_coin, query: searchQuery })
+            body: JSON.stringify({ xyz_coin: row.xyz_coin, query: searchQuery })
           });
           if (!result.success) {
             throw new Error(result.error || 'Tiingo search failed.');
@@ -5443,19 +5436,18 @@
 
       async function fetchTradfiStartDate() {
         var row = getSelectedTradfiRow();
-        var apiKey = getCurrentTiingoApiKey();
         if (!row) {
           showToast('Select a TradFi mapping row first.', 'error');
           return;
         }
-        if (!apiKey) {
+        if (!isTiingoConfigured()) {
           showToast('Tiingo API key is empty.', 'error');
           return;
         }
         try {
           var result = await fetchJson('/settings/hyperliquid/tradfi-map/fetch-start-date', {
             method: 'POST',
-            body: JSON.stringify({ api_key: apiKey, xyz_coin: row.xyz_coin })
+            body: JSON.stringify({ xyz_coin: row.xyz_coin })
           });
           if (!result.success) {
             throw new Error(result.error || 'Start-date fetch failed.');
@@ -5476,15 +5468,14 @@
       }
 
       async function fetchAllTradfiStartDates() {
-        var apiKey = getCurrentTiingoApiKey();
-        if (!apiKey) {
+        if (!isTiingoConfigured()) {
           showToast('Tiingo API key is empty.', 'error');
           return;
         }
         try {
           var result = await fetchJson('/settings/hyperliquid/tradfi-map/fetch-all-start-dates', {
             method: 'POST',
-            body: JSON.stringify({ api_key: apiKey })
+            body: JSON.stringify({})
           });
           if (!result.success) {
             throw new Error(result.error || 'Bulk start-date fetch failed.');
@@ -5520,15 +5511,14 @@
       }
 
       async function autoMapTradfiMappings() {
-        var apiKey = getCurrentTiingoApiKey();
-        if (!apiKey) {
+        if (!isTiingoConfigured()) {
           showToast('Tiingo API key is empty.', 'error');
           return;
         }
         try {
           var result = await fetchJson('/settings/hyperliquid/tradfi-map/auto-map', {
             method: 'POST',
-            body: JSON.stringify({ api_key: apiKey })
+            body: JSON.stringify({})
           });
           if (!result.success) {
             throw new Error(result.error || 'TradFi Auto-Map failed.');
@@ -5570,15 +5560,14 @@
       }
 
       async function refreshTradfiMetadata() {
-        var apiKey = getCurrentTiingoApiKey();
-        if (!apiKey) {
+        if (!isTiingoConfigured()) {
           showToast('Tiingo API key is empty.', 'error');
           return;
         }
         try {
           var result = await fetchJson('/settings/hyperliquid/tradfi-map/refresh-metadata', {
             method: 'POST',
-            body: JSON.stringify({ api_key: apiKey })
+            body: JSON.stringify({})
           });
           if (!result.success) {
             throw new Error(result.error || 'Metadata refresh failed.');
@@ -5592,15 +5581,14 @@
       }
 
       async function refreshTradfiPrices() {
-        var apiKey = getCurrentTiingoApiKey();
-        if (!apiKey) {
+        if (!isTiingoConfigured()) {
           showToast('Tiingo API key is empty.', 'error');
           return;
         }
         try {
           var result = await fetchJson('/settings/hyperliquid/tradfi-map/refresh-prices', {
             method: 'POST',
-            body: JSON.stringify({ api_key: apiKey })
+            body: JSON.stringify({})
           });
           if (!result.success) {
             throw new Error(result.error || 'Price refresh failed.');
@@ -6031,8 +6019,14 @@
           setFieldValue('settings-scan-workers', settings.l2book_scan_workers);
           setFieldValue('settings-archive-enabled', settings.l2book_archive_enabled);
           setFieldValue('settings-archive-dir', settings.l2book_archive_dir);
-          setFieldValue('settings-tiingo-api-key', settings.tiingo_api_key);
-          renderTiingoUsage(settings.tiingo_usage || {}, settings.tiingo_api_key || '');
+          settingsState.tiingoConfigured = Boolean(settings.tiingo_configured);
+          var credentialStatus = document.getElementById('settings-tiingo-credential-status');
+          if (credentialStatus) {
+            credentialStatus.textContent = settingsState.tiingoConfigured
+              ? 'An active Tiingo vault profile is available. Credentials stay server-side.'
+              : 'No active Tiingo vault profile. Configure one in Setup > API Keys > TradFi.';
+          }
+          renderTiingoUsage(settings.tiingo_usage || {}, settingsState.tiingoConfigured);
           loadTradfiMappings();
         } else {
           tradfiMapState.rows = [];
@@ -7561,7 +7555,6 @@
           request.settings.l2book_scan_workers = readNumberValue('settings-scan-workers', 8, true);
           request.settings.l2book_archive_enabled = readFieldValue('settings-archive-enabled');
           request.settings.l2book_archive_dir = readFieldValue('settings-archive-dir');
-          request.settings.tiingo_api_key = readFieldValue('settings-tiingo-api-key');
         }
 
         return request;
@@ -7587,21 +7580,20 @@
       }
 
       async function testTiingo() {
-        var apiKey = readFieldValue('settings-tiingo-api-key');
-        if (!apiKey) {
-          showToast('Tiingo API key is empty.', 'error');
+        if (!isTiingoConfigured()) {
+          showToast('No active Tiingo vault profile is configured.', 'error');
           return;
         }
 
         try {
           var result = await fetchJson('/settings/hyperliquid/tiingo-probe', {
             method: 'POST',
-            body: JSON.stringify({ api_key: apiKey, ticker: 'AAPL' })
+            body: JSON.stringify({ ticker: 'AAPL' })
           });
           if (!result.success) {
             throw new Error(result.error || 'Tiingo test failed.');
           }
-          renderTiingoUsage(result.usage || {}, apiKey);
+          renderTiingoUsage(result.usage || {}, true);
           showToast(result.message || 'Tiingo connection OK.', 'success');
         } catch (error) {
           showToast(error && error.message ? error.message : 'Tiingo test failed.', 'error');
@@ -8019,9 +8011,6 @@
 
         document.getElementById('page-exchange').addEventListener('change', function (event) {
           setContextExchange(event.target.value);
-        });
-        document.getElementById('settings-tiingo-api-key').addEventListener('input', function () {
-          updateTradfiActionButtons();
         });
         document.getElementById('settings-panel').addEventListener('input', function (event) {
           var target = event.target;

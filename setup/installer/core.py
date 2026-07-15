@@ -20,6 +20,12 @@ import time
 from typing import Callable
 from urllib.request import urlopen
 
+from pb7_guard import (
+    PB7_PINNED_COMMIT,
+    fetch_passivbot_ref,
+    stop_passivbot_processes,
+    verify_passivbot_major,
+)
 from secure_files import atomic_write_private_text, ensure_private_directory
 
 from .ssh import SSHConnection
@@ -259,7 +265,6 @@ class RemoteMasterConfig:
     ssh_mode: str = "specific_ips_vpn"
     ssh_allowed_ips: list[str] = field(default_factory=list)
     install_dir: str = ""
-    coinmarketcap_api_key: str = ""
     local_public_key: str = ""
     installer_branch: str = field(default_factory=_current_installer_branch)
     confirm_fresh_host: bool = False
@@ -299,7 +304,6 @@ class RemoteMasterConfig:
             ssh_mode=str(data.get("ssh_mode") or "specific_ips_vpn").strip(),
             ssh_allowed_ips=allowed,
             install_dir=install_dir,
-            coinmarketcap_api_key=str(data.get("coinmarketcap_api_key") or "").strip(),
             installer_branch=normalize_installer_branch(data.get("installer_branch") or _current_installer_branch()),
             confirm_fresh_host=data.get("confirm_fresh_host") in {True, "true", "1", "yes", "on"},
             accept_unknown_host=data.get("accept_unknown_host") in {True, "true", "1", "yes", "on"},
@@ -488,9 +492,13 @@ def _ensure_git_checkout(
     *,
     current_source: Path | None = None,
     branch: str = "",
+    revision: str = "",
+    expected_major: int | None = None,
 ) -> None:
     """Clone or fast-forward an existing git checkout."""
     branch = normalize_installer_branch(branch)
+    if branch and revision:
+        raise ValueError("Git checkout cannot select both a branch and a revision.")
     if current_source and target.exists():
         try:
             if target.resolve() == current_source.resolve():
@@ -500,6 +508,12 @@ def _ensure_git_checkout(
             pass
     if (target / ".git").exists():
         log(f"Updating existing checkout: {target}")
+        if revision:
+            fetch_passivbot_ref(target, repo_url, ref=revision)
+            if expected_major is not None:
+                verify_passivbot_major(target, expected_major, ref=revision)
+            _run_command(["git", "checkout", "--detach", revision], log, cwd=target)
+            return
         if branch:
             _run_command(["git", "fetch", "origin", f"{branch}:refs/remotes/origin/{branch}"], log, cwd=target)
             _run_command(["git", "checkout", "-B", branch, f"refs/remotes/origin/{branch}"], log, cwd=target)
@@ -513,10 +527,16 @@ def _ensure_git_checkout(
         raise RuntimeError(f"Target directory exists and is not an empty git checkout: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
     clone_cmd: list[str | Path] = ["git", "clone"]
+    if revision:
+        clone_cmd.append("--no-checkout")
     if branch:
         clone_cmd.extend(["--branch", branch, "--single-branch"])
     clone_cmd.extend([repo_url, target])
     _run_command(clone_cmd, log)
+    if revision:
+        if expected_major is not None:
+            verify_passivbot_major(target, expected_major, ref=revision)
+        _run_command(["git", "checkout", "--detach", revision], log, cwd=target)
 
 
 def _write_pbgui_config(config: LocalMasterConfig, install_dir: Path, pbgui_dir: Path) -> None:
@@ -529,7 +549,7 @@ def _write_pbgui_config(config: LocalMasterConfig, install_dir: Path, pbgui_dir:
         "role": "master",
     }
     cfg["api_server"] = {"host": config.pbgui_bind_host, "port": str(config.pbgui_port)}
-    cfg["coinmarketcap"] = {"api_key": "", "fetch_limit": "1000", "fetch_interval": "4"}
+    cfg["coinmarketcap"] = {"fetch_limit": "1000", "fetch_interval": "4"}
     path = pbgui_dir / "pbgui.ini"
     buffer = io.StringIO()
     cfg.write(buffer)
@@ -782,6 +802,28 @@ def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifa
     log(f"PB7: {pb7_dir}")
     log(f"Venvs: {pbgui_venv}, {pb7_venv}")
 
+    existing_pb7_runtime = (pb7_dir / ".git").exists() or pb7_venv.exists()
+    if (pb7_dir / ".git").exists():
+        fetch_passivbot_ref(pb7_dir, "https://github.com/enarjord/passivbot.git", ref=PB7_PINNED_COMMIT)
+        verify_passivbot_major(pb7_dir, 7, ref=PB7_PINNED_COMMIT)
+    if existing_pb7_runtime:
+        log("Stopping existing PB7 runtime before replacing its checkout or virtualenv...")
+        service_control = root / "setup" / "vps_service_control.sh"
+        if not service_control.exists():
+            raise RuntimeError(f"PBGui service control helper not found: {service_control}")
+        service_env = os.environ.copy()
+        service_env.update(
+            {
+                "PBGUI_DIR": str(pbgui_dir),
+                "PBGUI_PYTHON": str(pbgui_venv / "bin" / "python"),
+                "PBGUI_USER": getpass.getuser(),
+            }
+        )
+        _run_command(["bash", service_control, "stop", "PBRun"], log, env=service_env, timeout=60)
+        stopped_pids = stop_passivbot_processes(pb7_dir, pb7_venv)
+        if stopped_pids:
+            log(f"Stopped {len(stopped_pids)} existing PB7 process(es).")
+
     _ensure_git_checkout(
         "https://github.com/msei99/pbgui.git",
         pbgui_dir,
@@ -789,7 +831,15 @@ def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifa
         current_source=root,
         branch=_current_installer_branch(),
     )
-    _ensure_git_checkout("https://github.com/enarjord/passivbot.git", pb7_dir, log)
+    _ensure_git_checkout(
+        "https://github.com/enarjord/passivbot.git",
+        pb7_dir,
+        log,
+        revision=PB7_PINNED_COMMIT,
+        expected_major=7,
+    )
+    verified_pb7_version = verify_passivbot_major(pb7_dir, 7)
+    log(f"Verified pinned Passivbot v{verified_pb7_version} ({PB7_PINNED_COMMIT[:12]}).")
 
     setup_systemd_source = root / "setup" / "setup_systemd.sh"
     setup_systemd_target = pbgui_dir / "setup" / "setup_systemd.sh"
@@ -926,6 +976,7 @@ def run_remote_master_install(config: RemoteMasterConfig, log: LogCallback, arti
     remote_result = f"/tmp/pbgui_remote_master_result_{token}.json"
 
     payload = config.__dict__.copy()
+    payload["pb7_ref"] = PB7_PINNED_COMMIT
     payload["result_path"] = remote_result
     payload["uploaded_setup_systemd_path"] = remote_systemd_setup
 

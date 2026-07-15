@@ -1859,6 +1859,17 @@ def _launch_pareto_dash_session(session_id: str, result_dir: Path, pathname_pref
     data_root.mkdir(parents=True, exist_ok=False)
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
+    from logging_helpers import rotate_managed_log_before_open
+    with _pareto_dash_lock:
+        active_log_owner = any(
+            session.get("process") is not None and session["process"].poll() is None
+            for session in _pareto_dash_sessions.values()
+        )
+    if active_log_owner:
+        _log(SERVICE, "Skipped Pareto Dash log rotation because an active session owns the descriptor", level="INFO")
+    else:
+        rotate_managed_log_before_open(log_path, "pareto_sessions")
+
     try:
         link_path.symlink_to(result_dir, target_is_directory=True)
     except Exception:
@@ -2336,6 +2347,9 @@ class OptimizeWorker:
 
         env = os.environ.copy()
         env["PATH"] = os.path.dirname(pb7venv()) + os.pathsep + env.get("PATH", "")
+        from logging_helpers import rotate_managed_log_before_open
+
+        rotate_managed_log_before_open(log_path, "optimizes")
         log_file = open(log_path, "w", encoding="utf-8")
         if platform.system() == "Windows":
             flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW

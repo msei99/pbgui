@@ -25,7 +25,7 @@ import pandas as pd
 from api.auth import SessionToken, require_auth
 from ParetoDataLoader import ParetoDataLoader
 from pareto_preset_generator import OPTIMIZE_PRESET_DIRECTIONS, build_optimize_preset
-from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION, load_ini, pb7dir, save_ini
+from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION, load_ini, pb7dir, save_ini_section
 
 router = APIRouter()
 
@@ -3689,8 +3689,10 @@ def load_result_data(body: dict, session: SessionToken = Depends(require_auth)):
     view_range = (body or {}).get("view_range")
 
     if persist_defaults:
-        save_ini("pareto", "load_strategy", ",".join(load_strategy))
-        save_ini("pareto", "max_configs", str(max_configs))
+        save_ini_section("pareto", {
+            "load_strategy": ",".join(load_strategy),
+            "max_configs": str(max_configs),
+        })
 
     cached_result_dir = None
     cached_loader = None

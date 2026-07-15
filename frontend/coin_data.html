@@ -1732,6 +1732,7 @@
     var tagMsController = null;
     var filterInputDebounceTimer = 0;
     var loadStateRequestSeq = 0;
+    var loadStateController = null;
     var busyJobPollTimer = 0;
     var busyJobId = '';
     var sortState = {
@@ -2157,8 +2158,10 @@
 
     function loadState() {
       var requestSeq = ++loadStateRequestSeq;
+      if (loadStateController) loadStateController.abort();
+      loadStateController = new AbortController();
       setActionStatus('Loading Coin Data...', false);
-      return fetch(buildStateUrl(), { cache: 'no-store' })
+      return fetch(buildStateUrl(), { cache: 'no-store', signal: loadStateController.signal })
         .then(function (response) {
           if (!response.ok) throw new Error('HTTP ' + response.status);
           return response.json();
@@ -2166,10 +2169,12 @@
         .then(function (data) {
           if (requestSeq !== loadStateRequestSeq) return;
           applyServerState(data);
-          setActionStatus('Ready.', false);
+          var pool = data.cmc_pool || {};
+          var reason = pool.error || pool.reason || 'No active materialized CoinMarketCap key is available.';
+          setActionStatus(pool.ready ? 'Ready.' : reason + ' Cached Coin Data remains available.', !pool.ready);
         })
         .catch(function (error) {
-          if (requestSeq !== loadStateRequestSeq) return;
+          if (requestSeq !== loadStateRequestSeq || error.name === 'AbortError') return;
           setActionStatus('Failed to load Coin Data: ' + error.message, true);
           throw error;
         });
@@ -2180,7 +2185,7 @@
         .then(function (response) {
           if (!response.ok) {
             return response.json().catch(function () { return {}; }).then(function (payload) {
-              throw new Error(payload.detail || ('HTTP ' + response.status));
+              throw new Error(response.status + ': ' + (payload.detail || payload.reason || response.statusText || 'Refresh rejected'));
             });
           }
           return response.json();
@@ -2238,7 +2243,7 @@
         .then(function (response) {
           if (!response.ok) {
             return response.json().catch(function () { return {}; }).then(function (payload) {
-              throw new Error(payload.detail || ('HTTP ' + response.status));
+              throw new Error(response.status + ': ' + (payload.detail || payload.reason || response.statusText || 'Refresh rejected'));
             });
           }
           return response.json();
@@ -2274,7 +2279,15 @@
       if (uiState.activeView === 'unmatched') currentCount = serverState.counts.unmatched_visible || 0;
       if (uiState.activeView === 'hip3') currentCount = getFilteredHip3Rows().length;
       document.getElementById('sb-count').textContent = currentCount + ' rows';
-      document.getElementById('btn-refresh-cmc').removeAttribute('title');
+      var pool = serverState.cmc_pool || {};
+      var hasMaterializedKey = pool.ready === true && Number(pool.active_credentials || 0) > 0;
+      var reason = pool.error || pool.reason || 'No active materialized CoinMarketCap key is available.';
+      ['btn-refresh-cmc', 'btn-refresh-cmc-all'].forEach(function (id) {
+        var button = document.getElementById(id);
+        button.disabled = !hasMaterializedKey;
+        if (hasMaterializedKey) button.removeAttribute('title');
+        else button.title = reason + ' Cached Coin Data remains readable.';
+      });
     }
 
     function renderSummaries() {

@@ -79,6 +79,10 @@ Key settings in the edit form:
 | **Coin Overrides** | Per-coin parameter overrides (bot params, live mode, separate config files) |
 | **Dynamic Ignore** | Preview of symbols automatically ignored based on filter settings |
 
+### Dynamic Ignore and the CMC pool
+
+Dynamic Ignore is a target-host capability, not a per-instance or per-VPS key setting. Before save, sync, or start, PBGui checks secret-free host metadata for credential protocol v2, an active local CMC pool, and matching catalog/materialized generations. If the target reports no active pool or its status is still unknown, the action is blocked with the reported reason. Materialize the Cluster CMC pool on that host first. Disabled instances do not require pool readiness.
+
 ---
 
 ## Typical workflows

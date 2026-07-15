@@ -13,11 +13,11 @@ from urllib.parse import urlencode
 
 from hyperliquid_aws import HYPERLIQUID_AWS_REGION
 from hyperliquid_best_1m import (
-    _load_tradfi_profiles_from_ini,
     get_tiingo_runtime_usage,
     probe_tiingo_iex_1m,
     resolve_tradfi_symbol,
 )
+from credential_store import CredentialStore
 from market_data import (
     _get_pb7_root_dir,
     get_effective_enabled_coins,
@@ -56,7 +56,8 @@ from market_data_tradfi import (
 )
 from market_data_sources import SOURCE_CODE_API, remove_days_from_index, update_source_index_for_day
 from pbgui_purefunc import coin_from_symbol_code
-from pbgui_purefunc import load_ini, save_ini
+from pbgui_purefunc import load_ini, update_ini
+from ini_settings import apply_metadata
 from tradfi_sync import auto_map_tradfi, fetch_tiingo_meta, fetch_xyz_spec
 from logging_helpers import human_log as _log
 
@@ -259,9 +260,7 @@ def _build_market_data_settings_payload(exchange: str) -> dict[str, Any]:
             creds_settings = {}
 
         region_default_settings = load_aws_profile_region(profile_for_settings) or HYPERLIQUID_AWS_REGION
-        tradfi_profiles = _load_tradfi_profiles_from_ini()
-        tiingo_cfg = tradfi_profiles.get("tiingo") if isinstance(tradfi_profiles, dict) else {}
-        tiingo_api_key = str((tiingo_cfg or {}).get("api_key") or "")
+        tiingo_record, tiingo_api_key = _active_tiingo_credential(required=False)
         try:
             tiingo_usage = get_tiingo_runtime_usage(api_key=tiingo_api_key) if tiingo_api_key else {}
         except Exception:
@@ -277,7 +276,8 @@ def _build_market_data_settings_payload(exchange: str) -> dict[str, Any]:
                 "l2book_scan_workers": _read_int_ini("market_data", "hl_l2book_scan_workers", 8),
                 "l2book_archive_enabled": _read_bool_ini("market_data", "l2book_archive_enabled", False),
                 "l2book_archive_dir": str(load_ini("market_data", "l2book_archive_dir") or "").strip(),
-                "tiingo_api_key": tiingo_api_key,
+                "tiingo_configured": bool(tiingo_api_key),
+                "tiingo_profile_id": str((tiingo_record or {}).get("id") or ""),
                 "tiingo_usage": tiingo_usage,
             }
         )
@@ -290,6 +290,7 @@ def _build_market_data_settings_payload(exchange: str) -> dict[str, Any]:
         "coin_options": coin_options,
         "missing_saved_coins": missing_saved_coins,
         "settings": settings,
+        "apply": apply_metadata("market_data"),
     }
 
 
@@ -315,11 +316,15 @@ def _save_market_data_settings(exchange: str, request: dict[str, Any]) -> dict[s
     set_enabled_coins(ex, [str(coin) for coin in enabled_coins])
     set_auto_enable_new_coins(ex, bool(auto_enable_new_coins))
 
-    save_ini(meta["ini_section"], "latest_1m_interval_seconds", str(int(settings.get("interval_seconds", meta["defaults"]["interval_seconds"]))))
-    save_ini(meta["ini_section"], "latest_1m_coin_pause_seconds", str(float(settings.get("coin_pause_seconds", meta["defaults"]["coin_pause_seconds"]))))
-    save_ini(meta["ini_section"], "latest_1m_api_timeout_seconds", str(float(settings.get("api_timeout_seconds", meta["defaults"]["api_timeout_seconds"]))))
-    save_ini(meta["ini_section"], "latest_1m_min_lookback_days", str(int(settings.get("min_lookback_days", meta["defaults"]["min_lookback_days"]))))
-    save_ini(meta["ini_section"], "latest_1m_max_lookback_days", str(int(settings.get("max_lookback_days", meta["defaults"]["max_lookback_days"]))))
+    ini_updates = {
+        meta["ini_section"]: {
+            "latest_1m_interval_seconds": str(int(settings.get("interval_seconds", meta["defaults"]["interval_seconds"]))),
+            "latest_1m_coin_pause_seconds": str(float(settings.get("coin_pause_seconds", meta["defaults"]["coin_pause_seconds"]))),
+            "latest_1m_api_timeout_seconds": str(float(settings.get("api_timeout_seconds", meta["defaults"]["api_timeout_seconds"]))),
+            "latest_1m_min_lookback_days": str(int(settings.get("min_lookback_days", meta["defaults"]["min_lookback_days"]))),
+            "latest_1m_max_lookback_days": str(int(settings.get("max_lookback_days", meta["defaults"]["max_lookback_days"]))),
+        },
+    }
 
     if ex == "hyperliquid":
         profile = str(settings.get("aws_profile") or "pbgui-hyperliquid").strip() or "pbgui-hyperliquid"
@@ -327,7 +332,13 @@ def _save_market_data_settings(exchange: str, request: dict[str, Any]) -> dict[s
         aws_secret_access_key = str(settings.get("aws_secret_access_key") or "").strip()
         aws_region = str(settings.get("aws_region") or "").strip()
 
-        save_ini("market_data", "hl_aws_profile", profile)
+        ini_updates["market_data"] = {
+            "hl_aws_profile": profile,
+            "hl_l2book_scan_timeout_s": str(float(settings.get("l2book_scan_timeout_s", 5.0))),
+            "hl_l2book_scan_workers": str(int(settings.get("l2book_scan_workers", 8))),
+            "l2book_archive_enabled": "true" if bool(settings.get("l2book_archive_enabled")) else "false",
+            "l2book_archive_dir": str(settings.get("l2book_archive_dir") or "").strip(),
+        }
         save_aws_profile_credentials(
             profile=profile,
             aws_access_key_id=aws_access_key_id,
@@ -335,11 +346,15 @@ def _save_market_data_settings(exchange: str, request: dict[str, Any]) -> dict[s
         )
         save_aws_profile_region(profile=profile, region=aws_region)
 
-        save_ini("market_data", "hl_l2book_scan_timeout_s", str(float(settings.get("l2book_scan_timeout_s", 5.0))))
-        save_ini("market_data", "hl_l2book_scan_workers", str(int(settings.get("l2book_scan_workers", 8))))
-        save_ini("market_data", "l2book_archive_enabled", "true" if bool(settings.get("l2book_archive_enabled")) else "false")
-        save_ini("market_data", "l2book_archive_dir", str(settings.get("l2book_archive_dir") or "").strip())
-        save_ini("tradfi_profiles", "tiingo_api_key", str(settings.get("tiingo_api_key") or "").strip())
+
+    def mutate_ini(parser) -> None:
+        for section, values in ini_updates.items():
+            if not parser.has_section(section):
+                parser.add_section(section)
+            for key, value in values.items():
+                parser.set(section, key, value)
+
+    update_ini(mutate_ini)
 
     try:
         _touch_exchange_refresh_flag(ex)
@@ -370,11 +385,46 @@ def _build_tradfi_symbol_map_payload() -> dict[str, Any]:
     }
 
 
-def _require_tiingo_api_key(body: dict[str, Any]) -> str:
-    api_key = str((body or {}).get("api_key") or "").strip()
-    if not api_key:
-        raise ValueError("Tiingo API key is empty.")
-    return api_key
+def _active_tiingo_credential(*, required: bool = True) -> tuple[dict[str, Any] | None, str]:
+    """Resolve the newest active Tiingo profile directly from CredentialStore."""
+
+    from credential_rolling_bootstrap import bootstrap_local_legacy_credentials
+
+    bootstrap_local_legacy_credentials(PBGDIR)
+    store = CredentialStore(PBGDIR / "data" / "credentials")
+    records = sorted(
+        (
+            record
+            for record in store.list_tradfi(active_only=True)
+            if str(record.get("provider") or "").strip().lower() == "tiingo"
+        ),
+        key=lambda item: (str(item.get("updated_at") or ""), str(item.get("id") or "")),
+    )
+    if not records:
+        if required:
+            raise ValueError("No active Tiingo vault profile is configured.")
+        return None, ""
+    record = records[-1]
+    credentials = store.load_tradfi_credentials(str(record["id"]))
+    api_key = str(
+        credentials.get("api_key") or credentials.get("token") or credentials.get("key") or ""
+    ).strip()
+    if not api_key and required:
+        raise ValueError("The active Tiingo vault profile has no API key.")
+    return record, api_key
+
+
+def _require_tiingo_api_key() -> str:
+    """Return the active server-side Tiingo token or raise a safe error."""
+
+    return _active_tiingo_credential(required=True)[1]
+
+
+def _safe_provider_error(action: str, exc: Exception) -> str:
+    """Log provider failures without URLs and return a secret-free API error."""
+
+    _log(SERVICE, f"{action} failed: {type(exc).__name__}", level="WARNING")
+    return f"{action} failed ({type(exc).__name__})."
 
 
 @router.get("/settings/{exchange}")
@@ -398,6 +448,7 @@ def save_market_data_settings(exchange: str, request: dict[str, Any], session: S
             "success": True,
             "message": meta["save_message"],
             "settings": payload,
+            "apply": payload["apply"],
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -435,7 +486,7 @@ def save_market_data_tradfi_map(request: dict[str, Any], session: SessionToken =
 def search_market_data_tradfi_ticker(request: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     try:
         body = request if isinstance(request, dict) else {}
-        api_key = _require_tiingo_api_key(body)
+        api_key = _require_tiingo_api_key()
         xyz_coin = str(body.get("xyz_coin") or "").strip().upper()
         query = str(body.get("query") or xyz_coin).strip()
         if not query:
@@ -474,7 +525,7 @@ def search_market_data_tradfi_ticker(request: dict[str, Any], session: SessionTo
             "query": query,
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _safe_provider_error("Tiingo ticker search", e)}
 
 
 @router.post("/settings/hyperliquid/tradfi-map/test-resolve")
@@ -505,7 +556,7 @@ def test_market_data_tradfi_resolve(request: dict[str, Any], session: SessionTok
 def fetch_market_data_tradfi_start_date(request: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     try:
         body = request if isinstance(request, dict) else {}
-        api_key = _require_tiingo_api_key(body)
+        api_key = _require_tiingo_api_key()
         xyz_coin = str(body.get("xyz_coin") or "").strip().upper()
         if not xyz_coin:
             raise ValueError("xyz_coin is empty.")
@@ -520,14 +571,13 @@ def fetch_market_data_tradfi_start_date(request: dict[str, Any], session: Sessio
             "payload": payload,
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _safe_provider_error("Tiingo start-date fetch", e)}
 
 
 @router.post("/settings/hyperliquid/tradfi-map/fetch-all-start-dates")
 def fetch_market_data_tradfi_all_start_dates(request: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     try:
-        body = request if isinstance(request, dict) else {}
-        api_key = _require_tiingo_api_key(body)
+        api_key = _require_tiingo_api_key()
         result = update_tiingo_start_dates_for_all(api_key=api_key, rows=build_merged_tradfi_table())
         return {
             "success": True,
@@ -536,7 +586,7 @@ def fetch_market_data_tradfi_all_start_dates(request: dict[str, Any], session: S
             "payload": _build_tradfi_symbol_map_payload(),
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _safe_provider_error("Tiingo bulk start-date fetch", e)}
 
 
 @router.post("/settings/hyperliquid/tradfi-map/spec-refresh")
@@ -555,8 +605,7 @@ def refresh_market_data_tradfi_specs(session: SessionToken = Depends(require_aut
 @router.post("/settings/hyperliquid/tradfi-map/auto-map")
 def auto_map_market_data_tradfi(request: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     try:
-        body = request if isinstance(request, dict) else {}
-        api_key = _require_tiingo_api_key(body)
+        api_key = _require_tiingo_api_key()
         result = auto_map_tradfi(api_key=api_key, force_meta_refresh=False)
         return {
             "success": True,
@@ -565,14 +614,13 @@ def auto_map_market_data_tradfi(request: dict[str, Any], session: SessionToken =
             "payload": _build_tradfi_symbol_map_payload(),
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _safe_provider_error("TradFi auto-map", e)}
 
 
 @router.post("/settings/hyperliquid/tradfi-map/refresh-metadata")
 def refresh_market_data_tradfi_metadata(request: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     try:
-        body = request if isinstance(request, dict) else {}
-        api_key = _require_tiingo_api_key(body)
+        api_key = _require_tiingo_api_key()
         meta = fetch_tiingo_meta(api_key=api_key, force_refresh=True)
         return {
             "success": True,
@@ -581,14 +629,13 @@ def refresh_market_data_tradfi_metadata(request: dict[str, Any], session: Sessio
             "payload": _build_tradfi_symbol_map_payload(),
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _safe_provider_error("Tiingo metadata refresh", e)}
 
 
 @router.post("/settings/hyperliquid/tradfi-map/refresh-prices")
 def refresh_market_data_tradfi_prices(request: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     try:
-        body = request if isinstance(request, dict) else {}
-        api_key = _require_tiingo_api_key(body)
+        api_key = _require_tiingo_api_key()
         result = refresh_tradfi_quote_cache(api_key=api_key, records=build_merged_tradfi_table())
         return {
             "success": True,
@@ -597,7 +644,7 @@ def refresh_market_data_tradfi_prices(request: dict[str, Any], session: SessionT
             "payload": _build_tradfi_symbol_map_payload(),
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _safe_provider_error("Tiingo price refresh", e)}
 
 
 @router.get("/settings/hyperliquid/tradfi-map/specs")
@@ -613,12 +660,10 @@ def get_market_data_tradfi_specs(session: SessionToken = Depends(require_auth)) 
 
 @router.post("/settings/hyperliquid/tiingo-probe")
 def test_market_data_tiingo(request: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
-    api_key = str((request or {}).get("api_key") or "").strip()
     ticker = str((request or {}).get("ticker") or "AAPL").strip().upper() or "AAPL"
-    if not api_key:
-        return {"success": False, "error": "Tiingo API key is empty."}
 
     try:
+        api_key = _require_tiingo_api_key()
         probe = probe_tiingo_iex_1m(api_key=api_key, ticker=ticker, timeout_s=20.0)
         usage = get_tiingo_runtime_usage(api_key=api_key)
         return {
@@ -628,7 +673,7 @@ def test_market_data_tiingo(request: dict[str, Any], session: SessionToken = Dep
             "usage": usage,
         }
     except Exception as e:
-        return {"success": False, "error": f"Tiingo test failed: {e}"}
+        return {"success": False, "error": _safe_provider_error("Tiingo test", e)}
 
 
 def _load_market_data_status() -> dict:

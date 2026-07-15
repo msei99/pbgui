@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
-import configparser
 import getpass
 import hashlib
 import ipaddress
@@ -28,26 +27,39 @@ from fastapi.responses import HTMLResponse
 
 from api.auth import SessionToken, require_auth
 from api.vps import get_monitor, get_monitor_state_snapshot
-from cluster_sync_command import _materialize_v7_configs
+import pbgui_purefunc
+from cluster_credential_publisher import ClusterCredentialPublisher, CredentialPublicationError
+from cluster_sync_command import _materialize_credentials, _materialize_v7_configs
+from credential_store import CredentialStore, credential_mutation_lock
 from logging_helpers import human_log as _log
 from master.async_pool import known_hosts_files, remote_shell_path
 from master.cluster_state import (
+    append_node_placeholder,
     append_operation,
     build_config_manifest,
     ClusterStateError,
     compute_config_manifest_hash,
+    credential_lifecycle_status,
+    create_join_authorization,
     default_cluster_root,
     ensure_local_identity,
     generate_node_id,
     load_operations,
     normalize_node_sync_mode,
+    read_local_identity,
     rebuild_materialized_state,
     validate_operation,
     write_operation,
 )
-from master.cluster_ssh_keys import ensure_local_cluster_ssh_material, install_authorized_cluster_key, public_key_fingerprint
+from master.cluster_ssh_keys import (
+    ensure_local_cluster_ssh_material,
+    install_authorized_cluster_key,
+    public_key_fingerprint,
+    remove_authorized_cluster_key,
+)
 from pb7_config import load_pb7_config
 from pbgui_purefunc import PBGDIR
+from operation_store import DurableOperationStore
 
 SERVICE = "Cluster"
 
@@ -57,6 +69,7 @@ _REMOTE_PUSH_JOBS: dict[str, dict[str, Any]] = {}
 _SELF_JOIN_JOBS: dict[str, dict[str, Any]] = {}
 _REPAIR_ALL_SSH_JOBS: dict[str, dict[str, Any]] = {}
 _BACKGROUND_JOBS: dict[asyncio.Task, tuple[str, str]] = {}
+_CREDENTIAL_REMOTE_OPERATION_LOCK = asyncio.Lock()
 _REMOTE_PUSH_JOB_TTL_SECONDS = 3600
 _REMOTE_PUSH_ACTIVE_STATES = frozenset({"queued", "running"})
 _SELF_JOIN_ACTIVE_STATES = frozenset({"queued", "running"})
@@ -145,6 +158,26 @@ def _cluster_root() -> Path:
     return default_cluster_root(Path(PBGDIR))
 
 
+def _credential_operation_store() -> DurableOperationStore:
+    """Return the durable idempotency journal for Cluster credential mutations."""
+
+    return DurableOperationStore(Path(PBGDIR) / "data" / "credentials")
+
+
+def _begin_credential_operation(
+    operation_id: str,
+    action: str,
+    target: str = "",
+) -> tuple[DurableOperationStore, dict[str, Any] | None]:
+    """Start one Cluster mutation or return its exact completed response."""
+
+    operations = _credential_operation_store()
+    record = operations.begin(operation_id, action, target)
+    if record.get("status") == "complete" and isinstance(record.get("result"), dict):
+        return operations, dict(record["result"])
+    return operations, None
+
+
 def _request_pbcluster_sync(root: Path | None = None) -> None:
     """Best-effort notification for PBCluster to run an immediate sync pass."""
 
@@ -154,6 +187,29 @@ def _request_pbcluster_sync(root: Path | None = None) -> None:
         (cluster_root / "sync_request").touch()
     except OSError:
         pass
+
+
+def _revoke_local_cluster_ssh_key(node: dict[str, Any]) -> dict[str, Any]:
+    """Remove this peer's exact local forced-command authorization, if known."""
+
+    node_id = str(node.get("node_id") or "")
+    public_key = str(node.get("cluster_ssh_public_key") or "").strip()
+    if not public_key:
+        return {"ok": True, "changed": False, "source_node_id": node_id}
+    try:
+        return remove_authorized_cluster_key(
+            pbgdir=Path(PBGDIR),
+            source_node_id=node_id,
+            source_public_key=public_key,
+        )
+    except Exception as exc:
+        _log(
+            SERVICE,
+            f"Failed to revoke local Cluster SSH key for {node_id}: {exc}",
+            level="ERROR",
+            meta={"operation": "revoke_cluster_ssh_key", "node_id": node_id},
+        )
+        raise HTTPException(status_code=500, detail="Failed to revoke local Cluster SSH authorization") from exc
 
 
 def _load_sync_status_summary(root: Path) -> dict[str, Any]:
@@ -605,11 +661,10 @@ def restart_block_reason() -> str:
 def _get_master_pbname() -> str:
     """Return the configured PBGui master name, falling back to the hostname."""
 
-    cfg = configparser.ConfigParser()
     try:
-        cfg.read(Path(PBGDIR) / "pbgui.ini")
-        if cfg.has_option("main", "pbname"):
-            pbname = cfg.get("main", "pbname").strip()
+        snapshot = pbgui_purefunc.load_ini_snapshot()
+        if snapshot.has_option("main", "pbname"):
+            pbname = snapshot.get("main", "pbname").strip()
             if pbname:
                 return pbname
     except Exception:
@@ -645,6 +700,132 @@ def _node_list(cluster_nodes: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(nodes, dict):
         return []
     return [dict(nodes[node_id]) for node_id in sorted(nodes)]
+
+
+def _public_cluster_node(node: dict[str, Any]) -> dict[str, Any]:
+    """Remove raw public keys while retaining registration identifiers."""
+
+    return {
+        key: value
+        for key, value in node.items()
+        if key not in {
+            "signing_public_key",
+            "encryption_public_key",
+            "cluster_ssh_public_key",
+        }
+    }
+
+
+def _public_cluster_nodes(cluster_nodes: dict[str, Any]) -> dict[str, Any]:
+    """Return sanitized materialized membership for API responses."""
+
+    result = {key: value for key, value in cluster_nodes.items() if key != "nodes"}
+    nodes = cluster_nodes.get("nodes") if isinstance(cluster_nodes.get("nodes"), dict) else {}
+    result["nodes"] = {
+        str(node_id): _public_cluster_node(node)
+        for node_id, node in nodes.items()
+        if isinstance(node, dict)
+    }
+    return result
+
+
+def _credential_status(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Return secret-free credential lifecycle status for one snapshot."""
+
+    status = credential_lifecycle_status({
+        "cluster_nodes": snapshot.get("cluster_nodes") or {},
+        "desired_state": snapshot.get("desired_state") or {},
+    })
+    desired = snapshot.get("desired_state") if isinstance(snapshot.get("desired_state"), dict) else {}
+    pool = desired.get("cmc_pool") if isinstance(desired.get("cmc_pool"), dict) else {}
+    authorities = pool.get("authorities") if isinstance(pool.get("authorities"), dict) else {}
+    status["authorities"] = [
+        {
+            "quota_domain_id": str(domain_id),
+            "authority_node_id": str(item.get("authority_node_id") or ""),
+            "authority_epoch": int(item.get("authority_epoch") or 0),
+            "updated_at": item.get("updated_at"),
+            "conflicted": bool(item.get("conflicted")),
+        }
+        for domain_id, item in sorted(authorities.items())
+        if isinstance(item, dict)
+    ]
+    nodes = ((snapshot.get("cluster_nodes") or {}).get("nodes") or {})
+    active_node_ids = {
+        str(node_id)
+        for node_id, node in nodes.items()
+        if isinstance(node, dict)
+        and node.get("enabled", True) is not False
+        and node.get("state_replica", True) is not False
+        and str(node.get("role") or "") in {"master", "vps"}
+    }
+    migration = status.get("migration") if isinstance(status.get("migration"), dict) else {}
+    missing = {
+        "freeze_acks": sorted(active_node_ids - set(migration.get("freeze_acks") or [])),
+        "materialization_acks": sorted(active_node_ids - set(migration.get("materialization_acks") or [])),
+        "cleanup_acks": sorted(active_node_ids - set(migration.get("cleanup_acks") or [])),
+        "scan_acks": sorted(active_node_ids - set((migration.get("scan_acks") or {}).keys())),
+    }
+    details = []
+    if migration.get("frozen") is True:
+        for key in ("freeze_acks", "materialization_acks"):
+            if missing[key]:
+                details.append({"reason": key, "missing_node_ids": missing[key]})
+    if migration.get("cutoff") and missing["cleanup_acks"]:
+        details.append({"reason": "cleanup_acks", "missing_node_ids": missing["cleanup_acks"]})
+    if migration.get("cutoff") and missing["scan_acks"]:
+        details.append({"reason": "scan_acks", "missing_node_ids": missing["scan_acks"]})
+    barrier_blockers = status.get("protocol_barrier", {}).get("blockers") or []
+    details.extend(barrier_blockers)
+    outdated_node_ids = sorted({
+        str(item.get("node_id") or "")
+        for item in barrier_blockers
+        if isinstance(item, dict) and item.get("node_id")
+    })
+    outdated_services: list[str] = []
+    try:
+        local_node_id = str(read_local_identity(_cluster_root()).get("node_id") or "")
+    except Exception:
+        local_node_id = ""
+    if local_node_id in active_node_ids:
+        from credential_process_registry import process_barrier_readiness
+
+        local_processes = process_barrier_readiness(Path(PBGDIR))
+        outdated_services = list(local_processes["waiting_services"])
+    if outdated_services:
+        details.append({"reason": "process_protocol", "services": outdated_services})
+    migration["missing_node_ids"] = missing
+    migration["blocker_details"] = details
+    migration["outdated_node_ids"] = outdated_node_ids
+    migration["outdated_services"] = outdated_services
+    migration["status"] = (
+        "complete"
+        if migration.get("frozen") is not True and migration.get("cutoff")
+        else "migrating"
+        if migration.get("frozen") is True
+        else "waiting_for_upgrade"
+        if outdated_node_ids or outdated_services
+        else "ready"
+    )
+    migration["cutoff_status"] = "active" if migration.get("cutoff") else "not_set"
+    migration["unfreeze_status"] = (
+        "complete"
+        if migration.get("frozen") is not True and migration.get("cutoff")
+        else "pending"
+        if migration.get("frozen") is True
+        else "not_started"
+    )
+    status["migration"] = migration
+    return status
+
+
+def _credential_publisher() -> ClusterCredentialPublisher:
+    """Build the local publisher without reading any secret into the API layer."""
+
+    return ClusterCredentialPublisher(
+        _cluster_root(),
+        CredentialStore(Path(PBGDIR) / "data" / "credentials"),
+    )
 
 
 def _instance_list(desired_state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -992,7 +1173,14 @@ def _cluster_state_read_command(remote_pbgui_dir: str | None, local_node_id: str
 def _cluster_materialize_command(remote_pbgui_dir: str | None, local_node_id: str, verb: str) -> str:
     """Build one remote materialization command."""
 
-    if verb not in {"materialize-v7-preview", "materialize-v7", "materialize-api-keys-preview", "materialize-api-keys"}:
+    if verb not in {
+        "materialize-v7-preview",
+        "materialize-v7",
+        "materialize-api-keys-preview",
+        "materialize-api-keys",
+        "materialize-credentials-preview",
+        "materialize-credentials",
+    }:
         raise ValueError("unsupported materialize command")
     return _cluster_remote_command(remote_pbgui_dir, local_node_id, verb)
 
@@ -1045,10 +1233,39 @@ def _cluster_join_command(
 ) -> str:
     """Build the remote Cluster Sync identity join command."""
 
-    node_id = shlex.quote(str(node.get("node_id") or ""))
-    role = shlex.quote(_cluster_role_from_monitor_role(node.get("role")))
+    raw_node_id = str(node.get("node_id") or "")
+    raw_role = _cluster_role_from_monitor_role(node.get("role"))
+    node_id = shlex.quote(raw_node_id)
+    role = shlex.quote(raw_role)
     pbname = shlex.quote(str(node.get("pbname") or node.get("hostname") or "").strip())
-    command_text = f"join {shlex.quote(str(cluster_id))} {node_id} {role} {pbname}"
+    root = _cluster_root()
+    authorization = create_join_authorization(root, raw_node_id, raw_role)
+    identity = read_local_identity(root)
+    local_node_id_value = str(identity["node_id"])
+    authorizer_operation = next(
+        (
+            operation
+            for operation in load_operations(root, expected_cluster_id=str(cluster_id))
+            if operation.get("op") == "ADD_NODE"
+            and operation.get("actor") == local_node_id_value
+            and operation.get("node_id") == local_node_id_value
+            and operation.get("signature")
+        ),
+        None,
+    )
+    if not isinstance(authorizer_operation, dict):
+        raise ClusterStateError("local master bootstrap membership is unavailable")
+    bootstrap = base64.urlsafe_b64encode(
+        json.dumps(
+            {"authorization": authorization, "authorizer_operation": authorizer_operation},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).decode("ascii")
+    command_text = (
+        f"join {shlex.quote(str(cluster_id))} {node_id} {role} {pbname} "
+        f"{shlex.quote(bootstrap)}"
+    )
     return _cluster_remote_command(remote_pbgui_dir, local_node_id, command_text)
 
 
@@ -1326,6 +1543,10 @@ async def _probe_cluster_node(node: dict[str, Any], identity: dict[str, Any]) ->
             "remote_cluster_id": remote_cluster_id,
             "remote_node_id": remote_node_id,
         }
+    crypto_bundle = payload.get("crypto_public_bundle") if isinstance(payload, dict) else {}
+    crypto_bundle = crypto_bundle if isinstance(crypto_bundle, dict) else {}
+    capability = payload.get("credential_capability") if isinstance(payload, dict) else {}
+    capability = capability if isinstance(capability, dict) else {}
     return {
         "node_id": node_id,
         "hostname": hostname,
@@ -1334,6 +1555,12 @@ async def _probe_cluster_node(node: dict[str, Any], identity: dict[str, Any]) ->
         "remote_cluster_id": remote_cluster_id,
         "remote_node_id": remote_node_id,
         "protocol_version": payload.get("protocol_version") if isinstance(payload, dict) else None,
+        "credential_protocol_version": capability.get("version"),
+        "signing_key_id": str(crypto_bundle.get("signing_key_id") or ""),
+        "encryption_key_id": str(crypto_bundle.get("encryption_key_id") or ""),
+        "crypto_registered": bool(
+            crypto_bundle.get("signing_key_id") and crypto_bundle.get("encryption_key_id")
+        ),
         "role": payload.get("role") if isinstance(payload, dict) else "",
         "cluster_ssh_fingerprint": payload.get("cluster_ssh_fingerprint") if isinstance(payload, dict) else "",
         "cluster_ssh_error": payload.get("cluster_ssh_error") if isinstance(payload, dict) else "",
@@ -1680,6 +1907,7 @@ async def _ensure_remote_blob_on_host(
     blob_hash: str,
     *,
     secret: bool,
+    sealed: bool = False,
 ) -> tuple[bytes, bool]:
     """Ensure one local blob exists by pulling it from a reachable upstream host."""
 
@@ -1687,7 +1915,7 @@ async def _ensure_remote_blob_on_host(
         return _read_cluster_blob(base_dir, blob_hash), False
     except Exception:
         pass
-    verb = "get-secret-blob" if secret else "get-blob"
+    verb = "get-sealed-blob" if sealed else "get-secret-blob" if secret else "get-blob"
     payload = await _run_cluster_json_command_on_host(
         pool,
         hostname,
@@ -1745,11 +1973,12 @@ async def _pull_blobs_for_operations_from_host(
 ) -> dict[str, int]:
     """Pull all config/API-key blobs required by received operations."""
 
-    counts = {"config": 0, "secret": 0, "missing_config": 0}
+    counts = {"config": 0, "secret": 0, "sealed": 0, "missing_config": 0}
     missing_config_hashes: set[str] = set()
     root = _cluster_root()
     config_dir = root / "config_blobs"
     secret_dir = root / "secret_blobs"
+    sealed_dir = root / "sealed_blobs"
     for operation in operations:
         refs = _operation_hash_refs(operation)
         for manifest_hash in refs["config"]:
@@ -1802,6 +2031,18 @@ async def _pull_blobs_for_operations_from_host(
                 secret=True,
             )
             counts["secret"] += 1 if fetched else 0
+        for sealed_hash in refs["sealed"]:
+            _raw, fetched = await _ensure_remote_blob_on_host(
+                pool,
+                hostname,
+                remote_pbgui_dir,
+                local_node_id,
+                sealed_dir,
+                sealed_hash,
+                secret=True,
+                sealed=True,
+            )
+            counts["sealed"] += 1 if fetched else 0
     counts["missing_config"] = len(missing_config_hashes)
     return counts
 
@@ -1815,10 +2056,11 @@ async def _pull_current_desired_blobs_from_host(
 ) -> dict[str, int]:
     """Pull current desired config/API-key blobs and fail if any are missing."""
 
-    counts = {"config": 0, "secret": 0}
+    counts = {"config": 0, "secret": 0, "sealed": 0}
     root = _cluster_root()
     config_dir = root / "config_blobs"
     secret_dir = root / "secret_blobs"
+    sealed_dir = root / "sealed_blobs"
     instances = desired_state.get("instances") if isinstance(desired_state, dict) else {}
     instances = instances if isinstance(instances, dict) else {}
     for name in sorted(instances):
@@ -1873,6 +2115,25 @@ async def _pull_current_desired_blobs_from_host(
                 secret=True,
             )
             counts["secret"] += 1 if fetched else 0
+    secrets = desired_state.get("secrets") if isinstance(desired_state, dict) else {}
+    secrets = secrets if isinstance(secrets, dict) else {}
+    for secret in secrets.values():
+        if not isinstance(secret, dict):
+            continue
+        sealed_hash = str(secret.get("sealed_blob_hash") or "")
+        if not sealed_hash:
+            continue
+        _raw, fetched = await _ensure_remote_blob_on_host(
+            pool,
+            hostname,
+            remote_pbgui_dir,
+            local_node_id,
+            sealed_dir,
+            sealed_hash,
+            secret=True,
+            sealed=True,
+        )
+        counts["sealed"] += 1 if fetched else 0
     return counts
 
 
@@ -1906,7 +2167,7 @@ async def _pull_missing_operations_from_host(
     local_vector = _state_vector_from_operations(local_operations)
     total_missing_ops = sum(max(0, int(remote_vector.get(actor) or 0) - int(local_vector.get(actor) or 0)) for actor in remote_vector)
     pulled = 0
-    blob_counts = {"config": 0, "secret": 0, "missing_config": 0}
+    blob_counts = {"config": 0, "secret": 0, "sealed": 0, "missing_config": 0}
     report_progress({"phase": "pulling_ops", "done": 0, "total": total_missing_ops, "remaining": total_missing_ops})
     for actor in sorted(remote_vector):
         remote_seq = int(remote_vector.get(actor) or 0)
@@ -1934,12 +2195,18 @@ async def _pull_missing_operations_from_host(
             pulled_blobs = await _pull_blobs_for_operations_from_host(pool, hostname, remote_pbgui_dir, local_node_id, operations)
             blob_counts["config"] += int(pulled_blobs.get("config") or 0)
             blob_counts["secret"] += int(pulled_blobs.get("secret") or 0)
+            blob_counts["sealed"] += int(pulled_blobs.get("sealed") or 0)
             blob_counts["missing_config"] += int(pulled_blobs.get("missing_config") or 0)
             for operation in operations:
-                validate_operation(operation, expected_cluster_id=cluster_id)
+                validate_operation(
+                    operation,
+                    expected_cluster_id=cluster_id,
+                    cluster_root=root,
+                    network_input=True,
+                )
                 op_path = root / "oplog" / str(operation["actor"]) / f"{int(operation['seq']):08d}.json"
                 existed = op_path.exists()
-                write_operation(root, operation)
+                write_operation(root, operation, network_input=True)
                 if not existed:
                     pulled += 1
             start = end + 1
@@ -1955,12 +2222,14 @@ async def _pull_missing_operations_from_host(
     )
     blob_counts["config"] += int(current_blob_counts.get("config") or 0)
     blob_counts["secret"] += int(current_blob_counts.get("secret") or 0)
+    blob_counts["sealed"] += int(current_blob_counts.get("sealed") or 0)
     return {
         "remote_vector": remote_vector,
         "local_vector_before": local_vector,
         "pulled_ops": pulled,
         "pulled_config_blobs": blob_counts["config"],
         "pulled_secret_blobs": blob_counts["secret"],
+        "pulled_sealed_blobs": blob_counts["sealed"],
         "deferred_missing_config_blobs": blob_counts["missing_config"],
     }
 
@@ -1999,8 +2268,12 @@ def _append_node_membership_if_needed(current: dict[str, Any], desired: dict[str
     if not node_id:
         return {"changed": False, "operation": "none"}
     if not current:
-        append_operation(_cluster_root(), "ADD_NODE", desired)
-        return {"changed": True, "operation": "ADD_NODE"}
+        local_node_id = str(read_local_identity(_cluster_root()).get("node_id") or "")
+        if node_id == local_node_id:
+            append_operation(_cluster_root(), "ADD_NODE", desired)
+            return {"changed": True, "operation": "ADD_NODE"}
+        append_node_placeholder(_cluster_root(), desired)
+        return {"changed": True, "operation": "UPDATE_NODE"}
     updates = _node_payload_updates(current, desired)
     if not updates:
         return {"changed": False, "operation": "none"}
@@ -2076,7 +2349,7 @@ async def _self_join_existing_cluster(
             hostname,
             remote_dir,
             local_node_id,
-            "hello",
+            f"join-hello {shlex.quote(local_node_id)} master",
             timeout=15,
             failure_label="Upstream cluster hello",
         )
@@ -2162,7 +2435,6 @@ async def _self_join_existing_cluster(
         }
         if str(settings.get("ssh_user") or ""):
             upstream_desired["ssh_user"] = str(settings.get("ssh_user") or "")
-        upstream_membership = _append_node_membership_if_needed(upstream_node, upstream_desired)
         local_ssh_host = _local_ssh_host_value(str(settings.get("ssh_host") or hostname), int(settings.get("ssh_port") or 22))
         local_ssh_user = _local_ssh_user_value()
 
@@ -2179,12 +2451,17 @@ async def _self_join_existing_cluster(
             "cluster_ssh_fingerprint": str(local_key.get("fingerprint") or ""),
             "cluster_ssh_mode": "forced",
         }
+        join_authorization = hello.get("join_authorization")
+        if not isinstance(join_authorization, dict):
+            raise HTTPException(status_code=409, detail="Upstream did not provide signed join authorization")
+        local_desired["membership_authorization"] = join_authorization
         if local_ssh_host:
             local_desired["ssh_host"] = local_ssh_host
             local_desired["ssh_port"] = 22
         if local_ssh_user:
             local_desired["ssh_user"] = local_ssh_user
         local_membership = _append_node_membership_if_needed(local_node, local_desired)
+        upstream_membership = _append_node_membership_if_needed(upstream_node, upstream_desired)
         materialized = rebuild_materialized_state(root)
         upstream_node = _node_for_id(_node_list(materialized["cluster_nodes"]), upstream_node_id)
         transport_node = _self_join_transport_node(upstream_node, settings)
@@ -2728,10 +3005,22 @@ def _compare_desired_states(local: dict[str, Any], remote: dict[str, Any]) -> di
     )
     tombstone_diff = _compare_named_records(local_tombstones, remote_tombstones, ("version", "deleted_by", "op_id"))
     api_keys_match = (local.get("api_keys") if isinstance(local, dict) else None) == (remote.get("api_keys") if isinstance(remote, dict) else None)
+    credential_fields = (
+        "secrets",
+        "secret_tombstones",
+        "cmc_pool",
+        "credential_migration",
+        "credential_materialization_acks",
+    )
     return {
         "instances": instance_diff,
         "tombstones": tombstone_diff,
         "api_keys_match": api_keys_match,
+        "credentials_match": all(
+            (local.get(field) if isinstance(local, dict) else None)
+            == (remote.get(field) if isinstance(remote, dict) else None)
+            for field in credential_fields
+        ),
     }
 
 
@@ -2750,7 +3039,7 @@ def _operation_target(operation: dict[str, Any]) -> str:
 def _operation_hash_refs(operation: dict[str, Any]) -> dict[str, list[str]]:
     """Return hash references that a later write phase may need to ship."""
 
-    refs = {"config": [], "api_payload": [], "secret": []}
+    refs = {"config": [], "api_payload": [], "secret": [], "sealed": []}
     config_hash = str(operation.get("config_manifest_hash") or "")
     if config_hash:
         refs["config"].append(config_hash)
@@ -2760,6 +3049,12 @@ def _operation_hash_refs(operation: dict[str, Any]) -> dict[str, list[str]]:
     secret_hash = str(operation.get("secret_blob_hash") or "")
     if secret_hash:
         refs["secret"].append(secret_hash)
+    sealed_hash = str(operation.get("sealed_blob_hash") or "")
+    if sealed_hash and str(operation.get("op") or "") in {
+        "UPSERT_SECRET",
+        "UPDATE_SECRET_RECIPIENTS",
+    }:
+        refs["sealed"].append(sealed_hash)
     return refs
 
 
@@ -2888,6 +3183,34 @@ def _collect_current_api_key_blobs(desired_state: dict[str, Any]) -> tuple[list[
     return payload_blobs, secret_blobs, skipped
 
 
+def _collect_current_sealed_blobs(
+    desired_state: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Collect current opaque sealed envelopes without decoding their contents."""
+
+    secrets = desired_state.get("secrets") if isinstance(desired_state, dict) else {}
+    secrets = secrets if isinstance(secrets, dict) else {}
+    blobs: dict[str, dict[str, Any]] = {}
+    skipped: list[dict[str, str]] = []
+    root = _cluster_root() / "sealed_blobs"
+    for secret_id, secret in sorted(secrets.items()):
+        if not isinstance(secret, dict):
+            continue
+        blob_hash = str(secret.get("sealed_blob_hash") or "")
+        if not blob_hash:
+            continue
+        try:
+            blobs.setdefault(blob_hash, {
+                "hash": blob_hash,
+                "raw": _read_cluster_blob(root, blob_hash),
+                "kind": "sealed_secret",
+                "name": str(secret_id),
+            })
+        except Exception as exc:
+            skipped.append({"kind": "sealed_secret", "hash": blob_hash, "reason": str(exc)})
+    return list(blobs.values()), skipped
+
+
 def _blob_batch_payload(blobs: list[dict[str, Any]]) -> str:
     """Build one JSON payload for the remote put-blobs command."""
 
@@ -2924,7 +3247,7 @@ def _build_operation_sync_preview(local_operations: list[dict[str, Any]], remote
     local_vector: dict[str, int] = {}
     local_missing_remote: list[dict[str, Any]] = []
     push_by_op: dict[str, int] = {}
-    hashes = {"config": set(), "api_payload": set(), "secret": set()}
+    hashes = {"config": set(), "api_payload": set(), "secret": set(), "sealed": set()}
     for operation in local_operations:
         actor = str(operation.get("actor") or "")
         seq = int(operation.get("seq") or 0)
@@ -2973,6 +3296,7 @@ def _build_operation_sync_preview(local_operations: list[dict[str, Any]], remote
             "config_hash_refs": len(hashes["config"]),
             "api_payload_hash_refs": len(hashes["api_payload"]),
             "secret_blob_hash_refs": len(hashes["secret"]),
+            "sealed_blob_hash_refs": len(hashes["sealed"]),
         },
         "push_by_op": {key: push_by_op[key] for key in sorted(push_by_op)},
     }
@@ -3109,6 +3433,48 @@ async def _push_secret_blobs_to_remote(
     return {"pushed": pushed, "total": len(blobs)}
 
 
+async def _push_sealed_blobs_to_remote(
+    pool: Any,
+    hostname: str,
+    remote_dir: str,
+    local_node_id: str,
+    blobs: list[dict[str, Any]],
+    progress_callback: Callable[[dict[str, Any]], None],
+) -> dict[str, int]:
+    """Push opaque current sealed envelopes before their signed operations."""
+
+    pushed = 0
+    progress_callback({"phase": "sealed", "done": 0, "total": len(blobs), "remaining": len(blobs)})
+    for blob in blobs:
+        raw = blob.get("raw") or b""
+        try:
+            payload = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(status_code=409, detail="Sealed credential blob is not UTF-8 JSON") from exc
+        result = await _run_cluster_payload_command(
+            pool,
+            hostname,
+            remote_dir,
+            local_node_id,
+            f"put-sealed-blob {shlex.quote(str(blob.get('hash') or ''))}",
+            payload,
+            timeout=30,
+        )
+        if result is None:
+            raise HTTPException(status_code=502, detail="Remote host is unreachable")
+        if int(getattr(result, "exit_status", 1) or 0) != 0:
+            raise HTTPException(status_code=409, detail=_probe_error_text(result))
+        _parse_remote_json_result(result, "Remote put-sealed-blob")
+        pushed += 1
+        progress_callback({
+            "phase": "sealed",
+            "done": pushed,
+            "total": len(blobs),
+            "remaining": len(blobs) - pushed,
+        })
+    return {"pushed": pushed, "total": len(blobs)}
+
+
 async def _push_missing_operations_to_remote(
     node: dict[str, Any],
     identity: dict[str, Any],
@@ -3135,6 +3501,19 @@ async def _push_missing_operations_to_remote(
     remote_vector_payload = await _run_remote_read_command(node, identity, "get-state-vector", pool=pool)
     remote_vector = _as_state_vector(remote_vector_payload.get("state_vector") or {})
     local_operations = load_operations(root, expected_cluster_id=str(identity.get("cluster_id") or ""))
+    materialized = rebuild_materialized_state(root, write=False)
+    cutoff = (((materialized.get("desired_state") or {}).get("credential_migration") or {}).get("cutoff"))
+    if isinstance(cutoff, dict):
+        if int(node.get("credential_protocol_version") or 0) < int(cutoff.get("min_protocol") or 2):
+            raise HTTPException(status_code=409, detail="Credential protocol downgrade rejected after cutoff")
+        obsolete_hashes = set(cutoff.get("obsolete_secret_blob_hashes") or [])
+        local_operations = [
+            operation for operation in local_operations
+            if not (
+                operation.get("op") == "UPSERT_API_KEYS"
+                and operation.get("secret_blob_hash") in obsolete_hashes
+            )
+        ]
     preview = _build_operation_sync_preview(local_operations, remote_vector)
     counts = preview.get("counts") if isinstance(preview, dict) else {}
     if int((counts or {}).get("remote_ops_to_pull") or 0) > 0:
@@ -3160,8 +3539,10 @@ async def _push_missing_operations_to_remote(
     pushed: list[dict[str, Any]] = []
     remote_dir = str(node.get("remote_pbgui_dir") or "")
     local_materialized = rebuild_materialized_state(root, write=False)
-    config_blobs, config_blob_skips = _collect_current_config_blobs(local_materialized.get("desired_state") or {})
-    api_payload_blobs, secret_blobs, api_blob_skips = _collect_current_api_key_blobs(local_materialized.get("desired_state") or {})
+    local_desired = local_materialized.get("desired_state") or {}
+    config_blobs, config_blob_skips = _collect_current_config_blobs(local_desired)
+    api_payload_blobs, secret_blobs, api_blob_skips = _collect_current_api_key_blobs(local_desired)
+    sealed_blobs, sealed_blob_skips = _collect_current_sealed_blobs(local_desired)
     blob_counts = await _push_config_blobs_to_remote(
         pool,
         hostname,
@@ -3171,6 +3552,14 @@ async def _push_missing_operations_to_remote(
         report_progress,
     )
     secret_blob_counts = await _push_secret_blobs_to_remote(pool, hostname, remote_dir, local_node_id, secret_blobs, report_progress)
+    sealed_blob_counts = await _push_sealed_blobs_to_remote(
+        pool,
+        hostname,
+        remote_dir,
+        local_node_id,
+        sealed_blobs,
+        report_progress,
+    )
 
     bulk_payload = json.dumps({"operations": operations}, sort_keys=True, separators=(",", ":"))
     bulk_unsupported = False
@@ -3249,9 +3638,14 @@ async def _push_missing_operations_to_remote(
                 "config_hash_refs": int((counts or {}).get("config_hash_refs") or 0),
                 "api_payload_hash_refs": int((counts or {}).get("api_payload_hash_refs") or 0),
                 "secret_blob_hash_refs": int((counts or {}).get("secret_blob_hash_refs") or 0),
+                "sealed_blobs_pushed": int(sealed_blob_counts.get("pushed") or 0),
+                "sealed_blobs_total": int(sealed_blob_counts.get("total") or 0),
+                "sealed_blobs_skipped": len(sealed_blob_skips),
+                "sealed_blob_hash_refs": int((counts or {}).get("sealed_blob_hash_refs") or 0),
             },
             "config_blob_skips": config_blob_skips,
             "api_blob_skips": api_blob_skips,
+            "sealed_blob_skips": sealed_blob_skips,
             "message": "Config/API blobs and missing local operations were pushed. Remote materialized state was not rebuilt yet.",
         }
 
@@ -3290,9 +3684,14 @@ async def _push_missing_operations_to_remote(
             "config_hash_refs": int((counts or {}).get("config_hash_refs") or 0),
             "api_payload_hash_refs": int((counts or {}).get("api_payload_hash_refs") or 0),
             "secret_blob_hash_refs": int((counts or {}).get("secret_blob_hash_refs") or 0),
+            "sealed_blobs_pushed": int(sealed_blob_counts.get("pushed") or 0),
+            "sealed_blobs_total": int(sealed_blob_counts.get("total") or 0),
+            "sealed_blobs_skipped": len(sealed_blob_skips),
+            "sealed_blob_hash_refs": int((counts or {}).get("sealed_blob_hash_refs") or 0),
         },
         "config_blob_skips": config_blob_skips,
         "api_blob_skips": api_blob_skips,
+        "sealed_blob_skips": sealed_blob_skips,
         "message": "Config/API blobs and missing local operations were pushed, then remote materialized state was rebuilt. API-key files were not installed in this phase.",
     }
     report_progress({"phase": "done", "done": len(pushed), "total": total_missing, "remaining": remaining_after_batch})
@@ -3425,6 +3824,20 @@ async def _build_remote_preview(node: dict[str, Any], identity: dict[str, Any], 
             "counts": {},
             "error": str(exc.detail),
         }
+    try:
+        credential_materialization = await _run_remote_materialize_command(
+            node,
+            identity,
+            "materialize-credentials-preview",
+        )
+    except HTTPException as exc:
+        credential_materialization = {
+            "ok": False,
+            "read_only": True,
+            "can_apply": False,
+            "counts": {},
+            "error": str(exc.detail),
+        }
     return {
         "ok": True,
         "read_only": True,
@@ -3440,6 +3853,7 @@ async def _build_remote_preview(node: dict[str, Any], identity: dict[str, Any], 
         ),
         "materialization": materialization,
         "api_key_materialization": api_key_materialization,
+        "credential_materialization": credential_materialization,
     }
 
 
@@ -3599,7 +4013,7 @@ def _build_bootstrap_plan() -> dict[str, Any]:
         "counts": counts,
         "items": items,
         "can_apply": bool(counts.get("add") or counts.get("update")),
-        "message": "Bootstrap writes ADD_NODE for known VPS hosts and UPSERT_CONFIG for local configs. It never infers deletes.",
+        "message": "Bootstrap records non-replica VPS inventory and UPSERT_CONFIG operations. It never infers deletes.",
     }
 
 
@@ -3630,9 +4044,8 @@ def _apply_bootstrap_plan(plan: dict[str, Any]) -> dict[str, Any]:
                 })
                 entry.setdefault("created_at", int(time.time()))
                 _write_host_node_ids(host_node_ids)
-                append_operation(
+                append_node_placeholder(
                     _cluster_root(),
-                    "ADD_NODE",
                     _node_payload_from_vps_config(node_id, {
                         "hostname": name,
                         "role": item.get("node_role") or "vps",
@@ -3678,6 +4091,7 @@ def get_status(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     nodes = _node_list(cluster_nodes)
     instances = _instance_list(desired_state)
     tombstones = _tombstone_list(desired_state)
+    credentials = _credential_status(snapshot)
     conflict_count = sum(1 for item in instances if item.get("conflicted") is True)
     warnings: list[str] = []
     if not nodes:
@@ -3689,7 +4103,9 @@ def get_status(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
         "read_only": True,
         "cluster_root": snapshot["cluster_root"],
         "identity": snapshot["identity"],
-        "local_node": (cluster_nodes.get("nodes") or {}).get(snapshot["identity"].get("node_id")),
+        "local_node": _public_cluster_node(
+            (cluster_nodes.get("nodes") or {}).get(snapshot["identity"].get("node_id")) or {}
+        ),
         "generation": int(cluster_nodes.get("generation") or 0),
         "generated_at": int(desired_state.get("generated_at") or 0),
         "counts": {
@@ -3700,6 +4116,7 @@ def get_status(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
             "oplog": int(cluster_nodes.get("generation") or 0),
         },
         "api_keys": desired_state.get("api_keys"),
+        "credentials": credentials,
         "sync_status": _load_sync_status_summary(root),
         "warnings": warnings,
     }
@@ -3717,9 +4134,16 @@ def get_nodes(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
         local_cluster_ssh = {"ok": False, "error": str(exc)}
     nodes = _node_list(cluster_nodes)
     local_node_id = str(snapshot["identity"].get("node_id") or "")
+    credential_nodes = _credential_status(snapshot).get("nodes") or {}
+    public_nodes = []
+    for node in _nodes_with_local_defaults(nodes, local_node_id):
+        public = _public_cluster_node(node)
+        public.update(credential_nodes.get(str(node.get("node_id") or "")) or {})
+        public_nodes.append(public)
     return {
-        "cluster_nodes": cluster_nodes,
-        "nodes": _nodes_with_local_defaults(nodes, local_node_id),
+        "cluster_nodes": _public_cluster_nodes(cluster_nodes),
+        "nodes": public_nodes,
+        "credentials": _credential_status(snapshot),
         "local_cluster_ssh": {
             "ok": local_cluster_ssh.get("ok", True) is not False,
             "fingerprint": str(local_cluster_ssh.get("fingerprint") or ""),
@@ -3751,6 +4175,7 @@ def set_node_sync(
     if current == bool(sync_enabled):
         return {"ok": True, "changed": False, "node": node}
 
+    authorization = _revoke_local_cluster_ssh_key(node) if not sync_enabled else {"changed": False}
     append_operation(
         _cluster_root(),
         "UPDATE_NODE",
@@ -3762,7 +4187,7 @@ def set_node_sync(
     )
     materialized = rebuild_materialized_state(_cluster_root())
     updated = _node_for_id(_node_list(materialized["cluster_nodes"]), str(node.get("node_id") or ""))
-    return {"ok": True, "changed": True, "node": updated}
+    return {"ok": True, "changed": True, "node": updated, "authorized_key_removed": bool(authorization.get("changed"))}
 
 
 @router.post("/nodes/{node_id}/settings")
@@ -3816,6 +4241,11 @@ async def update_node_settings(
     if current == settings:
         return {"ok": True, "changed": False, "node": node}
 
+    authorization = (
+        _revoke_local_cluster_ssh_key(node)
+        if settings["sync_mode"] == "disabled"
+        else {"changed": False}
+    )
     append_operation(
         _cluster_root(),
         "UPDATE_NODE",
@@ -3826,7 +4256,7 @@ async def update_node_settings(
     )
     materialized = rebuild_materialized_state(_cluster_root())
     updated = _node_for_id(_node_list(materialized["cluster_nodes"]), str(node.get("node_id") or ""))
-    return {"ok": True, "changed": True, "node": updated}
+    return {"ok": True, "changed": True, "node": updated, "authorized_key_removed": bool(authorization.get("changed"))}
 
 
 @router.post("/nodes/{node_id}/remove")
@@ -3852,12 +4282,26 @@ def remove_cluster_node(node_id: str, session: SessionToken = Depends(require_au
     if assigned_instances:
         preview = ", ".join(sorted(assigned_instances)[:5])
         raise HTTPException(status_code=400, detail=f"Node still has assigned V7 configs: {preview}")
+    secrets = desired_state.get("secrets") if isinstance(desired_state.get("secrets"), dict) else {}
+    affected_credentials = {"cmc": 0, "tradfi": 0}
+    for secret in secrets.values():
+        if not isinstance(secret, dict) or str(node.get("node_id") or "") not in set(secret.get("recipient_ids") or []):
+            continue
+        if str(secret.get("secret_kind") or "") == "cmc_api_key":
+            affected_credentials["cmc"] += 1
+        elif str(secret.get("secret_kind") or "") == "tradfi_profile":
+            affected_credentials["tradfi"] += 1
+    affected_credentials["total"] = affected_credentials["cmc"] + affected_credentials["tradfi"]
+    authorization = _revoke_local_cluster_ssh_key(node)
     append_operation(_cluster_root(), "REMOVE_NODE", {"node_id": str(node.get("node_id") or "")})
     materialized = rebuild_materialized_state(_cluster_root())
     return {
         "ok": True,
         "changed": True,
         "removed_node_id": str(node.get("node_id") or ""),
+        "authorized_key_removed": bool(authorization.get("changed")),
+        "rotation_recommended": affected_credentials["total"] > 0,
+        "affected_credentials": affected_credentials,
         "node": node,
         "nodes": _node_list(materialized["cluster_nodes"]),
     }
@@ -4039,6 +4483,9 @@ async def get_remote_status(session: SessionToken = Depends(require_auth)) -> di
     snapshot = _load_cluster_snapshot()
     nodes = _node_list(snapshot["cluster_nodes"])
     probes = await _probe_cluster_nodes(nodes, snapshot["identity"])
+    credential_nodes = _credential_status(snapshot).get("nodes") or {}
+    for probe in probes:
+        probe.update(credential_nodes.get(str(probe.get("node_id") or "")) or {})
     return {
         "count": len(probes),
         "probes": probes,
@@ -4213,6 +4660,216 @@ async def materialize_remote_api_keys(node_id: str, session: SessionToken = Depe
     }
 
 
+@router.post("/remote-materialize-credentials/{node_id}")
+async def materialize_remote_credentials(
+    node_id: str,
+    session: SessionToken = Depends(require_auth),
+    operation_id: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Materialize current sealed credentials on one synchronized replica."""
+
+    operation_id = operation_id or request_id or uuid.uuid4().hex
+    operations, completed = _begin_credential_operation(
+        operation_id,
+        "cluster_remote_materialize_credentials",
+        node_id,
+    )
+    if completed is not None:
+        return completed
+    async with _CREDENTIAL_REMOTE_OPERATION_LOCK:
+        snapshot = _load_cluster_snapshot()
+        node = _node_for_id(_node_list(snapshot["cluster_nodes"]), str(node_id or ""))
+        if not node:
+            raise HTTPException(status_code=404, detail="Cluster node not found")
+        local_node_id = str(snapshot.get("identity", {}).get("node_id") or "")
+        lifecycle = _credential_status(snapshot)
+        lifecycle_node = (lifecycle.get("nodes") or {}).get(str(node_id)) or {}
+        eligible = (
+            str(node_id) != local_node_id
+            and node.get("enabled", True) is not False
+            and node.get("state_replica", True) is not False
+            and normalize_node_sync_mode(node) == "reachable"
+            and int(node.get("credential_protocol_version") or 0) == 2
+            and node.get("credential_capable") is True
+            and bool(node.get("signing_key_id"))
+            and bool(node.get("encryption_key_id"))
+            and (lifecycle.get("cmc", {}).get("count", 0) or lifecycle.get("tradfi", {}).get("count", 0))
+            and (lifecycle_node.get("materialization_ack") or {}).get("current") is not True
+        )
+        if not eligible:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Remote node is not eligible for pending credential materialization",
+                    "operation_id": operation_id,
+                },
+            )
+        await _require_remote_state_current(node, snapshot["identity"], snapshot)
+        result = await _run_remote_materialize_command(
+            node,
+            snapshot["identity"],
+            "materialize-credentials",
+            timeout=120,
+        )
+    response = {
+        "ok": True,
+        "operation_id": operation_id,
+        "node_id": str(node.get("node_id") or ""),
+        "hostname": str(node.get("pbname") or node.get("hostname") or ""),
+        "materialization": result,
+        "message": "Remote sealed credentials materialized and acknowledged.",
+    }
+    operations.complete(operation_id, response)
+    return response
+
+
+@router.post("/credentials/rewrap")
+async def rewrap_cluster_credentials(
+    request: Request,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Rewrap one or all current credentials for exact active recipients."""
+
+    payload = await _optional_json_payload(request)
+    operation_id = str(payload.get("operation_id") or payload.get("request_id") or uuid.uuid4().hex)
+    credential_id = str(payload.get("credential_id") or "").strip() or None
+    if credential_id is not None:
+        _validate_instance_name(credential_id)
+    try:
+        store = CredentialStore(Path(PBGDIR) / "data" / "credentials")
+        operations, completed = _begin_credential_operation(
+            operation_id,
+            "cluster_credential_rewrap",
+            credential_id or "*",
+        )
+        if completed is not None:
+            return completed
+        with credential_mutation_lock(store.root):
+            result = ClusterCredentialPublisher(_cluster_root(), store).rewrap(credential_id)
+            materialization = _materialize_credentials(_cluster_root(), write=True)
+            snapshot = _load_cluster_snapshot()
+            _request_pbcluster_sync(_cluster_root())
+        response = {
+            "ok": True,
+            "operation_id": operation_id,
+            "result": result,
+            "materialization": materialization,
+            "credentials": _credential_status(snapshot),
+        }
+        operations.complete(operation_id, response)
+        return response
+    except CredentialPublicationError as exc:
+        _log(SERVICE, f"Cluster credential rewrap blocked: {exc}", level="WARNING")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log(SERVICE, f"Cluster credential rewrap failed: {exc}", level="ERROR")
+        raise HTTPException(status_code=500, detail="Cluster credential rewrap failed") from exc
+
+
+@router.post("/credentials/rotate-local-key")
+def rotate_local_cluster_credential_key(
+    session: SessionToken = Depends(require_auth),
+    operation_id: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Rotate this node's owner-only crypto keys and rewrap all current secrets."""
+
+    operation_id = operation_id or request_id or uuid.uuid4().hex
+    try:
+        store = CredentialStore(Path(PBGDIR) / "data" / "credentials")
+        operations, completed = _begin_credential_operation(
+            operation_id,
+            "cluster_rotate_local_credential_key",
+        )
+        if completed is not None:
+            return completed
+        with credential_mutation_lock(store.root):
+            result = ClusterCredentialPublisher(_cluster_root(), store).rotate_local_keys(
+                operation_id=operation_id,
+            )
+            materialization = _materialize_credentials(_cluster_root(), write=True)
+            snapshot = _load_cluster_snapshot()
+            _request_pbcluster_sync(_cluster_root())
+        response = {
+            "ok": True,
+            "operation_id": operation_id,
+            "result": result,
+            "materialization": materialization,
+            "credentials": _credential_status(snapshot),
+        }
+        operations.complete(operation_id, response)
+        return response
+    except CredentialPublicationError as exc:
+        _log(SERVICE, f"Local cluster key rotation blocked: {exc}", level="WARNING")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log(SERVICE, f"Local cluster key rotation failed: {exc}", level="ERROR")
+        raise HTTPException(status_code=500, detail="Local cluster key rotation failed") from exc
+
+
+@router.get("/credentials/operations/{operation_id}")
+def get_cluster_credential_operation(
+    operation_id: str,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return durable secret-free status for one Cluster credential mutation."""
+
+    try:
+        record = _credential_operation_store().get(operation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if record is None:
+        raise HTTPException(status_code=404, detail="Cluster credential operation not found")
+    return record
+
+
+@router.post("/credentials/migration-conflicts/{conflict_id}/resolve")
+async def resolve_cluster_migration_conflict(
+    conflict_id: str,
+    request: Request,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Record an authenticated candidate/existing migration conflict decision."""
+
+    from credential_migration import resolve_migration_conflict
+
+    payload = await _optional_json_payload(request)
+    operation_id = str(payload.get("operation_id") or payload.get("request_id") or uuid.uuid4().hex)
+    choice = str(payload.get("choice") or "")
+    try:
+        operations, completed = _begin_credential_operation(
+            operation_id,
+            "cluster_migration_conflict_resolution",
+            conflict_id,
+        )
+        if completed is not None:
+            return completed
+        resolution = resolve_migration_conflict(
+            PBGDIR,
+            conflict_id,
+            choice,
+            resolution_id=operation_id,
+        )
+        response = {
+            "ok": True,
+            "operation_id": operation_id,
+            "conflict": resolution,
+        }
+        operations.complete(operation_id, response)
+        _request_pbcluster_sync(_cluster_root())
+        return response
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        _log(SERVICE, f"Migration conflict resolution failed: {exc}", level="WARNING")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/desired-state")
 def get_desired_state(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     """Return materialized V7 desired state and tombstones."""
@@ -4223,6 +4880,7 @@ def get_desired_state(session: SessionToken = Depends(require_auth)) -> dict[str
         "desired_state": desired_state,
         "instances": _instance_list(desired_state),
         "tombstones": _tombstone_list(desired_state),
+        "credentials": _credential_status(snapshot),
     }
 
 
@@ -4283,7 +4941,7 @@ def apply_bootstrap(session: SessionToken = Depends(require_auth)) -> dict[str, 
 
 @router.post("/bootstrap/nodes/{hostname}")
 def apply_bootstrap_node(hostname: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
-    """Write the bootstrap ADD_NODE/UPDATE_NODE operation for one known VPS host only."""
+    """Record one known VPS host as non-replica bootstrap inventory."""
 
     del session
     target = str(hostname or "").strip()

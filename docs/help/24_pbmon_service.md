@@ -50,6 +50,10 @@ Each group allows fine-grained Telegram routing while still keeping the UI compa
 - Cleared alerts disappear automatically
 - If a problem returns later, it becomes **new/unacknowledged** again
 - You can acknowledge single alerts or all visible alerts from the nav overlay
+- An acknowledged alert stays acknowledged while the same problem remains active,
+  even if its severity or details change. PBGui deliberately does not re-alert
+  on deterioration within one continuous episode; only resolve and reopen starts
+  a new episode.
 
 ## Telegram setup
 

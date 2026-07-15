@@ -9,7 +9,14 @@ from pathlib import Path
 import vps_manager_core
 import vps_manager_service
 from api import cluster
-from master.cluster_state import append_operation, default_cluster_root, ensure_local_identity, rebuild_materialized_state
+from master.cluster_state import (
+    append_operation as _append_operation,
+    default_cluster_root,
+    ensure_local_identity,
+    read_local_identity,
+    rebuild_materialized_state,
+    write_operation,
+)
 from vps_manager_service import VPSManagerService
 
 
@@ -19,6 +26,30 @@ NODE_REMOTE = "pbgui-node-00000000-0000-4000-8000-000000000102"
 NODE_OUTBOUND = "pbgui-node-00000000-0000-4000-8000-000000000103"
 NODE_DISABLED = "pbgui-node-00000000-0000-4000-8000-000000000104"
 NODE_REMOTE_B = "pbgui-node-00000000-0000-4000-8000-000000000105"
+
+
+def append_operation(root: Path, op: str, payload: dict, **kwargs) -> dict:
+    """Use historical v1 records for remote inventory fixtures."""
+
+    identity = read_local_identity(root)
+    target = str(payload.get("node_id") or "")
+    if op == "ADD_NODE" and target and target != str(identity["node_id"]):
+        actor = str(identity["node_id"])
+        actor_dir = Path(root) / "oplog" / actor
+        seq = max((int(path.stem) for path in actor_dir.glob("*.json")), default=0) + 1
+        operation = {
+            **payload,
+            "schema_version": 1,
+            "cluster_id": str(identity["cluster_id"]),
+            "op_id": f"{actor}:{seq:08d}",
+            "actor": actor,
+            "seq": seq,
+            "op": op,
+            "created_at": int(kwargs.get("created_at", 100 + seq)),
+        }
+        write_operation(root, operation, allow_legacy_membership=True)
+        return operation
+    return _append_operation(root, op, payload, **kwargs)
 
 
 def _prepare_service(monkeypatch, tmp_path: Path) -> tuple[VPSManagerService, dict[str, str]]:
@@ -159,7 +190,7 @@ def test_cluster_nodes_import_writes_only_rows_with_passwords(monkeypatch, tmp_p
     assert payload["user"] == "pbuser"
     assert payload["firewall_ssh_port"] == 2222
     assert payload["remote_pbgui_dir"] == "software/pbgui"
-    assert not payload["coinmarketcap_api_key"]
+    assert "coinmarketcap_api_key" not in payload
     assert "user_pw" not in payload
     assert "root_pw" not in payload
     assert "user_sudo_pw" not in payload

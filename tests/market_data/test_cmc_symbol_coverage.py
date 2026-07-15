@@ -15,7 +15,6 @@ mismatches, it uses fuzzy matching to suggest potential CMC symbol names
 that may indicate missing/incorrect exchange mapping data.
 """
 
-import configparser
 import importlib.util
 import os
 import sys
@@ -25,6 +24,8 @@ from collections import defaultdict
 from datetime import datetime
 
 import pytest
+from cmc_pool import CmcPoolClient
+from credential_store import CredentialStore
 
 # Import real PBCoinData module directly (bypassing mock in tests/)
 # This is needed because the test validates actual normalization and CMC matching
@@ -145,18 +146,23 @@ class TestCMCSymbolCoverage:
     def coin_data(self, tmp_path_factory):
         """Load live CMC data while keeping all writes in a temporary root."""
         repo_root = Path(__file__).resolve().parents[2]
-        config = configparser.ConfigParser()
-        config.read(repo_root / "pbgui.ini")
-        api_key = config.get("coinmarketcap", "api_key", fallback="").strip()
-        if not api_key or api_key == "<api_key>":
+        source_store = CredentialStore(repo_root / "data" / "credentials")
+        source_credentials = source_store.active_cmc_credentials()
+        if not source_credentials:
             pytest.skip("CoinMarketCap API key is not configured")
+        api_key = source_credentials[0]["api_key"]
 
         sandbox = tmp_path_factory.mktemp("cmc_symbol_coverage")
         original_cwd = Path.cwd()
         os.chdir(sandbox)
         try:
-            cd = CoinData()
-            cd._api_key = api_key
+            store = CredentialStore(sandbox / "data" / "credentials")
+            store.create_cmc(api_key)
+            pool = CmcPoolClient(
+                credential_store=store,
+                state_root=sandbox / "data" / "credentials" / "cmc_pool",
+            )
+            cd = CoinData(cmc_pool=pool)
             cd.load_data()
             yield cd
         finally:

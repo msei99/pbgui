@@ -10,6 +10,8 @@ from datetime import datetime
 from pbgui_purefunc import PBGDIR
 from logging_helpers import human_log as _log
 
+SERVICE = "Exchange"
+
 from ccxt.base.errors import (
     AuthenticationError,
     BadRequest,
@@ -1038,12 +1040,17 @@ class Exchange:
         return self.instance.milliseconds()
 
     def save_income_other(self, history : list, exchange: str):
-        dest = Path(f'{PBGDIR}/data/logs')
-        if not dest.exists():
-            dest.mkdir(parents=True)
-        file = Path(f"{PBGDIR}/data/logs/income_other_{exchange}.json")
-        with open(file, 'a') as f:
-            json.dump(history, f, indent=4)
+        _log(
+            SERVICE,
+            "Received income records that are not imported into the database",
+            level="WARNING",
+            meta={
+                "operation": "save_income_other",
+                "exchange": exchange,
+                "record_count": len(history) if isinstance(history, list) else 0,
+                "records": history,
+            },
+        )
 
     def fetch_history(self, since: int = None):
         if self.user.key == 'key':

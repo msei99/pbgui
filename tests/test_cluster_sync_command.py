@@ -11,19 +11,38 @@ from pathlib import Path
 
 import pytest
 
+from cluster_credentials import (
+    SecretContext,
+    SecretRecipient,
+    ensure_node_key_material,
+    seal_secret,
+    serialize_sealed_secret,
+    sign_operation,
+)
 from cluster_sync_command import ClusterSyncCommandError, main, run_command
-from master.cluster_state import append_operation, ensure_local_identity, load_operations, read_local_identity
+from credential_store import CredentialStore
+from master.cluster_state import (
+    append_operation,
+    credential_lifecycle_status,
+    create_join_authorization,
+    ensure_local_identity,
+    load_operations,
+    read_local_identity,
+    rebuild_materialized_state,
+    write_operation,
+)
 
 
 CLUSTER_ID = "pbgui-cluster-00000000-0000-4000-8000-000000000001"
 FOREIGN_CLUSTER_ID = "pbgui-cluster-00000000-0000-4000-8000-000000000099"
 NODE_A = "pbgui-node-00000000-0000-4000-8000-00000000000a"
 NODE_B = "pbgui-node-00000000-0000-4000-8000-00000000000b"
+NODE_C = "pbgui-node-00000000-0000-4000-8000-00000000000c"
 HASH_A = "sha256:" + "a" * 64
 
 
 def _init_cluster(tmp_path: Path) -> Path:
-    """Create a deterministic cluster with a registered remote node."""
+    """Create a deterministic cluster with one historical remote member."""
 
     root = tmp_path / "cluster"
     ensure_local_identity(
@@ -34,12 +53,37 @@ def _init_cluster(tmp_path: Path) -> Path:
         node_id=NODE_A,
         created_at=100,
     )
-    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-b"}, created_at=101)
+    write_operation(root, _legacy_membership(NODE_A, 1, NODE_B, "vps", created_at=101), allow_legacy_membership=True)
     return root
 
 
+def _legacy_membership(
+    actor: str,
+    seq: int,
+    node_id: str,
+    role: str,
+    *,
+    created_at: int,
+    **payload,
+) -> dict:
+    """Build an unsigned v1 membership record used only for disk-replay fixtures."""
+
+    return {
+        "schema_version": 1,
+        "cluster_id": CLUSTER_ID,
+        "op_id": f"{actor}:{seq:08d}",
+        "actor": actor,
+        "seq": seq,
+        "op": "ADD_NODE",
+        "created_at": created_at,
+        "node_id": node_id,
+        "role": role,
+        **payload,
+    }
+
+
 def _operation(cluster_id: str = CLUSTER_ID) -> dict:
-    """Build one deterministic remote operation."""
+    """Build one deterministic non-membership remote operation."""
 
     return {
         "schema_version": 1,
@@ -47,11 +91,9 @@ def _operation(cluster_id: str = CLUSTER_ID) -> dict:
         "op_id": f"{NODE_B}:00000001",
         "actor": NODE_B,
         "seq": 1,
-        "op": "ADD_NODE",
+        "op": "STOP_INSTANCE",
         "created_at": 102,
-        "node_id": NODE_B,
-        "role": "vps",
-        "pbname": "vps-b",
+        "instance": "remote-b",
     }
 
 
@@ -116,10 +158,13 @@ def test_hello_returns_identity_for_registered_peer(tmp_path: Path) -> None:
     payload = run_command(root, NODE_B, "hello")
 
     assert payload["ok"] is True
-    assert payload["protocol_version"] == 1
+    assert payload["protocol_version"] == 2
     assert payload["cluster_id"] == CLUSTER_ID
     assert payload["node_id"] == NODE_A
     assert payload["remote_node"] == NODE_B
+    assert payload["credential_capability"]["sealed_credentials"] is True
+    assert payload["crypto_public_bundle"]["node_id"] == NODE_A
+    assert payload["capabilities"] == ["sealed_credentials_v2"]
 
 
 def test_unknown_peer_is_rejected_without_join_mode(tmp_path: Path) -> None:
@@ -131,7 +176,44 @@ def test_unknown_peer_is_rejected_without_join_mode(tmp_path: Path) -> None:
     with pytest.raises(ClusterSyncCommandError, match="not registered"):
         run_command(root, unknown, "hello")
 
-    assert run_command(root, unknown, "hello", allow_join=True)["remote_node"] == unknown
+    with pytest.raises(ClusterSyncCommandError, match="not registered"):
+        run_command(root, unknown, "hello", allow_join=True)
+
+
+def test_disabled_peer_is_denied_every_non_join_command(tmp_path: Path) -> None:
+    """A disabled SSH key cannot use read or write verbs even with allow-join set."""
+
+    root = _init_cluster(tmp_path)
+    local_bundle = ensure_node_key_material(root).public_bundle(NODE_A, "master")
+    write_operation(
+        root,
+        _legacy_membership(
+            NODE_A,
+            2,
+            NODE_A,
+            "master",
+            created_at=102,
+            **{field: local_bundle[field] for field in (
+                "signing_public_key", "signing_key_id", "encryption_public_key", "encryption_key_id"
+            )},
+        ),
+        allow_legacy_membership=True,
+    )
+    append_operation(root, "DISABLE_NODE", {"node_id": NODE_B}, created_at=103)
+
+    for command in ("hello", "get-state-vector", "put-blob sha256:" + "0" * 64):
+        with pytest.raises(ClusterSyncCommandError, match="disabled"):
+            run_command(root, NODE_B, command, allow_join=True)
+
+
+def test_network_rejects_unsigned_historical_membership_input(tmp_path: Path) -> None:
+    """Unsigned v1 membership remains disk-readable but cannot enter over sync."""
+
+    root = _init_cluster(tmp_path)
+    operation = _legacy_membership(NODE_C, 1, NODE_C, "vps", created_at=102)
+
+    with pytest.raises(ClusterSyncCommandError, match="historical replay only"):
+        run_command(root, NODE_B, "put-op", json.dumps(operation).encode())
 
 
 def test_join_initializes_identity_for_approved_remote(tmp_path: Path) -> None:
@@ -148,6 +230,45 @@ def test_join_initializes_identity_for_approved_remote(tmp_path: Path) -> None:
     assert payload["joined_by"] == NODE_A
     assert identity["cluster_id"] == CLUSTER_ID
     assert identity["node_id"] == NODE_B
+
+
+def test_join_bootstrap_installs_authorizer_and_signed_self_membership(tmp_path: Path) -> None:
+    """Explicit join metadata establishes both trust roots before normal sync."""
+
+    master_root = tmp_path / "master-cluster"
+    ensure_local_identity(
+        master_root,
+        role="master",
+        pbname="master-a",
+        cluster_id=CLUSTER_ID,
+        node_id=NODE_A,
+        created_at=100,
+    )
+    master_op = append_operation(
+        master_root,
+        "ADD_NODE",
+        {"node_id": NODE_A, "role": "master", "pbname": "master-a"},
+        created_at=101,
+    )
+    authorization = create_join_authorization(master_root, NODE_B, "vps", created_at=102)
+    bootstrap = base64.urlsafe_b64encode(json.dumps({
+        "authorization": authorization,
+        "authorizer_operation": master_op,
+    }, sort_keys=True, separators=(",", ":")).encode()).decode()
+    joined_root = tmp_path / "joined-cluster"
+
+    payload = run_command(
+        joined_root,
+        NODE_A,
+        f"join {CLUSTER_ID} {NODE_B} vps vps-b {bootstrap}",
+        allow_join=True,
+    )
+    operations = load_operations(joined_root, expected_cluster_id=CLUSTER_ID)
+
+    assert payload["membership_op_id"] == f"{NODE_B}:00000001"
+    assert {operation["node_id"] for operation in operations if operation["op"] == "ADD_NODE"} == {NODE_A, NODE_B}
+    assert all(operation.get("signature_algorithm") == "Ed25519" for operation in operations)
+    assert run_command(joined_root, NODE_A, "hello")["remote_node"] == NODE_A
 
 
 def test_join_rejects_overwriting_existing_identity(tmp_path: Path) -> None:
@@ -206,6 +327,172 @@ def test_put_ops_writes_valid_operation_batch(tmp_path: Path) -> None:
     assert [item["op_id"] for item in payload["operations"]] == [f"{NODE_B}:00000001", f"{NODE_B}:00000002"]
     assert any(item["op_id"] == f"{NODE_B}:00000001" for item in operations)
     assert any(item["op_id"] == f"{NODE_B}:00000002" for item in operations)
+
+
+def test_put_ops_rejects_forged_membership_key_substitution(tmp_path: Path) -> None:
+    """A batch cannot replace a member key and validate a forged credential with it."""
+
+    root = _init_cluster(tmp_path)
+    trusted_keys = ensure_node_key_material(tmp_path / "trusted-remote-keys")
+    trusted_bundle = trusted_keys.public_bundle(NODE_B, "vps")
+    write_operation(
+        root,
+        _legacy_membership(
+            NODE_A,
+            2,
+            NODE_B,
+            "vps",
+            created_at=102,
+            **{field: trusted_bundle[field] for field in (
+                "signing_public_key", "signing_key_id", "encryption_public_key", "encryption_key_id"
+            )},
+        ) | {"op": "UPDATE_NODE"},
+        allow_legacy_membership=True,
+    )
+    keys = ensure_node_key_material(tmp_path / "attacker-keys")
+    bundle = keys.public_bundle(NODE_B, "vps")
+    membership = _operation()
+    membership.update({
+        "op": "UPDATE_NODE",
+        "node_id": NODE_B,
+        **{field: bundle[field] for field in (
+            "signing_public_key", "signing_key_id", "encryption_public_key", "encryption_key_id"
+        )},
+    })
+    membership = sign_operation(membership, keys.signing_private_key, signer_id=NODE_B)
+    unsigned_secret = {
+        "schema_version": 1,
+        "cluster_id": CLUSTER_ID,
+        "op_id": f"{NODE_B}:00000002",
+        "actor": NODE_B,
+        "seq": 2,
+        "op": "UPSERT_SECRET",
+        "created_at": 103,
+        "secret_id": "cmc_" + "4" * 32,
+        "secret_kind": "cmc_api_key",
+        "audience": "cluster",
+        "generation": 1,
+        "parent_generation": 0,
+        "sealed_blob_hash": "sha256:" + "4" * 64,
+    }
+    signed_secret = sign_operation(unsigned_secret, keys.signing_private_key, signer_id=NODE_B)
+
+    with pytest.raises(ClusterSyncCommandError, match="authenticated key|signature"):
+        run_command(
+            root,
+            NODE_B,
+            "put-ops",
+            json.dumps({"operations": [signed_secret, membership]}).encode(),
+        )
+    assert not any(operation["actor"] == NODE_B for operation in load_operations(root))
+
+
+def test_apply_bundle_rejects_forged_same_batch_membership_key(tmp_path: Path) -> None:
+    """A bundle cannot authenticate its envelope with an untrusted key update."""
+
+    root = _init_cluster(tmp_path)
+    trusted_keys = ensure_node_key_material(tmp_path / "trusted-remote-keys")
+    trusted_bundle = trusted_keys.public_bundle(NODE_B, "vps")
+    write_operation(
+        root,
+        _legacy_membership(
+            NODE_A,
+            2,
+            NODE_B,
+            "vps",
+            created_at=102,
+            **{field: trusted_bundle[field] for field in (
+                "signing_public_key", "signing_key_id", "encryption_public_key", "encryption_key_id"
+            )},
+        ) | {"op": "UPDATE_NODE"},
+        allow_legacy_membership=True,
+    )
+    keys = ensure_node_key_material(tmp_path / "attacker-keys")
+    bundle = keys.public_bundle(NODE_B, "vps")
+    membership = _operation()
+    membership.update({
+        "op": "UPDATE_NODE",
+        "node_id": NODE_B,
+        **{field: bundle[field] for field in (
+            "signing_public_key", "signing_key_id", "encryption_public_key", "encryption_key_id"
+        )},
+    })
+    membership = sign_operation(membership, keys.signing_private_key, signer_id=NODE_B)
+    secret_id = "cmc_" + "6" * 32
+    context = SecretContext(CLUSTER_ID, secret_id, "cmc_api_key", 1, "cluster")
+    envelope = seal_secret(
+        b"opaque-relay-value",
+        context,
+        [SecretRecipient(NODE_B, "vps", keys.encryption_public_key)],
+        keys.signing_private_key,
+        signer_id=NODE_B,
+    )
+    raw = serialize_sealed_secret(envelope)
+    blob_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+    signed_secret = sign_operation(
+        {
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_B}:00000002",
+            "actor": NODE_B,
+            "seq": 2,
+            "op": "UPSERT_SECRET",
+            "created_at": 103,
+            "secret_id": secret_id,
+            "secret_kind": "cmc_api_key",
+            "audience": "cluster",
+            "generation": 1,
+            "parent_generation": 0,
+            "sealed_blob_hash": blob_hash,
+        },
+        keys.signing_private_key,
+        signer_id=NODE_B,
+    )
+    request = {
+        "operations": [signed_secret, membership],
+        "config_blobs": [],
+        "secret_blobs": [],
+        "sealed_blobs": [{"hash": blob_hash, "content_b64": base64.b64encode(raw).decode("ascii")}],
+    }
+
+    with pytest.raises(ClusterSyncCommandError, match="authenticated key|signature"):
+        run_command(root, NODE_B, "apply-bundle", json.dumps(request).encode())
+    assert not (root / "sealed_blobs").exists()
+
+
+def test_apply_bundle_accepts_direct_legacy_node_key_claim(tmp_path: Path) -> None:
+    """The authenticated node may publish its first v2 key through the fast path."""
+
+    root = _init_cluster(tmp_path)
+    keys = ensure_node_key_material(tmp_path / "remote-keys")
+    claim = sign_operation(
+        {
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_B}:00000001",
+            "actor": NODE_B,
+            "seq": 1,
+            "op": "UPDATE_NODE_KEY",
+            "created_at": 102,
+            "node_id": NODE_B,
+            **keys.public_bundle(NODE_B, "vps"),
+        },
+        keys.signing_private_key,
+        signer_id=NODE_B,
+    )
+    request = {
+        "operations": [claim],
+        "config_blobs": [],
+        "secret_blobs": [],
+        "sealed_blobs": [],
+    }
+
+    payload = run_command(root, NODE_B, "apply-bundle", json.dumps(request).encode())
+
+    assert payload["ok"] is True
+    operations = load_operations(root, expected_cluster_id=CLUSTER_ID)
+    assert operations[-1]["op"] == "UPDATE_NODE_KEY"
+    assert operations[-1]["signer_key_id"] == claim["signing_key_id"]
 
 
 def test_get_ops_returns_bounded_operation_range(tmp_path: Path) -> None:
@@ -377,6 +664,389 @@ def test_put_secret_blob_uses_owner_only_permissions(tmp_path: Path) -> None:
     assert base64.b64decode(fetched["content_b64"]) == raw
 
 
+def _credential_cluster(
+    tmp_path: Path,
+    *,
+    local_node: str,
+    local_role: str,
+    members: list[tuple[str, str, Path]],
+) -> Path:
+    """Create one test replica with the same crypto-capable membership."""
+
+    root = tmp_path / local_node[-1] / "cluster"
+    ensure_local_identity(
+        root,
+        role=local_role,
+        pbname=local_node[-1],
+        cluster_id=CLUSTER_ID,
+        node_id=local_node,
+        created_at=100,
+    )
+    advertised_root = next(key_root for node_id, _role, key_root in members if node_id == local_node)
+    advertised_keys = ensure_node_key_material(advertised_root)
+    local_keys = ensure_node_key_material(root)
+    for path in local_keys.crypto_root.iterdir():
+        path.unlink()
+    for path in advertised_keys.crypto_root.iterdir():
+        if path.name != ".keys.lock":
+            (local_keys.crypto_root / path.name).write_bytes(path.read_bytes())
+    ensure_node_key_material(root)
+    for index, (node_id, role, key_root) in enumerate(members, start=1):
+        bundle = ensure_node_key_material(key_root).public_bundle(node_id, role)
+        write_operation(
+            root,
+            _legacy_membership(
+                node_id,
+                1,
+                node_id,
+                role,
+                created_at=100 + index,
+                 **{field: bundle[field] for field in (
+                     "signing_public_key", "signing_key_id", "encryption_public_key", "encryption_key_id"
+                 )},
+                 credential_protocol_version=2,
+                 credential_capable=True,
+                 pbname=node_id[-1],
+            ),
+            allow_legacy_membership=True,
+        )
+    return root
+
+
+def test_cutoff_rejects_obsolete_secret_blob_get_put_and_operation_relay(tmp_path: Path) -> None:
+    """A signed cutoff prevents every restricted-command plaintext relay path."""
+
+    key_a_root = tmp_path / "keys-a"
+    key_b_root = tmp_path / "keys-b"
+    root = _credential_cluster(
+        tmp_path,
+        local_node=NODE_A,
+        local_role="master",
+        members=[(NODE_A, "master", key_a_root), (NODE_B, "vps", key_b_root)],
+    )
+    raw = b'{"tradfi":{"api_key":"obsolete"}}'
+    blob_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+    _write_secret_blob(root, blob_hash, raw)
+    operation = append_operation(
+        root,
+        "UPSERT_API_KEYS",
+        {"api_serial": 1, "payload_hash": HASH_A, "secret_blob_hash": blob_hash},
+    )
+    append_operation(
+        root,
+        "CREDENTIAL_CUTOFF",
+        {
+            "cutoff_generation": 1,
+            "parent_generation": 0,
+            "state_vector": {NODE_A: int(operation["seq"])},
+            "min_protocol": 2,
+            "obsolete_secret_blob_hashes": [blob_hash],
+        },
+    )
+    rebuild_materialized_state(root)
+
+    with pytest.raises(ClusterSyncCommandError, match="pre-cutoff"):
+        run_command(root, NODE_B, f"get-secret-blob {blob_hash}")
+    with pytest.raises(ClusterSyncCommandError, match="pre-cutoff"):
+        run_command(root, NODE_B, f"put-secret-blob {blob_hash}", raw)
+    relayed = run_command(
+        root,
+        NODE_B,
+        f"get-ops {NODE_A} {operation['seq']} {operation['seq']}",
+    )
+    assert [item["op_id"] for item in relayed["operations"]] == [operation["op_id"]]
+    assert relayed["missing"] == []
+
+
+@pytest.mark.parametrize(("role", "node_id"), [("master", NODE_A), ("vps", NODE_B)])
+def test_materialize_cluster_audience_cmc_on_master_and_vps(
+    tmp_path: Path,
+    role: str,
+    node_id: str,
+) -> None:
+    """CMC sealed credentials decrypt and materialize on both cluster roles."""
+
+    key_a_root = tmp_path / "keys-a"
+    key_b_root = tmp_path / "keys-b"
+    members = [(NODE_A, "master", key_a_root), (NODE_B, "vps", key_b_root)]
+    root = _credential_cluster(
+        tmp_path,
+        local_node=node_id,
+        local_role=role,
+        members=members,
+    )
+    local_keys = ensure_node_key_material(root)
+    source_keys = ensure_node_key_material(key_a_root)
+    secret_id = "cmc_" + "1" * 32
+    context = SecretContext(CLUSTER_ID, secret_id, "cmc_api_key", 1, "cluster")
+    recipients = [
+        SecretRecipient(member_id, member_role, ensure_node_key_material(key_root).encryption_public_key)
+        for member_id, member_role, key_root in members
+    ]
+    recipient_key_ids = {
+        member_id: ensure_node_key_material(key_root).public_bundle(member_id, member_role)[
+            "encryption_key_id"
+        ]
+        for member_id, member_role, key_root in members
+    }
+    envelope = seal_secret(
+        b"cmc-test-value",
+        context,
+        recipients,
+        source_keys.signing_private_key,
+        signer_id=NODE_A,
+    )
+    raw = serialize_sealed_secret(envelope)
+    blob_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+    secret_payload = {
+            "secret_id": secret_id,
+            "secret_kind": "cmc_api_key",
+            "audience": "cluster",
+            "generation": 1,
+            "parent_generation": 0,
+            "recipient_generation": 1,
+            "parent_recipient_generation": 0,
+            "membership_generation": 2,
+            "recipient_ids": sorted([NODE_A, NODE_B]),
+            "recipient_key_ids": recipient_key_ids,
+            "sealed_blob_hash": blob_hash,
+    }
+    if node_id == NODE_A:
+        append_operation(root, "UPSERT_SECRET", secret_payload, created_at=110)
+    else:
+        operation = {
+            **secret_payload,
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_A}:00000002",
+            "actor": NODE_A,
+            "seq": 2,
+            "op": "UPSERT_SECRET",
+            "created_at": 110,
+            "actor_role_epoch": 1,
+            "actor_membership_op_id": f"{NODE_A}:00000001",
+        }
+        write_operation(
+            root,
+            sign_operation(operation, source_keys.signing_private_key, signer_id=NODE_A),
+            network_input=True,
+        )
+    # Re-sign with the advertised key when this replica is the VPS actor-independent recipient.
+    operation = load_operations(root)[-1]
+    assert local_keys.encryption_public_key is not None
+    run_command(root, NODE_A if node_id == NODE_B else NODE_B, f"put-sealed-blob {blob_hash}", raw)
+
+    result = run_command(root, NODE_A if node_id == NODE_B else NODE_B, "materialize-credentials")
+
+    assert result["ok"] is True, result
+    assert result["items"][0]["status"] == "written"
+    store = CredentialStore(root.parent / "credentials")
+    assert store.get_cmc(secret_id)["generation"] == 1
+    assert store.load_cmc_key(secret_id) == "cmc-test-value"
+    assert "cmc-test-value" not in json.dumps(result)
+    lifecycle = credential_lifecycle_status(rebuild_materialized_state(root, write=False))
+    assert lifecycle["nodes"][node_id]["credential_active"] is True
+    assert lifecycle["nodes"][node_id]["materialization_ack"]["recipient_generations"] == {
+        secret_id: 1
+    }
+
+
+def test_tradfi_materializes_on_master_and_vps_reports_not_recipient(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Masters open TradFi envelopes while VPS replicas only retain ciphertext."""
+
+    key_a_root = tmp_path / "keys-a"
+    key_b_root = tmp_path / "keys-b"
+    members = [(NODE_A, "master", key_a_root), (NODE_B, "vps", key_b_root)]
+    master_root = _credential_cluster(tmp_path / "master", local_node=NODE_A, local_role="master", members=members)
+    vps_root = _credential_cluster(tmp_path / "vps", local_node=NODE_B, local_role="vps", members=members)
+    pb7 = tmp_path / "pb7"
+    pb7.mkdir()
+    monkeypatch.setattr("cluster_sync_command.pb7dir", lambda: str(pb7))
+    secret_id = "tradfi_" + "2" * 32
+    context = SecretContext(CLUSTER_ID, secret_id, "tradfi_profile", 1, "masters")
+    source_keys = ensure_node_key_material(key_a_root)
+    envelope = seal_secret(
+        json.dumps({"provider": "alpaca", "credentials": {"key": "id", "secret": "value"}}).encode(),
+        context,
+        [SecretRecipient(NODE_A, "master", source_keys.encryption_public_key)],
+        source_keys.signing_private_key,
+        signer_id=NODE_A,
+    )
+    raw = serialize_sealed_secret(envelope)
+    blob_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+    source_operation = append_operation(
+        master_root,
+        "UPSERT_SECRET",
+        {
+            "secret_id": secret_id,
+            "secret_kind": "tradfi_profile",
+            "audience": "masters",
+            "generation": 1,
+            "parent_generation": 0,
+            "sealed_blob_hash": blob_hash,
+            "provider": "alpaca",
+            "actor_role_epoch": 1,
+            "actor_membership_op_id": f"{NODE_A}:00000001",
+        },
+        created_at=110,
+    )
+    run_command(master_root, NODE_B, f"put-sealed-blob {blob_hash}", raw)
+    run_command(vps_root, NODE_A, f"put-sealed-blob {blob_hash}", raw)
+    run_command(vps_root, NODE_A, "put-op", json.dumps(source_operation).encode())
+
+    master_result = run_command(master_root, NODE_B, "materialize-credentials")
+    vps_result = run_command(vps_root, NODE_A, "materialize-credentials")
+
+    assert master_result["items"][0]["status"] == "written"
+    assert CredentialStore(master_root.parent / "credentials").load_tradfi_credentials(secret_id) == {
+        "key": "id",
+        "secret": "value",
+    }
+    assert vps_result["items"][0]["status"] == "not_recipient"
+    assert CredentialStore(vps_root.parent / "credentials").list_tradfi() == []
+    projected = json.loads((pb7 / "api-keys.json").read_text(encoding="utf-8"))
+    assert projected["tradfi"]["provider"] == "alpaca"
+    assert projected["tradfi"]["key"] == "id"
+    assert projected["tradfi"]["secret"] == "value"
+    assert master_result["tradfi_projection"]["status"] == "current"
+    assert vps_result["tradfi_projection"]["status"] == "not_recipient"
+    assert "value" not in json.dumps(master_result)
+
+
+def test_three_node_vps_relay_forwards_opaque_tradfi_without_decrypting(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A VPS relays a masters envelope and signed operation without opening it."""
+
+    key_a_root = tmp_path / "keys-a"
+    key_b_root = tmp_path / "keys-b"
+    key_c_root = tmp_path / "keys-c"
+    members = [
+        (NODE_A, "master", key_a_root),
+        (NODE_B, "vps", key_b_root),
+        (NODE_C, "master", key_c_root),
+    ]
+    relay_root = _credential_cluster(tmp_path / "relay", local_node=NODE_B, local_role="vps", members=members)
+    destination_root = _credential_cluster(tmp_path / "destination", local_node=NODE_C, local_role="master", members=members)
+    secret_id = "tradfi_" + "3" * 32
+    source_keys = ensure_node_key_material(key_a_root)
+    context = SecretContext(CLUSTER_ID, secret_id, "tradfi_profile", 1, "masters")
+    envelope = seal_secret(
+        b'{"provider":"alpaca","credentials":{"secret":"relay-only"}}',
+        context,
+        [
+            SecretRecipient(NODE_A, "master", source_keys.encryption_public_key),
+            SecretRecipient(NODE_C, "master", ensure_node_key_material(key_c_root).encryption_public_key),
+        ],
+        source_keys.signing_private_key,
+        signer_id=NODE_A,
+    )
+    raw = serialize_sealed_secret(envelope)
+    blob_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+    operation = sign_operation(
+        {
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_A}:00000002",
+            "actor": NODE_A,
+            "seq": 2,
+            "op": "UPSERT_SECRET",
+            "created_at": 110,
+            "secret_id": secret_id,
+            "secret_kind": "tradfi_profile",
+            "audience": "masters",
+            "generation": 1,
+            "parent_generation": 0,
+            "sealed_blob_hash": blob_hash,
+            "provider": "alpaca",
+            "actor_role_epoch": 1,
+            "actor_membership_op_id": f"{NODE_A}:00000001",
+        },
+        source_keys.signing_private_key,
+        signer_id=NODE_A,
+    )
+    monkeypatch.setattr(
+        "cluster_sync_command.open_sealed_secret",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("relay must not decrypt")),
+    )
+
+    run_command(relay_root, NODE_A, f"put-sealed-blob {blob_hash}", raw)
+    run_command(relay_root, NODE_A, "put-op", json.dumps(operation).encode())
+    forwarded = run_command(relay_root, NODE_C, f"get-sealed-blob {blob_hash}")
+    run_command(destination_root, NODE_B, f"put-sealed-blob {blob_hash}", base64.b64decode(forwarded["content_b64"]))
+    run_command(destination_root, NODE_B, "put-op", json.dumps(operation).encode())
+
+    digest = blob_hash.removeprefix("sha256:")
+    relay_path = relay_root / "sealed_blobs" / "sha256" / digest[:2] / f"{digest}.json"
+    destination_path = destination_root / "sealed_blobs" / "sha256" / digest[:2] / f"{digest}.json"
+    assert relay_path.read_bytes() == destination_path.read_bytes() == raw
+    assert stat.S_IMODE(relay_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(relay_path.parent.stat().st_mode) == 0o700
+    assert load_operations(destination_root)[-1]["sealed_blob_hash"] == blob_hash
+
+    replacement = seal_secret(
+        b'{"provider":"alpaca","credentials":{"secret":"relay-only"}}',
+        context,
+        [
+            SecretRecipient(NODE_A, "master", source_keys.encryption_public_key),
+            SecretRecipient(
+                NODE_C,
+                "master",
+                ensure_node_key_material(key_c_root).encryption_public_key,
+            ),
+        ],
+        source_keys.signing_private_key,
+        signer_id=NODE_A,
+    )
+    replacement_raw = serialize_sealed_secret(replacement)
+    replacement_hash = "sha256:" + hashlib.sha256(replacement_raw).hexdigest()
+    replacement_operation = sign_operation(
+        {
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_A}:00000003",
+            "actor": NODE_A,
+            "seq": 3,
+            "op": "UPDATE_SECRET_RECIPIENTS",
+            "created_at": 111,
+            "secret_id": secret_id,
+            "provider_generation": 1,
+            "recipient_generation": 2,
+            "parent_recipient_generation": 1,
+            "membership_generation": 3,
+            "recipient_ids": [NODE_A, NODE_C],
+            "recipient_key_ids": {
+                NODE_A: source_keys.public_bundle(NODE_A, "master")["encryption_key_id"],
+                NODE_C: ensure_node_key_material(key_c_root).public_bundle(NODE_C, "master")["encryption_key_id"],
+            },
+            "sealed_blob_hash": replacement_hash,
+            "actor_role_epoch": 1,
+            "actor_membership_op_id": f"{NODE_A}:00000001",
+        },
+        source_keys.signing_private_key,
+        signer_id=NODE_A,
+    )
+    run_command(relay_root, NODE_A, f"put-sealed-blob {replacement_hash}", replacement_raw)
+    run_command(relay_root, NODE_A, "put-op", json.dumps(replacement_operation).encode())
+    forwarded = run_command(relay_root, NODE_C, f"get-sealed-blob {replacement_hash}")
+    run_command(
+        destination_root,
+        NODE_B,
+        f"put-sealed-blob {replacement_hash}",
+        base64.b64decode(forwarded["content_b64"]),
+    )
+    run_command(destination_root, NODE_B, "put-op", json.dumps(replacement_operation).encode())
+    current = rebuild_materialized_state(destination_root, write=False)["desired_state"]["secrets"][secret_id]
+    assert current["generation"] == 1
+    assert current["recipient_generation"] == 2
+    assert current["sealed_blob_hash"] == replacement_hash
+    assert destination_path.read_bytes() == raw
+
+
 def test_get_desired_state_returns_materialized_snapshot(tmp_path: Path) -> None:
     """get-desired-state returns a deterministic snapshot rebuilt from oplog."""
 
@@ -512,7 +1182,7 @@ def test_materialize_v7_vps_writes_only_assigned_config_blobs(tmp_path: Path) ->
         node_id=NODE_B,
         created_at=100,
     )
-    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master-a"}, created_at=101)
+    write_operation(root, _legacy_membership(NODE_A, 1, NODE_A, "master", created_at=101, pbname="master-a"), allow_legacy_membership=True)
     manifest_hash = _write_config_blob_set(root, {"config.json": b'{"live":{"user":"local"}}'})
     other_hash = _write_config_blob_set(root, {"config.json": b'{"live":{"user":"other"}}'})
     append_operation(
@@ -620,7 +1290,7 @@ def test_materialize_api_keys_preview_and_apply_writes_secret_blob(
     role: str,
     expects_backup: bool,
 ) -> None:
-    """materialize-api-keys writes api-keys.json and backs up only on masters."""
+    """Exchange materialization preserves TradFi and backs up only on masters."""
 
     root = _init_cluster(tmp_path)
     if role != "master":
@@ -635,7 +1305,10 @@ def test_materialize_api_keys_preview_and_apply_writes_secret_blob(
     pb7 = tmp_path / "pb7"
     pb7.mkdir()
     target = pb7 / "api-keys.json"
-    target.write_text('{"_api_serial":1}', encoding="utf-8")
+    target.write_text(
+        '{"_api_serial":1,"tradfi":{"provider":"tiingo","api_key":"vault-token"}}',
+        encoding="utf-8",
+    )
     monkeypatch.setattr("cluster_sync_command.PBGDIR", str(tmp_path))
     monkeypatch.setattr("cluster_sync_command.pb7dir", lambda: str(pb7))
     raw_secret = b'{"_api_serial":7,"user":{"exchange":"binance","secret":"s"}}'
@@ -655,13 +1328,16 @@ def test_materialize_api_keys_preview_and_apply_writes_secret_blob(
     assert preview["can_apply"] is True
     assert preview["counts"]["write"] == 1
     assert result["status"] == "written"
-    assert target.read_bytes() == raw_secret
+    written = json.loads(target.read_text(encoding="utf-8"))
+    assert written["_api_serial"] == 7
+    assert written["user"] == {"exchange": "binance", "secret": "s"}
+    assert written["tradfi"] == {"provider": "tiingo", "api_key": "vault-token"}
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
     if expects_backup:
         backup_path = Path(result["backup"])
         assert backup_path.parent == tmp_path / "data" / "api-keys"
         assert backup_path.name.startswith("api-keys7_cluster-materialize_")
-        assert backup_path.read_text(encoding="utf-8") == '{"_api_serial":1}'
+        assert json.loads(backup_path.read_text(encoding="utf-8"))["tradfi"]["api_key"] == "vault-token"
     else:
         assert result["backup_skipped"] == "vps_runner"
         assert "backup" not in result

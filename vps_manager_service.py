@@ -26,15 +26,18 @@ from typing import Any, Callable
 import yaml
 
 from api.vps import get_monitor, get_monitor_state_snapshot, get_metric_history_snapshot
+from cmc_pool import CmcPoolClient
 from logging_helpers import human_log as _log
+from credential_store import CredentialStore
 from master.async_monitor import INSTANCE_COLLECT_SCRIPT, METRICS_STREAM_STALE_SECONDS, MONITOR_CACHE_VERSION
-from master.cluster_state import ClusterStateError, default_cluster_root, normalize_node_sync_mode, read_local_identity, rebuild_materialized_state
+from master.cluster_state import ClusterStateError, default_cluster_root, local_cmc_credential_readiness, normalize_node_sync_mode, read_local_identity, rebuild_materialized_state
 from MonitorConfig import MonitorConfig
 from PBCoinData import CoinData
 from pb7_release import build_local_pb7_release_info, get_current_pb7_status, load_more_pb7_commits
 from pbgui_release import build_local_pbgui_release_info, load_more_pbgui_commits
 from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, load_ini_section, pb7dir as configured_pb7dir, save_ini, save_ini_section
 from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir, _register_vps_cluster_node, _strict_ssh_client, _validate_vps_hostname, strip_ansi
+from vps_inventory_store import delete_inventory_path
 
 SERVICE = "VPSManagerApi"
 
@@ -72,7 +75,45 @@ COMMAND_VPS_UPDATE_PB = "vps-update-pb"
 COMMAND_VPS_CLEANUP = "vps-cleanup"
 COMMAND_VPS_APPLY_CONFIG = "vps-apply-config"
 COMMAND_VPS_MIGRATE_SYSTEMD = "vps-migrate-systemd"
-OPTIONAL_VPS_CONFIG_FIELDS = ("coinmarketcap_api_key",)
+CREDENTIAL_CAPABILITY_FIELDS = (
+    "credential_protocol_version",
+    "credential_active",
+    "credential_reason",
+    "cmc_catalog_generation",
+    "cmc_materialized_generation",
+    "cmc_active_key_count",
+    "cmc_provider_used",
+    "cmc_provider_limit",
+    "cmc_provider_usage_age_seconds",
+    "cmc_authority_reachable",
+    "cmc_authority_state_age_seconds",
+)
+
+
+def _cmc_provider_usage_metadata(status: dict[str, Any]) -> dict[str, float | None]:
+    """Return the newest secret-free provider usage observation."""
+
+    observations: list[tuple[float, dict[str, Any]]] = []
+    for item in status.get("keys") or []:
+        if not isinstance(item, dict):
+            continue
+        timestamp = _safe_float(item.get("provider_usage_updated_at") or item.get("last_settled_at"), 0.0)
+        if timestamp > 0:
+            observations.append((timestamp, item))
+    if not observations:
+        return {
+            "cmc_provider_used": None,
+            "cmc_provider_limit": None,
+            "cmc_provider_usage_age_seconds": None,
+        }
+    timestamp, item = max(observations, key=lambda entry: entry[0])
+    return {
+        "cmc_provider_used": max(_safe_float(item.get("provider_used"), 0.0), 0.0) if item.get("provider_used") is not None else None,
+        "cmc_provider_limit": max(_safe_float(item.get("provider_limit"), 0.0), 0.0) if item.get("provider_limit") is not None else None,
+        "cmc_provider_usage_age_seconds": round(max(time.time() - timestamp, 0.0), 1),
+    }
+
+
 VPS_DEPLOY_DEFAULT_ACTION = COMMAND_VPS_DEPLOY_LOGGING
 VPS_DEPLOY_DEFAULT_MODE = "parallel"
 VPS_DEPLOY_MODES = ("parallel", "sequential")
@@ -832,16 +873,6 @@ def _safe_float_str(value: Any, default: float) -> float:
         return default
 
 
-def _configured_optional_secret(value: Any) -> bool:
-    normalized = str(value or "").strip()
-    if not normalized:
-        return False
-    lowered = normalized.lower()
-    if lowered in {"none", "null", "false", "<api_key>"}:
-        return False
-    return not (normalized.startswith("<") and normalized.endswith(">"))
-
-
 def _python_major_minor(executable: str | None) -> str:
     candidate = str(executable or "").strip()
     if not candidate:
@@ -1161,7 +1192,6 @@ class VPSManagerService:
             "swap": [],
         }
         self._master_server_cpu_history: list[tuple[float, float, float]] = []
-        self._vps_coindata_status_cache: dict[str, bool] = {}
         self._vps_ssh_ok_cache: dict[str, bool] = {}
         self._vps_systemd_migration_status_cache: dict[str, dict[str, Any]] = {}
         self._session_secrets: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
@@ -2036,10 +2066,7 @@ class VPSManagerService:
                 emit_progress("Refreshing remote settings...", hostname=hostname)
                 try:
                     info = vps.fetch_vps_info()
-                    vps.coinmarketcap_api_key = str(info.get("coinmarketcap") or vps.coinmarketcap_api_key or "")
                     vps.swap = info.get("swap", "0") if info.get("swap") in SWAP_OPTIONS else str(vps.swap or "0")
-                    if info.get("firewall_ssh_port") is not None:
-                        vps.firewall_ssh_port = _safe_int(info.get("firewall_ssh_port"), 22)
                     vps.firewall, vps.firewall_ssh_ips = vps.fetch_ufw_settings()
                     self._clear_vps_optional_config_pending(vps)
                     settings_refreshed.append(hostname)
@@ -2166,79 +2193,170 @@ class VPSManagerService:
     def _host_meta(self, host_state: dict[str, Any] | None) -> dict[str, Any]:
         return (host_state or {}).get("meta") or {}
 
+    def _local_credential_capability_metadata(self) -> dict[str, Any]:
+        """Build secret-free local readiness from materialized metadata."""
+        result = {field: None for field in CREDENTIAL_CAPABILITY_FIELDS}
+        result["credential_reason"] = "Local CMC credential capability is unavailable"
+        cluster_root = default_cluster_root(Path(PBGDIR))
+        try:
+            store = CredentialStore(Path(PBGDIR) / "data" / "credentials")
+            records = store.list_cmc(active_only=False)
+            pool_status = CmcPoolClient(
+                credential_store=store,
+                state_root=store.root / "cmc_pool",
+                desired_state_provider=lambda: rebuild_materialized_state(
+                    cluster_root,
+                    write=False,
+                ),
+            ).status()
+        except Exception:
+            pool_status = {}
+            try:
+                payload = json.loads(
+                    (Path(PBGDIR) / "data" / "credentials" / "catalog.json").read_text(encoding="utf-8")
+                )
+                cmc_records = payload.get("cmc") if isinstance(payload, dict) else None
+                records = list(cmc_records.values()) if isinstance(cmc_records, dict) else []
+            except Exception:
+                result["credential_active"] = False
+                result["credential_reason"] = "Local credential catalog is unavailable"
+                return result
+        try:
+            materialized = rebuild_materialized_state(cluster_root, write=False)
+            identity = read_local_identity(cluster_root)
+        except Exception:
+            standalone = [
+                record for record in records
+                if isinstance(record, dict) and record.get("active") and not record.get("pending")
+            ]
+            generation = max((_safe_int(record.get("generation"), 0) for record in standalone), default=0)
+            result.update({
+                "credential_protocol_version": 2,
+                "credential_active": bool(standalone),
+                "credential_reason": "Standalone local CMC credential pool active" if standalone else "No active standalone CMC credentials",
+                "cmc_catalog_generation": generation,
+                "cmc_materialized_generation": generation,
+                "cmc_active_key_count": len(standalone),
+            })
+            result.update(_cmc_provider_usage_metadata(pool_status))
+            return result
+        result.update(
+            local_cmc_credential_readiness(
+                materialized,
+                str(identity.get("node_id") or ""),
+                records,
+            )
+        )
+        result.update(_cmc_provider_usage_metadata(pool_status))
+        authority_reachable = pool_status.get("authority_reachable")
+        if isinstance(authority_reachable, bool):
+            result["cmc_authority_reachable"] = authority_reachable
+        authorities = (((materialized.get("desired_state") or {}).get("cmc_pool") or {}).get("authorities") or {})
+        authority_timestamps = [
+            _safe_float(item.get("updated_at"), 0.0)
+            for item in authorities.values()
+            if isinstance(item, dict)
+        ]
+        if any(authority_timestamps):
+            result["cmc_authority_state_age_seconds"] = round(
+                max(time.time() - max(authority_timestamps), 0.0), 1
+            )
+        return result
+
+    def _credential_capability_metadata(
+        self,
+        hostname: str,
+        host_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return explicit capability metadata without inferring readiness."""
+        host = str(hostname or "").strip()
+        if host == _local_master_name():
+            return self._local_credential_capability_metadata()
+        result = {field: None for field in CREDENTIAL_CAPABILITY_FIELDS}
+        meta = self._host_meta(host_state)
+        for field in CREDENTIAL_CAPABILITY_FIELDS:
+            if field not in meta:
+                continue
+            value = meta.get(field)
+            if field == "credential_active":
+                result[field] = value if isinstance(value, bool) else None
+            elif field == "credential_reason":
+                result[field] = str(value).strip() if isinstance(value, str) and value.strip() else None
+            elif field == "cmc_authority_reachable":
+                result[field] = value if isinstance(value, bool) else None
+            elif field in {"cmc_provider_used", "cmc_provider_limit", "cmc_provider_usage_age_seconds", "cmc_authority_state_age_seconds"}:
+                try:
+                    result[field] = max(float(value), 0.0)
+                except (TypeError, ValueError):
+                    result[field] = None
+            else:
+                try:
+                    result[field] = max(int(value), 0)
+                except (TypeError, ValueError):
+                    result[field] = None
+        if result["credential_reason"] is None:
+            if result["credential_active"] is True:
+                result["credential_reason"] = "CMC credential pool active"
+            elif result["credential_active"] is False:
+                result["credential_reason"] = "No active materialized CMC credentials"
+            else:
+                result["credential_reason"] = "CMC credential capability has not been reported"
+        if result["credential_protocol_version"] is not None:
+            return result
+        try:
+            materialized = rebuild_materialized_state(default_cluster_root(Path(PBGDIR)), write=False)
+            nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
+            for node in nodes.values() if isinstance(nodes, dict) else []:
+                if not isinstance(node, dict):
+                    continue
+                names = {str(node.get("hostname") or "").strip(), str(node.get("pbname") or "").strip()}
+                if host not in names:
+                    continue
+                result["credential_protocol_version"] = max(int(node["credential_protocol_version"]), 0)
+                break
+        except (ClusterStateError, KeyError, TypeError, ValueError, OSError):
+            pass
+        return result
+
+    def _credential_playbook_vars(self, hostname: str, host_state: dict[str, Any] | None = None) -> dict[str, Any]:
+        metadata = self._credential_capability_metadata(hostname, host_state)
+        playbook_fields = {
+            "credential_protocol_version",
+            "credential_active",
+            "cmc_catalog_generation",
+            "cmc_materialized_generation",
+            "cmc_active_key_count",
+        }
+        return {key: value for key, value in metadata.items() if key in playbook_fields}
+
     def _vps_optional_config_pending_path(self, vps: VPS) -> Path | None:
         hostname = str(getattr(vps, "hostname", "") or "").strip()
         if not hostname:
             return None
-        base_path = getattr(vps, "path", None)
-        if base_path:
-            return Path(base_path) / "optional_config_pending.json"
+        try:
+            hostname = _validate_vps_hostname(hostname)
+        except ValueError:
+            return None
         return Path(PBGDIR) / "data" / "vpsmanager" / "hosts" / hostname / "optional_config_pending.json"
 
-    def _load_vps_optional_config_pending(self, vps: VPS) -> dict[str, str]:
-        path = self._vps_optional_config_pending_path(vps)
-        if path is None or not path.exists():
-            return {}
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return {}
-        if not isinstance(payload, dict):
-            return {}
-        return {
-            field: str(payload.get(field) or "").strip()
-            for field in OPTIONAL_VPS_CONFIG_FIELDS
-            if field in payload
-        }
-
-    def _write_vps_optional_config_pending(self, vps: VPS, values: dict[str, Any]) -> None:
+    def _clear_vps_optional_config_pending(self, vps: VPS) -> None:
+        """Delete retired pending secret state without reading it into memory."""
         path = self._vps_optional_config_pending_path(vps)
         if path is None:
             return
-        payload = {
-            field: str(values.get(field) or "").strip()
-            for field in OPTIONAL_VPS_CONFIG_FIELDS
-            if field in values
-        }
-        if not payload:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return
-        payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
-        _atomic_write_json(path, payload)
-
-    def _clear_vps_optional_config_pending(self, vps: VPS) -> None:
-        self._write_vps_optional_config_pending(vps, {})
+        try:
+            delete_inventory_path(Path(PBGDIR) / "data" / "vpsmanager", path)
+        except OSError:
+            pass
 
     def _sync_vps_config_from_host_meta(self, vps: VPS, host_state: dict[str, Any] | None) -> None:
-        if not vps or not self._host_telemetry_fresh(host_state):
+        if not vps:
+            return
+        self._clear_vps_optional_config_pending(vps)
+        if not self._host_telemetry_fresh(host_state):
             return
         meta = self._host_meta(host_state)
-        pending = self._load_vps_optional_config_pending(vps)
-        remaining_pending = dict(pending)
         changed = False
-
-        def sync_optional_field(meta_key: str, attr_name: str, pending_key: str) -> None:
-            nonlocal changed
-            if meta_key not in meta:
-                return
-            remote_value = str(meta.get(meta_key) or "").strip()
-            if pending_key in pending:
-                desired_value = str(pending.get(pending_key) or "").strip()
-                if str(getattr(vps, attr_name, "") or "") != desired_value:
-                    setattr(vps, attr_name, desired_value)
-                    changed = True
-                if remote_value == desired_value:
-                    remaining_pending.pop(pending_key, None)
-                return
-            if str(getattr(vps, attr_name, "") or "") != remote_value:
-                setattr(vps, attr_name, remote_value)
-                changed = True
-
-        if "coinmarketcap_api_key" in meta:
-            sync_optional_field("coinmarketcap_api_key", "coinmarketcap_api_key", "coinmarketcap_api_key")
         if _truthy(meta.get("firewall_settings_present")):
             remote_firewall = _truthy(meta.get("firewall"))
             remote_firewall_port = _safe_int(meta.get("firewall_ssh_port"), 22)
@@ -2252,25 +2370,8 @@ class VPSManagerService:
             if str(getattr(vps, "firewall_ssh_ips", "") or "").strip() != remote_firewall_ips:
                 vps.firewall_ssh_ips = remote_firewall_ips
                 changed = True
-        if remaining_pending != pending:
-            self._write_vps_optional_config_pending(vps, remaining_pending)
         if changed:
             vps.save()
-
-    def _refresh_vps_instances_now(self, hostname: str) -> None:
-        monitor = get_monitor()
-        if monitor is None:
-            return
-        host = str(hostname or "").strip()
-        if not host:
-            return
-        try:
-            loop = getattr(monitor, "loop", None)
-            if loop is None or loop.is_closed():
-                return
-            asyncio.run_coroutine_threadsafe(monitor.collect_instances_now(host), loop).result(timeout=30)
-        except Exception as exc:
-            _log(SERVICE, f"immediate instance refresh failed for {host}: {exc}", level="WARNING")
 
     def _refresh_vps_monitor_connection(self, hostname: str) -> None:
         monitor = get_monitor()
@@ -2339,59 +2440,6 @@ class VPSManagerService:
         })
         return verified
 
-    def _local_v7_dynamic_ignore_enabled_on(self, name: str, hostname: str) -> bool:
-        safe_name = str(name or "").strip()
-        host = str(hostname or "").strip()
-        if not safe_name or not host or safe_name in {".", ".."} or any(ch in safe_name for ch in ("/", "\\", "\x00")):
-            return False
-        config_path = Path(PBGDIR) / "data" / "run_v7" / safe_name / "config.json"
-        if not config_path.is_file():
-            return False
-        try:
-            cfg = json.loads(config_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return False
-        pbgui = cfg.get("pbgui") if isinstance(cfg, dict) else None
-        if not isinstance(pbgui, dict) or not bool(pbgui.get("dynamic_ignore")):
-            return False
-        enabled_on = str(pbgui.get("enabled_on") or "").strip()
-        return not enabled_on or enabled_on == host
-
-    def _running_dynamic_ignore_v7_bots(self, hostname: str, host_state: dict[str, Any] | None) -> list[str]:
-        host = str(hostname or "").strip()
-        out: list[str] = []
-        for instance in (host_state or {}).get("v7_instances") or []:
-            if not _truthy((instance or {}).get("running")):
-                continue
-            name = str((instance or {}).get("name") or "").strip()
-            if not name:
-                continue
-            if _truthy((instance or {}).get("di")) or _truthy((instance or {}).get("dynamic_ignore")):
-                out.append(name)
-                continue
-            if self._local_v7_dynamic_ignore_enabled_on(name, host):
-                out.append(name)
-        return sorted(dict.fromkeys(out))
-
-    def _ensure_coinmarketcap_key_clear_allowed(self, vps: VPS, next_key: str) -> None:
-        if _configured_optional_secret(next_key) or not _configured_optional_secret(vps.coinmarketcap_api_key):
-            return
-        hostname = str(vps.hostname or "").strip()
-        if not hostname:
-            return
-        self._refresh_vps_instances_now(hostname)
-        monitor_state = self._get_monitor_state()
-        host_state = self._get_host_telemetry(monitor_state, hostname)
-        running_dynamic = self._running_dynamic_ignore_v7_bots(hostname, host_state)
-        if not running_dynamic:
-            return
-        names = ", ".join(running_dynamic[:5])
-        suffix = "" if len(running_dynamic) <= 5 else f" and {len(running_dynamic) - 5} more"
-        raise ValueError(
-            "Cannot remove the CoinMarketCap API key while dynamic_ignore bot(s) "
-            f"are running on {hostname}: {names}{suffix}. Stop them first."
-        )
-
     def _refresh_host_meta_now(self, hostname: str, *, include_package_status: bool = True) -> None:
         monitor = get_monitor()
         if monitor is None:
@@ -2415,8 +2463,6 @@ class VPSManagerService:
         self.refresh(force=False)
         monitor_state = self._get_monitor_state()
         overview_rows = self._build_overview_rows(monitor_state)
-        coindata = self._ensure_coindata()
-        cmc_api_key = coindata.api_key or ""
         vps_logging = self.get_vps_logging_config()
         deploy_settings = self.get_vps_deploy_settings()
         deploy_history = self.get_vps_deploy_history()
@@ -2427,7 +2473,7 @@ class VPSManagerService:
                 "local_user": getpass.getuser(),
                 "swap_options": SWAP_OPTIONS,
                 "init_methods": INIT_METHODS,
-                "coinmarketcap_api_key": cmc_api_key,
+                **self._local_credential_capability_metadata(),
                 "vps_logging": vps_logging,
                 "vps_deploy": deploy_settings,
             },
@@ -2702,21 +2748,6 @@ class VPSManagerService:
         monitor_state = self._get_monitor_state()
         host_state = self._get_host_telemetry(monitor_state, hostname)
         self._sync_vps_config_from_host_meta(vps, host_state)
-        # Quick detail may be less fresh, but it must not regress fields that
-        # were already validated by the full-detail path.
-        coindata_ok = bool(self._vps_coindata_status_cache.get(hostname, False)) if quick else False
-        if not quick:
-            try:
-                coindata = self._ensure_coindata()
-                if vps.coinmarketcap_api_key:
-                    old_key = coindata.api_key
-                    coindata.api_key = vps.coinmarketcap_api_key
-                    coindata_ok = coindata.fetch_api_status()
-                    coindata.api_key = old_key
-            except Exception:
-                coindata_ok = False
-            self._vps_coindata_status_cache[hostname] = bool(coindata_ok)
-
         logfiles: list[str] = []
         monitor_payload = self._build_monitor_payload(host_state, hostname=hostname)
         logfiles.extend(monitor_payload.get("logfiles", []))
@@ -2730,7 +2761,7 @@ class VPSManagerService:
         return {
             "kind": "vps",
             "hostname": hostname,
-            "status": self._build_vps_status(vps, host_state, coindata_ok, quick=quick),
+            "status": self._build_vps_status(vps, host_state, quick=quick),
             "config": self._build_vps_config(token, vps),
             "branches": {
                 "pbgui": self._build_vps_pbgui_branch_state(host_state),
@@ -2971,7 +3002,6 @@ class VPSManagerService:
 
     def _build_master_status(self, coindata_ok: bool) -> dict[str, Any]:
         summary_row = self._build_master_overview_row()
-        local_coindata = self._ensure_coindata()
         local_no_new_privs = _local_no_new_privileges()
         local_sudo_blocked_reason = "Local sudo blocked by runtime (`NoNewPrivs`)." if local_no_new_privs else ""
         pbgui_github = str(summary_row.get("pbgui_github") or "")
@@ -2980,11 +3010,9 @@ class VPSManagerService:
             "name": _local_master_name(),
             "online": bool(summary_row.get("online")),
             "coindata_ok": coindata_ok,
-            "coindata_configured": True,
             "update_ok": self.vpsmanager.update_status == "successful",
             "update_ready": True,
             "pending_updates": summary_row.get("updates", "N/A"),
-            "cmc_credits": getattr(local_coindata, "credits_left", None),
             "last_command": self.vpsmanager.command_text,
             "last_update": self.vpsmanager.last_update,
             "local_sudo_supported": not local_no_new_privs,
@@ -2994,10 +3022,11 @@ class VPSManagerService:
             "summary_row": summary_row,
             "pbgui_update_available": pbgui_github.startswith("❌"),
             "pb7_update_available": pb7_github.startswith("❌"),
+            **self._local_credential_capability_metadata(),
         }
 
     def _build_vps_status(self, vps: VPS, host_state: dict[str, Any],
-                          coindata_ok: bool, *, quick: bool = False) -> dict[str, Any]:
+                          *, quick: bool = False) -> dict[str, Any]:
         hostname = str(vps.hostname or "")
         summary_row = self._build_vps_overview_row(vps.hostname, host_state)
         cluster_node = self._cluster_node_status(hostname)
@@ -3051,9 +3080,7 @@ class VPSManagerService:
             "update_ok": vps.update_status == "successful",
             "update_ready": bool(vps.user_pw),
             "pending_updates": summary_row.get("updates", "N/A"),
-            "coindata_ok": coindata_ok,
-            "coindata_configured": True,
-            "cmc_credits": host_meta.get("cmc_credits"),
+            **self._credential_capability_metadata(hostname, host_state),
             "online": ssh_online and telemetry_fresh,
             "ssh_online": ssh_online,
             "ssh_connection_status": str(connection.get("status") or ""),
@@ -3192,6 +3219,7 @@ class VPSManagerService:
         """Return systemd units required for currently configured optional services."""
         pbrun_configured = values.get("pbrun_configured") == "yes"
         pbdata_configured = values.get("pbdata_configured") == "yes"
+        credential_active = values.get("credential_active", "unknown")
         required: list[dict[str, str]] = []
         for item in units:
             unit = item.get("unit")
@@ -3199,6 +3227,11 @@ class VPSManagerService:
                 continue
             if unit == "pbgui-pbdata.service" and not pbdata_configured:
                 continue
+            if unit == "pbgui-pbcoindata.service":
+                if credential_active == "no":
+                    continue
+                if credential_active == "unknown" and item.get("active") != "active" and item.get("enabled") != "enabled":
+                    continue
             required.append(item)
         return required
 
@@ -3236,8 +3269,7 @@ class VPSManagerService:
         monitor_state = self._get_monitor_state()
         host_state = self._get_host_telemetry(monitor_state, hostname)
         self._sync_vps_config_from_host_meta(vps, host_state)
-        coindata_ok = bool(self._vps_coindata_status_cache.get(hostname, False)) if quick else False
-        return self._build_vps_status(vps, host_state, coindata_ok, quick=quick)
+        return self._build_vps_status(vps, host_state, quick=quick)
 
     def _get_live_vps_package_status(self, vps: VPS, host_state: dict[str, Any]) -> dict[str, Any] | None:
         hostname = str(vps.hostname or "")
@@ -3838,7 +3870,6 @@ class VPSManagerService:
             "install_dir": _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user),
             "remote_pbgui_dir": vps.remote_pbgui_dir or "",
             "swap": vps.swap or "0",
-            "coinmarketcap_api_key": vps.coinmarketcap_api_key or "",
             "firewall": bool(vps.firewall),
             "firewall_ssh_port": int(vps.firewall_ssh_port or 22),
             "firewall_ssh_ips": vps.firewall_ssh_ips or "",
@@ -4903,9 +4934,10 @@ class VPSManagerService:
             if command == COMMAND_VPS_MIGRATE_SYSTEMD and not getattr(vps, "user_pw", None):
                 raise ValueError(f"VPS user password missing for {hostname}. It is required for sudo/become during systemd migration.")
             command_extra_vars = dict(extra_vars or {})
+            monitor_state = self._get_monitor_state()
+            host_state = self._get_host_telemetry(monitor_state, hostname)
+            command_extra_vars.update(self._credential_playbook_vars(hostname, host_state))
             if command in {COMMAND_VPS_UPDATE_PBGUI, COMMAND_VPS_UPDATE_PB}:
-                monitor_state = self._get_monitor_state()
-                host_state = self._get_host_telemetry(monitor_state, hostname)
                 self._sync_vps_config_from_host_meta(vps, host_state)
                 host_meta = self._host_meta(host_state)
                 if str(host_meta.get("role") or "").strip().lower() == "master":
@@ -4921,25 +4953,22 @@ class VPSManagerService:
                         "pb7dir": f"{install_dir}/pb7",
                         "pb7venv": f"{install_dir}/venv_pb7",
                     })
-                pending_optional = self._load_vps_optional_config_pending(vps)
-                if host_meta.get("coindata_configured") is False and "coinmarketcap_api_key" not in command_extra_vars and "coinmarketcap_api_key" not in pending_optional:
-                    command_extra_vars["coinmarketcap_api_key"] = ""
             self._raise_if_vps_task_active(vps, command_text)
             vps.command = command
             vps.command_text = command_text
             self.vpsmanager.update_vps(vps, debug=debug, extra_vars=command_extra_vars or None)
 
-    def _start_vps_optional_config_apply(self, token: str, vps: VPS, *, apply_optional_config: bool, apply_firewall: bool, apply_swap: bool = False) -> dict[str, Any]:
+    def _start_vps_config_apply(self, token: str, vps: VPS, *, apply_firewall: bool, apply_swap: bool = False) -> dict[str, Any]:
         self._apply_session_secrets_to_vps(token, vps)
         vps.command = COMMAND_VPS_APPLY_CONFIG
         vps.command_text = "Apply VPS Config"
         extra_vars = {
-            "apply_optional_config": bool(apply_optional_config),
             "apply_firewall": bool(apply_firewall),
             "apply_swap": bool(apply_swap),
         }
-        if apply_optional_config:
-            extra_vars["coinmarketcap_api_key"] = str(getattr(vps, "coinmarketcap_api_key", "") or "").strip()
+        monitor_state = self._get_monitor_state()
+        host_state = self._get_host_telemetry(monitor_state, str(vps.hostname or ""))
+        extra_vars.update(self._credential_playbook_vars(str(vps.hostname or ""), host_state))
         try:
             self.vpsmanager.update_vps(vps, debug=False, extra_vars=extra_vars)
         except Exception as exc:
@@ -4984,12 +5013,9 @@ class VPSManagerService:
         emit("ssh", "Connecting to VPS")
         if not vps.can_login_ssh():
             raise ValueError("Cannot login via SSH. Please check username and password.")
-        emit("remote_config", "Reading remote pbgui.ini")
+        emit("remote_config", "Reading remote VPS settings")
         info = vps.fetch_vps_info()
-        vps.coinmarketcap_api_key = info["coinmarketcap"]
         vps.swap = info.get("swap", "0") if info.get("swap") in SWAP_OPTIONS else "0"
-        if info.get("firewall_ssh_port") is not None:
-            vps.firewall_ssh_port = _safe_int(info.get("firewall_ssh_port"), 22)
         emit("firewall", "Reading UFW firewall settings")
         vps.firewall, vps.firewall_ssh_ips = vps.fetch_ufw_settings()
         emit("save", "Saving refreshed VPS settings")
@@ -5053,6 +5079,10 @@ class VPSManagerService:
 
         parsed = self._parse_vps_systemd_migration_preview(out)
         values = parsed.get("values") or {}
+        monitor_state = self._get_monitor_state()
+        host_state = self._get_host_telemetry(monitor_state, hostname)
+        credential_active = self._credential_capability_metadata(hostname, host_state).get("credential_active")
+        values["credential_active"] = "yes" if credential_active is True else "no" if credential_active is False else "unknown"
         units = parsed.get("units") or []
         cron_lines = parsed.get("cron") or []
         processes = parsed.get("processes") or []
@@ -5127,7 +5157,7 @@ printf 'KV\tpython_exists\t%s\n' "$([ -x "$python_bin" ] && printf yes || printf
 printf 'KV\tstart_sh_exists\t%s\n' "$([ -e "$pbgui_dir/start.sh" ] && printf yes || printf no)"
 printf 'KV\tsystemctl_exists\t%s\n' "$([ -n "$systemctl_path" ] && printf yes || printf no)"
 printf 'KV\tsystemctl_path\t%s\n' "$systemctl_path"
-PBGUI_CONFIG_PATH="$pbgui_dir/pbgui.ini" PBGUI_DIR="$pbgui_dir" python3 - <<'PY' 2>/dev/null || {{ printf 'KV\tpbrun_configured\tno\n'; printf 'KV\tpbdata_configured\tno\n'; printf 'KV\tcoindata_configured\tno\n'; }}
+PBGUI_CONFIG_PATH="$pbgui_dir/pbgui.ini" PBGUI_DIR="$pbgui_dir" python3 - <<'PY' 2>/dev/null || {{ printf 'KV\tpbrun_configured\tno\n'; printf 'KV\tpbdata_configured\tno\n'; }}
 import ast
 import configparser
 import json
@@ -5137,13 +5167,6 @@ from pathlib import Path
 
 config = configparser.ConfigParser()
 config.read(os.environ.get('PBGUI_CONFIG_PATH') or '')
-
-def configured(value):
-    normalized = str(value or '').strip()
-    lowered = normalized.lower()
-    if not normalized or lowered in {{'none', 'null', 'false', '<api_key>'}}:
-        return False
-    return not normalized.startswith('<')
 
 def parsed_list(raw):
     text = str(raw or '').strip()
@@ -5183,7 +5206,6 @@ def pbdata_required():
 
 print('KV\tpbrun_configured\t' + ('yes' if pbrun_required() else 'no'))
 print('KV\tpbdata_configured\t' + ('yes' if pbdata_required() else 'no'))
-print('KV\tcoindata_configured\t' + ('yes' if configured(config.get('coinmarketcap', 'api_key', fallback='')) else 'no'))
 PY
 if [ -n "$systemctl_path" ] && env XDG_RUNTIME_DIR="${{XDG_RUNTIME_DIR:-/run/user/$uid}}" systemctl --user show-environment >/dev/null 2>&1; then
   printf 'KV\tsystemd_user_manager\tyes\n'
@@ -5504,7 +5526,6 @@ fi"""
                 "pb7_dir": default_pb7_dir,
                 "pb7_venv": default_pb7_venv,
                 "swap": "0",
-                "coinmarketcap_api_key": "",
                 "firewall": False,
                 "firewall_ssh_port": 22,
                 "firewall_ssh_ips": "",
@@ -5513,6 +5534,7 @@ fi"""
                 "legacy_cron_lines": [],
                 "legacy_processes": [],
                 "legacy_start_sh_exists": False,
+                **self._credential_capability_metadata(hostname),
             },
             "can_save": False,
         }
@@ -5928,18 +5950,14 @@ done"""
                     remote_pbname = config.get("main", "pbname", fallback="").strip()
                     pb7_dir = config.get("main", "pb7dir", fallback=default_pb7_dir).strip() or default_pb7_dir
                     pb7_venv = config.get("main", "pb7venv", fallback=default_pb7_venv).strip() or default_pb7_venv
-                    cmc_key = config.get("coinmarketcap", "api_key", fallback="").strip()
                     if config.has_section("firewall"):
                         result["detected"]["firewall"] = _truthy(config.get("firewall", "enabled", fallback=""))
                         result["detected"]["firewall_ssh_port"] = _safe_int(config.get("firewall", "ssh_port", fallback="22"), 22)
                         result["detected"]["firewall_ssh_ips"] = config.get("firewall", "ssh_ips", fallback="").strip()
                     result["detected"]["pb7_dir"] = pb7_dir
                     result["detected"]["pb7_venv"] = pb7_venv
-                    result["detected"]["coinmarketcap_api_key"] = cmc_key
                     if remote_pbname and remote_pbname != hostname:
                         add_warning(f"Remote pbgui.ini pbname is '{remote_pbname}', not '{hostname}'.")
-                    if not cmc_key:
-                        add_warning("Remote pbgui.ini has no CoinMarketCap API key.")
                     pb7_dir_exists = _sftp_path_exists(sftp, pb7_dir)
                     pb7_venv_exists = _sftp_path_exists(sftp, pb7_venv)
                     add_check("PB7 directory", pb7_dir_exists, pb7_dir)
@@ -6023,7 +6041,6 @@ done"""
         vps.user = user
         vps.remote_pbgui_dir = str(detected.get("remote_pbgui_dir") or detected.get("pbgui_dir") or "").strip()
         vps.swap = str(detected.get("swap") or "0") if str(detected.get("swap") or "0") in SWAP_OPTIONS else "0"
-        vps.coinmarketcap_api_key = str(detected.get("coinmarketcap_api_key") or "")
         vps.firewall = bool(detected.get("firewall"))
         vps.firewall_ssh_port = _safe_int(detected.get("firewall_ssh_port"), 22)
         vps.firewall_ssh_ips = str(detected.get("firewall_ssh_ips") or "")
@@ -6052,9 +6069,6 @@ done"""
 
     def save_vps_config(self, token: str, hostname: str, form: dict[str, Any]) -> dict[str, Any]:
         vps = self._require_vps(hostname)
-        previous_optional = {
-            "coinmarketcap_api_key": str(getattr(vps, "coinmarketcap_api_key", "") or "").strip(),
-        }
         previous_firewall = {
             "firewall": bool(getattr(vps, "firewall", False)),
             "firewall_ssh_port": _safe_int(getattr(vps, "firewall_ssh_port", 22), 22),
@@ -6063,33 +6077,25 @@ done"""
         previous_swap = str(getattr(vps, "swap", "0") or "0")
         self._apply_vps_setup_form(token, vps, form)
         vps.save()
-        current_optional = {
-            "coinmarketcap_api_key": str(getattr(vps, "coinmarketcap_api_key", "") or "").strip(),
-        }
         current_firewall = {
             "firewall": bool(getattr(vps, "firewall", False)),
             "firewall_ssh_port": _safe_int(getattr(vps, "firewall_ssh_port", 22), 22),
             "firewall_ssh_ips": str(getattr(vps, "firewall_ssh_ips", "") or "").strip(),
         }
         current_swap = str(getattr(vps, "swap", "0") or "0")
-        optional_changed = current_optional != previous_optional
         firewall_changed = current_firewall != previous_firewall
         swap_changed = current_swap != previous_swap
         remote_apply = {"started": False, "command": COMMAND_VPS_APPLY_CONFIG, "command_text": "Apply VPS Config"}
-        if optional_changed or firewall_changed or swap_changed:
-            if optional_changed:
-                self._write_vps_optional_config_pending(vps, current_optional)
-            remote_apply = self._start_vps_optional_config_apply(
+        if firewall_changed or swap_changed:
+            remote_apply = self._start_vps_config_apply(
                 token,
                 vps,
-                apply_optional_config=optional_changed,
                 apply_firewall=firewall_changed,
                 apply_swap=swap_changed,
             )
         return {
             "config": self._build_vps_config(token, vps),
             "remote_apply": remote_apply,
-            "optional_changed": optional_changed,
             "firewall_changed": firewall_changed,
             "swap_changed": swap_changed,
         }
@@ -6126,7 +6132,13 @@ done"""
         self._apply_session_secrets_to_vps(token, vps)
         if not vps.has_setup_parameters():
             raise ValueError("Setup parameters are incomplete.")
-        self.vpsmanager.setup_vps(vps, debug=debug, extra_vars={"vps_logging_services": self.get_vps_logging_config().get("services") or []})
+        monitor_state = self._get_monitor_state()
+        host_state = self._get_host_telemetry(monitor_state, hostname)
+        extra_vars = {
+            "vps_logging_services": self.get_vps_logging_config().get("services") or [],
+            **self._credential_playbook_vars(hostname, host_state),
+        }
+        self.vpsmanager.setup_vps(vps, debug=debug, extra_vars=extra_vars)
         return self._build_vps_progress(vps, include_logs=True)
 
     def add_vps_to_cluster(self, hostname: str) -> dict[str, Any]:
@@ -6210,9 +6222,6 @@ done"""
                     raise ValueError("IP-Addresses to allow contains an invalid IPv4 address or CIDR network.")
         vps.user_pw = user_pw or None
         vps.swap = swap
-        coinmarketcap_api_key = form.get("coinmarketcap_api_key") if "coinmarketcap_api_key" in form else vps.coinmarketcap_api_key
-        self._ensure_coinmarketcap_key_clear_allowed(vps, str(coinmarketcap_api_key or "").strip())
-        vps.coinmarketcap_api_key = str(coinmarketcap_api_key or "").strip()
         install_dir = _normalize_vps_install_dir(form.get("install_dir"), vps.user)
         if install_dir:
             vps.remote_pbgui_dir = f"{install_dir}/pbgui"
@@ -6605,31 +6614,6 @@ done"""
             "ok": False,
             "error": stderr_text or "Incorrect sudo password or local sudo unavailable",
         }
-
-    def check_cmc_api_key(self, api_key: str) -> dict[str, Any]:
-        key = str(api_key or "").strip()
-        if not key:
-            return {"ok": False, "error": "API key is empty"}
-        coindata = self._ensure_coindata()
-        old_key = coindata.api_key
-        try:
-            coindata.api_key = key
-            ok = coindata.fetch_api_status()
-            if not ok:
-                return {"ok": False, "error": getattr(coindata, "api_error", "CoinMarketCap API key is invalid")}
-            return {
-                "ok": True,
-                "error": "",
-                "credit_limit_monthly": getattr(coindata, "credit_limit_monthly", None),
-                "credits_used_day": getattr(coindata, "credits_used_day", None),
-                "credits_used_month": getattr(coindata, "credits_used_month", None),
-                "credits_left": getattr(coindata, "credits_left", None),
-                "credit_limit_monthly_reset_timestamp": getattr(coindata, "credit_limit_monthly_reset_timestamp", None),
-            }
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-        finally:
-            coindata.api_key = old_key
 
     def detect_public_ip(self) -> dict[str, Any]:
         from urllib.request import urlopen

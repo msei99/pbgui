@@ -1244,7 +1244,7 @@ class LogViewerPanel {
                 return next;
             }
         }
-        var svcs = ['PBRun', 'PBRemote', 'PBCoinData', 'PBData', 'PBGui', 'PBApiServer', 'FastAPI', 'VPSMonitor', 'VPSManagerApi', 'data/logs/sync.log'];
+        var svcs = ['PBRun', 'PBCoinData', 'PBData', 'PBGui', 'PBApiServer', 'VPSMonitor', 'VPSManagerApi'];
         if (this._vpState && this._host !== 'local') {
             var meta = (this._vpState.host_meta || {})[this._host] || {};
             var available = meta.available_logs;
@@ -1260,7 +1260,7 @@ class LogViewerPanel {
                 }
             } else if (String(meta.role) === 'slave') {
                 /* fallback: filter by role when available_logs not yet collected */
-                var masterOnly = ['PBGui', 'PBApiServer', 'FastAPI', 'VPSMonitor', 'VPSManagerApi'];
+                var masterOnly = ['PBGui', 'PBApiServer', 'VPSMonitor', 'VPSManagerApi'];
                 svcs = svcs.filter(function(s) { return masterOnly.indexOf(s) < 0; });
             }
             /* PB7 instances (config-status): {name, running, cv, eo, rv} */

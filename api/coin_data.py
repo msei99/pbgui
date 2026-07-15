@@ -425,6 +425,18 @@ def _new_coindata(
     return coindata
 
 
+def _require_cmc_pool_ready(coindata: CoinData) -> None:
+    """Reject CMC jobs only when this host has no active local pool key."""
+    status = coindata.cmc_pool_status()
+    if status.get("error"):
+        raise HTTPException(status_code=503, detail="CoinMarketCap pool status is unavailable")
+    if int(status.get("active_credentials") or 0) < 1:
+        raise HTTPException(
+            status_code=409,
+            detail="No active local CoinMarketCap pool key is available",
+        )
+
+
 def _serialize_main_row(row: dict[str, Any], cmc_links: dict[str, str]) -> dict[str, Any]:
     return {
         "coin": str(row.get("coin") or ""),
@@ -606,8 +618,10 @@ def _build_state(
 
     filtered_rows = [row for row in filtered_rows_all if not row.get("is_hip3", False)]
     cmc_links = _load_cmc_link_map()
+    cmc_pool = coindata.cmc_pool_status()
 
     return {
+        "cmc_pool": cmc_pool,
         "filters": {
             "exchange": coindata.exchange,
             "market_cap": coindata.market_cap,
@@ -854,6 +868,7 @@ def refresh_cmc(
         only_cpt=payload.only_cpt,
         hide_notices=payload.hide_notices,
     )
+    _require_cmc_pool_ready(coindata)
     total_steps = 12
 
     def _runner(job_id: str, _: int) -> tuple[str, dict[str, Any]]:
@@ -903,6 +918,7 @@ def refresh_cmc_all(
         only_cpt=payload.only_cpt,
         hide_notices=payload.hide_notices,
     )
+    _require_cmc_pool_ready(coindata)
     exchanges = V7.list()
     total_steps = 6 + (len(exchanges) * 5) + 1
 

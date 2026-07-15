@@ -3,11 +3,7 @@ pbname = <hostname>
 pb7dir = <install_dir>/pb7
 pb7venv = <install_dir>/venv_pb7/bin/python
 
-[pbremote]
-bucket = <bucket_name>:
-
 [coinmarketcap]
-api_key = <api_key>
 fetch_limit = 1000
 fetch_interval = 4
 

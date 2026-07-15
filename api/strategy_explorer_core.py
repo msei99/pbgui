@@ -2047,6 +2047,109 @@ def _infer_maker_taker_fees(exchange: str, coin: str) -> tuple[float, float]:
     return 0.0, 0.0
 
 
+def _resolve_backtest_fee_overrides(
+    config: Any,
+    exchange_maker_fee: float,
+    exchange_taker_fee: float,
+) -> tuple[float, float]:
+    """Apply PB7's null-fallback semantics while preserving a zero override."""
+    backtest = config.get("backtest") if isinstance(config, dict) else {}
+    backtest = backtest if isinstance(backtest, dict) else {}
+
+    def _resolve(name: str, fallback: float) -> float:
+        value = backtest.get(name)
+        resolved = float(fallback) if value is None else float(value)
+        if not math.isfinite(resolved):
+            raise ValueError(f"backtest.{name} must be a finite number or null")
+        return resolved
+
+    return (
+        _resolve("maker_fee_override", exchange_maker_fee),
+        _resolve("taker_fee_override", exchange_taker_fee),
+    )
+
+
+class _PnlLookbackTracker:
+    """Track PB7-compatible rolling net-PnL peak and current values by 1m bar."""
+
+    def __init__(self, lookback_days: Any) -> None:
+        days = _pnl_lookback_backtest_value(lookback_days)
+        self._lookback_bars = None if days < 0.0 else max(1, int(math.ceil(days * 1440.0)))
+        self._events: deque[tuple[int, float, float, int]] = deque()
+        self._peak_candidates: deque[tuple[int, float]] = deque()
+        self._running = 0.0
+        self._peak = 0.0
+        self._sequence = 0
+
+    def _prune(self, bar_index: int) -> None:
+        if self._lookback_bars is None:
+            return
+        while self._events and int(bar_index) - self._events[0][0] > self._lookback_bars:
+            _bar, _pnl, _absolute, sequence = self._events.popleft()
+            if self._peak_candidates and self._peak_candidates[0][0] == sequence:
+                self._peak_candidates.popleft()
+
+    def record(self, bar_index: int, pnl: float) -> None:
+        """Record one net fill result at the current candle index."""
+        value = float(pnl)
+        self._running += value
+        self._peak = max(self._peak, self._running)
+        if self._lookback_bars is None:
+            return
+        self._prune(bar_index)
+        sequence = self._sequence
+        self._sequence += 1
+        self._events.append((int(bar_index), value, self._running, sequence))
+        while self._peak_candidates and self._peak_candidates[-1][1] <= self._running:
+            self._peak_candidates.pop()
+        self._peak_candidates.append((sequence, self._running))
+
+    def effective(self, bar_index: int) -> tuple[float, float]:
+        """Return the effective cumulative peak and current net PnL."""
+        if self._lookback_bars is None:
+            return self._peak, self._running
+        self._prune(bar_index)
+        if not self._events:
+            return 0.0, 0.0
+        _bar, first_pnl, first_absolute, _sequence = self._events[0]
+        base = first_absolute - first_pnl
+        peak = max(0.0, self._peak_candidates[0][1] - base)
+        return peak, self._running - base
+
+
+def _pnl_lookback_backtest_value(value: Any) -> float:
+    """Normalize PB7's canonical all-history value to its Rust sentinel."""
+    if isinstance(value, str) and value.strip().lower() == "all":
+        return -1.0
+    try:
+        days = float(value)
+    except (TypeError, ValueError):
+        return 30.0
+    return days if math.isfinite(days) else 30.0
+
+
+def _orchestrator_risk_state(
+    balance_raw: float,
+    max_realized_loss_pct: Any,
+    pnl_tracker: _PnlLookbackTracker,
+    bar_index: int,
+) -> dict[str, float]:
+    """Build the PB7 realized-loss gate fields for one orchestrator step."""
+    try:
+        max_loss = float(max_realized_loss_pct)
+    except (TypeError, ValueError):
+        max_loss = 1.0
+    if not math.isfinite(max_loss):
+        max_loss = 1.0
+    pnl_max, pnl_last = pnl_tracker.effective(bar_index)
+    return {
+        "balance_raw": float(balance_raw),
+        "max_realized_loss_pct": max_loss,
+        "realized_pnl_cumsum_max": float(pnl_max),
+        "realized_pnl_cumsum_last": float(pnl_last),
+    }
+
+
 def _compute_warmup_minutes_for_mode_c(
     bp_long: BotParams,
     bp_short: BotParams,
@@ -2956,25 +3059,13 @@ def _run_compare_from_pb7_backtest_dir(
         fees = _derive_exchange_fees_from_market(exchange, coin)
     except Exception:
         fees = {}
-    try:
-        maker_fee = float((cfg.get("backtest") or {}).get("maker_fee") or 0.0)
-    except Exception:
-        maker_fee = 0.0
-    if not math.isfinite(maker_fee) or maker_fee <= 0.0:
-        try:
-            maker_fee = float(fees.get("maker_fee", 0.0) or 0.0)
-        except Exception:
-            maker_fee = 0.0
-
-    try:
-        taker_fee = float((cfg.get("backtest") or {}).get("taker_fee") or 0.0)
-    except Exception:
-        taker_fee = 0.0
-    if not math.isfinite(taker_fee) or taker_fee <= 0.0:
-        try:
-            taker_fee = float(fees.get("taker_fee", 0.0) or maker_fee)
-        except Exception:
-            taker_fee = float(maker_fee)
+    exchange_maker_fee = float(fees.get("maker_fee", 0.0) or 0.0)
+    exchange_taker_fee = float(fees.get("taker_fee", exchange_maker_fee) or 0.0)
+    maker_fee, taker_fee = _resolve_backtest_fee_overrides(
+        cfg,
+        exchange_maker_fee,
+        exchange_taker_fee,
+    )
 
     live_cfg = cfg.get("live") if isinstance(cfg, dict) else {}
     bt_cfg = cfg.get("backtest") if isinstance(cfg, dict) else {}
@@ -3017,6 +3108,7 @@ def _run_compare_from_pb7_backtest_dir(
             market_order_slippage_pct=float(market_order_slippage_pct),
             hsl_signal_mode=str(live_cfg.get("hsl_signal_mode", "unified") or "unified"),
             pnls_max_lookback_days=live_cfg.get("pnls_max_lookback_days", bt_cfg.get("pnls_max_lookback_days", 30.0)),
+            max_realized_loss_pct=live_cfg.get("max_realized_loss_pct", 1.0),
             trade_start_time=pd.to_datetime(trade_start_ts),
             max_orders=int(max_orders),
             max_candles=int(len(candles) if candles is not None else 0),
@@ -3096,6 +3188,7 @@ def _run_pb7_engine_backtest_for_visualizer(
 
     _report(0.02, "Preparing PB7 Backtest Engine inputs...")
     maker_fee, taker_fee = _infer_maker_taker_fees(exchange, coin)
+    maker_fee, taker_fee = _resolve_backtest_fee_overrides(config, maker_fee, taker_fee)
     if warmup_minutes_override is not None:
         try:
             warmup_minutes_req = max(0, int(warmup_minutes_override))
@@ -3246,7 +3339,9 @@ def _run_pb7_engine_backtest_for_visualizer(
     )
 
     def _bp_dict(bp: BotParams, *, enabled: bool) -> dict:
-        d = _bot_params_dict_for_rust_visualizer(bp)
+        # The Python backtest binding accepts PB7 config shape, unlike the
+        # orchestrator JSON API which consumes flattened HSL ratio fields.
+        d = asdict(bp)
         # Backtest expects this key; PB7 defaults to -1.0 if not explicitly overridden.
         # (-1.0 has special meaning in PB7 config flow; keep for parity.)
         d.setdefault("wallet_exposure_limit", -1.0)
@@ -3338,6 +3433,10 @@ def _run_pb7_engine_backtest_for_visualizer(
                 pass
             try:
                 live = config.get("live") or {}
+                backtest_params["max_realized_loss_pct"] = float(live.get("max_realized_loss_pct", 1.0))
+                backtest_params["pnls_max_lookback_days"] = _pnl_lookback_backtest_value(
+                    live.get("pnls_max_lookback_days", bt.get("pnls_max_lookback_days", 30.0))
+                )
                 if "market_orders_allowed" in live:
                     backtest_params["market_orders_allowed"] = bool(live.get("market_orders_allowed"))
                 elif "market_orders_allowed" in bt:
@@ -3499,6 +3598,7 @@ def _simulate_backtest_over_historical_candles(
     market_order_slippage_pct: float = 0.0005,
     hsl_signal_mode: str = "unified",
     pnls_max_lookback_days: Any = 30.0,
+    max_realized_loss_pct: Any = 1.0,
     trade_start_time: Optional[pd.Timestamp] = None,
     max_orders: int = 200,
     max_candles: int = 2000,
@@ -3542,6 +3642,7 @@ def _simulate_backtest_over_historical_candles(
         market_order_slippage_pct=float(market_order_slippage_pct or 0.0),
         hsl_signal_mode=hsl_signal_mode,
         pnls_max_lookback_days=pnls_max_lookback_days,
+        max_realized_loss_pct=max_realized_loss_pct,
         trade_start_time=trade_start_time,
         max_orders=int(max_orders),
         max_candles=int(max_candles),
@@ -3572,6 +3673,7 @@ def _simulate_backtest_over_historical_candles_pair(
     market_order_slippage_pct: float = 0.0005,
     hsl_signal_mode: str = "unified",
     pnls_max_lookback_days: Any = 30.0,
+    max_realized_loss_pct: Any = 1.0,
     trade_start_time: Optional[pd.Timestamp] = None,
     max_orders: int = 200,
     max_candles: int = 2000,
@@ -3600,6 +3702,7 @@ def _simulate_backtest_over_historical_candles_pair(
         market_order_slippage_pct=float(market_order_slippage_pct or 0.0),
         hsl_signal_mode=hsl_signal_mode,
         pnls_max_lookback_days=pnls_max_lookback_days,
+        max_realized_loss_pct=max_realized_loss_pct,
         trade_start_time=trade_start_time,
         max_orders=max_orders,
         max_candles=max_candles,
@@ -3628,6 +3731,7 @@ def _simulate_backtest_over_historical_candles_pair_core(
     market_order_slippage_pct: float = 0.0005,
     hsl_signal_mode: str = "unified",
     pnls_max_lookback_days: Any = 30.0,
+    max_realized_loss_pct: Any = 1.0,
     trade_start_time: Optional[pd.Timestamp] = None,
     max_orders: int = 200,
     max_candles: int = 2000,
@@ -3772,10 +3876,10 @@ def _simulate_backtest_over_historical_candles_pair_core(
     pos_short = Position(size=float(starting_position_short.size), price=float(starting_position_short.price))
 
     maker_fee = float(maker_fee or 0.0)
-    if not math.isfinite(maker_fee) or maker_fee < 0.0:
+    if not math.isfinite(maker_fee):
         maker_fee = 0.0
     taker_fee = float(taker_fee or 0.0)
-    if not math.isfinite(taker_fee) or taker_fee < 0.0:
+    if not math.isfinite(taker_fee):
         taker_fee = maker_fee
     market_orders_allowed = bool(market_orders_allowed)
     market_order_slippage_pct = float(market_order_slippage_pct or 0.0)
@@ -3806,11 +3910,10 @@ def _simulate_backtest_over_historical_candles_pair_core(
     trade_start_time_pd = pd.to_datetime(trade_start_time) if trade_start_time is not None else None
     capture_from_pd = pd.to_datetime(capture_frames_from_time) if capture_frames_from_time is not None else None
 
-    pnl_cumsum_running = 0.0
-    pnl_cumsum_max = 0.0
     pnl_cumsum_running_net = 0.0
     pnl_cumsum_running_net_long = 0.0
     pnl_cumsum_running_net_short = 0.0
+    pnl_tracker = _PnlLookbackTracker(pnls_max_lookback_days)
 
     def _normalize_hsl_signal_mode(value: Any) -> str:
         text = str(value or "").strip().lower()
@@ -4327,7 +4430,7 @@ def _simulate_backtest_over_historical_candles_pair_core(
     except Exception:
         pass
 
-    def _unstuck_allowance() -> tuple[float, float]:
+    def _unstuck_allowance(pnl_max: float, pnl_last: float) -> tuple[float, float]:
         def _one(bp: BotParams) -> float:
             try:
                 pct = float(getattr(bp, "unstuck_loss_allowance_pct", 0.0) or 0.0)
@@ -4341,8 +4444,8 @@ def _simulate_backtest_over_historical_candles_pair_core(
                     pbr.calc_auto_unstuck_allowance(
                         float(sim_balance),
                         float(pct) * float(total_wel),
-                        float(pnl_cumsum_max),
-                        float(pnl_cumsum_running),
+                        float(pnl_max),
+                        float(pnl_last),
                     )
                 )
             except Exception:
@@ -4362,10 +4465,20 @@ def _simulate_backtest_over_historical_candles_pair_core(
         next_high: float,
         tradable_now: bool,
         tradable_next: bool,
+        pnl_bar_index: int,
         mode_long: Optional[str] = None,
         mode_short: Optional[str] = None,
     ) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
-        ul, us = _unstuck_allowance()
+        risk_state = _orchestrator_risk_state(
+            sim_balance,
+            max_realized_loss_pct,
+            pnl_tracker,
+            pnl_bar_index,
+        )
+        ul, us = _unstuck_allowance(
+            risk_state["realized_pnl_cumsum_max"],
+            risk_state["realized_pnl_cumsum_last"],
+        )
 
         def _mode_or_none(value: Any) -> Optional[str]:
             text = str(value or "").strip().lower()
@@ -4437,12 +4550,16 @@ def _simulate_backtest_over_historical_candles_pair_core(
 
         inp = {
             "balance": float(sim_balance),
+            "balance_raw": risk_state["balance_raw"],
             "global": {
                 "filter_by_min_effective_cost": False,
                 "market_orders_allowed": bool(market_orders_allowed),
                 "market_order_near_touch_threshold": float(market_order_near_touch_threshold or 0.0),
                 "unstuck_allowance_long": float(ul),
                 "unstuck_allowance_short": float(us),
+                "max_realized_loss_pct": risk_state["max_realized_loss_pct"],
+                "realized_pnl_cumsum_max": risk_state["realized_pnl_cumsum_max"],
+                "realized_pnl_cumsum_last": risk_state["realized_pnl_cumsum_last"],
                 "sort_global": False,
                 "global_bot_params": {"long": bp_long_master_dict, "short": bp_short_master_dict},
             },
@@ -4580,6 +4697,7 @@ def _simulate_backtest_over_historical_candles_pair_core(
                 next_high=next_high,
                 tradable_now=bool(prev_trading_active),
                 tradable_next=bool(trading_active),
+                pnl_bar_index=i - 1,
                 mode_long=pending_mode_long,
                 mode_short=pending_mode_short,
             )
@@ -4651,10 +4769,9 @@ def _simulate_backtest_over_historical_candles_pair_core(
 
                 fee_paid = -float(pbr.qty_to_cost(float(adj_qty), float(p), float(c_mult))) * float(fee_rate)
                 pnl = float(pbr.calc_pnl_long(float(pos_long.price), float(p), float(adj_qty), float(c_mult)))
-                pnl_cumsum_running += float(pnl)
-                pnl_cumsum_max = max(float(pnl_cumsum_max), float(pnl_cumsum_running))
                 pnl_cumsum_running_net += float(pnl) + float(fee_paid)
                 pnl_cumsum_running_net_long += float(pnl) + float(fee_paid)
+                pnl_tracker.record(i, float(pnl) + float(fee_paid))
                 sim_balance += float(pnl) + float(fee_paid)
 
                 if float(new_psize) == 0.0:
@@ -4711,10 +4828,9 @@ def _simulate_backtest_over_historical_candles_pair_core(
 
                 fee_paid = -float(pbr.qty_to_cost(float(adj_qty), float(p), float(c_mult))) * float(fee_rate)
                 pnl = float(pbr.calc_pnl_short(float(pos_short.price), float(p), float(adj_qty), float(c_mult)))
-                pnl_cumsum_running += float(pnl)
-                pnl_cumsum_max = max(float(pnl_cumsum_max), float(pnl_cumsum_running))
                 pnl_cumsum_running_net += float(pnl) + float(fee_paid)
                 pnl_cumsum_running_net_short += float(pnl) + float(fee_paid)
+                pnl_tracker.record(i, float(pnl) + float(fee_paid))
                 sim_balance += float(pnl) + float(fee_paid)
 
                 if float(new_psize) == 0.0:
@@ -4761,6 +4877,7 @@ def _simulate_backtest_over_historical_candles_pair_core(
                 fee_paid = -float(pbr.qty_to_cost(float(q), float(p), float(c_mult))) * float(fee_rate)
                 pnl_cumsum_running_net += float(fee_paid)
                 pnl_cumsum_running_net_long += float(fee_paid)
+                pnl_tracker.record(i, float(fee_paid))
                 sim_balance += float(fee_paid)
                 try:
                     new_psize, new_pprice = pbr.calc_new_psize_pprice(
@@ -4809,6 +4926,7 @@ def _simulate_backtest_over_historical_candles_pair_core(
                 fee_paid = -float(pbr.qty_to_cost(float(q), float(p), float(c_mult))) * float(fee_rate)
                 pnl_cumsum_running_net += float(fee_paid)
                 pnl_cumsum_running_net_short += float(fee_paid)
+                pnl_tracker.record(i, float(fee_paid))
                 sim_balance += float(fee_paid)
                 try:
                     new_psize, new_pprice = pbr.calc_new_psize_pprice(
@@ -4900,6 +5018,7 @@ def _simulate_backtest_over_historical_candles_pair_core(
                     next_high=float(next_high2),
                     tradable_now=bool(trading_active),
                     tradable_next=bool(next_trading_active),
+                    pnl_bar_index=i,
                     mode_long=next_mode_long,
                     mode_short=next_mode_short,
                 )

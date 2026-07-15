@@ -16,7 +16,6 @@ Endpoints:
 from __future__ import annotations
 
 import asyncio
-import configparser
 import json
 import os
 import platform
@@ -32,8 +31,11 @@ from fastapi.responses import HTMLResponse
 
 from api.auth import SessionToken, authenticate_websocket, require_auth, validate_token
 from api.pb7_bridge import get_allowed_override_params, get_template_config
+from cmc_pool import CmcPoolClient
+from credential_store import CredentialStore
 from logging_helpers import human_log as _log
 from master.cluster_state import (
+    append_node_placeholder,
     append_operation,
     build_config_manifest,
     compute_config_manifest_hash,
@@ -41,10 +43,12 @@ from master.cluster_state import (
     ensure_local_identity,
     generate_node_id,
     load_operations,
+    local_cmc_credential_readiness,
     read_local_identity,
     rebuild_materialized_state,
 )
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config, strip_pbgui_param_status
+import pbgui_purefunc
 from pbgui_purefunc import PBGDIR
 
 SERVICE = "V7Instances"
@@ -80,10 +84,9 @@ def init(monitor):
 
 def _get_master_hostname() -> str:
     """Get the hostname of this master (from pbgui.ini or platform.node())."""
-    pb_config = configparser.ConfigParser()
-    pb_config.read(Path(PBGDIR) / "pbgui.ini")
-    if pb_config.has_option("main", "pbname"):
-        return pb_config.get("main", "pbname")
+    snapshot = pbgui_purefunc.load_ini_snapshot(Path(PBGDIR) / "pbgui.ini")
+    if snapshot.has_option("main", "pbname"):
+        return snapshot.get("main", "pbname")
     return platform.node()
 
 
@@ -209,15 +212,16 @@ def _ensure_cluster_node_record(
     role: str,
     pending: set[str],
 ) -> None:
-    """Append a membership op for a node when cluster_nodes does not know it yet."""
+    """Add local membership or remote non-replica inventory when unknown."""
 
     if _cluster_node_known(cluster_root, node_id, pending):
         return
-    append_operation(
-        cluster_root,
-        "ADD_NODE",
-        _cluster_node_payload(node_id, hostname, role),
-    )
+    payload = _cluster_node_payload(node_id, hostname, role)
+    identity = read_local_identity(cluster_root)
+    if node_id == str(identity.get("node_id") or ""):
+        append_operation(cluster_root, "ADD_NODE", payload)
+    else:
+        append_node_placeholder(cluster_root, payload)
     pending.add(node_id)
 
 
@@ -611,98 +615,140 @@ def _host_pb7_config_schema_version(hostname: str) -> str | None:
     return None
 
 
-def _configured_secret_value(value) -> bool:
-    """Return whether an optional secret-like config value is usable."""
-    normalized = str(value or "").strip()
-    if not normalized:
-        return False
-    lowered = normalized.lower()
-    if lowered in {"none", "null", "false", "<api_key>"}:
-        return False
-    return not (normalized.startswith("<") and normalized.endswith(">"))
-
-
-def _local_coinmarketcap_configured() -> bool:
-    """Return whether this PBGui host has a CoinMarketCap API key configured."""
-    pb_config = configparser.ConfigParser()
-    pb_config.read(Path(PBGDIR) / "pbgui.ini")
-    return _configured_secret_value(pb_config.get("coinmarketcap", "api_key", fallback=""))
-
-
-def _vps_manager_coinmarketcap_configured(hostname: str) -> bool | None:
-    """Return stored VPS setup CMC-key state when this host was set up by PBGui."""
-    safe_host = str(hostname or "").strip()
-    if not safe_host or "/" in safe_host or "\\" in safe_host:
-        return None
-    config_path = Path(PBGDIR) / "data" / "vpsmanager" / "hosts" / safe_host / f"{safe_host}.json"
-    if not config_path.is_file():
-        return None
-    try:
-        payload = json.loads(config_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-    if not isinstance(payload, dict) or "coinmarketcap_api_key" not in payload:
-        return None
-    return _configured_secret_value(payload.get("coinmarketcap_api_key"))
-
-
-def _vps_manager_coinmarketcap_pending(hostname: str) -> bool | None:
-    """Return pending desired VPS CMC-key state after a local Save VPS change."""
-    safe_host = str(hostname or "").strip()
-    if not safe_host or "/" in safe_host or "\\" in safe_host:
-        return None
-    pending_path = Path(PBGDIR) / "data" / "vpsmanager" / "hosts" / safe_host / "optional_config_pending.json"
-    if not pending_path.is_file():
-        return None
-    try:
-        payload = json.loads(pending_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-    if not isinstance(payload, dict) or "coinmarketcap_api_key" not in payload:
-        return None
-    return _configured_secret_value(payload.get("coinmarketcap_api_key"))
-
-
-def _host_meta_coinmarketcap_configured(hostname: str) -> bool | None:
-    """Return CMC-key capability from the latest monitor host metadata."""
+def _host_meta_credential_active(hostname: str) -> bool | None:
+    """Return confirmed credential capability from monitor host metadata."""
     store = _monitor.store if _monitor else None
     meta = store.host_meta.get(hostname, {}) if store else {}
     if not isinstance(meta, dict):
         return None
-    if "coindata_configured" in meta:
-        return bool(meta.get("coindata_configured"))
+    value = meta.get("credential_active")
+    if isinstance(value, bool):
+        return value
     return None
 
 
-def _host_coinmarketcap_configured(hostname: str) -> bool | None:
-    """Return tri-state CMC-key capability for a target host."""
-    if not hostname or hostname == "disabled":
-        return True
-    if hostname == _get_master_hostname():
-        return _local_coinmarketcap_configured()
+def _local_credential_capability() -> dict:
+    """Return local master CMC capability from the materialized store and pool."""
 
-    pending_state = _vps_manager_coinmarketcap_pending(hostname)
-    if pending_state is False:
-        return False
+    result = {
+        "credential_protocol_version": 2,
+        "credential_active": None,
+        "credential_reason": "CMC credential pool status unavailable",
+        "cmc_catalog_generation": None,
+        "cmc_materialized_generation": None,
+        "cmc_active_key_count": None,
+    }
+    try:
+        store = CredentialStore(Path(PBGDIR) / "data" / "credentials")
+        records = store.list_cmc(active_only=True)
+        status = CmcPoolClient(
+            credential_store=store,
+            state_root=store.root / "cmc_pool",
+            desired_state_provider=lambda: rebuild_materialized_state(
+                default_cluster_root(Path(PBGDIR)),
+                write=False,
+            ),
+        ).status()
+    except Exception as exc:
+        _log(SERVICE, f"Local CMC credential capability unavailable: {exc.__class__.__name__}", level="WARNING")
+        return result
+    active_count = max(int(status.get("active_credentials") or 0), 0)
+    try:
+        cluster_root = default_cluster_root(Path(PBGDIR))
+        materialized = rebuild_materialized_state(cluster_root, write=False)
+        try:
+            node_id = str(read_local_identity(cluster_root)["node_id"])
+        except Exception:
+            nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
+            node_id = str(next(iter(nodes))) if len(nodes) == 1 else ""
+        result.update(local_cmc_credential_readiness(materialized, node_id, records))
+    except Exception:
+        standalone = [
+            record for record in records
+            if isinstance(record, dict) and record.get("active") and not record.get("pending")
+        ]
+        generation = max((int(record.get("generation") or 0) for record in standalone), default=0)
+        result.update({
+            "credential_active": bool(standalone),
+            "credential_reason": "CMC credential pool active" if standalone else "No active materialized CMC credentials",
+            "cmc_catalog_generation": generation,
+            "cmc_materialized_generation": generation,
+            "cmc_active_key_count": len(standalone),
+            "cluster_origin_metadata": False,
+        })
+    if result.get("credential_active") is True and active_count < 1:
+        result["credential_active"] = False
+        result["credential_reason"] = "CMC pool has no exact eligible credential"
+    return result
 
-    meta_state = _host_meta_coinmarketcap_configured(hostname)
-    if meta_state is not None:
-        return meta_state
 
-    stored = _vps_manager_coinmarketcap_configured(hostname)
-    if stored is not None:
-        return stored
-    return None
+def _host_meta_credential_capability(hostname: str) -> dict:
+    """Return whitelisted remote capability metadata from monitor host meta."""
+
+    store = _monitor.store if _monitor else None
+    meta = store.host_meta.get(hostname, {}) if store else {}
+    result = {
+        "credential_protocol_version": None,
+        "credential_active": None,
+        "credential_reason": "CMC credential capability has not been reported",
+        "cmc_catalog_generation": None,
+        "cmc_materialized_generation": None,
+        "cmc_active_key_count": None,
+    }
+    if not isinstance(meta, dict):
+        return result
+    active = meta.get("credential_active")
+    result["credential_active"] = active if isinstance(active, bool) else None
+    for field in (
+        "credential_protocol_version",
+        "cmc_catalog_generation",
+        "cmc_materialized_generation",
+        "cmc_active_key_count",
+    ):
+        try:
+            result[field] = max(int(meta[field]), 0)
+        except (KeyError, TypeError, ValueError):
+            result[field] = None
+    reason = meta.get("credential_reason")
+    if isinstance(reason, str) and reason.strip():
+        result["credential_reason"] = reason.strip()
+    elif result["credential_active"] is False:
+        result["credential_reason"] = "No active materialized CMC credentials"
+    return result
+
+
+def _host_credential_capability(hostname: str) -> dict:
+    """Return local or remote secret-free CMC capability metadata."""
+
+    clean_host = str(hostname or "").strip()
+    if not clean_host or clean_host == "disabled":
+        return {
+            "credential_protocol_version": None,
+            "credential_active": True,
+            "credential_reason": "Disabled targets do not require a CMC credential pool",
+            "cmc_catalog_generation": None,
+            "cmc_materialized_generation": None,
+            "cmc_active_key_count": None,
+        }
+    if clean_host == _get_master_hostname():
+        return _local_credential_capability()
+    return _host_meta_credential_capability(clean_host)
+
+
+def _host_credential_active(hostname: str) -> bool | None:
+    """Return tri-state credential capability for a target host."""
+
+    return _host_credential_capability(hostname)["credential_active"]
 
 
 def _host_dropdown_detail(hostname: str) -> dict:
     """Return host metadata used by the PBv7 enabled_on dropdown."""
     clean_host = str(hostname or "").strip()
-    cmc_configured = _host_coinmarketcap_configured(clean_host)
+    capability = _host_credential_capability(clean_host)
     return {
         "name": clean_host,
-        "coinmarketcap_configured": cmc_configured,
-        "dynamic_ignore_allowed": cmc_configured is True,
+        **capability,
+        "dynamic_ignore_allowed": capability["credential_active"] is True,
     }
 
 
@@ -716,11 +762,11 @@ async def _refresh_host_schema_if_missing(hostname: str) -> None:
         await _monitor.collect_host_meta_now(hostname, include_package_status=False)
 
 
-async def _refresh_host_coinmarketcap_if_missing(hostname: str) -> None:
-    """Collect host metadata once when CMC-key capability is not yet available."""
+async def _refresh_host_credential_if_missing(hostname: str) -> None:
+    """Collect host metadata once when credential capability is unavailable."""
     if not hostname or hostname == "disabled" or hostname == _get_master_hostname():
         return
-    if _host_meta_coinmarketcap_configured(hostname) is not None:
+    if _host_meta_credential_active(hostname) is not None:
         return
     if _monitor and hasattr(_monitor, "collect_host_meta_now"):
         await _monitor.collect_host_meta_now(hostname, include_package_status=False)
@@ -759,13 +805,15 @@ async def _target_dynamic_ignore_incompatibility_detail(name: str, cfg: dict) ->
     if not isinstance(enabled_on, str) or not enabled_on.strip() or enabled_on == "disabled":
         return None
     enabled_on = enabled_on.strip()
-    await _refresh_host_coinmarketcap_if_missing(enabled_on)
-    cmc_configured = _host_coinmarketcap_configured(enabled_on)
-    if cmc_configured is not True:
-        status = "has no" if cmc_configured is False else "has no confirmed"
+    await _refresh_host_credential_if_missing(enabled_on)
+    capability = _host_credential_capability(enabled_on)
+    credential_active = capability["credential_active"]
+    if credential_active is not True:
+        status = "has no active" if credential_active is False else "has no confirmed active"
+        reason = str(capability.get("credential_reason") or "CMC credential pool unavailable")
         return (
-            f"'{name}' uses dynamic_ignore but {enabled_on} {status} CoinMarketCap API key. "
-            "Add a CoinMarketCap API key on that VPS before saving, syncing, or starting this bot."
+            f"'{name}' uses dynamic_ignore but {enabled_on} {status} CMC credential pool ({reason}). "
+            "Activate and materialize the Cluster credential pool on that host before saving, syncing, or starting this bot."
         )
     return None
 
@@ -1802,8 +1850,12 @@ def get_users(session: SessionToken = Depends(require_auth)):
 
 
 @router.get("/hosts")
-def get_hosts(session: SessionToken = Depends(require_auth)):
+def get_hosts(
+    request_id: str = "",
+    session: SessionToken = Depends(require_auth),
+):
     """List available hosts for the 'enabled_on' dropdown."""
+    del session
     master = _get_master_hostname()
     hosts = ["disabled", master]
     if _monitor and _monitor.pool:
@@ -1811,6 +1863,8 @@ def get_hosts(session: SessionToken = Depends(require_auth)):
             if h != master and h not in hosts:
                 hosts.append(h)
     return {
+        "request_id": request_id,
+        "generated_at": time.time(),
         "hosts": hosts,
         "host_details": [_host_dropdown_detail(host) for host in hosts],
     }

@@ -1062,7 +1062,7 @@ var allSymbols = [];     // available symbols for current exchange
 var allTags = [];        // available tags for current exchange
 var allUsers = [];       // [{name, exchange}]
 var allHosts = [];       // [string]
-var hostDetailsByName = {}; // {host: {coinmarketcap_configured, dynamic_ignore_allowed}}
+var hostDetailsByName = {}; // {host: {credential_active, credential_reason, generations, active count}}
 var dirty = false;
 var draftOverrideConfigs = {};
 var _extraLiveKeys = []; // unknown live.* keys not in the GUI form
@@ -1072,6 +1072,9 @@ var _structuredEditorSyncing = false;
 var _runJsonSync = null;
 var _symbolsAndTagsLoadSeq = 0;
 var _symbolsAndTagsLoadPromise = Promise.resolve();
+var _hostCapabilityGeneration = 0;
+var _hostCapabilityController = null;
+var _hostCapabilityTimer = null;
 
 /* live.* keys handled by the GUI form or intentionally hidden/deprecated. */
 var KNOWN_LIVE_PARAMS = new Set([
@@ -1575,17 +1578,25 @@ async function goBalanceCalc() {
 /* ─── Load Data ────────────────────────────────────────────── */
 async function init() {
   try {
-    // Load users and hosts in parallel
-    var [usersResp, hostsResp] = await Promise.all([
-      apiFetch('/users').then(function(r) { return r.json(); }),
-      apiFetch('/hosts').then(function(r) { return r.json(); }),
-    ]);
+    // Capability diagnostics are optional during editor startup; config loading is not.
+    var usersResp = await apiFetch('/users').then(function(r) { return r.json(); });
+    var hostsResp;
+    try {
+      hostsResp = await requestHostCapabilities();
+    } catch (capabilityError) {
+      if (capabilityError.name === 'AbortError') throw capabilityError;
+      hostsResp = { hosts: ['disabled'], host_details: [], generated_at: Date.now() / 1000 };
+      toast('Host capability status is unknown: ' + capabilityError.message, 'warn');
+    }
     allUsers = usersResp.users || [];
     allHosts = hostsResp.hosts || [];
     hostDetailsByName = {};
     (hostsResp.host_details || []).forEach(function(item) {
       var name = String((item || {}).name || '').trim();
-      if (name) hostDetailsByName[name] = item || {};
+      if (name) hostDetailsByName[name] = Object.assign({}, item || {}, {
+        credential_stale: false,
+        credential_refreshed_at: hostsResp.generated_at || Date.now() / 1000
+      });
     });
 
     // Populate user dropdown
@@ -1660,10 +1671,64 @@ async function init() {
     document.getElementById('f-user').addEventListener('change', function() {
       queueSymbolsAndTagsLoad();
     });
+    document.getElementById('f-enabled-on').addEventListener('focus', function() {
+      refreshHostCapabilities();
+    });
+    _hostCapabilityTimer = window.setInterval(function() {
+      if (!document.hidden) refreshHostCapabilities();
+    }, 60000);
 
   } catch (e) {
     toast('Failed to initialize: ' + e.message, 'err');
     console.error(e);
+  }
+}
+
+async function requestHostCapabilities() {
+  var generation = ++_hostCapabilityGeneration;
+  if (_hostCapabilityController) _hostCapabilityController.abort();
+  _hostCapabilityController = new AbortController();
+  var requestId = (window.crypto && window.crypto.randomUUID)
+    ? window.crypto.randomUUID()
+    : 'host-capability-' + Date.now() + '-' + generation;
+  var response = await apiFetch('/hosts?request_id=' + encodeURIComponent(requestId), {
+    signal: _hostCapabilityController.signal,
+    cache: 'no-store'
+  });
+  if (!response.ok) throw new Error('Host capability refresh failed: HTTP ' + response.status);
+  var payload = await response.json();
+  if (generation !== _hostCapabilityGeneration) return null;
+  if (String(payload.request_id || '') !== requestId) throw new Error('Host capability response request ID mismatch');
+  return payload;
+}
+
+async function refreshHostCapabilities() {
+  var selected = getVal('f-enabled-on');
+  try {
+    var payload = await requestHostCapabilities();
+    if (!payload) return;
+    allHosts = payload.hosts || allHosts;
+    hostDetailsByName = {};
+    (payload.host_details || []).forEach(function(item) {
+      var name = String((item || {}).name || '').trim();
+      if (name) hostDetailsByName[name] = Object.assign({}, item || {}, {
+        credential_stale: false,
+        credential_refreshed_at: payload.generated_at || Date.now() / 1000
+      });
+    });
+    populateHosts();
+    var select = document.getElementById('f-enabled-on');
+    if (selected && Array.prototype.some.call(select.options, function(option) { return option.value === selected && !option.disabled; })) {
+      select.value = selected;
+    }
+  } catch (error) {
+    if (error.name === 'AbortError') return;
+    Object.keys(hostDetailsByName).forEach(function(name) {
+      if (name === 'disabled') return;
+      hostDetailsByName[name].credential_stale = true;
+      hostDetailsByName[name].credential_stale_reason = error.message || 'Capability refresh failed';
+    });
+    populateHosts();
   }
 }
 
@@ -1680,9 +1745,9 @@ function populateHosts() {
     var detail = hostDetailsByName[h] || {};
     var opt = document.createElement('option');
     opt.value = h;
-    opt.textContent = h;
+    opt.textContent = h + ' (' + hostCmcStatusLabel(h) + ')';
     opt.dataset.dynamicIgnoreAllowed = detail.dynamic_ignore_allowed === true ? '1' : '0';
-    opt.dataset.cmcStatus = detail.coinmarketcap_configured === true ? 'ok' : (detail.coinmarketcap_configured === false ? 'missing' : 'unknown');
+    opt.dataset.cmcStatus = detail.credential_active === true ? 'ok' : (detail.credential_active === false ? 'missing' : 'unknown');
     sel.appendChild(opt);
   });
   updateEnabledOnAvailability();
@@ -1692,14 +1757,22 @@ function hostDynamicIgnoreAllowed(hostname) {
   var host = String(hostname || '').trim();
   if (!host || host === 'disabled') return true;
   var detail = hostDetailsByName[host] || {};
-  return detail.dynamic_ignore_allowed === true;
+  return detail.credential_stale !== true && detail.credential_active === true && detail.dynamic_ignore_allowed === true;
 }
 
 function hostCmcStatusLabel(hostname) {
   var detail = hostDetailsByName[String(hostname || '').trim()] || {};
-  if (detail.coinmarketcap_configured === false) return 'CoinMarketCap API missing';
-  if (detail.coinmarketcap_configured !== true) return 'CoinMarketCap status unknown';
-  return 'CoinMarketCap API OK';
+  var values = [];
+  if (detail.credential_protocol_version != null) values.push('protocol ' + detail.credential_protocol_version);
+  if (detail.cmc_catalog_generation != null) values.push('catalog generation ' + detail.cmc_catalog_generation);
+  if (detail.cmc_materialized_generation != null) values.push('materialized generation ' + detail.cmc_materialized_generation);
+  if (detail.cmc_active_key_count != null) values.push('active keys ' + detail.cmc_active_key_count);
+  var suffix = values.length ? ' (' + values.join(', ') + ')' : '';
+  var reason = String(detail.credential_reason || '').trim();
+  if (detail.credential_stale) return 'CMC pool status stale: ' + (detail.credential_stale_reason || reason || 'capability refresh failed') + suffix;
+  if (detail.credential_active === false) return 'CMC pool inactive: ' + (reason || 'no active materialized credentials') + suffix;
+  if (detail.credential_active !== true) return 'CMC pool status unknown: ' + (reason || 'capability has not been reported') + suffix;
+  return 'CMC pool active' + suffix;
 }
 
 function updateEnabledOnAvailability() {
@@ -1713,7 +1786,7 @@ function updateEnabledOnAvailability() {
     }
     var blocked = dynamicIgnore && !hostDynamicIgnoreAllowed(opt.value);
     opt.disabled = blocked;
-    opt.textContent = opt.value + (blocked ? ' (' + hostCmcStatusLabel(opt.value) + ')' : '');
+    opt.textContent = opt.value + ' (' + hostCmcStatusLabel(opt.value) + ')';
   });
   if (dynamicIgnore && sel.value !== 'disabled' && !hostDynamicIgnoreAllowed(sel.value)) {
     toast(sel.value + ' cannot run dynamic_ignore: ' + hostCmcStatusLabel(sel.value), 'warn');
@@ -1926,7 +1999,20 @@ function populateForm(opts) {
   // Row 1
   ensureSelectOption('f-user', live.user || '');
   setVal('f-user', live.user || '');
-  setVal('f-enabled-on', pbgui.enabled_on || 'disabled');
+  var configuredHost = pbgui.enabled_on || 'disabled';
+  if (configuredHost !== 'disabled' && allHosts.indexOf(configuredHost) < 0) {
+    allHosts.push(configuredHost);
+    hostDetailsByName[configuredHost] = {
+      credential_active: null,
+      credential_reason: 'Initial capability fetch failed',
+      credential_stale: true,
+      credential_stale_reason: 'Host capability has not been loaded',
+      dynamic_ignore_allowed: false
+    };
+    populateHosts();
+  }
+  ensureSelectOption('f-enabled-on', configuredHost);
+  setVal('f-enabled-on', configuredHost);
   setVal('f-version', pbgui.version || 0);
   setVal('f-leverage', live.leverage || 10);
   setVal('f-margin-mode', live.margin_mode_preference || 'cross');
@@ -2689,7 +2775,7 @@ function validateDynamicIgnoreTargetForSave() {
   if (hostDynamicIgnoreAllowed(enabledOn)) return true;
   window.PBGuiDialogs.alert({
     title: 'Save blocked',
-    message: enabledOn + ' cannot run dynamic_ignore: ' + hostCmcStatusLabel(enabledOn) + '. Add a CoinMarketCap API key on that VPS first.',
+    message: enabledOn + ' cannot run dynamic_ignore: ' + hostCmcStatusLabel(enabledOn) + '. Activate and materialize the Cluster CMC pool on that host first.',
     confirmText: 'OK'
   });
   return false;
@@ -3216,7 +3302,7 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/log_viewer_panel.js?v=25"></script>
+<script src="/app/js/log_viewer_panel.js?v=26"></script>
 <script src="/app/js/coin_overrides_editor.js?v=13"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */

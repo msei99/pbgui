@@ -41,6 +41,38 @@ pbrun_spec.loader.exec_module(PBRun_mod)
 DynamicIgnore = PBRun_mod.DynamicIgnore
 
 
+def test_pbrun_startup_uses_one_canonical_ini_snapshot(tmp_path, monkeypatch) -> None:
+    """PBRun startup reads all restart-required values from one canonical generation."""
+    ini_path = tmp_path / "config" / "pbgui.ini"
+    ini_path.parent.mkdir()
+    ini_path.write_text(
+        "[main]\npbname = snapshot-node\npb7dir = /srv/pb7\npb7venv = /srv/venv/bin/python\n",
+        encoding="utf-8",
+    )
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    monkeypatch.setattr(PBRun_mod.pbgui_purefunc, "pbgui_ini_path", lambda: ini_path)
+    monkeypatch.setattr(PBRun_mod, "CoinData", lambda: SimpleNamespace())
+    calls = []
+    real_loader = PBRun_mod.pbgui_purefunc.load_ini_snapshot
+
+    def capture_snapshot():
+        calls.append(True)
+        return real_loader()
+
+    monkeypatch.setattr(PBRun_mod.pbgui_purefunc, "load_ini_snapshot", capture_snapshot)
+
+    run = PBRun_mod.PBRun()
+
+    assert (run.name, run.pb7dir, run.pb7venv) == (
+        "snapshot-node",
+        "/srv/pb7",
+        "/srv/venv/bin/python",
+    )
+    assert calls == [True]
+
+
 def test_find_high_memory_bot_uses_run_v7_process_memory() -> None:
     """PBRun must rank bots by stats attached to RunV7, not monitor payloads."""
     run = PBRun_mod.PBRun.__new__(PBRun_mod.PBRun)
@@ -1016,23 +1048,23 @@ class TestDynamicIgnoreStartupGate:
         assert popen_calls == [], "V7 process must not start before dynamic ignore lists are ready"
 
     def test_runv7_start_delays_dynamic_ignore_without_cmc_key(self, tmp_path, monkeypatch):
-        """RunV7.start() must not spawn or bootstrap CMC data without an API key."""
+        """RunV7.start() must not spawn or bootstrap without an active CMC pool."""
 
-        class CoinDataNoKey:
-            """CoinData double with no configured CoinMarketCap API key."""
+        class CoinDataInactivePool:
+            """CoinData double with no active materialized CMC credentials."""
 
             def __init__(self):
-                self.api_key = ""
-                self.load_config_calls = 0
+                self.pool_ready_calls = 0
 
-            def load_config(self):
-                self.load_config_calls += 1
+            def cmc_pool_ready(self):
+                self.pool_ready_calls += 1
+                return False
 
         class DynamicIgnoreNotReady:
             """DynamicIgnore double whose lists are unavailable."""
 
             def __init__(self):
-                self.coindata = CoinDataNoKey()
+                self.coindata = CoinDataInactivePool()
                 self.watch_calls = 0
 
             def list_files_exist(self):
@@ -1060,8 +1092,47 @@ class TestDynamicIgnoreStartupGate:
         rv7.start()
 
         assert rv7.dynamic_ignore.watch_calls == 1
-        assert rv7.dynamic_ignore.coindata.load_config_calls == 1
+        assert rv7.dynamic_ignore.coindata.pool_ready_calls == 1
         assert (tmp_path / "running_version.txt").read_text(encoding="utf-8") == "0"
+
+    def test_dynamic_ignore_accepts_active_pool_without_lease_provider(self):
+        """An active materialized pool is sufficient when optional leases are absent."""
+
+        class CoinDataActivePool:
+            """Pool-only CoinData double with no legacy key or lease attributes."""
+
+            @staticmethod
+            def cmc_pool_ready():
+                return True
+
+        rv7 = PBRun_mod.RunV7()
+        rv7.dynamic_ignore = SimpleNamespace(coindata=CoinDataActivePool())
+
+        assert rv7._dynamic_ignore_api_key_configured() is True
+
+    def test_pbrun_dynamic_ignore_gate_has_no_legacy_key_property_probe(self):
+        """PBRun source must gate on pool readiness rather than CoinData.api_key."""
+
+        source = Path(PBRun_mod.__file__).read_text(encoding="utf-8")
+
+        assert 'getattr(self.dynamic_ignore.coindata, "api_key"' not in source
+        assert "getattr(coindata, \"api_key\"" not in source
+        assert "cmc_pool_ready" in source
+
+    def test_fetch_cmc_credits_refreshes_provider_and_pool_status(self):
+        """PBRun refreshes aggregate provider and pool state without selecting one key."""
+
+        coindata = SimpleNamespace(
+            fetch_api_status=lambda: True,
+            cmc_pool_status=lambda: {"active_credentials": 2, "keys": []},
+        )
+        run = PBRun_mod.PBRun.__new__(PBRun_mod.PBRun)
+        run.coindata = coindata
+
+        assert run.fetch_cmc_credits() == {
+            "provider_refreshed": True,
+            "pool": {"active_credentials": 2, "keys": []},
+        }
 
     def test_watch_v7_keeps_status_not_running_when_start_skips(self, tmp_path, monkeypatch):
         """watch_v7() must not report a bot as running when RunV7.start() skips startup."""

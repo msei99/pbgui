@@ -83,7 +83,8 @@ from api.pb7_ohlcv_tools import (
 from logging_helpers import human_log as _log
 from pareto_preset_generator import OPTIMIZE_PRESET_DIRECTIONS, build_optimize_preset
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config
-from pbgui_purefunc import PBGDIR, load_ini, load_ini_section, save_ini, pb7dir, pb7venv
+from pbgui_purefunc import PBGDIR, load_ini, load_ini_section, load_ini_snapshot, save_ini, save_ini_section, pb7dir, pb7venv
+from ini_settings import apply_metadata
 
 SERVICE = "BacktestQueueAPI"
 ARCHIVE_SERVICE = "ArchiveSync"
@@ -1063,6 +1064,9 @@ class BacktestWorker:
             return
 
         cmd = [venv, "-u", str(PurePath(f"{pb7}/src/backtest.py")), str(PurePath(config_path))]
+        from logging_helpers import rotate_managed_log_before_open
+
+        rotate_managed_log_before_open(log_path, "backtests")
         log_file = open(log_path, "w")
 
         old_path = os.environ.get("PATH", "")
@@ -4554,22 +4558,32 @@ def remove_archive_duplicate_results(name: str, body: dict, session: SessionToke
 def get_archive_settings(session: SessionToken = Depends(require_auth)):
     """Get archive configuration from INI using the legacy config_archive keys."""
     section = "config_archive"
-    my_archive = load_ini(section, "my_archive") or ""
+    snapshot = load_ini_snapshot()
+
+    def value(key: str) -> str:
+        return snapshot.get(section, key) if snapshot.has_option(section, key) else ""
+
+    my_archive = value("my_archive")
     readme_config = {}
     if my_archive:
         archive_dir = _archives_dir() / my_archive
         if archive_dir.exists():
             readme_config = load_archive_readme_config(archive_dir)
+    try:
+        auto_pull_interval = max(0, int(value("auto_pull_interval") or "0"))
+    except (TypeError, ValueError):
+        auto_pull_interval = 0
     return {
         "my_archive":        my_archive,
-        "my_archive_path":   load_ini(section, "my_archive_path") or "",
+        "my_archive_path":   value("my_archive_path"),
         "generated_paths":   True,
-        "username":          load_ini(section, "my_archive_username") or "",
-        "email":             load_ini(section, "my_archive_email") or "",
-        "access_token":      load_ini(section, "my_archive_access_token") or "",
-        "auto_pull_interval": _read_auto_pull_interval(),
+        "username":          value("my_archive_username"),
+        "email":             value("my_archive_email"),
+        "access_token":      value("my_archive_access_token"),
+        "auto_pull_interval": auto_pull_interval,
         "readme_title":      readme_config.get("title", my_archive or "PBGui Config Archive"),
         "readme_static_markdown": readme_config.get("static_markdown", ""),
+        "apply": apply_metadata("config_archive"),
     }
 
 
@@ -4583,15 +4597,18 @@ def save_archive_settings(body: dict, session: SessionToken = Depends(require_au
         "email":            "my_archive_email",
         "access_token":    "my_archive_access_token",
     }
+    ini_values = {}
     for body_key, ini_key in mapping.items():
         if body_key in body:
-            save_ini(section, ini_key, str(body[body_key]))
+            ini_values[ini_key] = str(body[body_key])
     if "auto_pull_interval" in body:
         try:
             interval = max(0, int(body["auto_pull_interval"]))
         except (ValueError, TypeError):
             interval = 0
-        save_ini(section, "auto_pull_interval", str(interval))
+        ini_values["auto_pull_interval"] = str(interval)
+    if ini_values:
+        save_ini_section(section, ini_values)
     if "readme_title" in body or "readme_static_markdown" in body:
         archive_name = str(body.get("my_archive") or _own_archive_name() or "").strip()
         _validate_name(archive_name)
@@ -4604,7 +4621,7 @@ def save_archive_settings(body: dict, session: SessionToken = Depends(require_au
         })
         update_archive_readme(archive_dir, config)
         _invalidate_archive_cache(archive_name)
-    return {"ok": True}
+    return {"ok": True, "apply": apply_metadata("config_archive")}
 
 
 @router.get("/archives/{name}/readme-config")

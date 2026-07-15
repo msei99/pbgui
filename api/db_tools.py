@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from api.auth import SessionToken, require_auth
 from logging_helpers import human_log as _log
 from master.async_pool import remote_path_join
+import pbgui_purefunc
 from pbgui_purefunc import PBGDIR
 from task_queue import enqueue_running_job, force_fail_job, is_pid_running, list_jobs, retry_failed_job
 
@@ -915,9 +916,9 @@ print(json.dumps({
 
 async def _known_targets() -> list[dict[str, Any]]:
     try:
-        from pbgui_purefunc import load_ini
-
-        local_name = str(load_ini("main", "pbname") or "local").strip() or "local"
+        snapshot = pbgui_purefunc.load_ini_snapshot()
+        local_name = snapshot.get("main", "pbname") if snapshot.has_option("main", "pbname") else "local"
+        local_name = str(local_name).strip() or "local"
     except Exception:
         local_name = "local"
     targets = [{"id": "local", "label": local_name, "kind": "local", "role": "master", "connected": True}]
@@ -1099,10 +1100,7 @@ def _local_pbdata_active_users() -> dict[str, Any]:
     trades_users: list[str] = []
     try:
         import ast as _ast
-        import configparser as _configparser
-
-        cfg = _configparser.ConfigParser()
-        cfg.read(Path(PBGDIR) / "pbgui.ini")
+        cfg = pbgui_purefunc.load_ini_snapshot().parser
         if cfg.has_option("pbdata", "fetch_users"):
             parsed = _ast.literal_eval(cfg.get("pbdata", "fetch_users"))
             fetch_users = [str(item) for item in parsed] if isinstance(parsed, list) else []

@@ -3,15 +3,15 @@ import socket
 import hashlib
 import os
 import uuid
-import configparser
 from pathlib import Path
 from datetime import datetime, timezone
 from api_key_state import strip_runtime_extra
 from logging_helpers import human_log as _log
+from pb7_api_keys import PB7ApiKeysMergeWriter, exchange_payload
+import pbgui_purefunc
 from pbgui_purefunc import pb7dir, PBGDIR, is_pb7_installed
 from secure_files import (
     atomic_write_private_bytes,
-    copy_private_file,
     ensure_private_directory,
     ensure_private_directory_tree,
 )
@@ -111,6 +111,7 @@ class Users:
         self.api7_path = f'{pb7dir()}/api-keys.json'
         self.api_backup = Path(f'{PBGDIR}/data/api-keys')
         self._top_level_extras = {}
+        self._loaded_api_serial = 0
         self.load()
     
     def __iter__(self):
@@ -218,6 +219,7 @@ class Users:
         self.users = []
         users: dict = {}
         self._top_level_extras = {}
+        self._loaded_api_serial = 0
         try:
             if Path(self.api7_path).exists():
                 with Path(self.api7_path).open(encoding="UTF-8") as f:
@@ -240,7 +242,9 @@ class Users:
             return None
 
         for user_name, user_data in users.items():
-            if user_name == "referrals" or user_name == "tradfi" or str(user_name).startswith("_"):
+            if user_name == "tradfi":
+                continue
+            if user_name == "referrals" or str(user_name).startswith("_"):
                 self._top_level_extras[user_name] = user_data
                 continue
 
@@ -298,6 +302,7 @@ class Users:
                     my_user.extra = extras
                     self.users.append(my_user)
         self.users.sort(key=lambda x: x.name)
+        self._loaded_api_serial = int(self._top_level_extras.get("_api_serial") or 0)
 
     def save(self):
         save_users = dict(self._top_level_extras) if isinstance(self._top_level_extras, dict) else {}
@@ -312,7 +317,7 @@ class Users:
                 del save_users[old]
 
         # Bump api serial and record editor metadata
-        save_users["_api_serial"] = save_users.get("_api_serial", 0) + 1
+        save_users["_api_serial"] = self._loaded_api_serial + 1
         save_users["_api_ts"] = datetime.now(timezone.utc).isoformat()
         save_users["_api_by"] = socket.gethostname()
 
@@ -348,13 +353,22 @@ class Users:
         # Backup api-keys7 and save new version
         if is_pb7_installed():
             destination = Path(f'{self.api_backup}/api-keys7_{date}.json')
-            if Path(self.api7_path).exists():
-                copy_private_file(Path(self.api7_path), destination)
-            atomic_write_private_bytes(
+            writer = PB7ApiKeysMergeWriter(
                 Path(self.api7_path),
-                json.dumps(save_users, indent=4).encode("UTF-8"),
+                Path(PBGDIR) / "data" / "credentials" / "pb7_projection.json",
             )
-            _record_cluster_api_keys_update(save_users)
+            merged = writer.write_exchange_payload(
+                save_users,
+                expected_generation=self._loaded_api_serial,
+                backup_path=destination if Path(self.api7_path).exists() else None,
+            )
+            self._loaded_api_serial = int(save_users["_api_serial"])
+            self._top_level_extras.update({
+                "_api_serial": save_users["_api_serial"],
+                "_api_ts": save_users["_api_ts"],
+                "_api_by": save_users["_api_by"],
+            })
+            _record_cluster_api_keys_update(exchange_payload(merged))
 
 
 def _record_cluster_api_keys_update(payload: dict) -> None:
@@ -365,6 +379,7 @@ def _record_cluster_api_keys_update(payload: dict) -> None:
 
         cluster_root = default_cluster_root(Path(PBGDIR))
         ensure_local_identity(cluster_root, role="master", pbname=_cluster_pbname())
+        payload = exchange_payload(payload)
         raw_secret = json.dumps(payload, indent=4).encode("utf-8")
         redacted = _redact_api_keys_payload(payload)
         raw_payload = _canonical_json_bytes(redacted)
@@ -377,6 +392,8 @@ def _record_cluster_api_keys_update(payload: dict) -> None:
                 "api_serial": int(payload.get("_api_serial") or 1),
                 "payload_hash": payload_hash,
                 "secret_blob_hash": secret_blob_hash,
+                "sanitized": True,
+                "credential_protocol_version": 2,
             },
         )
         rebuild_materialized_state(cluster_root)
@@ -431,11 +448,10 @@ def _write_cluster_blob(base_dir: Path, raw: bytes, *, secret: bool) -> str:
 def _cluster_pbname() -> str:
     """Return the configured PBGui name for Cluster Sync identity creation."""
 
-    cfg = configparser.ConfigParser()
     try:
-        cfg.read(Path(PBGDIR) / "pbgui.ini")
-        if cfg.has_option("main", "pbname"):
-            value = cfg.get("main", "pbname").strip()
+        snapshot = pbgui_purefunc.load_ini_snapshot()
+        if snapshot.has_option("main", "pbname"):
+            value = snapshot.get("main", "pbname").strip()
             if value:
                 return value
     except Exception:

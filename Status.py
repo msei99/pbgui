@@ -11,6 +11,8 @@ from pathlib import Path
 import json
 from logging_helpers import human_log as _log
 
+SERVICE = "Status"
+
 class InstanceStatus():
     """Stores information about one passivbot configuration."""
     def __init__(self):

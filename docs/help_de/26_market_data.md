@@ -14,6 +14,12 @@ Das ist der schnellste und speichereffizienteste Weg, damit alle Coins aktuell s
 
 Damit sind alle Coins für den fortlaufenden Update-Loop registriert. Der Loop hält die letzten Tage automatisch aktuell — nach dem ersten vollständigen Download ist kein weiterer manueller Eingriff nötig.
 
+Antworten der Settings-API enthalten additiv ein `apply`-Objekt mit `timing`,
+`restart_required` und einer sicheren `message`. Latest-1m-Einstellungen
+gelten im nächsten PBData-Zyklus; Archivpfade und TradFi-Profile werden bei der
+nächsten Operation gelesen. Daraus folgt weder ein globaler Market-Data-Watcher
+noch ein erforderlicher Dienstneustart.
+
 ### Schritt 2 — „Build best 1m all" für den initialen Backfill starten
 
 Unter **Build best 1m OHLCV** auf **Build best 1m all** klicken (oder alle Coins auswählen und abschicken).
@@ -78,7 +84,7 @@ Die Sidebar selbst ist jetzt reine Navigation: Sie enthält nur die Hauptbereich
 
 - `Coin Refresh` — Exchange-Refresh-Einstellungen und der Enabled-Coins-Workflow
 - `AWS / l2Book` — Hyperliquid-Archiv- und Download-Einstellungen
-- `TradFi / Tiingo` — Tiingo-Zugangsdaten und TradFi-Mapping-Steuerung
+- `TradFi / Tiingo` — serverseitiger Tiingo-Profilstatus und TradFi-Mapping-Steuerung
 
 Der gemeinsame `Guide`-Button auf dieser Seite öffnet dieses `Market Data`-Thema direkt in einem Overlay innerhalb der Seite, sodass die aktuelle Market-Data-Ansicht beim Lesen sichtbar bleibt.
 
@@ -320,7 +326,7 @@ Pyth-Links behalten jetzt die für `pythdata.app` nötige encodierte Symbol-Tren
 
 - `Fetch start date` gilt nur für Equity (Daily-Metadaten-Endpoint).
 - Für FX gibt es keinen dedizierten Startdate-Metadata-Fetch-Button.
-- Auto-Map sowie Metadata/Price-Refresh benötigen einen konfigurierten Tiingo API-Key.
+- Auto-Map sowie Metadata/Price-Refresh benötigen ein aktives Tiingo-Vault-Profil unter **Setup -> API Keys -> TradFi**.
 
 ## Download l2Book from AWS
 
@@ -434,20 +440,18 @@ Im Job-Panel können u. a. angezeigt werden:
 - Tiingo month request usage
 - Quota/429-Wartezustände mit Sekunden und Grund
 
-## Tiingo Settings (im Settings-Bereich)
+## Tiingo-Credentials
 
-Die Seite enthält Tiingo-Controls:
-- `tiingo_api_key`
-- Test Tiingo Button
-- Runtime-Quota-Anzeigen (Stunde/Tag/Monatsbandbreite)
-- Externe Links für API-Key-Signup und Usage-Dashboard
+Das Tiingo-Profil wird unter **Setup -> API Keys -> TradFi** angelegt oder ersetzt. Market Data erhält nur serverseitigen Verfügbarkeits- und Quota-Status, niemals den gespeicherten Key. Tiingo nicht in `pbgui.ini` eintragen und PB7-TradFi-Einträge nicht manuell bearbeiten.
+
+Diese Seite zeigt Runtime-Quota-Werte (Stunde/Tag/Monatsbandbreite), Provider-Links und Mapping-Werkzeuge, die das aktive Vault-Profil verwenden.
 
 ## Troubleshooting
 
 Wenn ein Build-Job kurz erscheint und wieder verschwindet:
 1. Neuesten Failed-Job in `data/ohlcv/_tasks/failed` prüfen
 2. Sicherstellen, dass der Worker mit aktuellem Code läuft (ggf. Worker neu starten)
-3. Tiingo-Key und Symbol-Mapping-Status prüfen
+3. Tiingo-Vault-Profil und Symbol-Mapping-Status prüfen
 4. `Test Resolve` für das ausgewählte Symbol verwenden
 
 Wenn die Build-Coin-Liste leer ist:

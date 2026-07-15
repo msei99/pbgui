@@ -25,10 +25,10 @@
     user: "{{ user }}"
     user_pw: "{{ user_pw }}"
     swap_size: "{{ swap_size }}"
-    api_key: "{{ coinmarketcap_api_key }}"
     firewall: "{{ firewall }}"
     firewall_ssh_port: "{{ firewall_ssh_port }}"
     firewall_ssh_ips: "{{ firewall_ssh_ips }}"
+    pb7_ref: "{{ lookup('file', playbook_dir + '/pb7_ref.txt') | trim }}"
 
   tasks:
     - name: display facts
@@ -265,12 +265,85 @@
         version: main
         update: yes
 
-    - name: clone passivbot repository for pb7
-      git:
-        repo: https://github.com/enarjord/passivbot.git
-        dest: "{{ install_dir }}/pb7"
-        version: master
-        update: yes
+    - name: Validate pinned PB7 commit
+      assert:
+        that:
+          - pb7_ref is match('^[0-9a-f]{40}$')
+        fail_msg: "pb7_ref.txt must contain one exact lowercase 40-character commit SHA."
+
+    - name: Check for existing PB7 checkout
+      stat:
+        path: "{{ install_dir }}/pb7/.git"
+      register: pb7_git_dir
+
+    - name: Verify pinned PB7 commit before changing an existing runtime
+      command:
+        argv:
+          - python3
+          - "{{ install_dir }}/pbgui/pb7_guard.py"
+          - --repo
+          - "{{ install_dir }}/pb7"
+          - --ref
+          - "{{ pb7_ref }}"
+          - --expected-major
+          - "7"
+          - --fetch-url
+          - https://github.com/enarjord/passivbot.git
+      changed_when: false
+      when: pb7_git_dir.stat.exists
+
+    - name: Stop PBRun before replacing an existing PB7 runtime
+      script: setup/vps_service_control.sh stop PBRun
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+        PBGUI_USER: "{{ user }}"
+      changed_when: false
+      ignore_errors: yes
+      when: pb7_git_dir.stat.exists
+
+    - name: Stop processes from the existing PB7 runtime
+      command:
+        argv:
+          - python3
+          - "{{ install_dir }}/pbgui/pb7_guard.py"
+          - --repo
+          - "{{ install_dir }}/pb7"
+          - --ref
+          - "{{ pb7_ref }}"
+          - --expected-major
+          - "7"
+          - --stop-processes
+          - --venv
+          - "{{ install_dir }}/venv_pb7"
+      changed_when: false
+      when: pb7_git_dir.stat.exists
+
+    - name: Clone Passivbot without checking out upstream master
+      command:
+        argv:
+          - git
+          - clone
+          - --no-checkout
+          - https://github.com/enarjord/passivbot.git
+          - "{{ install_dir }}/pb7"
+      when: not pb7_git_dir.stat.exists
+
+    - name: Fetch, verify and checkout pinned Passivbot v7
+      command:
+        argv:
+          - python3
+          - "{{ install_dir }}/pbgui/pb7_guard.py"
+          - --repo
+          - "{{ install_dir }}/pb7"
+          - --ref
+          - "{{ pb7_ref }}"
+          - --expected-major
+          - "7"
+          - --fetch-url
+          - https://github.com/enarjord/passivbot.git
+          - --checkout
+      changed_when: false
 
     - name: create python3.12 venv for pbgui
       pip:
@@ -380,7 +453,6 @@
       loop:
         - { regexp: '<hostname>', replace: "{{ hostname }}" }
         - { regexp: '<install_dir>', replace: "{{ install_dir }}" }
-        - { regexp: '<api_key>', replace: "{{ api_key }}" }
 
     - name: store firewall config in pbgui.ini
       ini_file:
@@ -398,7 +470,8 @@
 
     - name: Build enabled PBGui service list
       set_fact:
-        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if (api_key | default('') | string | trim) else []) }}"
+        pbgui_credential_capability_known: "{{ credential_active is defined and credential_active is not none }}"
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if (credential_active | default(false)) else []) }}"
 
     - name: apply VPS logging max bytes
       ini_file:
@@ -420,17 +493,7 @@
     
     - name: install and start PBGui systemd user services
       command:
-        argv:
-          - /bin/bash
-          - "{{ install_dir }}/pbgui/setup/setup_systemd.sh"
-          - --user
-          - "{{ user }}"
-          - --pbgui-dir
-          - "{{ install_dir }}/pbgui"
-          - --python
-          - "{{ install_dir }}/venv_pbgui/bin/python"
-          - --enable
-          - "{{ pbgui_enabled_services | join(',') }}"
+        argv: "{{ ['/bin/bash', install_dir + '/pbgui/setup/setup_systemd.sh', '--user', user, '--pbgui-dir', install_dir + '/pbgui', '--python', install_dir + '/venv_pbgui/bin/python', '--enable', pbgui_enabled_services | join(',')] + ([] if pbgui_credential_capability_known else ['--no-disable-excluded']) }}"
       become: yes
       register: systemd_setup_result
 

@@ -3,12 +3,49 @@
 from __future__ import annotations
 
 import os
+import stat
 import uuid
 from pathlib import Path
 
 
 PRIVATE_DIR_MODE = 0o700
 PRIVATE_FILE_MODE = 0o600
+
+
+def read_regular_file_nofollow(path: Path, approved_root: Path) -> bytes:
+    """Read a regular file through no-follow descriptors below an approved root."""
+    path = Path(os.path.abspath(Path(path).expanduser()))
+    approved_root = Path(os.path.abspath(Path(approved_root).expanduser()))
+    try:
+        relative = path.relative_to(approved_root)
+    except ValueError as exc:
+        raise RuntimeError(f"Sensitive source escaped approved root: {path}") from exc
+    if not relative.parts:
+        raise RuntimeError("Sensitive source must be a file below its approved root")
+
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow
+    descriptors: list[int] = []
+    try:
+        directory_fd = os.open(approved_root, directory_flags)
+        descriptors.append(directory_fd)
+        for part in relative.parts[:-1]:
+            directory_fd = os.open(part, directory_flags, dir_fd=directory_fd)
+            descriptors.append(directory_fd)
+        file_fd = os.open(relative.parts[-1], os.O_RDONLY | nofollow, dir_fd=directory_fd)
+        descriptors.append(file_fd)
+        file_stat = os.fstat(file_fd)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise RuntimeError(f"Sensitive source is not a regular file: {path}")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(file_fd, 1024 * 1024)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
 
 
 def _reject_symlink(path: Path) -> None:
@@ -97,7 +134,11 @@ def harden_private_tree(root: Path) -> None:
             secure_private_file(item)
 
 
-def harden_sensitive_paths(pbgui_root: Path, pb7_root: Path | None = None) -> None:
+def harden_sensitive_paths(
+    pbgui_root: Path,
+    pb7_root: Path | None = None,
+    aws_root: Path | None = None,
+) -> None:
     """Migrate known PBGui credential stores to owner-only permissions."""
     pbgui_root = Path(pbgui_root)
     legacy_secrets = pbgui_root / ".streamlit" / "secrets.toml"
@@ -115,8 +156,14 @@ def harden_sensitive_paths(pbgui_root: Path, pb7_root: Path | None = None) -> No
         pbgui_root / "data" / "api_tokens",
         pbgui_root / "data" / "api-keys",
         pbgui_root / "data" / "cluster" / "secret_blobs",
+        pbgui_root / "data" / "vpsmanager",
     ):
         harden_private_tree(path)
 
     if pb7_root is not None:
         secure_private_file(Path(pb7_root) / "api-keys.json")
+
+    if aws_root is not None and Path(aws_root).exists():
+        aws_root = ensure_private_directory(Path(aws_root))
+        secure_private_file(aws_root / "credentials")
+        secure_private_file(aws_root / "config")

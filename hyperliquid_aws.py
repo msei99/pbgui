@@ -13,6 +13,8 @@ from hyperliquid_api import resolve_hyperliquid_coin_name
 from market_data import normalize_market_data_coin_dir
 from logging_helpers import human_log as _log
 
+SERVICE = "HyperliquidAWS"
+
 
 HYPERLIQUID_AWS_REGION = "us-east-2"
 HYPERLIQUID_AWS_BUCKET = "hyperliquid-archive"
@@ -855,7 +857,7 @@ def download_hyperliquid_l2book_aws(
             if fail_fast:
                 raise
             if verbose:
-                _log('HyperliquidAWS', f'Download failed: s3://{bucket}/{obj.key}: {exc!r}', level='WARNING')
+                _log(SERVICE, f'Download failed: s3://{bucket}/{obj.key}: {exc!r}', level='WARNING')
             err_code = _s3_error_code(exc)
             err_msg = f"{err_code}: {exc}" if err_code else str(exc)
             error_by_key[obj.key] = err_msg

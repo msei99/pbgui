@@ -1,45 +1,315 @@
-"""Tests for central logging helper rotation and per-service configuration."""
+"""Tests for secure, concurrent central logging helpers."""
 
+from concurrent.futures import ThreadPoolExecutor
+import configparser
+import json
+import multiprocessing
 from pathlib import Path
+import threading
+import time
+
+import pytest
 
 import logging_helpers
+from file_lock import advisory_file_lock
+
+
+TIER_3_SERVICES = {
+    "ApiLogging", "ApiKeys", "BalanceCalc", "CoinDataUI", "Dashboard",
+    "Services", "V7Instances", "MarketDataAPI", "PB7OhlcvAPI", "PBV7UI",
+}
+DEDICATED_SERVICES = {
+    "OptimizeQueueAPI", "PBRun", "PBData", "PBCoinData", "PBCluster",
+    "PBApiServer", "PBMonitorAgent", "VPSMonitor", "MarketData",
+}
+
+
+def test_log_group_ownership_contract():
+    """Tier-3 helpers group into PBGui while daemons and pipelines stay dedicated."""
+    assert {service for service in TIER_3_SERVICES if logging_helpers.LOG_GROUPS.get(service) == "PBGui"} == TIER_3_SERVICES
+    assert DEDICATED_SERVICES.isdisjoint(logging_helpers.LOG_GROUPS)
+
+
+def _process_writer(logfile: str, ini_path: str, start: int, count: int) -> None:
+    """Write an isolated range from a child process."""
+    logging_helpers.PBGUI_INI = Path(ini_path)
+    for index in range(start, start + count):
+        logging_helpers.human_log("ProcessTest", f"record-{index}", logfile=logfile)
+
+
+@pytest.fixture
+def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """Redirect every canonical logging path away from repository data."""
+    root = tmp_path / "project"
+    ini_path = root / "pbgui.ini"
+    log_root = root / "data" / "logs"
+    monkeypatch.setattr(logging_helpers, "PBGDIR", root)
+    monkeypatch.setattr(logging_helpers, "PBGUI_INI", ini_path)
+    monkeypatch.setattr(logging_helpers, "LOG_ROOT", log_root)
+    return ini_path, log_root
+
+
+def test_defaults_are_independent_of_cwd(isolated_paths, tmp_path, monkeypatch):
+    """Default logs and settings should use canonical paths, never cwd."""
+    ini_path, log_root = isolated_paths
+    ini_path.parent.mkdir(parents=True)
+    ini_path.write_text("[logging]\nrotate_default_max_bytes = 1234\n", encoding="utf-8")
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+
+    logging_helpers.human_log("Canonical", "from elsewhere")
+
+    assert logging_helpers.get_rotate_defaults()[0] == 1234
+    assert (log_root / "Canonical.log").read_text(encoding="utf-8").endswith("from elsewhere\n")
+    assert not (unrelated / "data").exists()
+
+
+def test_redacts_all_channels_and_nested_metadata(isolated_paths):
+    """Credentials should be removed from text fields and nested metadata."""
+    _, log_root = isolated_paths
+    pem = "-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----"
+    recursive = []
+    recursive.append(recursive)
+
+    class Unserializable:
+        """Object whose repr must not leak into metadata."""
+
+        def __str__(self):
+            raise RuntimeError("password=from-str")
+
+    logging_helpers.human_log(
+        "Secrets",
+        "Authorization: Bearer message-token url=https://host/x?token=query-token&ok=1",
+        user="cookie=user-cookie",
+        tags=["session=tag-session"],
+        code="api_key=code-key",
+        meta={
+            "Password": "nested-password",
+            "passwd": "nested-passwd",
+            "api_key": "nested-api-key",
+            "apikey": "nested-apikey",
+            "api_secret": "nested-api-secret",
+            "secret": "nested-secret",
+            "token": "nested-token",
+            "session": "nested-session",
+            "cookie": "nested-cookie",
+            "authorization": "nested-authorization",
+            "bearer": "nested-bearer",
+            "private_key": "nested-private-key",
+            "passphrase": "nested-passphrase",
+            "access_token": "nested-access-token",
+            "refreshToken": "nested-refresh-token",
+            "client_secret": "nested-client-secret",
+            "aws_secret_access_key": "nested-aws-secret",
+            "x-api-key": "nested-x-api-key",
+            "nested": {
+                "traceback": "failure cookie=trace-cookie",
+                "exception": "authorization=Bearer exception-token",
+                "url": "https://host/?api_secret=url-secret&safe=yes",
+                "pem": pem,
+            },
+            "recursive": recursive,
+            "object": Unserializable(),
+        },
+    )
+
+    content = (log_root / "Secrets.log").read_text(encoding="utf-8")
+    for secret in (
+        "message-token", "query-token", "user-cookie", "tag-session", "code-key",
+        "nested-password", "trace-cookie", "exception-token", "url-secret", "private-material",
+        "from-str", "nested-passwd", "nested-api-key", "nested-apikey", "nested-api-secret",
+        "nested-secret", "nested-token", "nested-session", "nested-cookie", "nested-authorization",
+        "nested-bearer", "nested-private-key", "nested-passphrase",
+        "nested-access-token", "nested-refresh-token", "nested-client-secret",
+        "nested-aws-secret", "nested-x-api-key",
+    ):
+        assert secret not in content
+    assert content.count("[REDACTED]") >= 8
+    assert '"recursive": ["[RECURSIVE]"]' in content
+    assert '"object": "<Unserializable>"' in content
+    assert "&ok=1" in content
+
+
+def test_redacts_basic_auth_set_cookie_and_extended_query_secrets(isolated_paths):
+    """Common HTTP and OAuth credential variants must be centrally redacted."""
+    _, log_root = isolated_paths
+    logging_helpers.human_log(
+        "Secrets",
+        "Authorization: Basic basic-secret Set-Cookie: pbgui_session=cookie-secret "
+        "https://host/path?access_token=oauth-secret&safe=yes",
+        meta={"proxy_authorization": "proxy-secret", "totp_secret": "totp-value"},
+    )
+
+    content = (log_root / "Secrets.log").read_text(encoding="utf-8")
+    for secret in ("basic-secret", "cookie-secret", "oauth-secret", "proxy-secret", "totp-value"):
+        assert secret not in content
+    assert "&safe=yes" in content
+
+
+def test_nested_logging_context_resets_and_explicit_metadata_wins(isolated_paths):
+    """Nested context should restore its parent and explicit metadata should win."""
+    _, log_root = isolated_paths
+
+    with logging_helpers.logging_context(request_id="outer", operation="outer-op"):
+        logging_helpers.human_log("Context", "outer")
+        with logging_helpers.logging_context(operation="inner-op", instance="bot-a"):
+            logging_helpers.human_log("Context", "inner", meta={"operation": "explicit-op"})
+        logging_helpers.human_log("Context", "restored")
+    logging_helpers.human_log("Context", "cleared")
+
+    lines = (log_root / "Context.log").read_text(encoding="utf-8").splitlines()
+    metadata = [json.loads(line[line.index("{"):]) if "{" in line else {} for line in lines]
+    assert metadata == [
+        {"operation": "outer-op", "request_id": "outer"},
+        {"instance": "bot-a", "operation": "explicit-op", "request_id": "outer"},
+        {"operation": "outer-op", "request_id": "outer"},
+        {},
+    ]
+
+
+def test_grouped_rotation_uses_physical_stem(isolated_paths):
+    """Grouped services and their physical logfile should share one override."""
+    logging_helpers.set_rotate_defaults(900, 1)
+    logging_helpers.set_rotate_settings("VPSManager", 321, 4)
+
+    assert logging_helpers.get_rotate_settings(service="VPSManager") == (321, 4)
+    assert logging_helpers.get_rotate_settings(logfile="/tmp/PBGui.log") == (321, 4)
+    assert logging_helpers.get_rotate_settings(service="VPSManager", logfile="/tmp/PBGui.log") == (321, 4)
+
+
+def test_managed_scope_persistence_and_resolution(isolated_paths):
+    """Managed scope settings apply by path below exact physical overrides."""
+    ini_path, log_root = isolated_paths
+    logging_helpers.set_rotate_defaults(900, 1)
+    logging_helpers.set_managed_scope_settings("jobs", 500, 3)
+    job_log = log_root / "jobs" / "abc.log"
+    assert logging_helpers.resolve_managed_log_scope(job_log) == "jobs"
+    assert logging_helpers.get_rotate_settings(logfile=str(job_log)) == (500, 3)
+    logging_helpers.set_rotate_settings("abc", 250, 7)
+    assert logging_helpers.get_rotate_settings(logfile=str(job_log)) == (250, 7)
+    cfg = configparser.ConfigParser(); cfg.read(ini_path)
+    assert cfg.getint("logging", "managed_jobs_backup_count") == 3
+
+
+def test_managed_scope_validation_and_external_paths(isolated_paths):
+    """Only registered IDs are accepted and declared legacy paths resolve."""
+    root = logging_helpers.PBGDIR
+    with pytest.raises(ValueError):
+        logging_helpers.set_managed_scope_settings("../../bad", 1, 1)
+    assert logging_helpers.resolve_managed_log_scope(root / "data/ohlcv_preload/logs/preload_x.log") == "ohlcv_preloads"
+    assert logging_helpers.resolve_managed_log_scope(logging_helpers.LOG_ROOT / "ohlcv-preloads" / "preload_x.log") == "ohlcv_preloads"
+    assert logging_helpers.resolve_managed_log_scope(logging_helpers.LOG_ROOT / "vps-manager" / "hosts" / "host-a" / "run.log") == "vps_manager_runs"
+    assert logging_helpers.resolve_managed_log_scope(logging_helpers.LOG_ROOT / "monitor-agent" / "live_metrics.ndjson") == "monitor_agent_live"
+    assert logging_helpers.resolve_managed_log_scope(root / "outside.log") is None
+
+
+def test_managed_transcript_append_rotates_sanitizes_and_locks(isolated_paths, monkeypatch):
+    """Managed transcript writes share one rotate-and-append lock transaction."""
+    _, log_root = isolated_paths
+    path = log_root / "jobs" / "job-a.log"
+    logging_helpers.set_managed_scope_settings("jobs", 8, 2)
+    path.parent.mkdir(parents=True)
+    path.write_text("old transcript\n", encoding="utf-8")
+
+    logging_helpers.append_managed_transcript_line(path, "token=secret-value", "jobs")
+
+    assert (Path(f"{path}.1")).read_text(encoding="utf-8") == "old transcript\n"
+    assert "secret-value" not in path.read_text(encoding="utf-8")
+    assert "[REDACTED]" in path.read_text(encoding="utf-8")
+
+
+def test_atomic_settings_update_preserves_unrelated_values(isolated_paths):
+    """Locked atomic updates should retain unrelated INI settings."""
+    ini_path, _ = isolated_paths
+    ini_path.parent.mkdir(parents=True)
+    ini_path.write_text("[main]\nname = keep-me\n[other]\nvalue = 42\n", encoding="utf-8")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(logging_helpers.set_rotate_defaults, 2048, 2),
+            pool.submit(logging_helpers.set_rotate_settings, "PBRun", 4096, 3),
+        ]
+        for future in futures:
+            future.result()
+
+    cfg = configparser.ConfigParser()
+    cfg.read(ini_path, encoding="utf-8")
+    assert cfg.get("main", "name") == "keep-me"
+    assert cfg.get("other", "value") == "42"
+    assert logging_helpers.get_rotate_defaults() == (2048, 2)
+    assert logging_helpers.get_rotate_settings(service="PBRun") == (4096, 3)
+    assert not list(ini_path.parent.glob("*.tmp"))
+
+
+def test_thread_safe_writes_have_complete_lines(isolated_paths, tmp_path):
+    """Concurrent threads should append every complete record exactly once."""
+    logfile = tmp_path / "thread.log"
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for index in range(200):
+            pool.submit(logging_helpers.human_log, "ThreadTest", f"record-{index}", logfile=str(logfile))
+
+    lines = logfile.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 200
+    assert {line.rsplit(" ", 1)[-1] for line in lines} == {f"record-{index}" for index in range(200)}
+
+
+@pytest.mark.skipif(multiprocessing.get_start_method(allow_none=True) == "spawn", reason="fork-oriented lock stress test")
+def test_process_safe_writes_have_complete_lines(isolated_paths, tmp_path):
+    """Concurrent processes should serialize append transactions."""
+    ini_path, _ = isolated_paths
+    logfile = tmp_path / "process.log"
+    context = multiprocessing.get_context("fork")
+    processes = [
+        context.Process(target=_process_writer, args=(str(logfile), str(ini_path), worker * 50, 50))
+        for worker in range(4)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(20)
+        assert process.exitcode == 0
+
+    lines = logfile.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 200
+    assert {line.rsplit(" ", 1)[-1] for line in lines} == {f"record-{index}" for index in range(200)}
+
+
+@pytest.mark.parametrize("operation", ["rotate", "purge"])
+def test_rotation_and_purge_use_physical_log_lock(isolated_paths, tmp_path, operation):
+    """Rotation and purge should wait for the same lock used by writers."""
+    logfile = tmp_path / "locked.log"
+    logfile.write_text("old content\n", encoding="utf-8")
+    started = threading.Event()
+    finished = threading.Event()
+
+    def run_operation():
+        started.set()
+        if operation == "rotate":
+            logging_helpers.rotate_logfile_if_oversize(str(logfile), 1, 2)
+        else:
+            logging_helpers.purge_log_to_rotated(str(logfile), 1024)
+        finished.set()
+
+    with advisory_file_lock(logfile):
+        thread = threading.Thread(target=run_operation)
+        thread.start()
+        assert started.wait(1)
+        time.sleep(0.05)
+        assert not finished.is_set()
+    thread.join(2)
+    assert finished.is_set()
+    assert (tmp_path / "locked.log.1").exists()
 
 
 def test_rotate_logfile_keeps_configured_backup_count(tmp_path):
     """Rotation should keep multiple generations up to backup_count."""
     log_path = tmp_path / "service.log"
-
-    # Force multiple rotations with very small threshold
-    for idx in range(1, 5):
-        log_path.write_text(f"entry-{idx}\n", encoding="utf-8")
+    for index in range(1, 5):
+        log_path.write_text(f"entry-{index}\n", encoding="utf-8")
         logging_helpers.rotate_logfile_if_oversize(str(log_path), max_bytes=1, backup_count=3)
 
     assert (tmp_path / "service.log.1").exists()
     assert (tmp_path / "service.log.2").exists()
     assert (tmp_path / "service.log.3").exists()
-    assert not (tmp_path / "service.log.4").exists(), "Must not keep more than backup_count files"
-
-
-def test_rotate_settings_can_be_saved_per_service(tmp_path, monkeypatch):
-    """Per-service rotate settings should persist in pbgui.ini and be read back."""
-    monkeypatch.chdir(tmp_path)
-
-    # Ensure an ini exists
-    Path("pbgui.ini").write_text("[main]\n", encoding="utf-8")
-
-    logging_helpers.set_rotate_defaults(8 * 1024 * 1024, 2)
-    logging_helpers.set_rotate_settings("PBRun", 2 * 1024 * 1024, 5)
-
-    default_max_bytes, default_backup_count = logging_helpers.get_rotate_defaults()
-    pbrun_max_bytes, pbrun_backup_count = logging_helpers.get_rotate_settings(service="PBRun")
-    other_max_bytes, other_backup_count = logging_helpers.get_rotate_settings(service="SomeOtherService")
-
-    assert default_max_bytes == 8 * 1024 * 1024
-    assert default_backup_count == 2
-
-    assert pbrun_max_bytes == 2 * 1024 * 1024
-    assert pbrun_backup_count == 5
-
-    # Unconfigured service should fall back to defaults
-    assert other_max_bytes == 8 * 1024 * 1024
-    assert other_backup_count == 2
+    assert not (tmp_path / "service.log.4").exists()

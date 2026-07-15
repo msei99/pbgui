@@ -22,6 +22,7 @@
     target_commit: "{{ pb7_commit | default('') }}"
     remote_name: "{{ pb7_remote_name | default('origin') }}"
     remote_url: "{{ pb7_remote_url | default('') }}"
+    selected_ref: "{{ target_commit if target_commit != '' else remote_name ~ '/' ~ source_branch }}"
 
   tasks:
     - name: display facts
@@ -63,14 +64,6 @@
         msg: "Uncommitted changes detected in PB7. Please commit or stash changes before switching branches."
       when: git_status.stdout != ""
 
-    - name: Check if branch exists locally
-      command: git show-ref --verify --quiet "refs/heads/{{ target_branch }}"
-      args:
-        chdir: "{{ pb7dir }}"
-      register: branch_exists
-      failed_when: false
-      changed_when: false
-
     - name: Check if source branch exists on selected remote
       command: git show-ref --verify --quiet "refs/remotes/{{ remote_name }}/{{ source_branch }}"
       args:
@@ -84,35 +77,66 @@
         msg: "Remote branch {{ remote_name }}/{{ source_branch }} does not exist. Please choose a valid source branch before switching PB7."
       when: source_branch_exists.rc != 0
 
-    - name: Create and checkout local branch from remote if it doesn't exist
-      command: git checkout -b "{{ target_branch }}" --track "{{ remote_name }}/{{ source_branch }}"
+    - name: Resolve selected PB7 ref to one immutable commit
+      command: git rev-parse "{{ selected_ref }}^{commit}"
       args:
         chdir: "{{ pb7dir }}"
-      when: branch_exists.rc != 0
+      register: resolved_commit
+      changed_when: false
+
+    - name: Verify selected commit is Passivbot v7 before checkout
+      command:
+        argv:
+          - python3
+          - "{{ pbgdir }}/pb7_guard.py"
+          - --repo
+          - "{{ pb7dir }}"
+          - --ref
+          - "{{ resolved_commit.stdout }}"
+          - --expected-major
+          - "7"
+      register: pb7_preflight
+      changed_when: false
+
+    - name: Stop PBRun before changing PB7 checkout
+      command:
+        argv:
+          - "{{ pbgui_python | default(ansible_playbook_python) }}"
+          - "{{ pbgdir }}/starter.py"
+          - --stop
+          - PBRun
+      changed_when: false
+      when: "'checkout_required=true' in pb7_preflight.stdout"
+
+    - name: Stop PB7 processes before changing checkout
+      command:
+        argv:
+          - python3
+          - "{{ pbgdir }}/pb7_guard.py"
+          - --repo
+          - "{{ pb7dir }}"
+          - --ref
+          - "{{ resolved_commit.stdout }}"
+          - --expected-major
+          - "7"
+          - --stop-processes
+          - --venv
+          - "{{ pb7venv }}"
+      changed_when: false
+      when: "'checkout_required=true' in pb7_preflight.stdout"
+
+    - name: Checkout target branch directly at verified commit
+      command: git checkout -B "{{ target_branch }}" "{{ resolved_commit.stdout }}"
+      args:
+        chdir: "{{ pb7dir }}"
+      register: checkout_result
       notify: restart pb7
 
-    - name: Checkout target branch (if already exists locally)
-      command: git checkout "{{ target_branch }}"
+    - name: Set target branch upstream
+      command: git branch --set-upstream-to "{{ remote_name }}/{{ source_branch }}" "{{ target_branch }}"
       args:
         chdir: "{{ pb7dir }}"
-      when: branch_exists.rc == 0
-      notify: restart pb7
-
-    - name: Reset to specific commit if provided (stays on branch)
-      command: git reset --hard "{{ target_commit }}"
-      args:
-        chdir: "{{ pb7dir }}"
-      when: target_commit != ""
-      register: commit_reset
-      notify: restart pb7
-
-    - name: Reset to latest remote HEAD (only if no specific commit provided)
-      command: git reset --hard "{{ remote_name }}/{{ source_branch }}"
-      args:
-        chdir: "{{ pb7dir }}"
-      when: target_commit == ""
-      register: pull_result
-      notify: restart pb7
+      changed_when: false
 
     - name: Display checkout result
       debug:
@@ -124,6 +148,32 @@
       tags: debug,never
 
   handlers:
+    - name: Stop PBRun before PB7 rebuild
+      command:
+        argv:
+          - "{{ pbgui_python | default(ansible_playbook_python) }}"
+          - "{{ pbgdir }}/starter.py"
+          - --stop
+          - PBRun
+      changed_when: false
+      listen: "restart pb7"
+      ignore_errors: yes
+
+    - name: kill all pb7 processes
+      shell: |
+        pids="$({
+          ps -ef | grep "{{ pb7dir }}/src/main.py" | grep -v grep | awk '{print $2}'
+          ps -ef | grep "{{ pb7venv }}/bin/python" | grep -v grep | awk '{print $2}'
+        } | sort -u)"
+        if [ -n "$pids" ]; then
+          kill $pids
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      listen: "restart pb7"
+      ignore_errors: yes
+
     - name: Install pb7 requirements
       pip:
         requirements: "{{ pb7dir }}/requirements.txt"
@@ -157,21 +207,9 @@
         executable: /bin/bash
       listen: "restart pb7"
 
-    - name: kill all pb7 processes
-      shell: |
-        pids="$(ps -ef | grep "{{ pb7dir }}/src/main.py" | grep -v grep | awk '{print $2}')"
-        if [ -n "$pids" ]; then
-          kill $pids
-        fi
-      args:
-        executable: /bin/bash
-      changed_when: false
-      listen: "restart pb7"
-      ignore_errors: yes
-
     - name: Make sure PBRun ist running
       shell: |
-        python "{{ pbgdir }}/starter.py" -s PBRun
+        "{{ pbgui_python | default(ansible_playbook_python) }}" "{{ pbgdir }}/starter.py" -s PBRun
       args:
         executable: /bin/bash
         chdir: "{{ pbgdir }}"

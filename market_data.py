@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import configparser
+from io import StringIO
 import re
 import calendar
 from datetime import date, datetime, timedelta, timezone
@@ -15,7 +16,11 @@ from logging_helpers import human_log
 from file_lock import advisory_file_lock
 from market_data_sources import get_source_minutes_for_range
 from PBCoinData import CoinData, compute_coin_name, get_symbol_for_coin
+import pbgui_purefunc
 from pbgui_purefunc import load_symbols_from_ini
+from secure_files import atomic_write_private_text, ensure_private_directory, secure_private_file
+
+SERVICE = "MarketData"
 
 
 _DAY_HOUR_RE = re.compile(r"^(\d{8})-(\d{2})\.(lz4|jsonl|npz)$")
@@ -23,6 +28,15 @@ _DAY_RE = re.compile(r"^(\d{8})\.(lz4|jsonl|npz)$")
 _DAY_DASH_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})\.(lz4|jsonl|npz)$")
 _HL_COIN_TO_CCXT_SYMBOL_CACHE: dict[str, str] | None = None
 _HL_SYMBOL_TO_CCXT_SYMBOL_CACHE: dict[str, str] | None = None
+_AWS_PROFILE_RE = re.compile(r"^[A-Za-z0-9_+=,.@-]{1,128}$")
+
+
+def _validate_aws_profile_name(profile: str) -> str:
+    """Return one AWS-compatible profile name without INI control syntax."""
+    profile = str(profile or "").strip()
+    if not _AWS_PROFILE_RE.fullmatch(profile):
+        raise ValueError("AWS profile contains invalid characters")
+    return profile
 
 
 def _normalize_day_str(day: str) -> str:
@@ -250,7 +264,7 @@ def append_exchange_download_log(exchange: str, line: str, level: str = None) ->
     tags = ["market_data"]
     if ex:
         tags.append(f"ex:{ex}")
-    human_log("MarketData", str(line or "").rstrip("\n"), tags=tags, level=level)
+    human_log(SERVICE, str(line or "").rstrip("\n"), tags=tags, level=level)
 
 
 def get_market_data_config_path() -> Path:
@@ -748,9 +762,9 @@ def _get_pb7_root_dir(pb7_root: str | Path | None = None) -> Path | None:
             return None
 
     try:
-        cfg = configparser.ConfigParser()
-        cfg.read(Path(__file__).resolve().parent / "pbgui.ini")
-        ini_val = str(cfg.get("main", "pb7dir", fallback="") or "").strip()
+        snapshot = pbgui_purefunc.load_ini_snapshot()
+        ini_val = snapshot.get("main", "pb7dir") if snapshot.has_option("main", "pb7dir") else ""
+        ini_val = str(ini_val or "").strip()
         if ini_val:
             p = Path(ini_val).expanduser().resolve()
             if p.exists():
@@ -1478,13 +1492,12 @@ def load_aws_profile_credentials(profile: str) -> dict[str, str]:
         aws_access_key_id, aws_secret_access_key
     """
 
-    prof = str(profile or "").strip()
-    if not prof:
-        raise ValueError("profile is empty")
+    prof = _validate_aws_profile_name(profile)
 
     path = get_aws_credentials_path()
     if not path.exists():
         return {}
+    secure_private_file(path)
 
     cp = configparser.RawConfigParser()
     cp.read(path)
@@ -1504,14 +1517,12 @@ def save_aws_profile_credentials(
     aws_access_key_id: str,
     aws_secret_access_key: str,
 ) -> None:
-    prof = str(profile or "").strip()
-    if not prof:
-        raise ValueError("profile is empty")
+    prof = _validate_aws_profile_name(profile)
     if not str(aws_access_key_id or "").strip() or not str(aws_secret_access_key or "").strip():
         raise ValueError("AWS access key id and secret access key are required")
 
     path = get_aws_credentials_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_directory(path.parent)
 
     with advisory_file_lock(path):
         cp = configparser.RawConfigParser()
@@ -1522,10 +1533,9 @@ def save_aws_profile_credentials(
         cp.set(prof, "aws_access_key_id", str(aws_access_key_id).strip())
         cp.set(prof, "aws_secret_access_key", str(aws_secret_access_key).strip())
 
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            cp.write(f)
-        os.replace(tmp, path)
+        buffer = StringIO()
+        cp.write(buffer)
+        atomic_write_private_text(path, buffer.getvalue())
 
 
 def load_aws_profile_region(profile: str) -> str:
@@ -1536,13 +1546,12 @@ def load_aws_profile_region(profile: str) -> str:
         region = us-east-1
     """
 
-    prof = str(profile or "").strip()
-    if not prof:
-        raise ValueError("profile is empty")
+    prof = _validate_aws_profile_name(profile)
 
     path = get_aws_config_path()
     if not path.exists():
         return ""
+    secure_private_file(path)
 
     cp = configparser.RawConfigParser()
     cp.read(path)
@@ -1556,15 +1565,13 @@ def load_aws_profile_region(profile: str) -> str:
 
 
 def save_aws_profile_region(*, profile: str, region: str) -> None:
-    prof = str(profile or "").strip()
-    if not prof:
-        raise ValueError("profile is empty")
+    prof = _validate_aws_profile_name(profile)
     reg = str(region or "").strip()
     if not reg:
         raise ValueError("region is empty")
 
     path = get_aws_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_directory(path.parent)
 
     with advisory_file_lock(path):
         cp = configparser.RawConfigParser()
@@ -1576,19 +1583,17 @@ def save_aws_profile_region(*, profile: str, region: str) -> None:
             cp.add_section(section)
         cp.set(section, "region", reg)
 
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            cp.write(f)
-        os.replace(tmp, path)
+        buffer = StringIO()
+        cp.write(buffer)
+        atomic_write_private_text(path, buffer.getvalue())
 
 
 def load_l2book_archive_dir() -> str:
     """Return configured l2book archive directory from pbgui.ini, or empty string."""
     try:
-        cfg = configparser.ConfigParser()
-        cfg.read(Path(__file__).resolve().parent / "pbgui.ini")
-        if cfg.has_option("market_data", "l2book_archive_dir"):
-            return str(cfg.get("market_data", "l2book_archive_dir")).strip()
+        snapshot = pbgui_purefunc.load_ini_snapshot()
+        if snapshot.has_option("market_data", "l2book_archive_dir"):
+            return snapshot.get("market_data", "l2book_archive_dir").strip()
     except Exception:
         pass
     return ""
@@ -1597,10 +1602,9 @@ def load_l2book_archive_dir() -> str:
 def is_l2book_archive_enabled() -> bool:
     """Return True if l2book archiving to NAS is enabled in pbgui.ini."""
     try:
-        cfg = configparser.ConfigParser()
-        cfg.read(Path(__file__).resolve().parent / "pbgui.ini")
-        if cfg.has_option("market_data", "l2book_archive_enabled"):
-            return str(cfg.get("market_data", "l2book_archive_enabled")).strip().lower() in ("1", "true", "yes")
+        snapshot = pbgui_purefunc.load_ini_snapshot()
+        if snapshot.has_option("market_data", "l2book_archive_enabled"):
+            return snapshot.get("market_data", "l2book_archive_enabled").strip().lower() in ("1", "true", "yes")
     except Exception:
         pass
     return False

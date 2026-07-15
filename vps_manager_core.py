@@ -1,4 +1,3 @@
-import configparser
 import glob
 import json
 import os
@@ -15,14 +14,28 @@ import ansible_runner
 import getpass
 import paramiko
 
-from logging_helpers import human_log as _log
+from file_lock import advisory_file_lock
+from logging_helpers import append_managed_transcript_line, human_log as _log, rotate_managed_log_before_open
 from master.cluster_ssh_keys import ensure_local_cluster_ssh_material
 from pbgui_purefunc import load_ini, pb7dir, pb7venv, save_ini
+from vps_inventory_store import delete_inventory_path, write_inventory_json, write_versioned_inventory_json
 
 PBGDIR = Path(__file__).resolve().parent
+SERVICE = "VPSManager"
 PB7DIR = pb7dir()
 PB7VENV = pb7venv()
 TASK_LOG_HISTORY_DEFAULT = 10
+VPS_LOG_ROOT = PBGDIR / "data" / "logs" / "vps-manager"
+VPS_INVENTORY_DENYLIST = frozenset({
+    "coinmarketcap_api_key",
+    "user_pw",
+    "initial_root_pw",
+    "root_pw",
+    "user_sudo",
+    "user_sudo_pw",
+    "private_key_user",
+    "private_key_file",
+})
 
 
 def _vps_hosts_root() -> Path:
@@ -273,7 +286,6 @@ class VPS:
         self.init_log = ""
         self.setup_log = ""
         self.update_log = ""
-        self.coinmarketcap_api_key = None
         self.firewall = True
         self.firewall_ssh_port = 22
         self.firewall_ssh_ips = ""
@@ -281,6 +293,8 @@ class VPS:
         self.logfile = None
         self.logsize = 50
         self.remote_pbgui_dir = None
+        self._inventory_revision = 0
+        self._inventory_snapshot = None
 
     @property
     def hostname(self):
@@ -292,25 +306,26 @@ class VPS:
         self.path = _vps_host_path(self._hostname)
 
     def _task_log_path(self, task_name: str | None = None, fallback: str = "vps-update") -> Path:
-        base_dir = _vps_host_path(self.hostname)
+        base_dir = VPS_LOG_ROOT / "hosts" / self.hostname
         return _task_run_log_path(base_dir, task_name or self.command, self.command_run_id, fallback)
 
     def _task_log_alias_path(self, task_name: str | None = None, fallback: str = "vps-update") -> Path:
-        base_dir = _vps_host_path(self.hostname)
+        base_dir = VPS_LOG_ROOT / "hosts" / self.hostname
         return _task_log_path(base_dir, task_name or self.command, fallback)
 
     def _rotate_task_log(self, task_name: str | None = None, fallback: str = "vps-update") -> None:
-        _rotate_task_log(self._task_log_alias_path(task_name, fallback), _task_log_history_limit())
+        rotate_managed_log_before_open(self._task_log_alias_path(task_name, fallback), "vps_manager_runs")
 
     def _append_task_log(self, dump: str, *, task_name: str | None = None, fallback: str, buffer_attr: str) -> None:
         log = self._task_log_path(task_name, fallback)
         alias_log = self._task_log_alias_path(task_name, fallback)
-        with open(log, "a", encoding="utf-8") as logfile:
-            logfile.write(dump)
+        append_managed_transcript_line(log, dump, "vps_manager_runs")
         try:
-            shutil.copyfile(log, alias_log)
-        except Exception:
-            pass
+            if log != alias_log:
+                with advisory_file_lock(log), advisory_file_lock(alias_log):
+                    shutil.copyfile(log, alias_log)
+        except Exception as exc:
+            _log(SERVICE, f"Could not update task log alias: {exc}", level="WARNING", meta={"operation": "copy_task_log_alias", "host": self.hostname, "task": task_name or self.command})
         setattr(self, buffer_attr, getattr(self, buffer_attr) + dump)
 
     def _start_task_log(self, task_name: str | None = None, fallback: str = "vps-update") -> None:
@@ -318,16 +333,30 @@ class VPS:
         alias_log = self._task_log_alias_path(task_name, fallback)
         log.parent.mkdir(parents=True, exist_ok=True)
         header = _task_log_header(task_name=task_name or self.command, fallback=fallback, target=str(self.hostname or "unknown"))
-        with open(log, "w", encoding="utf-8") as logfile:
-            logfile.write(header)
+        rotate_managed_log_before_open(log, "vps_manager_runs")
+        with advisory_file_lock(log):
+            with open(log, "w", encoding="utf-8") as logfile:
+                logfile.write(header)
         try:
-            shutil.copyfile(log, alias_log)
-        except Exception:
-            pass
+            if log != alias_log:
+                rotate_managed_log_before_open(alias_log, "vps_manager_runs")
+                with advisory_file_lock(log), advisory_file_lock(alias_log):
+                    shutil.copyfile(log, alias_log)
+        except Exception as exc:
+            _log(SERVICE, f"Could not initialize task log alias: {exc}", level="WARNING", meta={"operation": "copy_task_log_alias", "host": self.hostname, "task": task_name or self.command})
 
     def load(self, file_path):
         with open(file_path, "r", encoding="utf-8") as handle:
             config = json.load(handle)
+        try:
+            self._inventory_revision = max(int(config.get("_revision") or 0), 0)
+        except (TypeError, ValueError):
+            self._inventory_revision = 0
+        self._inventory_snapshot = {
+            key: value
+            for key, value in config.items()
+            if key != "_revision" and key not in VPS_INVENTORY_DENYLIST
+        }
         if "_hostname" in config:
             self.hostname = config["_hostname"] or Path(file_path).stem
         if "ip" in config:
@@ -348,8 +377,6 @@ class VPS:
             self.init_status = config["init_status"]
         if "update_status" in config:
             self.update_status = config["update_status"]
-        if "coinmarketcap_api_key" in config:
-            self.coinmarketcap_api_key = config["coinmarketcap_api_key"]
         if "firewall" in config:
             self.firewall = config["firewall"]
         if "firewall_ssh_port" in config:
@@ -531,7 +558,7 @@ class VPS:
         return False
 
     def fetch_vps_info(self):
-        result = {"coinmarketcap": None, "swap": "0", "firewall": None, "firewall_ssh_port": None, "firewall_ssh_ips": None}
+        result = {"swap": "0"}
         if not self.ip or not self.user:
             _log("VPSManager", "Missing VPS IP or username.", level="WARNING")
             return result
@@ -552,61 +579,7 @@ class VPS:
             except Exception as exc:
                 _log("VPSManager", f"Failed to get swap size on VPS {self.hostname}: {exc}", level="WARNING")
 
-            sftp = ssh.open_sftp()
-            try:
-                remote_dirs = []
-                for item in (self.remote_pbgui_dir, "software/pbgui", "pbgui"):
-                    value = str(item or "").strip().rstrip("/")
-                    if value and value not in remote_dirs:
-                        remote_dirs.append(value)
-                content = None
-                for remote_dir in remote_dirs:
-                    remote_path = f"{remote_dir}/pbgui.ini"
-                    try:
-                        with sftp.file(remote_path, mode="r") as config_file:
-                            content = config_file.read().decode()
-                        if content and remote_dir != self.remote_pbgui_dir:
-                            self.remote_pbgui_dir = remote_dir
-                        break
-                    except FileNotFoundError:
-                        continue
-                    except Exception as exc:
-                        _log(
-                            "VPSManager",
-                            f"Error reading file from VPS {self.hostname} ({self.ip}): {exc}",
-                            level="ERROR",
-                        )
-                        break
-                if not content:
-                    _log(
-                        "VPSManager",
-                        f"pbgui.ini not found on VPS {self.hostname} ({self.ip}) in: {', '.join(remote_dirs)}",
-                        level="ERROR",
-                    )
-            finally:
-                sftp.close()
-                ssh.close()
-
-            if not content:
-                return result
-
-            config_data = configparser.ConfigParser()
-            try:
-                config_data.read_string(content)
-            except Exception as exc:
-                _log("VPSManager", f"Error parsing config file from VPS {self.hostname} ({self.ip}): {exc}", level="WARNING")
-                return result
-
-            if config_data.has_section("coinmarketcap") and config_data.has_option("coinmarketcap", "api_key"):
-                result["coinmarketcap"] = config_data.get("coinmarketcap", "api_key")
-                _log("VPSManager", f"Successfully fetched API key from {self.hostname}", level="INFO")
-            else:
-                _log("VPSManager", f"'api_key' not found in [coinmarketcap] section on VPS {self.hostname}", level="WARNING")
-
-            if config_data.has_section("firewall"):
-                result["firewall"] = _ini_truthy(config_data.get("firewall", "enabled", fallback=""))
-                result["firewall_ssh_port"] = config_data.get("firewall", "ssh_port", fallback="").strip() or None
-                result["firewall_ssh_ips"] = config_data.get("firewall", "ssh_ips", fallback="").strip()
+            ssh.close()
         except Exception as exc:
             _log("VPSManager", f"Error connecting to VPS {self.hostname} ({self.ip}): {exc}", level="ERROR")
 
@@ -963,7 +936,6 @@ PY"""
     def save(self):
         if self.hostname:
             self.path = _vps_host_path(self.hostname)
-            self.path.mkdir(parents=True, exist_ok=True)
             file_path = self.path / f"{self.hostname}.json"
             # Never persist credentials or bootstrap secrets here. VPS passwords,
             # sudo credentials, and init private-key fields must stay session-only
@@ -974,7 +946,6 @@ PY"""
                 "ip": self.ip,
                 "user": self.user,
                 "swap": self.swap,
-                "coinmarketcap_api_key": self.coinmarketcap_api_key,
                 "last_setup": self.last_setup,
                 "last_init": self.last_init,
                 "last_update": self.last_update,
@@ -991,12 +962,28 @@ PY"""
                 "remove_user": self.remove_user,
                 "remote_pbgui_dir": self.remote_pbgui_dir,
             }
-            with open(file_path, "w", encoding="utf-8") as handle:
-                json.dump(config, handle, indent=4)
+            inventory_root = Path(PBGDIR) / "data" / "vpsmanager"
+            saved = write_versioned_inventory_json(
+                inventory_root,
+                file_path,
+                config,
+                expected_revision=self._inventory_revision,
+                preserve_on_conflict=("remote_pbgui_dir",),
+                baseline=self._inventory_snapshot,
+                deny_fields=VPS_INVENTORY_DENYLIST,
+            )
+            self._inventory_revision = saved["_revision"]
+            for field, value in saved.items():
+                if field not in {"_hostname", "_revision"} and hasattr(self, field):
+                    setattr(self, field, value)
+            self._inventory_snapshot = {
+                key: value for key, value in saved.items() if key != "_revision"
+            }
 
     def delete(self):
         vps_path = _vps_host_path(self.hostname)
-        shutil.rmtree(vps_path, ignore_errors=True)
+        inventory_root = Path(PBGDIR) / "data" / "vpsmanager"
+        delete_inventory_path(inventory_root, vps_path)
 
 
 class VPSManager:
@@ -1014,23 +1001,24 @@ class VPSManager:
         self.load_master()
 
     def _task_log_path(self, task_name: str | None = None, fallback: str = "master-update-pb") -> Path:
-        return _task_log_path(Path(f"{PBGDIR}/data/vpsmanager"), task_name or self.command, fallback)
+        return _task_log_path(VPS_LOG_ROOT / "master", task_name or self.command, fallback)
 
     def _rotate_task_log(self, task_name: str | None = None, fallback: str = "master-update-pb") -> None:
-        _rotate_task_log(self._task_log_path(task_name, fallback), _task_log_history_limit())
+        rotate_managed_log_before_open(self._task_log_path(task_name, fallback), "vps_manager_runs")
 
     def _append_task_log(self, dump: str, *, task_name: str | None = None, fallback: str, buffer_attr: str) -> None:
         log = self._task_log_path(task_name, fallback)
-        with open(log, "a", encoding="utf-8") as logfile:
-            logfile.write(dump)
+        append_managed_transcript_line(log, dump, "vps_manager_runs")
         setattr(self, buffer_attr, getattr(self, buffer_attr) + dump)
 
     def _start_task_log(self, task_name: str | None = None, fallback: str = "master-update-pb") -> None:
         log = self._task_log_path(task_name, fallback)
         log.parent.mkdir(parents=True, exist_ok=True)
         header = _task_log_header(task_name=task_name or self.command, fallback=fallback, target="master")
-        with open(log, "w", encoding="utf-8") as logfile:
-            logfile.write(header)
+        rotate_managed_log_before_open(log, "vps_manager_runs")
+        with advisory_file_lock(log):
+            with open(log, "w", encoding="utf-8") as logfile:
+                logfile.write(header)
 
     def update_event_handler(self, event):
         if dump := event.get("stdout"):
@@ -1152,7 +1140,6 @@ class VPSManager:
             "user": vps.user,
             "user_pw": vps.user_pw,
             "swap_size": vps.swap,
-            "coinmarketcap_api_key": str(vps.coinmarketcap_api_key or ""),
             "firewall": vps.firewall,
             "firewall_ssh_port": vps.firewall_ssh_port,
             "firewall_ssh_ips": vps.firewall_ssh_ips.split(","),
@@ -1202,7 +1189,6 @@ class VPSManager:
             "user": vps.user,
             "user_pw": vps.user_pw,
             "swap_size": vps.swap,
-            "coinmarketcap_api_key": str(vps.coinmarketcap_api_key or ""),
             "firewall": vps.firewall,
             "firewall_ssh_port": vps.firewall_ssh_port,
             "firewall_ssh_ips": vps.firewall_ssh_ips.split(","),
@@ -1332,12 +1318,11 @@ class VPSManager:
 
     def save_master(self):
         self.path = Path(f"{PBGDIR}/data/vpsmanager")
-        file_path = f"{self.path}/{self.hostname}.json"
+        file_path = self.path / f"{self.hostname}.json"
         config = {
             "last_update": self.last_update,
             "update_status": self.update_status,
             "command": self.command,
             "command_text": self.command_text,
         }
-        with open(file_path, "w", encoding="utf-8") as handle:
-            json.dump(config, handle, indent=4)
+        write_inventory_json(self.path, file_path, config)

@@ -156,7 +156,7 @@ def main() -> None:
     profiles = _load_tradfi_profiles_from_ini()
     api_key = str((profiles.get("tiingo") or {}).get("api_key") or "").strip()
     if not api_key:
-        print("ERROR: No Tiingo API key found in pbgui.ini [tradfi_profiles]")
+        print("ERROR: No active Tiingo credential found in the local vault")
         sys.exit(1)
 
     # Determine which coins to process
@@ -192,4 +192,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from credential_process_registry import ProcessCapabilityHeartbeat
+
+    with ProcessCapabilityHeartbeat(Path(__file__).resolve().parent, "TradFi split job"):
+        main()

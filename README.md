@@ -155,7 +155,7 @@ PBData fills the dashboard database. Enable or restart it from `Services -> PBDa
 
 ## PBCluster Sync
 
-PBCluster replicates Cluster Sync operations and materializes assigned V7 configs/API keys on joined nodes. PBRun remains responsible for starting and stopping local bots from the materialized Cluster desired state.
+PBCluster replicates Cluster Sync operations and materializes assigned V7 configs, exchange API keys, and sealed credential-vault entries on joined nodes. Credential protocol v2 encrypts CMC keys for all active nodes and TradFi profiles for masters only; VPS relays can forward sealed TradFi data but cannot decrypt it. PBRun remains responsible for starting and stopping local bots from the materialized Cluster desired state.
 
 Existing PBRemote/API Sync/V7 SSH Sync installations should follow `docs/help/40_cluster_migration.md` before joining production VPS runners.
 
@@ -163,16 +163,15 @@ Existing PBRemote/API Sync/V7 SSH Sync installations should follow `docs/help/40
 
 PBCoinData downloads CoinMarketCap data for symbols and helps maintain ignored symbols and ignored coins. It can filter low market-cap symbols or use volume/market-cap ratios to detect possible rug pulls early.
 
-Configure the CoinMarketCap API key in PBGui after installation. The installer no longer asks for it. A minimal configuration looks like this:
+Manage CoinMarketCap credentials under `System -> Services -> PBCoinData -> Pool`. Credentials are stored in the owner-only vault and shared through Cluster Sync; they must not be placed in `pbgui.ini` or configured per VPS. A minimal non-secret configuration contains only scheduling values:
 
 ```
 [coinmarketcap]
-api_key = <your_api_key>
 fetch_limit = 1000
 fetch_interval = 4
 ```
 
-With these settings, PBCoinData fetches the top 1000 symbols every 4 hours. You need around 930 credits per month with this configuration. A Basic Free Plan from CoinMarketCap provides 10,000 credits per month, allowing one master and several VPS instances to share the same API key. New installer setups manage PBCoinData with `pbgui-pbcoindata.service`.
+With these settings, PBCoinData fetches the top 1000 symbols every 4 hours. You need around 930 credits per month with this configuration. A Basic Free Plan from CoinMarketCap provides 10,000 credits per month. The pool accepts local, imported/externally used, and shared-quota keys; leases are best effort, and provider `429` responses cool down one key and fail over to another eligible key. Key rotation is optional. New installer setups manage PBCoinData with `pbgui-pbcoindata.service`.
 
 ## Existing VPS and systemd migration
 

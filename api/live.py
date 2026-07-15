@@ -15,6 +15,7 @@ Live session constraints:
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import traceback
 from typing import Any
@@ -28,19 +29,22 @@ except ImportError:
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from api.auth import require_auth, SessionToken
+from api.auth import require_auth, validate_token, SessionToken
 from logging_helpers import human_log as _log
 
 router = APIRouter()
 
 MAX_LIVE_USERS = 10
-_SERVICE = "LiveSession"
+SESSION_CHECK_INTERVAL_SECONDS = 2
+KEEPALIVE_INTERVAL_SECONDS = 20
+SERVICE = "LiveSession"
 
 # ── Shared watcher state (process-wide, one entry per (kind, user_name)) ──────
 # kind is 'positions' or 'balance'.
 _watcher_tasks: dict[str, asyncio.Task] = {}   # "kind:user" → task
 _watcher_subs:  dict[str, set]          = {}   # "kind:user" → set of asyncio.Queue
 _watcher_lock:  asyncio.Lock | None     = None  # lazily created inside event loop
+_cleanup_tasks: set[asyncio.Task] = set()
 
 
 def _get_lock() -> asyncio.Lock:
@@ -94,23 +98,24 @@ def _classify_position_orders(orders: list, side: str) -> tuple[int, float, floa
 
 # ── Watcher lifecycle ──────────────────────────────────────────────────────────
 
-async def _ensure_watcher(user_name: str, kind: str, queue: asyncio.Queue) -> None:
+async def _ensure_watcher(user_name: str, kind: str, queue: asyncio.Queue, user: Any = None) -> None:
     """Add *queue* as a subscriber for *kind* updates for *user_name*.
 
     Starts a background WS watcher task if none is running yet.
     """
-    from User import Users  # lazy import to avoid circular deps at module load
-
     key = _wkey(user_name, kind)
     async with _get_lock():
         _watcher_subs.setdefault(key, set()).add(queue)
         task = _watcher_tasks.get(key)
         if task is None or task.done():
-            users = Users()
-            users.load()
-            user = users.find_user(user_name)
             if user is None:
-                _log(_SERVICE, f"[live] User {user_name!r} not found; no watcher started", level="WARNING")
+                from User import Users  # lazy import to avoid circular deps at module load
+
+                users = Users()
+                users.load()
+                user = users.find_user(user_name)
+            if user is None:
+                _log(SERVICE, f"[live] User {user_name!r} not found; no watcher started", level="WARNING")
                 return
             _watcher_tasks[key] = asyncio.create_task(
                 _watcher_loop(user, kind),
@@ -120,20 +125,35 @@ async def _ensure_watcher(user_name: str, kind: str, queue: asyncio.Queue) -> No
 
 async def _unsubscribe(user_name: str, kind: str, queue: asyncio.Queue) -> None:
     """Remove *queue* from subscribers; stop watcher task if no subscribers remain."""
-    key = _wkey(user_name, kind)
     async with _get_lock():
-        subs = _watcher_subs.get(key)
-        if subs:
-            subs.discard(queue)
-            if not subs:
-                task = _watcher_tasks.get(key)
-                if task and not task.done():
-                    task.cancel()
-                if task is not None:
-                    await asyncio.gather(task, return_exceptions=True)
-                _watcher_tasks.pop(key, None)
-                _watcher_subs.pop(key, None)
-                _log(_SERVICE, f"[live] Stopped {kind} watcher for {user_name!r} (no more subscribers)", level="INFO")
+        task = _detach_subscriber(user_name, kind, queue)
+    if task is not None:
+        await asyncio.gather(task, return_exceptions=True)
+        _log(SERVICE, f"[live] Stopped {kind} watcher for {user_name!r} (no more subscribers)", level="INFO")
+
+
+def _detach_subscriber(user_name: str, kind: str, queue: asyncio.Queue) -> asyncio.Task | None:
+    """Synchronously detach one subscriber so transport cancellation cannot interrupt it."""
+    key = _wkey(user_name, kind)
+    subscribers = _watcher_subs.get(key)
+    if not subscribers:
+        return None
+    subscribers.discard(queue)
+    if subscribers:
+        return None
+    _watcher_subs.pop(key, None)
+    task = _watcher_tasks.pop(key, None)
+    if task is not None and not task.done():
+        task.cancel()
+    return task
+
+
+async def _finish_detached_watchers(tasks: list[asyncio.Task]) -> None:
+    """Await detached watcher finalizers, including private-client release."""
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    if not _watcher_tasks:
+        gc.collect()
 
 
 async def shutdown() -> None:
@@ -149,7 +169,35 @@ async def shutdown() -> None:
             await asyncio.gather(*tasks, return_exceptions=True)
         _watcher_tasks.clear()
         _watcher_subs.clear()
+    cleanup_tasks = list(_cleanup_tasks)
+    for task in cleanup_tasks:
+        if not task.done():
+            task.cancel()
+    if cleanup_tasks:
+        await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+    _cleanup_tasks.clear()
     _watcher_lock = None
+
+
+@router.get("/status")
+async def live_status(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Return value-free live-session resource counts for operational validation."""
+    del session
+    from Exchange import Exchange
+
+    async with _get_lock():
+        watcher_tasks = dict(_watcher_tasks)
+        subscriber_sets = {key: set(subscribers) for key, subscribers in _watcher_subs.items()}
+    return {
+        "max_live_users": MAX_LIVE_USERS,
+        "watcher_registry_count": len(watcher_tasks),
+        "watcher_active_count": sum(1 for task in watcher_tasks.values() if not task.done()),
+        "subscriber_key_count": len(subscriber_sets),
+        "subscriber_reference_count": sum(len(subscribers) for subscribers in subscriber_sets.values()),
+        "private_ws_client_count": len(Exchange._private_ws_clients),
+        "private_ws_owner_count": sum(len(owners) for owners in Exchange._private_ws_owners.values()),
+        "cleanup_task_count": sum(1 for task in _cleanup_tasks if not task.done()),
+    }
 
 
 # ── DB polling fallback ───────────────────────────────────────────────────────
@@ -161,7 +209,7 @@ async def _db_poll_loop(user: Any, kind: str, db: Any) -> None:
     fresh (e.g. Hyperliquid — ccxtpro watchBalance/watchPositions not supported).
     """
     key = _wkey(user.name, kind)
-    _log(_SERVICE, f"[live] {kind} DB-poll fallback active for {user.name} ({user.exchange})", level="INFO")
+    _log(SERVICE, f"[live] {kind} DB-poll fallback active for {user.name} ({user.exchange})", level="INFO")
     while True:
         try:
             if kind == "balance":
@@ -205,7 +253,7 @@ async def _db_poll_loop(user: Any, kind: str, db: Any) -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            _log(_SERVICE, f"[live] DB poll error {kind} {user.name}: {exc}", level="WARNING")
+            _log(SERVICE, f"[live] DB poll error {kind} {user.name}: {exc}", level="WARNING")
         await asyncio.sleep(30)
 
 
@@ -223,7 +271,7 @@ async def _watcher_loop(user: Any, kind: str) -> None:
     key = _wkey(user.name, kind)
     caller = f"live_session.{kind}"
     client = None
-    _log(_SERVICE, f"[live] Starting {kind} watcher for {user.name} ({user.exchange})", level="INFO")
+    _log(SERVICE, f"[live] Starting {kind} watcher for {user.name} ({user.exchange})", level="INFO")
     db = Database()
 
     try:
@@ -232,7 +280,7 @@ async def _watcher_loop(user: Any, kind: str) -> None:
         )
         if client is None:
             _log(
-                _SERVICE,
+                SERVICE,
                 f"[live] No WS client for {user.name} ({user.exchange}), kind={kind}. "
                 "Exchange WS cap reached or exchange unsupported; live updates unavailable.",
                 level="WARNING",
@@ -283,12 +331,12 @@ async def _watcher_loop(user: Any, kind: str) -> None:
             except _WS_UNSUPPORTED:
                 # ccxtpro does not support watch*() for this exchange;
                 # switch to a DB polling loop so the badge stays fresh.
-                _log(_SERVICE, f"[live] watch{kind.capitalize()} not supported for {user.exchange}; switching to 30s DB polling", level="INFO")
+                _log(SERVICE, f"[live] watch{kind.capitalize()} not supported for {user.exchange}; switching to 30s DB polling", level="INFO")
                 await _db_poll_loop(user, kind, db)
                 return
             except Exception as exc:
                 _log(
-                    _SERVICE,
+                    SERVICE,
                     f"[live] {kind} watch error for {user.name}: {exc}",
                     level="ERROR",
                     meta={"traceback": traceback.format_exc()},
@@ -299,7 +347,7 @@ async def _watcher_loop(user: Any, kind: str) -> None:
         pass
     except Exception as exc:
         _log(
-            _SERVICE,
+            SERVICE,
             f"[live] {kind} watcher crashed for {user.name}: {exc}",
             level="ERROR",
             meta={"traceback": traceback.format_exc()},
@@ -307,7 +355,7 @@ async def _watcher_loop(user: Any, kind: str) -> None:
     finally:
         if client is not None:
             await Exchange.release_private_ws_client(user.exchange, user, caller=caller)
-        _log(_SERVICE, f"[live] {kind} watcher stopped for {user.name}", level="DEBUG")
+        _log(SERVICE, f"[live] {kind} watcher stopped for {user.name}", level="DEBUG")
 
 
 # ── Data normalization ────────────────────────────────────────────────────────
@@ -437,28 +485,47 @@ async def live_stream(
     queue: asyncio.Queue = asyncio.Queue(maxsize=200)
     subscribed: list[tuple[str, str]] = []
 
+    async def cleanup_subscriptions() -> None:
+        tasks = [
+            task
+            for user_name, kind in subscribed
+            if (task := _detach_subscriber(user_name, kind, queue)) is not None
+        ]
+        await _finish_detached_watchers(tasks)
+
     async def generate():
         nonlocal subscribed
+        last_keepalive = asyncio.get_running_loop().time()
         try:
             yield f"data: {json.dumps({'type': 'connected', 'users': requested})}\n\n"
+            from User import Users
+
+            users = Users()
+            users.load()
             for user_name in requested:
+                user = users.find_user(user_name)
                 for kind in ("positions", "balance"):
-                    await _ensure_watcher(user_name, kind, queue)
+                    await _ensure_watcher(user_name, kind, queue, user=user)
                     subscribed.append((user_name, kind))
             while True:
+                if validate_token(session.token) is None:
+                    break
                 try:
-                    msg = await asyncio.wait_for(queue.get(), timeout=20)
+                    msg = await asyncio.wait_for(queue.get(), timeout=SESSION_CHECK_INTERVAL_SECONDS)
+                    if validate_token(session.token) is None:
+                        break
                     yield f"data: {msg}\n\n"
                 except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
+                    now = asyncio.get_running_loop().time()
+                    if now - last_keepalive >= KEEPALIVE_INTERVAL_SECONDS:
+                        last_keepalive = now
+                        yield ": keepalive\n\n"
         except (GeneratorExit, asyncio.CancelledError):
             pass
         finally:
-            for user_name, kind in subscribed:
-                try:
-                    await _unsubscribe(user_name, kind, queue)
-                except Exception:
-                    pass
+            cleanup_task = asyncio.create_task(cleanup_subscriptions(), name="live-session-cleanup")
+            _cleanup_tasks.add(cleanup_task)
+            cleanup_task.add_done_callback(_cleanup_tasks.discard)
 
     return StreamingResponse(
         generate(),

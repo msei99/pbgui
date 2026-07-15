@@ -34,6 +34,7 @@ from api.strategy_explorer_core import (
     _ohlcv_source_debug,
     _order_type_to_str,
     _pb7_src_dir,
+    _resolve_backtest_fee_overrides,
     _load_pb7_fills_csv_to_events,
     _resolve_safe_backtest_dir,
     _resolve_safe_ohlcv_source_dir,
@@ -1232,6 +1233,7 @@ def build_strategy_simulation(
             bt_cfg = cfg.get("backtest") if isinstance(cfg, dict) else {}
             live_cfg = live_cfg if isinstance(live_cfg, dict) else {}
             bt_cfg = bt_cfg if isinstance(bt_cfg, dict) else {}
+            maker_fee, taker_fee = _resolve_backtest_fee_overrides(cfg, maker_fee, taker_fee)
 
             def _local_progress(progress: float, message: str) -> None:
                 _report(0.24 + 0.68 * max(0.0, min(1.0, float(progress))), f"PBGui Simulation: {message}")
@@ -1247,7 +1249,7 @@ def build_strategy_simulation(
                 starting_position_short=start_pos_short,
                 balance=float(start_balance),
                 maker_fee=float(maker_fee or 0.0),
-                taker_fee=float(taker_fee or maker_fee or 0.0),
+                taker_fee=float(taker_fee),
                 market_orders_allowed=bool(live_cfg.get("market_orders_allowed", bt_cfg.get("market_orders_allowed", False))),
                 market_order_near_touch_threshold=_safe_float(
                     bt_cfg.get("market_order_near_touch_threshold", live_cfg.get("market_order_near_touch_threshold", 0.001)),
@@ -1259,6 +1261,7 @@ def build_strategy_simulation(
                 ),
                 hsl_signal_mode=str(live_cfg.get("hsl_signal_mode", "unified") or "unified"),
                 pnls_max_lookback_days=live_cfg.get("pnls_max_lookback_days", bt_cfg.get("pnls_max_lookback_days", 30.0)),
+                max_realized_loss_pct=live_cfg.get("max_realized_loss_pct", 1.0),
                 trade_start_time=trade_start_time,
                 max_orders=max_orders,
                 max_candles=len(sim_df),
@@ -1532,6 +1535,7 @@ def _run_strategy_compare_b_c(
     bt_cfg = cfg.get("backtest") if isinstance(cfg, dict) else {}
     live_cfg = live_cfg if isinstance(live_cfg, dict) else {}
     bt_cfg = bt_cfg if isinstance(bt_cfg, dict) else {}
+    maker_fee, _taker_fee = _resolve_backtest_fee_overrides(cfg, maker_fee, _taker_fee)
     market_orders_allowed = bool(live_cfg.get("market_orders_allowed", bt_cfg.get("market_orders_allowed", False)))
     market_order_near_touch_threshold = _safe_float(
         bt_cfg.get("market_order_near_touch_threshold", live_cfg.get("market_order_near_touch_threshold", 0.001)),
@@ -1562,12 +1566,13 @@ def _run_strategy_compare_b_c(
                 starting_position_short=Position(size=0.0, price=0.0),
                 balance=float(data.state_params.balance),
                 maker_fee=float(maker_fee or 0.0),
-                taker_fee=float(_taker_fee or maker_fee or 0.0),
+                taker_fee=float(_taker_fee),
                 market_orders_allowed=bool(market_orders_allowed),
                 market_order_near_touch_threshold=float(market_order_near_touch_threshold),
                 market_order_slippage_pct=float(market_order_slippage_pct),
                 hsl_signal_mode=str(live_cfg.get("hsl_signal_mode", "unified") or "unified"),
                 pnls_max_lookback_days=live_cfg.get("pnls_max_lookback_days", bt_cfg.get("pnls_max_lookback_days", 30.0)),
+                max_realized_loss_pct=live_cfg.get("max_realized_loss_pct", 1.0),
                 trade_start_time=trade_start,
                 max_orders=int(max_orders),
                 max_candles=int(len(sim_df)),

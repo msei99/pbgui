@@ -9,19 +9,22 @@ from time import sleep
 from datetime import datetime
 import platform
 import traceback
-from pbgui_purefunc import PBGDIR
+from dataclasses import dataclass
+from math import isfinite
+from pbgui_purefunc import IniSnapshot, PBGDIR, load_ini_snapshot, save_ini
 import json
 import re
 from pathlib import Path as _Path
-import tempfile
 from Database import Database
 from User import Users
-import configparser
 from collections import defaultdict
 import asyncio
 import random
 from logging_helpers import human_log as _human_log, set_service_min_level, is_debug_enabled
-from Exchange import set_ws_limits, Exchange as _Exchange
+
+SERVICE = "PBData"
+from Exchange import MAX_PRIVATE_WS_GLOBAL, set_ws_limits, Exchange as _Exchange
+from ini_watcher import IniWatcher
 from market_data import get_daily_hour_coverage_for_dataset, get_effective_enabled_coins, load_market_data_config, set_enabled_coins
 from rate_limit_budget import RateLimitBudget, EXCHANGE_RATE_LIMITS, get_weight
 from hyperliquid_best_1m import update_latest_hyperliquid_1m_api_for_coin
@@ -29,6 +32,61 @@ from binance_best_1m import update_latest_binance_1m_for_coin
 from okx_best_1m import update_latest_okx_1m_for_coin
 from bitget_best_1m import update_latest_bitget_1m_for_coin
 from inventory_cache import refresh_coin as _refresh_inventory_coin
+
+
+@dataclass(frozen=True)
+class PBDataRuntimeConfig:
+    """Fully validated, immutable PBData runtime configuration."""
+
+    ws_max: int = MAX_PRIVATE_WS_GLOBAL
+    log_level: str = "INFO"
+    pollers_delay_seconds: float = 60.0
+    poll_interval_combined_seconds: int = 90
+    poll_interval_history_seconds: int = 300
+    poll_interval_executions_seconds: int = 1800
+    poll_interval_balance_seconds: int = 300
+    poll_interval_positions_seconds: int = 300
+    poll_interval_orders_seconds: int = 60
+    latest_1m_interval_seconds: int = 1800
+    latest_1m_coin_pause_seconds: float = 2.0
+    latest_1m_api_timeout_seconds: float = 30.0
+    latest_1m_min_lookback_days: int = 2
+    latest_1m_max_lookback_days: int = 4
+    binance_latest_1m_interval_seconds: int = 3600
+    binance_latest_1m_coin_pause_seconds: float = 0.5
+    binance_latest_1m_api_timeout_seconds: float = 30.0
+    binance_latest_1m_min_lookback_days: int = 2
+    binance_latest_1m_max_lookback_days: int = 7
+    bybit_latest_1m_interval_seconds: int = 3600
+    bybit_latest_1m_coin_pause_seconds: float = 0.5
+    bybit_latest_1m_api_timeout_seconds: float = 30.0
+    bybit_latest_1m_min_lookback_days: int = 2
+    bybit_latest_1m_max_lookback_days: int = 7
+    okx_latest_1m_interval_seconds: int = 3600
+    okx_latest_1m_coin_pause_seconds: float = 0.5
+    okx_latest_1m_api_timeout_seconds: float = 30.0
+    okx_latest_1m_min_lookback_days: int = 2
+    okx_latest_1m_max_lookback_days: int = 7
+    bitget_latest_1m_interval_seconds: int = 3600
+    bitget_latest_1m_coin_pause_seconds: float = 0.5
+    bitget_latest_1m_api_timeout_seconds: float = 30.0
+    bitget_latest_1m_min_lookback_days: int = 2
+    bitget_latest_1m_max_lookback_days: int = 7
+    shared_rest_user_pause_seconds: float = 0.75
+    shared_rest_pause_by_exchange: tuple[tuple[str, float], ...] = (("hyperliquid", 3.0), ("bybit", 3.0))
+    price_watch_timeout: float = 120.0
+    rest_semaphore_acquire_timeout: float = 5.0
+    fetch_users: tuple[str, ...] = ()
+    trades_users: tuple[str, ...] = ()
+
+
+class PBDataConfigError(ValueError):
+    """A safe configuration error identifying only its section and key."""
+
+    def __init__(self, section: str, key: str):
+        self.section = section
+        self.key = key
+        super().__init__(f"invalid [{section}] {key}")
 
 
 async def _wait_for_flag(flag_path: _Path, timeout: float) -> bool:
@@ -122,6 +180,24 @@ async def _wait_for_flag(flag_path: _Path, timeout: float) -> bool:
                 return True
             await asyncio.sleep(5.0)
             elapsed += 5.0
+        return False
+
+
+async def _bounded_shutdown_step(awaitable, timeout: float, label: str) -> bool:
+    """Run one shutdown awaitable without letting cancellation-resistant I/O block exit."""
+    task = asyncio.ensure_future(awaitable)
+    done, _pending = await asyncio.wait({task}, timeout=max(0.0, timeout))
+    if task not in done:
+        task.cancel()
+        _human_log(SERVICE, f"[shutdown] {label} timed out after {timeout:g}s", level="WARNING")
+        return False
+    try:
+        task.result()
+        return True
+    except asyncio.CancelledError:
+        return False
+    except Exception as exc:
+        _human_log(SERVICE, f"[shutdown] {label} failed: {exc}", level="WARNING")
         return False
 
 
@@ -298,8 +374,12 @@ class PBData():
         self.users = Users()
         self._fetch_users = []
         self._trades_users = []
-        self.load_fetch_users()
-        self.load_trades_users()
+        self._runtime_config = PBDataRuntimeConfig()
+        self._config_generation = None
+        self._config_changed = None
+        self._config_schedule_changed = None
+        self._config_reload_task = None
+        self._ini_watcher = IniWatcher()
         self._price_exchange_tasks = {}
         self._price_exchange_config = {}
         # Track which symbols we have already subscribed to per exchange
@@ -392,7 +472,6 @@ class PBData():
         self._orders_stale_users: set = set()
         # Flag to restart shared poller tasks when intervals change
         self._poll_intervals_changed = False
-        self._pbgui_ini_mtime = None
         # Last loaded ws_max value from pbgui.ini (so we only reapply when changed)
         self._ws_max_loaded = None
         # Last loaded log_level for PBData (string like 'DEBUG'/'INFO')
@@ -510,12 +589,6 @@ class PBData():
         self._bitget_latest_1m_task = None
         self._market_data_status: dict = {}
         self._market_data_status_lock = asyncio.Lock()
-        # Load initial settings (ws_max, log_level, ...)
-        try:
-            self._load_settings()
-        except Exception:
-            pass
-
         # Caller-side private-client manager (Queue + background manager task)
         # This manager serializes private-client creation requests from PBData
         # so that check+reserve logic can be performed atomically on the caller
@@ -571,289 +644,219 @@ class PBData():
         except Exception:
             pass
 
+        # Synchronous compatibility paths get one coherent initial generation.
+        self._load_settings()
+
 
 
 
 
     # Logging is centralized via the module-level `_log_central` function.
 
+    def _build_config_candidate(self, snapshot: IniSnapshot) -> PBDataRuntimeConfig:
+        """Build one complete candidate without mutating live runtime state."""
+        defaults = PBDataRuntimeConfig()
+
+        def raw(section: str, key: str, default):
+            if not snapshot.has_option(section, key):
+                return default
+            value = snapshot.get(section, key).strip()
+            if not value:
+                raise PBDataConfigError(section, key)
+            return value
+
+        def number(section: str, key: str, default, *, integer=False, allow_zero=False):
+            value = raw(section, key, default)
+            if not isinstance(value, str):
+                return default
+            try:
+                parsed = float(value)
+                if not isfinite(parsed) or parsed < 0 or (parsed == 0 and not allow_zero):
+                    raise ValueError
+                converted = int(parsed) if integer else parsed
+                if converted < 0 or (converted == 0 and not allow_zero):
+                    raise ValueError
+                return converted
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise PBDataConfigError(section, key) from exc
+
+        def users(key: str) -> tuple[str, ...]:
+            value = raw("pbdata", key, ())
+            if value == ():
+                return ()
+            try:
+                parsed = ast.literal_eval(value)
+            except (SyntaxError, ValueError) as exc:
+                raise PBDataConfigError("pbdata", key) from exc
+            if not isinstance(parsed, list) or any(not isinstance(item, str) for item in parsed):
+                raise PBDataConfigError("pbdata", key)
+            valid = set(self.users.list())
+            return tuple(item for item in parsed if item in valid)
+
+        if snapshot.has_option("pbdata", "log_level") and not snapshot.get("pbdata", "log_level").strip():
+            log_level = defaults.log_level
+        else:
+            log_level = str(raw("pbdata", "log_level", defaults.log_level)).upper()
+        if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise PBDataConfigError("pbdata", "log_level")
+
+        override_value = raw("pbdata", "shared_rest_pause_by_exchange_json", None)
+        if override_value is None:
+            overrides = defaults.shared_rest_pause_by_exchange
+        else:
+            try:
+                parsed_overrides = json.loads(override_value)
+            except (TypeError, ValueError) as exc:
+                raise PBDataConfigError("pbdata", "shared_rest_pause_by_exchange_json") from exc
+            if not isinstance(parsed_overrides, dict):
+                raise PBDataConfigError("pbdata", "shared_rest_pause_by_exchange_json")
+            cleaned = dict(defaults.shared_rest_pause_by_exchange)
+            for exchange, pause in parsed_overrides.items():
+                exchange_name = str(exchange).strip()
+                try:
+                    pause_value = float(pause)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise PBDataConfigError("pbdata", "shared_rest_pause_by_exchange_json") from exc
+                if not exchange_name or not isfinite(pause_value) or pause_value < 0:
+                    raise PBDataConfigError("pbdata", "shared_rest_pause_by_exchange_json")
+                cleaned[exchange_name] = pause_value
+            overrides = tuple(sorted(cleaned.items()))
+
+        values = {
+            "ws_max": number("pbdata", "ws_max", defaults.ws_max, integer=True),
+            "log_level": log_level,
+            "pollers_delay_seconds": number("pbdata", "pollers_delay_seconds", defaults.pollers_delay_seconds, allow_zero=True),
+            "poll_interval_combined_seconds": number("pbdata", "poll_interval_combined_seconds", defaults.poll_interval_combined_seconds, integer=True),
+            "poll_interval_history_seconds": number("pbdata", "poll_interval_history_seconds", defaults.poll_interval_history_seconds, integer=True),
+            "poll_interval_executions_seconds": number("pbdata", "poll_interval_executions_seconds", defaults.poll_interval_executions_seconds, integer=True),
+            "poll_interval_balance_seconds": number("pbdata", "poll_interval_balance_seconds", defaults.poll_interval_balance_seconds, integer=True),
+            "poll_interval_positions_seconds": number("pbdata", "poll_interval_positions_seconds", defaults.poll_interval_positions_seconds, integer=True),
+            "poll_interval_orders_seconds": number("pbdata", "poll_interval_orders_seconds", defaults.poll_interval_orders_seconds, integer=True),
+            "shared_rest_user_pause_seconds": number("pbdata", "shared_rest_user_pause_seconds", defaults.shared_rest_user_pause_seconds, allow_zero=True),
+            "shared_rest_pause_by_exchange": overrides,
+            "price_watch_timeout": number("pbdata", "price_watch_timeout", defaults.price_watch_timeout),
+            "rest_semaphore_acquire_timeout": number("pbdata", "rest_semaphore_acquire_timeout", defaults.rest_semaphore_acquire_timeout),
+            "fetch_users": users("fetch_users"),
+            "trades_users": users("trades_users"),
+        }
+        exchanges = (("", "pbdata"), ("binance_", "binance_data"), ("bybit_", "bybit_data"), ("okx_", "okx_data"), ("bitget_", "bitget_data"))
+        for prefix, section in exchanges:
+            for suffix, integer, allow_zero in (
+                ("interval_seconds", True, False), ("coin_pause_seconds", False, True),
+                ("api_timeout_seconds", False, False), ("min_lookback_days", True, False),
+                ("max_lookback_days", True, False),
+            ):
+                field = f"{prefix}latest_1m_{suffix}"
+                values[field] = number(section, f"latest_1m_{suffix}", getattr(defaults, field), integer=integer, allow_zero=allow_zero)
+            if values[f"{prefix}latest_1m_min_lookback_days"] > values[f"{prefix}latest_1m_max_lookback_days"]:
+                raise PBDataConfigError(section, "latest_1m_min_lookback_days")
+        return PBDataRuntimeConfig(**values)
+
+    def _apply_config_candidate(self, candidate: PBDataRuntimeConfig, generation) -> None:
+        """Publish a completely validated candidate and then its generation."""
+        previous = self._runtime_config
+        interval_fields = ("poll_interval_combined_seconds", "poll_interval_history_seconds", "poll_interval_executions_seconds")
+        intervals_changed = any(getattr(previous, field) != getattr(candidate, field) for field in interval_fields)
+        if candidate.ws_max != self._ws_max_loaded:
+            set_ws_limits(global_max=candidate.ws_max)
+        if candidate.log_level != self._log_level_loaded:
+            set_service_min_level(SERVICE, candidate.log_level)
+
+        old_enable_after = self._pollers_enabled_after_ts
+        runtime_names = {
+            "poll_interval_combined_seconds": "_shared_combined_interval_seconds",
+            "poll_interval_history_seconds": "_shared_history_interval_seconds",
+            "poll_interval_executions_seconds": "_shared_executions_interval_seconds",
+            "shared_rest_user_pause_seconds": "_shared_rest_user_pause",
+        }
+        for field, value in candidate.__dict__.items():
+            if field not in {"shared_rest_pause_by_exchange", "fetch_users", "trades_users"}:
+                setattr(self, runtime_names.get(field, f"_{field}"), value)
+        self._shared_rest_pause_by_exchange = dict(candidate.shared_rest_pause_by_exchange)
+        self._fetch_users = list(candidate.fetch_users)
+        self._trades_users = list(candidate.trades_users)
+        self._ws_max_loaded = candidate.ws_max
+        self._log_level_loaded = candidate.log_level
+        if candidate.pollers_delay_seconds != previous.pollers_delay_seconds:
+            now_ts = datetime.now().timestamp()
+            if old_enable_after is not None and now_ts < old_enable_after:
+                self._pollers_enabled_after_ts = now_ts + candidate.pollers_delay_seconds
+        self._poll_intervals_changed = self._poll_intervals_changed or intervals_changed
+        self._runtime_config = candidate
+        self._config_generation = generation
+
+    def _apply_config_snapshot(self, snapshot: IniSnapshot) -> bool:
+        """Validate and atomically apply one snapshot generation."""
+        if snapshot.signature == self._config_generation:
+            return False
+        candidate = self._build_config_candidate(snapshot)
+        self._apply_config_candidate(candidate, snapshot.signature)
+        return True
+
     def _load_settings(self):
-        """Read `pbgui.ini` and update runtime settings when file changes.
-
-                Currently loads:
-                    - pbdata.ws_max (int) -> passed to Exchange.set_ws_limits(global_max=...)
-                    - pbdata.log_level (str) -> sets minimum log level for PBData
-
-        The function uses the file mtime to avoid re-reading the INI too often.
-        """
+        """Compatibility synchronous reload using exactly one snapshot read."""
         try:
-            p = Path('pbgui.ini')
-            if not p.exists():
-                return
-            mtime = p.stat().st_mtime
-            if self._pbgui_ini_mtime is not None and mtime == self._pbgui_ini_mtime:
-                return
-            self._pbgui_ini_mtime = mtime
-            cfg = configparser.ConfigParser()
-            cfg.read('pbgui.ini')
+            return self._apply_config_snapshot(load_ini_snapshot(self._ini_watcher._ini_path))
+        except Exception as exc:
+            key = f"[{exc.section}] {exc.key}" if isinstance(exc, PBDataConfigError) else "snapshot"
+            _human_log(SERVICE, f"Config reload rejected for {key}; keeping last known good settings", level="WARNING")
+            return False
 
-            # Note: payload debug flag removed — use log_level to control DEBUG logging.
+    async def _config_reload_loop(self) -> None:
+        """Coalesce watcher notifications and apply only complete generations."""
+        while True:
+            await self._config_changed.wait()
+            self._config_changed.clear()
+            self._ini_watcher.changed.clear()
+            self._load_settings()
+            self._config_schedule_changed.set()
 
-            # ws_max (integer) - global cap for private websocket clients
-            ws_max = None
-            if cfg.has_option('pbdata', 'ws_max'):
-                try:
-                    raw = cfg.get('pbdata', 'ws_max')
-                    sval = str(raw).strip() if raw is not None else ''
-                    if sval != '':
-                        try:
-                            ws_max = int(sval)
-                        except Exception:
-                            ws_max = None
-                except Exception:
-                    ws_max = None
-
-            if ws_max is not None and ws_max != getattr(self, '_ws_max_loaded', None):
-                try:
-                    set_ws_limits(global_max=ws_max)
-                    self._ws_max_loaded = ws_max
-                    _human_log('PBData', f"Set Exchange.ws global cap via pbgui.ini [pbdata] ws_max={ws_max}", level='INFO')
-                except Exception:
-                    try:
-                        _human_log('PBData', f"Failed to call Exchange.set_ws_limits with ws_max={ws_max}", level='WARNING')
-                    except Exception:
-                        pass
-            # log_level (string) - minimum log level for PBData
-            log_level = None
-            if cfg.has_option('pbdata', 'log_level'):
-                try:
-                    raw = cfg.get('pbdata', 'log_level')
-                    s = str(raw).strip() if raw is not None else ''
-                    if s != '':
-                        log_level = s.upper()
-                except Exception:
-                    log_level = None
-
-            if log_level is not None and log_level != getattr(self, '_log_level_loaded', None):
-                try:
-                    set_service_min_level('PBData', log_level)
-                    self._log_level_loaded = log_level
-                    _human_log('PBData', f"PBData log level set via pbgui.ini [pbdata] log_level={log_level}", level='INFO')
-                except Exception:
-                    try:
-                        _human_log('PBData', f"Failed to set PBData log level to {log_level}", level='WARNING')
-                    except Exception:
-                        pass
-
-            # -----------------------------
-            # Timers / intervals
-            # -----------------------------
-            def _get_int_opt(section: str, key: str):
-                try:
-                    if not cfg.has_option(section, key):
-                        return None
-                    raw = cfg.get(section, key)
-                    sval = str(raw).strip() if raw is not None else ''
-                    if sval == '':
-                        return None
-                    return int(float(sval))
-                except Exception:
-                    return None
-
-            def _get_float_opt(section: str, key: str):
-                try:
-                    if not cfg.has_option(section, key):
-                        return None
-                    raw = cfg.get(section, key)
-                    sval = str(raw).strip() if raw is not None else ''
-                    if sval == '':
-                        return None
-                    return float(sval)
-                except Exception:
-                    return None
-
-            # Startup/grace period for starting shared pollers
-            new_pollers_delay = _get_int_opt('pbdata', 'pollers_delay_seconds')
-            if new_pollers_delay is not None and new_pollers_delay >= 0:
-                if new_pollers_delay != getattr(self, '_pollers_delay_seconds', 60.0):
-                    old_enable_after = getattr(self, '_pollers_enabled_after_ts', None)
-                    self._pollers_delay_seconds = float(new_pollers_delay)
-                    # Only re-apply enable-after if pollers have not started yet
-                    try:
-                        now_ts = datetime.now().timestamp()
-                        if old_enable_after is not None and now_ts < old_enable_after:
-                            self._pollers_enabled_after_ts = now_ts + float(new_pollers_delay)
-                    except Exception:
-                        pass
-
-            # Shared poller intervals
-            new_combined = _get_int_opt('pbdata', 'poll_interval_combined_seconds')
-            if new_combined is not None and new_combined > 0:
-                if new_combined != getattr(self, '_shared_combined_interval_seconds', 90):
-                    self._shared_combined_interval_seconds = int(new_combined)
-                    self._poll_intervals_changed = True
-
-            new_history = _get_int_opt('pbdata', 'poll_interval_history_seconds')
-            if new_history is not None and new_history > 0:
-                if new_history != getattr(self, '_shared_history_interval_seconds', 90):
-                    self._shared_history_interval_seconds = int(new_history)
-                    self._poll_intervals_changed = True
-
-            new_exec = _get_int_opt('pbdata', 'poll_interval_executions_seconds')
-            if new_exec is not None and new_exec > 0:
-                if new_exec != getattr(self, '_shared_executions_interval_seconds', 1800):
-                    self._shared_executions_interval_seconds = int(new_exec)
-                    self._poll_intervals_changed = True
-
-            new_balance = _get_int_opt('pbdata', 'poll_interval_balance_seconds')
-            if new_balance is not None and new_balance > 0:
-                self._poll_interval_balance_seconds = int(new_balance)
-
-            new_positions = _get_int_opt('pbdata', 'poll_interval_positions_seconds')
-            if new_positions is not None and new_positions > 0:
-                self._poll_interval_positions_seconds = int(new_positions)
-
-            new_orders = _get_int_opt('pbdata', 'poll_interval_orders_seconds')
-            if new_orders is not None and new_orders > 0:
-                self._poll_interval_orders_seconds = int(new_orders)
-
-            # Latest 1m API fetch interval
-            new_latest_1m_interval = _get_int_opt('pbdata', 'latest_1m_interval_seconds')
-            if new_latest_1m_interval is not None and new_latest_1m_interval > 0:
-                if new_latest_1m_interval != getattr(self, '_latest_1m_interval_seconds', 120):
-                    self._latest_1m_interval_seconds = int(new_latest_1m_interval)
-
-            # Latest 1m pause between coins
-            new_latest_1m_coin_pause = _get_float_opt('pbdata', 'latest_1m_coin_pause_seconds')
-            if new_latest_1m_coin_pause is not None and new_latest_1m_coin_pause >= 0:
-                self._latest_1m_coin_pause_seconds = float(new_latest_1m_coin_pause)
-
-            # Latest 1m API timeout
-            new_latest_1m_timeout = _get_float_opt('pbdata', 'latest_1m_api_timeout_seconds')
-            if new_latest_1m_timeout is not None and new_latest_1m_timeout > 0:
-                self._latest_1m_api_timeout_seconds = float(new_latest_1m_timeout)
-
-            # Latest 1m lookback days (min/max)
-            new_latest_1m_min_lb = _get_int_opt('pbdata', 'latest_1m_min_lookback_days')
-            if new_latest_1m_min_lb is not None and new_latest_1m_min_lb > 0:
-                self._latest_1m_min_lookback_days = int(new_latest_1m_min_lb)
-
-            new_latest_1m_max_lb = _get_int_opt('pbdata', 'latest_1m_max_lookback_days')
-            if new_latest_1m_max_lb is not None and new_latest_1m_max_lb > 0:
-                self._latest_1m_max_lookback_days = int(new_latest_1m_max_lb)
-
-            # Binance latest 1m settings
-            bnc_interval = _get_int_opt('binance_data', 'latest_1m_interval_seconds')
-            if bnc_interval is not None and bnc_interval > 0:
-                self._binance_latest_1m_interval_seconds = int(bnc_interval)
-            bnc_pause = _get_float_opt('binance_data', 'latest_1m_coin_pause_seconds')
-            if bnc_pause is not None and bnc_pause >= 0:
-                self._binance_latest_1m_coin_pause_seconds = float(bnc_pause)
-            bnc_timeout = _get_float_opt('binance_data', 'latest_1m_api_timeout_seconds')
-            if bnc_timeout is not None and bnc_timeout > 0:
-                self._binance_latest_1m_api_timeout_seconds = float(bnc_timeout)
-            bnc_min_lb = _get_int_opt('binance_data', 'latest_1m_min_lookback_days')
-            if bnc_min_lb is not None and bnc_min_lb > 0:
-                self._binance_latest_1m_min_lookback_days = int(bnc_min_lb)
-            bnc_max_lb = _get_int_opt('binance_data', 'latest_1m_max_lookback_days')
-            if bnc_max_lb is not None and bnc_max_lb > 0:
-                self._binance_latest_1m_max_lookback_days = int(bnc_max_lb)
-
-            # Bybit latest 1m settings
-            bbt_interval = _get_int_opt('bybit_data', 'latest_1m_interval_seconds')
-            if bbt_interval is not None and bbt_interval > 0:
-                self._bybit_latest_1m_interval_seconds = int(bbt_interval)
-            bbt_pause = _get_float_opt('bybit_data', 'latest_1m_coin_pause_seconds')
-            if bbt_pause is not None and bbt_pause >= 0:
-                self._bybit_latest_1m_coin_pause_seconds = float(bbt_pause)
-            bbt_timeout = _get_float_opt('bybit_data', 'latest_1m_api_timeout_seconds')
-            if bbt_timeout is not None and bbt_timeout > 0:
-                self._bybit_latest_1m_api_timeout_seconds = float(bbt_timeout)
-            bbt_min_lb = _get_int_opt('bybit_data', 'latest_1m_min_lookback_days')
-            if bbt_min_lb is not None and bbt_min_lb > 0:
-                self._bybit_latest_1m_min_lookback_days = int(bbt_min_lb)
-            bbt_max_lb = _get_int_opt('bybit_data', 'latest_1m_max_lookback_days')
-            if bbt_max_lb is not None and bbt_max_lb > 0:
-                self._bybit_latest_1m_max_lookback_days = int(bbt_max_lb)
-
-            # OKX latest 1m settings
-            okx_interval = _get_int_opt('okx_data', 'latest_1m_interval_seconds')
-            if okx_interval is not None and okx_interval > 0:
-                self._okx_latest_1m_interval_seconds = int(okx_interval)
-            okx_pause = _get_float_opt('okx_data', 'latest_1m_coin_pause_seconds')
-            if okx_pause is not None and okx_pause >= 0:
-                self._okx_latest_1m_coin_pause_seconds = float(okx_pause)
-            okx_timeout = _get_float_opt('okx_data', 'latest_1m_api_timeout_seconds')
-            if okx_timeout is not None and okx_timeout > 0:
-                self._okx_latest_1m_api_timeout_seconds = float(okx_timeout)
-            okx_min_lb = _get_int_opt('okx_data', 'latest_1m_min_lookback_days')
-            if okx_min_lb is not None and okx_min_lb > 0:
-                self._okx_latest_1m_min_lookback_days = int(okx_min_lb)
-            okx_max_lb = _get_int_opt('okx_data', 'latest_1m_max_lookback_days')
-            if okx_max_lb is not None and okx_max_lb > 0:
-                self._okx_latest_1m_max_lookback_days = int(okx_max_lb)
-
-            # Bitget latest 1m settings
-            bitget_interval = _get_int_opt('bitget_data', 'latest_1m_interval_seconds')
-            if bitget_interval is not None and bitget_interval > 0:
-                self._bitget_latest_1m_interval_seconds = int(bitget_interval)
-            bitget_pause = _get_float_opt('bitget_data', 'latest_1m_coin_pause_seconds')
-            if bitget_pause is not None and bitget_pause >= 0:
-                self._bitget_latest_1m_coin_pause_seconds = float(bitget_pause)
-            bitget_timeout = _get_float_opt('bitget_data', 'latest_1m_api_timeout_seconds')
-            if bitget_timeout is not None and bitget_timeout > 0:
-                self._bitget_latest_1m_api_timeout_seconds = float(bitget_timeout)
-            bitget_min_lb = _get_int_opt('bitget_data', 'latest_1m_min_lookback_days')
-            if bitget_min_lb is not None and bitget_min_lb > 0:
-                self._bitget_latest_1m_min_lookback_days = int(bitget_min_lb)
-            bitget_max_lb = _get_int_opt('bitget_data', 'latest_1m_max_lookback_days')
-            if bitget_max_lb is not None and bitget_max_lb > 0:
-                self._bitget_latest_1m_max_lookback_days = int(bitget_max_lb)
-
-            # Pause between per-user REST calls in shared pollers
-            new_rest_pause = _get_float_opt('pbdata', 'shared_rest_user_pause_seconds')
-            if new_rest_pause is not None and new_rest_pause >= 0:
-                self._shared_rest_user_pause = float(new_rest_pause)
-
-            # Per-exchange overrides as JSON: {"exchange": seconds, ...}
-            if cfg.has_option('pbdata', 'shared_rest_pause_by_exchange_json'):
-                try:
-                    raw = cfg.get('pbdata', 'shared_rest_pause_by_exchange_json')
-                    sval = str(raw).strip() if raw is not None else ''
-                    if sval != '':
-                        obj = json.loads(sval)
-                        if isinstance(obj, dict):
-                            cleaned = {}
-                            for k, v in obj.items():
-                                try:
-                                    if k is None:
-                                        continue
-                                    exid = str(k).strip()
-                                    if exid == '':
-                                        continue
-                                    sec = float(v)
-                                    if sec < 0:
-                                        continue
-                                    cleaned[exid] = sec
-                                except Exception:
-                                    continue
-                            # merge into existing defaults
-                            if cleaned:
-                                self._shared_rest_pause_by_exchange.update(cleaned)
-                except Exception:
-                    pass
-
-            # price_watch_timeout (float, seconds) — timeout for watch_* calls
-            new_pw_timeout = _get_float_opt('pbdata', 'price_watch_timeout')
-            if new_pw_timeout is not None and new_pw_timeout > 0:
-                self._price_watch_timeout = float(new_pw_timeout)
-
-            # rest_semaphore_acquire_timeout (float, seconds) — REST slot acquire timeout
-            new_rest_timeout = _get_float_opt('pbdata', 'rest_semaphore_acquire_timeout')
-            if new_rest_timeout is not None and new_rest_timeout > 0:
-                self._rest_semaphore_acquire_timeout = float(new_rest_timeout)
-        except Exception:
+    async def start_config_reload(self) -> None:
+        """Start the sole PBData INI watcher and loop-owned async bridge."""
+        if self._config_reload_task is not None and not self._config_reload_task.done():
             return
+        loop = asyncio.get_running_loop()
+        self._config_changed = asyncio.Event()
+        self._config_schedule_changed = asyncio.Event()
+        self._ini_watcher.bind_asyncio(loop, self._config_changed)
+        self._ini_watcher.start()
+        self._load_settings()
+        self._config_reload_task = asyncio.create_task(self._config_reload_loop(), name="pbdata-config-reload")
+
+    async def stop_config_reload(self) -> None:
+        """Stop and release the watcher thread and async bridge deterministically."""
+        task = self._config_reload_task
+        self._config_reload_task = None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self._ini_watcher.stop()
+        self._ini_watcher.unbind_asyncio()
+        if self._config_changed is not None:
+            self._config_changed.clear()
+        if self._config_schedule_changed is not None:
+            self._config_schedule_changed.clear()
+
+    async def _restart_pollers_for_interval_change(self) -> None:
+        """Cancel each interval-owned poller once and await it before recreation."""
+        if not self._poll_intervals_changed:
+            return
+        cancelled = []
+        for task_name in ("_shared_combined_task", "_shared_history_task", "_shared_executions_task"):
+            task = getattr(self, task_name, None)
+            if task is not None and not task.done():
+                task.cancel()
+                cancelled.append(task)
+            setattr(self, task_name, None)
+        for tasks_name in ("_shared_history_tasks_by_exchange", "_shared_combined_tasks_by_exchange"):
+            for task in getattr(self, tasks_name, {}).values():
+                if task is not None and not task.done():
+                    task.cancel()
+                    cancelled.append(task)
+            setattr(self, tasks_name, {})
+        if cancelled:
+            await asyncio.gather(*set(cancelled), return_exceptions=True)
+        self._poll_intervals_changed = False
 
     # -----------------------------
     # Private client manager (caller-side)
@@ -889,13 +892,6 @@ class PBData():
         await asyncio.sleep(5)
         while True:
             try:
-                # Reload settings from pbgui.ini each loop so GUI changes
-                # to latest_1m_* settings take effect without restart.
-                try:
-                    self._load_settings()
-                except Exception:
-                    pass
-                
                 if not self._latest_1m_enabled:
                     await asyncio.sleep(5)
                     continue
@@ -1108,11 +1104,6 @@ class PBData():
         await asyncio.sleep(8)  # Slight offset from HL loop
         while True:
             try:
-                try:
-                    self._load_settings()
-                except Exception:
-                    pass
-
                 if not self._binance_latest_1m_enabled:
                     await asyncio.sleep(5)
                     continue
@@ -1266,11 +1257,6 @@ class PBData():
         await asyncio.sleep(16)  # Slight offset from binance loop
         while True:
             try:
-                try:
-                    self._load_settings()
-                except Exception:
-                    pass
-
                 if not self._bybit_latest_1m_enabled:
                     await asyncio.sleep(5)
                     continue
@@ -1422,11 +1408,6 @@ class PBData():
         await asyncio.sleep(24)  # Offset from HL/Binance/Bybit loops
         while True:
             try:
-                try:
-                    self._load_settings()
-                except Exception:
-                    pass
-
                 if not self._okx_latest_1m_enabled:
                     await asyncio.sleep(5)
                     continue
@@ -1577,11 +1558,6 @@ class PBData():
         await asyncio.sleep(30)  # Offset from HL/Binance/Bybit/OKX loops
         while True:
             try:
-                try:
-                    self._load_settings()
-                except Exception:
-                    pass
-
                 if not self._bitget_latest_1m_enabled:
                     await asyncio.sleep(5)
                     continue
@@ -2604,84 +2580,21 @@ class PBData():
         tmp_path.replace(self.pidfile)
     
     def load_fetch_users(self):
-        pb_config = configparser.ConfigParser()
-        try:
-            pb_config.read('pbgui.ini')
-        except Exception as e:
-            _human_log('PBData', f"Warning: failed reading pbgui.ini ({e}); keeping previous fetch_users: {self._fetch_users}", level='WARNING')
-            return
-        if pb_config.has_option("pbdata", "fetch_users"):
-            users = ast.literal_eval(pb_config.get("pbdata", "fetch_users"))
-            valid = set(self.users.list())
-            self._fetch_users = [u for u in users if u in valid]
-        else:
-            self._fetch_users = []  # Default to empty list if not set
+        """Compatibility wrapper that reloads one complete PBData generation."""
+        return self._load_settings()
 
     def load_trades_users(self):
         """Load the user list which is allowed to download/store executions (trades).
 
         Default: empty list (no trades download) unless explicitly configured.
         """
-        pb_config = configparser.ConfigParser()
-        try:
-            pb_config.read('pbgui.ini')
-        except Exception as e:
-            _human_log('PBData', f"Warning: failed reading pbgui.ini ({e}); keeping previous trades_users: {self._trades_users}", level='WARNING')
-            return
-
-        if pb_config.has_option("pbdata", "trades_users"):
-            try:
-                raw = pb_config.get("pbdata", "trades_users")
-                sval = str(raw).strip() if raw is not None else ''
-                if sval == '':
-                    users = []
-                else:
-                    users = ast.literal_eval(sval)
-                if not isinstance(users, list):
-                    users = []
-            except Exception:
-                users = []
-            valid = set(self.users.list())
-            self._trades_users = [u for u in users if u in valid]
-        else:
-            # Default to empty list unless explicitly configured.
-            self._trades_users = []
+        return self._load_settings()
     
     def save_fetch_users(self):
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        if not pb_config.has_section("pbdata"):
-            pb_config.add_section("pbdata")
-        pb_config.set("pbdata", "fetch_users", f'{self.fetch_users}')
-        fd, tmp = tempfile.mkstemp(dir='.', suffix='.ini.tmp')
-        try:
-            with os.fdopen(fd, 'w') as f:
-                pb_config.write(f)
-            os.replace(tmp, 'pbgui.ini')
-        except Exception:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+        save_ini("pbdata", "fetch_users", f'{self.fetch_users}')
 
     def save_trades_users(self):
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
-        if not pb_config.has_section("pbdata"):
-            pb_config.add_section("pbdata")
-        pb_config.set("pbdata", "trades_users", f'{self.trades_users}')
-        fd, tmp = tempfile.mkstemp(dir='.', suffix='.ini.tmp')
-        try:
-            with os.fdopen(fd, 'w') as f:
-                pb_config.write(f)
-            os.replace(tmp, 'pbgui.ini')
-        except Exception:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+        save_ini("pbdata", "trades_users", f'{self.trades_users}')
 
     async def _order_poll_loop(self, user, interval_seconds: int = 5):
         _human_log('PBData', f"[poll] Starting orders poller for {user.name}", level='INFO', user=user)
@@ -2765,10 +2678,6 @@ class PBData():
             if exchange_filter:
                 users = [u for u in users if u.exchange == exchange_filter]
             if kind == 'executions':
-                try:
-                    self.load_trades_users()
-                except Exception:
-                    pass
                 try:
                     allowed = set(self.trades_users or [])
                 except Exception:
@@ -2997,7 +2906,6 @@ class PBData():
                                 # removing a user in the UI takes effect immediately even
                                 # mid-cycle.
                                 try:
-                                    self.load_trades_users()
                                     if user.name not in (self.trades_users or []):
                                         continue
                                 except Exception:
@@ -3848,51 +3756,11 @@ class PBData():
     async def update_db_async(self):
         # Load users first so filtering in load_fetch_users is correct
         self.users.load()
-        self.load_fetch_users()
-        # Reload debug setting if pbgui.ini changed
-        try:
-            self._load_settings()
-        except Exception:
-            pass
 
         # If poll intervals changed via settings, restart shared pollers so
         # new intervals take effect without restarting PBData.
         try:
-            if getattr(self, '_poll_intervals_changed', False):
-                for tname in ("_shared_combined_task", "_shared_history_task", "_shared_executions_task"):
-                    try:
-                        t = getattr(self, tname, None)
-                        if t and not t.done():
-                            t.cancel()
-                    except Exception:
-                        pass
-                    try:
-                        setattr(self, tname, None)
-                    except Exception:
-                        pass
-                # Also cancel per-exchange history tasks so new interval takes effect.
-                for _exch, _t in list(getattr(self, '_shared_history_tasks_by_exchange', {}).items()):
-                    try:
-                        if _t and not _t.done():
-                            _t.cancel()
-                    except Exception:
-                        pass
-                try:
-                    self._shared_history_tasks_by_exchange = {}
-                except Exception:
-                    pass
-                # Also cancel per-exchange combined tasks so new interval takes effect.
-                for _exch, _t in list(getattr(self, '_shared_combined_tasks_by_exchange', {}).items()):
-                    try:
-                        if _t and not _t.done():
-                            _t.cancel()
-                    except Exception:
-                        pass
-                try:
-                    self._shared_combined_tasks_by_exchange = {}
-                except Exception:
-                    pass
-                self._poll_intervals_changed = False
+            await self._restart_pollers_for_interval_change()
         except Exception:
             pass
         now_ts = datetime.now().timestamp()
@@ -4032,7 +3900,6 @@ class PBData():
                 self.users.load()
             except Exception:
                 pass
-            self.load_fetch_users()
             balances_ws = []
             balances_rest = []
             positions_ws = []
@@ -4091,10 +3958,6 @@ class PBData():
                     # Execution-level polling is only meaningful for a subset of exchanges.
                     # Keep in sync with Database.update_executions() support.
                     try:
-                        try:
-                            self.load_trades_users()
-                        except Exception:
-                            pass
                         exec_users = [
                             u.name
                             for u in self.users
@@ -4272,11 +4135,6 @@ class PBData():
                 self.users.load()
             except Exception:
                 pass
-            self.load_fetch_users()
-            try:
-                self.load_trades_users()
-            except Exception:
-                pass
             balances_ws = []
             balances_rest = []
             positions_ws = []
@@ -4375,6 +4233,7 @@ def main():
     pbdata.save_pid()
 
     async def run_loop():
+        await pbdata.start_config_reload()
         # Start metrics loop so periodic client/backoff metrics appear in logs
         try:
             if not hasattr(pbdata, '_metrics_task') or pbdata._metrics_task is None or pbdata._metrics_task.done():
@@ -4399,7 +4258,11 @@ def main():
                         _human_log('PBData', f"[loop] update_db_async ERROR: {e}", level='ERROR', meta={'traceback': tb})
                     except Exception:
                         pass
-                await asyncio.sleep(1)
+                try:
+                    await asyncio.wait_for(pbdata._config_schedule_changed.wait(), timeout=1)
+                    pbdata._config_schedule_changed.clear()
+                except asyncio.TimeoutError:
+                    pass
             except Exception as e:
                 try:
                     tb = traceback.format_exc()
@@ -4413,11 +4276,9 @@ def main():
                 _human_log('PBData', '[shutdown] Shutdown requested: closing ws clients', level='INFO')
             except Exception:
                 pass
+            await _bounded_shutdown_step(pbdata.stop_config_reload(), 3, "config reload stop")
             from Exchange import Exchange
-            try:
-                await Exchange.close_all_ws_clients()
-            except Exception:
-                pass
+            await _bounded_shutdown_step(Exchange.close_all_ws_clients(), 5, "websocket close")
             # Disable further buffering and attempt a final flush before cancelling tasks
             try:
                 try:
@@ -4426,21 +4287,12 @@ def main():
                     pass
                 if hasattr(pbdata, '_price_writer_task') and pbdata._price_writer_task is not None:
                     # Ask PBData to flush buffer synchronously with a timeout
-                    try:
-                        await asyncio.wait_for(pbdata._flush_price_buffer(), timeout=10)
-                    except Exception as e:
-                        try:
-                            _human_log('PBData', f"[shutdown] final price buffer flush failed/timeout: {e}", level='WARNING')
-                        except Exception:
-                            pass
+                    await _bounded_shutdown_step(pbdata._flush_price_buffer(), 5, "final price buffer flush")
                     # Cancel the writer task if it's still running and wait briefly
                     try:
                         if not pbdata._price_writer_task.done():
                             pbdata._price_writer_task.cancel()
-                            try:
-                                await asyncio.wait_for(pbdata._price_writer_task, timeout=5)
-                            except Exception:
-                                pass
+                            await _bounded_shutdown_step(pbdata._price_writer_task, 2, "price writer stop")
                     except Exception:
                         pass
             except Exception:

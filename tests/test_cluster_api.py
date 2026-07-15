@@ -16,7 +16,18 @@ from fastapi import HTTPException
 
 from api import cluster
 from api import v7_instances
-from master.cluster_state import append_operation, build_config_manifest, compute_config_manifest_hash, ensure_local_identity, load_operations
+from cluster_credential_publisher import ClusterCredentialPublisher
+from cluster_credentials import ensure_node_key_material, sign_operation
+from credential_store import CredentialStore
+from master.cluster_state import (
+    append_operation as _append_operation,
+    build_config_manifest,
+    compute_config_manifest_hash,
+    ensure_local_identity,
+    load_operations,
+    read_local_identity,
+    write_operation,
+)
 
 
 CLUSTER_ID = "pbgui-cluster-00000000-0000-4000-8000-000000000001"
@@ -27,6 +38,70 @@ NODE_C = "pbgui-node-00000000-0000-4000-8000-00000000000c"
 HASH_A = "sha256:" + "a" * 64
 LOCAL_CLUSTER_PUBLIC_KEY = "ssh-ed25519 aGVsbG8= pbgui-cluster:local"
 REMOTE_CLUSTER_PUBLIC_KEY = "ssh-ed25519 d29ybGQ= pbgui-cluster:remote"
+
+
+def append_operation(root: Path, op: str, payload: dict, **kwargs) -> dict:
+    """Keep unrelated API fixtures on historical v1 remote membership records."""
+
+    identity = read_local_identity(root)
+    actor = str(identity["node_id"])
+    target = str(payload.get("node_id") or "")
+    if op == "ADD_NODE" and target and target != actor:
+        actor_dir = Path(root) / "oplog" / actor
+        existing = [int(path.stem) for path in actor_dir.glob("*.json")] if actor_dir.exists() else []
+        seq = max(existing, default=0) + 1
+        operation = {
+            **payload,
+            "schema_version": 1,
+            "cluster_id": str(identity["cluster_id"]),
+            "op_id": f"{actor}:{seq:08d}",
+            "actor": actor,
+            "seq": seq,
+            "op": op,
+            "created_at": int(kwargs.get("created_at", 100 + seq)),
+        }
+        write_operation(root, operation, allow_legacy_membership=True)
+        return operation
+    return _append_operation(root, op, payload, **kwargs)
+
+
+def _signed_bootstrap_operation(key_root: Path, **metadata) -> tuple[dict, Any]:
+    """Build a signed upstream bootstrap membership operation for join tests."""
+
+    keys = ensure_node_key_material(key_root)
+    bundle = keys.public_bundle(NODE_B, "master")
+    operation = {
+        **bundle,
+        **metadata,
+        "schema_version": 1,
+        "cluster_id": CLUSTER_ID,
+        "op_id": f"{NODE_B}:00000001",
+        "actor": NODE_B,
+        "seq": 1,
+        "op": "ADD_NODE",
+        "created_at": 101,
+        "node_id": NODE_B,
+        "role": "master",
+        "state_replica": True,
+        "membership_authorization": {"kind": "bootstrap"},
+    }
+    return sign_operation(operation, keys.signing_private_key, signer_id=NODE_B), keys
+
+
+def _signed_join_authorization(keys: Any, node_id: str) -> dict:
+    """Build the explicit upstream approval returned by join-hello fixtures."""
+
+    return sign_operation(
+        {
+            "kind": "join",
+            "cluster_id": CLUSTER_ID,
+            "node_id": node_id,
+            "role": "master",
+            "created_at": 102,
+        },
+        keys.signing_private_key,
+        signer_id=NODE_B,
+    )
 
 
 def test_pulled_secret_blob_uses_owner_only_tree(tmp_path: Path) -> None:
@@ -343,6 +418,308 @@ def test_get_nodes_defaults_local_connection_metadata(monkeypatch, tmp_path: Pat
     assert local_node["ssh_user"] == "mani"
 
 
+def test_credential_status_endpoints_expose_ids_but_no_keys_ciphertext_or_secrets(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Cluster status surfaces lifecycle metadata without raw cryptographic material."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(
+        cluster,
+        "ensure_local_cluster_ssh_material",
+        lambda *args, **kwargs: {"ok": True, "fingerprint": "SHA256:local"},
+    )
+    store = CredentialStore(tmp_path / "data" / "credentials")
+    record = store.create_cmc("never-return-this-cluster-secret")
+    ClusterCredentialPublisher(root, store).publish_cmc(record["id"])
+
+    status = cluster.get_status(session=None)
+    nodes = cluster.get_nodes(session=None)
+    desired = cluster.get_desired_state(session=None)
+    rendered = json.dumps({"status": status, "nodes": nodes, "desired": desired})
+
+    assert status["credentials"]["protocol_version"] == 2
+    assert status["credentials"]["cmc"]["catalog"][record["id"]]["catalog_generation"] == 1
+    assert status["credentials"]["cmc"]["catalog"][record["id"]]["recipient_generation"] == 1
+    assert status["credentials"]["authorities"][0]["authority_node_id"] == NODE_A
+    assert status["credentials"]["authorities"][0]["authority_epoch"] == 1
+    assert status["credentials"]["migration"]["cutoff_status"] == "not_set"
+    assert status["credentials"]["migration"]["unfreeze_status"] == "not_started"
+    assert nodes["nodes"][0]["encryption_key_id"].startswith("x25519:")
+    assert "signing_public_key" not in rendered
+    assert "encryption_public_key" not in rendered
+    assert "cluster_ssh_public_key" not in rendered
+    assert "ciphertext" not in rendered
+    assert "never-return-this-cluster-secret" not in rendered
+
+
+def test_rewrap_endpoint_materializes_and_acknowledges_exact_local_state(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """The explicit rewrap route completes local wrapper verification and ACK."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    store = CredentialStore(tmp_path / "data" / "credentials")
+    record = store.create_cmc("route-rewrap-secret")
+    publisher = ClusterCredentialPublisher(root, store)
+    publisher.publish_cmc(record["id"])
+    before = cluster.get_status(session=None)["credentials"]
+    assert before["nodes"][NODE_A]["credential_active"] is False
+
+    response = asyncio.run(
+        cluster.rewrap_cluster_credentials(
+            _JsonRequest({"operation_id": "rewrap-idempotent-1"}),
+            session=None,
+        )
+    )
+    repeated = asyncio.run(
+        cluster.rewrap_cluster_credentials(
+            _JsonRequest({"operation_id": "rewrap-idempotent-1"}),
+            session=None,
+        )
+    )
+
+    assert response["ok"] is True
+    assert repeated == response
+    assert response["operation_id"]
+    assert response["result"]["status"] == "current"
+    assert response["materialization"]["migration_ack"]["recipient_generations"] == {
+        record["id"]: 1
+    }
+    assert response["credentials"]["nodes"][NODE_A]["credential_active"] is True
+    assert "route-rewrap-secret" not in json.dumps(response)
+    assert cluster.get_cluster_credential_operation(
+        "rewrap-idempotent-1",
+        session=None,
+    )["status"] == "complete"
+
+
+def test_local_key_rotation_retry_cannot_rotate_twice(monkeypatch, tmp_path: Path) -> None:
+    """A repeated client operation ID returns the first durable key rotation result."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+
+    first = cluster.rotate_local_cluster_credential_key(
+        session=None,
+        operation_id="key-rotation-idempotent-1",
+    )
+    second = cluster.rotate_local_cluster_credential_key(
+        session=None,
+        operation_id="key-rotation-idempotent-1",
+    )
+    rotations = [operation for operation in load_operations(root) if operation["op"] == "UPDATE_NODE_KEY"]
+
+    assert second == first
+    assert len(rotations) == 1
+    assert first["result"]["rotation"]["signing_key_id"] == rotations[0]["signing_key_id"]
+
+
+def test_credential_status_names_missing_migration_nodes_and_unfreeze_state() -> None:
+    """Migration diagnostics identify each missing active node without credential values."""
+
+    node_a = {
+        "role": "master",
+        "credential_protocol_version": 2,
+        "credential_capable": True,
+        "signing_key_id": "ed25519:a",
+        "encryption_key_id": "x25519:a",
+    }
+    node_b = {
+        "role": "vps",
+        "credential_protocol_version": 2,
+        "credential_capable": True,
+        "signing_key_id": "ed25519:b",
+        "encryption_key_id": "x25519:b",
+    }
+    snapshot = {
+        "cluster_nodes": {
+            "credential_membership_generation": 2,
+            "nodes": {NODE_A: node_a, NODE_B: node_b},
+        },
+        "desired_state": {
+            "tradfi_active_profiles": {
+                "tiingo": {"profile_id": "tradfi-id", "activation_generation": 2},
+            },
+            "tradfi_projection_acks": {
+                NODE_A: {
+                    "membership_generation": 2,
+                    "active_profile_generations": {"tiingo": 2},
+                    "projection_status": "current",
+                    "projection_applied_generation": 2,
+                },
+            },
+            "credential_migration": {
+                "frozen": True,
+                "freeze_generation": 3,
+                "freeze_acks": {NODE_A: {}},
+                "materialization_acks": {},
+                "cutoff": {"cutoff_generation": 4, "min_protocol": 2},
+                "cleanup_acks": {NODE_A: {}},
+                "scan_acks": {NODE_A: {
+                    "freeze_generation": 3,
+                    "cutoff_generation": 4,
+                    "status": "clean",
+                    "findings": [],
+                }},
+                "candidates": {
+                    "candidate-a": {
+                        "candidate_id": "candidate-a",
+                        "candidate_kind": "tradfi_profile",
+                        "submitted_by": NODE_A,
+                    },
+                },
+                "candidate_acceptances": {
+                    "candidate-a": {"candidate_id": "candidate-a", "status": "accepted"},
+                },
+            }
+        },
+    }
+
+    status = cluster._credential_status(snapshot)
+
+    migration = status["migration"]
+    assert migration["missing_node_ids"]["freeze_acks"] == [NODE_B]
+    assert migration["missing_node_ids"]["materialization_acks"] == [NODE_A, NODE_B]
+    assert migration["missing_node_ids"]["cleanup_acks"] == [NODE_B]
+    assert migration["missing_node_ids"]["scan_acks"] == [NODE_B]
+    assert migration["cutoff_status"] == "active"
+    assert migration["unfreeze_status"] == "pending"
+    assert {item["reason"] for item in migration["blocker_details"]} == {
+        "freeze_acks",
+        "materialization_acks",
+        "cleanup_acks",
+        "scan_acks",
+    }
+    assert status["nodes"][NODE_A]["migration_candidate"]["status"] == "accepted"
+    assert status["nodes"][NODE_A]["migration_scan_ack"]["current"] is True
+    assert status["nodes"][NODE_A]["tradfi_projection_ack"]["current"] is True
+    assert status["nodes"][NODE_B]["migration_scan_ack"]["status"] == "pending"
+    assert "scan_ack" in status["nodes"][NODE_B]["migration_blockers"]
+
+
+def test_credential_status_reports_only_service_names_for_local_process_barrier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rolling status exposes blocked service names without PID or command metadata."""
+    import credential_process_registry
+
+    monkeypatch.setattr(cluster, "read_local_identity", lambda _root: {"node_id": NODE_A})
+    monkeypatch.setattr(
+        credential_process_registry,
+        "process_barrier_readiness",
+        lambda _root: {
+            "ready": False,
+            "services": [],
+            "waiting_services": ["PBApiServer", "PBCoinData"],
+        },
+    )
+    snapshot = {
+        "cluster_nodes": {
+            "credential_membership_generation": 1,
+            "nodes": {NODE_A: {
+                "role": "master",
+                "credential_protocol_version": 2,
+                "credential_capable": True,
+                "signing_key_id": "ed25519:a",
+                "encryption_key_id": "x25519:a",
+            }},
+        },
+        "desired_state": {"credential_migration": {}},
+    }
+
+    migration = cluster._credential_status(snapshot)["migration"]
+
+    assert migration["status"] == "waiting_for_upgrade"
+    assert migration["outdated_services"] == ["PBApiServer", "PBCoinData"]
+    assert all("pid" not in str(item).lower() for item in migration["blocker_details"])
+
+
+def test_remote_credential_materialization_requires_eligible_pending_node(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Remote credential materialization is guarded and returns a server operation ID."""
+
+    remote = {
+        "node_id": NODE_B,
+        "role": "vps",
+        "enabled": True,
+        "state_replica": True,
+        "sync_mode": "reachable",
+        "credential_protocol_version": 2,
+        "credential_capable": True,
+        "signing_key_id": "ed25519:remote",
+        "encryption_key_id": "x25519:remote",
+        "pbname": "runner-b",
+    }
+    snapshot = {
+        "identity": {"node_id": NODE_A},
+        "cluster_nodes": {"nodes": {NODE_A: {"node_id": NODE_A}, NODE_B: remote}},
+        "desired_state": {},
+    }
+    calls: list[str] = []
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+
+    async def require_current(*_args, **_kwargs) -> None:
+        return None
+
+    async def materialize(_node, _identity, verb, **_kwargs) -> dict:
+        calls.append(verb)
+        return {"ok": True, "counts": {"written": 1}}
+
+    monkeypatch.setattr(cluster, "_load_cluster_snapshot", lambda: snapshot)
+    monkeypatch.setattr(
+        cluster,
+        "_credential_status",
+        lambda _snapshot: {
+            "cmc": {"count": 1},
+            "tradfi": {"count": 0},
+            "nodes": {NODE_B: {"materialization_ack": {"current": False}}},
+        },
+    )
+    monkeypatch.setattr(cluster, "_require_remote_state_current", require_current)
+    monkeypatch.setattr(cluster, "_run_remote_materialize_command", materialize)
+
+    payload = asyncio.run(
+        cluster.materialize_remote_credentials(
+            NODE_B,
+            session=None,
+            operation_id="remote-materialize-1",
+        )
+    )
+    repeated = asyncio.run(
+        cluster.materialize_remote_credentials(
+            NODE_B,
+            session=None,
+            operation_id="remote-materialize-1",
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["operation_id"]
+    assert repeated == payload
+    assert calls == ["materialize-credentials"]
+
+    monkeypatch.setattr(
+        cluster,
+        "_credential_status",
+        lambda _snapshot: {
+            "cmc": {"count": 1},
+            "tradfi": {"count": 0},
+            "nodes": {NODE_B: {"materialization_ack": {"current": True}}},
+        },
+    )
+    with pytest.raises(cluster.HTTPException) as exc_info:
+        asyncio.run(cluster.materialize_remote_credentials(NODE_B, session=None))
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["operation_id"]
+
+
 def test_local_pbgui_dir_value_uses_absolute_path_outside_home(monkeypatch, tmp_path: Path) -> None:
     """Local PBGui path detection falls back to an absolute path outside HOME."""
 
@@ -463,8 +840,14 @@ def test_update_node_settings_records_disabled_sync_mode(monkeypatch, tmp_path: 
     append_operation(
         root,
         "ADD_NODE",
-        {"node_id": NODE_B, "role": "vps", "pbname": "vps-a", "sync_mode": "reachable", "sync_enabled": True, "ssh_host": "203.0.113.10"},
+        {"node_id": NODE_B, "role": "vps", "pbname": "vps-a", "sync_mode": "reachable", "sync_enabled": True, "ssh_host": "203.0.113.10", "cluster_ssh_public_key": REMOTE_CLUSTER_PUBLIC_KEY},
         created_at=102,
+    )
+    revoked: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        cluster,
+        "remove_authorized_cluster_key",
+        lambda **kwargs: revoked.append(kwargs) or {"ok": True, "changed": True},
     )
 
     result = asyncio.run(
@@ -478,6 +861,8 @@ def test_update_node_settings_records_disabled_sync_mode(monkeypatch, tmp_path: 
     nodes = _read_json(tmp_path / "data" / "cluster" / "cluster_nodes.json")["nodes"]
 
     assert result["changed"] is True
+    assert result["authorized_key_removed"] is True
+    assert revoked[0]["source_node_id"] == NODE_B
     assert operations[-1]["op"] == "UPDATE_NODE"
     assert operations[-1]["sync_mode"] == "disabled"
     assert operations[-1]["sync_enabled"] is False
@@ -569,7 +954,7 @@ def test_update_node_settings_rejects_unknown_sync_peer(monkeypatch, tmp_path: P
 
 
 def test_remove_cluster_node_records_remove_operation(monkeypatch, tmp_path: Path) -> None:
-    """Disabled stale nodes can be removed from materialized membership."""
+    """Removing a stale node revokes its exact local key before membership removal."""
 
     root = _init_cluster(tmp_path)
     monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
@@ -577,8 +962,14 @@ def test_remove_cluster_node_records_remove_operation(monkeypatch, tmp_path: Pat
     append_operation(
         root,
         "ADD_NODE",
-        {"node_id": NODE_B, "role": "master", "pbname": "old-master", "sync_mode": "disabled", "sync_enabled": False},
+        {"node_id": NODE_B, "role": "master", "pbname": "old-master", "sync_mode": "disabled", "sync_enabled": False, "cluster_ssh_public_key": REMOTE_CLUSTER_PUBLIC_KEY},
         created_at=102,
+    )
+    revoked: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        cluster,
+        "remove_authorized_cluster_key",
+        lambda **kwargs: revoked.append(kwargs) or {"ok": True, "changed": True},
     )
 
     result = cluster.remove_cluster_node(NODE_B, session=None)
@@ -587,9 +978,51 @@ def test_remove_cluster_node_records_remove_operation(monkeypatch, tmp_path: Pat
 
     assert result["changed"] is True
     assert result["removed_node_id"] == NODE_B
+    assert result["authorized_key_removed"] is True
+    assert result["rotation_recommended"] is False
+    assert result["affected_credentials"] == {"cmc": 0, "tradfi": 0, "total": 0}
+    assert revoked == [{
+        "pbgdir": Path(tmp_path),
+        "source_node_id": NODE_B,
+        "source_public_key": REMOTE_CLUSTER_PUBLIC_KEY,
+    }]
     assert operations[-1]["op"] == "REMOVE_NODE"
     assert operations[-1]["node_id"] == NODE_B
     assert NODE_B not in nodes
+
+
+def test_remove_cluster_node_reports_secret_free_rotation_impact(monkeypatch) -> None:
+    """Removal reports affected current recipient counts without credential material."""
+
+    remote = {
+        "node_id": NODE_B,
+        "role": "master",
+        "enabled": True,
+        "sync_mode": "disabled",
+        "sync_enabled": False,
+    }
+    snapshot = {
+        "identity": {"node_id": NODE_A},
+        "cluster_nodes": {"nodes": {NODE_A: {"node_id": NODE_A}, NODE_B: remote}},
+        "desired_state": {
+            "instances": {},
+            "secrets": {
+                "cmc-id": {"secret_kind": "cmc_api_key", "recipient_ids": [NODE_A, NODE_B]},
+                "tradfi-id": {"secret_kind": "tradfi_profile", "recipient_ids": [NODE_B]},
+                "other-id": {"secret_kind": "cmc_api_key", "recipient_ids": [NODE_A]},
+            },
+        },
+    }
+    monkeypatch.setattr(cluster, "_load_cluster_snapshot", lambda: snapshot)
+    monkeypatch.setattr(cluster, "_revoke_local_cluster_ssh_key", lambda _node: {"changed": False})
+    monkeypatch.setattr(cluster, "append_operation", lambda *_args, **_kwargs: {"op_id": "remove-op"})
+    monkeypatch.setattr(cluster, "rebuild_materialized_state", lambda *_args, **_kwargs: {"cluster_nodes": {"nodes": {NODE_A: {"node_id": NODE_A}}}})
+
+    payload = cluster.remove_cluster_node(NODE_B, session=None)
+
+    assert payload["rotation_recommended"] is True
+    assert payload["affected_credentials"] == {"cmc": 1, "tradfi": 1, "total": 2}
+    assert "secret" not in json.dumps(payload).lower()
 
 
 def test_remove_cluster_node_rejects_local_active_or_assigned_nodes(monkeypatch, tmp_path: Path) -> None:
@@ -1070,6 +1503,45 @@ def test_remote_status_reports_successful_hello(monkeypatch, tmp_path: Path) -> 
     assert "--allow-join hello" in calls[0][1]
 
 
+def test_credential_status_passively_lists_only_active_outdated_replicas() -> None:
+    """Rolling status waits for active v1 nodes while disabled nodes do not block."""
+
+    snapshot = {
+        "cluster_nodes": {
+            "nodes": {
+                "master-v2": {
+                    "role": "master",
+                    "state_replica": True,
+                    "enabled": True,
+                    "credential_protocol_version": 2,
+                    "credential_capable": True,
+                    "signing_key_id": "sign-v2",
+                    "encryption_key_id": "enc-v2",
+                },
+                "vps-v1": {
+                    "role": "vps",
+                    "state_replica": True,
+                    "enabled": True,
+                    "credential_protocol_version": 1,
+                },
+                "removed-v1": {
+                    "role": "vps",
+                    "state_replica": True,
+                    "enabled": False,
+                    "credential_protocol_version": 1,
+                },
+            }
+        },
+        "desired_state": {},
+    }
+
+    migration = cluster._credential_status(snapshot)["migration"]
+
+    assert migration["status"] == "waiting_for_upgrade"
+    assert migration["outdated_node_ids"] == ["vps-v1"]
+    assert migration["frozen"] is False
+
+
 def test_remote_status_reports_uninitialized_remote(monkeypatch, tmp_path: Path) -> None:
     """Remote status classifies an uninitialized remote cluster identity."""
 
@@ -1121,6 +1593,7 @@ def test_remote_join_writes_identity_for_known_node(monkeypatch, tmp_path: Path)
     """Remote join invokes the restricted wrapper for a known uninitialized node."""
 
     root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=100)
     append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
     calls: list[tuple[str, str, int]] = []
@@ -1182,6 +1655,7 @@ def test_remote_join_does_not_stop_pbrun_for_master_node(monkeypatch, tmp_path: 
     """Remote join leaves PBRun alone for remote master nodes."""
 
     root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=100)
     append_operation(
         root,
         "ADD_NODE",
@@ -1235,6 +1709,7 @@ def test_remote_join_rejects_foreign_remote_identity(monkeypatch, tmp_path: Path
     """Remote join surfaces wrapper rejections without hiding the safety error."""
 
     root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=100)
     append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
     monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
 
@@ -1279,23 +1754,15 @@ def test_self_join_adopts_empty_local_identity_and_registers_master(monkeypatch,
         lambda *args, **kwargs: {"public_key": LOCAL_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:local"},
     )
     calls: list[tuple[str, str, int]] = []
-    upstream_op = {
-        "schema_version": 1,
-        "cluster_id": CLUSTER_ID,
-        "op_id": f"{NODE_B}:00000001",
-        "actor": NODE_B,
-        "seq": 1,
-        "op": "ADD_NODE",
-        "created_at": 101,
-        "node_id": NODE_B,
-        "role": "master",
-        "pbname": "upstream-master",
-        "hostname": "upstream-master",
-        "sync_mode": "reachable",
-        "sync_enabled": True,
-        "ssh_host": "198.51.100.10",
-        "ssh_port": 22,
-    }
+    upstream_op, upstream_keys = _signed_bootstrap_operation(
+        tmp_path / "upstream-keys",
+        pbname="upstream-master",
+        hostname="upstream-master",
+        sync_mode="reachable",
+        sync_enabled=True,
+        ssh_host="198.51.100.10",
+        ssh_port=22,
+    )
 
     class FakePool:
         async def run(self, hostname: str, command: str, timeout: int = 30):
@@ -1318,6 +1785,7 @@ def test_self_join_adopts_empty_local_identity_and_registers_master(monkeypatch,
                         "cluster_id": CLUSTER_ID,
                         "node_id": NODE_B,
                         "role": "master",
+                        "join_authorization": _signed_join_authorization(upstream_keys, NODE_C),
                         "cluster_ssh_public_key": REMOTE_CLUSTER_PUBLIC_KEY,
                         "cluster_ssh_fingerprint": "SHA256:remote",
                     }),
@@ -1430,24 +1898,17 @@ def test_self_join_defers_missing_historical_config_blobs(monkeypatch, tmp_path:
     }
     current_manifest_raw = cluster._canonical_json_bytes(current_manifest)
     current_manifest_hash = "sha256:" + hashlib.sha256(current_manifest_raw).hexdigest()
+    upstream_membership, upstream_keys = _signed_bootstrap_operation(
+        tmp_path / "upstream-keys",
+        pbname="upstream-master",
+        hostname="upstream-master",
+        sync_mode="reachable",
+        sync_enabled=True,
+        ssh_host="198.51.100.10",
+        ssh_port=22,
+    )
     upstream_ops = [
-        {
-            "schema_version": 1,
-            "cluster_id": CLUSTER_ID,
-            "op_id": f"{NODE_B}:00000001",
-            "actor": NODE_B,
-            "seq": 1,
-            "op": "ADD_NODE",
-            "created_at": 101,
-            "node_id": NODE_B,
-            "role": "master",
-            "pbname": "upstream-master",
-            "hostname": "upstream-master",
-            "sync_mode": "reachable",
-            "sync_enabled": True,
-            "ssh_host": "198.51.100.10",
-            "ssh_port": 22,
-        },
+        upstream_membership,
         {
             "schema_version": 1,
             "cluster_id": CLUSTER_ID,
@@ -1493,7 +1954,7 @@ def test_self_join_defers_missing_historical_config_blobs(monkeypatch, tmp_path:
             if "cluster_ssh_setup.py" in command and "install-authorized-key" in command:
                 return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "changed": True}), stderr="")
             if "hello" in command:
-                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "master"}), stderr="")
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "master", "join_authorization": _signed_join_authorization(upstream_keys, NODE_C)}), stderr="")
             if "get-state-vector" in command:
                 return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_B: 3}}), stderr="")
             if "get-ops" in command:
@@ -1560,23 +2021,15 @@ def test_self_join_uses_password_runner_without_monitor_pool(monkeypatch, tmp_pa
         "ensure_local_cluster_ssh_material",
         lambda *args, **kwargs: {"public_key": LOCAL_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:local"},
     )
-    upstream_op = {
-        "schema_version": 1,
-        "cluster_id": CLUSTER_ID,
-        "op_id": f"{NODE_B}:00000001",
-        "actor": NODE_B,
-        "seq": 1,
-        "op": "ADD_NODE",
-        "created_at": 101,
-        "node_id": NODE_B,
-        "role": "master",
-        "pbname": "upstream-master",
-        "hostname": "upstream-master",
-        "sync_mode": "reachable",
-        "sync_enabled": True,
-        "ssh_host": "198.51.100.10",
-        "ssh_port": 22,
-    }
+    upstream_op, upstream_keys = _signed_bootstrap_operation(
+        tmp_path / "upstream-keys",
+        pbname="upstream-master",
+        hostname="upstream-master",
+        sync_mode="reachable",
+        sync_enabled=True,
+        ssh_host="198.51.100.10",
+        ssh_port=22,
+    )
     runners: list[Any] = []
 
     class FakePasswordRunner:
@@ -1598,7 +2051,7 @@ def test_self_join_uses_password_runner_without_monitor_pool(monkeypatch, tmp_pa
             if "cluster_ssh_setup.py" in command and "install-authorized-key" in command:
                 return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "changed": True}), stderr="")
             if "hello" in command:
-                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "master"}), stderr="")
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "master", "join_authorization": _signed_join_authorization(upstream_keys, NODE_C)}), stderr="")
             if "get-state-vector" in command:
                 return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_B: 1}}), stderr="")
             if "get-ops" in command:
@@ -1694,6 +2147,14 @@ def test_self_join_recovery_archives_non_empty_foreign_cluster(monkeypatch, tmp_
         "ensure_local_cluster_ssh_material",
         lambda *args, **kwargs: {"public_key": LOCAL_CLUSTER_PUBLIC_KEY, "fingerprint": "SHA256:local"},
     )
+    upstream_op, upstream_keys = _signed_bootstrap_operation(
+        tmp_path / "upstream-keys",
+        pbname="upstream-master",
+        hostname="upstream-master",
+        sync_mode="reachable",
+        sync_enabled=True,
+        ssh_host="198.51.100.10",
+    )
 
     class FakePool:
         async def run(self, hostname: str, command: str, timeout: int = 30):
@@ -1704,9 +2165,11 @@ def test_self_join_recovery_archives_non_empty_foreign_cluster(monkeypatch, tmp_
             if "cluster_ssh_setup.py" in command and "install-authorized-key" in command:
                 return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "changed": True}), stderr="")
             if "hello" in command:
-                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "master"}), stderr="")
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "master", "join_authorization": _signed_join_authorization(upstream_keys, NODE_C)}), stderr="")
             if "get-state-vector" in command:
-                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {}}), stderr="")
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_B: 1}}), stderr="")
+            if "get-ops" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "operations": [upstream_op], "missing": []}), stderr="")
             if "put-ops" in command:
                 return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "count": 2, "operations": []}), stderr="")
             if "rebuild" in command:
@@ -1815,7 +2278,8 @@ def test_remote_preview_compares_state_without_writes(monkeypatch, tmp_path: Pat
     assert payload["operation_sync"]["local_ops_missing_on_remote"][0]["target"] == "local_inst"
     assert payload["materialization"]["counts"]["add"] == 1
     assert payload["api_key_materialization"]["status"] == "current"
-    assert len(calls) == 4
+    assert len(calls) == 5
+    assert "materialize-credentials-preview" in calls[-1]
     assert "get-state-vector" in calls[0]
     assert "get-desired-state" in calls[1]
     assert "materialize-v7-preview" in calls[2]
@@ -2523,17 +2987,18 @@ def test_apply_bootstrap_records_known_vps_node(monkeypatch, tmp_path: Path) -> 
     result = cluster.apply_bootstrap(session=None)
     nodes = _read_json(tmp_path / "data" / "cluster" / "cluster_nodes.json")["nodes"]
     operations = load_operations(root, expected_cluster_id=CLUSTER_ID)
-    node = next(iter(nodes.values()))
+    node = next(item for item in nodes.values() if item.get("pbname") == "vps-a")
 
     assert result["result"]["counts"]["applied"] == 1
     assert result["after"]["counts"]["skip"] == 1
-    assert operations[0]["op"] == "ADD_NODE"
-    assert operations[0]["sync_mode"] == "disabled"
-    assert operations[0]["sync_enabled"] is False
+    assert operations[-1]["op"] == "UPDATE_NODE"
+    assert operations[-1]["sync_mode"] == "disabled"
+    assert operations[-1]["sync_enabled"] is False
     assert node["role"] == "vps"
     assert node["pbname"] == "vps-a"
     assert node["sync_mode"] == "disabled"
     assert node["sync_enabled"] is False
+    assert node["state_replica"] is False
     assert node["ssh_host"] == "203.0.113.10"
     assert node["ssh_user"] == "bot"
     assert node["ssh_port"] == 2222
@@ -2556,9 +3021,9 @@ def test_apply_bootstrap_node_records_only_selected_known_vps(monkeypatch, tmp_p
 
     assert result["changed"] is True
     assert result["result"]["counts"] == {"applied": 1, "skipped": 0, "failed": 0}
-    assert len(nodes) == 1
-    assert next(iter(nodes.values()))["pbname"] == "vps-a"
-    assert [op["pbname"] for op in operations if op["op"] == "ADD_NODE"] == ["vps-a"]
+    assert len(nodes) == 2
+    assert any(node.get("pbname") == "vps-a" and node.get("state_replica") is False for node in nodes.values())
+    assert [op["pbname"] for op in operations if op["op"] == "UPDATE_NODE"] == ["vps-a"]
     assert sorted(mapping["hosts"]) == ["vps-a"]
     assert result["after"]["counts"]["add"] == 1
 
@@ -2579,17 +3044,18 @@ def test_apply_bootstrap_uses_monitor_master_role(monkeypatch, tmp_path: Path) -
     result = cluster.apply_bootstrap(session=None)
     nodes = _read_json(tmp_path / "data" / "cluster" / "cluster_nodes.json")["nodes"]
     operations = load_operations(root, expected_cluster_id=CLUSTER_ID)
-    node = next(iter(nodes.values()))
+    node = next(item for item in nodes.values() if item.get("pbname") == "remote-master")
     mapping = _read_json(tmp_path / "data" / "cluster" / "host_node_ids.json")
 
     assert preview["items"][0]["node_role"] == "master"
     assert result["result"]["counts"]["applied"] == 1
-    assert operations[0]["role"] == "master"
-    assert operations[0]["sync_mode"] == "disabled"
-    assert operations[0]["sync_enabled"] is False
+    assert operations[-1]["role"] == "master"
+    assert operations[-1]["sync_mode"] == "disabled"
+    assert operations[-1]["sync_enabled"] is False
     assert node["role"] == "master"
     assert node["sync_mode"] == "disabled"
     assert node["sync_enabled"] is False
+    assert node["state_replica"] is False
     assert mapping["hosts"]["remote-master"]["role"] == "master"
 
 

@@ -1,6 +1,6 @@
 # API-Keys
 
-Exchange-API-Credentials und TradFi-Provider-Einstellungen verwalten. Alle Credentials werden in `api-keys.json` gespeichert und von PB7 für den Live-Betrieb gelesen.
+Exchange-API-Credentials und TradFi-Provider-Profile verwalten. Exchange-User bleiben in `api-keys.json`; TradFi-Secrets werden getrennt im owner-only Credential Vault von PBGui gespeichert.
 
 ---
 
@@ -65,13 +65,15 @@ Klick auf eine User-Zeile öffnet das Formular, oder **+ Add User** verwenden. D
 | **Options** | Optionales JSON-Objekt (z. B. `{"defaultType": "swap"}`) |
 | **Extra** | Optionaler JSON-Passthrough für Exchange-spezifische Felder |
 
-### Auge-Symbol (Credentials enthüllen)
+### Auge-Symbol (Exchange-Credentials)
 
-Alle Credential-Felder (Secret, Passphrase, Private Key, TradFi-Keys) haben einen 👁-Button:
+Gespeicherte Exchange-Felder (Secret, Passphrase, Private Key) haben einen 👁-Button:
 
 - **Klick** — ruft den echten gespeicherten Wert vom Server ab und zeigt ihn im Klartext
 - **Erneuter Klick** — verbirgt und leert das Feld (Speichern mit leerem Feld lässt den gespeicherten Wert unverändert)
 - Credential ersetzen: enthüllen, leeren, neuen Wert eingeben, speichern
+
+TradFi-Vault-Secrets funktionieren anders: Gespeicherte Werte werden nie an den Browser zurückgegeben. Das Auge kann dort nur Text anzeigen, der während der aktuellen Bearbeitung eingegeben wurde. Ein leeres Feld behält den gespeicherten Wert; ein neuer Wert ersetzt ihn beim Speichern.
 
 ### Validierung
 
@@ -112,11 +114,13 @@ Beliebige zwei Einträge nebeneinander oder unified vergleichen:
 
 ## Cluster Sync
 
-Die API-Keys-Seite bearbeitet nur das lokale `api-keys.json`. Remote-Schreibvorgänge für API-Keys gehören zu **Cluster Sync**.
+Exchange-User werden in das lokale `api-keys.json` projiziert. Remote-Schreibvorgänge für Exchange-API-Keys gehören zu **Cluster Sync**.
 
-Beim Speichern von Credentials legt PBGui die aktualisierten API-Key-Metadaten und den Secret-Blob im Cluster-State ab. Verwende **System -> Cluster Sync**, um `api-keys.json` auf einem erreichbaren Node zu prüfen und explizit zu materialisieren.
+Beim Speichern von Exchange-Credentials legt PBGui die aktualisierten API-Key-Metadaten und den eingeschränkten Secret-Blob im Cluster-State ab. Verwende **System -> Cluster Sync**, um `api-keys.json` auf einem erreichbaren Node zu prüfen und explizit zu materialisieren.
 
 Die Cluster-Materialisierung erstellt Ersatz-Backups nur auf Master-Nodes, wenn sich die Zieldatei unterscheidet. Diese Backups liegen bei den normalen API-Key-Backups in `data/api-keys/`. VPS-Runner ueberspringen lokale Backups, schreiben den verifizierten Secret-Blob atomar und starten keine Bots neu.
+
+TradFi-Profile verwenden stattdessen Sealed Envelopes aus Credential Protocol v2. Sie sind nur an aktive Master adressiert; VPS-Nodes können den Ciphertext weiterleiten, aber TradFi-Credentials weder entschlüsseln noch projizieren.
 
 ---
 
@@ -171,7 +175,7 @@ Verwaltet `_comment_*`-Einträge auf oberster Ebene in `api-keys.json` — freie
 
 Für Hyperliquid-XYZ-Symbol-Backtests werden 1-Minuten-OHLCV-Daten traditioneller Assets (Aktien, FX) benötigt.
 
-> 💡 **Empfohlen für vollständige Stock-Perp-Historie:** PBGuis **Market Data**-Modul mit **Tiingo** aufbauen — deutlich vollständiger als die PB7-seitigen Provider weiter unten. Tiingo konfigurieren und **Build best 1m OHLCV** starten unter _Setup → Market Data_.
+> 💡 **Empfohlen für vollständige Stock-Perp-Historie:** Hier ein **Tiingo**-Profil anlegen und danach im **Market Data**-Modul mit **Build best 1m OHLCV** ein vollständiges lokales 1-Minuten-OHLCV-Archiv aufbauen.
 
 ### yfinance (automatischer Standard)
 
@@ -190,7 +194,9 @@ Für Hyperliquid-XYZ-Symbol-Backtests werden 1-Minuten-OHLCV-Daten traditionelle
 
 Bei der Auswahl eines Providers wird ein Link zur Registrierungsseite angezeigt.
 
-**Test Connection** ruft einen Test-Quote/-Kerzen für `AAPL` ab und zeigt das Ergebnis in einem Modal. Funktioniert auch mit bereits gespeicherten Credentials, wenn die Felder leer sind.
+Gespeicherte Profile zeigen nur Metadaten wie Provider, Aktivstatus und Generation. **Test Connection** verwendet bei leeren Feldern das gespeicherte Profil serverseitig oder vor dem Speichern einmalige Credentials aus dem authentifizierten Request-Body. Gespeicherte TradFi-Werte können nicht enthüllt werden.
+
+PBGui projiziert aktive TradFi-Profile auf Mastern automatisch in den reservierten PB7-Teil von `api-keys.json`, inklusive atomarem Merge und Retry. PB7-TradFi-Einträge nicht manuell bearbeiten. Das Ersetzen eines Provider-Keys erzeugt eine neue Vault-Generation; Provider-Rotation ist optional und keine Voraussetzung für die Credential-Migration.
 
 ---
 

@@ -345,7 +345,7 @@
     .pm-badge-idle { background:#1e2736; color:#64748b; }
     .pm-badge-backoff { background:#2d1515; color:#fca5a5; }
 
-    /* ── CMC key status bar ── */
+    /* ── CMC pool ── */
     .cmc-status-bar { display:flex; align-items:center; justify-content:space-between; gap:0.75rem;
       margin:0.5rem 1rem 0; padding:0.55rem 0.9rem; border-radius:8px; font-size:var(--fs-sm);
       border:1px solid #1e2736; background:#0d2a1a; color:#4ade80; min-height:2.2rem; }
@@ -354,12 +354,51 @@
     .cmc-status-text { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .cmc-refresh-btn { background:none; border:none; color:inherit; cursor:pointer; font-size:1rem; opacity:0.7; padding:0 2px; flex-shrink:0; }
     .cmc-refresh-btn:hover { opacity:1; }
+    .cmc-pool-wrap { padding:1rem 1.5rem 1.5rem; overflow-y:auto; flex:1; }
+    .cmc-summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:0.6rem; margin-bottom:0.8rem; }
+    .cmc-summary-card { background:#131b2b; border:1px solid #1e2736; border-radius:8px; padding:0.55rem 0.7rem; min-width:0; }
+    .cmc-summary-label { color:#64748b; font-size:var(--fs-xs); text-transform:uppercase; letter-spacing:0.05em; }
+    .cmc-summary-value { color:#e2e8f0; font-size:var(--fs-md); font-weight:700; margin-top:0.2rem; overflow:hidden; text-overflow:ellipsis; }
+    .cmc-pool-toolbar { display:flex; align-items:center; gap:0.45rem; flex-wrap:wrap; margin-bottom:0.7rem; }
+    .cmc-pool-toolbar .form-btn:disabled { opacity:0.45; cursor:not-allowed; }
+    .cmc-pool-message { color:#64748b; font-size:var(--fs-xs); margin-left:auto; }
+    .cmc-pool-message.error { color:#fca5a5; }
+    .cmc-pool-warnings { display:grid; gap:0.35rem; margin-bottom:0.7rem; }
+    .cmc-pool-warning { color:#fbbf24; background:#2d220d; border:1px solid #713f12; border-radius:6px; padding:0.45rem 0.6rem; font-size:var(--fs-xs); }
+    .cmc-table-wrap { overflow:auto; border:1px solid #1e2736; border-radius:8px; }
+    .cmc-table { width:100%; border-collapse:collapse; font-size:var(--fs-xs); min-width:1500px; }
+    .cmc-table th { position:sticky; top:0; z-index:1; background:#111827; color:#64748b; padding:0.45rem 0.6rem; text-align:left; border-bottom:2px solid #1e2736; white-space:nowrap; }
+    .cmc-table td { padding:0.42rem 0.6rem; border-bottom:1px solid #1e2736; color:#cbd5e1; white-space:nowrap; }
+    .cmc-table tbody tr { cursor:pointer; }
+    .cmc-table tbody tr:hover td { background:#131b2b; }
+    .cmc-table tbody tr.selected td { background:rgba(77,166,255,.12); }
+    .cmc-table tbody tr.selected td:first-child { border-left:3px solid #4da6ff; padding-left:calc(0.6rem - 3px); }
+    .cmc-state { display:inline-flex; align-items:center; padding:0.1rem 0.42rem; border-radius:999px; border:1px solid #2d3748; color:#94a3b8; font-weight:700; text-transform:uppercase; }
+    .cmc-state.active { color:#4ade80; border-color:rgba(33,195,84,0.45); background:#052e16; }
+    .cmc-state.disabled, .cmc-state.invalid { color:#fca5a5; border-color:#7f1d1d; background:#2d1515; }
+    .cmc-modal-backdrop { position:fixed; inset:0; z-index:19000; display:flex; align-items:center; justify-content:center; padding:1rem; background:rgba(0,0,0,.72); backdrop-filter:blur(2px); }
+    .cmc-modal-backdrop[hidden] { display:none; }
+    .cmc-modal-card { width:min(480px,94vw); background:#131b2b; border:1px solid #2d3748; border-radius:14px; box-shadow:0 20px 70px rgba(0,0,0,.9); overflow:hidden; }
+    .cmc-modal-head { display:flex; align-items:center; justify-content:space-between; padding:0.85rem 1.1rem; border-bottom:1px solid #1e2736; background:#111827; }
+    .cmc-modal-title { color:#e2e8f0; font-size:var(--fs-md); font-weight:700; }
+    .cmc-modal-close { background:transparent; border:0; color:#64748b; font-size:var(--fs-lg); cursor:pointer; padding:0.2rem 0.35rem; border-radius:5px; }
+    .cmc-modal-close:hover { color:#e2e8f0; background:rgba(255,255,255,.06); }
+    .cmc-modal-body { display:grid; gap:0.8rem; padding:1rem 1.1rem; }
+    .cmc-modal-options { display:flex; gap:1rem; flex-wrap:wrap; color:#94a3b8; font-size:var(--fs-sm); }
+    .cmc-modal-options label { display:flex; align-items:center; gap:0.35rem; cursor:pointer; }
+    .cmc-modal-options input { accent-color:#4da6ff; }
+    .cmc-modal-error { min-height:1rem; color:#fca5a5; font-size:var(--fs-xs); }
+    .cmc-modal-actions { display:flex; justify-content:flex-end; gap:0.5rem; padding:0 1.1rem 1rem; }
 
     /* ── Responsive ── */
     @media (max-width: 640px) {
       #sidebar { width: 140px; min-width: 100px; }
       .sb-btn { font-size: 11px; padding: 0.3rem 0.4rem; }
       .overview-grid { grid-template-columns: 1fr; }
+      .cmc-pool-wrap { padding:0.75rem; }
+      .cmc-pool-message { width:100%; margin-left:0; }
+      .cmc-table-wrap { max-width:calc(100vw - 170px); }
+      .cmc-summary-grid { grid-template-columns:1fr 1fr; }
     }
 
     @media (max-width: 1100px) {
@@ -431,7 +470,7 @@
     .gs-topic { color:#93c5fd; font-weight:600; font-size:13px; margin-bottom:5px; }
     .gs-snip { color:#94a3b8; font-size:11px; line-height:1.55; }
   </style>
-  <script src="/app/js/log_viewer_panel.js?v=25"></script>
+  <script src="/app/js/log_viewer_panel.js?v=26"></script>
 </head>
 <body>
 <!-- ── Prices overlay ── -->
@@ -638,29 +677,48 @@
         <span id="ctrl-btns-pbcoindata"></span>
       </div>
       <div class="cmc-status-bar loading" id="cmc-status-bar">
-        <button class="cmc-refresh-btn" onclick="loadCmcKeyStatus()" title="Refresh">&#8635;</button>
-        <span class="cmc-status-text" id="cmc-status-text">Loading API key status&#8230;</span>
+        <button class="cmc-refresh-btn" onclick="loadCmcPool()" title="Refresh">&#8635;</button>
+        <span class="cmc-status-text" id="cmc-status-text">Loading CMC pool&#8230;</span>
       </div>
       <div class="tab-bar">
         <button class="tab-btn active" data-svc="pbcoindata" data-tab="log" onclick="switchTab(this)">&#128203; Log</button>
+        <button class="tab-btn" data-svc="pbcoindata" data-tab="pool" onclick="switchTab(this)">Pool</button>
         <button class="tab-btn" data-svc="pbcoindata" data-tab="settings" onclick="switchTab(this)">&#9881; Settings</button>
       </div>
       <div id="pbcoindata-tab-log" class="tab-pane active log-wrap">
         <div id="log-pbcoindata" style="height:100%;"></div>
       </div>
+      <div id="pbcoindata-tab-pool" class="tab-pane">
+        <div class="cmc-pool-wrap">
+          <div class="cmc-summary-grid" id="cmc-summary-grid"></div>
+          <div class="cmc-pool-toolbar">
+            <button class="form-btn save" data-cmc-mutation type="button" onclick="openCmcKeyModal('add')">Add Key</button>
+            <button class="form-btn" id="cmc-rotate-btn" type="button" onclick="openCmcKeyModal('rotate')" disabled>Rotate</button>
+            <button class="form-btn" id="cmc-edit-btn" type="button" onclick="openCmcKeyModal('edit')" disabled>Edit</button>
+            <button class="form-btn" id="cmc-disable-btn" type="button" onclick="toggleSelectedCmcKey()" disabled>Disable</button>
+            <button class="form-btn" id="cmc-delete-btn" type="button" onclick="deleteSelectedCmcKey()" disabled>Delete</button>
+            <button class="form-btn" id="cmc-authority-btn" type="button" onclick="openCmcAuthorityModal()" disabled>Transfer Authority</button>
+            <button class="form-btn" type="button" onclick="loadCmcPool()">Refresh</button>
+            <span class="cmc-pool-message" id="cmc-pool-message"></span>
+          </div>
+          <div class="cmc-pool-warnings" id="cmc-pool-warnings"></div>
+          <div class="cmc-table-wrap">
+            <table class="cmc-table">
+              <thead><tr><th>Label</th><th>Local</th><th>Desired</th><th>Materialized / Desired</th><th>Source</th><th>Shared</th><th>Local Used</th><th>Reserved</th><th>Uncertain</th><th>Provider Used</th><th>Provider Limit</th><th>Provider Remaining</th><th>Provider Reset</th><th>Provider Age</th><th>Cooldown</th><th>Quota Domain</th><th>Assigned Authority</th><th>Epoch / Reachable</th><th>Authority Updated</th><th>Authority Age</th></tr></thead>
+              <tbody id="cmc-pool-body"><tr><td colspan="20">Loading pool&#8230;</td></tr></tbody>
+            </table>
+          </div>
+          <div class="form-section-title" style="margin-top:1rem;">Lease Details</div>
+          <div class="cmc-table-wrap">
+            <table class="cmc-table" style="min-width:1050px;">
+              <thead><tr><th>Lease</th><th>Key</th><th>Generation</th><th>Quota Domain</th><th>Authority Epoch</th><th>Recipient</th><th>Reserved</th><th>Requests</th><th>Granted</th><th>Expires</th><th>Outcome</th></tr></thead>
+              <tbody id="cmc-leases-body"><tr><td colspan="11">Loading leases&#8230;</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
       <div id="pbcoindata-tab-settings" class="tab-pane">
         <div class="settings-wrap">
-          <div class="form-section-title">CoinMarketCap API</div>
-          <div class="form-row">
-            <div class="form-field">
-              <span class="form-label">API Key</span>
-              <div class="pw-wrap">
-                <input class="form-input wide" type="password" id="coindata-api-key" placeholder="CMC API key…" autocomplete="off">
-                <button class="pw-eye" type="button" onclick="togglePw('coindata-api-key', this)" title="Show/hide">&#128065;</button>
-              </div>
-            </div>
-          </div>
-          <hr class="form-divider">
           <div class="form-section-title">Intervals</div>
           <div class="form-row">
             <div class="form-field">
@@ -768,6 +826,57 @@
 
   </div><!-- /main-content -->
 </div><!-- /page-body -->
+
+<div class="cmc-modal-backdrop" id="cmc-key-modal" hidden>
+  <div class="cmc-modal-card" role="dialog" aria-modal="true" aria-labelledby="cmc-key-modal-title">
+    <div class="cmc-modal-head">
+      <div class="cmc-modal-title" id="cmc-key-modal-title">Add CMC Key</div>
+      <button class="cmc-modal-close" type="button" onclick="closeCmcKeyModal()" aria-label="Close">&#x2715;</button>
+    </div>
+    <div class="cmc-modal-body">
+      <div class="form-field" id="cmc-key-label-field">
+        <label class="form-label" for="cmc-key-label">Label</label>
+        <input class="form-input" id="cmc-key-label" type="text" maxlength="120" autocomplete="off" placeholder="Primary CMC key">
+      </div>
+      <div class="form-field" id="cmc-key-secret-field">
+        <label class="form-label" for="cmc-key-secret">Secret</label>
+        <input class="form-input" id="cmc-key-secret" type="password" autocomplete="new-password" placeholder="Paste CoinMarketCap key">
+      </div>
+      <div class="cmc-modal-options" id="cmc-key-options">
+        <label><input id="cmc-key-imported" type="checkbox"> Imported / externally used</label>
+        <label><input id="cmc-key-shared" type="checkbox"> Shared quota</label>
+        <label><input id="cmc-key-active" type="checkbox" checked> Active</label>
+      </div>
+      <div class="cmc-modal-error" id="cmc-key-modal-error"></div>
+    </div>
+    <div class="cmc-modal-actions">
+      <button class="form-btn" type="button" onclick="closeCmcKeyModal()">Cancel</button>
+      <button class="form-btn save" id="cmc-key-submit" data-cmc-mutation type="button" onclick="submitCmcKey()">Add Key</button>
+    </div>
+  </div>
+</div>
+
+<div class="cmc-modal-backdrop" id="cmc-authority-modal" hidden>
+  <div class="cmc-modal-card" role="dialog" aria-modal="true" aria-labelledby="cmc-authority-modal-title">
+    <div class="cmc-modal-head">
+      <div class="cmc-modal-title" id="cmc-authority-modal-title">Transfer CMC Authority</div>
+      <button class="cmc-modal-close" type="button" onclick="closeCmcAuthorityModal()" aria-label="Close">&#x2715;</button>
+    </div>
+    <div class="cmc-modal-body">
+      <div class="form-field"><span class="form-label">Quota Domain</span><div id="cmc-authority-domain" class="form-hint"></div></div>
+      <div class="form-field"><span class="form-label">Current Assignment</span><div id="cmc-authority-current" class="form-hint"></div></div>
+      <div class="form-field">
+        <label class="form-label" for="cmc-authority-target">Eligible Target Node</label>
+        <select class="form-select" id="cmc-authority-target"></select>
+      </div>
+      <div class="cmc-modal-error" id="cmc-authority-error"></div>
+    </div>
+    <div class="cmc-modal-actions">
+      <button class="form-btn" type="button" onclick="closeCmcAuthorityModal()">Cancel</button>
+      <button class="form-btn save" id="cmc-authority-submit" data-cmc-mutation type="button" onclick="submitCmcAuthorityTransfer()">Transfer Authority</button>
+    </div>
+  </div>
+</div>
 
 <!-- Token / base URL injection (server-side replacement) -->
 <script>
@@ -1022,6 +1131,18 @@ window.PBGUI_NAV_CONFIG = {
   var _apiRestartPendingUntil = 0;
   var _migrationRestartTimer = null;
   var _serviceActionPending = {};
+  var _cmcPool = { keys: [] };
+  var _cmcUsage = { keys: [] };
+  var _cmcLeases = { authority: {}, leases: [] };
+  var _selectedCmcKeyId = '';
+  var _cmcModalMode = 'add';
+  var _cmcOperationId = '';
+  var _cmcAuthorityOperationId = '';
+  var _cmcPendingMutation = null;
+  var _cmcLoadGeneration = 0;
+  var _cmcLoadController = null;
+  var _cmcMutationGeneration = 0;
+  var _cmcMutationBusy = false;
 
   function esc(value) {
     return String(value == null ? '' : value)
@@ -1726,7 +1847,7 @@ window.PBGUI_NAV_CONFIG = {
     clearTimeout(_workersTimer); _workersTimer = null;
     clearInterval(_fetchSummaryTimer); _fetchSummaryTimer = null;
     clearInterval(_pollerMetricsTimer); _pollerMetricsTimer = null;
-    if (panelId === 'pbcoindata') loadCmcKeyStatus();
+    if (panelId === 'pbcoindata') loadCmcPool();
     if (panelId === 'workers') window.fetchWorkers(true);
     if (panelId === 'migration') loadMigrationStatus(true);
     /* update guide keyword for the active panel */
@@ -1756,6 +1877,7 @@ window.PBGUI_NAV_CONFIG = {
     if (pane) pane.classList.add('active');
     if (tab === 'log') initLogViewer(svc);
     if (tab === 'settings' && !_settingsLoaded[svc]) loadSettings(svc);
+    if (tab === 'pool' && svc === 'pbcoindata') loadCmcPool();
     if (tab === 'status' && svc === 'pbdata') {
       loadFetchSummary();
       loadPollerMetrics();
@@ -1804,7 +1926,9 @@ window.PBGUI_NAV_CONFIG = {
       viewer.open();
       _logViewers[svcId] = viewer;
     } catch (e) {
-      el.innerHTML = '<div style="color:#fca5a5;padding:1rem;">Log viewer unavailable: ' + e.message + '</div>';
+      el.textContent = 'Log viewer unavailable: ' + String(e.message || e);
+      el.style.color = '#fca5a5';
+      el.style.padding = '1rem';
     }
   }
 
@@ -1898,7 +2022,6 @@ window.PBGUI_NAV_CONFIG = {
 
   function applySettings(svcId, data) {
     if (svcId === 'pbcoindata') {
-      _setVal('coindata-api-key', data.api_key || '');
       _setVal('coindata-fetch-interval', data.fetch_interval || 24);
       _setVal('coindata-fetch-limit', data.fetch_limit || 5000);
       _setVal('coindata-metadata-interval', data.metadata_interval || 1);
@@ -2604,52 +2727,542 @@ window.PBGUI_NAV_CONFIG = {
   window.togglePollerMetrics = togglePollerMetrics;
   window.loadPollerMetrics = loadPollerMetrics;
 
-  /* ── CMC key status ────────────────────────────────────── */
-  function loadCmcKeyStatus() {
-    var bar  = document.getElementById('cmc-status-bar');
-    var text = document.getElementById('cmc-status-text');
-    if (!bar || !text) return;
-    bar.className = 'cmc-status-bar loading';
-    text.textContent = 'Checking API key\u2026';
-    var t0 = Date.now();
-    fetch(API_BASE + '/settings/pbcoindata/key-status', authOptions())
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        var elapsed = Math.round((Date.now() - t0) / 1000);
-        if (!d.ok) {
-          bar.className = 'cmc-status-bar error';
-          text.textContent = '\u26a0 API Key error \u2014 ' + (d.error || 'unknown');
-          return;
+  /* ── CMC pool ──────────────────────────────────────────── */
+  function cmcFetch(path, options) {
+    return fetch(API_BASE + path, authOptions(options)).then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (data) {
+        if (!response.ok) {
+          var detail = data.detail || data.error || 'CMC pool request failed.';
+          var operationId = '';
+          if (detail && typeof detail === 'object') {
+            operationId = String(detail.operation_id || '');
+            detail = String(detail.message || 'CMC pool request failed.') + (operationId ? ' (operation ' + operationId + ')' : '');
+          }
+          var error = new Error(String(detail));
+          error.status = response.status;
+          error.operationId = operationId;
+          throw error;
         }
-        bar.className = 'cmc-status-bar';
-        var limit  = d.credit_limit_monthly  != null ? d.credit_limit_monthly  : '?';
-        var today  = d.credits_used_day      != null ? d.credits_used_day      : '?';
-        var month  = d.credits_used_month    != null ? d.credits_used_month    : '?';
-        var left   = d.credits_left          != null ? d.credits_left          : '?';
-        var resets = '';
-        if (d.credit_limit_monthly_reset_timestamp) {
-          var secs = Math.max(0, Math.floor(new Date(d.credit_limit_monthly_reset_timestamp).getTime() / 1000 - Date.now() / 1000));
-          var days  = Math.floor(secs / 86400);
-          var hours = Math.floor((secs % 86400) / 3600);
-          var mins  = Math.floor((secs % 3600) / 60);
-          resets = ' \u2022 Resets: ' + days + 'd ' + hours + 'h ' + mins + 'm';
+        return data;
+      });
+    });
+  }
+
+  function newCmcOperationId(prefix) {
+    return (window.crypto && window.crypto.randomUUID)
+      ? window.crypto.randomUUID()
+      : String(prefix || 'cmc') + '-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+  }
+
+  function sameCmcMutation(left, right) {
+    return !!left && !!right
+      && left.action === right.action
+      && left.target === right.target
+      && left.path === right.path
+      && left.method === right.method
+      && left.transport === right.transport
+      && JSON.stringify(left.body || {}) === JSON.stringify(right.body || {});
+  }
+
+  function clearCmcMutationContext(context, clearSecret) {
+    if (!context) return;
+    if (clearSecret && context.secretInputId) {
+      var input = document.getElementById(context.secretInputId);
+      if (input && input.value === context.secretValue) input.value = '';
+    }
+    if (_cmcPendingMutation === context) _cmcPendingMutation = null;
+    if (context.modal === 'key' && _cmcOperationId === context.operationId) _cmcOperationId = '';
+    if (context.modal === 'authority' && _cmcAuthorityOperationId === context.operationId) _cmcAuthorityOperationId = '';
+  }
+
+  function cancelCmcMutationContext(modal) {
+    var pending = _cmcPendingMutation;
+    if (pending && pending.modal === modal) clearCmcMutationContext(pending, false);
+    if (modal === 'key') _cmcOperationId = '';
+    if (modal === 'authority') _cmcAuthorityOperationId = '';
+  }
+
+  function cmcMutationOptions(context) {
+    var path = context.path;
+    var options = { method: context.method };
+    var identifierField = context.identifierField || 'operation_id';
+    if (context.transport === 'query') {
+      path += (path.indexOf('?') >= 0 ? '&' : '?') + encodeURIComponent(identifierField) + '=' + encodeURIComponent(context.operationId);
+    } else {
+      var identifier = {};
+      identifier[identifierField] = context.operationId;
+      options.headers = { 'Content-Type': 'application/json' };
+      options.body = JSON.stringify(Object.assign({}, context.body || {}, identifier));
+    }
+    return { path: path, options: options };
+  }
+
+  function resolvePendingCmcMutation(candidate) {
+    var pending = _cmcPendingMutation;
+    if (!pending) {
+      _cmcPendingMutation = candidate;
+      return Promise.resolve({ context: candidate, payload: null });
+    }
+    var same = sameCmcMutation(pending, candidate);
+    return cmcFetch('/cmc-pool/operations/' + encodeURIComponent(pending.operationId), { cache: 'no-store' })
+      .then(function (record) {
+        if (record.status === 'complete' && record.result && typeof record.result === 'object') {
+          var result = record.result;
+          clearCmcMutationContext(pending, true);
+          if (same) return { context: pending, payload: result };
+          loadCmcPool();
+          throw new Error('Previous CMC operation ' + pending.operationId + ' completed. Review the refreshed pool, then retry this action.');
         }
-        text.textContent = '\u2705 API Key valid \u2014 Limit: ' + limit +
-          ' \u2022 Today: ' + today + ' \u2022 Monthly: ' + month +
-          ' \u2022 Left: ' + left + resets +
-          ' (checked ' + elapsed + 's ago)';
+        if (!same) {
+          throw new Error('CMC operation ' + pending.operationId + ' is still pending. Retry or explicitly cancel that action before starting another mutation.');
+        }
+        return { context: pending, payload: null };
       })
-      .catch(function (e) {
-        if (bar) bar.className = 'cmc-status-bar error';
-        if (text) text.textContent = '\u26a0 Failed to check key: ' + e.message;
+      .catch(function (error) {
+        if (error.status !== 404) throw error;
+        if (same) return { context: pending, payload: null };
+        clearCmcMutationContext(pending, false);
+        _cmcPendingMutation = candidate;
+        return { context: candidate, payload: null };
       });
   }
-  window.loadCmcKeyStatus = loadCmcKeyStatus;
 
+  function cmcMutationFetch(candidate) {
+    if (_cmcMutationBusy) return Promise.reject(new Error('Another credential mutation is already in progress.'));
+    var generation = ++_cmcMutationGeneration;
+    setCmcMutationBusy(true);
+    return resolvePendingCmcMutation(candidate).then(function (resolved) {
+      if (generation !== _cmcMutationGeneration) throw new DOMException('Superseded CMC mutation', 'AbortError');
+      if (resolved.payload) return resolved.payload;
+      var request = cmcMutationOptions(resolved.context);
+      return cmcFetch(request.path, request.options).then(function (data) {
+        if (generation !== _cmcMutationGeneration) throw new DOMException('Superseded CMC mutation', 'AbortError');
+        clearCmcMutationContext(resolved.context, true);
+        return data;
+      }).catch(function (error) {
+        if (error.status && error.status < 500 && error.status !== 409) {
+          clearCmcMutationContext(resolved.context, false);
+        }
+        throw error;
+      });
+    }).catch(function (error) {
+      if (_cmcPendingMutation && error.name !== 'AbortError' && error.message.indexOf('Retry will check operation') < 0) {
+        error.message += ' Retry will check operation ' + _cmcPendingMutation.operationId + ' before sending anything.';
+      }
+      throw error;
+    }).finally(function () {
+      if (generation === _cmcMutationGeneration) setCmcMutationBusy(false);
+    });
+  }
+
+  function setCmcMutationBusy(busy) {
+    _cmcMutationBusy = !!busy;
+    updateCmcButtons();
+    document.querySelectorAll('[data-cmc-mutation]').forEach(function (button) {
+      button.disabled = _cmcMutationBusy;
+    });
+  }
+
+  function cmcNumber(value) {
+    if (value == null || value === '') return '-';
+    var number = Number(value);
+    return Number.isFinite(number) ? number.toLocaleString() : '-';
+  }
+
+  function cmcDuration(value) {
+    var seconds = Math.max(0, Number(value) || 0);
+    if (!seconds) return '-';
+    if (seconds >= 3600) return (seconds / 3600).toFixed(1) + 'h';
+    if (seconds >= 60) return Math.ceil(seconds / 60) + 'm';
+    return Math.ceil(seconds) + 's';
+  }
+
+  function selectedCmcKey() {
+    return (_cmcPool.keys || []).find(function (item) { return item.id === _selectedCmcKeyId; }) || null;
+  }
+
+  function updateCmcButtons() {
+    var selected = selectedCmcKey();
+    var rotate = document.getElementById('cmc-rotate-btn');
+    var edit = document.getElementById('cmc-edit-btn');
+    var disable = document.getElementById('cmc-disable-btn');
+    var remove = document.getElementById('cmc-delete-btn');
+    var authorityButton = document.getElementById('cmc-authority-btn');
+    if (rotate) rotate.disabled = _cmcMutationBusy || !selected;
+    if (edit) edit.disabled = _cmcMutationBusy || !selected;
+    if (disable) {
+      disable.disabled = _cmcMutationBusy || !selected;
+      disable.textContent = selected && selected.active === false ? 'Re-enable' : 'Disable';
+    }
+    if (remove) remove.disabled = _cmcMutationBusy || !selected;
+    if (authorityButton) {
+      var selectedDomain = selected && (_cmcLeases.domains || []).find(function (item) { return item.quota_domain_id === selected.quota_domain_id; });
+      var authorityTargets = (_cmcPool.eligible_authority_nodes || []).filter(function (node) { return !selectedDomain || node.node_id !== selectedDomain.authority_node_id; });
+      authorityButton.disabled = _cmcMutationBusy || !selected || !selected.quota_domain_id || !authorityTargets.length;
+    }
+  }
+
+  function cmcMessage(message, error) {
+    var target = document.getElementById('cmc-pool-message');
+    if (!target) return;
+    target.textContent = message || '';
+    target.className = 'cmc-pool-message' + (error ? ' error' : '');
+  }
+
+  function renderCmcPool() {
+    var keys = _cmcPool.keys || [];
+    if (_selectedCmcKeyId && !keys.some(function (item) { return item.id === _selectedCmcKeyId; })) {
+      _selectedCmcKeyId = '';
+    }
+    var authority = _cmcLeases.authority || {};
+    var keyUsage = {};
+    (_cmcLeases.key_usage || []).forEach(function (item) { keyUsage[item.credential_id] = item; });
+    var domains = {};
+    (_cmcLeases.domains || []).forEach(function (item) { domains[item.quota_domain_id] = item; });
+    var summaries = [
+      ['Active Keys', (_cmcPool.active_credentials || 0) + ' / ' + (_cmcPool.total_credentials || keys.length)],
+      ['Health', _cmcPool.health || 'unknown'],
+      ['Usage Day', _cmcUsage.day || '-'],
+      ['Soft Limit', cmcNumber(_cmcUsage.soft_credit_limit)],
+      ['Assigned Authorities', (_cmcLeases.domains || []).map(function (item) { return (item.authority_node || item.authority_node_id || 'unassigned') + ' (epoch ' + cmcNumber(item.authority_epoch) + ')'; }).join(', ') || (authority.available === false ? 'Unavailable' : 'Unassigned')],
+      ['Active Leases', cmcNumber(authority.active_leases || 0)],
+      ['Uncertain Spend', cmcNumber((_cmcLeases.domains || []).reduce(function (total, item) { return total + Number(item.uncertain_credits || 0); }, 0))]
+    ];
+    var grid = document.getElementById('cmc-summary-grid');
+    if (grid) {
+      grid.innerHTML = summaries.map(function (item) {
+        return '<div class="cmc-summary-card"><div class="cmc-summary-label">' + esc(item[0]) + '</div><div class="cmc-summary-value">' + esc(item[1]) + '</div></div>';
+      }).join('');
+    }
+    var warnings = document.getElementById('cmc-pool-warnings');
+    if (warnings) {
+      var warningItems = (_cmcPool.warnings || []).concat(_cmcLeases.warnings || []);
+      warnings.innerHTML = warningItems.map(function (warning) {
+        return '<div class="cmc-pool-warning">' + esc(warning) + '</div>';
+      }).join('');
+    }
+    var body = document.getElementById('cmc-pool-body');
+    if (body) {
+      if (!keys.length) {
+        body.innerHTML = '<tr><td colspan="20" style="color:#64748b;cursor:default;">No CMC keys configured.</td></tr>';
+      } else {
+        body.innerHTML = keys.map(function (item) {
+          var state = item.local_state || (item.active === false ? 'disabled' : (item.status || 'active'));
+          var usage = keyUsage[item.id] || {};
+          var domain = domains[item.quota_domain_id] || {};
+          var rowClass = item.id === _selectedCmcKeyId ? ' class="selected"' : '';
+          return '<tr' + rowClass + ' data-key-id="' + esc(item.id) + '" onclick="selectCmcKey(this.dataset.keyId)">'
+            + '<td>' + esc(item.label || item.id) + '</td>'
+            + '<td><span class="cmc-state ' + esc(state) + '">' + esc(state) + '</span></td>'
+            + '<td>' + esc(item.desired_state || '-') + '</td>'
+            + '<td>' + esc(cmcNumber(item.materialized_generation)) + ' / ' + esc(cmcNumber(item.desired_generation)) + '</td>'
+            + '<td>' + esc(item.source || 'local') + '</td>'
+            + '<td>' + (item.shared ? 'Yes' : 'No') + '</td>'
+            + '<td>' + esc(cmcNumber(item.used_credits)) + '</td>'
+            + '<td>' + esc(cmcNumber(usage.reserved_credits)) + ' / ' + esc(cmcNumber(usage.reserved_requests)) + ' req</td>'
+            + '<td>' + esc(cmcNumber(domain.uncertain_credits)) + '</td>'
+            + '<td>' + esc(cmcNumber(item.provider_used)) + '</td>'
+            + '<td>' + esc(cmcNumber(item.provider_limit)) + '</td>'
+            + '<td>' + esc(cmcNumber(domain.provider_remaining != null ? domain.provider_remaining : item.provider_remaining)) + '</td>'
+            + '<td>' + esc(cmcTimestamp(domain.provider_reset_at != null ? domain.provider_reset_at : item.provider_reset_at)) + '</td>'
+            + '<td>' + esc(cmcDuration(domain.provider_stale_age_seconds != null ? domain.provider_stale_age_seconds : item.provider_stale_age_seconds)) + '</td>'
+            + '<td>' + esc(cmcDuration(item.cooldown_remaining)) + '</td>'
+            + '<td>' + esc(item.quota_domain_id || '-') + '</td>'
+            + '<td>' + esc(domain.authority_node || domain.authority_node_id || '-') + '</td>'
+            + '<td>' + esc(cmcNumber(domain.authority_epoch != null ? domain.authority_epoch : item.authority_epoch)) + ' / ' + esc(domain.authority_reachable === true ? 'yes' : domain.authority_reachable === false ? 'no' : 'unknown') + '</td>'
+            + '<td>' + esc(cmcTimestamp(domain.authority_updated_at)) + '</td>'
+            + '<td>' + esc(cmcDuration(domain.authority_state_age_seconds)) + '</td>'
+            + '</tr>';
+        }).join('');
+      }
+    }
+    var leasesBody = document.getElementById('cmc-leases-body');
+    if (leasesBody) {
+      var leases = _cmcLeases.leases || [];
+      leasesBody.innerHTML = leases.length ? leases.map(function (lease) {
+        return '<tr style="cursor:default;">'
+          + '<td>' + esc(lease.lease_id || '-') + '</td>'
+          + '<td>' + esc(lease.credential_id || '-') + '</td>'
+          + '<td>' + esc(cmcNumber(lease.generation)) + '</td>'
+          + '<td>' + esc(lease.quota_domain_id || '-') + '</td>'
+          + '<td>' + esc(cmcNumber(lease.authority_epoch)) + '</td>'
+          + '<td>' + esc(lease.recipient || '-') + '</td>'
+          + '<td>' + esc(cmcNumber(lease.credits)) + '</td>'
+          + '<td>' + esc(cmcNumber(lease.request_count)) + '</td>'
+          + '<td>' + esc(cmcTimestamp(lease.granted_at)) + '</td>'
+          + '<td>' + esc(cmcTimestamp(lease.expires_at)) + '</td>'
+          + '<td>' + esc(lease.outcome || (lease.terminal ? 'terminal' : 'active')) + '</td>'
+          + '</tr>';
+      }).join('') : '<tr><td colspan="11" style="color:#64748b;cursor:default;">No lease records.</td></tr>';
+    }
+    var bar = document.getElementById('cmc-status-bar');
+    var text = document.getElementById('cmc-status-text');
+    if (bar) bar.className = 'cmc-status-bar' + (_cmcPool.ready ? '' : ' error');
+    if (text) {
+      text.textContent = _cmcPool.ready
+        ? 'CMC pool ready: ' + (_cmcPool.active_credentials || 0) + ' active, health ' + (_cmcPool.health || 'unknown') + ', generation ' + cmcNumber(Math.max.apply(null, keys.map(function (item) { return Number(item.generation) || 0; }).concat([0])))
+        : 'CMC pool is not configured. Add an active key to enable CMC requests.';
+    }
+    updateCmcButtons();
+  }
+
+  function cmcTimestamp(value) {
+    if (value == null || value === '') return '-';
+    var numeric = Number(value);
+    var date = new Date(Number.isFinite(numeric) ? (numeric < 100000000000 ? numeric * 1000 : numeric) : value);
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+  }
+
+  function loadCmcPool() {
+    var generation = ++_cmcLoadGeneration;
+    if (_cmcLoadController) _cmcLoadController.abort();
+    _cmcLoadController = new AbortController();
+    var signal = _cmcLoadController.signal;
+    var bar = document.getElementById('cmc-status-bar');
+    var text = document.getElementById('cmc-status-text');
+    if (bar) bar.className = 'cmc-status-bar loading';
+    if (text) text.textContent = 'Loading CMC pool\u2026';
+    cmcMessage('Loading\u2026', false);
+    return Promise.all([
+      cmcFetch('/cmc-pool', { signal: signal, cache: 'no-store' }),
+      cmcFetch('/cmc-pool/usage', { signal: signal, cache: 'no-store' }),
+      cmcFetch('/cmc-pool/leases', { signal: signal, cache: 'no-store' })
+    ]).then(function (results) {
+      if (generation !== _cmcLoadGeneration) return;
+      _cmcPool = results[0] || { keys: [] };
+      _cmcUsage = results[1] || { keys: [] };
+      _cmcLeases = results[2] || { authority: {}, leases: [] };
+      cmcMessage(((_cmcLeases.authority || {}).lease_count || 0) + ' lease records', false);
+      renderCmcPool();
+    }).catch(function (error) {
+      if (generation !== _cmcLoadGeneration || error.name === 'AbortError') return;
+      if (bar) bar.className = 'cmc-status-bar error';
+      if (text) text.textContent = 'CMC pool unavailable: ' + error.message;
+      cmcMessage(error.message, true);
+    });
+  }
+  window.loadCmcPool = loadCmcPool;
+
+  window.selectCmcKey = function (keyId) {
+    _selectedCmcKeyId = String(keyId || '');
+    renderCmcPool();
+  };
+
+  window.openCmcKeyModal = function (mode) {
+    var selected = selectedCmcKey();
+    if ((mode === 'rotate' || mode === 'edit') && !selected) return;
+    _cmcModalMode = mode === 'rotate' || mode === 'edit' ? mode : 'add';
+    if (!_cmcOperationId) _cmcOperationId = newCmcOperationId('cmc');
+    var modal = document.getElementById('cmc-key-modal');
+    var title = document.getElementById('cmc-key-modal-title');
+    var submit = document.getElementById('cmc-key-submit');
+    var labelField = document.getElementById('cmc-key-label-field');
+    var secretField = document.getElementById('cmc-key-secret-field');
+    var options = document.getElementById('cmc-key-options');
+    document.getElementById('cmc-key-secret').value = '';
+    document.getElementById('cmc-key-modal-error').textContent = '';
+    document.getElementById('cmc-key-label').value = _cmcModalMode === 'edit' ? (selected.label || '') : '';
+    document.getElementById('cmc-key-imported').checked = _cmcModalMode === 'edit' ? !!selected.imported : false;
+    document.getElementById('cmc-key-shared').checked = _cmcModalMode === 'edit' ? !!selected.shared : false;
+    document.getElementById('cmc-key-active').checked = _cmcModalMode === 'edit' ? selected.active !== false : true;
+    title.textContent = _cmcModalMode === 'rotate' ? 'Rotate ' + (selected.label || selected.id) : _cmcModalMode === 'edit' ? 'Edit ' + (selected.label || selected.id) : 'Add CMC Key';
+    submit.textContent = _cmcModalMode === 'rotate' ? 'Rotate' : _cmcModalMode === 'edit' ? 'Save' : 'Add Key';
+    labelField.hidden = _cmcModalMode === 'rotate';
+    options.hidden = _cmcModalMode === 'rotate';
+    secretField.hidden = _cmcModalMode === 'edit';
+    modal.hidden = false;
+    document.getElementById(_cmcModalMode === 'edit' ? 'cmc-key-label' : 'cmc-key-secret').focus();
+  };
+
+  window.closeCmcKeyModal = function () {
+    if (_cmcMutationBusy) return;
+    cancelCmcMutationContext('key');
+    document.getElementById('cmc-key-secret').value = '';
+    document.getElementById('cmc-key-modal-error').textContent = '';
+    document.getElementById('cmc-key-modal').hidden = true;
+  };
+
+  window.submitCmcKey = function () {
+    var secretInput = document.getElementById('cmc-key-secret');
+    var secret = secretInput.value;
+    var errorTarget = document.getElementById('cmc-key-modal-error');
+    var submit = document.getElementById('cmc-key-submit');
+    if (_cmcModalMode !== 'edit' && !secret.trim()) {
+      errorTarget.textContent = 'A non-empty secret is required.';
+      return;
+    }
+    var selected = selectedCmcKey();
+    if (!_cmcOperationId) _cmcOperationId = newCmcOperationId('cmc');
+    var path = '/cmc-pool/keys';
+    var body = { api_key: secret };
+    var action = 'cmc_create';
+    var target = '';
+    if (_cmcModalMode === 'rotate') {
+      if (!selected) return;
+      path += '/' + encodeURIComponent(selected.id) + '/rotate';
+      action = 'cmc_rotate';
+      target = selected.id;
+    } else if (_cmcModalMode === 'edit') {
+      if (!selected) return;
+      path += '/' + encodeURIComponent(selected.id);
+      action = 'cmc_patch';
+      target = selected.id;
+      body = {
+        label: document.getElementById('cmc-key-label').value,
+        imported: document.getElementById('cmc-key-imported').checked,
+        shared: document.getElementById('cmc-key-shared').checked,
+        active: document.getElementById('cmc-key-active').checked
+      };
+    } else {
+      body.label = document.getElementById('cmc-key-label').value;
+      body.imported = document.getElementById('cmc-key-imported').checked;
+      body.shared = document.getElementById('cmc-key-shared').checked;
+      body.active = document.getElementById('cmc-key-active').checked;
+    }
+    submit.disabled = true;
+    errorTarget.textContent = '';
+    cmcMutationFetch({
+      operationId: _cmcOperationId,
+      action: action,
+      target: target,
+      path: path,
+      method: _cmcModalMode === 'edit' ? 'PATCH' : 'POST',
+      transport: 'body',
+      body: body,
+      modal: 'key',
+      secretInputId: _cmcModalMode === 'edit' ? '' : 'cmc-key-secret',
+      secretValue: secret
+    }).then(function () {
+      document.getElementById('cmc-key-modal').hidden = true;
+      _cmcOperationId = '';
+      return loadCmcPool();
+    }).catch(function (error) {
+      if (error.name === 'AbortError') return;
+      errorTarget.textContent = error.message;
+    }).finally(function () {
+      submit.disabled = _cmcMutationBusy;
+    });
+  };
+
+  window.openCmcAuthorityModal = function () {
+    if (_cmcMutationBusy) return;
+    var selected = selectedCmcKey();
+    if (!selected || !selected.quota_domain_id) return;
+    var domain = (_cmcLeases.domains || []).find(function (item) { return item.quota_domain_id === selected.quota_domain_id; }) || {};
+    var target = document.getElementById('cmc-authority-target');
+    target.innerHTML = '';
+    (_cmcPool.eligible_authority_nodes || []).filter(function (node) { return node.node_id !== domain.authority_node_id; }).forEach(function (node) {
+      var option = document.createElement('option');
+      option.value = node.node_id;
+      option.textContent = (node.name || node.node_id) + ' (' + node.node_id + ')';
+      target.appendChild(option);
+    });
+    document.getElementById('cmc-authority-domain').textContent = selected.quota_domain_id;
+    document.getElementById('cmc-authority-current').textContent = (domain.authority_node || domain.authority_node_id || 'unassigned') + ' · epoch ' + cmcNumber(domain.authority_epoch) + ' · reachable ' + (domain.authority_reachable === true ? 'yes' : domain.authority_reachable === false ? 'no' : 'unknown');
+    if (!target.options.length) {
+      document.getElementById('cmc-authority-error').textContent = 'No alternate eligible protocol-v2 master is available.';
+      return;
+    }
+    document.getElementById('cmc-authority-error').textContent = '';
+    if (!_cmcAuthorityOperationId) _cmcAuthorityOperationId = newCmcOperationId('cmc-authority');
+    document.getElementById('cmc-authority-modal').hidden = false;
+    target.focus();
+  };
+
+  window.closeCmcAuthorityModal = function () {
+    if (_cmcMutationBusy) return;
+    cancelCmcMutationContext('authority');
+    document.getElementById('cmc-authority-error').textContent = '';
+    document.getElementById('cmc-authority-modal').hidden = true;
+  };
+
+  window.submitCmcAuthorityTransfer = async function () {
+    var selected = selectedCmcKey();
+    var targetNodeId = document.getElementById('cmc-authority-target').value;
+    if (!selected || !selected.quota_domain_id || !targetNodeId || _cmcMutationBusy) return;
+    var domain = (_cmcLeases.domains || []).find(function (item) { return item.quota_domain_id === selected.quota_domain_id; }) || {};
+    var targetNode = (_cmcPool.eligible_authority_nodes || []).find(function (node) { return node.node_id === targetNodeId; }) || {};
+    var confirmed = await window.PBGuiDialogs.confirm({
+      title: 'Transfer CMC authority',
+      message: 'Transfer quota domain ' + selected.quota_domain_id + ' to ' + (targetNode.name || targetNodeId) + '?',
+      detail: 'This authenticated operation advances the authority epoch with compare-and-set. Existing leases remain bound to their original epoch.',
+      confirmText: 'Transfer Authority'
+    });
+    if (!confirmed) {
+      _cmcAuthorityOperationId = '';
+      return;
+    }
+    if (!_cmcAuthorityOperationId) _cmcAuthorityOperationId = newCmcOperationId('cmc-authority');
+    var operationId = _cmcAuthorityOperationId;
+    cmcMutationFetch({
+      operationId: operationId,
+      action: 'cmc_authority_transfer',
+      target: selected.quota_domain_id + ':' + targetNodeId,
+      path: '/cmc-pool/authority/transfer',
+      method: 'POST',
+      transport: 'body',
+      identifierField: 'request_id',
+      body: {
+        quota_domain_id: selected.quota_domain_id,
+        authority_node_id: targetNodeId,
+        expected_epoch: domain.authority_epoch == null ? null : Number(domain.authority_epoch)
+      },
+      modal: 'authority'
+    }).then(function (payload) {
+      document.getElementById('cmc-authority-modal').hidden = true;
+      _cmcAuthorityOperationId = '';
+      cmcMessage('Authority transferred. Operation ' + (payload.operation_id || operationId) + '.', false);
+      return loadCmcPool();
+    }).catch(function (error) {
+      document.getElementById('cmc-authority-error').textContent = error.message;
+    });
+  };
+
+  window.toggleSelectedCmcKey = function () {
+    var selected = selectedCmcKey();
+    if (!selected) return;
+    var enable = selected.active === false;
+    cmcMessage((enable ? 'Re-enabling ' : 'Disabling ') + (selected.label || selected.id) + '\u2026', false);
+    cmcMutationFetch({
+      operationId: newCmcOperationId(enable ? 'cmc-enable' : 'cmc-disable'),
+      action: enable ? 'cmc_patch' : 'cmc_disable',
+      target: selected.id,
+      path: '/cmc-pool/keys/' + encodeURIComponent(selected.id) + (enable ? '' : '/disable'),
+      method: enable ? 'PATCH' : 'POST',
+      transport: enable ? 'body' : 'query',
+      body: enable ? { active: true } : {},
+      modal: ''
+    })
+      .then(loadCmcPool)
+      .catch(function (error) { if (error.name !== 'AbortError') cmcMessage(error.message, true); });
+  };
+
+  window.deleteSelectedCmcKey = async function () {
+    var selected = selectedCmcKey();
+    if (!selected) return;
+    var confirmed = await window.PBGuiDialogs.confirm({
+      title: 'Delete CMC key',
+      message: 'Delete "' + (selected.label || selected.id) + '" from the pool?',
+      detail: 'This publishes a cluster tombstone. The secret cannot be revealed or restored from this UI.',
+      confirmText: 'Delete'
+    });
+    if (!confirmed) return;
+    cmcMutationFetch({
+      operationId: newCmcOperationId('cmc-delete'),
+      action: 'cmc_delete',
+      target: selected.id,
+      path: '/cmc-pool/keys/' + encodeURIComponent(selected.id),
+      method: 'DELETE',
+      transport: 'query',
+      body: {},
+      modal: ''
+    })
+      .then(function () { _selectedCmcKeyId = ''; return loadCmcPool(); })
+      .catch(function (error) { if (error.name !== 'AbortError') cmcMessage(error.message, true); });
+  };
 
   window.saveCoinDataSettings = function () {
     _post('/settings/pbcoindata', {
-      api_key:            _val('coindata-api-key'),
       fetch_interval:     parseInt(_val('coindata-fetch-interval') || '24', 10),
       fetch_limit:        parseInt(_val('coindata-fetch-limit') || '5000', 10),
       metadata_interval:  parseInt(_val('coindata-metadata-interval') || '1', 10),
@@ -2708,7 +3321,10 @@ window.PBGUI_NAV_CONFIG = {
       body: JSON.stringify(body),
     }))
     .then(function (r) { return r.json(); })
-    .then(function (d) { _flash(msgId, d.ok ? 'Saved' : (d.detail || 'Error'), !d.ok); })
+    .then(function (d) {
+      var message = d && d.apply && d.apply.message ? String(d.apply.message) : 'Saved';
+      _flash(msgId, d.ok ? message : (d.detail || 'Error'), !d.ok);
+    })
     .catch(function (e) { _flash(msgId, 'Error: ' + e.message, true); });
   }
 

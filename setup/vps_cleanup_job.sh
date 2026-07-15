@@ -493,7 +493,19 @@ remove_tree "${pb7_rust_target_release_dir}" "pb7 rust target release"
 remove_tree "${pbgui_dir}/data/instances" "legacy instances directory"
 remove_tree "${pbgui_dir}/data/multi" "legacy multi directory"
 remove_file "${pbgui_dir}/data/logs/PBRemote.log" "legacy PBRemote log"
+remove_file "${pbgui_dir}/data/logs/PBRemote.log.old" "legacy PBRemote rotated log"
 remove_file "${pbgui_dir}/data/logs/sync.log" "legacy sync log"
+remove_file "${pbgui_dir}/data/logs/sync.log.old" "legacy sync rotated log"
+for legacy_log in "${pbgui_dir}"/data/logs/PBRemote.log.[0-9]* "${pbgui_dir}"/data/logs/sync.log.[0-9]*; do
+    [ -e "$legacy_log" ] || continue
+    legacy_generation="${legacy_log##*.}"
+    case "$legacy_generation" in
+        ''|*[!0-9]*) continue ;;
+    esac
+    case "$(basename "$legacy_log")" in
+        PBRemote.log.[0-9]*|sync.log.[0-9]*) remove_file "$legacy_log" "legacy rotated service log" ;;
+    esac
+done
 remove_file "${pbgui_dir}/data/logs/PBGui.log" "unexpected VPS PBGui log"
 remove_tree "${pbgui_dir}/data/remote" "legacy PBRemote data cache"
 remove_tree "${pbgui_dir}/data/state/pbremote" "legacy PBRemote state"

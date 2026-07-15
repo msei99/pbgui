@@ -17,19 +17,31 @@ PBCoinData führt eine Daemon-Schleife (60-Sekunden-Zyklus) aus:
 
 ## Konfiguration
 
-Alle PBCoinData-Einstellungen werden im **Settings**-Tab des PBCoinData-Detail-Panels konfiguriert.
-Klicke auf die PBCoinData-Kachel in der Services-Übersicht, dann zum **Settings**-Tab wechseln.
+Klicke auf die PBCoinData-Kachel in der Services-Übersicht. Credentials werden unter **Pool** verwaltet; nicht-sensitive Zeitpläne bleiben unter **Settings**.
+
+### CMC-Pool
+
+Unter **Pool -> Add Key** können ein oder mehrere CMC-Keys hinzugefügt werden. Secrets liegen im owner-only Credential Vault und werden weder von Status-APIs noch durch Reveal-Controls zurückgegeben.
+
+- **Imported / externally used** Keys sind erlaubt und nehmen an der fairen lokalen Auswahl teil.
+- **Shared quota** markieren, wenn dasselbe Provider-Kontingent außerhalb dieses PBGui-Eintrags mitgenutzt wird.
+- Cluster Sync verteilt versiegelte Generationen; keinen CMC-Key in `pbgui.ini` oder pro VPS einrichten.
+- Leases koordinieren die Nutzung, wenn sie verfügbar sind, bleiben aber Best Effort. Ohne Lease-System nutzt jeder Node sein lokales Soft-Budget.
+- Ein Provider-`429` setzt den betroffenen Key auf Cooldown und der Request kann auf den nächsten geeigneten Key wechseln. Ungültige, deaktivierte, erschöpfte, abkühlende oder konfliktbehaftete Keys werden übersprungen.
+- **Rotate** ist optional und ersetzt den gewählten Key durch eine neue unveränderliche Generation. **Disable** behält die Historie; **Delete** veröffentlicht einen Tombstone.
+
+PBCoinData kann ohne bereiten Pool weiterlaufen und Exchange-seitige Mapping-Inputs aktualisieren. CMC-Listings und Metadaten werden jedoch erst mit mindestens einem aktiven materialisierten Key abgerufen.
+
+### Zeitplanung
 
 | Einstellung | Standard | Beschreibung |
 |---|---|---|
-| `CoinMarketCap API_Key` | *(leer)* | CoinMarketCap API-Key (erforderlich für CMC-Abrufe) |
 | `Fetch Interval` | `24` | Wie oft CMC-Listings neu abgerufen werden (Stunden) |
 | `Fetch Limit` | `5000` | Max. Symbole pro CMC-Abruf |
 | `Metadata Interval` | `1` | CMC-Metadaten-Aktualisierung (Tage) |
 | `Mapping Interval` | `24` | Exchange-Mapping-Rebuild-Intervall (Stunden) |
 
-Ein CMC-API-Key ist erforderlich. Für die meisten Setups reicht ein kostenloser Basic-Plan.
-Nach Eingabe eines gültigen API-Keys zeigt die Statusleiste über den Tabs den API-Credit-Status (Monatslimit, Verbrauch, verbleibende Credits).
+Für die meisten Setups reicht ein kostenloser Basic-Plan. Statusleiste und Pool-Tab zeigen Readiness, aktive Key-Anzahl, Health, Generationen, lokale Nutzung, vom Provider gemeldete Rest-Credits, Cooldowns, Fehler und secret-freie Lease-Statistiken.
 
 ## PBCoinData-Detail-Panel
 
@@ -37,6 +49,7 @@ Klicke auf die PBCoinData-Kachel in der Services-Übersicht (oder nutze die Side
 
 - Der Control-Strip zeigt den aktuellen Status (läuft/gestoppt) und Start/Stop/Restart-Buttons
 - Der **Log**-Tab zeigt einen Live-gefilterten PBCoinData-Log-Viewer
+- Der **Pool**-Tab verwaltet CMC-Credentials und zeigt secret-freien Pool-/Lease-Status
 - Der **Settings**-Tab enthält das oben beschriebene Konfigurationsformular
 
 ## Self-Heal-Zyklus
@@ -55,7 +68,7 @@ Schlägt ein Mapping-Build für eine Exchange fehl (z. B. durch einen temporäre
 
 ## Schnelle Fehlersuche
 
-- **Noch kein Mapping erstellt**: Prüfen ob PBCoinData läuft und ein gültiger CMC-API-Key im PBCoinData **Settings**-Tab eingetragen ist
+- **Noch keine CMC-Daten**: Prüfen, ob PBCoinData läuft und **Services -> PBCoinData -> Pool** mindestens einen aktiven materialisierten Key meldet
 - **Mapping veraltet**: `data/logs/PBCoinData.log` auf wiederholte `ERROR`- oder `self-heal`-Einträge prüfen
-- **CMC-Rate-Limit-Fehler (429)**: PBCoinData wiederholt automatisch; bei anhaltenden Fehlern `fetch_interval` erhöhen
+- **CMC-Rate-Limit-Fehler (429)**: Der betroffene Key geht in Cooldown und der Pool versucht einen anderen geeigneten Key; wenn alle Keys limitiert bleiben, `fetch_interval` erhöhen
 - **Ignored/Approved-Listen in PBRun werden nicht aktualisiert**: Mapping-Dateien unter `data/coindata/{exchange}/` prüfen und PBCoinData einmal neu starten

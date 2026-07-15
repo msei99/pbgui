@@ -257,7 +257,6 @@ class TestVpsManagerFrontendLogic:
             hostname: 'manibot70',
             config: {
               bucket: 'pbguimani:',
-              coinmarketcap_api_key: 'cmc-test-api-key',
               install_dir: '/home/mani/software',
               swap: '4G'
             },
@@ -275,17 +274,13 @@ class TestVpsManagerFrontendLogic:
         assert.equal(canSaveForm(ui.form, ui.savedForm), false);
 
         setVpsField('manibot70', 'bucket', '');
-        setVpsField('manibot70', 'coinmarketcap_api_key', '');
         assert.equal(ui.form.bucket, '');
-        assert.equal(ui.form.coinmarketcap_api_key, '');
         assert.equal(ui.dirtyFields.bucket, true);
-        assert.equal(ui.dirtyFields.coinmarketcap_api_key, true);
         assert.equal(canSaveForm(ui.form, ui.savedForm), true);
 
         store.detail = Object.assign({}, store.detail, {
           config: {
             bucket: 'pbguimani:',
-            coinmarketcap_api_key: 'cmc-test-api-key',
             install_dir: '/opt/pbgui',
             swap: '8G'
           }
@@ -293,9 +288,7 @@ class TestVpsManagerFrontendLogic:
         ensureVpsUi('manibot70', store.detail);
 
         assert.equal(ui.form.bucket, '');
-        assert.equal(ui.form.coinmarketcap_api_key, '');
         assert.equal(ui.savedForm.bucket, 'pbguimani:');
-        assert.equal(ui.savedForm.coinmarketcap_api_key, 'cmc-test-api-key');
         assert.equal(ui.form.install_dir, '/opt/pbgui');
         assert.equal(ui.form.swap, '8G');
         assert.equal(canSaveForm(ui.form, ui.savedForm), true);
@@ -319,7 +312,6 @@ class TestVpsManagerFrontendLogic:
             hostname: 'manibot70',
             config: {
               bucket: 'pbguimani:',
-              coinmarketcap_api_key: 'cmc-test-api-key',
               install_dir: '/home/mani/software',
               swap: '4G'
             },
@@ -352,13 +344,11 @@ class TestVpsManagerFrontendLogic:
         assert.equal(canSaveForm(ui.form, ui.savedForm), false);
 
         domFields = [
-          formField('bucket', '', 'manibot70'),
-          formField('coinmarketcap_api_key', 'cmc-test-api-key', 'manibot70')
+          formField('bucket', '', 'manibot70')
         ];
         store.detail = Object.assign({}, store.detail, {
           config: {
             bucket: 'pbguimani:',
-            coinmarketcap_api_key: 'cmc-test-api-key',
             install_dir: '/home/mani/software',
             swap: '4G'
           }

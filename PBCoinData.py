@@ -1,18 +1,46 @@
 import psutil
 import subprocess
-from time import sleep
+from time import sleep, time_ns
 from requests import Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 import json
-import configparser
+import pbgui_purefunc
 from pathlib import Path, PurePath
 from datetime import datetime
 import platform
 import sys
 import os
 import re
+import traceback
+from dataclasses import dataclass
+from urllib.parse import urlparse
 from Exchange import Exchange, Exchanges, V7
+from cmc_pool import CmcPoolClient, CmcPoolExhaustedError
+from cmc_runtime import build_cmc_pool_client
+from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
+from pbgui_purefunc import IniSnapshot, load_ini_snapshot, save_ini, update_ini
+from ini_watcher import IniWatcher
+
+SERVICE = "PBCoinData"
+
+
+@dataclass(frozen=True)
+class CoinDataRuntimeConfig:
+    """Validated settings applied atomically by the CoinData owner."""
+
+    fetch_limit: int = 5000
+    fetch_interval: int = 24
+    metadata_interval: int = 1
+    mapping_interval: int = 24
+
+
+class CoinDataConfigError(ValueError):
+    """Identify a rejected setting without retaining its sensitive value."""
+
+    def __init__(self, key: str):
+        self.key = key
+        super().__init__(f"Invalid INI value [coinmarketcap] {key}")
 
 
 def _arg_matches_path(arg: str, expected_path: Path) -> bool:
@@ -391,14 +419,18 @@ def get_symbol_for_coin(coin: str, exchange: str, use_cache=True) -> str:
 
 
 class CoinData:
-    def __init__(self):
+    def __init__(self, defer_config: bool = False, cmc_pool: CmcPoolClient | None = None):
         pbgdir = Path.cwd()
+        self.cmc_pool = cmc_pool or build_cmc_pool_client(pbgdir)
         self.piddir = Path(f'{pbgdir}/data/pid')
         if not self.piddir.exists():
             self.piddir.mkdir(parents=True)
         self.pidfile = Path(f'{self.piddir}/pbcoindata.pid')
         self.my_pid = None
-        self._api_key = None
+        self._runtime_config = CoinDataRuntimeConfig()
+        self._config_generation = None
+        self._config_load_failed = False
+        self._ini_watcher = IniWatcher(ini_path=pbgui_purefunc.pbgui_ini_path())
         self.api_error = None
         self._fetch_limit = 5000
         self._fetch_interval = 24
@@ -406,7 +438,8 @@ class CoinData:
         self._mapping_interval = 24
         self.ini_ts = 0
         self._cleanup_legacy_exchange_ini_entries()
-        self.load_config()
+        if not defer_config:
+            self.load_config()
         self.data = None
         self.metadata = None
         self.data_ts = 0
@@ -1113,43 +1146,38 @@ class CoinData:
     
     def _load_cpt_user(self, exchange_id: str) -> str | None:
         """Load remembered copy trading user from pbgui.ini."""
-        pb_config = configparser.ConfigParser()
-        pb_config.optionxform = str
-        pb_config.read('pbgui.ini')
         key = f'cpt_user.{exchange_id}'
-        if pb_config.has_option("coinmarketcap", key):
-            return pb_config.get("coinmarketcap", key)
-        return None
+        value = pbgui_purefunc.load_ini("coinmarketcap", key)
+        return value or None
     
     def _save_cpt_user(self, exchange_id: str, user_name: str):
         """Save working copy trading user to pbgui.ini."""
-        pb_config = configparser.ConfigParser()
-        pb_config.optionxform = str
-        pb_config.read('pbgui.ini')
-        if not pb_config.has_section("coinmarketcap"):
-            pb_config.add_section("coinmarketcap")
-        pb_config.set("coinmarketcap", f'cpt_user.{exchange_id}', user_name)
-        ini_path = Path('pbgui.ini')
-        tmp_path = ini_path.with_suffix(ini_path.suffix + '.tmp')
-        with tmp_path.open('w', encoding='utf-8') as f:
-            pb_config.write(f)
-        tmp_path.replace(ini_path)
+        save_ini("coinmarketcap", f'cpt_user.{exchange_id}', user_name)
     
+    def cmc_pool_status(self) -> dict:
+        """Return readiness and pool diagnostics without credential secrets."""
+        try:
+            status = self.cmc_pool.status()
+        except Exception as exc:
+            _log(SERVICE, f"CMC pool status unavailable: {exc.__class__.__name__}", level="WARNING")
+            return {
+                "ready": False,
+                "active_credentials": 0,
+                "keys": [],
+                "error": "CMC pool status unavailable",
+            }
+        safe_status = dict(status) if isinstance(status, dict) else {}
+        safe_status["ready"] = int(safe_status.get("active_credentials") or 0) > 0
+        return safe_status
+
     @property
-    def api_key(self):
-        return self._api_key
-    @api_key.setter
-    def api_key(self, new_api_key):
-        self._api_key = new_api_key
+    def cmc_pool_ready(self) -> bool:
+        """Return whether at least one active local pool credential exists."""
+        return bool(self.cmc_pool_status().get("ready"))
 
     def _has_cmc_api_key(self) -> bool:
-        key = str(self.api_key or "").strip()
-        if not key:
-            return False
-        lowered = key.lower()
-        if lowered in {"none", "null", "false", "<api_key>"}:
-            return False
-        return not (key.startswith("<") and key.endswith(">"))
+        """Retain the compatibility name while deriving readiness only from the pool."""
+        return self.cmc_pool_ready
     
     @property
     def fetch_limit(self):
@@ -1336,46 +1364,31 @@ class CoinData:
         tmp_path.replace(self.pidfile)
 
     def has_new_config(self):
-        if Path('pbgui.ini').exists():
-            ini_ts = Path('pbgui.ini').stat().st_mtime
-            if self.ini_ts < ini_ts:
-                self.ini_ts = ini_ts
-                return True
-        return False
+        """Return whether the current file generation has not been applied."""
+        return self._ini_watcher._read_signature() != self._config_generation
 
     def _cleanup_legacy_exchange_ini_entries(self):
         """TEMP migration cleanup: remove legacy [exchanges] entries from pbgui.ini.
 
         REMOVE AFTER mapping migration is fully rolled out on all environments.
         """
-        ini_path = Path('pbgui.ini')
+        ini_path = self._ini_watcher._ini_path
         if not ini_path.exists():
             return
 
-        pb_config = configparser.ConfigParser()
-        pb_config.optionxform = str
-        pb_config.read(str(ini_path))
-
-        if not pb_config.has_section("exchanges"):
-            return
-
         try:
-            removed_count = len(pb_config.options("exchanges"))
-        except Exception:
-            removed_count = 0
+            def mutate(pb_config):
+                if not pb_config.has_section("exchanges"):
+                    return 0
+                removed_count = len(pb_config.options("exchanges"))
+                pb_config.remove_section("exchanges")
+                return removed_count
 
-        pb_config.remove_section("exchanges")
-
-        tmp_path = ini_path.with_suffix(ini_path.suffix + ".tmp")
-        try:
-            with tmp_path.open('w', encoding='utf-8') as f:
-                pb_config.write(f)
-            tmp_path.replace(ini_path)
-            _log('PBCoinData', f'Removed legacy [exchanges] section from pbgui.ini ({removed_count} entries)', level='INFO')
+            removed_count = update_ini(mutate)
+            if removed_count:
+                _log('PBCoinData', f'Removed legacy [exchanges] section from pbgui.ini ({removed_count} entries)', level='INFO')
         except Exception as e:
             _log('PBCoinData', f'Failed to remove legacy [exchanges] section from pbgui.ini: {e}', level='ERROR')
-            if tmp_path.exists():
-                tmp_path.unlink(missing_ok=True)
     
     def has_new_data(self):
         pbgdir = Path.cwd()
@@ -1399,39 +1412,71 @@ class CoinData:
                 return False
         return True
 
+    @staticmethod
+    def _build_config_candidate(snapshot: IniSnapshot) -> CoinDataRuntimeConfig:
+        """Build one immutable candidate from exactly one INI snapshot."""
+        defaults = CoinDataRuntimeConfig()
+
+        def integer(key: str, minimum: int, maximum: int) -> int:
+            if not snapshot.has_option("coinmarketcap", key):
+                return getattr(defaults, key)
+            try:
+                value = int(snapshot.get("coinmarketcap", key))
+            except (TypeError, ValueError) as exc:
+                raise CoinDataConfigError(key) from exc
+            if value < minimum or value > maximum:
+                raise CoinDataConfigError(key)
+            return value
+
+        return CoinDataRuntimeConfig(
+            fetch_limit=integer("fetch_limit", 200, 5000),
+            fetch_interval=integer("fetch_interval", 1, 24),
+            metadata_interval=integer("metadata_interval", 1, 7),
+            mapping_interval=integer("mapping_interval", 1, 168),
+        )
+
+    def _apply_config_snapshot(self, snapshot: IniSnapshot) -> bool:
+        """Validate and atomically publish one file generation."""
+        if snapshot.signature == self._config_generation:
+            return False
+        candidate = self._build_config_candidate(snapshot)
+        self._fetch_limit = candidate.fetch_limit
+        self._fetch_interval = candidate.fetch_interval
+        self._metadata_interval = candidate.metadata_interval
+        self._mapping_interval = candidate.mapping_interval
+        self._runtime_config = candidate
+        self._sync_cmc_metrics_log_interval()
+        self._config_generation = snapshot.signature
+        self.ini_ts = snapshot.signature.mtime_ns or 0
+        return True
+
     def load_config(self):
-        if self.has_new_config():
-            pb_config = configparser.ConfigParser()
-            pb_config.optionxform = str
-            pb_config.read('pbgui.ini')
-            if pb_config.has_option("coinmarketcap", "api_key"):
-                self._api_key = pb_config.get("coinmarketcap", "api_key")
-            if pb_config.has_option("coinmarketcap", "fetch_limit"):
-                self._fetch_limit = int(pb_config.get("coinmarketcap", "fetch_limit"))
-            if pb_config.has_option("coinmarketcap", "fetch_interval"):
-                self._fetch_interval = int(pb_config.get("coinmarketcap", "fetch_interval"))
-            if pb_config.has_option("coinmarketcap", "metadata_interval"):
-                self._metadata_interval = int(pb_config.get("coinmarketcap", "metadata_interval"))
-            if pb_config.has_option("coinmarketcap", "mapping_interval"):
-                self._mapping_interval = int(pb_config.get("coinmarketcap", "mapping_interval"))
-            self._sync_cmc_metrics_log_interval()
+        """Compatibility reload using one snapshot and last-known-good state."""
+        try:
+            applied = self._apply_config_snapshot(load_ini_snapshot(self._ini_watcher._ini_path))
+            self._config_load_failed = False
+            return applied
+        except Exception as exc:
+            key = exc.key if isinstance(exc, CoinDataConfigError) else "snapshot"
+            _log(SERVICE, f"Config reload rejected for [coinmarketcap] {key}; keeping last known good settings", level="WARNING")
+            self._config_load_failed = True
+            return False
     
     def save_config(self):
-        pb_config = configparser.ConfigParser()
-        pb_config.optionxform = str
-        pb_config.read('pbgui.ini')
-        if not pb_config.has_section("coinmarketcap"):
-            pb_config.add_section("coinmarketcap")
-        pb_config.set("coinmarketcap", "api_key", self.api_key)
-        pb_config.set("coinmarketcap", "fetch_limit", str(self.fetch_limit))
-        pb_config.set("coinmarketcap", "fetch_interval", str(self.fetch_interval))
-        pb_config.set("coinmarketcap", "metadata_interval", str(self.metadata_interval))
-        pb_config.set("coinmarketcap", "mapping_interval", str(self.mapping_interval))
-        ini_path = Path('pbgui.ini')
-        tmp_path = ini_path.with_suffix(ini_path.suffix + '.tmp')
-        with tmp_path.open('w', encoding='utf-8') as pbgui_configfile:
-            pb_config.write(pbgui_configfile)
-        tmp_path.replace(ini_path)
+        values = {
+            "fetch_limit": str(self.fetch_limit),
+            "fetch_interval": str(self.fetch_interval),
+            "metadata_interval": str(self.metadata_interval),
+            "mapping_interval": str(self.mapping_interval),
+        }
+
+        def mutate(pb_config):
+            if not pb_config.has_section("coinmarketcap"):
+                pb_config.add_section("coinmarketcap")
+            for key, value in values.items():
+                pb_config.set("coinmarketcap", key, value)
+
+        update_ini(mutate)
     
     def fetch_ccxt_markets(self, exchange_id: str):
         """Fetch CCXT markets for a specific exchange and save to coindata/{exchange}/ccxt_markets.json"""
@@ -2094,10 +2139,7 @@ class CoinData:
             return False
         endpoint = "status"
         url = 'https://pro-api.coinmarketcap.com/v1/key/info'
-        headers = {
-            'Accepts': 'application/json',
-            'X-CMC_PRO_API_KEY': self.api_key,
-        }
+        headers = {'Accepts': 'application/json'}
         data, status_code, attempts, error = self._cmc_get_json(
             endpoint=endpoint,
             url=url,
@@ -2124,16 +2166,25 @@ class CoinData:
         return False
 
     def fetch_data(self):
+        """Fetch listings once across all local PBGui processes."""
+        started_ns = time_ns()
+        lock_target = Path.cwd() / "data" / "coindata" / ".locks" / "cmc-listings-refresh"
+        with advisory_file_lock(lock_target):
+            if self._reuse_singleflight_cache("listings", started_ns):
+                return True
+            success = self._fetch_data_once()
+            if success:
+                self.save_data()
+            return success
+
+    def _fetch_data_once(self):
         endpoint = "listings"
         url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest'
         parameters = {
             'start':'1',
             'limit':self.fetch_limit
         }
-        headers = {
-            'Accepts': 'application/json',
-            'X-CMC_PRO_API_KEY': self.api_key,
-        }
+        headers = {'Accepts': 'application/json'}
         data, status_code, attempts, error = self._cmc_get_json(
             endpoint=endpoint,
             url=url,
@@ -2147,7 +2198,7 @@ class CoinData:
             self.fetch_api_status()
             self._cmc_metrics["listings_ok"] += 1
             self._log_cmc_metrics(endpoint, True, attempts, status_code)
-            _log('PBCoinData', f'Fetched CoinMarketCap data. Credits left: {self.credits_left}', level='INFO')
+            _log('PBCoinData', f'Fetched CoinMarketCap data. Credits left: {getattr(self, "credits_left", "unknown")}', level='INFO')
             return True
 
         self.data = None
@@ -2156,6 +2207,18 @@ class CoinData:
         return False
     
     def fetch_metadata(self):
+        """Fetch metadata once across all local PBGui processes."""
+        started_ns = time_ns()
+        lock_target = Path.cwd() / "data" / "coindata" / ".locks" / "cmc-metadata-refresh"
+        with advisory_file_lock(lock_target):
+            if self._reuse_singleflight_cache("metadata", started_ns):
+                return True
+            success = self._fetch_metadata_once()
+            if success:
+                self.save_metadata()
+            return success
+
+    def _fetch_metadata_once(self):
         endpoint = "metadata"
         # Make sure we have coindata, but never overwrite already loaded data.
         if not self.data and self.has_new_data():
@@ -2179,10 +2242,7 @@ class CoinData:
         parameters = {
             'id': ','.join(map(str, symbols_ids))
         }
-        headers = {
-            'Accepts': 'application/json',
-            'X-CMC_PRO_API_KEY': self.api_key,
-        }
+        headers = {'Accepts': 'application/json'}
         data, status_code, attempts, error = self._cmc_get_json(
             endpoint=endpoint,
             url=url,
@@ -2196,13 +2256,85 @@ class CoinData:
             self.fetch_api_status()
             self._cmc_metrics["metadata_ok"] += 1
             self._log_cmc_metrics(endpoint, True, attempts, status_code)
-            _log('PBCoinData', f'Fetched CoinMarketCap metadata. Credits left: {self.credits_left}', level='INFO')
+            _log('PBCoinData', f'Fetched CoinMarketCap metadata. Credits left: {getattr(self, "credits_left", "unknown")}', level='INFO')
             return True
 
         self.metadata = None
         self._cmc_metrics["metadata_fail"] += 1
         self._log_cmc_metrics(endpoint, False, attempts, status_code, error=error)
         return False
+
+    def _reuse_singleflight_cache(self, endpoint: str, started_ns: int) -> bool:
+        """Reuse a valid cache published by an overlapping refresh owner."""
+        filename = "coindata.json" if endpoint == "listings" else "metadata.json"
+        cache_path = Path.cwd() / "data" / "coindata" / filename
+        if not cache_path.exists() or cache_path.stat().st_mtime_ns <= started_ns:
+            return False
+        payload = _read_json_with_retry(cache_path, retries=1, delay_s=0.1)
+        valid, _error = self._validate_cmc_payload(endpoint, payload)
+        if not valid:
+            return False
+        if endpoint == "listings":
+            self.data = payload
+            self.data_ts = cache_path.stat().st_mtime
+        else:
+            self.metadata = payload
+            self.metadata_ts = cache_path.stat().st_mtime
+        return True
+
+    @staticmethod
+    def _cmc_actual_credits(payload: dict | None) -> float | None:
+        """Read CMC's authoritative per-response credit charge."""
+        status = payload.get("status") if isinstance(payload, dict) else None
+        if not isinstance(status, dict) or status.get("credit_count") is None:
+            return None
+        try:
+            credits = float(status["credit_count"])
+        except (TypeError, ValueError):
+            return None
+        return credits if credits >= 0 else None
+
+    @staticmethod
+    def _cmc_provider_status(response, payload: dict | None, endpoint: str) -> dict:
+        """Collect provider counters and reset data for pool settlement."""
+        result = {}
+        response_headers = getattr(response, "headers", None)
+        if hasattr(response_headers, "items"):
+            result.update(dict(response_headers.items()))
+        status = payload.get("status") if isinstance(payload, dict) else None
+        if isinstance(status, dict):
+            for key in ("remaining", "limit", "used", "reset_at", "state", "error_code"):
+                if status.get(key) is not None:
+                    result[key] = status[key]
+        if endpoint == "status" and isinstance(payload, dict):
+            data = payload.get("data")
+            plan = data.get("plan") if isinstance(data, dict) else None
+            usage = data.get("usage") if isinstance(data, dict) else None
+            current_month = usage.get("current_month") if isinstance(usage, dict) else None
+            if isinstance(plan, dict):
+                if plan.get("credit_limit_monthly") is not None:
+                    result["limit"] = plan["credit_limit_monthly"]
+                reset = plan.get("credit_limit_monthly_reset_timestamp")
+                if reset is None:
+                    reset = plan.get("credit_limit_monthly_reset")
+                if reset is not None:
+                    result["reset_at"] = reset
+            if isinstance(current_month, dict):
+                if current_month.get("credits_used") is not None:
+                    result["used"] = current_month["credits_used"]
+                if current_month.get("credits_left") is not None:
+                    result["remaining"] = current_month["credits_left"]
+        return result
+
+    @staticmethod
+    def _redact_cmc_error(error, api_key: str) -> str | None:
+        """Remove the attempt credential if a provider echoes it in diagnostics."""
+        if error is None:
+            return None
+        text = str(error)
+        if api_key:
+            text = text.replace(api_key, "<redacted>")
+        return text
 
     def _cmc_get_json(
         self,
@@ -2213,65 +2345,104 @@ class CoinData:
         max_retries: int = 3,
         timeout: int = 30,
     ) -> tuple[dict | None, int | None, int, str | None]:
-        retryable_statuses = {429, 500, 502, 503, 504}
+        retryable_statuses = {401, 402, 403, 429, 500, 502, 503, 504}
         attempts = 0
         last_status = None
         last_error = None
 
         session = Session()
-        session.headers.update(headers)
+        session.headers.update({
+            key: value
+            for key, value in headers.items()
+            if str(key).lower() != "x-cmc_pro_api_key"
+        })
+        endpoint_path = urlparse(url).path or endpoint
 
         for attempt in range(1, max_retries + 1):
-            attempts = attempt
+            try:
+                acquisition = self.cmc_pool.acquire(
+                    endpoint_path,
+                    params,
+                    estimated_credits=0 if endpoint == "status" else None,
+                )
+            except CmcPoolExhaustedError as exc:
+                last_error = str(exc)
+                break
+            attempts += 1
+            session.headers["X-CMC_PRO_API_KEY"] = acquisition.api_key
+            response = None
+            payload = None
+            provider_status = {}
+            actual_credits = None
+            retry_after = None
+            settlement_error = None
+            action = "stop"
             try:
                 response = session.get(url, params=params, timeout=timeout)
                 last_status = response.status_code
+                retry_header = getattr(response, "headers", {}).get("Retry-After") if hasattr(getattr(response, "headers", None), "get") else None
+                try:
+                    retry_after = float(retry_header) if retry_header is not None else None
+                except (TypeError, ValueError):
+                    retry_after = None
 
                 if response.status_code == 200:
                     try:
                         payload = json.loads(response.text)
                     except Exception as e:
                         last_error = f'invalid json payload: {e}'
-                        if attempt < max_retries:
-                            wait_s = min(8, 2 ** (attempt - 1))
-                            _log('PBCoinData', f'CMC {endpoint} retry {attempt}/{max_retries} after malformed JSON, waiting {wait_s}s', level='WARNING')
-                            sleep(wait_s)
-                            continue
-                        break
-
-                    is_valid, validation_error = self._validate_cmc_payload(endpoint, payload)
-                    if is_valid:
-                        return payload, response.status_code, attempts, None
-
-                    last_error = validation_error or 'invalid payload schema'
-                    if attempt < max_retries:
-                        wait_s = min(8, 2 ** (attempt - 1))
-                        _log('PBCoinData', f'CMC {endpoint} retry {attempt}/{max_retries} after invalid payload, waiting {wait_s}s', level='WARNING')
-                        sleep(wait_s)
-                        continue
-                    break
-
-                if response.status_code in retryable_statuses and attempt < max_retries:
-                    wait_s = min(8, 2 ** (attempt - 1))
-                    _log('PBCoinData', f'CMC {endpoint} retry {attempt}/{max_retries} after HTTP {response.status_code}, waiting {wait_s}s', level='WARNING')
-                    sleep(wait_s)
-                    continue
-
-                try:
-                    body = json.loads(response.text)
-                    last_error = body.get("status", {}).get("error_message")
-                except Exception:
-                    last_error = (response.text or "")[:200]
-                break
+                        settlement_error = last_error
+                        action = "retry" if attempt < max_retries else "stop"
+                    else:
+                        provider_status = self._cmc_provider_status(response, payload, endpoint)
+                        is_valid, validation_error = self._validate_cmc_payload(endpoint, payload)
+                        if is_valid:
+                            actual_credits = self._cmc_actual_credits(payload)
+                            action = "success"
+                        else:
+                            payload_status = payload.get("status") if isinstance(payload, dict) else None
+                            provider_error = payload_status.get("error_message") if isinstance(payload_status, dict) else None
+                            last_error = provider_error or validation_error or 'invalid payload schema'
+                            settlement_error = last_error
+                            action = "retry" if attempt < max_retries else "stop"
+                else:
+                    try:
+                        payload = json.loads(response.text)
+                        last_error = payload.get("status", {}).get("error_message")
+                    except Exception:
+                        last_error = (response.text or "")[:200]
+                    provider_status = self._cmc_provider_status(response, payload, endpoint)
+                    actual_credits = self._cmc_actual_credits(payload)
+                    if actual_credits is None:
+                        actual_credits = 0
+                    settlement_error = last_error or f"HTTP {response.status_code}"
+                    action = "retry" if response.status_code in retryable_statuses and attempt < max_retries else "stop"
 
             except (ConnectionError, Timeout, TooManyRedirects) as e:
-                last_error = str(e)
-                if attempt < max_retries:
-                    wait_s = min(8, 2 ** (attempt - 1))
-                    _log('PBCoinData', f'CMC {endpoint} network retry {attempt}/{max_retries} after {e.__class__.__name__}, waiting {wait_s}s', level='WARNING')
-                    sleep(wait_s)
-                    continue
-                break
+                last_error = self._redact_cmc_error(e, acquisition.api_key)
+                settlement_error = last_error
+                action = "retry" if attempt < max_retries else "stop"
+            finally:
+                safe_error = self._redact_cmc_error(settlement_error, acquisition.api_key)
+                self.cmc_pool.settle(
+                    acquisition,
+                    status_code=getattr(response, "status_code", None),
+                    error=safe_error,
+                    provider_status=provider_status,
+                    actual_credits=actual_credits,
+                    retry_after=retry_after,
+                )
+
+            last_error = self._redact_cmc_error(last_error, acquisition.api_key)
+            if action == "success":
+                return payload, last_status, attempts, None
+            if action == "retry":
+                wait_s = min(8, 2 ** (attempt - 1))
+                reason = f"HTTP {last_status}" if last_status and last_status != 200 else (last_error or "provider error")
+                _log('PBCoinData', f'CMC {endpoint} retry {attempt}/{max_retries} after {reason}, waiting {wait_s}s', level='WARNING')
+                sleep(wait_s)
+                continue
+            break
 
         return None, last_status, attempts, last_error
 
@@ -2299,6 +2470,23 @@ class CoinData:
                 return False, "status payload missing data.plan"
             if not isinstance(usage, dict):
                 return False, "status payload missing data.usage"
+            current_day = usage.get("current_day")
+            current_month = usage.get("current_month")
+            if not isinstance(current_day, dict):
+                return False, "status payload missing data.usage.current_day"
+            if not isinstance(current_month, dict):
+                return False, "status payload missing data.usage.current_month"
+            required_plan = {
+                "credit_limit_monthly",
+                "credit_limit_monthly_reset",
+                "credit_limit_monthly_reset_timestamp",
+            }
+            if not required_plan.issubset(plan):
+                return False, "status payload missing plan credit fields"
+            if "credits_used" not in current_day:
+                return False, "status payload missing current-day usage"
+            if not {"credits_used", "credits_left"}.issubset(current_month):
+                return False, "status payload missing current-month usage"
             return True, None
 
         return True, None
@@ -2556,9 +2744,8 @@ class CoinData:
     def _is_master() -> bool:
         """Return True if pbgui.ini role == master."""
         try:
-            pb_config = configparser.ConfigParser()
-            pb_config.read('pbgui.ini')
-            return pb_config.get('main', 'role', fallback='slave').strip().lower() == 'master'
+            role = pbgui_purefunc.load_ini("main", "role") or "slave"
+            return role.strip().lower() == "master"
         except Exception:
             return False
 
@@ -2835,32 +3022,49 @@ class CoinData:
         return sorted(approved_coins), sorted(ignored_coins)
 
 def main():
-    pbcoindata = CoinData()
+    from credential_process_registry import ProcessCapabilityHeartbeat
+
+    pbcoindata = CoinData(defer_config=True)
     if pbcoindata.is_running():
         _log('PBCoinData', 'PBCoinData already started', level='ERROR')
         sys.exit(1)
     _log('PBCoinData', 'Start: PBCoinData', level='INFO')
     pbcoindata.save_pid()
-    while True:
-        try:
-            pbcoindata.load_config()
-            if not pbcoindata._is_master():
-                if not pbcoindata._has_dynamic_ignore_bots():
-                    if not pbcoindata._logged_idle:
-                        _log('PBCoinData', 'No running dynamic_ignore bots — idle mode', level='INFO')
-                        pbcoindata._logged_idle = True
-                    sleep(60)
-                    continue
-                if pbcoindata._logged_idle:
-                    _log('PBCoinData', 'Running dynamic_ignore bot detected — resuming', level='INFO')
-                    pbcoindata._logged_idle = False
-            pbcoindata.load_data()
-            pbcoindata.load_metadata()
-            pbcoindata.update_mappings()
-            sleep(60)
-        except Exception as e:
-            _log('PBCoinData', f'Something went wrong, but continue: {e}', level='ERROR')
-            _log('PBCoinData', 'PBCoinData main loop traceback', level='DEBUG', meta={'traceback': traceback.format_exc()})
+    capability = ProcessCapabilityHeartbeat(Path(__file__).resolve().parent, "PBCoinData")
+    capability.__enter__()
+    pbcoindata._ini_watcher.start()
+    config_retry_count = 0
+    try:
+        while True:
+            try:
+                pbcoindata._ini_watcher.changed.clear()
+                pbcoindata.load_config()
+                if pbcoindata._config_load_failed:
+                    config_retry_count += 1
+                else:
+                    config_retry_count = 0
+                if not pbcoindata._is_master():
+                    if not pbcoindata._has_dynamic_ignore_bots():
+                        if not pbcoindata._logged_idle:
+                            _log('PBCoinData', 'No running dynamic_ignore bots — idle mode', level='INFO')
+                            pbcoindata._logged_idle = True
+                        delay = min(60, 2 ** min(config_retry_count, 5)) if config_retry_count else 60
+                        pbcoindata._ini_watcher.changed.wait(timeout=delay)
+                        continue
+                    if pbcoindata._logged_idle:
+                        _log('PBCoinData', 'Running dynamic_ignore bot detected — resuming', level='INFO')
+                        pbcoindata._logged_idle = False
+                pbcoindata.load_data()
+                pbcoindata.load_metadata()
+                pbcoindata.update_mappings()
+                delay = min(60, 2 ** min(config_retry_count, 5)) if config_retry_count else 60
+                pbcoindata._ini_watcher.changed.wait(timeout=delay)
+            except Exception as e:
+                _log('PBCoinData', f'Something went wrong, but continue: {e}', level='ERROR')
+                _log('PBCoinData', 'PBCoinData main loop traceback', level='DEBUG', meta={'traceback': traceback.format_exc()})
+    finally:
+        pbcoindata._ini_watcher.stop()
+        capability.close()
 
 if __name__ == '__main__':
     main()

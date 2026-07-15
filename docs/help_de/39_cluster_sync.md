@@ -33,6 +33,7 @@ Cluster Sync deckt ab:
 - V7 Desired State: Start, Stop, Move, Delete und Tombstone.
 - Explizite V7-Forced-Mode-Config-Änderungen wie Panic, Graceful Stop und Take Profit Only.
 - API-Key-Verteilung für `api-keys.json`.
+- CMC-Pool-Credentials für alle aktiven State-Replikas und TradFi-Vault-Profile für Master.
 - Lokale State-Replikas auf Mastern und VPS-Nodes.
 - Eingeschränkte Cluster-Sync-SSH-Keys für Node-zu-Node-Replikation.
 
@@ -57,10 +58,20 @@ Beispiele:
 - Stoppen eines Bots schreibt eine Stop-Operation.
 - Löschen eines Bots schreibt eine Delete- oder Tombstone-Operation.
 - Aktualisieren von `api-keys.json` schreibt eine API-Key-Operation.
+- Hinzufügen, Rotieren, Deaktivieren oder Löschen eines CMC-/TradFi-Vault-Eintrags schreibt signierte Credential-Protocol-v2-Operationen und versiegelte Blobs.
 
 Jeder Node vergleicht seine bekannten Operation-Counter mit einem anderen Node. Fehlende Operationen und benötigte Blobs werden übertragen, danach baut der empfangende Node seinen lokalen Desired State neu auf.
 
 Dadurch ist Sync wiederholbar und sicher erneut ausführbar.
+
+Credential-Protocol-Upgrades sind Zero-Order. Jeder aktualisierte Prozess haelt
+seine eigenen Legacy-CMC-/TradFi-Credentials zuerst ueber einen lokalen
+owner-only Shadow-Record verfuegbar, ohne die Legacy-Quelle zu aendern oder zu
+publizieren. Gemischte v1/v2-Cluster bleiben passiv in **waiting for upgrade**.
+Freeze, Inventur oder Loeschung beginnen erst, wenn jede aktive State-Replica v2
+meldet; deaktivierte und entfernte Nodes werden ignoriert. Der letzte v2-Sync
+startet den Cutover automatisch, ohne festgelegten letzten Node- oder
+Service-Restart.
 
 ---
 
@@ -136,9 +147,9 @@ PBGui nutzt für V7-Instance-Conflicts kein blindes Last-Write-Wins.
 
 ---
 
-## API-Keys
+## Credentials
 
-Cluster Sync verfolgt auch Änderungen an `api-keys.json`.
+Cluster Sync verfolgt sowohl Änderungen am Exchange-`api-keys.json` als auch Generationen im Credential Vault.
 
 Der Desired State speichert nur Metadaten wie Serial und Payload-Hash. Der API-Key-Inhalt wird als eingeschränkte Secret-Daten gespeichert und darf nicht in Logs oder im normalen Desired-State-JSON auftauchen.
 
@@ -149,6 +160,14 @@ Die Installation von API-Keys auf einem Node nutzt die Sicherheitsstufen der Clu
 - neue Datei schreiben
 - Payload verifizieren
 - keine Bots neu starten und keine weiteren Dateien deployen
+
+CMC- und TradFi-Vault-Einträge verwenden nicht den Exchange-API-Key-Blob. Credential Protocol v2 signiert jede Operation und versiegelt jede Secret-Generation für ihre zulässigen Empfänger. CMC nutzt die Audience `cluster` (aktive Master und VPS-Replikas), TradFi die Audience `masters`. Eine VPS kann ein undurchsichtiges TradFi-Envelope validieren, speichern und weiterleiten, ist aber kein Empfänger und kann es nicht entschlüsseln.
+
+Protocol-v1-Peers erhalten keine v2-Credential-Operationen. Credential-Migration und neue Credential-Veröffentlichung warten, bis jede aktive State-Replica Protocol-v2-Crypto-Capability meldet.
+
+CMC-Leases sind Best-Effort-Koordinationsmetadaten und keine Voraussetzung für die Nutzung eines materialisierten Keys. Wenn Authority oder Relay nicht verfügbar sind, läuft die lokale Auswahl mit Soft-Budget weiter. Provider-`429` setzt den betroffenen Key auf Cooldown und wechselt nach Möglichkeit auf einen anderen geeigneten Pool-Key. Importierte, extern verwendete und Shared-Quota-Keys sind zulässige Pool-Mitglieder; Provider-Rotation ist optional.
+
+Wenn sich die aktive Membership ändert, rewrappt PBGui bestehende Secret-Generationen für die neue Empfängermenge. Ein neuer Node darf Credential Capability erst nach Rewrap, Materialisierung der exakten Generation und ACK als aktiv melden. TradFi bleibt dabei master-only.
 
 ---
 
@@ -210,6 +229,8 @@ VPS-Nodes sind nach Bootstrap oder Import häufig zunächst **Disabled**. Nutze 
 
 Wenn ein Node **No Identity** zeigt, schreibt **Join & Sync** die Remote-Cluster-Identität und überschreibt keine abweichende bestehende Identität. Danach pusht PBGui fehlende lokale Operationen, baut den Remote-Cluster-State neu, materialisiert zugewiesene V7-Configs und API-Keys und startet PBRun wieder, wenn der Remote-State aktuell ist. Auf VPS-Runnern stoppt Join vorher PBRun, damit laufende Bots während der Übergangsphase nicht bewertet werden; passivbot-Prozesse bleiben unangetastet. Auf Master-Nodes wird PBRun nicht gestoppt oder gestartet.
 
+Nach dem Eintreffen von Protocol-v2-Operationen materialisiert PBCluster zusätzlich zulässige versiegelte Credentials in den owner-only Vault. Die Materialisierung von Exchange-`api-keys.json` und versiegelten Credentials sind getrennte Schritte.
+
 Um einen neu eingerichteten VPS-Runner einem bestehenden Cluster hinzuzufügen, nutze diese Reihenfolge:
 
 1. VPS in **System -> VPS Manager** anlegen und einrichten. Nach erfolgreichem Setup registriert PBGui die VPS automatisch lokal als Cluster-Node-Kandidat. Wenn der Host vor dieser Automatik eingerichtet wurde, öffne die VPS im VPS Manager und klicke **Add to Cluster**.
@@ -238,6 +259,8 @@ Im Preview-Fenster ist **Push Missing Ops + Rebuild** eine explizite Retry-/Diag
 Wenn Operationen und Config-Blobs synchron sind, zeigt das Preview-Fenster zusätzlich **V7 Config Materialization Preview**. **Materialize V7 Configs** ist die manuelle Retry-Aktion, die zugewiesene, konfliktfreie V7-JSON-Configs aus geprüften Config-Blobs in das remote `data/run_v7`-Verzeichnis schreibt. Sie verweigert den Lauf, wenn Remote-State-Vector oder Desired State vom lokalen State abweichen oder benötigte Blobs fehlen beziehungsweise ungültig sind. Configs für andere Nodes, Conflicts und Tombstones werden übersprungen.
 
 Das Preview-Fenster zeigt außerdem **API-key Materialization Preview**. **Materialize API Keys** ist die manuelle Retry-Aktion, die `api-keys.json` aus dem replizierten Secret-Blob installiert. Master-Nodes erstellen zuerst ein normales `data/api-keys/`-Backup, wenn eine bestehende Datei abweicht; VPS-Runner ueberspringen lokale Backups. Danach schreibt PBGui atomisch und prueft den finalen Hash.
+
+Die CMC-/TradFi-Vault-Migration ist fortsetzbar und automatisch. Sie inventarisiert alte CMC-/TradFi-Felder, setzt einen signierten Writer Freeze über alle aktiven v2-Replikas, importiert und versiegelt unveränderliche Generationen, wartet auf ACKs der exakten Materialisierung und entfernt danach unveränderte Legacy-Felder mit Backup. CMC-Secrets nicht wieder in `pbgui.ini`, VPS-Inventar oder Automation eintragen und PB7-TradFi-Einträge nicht manuell bearbeiten. Rotation ist für den Abschluss des Cleanups nicht erforderlich.
 
 ---
 

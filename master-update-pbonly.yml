@@ -16,6 +16,7 @@
     pbgvenv: "{{ pbgvenv }}"
     pb7dir: "{{ pb7dir }}"
     pb7venv: "{{ pb7venv }}"
+    pb7_ref: "{{ lookup('file', playbook_dir + '/pb7_ref.txt') | trim }}"
     # user_pw: "{{ user_pw }}"
 
   tasks:
@@ -45,23 +46,71 @@
         var: update_rust
       tags: debug,never
 
-    - name: Get current pb7 branch
-      command: git rev-parse --abbrev-ref HEAD
-      args:
-        chdir: "{{ pb7dir }}"
-      register: current_pb7_branch
+    - name: Validate pinned PB7 commit
+      assert:
+        that:
+          - pb7_ref is match('^[0-9a-f]{40}$')
+        fail_msg: "pb7_ref.txt must contain one exact lowercase 40-character commit SHA."
+
+    - name: Fetch and verify pinned Passivbot v7
+      command:
+        argv:
+          - python3
+          - "{{ pbgdir }}/pb7_guard.py"
+          - --repo
+          - "{{ pb7dir }}"
+          - --ref
+          - "{{ pb7_ref }}"
+          - --expected-major
+          - "7"
+          - --fetch-url
+          - https://github.com/enarjord/passivbot.git
+      register: pb7_preflight
       changed_when: false
       when: pb7dir != ""
 
-    - name: clone passivbot repository for pb7
-      git:
-        repo: https://github.com/enarjord/passivbot.git
-        dest: "{{ pb7dir }}"
-        version: "{{ current_pb7_branch.stdout }}"
-        update: yes
-        force: yes
-      when: pb7dir != ""
+    - name: Stop PBRun before changing PB7 checkout
+      command:
+        argv:
+          - "{{ pbgui_python | default(ansible_playbook_python) }}"
+          - "{{ pbgdir }}/starter.py"
+          - --stop
+          - PBRun
+      changed_when: false
+      when: pb7dir != "" and 'checkout_required=true' in pb7_preflight.stdout
+
+    - name: Stop PB7 processes before changing checkout
+      command:
+        argv:
+          - python3
+          - "{{ pbgdir }}/pb7_guard.py"
+          - --repo
+          - "{{ pb7dir }}"
+          - --ref
+          - "{{ pb7_ref }}"
+          - --expected-major
+          - "7"
+          - --stop-processes
+          - --venv
+          - "{{ pb7venv }}"
+      changed_when: false
+      when: pb7dir != "" and 'checkout_required=true' in pb7_preflight.stdout
+
+    - name: Checkout verified pinned Passivbot v7
+      command:
+        argv:
+          - python3
+          - "{{ pbgdir }}/pb7_guard.py"
+          - --repo
+          - "{{ pb7dir }}"
+          - --ref
+          - "{{ pb7_ref }}"
+          - --expected-major
+          - "7"
+          - --checkout
       register: pb7_repo
+      changed_when: "'checkout_changed=true' in pb7_repo.stdout"
+      when: pb7dir != ""
       notify: restart pb7
 
     - name: print pb7_repo
@@ -70,6 +119,32 @@
       tags: debug,never
 
   handlers:
+    - name: Stop PBRun before PB7 rebuild
+      command:
+        argv:
+          - "{{ pbgui_python | default(ansible_playbook_python) }}"
+          - "{{ pbgdir }}/starter.py"
+          - --stop
+          - PBRun
+      changed_when: false
+      listen: "restart pb7"
+      ignore_errors: yes
+
+    - name: kill all pb7 processes
+      shell: |
+        pids="$({
+          ps -ef | grep "{{ pb7dir }}/src/main.py" | grep -v grep | awk '{print $2}'
+          ps -ef | grep "{{ pb7venv }}/bin/python" | grep -v grep | awk '{print $2}'
+        } | sort -u)"
+        if [ -n "$pids" ]; then
+          kill $pids
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      listen: "restart pb7"
+      ignore_errors: yes
+
     - name: Install pb7 requirements
       pip:
         virtualenv: "{{ pb7venv }}"
@@ -103,21 +178,9 @@
         executable: /bin/bash
       listen: "restart pb7"
 
-    - name: kill all pb7 processes
-      shell: |
-        pids="$(ps -ef | grep "{{ pb7dir }}/src/main.py" | grep -v grep | awk '{print $2}')"
-        if [ -n "$pids" ]; then
-          kill $pids
-        fi
-      args:
-        executable: /bin/bash
-      changed_when: false
-      listen: "restart pb7"
-      ignore_errors: yes
-    
     - name: Make sure PBRun ist running
       shell: |
-        python "{{ pbgdir }}/starter.py" -s PBRun
+        "{{ pbgui_python | default(ansible_playbook_python) }}" "{{ pbgdir }}/starter.py" -s PBRun
       args:
         executable: /bin/bash
         chdir: "{{ pbgdir }}"

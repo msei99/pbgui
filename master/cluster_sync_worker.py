@@ -23,9 +23,16 @@ from typing import Any
 from cluster_sync_command import (
     ClusterSyncCommandError,
     MAX_GET_OPS,
+    _append_credential_migration_acks,
     _materialize_api_keys,
+    _materialize_credentials,
     _materialize_v7_configs,
+    _validate_sealed_blob_payload,
 )
+from cmc_leases import ClusterMailbox
+from credential_reconciler import reconcile_pending_credentials
+from credential_migration import advance_local_credential_migration, run_credential_migration
+from credential_rolling_bootstrap import bootstrap_local_legacy_credentials
 from logging_helpers import human_log as _log
 from master.cluster_state import (
     append_operation,
@@ -38,7 +45,9 @@ from master.cluster_state import (
     normalize_node_sync_mode,
     read_local_identity,
     rebuild_materialized_state,
+    stage_membership_operations,
     validate_operation,
+    V2_CREDENTIAL_OPS,
     write_operation,
 )
 from secure_files import atomic_write_private_bytes, ensure_private_directory_tree
@@ -162,6 +171,12 @@ class ClusterSyncWorker:
         }
 
         try:
+            base["credential_bootstrap"] = bootstrap_local_legacy_credentials(self.pbgdir)
+        except Exception as exc:
+            base["credential_bootstrap"] = {"status": "error", "error": type(exc).__name__}
+            _log(SERVICE, f"Local credential bootstrap pending: {type(exc).__name__}", level="WARNING")
+
+        try:
             identity = read_local_identity(self.cluster_root)
             try:
                 base["cluster_ssh"] = _compact_cluster_ssh_key(ensure_cluster_ssh_key(self.cluster_root, node_id=str(identity.get("node_id") or "")))
@@ -179,15 +194,56 @@ class ClusterSyncWorker:
             return status
 
         try:
+            try:
+                migration_pre_sync = advance_local_credential_migration(
+                    self.pbgdir,
+                    max_items=8,
+                )
+            except Exception as exc:
+                migration_pre_sync = {"status": "error", "error": type(exc).__name__}
+                _log(SERVICE, f"Credential migration advance pending: {type(exc).__name__}", level="WARNING")
             materialized = rebuild_materialized_state(self.cluster_root)
             peer_results = self._sync_peers(identity, materialized)
             if any(int(item.get("pulled_ops") or 0) for item in peer_results):
                 materialized = rebuild_materialized_state(self.cluster_root)
+            migration_coordinator = {"status": "not_coordinator"}
+            if str(identity.get("role") or "").strip().lower() == "master":
+                try:
+                    coordinator_state = run_credential_migration(self.pbgdir)
+                    migration_coordinator = {
+                        "status": str(coordinator_state.get("status") or "advanced"),
+                        "phase": str(coordinator_state.get("phase") or "unknown"),
+                    }
+                    materialized = rebuild_materialized_state(self.cluster_root)
+                except Exception as exc:
+                    migration_coordinator = {"status": "error", "error": type(exc).__name__}
+                    _log(SERVICE, f"Credential migration coordinator pending: {type(exc).__name__}", level="WARNING")
             v7_result = _materialize_v7_configs(self.cluster_root, write=True)
             api_preview = _materialize_api_keys(self.cluster_root, write=False)
             api_result = api_preview
             if api_preview.get("can_apply"):
                 api_result = _materialize_api_keys(self.cluster_root, write=True)
+            credential_preview = _materialize_credentials(self.cluster_root, write=False)
+            credential_result = credential_preview
+            if credential_preview.get("can_apply"):
+                credential_result = _materialize_credentials(self.cluster_root, write=True)
+            migration_ack = _append_credential_migration_acks(self.cluster_root)
+            try:
+                migration_post_sync = advance_local_credential_migration(
+                    self.pbgdir,
+                    max_items=8,
+                )
+            except Exception as exc:
+                migration_post_sync = {"status": "error", "error": type(exc).__name__}
+                _log(SERVICE, f"Credential migration post-sync advance pending: {type(exc).__name__}", level="WARNING")
+            try:
+                credential_reconciliation = reconcile_pending_credentials(self.pbgdir)
+            except Exception as exc:
+                credential_reconciliation = {
+                    "status": "error",
+                    "error": type(exc).__name__,
+                }
+                _log(SERVICE, f"Credential reconciliation pending: {type(exc).__name__}", level="WARNING")
 
             cluster_nodes = materialized.get("cluster_nodes") if isinstance(materialized, dict) else {}
             nodes = cluster_nodes.get("nodes") if isinstance(cluster_nodes, dict) else {}
@@ -198,6 +254,12 @@ class ClusterSyncWorker:
                 for node_id, node in nodes.items()
                 if str(node_id) != local_node_id and isinstance(node, dict) and node.get("enabled", True) is not False
             )
+            migration_advance_status = {
+                "pre_sync": migration_pre_sync,
+                "post_sync": migration_post_sync,
+            }
+            if migration_coordinator.get("status") != "not_coordinator":
+                migration_advance_status["coordinator"] = migration_coordinator
             status = dict(base)
             status.update({
                 "ok": True,
@@ -212,8 +274,15 @@ class ClusterSyncWorker:
                 "peers_ok": sum(1 for item in peer_results if item.get("ok")),
                 "pulled_ops": sum(int(item.get("pulled_ops") or 0) for item in peer_results),
                 "pushed_ops": sum(int(item.get("pushed_ops") or 0) for item in peer_results),
+                "mailbox_pulled": sum(int(item.get("mailbox_pulled") or 0) for item in peer_results),
+                "mailbox_pushed": sum(int(item.get("mailbox_pushed") or 0) for item in peer_results),
+                "mailbox_acked": sum(int(item.get("mailbox_acked") or 0) for item in peer_results),
                 "v7_materialization": _compact_materialization(v7_result),
                 "api_key_materialization": _compact_materialization(api_result),
+                "credential_materialization": _compact_materialization(credential_result),
+                "credential_migration_ack": migration_ack,
+                "credential_migration_advance": migration_advance_status,
+                "credential_reconciliation": credential_reconciliation,
             })
             _atomic_write_json(self.status_path, status)
             return status
@@ -309,6 +378,10 @@ class ClusterSyncWorker:
         hello, remote_vector = self._peer_handshake(peer, local_node_id)
         if str(hello.get("cluster_id") or "") != cluster_id:
             raise ClusterSyncWorkerError("peer belongs to another cluster")
+        local_materialized = rebuild_materialized_state(self.cluster_root, write=False)
+        cutoff = (((local_materialized.get("desired_state") or {}).get("credential_migration") or {}).get("cutoff"))
+        if isinstance(cutoff, dict) and int(hello.get("protocol_version") or 0) < int(cutoff.get("min_protocol") or 2):
+            raise ClusterSyncWorkerError("credential protocol downgrade rejected after cutoff")
         remote_node_id = str(hello.get("node_id") or "")
         if peer_id and remote_node_id and remote_node_id != peer_id:
             raise ClusterSyncWorkerError("peer node_id does not match cluster_nodes")
@@ -326,23 +399,45 @@ class ClusterSyncWorker:
             local_vector = _state_vector_from_operations(local_ops)
 
         push_ops = _select_operations_missing_on_remote(local_ops, remote_vector)
+        peer_supports_credentials = (
+            int(hello.get("protocol_version") or 1) >= 2
+            and bool((hello.get("credential_capability") or {}).get("sealed_credentials"))
+        )
+        deferred_credential_ops = 0
+        if not peer_supports_credentials:
+            deferred_credential_ops = sum(
+                1 for operation in push_ops if str(operation.get("op") or "") in V2_CREDENTIAL_OPS
+            )
+            push_ops = [
+                operation
+                for operation in push_ops
+                if str(operation.get("op") or "") not in V2_CREDENTIAL_OPS
+            ]
         pushed_config_blobs = 0
         pushed_secret_blobs = 0
+        pushed_sealed_blobs = 0
         pushed_ops = 0
         if push_ops:
             fast_result = self._apply_operations_bundle(peer, local_node_id, push_ops)
             if fast_result is None:
-                pushed_config_blobs, pushed_secret_blobs = self._push_blobs_for_operations(peer, local_node_id, push_ops)
+                pushed_config_blobs, pushed_secret_blobs, pushed_sealed_blobs = self._push_blobs_for_operations(peer, local_node_id, push_ops)
                 pushed_ops = self._push_operations(peer, local_node_id, push_ops)
                 if pushed_ops:
                     self._remote_rebuild_and_materialize(peer, local_node_id)
             else:
                 pushed_config_blobs = int(fast_result.get("config_blobs") or 0)
                 pushed_secret_blobs = int(fast_result.get("secret_blobs") or 0)
+                pushed_sealed_blobs = int(fast_result.get("sealed_blobs") or 0)
                 pushed_ops = int(fast_result.get("count") or len(push_ops))
                 base_result["remote_apply"] = "bundle"
 
-        if pulled_ops or pushed_ops or key_changed:
+        mailbox_counts = (
+            self._sync_mailbox(peer, local_node_id)
+            if bool(hello.get("mailbox_capability"))
+            else {"supported": False, "pulled": 0, "pushed": 0, "acked": 0}
+        )
+
+        if pulled_ops or pushed_ops or key_changed or mailbox_counts["pulled"] or mailbox_counts["pushed"]:
             base_result["status"] = "changed"
         base_result.update({
             "remote_node_id": remote_node_id,
@@ -352,10 +447,72 @@ class ClusterSyncWorker:
             "pushed_ops": pushed_ops,
             "pushed_config_blobs": pushed_config_blobs,
             "pushed_secret_blobs": pushed_secret_blobs,
+            "pushed_sealed_blobs": pushed_sealed_blobs,
+            "deferred_credential_ops": deferred_credential_ops,
             "cluster_ssh_key_updated": key_changed,
+            "mailbox_supported": mailbox_counts["supported"],
+            "mailbox_pulled": mailbox_counts["pulled"],
+            "mailbox_pushed": mailbox_counts["pushed"],
+            "mailbox_acked": mailbox_counts["acked"],
             "last_seen": int(time.time()),
         })
         return base_result
+
+    def _sync_mailbox(self, peer: dict[str, Any], local_node_id: str) -> dict[str, Any]:
+        """Exchange missing mailbox messages while retaining opaque relay payloads."""
+
+        counts: dict[str, Any] = {"supported": False, "pulled": 0, "pushed": 0, "acked": 0}
+        try:
+            remote_payload = self.peer_client.run(peer, local_node_id, "get-mailbox-index")
+        except Exception as exc:
+            if _is_unsupported_command_error(exc, "get-mailbox-index"):
+                return counts
+            raise
+        counts["supported"] = True
+        remote_items = remote_payload.get("messages") if isinstance(remote_payload, dict) else []
+        remote_items = remote_items if isinstance(remote_items, list) else []
+        remote_ids = {
+            str(item.get("message_id") or "")
+            for item in remote_items
+            if isinstance(item, dict) and item.get("message_id")
+        }
+        mailbox = ClusterMailbox(self.cluster_root)
+        local_ids = {str(item["message_id"]) for item in mailbox.index()}
+
+        for message_id in sorted(remote_ids - local_ids):
+            payload = self.peer_client.run(
+                peer,
+                local_node_id,
+                f"get-mailbox-message {shlex.quote(message_id)}",
+            )
+            message = payload.get("message") if isinstance(payload, dict) else None
+            if not isinstance(message, dict):
+                raise ClusterSyncWorkerError("peer returned invalid mailbox message")
+            if mailbox.put(message):
+                counts["pulled"] += 1
+            self.peer_client.run(
+                peer,
+                local_node_id,
+                f"ack-mailbox-message {shlex.quote(message_id)}",
+            )
+            counts["acked"] += 1
+
+        for item in mailbox.index():
+            message_id = str(item["message_id"])
+            if message_id in remote_ids:
+                continue
+            message = mailbox.get(message_id)
+            result = self.peer_client.run(
+                peer,
+                local_node_id,
+                "put-mailbox-message",
+                payload=json.dumps(message, sort_keys=True, separators=(",", ":")),
+            )
+            if bool(result.get("created", True)):
+                counts["pushed"] += 1
+            mailbox.ack(message_id, str(peer.get("node_id") or ""))
+            counts["acked"] += 1
+        return counts
 
     def _peer_handshake(self, peer: dict[str, Any], local_node_id: str) -> tuple[dict[str, Any], dict[str, int]]:
         """Return peer hello metadata and state vector, using one SSH call when supported."""
@@ -376,23 +533,21 @@ class ClusterSyncWorker:
         peer_id = str(peer.get("node_id") or hello.get("node_id") or "")
         public_key = str(hello.get("cluster_ssh_public_key") or "").strip()
         fingerprint = str(hello.get("cluster_ssh_fingerprint") or "").strip()
-        if not peer_id or not public_key or not fingerprint:
+        updates: dict[str, Any] = {}
+        if public_key and fingerprint:
+            updates.update({
+                "cluster_ssh_public_key": public_key,
+                "cluster_ssh_fingerprint": fingerprint,
+                "cluster_ssh_mode": "forced",
+            })
+        if not peer_id or not updates:
             return False
-        if (
-            str(peer.get("cluster_ssh_public_key") or "").strip() == public_key
-            and str(peer.get("cluster_ssh_fingerprint") or "").strip() == fingerprint
-            and str(peer.get("cluster_ssh_mode") or "forced").strip() == "forced"
-        ):
+        if all(peer.get(field) == value for field, value in updates.items()):
             return False
         append_operation(
             self.cluster_root,
             "UPDATE_NODE",
-            {
-                "node_id": peer_id,
-                "cluster_ssh_public_key": public_key,
-                "cluster_ssh_fingerprint": fingerprint,
-                "cluster_ssh_mode": "forced",
-            },
+            {"node_id": peer_id, **updates},
         )
         return True
 
@@ -407,6 +562,7 @@ class ClusterSyncWorker:
         """Pull operation ranges that exist on the peer but not locally."""
 
         pulled = 0
+        deferred_v2: list[dict[str, Any]] = []
         for actor in sorted(remote_vector):
             remote_seq = int(remote_vector.get(actor) or 0)
             local_seq = int(local_vector.get(actor) or 0)
@@ -418,23 +574,70 @@ class ClusterSyncWorker:
                 payload = self.peer_client.run(peer, local_node_id, f"get-ops {shlex.quote(actor)} {start} {end}")
                 operations = payload.get("operations") if isinstance(payload, dict) else []
                 operations = operations if isinstance(operations, list) else []
+                staged_trust = stage_membership_operations(
+                    self.cluster_root,
+                    operations,
+                    expected_cluster_id=cluster_id,
+                    authenticated_remote_node=str(peer.get("node_id") or ""),
+                )
                 self._pull_blobs_for_operations(peer, local_node_id, operations)
                 for operation in operations:
-                    validate_operation(operation, expected_cluster_id=cluster_id)
+                    if str(operation.get("op") or "") in V2_CREDENTIAL_OPS:
+                        deferred_v2.append(operation)
+                        continue
+                    validate_operation(
+                        operation,
+                        expected_cluster_id=cluster_id,
+                        cluster_root=self.cluster_root,
+                        membership_trust=staged_trust,
+                        network_input=True,
+                    )
                     op_path = ClusterPaths.from_root(self.cluster_root).oplog / str(operation["actor"]) / f"{int(operation['seq']):08d}.json"
                     with self._local_state_lock:
                         existed = op_path.exists()
-                        write_operation(self.cluster_root, operation)
+                        write_operation(
+                            self.cluster_root,
+                            operation,
+                            network_input=True,
+                            membership_trust=staged_trust,
+                        )
                     if not existed:
                         pulled += 1
                 start = end + 1
+        for operation in deferred_v2:
+            self._pull_blobs_for_operations(peer, local_node_id, [operation])
+            validate_operation(
+                operation,
+                expected_cluster_id=cluster_id,
+                cluster_root=self.cluster_root,
+                network_input=True,
+            )
+            op_path = (
+                ClusterPaths.from_root(self.cluster_root).oplog
+                / str(operation["actor"])
+                / f"{int(operation['seq']):08d}.json"
+            )
+            with self._local_state_lock:
+                existed = op_path.exists()
+                write_operation(self.cluster_root, operation, network_input=True)
+            if not existed:
+                pulled += 1
         return pulled
 
     def _pull_blobs_for_operations(self, peer: dict[str, Any], local_node_id: str, operations: list[dict[str, Any]]) -> dict[str, int]:
         """Pull required config and secret blobs for received operations."""
 
-        counts = {"config": 0, "secret": 0}
+        counts = {"config": 0, "secret": 0, "sealed": 0}
         paths = ClusterPaths.from_root(self.cluster_root)
+        materialized = rebuild_materialized_state(self.cluster_root, write=False)
+        cutoff = (((materialized.get("desired_state") or {}).get("credential_migration") or {}).get("cutoff"))
+        obsolete_secret_hashes = set((cutoff or {}).get("obsolete_secret_blob_hashes") or [])
+        obsolete_secret_hashes.update(
+            str(blob_hash)
+            for operation in operations
+            if str(operation.get("op") or "") == "CREDENTIAL_CUTOFF"
+            for blob_hash in operation.get("obsolete_secret_blob_hashes") or []
+        )
         for operation in operations:
             refs = _operation_hash_refs(operation)
             for manifest_hash in refs["config"]:
@@ -448,8 +651,20 @@ class ClusterSyncWorker:
                 if self._ensure_remote_blob(peer, local_node_id, paths.config_blobs, payload_hash, secret=False) is not None:
                     counts["config"] += 1
             for secret_hash in refs["secret"]:
+                if secret_hash in obsolete_secret_hashes:
+                    continue
                 if self._ensure_remote_blob(peer, local_node_id, paths.secret_blobs, secret_hash, secret=True) is not None:
                     counts["secret"] += 1
+            for sealed_hash in refs["sealed"]:
+                if self._ensure_remote_blob(
+                    peer,
+                    local_node_id,
+                    paths.sealed_blobs,
+                    sealed_hash,
+                    secret=True,
+                    sealed=True,
+                ) is not None:
+                    counts["sealed"] += 1
         return counts
 
     def _ensure_remote_blob(
@@ -460,21 +675,24 @@ class ClusterSyncWorker:
         blob_hash: str,
         *,
         secret: bool,
+        sealed: bool = False,
     ) -> bytes | None:
         """Ensure one local blob exists by pulling it from the peer when missing."""
 
         if _local_blob_exists(base_dir, blob_hash):
             return None
-        verb = "get-secret-blob" if secret else "get-blob"
+        verb = "get-sealed-blob" if sealed else "get-secret-blob" if secret else "get-blob"
         payload = self.peer_client.run(peer, local_node_id, f"{verb} {shlex.quote(str(blob_hash))}")
         raw = base64.b64decode(str(payload.get("content_b64") or ""))
+        if sealed:
+            _validate_sealed_blob_payload(self.cluster_root, raw)
         _write_local_blob(base_dir, str(payload.get("hash") or blob_hash), raw, secret=secret)
         return raw
 
-    def _push_blobs_for_operations(self, peer: dict[str, Any], local_node_id: str, operations: list[dict[str, Any]]) -> tuple[int, int]:
+    def _push_blobs_for_operations(self, peer: dict[str, Any], local_node_id: str, operations: list[dict[str, Any]]) -> tuple[int, int, int]:
         """Push required config and secret blobs for outbound operations."""
 
-        config_blobs, secret_blobs = _collect_local_blobs_for_operations(self.cluster_root, operations)
+        config_blobs, secret_blobs, sealed_blobs = _collect_local_blobs_for_operations(self.cluster_root, operations)
         pushed_config = 0
         for chunk in _chunk_config_blobs(config_blobs):
             payload = _blob_batch_payload(chunk)
@@ -484,7 +702,11 @@ class ClusterSyncWorker:
         for blob in secret_blobs:
             self.peer_client.run(peer, local_node_id, f"put-secret-blob {shlex.quote(str(blob['hash']))}", payload=blob["raw"])
             pushed_secret += 1
-        return pushed_config, pushed_secret
+        pushed_sealed = 0
+        for blob in sealed_blobs:
+            self.peer_client.run(peer, local_node_id, f"put-sealed-blob {shlex.quote(str(blob['hash']))}", payload=blob["raw"])
+            pushed_sealed += 1
+        return pushed_config, pushed_secret, pushed_sealed
 
     def _push_operations(self, peer: dict[str, Any], local_node_id: str, operations: list[dict[str, Any]]) -> int:
         """Push outbound operations to the peer."""
@@ -500,8 +722,8 @@ class ClusterSyncWorker:
 
         if not operations:
             return {"ok": True, "count": 0, "config_blobs": 0, "secret_blobs": 0}
-        config_blobs, secret_blobs = _collect_local_blobs_for_operations(self.cluster_root, operations)
-        payload = _apply_bundle_payload(operations, config_blobs, secret_blobs)
+        config_blobs, secret_blobs, sealed_blobs = _collect_local_blobs_for_operations(self.cluster_root, operations)
+        payload = _apply_bundle_payload(operations, config_blobs, secret_blobs, sealed_blobs)
         if len(payload.encode("utf-8")) > APPLY_BUNDLE_TARGET_BYTES:
             return None
         try:
@@ -519,6 +741,9 @@ class ClusterSyncWorker:
         api_preview = self.peer_client.run(peer, local_node_id, "materialize-api-keys-preview")
         if api_preview.get("can_apply"):
             self.peer_client.run(peer, local_node_id, "materialize-api-keys")
+        credential_preview = self.peer_client.run(peer, local_node_id, "materialize-credentials-preview")
+        if credential_preview.get("can_apply"):
+            self.peer_client.run(peer, local_node_id, "materialize-credentials")
 
 
 class ClusterSyncWorkerError(RuntimeError):
@@ -650,6 +875,12 @@ def _peer_result(peer_id: str, peer: dict[str, Any], *, ok: bool, status: str, r
         "pushed_ops": 0,
         "pushed_config_blobs": 0,
         "pushed_secret_blobs": 0,
+        "pushed_sealed_blobs": 0,
+        "deferred_credential_ops": 0,
+        "mailbox_supported": False,
+        "mailbox_pulled": 0,
+        "mailbox_pushed": 0,
+        "mailbox_acked": 0,
     }
 
 
@@ -672,7 +903,7 @@ def _as_state_vector(value: Any) -> dict[str, int]:
 def _state_vector_from_operations(operations: list[dict[str, Any]]) -> dict[str, int]:
     """Build a state vector from loaded operations."""
 
-    vector: dict[str, int] = {}
+    sequences: dict[str, set[int]] = {}
     for operation in operations:
         actor = str(operation.get("actor") or "")
         try:
@@ -680,7 +911,14 @@ def _state_vector_from_operations(operations: list[dict[str, Any]]) -> dict[str,
         except (TypeError, ValueError):
             continue
         if actor and seq > 0:
-            vector[actor] = max(vector.get(actor, 0), seq)
+            sequences.setdefault(actor, set()).add(seq)
+    vector: dict[str, int] = {}
+    for actor, values in sequences.items():
+        contiguous = 0
+        while contiguous + 1 in values:
+            contiguous += 1
+        if contiguous:
+            vector[actor] = contiguous
     return {key: vector[key] for key in sorted(vector)}
 
 
@@ -703,7 +941,7 @@ def _select_operations_missing_on_remote(local_operations: list[dict[str, Any]],
 def _operation_hash_refs(operation: dict[str, Any]) -> dict[str, list[str]]:
     """Return blob hashes referenced by one operation."""
 
-    refs = {"config": [], "api_payload": [], "secret": []}
+    refs = {"config": [], "api_payload": [], "secret": [], "sealed": []}
     config_hash = str(operation.get("config_manifest_hash") or "")
     if config_hash:
         refs["config"].append(config_hash)
@@ -713,6 +951,9 @@ def _operation_hash_refs(operation: dict[str, Any]) -> dict[str, list[str]]:
     secret_hash = str(operation.get("secret_blob_hash") or "")
     if secret_hash:
         refs["secret"].append(secret_hash)
+    sealed_hash = str(operation.get("sealed_blob_hash") or "")
+    if sealed_hash:
+        refs["sealed"].append(sealed_hash)
     return refs
 
 
@@ -747,7 +988,12 @@ def _blob_batch_payload(blobs: list[dict[str, Any]]) -> str:
     }, sort_keys=True, separators=(",", ":"))
 
 
-def _apply_bundle_payload(operations: list[dict[str, Any]], config_blobs: list[dict[str, Any]], secret_blobs: list[dict[str, Any]]) -> str:
+def _apply_bundle_payload(
+    operations: list[dict[str, Any]],
+    config_blobs: list[dict[str, Any]],
+    secret_blobs: list[dict[str, Any]],
+    sealed_blobs: list[dict[str, Any]] | None = None,
+) -> str:
     """Build one JSON payload for apply-bundle."""
 
     def blob_items(blobs: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -761,18 +1007,32 @@ def _apply_bundle_payload(operations: list[dict[str, Any]], config_blobs: list[d
             "operations": operations,
             "config_blobs": blob_items(config_blobs),
             "secret_blobs": blob_items(secret_blobs),
+            "sealed_blobs": blob_items(sealed_blobs or []),
         },
         sort_keys=True,
         separators=(",", ":"),
     )
 
 
-def _collect_local_blobs_for_operations(cluster_root: Path, operations: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _collect_local_blobs_for_operations(
+    cluster_root: Path,
+    operations: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Collect local config and secret blobs required to send operations."""
 
     paths = ClusterPaths.from_root(cluster_root)
     config_by_hash: dict[str, dict[str, Any]] = {}
     secret_by_hash: dict[str, dict[str, Any]] = {}
+    sealed_by_hash: dict[str, dict[str, Any]] = {}
+    materialized = rebuild_materialized_state(cluster_root, write=False)
+    cutoff = (((materialized.get("desired_state") or {}).get("credential_migration") or {}).get("cutoff"))
+    obsolete_secret_hashes = set((cutoff or {}).get("obsolete_secret_blob_hashes") or [])
+    obsolete_secret_hashes.update(
+        str(blob_hash)
+        for operation in operations
+        if str(operation.get("op") or "") == "CREDENTIAL_CUTOFF"
+        for blob_hash in operation.get("obsolete_secret_blob_hashes") or []
+    )
     for operation in operations:
         refs = _operation_hash_refs(operation)
         for manifest_hash in refs["config"]:
@@ -782,9 +1042,19 @@ def _collect_local_blobs_for_operations(cluster_root: Path, operations: list[dic
             raw = _read_local_blob(paths.config_blobs, payload_hash)
             config_by_hash.setdefault(payload_hash, {"hash": payload_hash, "raw": raw})
         for secret_hash in refs["secret"]:
+            if secret_hash in obsolete_secret_hashes:
+                continue
             raw = _read_local_blob(paths.secret_blobs, secret_hash)
             secret_by_hash.setdefault(secret_hash, {"hash": secret_hash, "raw": raw})
-    return list(config_by_hash.values()), list(secret_by_hash.values())
+        for sealed_hash in refs["sealed"]:
+            raw = _read_local_blob(paths.sealed_blobs, sealed_hash)
+            _validate_sealed_blob_payload(cluster_root, raw)
+            sealed_by_hash.setdefault(sealed_hash, {"hash": sealed_hash, "raw": raw})
+    return (
+        list(config_by_hash.values()),
+        list(secret_by_hash.values()),
+        list(sealed_by_hash.values()),
+    )
 
 
 def _collect_config_manifest_blobs(cluster_root: Path, operation: dict[str, Any], manifest_hash: str) -> list[dict[str, Any]]:

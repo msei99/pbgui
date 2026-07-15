@@ -42,7 +42,7 @@ Left sidebar:
 
 The overview uses the normal shared PBGui FastAPI shell. When you switch to **Master** or a specific **VPS**, the left sidebar changes into the view-specific action list. The main overview area stays focused on the table, while host import stays available from the sidebar as a manual hostname-based action or as an **Import Cluster Nodes** action after joining an existing Cluster Sync state.
 
-**Import Cluster Nodes** reads the local materialized `cluster_nodes` state and imports non-local nodes that have SSH metadata, regardless of their Cluster Sync mode. Disabled Cluster Sync nodes can still be imported into VPS Manager; disabled only means PBCluster should not replicate through that node. The import writes only safe local VPS Manager metadata such as hostname, SSH host, SSH user, SSH port and Remote PBGui Dir; VPS passwords, sudo passwords, CoinMarketCap keys and private keys stay local and are not copied from Cluster Sync. If local `/etc/hosts` is missing or points the hostname at a different IP, the import preview shows the required host entry changes and the apply step asks for the local sudo password before writing them. The modal asks for each imported host's VPS user password; rows left without a password are skipped, while entered passwords are used once to refresh remote settings, install the monitoring SSH key and keep the password only in the current browser/API session for later SSH-backed actions.
+**Import Cluster Nodes** reads the local materialized `cluster_nodes` state and imports non-local nodes that have SSH metadata, regardless of their Cluster Sync mode. Disabled Cluster Sync nodes can still be imported into VPS Manager; disabled only means PBCluster should not replicate through that node. The import writes only safe local VPS Manager metadata such as hostname, SSH host, SSH user, SSH port and Remote PBGui Dir; passwords and private keys are not imported. CMC secrets are never VPS Manager fields: Cluster Sync materializes sealed pool generations separately. If local `/etc/hosts` is missing or points the hostname at a different IP, the import preview shows the required host entry changes and the apply step asks for the local sudo password before writing them. The modal asks for each imported host's VPS user password; rows left without a password are skipped, while entered passwords are used once to refresh remote settings, install the monitoring SSH key and keep the password only in the current browser/API session for later SSH-backed actions.
 
 The page keeps a live WebSocket connection for overview rows, progress logs, and branch state.
 
@@ -107,10 +107,9 @@ Sidebar actions:
 | **Update Linux** | Run `apt upgrade` (optional reboot checkbox) |
 | **Reboot VPS** | Restart the VPS |
 | **Cleanup VPS** | Remove old packages and logs |
-| **Update CoinData API** | Push updated CoinMarketCap API key |
 
 The **VPS** content area also contains:
-- a setup/config grid for password, swap, CoinMarketCap key and firewall fields; **Apply VPS Changes** saves changes locally and applies changed swap, firewall, and CoinMarketCap settings on the VPS
+- a setup/config grid for password, swap, and firewall fields; **Apply VPS Changes** saves changes locally and applies changed swap and firewall settings on the VPS
 - **PBGui Branch Management** and **PB7 Branch Management** with the same switch / update workflow as the Master page
 - a **Remote Monitor** section with server metrics plus PB7 activity data from live processes, PB7 logs, and Cluster Sync desired state
 - a **Progress** section with separate status buckets for init, setup and update runs; use the sidebar action buttons to open the shared **Command Log Viewer** whenever you need the full ansible output
@@ -120,7 +119,7 @@ In cluster mode, **Update PBGui** and PBGui branch switches on a VPS sync PBClus
 The sidebar keeps the detailed log workflows separate from the normal host overview:
 - utility actions such as **Task Logs**, **Host Logs**, **Change VPS**, **Initialize**, or **Delete VPS** stay above a divider, while the executable ansible playbook buttons are grouped below it
 - **Task Logs** opens a dedicated filtered viewer for all stored playbook logs of the selected VPS, including rotated history files
-- actions such as **Initialize**, **Setup VPS**, **Update PBGui**, **Update PBGui and PB7**, **Update Linux**, **Cleanup VPS**, or **Update CoinData API** switch the main pane to the shared **Command Log Viewer** automatically
+- actions such as **Initialize**, **Setup VPS**, **Update PBGui**, **Update PBGui and PB7**, **Update Linux**, or **Cleanup VPS** switch the main pane to the shared **Command Log Viewer** automatically
 - **Host Logs** opens a dedicated **Host Log Viewer** screen for service logs, running bot logs, and file-style targets such as `PBCluster.log`
 - **Back** returns from branch, setup, or log screens to the normal VPS detail view without losing the selected host context
 - every callable VPS Manager task now keeps its own current log plus rotated history entries in the shared viewer; the retention defaults to 10 history files and can be changed via `[vps_manager] task_log_history` in `pbgui.ini`
@@ -130,14 +129,14 @@ The sidebar keeps the detailed log workflows separate from the normal host overv
 
 The status cards above the setup grid are live operator hints:
 - **Update Ready** turns green as soon as a VPS user password is entered locally and shows how many Linux updates are pending.
-- **CoinData Ready** shows the remaining CoinMarketCap credits when the monitor reports them.
+- **Credential Capability** and **Credential Protocol** report secret-free CMC pool readiness, active-key count, and catalog/materialized generations when available.
 - **Monitor Agent** shows whether the remote `pbgui-monitor-agent.service` cache is OK, stale, missing, or in error. Missing/stale states should be fixed by running **Update PBGui** on the VPS or checking `systemctl --user status pbgui-monitor-agent.service` and `journalctl --user -u pbgui-monitor-agent.service` on the VPS.
 - Pending Linux updates and reboot-needed hints are refreshed from the monitor-agent package-status cache.
 - The detail page also includes a one-row summary table plus a remote server resource snapshot similar to the previous server view.
 
 `Cleanup VPS` also installs or refreshes two small daily cleanup cron jobs on the VPS: one user-level job for pip and rustup caches, plus one root-level job for `journalctl --vacuum-time=1d`. The periodic jobs run quietly and do not keep their own log history.
 
-Sensitive fields such as **VPS User Password** and **CoinMarketCap API Key** include an eye button so you can temporarily reveal the stored value while editing.
+Sensitive login fields such as **VPS User Password** include an eye button so you can temporarily reveal the value entered for the current session. VPS Manager has no raw CoinMarketCap key field or reveal action.
 
 The reveal state is preserved during live updates, so opening an eye button does not immediately flip back to hidden when fresh WebSocket data arrives.
 
@@ -176,4 +175,4 @@ PBGui branch switches use the same PBCluster service sync/restart handling as PB
 
 ### Materialize API keys
 - Use **System -> Cluster Sync** to preview and materialize `api-keys.json` on reachable nodes.
-- Per-VPS: open the VPS detail → **Update CoinData API** only updates the CoinMarketCap key used by market-data filters.
+- CMC pool credentials are separate sealed generations. Manage them under **Services -> PBCoinData -> Pool** and let Cluster Sync materialize them; there are no per-VPS CMC keys.

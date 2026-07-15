@@ -24,6 +24,8 @@ Main public API:
 
 from __future__ import annotations
 
+SERVICE = "BinanceBest1m"
+
 import asyncio
 import calendar
 import io

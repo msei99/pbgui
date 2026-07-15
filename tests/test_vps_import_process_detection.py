@@ -704,7 +704,11 @@ def test_save_existing_vps_import_writes_missing_hosts_entry(monkeypatch: pytest
         "detected": {
             "remote_pbgui_dir": "/home/mani/software/pbgui",
             "swap": "2G",
-            "coinmarketcap_api_key": "",
+            "credential_protocol_version": None,
+            "credential_active": None,
+            "cmc_catalog_generation": None,
+            "cmc_materialized_generation": None,
+            "cmc_active_key_count": None,
             "firewall": True,
             "firewall_ssh_port": 22,
             "firewall_ssh_ips": "198.51.100.1",
@@ -737,8 +741,8 @@ def test_save_existing_vps_import_writes_missing_hosts_entry(monkeypatch: pytest
     assert result["hostname"] == "manibot90"
 
 
-def test_update_vps_passes_empty_optional_values(monkeypatch, tmp_path: Path) -> None:
-    """Update playbooks receive explicit empty optional values after clearing CoinData."""
+def test_update_vps_does_not_pass_raw_cmc_values(monkeypatch, tmp_path: Path) -> None:
+    """Update playbooks never receive raw per-VPS CMC values."""
     captured: dict[str, object] = {}
 
     def fake_run_async(**kwargs) -> None:
@@ -754,14 +758,13 @@ def test_update_vps_passes_empty_optional_values(monkeypatch, tmp_path: Path) ->
     vps.user = "mani"
     vps.user_pw = None
     vps.swap = "2G"
-    vps.coinmarketcap_api_key = ""
     vps.command = "vps-update-pbgui"
 
     manager = core.VPSManager()
     manager.update_vps(vps)
 
     extravars = captured["extravars"]
-    assert extravars["coinmarketcap_api_key"] == ""
+    assert "coinmarketcap_api_key" not in extravars
 
 
 def test_update_vps_cleans_only_its_runner_private_dir(monkeypatch, tmp_path: Path) -> None:
@@ -796,8 +799,8 @@ def test_update_vps_cleans_only_its_runner_private_dir(monkeypatch, tmp_path: Pa
     assert observed["other_dir"].exists()
 
 
-def test_fetch_vps_info_reads_optional_settings_from_remote_ini(monkeypatch) -> None:
-    """Remote settings refresh reads supported VPS settings from pbgui.ini."""
+def test_fetch_vps_info_does_not_read_remote_ini_secrets(monkeypatch) -> None:
+    """Remote settings refresh reads swap without opening pbgui.ini."""
     _FakeSshClient.config_content = """
 [coinmarketcap]
 api_key = remote-api-key
@@ -817,11 +820,8 @@ ssh_ips = 198.51.100.1,203.0.113.7
 
     info = vps.fetch_vps_info()
 
-    assert info["coinmarketcap"] == "remote-api-key"
     assert info["swap"] == "2G"
-    assert info["firewall"] is True
-    assert info["firewall_ssh_port"] == "2222"
-    assert info["firewall_ssh_ips"] == "198.51.100.1,203.0.113.7"
+    assert "coinmarketcap" not in info
 
 
 def test_fetch_ufw_settings_reads_specific_ips_without_pbgui_ini(monkeypatch) -> None:
@@ -958,8 +958,8 @@ def test_build_ufw_apply_script_deletes_descending_and_never_resets() -> None:
     assert "ufw --force enable" in script
 
 
-def test_vps_status_keeps_coindata_expected_without_cmc_key() -> None:
-    """A second master still displays CoinData as expected without a CMC key."""
+def test_vps_status_reports_unknown_credential_capability_explicitly() -> None:
+    """Missing monitor capability metadata remains explicit unknown state."""
     service = object.__new__(VPSManagerService)
     service._vps_package_status_cache = {}
     service._vps_ssh_ok_cache = {}
@@ -970,12 +970,18 @@ def test_vps_status_keeps_coindata_expected_without_cmc_key() -> None:
     service._host_online = lambda host_state: True
     service._host_telemetry_fresh = lambda host_state: True
     service._host_telemetry_age = lambda host_state: 1.0
-    service._host_meta = lambda host_state: {"coindata_configured": False}
+    service._host_meta = lambda host_state: {}
+    service._credential_capability_metadata = lambda hostname, host_state: {
+        "credential_protocol_version": None,
+        "credential_active": None,
+        "cmc_catalog_generation": None,
+        "cmc_materialized_generation": None,
+        "cmc_active_key_count": None,
+    }
     service._build_remote_server_metrics = lambda hostname, host_state: None
     service._get_vps_systemd_migration_status = lambda vps, host_state, quick=False: {}
     vps = SimpleNamespace(
         hostname="test-vps",
-        coinmarketcap_api_key="old-api-key",
         init_status="successful",
         setup_status="successful",
         update_status="successful",
@@ -990,9 +996,10 @@ def test_vps_status_keeps_coindata_expected_without_cmc_key() -> None:
         is_vps_in_hosts=lambda: True,
     )
 
-    status = service._build_vps_status(vps, {}, False)
+    status = service._build_vps_status(vps, {})
 
-    assert status["coindata_configured"] is True
+    assert status["credential_active"] is None
+    assert status["cmc_active_key_count"] is None
 
 
 def test_master_overview_row_is_online_without_remote_helper(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1010,8 +1017,8 @@ def test_master_overview_row_is_online_without_remote_helper(monkeypatch: pytest
     assert row["online"] is True
 
 
-def test_run_vps_command_blocks_stale_optional_reenable_from_remote_meta() -> None:
-    """A second master does not re-enable VPS optional services from stale local config."""
+def test_run_vps_command_passes_secret_free_inactive_capability() -> None:
+    """Update playbooks receive inactive capability without any raw key."""
     captured: dict[str, object] = {}
 
     def fake_update_vps(vps, debug=False, extra_vars=None) -> None:
@@ -1024,11 +1031,9 @@ def test_run_vps_command_blocks_stale_optional_reenable_from_remote_meta() -> No
     service._require_vps = lambda hostname: SimpleNamespace(
         hostname=hostname,
         user_pw=None,
-        coinmarketcap_api_key="old-api-key",
     )
     service._apply_session_secrets_to_vps = lambda token, vps: None
-    service._get_monitor_state = lambda: {"host_meta": {"test-vps": {"coindata_configured": False}}}
-    service._load_vps_optional_config_pending = lambda vps: {}
+    service._get_monitor_state = lambda: {"host_meta": {"test-vps": {"credential_protocol_version": 2, "credential_active": False}}}
 
     service.run_vps_command(
         token="token",
@@ -1037,8 +1042,9 @@ def test_run_vps_command_blocks_stale_optional_reenable_from_remote_meta() -> No
         command_text="Update PBGui",
     )
 
-    assert "bucket" not in captured["extra_vars"]
-    assert captured["extra_vars"]["coinmarketcap_api_key"] == ""
+    assert captured["extra_vars"]["credential_protocol_version"] == 2
+    assert captured["extra_vars"]["credential_active"] is False
+    assert "coinmarketcap_api_key" not in captured["extra_vars"]
 
 
 def test_start_vps_deploy_host_blocks_active_vps_task() -> None:
@@ -1162,100 +1168,22 @@ def test_validate_and_stage_vps_deploy_host_skips_active_host() -> None:
     assert updates[0]["busy-vps"]["status"] == "skipped"
 
 
-def test_run_vps_command_keeps_pending_optional_values() -> None:
-    """Pending local CoinData values override stale missing remote metadata during updates."""
-    captured: dict[str, object] = {}
-
-    def fake_update_vps(vps, debug=False, extra_vars=None) -> None:
-        """Capture update arguments instead of running Ansible."""
-        del debug
-        captured["coinmarketcap_api_key"] = vps.coinmarketcap_api_key
-        captured["extra_vars"] = extra_vars
-
+def test_sync_vps_config_scrubs_retired_pending_secret_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retired pending secret state is deleted without being loaded."""
+    monkeypatch.setattr(service_mod, "PBGDIR", str(tmp_path))
     service = object.__new__(VPSManagerService)
-    service.vpsmanager = SimpleNamespace(update_vps=fake_update_vps)
-    vps = SimpleNamespace(
-        hostname="test-vps",
-        user_pw=None,
-        coinmarketcap_api_key="new-api-key",
-        save=lambda: None,
-    )
-    service._require_vps = lambda hostname: vps
-    service._apply_session_secrets_to_vps = lambda token, vps: None
-    service._get_monitor_state = lambda: {"host_meta": {"test-vps": {"coindata_configured": False}}}
-    service._host_telemetry_fresh = lambda state: True
-    service._load_vps_optional_config_pending = lambda vps: {"coinmarketcap_api_key": "new-api-key"}
-    service._write_vps_optional_config_pending = lambda vps, values: None
+    service._host_telemetry_fresh = lambda state: False
+    vps = SimpleNamespace(hostname="test-vps")
+    pending = tmp_path / "data" / "vpsmanager" / "hosts" / "test-vps" / "optional_config_pending.json"
+    pending.parent.mkdir(parents=True)
+    pending.write_text('{"coinmarketcap_api_key":"legacy-secret"}', encoding="utf-8")
 
-    service.run_vps_command(
-        token="token",
-        hostname="test-vps",
-        command="vps-update-pbgui",
-        command_text="Update PBGui",
-    )
+    service._sync_vps_config_from_host_meta(vps, {})
 
-    assert captured["coinmarketcap_api_key"] == "new-api-key"
-    assert captured["extra_vars"] is None
-
-
-def test_sync_vps_config_from_host_meta_persists_remote_optional_values() -> None:
-    """Fresh VPS metadata updates the local master's saved optional settings."""
-    saves: list[str] = []
-    service = object.__new__(VPSManagerService)
-    service._load_vps_optional_config_pending = lambda vps: {}
-    service._write_vps_optional_config_pending = lambda vps, values: None
-    vps = SimpleNamespace(
-        coinmarketcap_api_key="old-api-key",
-        save=lambda: saves.append(vps.coinmarketcap_api_key),
-    )
-    host_state = {
-        "connection": {"status": "connected"},
-        "stream": {"last_update": 1_700_000_000},
-        "meta": {
-            "coinmarketcap_api_key": "remote-api-key",
-        },
-    }
-    service._host_telemetry_fresh = lambda state: True
-
-    service._sync_vps_config_from_host_meta(vps, host_state)
-
-    assert vps.coinmarketcap_api_key == "remote-api-key"
-    assert saves == ["remote-api-key"]
-
-
-def test_sync_vps_config_from_host_meta_keeps_pending_local_optional_values(tmp_path: Path) -> None:
-    """Stale live metadata cannot overwrite locally saved pending optional settings."""
-    saves: list[str] = []
-    service = object.__new__(VPSManagerService)
-    service._host_telemetry_fresh = lambda state: True
-    vps = SimpleNamespace(
-        hostname="test-vps",
-        path=tmp_path,
-        coinmarketcap_api_key="",
-        save=lambda: saves.append(vps.coinmarketcap_api_key),
-    )
-    service._write_vps_optional_config_pending(vps, {"coinmarketcap_api_key": ""})
-    stale_host_state = {
-        "meta": {
-            "coinmarketcap_api_key": "old-api-key",
-        },
-    }
-
-    service._sync_vps_config_from_host_meta(vps, stale_host_state)
-
-    assert vps.coinmarketcap_api_key == ""
-    assert service._load_vps_optional_config_pending(vps) == {"coinmarketcap_api_key": ""}
-    assert saves == []
-
-    confirmed_host_state = {
-        "meta": {
-            "coinmarketcap_api_key": "",
-        },
-    }
-    service._sync_vps_config_from_host_meta(vps, confirmed_host_state)
-
-    assert service._load_vps_optional_config_pending(vps) == {}
-    assert saves == []
+    assert not pending.exists()
 
 
 def test_sync_vps_config_from_host_meta_persists_remote_firewall_values() -> None:
@@ -1263,13 +1191,11 @@ def test_sync_vps_config_from_host_meta_persists_remote_firewall_values() -> Non
     saves: list[tuple[bool, int, str]] = []
     service = object.__new__(VPSManagerService)
     service._host_telemetry_fresh = lambda state: True
-    service._load_vps_optional_config_pending = lambda vps: {}
-    service._write_vps_optional_config_pending = lambda vps, values: None
     vps = SimpleNamespace(
+        hostname="test-vps",
         firewall=False,
         firewall_ssh_port=22,
         firewall_ssh_ips="",
-        coinmarketcap_api_key="",
         save=lambda: saves.append((vps.firewall, vps.firewall_ssh_port, vps.firewall_ssh_ips)),
     )
     host_state = {
@@ -1296,13 +1222,11 @@ def test_sync_vps_config_from_host_meta_ignores_missing_firewall_section() -> No
     saves: list[tuple[bool, int, str]] = []
     service = object.__new__(VPSManagerService)
     service._host_telemetry_fresh = lambda state: True
-    service._load_vps_optional_config_pending = lambda vps: {}
-    service._write_vps_optional_config_pending = lambda vps, values: None
     vps = SimpleNamespace(
+        hostname="test-vps",
         firewall=True,
         firewall_ssh_port=2222,
         firewall_ssh_ips="198.51.100.1",
-        coinmarketcap_api_key="",
         save=lambda: saves.append((vps.firewall, vps.firewall_ssh_port, vps.firewall_ssh_ips)),
     )
     host_state = {
@@ -1324,24 +1248,20 @@ def test_sync_vps_config_from_host_meta_ignores_missing_firewall_section() -> No
     assert saves == []
 
 
-def test_run_vps_command_uses_fresh_remote_optional_values() -> None:
-    """A second master's update command uses the VPS-reported optional values."""
+def test_run_vps_command_uses_fresh_remote_capability_values() -> None:
+    """A second master's update command uses monitor-reported capability values."""
     captured: dict[str, object] = {}
 
     def fake_update_vps(vps, debug=False, extra_vars=None) -> None:
         """Capture the updated VPS object instead of running Ansible."""
         del debug
-        captured["coinmarketcap_api_key"] = vps.coinmarketcap_api_key
         captured["extra_vars"] = extra_vars
 
     service = object.__new__(VPSManagerService)
     service.vpsmanager = SimpleNamespace(update_vps=fake_update_vps)
-    service._load_vps_optional_config_pending = lambda vps: {}
-    service._write_vps_optional_config_pending = lambda vps, values: None
     vps = SimpleNamespace(
         hostname="test-vps",
         user_pw=None,
-        coinmarketcap_api_key="old-api-key",
         save=lambda: None,
     )
     service._require_vps = lambda hostname: vps
@@ -1351,8 +1271,11 @@ def test_run_vps_command_uses_fresh_remote_optional_values() -> None:
         "streams": {"test-vps": {"last_update": 1_700_000_000}},
         "host_meta": {
             "test-vps": {
-                "coindata_configured": True,
-                "coinmarketcap_api_key": "remote-api-key",
+                "credential_protocol_version": 2,
+                "credential_active": True,
+                "cmc_catalog_generation": 4,
+                "cmc_materialized_generation": 4,
+                "cmc_active_key_count": 2,
             }
         },
     }
@@ -1365,8 +1288,8 @@ def test_run_vps_command_uses_fresh_remote_optional_values() -> None:
         command_text="Update PBGui",
     )
 
-    assert captured["coinmarketcap_api_key"] == "remote-api-key"
-    assert captured["extra_vars"] is None
+    assert captured["extra_vars"]["credential_active"] is True
+    assert captured["extra_vars"]["cmc_active_key_count"] == 2
 
 
 def test_run_vps_command_uses_master_playbook_for_remote_master_updates() -> None:
@@ -1381,15 +1304,13 @@ def test_run_vps_command_uses_master_playbook_for_remote_master_updates() -> Non
 
     service = object.__new__(VPSManagerService)
     service.vpsmanager = SimpleNamespace(update_vps=fake_update_vps)
-    service._load_vps_optional_config_pending = lambda vps: {}
-    service._write_vps_optional_config_pending = lambda vps, values: None
-    vps = SimpleNamespace(hostname="manibot02", user="mani", remote_pbgui_dir="", user_pw=None, coinmarketcap_api_key="", save=lambda: None)
+    vps = SimpleNamespace(hostname="manibot02", user="mani", remote_pbgui_dir="", user_pw=None, save=lambda: None)
     service._require_vps = lambda hostname: vps
     service._apply_session_secrets_to_vps = lambda token, vps: None
     service._get_monitor_state = lambda: {
         "connections": {"connections": {"manibot02": {"status": "connected"}}},
         "streams": {"manibot02": {"last_update": 1_700_000_000}},
-        "host_meta": {"manibot02": {"role": "master", "coindata_configured": False}},
+        "host_meta": {"manibot02": {"role": "master", "credential_protocol_version": 2, "credential_active": False}},
     }
     service._host_telemetry_fresh = lambda state: True
 
@@ -1402,26 +1323,41 @@ def test_run_vps_command_uses_master_playbook_for_remote_master_updates() -> Non
         "pbgui_python": "/home/mani/software/venv_pbgui/bin/python",
         "pb7dir": "/home/mani/software/pb7",
         "pb7venv": "/home/mani/software/venv_pb7",
-        "coinmarketcap_api_key": "",
+        "credential_protocol_version": 2,
+        "credential_active": False,
+        "cmc_catalog_generation": None,
+        "cmc_materialized_generation": None,
+        "cmc_active_key_count": None,
     }
 
 
-def test_vps_action_log_resolves_remote_master_task_logs() -> None:
+def test_vps_action_log_resolves_remote_master_task_logs(tmp_path, monkeypatch) -> None:
     """VPS task log aliases can point at remote-master master-update logs."""
+    monkeypatch.setattr(async_logs, "_project_root", lambda: tmp_path)
     resolved = async_logs.resolve_local_log_path("VPSAction:manibot02:master-update-pbgui")
 
     assert resolved is not None
-    assert resolved.as_posix().endswith("data/vpsmanager/hosts/manibot02/master-update-pbgui.log")
+    assert resolved.as_posix().endswith("data/logs/vps-manager/hosts/manibot02/master-update-pbgui.log")
 
 
-def test_pbcoindata_is_expected_without_coinmarketcap_key() -> None:
-    """PBCoinData remains expected because it updates exchange mappings without CMC."""
+def test_vps_action_log_falls_back_to_known_legacy_location(tmp_path, monkeypatch) -> None:
+    """A known legacy VPS transcript remains readable when canonical is absent."""
+    legacy = tmp_path / "data" / "vpsmanager" / "hosts" / "host-a" / "vps-update.log"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("legacy", encoding="utf-8")
+    monkeypatch.setattr(async_logs, "_project_root", lambda: tmp_path)
+
+    assert async_logs.resolve_local_log_path("VPSAction:host-a:vps-update") == legacy
+
+
+def test_pbcoindata_expectation_is_unknown_without_capability() -> None:
+    """Missing capability metadata cannot fabricate PBCoinData readiness."""
 
     monitor = object.__new__(VPSMonitor)
     monitor.store = SimpleNamespace(host_meta={"manibot90": {"optional_services": {"PBCoinData": False}}})
     monitor._local_optional_service_expected = lambda hostname, service_name: True
 
-    assert monitor._optional_service_expected("manibot90", "PBCoinData") is True
+    assert monitor._optional_service_expected("manibot90", "PBCoinData") is None
 
 
 def test_optional_pbrun_remote_unconfigured_prevents_restart() -> None:
@@ -1652,6 +1588,68 @@ def test_pbcluster_sync_off_alerts_clear_without_recovery_telegram(monkeypatch: 
     assert recoveries == []
 
 
+def test_acknowledged_active_alert_does_not_realert_on_deterioration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Severity and detail changes within one active episode preserve acknowledgement."""
+    monitor = object.__new__(VPSMonitor)
+    alert_id = "system:manibot01:system"
+    monitor._alerts = {
+        alert_id: monitor_mod.AlertRecord(
+            id=alert_id,
+            kind=monitor_mod.ALERT_KIND_SYSTEM,
+            host="manibot01",
+            name="system",
+            severity="warning",
+            summary="System warning",
+            details="memory warning",
+            active=True,
+            acknowledged=True,
+            first_seen_ts=1.0,
+            last_seen_ts=1.0,
+        )
+    }
+    monitor.pool = SimpleNamespace(get_status_summary=lambda: {"connections": {}})
+    monitor.store = SimpleNamespace(
+        system={},
+        instances={},
+        services={},
+        streams={},
+        changed=threading.Event(),
+    )
+    monitor._load_alert_routes = lambda: None
+    monitor._prune_alert_history = lambda now=None: False
+    monitor._save_alert_state = lambda: None
+    monitor._update_cpu_threshold_state = lambda config: None
+    monitor._monitor_config = object()
+    monitor._alert_gui_routes = {monitor_mod.ALERT_KIND_SYSTEM: True}
+    monkeypatch.setattr(
+        monitor_mod,
+        "collect_live_alerts",
+        lambda *_args, **_kwargs: [{
+            "id": alert_id,
+            "kind": monitor_mod.ALERT_KIND_SYSTEM,
+            "host": "manibot01",
+            "name": "system",
+            "severity": "error",
+            "summary": "System error",
+            "details": "memory and swap error",
+            "triggered_thresholds": ["memory", "swap"],
+        }],
+    )
+    emitted: list[str] = []
+
+    async def fake_problem(alert) -> None:
+        emitted.append(alert.id)
+
+    monitor._emit_problem_event = fake_problem
+
+    asyncio.run(monitor._sync_live_alerts())
+
+    assert monitor._alerts[alert_id].severity == "error"
+    assert monitor._alerts[alert_id].acknowledged is True
+    assert monitor._alerts[alert_id].episode == 1
+    assert emitted == []
+
+
 def test_pbcluster_check_requires_systemd_unit() -> None:
     """PBCluster is not considered healthy from a legacy PID fallback."""
     commands: list[str] = []
@@ -1783,6 +1781,7 @@ def test_monitor_agent_locally_restarts_expected_service(monkeypatch: pytest.Mon
     assert services["PBData"]["was_restarted"] is True
     assert services["PBRun"]["status"] == "disabled"
     assert services["PBCoinData"]["status"] == "disabled"
+    assert services["PBCoinData"]["expected"] is False
     assert services["PBMonitorAgent"]["status"] == "running"
 
 
@@ -1826,39 +1825,28 @@ def test_pbcluster_restart_does_not_use_legacy_starter_fallback() -> None:
     assert not any("starter.py" in command for command in commands)
 
 
-def test_save_vps_config_starts_remote_optional_apply(tmp_path: Path) -> None:
-    """Saving changed optional settings starts the targeted remote apply playbook."""
-    captured: dict[str, object] = {}
-    saves: list[str] = []
-
-    def fake_update_vps(vps, debug=False, extra_vars=None) -> None:
-        """Capture the targeted remote apply instead of running Ansible."""
-        del debug
-        captured["command"] = vps.command
-        captured["command_text"] = vps.command_text
-        captured["extra_vars"] = extra_vars or {}
-        vps.command_run_id = "run-123"
-
+def test_save_vps_config_ignores_retired_raw_cmc_form_field(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A legacy raw CMC form field is ignored and never starts a remote apply."""
+    monkeypatch.setattr(service_mod, "PBGDIR", str(tmp_path))
     service = object.__new__(VPSManagerService)
-    service.vpsmanager = SimpleNamespace(update_vps=fake_update_vps)
     service._store_session_secrets = lambda token, hostname, form: None
     service._session_secret_value = lambda token, hostname, field: ""
-    service._ensure_coinmarketcap_key_clear_allowed = lambda vps, next_key: None
-    service._apply_session_secrets_to_vps = lambda token, vps: None
-    service._build_vps_config = lambda token, vps: {"coinmarketcap_api_key": vps.coinmarketcap_api_key}
+    service._build_vps_config = lambda token, vps: {"swap": vps.swap}
     vps = SimpleNamespace(
         hostname="test-vps",
         path=tmp_path,
         user="mani",
         user_pw=None,
         swap="2G",
-        coinmarketcap_api_key="old-api-key",
         remote_pbgui_dir="/home/mani/software/pbgui",
         firewall=True,
         firewall_ssh_port=22,
         firewall_ssh_ips="",
         command_run_id="",
-        save=lambda: saves.append(vps.coinmarketcap_api_key),
+        save=lambda: None,
         _task_log_path=lambda command, fallback: tmp_path / f"{command}.log",
     )
     service._require_vps = lambda hostname: vps
@@ -1876,24 +1864,18 @@ def test_save_vps_config_starts_remote_optional_apply(tmp_path: Path) -> None:
         },
     )
 
-    assert captured["command"] == "vps-apply-config"
-    assert captured["command_text"] == "Apply VPS Config"
-    assert captured["extra_vars"] == {
-        "apply_optional_config": True,
-        "apply_firewall": False,
-        "apply_swap": False,
-        "coinmarketcap_api_key": "",
-    }
-    assert result["optional_changed"] is True
-    assert result["remote_apply"]["started"] is True
-    assert result["remote_apply"]["run_id"] == "run-123"
-    assert result["config"] == {"coinmarketcap_api_key": ""}
-    assert service._load_vps_optional_config_pending(vps) == {"coinmarketcap_api_key": ""}
-    assert saves
+    assert result["remote_apply"]["started"] is False
+    assert result["firewall_changed"] is False
+    assert result["swap_changed"] is False
+    assert result["config"] == {"swap": "2G"}
 
 
-def test_save_vps_config_starts_remote_firewall_apply_without_optional_pending(tmp_path: Path) -> None:
+def test_save_vps_config_starts_remote_firewall_apply_without_optional_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Saving changed firewall settings starts targeted apply without optional pending state."""
+    monkeypatch.setattr(service_mod, "PBGDIR", str(tmp_path))
     captured: dict[str, object] = {}
 
     def fake_update_vps(vps, debug=False, extra_vars=None) -> None:
@@ -1908,10 +1890,10 @@ def test_save_vps_config_starts_remote_firewall_apply_without_optional_pending(t
     service.vpsmanager = SimpleNamespace(update_vps=fake_update_vps)
     service._store_session_secrets = lambda token, hostname, form: None
     service._session_secret_value = lambda token, hostname, field: "fresh-password"
-    service._ensure_coinmarketcap_key_clear_allowed = lambda vps, next_key: None
     service._apply_session_secrets_to_vps = lambda token, vps: setattr(vps, "user_pw", "fresh-password")
+    service._get_monitor_state = lambda: {}
+    service._credential_playbook_vars = lambda hostname, host_state: {"credential_active": True}
     service._build_vps_config = lambda token, vps: {
-        "coinmarketcap_api_key": vps.coinmarketcap_api_key,
         "firewall": vps.firewall,
         "firewall_ssh_ips": vps.firewall_ssh_ips,
     }
@@ -1921,7 +1903,6 @@ def test_save_vps_config_starts_remote_firewall_apply_without_optional_pending(t
         user="mani",
         user_pw=None,
         swap="2G",
-        coinmarketcap_api_key="same-api-key",
         remote_pbgui_dir="/home/mani/software/pbgui",
         firewall=False,
         firewall_ssh_port=22,
@@ -1937,7 +1918,6 @@ def test_save_vps_config_starts_remote_firewall_apply_without_optional_pending(t
         "test-vps",
         {
             "swap": "2G",
-            "coinmarketcap_api_key": "same-api-key",
             "install_dir": "/home/mani/software",
             "firewall": True,
             "firewall_ssh_port": 22,
@@ -1947,18 +1927,20 @@ def test_save_vps_config_starts_remote_firewall_apply_without_optional_pending(t
 
     assert captured["command"] == "vps-apply-config"
     assert captured["command_text"] == "Apply VPS Config"
-    assert captured["extra_vars"] == {"apply_optional_config": False, "apply_firewall": True, "apply_swap": False}
-    assert result["optional_changed"] is False
+    assert captured["extra_vars"] == {"apply_firewall": True, "apply_swap": False, "credential_active": True}
     assert result["firewall_changed"] is True
     assert result["remote_apply"]["started"] is True
     assert result["remote_apply"]["run_id"] == "run-firewall"
     assert result["config"]["firewall"] is True
     assert result["config"]["firewall_ssh_ips"] == "198.51.100.1"
-    assert service._load_vps_optional_config_pending(vps) == {}
 
 
-def test_save_vps_config_starts_remote_swap_apply(tmp_path: Path) -> None:
+def test_save_vps_config_starts_remote_swap_apply(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Saving a changed swap size starts targeted apply through Save VPS."""
+    monkeypatch.setattr(service_mod, "PBGDIR", str(tmp_path))
     captured: dict[str, object] = {}
 
     def fake_update_vps(vps, debug=False, extra_vars=None) -> None:
@@ -1973,8 +1955,9 @@ def test_save_vps_config_starts_remote_swap_apply(tmp_path: Path) -> None:
     service.vpsmanager = SimpleNamespace(update_vps=fake_update_vps)
     service._store_session_secrets = lambda token, hostname, form: None
     service._session_secret_value = lambda token, hostname, field: "fresh-password"
-    service._ensure_coinmarketcap_key_clear_allowed = lambda vps, next_key: None
     service._apply_session_secrets_to_vps = lambda token, vps: setattr(vps, "user_pw", "fresh-password")
+    service._get_monitor_state = lambda: {}
+    service._credential_playbook_vars = lambda hostname, host_state: {"credential_active": True}
     service._build_vps_config = lambda token, vps: {"swap": vps.swap}
     vps = SimpleNamespace(
         hostname="test-vps",
@@ -1982,7 +1965,6 @@ def test_save_vps_config_starts_remote_swap_apply(tmp_path: Path) -> None:
         user="mani",
         user_pw=None,
         swap="2G",
-        coinmarketcap_api_key="same-api-key",
         remote_pbgui_dir="/home/mani/software/pbgui",
         firewall=True,
         firewall_ssh_port=22,
@@ -1998,7 +1980,6 @@ def test_save_vps_config_starts_remote_swap_apply(tmp_path: Path) -> None:
         "test-vps",
         {
             "swap": "4G",
-            "coinmarketcap_api_key": "same-api-key",
             "install_dir": "/home/mani/software",
             "firewall": True,
             "firewall_ssh_port": 22,
@@ -2008,37 +1989,33 @@ def test_save_vps_config_starts_remote_swap_apply(tmp_path: Path) -> None:
 
     assert captured["command"] == "vps-apply-config"
     assert captured["command_text"] == "Apply VPS Config"
-    assert captured["extra_vars"] == {"apply_optional_config": False, "apply_firewall": False, "apply_swap": True}
-    assert result["optional_changed"] is False
+    assert captured["extra_vars"] == {"apply_firewall": False, "apply_swap": True, "credential_active": True}
     assert result["firewall_changed"] is False
     assert result["swap_changed"] is True
     assert result["remote_apply"]["started"] is True
     assert result["remote_apply"]["run_id"] == "run-swap"
     assert result["config"]["swap"] == "4G"
-    assert service._load_vps_optional_config_pending(vps) == {}
 
 
 def test_read_vps_settings_uses_form_user_password() -> None:
     """Read VPS settings accepts a freshly entered form password."""
-    saves: list[tuple[str, bool, str]] = []
+    saves: list[tuple[bool, str]] = []
     progress: list[tuple[str, str, str]] = []
     service = object.__new__(VPSManagerService)
     service._session_secrets = {}
     vps = SimpleNamespace(
         hostname="test-vps",
         user_pw=None,
-        coinmarketcap_api_key="",
         swap="0",
         can_login_ssh=lambda: vps.user_pw == "fresh-password",
-        fetch_vps_info=lambda: {"coinmarketcap": "remote-cmc", "swap": "2G"},
+        fetch_vps_info=lambda: {"swap": "2G"},
         fetch_ufw_settings=lambda: (True, "82.165.176.129"),
         write_vps_firewall_info=lambda: True,
-        save=lambda: saves.append((vps.coinmarketcap_api_key, vps.firewall, vps.firewall_ssh_ips)),
+        save=lambda: saves.append((vps.firewall, vps.firewall_ssh_ips)),
     )
     service._require_vps = lambda hostname: vps
     service._clear_vps_optional_config_pending = lambda vps: None
     service._build_vps_config = lambda token, vps: {
-        "coinmarketcap_api_key": vps.coinmarketcap_api_key,
         "swap": vps.swap,
         "firewall": vps.firewall,
         "firewall_ssh_ips": vps.firewall_ssh_ips,
@@ -2053,11 +2030,11 @@ def test_read_vps_settings_uses_form_user_password() -> None:
 
     assert vps.user_pw == "fresh-password"
     assert service._session_secret_value("token", "test-vps", "user_pw") == "fresh-password"
-    assert result["coinmarketcap_api_key"] == "remote-cmc"
+    assert "coinmarketcap_api_key" not in result
     assert result["swap"] == "2G"
     assert result["firewall"] is True
     assert result["firewall_ssh_ips"] == "82.165.176.129"
-    assert saves == [("remote-cmc", True, "82.165.176.129")]
+    assert saves == [(True, "82.165.176.129")]
     assert [item[0] for item in progress] == ["start", "password", "ssh", "remote_config", "firewall", "save", "done"]
     assert progress[-1] == ("done", "VPS settings refreshed", "done")
 
@@ -2248,7 +2225,7 @@ SECTION\tprocesses\tEND
     assert status["migration_complete"] is False
     assert status["migration_needed"] is True
     assert status["units_ready"] is False
-    assert [item["unit"] for item in status["required_units"]] == ["pbgui-pbcluster.service", "pbgui-pbrun.service", "pbgui-pbcoindata.service"]
+    assert [item["unit"] for item in status["required_units"]] == ["pbgui-pbcluster.service", "pbgui-pbrun.service"]
 
 
 def test_systemd_migration_running_status_does_not_reuse_stale_cache() -> None:
@@ -2331,16 +2308,18 @@ def test_monitor_host_meta_collects_systemd_migration_status() -> None:
     assert "legacy_process_count" in source
 
 
-def test_systemd_migration_playbook_enables_only_configured_optional_units() -> None:
-    """The migration playbook must not always start optional PBCoinData."""
+def test_systemd_migration_playbook_uses_credential_capability() -> None:
+    """Migration enables PBCoinData only from explicit credential capability."""
     playbook = Path("vps-migrate-systemd.yml").read_text(encoding="utf-8")
 
-    assert "read PBGui optional service config" in playbook
+    assert "pbgui_credential_capability_known" in playbook
+    assert "credential_active | default(false)" in playbook
+    assert "--no-disable-excluded" in playbook
     assert "pbgui-pbcluster.service" in playbook
     assert "pbgui_enabled_services" in playbook
-    assert "{{ pbgui_enabled_services | join(',') }}" in playbook
+    assert "pbgui_enabled_services | join(',')" in playbook
     assert "- pbrun,pbremote,pbcoindata" not in playbook
-    assert "for unit in {{ all_systemd_units | join(' ') }}" in playbook
+    assert "for unit in {{ migration_stop_units | join(' ') }}" in playbook
     assert "pbgui-pbremote.service" in playbook
     assert "PBRemote.py" in playbook
 
@@ -2358,16 +2337,23 @@ def test_pbgui_code_update_playbooks_sync_systemd_units(playbook_path: str) -> N
     assert 'user: "{{ user }}"' not in playbook
     assert "target_user={{ user | default('', true) | quote }}" in playbook
     assert 'getent passwd "$target_user"' in playbook
-    assert "Read PBGui optional service config" in playbook
+    assert "pbgui_credential_capability_known" in playbook
+    assert "credential_active | default(false)" in playbook
+    assert "PBGUI_CREDENTIAL_ACTIVE" in playbook
     assert "pbgui_enabled_services" in playbook
-    assert "{{ pbgui_enabled_services | join(',') }}" in playbook
+    assert "pbgui_enabled_services | join(',')" in playbook
     assert "pbgui_role" not in playbook
     assert "Restart remote master PBApiServer" not in playbook
     assert "setup/setup_systemd.sh" in playbook
     assert "--include-pbremote" not in playbook
     assert "--no-start" in playbook
     assert "failed_when: false" not in systemd_setup_block
-    assert "setup/vps_service_control.sh restart PBCluster PBRun PBCoinData PBMonitorAgent" in playbook
+    if playbook_path == "vps-update-pb.yml":
+        assert "setup/vps_service_control.sh restart PBCluster PBCoinData PBMonitorAgent" in playbook
+        assert "Restart PBRun after PBGui-only update" in playbook
+        assert "when: not (pb7_repo.changed | default(false))" in playbook
+    else:
+        assert "setup/vps_service_control.sh restart PBCluster PBRun PBCoinData PBMonitorAgent" in playbook
     assert "setup/vps_service_control.sh restart PBCluster PBRun PBRemote PBCoinData" not in playbook
 
 
@@ -2376,7 +2362,9 @@ def test_metrics_stream_reads_monitor_agent_cache() -> None:
 
     command = monitor_mod._monitor_agent_tail_command("software/pbgui")
 
+    assert "data/logs/monitor-agent/live_metrics.ndjson" in command
     assert "data/monitor_agent/live_metrics.ndjson" in command
+    assert command.index("data/logs/monitor-agent/live_metrics.ndjson") < command.index("data/monitor_agent/live_metrics.ndjson")
     assert "tail -n 1 -F" in command
     assert "python3 -u -c" not in command
 
@@ -2457,13 +2445,13 @@ def test_master_update_playbooks_repair_required_systemd_units(playbook_path: st
     assert "failed_when: false" not in systemd_setup_block
 
 
-def test_master_restart_control_keeps_required_pbcoindata_enabled() -> None:
-    """Master restarts must not disable required PBCoinData without a CMC key."""
+def test_service_control_uses_tri_state_credential_capability() -> None:
+    """Unknown capability preserves PBCoinData while true/false control it explicitly."""
     script = Path("setup/vps_service_control.sh").read_text(encoding="utf-8")
 
-    assert "PBGUI_REQUIRE_PBCOINDATA" in script
-    assert 'case "$require_coindata" in 1|true|yes|on) return 0 ;; esac' in script
-    assert 'PBCoinData)\n      local require_coindata=' in script
+    assert "PBGUI_CREDENTIAL_ACTIVE" in script
+    assert "printf '%s\\n' unknown" in script
+    assert 'Leaving $service unchanged: credential capability is unknown' in script
 
 
 def test_local_master_metrics_are_recorded_in_host_history(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2649,45 +2637,12 @@ def test_instance_collect_script_reports_dynamic_ignore_flag() -> None:
     assert "'di': dynamic_ignore" in INSTANCE_COLLECT_SCRIPT
 
 
-def test_cannot_clear_cmc_key_while_dynamic_ignore_bot_runs() -> None:
-    """Clearing a VPS CMC key is blocked while a dynamic_ignore bot is running."""
-    service = object.__new__(VPSManagerService)
-    service._refresh_vps_instances_now = lambda hostname: None
-    service._get_monitor_state = lambda: {
-        "connections": {"connections": {"test-vps": {"status": "connected"}}},
-        "v7_instances": {"test-vps": [{"name": "dynbot", "running": True, "di": True}]},
-    }
-    vps = SimpleNamespace(hostname="test-vps", coinmarketcap_api_key="old-api-key")
-
-    with pytest.raises(ValueError, match="dynbot"):
-        service._ensure_coinmarketcap_key_clear_allowed(vps, "")
-
-
-def test_can_clear_cmc_key_when_dynamic_ignore_bot_is_stopped() -> None:
-    """A stopped dynamic_ignore bot does not block CMC key removal."""
-    service = object.__new__(VPSManagerService)
-    service._refresh_vps_instances_now = lambda hostname: None
-    service._get_monitor_state = lambda: {
-        "connections": {"connections": {"test-vps": {"status": "connected"}}},
-        "v7_instances": {"test-vps": [{"name": "dynbot", "running": False, "di": True}]},
-    }
-    vps = SimpleNamespace(hostname="test-vps", coinmarketcap_api_key="old-api-key")
-
-    service._ensure_coinmarketcap_key_clear_allowed(vps, "")
-
-
-def test_v7_host_dropdown_blocks_pending_cmc_removal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pending CMC key removal disables dynamic_ignore even with stale live metadata."""
+def test_v7_host_dropdown_blocks_inactive_credential_capability(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Confirmed inactive credential capability disables dynamic_ignore."""
     host = "test-vps"
     (tmp_path / "pbgui.ini").write_text("[main]\npbname=master\n", encoding="utf-8")
-    pending_dir = tmp_path / "data" / "vpsmanager" / "hosts" / host
-    pending_dir.mkdir(parents=True)
-    (pending_dir / "optional_config_pending.json").write_text(
-        '{"coinmarketcap_api_key": ""}',
-        encoding="utf-8",
-    )
     monitor = SimpleNamespace(
-        store=SimpleNamespace(host_meta={host: {"optional_services": {"PBCoinData": True}}})
+        store=SimpleNamespace(host_meta={host: {"credential_active": False}})
     )
     monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
     monkeypatch.setattr(v7_instances, "_monitor", monitor)
@@ -2698,9 +2653,9 @@ def test_v7_host_dropdown_blocks_pending_cmc_removal(tmp_path: Path, monkeypatch
         {"pbgui": {"dynamic_ignore": True, "enabled_on": host}},
     ))
 
-    assert detail["coinmarketcap_configured"] is False
+    assert detail["credential_active"] is False
     assert detail["dynamic_ignore_allowed"] is False
-    assert "has no CoinMarketCap API key" in message
+    assert "has no active CMC credential pool" in message
 
 
 def test_v7_get_hosts_keeps_host_list_and_adds_details(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2710,7 +2665,7 @@ def test_v7_get_hosts_keeps_host_list_and_adds_details(tmp_path: Path, monkeypat
     monitor = SimpleNamespace(
         pool=True,
         enabled_hosts={host},
-        store=SimpleNamespace(host_meta={host: {"coindata_configured": True, "optional_services": {"PBCoinData": True}}}),
+        store=SimpleNamespace(host_meta={host: {"credential_active": True}}),
     )
     monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
     monkeypatch.setattr(v7_instances, "_monitor", monitor)
@@ -2719,7 +2674,7 @@ def test_v7_get_hosts_keeps_host_list_and_adds_details(tmp_path: Path, monkeypat
 
     assert response["hosts"] == ["disabled", "master", host]
     details = {item["name"]: item for item in response["host_details"]}
-    assert details[host]["coinmarketcap_configured"] is True
+    assert details[host]["credential_active"] is True
     assert details[host]["dynamic_ignore_allowed"] is True
 
 
@@ -2735,7 +2690,7 @@ def test_v7_dynamic_ignore_does_not_treat_coindata_service_as_cmc_key(tmp_path: 
 
     detail = v7_instances._host_dropdown_detail(host)
 
-    assert detail["coinmarketcap_configured"] is None
+    assert detail["credential_active"] is None
     assert detail["dynamic_ignore_allowed"] is False
 
 
@@ -2753,9 +2708,9 @@ def test_v7_dynamic_ignore_blocks_unknown_cmc_status(tmp_path: Path, monkeypatch
         {"pbgui": {"dynamic_ignore": True, "enabled_on": host}},
     ))
 
-    assert detail["coinmarketcap_configured"] is None
+    assert detail["credential_active"] is None
     assert detail["dynamic_ignore_allowed"] is False
-    assert "has no confirmed CoinMarketCap API key" in message
+    assert "has no confirmed active CMC credential pool" in message
 
 
 def test_vps_deploy_shutdown_joins_controller_without_stopping_remote_job() -> None:

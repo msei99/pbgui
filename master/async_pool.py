@@ -27,6 +27,7 @@ import asyncssh
 
 from pbgui_purefunc import PBGDIR
 from logging_helpers import human_log as _log
+from vps_inventory_store import patch_versioned_inventory_json
 
 SERVICE = "SSH"
 
@@ -782,19 +783,17 @@ class AsyncSSHPool:
         return bool(result and (result.stdout or '').strip() == 'yes')
 
     async def _persist_remote_pbgui_dir(self, hostname: str, remote_pbgui_dir: str) -> None:
-        config_path = Path(PBGDIR) / 'data' / 'vpsmanager' / 'hosts' / hostname / f'{hostname}.json'
-        if not config_path.exists():
-            return
+        inventory_root = Path(PBGDIR) / 'data' / 'vpsmanager'
+        config_path = inventory_root / 'hosts' / hostname / f'{hostname}.json'
         try:
-            data = json.loads(config_path.read_text(encoding='utf-8'))
+            patch_versioned_inventory_json(
+                inventory_root,
+                config_path,
+                {'remote_pbgui_dir': remote_pbgui_dir},
+                require_exists=True,
+            )
         except Exception:
             return
-        if str(data.get('remote_pbgui_dir') or '') == str(remote_pbgui_dir or ''):
-            return
-        data['remote_pbgui_dir'] = remote_pbgui_dir
-        tmp_path = config_path.with_suffix('.tmp')
-        tmp_path.write_text(json.dumps(data, indent=4), encoding='utf-8')
-        tmp_path.replace(config_path)
 
     async def _detect_remote_pbgui_dir(self, entry: VPSConnection,
                                        conn: Optional[asyncssh.SSHClientConnection] = None) -> str:

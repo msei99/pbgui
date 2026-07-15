@@ -267,13 +267,17 @@ def test_auth_tokens_and_ini_remain_owner_only(tmp_path: Path, monkeypatch) -> N
 def test_sensitive_path_migration_repairs_existing_modes(tmp_path: Path) -> None:
     """Startup migration repairs existing credential trees without changing data."""
     pb7_root = tmp_path / "pb7"
+    aws_root = tmp_path / ".aws"
     private_files = [
         tmp_path / "pbgui.ini",
         tmp_path / "data" / "auth" / "secrets.toml",
         tmp_path / "data" / "api_tokens" / "token.json",
         tmp_path / "data" / "api-keys" / "backup.json",
         tmp_path / "data" / "cluster" / "secret_blobs" / "sha256" / "aa" / "secret.json",
+        tmp_path / "data" / "vpsmanager" / "hosts" / "test-vps" / "test-vps.json",
         pb7_root / "api-keys.json",
+        aws_root / "credentials",
+        aws_root / "config",
     ]
     for path in private_files:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -286,11 +290,15 @@ def test_sensitive_path_migration_repairs_existing_modes(tmp_path: Path) -> None
         tmp_path / "data" / "cluster" / "secret_blobs",
         tmp_path / "data" / "cluster" / "secret_blobs" / "sha256",
         tmp_path / "data" / "cluster" / "secret_blobs" / "sha256" / "aa",
+        tmp_path / "data" / "vpsmanager",
+        tmp_path / "data" / "vpsmanager" / "hosts",
+        tmp_path / "data" / "vpsmanager" / "hosts" / "test-vps",
+        aws_root,
     ]
     for path in private_dirs:
         path.chmod(0o755)
 
-    harden_sensitive_paths(tmp_path, pb7_root)
+    harden_sensitive_paths(tmp_path, pb7_root, aws_root)
 
     assert all(path.read_text(encoding="utf-8") == "secret" for path in private_files)
     assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in private_files)
@@ -866,7 +874,7 @@ def test_session_tokens_are_absent_from_browser_and_backend_urls() -> None:
     frontend_root = Path("frontend")
     forbidden = re.compile(
         r"(?:[?&]token=|(?:searchParams|params)\.set\(['\"]token|"
-        r"(?:urlParams|query|params|searchParams)\.get\(['\"]token['\"]\))"
+        r"(?:[A-Za-z_$][\w$]*|new\s+URLSearchParams\([^)]*\))\.get\(['\"]token['\"]\))"
     )
     offenders = []
     for path in sorted(frontend_root.rglob("*")):

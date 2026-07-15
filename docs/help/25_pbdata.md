@@ -64,6 +64,14 @@ General guidance:
 - Too-small intervals can trigger **rate limits (HTTP 429)**.
 - Increase intervals or reduce the number of active users if you see frequent backoffs.
 
+### Dashboard live sessions
+
+The Dashboard opens private exchange WebSockets only while a browser live session needs them. Sessions for the same user share watchers, and the configured **Max private WS** limit prevents unbounded client creation. Exchanges without the required private streaming methods automatically use the database data maintained by PBData.
+
+Disconnecting a tab, logging out, session expiry, and an API restart all release the associated watchers and private clients. A production validation with repeated 1-user and 10-user sessions confirmed that watcher, subscriber, client, file-descriptor, and thread counts return to their idle values. PBData memory remained unchanged; FastAPI memory reached a stable warm cache after repeated 10-user cycles rather than growing per cycle.
+
+For authenticated diagnostics, `GET /api/live/status` reports the configured limit and current watcher, subscriber, private-client, and cleanup-task counts. After all Dashboard live sessions are closed, these counts should return to zero. Briefly elevated FastAPI memory after the first session is expected because exchange libraries and market metadata remain warm.
+
 ## Rate-limit controls (REST pause)
 
 PBData uses a small pause between users in shared REST pollers.
@@ -137,3 +145,9 @@ Most PBData settings are persisted in `pbgui.ini` under `[pbdata]`, including:
 - Check whether PBData is running (Start/Stop buttons in the control strip)
 - Open the **Status** tab and check the Fetch Summary for recent timestamps
 - Consider increasing the combined poll interval if the system is overloaded
+
+### Live-session resources do not return to zero
+
+- Close all Dashboard tabs and allow the disconnect cleanup to complete.
+- Check authenticated `GET /api/live/status`; watcher, subscriber, private-client, and cleanup-task counts should settle at zero.
+- If counts remain non-zero, check `PBGui.log` for `LiveSession` warnings and restart the API from the Services page. PBData does not need to restart for Dashboard live-session cleanup.

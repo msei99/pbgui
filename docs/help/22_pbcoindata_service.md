@@ -17,19 +17,31 @@ PBCoinData runs a daemon loop (60-second cycle) that:
 
 ## Configuration
 
-All PBCoinData settings are configured in the **Settings** tab of the PBCoinData detail panel.
-Click the PBCoinData card on the Services overview, then switch to the **Settings** tab.
+Click the PBCoinData card on the Services overview. Credentials are managed in **Pool**; non-secret schedules remain in **Settings**.
+
+### CMC pool
+
+Use **Pool -> Add Key** to add one or more CMC keys. Secrets are stored in the owner-only credential vault and are never returned by status APIs or reveal controls.
+
+- **Imported / externally used** keys are allowed and participate in local fair selection.
+- Mark **Shared quota** when the same provider quota is shared outside this PBGui entry.
+- Cluster Sync distributes sealed generations; do not put a CMC key in `pbgui.ini` or configure one per VPS.
+- Leases coordinate usage when available, but are best effort. If leasing is unavailable, each node falls back to its local soft budget.
+- A provider `429` cools down that key and the request can fail over to another eligible key. Invalid, disabled, exhausted, cooling, or conflicted keys are skipped.
+- **Rotate** is optional and replaces the selected key with a new immutable generation. **Disable** keeps its history; **Delete** publishes a tombstone.
+
+PBCoinData can run without a ready pool to refresh exchange-side mapping inputs, but CMC listings and metadata fetches are skipped until at least one active key is materialized.
+
+### Scheduling
 
 | Setting | Default | Description |
 |---|---|---|
-| `CoinMarketCap API_Key` | *(empty)* | CoinMarketCap API key (required for CMC fetches) |
 | `Fetch Interval` | `24` | How often CMC listings are re-fetched (hours) |
 | `Fetch Limit` | `5000` | Max symbols fetched per CMC call |
 | `Metadata Interval` | `1` | CMC metadata refresh (days) |
 | `Mapping Interval` | `24` | Exchange mapping rebuild interval (hours) |
 
-A CMC API key is required. Free Basic plans are sufficient for most setups.
-After entering a valid API key, the status bar above the tabs shows your API credit status (monthly limit, usage, remaining credits).
+Free Basic plans are sufficient for most setups. The status bar and Pool tab show readiness, active-key count, health, generations, local usage, provider remaining credits when reported, cooldowns, failures, and secret-free lease statistics.
 
 ## PBCoinData detail panel
 
@@ -37,6 +49,7 @@ Click the PBCoinData card on the Services overview (or use the sidebar) to open 
 
 - The control strip shows the current status (running/stopped) and Start/Stop/Restart buttons
 - The **Log** tab shows a live filtered PBCoinData log viewer
+- The **Pool** tab manages CMC credentials and secret-free pool/lease status
 - The **Settings** tab provides the configuration form described above
 
 ## Self-heal cycle
@@ -55,7 +68,7 @@ If a mapping build fails for an exchange (e.g. due to a temporary network error)
 
 ## Troubleshooting
 
-- **No mapping built yet**: Confirm PBCoinData is running and a valid CMC API key is set in the PBCoinData **Settings** tab
+- **No CMC data yet**: Confirm PBCoinData is running and **Services -> PBCoinData -> Pool** reports at least one active materialized key
 - **Mapping stale**: Check `data/logs/PBCoinData.log` for repeated `ERROR` or `self-heal` entries
-- **CMC rate-limit errors (429)**: PBCoinData retries automatically; increase `fetch_interval` if persistent
+- **CMC rate-limit errors (429)**: The affected key enters cooldown and the pool tries another eligible key; increase `fetch_interval` if every key remains limited
 - **Ignored/approved lists not updating in PBRun**: Verify mapping files exist under `data/coindata/{exchange}/` and restart PBCoinData once

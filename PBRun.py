@@ -7,7 +7,6 @@ and starts or stops local bots accordingly.
 import psutil
 import subprocess
 import threading
-import configparser
 import sys
 from pathlib import Path, PurePath
 from time import sleep, time
@@ -18,7 +17,10 @@ import platform
 import os
 import traceback
 from PBCoinData import CoinData
+import pbgui_purefunc
 from logging_helpers import human_log as _log, get_rotate_settings, rotate_logfile_if_oversize
+
+SERVICE = "PBRun"
 from master.cluster_state import (
     build_config_manifest,
     compute_config_manifest_hash,
@@ -282,15 +284,6 @@ def _ensure_dynamic_ignore_ready(dynamic_ignore: "DynamicIgnore") -> bool:
         return lists_ready()
     return False
 
-
-def _configured_secret_value(value) -> bool:
-    normalized = str(value or "").strip()
-    if not normalized:
-        return False
-    lowered = normalized.lower()
-    if lowered in {"none", "null", "false", "<api_key>"}:
-        return False
-    return not (normalized.startswith("<") and normalized.endswith(">"))
 
 class DynamicIgnore():
     def __init__(self):
@@ -617,7 +610,7 @@ class RunV7():
                 return False
 
             self.dynamic_ignore.coindata.load_config()
-            if not _configured_secret_value(getattr(self.dynamic_ignore.coindata, "api_key", None)):
+            if not self._dynamic_ignore_api_key_configured():
                 return False
 
             # First try to build or reuse list files from whatever local mapping data
@@ -673,10 +666,10 @@ class RunV7():
         if coindata is None:
             return True
         try:
-            coindata.load_config()
+            ready = getattr(coindata, "cmc_pool_ready", False)
+            return bool(ready() if callable(ready) else ready)
         except Exception:
-            pass
-        return _configured_secret_value(getattr(coindata, "api_key", None))
+            return False
 
     def _delay_dynamic_ignore_start(self, reason: str):
         _atomic_write_text(Path(self.path) / "running_version.txt", "0")
@@ -748,7 +741,12 @@ class RunV7():
     def stop(self):
         process = self.pid()
         if process:
-            _log("PBRun", f"Stop: passivbot v7 {self.path}/config_run.json")
+            _log(
+                "PBRun",
+                f"Stop: passivbot v7 {self.path}/config_run.json",
+                user=self.user,
+                meta={"operation": "stop_passivbot_v7", "instance": self.user},
+            )
             _kill_process(process, f"v7 {self.path}")
         # Always write 0 — even if bot already crashed and no process found.
         # This ensures running_version.txt reflects "stopped" for inotify → UI.
@@ -789,7 +787,12 @@ class RunV7():
                 threading.Thread(target=_ts_wrap_stderr, args=(proc.stderr, err_log), daemon=True).start()
             finally:
                 os.environ['PATH'] = old_os_path
-            _log("PBRun", f"Start: passivbot_v7 {self.path}/config_run.json")
+            _log(
+                "PBRun",
+                f"Start: passivbot_v7 {self.path}/config_run.json",
+                user=self.user,
+                meta={"operation": "start_passivbot_v7", "instance": self.user},
+            )
         # wait until passivbot is running
         for i in range(10):
             if self.is_running():
@@ -915,18 +918,17 @@ class PBRun():
         self.run_v7 = []
         self.index = 0
         self.pbgdir = Path.cwd()
-        pb_config = configparser.ConfigParser()
-        pb_config.read('pbgui.ini')
+        ini_snapshot = pbgui_purefunc.load_ini_snapshot()
         # Init pbname
-        if pb_config.has_option("main", "pbname"):
-            self.name = pb_config.get("main", "pbname")
+        if ini_snapshot.has_option("main", "pbname"):
+            self.name = ini_snapshot.get("main", "pbname")
         else:
             self.name = platform.node()
         self._v7_runtime_signature = None
         # Init PB7 directory
         self.pb7dir = None
-        if pb_config.has_option("main", "pb7dir"):
-            self.pb7dir = pb_config.get("main", "pb7dir")
+        if ini_snapshot.has_option("main", "pb7dir"):
+            self.pb7dir = ini_snapshot.get("main", "pb7dir")
         if not self.pb7dir:
             if __name__ == '__main__':
                 _log("PBRun", "No passivbot directory configured in pbgui.ini", level="ERROR")
@@ -936,8 +938,8 @@ class PBRun():
                 return
         # Init PB7 virtual environment
         self.pb7venv = None
-        if pb_config.has_option("main", "pb7venv"):
-            self.pb7venv = pb_config.get("main", "pb7venv")
+        if ini_snapshot.has_option("main", "pb7venv"):
+            self.pb7venv = ini_snapshot.get("main", "pb7venv")
         if not self.pb7venv:
             if __name__ == '__main__':
                 _log("PBRun", "No passivbot venv python interpreter configured in pbgui.ini", level="ERROR")
@@ -1192,7 +1194,11 @@ class PBRun():
         return True
 
     def fetch_cmc_credits(self):
-        self.coindata.fetch_api_status()        
+        provider_refreshed = bool(self.coindata.fetch_api_status())
+        return {
+            "provider_refreshed": provider_refreshed,
+            "pool": self.coindata.cmc_pool_status(),
+        }
 
     def add_v7(self, run_v7: RunV7):
         if run_v7:
@@ -1353,12 +1359,16 @@ def main():
     """
     Main function of PBRun, responsible for starting and monitoring v7 passivbot instances.
     """
+    from credential_process_registry import ProcessCapabilityHeartbeat
+
     run = PBRun()
     if run.is_running():
         _log("PBRun", "PBRun already started", level="ERROR")
         sys.exit(1)
     _log("PBRun", "Start: PBRun")
     run.save_pid()
+    capability = ProcessCapabilityHeartbeat(Path(run.pbgdir), "PBRun")
+    capability.__enter__()
     _wait_for_cluster_boot_sync(Path(run.pbgdir), timeout=20)
     if run.pb7dir:
         run.watch_v7()

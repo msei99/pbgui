@@ -4,6 +4,8 @@ from User import Users, User
 from Exchange import Exchange
 from pbgui_purefunc import PBGDIR
 from logging_helpers import human_log as _human_log
+
+SERVICE = "Database"
 import shutil
 import sqlite3
 import json
@@ -128,10 +130,15 @@ class Database():
                             pass
             except Exception:
                 pass
+            _human_log(
+                SERVICE,
+                f"Created full database backup {backup_path.name}",
+                meta={"operation": "backup_full_db"},
+            )
             return str(backup_path)
         except Exception as e:
             try:
-                _human_log('Database', f"backup_full_db error: {e}", level='ERROR')
+                _human_log(SERVICE, f"backup_full_db error: {e}", level='ERROR', meta={"operation": "backup_full_db"})
             except Exception:
                 pass
             return None
@@ -144,10 +151,15 @@ class Database():
                 return False
             # Replace current DB with backup
             shutil.copy2(src, self.db)
+            _human_log(
+                SERVICE,
+                f"Restored database from {src.name}",
+                meta={"operation": "restore_db_from"},
+            )
             return True
         except Exception as e:
             try:
-                _human_log('Database', f"restore_db_from error: {e}", level='ERROR')
+                _human_log(SERVICE, f"restore_db_from error: {e}", level='ERROR', meta={"operation": "restore_db_from"})
             except Exception:
                 pass
             return False

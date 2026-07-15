@@ -58,6 +58,7 @@
         PBGUI_DIR: "{{ install_dir }}/pbgui"
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
         PBGUI_USER: "{{ user }}"
+        PBGUI_CREDENTIAL_ACTIVE: "{{ credential_active | default('') }}"
       ignore_errors: yes
 
     - name: Install python3.12-venv
@@ -102,3 +103,4 @@
         PBGUI_DIR: "{{ install_dir }}/pbgui"
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
         PBGUI_USER: "{{ user }}"
+        PBGUI_CREDENTIAL_ACTIVE: "{{ credential_active | default('') }}"

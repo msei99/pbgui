@@ -28,7 +28,7 @@ from pbgui_purefunc import (
     load_ini,
     pb7_runtime_status,
     pbgui_auth_secrets_path,
-    save_ini,
+    save_ini_section,
 )
 from secure_files import atomic_write_private_text, ensure_private_directory
 
@@ -924,10 +924,12 @@ def save_setup(payload: SetupConfigRequest, session: SessionToken = Depends(requ
     role = "master" if payload.role == "master" else "slave"
     pbname = payload.pbname.strip() or pb7_runtime_status()["pbname"]
 
-    save_ini("main", "pb7dir", payload.pb7dir.strip())
-    save_ini("main", "pb7venv", payload.pb7venv.strip())
-    save_ini("main", "pbname", pbname)
-    save_ini("main", "role", role)
+    save_ini_section("main", {
+        "pb7dir": payload.pb7dir.strip(),
+        "pb7venv": payload.pb7venv.strip(),
+        "pbname": pbname,
+        "role": role,
+    })
 
     response = _bootstrap_payload(session)
     response["message"] = "Setup saved"

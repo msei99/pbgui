@@ -53,5 +53,5 @@ The calculation uses the coin list from `approved_coins` in the config, filtered
 ## Troubleshooting
 
 - **"Missing exchange context"**: do not open Balance Calculator directly from the navigation — use the button in the PBv7 Run or PBv7 Backtest flow.
-- **CoinData not configured**: configure your CoinMarketCap API key in **System → API Keys**.
+- **CoinData not configured**: add or activate a CMC pool key under **System -> Services -> PBCoinData -> Pool** and wait for local materialization.
 - **Unexpected coin list**: if dynamic ignore is enabled, the coin list is filtered by your CoinData settings (market cap, volume, tags).

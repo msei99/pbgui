@@ -66,8 +66,13 @@ Auf **⚙ Settings** in der Sidebar klicken, um die Log-Rotation zu konfiguriere
 
 - **Standard-Rotation**: maximale Dateigröße (MB) und Anzahl der Backup-Dateien für alle Dienste
 - **Einzelne Log-Rotation**: Größe und Backup-Anzahl pro Dienst überschreiben
+- **Managed Logs**: Größe und Backup-Anzahl für dynamische Log-Familien wie
+  API-Konsole, Jobs, Backtests, Optimierungen, VPS-Manager-Runs,
+  OHLCV-Preloads, Monitor-Agent-Livedaten, Pareto-Sessions und API-Handoff
 
-Änderungen wirken sich aus, wenn der Logger des Dienstes neu initialisiert wird (Dienst bei Bedarf neu starten).
+Änderungen werden beim nächsten Log-Schreibvorgang oder vor dem Öffnen des
+nächsten verwalteten Transkripts gelesen. Die Log-Rotation besitzt bewusst
+keinen Watcher und benötigt keinen Dienstneustart.
 
 ## Fehlerbehebung
 
@@ -79,24 +84,96 @@ Auf **⚙ Settings** in der Sidebar klicken, um die Log-Rotation zu konfiguriere
 
 ## Wo finde ich was?
 
-Alle Log-Dateien liegen in `data/logs/`. In der Sidebar kann jede direkt geöffnet werden.
+Alle Log-Dateien liegen im kanonischen PBGui-Verzeichnis `data/logs/`. Der Pfad
+ist am PBGui-Installationsverzeichnis verankert und hängt nicht vom aktuellen
+Arbeitsverzeichnis eines Prozesses ab. In der Sidebar kann jede Datei direkt
+geöffnet werden.
+
+PBGui serialisiert paralleles Schreiben, Rotieren und Leeren über Threads und
+Prozesse hinweg. Rotationseinstellungen werden atomar in der PBGui-Datei
+`pbgui.ini` gespeichert. Eine Einstellung gilt für die physische Log-Datei;
+alle in `PBGui.log` gruppierten Helfer verwenden daher dieselbe Regel.
+
+PBGui-eigene Transkripte verwenden eigene Unterverzeichnisse unter demselben
+Root:
+
+```text
+data/logs/jobs/
+data/logs/backtests/
+data/logs/optimizes/
+data/logs/vps-manager/
+data/logs/ohlcv-preloads/
+data/logs/monitor-agent/
+```
+
+Die Managed-Logs-Einstellungen gelten bereits, bevor eine Familie ihre erste
+Datei erzeugt. Child-Prozess-Logs werden nur vor dem Öffnen einer neuen
+Capture-Datei rotiert, damit keine Datei umbenannt wird, solange der
+Child-Prozess noch einen offenen Deskriptor besitzt.
+
+PB7-native Botlogs bleiben im PB7-eigenen `logs/`-Verzeichnis; Legacy-
+Passivbot-stderr bleibt im Runtime-Verzeichnis der Instanz. PBGui kann diese
+Dateien anzeigen, übernimmt aber weder Speicher- noch Rotationsverantwortung.
+
+### Automatische Migrationsbereinigung
+
+Beim ersten API-Start nach einem Update entfernt eine prozesssichere
+Startup-Migration ausschließlich explizit stillgelegte PBGui-Lognamen und alte
+`income_other_*.json`-Diagnosen. Der Abschluss wird atomar in
+`data/state/startup_migrations.json` gespeichert, sodass jeder Master die
+Migration genau einmal ausführt. Fehlgeschlagene Migrationen bleiben für den
+nächsten API-Start offen. Symlinks und Pfade außerhalb der freigegebenen Roots
+werden nie entfernt.
+
+### Sicherheit und Kontext
+
+Die Logging-Seite authentifiziert Browser ausschließlich über das
+Same-Origin-HttpOnly-Session-Cookie. Session-Tokens werden nicht in HTML oder
+JavaScript gerendert.
+
+Der zentrale Logger entfernt übliche Zugangsdaten aus Meldungen, Tags, Codes,
+URLs, Exceptions, Tracebacks und verschachtelten Metadaten. Dazu gehören
+Passwörter, API-Keys und Secrets, Access-/Session-/Refresh-Tokens,
+Authorization- und Cookie-Header, sensible URL-Parameter und Private-Key-Blöcke.
+Redaction ist nur die letzte Schutzschicht; bekannte Secrets dürfen weiterhin
+nicht absichtlich geloggt werden.
+
+Operationale Ereignisse können strukturierten JSON-Kontext am Zeilenende
+enthalten:
+
+- `request_id` und `operation` bei API-Requests
+- `host` bei Remote-/VPS-Aktionen
+- `instance` oder `user` bei botbezogenen Aktionen
+
+API-Antworten enthalten `X-Request-ID`, damit Fehler ohne Offenlegung einer
+Session-ID den passenden Logs zugeordnet werden können.
+
+### Log-Zuordnung
+
+PBGui verwendet drei Stufen:
+
+1. Eigenständige Daemons schreiben eigene Service-Logs.
+2. Datenpipelines und detached Jobs verwenden eigene Pipeline-Logs oder
+   dokumentierte Transkripte.
+3. API-/UI-Helfer ohne eigenen Lifecycle teilen sich `PBGui.log`.
+
+Maschinenlesbare Worker-Ausgaben, Installer-/Wartungs-CLI-Ausgaben, rohes
+Child-stderr und sichtbare VPS-/Job-Transkripte sind beabsichtigte Ausnahmen.
+Sie gelten nicht als alternative Anwendungslogger und werden durch Policy-Tests
+abgesichert.
 
 ### PBGui.log
 
-Enthält Meldungen aller GUI-Hilfskomponenten:
+Enthält Meldungen gruppierter API- und GUI-Hilfskomponenten:
 
 | Komponente | Was steht dort |
 |------------|---------------|
-| VPSManager | VPS-Verbindungen, Remote-Befehle |
-| Instance | Bot-Instanz laden/speichern, Symbol-Infos |
-| Config | Fehler beim Laden/Speichern von Konfigurationen |
-| Multi | Multi-Bot-Konfigurationen |
-| Backtest / PBv7 Backtest | Backtest-Ergebnisse laden, beschädigte Dateien |
-| BacktestMulti | Multi-Symbol-Backtest-Operationen |
-| Optimize / PBv7 Optimize / OptimizeMulti | Optimizer-Operationen |
+| VPSManager | VPS-Verbindungen und Task-Koordination |
+| Config | Fehler in Konfigurationshelfern |
 | ParetoDataLoader | Pareto-Ergebnisse laden |
-| Status | Status-Seiten-Ereignisse |
-| HyperliquidAWS | Hyperliquid AWS-Integration |
+| Status | Ereignisse der Status-Helfer |
+| HyperliquidAWS | Hyperliquid-AWS-Integration |
+| API-/UI-Helfer | Authentifizierung, Live-Sessions, Benutzer, API-Key-State, Logging, Balance, Coin Data, Dashboard, Services, V7-Instanzen, Market Data und PB7-OHLCV-Aktionen |
 
 ### Eigene Log-Dateien
 
@@ -107,7 +184,12 @@ Enthält Meldungen aller GUI-Hilfskomponenten:
 | `PBCoinData.log` | PBCoinData | CMC-Daten-Updates, Symbol-Listen |
 | `VPSMonitor.log` | VPS Monitor | SSH-Verbindungen, Host-Metriken, Service-Auto-Heal |
 | `PBApiServer.log` | PBAPIServer | FastAPI-Start, REST/WebSocket-Requests |
-| `PBStat.log` | PBStat | Statistik-Erfassung |
 | `Database.log` | Database | DB-Abfragen, Verbindungsfehler |
 | `Exchange.log` | Exchange | Marktdaten, Symbol-Infos, CCXT-Fehler |
 | `PBData.log` | PBData | OHLCV-Download, Marktdaten-Pipeline |
+| `SSH.log` | SSH-Pool | AsyncSSH-Verbindungen und Host-Key-Diagnose |
+| `tradfi_sync.log` | TradFi Sync | TradFi-Symbol-Mapping und Synchronisierung |
+
+Weitere Exchange-Downloader, Queues und detached Pipelines können eigene Logs
+oder Job-Transkripte besitzen. `OptimizeQueueAPI` bleibt absichtlich separat
+und wird nicht in `PBGui.log` gruppiert.

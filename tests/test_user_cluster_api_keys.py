@@ -23,13 +23,19 @@ def test_users_save_records_api_key_cluster_secret_blob(monkeypatch, tmp_path: P
 
     pb7 = tmp_path / "pb7"
     pb7.mkdir()
-    (pb7 / "api-keys.json").write_text("{}", encoding="utf-8")
+    (pb7 / "api-keys.json").write_text(
+        '{"tradfi":{"provider":"tiingo","api_key":"tradfi-vault-secret"}}',
+        encoding="utf-8",
+    )
     (tmp_path / "pbgui.ini").write_text("[main]\npbname = local-pbgui\n", encoding="utf-8")
     monkeypatch.setattr(user_module, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(user_module.pbgui_purefunc, "pbgui_ini_path", lambda: tmp_path / "pbgui.ini")
     monkeypatch.setattr(user_module, "pb7dir", lambda: str(pb7))
     monkeypatch.setattr(user_module, "is_pb7_installed", lambda: True)
 
     users = user_module.Users()
+    assert "tradfi" not in users.list()
+    assert "tradfi" not in users._top_level_extras
     user = user_module.User()
     user.name = "api_user"
     user.exchange = "binance"
@@ -54,6 +60,7 @@ def test_users_save_records_api_key_cluster_secret_blob(monkeypatch, tmp_path: P
     assert secret_blob.is_file()
     assert b"super-secret" not in payload_blob.read_bytes()
     assert b"super-secret" in secret_blob.read_bytes()
+    assert b"tradfi-vault-secret" not in secret_blob.read_bytes()
     assert stat.S_IMODE(secret_blob.stat().st_mode) == 0o600
     assert stat.S_IMODE(secret_blob.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE((cluster_root / "secret_blobs").stat().st_mode) == 0o700
@@ -63,7 +70,9 @@ def test_users_save_records_api_key_cluster_secret_blob(monkeypatch, tmp_path: P
         stat.S_IMODE(path.stat().st_mode) == 0o600
         for path in (tmp_path / "data" / "api-keys").glob("*.json")
     )
-    assert json.loads((pb7 / "api-keys.json").read_text(encoding="utf-8"))["_api_serial"] == 1
+    saved_payload = json.loads((pb7 / "api-keys.json").read_text(encoding="utf-8"))
+    assert saved_payload["_api_serial"] == 1
+    assert saved_payload["tradfi"]["api_key"] == "tradfi-vault-secret"
 
 
 def test_hl_expiry_preview_uses_copy_without_persisting_override(monkeypatch) -> None:

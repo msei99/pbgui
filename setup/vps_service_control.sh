@@ -12,6 +12,7 @@ Environment:
   PBGUI_DIR      Remote PBGui directory. Default: current working directory.
   PBGUI_PYTHON   PBGui virtualenv Python. Default: ../venv_pbgui/bin/python.
   PBGUI_USER     Target service user when executed with become/root.
+  PBGUI_CREDENTIAL_ACTIVE  true/false when pool capability is known; empty means preserve state.
 EOF
 }
 
@@ -32,10 +33,6 @@ esac
 
 pbgui_dir="${PBGUI_DIR:-$(pwd)}"
 python_bin="${PBGUI_PYTHON:-$(dirname "$pbgui_dir")/venv_pbgui/bin/python}"
-config_python="$python_bin"
-if [[ ! -x "$config_python" ]]; then
-  config_python="$(command -v python3 || true)"
-fi
 target_user="${PBGUI_USER:-}"
 if [[ -n "$target_user" ]]; then
   target_uid="$(id -u "$target_user")"
@@ -77,49 +74,19 @@ script_for() {
   esac
 }
 
-ini_value() {
-  local section="$1"
-  local option="$2"
-  local ini_path="$pbgui_dir/pbgui.ini"
-  [[ -r "$ini_path" && -n "$config_python" ]] || return 0
-  "$config_python" - "$ini_path" "$section" "$option" <<'PY'
-import configparser
-import sys
-
-cfg = configparser.ConfigParser()
-cfg.read(sys.argv[1])
-print(cfg.get(sys.argv[2], sys.argv[3], fallback=''))
-PY
-}
-
-configured_value() {
-  local value="$1"
-  value="${value//$'\r'/}"
-  value="${value#"${value%%[![:space:]]*}"}"
-  value="${value%"${value##*[![:space:]]}"}"
-  [[ -n "$value" ]] || return 1
-  local lowered="${value,,}"
-  case "$lowered" in
-    none|null|false|'<api_key>') return 1 ;;
-  esac
-  if [[ "$value" == '<'*'>' ]]; then
-    return 1
-  fi
-  return 0
-}
-
-service_configured() {
+service_capability_state() {
   case "$1" in
-    PBRun) return 0 ;;
-    PBCluster) return 0 ;;
+    PBRun|PBCluster|PBMonitorAgent) printf '%s\n' enabled ;;
     PBCoinData)
-      local require_coindata="${PBGUI_REQUIRE_PBCOINDATA:-}"
-      require_coindata="${require_coindata,,}"
-      case "$require_coindata" in 1|true|yes|on) return 0 ;; esac
-      configured_value "$(ini_value coinmarketcap api_key)"
+      local active="${PBGUI_CREDENTIAL_ACTIVE:-}"
+      active="${active,,}"
+      case "$active" in
+        1|true|yes|on) printf '%s\n' enabled ;;
+        0|false|no|off) printf '%s\n' disabled ;;
+        *) printf '%s\n' unknown ;;
+      esac
       ;;
-    PBMonitorAgent) return 0 ;;
-    *) return 1 ;;
+    *) printf '%s\n' disabled ;;
   esac
 }
 
@@ -128,7 +95,7 @@ disable_optional_service() {
   local unit
   unit="$(unit_for "$service")"
 
-  echo "Skipping $service: required configuration is missing in pbgui.ini"
+  echo "Disabling $service: credential capability is inactive"
   if command -v systemctl >/dev/null 2>&1 && [[ -f "$target_home/.config/systemd/user/$unit" ]]; then
     run_as_service_user systemctl --user daemon-reload >/dev/null 2>&1 || true
     run_as_service_user systemctl --user stop "$unit" >/dev/null 2>&1 || true
@@ -155,9 +122,16 @@ requested_services=("$@")
 active_services=()
 for service in "${requested_services[@]}"; do
   unit_for "$service" >/dev/null
-  if [[ "$action" != "stop" ]] && ! service_configured "$service"; then
-    disable_optional_service "$service"
+  capability_state="$(service_capability_state "$service")"
+  if [[ "$service" == "PBCoinData" && "$capability_state" == "unknown" ]]; then
+    echo "Leaving $service unchanged: credential capability is unknown"
     continue
+  fi
+  if [[ "$action" != "stop" ]]; then
+    if [[ "$capability_state" == "disabled" ]]; then
+      disable_optional_service "$service"
+      continue
+    fi
   fi
   active_services+=("$service")
 done

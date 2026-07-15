@@ -15,12 +15,20 @@ import socket
 import subprocess
 import threading
 import time
-import configparser
 from collections import deque
 from pathlib import Path
 from typing import Any
 
+from cmc_pool import CmcPoolClient
+from credential_store import CredentialStore
 from logging_helpers import human_log as _log
+from master.cluster_state import (
+    default_cluster_root,
+    local_cmc_credential_readiness,
+    read_local_identity,
+    rebuild_materialized_state,
+)
+import pbgui_purefunc
 
 
 SERVICE = "PBMonitorAgent"
@@ -77,12 +85,106 @@ def _read_json(path: Path, default: Any = None) -> Any:
         return default
 
 
-def _read_ini() -> configparser.ConfigParser:
+def _read_ini():
     """Read the local PBGui config file."""
 
-    cfg = configparser.ConfigParser()
-    cfg.read(PBGDIR / "pbgui.ini")
-    return cfg
+    return pbgui_purefunc.load_ini_snapshot(Path(PBGDIR) / "pbgui.ini").parser
+
+
+def _local_credential_capability() -> dict[str, Any]:
+    """Return secret-free readiness from the local CMC store and pool."""
+
+    result: dict[str, Any] = {
+        "credential_protocol_version": 2,
+        "credential_active": None,
+        "credential_reason": "CMC credential pool status unavailable",
+        "cmc_catalog_generation": None,
+        "cmc_materialized_generation": None,
+        "cmc_active_key_count": None,
+    }
+    try:
+        store = CredentialStore(PBGDIR / "data" / "credentials")
+        records = store.list_cmc(active_only=False)
+        pool = CmcPoolClient(
+            credential_store=store,
+            state_root=store.root / "cmc_pool",
+            desired_state_provider=lambda: rebuild_materialized_state(
+                default_cluster_root(PBGDIR),
+                write=False,
+            ),
+        )
+        status = pool.status()
+    except Exception as exc:
+        _log(SERVICE, f"CMC credential capability unavailable: {exc.__class__.__name__}", level="WARNING")
+        return result
+
+    active_count = max(int(status.get("active_credentials") or 0), 0)
+    readiness: dict[str, Any]
+    try:
+        cluster_root = default_cluster_root(PBGDIR)
+        materialized = rebuild_materialized_state(cluster_root, write=False)
+        try:
+            node_id = str(read_local_identity(cluster_root)["node_id"])
+        except Exception:
+            nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
+            node_id = str(next(iter(nodes))) if len(nodes) == 1 else ""
+        readiness = local_cmc_credential_readiness(materialized, node_id, records)
+        authorities = (((materialized.get("desired_state") or {}).get("cmc_pool") or {}).get("authorities") or {})
+        authority_timestamps = [
+            float(item.get("updated_at") or 0)
+            for item in authorities.values()
+            if isinstance(item, dict) and item.get("updated_at")
+        ]
+        if authority_timestamps:
+            result["cmc_authority_state_age_seconds"] = round(
+                max(time.time() - max(authority_timestamps), 0.0),
+                1,
+            )
+    except Exception:
+        standalone = [
+            record for record in records
+            if isinstance(record, dict) and record.get("active") and not record.get("pending")
+        ]
+        generation = max((int(record.get("generation") or 0) for record in standalone), default=0)
+        readiness = {
+            "credential_protocol_version": 2,
+            "credential_active": bool(standalone),
+            "credential_reason": "CMC credential pool active" if standalone else "No active materialized CMC credentials",
+            "cmc_catalog_generation": generation,
+            "cmc_materialized_generation": generation,
+            "cmc_active_key_count": len(standalone),
+            "cluster_origin_metadata": False,
+        }
+    if readiness.get("credential_active") is True and active_count < 1:
+        readiness["credential_active"] = False
+        readiness["credential_reason"] = "CMC pool has no exact eligible credential"
+    result.update(readiness)
+
+    provider_observations: list[tuple[float, dict[str, Any]]] = []
+    for key_status in status.get("keys") or []:
+        if not isinstance(key_status, dict):
+            continue
+        try:
+            timestamp = float(key_status.get("provider_usage_updated_at") or key_status.get("last_settled_at") or 0)
+        except (TypeError, ValueError):
+            timestamp = 0
+        if timestamp > 0:
+            provider_observations.append((timestamp, key_status))
+    if provider_observations:
+        provider_timestamp, provider_status = max(provider_observations, key=lambda item: item[0])
+        result["cmc_provider_usage_age_seconds"] = round(
+            max(time.time() - provider_timestamp, 0.0),
+            1,
+        )
+        for source, target in (("provider_used", "cmc_provider_used"), ("provider_limit", "cmc_provider_limit")):
+            try:
+                result[target] = max(float(provider_status[source]), 0.0) if provider_status.get(source) is not None else None
+            except (TypeError, ValueError):
+                result[target] = None
+    authority_reachable = status.get("authority_reachable")
+    if isinstance(authority_reachable, bool):
+        result["cmc_authority_reachable"] = authority_reachable
+    return result
 
 
 def _parsed_list_config(text: str) -> list[str]:
@@ -100,18 +202,6 @@ def _parsed_list_config(text: str) -> list[str]:
     except Exception:
         pass
     return [part.strip() for part in raw.split(",") if part.strip()]
-
-
-def _configured_text(value: Any) -> bool:
-    """Return whether a config value is explicitly configured."""
-
-    normalized = str(value or "").strip()
-    if not normalized:
-        return False
-    lowered = normalized.lower()
-    if lowered in {"none", "null", "false", "<api_key>"}:
-        return False
-    return not (normalized.startswith("<") and normalized.endswith(">"))
 
 
 def _local_pbname(cfg: configparser.ConfigParser | None = None) -> str:
@@ -171,9 +261,11 @@ def _pbcluster_required_for_host(pbname: str) -> bool:
     return False
 
 
-def _service_expected(service_name: str) -> bool:
+def _service_expected(service_name: str) -> bool | None:
     """Return whether this host should run one PBGui service."""
 
+    if service_name == "PBCoinData":
+        return _local_credential_capability()["credential_active"]
     cfg = _read_ini()
     pbname = _local_pbname(cfg)
     if service_name == "PBCluster":
@@ -182,8 +274,6 @@ def _service_expected(service_name: str) -> bool:
         return _pbrun_required_for_host(pbname)
     if service_name == "PBData":
         return _pbdata_required(cfg)
-    if service_name == "PBCoinData":
-        return _configured_text(cfg.get("coinmarketcap", "api_key", fallback=""))
     if service_name == "PBMonitorAgent":
         return True
     return True
@@ -232,13 +322,10 @@ def _run_shell_script(script: str, *, env: dict[str, str] | None = None, timeout
 def _pb7_dir() -> Path:
     """Return the configured PB7 directory or the default sibling checkout."""
 
-    ini = PBGDIR / "pbgui.ini"
     try:
-        import configparser
-
-        cfg = configparser.ConfigParser()
-        cfg.read(ini)
-        raw = str(cfg.get("main", "pb7dir", fallback="") or "").strip()
+        snapshot = pbgui_purefunc.load_ini_snapshot(Path(PBGDIR) / "pbgui.ini")
+        raw = snapshot.get("main", "pb7dir") if snapshot.has_option("main", "pb7dir") else ""
+        raw = str(raw or "").strip()
         if raw:
             value = Path(raw).expanduser()
             return value if value.is_absolute() else Path.home() / value
@@ -308,7 +395,8 @@ def _run_host_meta() -> None:
     script = _embedded_monitor_script("HOST_META_SCRIPT").replace("__PBGDIR__", str(PBGDIR))
     payload = _run_shell_script(script, env=_script_env(), timeout=20) or {}
     now = time.time()
-    payload.pop("coinmarketcap_api_key", None)
+    payload.pop("coinmarketcap" + "_api_key", None)
+    payload.update(_local_credential_capability())
     payload["schema_version"] = SCHEMA_VERSION
     payload["generated_at"] = now
     payload["source"] = "monitor-agent"
@@ -488,7 +576,8 @@ def _run_service_status() -> None:
     }
     heal_enabled = _auto_heal_enabled()
     for service_name, (unit, pid_file, process_match) in PBGUI_SERVICES.items():
-        if not _service_expected(service_name):
+        expected = _service_expected(service_name)
+        if expected is False:
             payload["services"][service_name] = _disabled_service_status(service_name)
             continue
         status = _service_status(unit, pid_file, process_match)
@@ -501,7 +590,7 @@ def _run_service_status() -> None:
                 "manager": "systemd",
                 "unit": unit,
             }
-        if status.get("status") == "stopped" and heal_enabled and service_name != "PBMonitorAgent":
+        if status.get("status") == "stopped" and heal_enabled and expected is True and service_name != "PBMonitorAgent":
             restarted, restart_error = _restart_systemd_service(service_name, unit)
             status = dict(status)
             status["was_restarted"] = bool(restarted)
@@ -509,7 +598,7 @@ def _run_service_status() -> None:
             if restarted:
                 status["status"] = "restarting"
                 status["error"] = None
-        status["expected"] = True
+        status["expected"] = expected
         payload["services"][service_name] = status
     _atomic_write_json(DATA_DIR / "service_status.json", payload)
 
@@ -686,24 +775,23 @@ def _process_memory_mb(proc_dir: Path) -> tuple[float, float]:
 def _append_live_sample(payload: dict[str, Any]) -> None:
     """Append a live metrics sample to NDJSON."""
 
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with (DATA_DIR / "live_metrics.ndjson").open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    from logging_helpers import append_managed_transcript_line
+
+    append_managed_transcript_line(
+        _pbgui_dir() / "data" / "logs" / "monitor-agent" / "live_metrics.ndjson",
+        json.dumps(payload, separators=(",", ":")),
+        "monitor_agent_live",
+    )
 
 
 def _rotate_live_samples() -> None:
-    """Rotate live metrics NDJSON so tail -F readers keep working."""
+    """Apply configured managed rotation to the closed live metrics file."""
 
-    path = DATA_DIR / "live_metrics.ndjson"
+    from logging_helpers import rotate_managed_log_before_open
+
+    path = _pbgui_dir() / "data" / "logs" / "monitor-agent" / "live_metrics.ndjson"
     try:
-        if not path.exists() or path.stat().st_size < 1024 * 1024:
-            return
-        stamp = int(time.time())
-        rotated = DATA_DIR / f"live_metrics.{stamp}.ndjson"
-        path.rename(rotated)
-        path.touch()
-        for old in sorted(DATA_DIR.glob("live_metrics.*.ndjson"))[:-2]:
-            old.unlink(missing_ok=True)
+        rotate_managed_log_before_open(path, "monitor_agent_live")
     except Exception as exc:
         _log(SERVICE, f"Live metrics rotation failed: {exc}", level="WARNING")
 
@@ -816,4 +904,7 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    from credential_process_registry import ProcessCapabilityHeartbeat
+
+    with ProcessCapabilityHeartbeat(PBGDIR, SERVICE):
+        run()
