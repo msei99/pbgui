@@ -707,6 +707,51 @@ def rebuild_materialized_state(cluster_root: Path, *, write: bool = True) -> dic
     return materialized
 
 
+def read_materialized_state(cluster_root: Path) -> dict[str, Any]:
+    """Read a current persisted snapshot or validate and rebuild a stale one."""
+
+    root = Path(cluster_root)
+    paths = ClusterPaths.from_root(root)
+    try:
+        before = (
+            paths.cluster_nodes.stat().st_mtime_ns,
+            paths.desired_state.stat().st_mtime_ns,
+            paths.state_vector.stat().st_mtime_ns,
+        )
+        snapshot_mtime_ns = min(before)
+        cluster_nodes = _read_json(paths.cluster_nodes)
+        desired_state = _read_json(paths.desired_state)
+        state_vector = _read_json(paths.state_vector)
+        after = (
+            paths.cluster_nodes.stat().st_mtime_ns,
+            paths.desired_state.stat().st_mtime_ns,
+            paths.state_vector.stat().st_mtime_ns,
+        )
+        identity = read_local_identity(root)
+        cluster_id = str(identity["cluster_id"])
+        if before != after:
+            raise ClusterStateError("materialized snapshot changed while being read")
+        if any(
+            actor_dir.is_dir() and actor_dir.stat().st_mtime_ns > snapshot_mtime_ns
+            for actor_dir in paths.oplog.iterdir()
+        ):
+            raise ClusterStateError("materialized snapshot is older than the oplog")
+        if not all(isinstance(item, dict) for item in (cluster_nodes, desired_state, state_vector)):
+            raise ClusterStateError("materialized snapshot is invalid")
+        if (
+            str(cluster_nodes.get("cluster_id") or "") != cluster_id
+            or str(desired_state.get("cluster_id") or "") != cluster_id
+        ):
+            raise ClusterStateError("materialized snapshot belongs to another cluster")
+        return {
+            "cluster_nodes": cluster_nodes,
+            "desired_state": desired_state,
+            "state_vector": state_vector,
+        }
+    except (OSError, ValueError, TypeError, ClusterStateError):
+        return rebuild_materialized_state(root)
+
+
 def credential_lifecycle_status(materialized: dict[str, Any]) -> dict[str, Any]:
     """Build secret-free protocol, recipient, materialization, and barrier status."""
 

@@ -18,7 +18,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from cluster_sync_command import (
     ClusterSyncCommandError,
@@ -43,6 +43,7 @@ from master.cluster_state import (
     default_cluster_root,
     load_operations,
     normalize_node_sync_mode,
+    read_materialized_state,
     read_local_identity,
     rebuild_materialized_state,
     stage_membership_operations,
@@ -208,7 +209,7 @@ class ClusterSyncWorker:
             except Exception as exc:
                 migration_pre_sync = {"status": "error", "error": type(exc).__name__}
                 _log(SERVICE, f"Credential migration advance pending: {type(exc).__name__}", level="WARNING")
-            materialized = rebuild_materialized_state(self.cluster_root)
+            materialized = read_materialized_state(self.cluster_root)
             peer_results = self._sync_peers(identity, materialized)
             if any(int(item.get("pulled_ops") or 0) for item in peer_results):
                 materialized = rebuild_materialized_state(self.cluster_root)
@@ -220,7 +221,7 @@ class ClusterSyncWorker:
                         "status": str(coordinator_state.get("status") or "advanced"),
                         "phase": str(coordinator_state.get("phase") or "unknown"),
                     }
-                    materialized = rebuild_materialized_state(self.cluster_root)
+                    materialized = read_materialized_state(self.cluster_root)
                 except Exception as exc:
                     migration_coordinator = {"status": "error", "error": type(exc).__name__}
                     _log(SERVICE, f"Credential migration coordinator pending: {type(exc).__name__}", level="WARNING")
@@ -353,11 +354,21 @@ class ClusterSyncWorker:
             pending.append((str(peer_id), peer))
 
         if pending:
-            local_ops = load_operations(
-                self.cluster_root,
-                expected_cluster_id=str(identity.get("cluster_id") or ""),
-            )
-            local_vector = _state_vector_from_operations(local_ops)
+            local_vector = _as_state_vector(materialized.get("state_vector") or {})
+            local_ops: list[dict[str, Any]] | None = None
+            local_ops_lock = threading.Lock()
+
+            def load_local_ops() -> list[dict[str, Any]]:
+                nonlocal local_ops
+                with local_ops_lock:
+                    if local_ops is None:
+                        with self._local_state_lock:
+                            local_ops = load_operations(
+                                self.cluster_root,
+                                expected_cluster_id=str(identity.get("cluster_id") or ""),
+                            )
+                    return local_ops
+
             max_workers = min(self.peer_workers, len(pending))
             with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="pbcluster-peer") as executor:
                 future_map = {
@@ -368,7 +379,7 @@ class ClusterSyncWorker:
                         local_node_id,
                         str(identity.get("cluster_id") or ""),
                         materialized,
-                        local_ops,
+                        load_local_ops,
                         local_vector,
                     ): peer_id
                     for peer_id, peer in pending
@@ -386,7 +397,7 @@ class ClusterSyncWorker:
         local_node_id: str,
         cluster_id: str,
         local_materialized: dict[str, Any],
-        local_ops: list[dict[str, Any]],
+        load_local_ops: Callable[[], list[dict[str, Any]]],
         local_vector: dict[str, int],
     ) -> dict[str, Any]:
         """Synchronize one peer and update its retry backoff."""
@@ -398,7 +409,7 @@ class ClusterSyncWorker:
                 local_node_id,
                 cluster_id,
                 local_materialized,
-                local_ops,
+                load_local_ops,
                 local_vector,
             )
             self._peer_backoff.pop(str(peer_id), None)
@@ -422,7 +433,7 @@ class ClusterSyncWorker:
         local_node_id: str,
         cluster_id: str,
         local_materialized: dict[str, Any],
-        local_ops: list[dict[str, Any]],
+        load_local_ops: Callable[[], list[dict[str, Any]]],
         local_vector: dict[str, int],
     ) -> dict[str, Any]:
         """Synchronize local state with one peer."""
@@ -443,7 +454,14 @@ class ClusterSyncWorker:
 
         pulled_ops = self._pull_missing_operations(peer, local_node_id, remote_vector, local_vector, cluster_id)
 
-        push_ops = _select_operations_missing_on_remote(local_ops, remote_vector)
+        remote_needs_operations = any(
+            int(remote_vector.get(actor) or 0) < sequence
+            for actor, sequence in local_vector.items()
+        )
+        push_ops = _select_operations_missing_on_remote(
+            load_local_ops() if remote_needs_operations else [],
+            remote_vector,
+        )
         peer_supports_credentials = (
             int(hello.get("protocol_version") or 1) >= 2
             and bool((hello.get("credential_capability") or {}).get("sealed_credentials"))

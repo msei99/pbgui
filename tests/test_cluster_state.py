@@ -19,6 +19,7 @@ from master.cluster_state import (
     detect_duplicate_node_ids,
     ensure_local_identity,
     load_operations,
+    read_materialized_state,
     read_local_identity,
     rebuild_materialized_state,
     stage_membership_operations,
@@ -101,6 +102,39 @@ def test_ensure_local_identity_creates_stable_ids(tmp_path: Path) -> None:
     assert second["created_at"] == 100
     assert (root / "cluster_id").read_text(encoding="utf-8").strip() == CLUSTER_ID
     assert (root / "node_id").read_text(encoding="utf-8").strip() == NODE_A
+
+
+def test_read_materialized_state_reuses_current_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An unchanged oplog is served without another validated replay."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master"})
+    rebuilt = rebuild_materialized_state(root)
+    monkeypatch.setattr(
+        cluster_state_module,
+        "rebuild_materialized_state",
+        lambda *_args, **_kwargs: pytest.fail("current snapshot must not replay the oplog"),
+    )
+
+    assert read_materialized_state(root) == rebuilt
+
+
+def test_read_materialized_state_rebuilds_after_new_operation(tmp_path: Path) -> None:
+    """A newer actor directory invalidates and refreshes the persisted snapshot."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master"})
+    rebuild_materialized_state(root)
+    append_operation(root, "UPDATE_NODE", {"node_id": NODE_A, "pbname": "renamed"})
+
+    materialized = read_materialized_state(root)
+
+    assert materialized["cluster_nodes"]["generation"] == 2
+    assert materialized["cluster_nodes"]["nodes"][NODE_A]["pbname"] == "renamed"
+    assert json.loads((root / "cluster_nodes.json").read_text(encoding="utf-8"))["generation"] == 2
 
 
 def test_ensure_local_identity_rejects_foreign_existing_cluster(tmp_path: Path) -> None:

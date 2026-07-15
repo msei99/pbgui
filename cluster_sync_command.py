@@ -51,6 +51,7 @@ from master.cluster_state import (
     default_cluster_root,
     ensure_local_identity,
     membership_signing_public_key,
+    read_materialized_state,
     read_local_identity,
     rebuild_materialized_state,
     stage_membership_operations,
@@ -517,27 +518,7 @@ def _safe_state_call(callback):
 def _read_materialized_snapshot(cluster_root: Path) -> dict[str, Any]:
     """Read the last atomically persisted state without replaying the oplog."""
 
-    paths = ClusterPaths.from_root(cluster_root)
-    try:
-        snapshot_mtime_ns = min(
-            paths.cluster_nodes.stat().st_mtime_ns,
-            paths.desired_state.stat().st_mtime_ns,
-            paths.state_vector.stat().st_mtime_ns,
-        )
-        cluster_nodes = json.loads(paths.cluster_nodes.read_text(encoding="utf-8"))
-        desired_state = json.loads(paths.desired_state.read_text(encoding="utf-8"))
-        state_vector = json.loads(paths.state_vector.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=False))
-    if any(path.is_dir() and path.stat().st_mtime_ns > snapshot_mtime_ns for path in paths.oplog.iterdir()):
-        return _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=False))
-    if not isinstance(cluster_nodes, dict) or not isinstance(desired_state, dict) or not isinstance(state_vector, dict):
-        return _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=False))
-    return {
-        "cluster_nodes": cluster_nodes,
-        "desired_state": desired_state,
-        "state_vector": state_vector,
-    }
+    return _safe_state_call(lambda: read_materialized_state(cluster_root))
 
 
 def _mailbox_call(callback):
@@ -750,7 +731,9 @@ def _verify_remote_node(cluster_root: Path, remote_node: str, *, allow_join: boo
 def _materialize_v7_configs(cluster_root: Path, *, write: bool) -> dict[str, Any]:
     """Preview or write V7 config blobs into data/run_v7."""
 
-    materialized = _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=write))
+    materialized = _safe_state_call(
+        lambda: rebuild_materialized_state(cluster_root) if write else read_materialized_state(cluster_root)
+    )
     identity = _safe_state_call(lambda: read_local_identity(cluster_root))
     desired_state = materialized.get("desired_state") if isinstance(materialized, dict) else {}
     desired_state = desired_state if isinstance(desired_state, dict) else {}
@@ -877,7 +860,9 @@ def _repair_local_v7_config_blobs(
 def _materialize_api_keys(cluster_root: Path, *, write: bool) -> dict[str, Any]:
     """Preview or merge exchange keys from the desired secret blob."""
 
-    materialized = _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=write))
+    materialized = _safe_state_call(
+        lambda: rebuild_materialized_state(cluster_root) if write else read_materialized_state(cluster_root)
+    )
     identity = _safe_state_call(lambda: read_local_identity(cluster_root))
     desired_state = materialized.get("desired_state") if isinstance(materialized, dict) else {}
     desired_state = desired_state if isinstance(desired_state, dict) else {}
@@ -977,7 +962,9 @@ def _build_materialize_api_keys_plan(cluster_root: Path, desired_state: dict[str
 def _materialize_credentials(cluster_root: Path, *, write: bool) -> dict[str, Any]:
     """Preview or materialize sealed CMC/TradFi credentials locally."""
 
-    materialized = _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=write))
+    materialized = _safe_state_call(
+        lambda: rebuild_materialized_state(cluster_root) if write else read_materialized_state(cluster_root)
+    )
     identity = _safe_state_call(lambda: read_local_identity(cluster_root))
     desired = materialized.get("desired_state") if isinstance(materialized, dict) else {}
     desired = desired if isinstance(desired, dict) else {}
@@ -1232,7 +1219,7 @@ def _append_tradfi_projection_ack(
 ) -> dict[str, Any]:
     """Append the local master's exact active-profile projection ACK."""
 
-    materialized = rebuild_materialized_state(cluster_root, write=False)
+    materialized = read_materialized_state(cluster_root)
     identity = read_local_identity(cluster_root)
     node_id = str(identity["node_id"])
     local_node = (((materialized.get("cluster_nodes") or {}).get("nodes") or {}).get(node_id) or {})
@@ -1295,7 +1282,7 @@ def _append_credential_migration_acks(
 ) -> dict[str, Any]:
     """Append exact recipient ACKs plus migration ACKs when their barriers are ready."""
 
-    materialized = rebuild_materialized_state(cluster_root, write=False)
+    materialized = read_materialized_state(cluster_root)
     desired = materialized.get("desired_state") if isinstance(materialized, dict) else {}
     desired = desired if isinstance(desired, dict) else {}
     identity = read_local_identity(cluster_root)
@@ -1358,7 +1345,7 @@ def _append_credential_migration_acks(
         recipient_ack = {"status": "acked", "operation_id": str(operation["op_id"])}
 
     if migration.get("frozen") is True and recipient_ack["status"] == "acked":
-        materialized = rebuild_materialized_state(cluster_root, write=False)
+        materialized = read_materialized_state(cluster_root)
         desired = materialized["desired_state"]
         migration = desired["credential_migration"]
 
@@ -1400,7 +1387,7 @@ def _append_credential_migration_acks(
                 "process_readiness": process_readiness["services"],
             },
         )
-        materialized = rebuild_materialized_state(cluster_root, write=False)
+        materialized = read_materialized_state(cluster_root)
         desired = materialized["desired_state"]
         migration = desired["credential_migration"]
 
@@ -1454,7 +1441,7 @@ def _append_credential_migration_acks(
                 "process_readiness": process_readiness["services"],
             },
         )
-        materialized = rebuild_materialized_state(cluster_root, write=False)
+        materialized = read_materialized_state(cluster_root)
         desired = materialized["desired_state"]
         migration = desired["credential_migration"]
 
@@ -1559,7 +1546,7 @@ def _cleanup_cutoff_secret_blobs(cluster_root: Path, cutoff: dict[str, Any]) -> 
 def _append_credential_scan_ack(cluster_root: Path, node_id: str) -> dict[str, Any]:
     """Run one bounded redacted local scan and ACK the current migration barrier."""
 
-    materialized = rebuild_materialized_state(cluster_root, write=False)
+    materialized = read_materialized_state(cluster_root)
     migration = ((materialized.get("desired_state") or {}).get("credential_migration") or {})
     cutoff = migration.get("cutoff") if isinstance(migration.get("cutoff"), dict) else None
     if migration.get("frozen") is not True or cutoff is None:

@@ -15,6 +15,7 @@ from master.cluster_state import (
     compute_config_manifest_hash,
     default_cluster_root,
     ensure_local_identity,
+    rebuild_materialized_state,
     read_local_identity,
     write_operation,
 )
@@ -387,6 +388,35 @@ def test_cluster_sync_worker_syncs_reachable_peers_in_parallel(tmp_path: Path) -
     assert status["peers_ok"] == len(peer_ids)
     assert client.max_active > 1
     assert {item["status"] for item in status["peers"]} == {"synced"}
+
+
+def test_cluster_sync_worker_does_not_load_oplog_for_converged_peer(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A matching remote state vector avoids loading and validating local operations."""
+
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "master", "pbname": "master-a"})
+    append_operation(
+        cluster_root,
+        "ADD_NODE",
+        {"node_id": NODE_B, "role": "vps", "pbname": "runner-b", "sync_mode": "reachable", "ssh_host": "runner-b"},
+    )
+    materialized = rebuild_materialized_state(cluster_root)
+    client = _ParallelPeerClient(materialized["state_vector"])
+    worker = ClusterSyncWorker(tmp_path, peer_client=client)
+    monkeypatch.setattr(
+        cluster_sync_worker,
+        "load_operations",
+        lambda *_args, **_kwargs: pytest.fail("converged peer must not load the oplog"),
+    )
+
+    results = worker._sync_peers(read_local_identity(cluster_root), materialized)
+
+    assert len(results) == 1
+    assert results[0]["status"] == "synced"
 
 
 def test_cluster_sync_worker_skips_vps_peer_without_explicit_topology(tmp_path: Path) -> None:

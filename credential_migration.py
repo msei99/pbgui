@@ -39,6 +39,7 @@ from master.cluster_state import (
     ensure_local_identity,
     load_operations,
     membership_signing_public_key,
+    read_materialized_state,
     read_local_identity,
     rebuild_materialized_state,
 )
@@ -258,7 +259,7 @@ class CredentialMigrationCoordinator:
             "updated_at": _timestamp(),
         })
         self._write_state(state)
-        materialized = rebuild_materialized_state(self.cluster_root, write=False)
+        materialized = read_materialized_state(self.cluster_root)
         local_node_id = str(read_local_identity(self.cluster_root)["node_id"])
         migration = (materialized.get("desired_state") or {}).get("credential_migration") or {}
         inventory_acks = migration.get("inventory_acks") if isinstance(migration.get("inventory_acks"), dict) else {}
@@ -280,7 +281,7 @@ class CredentialMigrationCoordinator:
                     "source_generations": source_generations,
                 },
             )
-            materialized = rebuild_materialized_state(self.cluster_root, write=False)
+            materialized = read_materialized_state(self.cluster_root)
         active_nodes = self._active_nodes(materialized)
         migration = (materialized.get("desired_state") or {}).get("credential_migration") or {}
         inventory_acks = migration.get("inventory_acks") if isinstance(migration.get("inventory_acks"), dict) else {}
@@ -310,7 +311,7 @@ class CredentialMigrationCoordinator:
             )
         state.pop("outdated_services", None)
         self._ensure_local_cluster_identity_without_legacy_read()
-        materialized = rebuild_materialized_state(self.cluster_root, write=False)
+        materialized = read_materialized_state(self.cluster_root)
         active_nodes = self._active_nodes(materialized)
         incompatible = [
             node_id
@@ -349,7 +350,7 @@ class CredentialMigrationCoordinator:
             self._write_state(state)
 
         _append_credential_migration_acks(self.cluster_root, inventory_allowed=False)
-        materialized = rebuild_materialized_state(self.cluster_root, write=False)
+        materialized = read_materialized_state(self.cluster_root)
         migration = materialized["desired_state"]["credential_migration"]
         acks = migration.get("freeze_acks") if isinstance(migration.get("freeze_acks"), dict) else {}
         missing = [
@@ -380,7 +381,7 @@ class CredentialMigrationCoordinator:
                 + ", ".join(process_readiness["waiting_services"])
             )
         state.pop("outdated_services", None)
-        materialized = rebuild_materialized_state(self.cluster_root, write=False)
+        materialized = read_materialized_state(self.cluster_root)
         active_nodes = self._active_nodes(materialized)
         migration = (materialized.get("desired_state") or {}).get("credential_migration") or {}
         acks = migration.get("freeze_acks") if isinstance(migration.get("freeze_acks"), dict) else {}
@@ -399,7 +400,7 @@ class CredentialMigrationCoordinator:
 
         sources = self._require_source_generations(state)
         publisher = ClusterCredentialPublisher(self.cluster_root, self.store)
-        materialized = rebuild_materialized_state(self.cluster_root, write=False)
+        materialized = read_materialized_state(self.cluster_root)
         if _unresolved_migration_conflicts(materialized):
             raise CredentialMigrationBlocked("Migration credential conflict requires resolution")
         local_node_id = str(read_local_identity(self.cluster_root)["node_id"])
@@ -481,7 +482,7 @@ class CredentialMigrationCoordinator:
         local_ack = _append_credential_migration_acks(self.cluster_root)
         if local_ack.get("status") == "pending":
             raise CredentialMigrationBlocked(str(local_ack.get("reason") or "Local materialization pending"))
-        materialized = rebuild_materialized_state(self.cluster_root, write=False)
+        materialized = read_materialized_state(self.cluster_root)
         active_nodes = self._active_nodes(materialized)
         desired = materialized["desired_state"]
         migration = desired.get("credential_migration") or {}
@@ -513,7 +514,7 @@ class CredentialMigrationCoordinator:
     def _phase_credential_cutoff(self, state: dict[str, Any]) -> str:
         """Publish the signed protocol-v2 cutoff after an exchange-only checkpoint."""
 
-        materialized = rebuild_materialized_state(self.cluster_root, write=False)
+        materialized = read_materialized_state(self.cluster_root)
         desired = materialized.get("desired_state") or {}
         migration = desired.get("credential_migration") or {}
         conflicts = migration.get("conflicts") if isinstance(migration.get("conflicts"), dict) else {}
@@ -529,7 +530,7 @@ class CredentialMigrationCoordinator:
                 "Migration candidate resolution blocks credential cleanup"
             )
         self._checkpoint_legacy_api_keys_blob(state)
-        materialized = rebuild_materialized_state(self.cluster_root, write=False)
+        materialized = read_materialized_state(self.cluster_root)
         desired = materialized.get("desired_state") or {}
         migration = desired.get("credential_migration") or {}
         current_cutoff = migration.get("cutoff") if isinstance(migration.get("cutoff"), dict) else {}
@@ -574,7 +575,7 @@ class CredentialMigrationCoordinator:
         local_ack = _append_credential_migration_acks(self.cluster_root)
         if local_ack.get("status") == "pending":
             raise CredentialMigrationBlocked(str(local_ack.get("reason") or "Local cutoff cleanup pending"))
-        materialized = rebuild_materialized_state(self.cluster_root, write=False)
+        materialized = read_materialized_state(self.cluster_root)
         active_nodes = self._active_nodes(materialized)
         migration = (materialized.get("desired_state") or {}).get("credential_migration") or {}
         cutoff = migration.get("cutoff") if isinstance(migration.get("cutoff"), dict) else {}
@@ -672,7 +673,7 @@ class CredentialMigrationCoordinator:
                 "Migrated credential sentinel remains in legacy fields: " + ", ".join(findings)
             )
         _append_credential_migration_acks(self.cluster_root)
-        materialized = rebuild_materialized_state(self.cluster_root, write=False)
+        materialized = read_materialized_state(self.cluster_root)
         active_nodes = self._active_nodes(materialized)
         migration = (materialized.get("desired_state") or {}).get("credential_migration") or {}
         cutoff = migration.get("cutoff") if isinstance(migration.get("cutoff"), dict) else {}
@@ -709,7 +710,7 @@ class CredentialMigrationCoordinator:
     def _phase_unfreeze(self, state: dict[str, Any]) -> str:
         """Publish completion only after cleanup ACKs and the allowlist scan pass."""
 
-        materialized = rebuild_materialized_state(self.cluster_root, write=False)
+        materialized = read_materialized_state(self.cluster_root)
         migration = (materialized.get("desired_state") or {}).get("credential_migration") or {}
         if migration.get("frozen") is not True:
             return "complete"
@@ -1155,7 +1156,7 @@ class CredentialMigrationCoordinator:
 
         paths = ClusterPaths.from_root(self.cluster_root)
         with advisory_file_lock(paths.root / ".append_sequence"):
-            materialized = rebuild_materialized_state(self.cluster_root, write=False)
+            materialized = read_materialized_state(self.cluster_root)
             desired = materialized.get("desired_state") if isinstance(materialized, dict) else {}
             api_keys = desired.get("api_keys") if isinstance(desired, dict) else None
             if not isinstance(api_keys, dict):
@@ -1322,7 +1323,7 @@ class CredentialMigrationCoordinator:
                     references[credential_id] = (kind, generation)
 
         try:
-            materialized = rebuild_materialized_state(self.cluster_root, write=False)
+            materialized = read_materialized_state(self.cluster_root)
         except ClusterStateError:
             materialized = {}
         migration = (materialized.get("desired_state") or {}).get("credential_migration") or {}
@@ -1564,7 +1565,7 @@ def run_credential_migration(pbgdir: Path | str | None = None) -> dict[str, Any]
     """Run or resume the local credential migration coordinator."""
 
     coordinator = CredentialMigrationCoordinator(pbgdir)
-    materialized = rebuild_materialized_state(coordinator.cluster_root, write=False)
+    materialized = read_materialized_state(coordinator.cluster_root)
     local_node_id = str(read_local_identity(coordinator.cluster_root)["node_id"])
     nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
     master_node_ids = sorted(
@@ -1601,7 +1602,7 @@ def local_legacy_credential_inventory(
 
     coordinator = CredentialMigrationCoordinator(pbgdir)
     if require_barrier:
-        materialized = rebuild_materialized_state(coordinator.cluster_root, write=False)
+        materialized = read_materialized_state(coordinator.cluster_root)
         migration = (materialized.get("desired_state") or {}).get("credential_migration") or {}
         active = coordinator._active_nodes(materialized)
         freeze_acks = migration.get("freeze_acks") if isinstance(migration.get("freeze_acks"), dict) else {}
@@ -1622,7 +1623,7 @@ def local_managed_credential_scan(pbgdir: Path | str) -> list[str]:
     """Scan local legacy values across every PBGui-managed post-freeze location."""
 
     coordinator = CredentialMigrationCoordinator(pbgdir)
-    materialized = rebuild_materialized_state(coordinator.cluster_root, write=False)
+    materialized = read_materialized_state(coordinator.cluster_root)
     migration = (materialized.get("desired_state") or {}).get("credential_migration") or {}
     if migration.get("frozen") is not True:
         raise CredentialMigrationBlocked("Managed credential scan requires the frozen writer barrier")
@@ -1643,13 +1644,13 @@ def advance_local_credential_migration(
 
     bootstrap_local_legacy_credentials(root)
     cluster_root = default_cluster_root(root)
-    materialized = rebuild_materialized_state(cluster_root, write=False)
+    materialized = read_materialized_state(cluster_root)
     desired = materialized.get("desired_state") or {}
     migration = desired.get("credential_migration") or {}
     if migration.get("frozen") is not True:
         return {"status": "idle"}
     barrier_ack = _append_credential_migration_acks(cluster_root, scan_allowed=False)
-    materialized = rebuild_materialized_state(cluster_root, write=False)
+    materialized = read_materialized_state(cluster_root)
     desired = materialized.get("desired_state") or {}
     migration = desired.get("credential_migration") or {}
     active_nodes = CredentialMigrationCoordinator._active_nodes(materialized)
@@ -1695,7 +1696,7 @@ def advance_local_credential_migration(
                 migration,
                 max_items=max_items,
             )
-    materialized = rebuild_materialized_state(cluster_root, write=False)
+    materialized = read_materialized_state(cluster_root)
     result["cleaned_sources"] = _cleanup_accepted_local_sources(
         coordinator,
         materialized,
@@ -1986,7 +1987,7 @@ def _resolve_migration_import(
     if kind not in {"cmc_api_key", "tradfi_profile"}:
         raise CredentialMigrationError("Unsupported migration credential kind")
     provider = str(provider or "unknown").strip().lower() if kind == "tradfi_profile" else ""
-    latest = rebuild_materialized_state(coordinator.cluster_root, write=False)
+    latest = read_materialized_state(coordinator.cluster_root)
     migration = (latest.get("desired_state") or {}).get("credential_migration") or {}
     conflicts = migration.get("conflicts") if isinstance(migration.get("conflicts"), dict) else {}
     candidate_conflicts = sorted(
@@ -2147,7 +2148,7 @@ def resolve_migration_conflict(
     if not str(resolution_id).strip():
         raise CredentialMigrationError("Migration conflict resolution_id is required")
     coordinator = CredentialMigrationCoordinator(pbgdir)
-    materialized = rebuild_materialized_state(coordinator.cluster_root, write=False)
+    materialized = read_materialized_state(coordinator.cluster_root)
     migration = (materialized.get("desired_state") or {}).get("credential_migration") or {}
     conflicts = migration.get("conflicts") if isinstance(migration.get("conflicts"), dict) else {}
     conflict = conflicts.get(str(conflict_id)) if isinstance(conflicts.get(str(conflict_id)), dict) else None
@@ -2192,9 +2193,10 @@ def _import_local_master_sources(
     freeze_generation = int(migration.get("freeze_generation") or 0)
     acceptances = migration.get("candidate_acceptances") if isinstance(migration.get("candidate_acceptances"), dict) else {}
     staged: list[tuple[str, str, int]] = []
+    accepted = 0
     for source in sorted(sources.values(), key=lambda item: item.source_id):
         for item in source.items:
-            if len(staged) >= max_items:
+            if len(staged) + accepted >= max_items:
                 break
             candidate_id = _migration_candidate_id(node_id, freeze_generation, source, str(item["item_id"]))
             if candidate_id in acceptances:
@@ -2202,7 +2204,7 @@ def _import_local_master_sources(
             kind = str(item["kind"])
             credential_id, generation = _resolve_migration_import(
                 coordinator,
-                rebuild_materialized_state(coordinator.cluster_root, write=False),
+                read_materialized_state(coordinator.cluster_root),
                 candidate_id=candidate_id,
                 kind=kind,
                 value=item["value"],
@@ -2211,6 +2213,46 @@ def _import_local_master_sources(
                 freeze_generation=freeze_generation,
             )
             if not credential_id:
+                continue
+            latest = read_materialized_state(coordinator.cluster_root)
+            desired = latest.get("desired_state") if isinstance(latest.get("desired_state"), dict) else {}
+            secrets = desired.get("secrets") if isinstance(desired.get("secrets"), dict) else {}
+            published_secret = secrets.get(credential_id) if isinstance(secrets.get(credential_id), dict) else {}
+            already_published = kind == "cmc_api_key" and (
+                int(published_secret.get("generation") or 0) == generation
+                and str(published_secret.get("secret_kind") or "") == kind
+            )
+            if already_published:
+                entries = ((desired.get("cmc_pool") or {}).get("entries") or {})
+                entry = entries.get(credential_id) if isinstance(entries.get(credential_id), dict) else {}
+                already_published = (
+                    int(entry.get("catalog_generation") or 0) == generation
+                    and str(entry.get("secret_id") or credential_id) == credential_id
+                )
+            if already_published:
+                record = coordinator.store.get_cmc(credential_id)
+                pending_operation_id = str(record.get("pending_operation_id") or "")
+                if record.get("pending") and pending_operation_id.startswith("migration:"):
+                    coordinator.store.finalize_pending_mutation(
+                        "cmc",
+                        credential_id,
+                        pending_operation_id,
+                    )
+                elif record.get("pending"):
+                    already_published = False
+            if already_published:
+                append_operation(
+                    coordinator.cluster_root,
+                    "MIGRATION_SECRET_ACCEPTANCE",
+                    {
+                        "candidate_id": candidate_id,
+                        "credential_id": credential_id,
+                        "credential_generation": generation,
+                        "freeze_generation": freeze_generation,
+                        "status": "accepted",
+                    },
+                )
+                accepted += 1
                 continue
             _stage_migration_import(coordinator, candidate_id, credential_id)
             staged.append((candidate_id, credential_id, generation))
@@ -2222,7 +2264,6 @@ def _import_local_master_sources(
             store=coordinator.store,
             publisher=ClusterCredentialPublisher(coordinator.cluster_root, coordinator.store),
         )
-    accepted = 0
     for candidate_id, credential_id, generation in staged:
         record = (
             coordinator.store.get_cmc(credential_id)

@@ -68,7 +68,7 @@ def test_non_elected_master_does_not_coordinate_migration(
     monkeypatch.setattr(credential_migration, "read_local_identity", lambda _root: {"node_id": local_node_id})
     monkeypatch.setattr(
         credential_migration,
-        "rebuild_materialized_state",
+        "read_materialized_state",
         lambda *_args, **_kwargs: {
             "cluster_nodes": {
                 "nodes": {
@@ -934,6 +934,67 @@ def test_differing_tradfi_candidate_requires_secret_free_resolution(tmp_path: Pa
     assert credential_id.startswith("tradfi_") and credential_id != existing["id"]
     assert generation == 1
     assert store.get_tradfi(credential_id)["pending"] is True
+
+
+def test_local_master_accepts_already_published_matching_cmc_without_republishing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A matching Cluster CMC generation bypasses the pending publication lifecycle."""
+
+    _write_ini(
+        tmp_path,
+        """
+        [main]
+        role = master
+        pbname = secondary-master
+
+        [coinmarketcap]
+        api_key = shared-cluster-cmc
+        """,
+    )
+    cluster_root = tmp_path / "data" / "cluster"
+    store = CredentialStore(tmp_path / "data" / "credentials")
+    ensure_local_identity(cluster_root, role="master", pbname="secondary-master")
+    publisher = ClusterCredentialPublisher(cluster_root, store)
+    publisher._ensure_local_crypto_membership()
+    record = store.create_cmc("shared-cluster-cmc", origin="cluster", shared=True)
+    publisher.publish_cmc(str(record["id"]), state="active")
+    stale_operation_id = "migration:candidate_stale_secondary_import"
+    store.update_cmc(
+        str(record["id"]),
+        active=True,
+        pending=True,
+        operation_id=stale_operation_id,
+    )
+    append_operation(
+        cluster_root,
+        "WRITER_FREEZE",
+        {"freeze_generation": 1, "frozen": True, "migration_operation_id": "published-cmc"},
+    )
+    coordinator = CredentialMigrationCoordinator(tmp_path, credential_store=store)
+    sources = coordinator._inventory_sources()
+    migration = rebuild_materialized_state(cluster_root, write=False)["desired_state"]["credential_migration"]
+    operation_count = len(load_operations(cluster_root))
+    monkeypatch.setattr(
+        "credential_reconciler.reconcile_pending_credentials",
+        lambda *_args, **_kwargs: pytest.fail("published credential must not be reconciled again"),
+    )
+
+    assert credential_migration._import_local_master_sources(
+        coordinator,
+        sources,
+        migration,
+        max_items=8,
+    ) == 1
+
+    operations = load_operations(cluster_root)
+    assert len(operations) == operation_count + 1
+    assert operations[-1]["op"] == "MIGRATION_SECRET_ACCEPTANCE"
+    assert operations[-1]["credential_id"] == record["id"]
+    current = store.get_cmc(str(record["id"]))
+    assert current.get("pending") is not True
+    assert current["last_operation_id"] == stale_operation_id
 
 
 def test_local_master_and_vps_tradfi_conflict_blocks_cleanup(

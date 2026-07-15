@@ -77,7 +77,7 @@ def test_current_clean_credential_scan_ack_skips_repeated_managed_scan(
     }
     monkeypatch.setattr(
         cluster_sync_command,
-        "rebuild_materialized_state",
+        "read_materialized_state",
         lambda *_args, **_kwargs: {"desired_state": {"credential_migration": migration}},
     )
 
