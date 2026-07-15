@@ -495,6 +495,43 @@ def test_apply_bundle_accepts_direct_legacy_node_key_claim(tmp_path: Path) -> No
     assert operations[-1]["signer_key_id"] == claim["signing_key_id"]
 
 
+def test_apply_bundle_accepts_legacy_key_claim_relayed_by_authenticated_master(tmp_path: Path) -> None:
+    """A directly authenticated master may fan out a previously accepted legacy key claim."""
+    root = _init_cluster(tmp_path)
+    write_operation(
+        root,
+        _legacy_membership(NODE_A, 2, NODE_C, "master", created_at=102),
+        allow_legacy_membership=True,
+    )
+    keys = ensure_node_key_material(tmp_path / "relayed-keys")
+    claim = sign_operation(
+        {
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_B}:00000001",
+            "actor": NODE_B,
+            "seq": 1,
+            "op": "UPDATE_NODE_KEY",
+            "created_at": 103,
+            "node_id": NODE_B,
+            **keys.public_bundle(NODE_B, "vps"),
+        },
+        keys.signing_private_key,
+        signer_id=NODE_B,
+    )
+    request = {
+        "operations": [claim],
+        "config_blobs": [],
+        "secret_blobs": [],
+        "sealed_blobs": [],
+    }
+
+    payload = run_command(root, NODE_C, "apply-bundle", json.dumps(request).encode())
+
+    assert payload["ok"] is True
+    assert load_operations(root, expected_cluster_id=CLUSTER_ID)[-1]["op_id"] == claim["op_id"]
+
+
 def test_get_ops_returns_bounded_operation_range(tmp_path: Path) -> None:
     """get-ops returns existing operations and reports missing seq numbers."""
 

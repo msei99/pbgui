@@ -144,6 +144,7 @@ def test_api_restart_conflict_preserves_http_409(monkeypatch) -> None:
             return {"active": True, "summary": "node-a Update PBGui (running)"}
 
     monkeypatch.setattr(vps_manager, "get_service_instance", lambda: FakeService())
+    monkeypatch.setattr(PBApiServer, "credential_migration_restart_block_reason", lambda _root: "")
 
     try:
         services.restart_api_server(session=None)

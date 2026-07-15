@@ -2284,21 +2284,35 @@ def stage_membership_operations(
     ]
     direct_claim_op_ids: set[str] = set()
     if authenticated_remote_node:
-        expected_seq = _next_seq(ClusterPaths.from_root(cluster_root), authenticated_remote_node)
-        for operation in sorted(
-            (
-                item
-                for item in incoming_operations
-                if str(item.get("actor") or "") == authenticated_remote_node
-                and int(item.get("seq") or 0) >= expected_seq
-            ),
-            key=lambda item: int(item.get("seq") or 0),
-        ):
-            if int(operation.get("seq") or 0) != expected_seq:
-                break
-            if str(operation.get("op") or "") == "UPDATE_NODE_KEY":
-                direct_claim_op_ids.add(str(operation.get("op_id") or ""))
-            expected_seq += 1
+        authenticated_node = trust.nodes.get(authenticated_remote_node)
+        authenticated_master = (
+            isinstance(authenticated_node, dict)
+            and str(authenticated_node.get("role") or "") == "master"
+            and authenticated_node.get("enabled", True) is not False
+            and authenticated_node.get("state_replica", True) is not False
+        )
+        actors = {authenticated_remote_node}
+        if authenticated_master:
+            actors.update(str(item.get("actor") or "") for item in incoming_operations)
+        paths = ClusterPaths.from_root(cluster_root)
+        for actor in actors:
+            if not actor:
+                continue
+            expected_seq = _next_seq(paths, actor)
+            for operation in sorted(
+                (
+                    item
+                    for item in incoming_operations
+                    if str(item.get("actor") or "") == actor
+                    and int(item.get("seq") or 0) >= expected_seq
+                ),
+                key=lambda item: int(item.get("seq") or 0),
+            ):
+                if int(operation.get("seq") or 0) != expected_seq:
+                    break
+                if str(operation.get("op") or "") == "UPDATE_NODE_KEY":
+                    direct_claim_op_ids.add(str(operation.get("op_id") or ""))
+                expected_seq += 1
     membership_operations.sort(
         key=lambda item: (
             int(item.get("created_at") or 0),

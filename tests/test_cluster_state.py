@@ -270,6 +270,42 @@ def test_legacy_key_claim_requires_direct_node_and_next_sequence(tmp_path: Path)
     ]
 
 
+def test_authenticated_master_relays_contiguous_legacy_key_claim(tmp_path: Path) -> None:
+    """A directly authenticated active master may relay a self-signed first key claim."""
+    root = _init_cluster(tmp_path)
+    write_operation(root, _operation(NODE_A, 1, "ADD_NODE", {"node_id": NODE_A, "role": "master"}))
+    write_operation(root, _operation(NODE_A, 2, "ADD_NODE", {"node_id": NODE_B, "role": "vps"}))
+    keys = ensure_node_key_material(tmp_path / "relay-claim")
+
+    def claim(seq: int) -> dict:
+        return sign_operation(
+            _operation(
+                NODE_B,
+                seq,
+                "UPDATE_NODE_KEY",
+                {**keys.public_bundle(NODE_B, "vps"), "node_id": NODE_B},
+            ),
+            keys.signing_private_key,
+            signer_id=NODE_B,
+        )
+
+    trust = stage_membership_operations(
+        root,
+        [claim(1)],
+        expected_cluster_id=CLUSTER_ID,
+        authenticated_remote_node=NODE_A,
+    )
+    assert trust.signing_keys[NODE_B][0]["key_id"] == keys.public_bundle(NODE_B, "vps")["signing_key_id"]
+
+    with pytest.raises(ClusterStateError, match="direct authenticated node transport"):
+        stage_membership_operations(
+            root,
+            [claim(2)],
+            expected_cluster_id=CLUSTER_ID,
+            authenticated_remote_node=NODE_A,
+        )
+
+
 def test_append_membership_and_rebuild_materializes_nodes(tmp_path: Path) -> None:
     """Membership operations rebuild cluster_nodes and state_vector."""
 
