@@ -147,15 +147,15 @@ def run_command(
 
     if verb == "handshake":
         payload = _hello_payload(root, identity, remote_node)
-        materialized = _safe_state_call(lambda: rebuild_materialized_state(root, write=False))
+        materialized = _read_materialized_snapshot(root)
         payload["state_vector"] = materialized.get("state_vector") or {}
         return payload
     if verb == "hello":
         payload = _hello_payload(root, identity, remote_node)
-        payload["credential_migration_advance"] = _bounded_local_migration_advance(root)
+        payload["credential_migration_advance"] = {"status": "delegated_to_pbcluster"}
         return payload
     if verb == "get-state-vector":
-        materialized = _safe_state_call(lambda: rebuild_materialized_state(root, write=False))
+        materialized = _read_materialized_snapshot(root)
         return {
             "ok": True,
             "cluster_id": cluster_id,
@@ -163,7 +163,7 @@ def run_command(
             "state_vector": materialized.get("state_vector") or {},
         }
     if verb == "get-desired-state":
-        materialized = _safe_state_call(lambda: rebuild_materialized_state(root, write=False))
+        materialized = _read_materialized_snapshot(root)
         return {
             "ok": True,
             "cluster_id": cluster_id,
@@ -514,6 +514,32 @@ def _safe_state_call(callback):
         raise ClusterSyncCommandError(str(exc)) from exc
 
 
+def _read_materialized_snapshot(cluster_root: Path) -> dict[str, Any]:
+    """Read the last atomically persisted state without replaying the oplog."""
+
+    paths = ClusterPaths.from_root(cluster_root)
+    try:
+        snapshot_mtime_ns = min(
+            paths.cluster_nodes.stat().st_mtime_ns,
+            paths.desired_state.stat().st_mtime_ns,
+            paths.state_vector.stat().st_mtime_ns,
+        )
+        cluster_nodes = json.loads(paths.cluster_nodes.read_text(encoding="utf-8"))
+        desired_state = json.loads(paths.desired_state.read_text(encoding="utf-8"))
+        state_vector = json.loads(paths.state_vector.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=False))
+    if any(path.is_dir() and path.stat().st_mtime_ns > snapshot_mtime_ns for path in paths.oplog.iterdir()):
+        return _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=False))
+    if not isinstance(cluster_nodes, dict) or not isinstance(desired_state, dict) or not isinstance(state_vector, dict):
+        return _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=False))
+    return {
+        "cluster_nodes": cluster_nodes,
+        "desired_state": desired_state,
+        "state_vector": state_vector,
+    }
+
+
 def _mailbox_call(callback):
     """Convert mailbox validation errors into restricted-command errors."""
 
@@ -521,25 +547,6 @@ def _mailbox_call(callback):
         return callback()
     except CmcLeaseError as exc:
         raise ClusterSyncCommandError(str(exc)) from exc
-
-
-def _bounded_local_migration_advance(cluster_root: Path) -> dict[str, Any]:
-    """Give forced-command-only nodes one bounded idempotent migration turn."""
-
-    try:
-        from credential_rolling_bootstrap import bootstrap_local_legacy_credentials
-        from credential_migration import advance_local_credential_migration
-
-        bootstrap_local_legacy_credentials(Path(cluster_root).parent.parent)
-        return advance_local_credential_migration(
-            Path(cluster_root).parent.parent,
-            max_items=8,
-        )
-    except Exception as exc:
-        return {
-            "status": "pending",
-            "error_category": type(exc).__name__,
-        }
 
 
 def _staged_membership_nodes(
@@ -722,9 +729,13 @@ def _verify_remote_node(cluster_root: Path, remote_node: str, *, allow_join: boo
     """Ensure the caller is a known node unless this is an explicit join."""
 
     del allow_join
-    materialized = _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=False))
+    materialized = _read_materialized_snapshot(cluster_root)
     nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
     node = nodes.get(remote_node)
+    if not isinstance(node, dict):
+        materialized = _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=False))
+        nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
+        node = nodes.get(remote_node)
     if not isinstance(node, dict):
         raise ClusterSyncCommandError("remote node is not registered")
     if node.get("enabled", True) is False:
@@ -2178,16 +2189,6 @@ def _apply_bundle(
         written_ops.append({"op_id": str(operation["op_id"]), "actor": str(operation["actor"]), "seq": int(operation["seq"])})
 
     materialized = _safe_state_call(lambda: rebuild_materialized_state(cluster_root))
-    v7_result = _materialize_v7_configs(cluster_root, write=True)
-    api_preview = _materialize_api_keys(cluster_root, write=False)
-    api_result = api_preview
-    if api_preview.get("can_apply"):
-        api_result = _materialize_api_keys(cluster_root, write=True)
-    credential_preview = _materialize_credentials(cluster_root, write=False)
-    credential_result = credential_preview
-    if credential_preview.get("can_apply"):
-        credential_result = _materialize_credentials(cluster_root, write=True)
-    migration_advance = _bounded_local_migration_advance(cluster_root)
     return {
         "ok": True,
         "count": len(written_ops),
@@ -2196,10 +2197,7 @@ def _apply_bundle(
         "secret_blobs": len(written_secret),
         "sealed_blobs": len(written_sealed),
         "generation": int(((materialized.get("cluster_nodes") or {}).get("generation") or 0)),
-        "v7_materialization": v7_result,
-        "api_key_materialization": api_result,
-        "credential_materialization": credential_result,
-        "credential_migration_advance": migration_advance,
+        "materialization": {"status": "delegated_to_pbcluster"},
     }
 
 

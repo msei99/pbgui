@@ -59,6 +59,7 @@ STATUS_SCHEMA_VERSION = 1
 DEFAULT_SSH_TIMEOUT = 30
 CONFIG_BLOB_BATCH_TARGET_BYTES = 12 * 1024 * 1024
 APPLY_BUNDLE_TARGET_BYTES = 12 * 1024 * 1024
+APPLY_BUNDLE_MAX_OPERATIONS = 16
 DEFAULT_PEER_WORKERS = 32
 
 
@@ -413,6 +414,7 @@ class ClusterSyncWorker:
                 for operation in push_ops
                 if str(operation.get("op") or "") not in V2_CREDENTIAL_OPS
             ]
+        push_ops, remaining_push_ops = _bounded_operation_batch(push_ops)
         pushed_config_blobs = 0
         pushed_secret_blobs = 0
         pushed_sealed_blobs = 0
@@ -449,6 +451,7 @@ class ClusterSyncWorker:
             "pushed_secret_blobs": pushed_secret_blobs,
             "pushed_sealed_blobs": pushed_sealed_blobs,
             "deferred_credential_ops": deferred_credential_ops,
+            "remaining_push_ops": remaining_push_ops,
             "cluster_ssh_key_updated": key_changed,
             "mailbox_supported": mailbox_counts["supported"],
             "mailbox_pulled": mailbox_counts["pulled"],
@@ -860,6 +863,12 @@ def _peer_topology_allows(local_node: dict[str, Any], peer_id: str, peer: dict[s
     if str((local_node or {}).get("role") or "").strip() == "vps":
         return False, "VPS nodes do not initiate peer SSH without explicit sync_peers"
     return True, ""
+
+
+def _bounded_operation_batch(operations: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Return one bounded transport batch and the number left for later passes."""
+
+    return operations[:APPLY_BUNDLE_MAX_OPERATIONS], max(len(operations) - APPLY_BUNDLE_MAX_OPERATIONS, 0)
 
 
 def _peer_result(peer_id: str, peer: dict[str, Any], *, ok: bool, status: str, reason: str = "") -> dict[str, Any]:

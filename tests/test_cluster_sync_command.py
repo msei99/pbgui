@@ -178,15 +178,29 @@ def test_read_transport_commands_do_not_advance_migration(
 
     root = _init_cluster(tmp_path)
     run_command(root, NODE_B, "put-op", json.dumps(_operation()).encode("utf-8"))
+    rebuild_materialized_state(root)
     monkeypatch.setattr(
         cluster_sync_command,
-        "_bounded_local_migration_advance",
-        lambda _root: pytest.fail("read-only transport must not advance migration"),
+        "rebuild_materialized_state",
+        lambda *_args, **_kwargs: pytest.fail("read-only transport must use the persisted snapshot"),
     )
 
     payload = run_command(root, NODE_B, command)
 
     assert payload["ok"] is True
+
+
+def test_read_transport_replays_newer_membership_before_authentication(tmp_path: Path) -> None:
+    """A node revocation newer than the snapshot takes effect before transport auth."""
+
+    root = _init_cluster(tmp_path)
+    rebuild_materialized_state(root)
+    revoked = _legacy_membership(NODE_A, 2, NODE_B, "vps", created_at=102, enabled=False)
+    revoked["op"] = "UPDATE_NODE"
+    write_operation(root, revoked, allow_legacy_membership=True)
+
+    with pytest.raises(ClusterSyncCommandError, match="disabled"):
+        run_command(root, NODE_B, "handshake")
 
 
 def test_unknown_peer_is_rejected_without_join_mode(tmp_path: Path) -> None:
@@ -515,6 +529,7 @@ def test_apply_bundle_accepts_direct_legacy_node_key_claim(tmp_path: Path) -> No
     operations = load_operations(root, expected_cluster_id=CLUSTER_ID)
     assert operations[-1]["op"] == "UPDATE_NODE_KEY"
     assert operations[-1]["signer_key_id"] == claim["signing_key_id"]
+    assert payload["materialization"] == {"status": "delegated_to_pbcluster"}
 
 
 def test_apply_bundle_accepts_legacy_key_claim_relayed_by_authenticated_master(tmp_path: Path) -> None:

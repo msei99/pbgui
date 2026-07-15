@@ -422,7 +422,6 @@ def test_cluster_sync_worker_pushes_ops_blobs_and_remote_materializes(tmp_path: 
         },
         created_at=102,
     )
-
     client = _LocalPeerClient({NODE_ID: root_a, NODE_B: root_b})
     worker = ClusterSyncWorker(tmp_path / "node-a", peer_client=client)
 
@@ -438,8 +437,23 @@ def test_cluster_sync_worker_pushes_ops_blobs_and_remote_materializes(tmp_path: 
     assert "rebuild" not in commands
     assert "materialize-v7" not in commands
     remote_config = tmp_path / "node-b" / "data" / "run_v7" / "bot-a" / "config.json"
+    assert not remote_config.exists()
+    remote_worker = ClusterSyncWorker(tmp_path / "node-b", peer_client=client)
+    remote_status = remote_worker.run_once(reason="test")
+    assert remote_status["ok"] is True
     assert json.loads(remote_config.read_text(encoding="utf-8"))["live"]["user"] == "bot-a"
     assert json.loads((root_b / "desired_state.json").read_text(encoding="utf-8"))["instances"]["bot-a"]["assigned_host"] == NODE_B
+
+
+def test_cluster_sync_worker_limits_operation_bundle_size() -> None:
+    """One peer pass selects a bounded operation batch and reports the remainder."""
+
+    operations = [{"seq": index} for index in range(25)]
+
+    batch, remaining = cluster_sync_worker._bounded_operation_batch(operations)
+
+    assert batch == operations[:cluster_sync_worker.APPLY_BUNDLE_MAX_OPERATIONS]
+    assert remaining == 9
 
 
 def test_cluster_sync_worker_pulls_ops_and_blobs_from_peer(tmp_path: Path) -> None:
