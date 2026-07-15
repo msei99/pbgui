@@ -58,6 +58,39 @@ def _init_cluster(tmp_path: Path) -> Path:
     return root
 
 
+def test_current_clean_credential_scan_ack_skips_repeated_managed_scan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A current clean ACK avoids repeating the expensive managed-file scan."""
+
+    migration = {
+        "frozen": True,
+        "freeze_generation": 42,
+        "cutoff": {"cutoff_generation": 1},
+        "cleanup_acks": {NODE_A: {"cutoff_generation": 1}},
+        "scan_acks": {NODE_A: {
+            "freeze_generation": 42,
+            "cutoff_generation": 1,
+            "status": "clean",
+        }},
+    }
+    monkeypatch.setattr(
+        cluster_sync_command,
+        "rebuild_materialized_state",
+        lambda *_args, **_kwargs: {"desired_state": {"credential_migration": migration}},
+    )
+
+    def fail_scan(_root: Path) -> list[str]:
+        raise AssertionError("current scan ACK must be reused")
+
+    monkeypatch.setattr("credential_migration.local_managed_credential_scan", fail_scan)
+
+    result = cluster_sync_command._append_credential_scan_ack(tmp_path / "data" / "cluster", NODE_A)
+
+    assert result == {"scan_status": "clean"}
+
+
 def _legacy_membership(
     actor: str,
     seq: int,

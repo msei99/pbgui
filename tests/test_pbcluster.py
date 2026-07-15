@@ -214,12 +214,12 @@ def test_cluster_sync_worker_advances_migration_before_and_after_peer_sync(
     monkeypatch.setattr(
         cluster_sync_worker,
         "advance_local_credential_migration",
-        lambda _root, *, max_items: calls.append(max_items) or {"status": "advanced"},
+        lambda _root, *, max_items, scan_allowed: calls.append((max_items, scan_allowed)) or {"status": "advanced"},
     )
 
     status = ClusterSyncWorker(tmp_path).run_once(reason="test")
 
-    assert calls == [8, 8]
+    assert calls == [(8, True), (8, False)]
     assert status["credential_migration_advance"] == {
         "pre_sync": {"status": "advanced"},
         "post_sync": {"status": "advanced"},
@@ -265,6 +265,27 @@ def test_cluster_sync_worker_consumes_sync_request_trigger(tmp_path: Path) -> No
     worker.trigger_path.touch()
 
     assert worker._consume_trigger_change() is True
+    assert worker._consume_trigger_change() is False
+
+
+def test_cluster_sync_worker_coalesces_triggers_written_during_its_pass(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Operations written by a completed pass do not trigger an immediate retry loop."""
+
+    worker = ClusterSyncWorker(tmp_path)
+
+    def run_once(*, reason: str) -> dict:
+        worker.trigger_path.parent.mkdir(parents=True, exist_ok=True)
+        worker.trigger_path.touch()
+        worker.stop()
+        return {"reason": reason}
+
+    monkeypatch.setattr(worker, "run_once", run_once)
+
+    worker.run_forever()
+
     assert worker._consume_trigger_change() is False
 
 
@@ -365,6 +386,36 @@ def test_cluster_sync_worker_skips_vps_peer_without_explicit_topology(tmp_path: 
 
     assert status["ok"] is True
     assert status["peers"][0]["status"] == "topology_skipped"
+
+
+def test_secondary_master_delegates_peer_fanout_to_coordinator() -> None:
+    """Only the deterministic coordinator contacts VPS peers and other secondaries."""
+
+    coordinator = {"node_id": NODE_ID, "role": "master", "enabled": True}
+    secondary = {
+        "node_id": NODE_B,
+        "role": "master",
+        "enabled": True,
+        "sync_peers": [NODE_ID, NODE_C, "runner"],
+    }
+    other_secondary = {"node_id": NODE_C, "role": "master", "enabled": True}
+    runner = {"node_id": "runner", "role": "vps", "enabled": True}
+    nodes = {NODE_ID: coordinator, NODE_B: secondary, NODE_C: other_secondary, "runner": runner}
+
+    coordinator_allowed, _reason = cluster_sync_worker._peer_topology_allows(
+        NODE_B, secondary, NODE_ID, coordinator, nodes,
+    )
+    runner_allowed, runner_reason = cluster_sync_worker._peer_topology_allows(
+        NODE_B, secondary, "runner", runner, nodes,
+    )
+    secondary_allowed, _reason = cluster_sync_worker._peer_topology_allows(
+        NODE_B, secondary, NODE_C, other_secondary, nodes,
+    )
+
+    assert coordinator_allowed is True
+    assert runner_allowed is False
+    assert secondary_allowed is False
+    assert runner_reason == "secondary master fanout is delegated to coordinator"
 
 
 def test_ssh_cluster_peer_client_uses_dedicated_key_and_forced_command(monkeypatch, tmp_path: Path) -> None:

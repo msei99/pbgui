@@ -35,6 +35,26 @@
         force: yes
       when: pbgdir != ""
       register: pbgui_repo
+
+    - name: Reconcile pbgui requirements
+      command:
+        argv:
+          - "{{ pbgui_python | default(ansible_playbook_python) }}"
+          - -m
+          - pip
+          - install
+          - --upgrade
+          - pip
+          - -r
+          - "{{ pbgdir }}/requirements.txt"
+      when: pbgdir != ""
+      register: pbgui_requirements
+      changed_when: "'Successfully installed' in ((pbgui_requirements.stdout | default('')) + (pbgui_requirements.stderr | default('')))"
+
+    - name: Schedule PBGui restart after successful update
+      command: /bin/true
+      when: pbgdir != ""
+      changed_when: (pbgui_repo.changed | default(false)) or (pbgui_requirements.changed | default(false))
       notify: restart pbgui
 
     - name: Check required PBGui systemd units
@@ -72,19 +92,6 @@
       tags: debug,never
 
   handlers:
-    - name: Install pbgui requirements
-      command:
-        argv:
-          - "{{ pbgui_python | default(ansible_playbook_python) }}"
-          - -m
-          - pip
-          - install
-          - --upgrade
-          - pip
-          - -r
-          - "{{ pbgdir }}/requirements.txt"
-      listen: "restart pbgui"
-
     - name: Sync PBGui systemd user services
       command:
         argv:

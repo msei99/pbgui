@@ -2486,6 +2486,28 @@ def test_pbgui_update_playbooks_fetch_current_branch_explicitly(
     assert expected in playbook
 
 
+@pytest.mark.parametrize(("playbook_path", "requirements_file"), [
+    ("vps-update-pbgui.yml", "requirements_vps.txt"),
+    ("master-update-pbgui.yml", "requirements.txt"),
+    ("vps-update-pb.yml", "requirements_vps.txt"),
+    ("master-update-pb.yml", "requirements.txt"),
+])
+def test_regular_updates_reconcile_requirements_before_restart_handlers(
+    playbook_path: str,
+    requirements_file: str,
+) -> None:
+    """A normal update repairs dependency drift before any service restart can run."""
+
+    playbook = Path(playbook_path).read_text(encoding="utf-8")
+    tasks, handlers = playbook.split("  handlers:", 1)
+
+    assert "Reconcile pbgui requirements" in tasks
+    assert requirements_file in tasks
+    assert "Schedule PBGui restart after successful update" in tasks
+    assert "Install pbgui requirements" not in handlers
+    assert tasks.index("Reconcile pbgui requirements") < tasks.index("Schedule PBGui restart after successful update")
+
+
 def test_metrics_stream_reads_monitor_agent_cache() -> None:
     """Master-side live metrics must tail the monitor-agent cache, not run collectors."""
 

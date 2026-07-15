@@ -60,7 +60,7 @@ DEFAULT_SSH_TIMEOUT = 30
 CONFIG_BLOB_BATCH_TARGET_BYTES = 12 * 1024 * 1024
 APPLY_BUNDLE_TARGET_BYTES = 12 * 1024 * 1024
 APPLY_BUNDLE_MAX_OPERATIONS = 16
-DEFAULT_PEER_WORKERS = 32
+DEFAULT_PEER_WORKERS = 4
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -118,6 +118,7 @@ class ClusterSyncWorker:
 
         _log(SERVICE, "PBCluster worker starting")
         self.run_once(reason="boot")
+        self._consume_trigger_change()
         next_periodic = time.time() + self.interval
         while not self._stop.is_set():
             wait_for = min(2.0, max(0.1, next_periodic - time.time()))
@@ -131,6 +132,7 @@ class ClusterSyncWorker:
                 continue
             reason = "event" if triggered or trigger_changed else "periodic"
             self.run_once(reason=reason)
+            self._consume_trigger_change()
             if periodic_due or reason == "periodic":
                 next_periodic = time.time() + self.interval
         _log(SERVICE, "PBCluster worker stopped")
@@ -199,6 +201,7 @@ class ClusterSyncWorker:
                 migration_pre_sync = advance_local_credential_migration(
                     self.pbgdir,
                     max_items=8,
+                    scan_allowed=True,
                 )
             except Exception as exc:
                 migration_pre_sync = {"status": "error", "error": type(exc).__name__}
@@ -228,11 +231,15 @@ class ClusterSyncWorker:
             credential_result = credential_preview
             if credential_preview.get("can_apply"):
                 credential_result = _materialize_credentials(self.cluster_root, write=True)
-            migration_ack = _append_credential_migration_acks(self.cluster_root)
+            migration_ack = _append_credential_migration_acks(
+                self.cluster_root,
+                scan_allowed=False,
+            )
             try:
                 migration_post_sync = advance_local_credential_migration(
                     self.pbgdir,
                     max_items=8,
+                    scan_allowed=False,
                 )
             except Exception as exc:
                 migration_post_sync = {"status": "error", "error": type(exc).__name__}
@@ -321,7 +328,13 @@ class ClusterSyncWorker:
             if peer_mode == "outbound_only":
                 results_by_peer[str(peer_id)] = _peer_result(peer_id, peer, ok=True, status="outbound_only", reason="peer is outbound-only")
                 continue
-            allowed, reason = _peer_topology_allows(local_node, str(peer_id), peer)
+            allowed, reason = _peer_topology_allows(
+                local_node_id,
+                local_node,
+                str(peer_id),
+                peer,
+                nodes,
+            )
             if not allowed:
                 results_by_peer[str(peer_id)] = _peer_result(peer_id, peer, ok=True, status="topology_skipped", reason=reason)
                 continue
@@ -338,10 +351,24 @@ class ClusterSyncWorker:
             pending.append((str(peer_id), peer))
 
         if pending:
+            local_ops = load_operations(
+                self.cluster_root,
+                expected_cluster_id=str(identity.get("cluster_id") or ""),
+            )
+            local_vector = _state_vector_from_operations(local_ops)
             max_workers = min(self.peer_workers, len(pending))
             with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="pbcluster-peer") as executor:
                 future_map = {
-                    executor.submit(self._sync_peer_with_backoff, peer_id, peer, local_node_id, str(identity.get("cluster_id") or "")): peer_id
+                    executor.submit(
+                        self._sync_peer_with_backoff,
+                        peer_id,
+                        peer,
+                        local_node_id,
+                        str(identity.get("cluster_id") or ""),
+                        materialized,
+                        local_ops,
+                        local_vector,
+                    ): peer_id
                     for peer_id, peer in pending
                 }
                 for future in as_completed(future_map):
@@ -350,12 +377,28 @@ class ClusterSyncWorker:
 
         return [results_by_peer[str(peer_id)] for peer_id in sorted(nodes) if str(peer_id) != local_node_id and str(peer_id) in results_by_peer]
 
-    def _sync_peer_with_backoff(self, peer_id: str, peer: dict[str, Any], local_node_id: str, cluster_id: str) -> dict[str, Any]:
+    def _sync_peer_with_backoff(
+        self,
+        peer_id: str,
+        peer: dict[str, Any],
+        local_node_id: str,
+        cluster_id: str,
+        local_materialized: dict[str, Any],
+        local_ops: list[dict[str, Any]],
+        local_vector: dict[str, int],
+    ) -> dict[str, Any]:
         """Synchronize one peer and update its retry backoff."""
 
         backoff = self._peer_backoff.get(str(peer_id)) or {}
         try:
-            result = self._sync_peer(peer, local_node_id, cluster_id)
+            result = self._sync_peer(
+                peer,
+                local_node_id,
+                cluster_id,
+                local_materialized,
+                local_ops,
+                local_vector,
+            )
             self._peer_backoff.pop(str(peer_id), None)
             return result
         except Exception as exc:
@@ -371,7 +414,15 @@ class ClusterSyncWorker:
             result["retry_delay"] = delay
             return result
 
-    def _sync_peer(self, peer: dict[str, Any], local_node_id: str, cluster_id: str) -> dict[str, Any]:
+    def _sync_peer(
+        self,
+        peer: dict[str, Any],
+        local_node_id: str,
+        cluster_id: str,
+        local_materialized: dict[str, Any],
+        local_ops: list[dict[str, Any]],
+        local_vector: dict[str, int],
+    ) -> dict[str, Any]:
         """Synchronize local state with one peer."""
 
         peer_id = str(peer.get("node_id") or "")
@@ -379,7 +430,6 @@ class ClusterSyncWorker:
         hello, remote_vector = self._peer_handshake(peer, local_node_id)
         if str(hello.get("cluster_id") or "") != cluster_id:
             raise ClusterSyncWorkerError("peer belongs to another cluster")
-        local_materialized = rebuild_materialized_state(self.cluster_root, write=False)
         cutoff = (((local_materialized.get("desired_state") or {}).get("credential_migration") or {}).get("cutoff"))
         if isinstance(cutoff, dict) and int(hello.get("protocol_version") or 0) < int(cutoff.get("min_protocol") or 2):
             raise ClusterSyncWorkerError("credential protocol downgrade rejected after cutoff")
@@ -389,15 +439,7 @@ class ClusterSyncWorker:
         with self._local_state_lock:
             key_changed = self._record_peer_cluster_ssh_metadata(peer, hello)
 
-        local_ops = load_operations(self.cluster_root, expected_cluster_id=cluster_id)
-        local_vector = _state_vector_from_operations(local_ops)
-
         pulled_ops = self._pull_missing_operations(peer, local_node_id, remote_vector, local_vector, cluster_id)
-        if pulled_ops:
-            with self._local_state_lock:
-                rebuild_materialized_state(self.cluster_root)
-                local_ops = load_operations(self.cluster_root, expected_cluster_id=cluster_id)
-            local_vector = _state_vector_from_operations(local_ops)
 
         push_ops = _select_operations_missing_on_remote(local_ops, remote_vector)
         peer_supports_credentials = (
@@ -852,15 +894,39 @@ def _peer_sync_mode(peer: dict[str, Any]) -> str:
     return normalize_node_sync_mode(peer)
 
 
-def _peer_topology_allows(local_node: dict[str, Any], peer_id: str, peer: dict[str, Any]) -> tuple[bool, str]:
+def _peer_topology_allows(
+    local_node_id: str,
+    local_node: dict[str, Any],
+    peer_id: str,
+    peer: dict[str, Any],
+    nodes: dict[str, dict[str, Any]],
+) -> tuple[bool, str]:
     """Return whether this node should actively contact *peer* by default."""
+
+    local_role = str((local_node or {}).get("role") or "").strip()
+    if local_role == "master":
+        coordinator_id = min(
+            (
+                str(node_id)
+                for node_id, node in nodes.items()
+                if isinstance(node, dict)
+                and node.get("enabled", True) is not False
+                and node.get("state_replica", True) is not False
+                and str(node.get("role") or "").strip() == "master"
+            ),
+            default="",
+        )
+        if coordinator_id and str(local_node_id) != coordinator_id:
+            if str(peer_id) == coordinator_id:
+                return True, "secondary master syncs through coordinator"
+            return False, "secondary master fanout is delegated to coordinator"
 
     explicit = local_node.get("sync_peers") if isinstance(local_node, dict) else None
     if isinstance(explicit, list):
         if str(peer_id) in {str(item) for item in explicit}:
             return True, "explicit sync peer"
         return False, "peer is not in sync_peers"
-    if str((local_node or {}).get("role") or "").strip() == "vps":
+    if local_role == "vps":
         return False, "VPS nodes do not initiate peer SSH without explicit sync_peers"
     return True, ""
 

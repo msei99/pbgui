@@ -100,6 +100,20 @@
         update: yes
         force: yes
       register: pbgui_repo
+
+    - name: Reconcile pbgui requirements
+      pip:
+        virtualenv: "{{ install_dir }}/venv_pbgui"
+        requirements: "{{ install_dir }}/pbgui/requirements_vps.txt"
+        extra_args: --no-cache-dir --upgrade pip
+      environment:
+        PIP_NO_CACHE_DIR: "1"
+        PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      register: pbgui_requirements
+
+    - name: Schedule PBGui restart after successful update
+      command: /bin/true
+      changed_when: (pbgui_repo.changed | default(false)) or (pbgui_requirements.changed | default(false))
       notify: restart pbgui
 
     - name: print pbgui_repo
@@ -215,16 +229,6 @@
       register: pb7_disk_before
       changed_when: false
       listen: "restart pb7"
-
-    - name: Install pbgui requirements
-      pip:
-        virtualenv: "{{ install_dir }}/venv_pbgui"
-        requirements: "{{ install_dir }}/pbgui/requirements_vps.txt"
-        extra_args: --no-cache-dir --upgrade pip
-      environment:
-        PIP_NO_CACHE_DIR: "1"
-        PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      listen: "restart pbgui"
 
     - name: Remove pip cache directory after pbgui install
       file:

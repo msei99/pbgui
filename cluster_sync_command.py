@@ -1291,6 +1291,7 @@ def _append_credential_migration_acks(
     cluster_root: Path,
     *,
     inventory_allowed: bool = True,
+    scan_allowed: bool = True,
 ) -> dict[str, Any]:
     """Append exact recipient ACKs plus migration ACKs when their barriers are ready."""
 
@@ -1479,7 +1480,8 @@ def _append_credential_migration_acks(
         if recipient_ack.get("operation_id"):
             result["operation_id"] = recipient_ack["operation_id"]
         result.update(_append_cutoff_cleanup_ack(cluster_root, node_id, migration))
-        result.update(_append_credential_scan_ack(cluster_root, node_id))
+        if scan_allowed:
+            result.update(_append_credential_scan_ack(cluster_root, node_id))
         return result
     operation = append_operation(
         cluster_root,
@@ -1500,7 +1502,8 @@ def _append_credential_migration_acks(
         "recipient_generations": expected_recipients,
     }
     result.update(_append_cutoff_cleanup_ack(cluster_root, node_id, migration))
-    result.update(_append_credential_scan_ack(cluster_root, node_id))
+    if scan_allowed:
+        result.update(_append_credential_scan_ack(cluster_root, node_id))
     return result
 
 
@@ -1569,12 +1572,20 @@ def _append_credential_scan_ack(cluster_root: Path, node_id: str) -> dict[str, A
     local_cleanup = cleanup.get(node_id) if isinstance(cleanup.get(node_id), dict) else {}
     if int(local_cleanup.get("cutoff_generation") or 0) != cutoff_generation:
         return {"scan_status": "pending"}
+    scan_acks = migration.get("scan_acks") if isinstance(migration.get("scan_acks"), dict) else {}
+    current = scan_acks.get(node_id) if isinstance(scan_acks.get(node_id), dict) else {}
+    current_matches = (
+        int(current.get("freeze_generation") or 0) == freeze_generation
+        and int(current.get("cutoff_generation") or 0) == cutoff_generation
+    )
+    current_status = str(current.get("status") or "")
+    if current_matches and current_status == "clean":
+        return {"scan_status": "clean"}
+
     from credential_migration import local_managed_credential_scan
 
     findings = local_managed_credential_scan(Path(cluster_root).parent.parent)
     status = "blocked" if findings else "clean"
-    scan_acks = migration.get("scan_acks") if isinstance(migration.get("scan_acks"), dict) else {}
-    current = scan_acks.get(node_id) if isinstance(scan_acks.get(node_id), dict) else {}
     expected_findings = [{"path_category": item} for item in findings]
     if (
         int(current.get("freeze_generation") or 0) == freeze_generation

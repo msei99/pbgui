@@ -1634,6 +1634,7 @@ def advance_local_credential_migration(
     pbgdir: Path | str,
     *,
     max_items: int = 8,
+    scan_allowed: bool = True,
 ) -> dict[str, Any]:
     """Advance one bounded local freeze/candidate/import/cleanup turn."""
 
@@ -1647,7 +1648,7 @@ def advance_local_credential_migration(
     migration = desired.get("credential_migration") or {}
     if migration.get("frozen") is not True:
         return {"status": "idle"}
-    barrier_ack = _append_credential_migration_acks(cluster_root)
+    barrier_ack = _append_credential_migration_acks(cluster_root, scan_allowed=False)
     materialized = rebuild_materialized_state(cluster_root, write=False)
     desired = materialized.get("desired_state") or {}
     migration = desired.get("credential_migration") or {}
@@ -1701,7 +1702,10 @@ def advance_local_credential_migration(
         sources,
         role=role,
     )
-    result["ack"] = _append_credential_migration_acks(cluster_root)
+    result["ack"] = _append_credential_migration_acks(
+        cluster_root,
+        scan_allowed=scan_allowed,
+    )
     return result
 
 
