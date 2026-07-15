@@ -153,7 +153,7 @@
     - name: Build enabled PBGui service list
       set_fact:
         pbgui_credential_capability_known: "{{ credential_active is defined and credential_active is not none }}"
-        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if (credential_active | default(false)) else []) }}"
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if (credential_active | default(false)) else []) + (['api'] if (pbgui_role | default('') | lower) == 'master' else []) }}"
       listen: "restart pbgui"
 
     - name: Sync PBGui systemd user services
@@ -170,4 +170,15 @@
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
         PBGUI_USER: "{{ user }}"
         PBGUI_CREDENTIAL_ACTIVE: "{{ credential_active | default('') }}"
+      listen: "restart pbgui"
+
+    - name: Restart remote master PBApiServer
+      shell: |
+        set -euo pipefail
+        restart_unit="pbgui-api-restart-$(date +%s%N)"
+        systemd-run --user --unit="$restart_unit" --collect /bin/bash -lc 'sleep 1; systemctl --user enable pbgui-api.service; systemctl --user restart pbgui-api.service'
+      args:
+        executable: /bin/bash
+      changed_when: true
+      when: (pbgui_role | default('') | string | lower) == 'master'
       listen: "restart pbgui"

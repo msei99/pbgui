@@ -1563,10 +1563,33 @@ class CredentialMigrationCoordinator:
 def run_credential_migration(pbgdir: Path | str | None = None) -> dict[str, Any]:
     """Run or resume the local credential migration coordinator."""
 
+    coordinator = CredentialMigrationCoordinator(pbgdir)
+    materialized = rebuild_materialized_state(coordinator.cluster_root, write=False)
+    local_node_id = str(read_local_identity(coordinator.cluster_root)["node_id"])
+    nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
+    master_node_ids = sorted(
+        str(node_id)
+        for node_id, node in nodes.items()
+        if isinstance(node, dict)
+        and node.get("enabled", True) is not False
+        and node.get("state_replica", True) is not False
+        and str(node.get("role") or "") == "master"
+    )
+    elected_node_id = master_node_ids[0] if master_node_ids else local_node_id
+    if local_node_id != elected_node_id:
+        migration = (materialized.get("desired_state") or {}).get("credential_migration") or {}
+        return {
+            "version": STATE_VERSION,
+            "phase": "protocol_barrier",
+            "status": "not_coordinator",
+            "coordinator_node_id": elected_node_id,
+            "freeze_generation": int(migration.get("freeze_generation") or 0),
+        }
+
     from credential_rolling_bootstrap import bootstrap_local_legacy_credentials
 
     bootstrap_local_legacy_credentials(pbgdir)
-    return CredentialMigrationCoordinator(pbgdir).run()
+    return coordinator.run()
 
 
 def local_legacy_credential_inventory(

@@ -2,6 +2,7 @@
 
 import asyncio
 import builtins
+from contextlib import nullcontext
 import io
 import json
 import os
@@ -1118,6 +1119,42 @@ def test_run_vps_deploy_skips_active_hosts_and_starts_free_hosts() -> None:
     assert result["entry"]["host_logs"]["free-vps"]["run_id"] == "run-free-vps"
 
 
+def test_start_vps_deploy_host_passes_remote_role_to_playbook() -> None:
+    """Parallel deploys pass host-specific role metadata to remote update playbooks."""
+
+    captured: dict[str, object] = {}
+    service = object.__new__(VPSManagerService)
+    vps = SimpleNamespace(
+        command="",
+        command_text="",
+        command_run_id="run-123",
+        user_pw=None,
+        _task_log_path=lambda *_args: Path("vps-update-pbgui--run-123.log"),
+    )
+    service._host_task_start_lock = lambda _hostname: nullcontext()
+    service._deploy_shutdown_requested = lambda: False
+    service._require_vps = lambda _hostname: vps
+    service._apply_session_secrets_to_vps = lambda *_args: None
+    service._raise_if_vps_task_active = lambda *_args: None
+    service._get_monitor_state = lambda: {"host_meta": {"remote-master": {"role": "master"}}}
+    service._get_host_telemetry = lambda state, hostname: {"meta": state["host_meta"][hostname]}
+    service._credential_playbook_vars = lambda _hostname, _state: {"pbgui_role": "master"}
+    service.vpsmanager = SimpleNamespace(
+        update_vps=lambda _vps, **kwargs: captured.update(kwargs),
+    )
+
+    result = service._start_vps_deploy_host(
+        "token",
+        hostname="remote-master",
+        command="vps-update-pbgui",
+        debug=False,
+        extra_vars={"reboot": False},
+    )
+
+    assert captured["extra_vars"] == {"reboot": False, "pbgui_role": "master"}
+    assert result["run_id"] == "run-123"
+
+
 def test_deploy_progress_reads_completed_run_from_canonical_log_root(tmp_path, monkeypatch) -> None:
     """A run-specific transcript remains valid across a start-time second boundary."""
     hostname = "test-vps"
@@ -1378,6 +1415,7 @@ def test_run_vps_command_uses_master_playbook_for_remote_master_updates() -> Non
         "cmc_catalog_generation": None,
         "cmc_materialized_generation": None,
         "cmc_active_key_count": None,
+        "pbgui_role": "master",
     }
 
 
@@ -2392,8 +2430,9 @@ def test_pbgui_code_update_playbooks_sync_systemd_units(playbook_path: str) -> N
     assert "PBGUI_CREDENTIAL_ACTIVE" in playbook
     assert "pbgui_enabled_services" in playbook
     assert "pbgui_enabled_services | join(',')" in playbook
-    assert "pbgui_role" not in playbook
-    assert "Restart remote master PBApiServer" not in playbook
+    assert "pbgui_role" in playbook
+    assert "Restart remote master PBApiServer" in playbook
+    assert "systemd-run --user" in playbook
     assert "setup/setup_systemd.sh" in playbook
     assert "--include-pbremote" not in playbook
     assert "--no-start" in playbook

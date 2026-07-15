@@ -46,6 +46,56 @@ import pbgui_purefunc
 REMOTE_NODE_ID = "pbgui-node-22222222-2222-4222-8222-222222222222"
 
 
+def test_non_elected_master_does_not_coordinate_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only one deterministic active master may publish cluster migration phases."""
+
+    local_node_id = "pbgui-node-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    elected_node_id = "pbgui-node-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+    class FakeCoordinator:
+        """Coordinator double that must not run on a non-elected master."""
+
+        cluster_root = tmp_path / "data" / "cluster"
+
+        @staticmethod
+        def run() -> dict:
+            pytest.fail("non-elected master must not run the migration coordinator")
+
+    monkeypatch.setattr(credential_migration, "CredentialMigrationCoordinator", lambda *_args, **_kwargs: FakeCoordinator())
+    monkeypatch.setattr(credential_migration, "read_local_identity", lambda _root: {"node_id": local_node_id})
+    monkeypatch.setattr(
+        credential_migration,
+        "rebuild_materialized_state",
+        lambda *_args, **_kwargs: {
+            "cluster_nodes": {
+                "nodes": {
+                    local_node_id: {"role": "master", "enabled": True, "state_replica": True},
+                    elected_node_id: {"role": "master", "enabled": True, "state_replica": True},
+                    "pbgui-node-00000000-0000-4000-8000-000000000000": {
+                        "role": "master",
+                        "enabled": False,
+                        "state_replica": True,
+                    },
+                },
+            },
+            "desired_state": {"credential_migration": {"freeze_generation": 9}},
+        },
+    )
+
+    result = credential_migration.run_credential_migration(tmp_path)
+
+    assert result == {
+        "version": 1,
+        "phase": "protocol_barrier",
+        "status": "not_coordinator",
+        "coordinator_node_id": elected_node_id,
+        "freeze_generation": 9,
+    }
+
+
 def _write_ini(root: Path, body: str) -> Path:
     """Write one isolated migration INI fixture."""
 

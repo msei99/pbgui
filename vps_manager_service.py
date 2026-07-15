@@ -2327,7 +2327,11 @@ class VPSManagerService:
             "cmc_materialized_generation",
             "cmc_active_key_count",
         }
-        return {key: value for key, value in metadata.items() if key in playbook_fields}
+        result = {key: value for key, value in metadata.items() if key in playbook_fields}
+        role = str(self._host_meta(host_state).get("role") or "").strip().lower()
+        if role in {"master", "vps"}:
+            result["pbgui_role"] = role
+        return result
 
     def _vps_optional_config_pending_path(self, vps: VPS) -> Path | None:
         hostname = str(getattr(vps, "hostname", "") or "").strip()
@@ -4162,7 +4166,11 @@ class VPSManagerService:
             self._raise_if_vps_task_active(vps, command_text)
             vps.command = normalized_command
             vps.command_text = command_text
-            self.vpsmanager.update_vps(vps, debug=debug, extra_vars=extra_vars or None)
+            command_extra_vars = dict(extra_vars or {})
+            monitor_state = self._get_monitor_state()
+            host_state = self._get_host_telemetry(monitor_state, hostname)
+            command_extra_vars.update(self._credential_playbook_vars(hostname, host_state))
+            self.vpsmanager.update_vps(vps, debug=debug, extra_vars=command_extra_vars or None)
             task_log_name = vps._task_log_path(vps.command, COMMAND_VPS_UPDATE).name
         return {
             "command": normalized_command,
