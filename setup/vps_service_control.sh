@@ -118,14 +118,31 @@ flag_for() {
   esac
 }
 
+service_is_running() {
+  local service="$1"
+  local unit
+  local script
+  unit="$(unit_for "$service")"
+  if command -v systemctl >/dev/null 2>&1 && [[ -f "$target_home/.config/systemd/user/$unit" ]]; then
+    run_as_service_user systemctl --user is-active --quiet "$unit" >/dev/null 2>&1
+    return
+  fi
+  script="$(script_for "$service")"
+  pgrep -f "$pbgui_dir/$script" >/dev/null 2>&1
+}
+
 requested_services=("$@")
 active_services=()
 for service in "${requested_services[@]}"; do
   unit_for "$service" >/dev/null
   capability_state="$(service_capability_state "$service")"
   if [[ "$service" == "PBCoinData" && "$capability_state" == "unknown" ]]; then
-    echo "Leaving $service unchanged: credential capability is unknown"
-    continue
+    if [[ "$action" == "restart" ]] && service_is_running "$service"; then
+      echo "Restarting active $service while credential capability is unknown"
+    else
+      echo "Leaving $service unchanged: credential capability is unknown"
+      continue
+    fi
   fi
   if [[ "$action" != "stop" ]]; then
     if [[ "$capability_state" == "disabled" ]]; then

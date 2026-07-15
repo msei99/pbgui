@@ -4,6 +4,7 @@ import asyncio
 import builtins
 import io
 import json
+import os
 import subprocess
 import threading
 from pathlib import Path
@@ -2513,12 +2514,67 @@ def test_master_update_playbooks_repair_required_systemd_units(playbook_path: st
 
 
 def test_service_control_uses_tri_state_credential_capability() -> None:
-    """Unknown capability preserves PBCoinData while true/false control it explicitly."""
+    """Unknown capability preserves inactive PBCoinData while allowing active restarts."""
     script = Path("setup/vps_service_control.sh").read_text(encoding="utf-8")
 
     assert "PBGUI_CREDENTIAL_ACTIVE" in script
     assert "printf '%s\\n' unknown" in script
     assert 'Leaving $service unchanged: credential capability is unknown' in script
+    assert 'Restarting active $service while credential capability is unknown' in script
+
+
+@pytest.mark.parametrize(("currently_active", "expected_restart"), [(True, True), (False, False)])
+def test_service_control_unknown_capability_restarts_only_active_pbcoindata(
+    tmp_path: Path,
+    currently_active: bool,
+    expected_restart: bool,
+) -> None:
+    """Rolling updates restart an active old collector without enabling an inactive one."""
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls_path = tmp_path / "systemctl.calls"
+    fake_systemctl = fake_bin / "systemctl"
+    fake_systemctl.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$FAKE_SYSTEMCTL_CALLS\"\n"
+        "if [[ \"$*\" == *\"is-active\"* ]]; then\n"
+        "  [[ \"${FAKE_SYSTEMD_ACTIVE:-0}\" == \"1\" ]]\n"
+        "  exit\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_systemctl.chmod(0o755)
+    unit_dir = tmp_path / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True)
+    (unit_dir / "pbgui-pbcoindata.service").write_text("[Service]\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", "setup/vps_service_control.sh", "restart", "PBCoinData"],
+        cwd=Path(__file__).resolve().parents[1],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(tmp_path),
+            "PBGUI_DIR": str(tmp_path / "pbgui"),
+            "PBGUI_CREDENTIAL_ACTIVE": "",
+            "FAKE_SYSTEMCTL_CALLS": str(calls_path),
+            "FAKE_SYSTEMD_ACTIVE": "1" if currently_active else "0",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = calls_path.read_text(encoding="utf-8")
+    restarted = "--user restart pbgui-pbcoindata.service" in calls
+    assert restarted is expected_restart
+    if expected_restart:
+        assert "Restarting active PBCoinData while credential capability is unknown" in result.stdout
+    else:
+        assert "Leaving PBCoinData unchanged: credential capability is unknown" in result.stdout
 
 
 def test_local_master_metrics_are_recorded_in_host_history(monkeypatch: pytest.MonkeyPatch) -> None:
