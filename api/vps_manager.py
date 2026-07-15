@@ -411,7 +411,7 @@ async def ws_vps_manager(websocket: WebSocket):
                     )
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True})
                 elif cmd == "run_vps_command":
-                    await asyncio.to_thread(
+                    data = await asyncio.to_thread(
                         service.run_vps_command,
                         token=token,
                         hostname=str(msg.get("hostname") or ""),
@@ -420,7 +420,7 @@ async def ws_vps_manager(websocket: WebSocket):
                         debug=bool(msg.get("debug")),
                         extra_vars=msg.get("extra_vars") or None,
                     )
-                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True})
+                    await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "deploy_vps_logging":
                     data = await asyncio.to_thread(
                         service.deploy_vps_logging,

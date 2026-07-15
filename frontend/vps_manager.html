@@ -7426,6 +7426,18 @@
         store.detail = null;
         needsForceView = true;
       } else if (cmd === 'run_master_command' || cmd === 'run_vps_command') {
+        if (cmd === 'run_vps_command') {
+          const data = msg.data || {};
+          const actualFile = String(data.file_alias || '');
+          const task = store.taskLog || {};
+          if (actualFile && task.scope === 'vps' && task.hostname === String(data.hostname || '') && task.file !== actualFile) {
+            task.command = String(data.command || task.command || '');
+            task.file = actualFile;
+            task.startEmpty = false;
+            if (taskLogViewer) taskLogViewer.setFile(actualFile);
+            taskLogViewerFile = actualFile;
+          }
+        }
         toast('Command started.', 'success');
         if (cmd === 'run_master_command') {
           shouldForceRefresh = true;

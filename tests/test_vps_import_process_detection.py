@@ -1117,6 +1117,50 @@ def test_run_vps_deploy_skips_active_hosts_and_starts_free_hosts() -> None:
     assert result["entry"]["host_logs"]["free-vps"]["run_id"] == "run-free-vps"
 
 
+def test_deploy_progress_reads_completed_run_from_canonical_log_root(tmp_path, monkeypatch) -> None:
+    """A canonical run transcript must finalize deploy progress instead of staying at starting."""
+    hostname = "test-vps"
+    filename = "vps-update-pbgui--run-123.log"
+    log_path = tmp_path / "data" / "logs" / "vps-manager" / "hosts" / hostname / filename
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text(
+        "=== PLAYBOOK RUN START 2026-07-15 20:33:56 ===\n"
+        "PLAY RECAP ***************************************************************\n"
+        f"{hostname} : ok=11 changed=4 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service_mod, "PBGDIR", tmp_path)
+    service = object.__new__(VPSManagerService)
+    service._deploy_progress_cache = {}
+    service._deploy_progress_cache_lock = threading.Lock()
+
+    rows = service._build_deploy_progress_rows(
+        [{"hostname": hostname, "task_command": "vps-update-pbgui", "task_run_id": "run-123", "task_status": "successful"}],
+        [{
+            "command": "vps-update-pbgui",
+            "command_text": "Update PBGui",
+            "started_at": "2026-07-15 20:33:56",
+            "hostnames": [hostname],
+            "host_logs": {hostname: {
+                "started_at": "2026-07-15 20:33:56",
+                "run_id": "run-123",
+                "filename": filename,
+            }},
+        }],
+    )
+
+    assert rows[0]["task_status"] == "successful"
+    assert rows[0]["task_recap"] == {
+        "ok": 11,
+        "changed": 4,
+        "unreachable": 0,
+        "failed": 0,
+        "skipped": 0,
+        "rescued": 0,
+        "ignored": 0,
+    }
+
+
 def test_validate_and_stage_vps_deploy_host_skips_active_host() -> None:
     """Password deploy flow returns skipped for active hosts instead of failing the batch."""
     updates: list[dict[str, dict[str, object]]] = []
@@ -1314,9 +1358,14 @@ def test_run_vps_command_uses_master_playbook_for_remote_master_updates() -> Non
     }
     service._host_telemetry_fresh = lambda state: True
 
-    service.run_vps_command(token="token", hostname="manibot02", command="vps-update-pbgui", command_text="Update PBGui")
+    result = service.run_vps_command(token="token", hostname="manibot02", command="vps-update-pbgui", command_text="Update PBGui")
 
     assert captured["command"] == "master-update-pbgui"
+    assert result == {
+        "hostname": "manibot02",
+        "command": "master-update-pbgui",
+        "file_alias": "VPSAction:manibot02:master-update-pbgui",
+    }
     assert captured["extra_vars"] == {
         "target_hosts": "manibot02",
         "pbgdir": "/home/mani/software/pbgui",

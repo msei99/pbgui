@@ -244,7 +244,7 @@ def process_barrier_readiness(
     processes: Iterable[Mapping[str, Any]] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
-    """Require each live relevant PID/start time to have a fresh matching v2 entry."""
+    """Require each live relevant PID/start time to have a fresh compatible v2 entry."""
     root = Path(os.path.abspath(Path(root).expanduser()))
     path, lock_target = _registry_paths(root)
     checked_at = time.monotonic() if now is None else float(now)
@@ -254,7 +254,6 @@ def process_barrier_readiness(
         registry["entries"] = entries
         _write_registry(path, registry)
     live = list(processes) if processes is not None else running_relevant_processes(root)
-    serial = _code_serial(root)
     ready_by_service: dict[str, dict[str, Any]] = {}
     blocked_services: set[str] = set()
     for process in live:
@@ -269,7 +268,6 @@ def process_barrier_readiness(
             and int(record.get("credential_protocol_version") or 0) == CREDENTIAL_PROTOCOL_VERSION
             and int(record.get("capability_generation") or 0) == CAPABILITY_GENERATION
             and str(record.get("service") or "") == service
-            and str(record.get("code_serial") or "") == serial
             and checked_at - float(record.get("heartbeat_monotonic") or 0) <= HEARTBEAT_MAX_AGE_SECONDS
         )
         if not current:
@@ -278,7 +276,7 @@ def process_barrier_readiness(
         ready_by_service[service] = {
             "service": service,
             "credential_protocol_version": CREDENTIAL_PROTOCOL_VERSION,
-            "code_serial": serial,
+            "code_serial": str(record.get("code_serial") or ""),
             "capability_generation": CAPABILITY_GENERATION,
         }
     ready = [ready_by_service[service] for service in sorted(ready_by_service)]

@@ -2587,7 +2587,7 @@ class VPSManagerService:
             parsed_progress: dict[str, Any] | None = None
             parsed_status = ""
             if filename:
-                log_path = Path(PBGDIR) / "data" / "vpsmanager" / "hosts" / hostname / filename
+                log_path = Path(PBGDIR) / "data" / "logs" / "vps-manager" / "hosts" / hostname / filename
                 cache_key = (hostname, filename, latest_command)
                 active_cache_keys.add(cache_key)
                 with self._deploy_progress_cache_lock:
@@ -4927,7 +4927,7 @@ class VPSManagerService:
         self.vpsmanager.command_text = command_text
         self.vpsmanager.update_master(debug=debug, sudo_pw=sudo_pw, extra_vars=extra_vars)
 
-    def run_vps_command(self, *, token: str, hostname: str, command: str, command_text: str, debug: bool = False, extra_vars: dict[str, Any] | None = None) -> None:
+    def run_vps_command(self, *, token: str, hostname: str, command: str, command_text: str, debug: bool = False, extra_vars: dict[str, Any] | None = None) -> dict[str, str]:
         with self._host_task_start_lock(hostname):
             vps = self._require_vps(hostname)
             self._apply_session_secrets_to_vps(token, vps)
@@ -4957,6 +4957,11 @@ class VPSManagerService:
             vps.command = command
             vps.command_text = command_text
             self.vpsmanager.update_vps(vps, debug=debug, extra_vars=command_extra_vars or None)
+            return {
+                "hostname": hostname,
+                "command": command,
+                "file_alias": f"VPSAction:{hostname}:{command}",
+            }
 
     def _start_vps_config_apply(self, token: str, vps: VPS, *, apply_firewall: bool, apply_swap: bool = False) -> dict[str, Any]:
         self._apply_session_secrets_to_vps(token, vps)

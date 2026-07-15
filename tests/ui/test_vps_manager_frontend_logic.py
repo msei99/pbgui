@@ -122,6 +122,16 @@ class TestVpsManagerFrontendLogic:
         assert "flushPendingWsMessages()" in source
         assert "store.pendingWsMessages = []" in source
 
+    def test_remote_master_update_switches_to_actual_task_log(self) -> None:
+        """Use the backend-selected master log after a VPS update command is remapped."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        handle_result = _extract_function(source, "handleResult")
+
+        assert "const actualFile = String(data.file_alias || '')" in handle_result
+        assert "task.file = actualFile" in handle_result
+        assert "task.startEmpty = false" in handle_result
+        assert "taskLogViewer.setFile(actualFile)" in handle_result
+
     def test_vps_manager_delete_and_remote_purge_are_separate_actions(self) -> None:
         """Deleting a VPS record stays local while remote install purge is explicit."""
         source = HTML_PATH.read_text(encoding="utf-8")

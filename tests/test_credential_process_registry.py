@@ -98,7 +98,6 @@ def test_arbitrary_restart_order_auto_completes_without_losing_service_availabil
 @pytest.mark.parametrize("field,value", [
     ("create_time", 99.0),
     ("credential_protocol_version", 1),
-    ("code_serial", "41"),
     ("capability_generation", 2),
     ("heartbeat_monotonic", 69.0),
 ])
@@ -108,7 +107,7 @@ def test_stale_or_mismatched_capability_never_satisfies_live_process(
     field: str,
     value: object,
 ) -> None:
-    """PID reuse, stale heartbeat, old protocol, serial, and generation all fail closed."""
+    """PID reuse, stale heartbeat, old protocol, and generation all fail closed."""
     monkeypatch.setattr(registry, "_process_matches", lambda _pid, _created: True)
     processes = _write_registry(tmp_path, ("new",) + ("absent",) * (len(SERVICES) - 1))
     path, _lock = registry._registry_paths(tmp_path)
@@ -134,8 +133,8 @@ def test_registry_is_owner_only_and_unregisters_cleanly(tmp_path: Path) -> None:
     assert json.loads(path.read_text(encoding="utf-8"))["entries"] == {}
 
 
-def test_running_process_keeps_startup_serial_after_files_update(tmp_path: Path) -> None:
-    """A heartbeat cannot make already loaded code impersonate a newer code serial."""
+def test_unrelated_serial_update_does_not_close_protocol_barrier(tmp_path: Path) -> None:
+    """A global API serial bump does not invalidate an unchanged protocol capability."""
     (tmp_path / "api").mkdir()
     serial_path = tmp_path / "api" / "serial.txt"
     serial_path.write_text("42\n", encoding="utf-8")
@@ -152,8 +151,9 @@ def test_running_process_keeps_startup_serial_after_files_update(tmp_path: Path)
                 "service": "PBApiServer",
             }],
         )
-        assert result["ready"] is False
-        assert result["waiting_services"] == ["PBApiServer"]
+        assert result["ready"] is True
+        assert result["waiting_services"] == []
+        assert result["services"][0]["code_serial"] == "42"
     finally:
         heartbeat.close()
 
