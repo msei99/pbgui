@@ -1039,6 +1039,31 @@ def test_waiting_for_upgrade_does_not_block_required_api_restart(tmp_path: Path)
     assert credential_migration_restart_block_reason(tmp_path) == ""
 
 
+@pytest.mark.parametrize("reason", [
+    "Waiting for writer-freeze ACK from active Cluster nodes: node-a",
+    "Waiting for credential inventory ACK from active Cluster nodes: node-a",
+    "Waiting for credential materialization ACK from active Cluster nodes: node-a",
+    "Waiting for credential cutoff cleanup ACK from active Cluster nodes: node-a",
+    "Waiting for credential scan ACK from active Cluster nodes: node-a",
+])
+def test_passive_cluster_ack_wait_does_not_block_api_restart(tmp_path: Path, reason: str) -> None:
+    """Persisted remote-ACK waits are restart-safe and resume from migration state."""
+
+    state_path = tmp_path / "data" / "credentials" / "migration" / "state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps({
+            "version": 1,
+            "phase": "protocol_barrier",
+            "status": "pending",
+            "blocker_reason": reason,
+        }),
+        encoding="utf-8",
+    )
+
+    assert credential_migration_restart_block_reason(tmp_path) == ""
+
+
 def test_migration_exception_replaces_stale_waiting_status(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

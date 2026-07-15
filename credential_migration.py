@@ -2304,9 +2304,19 @@ def credential_migration_restart_block_reason(pbgdir: Path | str | None = None) 
         return ""
     if state.get("status") == "waiting_for_upgrade":
         return ""
+    blocker_reason = str(state.get("blocker_reason") or "")
+    passive_wait_prefixes = (
+        "Waiting for writer-freeze ACK from active Cluster nodes:",
+        "Waiting for credential inventory ACK from active Cluster nodes:",
+        "Waiting for credential materialization ACK from active Cluster nodes:",
+        "Waiting for credential cutoff cleanup ACK from active Cluster nodes:",
+        "Waiting for credential scan ACK from active Cluster nodes:",
+    )
+    if blocker_reason.startswith(passive_wait_prefixes):
+        return ""
     if state.get("phase") == "complete" and not state.get("blocker_reason"):
         return ""
-    return str(state.get("blocker_reason") or f"Credential migration phase {state.get('phase') or 'unknown'} is active")
+    return blocker_reason or f"Credential migration phase {state.get('phase') or 'unknown'} is active"
 
 
 def persist_credential_migration_error(
