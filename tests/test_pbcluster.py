@@ -226,6 +226,27 @@ def test_cluster_sync_worker_advances_migration_before_and_after_peer_sync(
     }
 
 
+def test_cluster_sync_worker_skips_managed_scan_during_periodic_cycle(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Periodic maintenance never repeats the expensive managed credential scan."""
+
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="vps", pbname="runner-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "vps"})
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        cluster_sync_worker,
+        "advance_local_credential_migration",
+        lambda _root, *, max_items, scan_allowed: calls.append(scan_allowed) or {"status": "advanced"},
+    )
+
+    ClusterSyncWorker(tmp_path).run_once(reason="periodic")
+
+    assert calls == [False, False]
+
+
 def test_master_cycle_auto_starts_cutover_after_last_v2_peer_sync(
     monkeypatch,
     tmp_path: Path,
@@ -416,6 +437,26 @@ def test_secondary_master_delegates_peer_fanout_to_coordinator() -> None:
     assert runner_allowed is False
     assert secondary_allowed is False
     assert runner_reason == "secondary master fanout is delegated to coordinator"
+
+
+def test_mailbox_sync_ignores_message_removed_after_index(tmp_path: Path) -> None:
+    """A mailbox expiry between index and fetch does not fail the whole peer sync."""
+
+    class ExpiredMailboxPeerClient:
+        """Expose one stale index entry and reject its subsequent fetch."""
+
+        def run(self, _peer, _local_node_id, command_text, payload=None) -> dict:
+            if command_text == "get-mailbox-index":
+                return {"messages": [{"message_id": "expired-message"}]}
+            if command_text == "get-mailbox-message expired-message":
+                raise RuntimeError('{"error": "mailbox message not found", "ok": false}')
+            raise AssertionError(f"unexpected command: {command_text}")
+
+    worker = ClusterSyncWorker(tmp_path, peer_client=ExpiredMailboxPeerClient())
+
+    result = worker._sync_mailbox({"node_id": NODE_B}, NODE_ID)
+
+    assert result == {"supported": True, "pulled": 0, "pushed": 0, "acked": 0}
 
 
 def test_ssh_cluster_peer_client_uses_dedicated_key_and_forced_command(monkeypatch, tmp_path: Path) -> None:

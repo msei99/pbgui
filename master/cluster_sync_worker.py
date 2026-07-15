@@ -157,8 +157,10 @@ class ClusterSyncWorker:
     def run_once(self, *, reason: str = "manual") -> dict[str, Any]:
         """Run one local sync pass and return the written status payload."""
 
-        if str(reason or "") == "event":
+        normalized_reason = str(reason or "manual")
+        if normalized_reason == "event":
             self._peer_backoff.clear()
+        scan_allowed = normalized_reason != "periodic"
         started_at = int(time.time())
         base: dict[str, Any] = {
             "schema_version": STATUS_SCHEMA_VERSION,
@@ -201,7 +203,7 @@ class ClusterSyncWorker:
                 migration_pre_sync = advance_local_credential_migration(
                     self.pbgdir,
                     max_items=8,
-                    scan_allowed=True,
+                    scan_allowed=scan_allowed,
                 )
             except Exception as exc:
                 migration_pre_sync = {"status": "error", "error": type(exc).__name__}
@@ -525,11 +527,17 @@ class ClusterSyncWorker:
         local_ids = {str(item["message_id"]) for item in mailbox.index()}
 
         for message_id in sorted(remote_ids - local_ids):
-            payload = self.peer_client.run(
-                peer,
-                local_node_id,
-                f"get-mailbox-message {shlex.quote(message_id)}",
-            )
+            try:
+                payload = self.peer_client.run(
+                    peer,
+                    local_node_id,
+                    f"get-mailbox-message {shlex.quote(message_id)}",
+                )
+            except Exception as exc:
+                error = str(exc or "").lower()
+                if "mailbox message not found" in error or "mailbox message has expired" in error:
+                    continue
+                raise
             message = payload.get("message") if isinstance(payload, dict) else None
             if not isinstance(message, dict):
                 raise ClusterSyncWorkerError("peer returned invalid mailbox message")

@@ -1389,7 +1389,6 @@ def _append_credential_migration_acks(
     if (
         int(freeze_ack.get("freeze_generation") or 0) != freeze_generation
         or freeze_ack.get("frozen") is not True
-        or freeze_ack.get("process_readiness") != process_readiness["services"]
     ):
         append_operation(
             cluster_root,
@@ -1443,7 +1442,6 @@ def _append_credential_migration_acks(
         int(inventory_ack.get("freeze_generation") or 0) != freeze_generation
         or inventory_ack.get("source_fingerprints", {}) != source_fingerprints
         or inventory_ack.get("source_generations", {}) != source_generations
-        or inventory_ack.get("process_readiness") != process_readiness["services"]
     ):
         append_operation(
             cluster_root,

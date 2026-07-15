@@ -584,6 +584,24 @@ def test_freeze_and_inventory_acks_are_separate(monkeypatch: pytest.MonkeyPatch,
     assert inventory_ack["source_generations"] == {"local": 9}
     assert inventory_ack["process_readiness"] == []
 
+    monkeypatch.setattr(
+        "credential_process_registry.process_barrier_readiness",
+        lambda _root: {
+            "ready": True,
+            "services": [{
+                "service": "Market Data worker",
+                "credential_protocol_version": 2,
+                "code_serial": "9999",
+                "capability_generation": 1,
+            }],
+            "waiting_services": [],
+        },
+    )
+    _append_credential_migration_acks(cluster_root)
+    operations = load_operations(cluster_root)
+    assert sum(item["op"] == "WRITER_FREEZE_ACK" for item in operations) == 1
+    assert sum(item["op"] == "CREDENTIAL_INVENTORY_ACK" for item in operations) == 1
+
 
 def test_no_source_coordinator_waits_for_active_v1_replica_upgrade(tmp_path: Path) -> None:
     """A source-free coordinator reports passive upgrade wait without freezing."""
