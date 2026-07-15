@@ -2610,7 +2610,15 @@ class VPSManagerService:
                             parsed_started_at = _read_playbook_run_started_at(log_path)
                             if parsed_started_at:
                                 parsed_progress["started_at"] = parsed_started_at
-                        if parsed_started_at and (not expected_started_at or parsed_started_at == expected_started_at):
+                        run_log_matches = bool(
+                            expected_run_id
+                            and filename == f"{latest_command}--{expected_run_id}.log"
+                        )
+                        if parsed_started_at and (
+                            run_log_matches
+                            or not expected_started_at
+                            or parsed_started_at == expected_started_at
+                        ):
                             parsed_status = self._status_from_task_progress(parsed_progress)
                             with self._deploy_progress_cache_lock:
                                 self._deploy_progress_cache[cache_key] = {

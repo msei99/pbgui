@@ -59,6 +59,7 @@
         repo: https://github.com/msei99/pbgui.git
         dest: "{{ pbgdir }}"
         version: "{{ current_pbgui_branch.stdout }}"
+        refspec: "+refs/heads/{{ current_pbgui_branch.stdout }}:refs/remotes/origin/{{ current_pbgui_branch.stdout }}"
         update: yes
         force: yes
       when: pbgdir != ""

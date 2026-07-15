@@ -1118,7 +1118,7 @@ def test_run_vps_deploy_skips_active_hosts_and_starts_free_hosts() -> None:
 
 
 def test_deploy_progress_reads_completed_run_from_canonical_log_root(tmp_path, monkeypatch) -> None:
-    """A canonical run transcript must finalize deploy progress instead of staying at starting."""
+    """A run-specific transcript remains valid across a start-time second boundary."""
     hostname = "test-vps"
     filename = "vps-update-pbgui--run-123.log"
     log_path = tmp_path / "data" / "logs" / "vps-manager" / "hosts" / hostname / filename
@@ -1139,10 +1139,10 @@ def test_deploy_progress_reads_completed_run_from_canonical_log_root(tmp_path, m
         [{
             "command": "vps-update-pbgui",
             "command_text": "Update PBGui",
-            "started_at": "2026-07-15 20:33:56",
+            "started_at": "2026-07-15 20:33:57",
             "hostnames": [hostname],
             "host_logs": {hostname: {
-                "started_at": "2026-07-15 20:33:56",
+                "started_at": "2026-07-15 20:33:57",
                 "run_id": "run-123",
                 "filename": filename,
             }},
@@ -2404,6 +2404,24 @@ def test_pbgui_code_update_playbooks_sync_systemd_units(playbook_path: str) -> N
     else:
         assert "setup/vps_service_control.sh restart PBCluster PBRun PBCoinData PBMonitorAgent" in playbook
     assert "setup/vps_service_control.sh restart PBCluster PBRun PBRemote PBCoinData" not in playbook
+
+
+@pytest.mark.parametrize(("playbook_path", "branch_variable"), [
+    ("vps-update-pbgui.yml", "current_branch.stdout"),
+    ("master-update-pbgui.yml", "current_branch.stdout"),
+    ("vps-update-pb.yml", "current_pbgui_branch.stdout"),
+    ("master-update-pb.yml", "current_pbgui_branch.stdout"),
+])
+def test_pbgui_update_playbooks_fetch_current_branch_explicitly(
+    playbook_path: str,
+    branch_variable: str,
+) -> None:
+    """PBGui updates must not depend on a repository's persisted fetch refspec."""
+
+    playbook = Path(playbook_path).read_text(encoding="utf-8")
+
+    expected = f'refs/heads/{{{{ {branch_variable} }}}}:refs/remotes/origin/{{{{ {branch_variable} }}}}'
+    assert expected in playbook
 
 
 def test_metrics_stream_reads_monitor_agent_cache() -> None:

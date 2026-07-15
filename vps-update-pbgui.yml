@@ -32,6 +32,7 @@
         repo: https://github.com/msei99/pbgui.git
         dest: "{{ install_dir }}/pbgui"
         version: "{{ current_branch.stdout }}"
+        refspec: "+refs/heads/{{ current_branch.stdout }}:refs/remotes/origin/{{ current_branch.stdout }}"
         update: yes
         force: yes
       register: pbgui_repo
