@@ -1261,7 +1261,12 @@ def _host_meta_direct_command(remote_pbgui_dir: str) -> str:
         pbgdir_expr = json.dumps(raw_dir)
     else:
         pbgdir_expr = f"os.path.join(HOME, {json.dumps(raw_dir)})"
-    return HOST_META_SCRIPT.replace("os.path.join(HOME, '__PBGDIR__')", pbgdir_expr)
+    command = HOST_META_SCRIPT.replace("os.path.join(HOME, '__PBGDIR__')", pbgdir_expr)
+    return command.replace(
+        "python3 -u - <<'PY'",
+        "timeout --signal=TERM --kill-after=2s 20s python3 -u - <<'PY'",
+        1,
+    )
 
 INSTANCE_COLLECT_SCRIPT = r'''python3 -u -c "
 import hashlib, json, os, re, subprocess, sys, time
@@ -2502,28 +2507,30 @@ def credential_metadata():
         'cmc_provider_used': None,
         'cmc_provider_limit': None,
     }
+    if os.environ.get('PBGUI_SKIP_CREDENTIAL_METADATA') == '1':
+        return unknown
     try:
         if PBGDIR not in sys.path:
             sys.path.insert(0, PBGDIR)
         from cmc_pool import CmcPoolClient
         from credential_store import CredentialStore
-        from master.cluster_state import default_cluster_root, local_cmc_credential_readiness, read_local_identity, rebuild_materialized_state
+        from master.cluster_state import default_cluster_root, local_cmc_credential_readiness, read_local_identity
+        cluster_root = default_cluster_root(Path(PBGDIR))
+        materialized = {
+            'cluster_nodes': json.loads((cluster_root / 'cluster_nodes.json').read_text(encoding='utf-8')),
+            'desired_state': json.loads((cluster_root / 'desired_state.json').read_text(encoding='utf-8')),
+        }
         store = CredentialStore(Path(PBGDIR) / 'data' / 'credentials')
         records = store.list_cmc(active_only=False)
         status = CmcPoolClient(
             credential_store=store,
             state_root=store.root / 'cmc_pool',
-            desired_state_provider=lambda: rebuild_materialized_state(
-                default_cluster_root(Path(PBGDIR)),
-                write=False,
-            ),
+            desired_state_provider=lambda: materialized,
         ).status()
     except Exception:
         return unknown
     active_count = max(int(status.get('active_credentials') or 0), 0)
     try:
-        cluster_root = default_cluster_root(Path(PBGDIR))
-        materialized = rebuild_materialized_state(cluster_root, write=False)
         node_id = str(read_local_identity(cluster_root)['node_id'])
         unknown.update(local_cmc_credential_readiness(materialized, node_id, records))
         authorities = (((materialized.get('desired_state') or {}).get('cmc_pool') or {}).get('authorities') or {})
@@ -2780,6 +2787,7 @@ class VPSMonitor:
         self._last_instance_collect: float = 0.0
         self._last_host_meta_collect: dict[str, float] = {}
         self._last_package_status_collect: dict[str, float] = {}
+        self._host_meta_collecting: set[str] = set()
 
         # Monitor cache (persisted across restarts, per-host per-bot GZ state)
         self._cache_path = Path(PBGDIR) / 'data' / 'state' / 'vps_monitor' / 'cache.json'
@@ -4675,48 +4683,58 @@ class VPSMonitor:
                                  *, include_package_status: bool = False,
                                  force: bool = False):
         """Collect SSH-derived host metadata for a single VPS."""
-        now = time.time()
-        collect_host_meta = force or (
-            now - self._last_host_meta_collect.get(hostname, 0.0) >= HOST_META_INTERVAL
-        )
-        collect_package_status = include_package_status and (
-            force or now - self._last_package_status_collect.get(hostname, 0.0) >= PACKAGE_STATUS_INTERVAL
-        )
-
-        if not collect_host_meta and not collect_package_status:
+        collecting = getattr(self, '_host_meta_collecting', None)
+        if collecting is None:
+            collecting = set()
+            self._host_meta_collecting = collecting
+        if hostname in collecting:
             return
-
-        if collect_host_meta:
-            parsed = await self._read_monitor_agent_json(
-                hostname,
-                "host_meta.json",
-                stale_after=30.0,
-                timeout=10,
+        collecting.add(hostname)
+        try:
+            now = time.time()
+            collect_host_meta = force or (
+                now - self._last_host_meta_collect.get(hostname, 0.0) >= HOST_META_INTERVAL
             )
-            if not parsed:
-                parsed = await self._collect_host_meta_direct(hostname)
-            if parsed:
-                self.store.update_host_meta(hostname, parsed)
-                self._last_host_meta_collect[hostname] = now
-                self._cache_host_snapshot(hostname)
-                if self.debug_logging:
-                    _log(SERVICE, f"[host-meta] Read agent cache for {hostname}", level="DEBUG")
-
-        if collect_package_status:
-            package_data = await self._read_monitor_agent_json(
-                hostname,
-                "package_status.json",
-                stale_after=7200.0,
-                timeout=10,
+            collect_package_status = include_package_status and (
+                force or now - self._last_package_status_collect.get(hostname, 0.0) >= PACKAGE_STATUS_INTERVAL
             )
-            if package_data:
-                current_meta = dict(self.store.host_meta.get(hostname, {}))
-                # Keep the last known package count when a slow probe falls back to N/A.
-                if package_data.get('upgrades') == 'N/A' and current_meta.get('upgrades') not in (None, '', 'N/A'):
-                    package_data['upgrades'] = current_meta.get('upgrades')
-                self.store.update_host_meta(hostname, package_data)
-                self._last_package_status_collect[hostname] = now
-                self._cache_host_snapshot(hostname)
+
+            if not collect_host_meta and not collect_package_status:
+                return
+
+            if collect_host_meta:
+                parsed = await self._read_monitor_agent_json(
+                    hostname,
+                    "host_meta.json",
+                    stale_after=30.0,
+                    timeout=10,
+                )
+                if not parsed:
+                    parsed = await self._collect_host_meta_direct(hostname)
+                if parsed:
+                    self.store.update_host_meta(hostname, parsed)
+                    self._last_host_meta_collect[hostname] = now
+                    self._cache_host_snapshot(hostname)
+                    if self.debug_logging:
+                        _log(SERVICE, f"[host-meta] Read agent cache for {hostname}", level="DEBUG")
+
+            if collect_package_status:
+                package_data = await self._read_monitor_agent_json(
+                    hostname,
+                    "package_status.json",
+                    stale_after=7200.0,
+                    timeout=10,
+                )
+                if package_data:
+                    current_meta = dict(self.store.host_meta.get(hostname, {}))
+                    # Keep the last known package count when a slow probe falls back to N/A.
+                    if package_data.get('upgrades') == 'N/A' and current_meta.get('upgrades') not in (None, '', 'N/A'):
+                        package_data['upgrades'] = current_meta.get('upgrades')
+                    self.store.update_host_meta(hostname, package_data)
+                    self._last_package_status_collect[hostname] = now
+                    self._cache_host_snapshot(hostname)
+        finally:
+            collecting.discard(hostname)
 
     # ── Service monitoring ──────────────────────────────────
 

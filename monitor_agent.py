@@ -26,7 +26,6 @@ from master.cluster_state import (
     default_cluster_root,
     local_cmc_credential_readiness,
     read_local_identity,
-    rebuild_materialized_state,
 )
 import pbgui_purefunc
 
@@ -85,6 +84,15 @@ def _read_json(path: Path, default: Any = None) -> Any:
         return default
 
 
+def _read_materialized_snapshot(cluster_root: Path) -> dict[str, Any]:
+    """Read the persisted cluster snapshot without replaying the oplog."""
+
+    return {
+        "cluster_nodes": _read_json(cluster_root / "cluster_nodes.json", {}),
+        "desired_state": _read_json(cluster_root / "desired_state.json", {}),
+    }
+
+
 def _read_ini():
     """Read the local PBGui config file."""
 
@@ -103,15 +111,14 @@ def _local_credential_capability() -> dict[str, Any]:
         "cmc_active_key_count": None,
     }
     try:
+        cluster_root = default_cluster_root(PBGDIR)
+        materialized = _read_materialized_snapshot(cluster_root)
         store = CredentialStore(PBGDIR / "data" / "credentials")
         records = store.list_cmc(active_only=False)
         pool = CmcPoolClient(
             credential_store=store,
             state_root=store.root / "cmc_pool",
-            desired_state_provider=lambda: rebuild_materialized_state(
-                default_cluster_root(PBGDIR),
-                write=False,
-            ),
+            desired_state_provider=lambda: materialized,
         )
         status = pool.status()
     except Exception as exc:
@@ -121,8 +128,6 @@ def _local_credential_capability() -> dict[str, Any]:
     active_count = max(int(status.get("active_credentials") or 0), 0)
     readiness: dict[str, Any]
     try:
-        cluster_root = default_cluster_root(PBGDIR)
-        materialized = rebuild_materialized_state(cluster_root, write=False)
         try:
             node_id = str(read_local_identity(cluster_root)["node_id"])
         except Exception:
@@ -393,7 +398,11 @@ def _run_host_meta() -> None:
     """Write the current host metadata cache."""
 
     script = _embedded_monitor_script("HOST_META_SCRIPT").replace("__PBGDIR__", str(PBGDIR))
-    payload = _run_shell_script(script, env=_script_env(), timeout=20) or {}
+    payload = _run_shell_script(
+        script,
+        env=_script_env({"PBGUI_SKIP_CREDENTIAL_METADATA": "1"}),
+        timeout=20,
+    ) or {}
     now = time.time()
     payload.pop("coinmarketcap" + "_api_key", None)
     payload.update(_local_credential_capability())

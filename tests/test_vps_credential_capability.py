@@ -359,7 +359,7 @@ def test_monitor_requires_every_desired_active_generation_exactly(
     monkeypatch.setattr(monitor_agent, "PBGDIR", tmp_path)
     monkeypatch.setattr(
         monitor_agent,
-        "rebuild_materialized_state",
+        "_read_materialized_snapshot",
         lambda *_args, **_kwargs: desired,
     )
 

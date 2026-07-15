@@ -1595,7 +1595,29 @@ def test_host_meta_falls_back_to_direct_probe_when_agent_cache_missing() -> None
     assert monitor.store.host_meta["manibot01"]["pbgv"] == "v1.90.8"
     assert monitor.store.host_meta["manibot01"]["source"] == "direct-ssh"
     assert len(monitor.pool.commands) == 2
-    assert "python3 -u" in monitor.pool.commands[1]
+    assert "timeout --signal=TERM --kill-after=2s 20s python3 -u" in monitor.pool.commands[1]
+
+
+def test_host_meta_skips_duplicate_collection_for_same_host() -> None:
+    """Concurrent refresh requests do not launch another remote collector."""
+
+    class FailPool:
+        """Fail if a duplicate collection reaches SSH."""
+
+        async def run(self, *_args, **_kwargs):
+            """Reject unexpected SSH work."""
+
+            pytest.fail("duplicate host metadata collection must not reach SSH")
+
+    monitor = object.__new__(VPSMonitor)
+    monitor.pool = FailPool()
+    monitor._last_host_meta_collect = {}
+    monitor._last_package_status_collect = {}
+    monitor._host_meta_collecting = {"manibot01"}
+
+    asyncio.run(monitor._collect_host_meta("manibot01", force=True))
+
+    assert monitor._host_meta_collecting == {"manibot01"}
 
 
 def test_vps_manager_unknown_context_host_resets_to_overview() -> None:
