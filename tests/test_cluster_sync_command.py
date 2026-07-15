@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import cluster_sync_command
 from cluster_credentials import (
     SecretContext,
     SecretRecipient,
@@ -165,6 +166,27 @@ def test_hello_returns_identity_for_registered_peer(tmp_path: Path) -> None:
     assert payload["credential_capability"]["sealed_credentials"] is True
     assert payload["crypto_public_bundle"]["node_id"] == NODE_A
     assert payload["capabilities"] == ["sealed_credentials_v2"]
+
+
+@pytest.mark.parametrize("command", ["handshake", f"get-ops {NODE_B} 1 1"])
+def test_read_transport_commands_do_not_advance_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    """Read-only sync transport stays bounded independently of migration work."""
+
+    root = _init_cluster(tmp_path)
+    run_command(root, NODE_B, "put-op", json.dumps(_operation()).encode("utf-8"))
+    monkeypatch.setattr(
+        cluster_sync_command,
+        "_bounded_local_migration_advance",
+        lambda _root: pytest.fail("read-only transport must not advance migration"),
+    )
+
+    payload = run_command(root, NODE_B, command)
+
+    assert payload["ok"] is True
 
 
 def test_unknown_peer_is_rejected_without_join_mode(tmp_path: Path) -> None:

@@ -143,7 +143,6 @@ def run_command(
     identity = read_local_identity(root)
     cluster_id = str(identity["cluster_id"])
     _verify_remote_node(root, remote_node, allow_join=False)
-    migration_advance = _bounded_local_migration_advance(root)
     paths = ClusterPaths.from_root(root)
 
     if verb == "handshake":
@@ -153,7 +152,7 @@ def run_command(
         return payload
     if verb == "hello":
         payload = _hello_payload(root, identity, remote_node)
-        payload["credential_migration_advance"] = migration_advance
+        payload["credential_migration_advance"] = _bounded_local_migration_advance(root)
         return payload
     if verb == "get-state-vector":
         materialized = _safe_state_call(lambda: rebuild_materialized_state(root, write=False))
