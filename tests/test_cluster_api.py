@@ -602,6 +602,49 @@ def test_credential_status_names_missing_migration_nodes_and_unfreeze_state() ->
     assert "scan_ack" in status["nodes"][NODE_B]["migration_blockers"]
 
 
+def test_credential_status_keeps_completed_scan_current_after_unfreeze() -> None:
+    """Unfreeze advances the generation without invalidating its clean scan ACK."""
+
+    snapshot = {
+        "cluster_nodes": {
+            "credential_membership_generation": 1,
+            "nodes": {
+                NODE_A: {
+                    "role": "master",
+                    "credential_protocol_version": 2,
+                    "credential_capable": True,
+                    "signing_key_id": "ed25519:a",
+                    "encryption_key_id": "x25519:a",
+                },
+            },
+        },
+        "desired_state": {
+            "credential_migration": {
+                "frozen": False,
+                "freeze_generation": 4,
+                "cutoff": {"cutoff_generation": 2, "min_protocol": 2},
+                "cleanup_acks": {NODE_A: {}},
+                "scan_acks": {
+                    NODE_A: {
+                        "freeze_generation": 3,
+                        "cutoff_generation": 2,
+                        "status": "clean",
+                        "findings": [],
+                    },
+                },
+            },
+        },
+    }
+
+    status = cluster._credential_status(snapshot)
+
+    assert status["migration"]["status"] == "complete"
+    assert status["migration"]["unfreeze_status"] == "complete"
+    assert status["migration"]["blocked"] is False
+    assert status["nodes"][NODE_A]["migration_scan_ack"]["current"] is True
+    assert status["nodes"][NODE_A]["migration_blockers"] == []
+
+
 def test_credential_status_reports_only_service_names_for_local_process_barrier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

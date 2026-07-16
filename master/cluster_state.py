@@ -968,6 +968,11 @@ def credential_lifecycle_status(materialized: dict[str, Any]) -> dict[str, Any]:
     candidate_acceptances = migration.get("candidate_acceptances") if isinstance(migration.get("candidate_acceptances"), dict) else {}
     cutoff_generation = int(cutoff.get("cutoff_generation") or 0)
     freeze_generation = int(migration.get("freeze_generation") or 0)
+    scan_freeze_generation = (
+        freeze_generation
+        if migration.get("frozen") is True
+        else max(freeze_generation - 1, 0)
+    )
     for node_id, status in node_status.items():
         submitted = [
             candidate
@@ -981,7 +986,7 @@ def credential_lifecycle_status(materialized: dict[str, Any]) -> dict[str, Any]:
         scan_ack = scan_acks.get(node_id) if isinstance(scan_acks.get(node_id), dict) else {}
         scan_current = bool(
             scan_ack
-            and int(scan_ack.get("freeze_generation") or 0) == freeze_generation
+            and int(scan_ack.get("freeze_generation") or 0) == scan_freeze_generation
             and int(scan_ack.get("cutoff_generation") or 0) == cutoff_generation
         )
         node_blockers: list[str] = []
