@@ -1036,6 +1036,33 @@ def test_tradfi_materializes_on_master_and_vps_reports_not_recipient(
     assert master_result["tradfi_projection"]["status"] == "current"
     assert vps_result["tradfi_projection"]["status"] == "not_recipient"
     assert "value" not in json.dumps(master_result)
+
+    master_store = CredentialStore(master_root.parent / "credentials")
+    master_store.update_tradfi(secret_id, active=False, origin="legacy_shadow")
+    drifted_preview = run_command(master_root, NODE_B, "materialize-credentials-preview")
+    assert drifted_preview["can_apply"] is True
+    assert drifted_preview["counts"]["ready"] == 1
+
+    repaired = run_command(master_root, NODE_B, "materialize-credentials")
+    promoted = master_store.get_tradfi(secret_id)
+    assert repaired["items"][0]["status"] == "written"
+    assert promoted["origin"] == "cluster"
+    assert promoted["active"] is True
+
+    materialized = rebuild_materialized_state(master_root, write=False)
+    append_operation(
+        master_root,
+        "CREDENTIAL_MATERIALIZATION_ACK",
+        {
+            "node_id": NODE_A,
+            "credential_generations": {secret_id: 1},
+            "recipient_generations": {secret_id: 1},
+            "membership_generation": materialized["cluster_nodes"]["credential_membership_generation"],
+        },
+    )
+    stable_preview = run_command(master_root, NODE_B, "materialize-credentials-preview")
+    assert stable_preview["can_apply"] is False, stable_preview
+    assert stable_preview["counts"]["current"] == 1
     monkeypatch.setattr(
         cluster_sync_command,
         "_validate_sealed_blob_payload",

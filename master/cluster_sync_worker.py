@@ -31,7 +31,11 @@ from cluster_sync_command import (
 )
 from cmc_leases import ClusterMailbox
 from credential_reconciler import reconcile_pending_credentials
-from credential_migration import advance_local_credential_migration, run_credential_migration
+from credential_migration import (
+    advance_local_credential_migration,
+    credential_migration_is_complete,
+    run_credential_migration,
+)
 from credential_rolling_bootstrap import bootstrap_local_legacy_credentials
 from logging_helpers import human_log as _log
 from master.cluster_state import (
@@ -225,7 +229,12 @@ class ClusterSyncWorker:
             migration_coordinator = {"status": "not_coordinator"}
             if str(identity.get("role") or "").strip().lower() == "master":
                 try:
-                    coordinator_state = run_credential_migration(self.pbgdir)
+                    coordinator_state = (
+                        {"status": "complete", "phase": "complete"}
+                        if normalized_reason != "boot"
+                        and credential_migration_is_complete(self.pbgdir)
+                        else run_credential_migration(self.pbgdir)
+                    )
                     migration_coordinator = {
                         "status": str(coordinator_state.get("status") or "advanced"),
                         "phase": str(coordinator_state.get("phase") or "unknown"),
@@ -243,7 +252,10 @@ class ClusterSyncWorker:
                         f"Credential migration coordinator pending: {type(exc).__name__}: {detail}",
                         level="WARNING",
                     )
-            v7_result = _materialize_v7_configs(self.cluster_root, write=True)
+            v7_preview = _materialize_v7_configs(self.cluster_root, write=False)
+            v7_result = v7_preview
+            if v7_preview.get("can_apply"):
+                v7_result = _materialize_v7_configs(self.cluster_root, write=True)
             api_preview = _materialize_api_keys(self.cluster_root, write=False)
             api_result = api_preview
             if api_preview.get("can_apply"):

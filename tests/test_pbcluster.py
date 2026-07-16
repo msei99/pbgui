@@ -202,6 +202,56 @@ def test_cluster_sync_worker_rebuilds_and_writes_status(tmp_path: Path) -> None:
     assert (cluster_root / "sync_status.json").is_file()
 
 
+def test_cluster_sync_worker_does_not_apply_current_v7_materialization(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A converged turn previews V7 state without entering the replaying write path."""
+
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="vps", pbname="runner-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "vps"})
+    writes: list[bool] = []
+
+    def materialize(_root: Path, *, write: bool) -> dict:
+        writes.append(write)
+        return {"ok": True, "can_apply": False, "counts": {"skip": 1}}
+
+    monkeypatch.setattr(cluster_sync_worker, "_materialize_v7_configs", materialize)
+
+    status = ClusterSyncWorker(tmp_path).run_once(reason="periodic")
+
+    assert writes == [False]
+    assert status["v7_materialization"]["counts"] == {"skip": 1}
+
+
+def test_cluster_sync_worker_applies_changed_v7_materialization(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A changed V7 preview still enters the write path exactly once."""
+
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="vps", pbname="runner-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "vps"})
+    writes: list[bool] = []
+
+    def materialize(_root: Path, *, write: bool) -> dict:
+        writes.append(write)
+        return {
+            "ok": True,
+            "can_apply": not write,
+            "counts": {"update": 0 if write else 1, "written_instances": 1 if write else 0},
+        }
+
+    monkeypatch.setattr(cluster_sync_worker, "_materialize_v7_configs", materialize)
+
+    status = ClusterSyncWorker(tmp_path).run_once(reason="event")
+
+    assert writes == [False, True]
+    assert status["v7_materialization"]["counts"]["written_instances"] == 1
+
+
 def test_cluster_sync_worker_advances_migration_before_and_after_peer_sync(
     monkeypatch,
     tmp_path: Path,
@@ -301,6 +351,30 @@ def test_master_cycle_auto_starts_cutover_after_last_v2_peer_sync(
     assert status["credential_migration_advance"]["coordinator"] == {
         "status": "advancing",
         "phase": "inventory",
+    }
+
+
+def test_periodic_master_cycle_skips_completed_migration_rescan(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A completed migration never repeats its full security scan every minute."""
+
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "master"})
+    monkeypatch.setattr(cluster_sync_worker, "credential_migration_is_complete", lambda _root: True)
+    monkeypatch.setattr(
+        cluster_sync_worker,
+        "run_credential_migration",
+        lambda _root: (_ for _ in ()).throw(AssertionError("completed migration was rescanned")),
+    )
+
+    status = ClusterSyncWorker(tmp_path).run_once(reason="periodic")
+
+    assert status["credential_migration_advance"]["coordinator"] == {
+        "status": "complete",
+        "phase": "complete",
     }
 
 

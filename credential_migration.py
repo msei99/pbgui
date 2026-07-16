@@ -2483,6 +2483,27 @@ def credential_migration_restart_block_reason(pbgdir: Path | str | None = None) 
     return blocker_reason or f"Credential migration phase {state.get('phase') or 'unknown'} is active"
 
 
+def credential_migration_is_complete(pbgdir: Path | str | None = None) -> bool:
+    """Return whether the owner-only local migration state is durably complete."""
+
+    root = Path(pbgdir or Path(__file__).resolve().parent)
+    state_path = root / "data" / "credentials" / "migration" / "state.json"
+    if state_path.is_symlink() or not state_path.is_file():
+        return False
+    try:
+        secure_private_file(state_path)
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(
+        isinstance(state, dict)
+        and state.get("version") == STATE_VERSION
+        and state.get("phase") == "complete"
+        and state.get("status") == "complete"
+        and not state.get("blocker_reason")
+    )
+
+
 def persist_credential_migration_error(
     reason: str,
     pbgdir: Path | str | None = None,

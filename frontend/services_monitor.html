@@ -3025,13 +3025,12 @@ window.PBGUI_NAV_CONFIG = {
     cmcMessage('Loading\u2026', false);
     return Promise.all([
       cmcFetch('/cmc-pool', { signal: signal, cache: 'no-store' }),
-      cmcFetch('/cmc-pool/usage', { signal: signal, cache: 'no-store' }),
       cmcFetch('/cmc-pool/leases', { signal: signal, cache: 'no-store' })
     ]).then(function (results) {
       if (generation !== _cmcLoadGeneration) return;
       _cmcPool = results[0] || { keys: [] };
-      _cmcUsage = results[1] || { keys: [] };
-      _cmcLeases = results[2] || { authority: {}, leases: [] };
+      _cmcUsage = _cmcPool;
+      _cmcLeases = results[1] || { authority: {}, leases: [] };
       cmcMessage(((_cmcLeases.authority || {}).lease_count || 0) + ' lease records', false);
       renderCmcPool();
     }).catch(function (error) {

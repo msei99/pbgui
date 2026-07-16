@@ -10,7 +10,7 @@ from cmc_leases import CmcLeaseAuthority, CmcLeaseProvider, ClusterMailbox
 from cmc_pool import CmcPoolClient
 from credential_rolling_bootstrap import bootstrap_local_legacy_credentials
 from credential_store import CredentialStore
-from master.cluster_state import default_cluster_root, read_local_identity, rebuild_materialized_state
+from master.cluster_state import default_cluster_root, read_local_identity, read_materialized_state
 
 
 SERVICE = "CmcRuntime"
@@ -21,7 +21,7 @@ def read_cmc_cluster_snapshot(project_root: Path | str) -> dict[str, Any] | None
 
     cluster_root = default_cluster_root(Path(project_root))
     try:
-        materialized = rebuild_materialized_state(cluster_root, write=False)
+        materialized = read_materialized_state(cluster_root)
     except Exception:
         return None
     desired = materialized.get("desired_state") if isinstance(materialized, Mapping) else None
@@ -65,7 +65,12 @@ def build_cmc_pool_client(
         if routes:
             cluster_root = default_cluster_root(root)
             local_node_id = str(read_local_identity(cluster_root)["node_id"])
-            mailbox = ClusterMailbox(cluster_root)
+            cluster_nodes = initial.get("cluster_nodes") if isinstance(initial, Mapping) else None
+            membership_nodes = cluster_nodes.get("nodes") if isinstance(cluster_nodes, Mapping) else None
+            mailbox = ClusterMailbox(
+                cluster_root,
+                membership_nodes=membership_nodes if isinstance(membership_nodes, Mapping) else None,
+            )
             authority = CmcLeaseAuthority(
                 store.root / "cmc_pool" / "leases",
                 authority_epochs={

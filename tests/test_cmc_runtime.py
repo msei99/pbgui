@@ -14,10 +14,11 @@ from credential_store import CredentialStore
 class _Mailbox:
     """Minimal local mailbox used to exercise the production factory wiring."""
 
-    def __init__(self, cluster_root: Path) -> None:
+    def __init__(self, cluster_root: Path, *, membership_nodes=None) -> None:
         """Expose local identity and an isolated provider-state root."""
 
         self.cluster_root = cluster_root
+        self.membership_nodes = membership_nodes
         self.local_node_id = "node-local"
         self.root = cluster_root / "mailbox"
         self.root.mkdir(parents=True, exist_ok=True)
@@ -60,6 +61,28 @@ def _strict_snapshot(record: dict, pool: dict) -> dict:
     }
 
 
+def test_cluster_snapshot_uses_current_materialized_reader(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """CMC runtime reuses the validated persisted snapshot instead of rebuilding it."""
+
+    expected = {
+        "cluster_nodes": {"nodes": {}},
+        "desired_state": {"cmc_pool": {"entries": {}, "authorities": {}}},
+        "state_vector": {},
+    }
+    calls: list[Path] = []
+    monkeypatch.setattr(
+        cmc_runtime,
+        "read_materialized_state",
+        lambda cluster_root: calls.append(cluster_root) or expected,
+    )
+
+    assert cmc_runtime.read_cmc_cluster_snapshot(tmp_path) == expected
+    assert calls == [tmp_path / "data" / "cluster"]
+
+
 def test_factory_builds_local_authority_from_desired_quota_domain(
     tmp_path: Path,
     monkeypatch,
@@ -92,6 +115,7 @@ def test_factory_builds_local_authority_from_desired_quota_domain(
     pool = build_cmc_pool_client(tmp_path, credential_store=store)
     acquisition = pool.acquire("/v1/cryptocurrency/map")
     assert acquisition.lease_token is not None
+    assert pool.lease_provider.mailbox.membership_nodes == materialized["cluster_nodes"]["nodes"]
     authority = pool.lease_provider.authority
     lease = authority.status()["requests"]
     granted = next(iter(lease.values()))["lease"]

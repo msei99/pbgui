@@ -1045,6 +1045,20 @@ def _materialize_credentials(cluster_root: Path, *, write: bool) -> dict[str, An
                 items.append(item)
                 continue
             current_generation = _credential_store_generation(store, str(secret_id), kind)
+            current_origin = ""
+            if store is not None and current_generation > 0:
+                try:
+                    current_record = (
+                        store.get_cmc(str(secret_id))
+                        if kind == "cmc_api_key"
+                        else store.get_tradfi(str(secret_id))
+                    )
+                    current_origin = str(current_record.get("origin") or "")
+                except (KeyError, ValueError):
+                    current_origin = ""
+            requires_cluster_promotion = (
+                current_generation >= generation and current_origin != "cluster"
+            )
             acked_recipient_generation = int(
                 (local_ack.get("recipient_generations") or {}).get(str(secret_id)) or 0
             )
@@ -1053,7 +1067,12 @@ def _materialize_credentials(cluster_root: Path, *, write: bool) -> dict[str, An
                 int(local_ack.get("membership_generation") or -1) == membership_generation
                 and acked_recipient_generation == recipient_generation
             )
-            if expected_recipient_ids and current_generation >= generation and recipient_current:
+            if (
+                expected_recipient_ids
+                and current_generation >= generation
+                and recipient_current
+                and not requires_cluster_promotion
+            ):
                 item.update({"status": "current", "reason": "credential generation is already materialized"})
                 counts["current"] += 1
                 items.append(item)
@@ -1090,7 +1109,11 @@ def _materialize_credentials(cluster_root: Path, *, write: bool) -> dict[str, An
                 counts["not_recipient"] += 1
                 items.append(item)
                 continue
-            if current_generation >= generation and recipient_current:
+            if (
+                current_generation >= generation
+                and recipient_current
+                and not requires_cluster_promotion
+            ):
                 item.update({"status": "current", "reason": "credential generation is already materialized"})
                 counts["current"] += 1
             else:

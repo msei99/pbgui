@@ -515,8 +515,9 @@ def test_services_frontend_uses_pool_manager_without_native_dialogs_or_legacy_ke
     assert 'id="coindata-api-key"' not in source
     assert "loadCmcKeyStatus" not in source
     assert "'/cmc-pool/keys'" in source
-    assert "'/cmc-pool/usage'" in source
+    assert "'/cmc-pool/usage'" not in source
     assert "'/cmc-pool/leases'" in source
+    assert "_cmcUsage = _cmcPool;" in source
     assert 'id="cmc-key-secret"' in source
     assert "if (input && input.value === context.secretValue) input.value = '';" in source
     assert ".cmc-table tbody tr.selected td" in source

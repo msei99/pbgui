@@ -1377,6 +1377,33 @@ def test_post_completion_startup_error_remains_a_restart_blocker(tmp_path: Path)
     assert credential_migration_restart_block_reason(tmp_path) == "post-completion failure"
 
 
+def test_completed_migration_fast_status_rejects_blockers_and_symlinks(tmp_path: Path) -> None:
+    """The periodic fast path accepts only a clean owner-only completed state."""
+
+    coordinator = CredentialMigrationCoordinator(tmp_path)
+    coordinator._write_state({
+        "version": credential_migration.STATE_VERSION,
+        "phase": "complete",
+        "status": "complete",
+        "blocker_reason": None,
+    })
+    assert credential_migration.credential_migration_is_complete(tmp_path) is True
+
+    coordinator._write_state({
+        "version": credential_migration.STATE_VERSION,
+        "phase": "complete",
+        "status": "error",
+        "blocker_reason": "post-completion failure",
+    })
+    assert credential_migration.credential_migration_is_complete(tmp_path) is False
+
+    external = tmp_path / "external-state.json"
+    external.write_text(json.dumps({"phase": "complete", "status": "complete"}), encoding="utf-8")
+    coordinator.state_path.unlink()
+    coordinator.state_path.symlink_to(external)
+    assert credential_migration.credential_migration_is_complete(tmp_path) is False
+
+
 def test_sentinel_scan_blocks_reintroduced_legacy_field(tmp_path: Path) -> None:
     """The final scan reports a migrated value reintroduced into a forbidden legacy field."""
 
