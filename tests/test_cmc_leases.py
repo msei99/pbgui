@@ -10,6 +10,7 @@ import time
 
 import pytest
 
+import cmc_leases
 from cluster_credentials import ensure_node_key_material
 from cluster_sync_command import ClusterSyncCommandError, run_command
 from cmc_leases import CmcLeaseAuthority, CmcLeaseError, CmcLeaseProvider, ClusterMailbox
@@ -285,6 +286,43 @@ def test_mailbox_ttl_and_recipient_ack_garbage_collection(tmp_path: Path) -> Non
     assert first["created"] is True
     assert second["created"] is False
     assert mailbox.index() == []
+
+
+def test_mailbox_index_loads_membership_once_for_multiple_messages(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """One mailbox transaction reuses its authenticated membership snapshot."""
+
+    roots, _pbgdirs = _cluster_roots(tmp_path)
+    mailbox = ClusterMailbox(roots[MASTER_A])
+    first = mailbox.create_message(
+        "CMC_PROVIDER_EVENT",
+        MASTER_B,
+        {"event_id": "event-first", "status": "healthy"},
+    )
+    second = mailbox.create_message(
+        "CMC_PROVIDER_EVENT",
+        MASTER_B,
+        {"event_id": "event-second", "status": "healthy"},
+    )
+    mailbox.put(first)
+    mailbox.put(second)
+    original = cmc_leases.rebuild_materialized_state
+    calls = 0
+
+    def counted_rebuild(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(cmc_leases, "rebuild_materialized_state", counted_rebuild)
+
+    assert {item["message_id"] for item in mailbox.index()} == {
+        first["message_id"],
+        second["message_id"],
+    }
+    assert calls == 1
 
 
 def test_worker_forwards_master_message_through_vps_relay(tmp_path: Path) -> None:

@@ -18,7 +18,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from cluster_sync_command import (
     ClusterSyncCommandError,
@@ -207,8 +207,17 @@ class ClusterSyncWorker:
                     scan_allowed=scan_allowed,
                 )
             except Exception as exc:
-                migration_pre_sync = {"status": "error", "error": type(exc).__name__}
-                _log(SERVICE, f"Credential migration advance pending: {type(exc).__name__}", level="WARNING")
+                detail = str(exc)[:240]
+                migration_pre_sync = {
+                    "status": "error",
+                    "error": type(exc).__name__,
+                    "detail": detail,
+                }
+                _log(
+                    SERVICE,
+                    f"Credential migration advance pending: {type(exc).__name__}: {detail}",
+                    level="WARNING",
+                )
             materialized = read_materialized_state(self.cluster_root)
             peer_results = self._sync_peers(identity, materialized)
             if any(int(item.get("pulled_ops") or 0) for item in peer_results):
@@ -223,8 +232,17 @@ class ClusterSyncWorker:
                     }
                     materialized = read_materialized_state(self.cluster_root)
                 except Exception as exc:
-                    migration_coordinator = {"status": "error", "error": type(exc).__name__}
-                    _log(SERVICE, f"Credential migration coordinator pending: {type(exc).__name__}", level="WARNING")
+                    detail = str(exc)[:240]
+                    migration_coordinator = {
+                        "status": "error",
+                        "error": type(exc).__name__,
+                        "detail": detail,
+                    }
+                    _log(
+                        SERVICE,
+                        f"Credential migration coordinator pending: {type(exc).__name__}: {detail}",
+                        level="WARNING",
+                    )
             v7_result = _materialize_v7_configs(self.cluster_root, write=True)
             api_preview = _materialize_api_keys(self.cluster_root, write=False)
             api_result = api_preview
@@ -245,16 +263,31 @@ class ClusterSyncWorker:
                     scan_allowed=False,
                 )
             except Exception as exc:
-                migration_post_sync = {"status": "error", "error": type(exc).__name__}
-                _log(SERVICE, f"Credential migration post-sync advance pending: {type(exc).__name__}", level="WARNING")
+                detail = str(exc)[:240]
+                migration_post_sync = {
+                    "status": "error",
+                    "error": type(exc).__name__,
+                    "detail": detail,
+                }
+                _log(
+                    SERVICE,
+                    f"Credential migration post-sync advance pending: {type(exc).__name__}: {detail}",
+                    level="WARNING",
+                )
             try:
                 credential_reconciliation = reconcile_pending_credentials(self.pbgdir)
             except Exception as exc:
+                detail = str(exc)[:240]
                 credential_reconciliation = {
                     "status": "error",
                     "error": type(exc).__name__,
+                    "detail": detail,
                 }
-                _log(SERVICE, f"Credential reconciliation pending: {type(exc).__name__}", level="WARNING")
+                _log(
+                    SERVICE,
+                    f"Credential reconciliation pending: {type(exc).__name__}: {detail}",
+                    level="WARNING",
+                )
 
             cluster_nodes = materialized.get("cluster_nodes") if isinstance(materialized, dict) else {}
             nodes = cluster_nodes.get("nodes") if isinstance(cluster_nodes, dict) else {}
@@ -495,11 +528,19 @@ class ClusterSyncWorker:
                 pushed_ops = int(fast_result.get("count") or len(push_ops))
                 base_result["remote_apply"] = "bundle"
 
-        mailbox_counts = (
-            self._sync_mailbox(peer, local_node_id)
-            if bool(hello.get("mailbox_capability"))
-            else {"supported": False, "pulled": 0, "pushed": 0, "acked": 0}
-        )
+        mailbox_counts = {"supported": False, "pulled": 0, "pushed": 0, "acked": 0}
+        if bool(hello.get("mailbox_capability")):
+            with self._local_state_lock:
+                mailbox_materialized = rebuild_materialized_state(
+                    self.cluster_root,
+                    write=False,
+                )
+            mailbox_nodes = (mailbox_materialized.get("cluster_nodes") or {}).get("nodes") or {}
+            mailbox_counts = self._sync_mailbox(
+                peer,
+                local_node_id,
+                membership_nodes=mailbox_nodes,
+            )
 
         if pulled_ops or pushed_ops or key_changed or mailbox_counts["pulled"] or mailbox_counts["pushed"]:
             base_result["status"] = "changed"
@@ -523,7 +564,13 @@ class ClusterSyncWorker:
         })
         return base_result
 
-    def _sync_mailbox(self, peer: dict[str, Any], local_node_id: str) -> dict[str, Any]:
+    def _sync_mailbox(
+        self,
+        peer: dict[str, Any],
+        local_node_id: str,
+        *,
+        membership_nodes: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Exchange missing mailbox messages while retaining opaque relay payloads."""
 
         counts: dict[str, Any] = {"supported": False, "pulled": 0, "pushed": 0, "acked": 0}
@@ -541,7 +588,7 @@ class ClusterSyncWorker:
             for item in remote_items
             if isinstance(item, dict) and item.get("message_id")
         }
-        mailbox = ClusterMailbox(self.cluster_root)
+        mailbox = ClusterMailbox(self.cluster_root, membership_nodes=membership_nodes)
         local_ids = {str(item["message_id"]) for item in mailbox.index()}
 
         for message_id in sorted(remote_ids - local_ids):

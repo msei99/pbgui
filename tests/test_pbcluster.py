@@ -227,6 +227,35 @@ def test_cluster_sync_worker_advances_migration_before_and_after_peer_sync(
     }
 
 
+def test_cluster_sync_worker_reports_bounded_migration_error_detail(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Migration status preserves a bounded diagnostic without stopping the turn."""
+
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="vps", pbname="runner-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "vps"})
+    detail = "candidate publication rejected " + ("x" * 300)
+
+    def fail_advance(*_args, **_kwargs):
+        raise RuntimeError(detail)
+
+    monkeypatch.setattr(cluster_sync_worker, "advance_local_credential_migration", fail_advance)
+
+    status = ClusterSyncWorker(tmp_path).run_once(reason="test")
+
+    expected = {
+        "status": "error",
+        "error": "RuntimeError",
+        "detail": detail[:240],
+    }
+    assert status["credential_migration_advance"] == {
+        "pre_sync": expected,
+        "post_sync": expected,
+    }
+
+
 def test_cluster_sync_worker_skips_managed_scan_during_periodic_cycle(
     monkeypatch,
     tmp_path: Path,

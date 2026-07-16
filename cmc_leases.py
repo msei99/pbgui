@@ -643,6 +643,7 @@ class ClusterMailbox:
         cluster_root: Path | str,
         *,
         clock: Callable[[], float] = time.time,
+        membership_nodes: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         """Bind the mailbox to one cluster identity and membership snapshot."""
 
@@ -652,6 +653,15 @@ class ClusterMailbox:
         self.ack_path = self.root / "acknowledgements.json"
         self._lock_target = self.root / ".mailbox"
         self._clock = clock
+        self._membership_snapshot = (
+            {
+                str(node_id): deepcopy(dict(node))
+                for node_id, node in membership_nodes.items()
+                if isinstance(node, Mapping)
+            }
+            if membership_nodes is not None
+            else None
+        )
         self._prepare_root()
 
     @property
@@ -702,6 +712,7 @@ class ClusterMailbox:
         message: Mapping[str, Any],
         *,
         allow_expired: bool = False,
+        membership_nodes: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Validate structure, public payload, membership signer, and signature."""
 
@@ -728,7 +739,7 @@ class ClusterMailbox:
         _validated_public_payload(clean.get("payload"))
         if str(clean.get("signer_id") or "") != sender:
             raise CmcLeaseError("mailbox signer_id must match sender")
-        nodes = self._membership_nodes()
+        nodes = membership_nodes if membership_nodes is not None else self._membership_nodes()
         sender_node = nodes.get(sender)
         recipient_node = nodes.get(recipient)
         if not _active_member(sender_node):
@@ -750,13 +761,21 @@ class ClusterMailbox:
     def put(self, message: Mapping[str, Any]) -> bool:
         """Persist one signed message idempotently before acknowledging delivery."""
 
-        clean = self.validate_message(message)
+        membership_nodes = self._membership_nodes()
+        clean = self.validate_message(message, membership_nodes=membership_nodes)
         message_id = str(clean["message_id"])
         with self._locked():
-            self._garbage_collect_unlocked(int(self._clock()))
+            self._garbage_collect_unlocked(
+                int(self._clock()),
+                membership_nodes=membership_nodes,
+            )
             path = self._message_path(message_id)
             if path.exists():
-                existing = self._read_message_unlocked(path, allow_expired=True)
+                existing = self._read_message_unlocked(
+                    path,
+                    allow_expired=True,
+                    membership_nodes=membership_nodes,
+                )
                 if existing != clean:
                     raise CmcLeaseError("mailbox message_id already has different content")
                 return False
@@ -769,10 +788,24 @@ class ClusterMailbox:
         """Return a payload-free index of live messages."""
 
         with self._locked():
-            self._garbage_collect_unlocked(int(self._clock()))
+            if not any(self.messages_root.glob("*.json")):
+                self._garbage_collect_unlocked(
+                    int(self._clock()),
+                    membership_nodes={},
+                )
+                return []
+            membership_nodes = self._membership_nodes()
+            self._garbage_collect_unlocked(
+                int(self._clock()),
+                membership_nodes=membership_nodes,
+            )
             result = []
             for path in sorted(self.messages_root.glob("*.json")):
-                message = self._read_message_unlocked(path, allow_expired=False)
+                message = self._read_message_unlocked(
+                    path,
+                    allow_expired=False,
+                    membership_nodes=membership_nodes,
+                )
                 result.append({
                     key: message[key]
                     for key in (
@@ -786,22 +819,34 @@ class ClusterMailbox:
         """Return one live validated signed message."""
 
         message_id = _validate_identifier(message_id, "message_id")
+        membership_nodes = self._membership_nodes()
         with self._locked():
-            self._garbage_collect_unlocked(int(self._clock()))
+            self._garbage_collect_unlocked(
+                int(self._clock()),
+                membership_nodes=membership_nodes,
+            )
             path = self._message_path(message_id)
             if not path.is_file():
                 raise CmcLeaseError("mailbox message not found")
-            return self._read_message_unlocked(path, allow_expired=False)
+            return self._read_message_unlocked(
+                path,
+                allow_expired=False,
+                membership_nodes=membership_nodes,
+            )
 
     def ack(self, message_id: str, node_id: str) -> bool:
         """Record durable possession and collect messages acknowledged by recipients."""
 
         message_id = _validate_identifier(message_id, "message_id")
         node_id = _validate_identifier(node_id, "node_id")
-        if not _active_member(self._membership_nodes().get(node_id)):
+        membership_nodes = self._membership_nodes()
+        if not _active_member(membership_nodes.get(node_id)):
             raise CmcLeaseError("mailbox acknowledgement node is not active")
         with self._locked():
-            self._garbage_collect_unlocked(int(self._clock()))
+            self._garbage_collect_unlocked(
+                int(self._clock()),
+                membership_nodes=membership_nodes,
+            )
             if not self._message_path(message_id).is_file():
                 return False
             acknowledgements = self._read_acks_unlocked()
@@ -811,18 +856,31 @@ class ClusterMailbox:
                 nodes.append(node_id)
                 nodes.sort()
                 self._write_acks_unlocked(acknowledgements)
-            self._garbage_collect_unlocked(int(self._clock()))
+            self._garbage_collect_unlocked(
+                int(self._clock()),
+                membership_nodes=membership_nodes,
+            )
             return changed
 
     def garbage_collect(self) -> dict[str, int]:
         """Remove expired and recipient-acknowledged messages."""
 
+        membership_nodes = self._membership_nodes()
         with self._locked():
-            return self._garbage_collect_unlocked(int(self._clock()))
+            return self._garbage_collect_unlocked(
+                int(self._clock()),
+                membership_nodes=membership_nodes,
+            )
 
-    def _garbage_collect_unlocked(self, now: int) -> dict[str, int]:
+    def _garbage_collect_unlocked(
+        self,
+        now: int,
+        *,
+        membership_nodes: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> dict[str, int]:
         """Collect mailbox files while holding the mailbox lock."""
 
+        active_nodes = membership_nodes if membership_nodes is not None else self._membership_nodes()
         acknowledgements = self._read_acks_unlocked()
         expired = 0
         acknowledged = 0
@@ -830,7 +888,11 @@ class ClusterMailbox:
         invalid = 0
         for path in list(self.messages_root.glob("*.json")):
             try:
-                message = self._read_message_unlocked(path, allow_expired=True)
+                message = self._read_message_unlocked(
+                    path,
+                    allow_expired=True,
+                    membership_nodes=active_nodes,
+                )
             except CmcLeaseError:
                 path.unlink(missing_ok=True)
                 invalid += 1
@@ -857,6 +919,8 @@ class ClusterMailbox:
     def _membership_nodes(self) -> dict[str, dict[str, Any]]:
         """Return current materialized membership for signature validation."""
 
+        if self._membership_snapshot is not None:
+            return self._membership_snapshot
         materialized = rebuild_materialized_state(self.cluster_root, write=False)
         nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
         return nodes if isinstance(nodes, dict) else {}
@@ -879,7 +943,13 @@ class ClusterMailbox:
 
         return self.messages_root / f"{_validate_identifier(message_id, 'message_id')}.json"
 
-    def _read_message_unlocked(self, path: Path, *, allow_expired: bool) -> dict[str, Any]:
+    def _read_message_unlocked(
+        self,
+        path: Path,
+        *,
+        allow_expired: bool,
+        membership_nodes: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Read and validate one private mailbox file while locked."""
 
         secure_private_file(path)
@@ -887,7 +957,11 @@ class ClusterMailbox:
             message = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise CmcLeaseError(f"unable to read mailbox message: {exc}") from exc
-        clean = self.validate_message(message, allow_expired=allow_expired)
+        clean = self.validate_message(
+            message,
+            allow_expired=allow_expired,
+            membership_nodes=membership_nodes,
+        )
         if path != self._message_path(str(clean["message_id"])):
             raise CmcLeaseError("mailbox message path does not match message_id")
         return clean
