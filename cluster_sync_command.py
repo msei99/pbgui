@@ -997,6 +997,7 @@ def _materialize_credentials(cluster_root: Path, *, write: bool) -> dict[str, An
             "credential_membership_generation", 0
         )
     )
+    membership_nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
     acknowledgements = desired.get("credential_materialization_acks")
     acknowledgements = acknowledgements if isinstance(acknowledgements, dict) else {}
     local_ack = acknowledgements.get(node_id) if isinstance(acknowledgements.get(node_id), dict) else {}
@@ -1032,30 +1033,8 @@ def _materialize_credentials(cluster_root: Path, *, write: bool) -> dict[str, An
                 counts["conflicted"] += 1
                 items.append(item)
                 continue
-            context = SecretContext(
-                cluster_id=str(desired.get("cluster_id") or ""),
-                secret_id=str(secret_id),
-                kind=kind,
-                generation=generation,
-                audience=str(secret.get("audience") or ""),
-            )
-            blob_hash = str(secret.get("sealed_blob_hash") or "")
-            raw = _read_verified_blob(
-                ClusterPaths.from_root(cluster_root).sealed_blobs,
-                blob_hash,
-                f"sealed credential blob for {secret_id}",
-                max_size=MAX_SEALED_BLOB_BYTES,
-            )
-            envelope = _validate_sealed_blob_payload(cluster_root, raw, expected_context=context)
-            if str(envelope.get("signer_id") or "") != str(secret.get("updated_by") or ""):
-                raise ClusterSyncCommandError("sealed credential signer does not match desired-state actor")
-            recipient_ids = {str(entry.get("node_id") or "") for entry in envelope["recipients"]}
-            expected_recipient_ids = list(secret.get("recipient_ids") or [])
-            if expected_recipient_ids and sorted(recipient_ids) != expected_recipient_ids:
-                raise ClusterSyncCommandError(
-                    "sealed credential recipients do not match desired recipient state"
-                )
-            if node_id not in recipient_ids:
+            expected_recipient_ids = sorted(str(value) for value in secret.get("recipient_ids") or [])
+            if expected_recipient_ids and node_id not in set(expected_recipient_ids):
                 item.update({"status": "not_recipient", "reason": "local node is not an intended recipient"})
                 counts["not_recipient"] += 1
                 items.append(item)
@@ -1074,6 +1053,43 @@ def _materialize_credentials(cluster_root: Path, *, write: bool) -> dict[str, An
                 int(local_ack.get("membership_generation") or -1) == membership_generation
                 and acked_recipient_generation == recipient_generation
             )
+            if expected_recipient_ids and current_generation >= generation and recipient_current:
+                item.update({"status": "current", "reason": "credential generation is already materialized"})
+                counts["current"] += 1
+                items.append(item)
+                continue
+            context = SecretContext(
+                cluster_id=str(desired.get("cluster_id") or ""),
+                secret_id=str(secret_id),
+                kind=kind,
+                generation=generation,
+                audience=str(secret.get("audience") or ""),
+            )
+            blob_hash = str(secret.get("sealed_blob_hash") or "")
+            raw = _read_verified_blob(
+                ClusterPaths.from_root(cluster_root).sealed_blobs,
+                blob_hash,
+                f"sealed credential blob for {secret_id}",
+                max_size=MAX_SEALED_BLOB_BYTES,
+            )
+            envelope = _validate_sealed_blob_payload(
+                cluster_root,
+                raw,
+                expected_context=context,
+                membership_nodes=membership_nodes,
+            )
+            if str(envelope.get("signer_id") or "") != str(secret.get("updated_by") or ""):
+                raise ClusterSyncCommandError("sealed credential signer does not match desired-state actor")
+            recipient_ids = {str(entry.get("node_id") or "") for entry in envelope["recipients"]}
+            if expected_recipient_ids and sorted(recipient_ids) != expected_recipient_ids:
+                raise ClusterSyncCommandError(
+                    "sealed credential recipients do not match desired recipient state"
+                )
+            if node_id not in recipient_ids:
+                item.update({"status": "not_recipient", "reason": "local node is not an intended recipient"})
+                counts["not_recipient"] += 1
+                items.append(item)
+                continue
             if current_generation >= generation and recipient_current:
                 item.update({"status": "current", "reason": "credential generation is already materialized"})
                 counts["current"] += 1
@@ -1692,6 +1708,12 @@ def _envelope_signing_key(
         if len(matches) == 1:
             return str(matches[0]["public_key"])
         raise ClusterSyncCommandError("sealed credential signer key is not authenticated")
+    node = nodes.get(signer_id) if isinstance(nodes.get(signer_id), dict) else {}
+    if (
+        str(node.get("signing_key_id") or "") == signing_key_id
+        and node.get("signing_public_key")
+    ):
+        return str(node["signing_public_key"])
     try:
         return membership_signing_public_key(cluster_root, signer_id, signing_key_id)
     except ClusterStateError:

@@ -997,6 +997,58 @@ def test_local_master_accepts_already_published_matching_cmc_without_republishin
     assert current["last_operation_id"] == stale_operation_id
 
 
+def test_local_master_prefers_published_duplicate_and_retires_pending_shadow(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A published matching CMC wins over an earlier pending legacy duplicate."""
+
+    cluster_root = tmp_path / "data" / "cluster"
+    ensure_local_identity(cluster_root, role="master", pbname="secondary-master")
+    store = CredentialStore(tmp_path / "data" / "credentials")
+    duplicate = store.create_cmc("shared-cluster-cmc", origin="legacy_shadow")
+    published = store.create_cmc("shared-cluster-cmc", origin="cluster", shared=True)
+    publisher = ClusterCredentialPublisher(cluster_root, store)
+    publisher._ensure_local_crypto_membership()
+    publisher.publish_cmc(str(published["id"]), state="active")
+    stale_operation_id = "migration:candidate_duplicate_shadow"
+    store.update_cmc(
+        str(duplicate["id"]),
+        active=True,
+        pending=True,
+        operation_id=stale_operation_id,
+    )
+    original_list_cmc = store.list_cmc
+    monkeypatch.setattr(
+        store,
+        "list_cmc",
+        lambda *, active_only=False: (
+            [store.get_cmc(str(duplicate["id"])), store.get_cmc(str(published["id"]))]
+            if not active_only
+            else original_list_cmc(active_only=True)
+        ),
+    )
+    coordinator = CredentialMigrationCoordinator(tmp_path, credential_store=store)
+    materialized = rebuild_materialized_state(cluster_root, write=False)
+
+    credential_id, generation = credential_migration._resolve_migration_import(
+        coordinator,
+        materialized,
+        candidate_id="candidate_published_duplicate",
+        kind="cmc_api_key",
+        value="shared-cluster-cmc",
+        provider="",
+        label="Imported duplicate",
+        freeze_generation=1,
+    )
+
+    assert (credential_id, generation) == (published["id"], published["generation"])
+    retired = store.get_cmc(str(duplicate["id"]))
+    assert retired.get("pending") is not True
+    assert retired["active"] is False
+    assert retired["last_operation_id"] == stale_operation_id
+
+
 def test_local_master_and_vps_tradfi_conflict_blocks_cleanup(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

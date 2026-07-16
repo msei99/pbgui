@@ -2010,6 +2010,7 @@ def _resolve_migration_import(
 
     if kind == "cmc_api_key":
         records = coordinator.store.list_cmc(active_only=False)
+        matching: list[dict[str, Any]] = []
         for record in records:
             try:
                 existing = coordinator.store.load_cmc_key(
@@ -2018,7 +2019,30 @@ def _resolve_migration_import(
             except (KeyError, ValueError):
                 continue
             if _migration_values_equal(existing, value):
-                return str(record["id"]), int(record["generation"])
+                matching.append(record)
+        if matching:
+            matching.sort(key=lambda record: (
+                not _published_cmc_generation(latest, str(record["id"]), int(record["generation"])),
+                str(record["id"]),
+            ))
+            selected = matching[0]
+            if _published_cmc_generation(
+                latest,
+                str(selected["id"]),
+                int(selected["generation"]),
+            ):
+                for duplicate in matching:
+                    pending_operation_id = str(duplicate.get("pending_operation_id") or "")
+                    if duplicate.get("pending") is not True or not pending_operation_id.startswith("migration:"):
+                        continue
+                    coordinator.store.finalize_pending_mutation(
+                        "cmc",
+                        str(duplicate["id"]),
+                        pending_operation_id,
+                    )
+                    if str(duplicate["id"]) != str(selected["id"]):
+                        coordinator.store.update_cmc(str(duplicate["id"]), active=False)
+            return str(selected["id"]), int(selected["generation"])
     else:
         records = [
             record for record in coordinator.store.list_tradfi(active_only=False)
@@ -2068,6 +2092,26 @@ def _resolve_migration_import(
         metadata=metadata,
     )
     return credential_id, int(record["generation"])
+
+
+def _published_cmc_generation(
+    materialized: Mapping[str, Any],
+    credential_id: str,
+    generation: int,
+) -> bool:
+    """Return whether one exact CMC generation is fully published in Cluster state."""
+
+    desired = materialized.get("desired_state") if isinstance(materialized.get("desired_state"), dict) else {}
+    secrets = desired.get("secrets") if isinstance(desired.get("secrets"), dict) else {}
+    secret = secrets.get(credential_id) if isinstance(secrets.get(credential_id), dict) else {}
+    entries = ((desired.get("cmc_pool") or {}).get("entries") or {})
+    entry = entries.get(credential_id) if isinstance(entries.get(credential_id), dict) else {}
+    return (
+        str(secret.get("secret_kind") or "") == "cmc_api_key"
+        and int(secret.get("generation") or 0) == generation
+        and int(entry.get("catalog_generation") or 0) == generation
+        and str(entry.get("secret_id") or credential_id) == credential_id
+    )
 
 
 def _block_tradfi_migration_activation(
@@ -2215,20 +2259,11 @@ def _import_local_master_sources(
             if not credential_id:
                 continue
             latest = read_materialized_state(coordinator.cluster_root)
-            desired = latest.get("desired_state") if isinstance(latest.get("desired_state"), dict) else {}
-            secrets = desired.get("secrets") if isinstance(desired.get("secrets"), dict) else {}
-            published_secret = secrets.get(credential_id) if isinstance(secrets.get(credential_id), dict) else {}
-            already_published = kind == "cmc_api_key" and (
-                int(published_secret.get("generation") or 0) == generation
-                and str(published_secret.get("secret_kind") or "") == kind
+            already_published = kind == "cmc_api_key" and _published_cmc_generation(
+                latest,
+                credential_id,
+                generation,
             )
-            if already_published:
-                entries = ((desired.get("cmc_pool") or {}).get("entries") or {})
-                entry = entries.get(credential_id) if isinstance(entries.get(credential_id), dict) else {}
-                already_published = (
-                    int(entry.get("catalog_generation") or 0) == generation
-                    and str(entry.get("secret_id") or credential_id) == credential_id
-                )
             if already_published:
                 record = coordinator.store.get_cmc(credential_id)
                 pending_operation_id = str(record.get("pending_operation_id") or "")

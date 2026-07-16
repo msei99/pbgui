@@ -867,6 +867,7 @@ def test_cutoff_rejects_obsolete_secret_blob_get_put_and_operation_relay(tmp_pat
 
 @pytest.mark.parametrize(("role", "node_id"), [("master", NODE_A), ("vps", NODE_B)])
 def test_materialize_cluster_audience_cmc_on_master_and_vps(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     role: str,
     node_id: str,
@@ -956,6 +957,20 @@ def test_materialize_cluster_audience_cmc_on_master_and_vps(
     assert lifecycle["nodes"][node_id]["materialization_ack"]["recipient_generations"] == {
         secret_id: 1
     }
+    monkeypatch.setattr(
+        cluster_sync_command,
+        "_validate_sealed_blob_payload",
+        lambda *_args, **_kwargs: pytest.fail("current credential preview must not reopen its envelope"),
+    )
+
+    preview = run_command(
+        root,
+        NODE_A if node_id == NODE_B else NODE_B,
+        "materialize-credentials-preview",
+    )
+
+    assert preview["counts"]["current"] == 1
+    assert preview["can_apply"] is False
 
 
 def test_tradfi_materializes_on_master_and_vps_reports_not_recipient(
@@ -1021,6 +1036,16 @@ def test_tradfi_materializes_on_master_and_vps_reports_not_recipient(
     assert master_result["tradfi_projection"]["status"] == "current"
     assert vps_result["tradfi_projection"]["status"] == "not_recipient"
     assert "value" not in json.dumps(master_result)
+    monkeypatch.setattr(
+        cluster_sync_command,
+        "_validate_sealed_blob_payload",
+        lambda *_args, **_kwargs: pytest.fail("master-only preview must not reopen its envelope on a VPS"),
+    )
+
+    vps_preview = run_command(vps_root, NODE_A, "materialize-credentials-preview")
+
+    assert vps_preview["counts"]["not_recipient"] == 1
+    assert vps_preview["can_apply"] is False
 
 
 def test_three_node_vps_relay_forwards_opaque_tradfi_without_decrypting(
