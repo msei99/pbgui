@@ -1858,8 +1858,6 @@ def _validate_v2_actor_role(
         raise ClusterStateError("credential operation actor has no authenticated role")
     if op in MASTER_ONLY_CREDENTIAL_OPS and role != "master":
         raise ClusterStateError(f"{op} requires an authenticated master actor")
-    if op == "MIGRATION_SECRET_CANDIDATE" and role != "vps":
-        raise ClusterStateError("migration candidates may only be appended by a VPS actor")
     if op in VPS_SELF_CREDENTIAL_OPS:
         node_id = str(operation.get("node_id") or actor)
         if node_id != actor:

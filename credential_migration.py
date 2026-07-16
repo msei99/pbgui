@@ -1690,10 +1690,10 @@ def advance_local_credential_migration(
             max_items=max_items,
         )
         if not _coordinator_owns_current_freeze(coordinator, migration):
-            result["imported_local"] = _import_local_master_sources(
+            result["published_candidates"] = _publish_local_migration_candidates(
                 coordinator,
+                materialized,
                 sources,
-                migration,
                 max_items=max_items,
             )
     materialized = read_materialized_state(cluster_root)
@@ -2353,6 +2353,14 @@ def _cleanup_accepted_local_sources(
         if any(candidate_id not in acceptances for candidate_id in item_ids):
             continue
         if role == "master":
+            _retire_accepted_local_cmc_pending(
+                coordinator,
+                materialized,
+                source,
+                acceptances,
+                node_id=node_id,
+                freeze_generation=freeze_generation,
+            )
             incomplete = False
             for candidate_id in item_ids:
                 acceptance = acceptances.get(candidate_id) if isinstance(acceptances.get(candidate_id), dict) else {}
@@ -2388,6 +2396,58 @@ def _cleanup_accepted_local_sources(
                 atomic_write_private_bytes(source.path, coordinator._cleaned_source_bytes(source))
             cleaned += 1
     return cleaned
+
+
+def _retire_accepted_local_cmc_pending(
+    coordinator: CredentialMigrationCoordinator,
+    materialized: Mapping[str, Any],
+    source: _Source,
+    acceptances: Mapping[str, Any],
+    *,
+    node_id: str,
+    freeze_generation: int,
+) -> None:
+    """Finalize migration-only local CMC duplicates after signed acceptance."""
+
+    records = coordinator.store.list_cmc(active_only=False)
+    for item in source.items:
+        if str(item.get("kind") or "") != "cmc_api_key":
+            continue
+        candidate_id = _migration_candidate_id(
+            node_id,
+            freeze_generation,
+            source,
+            str(item["item_id"]),
+        )
+        acceptance = acceptances.get(candidate_id) if isinstance(acceptances.get(candidate_id), dict) else {}
+        accepted_id = str(acceptance.get("credential_id") or "")
+        accepted_generation = int(acceptance.get("credential_generation") or 0)
+        if not _published_cmc_generation(
+            materialized,
+            accepted_id,
+            accepted_generation,
+        ):
+            continue
+        for record in records:
+            pending_operation_id = str(record.get("pending_operation_id") or "")
+            if record.get("pending") is not True or not pending_operation_id.startswith("migration:"):
+                continue
+            try:
+                value = coordinator.store.load_cmc_key(
+                    str(record["id"]),
+                    int(record["generation"]),
+                )
+            except (KeyError, ValueError):
+                continue
+            if not _migration_values_equal(value, item["value"]):
+                continue
+            coordinator.store.finalize_pending_mutation(
+                "cmc",
+                str(record["id"]),
+                pending_operation_id,
+            )
+            if str(record["id"]) != accepted_id:
+                coordinator.store.update_cmc(str(record["id"]), active=False)
 
 
 def credential_migration_restart_block_reason(pbgdir: Path | str | None = None) -> str:

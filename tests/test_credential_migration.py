@@ -1049,6 +1049,98 @@ def test_local_master_prefers_published_duplicate_and_retires_pending_shadow(
     assert retired["last_operation_id"] == stale_operation_id
 
 
+def test_secondary_master_cleanup_retires_pending_duplicate_after_acceptance(tmp_path: Path) -> None:
+    """A signed acceptance retires a matching stale direct-publish record before cleanup."""
+
+    _write_ini(
+        tmp_path,
+        """
+        [main]
+        role = master
+
+        [coinmarketcap]
+        api_key = accepted-cluster-cmc
+        """,
+    )
+    cluster_root = tmp_path / "data" / "cluster"
+    identity = ensure_local_identity(cluster_root, role="master", pbname="secondary-master")
+    store = CredentialStore(tmp_path / "data" / "credentials")
+    duplicate = store.create_cmc("accepted-cluster-cmc", origin="legacy_shadow")
+    accepted = store.create_cmc("accepted-cluster-cmc", origin="cluster", shared=True)
+    publisher = ClusterCredentialPublisher(cluster_root, store)
+    publisher._ensure_local_crypto_membership()
+    publisher.publish_cmc(str(accepted["id"]), state="active")
+    stale_operation_id = "migration:candidate_stale_direct_publish"
+    store.update_cmc(
+        str(duplicate["id"]),
+        active=True,
+        pending=True,
+        operation_id=stale_operation_id,
+    )
+    append_operation(
+        cluster_root,
+        "WRITER_FREEZE",
+        {"freeze_generation": 1, "frozen": True, "migration_operation_id": "secondary-cleanup"},
+    )
+    coordinator = CredentialMigrationCoordinator(tmp_path, credential_store=store)
+    sources = coordinator._inventory_sources()
+    source = next(iter(sources.values()))
+    candidate_id = credential_migration._migration_candidate_id(
+        str(identity["node_id"]),
+        1,
+        source,
+        str(source.items[0]["item_id"]),
+    )
+    append_operation(
+        cluster_root,
+        "MIGRATION_SECRET_ACCEPTANCE",
+        {
+            "candidate_id": candidate_id,
+            "credential_id": str(accepted["id"]),
+            "credential_generation": int(accepted["generation"]),
+            "freeze_generation": 1,
+            "status": "accepted",
+        },
+    )
+    before_cutoff = rebuild_materialized_state(cluster_root, write=False)
+    append_operation(
+        cluster_root,
+        "CREDENTIAL_CUTOFF",
+        {
+            "cutoff_generation": 1,
+            "parent_generation": 0,
+            "state_vector": before_cutoff["state_vector"],
+            "min_protocol": 2,
+            "obsolete_secret_blob_hashes": [],
+        },
+    )
+    append_operation(
+        cluster_root,
+        "CREDENTIAL_CUTOFF_ACK",
+        {
+            "cutoff_generation": 1,
+            "node_id": str(identity["node_id"]),
+            "state_vector": before_cutoff["state_vector"],
+            "removed_secret_blob_hashes": [],
+        },
+    )
+    materialized = rebuild_materialized_state(cluster_root, write=False)
+
+    cleaned = credential_migration._cleanup_accepted_local_sources(
+        coordinator,
+        materialized,
+        sources,
+        role="master",
+    )
+
+    assert cleaned == 1
+    retired = store.get_cmc(str(duplicate["id"]))
+    assert retired.get("pending") is not True
+    assert retired["active"] is False
+    assert retired["last_operation_id"] == stale_operation_id
+    assert "api_key" not in (tmp_path / "pbgui.ini").read_text(encoding="utf-8")
+
+
 def test_local_master_and_vps_tradfi_conflict_blocks_cleanup(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1377,11 +1469,13 @@ def test_exact_legacy_writer_reports_active_freeze(
     assert "blocked-secret" not in ini_path.read_text(encoding="utf-8")
 
 
-def test_vps_candidates_relay_import_accept_and_cleanup_without_plaintext(
+@pytest.mark.parametrize("remote_role", ["vps", "master"])
+def test_remote_candidates_relay_import_accept_and_cleanup_without_plaintext(
     monkeypatch,
     tmp_path: Path,
+    remote_role: str,
 ) -> None:
-    """A frozen VPS relays CMC/TradFi candidates and cleans only after acceptance/cutoff."""
+    """A frozen non-coordinator relays candidates and cleans only after acceptance/cutoff."""
 
     cluster_id = "pbgui-cluster-11111111-1111-4111-8111-111111111111"
     master_node = "pbgui-node-11111111-1111-4111-8111-111111111111"
@@ -1391,13 +1485,13 @@ def test_vps_candidates_relay_import_accept_and_cleanup_without_plaintext(
     vps_cluster = vps_root / "data" / "cluster"
     ensure_local_identity(master_cluster, role="master", pbname="master", cluster_id=cluster_id, node_id=master_node)
     master_membership = append_operation(master_cluster, "ADD_NODE", {"node_id": master_node, "role": "master"})
-    authorization = create_join_authorization(master_cluster, REMOTE_NODE_ID, "vps")
-    ensure_local_identity(vps_cluster, role="vps", pbname="vps", cluster_id=cluster_id, node_id=REMOTE_NODE_ID)
+    authorization = create_join_authorization(master_cluster, REMOTE_NODE_ID, remote_role)
+    ensure_local_identity(vps_cluster, role=remote_role, pbname="remote", cluster_id=cluster_id, node_id=REMOTE_NODE_ID)
     write_operation(vps_cluster, master_membership, network_input=True)
     vps_membership = append_operation(
         vps_cluster,
         "ADD_NODE",
-        {"node_id": REMOTE_NODE_ID, "role": "vps", "membership_authorization": authorization},
+        {"node_id": REMOTE_NODE_ID, "role": remote_role, "membership_authorization": authorization},
     )
     write_operation(master_cluster, vps_membership, network_input=True)
     rebuild_materialized_state(master_cluster)
@@ -1488,7 +1582,7 @@ def test_vps_candidates_relay_import_accept_and_cleanup_without_plaintext(
 
     replicate(vps_cluster, master_cluster, REMOTE_NODE_ID, 1)
     staged = credential_migration.advance_local_credential_migration(master_root)
-    assert staged["accepted_candidates"] == 1
+    assert staged["accepted_candidates"] == (1 if remote_role == "vps" else 0), staged
     master_store = CredentialStore(master_root / "data" / "credentials")
     assert len(master_store.list_cmc()) == 1
     assert len(master_store.list_tradfi()) == 1
@@ -1501,6 +1595,23 @@ def test_vps_candidates_relay_import_accept_and_cleanup_without_plaintext(
     assert accepted["accepted_candidates"] == 1
     materialized = rebuild_materialized_state(master_cluster, write=False)
     acceptances = materialized["desired_state"]["credential_migration"]["candidate_acceptances"]
+    if remote_role == "master" and set(acceptances) != {operation["candidate_id"] for operation in candidate_ops}:
+        replicated_master_seq = max(
+            int(operation["seq"])
+            for operation in load_operations(vps_cluster)
+            if operation["actor"] == master_node
+        )
+        replicate(master_cluster, vps_cluster, master_node, replicated_master_seq)
+        _materialize_credentials(vps_cluster, write=True)
+        replicated_remote_seq = max(
+            int(operation["seq"])
+            for operation in load_operations(master_cluster)
+            if operation["actor"] == REMOTE_NODE_ID
+        )
+        replicate(vps_cluster, master_cluster, REMOTE_NODE_ID, replicated_remote_seq)
+        credential_migration.advance_local_credential_migration(master_root)
+        materialized = rebuild_materialized_state(master_cluster, write=False)
+        acceptances = materialized["desired_state"]["credential_migration"]["candidate_acceptances"]
     assert set(acceptances) == {operation["candidate_id"] for operation in candidate_ops}
 
     last_master_seq = max(
