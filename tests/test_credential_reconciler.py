@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import time
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -51,6 +53,69 @@ def _add_remote_master(cluster_root: Path, key_root: Path) -> None:
         sign_operation(operation, keys.signing_private_key, signer_id=REMOTE_MASTER),
         network_input=True,
     )
+
+
+def _stub_cmc_key_info(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_value,
+    *,
+    credits_used: int | None = None,
+) -> None:
+    """Return one isolated successful CoinMarketCap key-info response."""
+
+    payload = json.dumps({
+        "status": {"error_code": 0},
+        "data": {
+            "plan": {
+                "name": "Basic",
+                "credit_limit_monthly": provider_value,
+            },
+            "usage": {
+                "current_month": (
+                    {"credits_used": credits_used}
+                    if credits_used is not None
+                    else {}
+                ),
+            },
+        },
+    }).encode("utf-8")
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.read.return_value = payload
+    monkeypatch.setattr(
+        credential_reconciler,
+        "urlopen",
+        lambda *_args, **_kwargs: response,
+    )
+
+
+@pytest.mark.parametrize("provider_value", [10_000, 10_000.0, "10000.0"])
+def test_cmc_provider_snapshot_uses_integer_signed_monthly_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_value,
+) -> None:
+    """Whole provider limits remain canonical integers in signed pool metadata."""
+
+    _stub_cmc_key_info(monkeypatch, provider_value, credits_used=125)
+
+    snapshot = credential_reconciler._snapshot_cmc_basis("write-only-secret")
+
+    assert snapshot["provider_limit"] == 10_000.0
+    assert snapshot["monthly_limit"] == 10_000
+    assert type(snapshot["monthly_limit"]) is int
+
+
+def test_cmc_provider_snapshot_does_not_round_fractional_monthly_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unexpected fractional provider limits stay local and out of signed metadata."""
+
+    _stub_cmc_key_info(monkeypatch, 10_000.5)
+
+    snapshot = credential_reconciler._snapshot_cmc_basis("write-only-secret")
+
+    assert snapshot["provider_limit"] == 10_000.5
+    assert "monthly_limit" not in snapshot
 
 
 def test_tradfi_activation_waits_for_every_master_ack(
@@ -140,7 +205,10 @@ def test_tradfi_activation_waits_for_every_master_ack(
     assert [item["id"] for item in store.list_tradfi(active_only=True)] == [record["id"]]
 
 
-def test_cmc_activation_waits_for_every_current_recipient_ack(tmp_path: Path) -> None:
+def test_cmc_activation_waits_for_every_current_recipient_ack(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     """CMC remains locally inactive until the remote replica ACKs the exact generation."""
 
     cluster_root = tmp_path / "data" / "cluster"
@@ -155,11 +223,14 @@ def test_cmc_activation_waits_for_every_current_recipient_ack(tmp_path: Path) ->
         pending=True,
         operation_id="cmc-pending-1",
     )
+    _stub_cmc_key_info(monkeypatch, 10_000.0, credits_used=125)
 
     pending = reconcile_pending_credentials(tmp_path, store=store, publisher=publisher)
     desired = rebuild_materialized_state(cluster_root, write=False)["desired_state"]
     assert pending["items"][0]["status"] == "pending"
     assert desired["cmc_pool"]["entries"][record["id"]]["state"] == "pending"
+    assert desired["cmc_pool"]["entries"][record["id"]]["monthly_limit"] == 10_000
+    assert type(desired["cmc_pool"]["entries"][record["id"]]["monthly_limit"]) is int
     assert store.list_cmc(active_only=True) == []
 
     materialized = rebuild_materialized_state(cluster_root, write=False)

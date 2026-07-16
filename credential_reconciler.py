@@ -139,8 +139,10 @@ def _snapshot_cmc_basis(api_key: str, *, timeout: float = 5.0) -> dict[str, Any]
         plan = data.get("plan") if isinstance(data.get("plan"), dict) else {}
         usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
         if plan.get("credit_limit_monthly") is not None:
-            result["provider_limit"] = float(plan["credit_limit_monthly"])
-            result["monthly_limit"] = float(plan["credit_limit_monthly"])
+            provider_limit = float(plan["credit_limit_monthly"])
+            result["provider_limit"] = provider_limit
+            if provider_limit.is_integer():
+                result["monthly_limit"] = int(provider_limit)
         if plan.get("credit_limit_monthly_reset") is not None:
             result["provider_reset_at"] = plan["credit_limit_monthly_reset"]
         if data.get("plan") and isinstance(data.get("plan"), dict):
