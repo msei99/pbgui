@@ -758,11 +758,17 @@ def test_prune_requires_explicit_policy_and_reconstructs_from_checkpoint(
     assert rebuild_materialized_state(root, write=False) == checkpoint["materialized"]
 
 
+@pytest.mark.parametrize(
+    ("operation_age_days", "expected_prune_status"),
+    [(1, "ready"), (9, "complete")],
+)
 def test_blob_gc_runs_automatically_without_a_stability_delay(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    operation_age_days: int,
+    expected_prune_status: str,
 ) -> None:
-    """An old unreachable blob is swept in the first healthy automatic evaluation."""
+    """A healthy ready or deleting oplog evaluation permits immediate blob cleanup."""
 
     root = _cluster(tmp_path)
     monkeypatch.setattr(
@@ -786,22 +792,24 @@ def test_blob_gc_runs_automatically_without_a_stability_delay(
             "mode": "oplog",
             "history_days": 7,
         },
-        created_at=NOW - 9 * 24 * 60 * 60,
+        created_at=NOW - operation_age_days * 24 * 60 * 60,
     )
     orphan_raw = b'{"orphan":true}\n'
     orphan_digest = hashlib.sha256(orphan_raw).hexdigest()
     orphan = root / "config_blobs" / "sha256" / orphan_digest[:2] / f"{orphan_digest}.json"
     orphan.parent.mkdir(parents=True)
     orphan.write_bytes(orphan_raw)
-    checkpoint = build_shadow_checkpoint(root, created_at=NOW - 2 * 24 * 60 * 60)
+    checkpoint = build_shadow_checkpoint(root, created_at=NOW - 30 * 60)
     proposal = create_checkpoint_proposal(root, checkpoint, created_at=NOW - 200, expires_at=NOW + 200)
     ack = create_checkpoint_ack(root, checkpoint, proposal, created_at=NOW - 190)
     proof = create_checkpoint_commit_proof(root, checkpoint, proposal, [ack], created_at=NOW - 180)
     activate_checkpoint(root, checkpoint, commit_proof=proof, activated_at=NOW - 170)
+    operation_mtime = NOW - operation_age_days * 24 * 60 * 60
+    for path in (root / "oplog").glob("*/*.json"):
+        os.utime(path, (operation_mtime, operation_mtime))
     old_mtime = NOW - 8 * 24 * 60 * 60
-    for path in [*list((root / "oplog").glob("*/*.json")), orphan]:
-        os.utime(path, (old_mtime, old_mtime))
-    assert prune_operation_history(root, now=NOW)["status"] == "complete"
+    os.utime(orphan, (old_mtime, old_mtime))
+    assert prune_operation_history(root, now=NOW)["status"] == expected_prune_status
 
     first = garbage_collect_blobs(root, now=NOW)
     preview = retention_preview(root, checkpoint, now=NOW)

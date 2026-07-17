@@ -1668,7 +1668,7 @@ def garbage_collect_blobs(
         prune_report = read_retention_report(root)
         if (
             not isinstance(prune_report, dict)
-            or prune_report.get("status") != "complete"
+            or prune_report.get("status") not in {"ready", "complete"}
             or active is None
             or prune_report.get("checkpoint_id") != active.get("checkpoint_id")
         ):
