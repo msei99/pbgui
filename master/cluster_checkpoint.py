@@ -1254,7 +1254,12 @@ def retention_preview(
     safe_baseline = _normalized_vector(
         (committed or active).get("baseline_vector") or {}
     )
-    candidates = _operation_prune_candidates(paths.oplog, safe_baseline, cutoff)
+    candidates = _operation_prune_candidates(
+        paths.oplog,
+        safe_baseline,
+        cutoff,
+        require_receipt_age=False,
+    )
     eligible_count = len(candidates)
     eligible_bytes = sum(int(item["size"]) for item in candidates)
     eligible = [
@@ -1562,7 +1567,12 @@ def _blob_gc_report_for_preview(root: Path, shadow: Mapping[str, Any], timestamp
     try:
         pruned_paths = {
             str(item["path"])
-            for item in _operation_prune_candidates(paths.oplog, safe_baseline, cutoff)
+            for item in _operation_prune_candidates(
+                paths.oplog,
+                safe_baseline,
+                cutoff,
+                require_receipt_age=False,
+            )
         }
         reachable: dict[str, set[str]] = {"config": set(), "secret": set(), "sealed": set()}
         _merge_blob_refs(reachable, shadow.get("blob_refs") or {})
@@ -2003,8 +2013,10 @@ def _operation_prune_candidates(
     oplog: Path,
     safe_baseline: Mapping[str, int],
     cutoff: int,
+    *,
+    require_receipt_age: bool = True,
 ) -> list[dict[str, Any]]:
-    """Return deterministic candidates old by signed and local receipt time."""
+    """Return deterministic candidates old by signed and optional receipt time."""
 
     result: list[dict[str, Any]] = []
     if not oplog.exists():
@@ -2022,7 +2034,8 @@ def _operation_prune_candidates(
             except (ValueError, OSError, json.JSONDecodeError) as exc:
                 raise ClusterCheckpointError("oplog operation is unreadable during retention scan") from exc
             created_at = int(operation.get("created_at") or 0) if isinstance(operation, dict) else 0
-            if seq <= actor_baseline and created_at < cutoff and int(stat.st_mtime) < cutoff:
+            receipt_is_old = int(stat.st_mtime) < cutoff
+            if seq <= actor_baseline and created_at < cutoff and (receipt_is_old or not require_receipt_age):
                 result.append({
                     "actor": actor,
                     "seq": seq,

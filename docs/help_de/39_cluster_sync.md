@@ -164,8 +164,11 @@ Die Report-Spalten bedeuten:
 Die Werte gelten pro Node. Gleiche Zeilen beschreiben normalerweise denselben
 replizierten Operation-Satz auf jedem Node und dürfen nicht als unterschiedliche
 Cluster-Operationen addiert werden. Eine Operation ist nur eligible, wenn sowohl
-ihr signierter Zeitstempel als auch das lokale dauerhafte Dateialter älter als
-der Cutoff sind.
+ihr signierter Zeitstempel als auch das lokale dauerhafte Dateialter für eine
+echte Löschung älter als der Cutoff sind. Der read-only Report normalisiert spät
+beigetretene Replicas, indem er das signierte Operation-Alter unter dem
+verifizierten Shadow-Checkpoint projiziert. Damit zeigen neue Nodes dieselben
+hypothetischen Kandidaten, ohne das echte Lösch-Gate abzuschwächen.
 Blob-Kandidaten beschreiben die lokalen Content-Addressed Stores jedes Nodes und
 können sich berechtigt unterscheiden, wenn ein Node zusätzliche verwaiste
 Kopien besitzt. Checkpoint-ID, Eligible Ops und Retained Ops müssen trotzdem auf

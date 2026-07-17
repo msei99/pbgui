@@ -162,7 +162,10 @@ The report columns mean:
 Values are per node. Equal rows normally describe the same replicated operation
 set on each node and must not be added together as different cluster
 operations. Eligibility requires both the signed operation timestamp and the
-local durable file age to be older than the cutoff.
+local durable file age to be older than the cutoff for actual deletion. The
+read-only report normalizes late replicas by projecting signed operation age
+under the verified shadow checkpoint, so a recently joined node reports the
+same hypothetical candidates without weakening the real deletion gate.
 Blob candidates describe each node's local content-addressed stores and may
 legitimately differ when one node has additional orphaned copies. Checkpoint ID,
 Eligible Ops, and Retained Ops must still converge across replicas.

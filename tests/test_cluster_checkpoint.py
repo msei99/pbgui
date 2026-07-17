@@ -352,6 +352,109 @@ def test_retention_preview_keeps_seven_days_and_never_deletes(tmp_path: Path) ->
     assert sorted(path.relative_to(root).as_posix() for path in (root / "oplog").glob("*/*.json")) == before
 
 
+def test_retention_preview_normalizes_fresh_receipt_age_for_late_replica(tmp_path: Path) -> None:
+    """A verified shadow projects canonical age while actual pruning stays fail-closed."""
+
+    root = _cluster(tmp_path)
+    operation_path = root / "oplog" / NODE_ID / "00000001.json"
+    os.utime(operation_path, (NOW, NOW))
+    checkpoint = create_shadow_checkpoint(root, created_at=NOW)
+
+    preview = retention_preview(root, checkpoint, now=NOW)
+    actual = prune_operation_history(root, now=NOW, dry_run=True)
+
+    assert preview["eligible_operations"] == 1
+    assert preview["retained_operations"] == 0
+    assert actual["eligible_operations"] == 0
+    assert "checkpoint_missing" in actual["blockers"]
+
+
+def test_actual_prune_keeps_fresh_receipt_despite_committed_safe_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A committed previous checkpoint does not bypass actual receipt-age safety."""
+
+    root = _cluster(tmp_path)
+    monkeypatch.setattr(
+        checkpoint_module,
+        "build_migration_seal",
+        lambda materialized: {
+            "schema_version": 1,
+            "status": "sealed",
+            "cluster_id": materialized["cluster_nodes"]["cluster_id"],
+            "active_node_ids": [NODE_ID],
+            "blockers": [],
+        },
+    )
+    first = build_shadow_checkpoint(root, created_at=NOW - 100)
+    first_proposal = create_checkpoint_proposal(root, first, created_at=NOW - 100, expires_at=NOW + 100)
+    first_ack = create_checkpoint_ack(root, first, first_proposal, created_at=NOW - 99)
+    first_proof = create_checkpoint_commit_proof(root, first, first_proposal, [first_ack], created_at=NOW - 98)
+    activate_checkpoint(root, first, commit_proof=first_proof, activated_at=NOW - 98)
+    append_operation(root, "UPDATE_NODE", {"node_id": NODE_ID, "pbname": "renamed"}, created_at=NOW - 60)
+    second = build_shadow_checkpoint(root, created_at=NOW)
+    second_proposal = create_checkpoint_proposal(root, second, created_at=NOW, expires_at=NOW + 100)
+    second_ack = create_checkpoint_ack(root, second, second_proposal, created_at=NOW + 1)
+    second_proof = create_checkpoint_commit_proof(root, second, second_proposal, [second_ack], created_at=NOW + 2)
+    activate_checkpoint(root, second, commit_proof=second_proof, activated_at=NOW + 2)
+    first_operation_path = root / "oplog" / NODE_ID / "00000001.json"
+    os.utime(first_operation_path, (NOW, NOW))
+
+    report = prune_operation_history(root, now=NOW, dry_run=True)
+
+    assert report["previous_checkpoint_id"] == first["checkpoint_id"]
+    assert report["safe_baseline"] == first["baseline_vector"]
+    assert report["eligible_operations"] == 0
+
+
+def test_retention_preview_drops_freshly_received_old_blob_reference(tmp_path: Path) -> None:
+    """A late replica does not require blobs referenced only by projected-pruned ops."""
+
+    root = _cluster(tmp_path)
+    old_hash = "sha256:" + "1" * 64
+    current_raw = b'{"current":true}\n'
+    current_digest = hashlib.sha256(current_raw).hexdigest()
+    current_hash = f"sha256:{current_digest}"
+    current_path = root / "config_blobs" / "sha256" / current_digest[:2] / f"{current_digest}.json"
+    current_path.parent.mkdir(parents=True)
+    current_path.write_bytes(current_raw)
+    old_operation = append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "bybit_BTC",
+            "version": "1",
+            "parent_version": "0",
+            "assigned_host": NODE_ID,
+            "desired_state": "stopped",
+            "config_manifest_hash": old_hash,
+        },
+        created_at=NOW - DEFAULT_HISTORY_SECONDS - 100,
+    )
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "bybit_BTC",
+            "version": "2",
+            "parent_version": "1",
+            "assigned_host": NODE_ID,
+            "desired_state": "running",
+            "config_manifest_hash": current_hash,
+        },
+        created_at=NOW - 60,
+    )
+    old_path = root / "oplog" / NODE_ID / f"{int(old_operation['seq']):08d}.json"
+    os.utime(old_path, (NOW, NOW))
+    checkpoint = create_shadow_checkpoint(root, created_at=NOW)
+
+    preview = retention_preview(root, checkpoint, now=NOW)
+
+    assert preview["blob_gc"]["status"] == "projected"
+    assert not any(str(item).startswith("blob_projection_failed:") for item in preview["blob_gc"]["blockers"])
+
+
 def test_checkpoint_refuses_actor_sequence_gaps(tmp_path: Path) -> None:
     """A missing operation prevents a checkpoint from hiding an incomplete actor log."""
 
