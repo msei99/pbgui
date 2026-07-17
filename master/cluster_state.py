@@ -993,18 +993,14 @@ def credential_lifecycle_status(materialized: dict[str, Any]) -> dict[str, Any]:
                 and int(secret.get("generation") or 0) > 0
             ):
                 desired_active_cmc[secret_id] = int(secret["generation"])
-        for secret_id, secret in secrets.items():
-            if (
-                isinstance(secret, dict)
-                and str(secret.get("secret_kind") or "") == "cmc_api_key"
-                and str(node_id) in set(secret.get("recipient_ids") or [])
-                and not any(
-                    isinstance(entry, dict)
-                    and str(entry.get("secret_id") or entry.get("key_id") or credential_id) == str(secret_id)
-                    for credential_id, entry in cmc_entries.items()
-                )
-            ):
-                desired_active_cmc[str(secret_id)] = int(secret.get("generation") or 0)
+        if not cmc_entries:
+            for secret_id, secret in secrets.items():
+                if (
+                    isinstance(secret, dict)
+                    and str(secret.get("secret_kind") or "") == "cmc_api_key"
+                    and str(node_id) in set(secret.get("recipient_ids") or [])
+                ):
+                    desired_active_cmc[str(secret_id)] = int(secret.get("generation") or 0)
         cmc_materialized = bool(desired_active_cmc) and ack_current and all(
             int((ack.get("credential_generations") or {}).get(secret_id) or 0) == generation
             and int((ack.get("recipient_generations") or {}).get(secret_id) or 0)

@@ -143,7 +143,41 @@ class TestVpsManagerFrontendLogic:
         assert "context_generation: store.contextGeneration" in send_context
         assert "incomingGeneration !== store.contextGeneration" in handle_message
         assert "store.detailAbortController.abort()" not in handle_message
-        assert "store.detail = store.detailCache[nextContext] || null" in select_view
+        assert "buildProvisionalVpsDetail(nextHostname)" in select_view
+
+    def test_host_switch_builds_immediate_detail_from_overview_snapshot(self) -> None:
+        """A never-visited host renders its local summary without waiting for detail I/O."""
+        bootstrap = """
+        const store = {};
+        function getOverviewRows() {
+          return [{
+            hostname: 'manibot62',
+            online: true,
+            ssh_online: true,
+            telemetry_fresh: true,
+            role: 'vps',
+            updates: 3,
+            task_command: 'vps-update',
+            task_command_text: 'Update Linux',
+            task_status: 'running'
+          }];
+        }
+        """
+        assertions = """
+        const detail = buildProvisionalVpsDetail('manibot62');
+        assert.equal(detail.kind, 'vps');
+        assert.equal(detail.hostname, 'manibot62');
+        assert.equal(detail.provisional, true);
+        assert.equal(detail.status.online, true);
+        assert.equal(detail.status.pending_updates, 3);
+        assert.equal(detail.status.summary_row.role, 'vps');
+        assert.equal(detail.progress.command, 'vps-update');
+        """
+        _run_node_assertions(
+            ["buildProvisionalVpsDetail"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
 
     def test_metric_history_reuses_cache_and_rejects_stale_responses(self) -> None:
         """Local history renders cached data immediately and aborts obsolete requests."""

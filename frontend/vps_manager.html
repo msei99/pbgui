@@ -7486,7 +7486,7 @@
         ui.dirtyFields = {};
       }
       syncCurrentVpsFormFromDom(hostname, ui);
-      if (detail && (!ui.initialized || !Object.keys(ui.form || {}).length)) {
+      if (detail && !detail.provisional && (!ui.initialized || !Object.keys(ui.form || {}).length)) {
         ui.form = Object.assign({}, detail.config || {});
         ui.savedForm = Object.assign({}, ui.form);
         ui.dirtyFields = {};
@@ -7540,6 +7540,41 @@
       return 'overview';
     }
 
+    function buildProvisionalVpsDetail(hostname) {
+      const host = String(hostname || '').trim();
+      const row = getOverviewRows().find(function (item) {
+        return String((item || {}).hostname || '') === host;
+      }) || {};
+      const summary = Object.assign({ name: host, hostname: host, nav: 'vps' }, row);
+      return {
+        kind: 'vps',
+        hostname: host,
+        provisional: true,
+        status: {
+          online: !!summary.online,
+          ssh_online: !!summary.ssh_online,
+          telemetry_fresh: !!summary.telemetry_fresh,
+          telemetry_stale: !!summary.telemetry_stale,
+          telemetry_age: summary.telemetry_age == null ? null : Number(summary.telemetry_age),
+          host_key_error: String(summary.ssh_host_key_status || '') === 'error',
+          pending_updates: summary.updates == null ? 'N/A' : summary.updates,
+          last_command: String(summary.task_command_text || summary.task_command || ''),
+          last_update: String(summary.task_started || ''),
+          summary_row: summary,
+          monitor_agent: { state: 'unknown' }
+        },
+        config: {},
+        branches: { pbgui: {}, pb7: {} },
+        monitor: {},
+        progress: {
+          command: String(summary.task_command || ''),
+          command_text: String(summary.task_command_text || ''),
+          update_status: String(summary.task_status || '')
+        },
+        logfiles: []
+      };
+    }
+
     function selectView(view, hostname) {
       clearTimeout(store._detailTimer);
       store._detailTimer = 0;
@@ -7551,7 +7586,8 @@
         store.detailRequestGeneration += 1;
         if (store.detailAbortController) store.detailAbortController.abort();
         store.detailAbortController = null;
-        store.detail = store.detailCache[nextContext] || null;
+        store.detail = store.detailCache[nextContext]
+          || (nextContext.indexOf('vps:') === 0 ? buildProvisionalVpsDetail(nextHostname) : null);
       }
       store.view = view;
       if (typeof hostname === 'string') {

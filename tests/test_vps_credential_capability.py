@@ -321,6 +321,7 @@ def test_monitor_requires_every_desired_active_generation_exactly(
     store = CredentialStore(tmp_path / "data" / "credentials")
     exact = store.create_cmc("exact", origin="cluster", shared=True)
     stale = store.create_cmc("stale", origin="cluster", shared=True)
+    orphan = store.create_cmc("orphan", origin="cluster", shared=True)
     desired = {
         "cluster_nodes": {
             "credential_membership_generation": 1,
@@ -336,11 +337,12 @@ def test_monitor_requires_every_desired_active_generation_exactly(
             "secrets": {
                 exact["id"]: {"generation": 1, "recipient_generation": 1, "recipient_ids": ["pbgui-node-00000000-0000-4000-8000-000000000001"], "secret_kind": "cmc_api_key"},
                 stale["id"]: {"generation": 2, "recipient_generation": 1, "recipient_ids": ["pbgui-node-00000000-0000-4000-8000-000000000001"], "secret_kind": "cmc_api_key"},
+                orphan["id"]: {"generation": 1, "recipient_generation": 1, "recipient_ids": ["pbgui-node-00000000-0000-4000-8000-000000000001"], "secret_kind": "cmc_api_key"},
             },
             "credential_materialization_acks": {"pbgui-node-00000000-0000-4000-8000-000000000001": {
                 "membership_generation": 1,
-                "credential_generations": {exact["id"]: 1, stale["id"]: 2},
-                "recipient_generations": {exact["id"]: 1, stale["id"]: 1},
+                "credential_generations": {exact["id"]: 1, stale["id"]: 2, orphan["id"]: 1},
+                "recipient_generations": {exact["id"]: 1, stale["id"]: 1, orphan["id"]: 1},
             }},
             "cmc_pool": {"entries": {
                 exact["id"]: {
@@ -370,6 +372,7 @@ def test_monitor_requires_every_desired_active_generation_exactly(
     ready = monitor_agent._local_credential_capability()
     assert ready["credential_active"] is True
     assert ready["cmc_active_key_count"] == 2
+    assert store.get_cmc(orphan["id"])["active"] is False
     assert "generation-two" not in json.dumps(ready)
 
 
