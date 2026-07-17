@@ -689,6 +689,15 @@ def test_global_nav_shows_non_dismissible_no_login_status() -> None:
     assert '"auth": auth_runtime_status()' in server_source
 
 
+def test_global_nav_allows_httponly_cookie_navigation() -> None:
+    """Navigation must not require a browser-readable session token."""
+
+    nav_source = Path("frontend/pbgui_nav.js").read_text(encoding="utf-8")
+
+    assert "var canNavigate = !!c.token;" not in nav_source
+    assert "disabled aria-disabled=\"true\"" not in nav_source
+
+
 def test_login_security_acknowledgement_persists_and_new_event_realerts(monkeypatch, tmp_path) -> None:
     """Acknowledgement is global and only suppresses the event that was confirmed."""
     last_block = {

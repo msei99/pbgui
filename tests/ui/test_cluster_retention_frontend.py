@@ -14,6 +14,10 @@ def test_cluster_retention_ui_is_explicit_and_fail_safe() -> None:
     assert 'id="retention-history-days"' in HTML
     assert "fetchJson('/retention/report')" in HTML
     assert "fetchJson('/retention/settings'" in HTML
+    assert "Blob Candidates" in HTML
+    assert "Blob Size" in HTML
+    assert "Blob GC Status" in HTML
+    assert "blobGc.deleted_blobs" in HTML
     assert "window.PBGuiConfirm" in HTML
     assert "blob_gc_enabled" not in HTML
     assert "window.confirm(" not in HTML

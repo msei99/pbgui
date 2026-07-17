@@ -333,6 +333,7 @@ def test_retention_report_is_read_only_and_main_page_exposes_no_session_token(
 
     assert report["read_only"] is True
     assert report["policy"]["mode"] == "report_only"
+    assert report["reports"][0]["blob_gc"]["status"] == "not_evaluated"
     assert sorted(path.read_bytes() for path in (root / "oplog").glob("*/*.json")) == before
     html = response.body.decode("utf-8")
     assert "must-not-appear" not in html
@@ -355,6 +356,12 @@ def test_retention_report_builds_remote_preview_command(monkeypatch, tmp_path: P
             "status": "report_only",
             "eligible_operations": 0,
             "eligible_bytes": 0,
+            "blob_gc": {
+                "status": "blocked",
+                "eligible_blobs": 3,
+                "eligible_bytes": 1024,
+                "blockers": ["blob_gc_stability_window"],
+            },
             "items": [],
         }
 
@@ -365,6 +372,7 @@ def test_retention_report_builds_remote_preview_command(monkeypatch, tmp_path: P
     assert report["counts"]["nodes_total"] == 2
     assert report["counts"]["nodes_reported"] == 2
     assert report["counts"]["nodes_unavailable"] == 0
+    assert report["reports"][1]["blob_gc"]["eligible_blobs"] == 3
 
 
 def test_get_status_includes_pbcluster_sync_status(monkeypatch, tmp_path: Path) -> None:

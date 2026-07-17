@@ -283,7 +283,6 @@
     if (!nav) return;
     var c = cfg();
     var CURRENT = c.current;
-    var canNavigate = !!c.token;
     var navGroups = NAV_GROUPS.map(function (group) {
       return {
         id: group.id,
@@ -317,7 +316,7 @@
     navGroups.forEach(function (group) {
       var isActive = (group.id === activeGroup);
       html += '<div class="nav-group">';
-      html += '<button class="nav-group-btn' + (isActive ? ' active' : '') + (canNavigate ? '' : ' disabled') + '" data-group="' + group.id + '"' + (canNavigate ? '' : ' disabled aria-disabled="true"') + '>';
+      html += '<button class="nav-group-btn' + (isActive ? ' active' : '') + '" data-group="' + group.id + '">';
       html += esc(group.label) + ' <span class="nav-arrow">&#9660;</span></button>';
       html += '<div class="nav-dropdown">';
       group.items.forEach(function (item) {

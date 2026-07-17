@@ -1293,6 +1293,7 @@ def retention_preview(
         "eligible_bytes": eligible_bytes,
         "retained_operations": retained_count,
         "retained_bytes": retained_bytes,
+        "blob_gc": _blob_gc_report_for_preview(root, active),
         "items": eligible,
         "items_truncated": eligible_count > len(eligible),
     }
@@ -1464,6 +1465,61 @@ def read_retention_report(cluster_root: Path | str) -> dict[str, Any] | None:
     root = Path(os.path.abspath(Path(cluster_root).expanduser()))
     value = _read_json_if_exists(root / RETENTION_DIR_NAME / RETENTION_REPORT_NAME)
     return value if isinstance(value, dict) else None
+
+
+def _blob_gc_report_for_preview(root: Path, shadow: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the latest matching automatic blob-GC report without advancing it."""
+
+    empty = {
+        "status": "not_evaluated",
+        "checkpoint_id": "",
+        "evaluated_at": 0,
+        "eligible_blobs": 0,
+        "eligible_bytes": 0,
+        "deleted_blobs": 0,
+        "deleted_bytes": 0,
+        "blockers": ["blob_gc_not_evaluated"],
+        "dry_run": True,
+    }
+    try:
+        committed = read_active_checkpoint(root)
+        report = _read_json_if_exists(root / RETENTION_DIR_NAME / GC_REPORT_NAME)
+    except ClusterCheckpointError as exc:
+        return {**empty, "status": "error", "blockers": [str(exc)]}
+    if committed is None:
+        return {**empty, "blockers": ["checkpoint_missing"]}
+    checkpoint_id = str(committed.get("checkpoint_id") or "")
+    current_mode = str((shadow.get("retention_policy") or {}).get("mode") or "report_only")
+    if not isinstance(report, Mapping):
+        return {**empty, "checkpoint_id": checkpoint_id}
+    if str(report.get("checkpoint_id") or "") != checkpoint_id:
+        return {
+            **empty,
+            "checkpoint_id": checkpoint_id,
+            "status": "stale",
+            "blockers": ["blob_gc_report_checkpoint_mismatch"],
+        }
+    if str(report.get("mode") or "report_only") != current_mode:
+        return {
+            **empty,
+            "checkpoint_id": checkpoint_id,
+            "status": "stale",
+            "blockers": ["blob_gc_report_policy_mismatch"],
+        }
+    try:
+        return {
+            "status": str(report.get("status") or "unknown"),
+            "checkpoint_id": checkpoint_id,
+            "evaluated_at": max(0, int(report.get("evaluated_at") or 0)),
+            "eligible_blobs": max(0, int(report.get("eligible_blobs") or 0)),
+            "eligible_bytes": max(0, int(report.get("eligible_bytes") or 0)),
+            "deleted_blobs": max(0, int(report.get("deleted_blobs") or 0)),
+            "deleted_bytes": max(0, int(report.get("deleted_bytes") or 0)),
+            "blockers": sorted(str(item) for item in report.get("blockers") or []),
+            "dry_run": bool(report.get("dry_run", True)),
+        }
+    except (TypeError, ValueError):
+        return {**empty, "checkpoint_id": checkpoint_id, "status": "error", "blockers": ["blob_gc_report_invalid"]}
 
 
 def garbage_collect_blobs(

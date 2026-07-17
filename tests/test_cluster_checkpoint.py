@@ -482,10 +482,15 @@ def test_blob_gc_requires_two_stable_reports_and_keeps_default_disabled(
     assert prune_operation_history(root, now=NOW)["status"] == "complete"
 
     first = garbage_collect_blobs(root, now=NOW)
+    preview = retention_preview(root, checkpoint, now=NOW)
     second = garbage_collect_blobs(root, now=NOW + 24 * 60 * 60 + 1)
 
     assert first["status"] == "blocked"
     assert "blob_gc_stability_window" in first["blockers"]
+    assert preview["blob_gc"]["status"] == "blocked"
+    assert preview["blob_gc"]["eligible_blobs"] == 1
+    assert preview["blob_gc"]["eligible_bytes"] == len(orphan_raw)
+    assert "blob_gc_stability_window" in preview["blob_gc"]["blockers"]
     assert second["status"] == "complete"
     assert second["deleted_blobs"] == 1
     assert not orphan.exists()

@@ -136,11 +136,64 @@ einen aktuellen Operation-Tail ersetzen. Cleanup ist standardmäßig deaktiviert
 Unter **Cluster Sync -> Retention** siehst du die clusterweite Policy und kannst
 einen reinen Lesebericht starten.
 
+Die Werte in **Mode** und **History Days** sind Entwürfe, bis du **Save Signed
+Policy** anklickst. **Run Report** verwendet immer die effektive signierte Policy
+aus der blauen Zusammenfassung und nicht ungespeicherte Feldwerte. Um ein
+anderes Zeitfenster ohne Löschfreigabe zu vergleichen, lässt du **Report only**
+aktiv, trägst die neue Anzahl Tage ein, speicherst die signierte Policy, wartest
+bis die blaue Zusammenfassung den neuen Wert zeigt und startest dann den Report
+erneut. Erlaubt sind 1 bis 3650 Tage; Standard sind sieben Tage.
+
 Verfügbare Modi:
 
 - **Report only**: Standard; erstellt und prüft Checkpoints, löscht aber nie Historie.
 - **Prune oplog history**: behält die konfigurierte Anzahl Tage sowie aktuellen und vorherigen Checkpoint.
 - **Prune oplog and unreachable blobs**: entfernt zusätzlich Blobs, die in zwei identischen Reports mindestens 24 Stunden unerreichbar bleiben.
+
+Die Report-Spalten bedeuten:
+
+- **Status**: `dry_run` bedeutet, dass der Node nur Kandidaten berechnet und nichts gelöscht hat.
+- **Checkpoint**: deterministische Shadow-Checkpoint-ID aus dem aktuell validierten Zustand und der effektiven Policy dieses Nodes.
+- **Eligible Ops**: Operation-Dateien, die für das effektive Zeitfenster alt genug sind und höchstens auf der Checkpoint-Baseline liegen.
+- **Eligible Size**: gemeinsame Dateigröße dieser löschbaren Operationen; Configs, Credentials, Checkpoints und Blobs sind darin nicht enthalten.
+- **Retained Ops**: Operation-Dateien, die im aktuellen Tail erhalten bleiben.
+- **Blob Candidates** und **Blob Size**: unerreichbare Blobs und deren gemeinsame Größe aus der letzten automatischen GC-Auswertung für diesen Checkpoint.
+- **Blob GC Status**: zeigt, ob Blob-GC noch nicht ausgewertet, durch ein Sicherheits-Gate blockiert, bereit, nach einer Checkpoint-/Policy-Änderung stale oder abgeschlossen ist. Der Status nennt außerdem Blocker wie das 24-Stunden-Stabilitätsfenster und nach Abschluss die bereits gelöschte Blob-Anzahl und Größe.
+- **Migration Seal / Error**: lokales Seal-Ergebnis oder Node-Fehler. `not reported` bedeutet, dass der Remote-Preview sein Seal-Ergebnis nicht liefert; das Commit-Protokoll prüft den Seal jeder Replica trotzdem unabhängig.
+
+Die Werte gelten pro Node. Gleiche Zeilen beschreiben normalerweise denselben
+replizierten Operation-Satz auf jedem Node und dürfen nicht als unterschiedliche
+Cluster-Operationen addiert werden. Eine Operation ist nur eligible, wenn sowohl
+ihr signierter Zeitstempel als auch das lokale dauerhafte Dateialter älter als
+der Cutoff sind.
+
+Blob-Werte sind erst verfügbar, nachdem der kombinierte Modus einen aktiven
+Checkpoint besitzt, das Oplog-Pruning abgeschlossen ist und PBCluster seine
+erste automatische Blob-GC-Auswertung durchgeführt hat. Bis dahin steht der
+Status auf `not_evaluated` oder zeigt den zutreffenden Blocker. **Run Report**
+liest nur das zuletzt gespeicherte GC-Ergebnis: Die Aktion erzeugt keine
+Kandidaten, startet das 24-Stunden-Stabilitätsfenster nicht neu und löscht keine
+Daten.
+
+Direkt nach dem Speichern einer Policy sind gemischte Zeilen kurzzeitig normal,
+während PBCluster die neue signierte Operation repliziert. Unterschiedliche
+Checkpoint-IDs oder unterschiedliche Eligible-/Retained-Zahlen bedeuten, dass
+die Replicas noch nicht konvergiert sind. Aktiviere in diesem Zustand kein
+Cleanup. Warte einen abgeschlossenen PBCluster-Sync-Zyklus ab und starte den
+Report erneut. Vor der Cleanup-Aktivierung müssen alle aktiven Replicas
+erreichbar sein, dieselbe Checkpoint-ID und dieselben Kandidatenzahlen zeigen
+und dürfen keinen Fehler melden; der lokale Migration Seal muss `sealed` sein
+und die Cluster-Seite darf keine Conflicts zeigen.
+
+Sicherer Ablauf für die erste Bereinigung:
+
+1. Lasse **Report only** aktiv, speichere das gewünschte Zeitfenster und wiederhole Reports, bis alle aktiven Replicas übereinstimmen.
+2. Wähle **Prune oplog history**, wenn nur die Operation-Historie bereinigt werden soll, oder direkt **Prune oplog and unreachable blobs**, wenn beides bereinigt werden soll. Speichere die signierte Policy.
+3. Warte, bis PBCluster den Checkpoint vorgeschlagen und passende signierte Bestätigungen von jeder aktiven State-Replica gesammelt hat.
+4. Prüfe, dass die blaue Zusammenfassung einen aktiven committed Checkpoint zeigt. `no committed checkpoint yet` bedeutet, dass Löschen weiterhin blockiert ist.
+5. Warte mindestens 24 Stunden, nachdem die löschende Policy aktiv wurde. Cleanup wird bei Policy-Änderungen, am Soft-Trigger von 5.000 Operationen oder 10 MiB und mindestens täglich ausgewertet, damit auch reine Altersübergänge verarbeitet werden.
+6. Starte den Report erneut und prüfe nach dem Oplog-Cleanup Cluster-State, V7-Zuweisungen, Credentials, CMC und TradFi.
+7. Prüfe im kombinierten Modus nach der ersten automatischen GC-Auswertung **Blob Candidates**, **Blob Size** und **Blob GC Status**. Blob-Löschung bleibt unabhängig blockiert, bis zwei identische Kandidaten-Reports mindestens 24 Stunden auseinanderliegen.
 
 Eine Policy-Änderung schreibt eine signierte Cluster-Operation. Ein löschender
 Modus umgeht keine Sicherheitsprüfung: Jede aktive State-Replica muss denselben

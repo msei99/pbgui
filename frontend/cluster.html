@@ -3415,10 +3415,19 @@
           target.textContent = 'No retention report is available.';
           return;
         }
-        var html = '<table><thead><tr><th>Node</th><th>Status</th><th>Checkpoint</th><th>Eligible Ops</th><th>Eligible Size</th><th>Retained Ops</th><th>Migration Seal / Error</th></tr></thead><tbody>';
+        var html = '<table><thead><tr><th>Node</th><th>Status</th><th>Checkpoint</th><th>Eligible Ops</th><th>Eligible Size</th><th>Retained Ops</th><th>Blob Candidates</th><th>Blob Size</th><th>Blob GC Status</th><th>Migration Seal / Error</th></tr></thead><tbody>';
         reports.forEach(function (item) {
           var seal = item.migration_seal || {};
+          var blobGc = item.blob_gc || null;
           var detail = item.error || (seal.status === 'sealed' ? 'sealed' : ((seal.blockers || []).join(', ') || 'not reported'));
+          var blobStatus = 'not reported';
+          if (blobGc) {
+            blobStatus = String(blobGc.status || 'unknown');
+            if ((blobGc.blockers || []).length) blobStatus += ': ' + blobGc.blockers.join(', ');
+            if (Number(blobGc.deleted_blobs || 0) > 0) {
+              blobStatus += '; deleted ' + Number(blobGc.deleted_blobs || 0) + ' (' + formatBytes(Number(blobGc.deleted_bytes || 0)) + ')';
+            }
+          }
           html += '<tr>'
             + '<td><strong>' + esc(item.pbname || item.node_id || 'unknown') + '</strong><div class="muted mono">' + esc(shortId(item.node_id)) + '</div></td>'
             + '<td>' + esc(item.status || 'dry_run') + '</td>'
@@ -3426,6 +3435,9 @@
             + '<td>' + esc(Number(item.eligible_operations || 0)) + '</td>'
             + '<td>' + esc(formatBytes(Number(item.eligible_bytes || 0))) + '</td>'
             + '<td>' + esc(Number(item.retained_operations || 0)) + '</td>'
+            + '<td>' + esc(blobGc ? Number(blobGc.eligible_blobs || 0) : '-') + '</td>'
+            + '<td>' + esc(blobGc ? formatBytes(Number(blobGc.eligible_bytes || 0)) : '-') + '</td>'
+            + '<td>' + esc(blobStatus) + '</td>'
             + '<td>' + esc(detail) + '</td>'
             + '</tr>';
         });
