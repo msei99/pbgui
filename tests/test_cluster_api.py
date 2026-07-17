@@ -333,7 +333,7 @@ def test_retention_report_is_read_only_and_main_page_exposes_no_session_token(
 
     assert report["read_only"] is True
     assert report["policy"]["mode"] == "report_only"
-    assert report["reports"][0]["blob_gc"]["status"] == "not_evaluated"
+    assert report["reports"][0]["blob_gc"]["status"] == "projected"
     assert sorted(path.read_bytes() for path in (root / "oplog").glob("*/*.json")) == before
     html = response.body.decode("utf-8")
     assert "must-not-appear" not in html

@@ -157,8 +157,8 @@ Die Report-Spalten bedeuten:
 - **Eligible Ops**: Operation-Dateien, die für das effektive Zeitfenster alt genug sind und höchstens auf der Checkpoint-Baseline liegen.
 - **Eligible Size**: gemeinsame Dateigröße dieser löschbaren Operationen; Configs, Credentials, Checkpoints und Blobs sind darin nicht enthalten.
 - **Retained Ops**: Operation-Dateien, die im aktuellen Tail erhalten bleiben.
-- **Blob Candidates** und **Blob Size**: unerreichbare Blobs und deren gemeinsame Größe aus der letzten automatischen GC-Auswertung für diesen Checkpoint.
-- **Blob GC Status**: zeigt, ob Blob-GC noch nicht ausgewertet, durch ein Sicherheits-Gate blockiert, bereit, nach einer Checkpoint-/Policy-Änderung stale oder abgeschlossen ist. Der Status nennt außerdem Blocker wie das 24-Stunden-Stabilitätsfenster und nach Abschluss die bereits gelöschte Blob-Anzahl und Größe.
+- **Blob Candidates** und **Blob Size**: projizierte unerreichbare Blobs und deren gemeinsame Größe vor dem Cleanup oder die Werte der letzten passenden automatischen GC-Auswertung nach dem Cleanup-Start.
+- **Blob GC Status**: `projected` für die reine Lese-Simulation vor dem Cleanup oder der automatische Blob-GC-Zustand `blocked`, `ready` beziehungsweise `complete`. Der Status nennt außerdem Blocker wie einen fehlenden committed Checkpoint oder das 24-Stunden-Stabilitätsfenster und nach Abschluss die bereits gelöschte Blob-Anzahl und Größe.
 - **Migration Seal / Error**: lokales Seal-Ergebnis oder Node-Fehler. `not reported` bedeutet, dass der Remote-Preview sein Seal-Ergebnis nicht liefert; das Commit-Protokoll prüft den Seal jeder Replica trotzdem unabhängig.
 
 Die Werte gelten pro Node. Gleiche Zeilen beschreiben normalerweise denselben
@@ -166,14 +166,20 @@ replizierten Operation-Satz auf jedem Node und dürfen nicht als unterschiedlich
 Cluster-Operationen addiert werden. Eine Operation ist nur eligible, wenn sowohl
 ihr signierter Zeitstempel als auch das lokale dauerhafte Dateialter älter als
 der Cutoff sind.
+Blob-Kandidaten beschreiben die lokalen Content-Addressed Stores jedes Nodes und
+können sich berechtigt unterscheiden, wenn ein Node zusätzliche verwaiste
+Kopien besitzt. Checkpoint-ID, Eligible Ops und Retained Ops müssen trotzdem auf
+allen Replicas konvergieren.
 
-Blob-Werte sind erst verfügbar, nachdem der kombinierte Modus einen aktiven
-Checkpoint besitzt, das Oplog-Pruning abgeschlossen ist und PBCluster seine
-erste automatische Blob-GC-Auswertung durchgeführt hat. Bis dahin steht der
-Status auf `not_evaluated` oder zeigt den zutreffenden Blocker. **Run Report**
-liest nur das zuletzt gespeicherte GC-Ergebnis: Die Aktion erzeugt keine
-Kandidaten, startet das 24-Stunden-Stabilitätsfenster nicht neu und löscht keine
-Daten.
+Vor der Cleanup-Aktivierung projiziert **Run Report** die Blob-Kandidaten aus dem
+Shadow-Checkpoint, dem Schutz des aktuellen/vorherigen Checkpoints, einem
+simulierten Oplog-Prune mit dem effektiven Zeitfenster, dem verbleibenden
+Operation-Tail und aktiven Mailbox-Referenzen. Werte mit Status `projected` sind
+daher eine Vorschau; Blocker wie `checkpoint_missing` verhindern weiterhin jede
+Löschung. Sobald eine passende automatische GC-Auswertung existiert, zeigt die
+Tabelle deren tatsächliche Kandidaten und Stabilitätsstatus. **Run Report**
+speichert niemals Kandidaten, verschiebt das 24-Stunden-Stabilitätsfenster nicht
+und löscht keine Daten.
 
 Direkt nach dem Speichern einer Policy sind gemischte Zeilen kurzzeitig normal,
 während PBCluster die neue signierte Operation repliziert. Unterschiedliche
@@ -181,8 +187,9 @@ Checkpoint-IDs oder unterschiedliche Eligible-/Retained-Zahlen bedeuten, dass
 die Replicas noch nicht konvergiert sind. Aktiviere in diesem Zustand kein
 Cleanup. Warte einen abgeschlossenen PBCluster-Sync-Zyklus ab und starte den
 Report erneut. Vor der Cleanup-Aktivierung müssen alle aktiven Replicas
-erreichbar sein, dieselbe Checkpoint-ID und dieselben Kandidatenzahlen zeigen
-und dürfen keinen Fehler melden; der lokale Migration Seal muss `sealed` sein
+erreichbar sein, dieselbe Checkpoint-ID und dieselben Oplog-Kandidatenzahlen
+zeigen und dürfen keinen Fehler melden; Blob-Kandidaten dürfen aus dem oben
+genannten lokalen Grund abweichen. Der lokale Migration Seal muss `sealed` sein
 und die Cluster-Seite darf keine Conflicts zeigen.
 
 Sicherer Ablauf für die erste Bereinigung:

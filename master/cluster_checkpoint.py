@@ -1249,41 +1249,29 @@ def retention_preview(
         }
     timestamp = int(time.time()) if now is None else _nonnegative_int(now, "now")
     cutoff = max(0, timestamp - int(active["history_seconds"]))
-    baseline = _normalized_vector(active["baseline_vector"])
-    eligible: list[dict[str, Any]] = []
-    eligible_count = 0
-    eligible_bytes = 0
-    retained_count = 0
-    retained_bytes = 0
     paths = ClusterPaths.from_root(root)
+    committed = read_active_checkpoint(root)
+    safe_baseline = _normalized_vector(
+        (committed or active).get("baseline_vector") or {}
+    )
+    candidates = _operation_prune_candidates(paths.oplog, safe_baseline, cutoff)
+    eligible_count = len(candidates)
+    eligible_bytes = sum(int(item["size"]) for item in candidates)
+    eligible = [
+        {
+            "actor": str(item["actor"]),
+            "seq": int(item["seq"]),
+            "op_id": str(item["op_id"]),
+            "op": str(item["op"]),
+            "created_at": int(item["created_at"]),
+            "bytes": int(item["size"]),
+        }
+        for item in candidates[:None if item_limit is None else max(0, int(item_limit))]
+    ]
     operation_paths = sorted(paths.oplog.glob("*/*.json")) if paths.oplog.exists() else []
-    for path in operation_paths:
-        if path.is_symlink():
-            raise ClusterCheckpointError("oplog operation must not be a symlink")
-        try:
-            operation = json.loads(path.read_text(encoding="utf-8"))
-            actor = str(operation["actor"])
-            seq = int(operation["seq"])
-            size = int(path.stat().st_size)
-        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            raise ClusterCheckpointError("oplog operation is invalid during retention preview") from exc
-        if path.parent.name != actor or path.stem != f"{seq:08d}":
-            raise ClusterCheckpointError("oplog operation path mismatch during retention preview")
-        if seq <= int(baseline.get(actor, 0)) and int(operation["created_at"]) < cutoff:
-            eligible_count += 1
-            eligible_bytes += size
-            if item_limit is None or len(eligible) < max(0, int(item_limit)):
-                eligible.append({
-                "actor": actor,
-                "seq": seq,
-                "op_id": str(operation["op_id"]),
-                "op": str(operation["op"]),
-                "created_at": int(operation["created_at"]),
-                "bytes": size,
-                })
-        else:
-            retained_count += 1
-            retained_bytes += size
+    total_bytes = sum(int(path.stat().st_size) for path in operation_paths)
+    retained_count = len(operation_paths) - eligible_count
+    retained_bytes = total_bytes - eligible_bytes
     return {
         "status": "dry_run",
         "checkpoint_id": str(active["checkpoint_id"]),
@@ -1293,7 +1281,7 @@ def retention_preview(
         "eligible_bytes": eligible_bytes,
         "retained_operations": retained_count,
         "retained_bytes": retained_bytes,
-        "blob_gc": _blob_gc_report_for_preview(root, active),
+        "blob_gc": _blob_gc_report_for_preview(root, active, timestamp),
         "items": eligible,
         "items_truncated": eligible_count > len(eligible),
     }
@@ -1467,8 +1455,8 @@ def read_retention_report(cluster_root: Path | str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _blob_gc_report_for_preview(root: Path, shadow: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the latest matching automatic blob-GC report without advancing it."""
+def _blob_gc_report_for_preview(root: Path, shadow: Mapping[str, Any], timestamp: int) -> dict[str, Any]:
+    """Return an actual or projected blob-GC report without advancing GC state."""
 
     empty = {
         "status": "not_evaluated",
@@ -1478,48 +1466,87 @@ def _blob_gc_report_for_preview(root: Path, shadow: Mapping[str, Any]) -> dict[s
         "eligible_bytes": 0,
         "deleted_blobs": 0,
         "deleted_bytes": 0,
-        "blockers": ["blob_gc_not_evaluated"],
+        "blockers": [],
         "dry_run": True,
+        "source": "projected",
     }
     try:
         committed = read_active_checkpoint(root)
         report = _read_json_if_exists(root / RETENTION_DIR_NAME / GC_REPORT_NAME)
     except ClusterCheckpointError as exc:
         return {**empty, "status": "error", "blockers": [str(exc)]}
-    if committed is None:
-        return {**empty, "blockers": ["checkpoint_missing"]}
-    checkpoint_id = str(committed.get("checkpoint_id") or "")
     current_mode = str((shadow.get("retention_policy") or {}).get("mode") or "report_only")
-    if not isinstance(report, Mapping):
-        return {**empty, "checkpoint_id": checkpoint_id}
-    if str(report.get("checkpoint_id") or "") != checkpoint_id:
-        return {
-            **empty,
-            "checkpoint_id": checkpoint_id,
-            "status": "stale",
-            "blockers": ["blob_gc_report_checkpoint_mismatch"],
-        }
-    if str(report.get("mode") or "report_only") != current_mode:
-        return {
-            **empty,
-            "checkpoint_id": checkpoint_id,
-            "status": "stale",
-            "blockers": ["blob_gc_report_policy_mismatch"],
-        }
+    committed_id = str((committed or {}).get("checkpoint_id") or "")
+    shadow_vector = _normalized_vector(shadow.get("baseline_vector") or {})
+    committed_vector = _normalized_vector((committed or {}).get("baseline_vector") or {})
+    if (
+        isinstance(report, Mapping)
+        and committed_id
+        and str(report.get("checkpoint_id") or "") == committed_id
+        and str(report.get("mode") or "report_only") == current_mode
+        and shadow_vector == committed_vector
+    ):
+        try:
+            return {
+                "status": str(report.get("status") or "unknown"),
+                "checkpoint_id": committed_id,
+                "evaluated_at": max(0, int(report.get("evaluated_at") or 0)),
+                "eligible_blobs": max(0, int(report.get("eligible_blobs") or 0)),
+                "eligible_bytes": max(0, int(report.get("eligible_bytes") or 0)),
+                "deleted_blobs": max(0, int(report.get("deleted_blobs") or 0)),
+                "deleted_bytes": max(0, int(report.get("deleted_bytes") or 0)),
+                "blockers": sorted(str(item) for item in report.get("blockers") or []),
+                "dry_run": bool(report.get("dry_run", True)),
+                "source": "automatic",
+            }
+        except (TypeError, ValueError):
+            return {**empty, "checkpoint_id": committed_id, "status": "error", "blockers": ["blob_gc_report_invalid"]}
+
+    paths = ClusterPaths.from_root(root)
+    previous = committed if committed is not None else shadow
+    safe_baseline = committed_vector if committed is not None else shadow_vector
+    cutoff = timestamp - int(shadow.get("history_seconds") or DEFAULT_HISTORY_SECONDS)
+    blockers = ["blob_gc_projection_only"]
+    if current_mode != "oplog_and_blobs":
+        blockers.append("blob_gc_not_enabled")
+    if committed is None:
+        blockers.append("checkpoint_missing")
     try:
-        return {
-            "status": str(report.get("status") or "unknown"),
-            "checkpoint_id": checkpoint_id,
-            "evaluated_at": max(0, int(report.get("evaluated_at") or 0)),
-            "eligible_blobs": max(0, int(report.get("eligible_blobs") or 0)),
-            "eligible_bytes": max(0, int(report.get("eligible_bytes") or 0)),
-            "deleted_blobs": max(0, int(report.get("deleted_blobs") or 0)),
-            "deleted_bytes": max(0, int(report.get("deleted_bytes") or 0)),
-            "blockers": sorted(str(item) for item in report.get("blockers") or []),
-            "dry_run": bool(report.get("dry_run", True)),
+        pruned_paths = {
+            str(item["path"])
+            for item in _operation_prune_candidates(paths.oplog, safe_baseline, cutoff)
         }
-    except (TypeError, ValueError):
-        return {**empty, "checkpoint_id": checkpoint_id, "status": "error", "blockers": ["blob_gc_report_invalid"]}
+        reachable: dict[str, set[str]] = {"config": set(), "secret": set(), "sealed": set()}
+        _merge_blob_refs(reachable, shadow.get("blob_refs") or {})
+        _merge_blob_refs(reachable, previous.get("blob_refs") or {})
+        obsolete_secret_hashes = _sealed_obsolete_secret_hashes(shadow)
+        for operation_path in sorted(paths.oplog.glob("*/*.json")) if paths.oplog.exists() else []:
+            if str(operation_path.relative_to(paths.root)) in pruned_paths:
+                continue
+            if operation_path.is_symlink():
+                raise ClusterCheckpointError("retained operation must not be a symlink")
+            operation = json.loads(operation_path.read_text(encoding="utf-8"))
+            _merge_operation_blob_refs(reachable, operation, obsolete_secret_hashes)
+        _collect_mailbox_blob_refs(paths, reachable)
+        _expand_config_manifest_refs(paths, reachable["config"])
+        _verify_reachable_blobs(paths, reachable)
+        candidates = _blob_gc_candidates(paths, reachable, timestamp - GC_STABILITY_SECONDS)
+    except (OSError, json.JSONDecodeError, ClusterCheckpointError) as exc:
+        return {
+            **empty,
+            "checkpoint_id": str(shadow.get("checkpoint_id") or ""),
+            "status": "error",
+            "blockers": [f"blob_projection_failed:{exc}"],
+        }
+    return {
+        **empty,
+        "status": "projected",
+        "checkpoint_id": str(shadow.get("checkpoint_id") or ""),
+        "evaluated_at": timestamp,
+        "eligible_blobs": len(candidates),
+        "eligible_bytes": sum(int(item["size"]) for item in candidates),
+        "blockers": sorted(blockers),
+    }
 
 
 def garbage_collect_blobs(
@@ -1576,11 +1603,12 @@ def garbage_collect_blobs(
                 _merge_blob_refs(reachable, current.get("blob_refs") or {})
             if previous is not None:
                 _merge_blob_refs(reachable, previous.get("blob_refs") or {})
+            obsolete_secret_hashes = _sealed_obsolete_secret_hashes(current)
             for operation_path in sorted(paths.oplog.glob("*/*.json")) if paths.oplog.exists() else []:
                 if operation_path.is_symlink():
                     raise ClusterCheckpointError("retained operation must not be a symlink")
                 operation = json.loads(operation_path.read_text(encoding="utf-8"))
-                _merge_blob_refs(reachable, _collect_direct_blob_refs(operation))
+                _merge_operation_blob_refs(reachable, operation, obsolete_secret_hashes)
             _collect_mailbox_blob_refs(paths, reachable)
             _expand_config_manifest_refs(paths, reachable["config"])
             _verify_reachable_blobs(paths, reachable)
@@ -1699,6 +1727,35 @@ def _merge_blob_refs(target: dict[str, set[str]], refs: Mapping[str, Any]) -> No
         values = refs.get(kind) if isinstance(refs, Mapping) else None
         if isinstance(values, list):
             target[kind].update(str(item) for item in values if _is_sha256(str(item)))
+
+
+def _sealed_obsolete_secret_hashes(checkpoint: Mapping[str, Any] | None) -> set[str]:
+    """Return secret hashes authorized as obsolete by a sealed migration."""
+
+    seal = checkpoint.get("migration_seal") if isinstance(checkpoint, Mapping) else None
+    if not isinstance(seal, Mapping) or seal.get("status") != "sealed":
+        return set()
+    return {
+        str(item)
+        for item in seal.get("obsolete_secret_blob_hashes") or []
+        if _is_sha256(str(item))
+    }
+
+
+def _merge_operation_blob_refs(
+    target: dict[str, set[str]],
+    operation: Mapping[str, Any],
+    obsolete_secret_hashes: set[str],
+) -> None:
+    """Mark operation refs except secrets a sealed migration removed intentionally."""
+
+    refs = _collect_direct_blob_refs(operation)
+    refs["secret"] = [
+        blob_hash
+        for blob_hash in refs["secret"]
+        if blob_hash not in obsolete_secret_hashes
+    ]
+    _merge_blob_refs(target, refs)
 
 
 def _collect_mailbox_blob_refs(paths: ClusterPaths, reachable: dict[str, set[str]]) -> None:
@@ -1864,6 +1921,7 @@ def _operation_prune_candidates(
                     "actor": actor,
                     "seq": seq,
                     "op_id": str(operation.get("op_id") or ""),
+                    "op": str(operation.get("op") or ""),
                     "created_at": created_at,
                     "first_seen_at": int(stat.st_mtime),
                     "size": int(stat.st_size),

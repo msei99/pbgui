@@ -496,6 +496,134 @@ def test_blob_gc_requires_two_stable_reports_and_keeps_default_disabled(
     assert not orphan.exists()
 
 
+def test_retention_preview_projects_blob_gc_before_checkpoint_commit(tmp_path: Path) -> None:
+    """A read-only shadow report predicts old unreachable blobs before cleanup is enabled."""
+
+    root = _cluster(tmp_path)
+    orphan_raw = b'{"projected":true}\n'
+    orphan_digest = hashlib.sha256(orphan_raw).hexdigest()
+    orphan = root / "config_blobs" / "sha256" / orphan_digest[:2] / f"{orphan_digest}.json"
+    orphan.parent.mkdir(parents=True)
+    orphan.write_bytes(orphan_raw)
+    old_mtime = NOW - 2 * 24 * 60 * 60
+    os.utime(orphan, (old_mtime, old_mtime))
+    checkpoint = build_shadow_checkpoint(root, created_at=NOW)
+
+    preview = retention_preview(root, checkpoint, now=NOW)
+
+    assert preview["blob_gc"]["status"] == "projected"
+    assert preview["blob_gc"]["source"] == "projected"
+    assert preview["blob_gc"]["eligible_blobs"] == 1
+    assert preview["blob_gc"]["eligible_bytes"] == len(orphan_raw)
+    assert "checkpoint_missing" in preview["blob_gc"]["blockers"]
+    assert "blob_gc_not_enabled" in preview["blob_gc"]["blockers"]
+    assert not (root / "retention").exists()
+
+
+def test_retention_preview_projects_blobs_released_by_pruned_tail(tmp_path: Path) -> None:
+    """Projection excludes old blob references only when their operations will be pruned."""
+
+    root = _cluster(tmp_path)
+    old_raw = b'{"version":1}\n'
+    new_raw = b'{"version":2}\n'
+    hashes = []
+    for raw in (old_raw, new_raw):
+        digest = hashlib.sha256(raw).hexdigest()
+        path = root / "config_blobs" / "sha256" / digest[:2] / f"{digest}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        hashes.append(f"sha256:{digest}")
+        os.utime(path, (NOW - 2 * 24 * 60 * 60, NOW - 2 * 24 * 60 * 60))
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "bybit_BTC",
+            "version": "1",
+            "parent_version": "0",
+            "assigned_host": NODE_ID,
+            "desired_state": "stopped",
+            "config_manifest_hash": hashes[0],
+        },
+        created_at=NOW - DEFAULT_HISTORY_SECONDS - 100,
+    )
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "bybit_BTC",
+            "version": "2",
+            "parent_version": "1",
+            "assigned_host": NODE_ID,
+            "desired_state": "running",
+            "config_manifest_hash": hashes[1],
+        },
+        created_at=NOW - 60,
+    )
+    for path in (root / "oplog").glob("*/*.json"):
+        os.utime(path, (NOW - DEFAULT_HISTORY_SECONDS - 200, NOW - DEFAULT_HISTORY_SECONDS - 200))
+    checkpoint = build_shadow_checkpoint(root, created_at=NOW)
+
+    preview = retention_preview(root, checkpoint, now=NOW)
+
+    assert preview["blob_gc"]["eligible_blobs"] == 1
+    assert preview["blob_gc"]["eligible_bytes"] == len(old_raw)
+
+
+def test_blob_projection_allows_sealed_obsolete_secret_to_be_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A sealed migration may remove an old secret while its operation tail is retained."""
+
+    root = _cluster(tmp_path)
+    old_secret = "sha256:" + "1" * 64
+    payload_hashes = []
+    for index in (1, 2):
+        raw = json.dumps({"payload": index}).encode()
+        digest = hashlib.sha256(raw).hexdigest()
+        path = root / "config_blobs" / "sha256" / digest[:2] / f"{digest}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        payload_hashes.append(f"sha256:{digest}")
+    new_secret_raw = b'{"secret":"current"}\n'
+    new_secret_digest = hashlib.sha256(new_secret_raw).hexdigest()
+    new_secret = f"sha256:{new_secret_digest}"
+    new_secret_path = root / "secret_blobs" / "sha256" / new_secret_digest[:2] / f"{new_secret_digest}.json"
+    new_secret_path.parent.mkdir(parents=True)
+    new_secret_path.write_bytes(new_secret_raw)
+    append_operation(
+        root,
+        "UPSERT_API_KEYS",
+        {"api_serial": 1, "payload_hash": payload_hashes[0], "secret_blob_hash": old_secret},
+        created_at=NOW - 2 * 24 * 60 * 60,
+    )
+    append_operation(
+        root,
+        "UPSERT_API_KEYS",
+        {"api_serial": 2, "payload_hash": payload_hashes[1], "secret_blob_hash": new_secret},
+        created_at=NOW - 24 * 60 * 60,
+    )
+    monkeypatch.setattr(
+        checkpoint_module,
+        "build_migration_seal",
+        lambda materialized: {
+            "schema_version": 1,
+            "status": "sealed",
+            "cluster_id": materialized["cluster_nodes"]["cluster_id"],
+            "active_node_ids": [NODE_ID],
+            "obsolete_secret_blob_hashes": [old_secret],
+            "blockers": [],
+        },
+    )
+    checkpoint = build_shadow_checkpoint(root, created_at=NOW)
+
+    preview = retention_preview(root, checkpoint, now=NOW)
+
+    assert preview["blob_gc"]["status"] == "projected"
+    assert not any("reachable blob is missing" in blocker for blocker in preview["blob_gc"]["blockers"])
+
+
 def test_checkpoint_join_bootstraps_new_node_without_genesis_oplog(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

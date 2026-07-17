@@ -155,29 +155,36 @@ The report columns mean:
 - **Eligible Ops**: operation files old enough for the effective history window and at or below the checkpoint baseline.
 - **Eligible Size**: combined on-disk size of those eligible operation files; it does not include configs, credentials, checkpoints, or blobs.
 - **Retained Ops**: operation files that remain in the recent tail.
-- **Blob Candidates** and **Blob Size**: unreachable blobs and their combined size from the latest automatic GC evaluation for this checkpoint.
-- **Blob GC Status**: whether blob GC is not yet evaluated, blocked by a safety gate, ready, stale after a checkpoint/policy change, or complete. The status also lists blockers such as the 24-hour stability window and reports already deleted blob counts and bytes after completion.
+- **Blob Candidates** and **Blob Size**: projected unreachable blobs and their combined size before cleanup, or the values from the latest matching automatic GC evaluation after cleanup starts.
+- **Blob GC Status**: `projected` for the read-only pre-cleanup simulation, or whether automatic blob GC is blocked by a safety gate, ready, or complete. The status also lists blockers such as a missing committed checkpoint or the 24-hour stability window and reports already deleted blob counts and bytes after completion.
 - **Migration Seal / Error**: local seal result or a node error. `not reported` means the remote preview does not expose its seal result; the commit protocol still verifies every replica's seal independently.
 
 Values are per node. Equal rows normally describe the same replicated operation
 set on each node and must not be added together as different cluster
 operations. Eligibility requires both the signed operation timestamp and the
 local durable file age to be older than the cutoff.
+Blob candidates describe each node's local content-addressed stores and may
+legitimately differ when one node has additional orphaned copies. Checkpoint ID,
+Eligible Ops, and Retained Ops must still converge across replicas.
 
-Blob values become available only after the combined mode has an active
-checkpoint, operation pruning has completed, and PBCluster has performed its
-first automatic blob-GC evaluation. Until then the status is `not_evaluated` or
-shows the applicable blocker. **Run Report** only reads the latest persisted GC
-result: it does not create candidates, advance the 24-hour stability window, or
-delete data.
+Before cleanup is enabled, **Run Report** projects blob candidates from the
+shadow checkpoint, the current/previous checkpoint protection, a simulated
+operation prune using the effective history window, the retained operation
+tail, and live mailbox references. `projected` values are therefore a preview;
+blockers such as `checkpoint_missing` still prevent deletion. Once a matching
+automatic GC evaluation exists, the table shows its actual candidates and
+stability status instead. **Run Report** never persists candidates, advances
+the 24-hour stability window, or deletes data.
 
 After saving a policy, mixed rows are normal for a short time while PBCluster
 replicates the new signed operation. Different checkpoint IDs or different
 eligible/retained counts mean the replicas are not yet converged. Do not enable
 cleanup in that state. Wait for a completed PBCluster sync cycle and rerun the
 report. Before enabling cleanup, every active replica must be available, show
-the same checkpoint ID and candidate counts, and report no error; the local
-migration seal must show `sealed` and the Cluster page must show no conflicts.
+the same checkpoint ID and operation candidate counts, and report no error; the
+local migration seal must show `sealed` and the Cluster page must show no
+conflicts. Blob candidate counts may differ for the local-store reason described
+above.
 
 A safe first cleanup rollout is:
 
