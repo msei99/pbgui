@@ -148,14 +148,29 @@ async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str |
     """
     if not _streamer or not hostname or not bot_name or bucket != "today":
         return []
-    line_limit = max(int(lines or 0), int(expected_count or 0), 200)
+    expected = max(int(expected_count or 0), 0)
+    line_limit = max(int(lines or 0), expected * (100 if kind == "tracebacks" else 20), 500)
+    line_limit = min(line_limit, 10_000)
     today_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     def is_today(line: str) -> bool:
         return str(line or "").startswith(today_prefix)
 
+    discovered = []
+    if _monitor:
+        discovered = list(((_monitor.store.bot_logs.get(hostname) or {}).get(bot_name) or []))
+
     if kind == "tracebacks":
-        output = await _streamer.get_recent_logs(hostname, f"data/run_v7/{bot_name}/passivbot_err.log", line_limit)
+        paths = [
+            path for path in discovered
+            if str(path).endswith(("/passivbot_err.log", "/passivbot_err.log.old"))
+        ]
+        if not paths:
+            paths = [
+                f"data/run_v7/{bot_name}/passivbot_err.log.old",
+                f"data/run_v7/{bot_name}/passivbot_err.log",
+            ]
+        output = await _streamer.get_recent_log_files(hostname, paths, line_limit)
         if output is None:
             return []
         matches: list[str] = []
@@ -179,11 +194,13 @@ async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str |
         flush_block()
         return matches[-line_limit:] if line_limit > 0 else matches
 
-    output = await _streamer.get_bot_log(hostname, bot_name, line_limit, pb_version)
+    paths = [path for path in discovered if "/pb7/logs/" in f"/{str(path).lstrip('/')}" ]
+    if not paths:
+        paths = [f"software/pb7/logs/{bot_name}.log"]
+    output = await _streamer.get_recent_log_files(hostname, paths, line_limit, contains=" ERROR ")
     if not output:
         return []
     return [line for line in output.splitlines() if is_today(line) and " ERROR " in line][-line_limit:]
-    return []
 
 
 def get_monitor_state_snapshot() -> dict:

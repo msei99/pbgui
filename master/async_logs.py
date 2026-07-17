@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shlex
 import subprocess
 import time
 from collections import deque
@@ -82,11 +83,12 @@ def _validate_remote_log_path(value: object) -> str:
     valid_root = (
         (len(parts) == 3 and parts[:2] == ("data", "logs"))
         or (len(parts) == 4 and parts[:2] == ("data", "run_v7")
-            and filename == "passivbot_err.log")
+            and filename in {"passivbot_err.log", "passivbot_err.log.old"})
         or (len(parts) == 3 and parts[:2] == ("pb7", "logs"))
         or (len(parts) == 4 and parts[:3] == ("software", "pb7", "logs"))
     )
-    if not valid_root or not _REMOTE_LOG_FILE_RE.fullmatch(filename):
+    valid_filename = bool(_REMOTE_LOG_FILE_RE.fullmatch(filename)) or filename == "passivbot_err.log.old"
+    if not valid_root or not valid_filename:
         raise ValueError("Remote log path is not allowed")
     if parts[:2] == ("data", "run_v7"):
         _validate_remote_log_instance_name(parts[2])
@@ -414,6 +416,59 @@ class AsyncLogStreamer:
                 return None
             if result.exit_status == 0 and (result.stdout or '').strip():
                 return result.stdout or ""
+        return ""
+
+    async def get_recent_log_files(
+        self,
+        hostname: str,
+        paths: list[str],
+        lines: int = 5000,
+        *,
+        contains: str | None = None,
+    ) -> Optional[str]:
+        """Fetch multiple monitor-discovered log files in one SSH round trip."""
+
+        line_limit = normalize_remote_log_lines(lines, default=5000)
+        commands: list[str] = []
+        seen: set[str] = set()
+        for raw_path in paths[:32]:
+            try:
+                log_path = _resolve_log_path(raw_path)
+            except ValueError:
+                continue
+            if log_path in seen:
+                continue
+            seen.add(log_path)
+            if _is_home_relative_log_path(log_path):
+                candidates = [_remote_log_shell_path(self._pool, hostname, log_path)]
+            else:
+                candidates = [
+                    remote_shell_path(remote_path_join(base_dir, log_path))
+                    for base_dir in self._pool.get_remote_pbgui_dirs(hostname)
+                ]
+            branches: list[tuple[str, str]] = []
+            for full_path in candidates:
+                if contains is None:
+                    read_command = f"tail -n {line_limit} {full_path} 2>/dev/null"
+                else:
+                    read_command = f"grep -hF -- {shlex.quote(contains)} {full_path} 2>/dev/null"
+                branches.append((f"[ -f {full_path} ]", read_command))
+            if branches:
+                command = f"if {branches[0][0]}; then {branches[0][1]}"
+                for condition, read_command in branches[1:]:
+                    command += f"; elif {condition}; then {read_command}"
+                commands.append(command + "; fi")
+        if not commands:
+            return ""
+        command = "{ " + "; ".join(commands) + "; }"
+        if line_limit > 0:
+            command += f" | tail -n {line_limit}"
+        result = await self._pool.run(hostname, command, timeout=30)
+        if result is None:
+            _log(SERVICE, f"[log] Cannot fetch grouped logs from {hostname}: no connection", level="WARNING")
+            return None
+        if result.exit_status == 0:
+            return result.stdout or ""
         return ""
 
     async def get_bot_log(self, hostname: str, instance_name: str,

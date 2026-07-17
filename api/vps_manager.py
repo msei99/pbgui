@@ -488,6 +488,7 @@ async def ws_vps_manager(websocket: WebSocket):
                     )
                     await websocket.send_json({
                         "type": "bot_log_matches",
+                        "request_id": str(msg.get("request_id") or ""),
                         "hostname": str(msg.get("hostname") or ""),
                         "bot_name": str(msg.get("bot_name") or ""),
                         "kind": str(msg.get("kind") or "tracebacks"),

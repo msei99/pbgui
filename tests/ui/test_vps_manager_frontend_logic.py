@@ -189,6 +189,16 @@ class TestVpsManagerFrontendLogic:
         assert "generation !== cpuHistoryRequestGeneration" in open_history
         assert "signal: cpuHistoryAbortController.signal" in open_history
 
+    def test_today_log_matches_show_loading_and_reject_stale_responses(self) -> None:
+        """Error and traceback clicks respond immediately while one request is active."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        fetch_matches = _extract_function(source, "fetchBotLogMatches")
+        handle_message = _extract_function(source, "handleMessage")
+
+        assert "openBotLogMatchesLoadingModal" in fetch_matches
+        assert "request_id: requestId" in fetch_matches
+        assert "pendingBotLogMatchRequestId" in handle_message
+
     def test_vps_manager_delete_and_remote_purge_are_separate_actions(self) -> None:
         """Deleting a VPS record stays local while remote install purge is explicit."""
         source = HTML_PATH.read_text(encoding="utf-8")

@@ -3022,6 +3022,8 @@
       detailRequestGeneration: 0,
       detailAbortController: null,
       detailCache: {},
+      botLogMatchRequestId: 0,
+      pendingBotLogMatchRequestId: '',
       connected: false,
       state: null,
       deletedOverviewHosts: {},
@@ -6315,8 +6317,12 @@
 
     function fetchBotLogMatches(hostname, botName, pbVersion, kind, bucket, expectedCount) {
       if (bucket !== 'today' && bucket !== 'yesterday') return;
+      const requestId = String(++store.botLogMatchRequestId);
+      store.pendingBotLogMatchRequestId = requestId;
+      openBotLogMatchesLoadingModal(botName, kind, bucket, expectedCount);
       send({
         cmd: 'fetch_bot_log_matches',
+        request_id: requestId,
         hostname: hostname,
         bot_name: botName,
         pb_version: pbVersion || '7',
@@ -6325,6 +6331,17 @@
         expected_count: expectedCount == null ? null : Number(expectedCount),
         lines: 0
       });
+    }
+
+    function openBotLogMatchesLoadingModal(botName, kind, bucket, expectedCount) {
+      prepareAlertModalWindow(980, 820);
+      const bucketLabel = bucket === 'today' ? 'Today' : 'Yesterday';
+      const countSuffix = Number.isFinite(Number(expectedCount)) ? ' (' + Number(expectedCount) + ')' : '';
+      document.getElementById('alertModalTitle').textContent = (kind === 'errors' ? 'Errors' : 'Tracebacks') + ' — ' + bucketLabel + countSuffix + ' — ' + botName;
+      const box = document.getElementById('alertModalBody');
+      box.textContent = 'Loading matching log entries...';
+      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Close</button>';
+      document.getElementById('alertModalOverlay').classList.add('visible');
     }
 
     function _renderLogMatchLines(lines, kind) {
@@ -7198,6 +7215,7 @@
         return;
       }
       if (msg.type === 'bot_log_matches') {
+        if (String(msg.request_id || '') !== String(store.pendingBotLogMatchRequestId || '')) return;
         const lines = Array.isArray(msg.lines) ? msg.lines : [];
         openBotLogMatchesModal(String(msg.bot_name || ''), String(msg.kind || 'tracebacks'), String(msg.bucket || 'today'), msg.expected_count, lines);
       }

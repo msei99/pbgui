@@ -1,10 +1,12 @@
 """Tests for async log path resolution helpers."""
 
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 
+import api.vps as vps_api
 from master import async_logs
 from master.async_monitor import VPSMonitor
 from Exchange import Exchange
@@ -121,6 +123,7 @@ def test_remote_log_path_rejects_traversal_and_non_log_files(path):
         "data/logs/PBRun.log",
         "data/logs/PBRun.log.1",
         "data/run_v7/bybit_SOLUSDT/passivbot_err.log",
+        "data/run_v7/bybit_SOLUSDT/passivbot_err.log.old",
         "pb7/logs/20260610_215403__bot_config_run.json.log",
         "software/pb7/logs/bybit_SOLUSDT.log",
     ],
@@ -155,6 +158,135 @@ def test_get_recent_logs_rejects_injection_before_remote_command():
 
     with pytest.raises(ValueError):
         asyncio.run(streamer.get_recent_logs("host", "PBRun", "1; touch /tmp/pwn"))
+
+
+def test_grouped_bot_log_fetch_uses_one_remote_command_for_all_files() -> None:
+    """Error and traceback popups fetch monitor-discovered files in one SSH round trip."""
+
+    class GroupedPool(FakePool):
+        """Capture the grouped remote command."""
+
+        def __init__(self) -> None:
+            super().__init__("/srv/pb7")
+            self.commands: list[str] = []
+
+        def get_remote_pbgui_dirs(self, hostname: str) -> list[str]:
+            """Return one known PBGui root."""
+            del hostname
+            return ["software/pbgui"]
+
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            """Record one grouped SSH command."""
+            del hostname, timeout
+            self.commands.append(command)
+            return SimpleNamespace(exit_status=0, stdout="2026-07-17T12:00:00Z ERROR boom\n")
+
+    pool = GroupedPool()
+    streamer = async_logs.AsyncLogStreamer(pool)
+    output = asyncio.run(streamer.get_recent_log_files(
+        "host",
+        ["pb7/logs/bot.log", "data/run_v7/bot/passivbot_err.log.old"],
+        500,
+        contains=" ERROR ",
+    ))
+
+    assert output == "2026-07-17T12:00:00Z ERROR boom\n"
+    assert len(pool.commands) == 1
+    assert "/srv/pb7/logs/bot.log" in pool.commands[0]
+    assert '"$HOME"/software/pbgui/data/run_v7/bot/passivbot_err.log.old' in pool.commands[0]
+
+
+def test_today_error_matches_use_monitor_discovered_current_and_rotated_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The popup reads the same PB7 log set which produced the monitor count."""
+
+    class MatchStreamer:
+        """Return two matching lines and capture the grouped request."""
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[list[str], int, str | None]] = []
+
+        async def get_recent_log_files(self, hostname, paths, lines, *, contains=None):
+            """Capture the selected files without performing SSH."""
+            del hostname
+            self.calls.append((list(paths), int(lines), contains))
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            return f"{today}T01:00:00Z ERROR old\n{today}T02:00:00Z ERROR current\n"
+
+    streamer = MatchStreamer()
+    monkeypatch.setattr(vps_api, "_streamer", streamer)
+    monkeypatch.setattr(
+        vps_api,
+        "_monitor",
+        SimpleNamespace(store=SimpleNamespace(bot_logs={
+            "host": {"bot": ["pb7/logs/archived-bot.log", "pb7/logs/bot.log"]}
+        })),
+    )
+
+    matches = asyncio.run(vps_api.get_bot_log_matches(
+        "host",
+        "bot",
+        pb_version="7",
+        kind="errors",
+        bucket="today",
+        expected_count=2,
+        lines=0,
+    ))
+
+    assert len(matches) == 2
+    assert streamer.calls == [
+        (["pb7/logs/archived-bot.log", "pb7/logs/bot.log"], 500, " ERROR ")
+    ]
+
+
+def test_today_traceback_matches_use_current_and_old_stderr_in_one_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The traceback popup uses both stderr rotations without sequential SSH probes."""
+
+    class MatchStreamer:
+        """Return one wrapper-timestamped traceback block."""
+
+        def __init__(self) -> None:
+            self.paths: list[str] = []
+
+        async def get_recent_log_files(self, hostname, paths, lines, *, contains=None):
+            """Capture one grouped request and return a traceback."""
+            del hostname, lines
+            assert contains is None
+            self.paths = list(paths)
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            return f"{today}T03:00:00Z stderr\nTraceback (most recent call last):\nValueError: boom\n"
+
+    streamer = MatchStreamer()
+    monkeypatch.setattr(vps_api, "_streamer", streamer)
+    monkeypatch.setattr(
+        vps_api,
+        "_monitor",
+        SimpleNamespace(store=SimpleNamespace(bot_logs={
+            "host": {"bot": [
+                "data/run_v7/bot/passivbot_err.log.old",
+                "data/run_v7/bot/passivbot_err.log",
+            ]}
+        })),
+    )
+
+    matches = asyncio.run(vps_api.get_bot_log_matches(
+        "host",
+        "bot",
+        pb_version="7",
+        kind="tracebacks",
+        bucket="today",
+        expected_count=1,
+        lines=0,
+    ))
+
+    assert "Traceback (most recent call last):" in matches
+    assert streamer.paths == [
+        "data/run_v7/bot/passivbot_err.log.old",
+        "data/run_v7/bot/passivbot_err.log",
+    ]
 
 
 def test_kill_instance_never_interpolates_name_into_remote_shell():
