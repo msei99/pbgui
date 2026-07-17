@@ -53,12 +53,15 @@ def test_automatic_retention_status_uses_existing_five_second_feed() -> None:
     assert "function renderRetentionRuntime(status)" in HTML
     assert "sync.history_retention" in HTML
     assert "renderRetentionRuntime(parts[0]);" in HTML
-    assert "Status refreshes every 5 seconds" in HTML
-    assert "retention maintenance runs automatically at least hourly" in HTML
-    assert "Verify All Nodes" in HTML
-    assert "Cluster-wide retention verification" in HTML
-    assert "Automatic local cleanup" in HTML
-    assert "Local retention healthy" in HTML
+    assert "Cluster health is collected automatically during normal PBCluster peer sync" in HTML
+    assert "cleanup runs at least hourly" in HTML
+    assert "Refresh Node Details" in HTML
+    assert "Detailed node diagnostics" in HTML
+    assert "Automatic cluster cleanup" in HTML
+    assert "Cluster retention healthy" in HTML
+    assert "Cluster retention blocked" in HTML
+    assert "clusterRetention.nodes_healthy" in HTML
+    assert "oplog.retained_operations" in HTML
     assert "nodes_cleanup_verified" in HTML
     assert "automatic_cleanup" in HTML
     assert "Safety delay" not in HTML

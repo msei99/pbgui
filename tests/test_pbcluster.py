@@ -36,6 +36,7 @@ CLUSTER_ID = "pbgui-cluster-00000000-0000-4000-8000-000000000010"
 NODE_ID = "pbgui-node-00000000-0000-4000-8000-000000000010"
 NODE_B = "pbgui-node-00000000-0000-4000-8000-000000000011"
 NODE_C = "pbgui-node-00000000-0000-4000-8000-000000000012"
+HASH_A = "sha256:" + "a" * 64
 
 
 def append_operation(root: Path, op: str, payload: dict, **kwargs) -> dict:
@@ -209,6 +210,57 @@ def test_cluster_sync_worker_rebuilds_and_writes_status(tmp_path: Path) -> None:
     assert status["v7_materialization"]["counts"]["skip"] == 0
     assert (cluster_root / "desired_state.json").is_file()
     assert (cluster_root / "sync_status.json").is_file()
+
+
+def test_cluster_retention_summary_requires_every_automatic_peer_report() -> None:
+    """Cluster retention is healthy only when every active replica reports healthy cleanup."""
+
+    cleanup = {
+        "oplog": {"status": "ready", "checkpoint_id": HASH_A, "blockers": []},
+        "blobs": {"status": "complete", "checkpoint_id": HASH_A, "blockers": []},
+    }
+    nodes = {
+        NODE_ID: {"pbname": "master-a", "enabled": True, "state_replica": True},
+        NODE_B: {"pbname": "vps-b", "enabled": True, "state_replica": True},
+    }
+    peer = {
+        "node_id": NODE_B,
+        "pbname": "vps-b",
+        "ok": True,
+        "last_seen": 123,
+        "retention_cleanup": cleanup,
+    }
+
+    healthy = cluster_sync_worker._cluster_retention_summary(
+        nodes,
+        NODE_ID,
+        {"mode": "oplog"},
+        {"checkpoint_id": HASH_A},
+        cleanup,
+        [peer],
+    )
+    blocked_cleanup = {
+        "oplog": cleanup["oplog"],
+        "blobs": {
+            "status": "blocked",
+            "checkpoint_id": HASH_A,
+            "blockers": ["blob_mark_failed:reachable blob is missing"],
+        },
+    }
+    blocked = cluster_sync_worker._cluster_retention_summary(
+        nodes,
+        NODE_ID,
+        {"mode": "oplog"},
+        {"checkpoint_id": HASH_A},
+        cleanup,
+        [{**peer, "retention_cleanup": blocked_cleanup}],
+    )
+
+    assert healthy["status"] == "healthy"
+    assert healthy["nodes_healthy"] == 2
+    assert blocked["status"] == "blocked"
+    assert blocked["nodes_healthy"] == 1
+    assert blocked["nodes"][1]["blockers"] == ["blob_mark_failed:reachable blob is missing"]
 
 
 @pytest.mark.parametrize("oplog_status", ["ready", "complete"])

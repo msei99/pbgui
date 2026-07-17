@@ -566,18 +566,18 @@
                   </div>
                 </div>
                 <div class="retention-runtime" id="retention-runtime">
-                  <div class="retention-runtime-label">Automatic local cleanup</div>
+                  <div class="retention-runtime-label">Automatic cluster cleanup</div>
                   <div class="retention-runtime-title">Loading PBCluster status...</div>
                 </div>
-                <details class="retention-advanced" open>
-                  <summary>Cluster-wide retention verification</summary>
+                <details class="retention-advanced">
+                  <summary>Detailed node diagnostics</summary>
                   <div class="bootstrap-toolbar" style="margin-top:var(--sp-md); margin-bottom:0">
-                    <div class="bootstrap-summary">Verify the committed checkpoint and actual automatic cleanup result on every reachable node.</div>
+                    <div class="bootstrap-summary">Load a detailed read-only snapshot for troubleshooting. Cluster health above is collected automatically by PBCluster.</div>
                     <div class="bootstrap-actions">
-                      <button class="btn" id="retention-report-btn" type="button">Verify All Nodes</button>
+                      <button class="btn" id="retention-report-btn" type="button">Refresh Node Details</button>
                     </div>
                   </div>
-                  <div class="setup-state-note" id="retention-report-summary" style="margin-top:var(--sp-md)">Cluster retention has not been verified in this browser session.</div>
+                  <div class="setup-state-note" id="retention-report-summary" style="margin-top:var(--sp-md)">Detailed node data has not been loaded in this browser session.</div>
                   <div class="table-wrap" id="retention-report" style="margin-top:var(--sp-md)"></div>
                 </details>
               </div>
@@ -3426,6 +3426,7 @@
         var checkpoint = status.checkpoint || {};
         var sync = status.sync_status || {};
         var runtime = sync.history_retention || {};
+        var clusterRetention = sync.cluster_retention || {};
         var runtimePolicy = runtime.policy || {};
         var checkpointCommit = runtime.checkpoint_commit || {};
         var oplog = runtime.oplog || {};
@@ -3474,10 +3475,32 @@
           badge = 'paused';
           detail = 'Nothing is being deleted. PBCluster resumes automatically when every condition below is healthy.';
         } else if (oplogHealthy && blobsHealthy) {
-          phase = 'Local retention healthy';
-          tone = 'good';
-          badge = 'healthy';
-          detail = 'This node is retaining ' + days + ' days of history and cleaning its local unreachable blobs.';
+          var clusterTotal = Number(clusterRetention.nodes_total || 0);
+          var clusterHealthy = Number(clusterRetention.nodes_healthy || 0);
+          var clusterAligned = Number(clusterRetention.nodes_checkpoint_aligned || 0);
+          if (String(clusterRetention.status || '') === 'healthy' && clusterTotal > 0) {
+            phase = 'Cluster retention healthy';
+            tone = 'good';
+            badge = 'cluster healthy';
+            detail = clusterHealthy + '/' + clusterTotal + ' nodes share the committed checkpoint and report healthy automatic cleanup.';
+          } else if (String(clusterRetention.status || '') === 'blocked') {
+            phase = 'Cluster retention blocked';
+            tone = 'bad';
+            badge = 'cluster blocked';
+            detail = clusterAligned + '/' + clusterTotal + ' checkpoints aligned; ' + clusterHealthy + '/' + clusterTotal + ' automatic cleanups healthy.';
+            (clusterRetention.nodes || []).forEach(function (node) {
+              if (String(node.status || '') !== 'blocked') return;
+              var nodeBlockers = Array.isArray(node.blockers) ? node.blockers : [];
+              allBlockers.push((node.pbname || node.node_id || 'Node') + ': ' + (nodeBlockers.join(', ') || 'automatic cleanup blocked'));
+            });
+          } else {
+            phase = 'Cluster retention pending';
+            tone = 'warn';
+            badge = 'cluster pending';
+            detail = clusterTotal
+              ? clusterAligned + '/' + clusterTotal + ' checkpoints aligned; ' + clusterHealthy + '/' + clusterTotal + ' automatic cleanups healthy.'
+              : 'Waiting for PBCluster to collect automatic retention reports during its normal peer sync.';
+          }
         } else {
           phase = 'Local retention active';
           tone = 'blue';
@@ -3494,7 +3517,7 @@
         } else if (checkpoint.active) {
           checkpointDetail += ' | committed cluster-wide';
         }
-        var retainedOperations = Number(((status.counts || {}).oplog) || 0);
+        var retainedOperations = Number(oplog.retained_operations || 0);
         var cleanupValue = oplog.status ? retainedOperations + ' retained' : 'Not evaluated';
         var cleanupDetail = !oplog.status
           ? 'Waiting for the first automatic maintenance evaluation'
@@ -3510,10 +3533,10 @@
         var cards = [
           ['Policy', retentionModeText(mode), days + ' days retained'],
           ['Cluster checkpoint', checkpointValue, checkpointDetail],
-          ['Oplog', cleanupValue, cleanupDetail]
+          ['Local oplog', cleanupValue, cleanupDetail]
         ];
         if (mode !== 'report_only') {
-          cards.push(['Blobs', blobValue, blobDetail]);
+          cards.push(['Local blobs', blobValue, blobDetail]);
         }
         var cardsHtml = cards.map(function (card) {
           return '<div class="retention-runtime-card">'
@@ -3527,13 +3550,13 @@
         }).join('');
         var lastEvaluation = Math.max(Number(oplog.evaluated_at || 0), Number(blobs.evaluated_at || 0), Number(sync.finished_at || 0));
         var html = '<div class="retention-runtime-head"><div>'
-          + '<div class="retention-runtime-label">Automatic local cleanup</div>'
+          + '<div class="retention-runtime-label">Automatic cluster cleanup</div>'
           + '<div class="retention-runtime-title">' + esc(phase) + '</div>'
           + '<div class="retention-runtime-detail">' + esc(detail) + '</div>'
           + '</div><span class="pill ' + tone + '">' + esc(badge) + '</span></div>'
           + '<div class="retention-runtime-grid">' + cardsHtml + '</div>'
           + (blockersHtml ? '<div class="retention-runtime-blockers">' + blockersHtml + '</div>' : '')
-          + '<div class="retention-runtime-foot">Status refreshes every 5 seconds; retention maintenance runs automatically at least hourly. Last PBCluster evaluation: ' + esc(timeText(lastEvaluation)) + '.</div>';
+          + '<div class="retention-runtime-foot">Cluster health is collected automatically during normal PBCluster peer sync; cleanup runs at least hourly. Last PBCluster evaluation: ' + esc(timeText(lastEvaluation)) + '.</div>';
         setHtmlIfChanged(target, html);
       }
 
@@ -3588,8 +3611,8 @@
         if (summary) {
           summary.className = 'setup-state-note' + (counts.cluster_cleanup_verified ? '' : ' warn');
           summary.textContent = counts.cluster_cleanup_verified
-            ? 'Cluster retention verified: ' + verified + '/' + total + ' nodes share the committed checkpoint and report healthy automatic cleanup.'
-            : 'Cluster retention not yet verified: ' + aligned + '/' + total + ' checkpoints aligned, ' + verified + '/' + total + ' automatic cleanups healthy.';
+            ? 'Detailed snapshot: ' + verified + '/' + total + ' nodes share the committed checkpoint and report healthy automatic cleanup.'
+            : 'Detailed snapshot: ' + aligned + '/' + total + ' checkpoints aligned, ' + verified + '/' + total + ' automatic cleanups healthy.';
         }
         var html = '<table><thead><tr><th>Node</th><th>Automatic Cleanup</th><th>Projection</th><th>Checkpoint</th><th>Eligible Ops</th><th>Eligible Size</th><th>Retained Ops</th><th>Required Blob Set</th><th>Local Garbage Blobs</th><th>Local Garbage Size</th><th>Blob GC Projection</th><th>Migration Seal / Error</th></tr></thead><tbody>';
         reports.forEach(function (item) {
@@ -3645,17 +3668,17 @@
         var requestGeneration = ++retentionReportGeneration;
         var btn = document.getElementById('retention-report-btn');
         if (btn) { btn.disabled = true; btn.textContent = 'Scanning...'; }
-        setMessage('Verifying cluster retention on every reachable node...', 'warn');
+        setMessage('Loading detailed retention data from every reachable node...', 'warn');
         return fetchJson('/retention/report').then(function (payload) {
           if (requestGeneration !== retentionReportGeneration) return payload;
           renderRetentionReport(payload);
-          setMessage('Cluster retention verification completed without changing remote state.', 'ok');
+          setMessage('Detailed retention data loaded without changing remote state.', 'ok');
           return payload;
         }).catch(function (err) {
           if (requestGeneration === retentionReportGeneration) setMessage('Node diagnostics failed: ' + err.message, 'err');
           throw err;
         }).finally(function () {
-          if (btn && requestGeneration === retentionReportGeneration) { btn.disabled = false; btn.textContent = 'Verify All Nodes'; }
+          if (btn && requestGeneration === retentionReportGeneration) { btn.disabled = false; btn.textContent = 'Refresh Node Details'; }
         });
       }
 

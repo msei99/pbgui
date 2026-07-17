@@ -76,6 +76,7 @@ from master.cluster_checkpoint import (
     install_rebootstrap_checkpoint,
     prune_operation_history,
     replica_blob_hashes,
+    retention_cleanup_status,
     read_retention_report,
     read_shadow_checkpoint,
     retention_policy,
@@ -368,6 +369,21 @@ class ClusterSyncWorker:
             }
             if migration_coordinator.get("status") != "not_coordinator":
                 migration_advance_status["coordinator"] = migration_coordinator
+            try:
+                local_retention_cleanup = retention_cleanup_status(self.cluster_root)
+            except (ClusterCheckpointError, OSError, TypeError, ValueError):
+                local_retention_cleanup = {
+                    "oplog": {"status": "error", "blockers": ["retention_status_unavailable"]},
+                    "blobs": {"status": "error", "blockers": ["retention_status_unavailable"]},
+                }
+            cluster_retention = _cluster_retention_summary(
+                nodes,
+                local_node_id,
+                retention_policy(materialized),
+                checkpoint_status(self.cluster_root),
+                local_retention_cleanup,
+                peer_results,
+            )
             status = dict(base)
             status.update({
                 "ok": True,
@@ -392,6 +408,7 @@ class ClusterSyncWorker:
                 "credential_migration_advance": migration_advance_status,
                 "credential_reconciliation": credential_reconciliation,
                 "history_retention": history_retention,
+                "cluster_retention": cluster_retention,
             })
             _atomic_write_json(self.status_path, status)
             return status
@@ -911,6 +928,8 @@ class ClusterSyncWorker:
             "mailbox_pushed": mailbox_counts["pushed"],
             "mailbox_acked": mailbox_counts["acked"],
             "checkpoint_action": checkpoint_action,
+            "remote_checkpoint_id": str(hello.get("checkpoint_id") or ""),
+            "retention_cleanup": _compact_retention_cleanup(hello.get("retention_cleanup")),
             "last_seen": int(time.time()),
         })
         return base_result
@@ -1664,6 +1683,126 @@ def _bounded_operation_batch(operations: list[dict[str, Any]]) -> tuple[list[dic
     """Return one bounded transport batch and the number left for later passes."""
 
     return operations[:APPLY_BUNDLE_MAX_OPERATIONS], max(len(operations) - APPLY_BUNDLE_MAX_OPERATIONS, 0)
+
+
+def _compact_retention_cleanup(value: Any) -> dict[str, Any]:
+    """Normalize one peer's bounded automatic retention result."""
+
+    source = value if isinstance(value, Mapping) else {}
+
+    def count(raw: Any) -> int:
+        try:
+            return max(0, int(raw or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def phase(name: str) -> dict[str, Any]:
+        raw = source.get(name) if isinstance(source.get(name), Mapping) else {}
+        return {
+            "status": str(raw.get("status") or "not_evaluated")[:40],
+            "evaluated_at": count(raw.get("evaluated_at")),
+            "checkpoint_id": str(raw.get("checkpoint_id") or "")[:80],
+            "eligible_operations": count(raw.get("eligible_operations")),
+            "deleted_operations": count(raw.get("deleted_operations")),
+            "retained_operations": count(raw.get("retained_operations")),
+            "eligible_blobs": count(raw.get("eligible_blobs")),
+            "deleted_blobs": count(raw.get("deleted_blobs")),
+            "blockers": [str(item)[:200] for item in raw.get("blockers") or []][:20],
+        }
+
+    return {"oplog": phase("oplog"), "blobs": phase("blobs")}
+
+
+def _cluster_retention_summary(
+    nodes: Mapping[str, Any],
+    local_node_id: str,
+    policy: Mapping[str, Any],
+    checkpoint: Mapping[str, Any],
+    local_cleanup: Mapping[str, Any],
+    peer_results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate automatic per-node cleanup reports from the normal sync pass."""
+
+    checkpoint_id = str(checkpoint.get("checkpoint_id") or "")
+    enabled_nodes = {
+        str(node_id): node
+        for node_id, node in nodes.items()
+        if isinstance(node, Mapping)
+        and node.get("enabled", True) is not False
+        and node.get("state_replica", True) is not False
+    }
+    peers = {str(item.get("node_id") or ""): item for item in peer_results}
+    rows: list[dict[str, Any]] = []
+    for node_id in sorted(enabled_nodes):
+        node = enabled_nodes[node_id]
+        is_local = node_id == str(local_node_id)
+        peer = peers.get(node_id) or {}
+        reachable = is_local or bool(peer.get("ok"))
+        cleanup = _compact_retention_cleanup(local_cleanup if is_local else peer.get("retention_cleanup"))
+        oplog = cleanup["oplog"]
+        blobs = cleanup["blobs"]
+        reported = bool(
+            oplog["status"] != "not_evaluated"
+            or blobs["status"] != "not_evaluated"
+        )
+        aligned = bool(
+            checkpoint_id
+            and oplog["checkpoint_id"] == checkpoint_id
+            and blobs["checkpoint_id"] == checkpoint_id
+        )
+        blockers = list(oplog["blockers"]) + list(blobs["blockers"])
+        healthy = bool(
+            reachable
+            and reported
+            and aligned
+            and oplog["status"] in {"ready", "complete"}
+            and blobs["status"] in {"ready", "complete"}
+            and not blockers
+        )
+        if healthy:
+            row_status = "healthy"
+        elif blockers or oplog["status"] in {"blocked", "error"} or blobs["status"] in {"blocked", "error"}:
+            row_status = "blocked"
+        elif not reachable:
+            row_status = "unavailable"
+        else:
+            row_status = "pending"
+        rows.append({
+            "node_id": node_id,
+            "pbname": str(node.get("pbname") or node.get("hostname") or node_id),
+            "status": row_status,
+            "reachable": reachable,
+            "reported": reported,
+            "checkpoint_aligned": aligned,
+            "cleanup": cleanup,
+            "blockers": blockers[:20],
+            "last_seen": int(time.time()) if is_local else max(0, int(peer.get("last_seen") or 0)),
+        })
+
+    nodes_total = len(rows)
+    nodes_reported = sum(1 for row in rows if row["reported"])
+    nodes_aligned = sum(1 for row in rows if row["checkpoint_aligned"])
+    nodes_healthy = sum(1 for row in rows if row["status"] == "healthy")
+    blocked = any(row["status"] == "blocked" for row in rows)
+    mode = str(policy.get("mode") or "report_only")
+    if mode == "report_only":
+        status = "disabled"
+    elif nodes_total and nodes_healthy == nodes_total:
+        status = "healthy"
+    elif blocked:
+        status = "blocked"
+    else:
+        status = "pending"
+    return {
+        "status": status,
+        "evaluated_at": int(time.time()),
+        "checkpoint_id": checkpoint_id,
+        "nodes_total": nodes_total,
+        "nodes_reported": nodes_reported,
+        "nodes_checkpoint_aligned": nodes_aligned,
+        "nodes_healthy": nodes_healthy,
+        "nodes": rows,
+    }
 
 
 def _peer_result(peer_id: str, peer: dict[str, Any], *, ok: bool, status: str, reason: str = "") -> dict[str, Any]:

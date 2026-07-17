@@ -1337,8 +1337,16 @@ def prune_operation_history(
             except ClusterCheckpointError as exc:
                 blockers.append(f"previous_checkpoint:{exc}")
         cutoff = timestamp - int(policy.get("history_days") or DEFAULT_HISTORY_DAYS) * 24 * 60 * 60
-        candidates = _operation_prune_candidates(paths.oplog, safe_baseline, cutoff)
+        candidates = _operation_prune_candidates(
+            paths.oplog,
+            safe_baseline,
+            cutoff,
+            require_receipt_age=False,
+        )
         candidate_digest = _sha256_json(candidates)
+        operation_paths = sorted(paths.oplog.glob("*/*.json")) if paths.oplog.exists() else []
+        total_bytes = sum(int(path.stat().st_size) for path in operation_paths)
+        eligible_bytes = sum(int(item["size"]) for item in candidates)
         report = {
             "schema_version": 1,
             "status": "blocked" if blockers else "ready",
@@ -1351,7 +1359,9 @@ def prune_operation_history(
             "safe_baseline": safe_baseline,
             "candidate_digest": candidate_digest,
             "eligible_operations": len(candidates),
-            "eligible_bytes": sum(int(item["size"]) for item in candidates),
+            "eligible_bytes": eligible_bytes,
+            "retained_operations": len(operation_paths) - len(candidates),
+            "retained_bytes": total_bytes - eligible_bytes,
             "blockers": sorted(set(blockers)),
             "dry_run": bool(dry_run or blockers),
             "deleted_operations": 0,
@@ -1459,6 +1469,8 @@ def retention_cleanup_status(cluster_root: Path | str) -> dict[str, Any]:
             "checkpoint_id": str(source.get("checkpoint_id") or ""),
             "eligible_operations": max(0, int(source.get("eligible_operations") or 0)),
             "deleted_operations": max(0, int(source.get("deleted_operations") or 0)),
+            "retained_operations": max(0, int(source.get("retained_operations") or 0)),
+            "retained_bytes": max(0, int(source.get("retained_bytes") or 0)),
             "eligible_blobs": max(0, int(source.get("eligible_blobs") or 0)),
             "deleted_blobs": max(0, int(source.get("deleted_blobs") or 0)),
             "deleted_bytes": max(0, int(source.get("deleted_bytes") or 0)),

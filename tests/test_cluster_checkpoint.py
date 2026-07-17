@@ -352,8 +352,8 @@ def test_retention_preview_keeps_seven_days_and_never_deletes(tmp_path: Path) ->
     assert sorted(path.relative_to(root).as_posix() for path in (root / "oplog").glob("*/*.json")) == before
 
 
-def test_retention_preview_normalizes_fresh_receipt_age_for_late_replica(tmp_path: Path) -> None:
-    """A verified shadow projects canonical age while actual pruning stays fail-closed."""
+def test_retention_preview_uses_canonical_age_before_checkpoint_commit(tmp_path: Path) -> None:
+    """Canonical age is projected while actual pruning still requires a committed checkpoint."""
 
     root = _cluster(tmp_path)
     operation_path = root / "oplog" / NODE_ID / "00000001.json"
@@ -369,11 +369,11 @@ def test_retention_preview_normalizes_fresh_receipt_age_for_late_replica(tmp_pat
     assert "checkpoint_missing" in actual["blockers"]
 
 
-def test_actual_prune_keeps_fresh_receipt_despite_committed_safe_baseline(
+def test_actual_prune_accepts_fresh_receipt_with_committed_safe_baseline(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """A committed previous checkpoint does not bypass actual receipt-age safety."""
+    """A committed previous checkpoint makes canonical operation age deterministic."""
 
     root = _cluster(tmp_path)
     monkeypatch.setattr(
@@ -405,13 +405,27 @@ def test_actual_prune_keeps_fresh_receipt_despite_committed_safe_baseline(
 
     assert report["previous_checkpoint_id"] == first["checkpoint_id"]
     assert report["safe_baseline"] == first["baseline_vector"]
-    assert report["eligible_operations"] == 0
+    assert report["eligible_operations"] == 1
 
 
-def test_retention_preview_drops_freshly_received_old_blob_reference(tmp_path: Path) -> None:
-    """A late replica does not require blobs referenced only by projected-pruned ops."""
+def test_late_replica_prunes_old_missing_blob_reference_before_gc(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A checkpointed old op received late cannot block GC on its unavailable blob."""
 
     root = _cluster(tmp_path)
+    monkeypatch.setattr(
+        checkpoint_module,
+        "build_migration_seal",
+        lambda materialized: {
+            "schema_version": 1,
+            "status": "sealed",
+            "cluster_id": materialized["cluster_nodes"]["cluster_id"],
+            "active_node_ids": [NODE_ID],
+            "blockers": [],
+        },
+    )
     old_hash = "sha256:" + "1" * 64
     current_raw = b'{"current":true}\n'
     current_digest = hashlib.sha256(current_raw).hexdigest()
@@ -445,14 +459,35 @@ def test_retention_preview_drops_freshly_received_old_blob_reference(tmp_path: P
         },
         created_at=NOW - 60,
     )
+    append_operation(
+        root,
+        "SET_RETENTION_POLICY",
+        {
+            "generation": 1,
+            "parent_generation": 0,
+            "mode": "oplog",
+            "history_days": 7,
+        },
+        created_at=NOW - 30,
+    )
     old_path = root / "oplog" / NODE_ID / f"{int(old_operation['seq']):08d}.json"
     os.utime(old_path, (NOW, NOW))
-    checkpoint = create_shadow_checkpoint(root, created_at=NOW)
+    checkpoint = build_shadow_checkpoint(root, created_at=NOW)
+    proposal = create_checkpoint_proposal(root, checkpoint, created_at=NOW, expires_at=NOW + 100)
+    ack = create_checkpoint_ack(root, checkpoint, proposal, created_at=NOW + 1)
+    proof = create_checkpoint_commit_proof(root, checkpoint, proposal, [ack], created_at=NOW + 2)
+    activate_checkpoint(root, checkpoint, commit_proof=proof, activated_at=NOW + 2)
 
     preview = retention_preview(root, checkpoint, now=NOW)
+    prune = prune_operation_history(root, now=NOW)
+    gc = garbage_collect_blobs(root, now=NOW)
 
     assert preview["blob_gc"]["status"] == "projected"
     assert not any(str(item).startswith("blob_projection_failed:") for item in preview["blob_gc"]["blockers"])
+    assert prune["status"] == "complete"
+    assert not old_path.exists()
+    assert gc["status"] == "ready"
+    assert gc["blockers"] == []
 
 
 def test_required_blob_digest_ignores_local_garbage(tmp_path: Path) -> None:
@@ -750,6 +785,7 @@ def test_prune_uses_cluster_seal_and_reconstructs_from_checkpoint(
 
     assert report["status"] == "complete"
     assert report["deleted_operations"] == 1
+    assert report["retained_operations"] == 1
     remaining_paths = list((root / "oplog").glob("*/*.json"))
     assert len(remaining_paths) == 1
     assert json.loads(remaining_paths[0].read_text(encoding="utf-8"))["op"] == "SET_RETENTION_POLICY"
@@ -757,15 +793,9 @@ def test_prune_uses_cluster_seal_and_reconstructs_from_checkpoint(
     assert rebuild_materialized_state(root, write=False) == checkpoint["materialized"]
 
 
-@pytest.mark.parametrize(
-    ("operation_age_days", "expected_prune_status"),
-    [(1, "ready"), (9, "complete")],
-)
 def test_blob_gc_runs_automatically_without_a_stability_delay(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    operation_age_days: int,
-    expected_prune_status: str,
 ) -> None:
     """A healthy ready or deleting oplog evaluation permits immediate blob cleanup."""
 
@@ -790,7 +820,7 @@ def test_blob_gc_runs_automatically_without_a_stability_delay(
             "mode": "oplog",
             "history_days": 7,
         },
-        created_at=NOW - operation_age_days * 24 * 60 * 60,
+        created_at=NOW - 9 * 24 * 60 * 60,
     )
     orphan_raw = b'{"orphan":true}\n'
     orphan_digest = hashlib.sha256(orphan_raw).hexdigest()
@@ -802,12 +832,12 @@ def test_blob_gc_runs_automatically_without_a_stability_delay(
     ack = create_checkpoint_ack(root, checkpoint, proposal, created_at=NOW - 190)
     proof = create_checkpoint_commit_proof(root, checkpoint, proposal, [ack], created_at=NOW - 180)
     activate_checkpoint(root, checkpoint, commit_proof=proof, activated_at=NOW - 170)
-    operation_mtime = NOW - operation_age_days * 24 * 60 * 60
+    operation_mtime = NOW - 9 * 24 * 60 * 60
     for path in (root / "oplog").glob("*/*.json"):
         os.utime(path, (operation_mtime, operation_mtime))
     old_mtime = NOW - 8 * 24 * 60 * 60
     os.utime(orphan, (old_mtime, old_mtime))
-    assert prune_operation_history(root, now=NOW)["status"] == expected_prune_status
+    assert prune_operation_history(root, now=NOW)["status"] == "complete"
 
     first = garbage_collect_blobs(root, now=NOW)
     preview = retention_preview(root, checkpoint, now=NOW)
@@ -817,6 +847,7 @@ def test_blob_gc_runs_automatically_without_a_stability_delay(
     fresh.parent.mkdir(parents=True, exist_ok=True)
     fresh.write_bytes(fresh_raw)
     os.utime(fresh, (NOW - 30 * 60, NOW - 30 * 60))
+    assert prune_operation_history(root, now=NOW + 1)["status"] == "ready"
     second = garbage_collect_blobs(root, now=NOW + 1)
     third = garbage_collect_blobs(root, now=NOW + 60 * 60 + 1)
 

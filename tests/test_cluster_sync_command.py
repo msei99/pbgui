@@ -226,6 +226,8 @@ def test_hello_returns_identity_for_registered_peer(tmp_path: Path) -> None:
     assert payload["credential_capability"]["sealed_credentials"] is True
     assert payload["crypto_public_bundle"]["node_id"] == NODE_A
     assert payload["capabilities"] == ["sealed_credentials_v2"]
+    assert payload["retention_cleanup"]["oplog"]["status"] == "not_evaluated"
+    assert payload["retention_cleanup"]["blobs"]["status"] == "not_evaluated"
 
 
 @pytest.mark.parametrize("command", ["handshake", f"get-ops {NODE_B} 1 1"])

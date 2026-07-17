@@ -309,6 +309,8 @@ def _load_sync_status_summary(root: Path) -> dict[str, Any]:
             "eligible_bytes": as_int(source.get("eligible_bytes")),
             "deleted_operations": as_int(source.get("deleted_operations")),
             "deleted_bytes": as_int(source.get("deleted_bytes")),
+            "retained_operations": as_int(source.get("retained_operations")),
+            "retained_bytes": as_int(source.get("retained_bytes")),
             "eligible_blobs": as_int(source.get("eligible_blobs")),
             "deleted_blobs": as_int(source.get("deleted_blobs")),
             "reachable_blobs": as_int(source.get("reachable_blobs")),
@@ -384,6 +386,37 @@ def _load_sync_status_summary(root: Path) -> dict[str, Any]:
         "oplog": cleanup_summary(oplog_source),
         "blobs": cleanup_summary(blob_source),
     }
+    cluster_retention_source = payload.get("cluster_retention")
+    cluster_retention_raw = cluster_retention_source if isinstance(cluster_retention_source, dict) else {}
+    cluster_retention_nodes = []
+    for item in cluster_retention_raw.get("nodes") if isinstance(cluster_retention_raw.get("nodes"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        cleanup = item.get("cleanup") if isinstance(item.get("cleanup"), dict) else {}
+        cluster_retention_nodes.append({
+            "node_id": str(item.get("node_id") or ""),
+            "pbname": str(item.get("pbname") or ""),
+            "status": str(item.get("status") or "pending"),
+            "reachable": bool(item.get("reachable", False)),
+            "reported": bool(item.get("reported", False)),
+            "checkpoint_aligned": bool(item.get("checkpoint_aligned", False)),
+            "last_seen": as_int(item.get("last_seen")),
+            "blockers": [str(value)[:200] for value in item.get("blockers") or []][:20],
+            "cleanup": {
+                "oplog": cleanup_summary(cleanup.get("oplog")),
+                "blobs": cleanup_summary(cleanup.get("blobs")),
+            },
+        })
+    cluster_retention = {
+        "status": str(cluster_retention_raw.get("status") or "pending"),
+        "evaluated_at": as_int(cluster_retention_raw.get("evaluated_at")),
+        "checkpoint_id": str(cluster_retention_raw.get("checkpoint_id") or ""),
+        "nodes_total": as_int(cluster_retention_raw.get("nodes_total")),
+        "nodes_reported": as_int(cluster_retention_raw.get("nodes_reported")),
+        "nodes_checkpoint_aligned": as_int(cluster_retention_raw.get("nodes_checkpoint_aligned")),
+        "nodes_healthy": as_int(cluster_retention_raw.get("nodes_healthy")),
+        "nodes": cluster_retention_nodes,
+    }
     return {
         "ok": bool(payload.get("ok", False)),
         "status": str(payload.get("status") or ""),
@@ -393,6 +426,7 @@ def _load_sync_status_summary(root: Path) -> dict[str, Any]:
         "peers_total": as_int(payload.get("peers_total")) or len(peers),
         "peers": peers,
         "history_retention": history_summary,
+        "cluster_retention": cluster_retention,
     }
 
 

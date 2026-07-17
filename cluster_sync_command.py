@@ -674,6 +674,13 @@ def _hello_payload(cluster_root: Path, identity: dict[str, Any], remote_node: st
         **checkpoint_status(cluster_root),
     }
     try:
+        payload["retention_cleanup"] = retention_cleanup_status(cluster_root)
+    except (ClusterCheckpointError, OSError, TypeError, ValueError):
+        payload["retention_cleanup"] = {
+            "oplog": {"status": "error", "blockers": ["retention_status_unavailable"]},
+            "blobs": {"status": "error", "blockers": ["retention_status_unavailable"]},
+        }
+    try:
         crypto = ensure_node_key_material(cluster_root)
         public_bundle = crypto.public_bundle(
             str(identity.get("node_id") or ""),

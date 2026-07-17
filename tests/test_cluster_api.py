@@ -541,16 +541,46 @@ def test_get_status_includes_automatic_retention_lifecycle(monkeypatch, tmp_path
                         "eligible_operations": 266,
                         "eligible_bytes": 169586,
                         "deleted_operations": 266,
+                        "retained_operations": 1765,
+                        "retained_bytes": 2984275,
                         "blockers": [],
                         "dry_run": False,
                     },
+                },
+                "cluster_retention": {
+                    "status": "blocked",
+                    "evaluated_at": 299,
+                    "checkpoint_id": HASH_A,
+                    "nodes_total": 15,
+                    "nodes_reported": 15,
+                    "nodes_checkpoint_aligned": 15,
+                    "nodes_healthy": 14,
+                    "nodes": [{
+                        "node_id": NODE_B,
+                        "pbname": "vps-a",
+                        "status": "blocked",
+                        "reachable": True,
+                        "reported": True,
+                        "checkpoint_aligned": True,
+                        "last_seen": 298,
+                        "blockers": ["blob_mark_failed:reachable blob is missing"],
+                        "cleanup": {
+                            "oplog": {"status": "ready", "checkpoint_id": HASH_A},
+                            "blobs": {
+                                "status": "blocked",
+                                "checkpoint_id": HASH_A,
+                                "blockers": ["blob_mark_failed:reachable blob is missing"],
+                            },
+                        },
+                    }],
                 },
             }
         ),
         encoding="utf-8",
     )
 
-    retention = cluster.get_status(session=None)["sync_status"]["history_retention"]
+    sync_status = cluster.get_status(session=None)["sync_status"]
+    retention = sync_status["history_retention"]
 
     assert retention["status"] == "cleanup_evaluated"
     assert "activation_ready_at" not in retention["policy"]
@@ -564,6 +594,8 @@ def test_get_status_includes_automatic_retention_lifecycle(monkeypatch, tmp_path
         "eligible_bytes": 169586,
         "deleted_operations": 266,
         "deleted_bytes": 0,
+        "retained_operations": 1765,
+        "retained_bytes": 2984275,
         "eligible_blobs": 0,
         "deleted_blobs": 0,
         "reachable_blobs": 0,
@@ -571,6 +603,11 @@ def test_get_status_includes_automatic_retention_lifecycle(monkeypatch, tmp_path
         "blockers": [],
         "dry_run": False,
     }
+    assert sync_status["cluster_retention"]["status"] == "blocked"
+    assert sync_status["cluster_retention"]["nodes_healthy"] == 14
+    assert sync_status["cluster_retention"]["nodes"][0]["blockers"] == [
+        "blob_mark_failed:reachable blob is missing"
+    ]
 
 
 def test_get_desired_state_returns_instances_and_tombstones(monkeypatch, tmp_path: Path) -> None:
