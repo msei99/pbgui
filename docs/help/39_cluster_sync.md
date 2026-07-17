@@ -176,6 +176,14 @@ automatic GC evaluation exists, the table shows its actual candidates and
 stability status instead. **Run Report** never persists candidates, advances
 the 24-hour stability window, or deletes data.
 
+PBCluster also checks replica-relevant blob coverage after normal operation
+sync. Active masters compare validated references from the applicable shadow or
+active/previous checkpoints, the retained oplog and live mailboxes, then send
+only blobs missing on a capable peer. This repairs a converged node whose
+operation counters already match but whose local blob store is incomplete,
+including an active master repaired by another master; it does not materialize
+configs or expose secret contents in the coverage query.
+
 After saving a policy, mixed rows are normal for a short time while PBCluster
 replicates the new signed operation. Different checkpoint IDs or different
 eligible/retained counts mean the replicas are not yet converged. Do not enable

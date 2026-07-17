@@ -624,12 +624,22 @@ def test_cluster_sync_worker_pushes_ops_blobs_and_remote_materializes(tmp_path: 
     root_a = default_cluster_root(tmp_path / "node-a")
     root_b = default_cluster_root(tmp_path / "node-b")
     ensure_local_identity(root_a, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
-    ensure_local_identity(root_b, role="vps", pbname="runner-b", cluster_id=CLUSTER_ID, node_id=NODE_B)
+    ensure_local_identity(root_b, role="master", pbname="master-b", cluster_id=CLUSTER_ID, node_id=NODE_B)
 
-    append_operation(root_a, "ADD_NODE", {"node_id": NODE_ID, "role": "master", "pbname": "master-a"}, created_at=100)
-    append_operation(root_a, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "runner-b", "ssh_host": "runner-b"}, created_at=101)
-    append_operation(root_b, "ADD_NODE", {"node_id": NODE_ID, "role": "master", "pbname": "master-a", "ssh_host": "master-a"}, created_at=100)
-    append_operation(root_b, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "runner-b"}, created_at=101)
+    master_membership = append_operation(
+        root_a,
+        "ADD_NODE",
+        {"node_id": NODE_ID, "role": "master", "pbname": "master-a", "ssh_host": "master-a"},
+        created_at=100,
+    )
+    runner_membership = append_operation(
+        root_b,
+        "ADD_NODE",
+        {"node_id": NODE_B, "role": "master", "pbname": "master-b", "ssh_host": "master-b"},
+        created_at=101,
+    )
+    write_operation(root_a, runner_membership, allow_legacy_membership=True)
+    write_operation(root_b, master_membership, allow_legacy_membership=True)
 
     instance_dir = tmp_path / "node-a" / "data" / "run_v7" / "bot-a"
     instance_dir.mkdir(parents=True)
@@ -661,11 +671,31 @@ def test_cluster_sync_worker_pushes_ops_blobs_and_remote_materializes(tmp_path: 
     assert "put-ops" not in commands
     assert "rebuild" not in commands
     assert "materialize-v7" not in commands
+    convergence_status = worker.run_once(reason="test")
+    assert convergence_status["peers"][0]["ok"], convergence_status["peers"][0]["reason"]
+    manifest_digest = manifest_hash.removeprefix("sha256:")
+    remote_manifest = root_b / "config_blobs" / "sha256" / manifest_digest[:2] / f"{manifest_digest}.json"
+    remote_manifest.unlink()
+    client.calls.clear()
+
+    repair_status = worker.run_once(reason="test")
+
+    assert repair_status["peers"][0]["ok"], repair_status["peers"][0]["reason"]
+    assert repair_status["peers"][0]["remote_vector"] == repair_status["peers"][0]["local_vector"]
+    assert repair_status["peers"][0]["pushed_ops"] == 0
+    assert repair_status["peers"][0]["blob_coverage_repair_owner"] is True
+    assert repair_status["peers"][0]["repaired_config_blobs"] == 1
+    assert remote_manifest.is_file()
+    assert "missing-blobs" in [command for _, command in client.calls]
     remote_config = tmp_path / "node-b" / "data" / "run_v7" / "bot-a" / "config.json"
     assert not remote_config.exists()
+    local_manifest = root_a / "config_blobs" / "sha256" / manifest_digest[:2] / f"{manifest_digest}.json"
+    local_manifest.unlink()
     remote_worker = ClusterSyncWorker(tmp_path / "node-b", peer_client=client)
     remote_status = remote_worker.run_once(reason="test")
     assert remote_status["ok"] is True
+    assert remote_status["peers"][0]["repaired_config_blobs"] == 1
+    assert local_manifest.is_file()
     assert json.loads(remote_config.read_text(encoding="utf-8"))["live"]["user"] == "bot-a"
     assert json.loads((root_b / "desired_state.json").read_text(encoding="utf-8"))["instances"]["bot-a"]["assigned_host"] == NODE_B
 
@@ -679,6 +709,91 @@ def test_cluster_sync_worker_limits_operation_bundle_size() -> None:
 
     assert batch == operations[:cluster_sync_worker.APPLY_BUNDLE_MAX_OPERATIONS]
     assert remaining == 9
+
+
+def test_blob_coverage_repairs_available_blobs_when_another_is_missing_locally(tmp_path: Path) -> None:
+    """One unavailable donor blob does not block other coverage repairs."""
+
+    class CoveragePeerClient:
+        """Force probe splitting and report every requested config blob missing."""
+
+        def __init__(self) -> None:
+            self.uploads = 0
+
+        def run(self, _peer, _local_node_id, command_text, payload=None) -> dict:
+            if command_text == "missing-blobs":
+                requested = json.loads(str(payload))["config"]
+                if len(requested) > 1:
+                    raise RuntimeError("missing-blobs verification budget exceeded")
+                return {"ok": True, "missing": {"config": requested, "secret": [], "sealed": []}}
+            if command_text == "put-blobs":
+                self.uploads += 1
+                return {"ok": True, "count": 1}
+            raise AssertionError(f"unexpected command: {command_text}")
+
+    root = default_cluster_root(tmp_path)
+    available_raw = b'{"available":true}'
+    available_hash = "sha256:" + hashlib.sha256(available_raw).hexdigest()
+    unavailable_hash = "sha256:" + "f" * 64
+    _write_cluster_blob(root, available_hash, available_raw)
+    client = CoveragePeerClient()
+    worker = ClusterSyncWorker(tmp_path, peer_client=client)
+
+    repaired = worker._repair_remote_blob_coverage(
+        {"node_id": NODE_B, "pbname": "master-b"},
+        NODE_ID,
+        {"config": sorted([available_hash, unavailable_hash]), "secret": [], "sealed": []},
+    )
+
+    assert repaired == (1, 0, 0)
+    assert client.uploads == 1
+
+
+def test_blob_coverage_rotates_within_per_peer_repair_budget(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Bounded coverage passes resume at the first blob deferred by the byte cap."""
+
+    class CoveragePeerClient:
+        """Report every requested config blob missing and record uploads."""
+
+        def __init__(self) -> None:
+            self.uploaded: list[str] = []
+
+        def run(self, _peer, _local_node_id, command_text, payload=None) -> dict:
+            request = json.loads(str(payload))
+            if command_text == "missing-blobs":
+                return {"ok": True, "missing": {"config": request["config"], "secret": [], "sealed": []}}
+            if command_text == "put-blobs":
+                self.uploaded.extend(str(item["hash"]) for item in request["blobs"])
+                return {"ok": True, "count": len(request["blobs"])}
+            raise AssertionError(f"unexpected command: {command_text}")
+
+    monkeypatch.setattr(cluster_sync_worker, "BLOB_COVERAGE_MAX_HASHES_PER_PEER_PASS", 2)
+    root = default_cluster_root(tmp_path)
+    hashes = []
+    for index in range(3):
+        raw = json.dumps({"item": index}, separators=(",", ":")).encode("utf-8")
+        blob_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+        _write_cluster_blob(root, blob_hash, raw)
+        hashes.append(blob_hash)
+    hashes.sort()
+    first_size = (root / "config_blobs" / "sha256" / hashes[0][7:9] / f"{hashes[0][7:]}.json").stat().st_size
+    monkeypatch.setattr(cluster_sync_worker, "BLOB_COVERAGE_MAX_BYTES_PER_PEER_PASS", first_size)
+    client = CoveragePeerClient()
+    worker = ClusterSyncWorker(tmp_path, peer_client=client)
+    peer = {"node_id": NODE_B, "pbname": "master-b"}
+    inventory = {"config": hashes, "secret": [], "sealed": []}
+
+    first = worker._repair_remote_blob_coverage(peer, NODE_ID, inventory)
+    second = worker._repair_remote_blob_coverage(peer, NODE_ID, inventory)
+    third = worker._repair_remote_blob_coverage(peer, NODE_ID, inventory)
+
+    assert first == (1, 0, 0)
+    assert second == (1, 0, 0)
+    assert third == (1, 0, 0)
+    assert client.uploaded == hashes
 
 
 def test_cluster_sync_worker_pulls_ops_and_blobs_from_peer(tmp_path: Path) -> None:

@@ -181,6 +181,16 @@ Tabelle deren tatsächliche Kandidaten und Stabilitätsstatus. **Run Report**
 speichert niemals Kandidaten, verschiebt das 24-Stunden-Stabilitätsfenster nicht
 und löscht keine Daten.
 
+PBCluster prüft nach dem normalen Operation-Sync zusätzlich die Abdeckung der
+für die Replica relevanten Blobs. Aktive Master vergleichen validierte
+Referenzen aus dem passenden Shadow- oder aktiven/vorherigen Checkpoint, dem
+verbliebenen Oplog sowie aktiven Mailboxes und senden nur die auf einem fähigen
+Peer fehlenden Blobs. Dadurch wird auch ein konvergierter Node mit bereits
+passenden Operation-Countern und unvollständigem Blob-Store repariert; ein
+aktiver Master kann dabei von einem anderen Master geheilt werden. Die
+Coverage-Abfrage materialisiert keine Configs und gibt keine Secret-Inhalte
+preis.
+
 Direkt nach dem Speichern einer Policy sind gemischte Zeilen kurzzeitig normal,
 während PBCluster die neue signierte Operation repliziert. Unterschiedliche
 Checkpoint-IDs oder unterschiedliche Eligible-/Retained-Zahlen bedeuten, dass

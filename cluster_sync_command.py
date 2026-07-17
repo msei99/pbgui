@@ -97,6 +97,8 @@ MAX_APPLY_BUNDLE_BYTES = 24 * 1024 * 1024
 MAX_CHECKPOINT_BYTES = 32 * 1024 * 1024
 MAX_GET_OPS = 1000
 MAX_GET_BLOBS = 100
+MAX_BLOB_COVERAGE_HASHES = 1000
+MAX_BLOB_COVERAGE_VERIFY_BYTES = 64 * 1024 * 1024
 MAILBOX_INDEX_VERBS = frozenset({"get-mailbox-index", "mailbox-list"})
 MAILBOX_GET_VERBS = frozenset({"get-mailbox-message", "mailbox-get"})
 MAILBOX_PUT_VERBS = frozenset({"put-mailbox-message", "mailbox-put"})
@@ -112,6 +114,7 @@ READ_VERBS = frozenset({
     "get-blobs",
     "get-secret-blob",
     "get-sealed-blob",
+    "missing-blobs",
     *MAILBOX_INDEX_VERBS,
     *MAILBOX_GET_VERBS,
     "materialize-v7-preview",
@@ -125,7 +128,7 @@ READ_VERBS = frozenset({
     "join-get-ops",
 })
 WRITE_VERBS = frozenset({"join", "join-hello", "join-checkpoint", "join-register", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "rebuild", "materialize-v7", "materialize-api-keys", "materialize-credentials", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", *MAILBOX_PUT_VERBS, *MAILBOX_ACK_VERBS})
-STDIN_VERBS = frozenset({"join-checkpoint", "join-register", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", *MAILBOX_PUT_VERBS})
+STDIN_VERBS = frozenset({"join-checkpoint", "join-register", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", "missing-blobs", *MAILBOX_PUT_VERBS})
 SUPPORTED_VERBS = READ_VERBS | WRITE_VERBS
 
 
@@ -385,6 +388,10 @@ def run_command(
         response = _read_blob_response(paths.sealed_blobs, tokens[1], secret=True)
         _validate_sealed_blob_payload(root, base64.b64decode(response["content_b64"]))
         return response
+    if verb == "missing-blobs":
+        _require_arity(tokens, 1)
+        request = _read_json_payload(stdin_data, MAX_OPERATION_BATCH_BYTES)
+        return _missing_blob_coverage(paths, request)
     if verb in MAILBOX_INDEX_VERBS:
         _require_arity(tokens, 1)
         _verify_remote_node(root, remote_node, allow_join=False)
@@ -658,6 +665,7 @@ def _hello_payload(cluster_root: Path, identity: dict[str, Any], remote_node: st
         "remote_node": remote_node,
         "mailbox_capability": True,
         "checkpoint_capability": True,
+        "blob_coverage_capability": True,
         **checkpoint_status(cluster_root),
     }
     try:
@@ -1004,6 +1012,63 @@ def _read_blob_response(
         "size": len(raw),
         "content_b64": base64.b64encode(raw).decode("ascii"),
     }
+
+
+def _missing_blob_coverage(paths: ClusterPaths, request: dict[str, Any]) -> dict[str, Any]:
+    """Return requested content-addressed hashes absent from local blob stores."""
+
+    kinds = {
+        "config": (paths.config_blobs, "config blob", MAX_CONFIG_BLOB_BYTES),
+        "secret": (paths.secret_blobs, "secret blob", MAX_SECRET_BLOB_BYTES),
+        "sealed": (paths.sealed_blobs, "sealed blob", MAX_SEALED_BLOB_BYTES),
+    }
+    if set(request) != set(kinds):
+        raise ClusterSyncCommandError("missing-blobs payload must contain config, secret, and sealed lists")
+    normalized: dict[str, list[str]] = {}
+    total = 0
+    for kind in kinds:
+        values = request.get(kind)
+        if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
+            raise ClusterSyncCommandError(f"missing-blobs {kind} must be a hash list")
+        hashes = [_validate_hash(item) for item in values]
+        if hashes != sorted(set(hashes)):
+            raise ClusterSyncCommandError(f"missing-blobs {kind} hashes must be sorted and unique")
+        normalized[kind] = hashes
+        total += len(hashes)
+    if total > MAX_BLOB_COVERAGE_HASHES:
+        raise ClusterSyncCommandError("missing-blobs request is too large")
+
+    missing: dict[str, list[str]] = {kind: [] for kind in kinds}
+    verify: list[tuple[str, str, Path, str, int]] = []
+    verify_bytes = 0
+    for kind, hashes in normalized.items():
+        base_dir, label, max_size = kinds[kind]
+        for blob_hash in hashes:
+            digest = blob_hash.removeprefix("sha256:")
+            path = base_dir / "sha256" / digest[:2] / f"{digest}.json"
+            if path.is_symlink() or not path.is_file():
+                missing[kind].append(blob_hash)
+                continue
+            try:
+                size = int(path.stat().st_size)
+            except OSError:
+                missing[kind].append(blob_hash)
+                continue
+            if size > max_size:
+                missing[kind].append(blob_hash)
+                continue
+            verify_bytes += size
+            verify.append((kind, blob_hash, base_dir, label, max_size))
+    if verify_bytes > MAX_BLOB_COVERAGE_VERIFY_BYTES:
+        raise ClusterSyncCommandError("missing-blobs verification budget exceeded")
+    for kind, blob_hash, base_dir, label, max_size in verify:
+        try:
+            _read_verified_blob(base_dir, blob_hash, label, max_size=max_size)
+        except ClusterSyncCommandError:
+            missing[kind].append(blob_hash)
+    for hashes in missing.values():
+        hashes.sort()
+    return {"ok": True, "requested": total, "missing": missing}
 
 
 def _repair_config_blob_response_from_run_v7(cluster_root: Path, requested_hash: str) -> bool:

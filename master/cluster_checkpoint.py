@@ -1455,6 +1455,54 @@ def read_retention_report(cluster_root: Path | str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def replica_blob_hashes(cluster_root: Path | str) -> dict[str, list[str]]:
+    """Return blob references required to reconstruct the local replica."""
+
+    root = Path(os.path.abspath(Path(cluster_root).expanduser()))
+    paths = ClusterPaths.from_root(root)
+    active = read_active_checkpoint(root)
+    checkpoints = [active] if active is not None else [read_shadow_checkpoint(root) or build_shadow_checkpoint(root)]
+    commit = _read_checkpoint_commit_unlocked(root) or {}
+    previous_id = str(commit.get("previous_checkpoint_id") or "")
+    if previous_id and all(str(item["checkpoint_id"]) != previous_id for item in checkpoints):
+        checkpoints.append(_read_checkpoint_object(root, previous_id))
+
+    reachable: dict[str, set[str]] = {"config": set(), "secret": set(), "sealed": set()}
+    config_manifest_refs: set[str] = set()
+    obsolete_secret_hashes = {
+        blob_hash
+        for checkpoint in checkpoints
+        for blob_hash in _sealed_obsolete_secret_hashes(checkpoint)
+    }
+    for checkpoint in checkpoints:
+        refs = checkpoint.get("blob_refs") or {}
+        config_manifest_refs.update(
+            _collect_hash_field_refs(checkpoint.get("materialized"), "config_manifest_hash")
+        )
+        _merge_blob_refs(
+            reachable,
+            {
+                "config": refs.get("config") or [],
+                "secret": [blob_hash for blob_hash in refs.get("secret") or [] if blob_hash not in obsolete_secret_hashes],
+                "sealed": refs.get("sealed") or [],
+            },
+        )
+    for operation_path in sorted(paths.oplog.glob("*/*.json")) if paths.oplog.exists() else []:
+        if operation_path.is_symlink():
+            raise ClusterCheckpointError("retained operation must not be a symlink")
+        try:
+            operation = json.loads(operation_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ClusterCheckpointError("retained operation is unreadable") from exc
+        _merge_operation_blob_refs(reachable, operation, obsolete_secret_hashes)
+        config_manifest_refs.update(_collect_hash_field_refs(operation, "config_manifest_hash"))
+    _collect_mailbox_blob_refs(paths, reachable, config_manifest_refs=config_manifest_refs)
+    _expand_available_config_manifest_refs(paths, config_manifest_refs, reachable["config"])
+    return {kind: sorted(values) for kind, values in reachable.items()}
+
+
 def _blob_gc_report_for_preview(root: Path, shadow: Mapping[str, Any], timestamp: int) -> dict[str, Any]:
     """Return an actual or projected blob-GC report without advancing GC state."""
 
@@ -1758,7 +1806,12 @@ def _merge_operation_blob_refs(
     _merge_blob_refs(target, refs)
 
 
-def _collect_mailbox_blob_refs(paths: ClusterPaths, reachable: dict[str, set[str]]) -> None:
+def _collect_mailbox_blob_refs(
+    paths: ClusterPaths,
+    reachable: dict[str, set[str]],
+    *,
+    config_manifest_refs: set[str] | None = None,
+) -> None:
     """Collect explicit typed references from mailbox and durable provider state."""
 
     candidates: list[Path] = []
@@ -1773,6 +1826,8 @@ def _collect_mailbox_blob_refs(paths: ClusterPaths, reachable: dict[str, set[str
             raise ClusterCheckpointError("mailbox state must not be a symlink")
         value = json.loads(path.read_text(encoding="utf-8"))
         _merge_blob_refs(reachable, _collect_direct_blob_refs(value))
+        if config_manifest_refs is not None:
+            config_manifest_refs.update(_collect_hash_field_refs(value, "config_manifest_hash"))
 
 
 def _expand_config_manifest_refs(paths: ClusterPaths, config_refs: set[str]) -> None:
@@ -1815,6 +1870,57 @@ def _expand_config_manifest_refs(paths: ClusterPaths, config_refs: set[str]) -> 
             child_raw = _read_verified_blob(_content_addressed_blob_path(paths.config_blobs, child_hash), child_hash)
             if expected_size is not None and int(expected_size) != len(child_raw):
                 raise ClusterCheckpointError("config manifest child size mismatch")
+            if child_hash not in config_refs:
+                config_refs.add(child_hash)
+        expanded.add(blob_hash)
+
+
+def _expand_available_config_manifest_refs(
+    paths: ClusterPaths,
+    manifest_refs: set[str],
+    config_refs: set[str],
+) -> None:
+    """Expand valid local manifests without requiring every referenced blob locally."""
+
+    queue = list(sorted(manifest_refs))
+    expanded: set[str] = set()
+    while queue:
+        blob_hash = queue.pop(0)
+        if blob_hash in expanded:
+            continue
+        path = _content_addressed_blob_path(paths.config_blobs, blob_hash)
+        if path.is_symlink() or not path.is_file():
+            expanded.add(blob_hash)
+            continue
+        try:
+            raw = _read_verified_blob(path, blob_hash)
+        except ClusterCheckpointError:
+            expanded.add(blob_hash)
+            continue
+        try:
+            manifest = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            expanded.add(blob_hash)
+            continue
+        files = manifest.get("files") if isinstance(manifest, dict) else None
+        if files is None:
+            expanded.add(blob_hash)
+            continue
+        if not isinstance(files, dict):
+            raise ClusterCheckpointError("config manifest files must be an object")
+        for name, record in files.items():
+            if not isinstance(name, str) or not name or "/" in name or "\\" in name or name in {".", ".."}:
+                raise ClusterCheckpointError("config manifest contains an invalid filename")
+            if isinstance(record, str):
+                child_hash = record
+            elif isinstance(record, dict):
+                child_hash = str(record.get("hash") or record.get("sha256") or "")
+            else:
+                raise ClusterCheckpointError("config manifest file record is invalid")
+            if len(child_hash) == 64 and all(character in "0123456789abcdef" for character in child_hash):
+                child_hash = f"sha256:{child_hash}"
+            if not _is_sha256(child_hash):
+                raise ClusterCheckpointError("config manifest contains an invalid blob hash")
             if child_hash not in config_refs:
                 config_refs.add(child_hash)
         expanded.add(blob_hash)
@@ -2447,6 +2553,25 @@ def _collect_direct_blob_refs(desired_state: Any) -> dict[str, list[str]]:
 
     visit(desired_state)
     return {kind: sorted(values) for kind, values in refs.items()}
+
+
+def _collect_hash_field_refs(value: Any, field: str) -> set[str]:
+    """Collect valid content-addressed hashes stored under one exact field name."""
+
+    refs: set[str] = set()
+
+    def visit(item: Any) -> None:
+        if isinstance(item, Mapping):
+            for key, child in item.items():
+                if str(key) == field and isinstance(child, str) and _is_sha256(child):
+                    refs.add(child)
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return refs
 
 
 def _normalized_blob_refs(value: Any) -> dict[str, list[str]]:

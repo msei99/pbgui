@@ -26,6 +26,7 @@ from master.cluster_checkpoint import (
     activate_checkpoint,
     read_active_checkpoint,
     read_shadow_checkpoint,
+    replica_blob_hashes,
     prune_operation_history,
     retention_preview,
     verify_shadow_checkpoint,
@@ -115,6 +116,179 @@ def test_shadow_checkpoint_persists_owner_only_and_rejects_tampering(tmp_path: P
     path.write_text(json.dumps(tampered), encoding="utf-8")
     with pytest.raises(ClusterCheckpointError, match="state hash mismatch"):
         read_shadow_checkpoint(root)
+
+
+def test_replica_blob_hashes_keeps_checkpoint_refs_after_oplog_prune(tmp_path: Path) -> None:
+    """Replica coverage includes checkpoint state after its source operation is gone."""
+
+    root = _cluster(tmp_path)
+    raw = b'{"checkpoint":"config"}\n'
+    digest = hashlib.sha256(raw).hexdigest()
+    blob_hash = f"sha256:{digest}"
+    path = root / "config_blobs" / "sha256" / digest[:2] / f"{digest}.json"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(raw)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "bybit_BTC",
+            "version": "1",
+            "parent_version": "0",
+            "assigned_host": NODE_ID,
+            "desired_state": "running",
+            "config_manifest_hash": blob_hash,
+        },
+        created_at=NOW - 60,
+    )
+    create_shadow_checkpoint(root, created_at=NOW)
+    for operation_path in (root / "oplog").glob("*/*.json"):
+        operation_path.unlink()
+
+    hashes = replica_blob_hashes(root)
+
+    assert hashes == {"config": [blob_hash], "secret": [], "sealed": []}
+
+
+def test_replica_blob_hashes_treats_manifest_children_as_leaves(tmp_path: Path) -> None:
+    """A child config file with a files key is not parsed as another manifest."""
+
+    root = _cluster(tmp_path)
+    child_raw = b'{"files":"ordinary config value"}\n'
+    child_digest = hashlib.sha256(child_raw).hexdigest()
+    child_hash = f"sha256:{child_digest}"
+    manifest = {"files": {"config.json": {"sha256": child_digest, "size": len(child_raw)}}}
+    manifest_raw = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    manifest_digest = hashlib.sha256(manifest_raw).hexdigest()
+    manifest_hash = f"sha256:{manifest_digest}"
+    for blob_hash, raw in ((child_hash, child_raw), (manifest_hash, manifest_raw)):
+        digest = blob_hash.removeprefix("sha256:")
+        path = root / "config_blobs" / "sha256" / digest[:2] / f"{digest}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "bybit_BTC",
+            "version": "1",
+            "parent_version": "0",
+            "assigned_host": NODE_ID,
+            "desired_state": "running",
+            "config_manifest_hash": manifest_hash,
+        },
+        created_at=NOW - 60,
+    )
+
+    hashes = replica_blob_hashes(root)
+
+    assert hashes == {"config": sorted([manifest_hash, child_hash]), "secret": [], "sealed": []}
+
+
+def test_replica_blob_hashes_does_not_parse_generic_payload_as_manifest(tmp_path: Path) -> None:
+    """A generic config-store payload may contain a files key without manifest semantics."""
+
+    root = _cluster(tmp_path)
+    payload_raw = b'{"files":"api user name"}\n'
+    payload_digest = hashlib.sha256(payload_raw).hexdigest()
+    payload_hash = f"sha256:{payload_digest}"
+    payload_path = root / "config_blobs" / "sha256" / payload_digest[:2] / f"{payload_digest}.json"
+    payload_path.parent.mkdir(parents=True)
+    payload_path.write_bytes(payload_raw)
+    secret_hash = "sha256:" + "1" * 64
+    append_operation(
+        root,
+        "UPSERT_API_KEYS",
+        {"api_serial": 1, "payload_hash": payload_hash, "secret_blob_hash": secret_hash},
+        created_at=NOW - 60,
+    )
+
+    hashes = replica_blob_hashes(root)
+
+    assert hashes == {"config": [payload_hash], "secret": [secret_hash], "sealed": []}
+
+
+def test_replica_blob_hashes_filters_obsolete_previous_checkpoint_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A sealed cutoff prevents previous-checkpoint plaintext secret repair."""
+
+    root = _cluster(tmp_path)
+    old_secret = "sha256:" + "1" * 64
+    active = {
+        "checkpoint_id": "sha256:" + "a" * 64,
+        "blob_refs": {"config": [], "secret": [], "sealed": []},
+        "migration_seal": {"status": "sealed", "obsolete_secret_blob_hashes": [old_secret]},
+    }
+    previous = {
+        "checkpoint_id": "sha256:" + "b" * 64,
+        "blob_refs": {"config": [], "secret": [old_secret], "sealed": []},
+        "migration_seal": {"status": "pending"},
+    }
+    monkeypatch.setattr(checkpoint_module, "read_active_checkpoint", lambda _root: active)
+    monkeypatch.setattr(
+        checkpoint_module,
+        "_read_checkpoint_commit_unlocked",
+        lambda _root: {"previous_checkpoint_id": previous["checkpoint_id"]},
+    )
+    monkeypatch.setattr(checkpoint_module, "_read_checkpoint_object", lambda _root, _checkpoint_id: previous)
+
+    hashes = replica_blob_hashes(root)
+
+    assert hashes == {"config": [], "secret": [], "sealed": []}
+
+
+def test_replica_blob_hashes_ignores_stale_shadow_after_activation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An active checkpoint prevents stale shadow refs from reviving collected blobs."""
+
+    root = _cluster(tmp_path)
+    monkeypatch.setattr(
+        checkpoint_module,
+        "build_migration_seal",
+        lambda materialized: {
+            "schema_version": 1,
+            "status": "sealed",
+            "cluster_id": materialized["cluster_nodes"]["cluster_id"],
+            "active_node_ids": [NODE_ID],
+            "blockers": [],
+        },
+    )
+    active = build_shadow_checkpoint(root, created_at=NOW)
+    proposal = create_checkpoint_proposal(root, active, created_at=NOW, expires_at=NOW + 60)
+    ack = create_checkpoint_ack(root, active, proposal, created_at=NOW + 1)
+    proof = create_checkpoint_commit_proof(root, active, proposal, [ack], created_at=NOW + 2)
+    activate_checkpoint(root, active, commit_proof=proof, activated_at=NOW + 2)
+
+    raw = b'{"stale":"shadow"}\n'
+    digest = hashlib.sha256(raw).hexdigest()
+    blob_hash = f"sha256:{digest}"
+    path = root / "config_blobs" / "sha256" / digest[:2] / f"{digest}.json"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(raw)
+    operation = append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "bybit_BTC",
+            "version": "1",
+            "parent_version": "0",
+            "assigned_host": NODE_ID,
+            "desired_state": "running",
+            "config_manifest_hash": blob_hash,
+        },
+        created_at=NOW + 3,
+    )
+    create_shadow_checkpoint(root, created_at=NOW + 4)
+    (root / "oplog" / NODE_ID / f"{int(operation['seq']):08d}.json").unlink()
+    path.unlink()
+
+    hashes = replica_blob_hashes(root)
+
+    assert hashes == {"config": [], "secret": [], "sealed": []}
 
 
 def test_shadow_checkpoint_rejects_foreign_cluster_and_symlink(tmp_path: Path) -> None:

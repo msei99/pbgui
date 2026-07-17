@@ -692,6 +692,65 @@ def test_put_blobs_writes_valid_blob_batch(tmp_path: Path) -> None:
     assert [base64.b64decode(item["content_b64"]) for item in batch["blobs"]] == [raw_a, raw_b]
 
 
+def test_missing_blobs_returns_only_absent_hashes_without_content(tmp_path: Path) -> None:
+    """The coverage probe validates requested hashes and returns no blob contents."""
+
+    root = _init_cluster(tmp_path)
+    raw = b'{"config":true}'
+    present = "sha256:" + hashlib.sha256(raw).hexdigest()
+    absent = "sha256:" + "f" * 64
+    run_command(root, NODE_B, f"put-blob {present}", raw)
+    request = {"config": sorted([present, absent]), "secret": [], "sealed": []}
+
+    payload = run_command(root, NODE_B, "missing-blobs", json.dumps(request).encode("utf-8"))
+
+    assert payload == {
+        "ok": True,
+        "requested": 2,
+        "missing": {"config": [absent], "secret": [], "sealed": []},
+    }
+    assert "content_b64" not in json.dumps(payload)
+    digest = present.removeprefix("sha256:")
+    (root / "config_blobs" / "sha256" / digest[:2] / f"{digest}.json").write_bytes(b"corrupt")
+
+    corrupted = run_command(root, NODE_B, "missing-blobs", json.dumps(request).encode("utf-8"))
+
+    assert corrupted["missing"]["config"] == sorted([present, absent])
+
+
+def test_missing_blobs_rejects_oversized_probe(tmp_path: Path) -> None:
+    """Coverage probes have a strict per-command work bound."""
+
+    root = _init_cluster(tmp_path)
+    hashes = [
+        f"sha256:{index:064x}"
+        for index in range(cluster_sync_command.MAX_BLOB_COVERAGE_HASHES + 1)
+    ]
+    request = {"config": hashes, "secret": [], "sealed": []}
+
+    with pytest.raises(ClusterSyncCommandError, match="request is too large"):
+        run_command(root, NODE_B, "missing-blobs", json.dumps(request).encode("utf-8"))
+
+
+def test_missing_blobs_enforces_verification_byte_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Hash verification cannot exceed its bounded per-command byte budget."""
+
+    root = _init_cluster(tmp_path)
+    hashes = []
+    for raw in (b'{"one":1}', b'{"two":2}'):
+        blob_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+        run_command(root, NODE_B, f"put-blob {blob_hash}", raw)
+        hashes.append(blob_hash)
+    monkeypatch.setattr(cluster_sync_command, "MAX_BLOB_COVERAGE_VERIFY_BYTES", 10)
+    request = {"config": sorted(hashes), "secret": [], "sealed": []}
+
+    with pytest.raises(ClusterSyncCommandError, match="verification budget exceeded"):
+        run_command(root, NODE_B, "missing-blobs", json.dumps(request).encode("utf-8"))
+
+
 def test_get_blob_repairs_missing_manifest_from_existing_run_v7_config(tmp_path: Path) -> None:
     """get-blob rebuilds a missing manifest blob from matching local run_v7 files."""
 
