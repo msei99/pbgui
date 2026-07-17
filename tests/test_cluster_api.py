@@ -340,6 +340,33 @@ def test_retention_report_is_read_only_and_main_page_exposes_no_session_token(
     assert "headers.Authorization" not in html
 
 
+def test_retention_report_builds_remote_preview_command(monkeypatch, tmp_path: Path) -> None:
+    """Retention reports allow the read-only remote preview command."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=102)
+
+    async def remote_read(node: dict, identity: dict, verb: str) -> dict:
+        command = cluster._cluster_state_read_command("software/pbgui", identity["node_id"], verb)
+        assert "retention-preview" in command
+        return {
+            "status": "report_only",
+            "eligible_operations": 0,
+            "eligible_bytes": 0,
+            "items": [],
+        }
+
+    monkeypatch.setattr(cluster, "_run_remote_read_command", remote_read)
+
+    report = asyncio.run(cluster.get_retention_report(session=None))
+
+    assert report["counts"]["nodes_total"] == 2
+    assert report["counts"]["nodes_reported"] == 2
+    assert report["counts"]["nodes_unavailable"] == 0
+
+
 def test_get_status_includes_pbcluster_sync_status(monkeypatch, tmp_path: Path) -> None:
     """Cluster status exposes the latest PBCluster peer sync result for UI key-login checks."""
 

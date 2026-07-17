@@ -1188,7 +1188,7 @@ def _cluster_hello_command(remote_pbgui_dir: str | None, local_node_id: str) -> 
 def _cluster_state_read_command(remote_pbgui_dir: str | None, local_node_id: str, verb: str) -> str:
     """Build one read-only remote Cluster Sync state command."""
 
-    if verb not in {"get-state-vector", "get-desired-state"}:
+    if verb not in {"get-state-vector", "get-desired-state", "retention-preview"}:
         raise ValueError("unsupported read command")
     return _cluster_remote_command(remote_pbgui_dir, local_node_id, verb)
 
