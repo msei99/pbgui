@@ -211,8 +211,13 @@ def test_cluster_sync_worker_rebuilds_and_writes_status(tmp_path: Path) -> None:
     assert (cluster_root / "sync_status.json").is_file()
 
 
-def test_legacy_oplog_policy_runs_full_automatic_retention(monkeypatch, tmp_path: Path) -> None:
-    """A persisted oplog policy automatically prunes history and unreachable blobs."""
+@pytest.mark.parametrize("oplog_status", ["ready", "complete"])
+def test_legacy_oplog_policy_runs_blob_gc_after_healthy_oplog_evaluation(
+    monkeypatch,
+    tmp_path: Path,
+    oplog_status: str,
+) -> None:
+    """Every healthy oplog result proceeds to automatic blob GC."""
 
     cluster_root = default_cluster_root(tmp_path)
     ensure_local_identity(cluster_root, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
@@ -241,7 +246,7 @@ def test_legacy_oplog_policy_runs_full_automatic_retention(monkeypatch, tmp_path
     monkeypatch.setattr(
         cluster_sync_worker,
         "prune_operation_history",
-        lambda _root, *, now: calls.append("oplog") or {"status": "complete"},
+        lambda _root, *, now: calls.append("oplog") or {"status": oplog_status},
     )
     monkeypatch.setattr(
         cluster_sync_worker,

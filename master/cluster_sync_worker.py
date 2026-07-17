@@ -508,7 +508,10 @@ class ClusterSyncWorker:
         if report_due:
             prune = prune_operation_history(self.cluster_root, now=now)
             result["oplog"] = prune
-            if str(policy.get("mode") or "report_only") != "report_only" and prune.get("status") == "complete":
+            if (
+                str(policy.get("mode") or "report_only") != "report_only"
+                and prune.get("status") in {"ready", "complete"}
+            ):
                 result["blobs"] = garbage_collect_blobs(self.cluster_root, now=now)
             result["status"] = "cleanup_evaluated"
         else:

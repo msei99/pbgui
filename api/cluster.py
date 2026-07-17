@@ -59,6 +59,7 @@ from master.cluster_ssh_keys import (
     public_key_fingerprint,
     remove_authorized_cluster_key,
 )
+from master.cluster_sync_worker import SshClusterPeerClient
 from master.cluster_checkpoint import (
     ClusterCheckpointError,
     active_checkpoint_bundle,
@@ -2991,29 +2992,38 @@ async def _run_remote_read_command(
     verb: str,
     *,
     pool: Any | None = None,
+    isolated: bool = False,
 ) -> dict[str, Any]:
     """Run one read-only Cluster Sync command against a remote node."""
 
     node_id, hostname, local_node_id = _require_remote_node_ready(node, identity)
-    if pool is None:
-        monitor = get_monitor()
-        pool = getattr(monitor, "pool", None) if monitor else None
-    if not pool:
-        raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
-    command = _cluster_state_read_command(str(node.get("remote_pbgui_dir") or ""), local_node_id, verb)
-    try:
-        result = await pool.run(hostname, command, timeout=15)
-    except Exception as exc:
-        _log(SERVICE, f"Remote cluster read failed for {hostname}: {exc}", level="ERROR")
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    if result is None:
-        raise HTTPException(status_code=502, detail="Remote host is unreachable")
-    exit_status = int(getattr(result, "exit_status", 1) or 0)
-    if exit_status != 0:
-        error = _probe_error_text(result)
-        _log(SERVICE, f"Remote cluster read rejected by {hostname}: {error}", level="WARNING")
-        raise HTTPException(status_code=409, detail=error)
-    payload = _parse_remote_json_result(result, "Remote cluster read")
+    if isolated:
+        client = SshClusterPeerClient(timeout=30, connect_timeout=8, cluster_root=_cluster_root())
+        try:
+            payload = await asyncio.to_thread(client.run, node, local_node_id, verb)
+        except Exception as exc:
+            _log(SERVICE, f"Isolated cluster read failed for {hostname}: {exc}", level="ERROR")
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+    else:
+        if pool is None:
+            monitor = get_monitor()
+            pool = getattr(monitor, "pool", None) if monitor else None
+        if not pool:
+            raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
+        command = _cluster_state_read_command(str(node.get("remote_pbgui_dir") or ""), local_node_id, verb)
+        try:
+            result = await pool.run(hostname, command, timeout=15)
+        except Exception as exc:
+            _log(SERVICE, f"Remote cluster read failed for {hostname}: {exc}", level="ERROR")
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if result is None:
+            raise HTTPException(status_code=502, detail="Remote host is unreachable")
+        exit_status = int(getattr(result, "exit_status", 1) or 0)
+        if exit_status != 0:
+            error = _probe_error_text(result)
+            _log(SERVICE, f"Remote cluster read rejected by {hostname}: {error}", level="WARNING")
+            raise HTTPException(status_code=409, detail=error)
+        payload = _parse_remote_json_result(result, "Remote cluster read")
     remote_cluster_id = str(payload.get("cluster_id") or "")
     remote_node_id = str(payload.get("node_id") or "")
     if remote_cluster_id and remote_cluster_id != str(identity.get("cluster_id") or ""):
@@ -4566,12 +4576,19 @@ async def get_retention_report(
         "items_truncated": int(local_preview.get("eligible_operations") or 0) > len(local_items),
         "migration_seal": checkpoint["migration_seal"],
     }]
+    remote_limit = asyncio.Semaphore(4)
 
     async def remote_report(node: dict[str, Any]) -> dict[str, Any]:
         node_id = str(node.get("node_id") or "")
         pbname = str(node.get("pbname") or node.get("hostname") or node_id)
         try:
-            payload = await _run_remote_read_command(node, identity, "retention-preview")
+            async with remote_limit:
+                payload = await _run_remote_read_command(
+                    node,
+                    identity,
+                    "retention-preview",
+                    isolated=True,
+                )
             return {"node_id": node_id, "pbname": pbname, **payload}
         except HTTPException as exc:
             return {

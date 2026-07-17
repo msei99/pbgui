@@ -349,7 +349,8 @@ def test_retention_report_builds_remote_preview_command(monkeypatch, tmp_path: P
     append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
     append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=102)
 
-    async def remote_read(node: dict, identity: dict, verb: str) -> dict:
+    async def remote_read(node: dict, identity: dict, verb: str, *, isolated: bool = False) -> dict:
+        assert isolated is True
         command = cluster._cluster_state_read_command("software/pbgui", identity["node_id"], verb)
         assert "retention-preview" in command
         return {
@@ -373,6 +374,56 @@ def test_retention_report_builds_remote_preview_command(monkeypatch, tmp_path: P
     assert report["counts"]["nodes_reported"] == 2
     assert report["counts"]["nodes_unavailable"] == 0
     assert report["reports"][1]["blob_gc"]["eligible_blobs"] == 3
+
+
+def test_isolated_cluster_read_bypasses_monitor_pool(monkeypatch, tmp_path: Path) -> None:
+    """Node diagnostics use a short-lived Cluster SSH connection, not monitor SSH."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    identity = read_local_identity(root)
+    calls: list[tuple[str, str]] = []
+
+    class IsolatedClient:
+        """Record the isolated command without opening SSH."""
+
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run(self, node: dict, local_node_id: str, verb: str) -> dict:
+            calls.append((str(node["node_id"]), verb))
+            assert local_node_id == NODE_A
+            return {
+                "ok": True,
+                "cluster_id": CLUSTER_ID,
+                "node_id": NODE_B,
+            }
+
+    class MonitorPool:
+        """Fail if the shared monitor pool is touched."""
+
+        async def run(self, *_args, **_kwargs):
+            raise AssertionError("monitor pool must not be used")
+
+    monkeypatch.setattr(cluster, "SshClusterPeerClient", IsolatedClient)
+
+    result = asyncio.run(
+        cluster._run_remote_read_command(
+            {
+                "node_id": NODE_B,
+                "pbname": "vps-a",
+                "ssh_host": "192.0.2.10",
+                "sync_mode": "reachable",
+            },
+            identity,
+            "retention-preview",
+            pool=MonitorPool(),
+            isolated=True,
+        )
+    )
+
+    assert result["node_id"] == NODE_B
+    assert calls == [(NODE_B, "retention-preview")]
 
 
 def test_get_status_includes_pbcluster_sync_status(monkeypatch, tmp_path: Path) -> None:
