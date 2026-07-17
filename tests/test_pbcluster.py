@@ -508,6 +508,68 @@ def test_cluster_sync_worker_consumes_sync_request_trigger(tmp_path: Path) -> No
     assert worker._consume_trigger_change() is False
 
 
+def test_passive_vps_uses_bounded_safety_poll(tmp_path: Path) -> None:
+    """A VPS without outbound peers relies on events instead of full minute scans."""
+
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="vps", pbname="runner-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(
+        cluster_root,
+        "ADD_NODE",
+        {"node_id": NODE_ID, "role": "vps", "pbname": "runner-a", "sync_peers": []},
+    )
+    append_operation(
+        cluster_root,
+        "ADD_NODE",
+        {"node_id": NODE_B, "role": "master", "pbname": "master-b", "ssh_host": "master-b"},
+    )
+    rebuild_materialized_state(cluster_root)
+
+    worker = ClusterSyncWorker(tmp_path, interval=60)
+
+    assert worker._periodic_delay() == cluster_sync_worker.PASSIVE_REPLICA_PERIODIC_INTERVAL
+
+
+def test_mailbox_sync_ignores_message_expired_during_push(monkeypatch, tmp_path: Path) -> None:
+    """Remote expiry during relay does not back off an otherwise healthy peer."""
+
+    class RaceMailbox:
+        """Expose one message that expires after the local index is read."""
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            """Accept the production mailbox constructor arguments."""
+
+        def index(self) -> list[dict]:
+            """Return one locally live message."""
+            return [{"message_id": "expiring-message"}]
+
+        def get(self, _message_id: str) -> dict:
+            """Return a redacted signed-message stand-in."""
+            return {"message_id": "expiring-message"}
+
+        def ack(self, _message_id: str, _node_id: str) -> bool:
+            """Record no acknowledgement for a rejected delivery."""
+            return False
+
+    class ExpiredPushPeerClient:
+        """Reject the message because the peer clock already considers it expired."""
+
+        def run(self, _peer, _local_node_id, command_text, payload=None) -> dict:
+            """Return an empty index and reject only the subsequent put."""
+            if command_text == "get-mailbox-index":
+                return {"messages": []}
+            if command_text == "put-mailbox-message":
+                raise RuntimeError('{"error": "mailbox message has expired", "ok": false}')
+            raise AssertionError(f"unexpected command: {command_text}")
+
+    monkeypatch.setattr(cluster_sync_worker, "ClusterMailbox", RaceMailbox)
+    worker = ClusterSyncWorker(tmp_path, peer_client=ExpiredPushPeerClient())
+
+    result = worker._sync_mailbox({"node_id": NODE_B}, NODE_ID)
+
+    assert result == {"supported": True, "pulled": 0, "pushed": 0, "acked": 0}
+
+
 def test_cluster_sync_worker_coalesces_triggers_written_during_its_pass(
     monkeypatch,
     tmp_path: Path,

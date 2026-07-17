@@ -446,6 +446,42 @@ def test_cluster_claim_fails_closed_when_desired_state_becomes_unavailable(tmp_p
     assert json.loads((tmp_path / "pool" / "cluster_claim.json").read_text())["cluster_metadata_claimed"] is True
 
 
+def test_cluster_pool_disables_and_hides_materialized_credentials_absent_from_desired_entries(
+    tmp_path: Path,
+) -> None:
+    """Duplicate migration aliases outside the desired pool cannot remain selectable or visible."""
+
+    store = CredentialStore(tmp_path / "credentials")
+    desired_record = store.create_cmc("shared-secret", origin="cluster", shared=True)
+    duplicate = store.create_cmc("shared-secret", origin="cluster", shared=True)
+    desired = _strict_desired_state(
+        tmp_path,
+        {
+            desired_record["id"]: {"generation": 1},
+            duplicate["id"]: {"generation": 1},
+        },
+        {
+            desired_record["id"]: {
+                "key_id": desired_record["id"],
+                "secret_id": desired_record["id"],
+                "state": "active",
+            },
+        },
+    )
+    pool = CmcPoolClient(
+        store,
+        state_root=tmp_path / "pool",
+        desired_state_provider=lambda: desired,
+    )
+
+    status = pool.status()
+
+    assert status["active_credentials"] == 1
+    assert [item["id"] for item in status["keys"]] == [desired_record["id"]]
+    assert store.get_cmc(duplicate["id"])["active"] is False
+    assert pool.acquire("/v1/cryptocurrency/map").credential_id == desired_record["id"]
+
+
 def test_provider_disabled_code_is_terminal_for_only_the_failed_generation(tmp_path: Path) -> None:
     """Documented disabled-key codes fence a generation while 429 remains cooldown-only."""
 

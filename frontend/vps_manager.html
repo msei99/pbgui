@@ -3018,8 +3018,10 @@
       ws: null,
       reconnectTimer: 0,
       pendingWsMessages: [],
+      contextGeneration: 1,
       detailRequestGeneration: 0,
       detailAbortController: null,
+      detailCache: {},
       connected: false,
       state: null,
       deletedOverviewHosts: {},
@@ -6668,16 +6670,17 @@
 
     function sendContext() {
       if (isMasterContextView()) {
-        send({ cmd: 'set_context', view: 'master' });
+        send({ cmd: 'set_context', view: 'master', context_generation: store.contextGeneration });
       } else if (isVpsContextView()) {
-        send({ cmd: 'set_context', view: 'vps', hostname: store.hostname });
+        send({ cmd: 'set_context', view: 'vps', hostname: store.hostname, context_generation: store.contextGeneration });
       } else {
-        send({ cmd: 'set_context', view: 'overview', hostname: '' });
+        send({ cmd: 'set_context', view: 'overview', hostname: '', context_generation: store.contextGeneration });
       }
     }
 
     function fetchVpsDetail(hostname) {
       const generation = ++store.detailRequestGeneration;
+      const contextGeneration = store.contextGeneration;
       if (store.detailAbortController) store.detailAbortController.abort();
       store.detailAbortController = new AbortController();
       return fetch(API_BASE + '/detail/' + encodeURIComponent(hostname), {
@@ -6701,11 +6704,13 @@
         })
         .then(function (data) {
           if (generation !== store.detailRequestGeneration) return;
+          if (contextGeneration !== store.contextGeneration) return;
           if (!data) return;
           if (!data || data.kind !== 'vps' || data.hostname !== hostname) return;
           if (store.hostname !== hostname) return;
           var hadDetail = !!(store.detail && store.detail.kind === 'vps' && store.detail.hostname === hostname);
           store.detail = data;
+          store.detailCache['vps:' + hostname] = data;
           ensureVpsUi(data.hostname, data);
           if (!hadDetail) {
             renderUi({ forceView: true });
@@ -6720,6 +6725,7 @@
 
     function fetchMasterDetail() {
       const generation = ++store.detailRequestGeneration;
+      const contextGeneration = store.contextGeneration;
       if (store.detailAbortController) store.detailAbortController.abort();
       store.detailAbortController = new AbortController();
       return fetch(API_BASE + '/detail-master', {
@@ -6733,10 +6739,12 @@
         })
         .then(function (data) {
           if (generation !== store.detailRequestGeneration) return;
+          if (contextGeneration !== store.contextGeneration) return;
           if (!data || data.kind !== 'master') return;
           if (!isMasterContextView()) return;
           var hadDetail = !!(store.detail && store.detail.kind === 'master');
           store.detail = data;
+          store.detailCache.master = data;
           ensureMasterUi(data);
           if (!hadDetail) {
             renderUi({ forceView: true });
@@ -6847,13 +6855,13 @@
       }
       if (msg.type === 'detail') {
         const incomingDetail = msg.data || null;
+        const incomingGeneration = Number(msg.context_generation || 0);
+        if (incomingGeneration && incomingGeneration !== store.contextGeneration) return;
         if (incomingDetail && incomingDetail.kind === 'vps' && (!isVpsContextView() || incomingDetail.hostname !== store.hostname)) return;
         if (incomingDetail && incomingDetail.kind === 'master' && !isMasterContextView()) return;
-        store.detailRequestGeneration += 1;
-        if (store.detailAbortController) store.detailAbortController.abort();
-        store.detailAbortController = null;
         store.detail = incomingDetail;
         if (store.detail && store.detail.kind === 'vps') {
+          store.detailCache['vps:' + store.detail.hostname] = store.detail;
           ensureVpsUi(store.detail.hostname, store.detail);
           const progress = store.detail.progress || {};
           const pending = store.pendingAutoSetupSwitch;
@@ -6881,6 +6889,8 @@
               store.pendingAutoSetupSwitch = null;
             }
           }
+        } else if (store.detail && store.detail.kind === 'master') {
+          store.detailCache.master = store.detail;
         }
         renderUi();
         return;
@@ -7522,9 +7532,27 @@
       return window.location.pathname + window.location.search + viewHash(view, hostname);
     }
 
+    function detailContextKey(view, hostname) {
+      const masterViews = ['master', 'master-task-log', 'master-host-logs', 'master-pbgui-branch', 'master-pb7-branch', 'master-ufw'];
+      const vpsViews = ['vps', 'vps-task-log', 'vps-host-logs', 'vps-setup', 'vps-pbgui-branch', 'vps-pb7-branch', 'vps-ufw'];
+      if (masterViews.indexOf(view) >= 0) return 'master';
+      if (hostname && vpsViews.indexOf(view) >= 0) return 'vps:' + hostname;
+      return 'overview';
+    }
+
     function selectView(view, hostname) {
       clearTimeout(store._detailTimer);
       store._detailTimer = 0;
+      const previousContext = detailContextKey(store.view, store.hostname);
+      const nextHostname = typeof hostname === 'string' ? hostname : (detailContextKey(view, store.hostname).indexOf('vps:') === 0 ? store.hostname : '');
+      const nextContext = detailContextKey(view, nextHostname);
+      if (nextContext !== previousContext) {
+        store.contextGeneration += 1;
+        store.detailRequestGeneration += 1;
+        if (store.detailAbortController) store.detailAbortController.abort();
+        store.detailAbortController = null;
+        store.detail = store.detailCache[nextContext] || null;
+      }
       store.view = view;
       if (typeof hostname === 'string') {
         store.hostname = hostname;
@@ -11062,12 +11090,27 @@
     }
 
     window.closeCpuHistoryModal = function closeCpuHistoryModal() {
+      cpuHistoryRequestGeneration += 1;
+      if (cpuHistoryAbortController) cpuHistoryAbortController.abort();
+      cpuHistoryAbortController = null;
       hideCpuHistoryOverlay();
       resetCpuHistoryWindow();
     };
 
     let cpuHistoryDisplayMetric = 'cpu';
     let cpuHistoryLastPayload = null;
+    let cpuHistoryRequestGeneration = 0;
+    let cpuHistoryAbortController = null;
+    const metricHistoryCache = {};
+
+    function renderMetricHistoryPayload(payload, host, bot, metric) {
+      const points = metricHistorySeriesPoints(metric, payload);
+      cpuHistoryLastPayload = { data: payload, host: host, botName: bot, metric: metric };
+      document.getElementById('cpuHistoryTitle').textContent = metricHistoryTitle(metric, host, bot);
+      document.getElementById('cpuHistorySubtitle').textContent = metricHistorySubtitle(metric, payload);
+      document.getElementById('cpuHistoryMeta').innerHTML = renderCpuHistoryMeta(payload, points, metric);
+      document.getElementById('cpuHistoryBody').innerHTML = renderCpuHistoryChart(payload, points, metric);
+    }
 
     window.openMetricHistory = function openMetricHistory(hostname, metricName, botName) {
       const host = String(hostname || '').trim();
@@ -11075,25 +11118,35 @@
       const requestMetric = metric === 'pnl_fills' ? 'pnl' : metric;
       const bot = String(botName || '').trim();
       if (!host) return;
+      const cacheKey = host + '::' + requestMetric + '::' + bot;
+      const generation = ++cpuHistoryRequestGeneration;
+      if (cpuHistoryAbortController) cpuHistoryAbortController.abort();
+      cpuHistoryAbortController = new AbortController();
       cpuHistoryDisplayMetric = metric;
-      setCpuHistoryLoading(host, bot, metric);
+      if (metricHistoryCache[cacheKey]) {
+        renderMetricHistoryPayload(metricHistoryCache[cacheKey], host, bot, metric);
+      } else {
+        setCpuHistoryLoading(host, bot, metric);
+      }
       showCpuHistoryOverlay();
       prepareCpuHistoryWindow(980, 560);
-      fetch(API_BASE + '/metric-history/' + encodeURIComponent(host) + '?metric=' + encodeURIComponent(requestMetric) + (bot ? '&bot_name=' + encodeURIComponent(bot) : ''), { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+      fetch(API_BASE + '/metric-history/' + encodeURIComponent(host) + '?metric=' + encodeURIComponent(requestMetric) + (bot ? '&bot_name=' + encodeURIComponent(bot) : ''), {
+        headers: { 'Authorization': 'Bearer ' + TOKEN },
+        signal: cpuHistoryAbortController.signal,
+        cache: 'no-store'
+      })
         .then(function (response) {
           if (!response.ok) throw new Error('metric history fetch failed');
           return response.json();
         })
         .then(function (data) {
+          if (generation !== cpuHistoryRequestGeneration) return;
           const payload = data || {};
-          const points = metricHistorySeriesPoints(metric, payload);
-          cpuHistoryLastPayload = { data: payload, host: host, botName: bot, metric: metric };
-          document.getElementById('cpuHistoryTitle').textContent = metricHistoryTitle(metric, host, bot);
-          document.getElementById('cpuHistorySubtitle').textContent = metricHistorySubtitle(metric, payload);
-          document.getElementById('cpuHistoryMeta').innerHTML = renderCpuHistoryMeta(payload, points, metric);
-          document.getElementById('cpuHistoryBody').innerHTML = renderCpuHistoryChart(payload, points, metric);
+          metricHistoryCache[cacheKey] = payload;
+          renderMetricHistoryPayload(payload, host, bot, metric);
         })
         .catch(function (error) {
+          if (generation !== cpuHistoryRequestGeneration || error.name === 'AbortError') return;
           cpuHistoryLastPayload = null;
           document.getElementById('cpuHistorySubtitle').textContent = 'Failed to load history';
           document.getElementById('cpuHistoryBody').innerHTML = '<div class="empty-state">Failed to load ' + esc(metricHistoryMeta(metric).label) + ' history: ' + esc(error.message || error) + '</div>';

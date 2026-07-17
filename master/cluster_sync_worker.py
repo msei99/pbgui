@@ -93,6 +93,7 @@ APPLY_BUNDLE_TARGET_BYTES = 12 * 1024 * 1024
 APPLY_BUNDLE_MAX_OPERATIONS = 16
 DEFAULT_PEER_WORKERS = 4
 RETENTION_EVALUATION_SECONDS = 60 * 60
+PASSIVE_REPLICA_PERIODIC_INTERVAL = 15 * 60
 CHECKPOINT_OPERATION_TRIGGER = 5000
 CHECKPOINT_BYTES_TRIGGER = 10 * 1024 * 1024
 BLOB_COVERAGE_MAX_HASHES_PER_PEER_PASS = 16
@@ -158,7 +159,7 @@ class ClusterSyncWorker:
         _log(SERVICE, "PBCluster worker starting")
         self.run_once(reason="boot")
         self._consume_trigger_change()
-        next_periodic = time.time() + self.interval
+        next_periodic = time.time() + self._periodic_delay()
         while not self._stop.is_set():
             wait_for = min(2.0, max(0.1, next_periodic - time.time()))
             triggered = self._sync_requested.wait(wait_for)
@@ -172,9 +173,37 @@ class ClusterSyncWorker:
             reason = "event" if triggered or trigger_changed else "periodic"
             self.run_once(reason=reason)
             self._consume_trigger_change()
-            if periodic_due or reason == "periodic":
-                next_periodic = time.time() + self.interval
+            next_periodic = time.time() + self._periodic_delay()
         _log(SERVICE, "PBCluster worker stopped")
+
+    def _periodic_delay(self) -> int:
+        """Use event-driven sync with a bounded safety poll on passive VPS replicas."""
+
+        try:
+            identity = read_local_identity(self.cluster_root)
+            materialized = read_materialized_state(self.cluster_root)
+            nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
+            local_node_id = str(identity.get("node_id") or "")
+            local_node = nodes.get(local_node_id) if isinstance(nodes.get(local_node_id), dict) else {}
+            if str(local_node.get("role") or identity.get("role") or "").strip() != "vps":
+                return self.interval
+            for peer_id, peer in nodes.items():
+                if str(peer_id) == local_node_id or not isinstance(peer, dict):
+                    continue
+                if _peer_sync_mode(peer) != "reachable" or not str(peer.get("ssh_host") or "").strip():
+                    continue
+                allowed, _reason = _peer_topology_allows(
+                    local_node_id,
+                    local_node,
+                    str(peer_id),
+                    peer,
+                    nodes,
+                )
+                if allowed:
+                    return self.interval
+            return max(self.interval, PASSIVE_REPLICA_PERIODIC_INTERVAL)
+        except (ClusterStateError, OSError, TypeError, ValueError):
+            return self.interval
 
     def _trigger_mtime(self) -> float:
         """Return the current sync-request trigger mtime."""
@@ -1075,8 +1104,7 @@ class ClusterSyncWorker:
                     f"get-mailbox-message {shlex.quote(message_id)}",
                 )
             except Exception as exc:
-                error = str(exc or "").lower()
-                if "mailbox message not found" in error or "mailbox message has expired" in error:
+                if _is_stale_mailbox_error(exc):
                     continue
                 raise
             message = payload.get("message") if isinstance(payload, dict) else None
@@ -1095,13 +1123,18 @@ class ClusterSyncWorker:
             message_id = str(item["message_id"])
             if message_id in remote_ids:
                 continue
-            message = mailbox.get(message_id)
-            result = self.peer_client.run(
-                peer,
-                local_node_id,
-                "put-mailbox-message",
-                payload=json.dumps(message, sort_keys=True, separators=(",", ":")),
-            )
+            try:
+                message = mailbox.get(message_id)
+                result = self.peer_client.run(
+                    peer,
+                    local_node_id,
+                    "put-mailbox-message",
+                    payload=json.dumps(message, sort_keys=True, separators=(",", ":")),
+                )
+            except Exception as exc:
+                if _is_stale_mailbox_error(exc):
+                    continue
+                raise
             if bool(result.get("created", True)):
                 counts["pushed"] += 1
             mailbox.ack(message_id, str(peer.get("node_id") or ""))
@@ -1640,6 +1673,13 @@ def _peer_sync_mode(peer: dict[str, Any]) -> str:
     if peer.get("state_replica", True) is False:
         return "disabled"
     return normalize_node_sync_mode(peer)
+
+
+def _is_stale_mailbox_error(exc: BaseException) -> bool:
+    """Return whether mailbox delivery raced expiry or recipient collection."""
+
+    error = str(exc or "").lower()
+    return "mailbox message not found" in error or "mailbox message has expired" in error
 
 
 def _peer_topology_allows(

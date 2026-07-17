@@ -17,12 +17,13 @@ def test_cluster_retention_ui_is_explicit_and_fail_safe() -> None:
     assert "fetchJson('/retention/report')" in HTML
     assert "fetchJson('/retention/settings'" in HTML
     assert "Required Blob Set" in HTML
-    assert "Local Garbage Blobs" in HTML
-    assert "Local Garbage Size" in HTML
+    assert "Remaining Local Garbage" in HTML
+    assert "Remaining Garbage Size" in HTML
     assert "blobGc.reachable_digest" in HTML
     assert "blobGc.reachable_blobs" in HTML
-    assert "Blob GC Projection" in HTML
+    assert "Blob GC Result" in HTML
     assert "blobGc.deleted_blobs" in HTML
+    assert "blobGc.eligible_blobs || 0) - Number(blobGc.deleted_blobs" in HTML
     assert "window.PBGuiConfirm" in HTML
     assert "blob_gc_enabled" not in HTML
     assert "window.confirm(" not in HTML

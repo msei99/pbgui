@@ -132,6 +132,29 @@ class TestVpsManagerFrontendLogic:
         assert "task.startEmpty = false" in handle_result
         assert "taskLogViewer.setFile(actualFile)" in handle_result
 
+    def test_host_detail_context_and_full_hydration_have_separate_generations(self) -> None:
+        """Quick socket updates must not cancel same-host background detail hydration."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        handle_message = _extract_function(source, "handleMessage")
+        send_context = _extract_function(source, "sendContext")
+        select_view = _extract_function(source, "selectView")
+
+        assert "contextGeneration: 1" in source
+        assert "context_generation: store.contextGeneration" in send_context
+        assert "incomingGeneration !== store.contextGeneration" in handle_message
+        assert "store.detailAbortController.abort()" not in handle_message
+        assert "store.detail = store.detailCache[nextContext] || null" in select_view
+
+    def test_metric_history_reuses_cache_and_rejects_stale_responses(self) -> None:
+        """Local history renders cached data immediately and aborts obsolete requests."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        open_history = _extract_function(source, "openMetricHistory")
+
+        assert "metricHistoryCache[cacheKey]" in open_history
+        assert "cpuHistoryAbortController.abort()" in open_history
+        assert "generation !== cpuHistoryRequestGeneration" in open_history
+        assert "signal: cpuHistoryAbortController.signal" in open_history
+
     def test_vps_manager_delete_and_remote_purge_are_separate_actions(self) -> None:
         """Deleting a VPS record stays local while remote install purge is explicit."""
         source = HTML_PATH.read_text(encoding="utf-8")

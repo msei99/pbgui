@@ -24,6 +24,15 @@ _OPT_IN_MARKERS = {
 
 
 @pytest.fixture(autouse=True)
+def isolate_test_logs(tmp_path, monkeypatch):
+    """Redirect central application logs away from the production runtime tree."""
+
+    import logging_helpers
+
+    monkeypatch.setattr(logging_helpers, "LOG_ROOT", tmp_path / "logs")
+
+
+@pytest.fixture(autouse=True)
 def skip_production_startup_migrations(monkeypatch):
     """Prevent ordinary lifespan tests from touching runtime migration state."""
     monkeypatch.setenv("PBGUI_SKIP_STARTUP_MIGRATIONS", "1")

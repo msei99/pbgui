@@ -151,7 +151,7 @@ def get_cpu_history(
 
 
 @router.get("/metric-history/{hostname}")
-def get_metric_history(
+async def get_metric_history(
     hostname: str,
     metric: str = Query(default="cpu", description="Metric key: cpu, memory, disk, swap"),
     bot_name: str = Query(default="", description="Optional bot name for bot CPU history"),
@@ -251,7 +251,7 @@ async def ws_vps_manager(websocket: WebSocket):
 
     token = session.token
     service = _get_service()
-    context: dict[str, str] = {"view": "overview", "hostname": "", "token": token}
+    context: dict[str, Any] = {"view": "overview", "hostname": "", "token": token, "generation": 0}
     push_task = asyncio.create_task(_push_loop(websocket, service, context), name="vps-manager-push")
     try:
         async for raw in websocket.iter_text():
@@ -266,6 +266,7 @@ async def ws_vps_manager(websocket: WebSocket):
                 if cmd == "set_context":
                     context["view"] = str(msg.get("view") or "overview")
                     context["hostname"] = str(msg.get("hostname") or "")
+                    context["generation"] = max(int(msg.get("context_generation") or 0), 0)
                     _log(SERVICE, f"set_context view={context['view']} hostname={context['hostname']}", level="INFO")
                     await _send_current_context_detail(websocket, service, context)
                 elif cmd == "refresh":
@@ -592,25 +593,32 @@ async def ws_vps_manager(websocket: WebSocket):
             pass
 
 
-async def _push_loop(websocket: WebSocket, service: VPSManagerService, context: dict[str, str]) -> None:
+async def _push_loop(websocket: WebSocket, service: VPSManagerService, context: dict[str, Any]) -> None:
     last_state = ""
     last_detail = ""
     try:
         while True:
+            context_snapshot = dict(context)
+            detail = await asyncio.to_thread(_build_quick_detail_for_context, service, context_snapshot)
+            if detail is not None:
+                encoded_detail = json.dumps(detail, sort_keys=True, default=str)
+                if encoded_detail != last_detail and context_snapshot.get("generation") == context.get("generation"):
+                    await websocket.send_json({
+                        "type": "detail",
+                        "data": detail,
+                        "context_generation": int(context_snapshot.get("generation") or 0),
+                    })
+                    last_detail = encoded_detail
+            else:
+                last_detail = ""
+
             state = await asyncio.to_thread(service.build_state)
             encoded_state = json.dumps(state, sort_keys=True, default=str)
             if encoded_state != last_state:
                 await websocket.send_json({"type": "state", "data": state})
                 last_state = encoded_state
 
-            detail = await asyncio.to_thread(_build_quick_detail_for_context, service, context)
-            if detail is not None:
-                encoded_detail = json.dumps(detail, sort_keys=True, default=str)
-                if encoded_detail != last_detail:
-                    await websocket.send_json({"type": "detail", "data": detail})
-                    last_detail = encoded_detail
-            else:
-                last_detail = ""
+            await asyncio.to_thread(service.refresh, force=False)
 
             await asyncio.sleep(1)
     except asyncio.CancelledError:
@@ -621,7 +629,7 @@ async def _push_loop(websocket: WebSocket, service: VPSManagerService, context: 
         _log(SERVICE, f"push loop failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
 
 
-def _build_detail_for_context(service: VPSManagerService, context: dict[str, str]) -> DetailPayload | None:
+def _build_detail_for_context(service: VPSManagerService, context: dict[str, Any]) -> DetailPayload | None:
     view = str(context.get("view") or "overview")
     if view in MASTER_CONTEXT_VIEWS:
         return service.build_master_detail()
@@ -639,7 +647,7 @@ def _build_detail_for_context(service: VPSManagerService, context: dict[str, str
     return None
 
 
-def _build_quick_detail_for_context(service: VPSManagerService, context: dict[str, str]) -> DetailPayload | None:
+def _build_quick_detail_for_context(service: VPSManagerService, context: dict[str, Any]) -> DetailPayload | None:
     view = str(context.get("view") or "overview")
     if view in MASTER_CONTEXT_VIEWS:
         return service.build_master_detail_quick()
@@ -657,12 +665,17 @@ def _build_quick_detail_for_context(service: VPSManagerService, context: dict[st
     return None
 
 
-async def _send_current_context_detail(websocket: WebSocket, service: VPSManagerService, context: dict[str, str]) -> None:
-    detail = await asyncio.to_thread(_build_quick_detail_for_context, service, context)
-    if detail is not None:
+async def _send_current_context_detail(websocket: WebSocket, service: VPSManagerService, context: dict[str, Any]) -> None:
+    context_snapshot = dict(context)
+    detail = await asyncio.to_thread(_build_quick_detail_for_context, service, context_snapshot)
+    if detail is not None and context_snapshot.get("generation") == context.get("generation"):
         try:
-            await websocket.send_json({"type": "detail", "data": detail})
-            _log(SERVICE, f"detail sent for {context.get('view')}/{context.get('hostname')}", level="INFO")
+            await websocket.send_json({
+                "type": "detail",
+                "data": detail,
+                "context_generation": int(context_snapshot.get("generation") or 0),
+            })
+            _log(SERVICE, f"detail sent for {context_snapshot.get('view')}/{context_snapshot.get('hostname')}", level="INFO")
         except Exception:
             _log(SERVICE, f"detail send failed for {context.get('view')}/{context.get('hostname')}", level="WARNING")
     else:

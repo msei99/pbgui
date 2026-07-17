@@ -275,6 +275,8 @@ class CmcPoolClient:
             for credential_id, record in catalog.items():
                 if credential_id in desired_metadata:
                     record.update(desired_metadata[credential_id])
+                if record.get("desired_present") is False:
+                    continue
                 before = deepcopy(state["keys"].get(credential_id))
                 key_state = self._reconcile_key_state(state, record, day)
                 changed = changed or before != key_state
@@ -282,6 +284,8 @@ class CmcPoolClient:
                 self._write_state_unlocked(state)
             keys = []
             for credential_id, record in sorted(catalog.items()):
+                if (desired_metadata.get(credential_id) or {}).get("desired_present") is False:
+                    continue
                 key_state = state["keys"].get(credential_id)
                 item = deepcopy_without_secrets(record)
                 if key_state is not None:
@@ -509,6 +513,21 @@ class CmcPoolClient:
                     strict_expected = set()
         except Exception:
             strict_expected = set() if entries or secrets else None
+        desired_ids = {str(credential_id) for credential_id in entries}
+        for credential_id, record in records.items():
+            if credential_id in desired_ids:
+                continue
+            if record.get("active") is True:
+                try:
+                    self.store.update_cmc(credential_id, active=False)
+                except Exception:
+                    pass
+            metadata[credential_id] = {
+                "desired_state": "absent",
+                "desired_generation": 0,
+                "desired_eligible": False,
+                "desired_present": False,
+            }
         for credential_id, entry in entries.items():
             if not isinstance(entry, Mapping):
                 continue
@@ -554,6 +573,7 @@ class CmcPoolClient:
             item["desired_state"] = state
             item["desired_generation"] = expected_generation
             item["desired_eligible"] = eligible
+            item["desired_present"] = True
             metadata[str(credential_id)] = item
         return metadata
 

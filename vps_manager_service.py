@@ -47,6 +47,8 @@ SWAP_OPTIONS = ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"]
 INIT_METHODS = ["root", "password", "private_key"]
 SESSION_SECRET_TTL_SECONDS = 15 * 60
 CLUSTER_IMPORT_JOB_TTL_SECONDS = 30 * 60
+LOCAL_RELEASE_REFRESH_SECONDS = 60 * 60
+LOCAL_PACKAGE_REFRESH_SECONDS = 5 * 60
 IMPORT_KEY_INSTALL_WARNING = "SSH key login is not available yet; saving the import will attempt to install this master's SSH public key for live monitoring."
 # Guardrail: every field listed here is sensitive bootstrap/auth material and
 # must never be written to host JSON or included in normal config/detail payloads.
@@ -1178,6 +1180,8 @@ class VPSManagerService:
         self._pb7_release: dict[str, Any] = {}
         self._pb7_release_ts = 0
         self._local_package_status: dict[str, Any] = {"upgrades": "N/A", "reboot": False}
+        self._local_package_status_ts = 0
+        self._refresh_lock = threading.Lock()
         self._vps_package_status_cache: dict[str, dict[str, Any]] = {}
         # Quick detail is pushed every second. Any status that requires a slower
         # validation step must reuse the last full-detail result instead of
@@ -1488,6 +1492,7 @@ class VPSManagerService:
             "upgrades": upgrades,
             "reboot": reboot_required,
         }
+        self._local_package_status_ts = _now_ts()
 
     def clear_session_secrets(self, token: str) -> None:
         token = str(token or "").strip()
@@ -1646,34 +1651,40 @@ class VPSManagerService:
             self.vpsmanager.load_master()
 
     def refresh(self, *, force: bool = False) -> None:
-        self._sync_vps_inventory()
+        lock = getattr(self, "_refresh_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._refresh_lock = lock
+        if not lock.acquire(blocking=force):
+            return
         try:
-            self._refresh_pbgui_release()
-            self._refresh_pb7_release(_configured_pb7dir())
-        except Exception as exc:
-            _log(SERVICE, f"refresh local versions failed: {exc}", level="WARNING")
+            self._sync_vps_inventory()
+            now = _now_ts()
+            release_stale = (
+                now - min(int(self._pbgui_release_ts or 0), int(self._pb7_release_ts or 0))
+            ) > LOCAL_RELEASE_REFRESH_SECONDS
+            if force or release_stale or not self._first_refresh_done:
+                try:
+                    self._refresh_pbgui_release()
+                except Exception as exc:
+                    _log(SERVICE, f"refresh git origin failed: {exc}", level="WARNING")
+                try:
+                    self._refresh_pb7_release(_configured_pb7dir())
+                except Exception as exc:
+                    _log(SERVICE, f"refresh local commit data failed: {exc}", level="WARNING")
 
-        # Package update and reboot state should refresh on every master detail
-        # fetch so localhost maintenance actions immediately reflect the new
-        # pending-update count instead of waiting for the next full refresh.
-        try:
-            self._refresh_local_package_status()
-        except Exception as exc:
-            _log(SERVICE, f"refresh package status failed: {exc}", level="WARNING")
+            package_stale = (
+                now - int(getattr(self, "_local_package_status_ts", 0) or 0)
+            ) > LOCAL_PACKAGE_REFRESH_SECONDS
+            if force or package_stale or not self._first_refresh_done:
+                try:
+                    self._refresh_local_package_status()
+                except Exception as exc:
+                    _log(SERVICE, f"refresh package status failed: {exc}", level="WARNING")
 
-        stale = (_now_ts() - int(self._pbgui_release_ts or 0)) > 3600
-        full_refresh = force or stale or not self._first_refresh_done
-        if full_refresh:
-            try:
-                self._refresh_pbgui_release()
-            except Exception as exc:
-                _log(SERVICE, f"refresh git origin failed: {exc}", level="WARNING")
-            try:
-                self._refresh_pb7_release(_configured_pb7dir())
-            except Exception as exc:
-                _log(SERVICE, f"refresh local commit data failed: {exc}", level="WARNING")
-
-        self._first_refresh_done = True
+            self._first_refresh_done = True
+        finally:
+            lock.release()
 
     def _cluster_nodes_for_vps_import(self) -> tuple[list[dict[str, Any]], str]:
         """Return materialized Cluster nodes and the local node id for VPS import."""
@@ -2464,7 +2475,7 @@ class VPSManagerService:
             _log(SERVICE, f"immediate host-meta refresh failed for {host}: {exc}", level="WARNING")
 
     def build_state(self) -> dict[str, Any]:
-        self.refresh(force=False)
+        self._sync_vps_inventory()
         monitor_state = self._get_monitor_state()
         overview_rows = self._build_overview_rows(monitor_state)
         vps_logging = self.get_vps_logging_config()
@@ -2751,11 +2762,7 @@ class VPSManagerService:
         }
 
     def build_vps_detail(self, token: str, hostname: str, *, quick: bool = False) -> dict[str, Any]:
-        if not quick:
-            self.refresh(force=False)
         vps = self._require_vps(hostname)
-        if not quick and str(getattr(vps, "update_status", "") or "").strip().lower() in {"successful", "failed", "error", "timeout", "canceled", "cancelled", "unreachable"}:
-            self._refresh_host_meta_now(hostname)
         self._apply_session_secrets_to_vps(token, vps)
         monitor_state = self._get_monitor_state()
         host_state = self._get_host_telemetry(monitor_state, hostname)
@@ -3122,23 +3129,24 @@ class VPSManagerService:
         if not host:
             return {"ok": False, "registered": False, "action": "error", "reason": "Hostname is required."}
         try:
-            from api import cluster
-
-            plan = cluster._build_bootstrap_plan()
+            path = default_cluster_root(Path(PBGDIR)) / "cluster_nodes.json"
+            if not path.is_file():
+                return {"ok": False, "registered": False, "action": "missing", "reason": "Cluster state is not initialized."}
+            cluster_nodes = json.loads(path.read_text(encoding="utf-8"))
         except Exception as exc:
             return {"ok": False, "registered": False, "action": "error", "reason": str(getattr(exc, "detail", None) or exc)}
-        for item in plan.get("items", []) if isinstance(plan, dict) else []:
-            if str(item.get("type") or "") != "node":
+        nodes = cluster_nodes.get("nodes") if isinstance(cluster_nodes, dict) else {}
+        for node_id, item in nodes.items() if isinstance(nodes, dict) else []:
+            if not isinstance(item, dict):
                 continue
-            if str(item.get("hostname") or item.get("pbname") or "").strip() != host:
+            if str(item.get("pbname") or item.get("hostname") or "").strip() != host:
                 continue
-            action = str(item.get("action") or "")
             return {
-                "ok": action != "error",
-                "registered": action == "skip",
-                "action": action,
-                "reason": str(item.get("reason") or ""),
-                "node_id": str(item.get("node_id") or ""),
+                "ok": True,
+                "registered": True,
+                "action": "skip",
+                "reason": "VPS node already registered",
+                "node_id": str(item.get("node_id") or node_id or ""),
             }
         return {"ok": False, "registered": False, "action": "missing", "reason": "VPS host is not known to Cluster bootstrap."}
 
@@ -3726,6 +3734,8 @@ class VPSManagerService:
             return self._master_monitor_payload_cache
         payload = self._empty_monitor_payload()
         payload["server"] = self._build_local_master_server_metrics(master_name)
+        if not refresh:
+            return payload
         snapshot = self._collect_local_master_monitor_snapshot()
         live_stats = self._collect_local_master_live_bot_stats()
         cfg = self.monitor_config
@@ -4973,10 +4983,18 @@ class VPSManagerService:
             vps.command = command
             vps.command_text = command_text
             self.vpsmanager.update_vps(vps, debug=debug, extra_vars=command_extra_vars or None)
+            run_id = str(getattr(vps, "command_run_id", "") or "")
+            task_log_name = ""
+            try:
+                task_log_name = vps._task_log_path(vps.command, COMMAND_VPS_UPDATE).name
+            except Exception:
+                task_log_name = ""
             return {
                 "hostname": hostname,
                 "command": command,
-                "file_alias": f"VPSAction:{hostname}:{command}",
+                "run_id": run_id,
+                "filename": task_log_name,
+                "file_alias": f"VPSAction:{hostname}:{task_log_name or command}",
             }
 
     def _start_vps_config_apply(self, token: str, vps: VPS, *, apply_firewall: bool, apply_swap: bool = False) -> dict[str, Any]:

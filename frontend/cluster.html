@@ -3614,7 +3614,7 @@
             ? 'Detailed snapshot: ' + verified + '/' + total + ' nodes share the committed checkpoint and report healthy automatic cleanup.'
             : 'Detailed snapshot: ' + aligned + '/' + total + ' checkpoints aligned, ' + verified + '/' + total + ' automatic cleanups healthy.';
         }
-        var html = '<table><thead><tr><th>Node</th><th>Automatic Cleanup</th><th>Projection</th><th>Checkpoint</th><th>Eligible Ops</th><th>Eligible Size</th><th>Retained Ops</th><th>Required Blob Set</th><th>Local Garbage Blobs</th><th>Local Garbage Size</th><th>Blob GC Projection</th><th>Migration Seal / Error</th></tr></thead><tbody>';
+        var html = '<table><thead><tr><th>Node</th><th>Automatic Cleanup</th><th>Projection</th><th>Checkpoint</th><th>Eligible Ops</th><th>Eligible Size</th><th>Retained Ops</th><th>Required Blob Set</th><th>Remaining Local Garbage</th><th>Remaining Garbage Size</th><th>Blob GC Result</th><th>Migration Seal / Error</th></tr></thead><tbody>';
         reports.forEach(function (item) {
           var seal = item.migration_seal || {};
           var blobGc = item.blob_gc || null;
@@ -3633,6 +3633,12 @@
             automaticStatus += '; deleted ' + Number(automaticBlobs.deleted_blobs || 0) + ' blobs';
           }
           var blobStatus = 'not reported';
+          var remainingGarbageBlobs = blobGc
+            ? Math.max(0, Number(blobGc.eligible_blobs || 0) - Number(blobGc.deleted_blobs || 0))
+            : null;
+          var remainingGarbageBytes = blobGc
+            ? Math.max(0, Number(blobGc.eligible_bytes || 0) - Number(blobGc.deleted_bytes || 0))
+            : null;
           var reachableDigest = blobGc ? String(blobGc.reachable_digest || '') : '';
           var reachableCount = blobGc ? Number(blobGc.reachable_blobs || 0) : 0;
           var reachableSet = reachableDigest
@@ -3654,8 +3660,8 @@
             + '<td>' + esc(formatBytes(Number(item.eligible_bytes || 0))) + '</td>'
             + '<td>' + esc(Number(item.retained_operations || 0)) + '</td>'
             + '<td>' + reachableSet + '</td>'
-            + '<td>' + esc(blobGc ? Number(blobGc.eligible_blobs || 0) : '-') + '</td>'
-            + '<td>' + esc(blobGc ? formatBytes(Number(blobGc.eligible_bytes || 0)) : '-') + '</td>'
+            + '<td>' + esc(remainingGarbageBlobs === null ? '-' : remainingGarbageBlobs) + '</td>'
+            + '<td>' + esc(remainingGarbageBytes === null ? '-' : formatBytes(remainingGarbageBytes)) + '</td>'
             + '<td>' + esc(blobStatus) + '</td>'
             + '<td>' + esc(detail) + '</td>'
             + '</tr>';

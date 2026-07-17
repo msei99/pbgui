@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1386,7 +1387,15 @@ def test_run_vps_command_uses_master_playbook_for_remote_master_updates() -> Non
 
     service = object.__new__(VPSManagerService)
     service.vpsmanager = SimpleNamespace(update_vps=fake_update_vps)
-    vps = SimpleNamespace(hostname="manibot02", user="mani", remote_pbgui_dir="", user_pw=None, save=lambda: None)
+    vps = SimpleNamespace(
+        hostname="manibot02",
+        user="mani",
+        remote_pbgui_dir="",
+        user_pw=None,
+        command_run_id="run-123",
+        save=lambda: None,
+    )
+    vps._task_log_path = lambda command, fallback: Path(f"{command}--{vps.command_run_id}.log")
     service._require_vps = lambda hostname: vps
     service._apply_session_secrets_to_vps = lambda token, vps: None
     service._get_monitor_state = lambda: {
@@ -1402,7 +1411,9 @@ def test_run_vps_command_uses_master_playbook_for_remote_master_updates() -> Non
     assert result == {
         "hostname": "manibot02",
         "command": "master-update-pbgui",
-        "file_alias": "VPSAction:manibot02:master-update-pbgui",
+        "run_id": "run-123",
+        "filename": "master-update-pbgui--run-123.log",
+        "file_alias": "VPSAction:manibot02:master-update-pbgui--run-123.log",
     }
     assert captured["extra_vars"] == {
         "target_hosts": "manibot02",
@@ -2269,6 +2280,74 @@ def test_vps_manager_context_detail_uses_quick_detail_for_fluid_switching() -> N
     body = source[start:end]
 
     assert "_build_quick_detail_for_context" in body
+
+
+def test_vps_manager_quick_master_detail_never_runs_deep_monitor_collectors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cold-cache quick master detail returns a local snapshot without subprocess collection."""
+    service = object.__new__(VPSManagerService)
+    service._master_monitor_payload_cache = None
+    service._empty_monitor_payload = lambda: {"server": None, "v7": [], "v7_running": [], "logfiles": []}
+    service._build_local_master_server_metrics = lambda hostname: {"hostname": hostname, "cpu": 1.0}
+    service._collect_local_master_monitor_snapshot = lambda: pytest.fail("quick detail ran deep monitor collection")
+    service._collect_local_master_live_bot_stats = lambda: pytest.fail("quick detail ran process collection")
+    monkeypatch.setattr(service_mod, "_local_master_name", lambda: "local-master")
+
+    payload = service._build_local_master_monitor_payload(refresh=False)
+
+    assert payload["server"] == {"hostname": "local-master", "cpu": 1.0}
+    assert payload["v7"] == []
+
+
+def test_vps_manager_refresh_throttles_deep_local_probes() -> None:
+    """Repeated state pushes reuse release and package caches inside their TTLs."""
+    calls: list[str] = []
+    service = object.__new__(VPSManagerService)
+    service._refresh_lock = threading.Lock()
+    service._first_refresh_done = False
+    service._pbgui_release_ts = 0
+    service._pb7_release_ts = 0
+    service._local_package_status_ts = 0
+    service._sync_vps_inventory = lambda: calls.append("inventory")
+    service._refresh_pbgui_release = lambda: (calls.append("pbgui"), setattr(service, "_pbgui_release_ts", int(time.time())))
+    service._refresh_pb7_release = lambda repo: (calls.append("pb7"), setattr(service, "_pb7_release_ts", int(time.time())))
+    service._refresh_local_package_status = lambda: (calls.append("packages"), setattr(service, "_local_package_status_ts", int(time.time())))
+
+    service.refresh()
+    service.refresh()
+
+    assert calls == ["inventory", "pbgui", "pb7", "packages", "inventory"]
+
+
+def test_vps_manager_cluster_status_reads_materialized_nodes_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Quick VPS detail does not build the full Cluster bootstrap plan."""
+    cluster_root = tmp_path / "data" / "cluster"
+    cluster_root.mkdir(parents=True)
+    (cluster_root / "cluster_nodes.json").write_text(
+        json.dumps({"nodes": {"node-1": {"node_id": "node-1", "pbname": "manibot50"}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service_mod, "PBGDIR", tmp_path)
+    service = object.__new__(VPSManagerService)
+
+    status = service._cluster_node_status("manibot50")
+
+    assert status == {
+        "ok": True,
+        "registered": True,
+        "action": "skip",
+        "reason": "VPS node already registered",
+        "node_id": "node-1",
+    }
+
+
+def test_vps_manager_full_detail_does_not_force_host_meta_refresh() -> None:
+    """Opening a host leaves monitor-owned deep metadata collection in the background."""
+    source = Path("vps_manager_service.py").read_text(encoding="utf-8")
+    start = source.index("    def build_vps_detail(")
+    end = source.index("\n    def get_cpu_history", start)
+
+    assert "self.refresh(" not in source[start:end]
+    assert "self._refresh_host_meta_now(" not in source[start:end]
 
 
 def test_systemd_migration_complete_with_unconfigured_pbrun_pbdata_units() -> None:
