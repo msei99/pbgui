@@ -57,6 +57,25 @@ from master.cluster_state import (
 )
 from secure_files import atomic_write_private_bytes, ensure_private_directory_tree
 from master.cluster_ssh_keys import ensure_cluster_ssh_key
+from master.cluster_checkpoint import (
+    ClusterCheckpointError,
+    activate_checkpoint,
+    active_checkpoint_bundle,
+    build_shadow_checkpoint,
+    checkpoint_status,
+    create_checkpoint_ack,
+    create_checkpoint_commit_proof,
+    create_checkpoint_proposal,
+    create_shadow_checkpoint,
+    garbage_collect_blobs,
+    install_rebootstrap_checkpoint,
+    prune_operation_history,
+    read_retention_report,
+    read_shadow_checkpoint,
+    retention_policy,
+    retention_preview,
+    verify_checkpoint_commit_proof,
+)
 from pbgui_purefunc import PBGDIR
 
 SERVICE = "PBCluster"
@@ -66,6 +85,9 @@ CONFIG_BLOB_BATCH_TARGET_BYTES = 12 * 1024 * 1024
 APPLY_BUNDLE_TARGET_BYTES = 12 * 1024 * 1024
 APPLY_BUNDLE_MAX_OPERATIONS = 16
 DEFAULT_PEER_WORKERS = 4
+RETENTION_EVALUATION_SECONDS = 24 * 60 * 60
+CHECKPOINT_OPERATION_TRIGGER = 5000
+CHECKPOINT_BYTES_TRIGGER = 10 * 1024 * 1024
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -301,6 +323,25 @@ class ClusterSyncWorker:
                     level="WARNING",
                 )
 
+            history_materialized = read_materialized_state(self.cluster_root)
+            try:
+                history_retention = self._maintain_history(
+                    identity,
+                    history_materialized,
+                    peer_results,
+                    reason=normalized_reason,
+                )
+                if str(retention_policy(history_materialized).get("mode") or "") != "report_only":
+                    materialized = read_materialized_state(self.cluster_root)
+            except Exception as exc:
+                detail = str(exc)[:240]
+                history_retention = {
+                    "status": "error",
+                    "error": type(exc).__name__,
+                    "detail": detail,
+                }
+                _log(SERVICE, f"Cluster history retention pending: {type(exc).__name__}: {detail}", level="WARNING")
+
             cluster_nodes = materialized.get("cluster_nodes") if isinstance(materialized, dict) else {}
             nodes = cluster_nodes.get("nodes") if isinstance(cluster_nodes, dict) else {}
             nodes = nodes if isinstance(nodes, dict) else {}
@@ -339,6 +380,7 @@ class ClusterSyncWorker:
                 "credential_migration_ack": migration_ack,
                 "credential_migration_advance": migration_advance_status,
                 "credential_reconciliation": credential_reconciliation,
+                "history_retention": history_retention,
             })
             _atomic_write_json(self.status_path, status)
             return status
@@ -354,6 +396,220 @@ class ClusterSyncWorker:
             })
             _atomic_write_json(self.status_path, status)
             return status
+
+    def _maintain_history(
+        self,
+        identity: dict[str, Any],
+        materialized: dict[str, Any],
+        peer_results: list[dict[str, Any]],
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Run bounded checkpoint/report/cleanup maintenance for one worker pass."""
+
+        policy = retention_policy(materialized)
+        now = int(time.time())
+        active = checkpoint_status(self.cluster_root)
+        current_vector = _as_state_vector(materialized.get("state_vector") or {})
+        baseline = _as_state_vector(active.get("checkpoint_baseline") or {})
+        report = read_retention_report(self.cluster_root)
+        report_due = bool(
+            reason in {"boot", "manual"}
+            or not isinstance(report, dict)
+            or int(report.get("evaluated_at") or 0) + RETENTION_EVALUATION_SECONDS <= now
+            or str(report.get("mode") or "") != str(policy.get("mode") or "")
+            or int(report.get("history_days") or 0) != int(policy.get("history_days") or 0)
+        )
+        result: dict[str, Any] = {
+            "status": "idle",
+            "policy": policy,
+            "checkpoint": active,
+            "report_due": report_due,
+        }
+        if str(policy.get("mode") or "report_only") == "report_only":
+            try:
+                shadow = read_shadow_checkpoint(self.cluster_root)
+                shadow_baseline = _as_state_vector((shadow or {}).get("baseline_vector") or {})
+            except (OSError, ClusterCheckpointError):
+                shadow_baseline = {}
+            shadow_tail = _checkpoint_tail_stats(self.cluster_root, shadow_baseline)
+            result["checkpoint_tail"] = shadow_tail
+            report_due = bool(
+                report_due
+                or int(shadow_tail["operations"]) >= CHECKPOINT_OPERATION_TRIGGER
+                or int(shadow_tail["bytes"]) >= CHECKPOINT_BYTES_TRIGGER
+            )
+            result["report_due"] = report_due
+            if report_due:
+                checkpoint = create_shadow_checkpoint(self.cluster_root, created_at=now)
+                preview = retention_preview(self.cluster_root, checkpoint, now=now, item_limit=0)
+                scheduled_report = prune_operation_history(self.cluster_root, now=now, dry_run=True)
+                result.update({
+                    "status": "report_only",
+                    "checkpoint_id": str(checkpoint["checkpoint_id"]),
+                    "migration_seal": checkpoint["migration_seal"],
+                    "eligible_operations": int(preview.get("eligible_operations") or 0),
+                    "eligible_bytes": int(preview.get("eligible_bytes") or 0),
+                    "blockers": list(scheduled_report.get("blockers") or []),
+                })
+            else:
+                result["status"] = "report_only_cached"
+            return result
+
+        nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
+        local_node_id = str(identity.get("node_id") or "")
+        active_masters = sorted(
+            str(node_id)
+            for node_id, node in nodes.items()
+            if isinstance(node, dict)
+            and str(node.get("role") or "") == "master"
+            and node.get("enabled", True) is not False
+            and node.get("state_replica", True) is not False
+        )
+        coordinator = active_masters[0] if active_masters else ""
+        if current_vector != baseline:
+            tail_stats = _checkpoint_tail_stats(self.cluster_root, baseline)
+            result["checkpoint_tail"] = tail_stats
+            checkpoint_due = bool(
+                not active.get("active")
+                or report_due
+                or int(tail_stats["operations"]) >= CHECKPOINT_OPERATION_TRIGGER
+                or int(tail_stats["bytes"]) >= CHECKPOINT_BYTES_TRIGGER
+            )
+            if not checkpoint_due:
+                result["status"] = "checkpoint_tail_pending"
+                return result
+            if local_node_id != coordinator:
+                result.update({"status": "awaiting_checkpoint_coordinator", "coordinator_id": coordinator})
+                return result
+            checkpoint_result = self._commit_checkpoint_clusterwide(
+                identity,
+                materialized,
+                peer_results,
+            )
+            result["checkpoint_commit"] = checkpoint_result
+            if checkpoint_result.get("status") != "committed":
+                result["status"] = "checkpoint_blocked"
+                return result
+            materialized = read_materialized_state(self.cluster_root)
+            result["checkpoint"] = checkpoint_status(self.cluster_root)
+
+        if report_due:
+            prune = prune_operation_history(self.cluster_root, now=now)
+            result["oplog"] = prune
+            if str(policy.get("mode") or "") == "oplog_and_blobs" and prune.get("status") == "complete":
+                result["blobs"] = garbage_collect_blobs(self.cluster_root, now=now)
+            result["status"] = "cleanup_evaluated"
+        else:
+            result["status"] = "cleanup_cached"
+        return result
+
+    def _commit_checkpoint_clusterwide(
+        self,
+        identity: dict[str, Any],
+        materialized: dict[str, Any],
+        peer_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Collect exact replica ACKs and commit one checkpoint on every replica."""
+
+        del peer_results
+        checkpoint = build_shadow_checkpoint(self.cluster_root)
+        seal = checkpoint.get("migration_seal") or {}
+        if seal.get("status") != "sealed":
+            return {"status": "blocked", "blockers": list(seal.get("blockers") or [])}
+        now = int(time.time())
+        proposal = create_checkpoint_proposal(
+            self.cluster_root,
+            checkpoint,
+            created_at=now,
+            expires_at=now + 300,
+        )
+        local_node_id = str(identity.get("node_id") or "")
+        acknowledgements: list[dict[str, Any]] = [
+            create_checkpoint_ack(self.cluster_root, checkpoint, proposal, created_at=now)
+        ]
+        nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
+        required = set(proposal.get("required_node_ids") or [])
+        remote_ids = sorted(required - {local_node_id})
+        unavailable = [
+            node_id for node_id in remote_ids
+            if not isinstance(nodes.get(node_id), dict)
+            or normalize_node_sync_mode(nodes[node_id]) != "reachable"
+            or not str(nodes[node_id].get("ssh_host") or "").strip()
+        ]
+        if unavailable:
+            return {"status": "blocked", "blockers": [f"replica_unreachable:{node_id}" for node_id in unavailable]}
+        prepare_payload = json.dumps(
+            {"checkpoint": checkpoint, "proposal": proposal},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+        def prepare(node_id: str) -> dict[str, Any]:
+            response = self.peer_client.run(
+                nodes[node_id],
+                local_node_id,
+                "prepare-checkpoint",
+                payload=prepare_payload,
+            )
+            ack = response.get("ack") if isinstance(response, dict) else None
+            if not isinstance(ack, dict):
+                raise ClusterSyncWorkerError(f"checkpoint ACK missing from {node_id}")
+            return ack
+
+        try:
+            with ThreadPoolExecutor(
+                max_workers=min(self.peer_workers, max(1, len(remote_ids))),
+                thread_name_prefix="pbcluster-checkpoint-prepare",
+            ) as executor:
+                futures = {executor.submit(prepare, node_id): node_id for node_id in remote_ids}
+                for future in as_completed(futures):
+                    acknowledgements.append(future.result())
+            proof = create_checkpoint_commit_proof(
+                self.cluster_root,
+                checkpoint,
+                proposal,
+                acknowledgements,
+            )
+            commit_payload = json.dumps(
+                {"checkpoint": checkpoint, "commit_proof": proof},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+
+            def commit(node_id: str) -> None:
+                self.peer_client.run(
+                    nodes[node_id],
+                    local_node_id,
+                    "commit-checkpoint",
+                    payload=commit_payload,
+                )
+
+            with ThreadPoolExecutor(
+                max_workers=min(self.peer_workers, max(1, len(remote_ids))),
+                thread_name_prefix="pbcluster-checkpoint-commit",
+            ) as executor:
+                futures = {executor.submit(commit, node_id): node_id for node_id in remote_ids}
+                for future in as_completed(futures):
+                    future.result()
+            if _as_state_vector(read_materialized_state(self.cluster_root).get("state_vector") or {}) != _as_state_vector(checkpoint["baseline_vector"]):
+                raise ClusterSyncWorkerError("local cluster state changed after checkpoint preparation")
+            local_commit = activate_checkpoint(
+                self.cluster_root,
+                checkpoint,
+                commit_proof=proof,
+            )
+            return {
+                "status": "committed",
+                "checkpoint_id": str(checkpoint["checkpoint_id"]),
+                "epoch": int(local_commit["epoch"]),
+                "acknowledgements": len(acknowledgements),
+            }
+        except Exception as exc:
+            return {
+                "status": "blocked",
+                "blockers": [f"checkpoint_protocol:{type(exc).__name__}:{str(exc)[:160]}"],
+            }
 
     def _sync_peers(self, identity: dict[str, Any], materialized: dict[str, Any]) -> list[dict[str, Any]]:
         """Synchronize with all currently known reachable peers."""
@@ -494,6 +750,19 @@ class ClusterSyncWorker:
         remote_node_id = str(hello.get("node_id") or "")
         if peer_id and remote_node_id and remote_node_id != peer_id:
             raise ClusterSyncWorkerError("peer node_id does not match cluster_nodes")
+        checkpoint_action = self._reconcile_peer_checkpoint(
+            peer,
+            local_node_id,
+            hello,
+            local_vector,
+        )
+        if checkpoint_action == "local_installed":
+            local_materialized = read_materialized_state(self.cluster_root)
+            local_vector = _as_state_vector(local_materialized.get("state_vector") or {})
+        elif checkpoint_action == "remote_installed":
+            remote_vector = _as_state_vector(
+                checkpoint_status(self.cluster_root).get("checkpoint_baseline") or {}
+            )
         with self._local_state_lock:
             key_changed = self._record_peer_cluster_ssh_metadata(peer, hello)
 
@@ -572,9 +841,116 @@ class ClusterSyncWorker:
             "mailbox_pulled": mailbox_counts["pulled"],
             "mailbox_pushed": mailbox_counts["pushed"],
             "mailbox_acked": mailbox_counts["acked"],
+            "checkpoint_action": checkpoint_action,
             "last_seen": int(time.time()),
         })
         return base_result
+
+    def _reconcile_peer_checkpoint(
+        self,
+        peer: dict[str, Any],
+        local_node_id: str,
+        hello: dict[str, Any],
+        local_vector: dict[str, int],
+    ) -> str:
+        """Install the newer proven checkpoint before comparing operation tails."""
+
+        local = checkpoint_status(self.cluster_root)
+        local_id = str(local.get("checkpoint_id") or "")
+        remote_id = str(hello.get("checkpoint_id") or "")
+        if local_id == remote_id:
+            return "current" if local_id else "none"
+        local_baseline = _as_state_vector(local.get("checkpoint_baseline") or {})
+        remote_baseline = _as_state_vector(hello.get("checkpoint_baseline") or {})
+        actors = set(local_baseline) | set(remote_baseline)
+        remote_dominates = all(remote_baseline.get(actor, 0) >= local_baseline.get(actor, 0) for actor in actors)
+        local_dominates = all(local_baseline.get(actor, 0) >= remote_baseline.get(actor, 0) for actor in actors)
+        if local_id and remote_id and (not remote_dominates and not local_dominates):
+            raise ClusterSyncWorkerError("peer checkpoint baselines are incomparable")
+        if local_id and remote_id and local_baseline == remote_baseline:
+            raise ClusterSyncWorkerError("peer reports a different checkpoint for the same baseline")
+        if remote_id and (not local_id or remote_dominates):
+            payload = self.peer_client.run(peer, local_node_id, "get-checkpoint-state")
+            bundle = payload.get("bundle") if isinstance(payload, dict) else None
+            checkpoint = bundle.get("checkpoint") if isinstance(bundle, dict) else None
+            proof = bundle.get("commit_proof") if isinstance(bundle, dict) else None
+            if not isinstance(checkpoint, dict) or not isinstance(proof, dict):
+                raise ClusterSyncWorkerError("peer checkpoint bundle is incomplete")
+            if str(checkpoint.get("checkpoint_id") or "") != remote_id:
+                raise ClusterSyncWorkerError("peer checkpoint bundle ID mismatch")
+            verify_checkpoint_commit_proof(checkpoint, proof)
+            self._pull_checkpoint_blobs(peer, local_node_id, checkpoint)
+            install_rebootstrap_checkpoint(self.cluster_root, checkpoint, proof)
+            return "local_installed"
+        if local_id and (not remote_id or local_dominates):
+            bundle = active_checkpoint_bundle(self.cluster_root)
+            if not isinstance(bundle, dict):
+                raise ClusterSyncWorkerError("local checkpoint bundle is unavailable")
+            checkpoint = bundle["checkpoint"]
+            proof = bundle["commit_proof"]
+            self._push_checkpoint_blobs(peer, local_node_id, checkpoint)
+            payload = json.dumps(
+                {"checkpoint": checkpoint, "commit_proof": proof},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            self.peer_client.run(peer, local_node_id, "install-checkpoint", payload=payload)
+            return "remote_installed"
+        raise ClusterSyncWorkerError("checkpoint negotiation could not select a safe direction")
+
+    def _pull_checkpoint_blobs(
+        self,
+        peer: dict[str, Any],
+        local_node_id: str,
+        checkpoint: dict[str, Any],
+    ) -> None:
+        """Pull every direct and manifest-expanded blob needed by a checkpoint."""
+
+        refs = checkpoint.get("blob_refs") or {}
+        paths = ClusterPaths.from_root(self.cluster_root)
+        for blob_hash in refs.get("config") or []:
+            raw = self._ensure_remote_blob(peer, local_node_id, paths.config_blobs, str(blob_hash), secret=False)
+            manifest_raw = raw if raw is not None else _read_local_blob(paths.config_blobs, str(blob_hash))
+            for child_hash in _manifest_file_hashes(manifest_raw):
+                self._ensure_remote_blob(peer, local_node_id, paths.config_blobs, child_hash, secret=False)
+        for blob_hash in refs.get("secret") or []:
+            self._ensure_remote_blob(peer, local_node_id, paths.secret_blobs, str(blob_hash), secret=True)
+        for blob_hash in refs.get("sealed") or []:
+            self._ensure_remote_blob(
+                peer,
+                local_node_id,
+                paths.sealed_blobs,
+                str(blob_hash),
+                secret=True,
+                sealed=True,
+            )
+
+    def _push_checkpoint_blobs(
+        self,
+        peer: dict[str, Any],
+        local_node_id: str,
+        checkpoint: dict[str, Any],
+    ) -> None:
+        """Push every checkpoint-reachable blob before remote rebootstrap."""
+
+        refs = checkpoint.get("blob_refs") or {}
+        paths = ClusterPaths.from_root(self.cluster_root)
+        config_hashes = {str(item) for item in refs.get("config") or []}
+        for manifest_hash in list(config_hashes):
+            for child_hash in _manifest_file_hashes(_read_local_blob(paths.config_blobs, manifest_hash)):
+                config_hashes.add(child_hash)
+        config_blobs = [
+            {"hash": blob_hash, "raw": _read_local_blob(paths.config_blobs, blob_hash)}
+            for blob_hash in sorted(config_hashes)
+        ]
+        for chunk in _chunk_config_blobs(config_blobs):
+            self.peer_client.run(peer, local_node_id, "put-blobs", payload=_blob_batch_payload(chunk))
+        for blob_hash in refs.get("secret") or []:
+            raw = _read_local_blob(paths.secret_blobs, str(blob_hash))
+            self.peer_client.run(peer, local_node_id, f"put-secret-blob {shlex.quote(str(blob_hash))}", payload=raw)
+        for blob_hash in refs.get("sealed") or []:
+            raw = _read_local_blob(paths.sealed_blobs, str(blob_hash))
+            self.peer_client.run(peer, local_node_id, f"put-sealed-blob {shlex.quote(str(blob_hash))}", payload=raw)
 
     def _sync_mailbox(
         self,
@@ -1058,6 +1434,27 @@ def _as_state_vector(value: Any) -> dict[str, int]:
         if parsed > 0:
             result[str(actor)] = parsed
     return result
+
+
+def _checkpoint_tail_stats(cluster_root: Path, baseline: Mapping[str, int]) -> dict[str, int]:
+    """Return operation count and bytes strictly above one checkpoint baseline."""
+
+    oplog = ClusterPaths.from_root(cluster_root).oplog
+    operations = 0
+    size = 0
+    if not oplog.exists():
+        return {"operations": 0, "bytes": 0}
+    for actor_dir in (path for path in oplog.iterdir() if path.is_dir()):
+        actor_baseline = int(baseline.get(str(actor_dir.name), 0))
+        for path in actor_dir.glob("*.json"):
+            try:
+                if int(path.stem) <= actor_baseline:
+                    continue
+                size += int(path.stat().st_size)
+            except (OSError, ValueError) as exc:
+                raise ClusterSyncWorkerError("checkpoint tail contains an invalid operation file") from exc
+            operations += 1
+    return {"operations": operations, "bytes": size}
 
 
 def _state_vector_from_operations(operations: list[dict[str, Any]]) -> dict[str, int]:

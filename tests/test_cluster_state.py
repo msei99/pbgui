@@ -863,6 +863,57 @@ def test_v1_operations_remain_unsigned_and_v2_signature_detects_tampering(tmp_pa
         validate_operation(tampered, cluster_root=root)
 
 
+def test_retention_policy_is_signed_and_materialized_fail_safe(tmp_path: Path) -> None:
+    """Cluster retention is signed and conflicts always fall back to report-only."""
+
+    root = _init_cluster(tmp_path)
+    _add_local_crypto_membership(root)
+    policy = append_operation(
+        root,
+        "SET_RETENTION_POLICY",
+        {
+            "generation": 1,
+            "parent_generation": 0,
+            "mode": "oplog",
+            "history_days": 7,
+        },
+        created_at=102,
+    )
+
+    assert policy["signature_algorithm"] == "Ed25519"
+    materialized = rebuild_materialized_state(root, write=False)
+    assert materialized["desired_state"]["retention_policy"] == {
+        "generation": 1,
+        "parent_generation": 0,
+        "mode": "oplog",
+        "history_days": 7,
+        "updated_by": NODE_A,
+        "updated_at": 102,
+        "op_id": policy["op_id"],
+        "conflicted": False,
+    }
+
+    tampered = dict(policy)
+    tampered["history_days"] = 30
+    with pytest.raises(ClusterStateError, match="signature"):
+        validate_operation(tampered, cluster_root=root)
+
+    append_operation(
+        root,
+        "SET_RETENTION_POLICY",
+        {
+            "generation": 2,
+            "parent_generation": 0,
+            "mode": "oplog_and_blobs",
+            "history_days": 30,
+        },
+        created_at=103,
+    )
+    conflicted = rebuild_materialized_state(root, write=False)["desired_state"]["retention_policy"]
+    assert conflicted["conflicted"] is True
+    assert conflicted["mode"] == "report_only"
+
+
 def test_initial_self_add_and_authorized_join_are_signed(tmp_path: Path) -> None:
     """Bootstrap is self-signed and later joins require separate master approval."""
 
@@ -974,6 +1025,26 @@ def test_vps_cannot_claim_master_role_for_credential_admin_operations(tmp_path: 
 
     with pytest.raises(ClusterStateError, match="authenticated master"):
         write_operation(root, forged_admin, network_input=True)
+
+    forged_policy = sign_operation(
+        _operation(
+            NODE_B,
+            1,
+            "SET_RETENTION_POLICY",
+            {
+                "generation": 1,
+                "parent_generation": 0,
+                "mode": "oplog",
+                "history_days": 7,
+                "actor_role_epoch": 1,
+                "actor_membership_op_id": f"{NODE_A}:00000002",
+            },
+        ) | {"created_at": 104},
+        vps_keys.signing_private_key,
+        signer_id=NODE_B,
+    )
+    with pytest.raises(ClusterStateError, match="authenticated master"):
+        write_operation(root, forged_policy, network_input=True)
 
     master_operation = append_operation(
         root,

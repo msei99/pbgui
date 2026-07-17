@@ -17,6 +17,7 @@ import os
 import shlex
 import shutil
 import sys
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ from cluster_credentials import (
     ensure_node_key_material,
     load_node_encryption_private_keys,
     open_sealed_secret,
+    verify_operation,
     validate_sealed_secret,
 )
 from cmc_leases import (
@@ -40,6 +42,7 @@ from cmc_leases import (
     MAX_MAILBOX_MESSAGE_BYTES,
 )
 from credential_store import CredentialStore
+from file_lock import advisory_file_lock
 from master.cluster_state import (
     ClusterPaths,
     ClusterStateError,
@@ -59,6 +62,20 @@ from master.cluster_state import (
     write_operation,
 )
 from master.cluster_ssh_keys import ensure_cluster_ssh_key
+from master.cluster_checkpoint import (
+    ClusterCheckpointError,
+    activate_checkpoint,
+    active_checkpoint_baseline,
+    active_checkpoint_bundle,
+    build_shadow_checkpoint,
+    checkpoint_status,
+    create_checkpoint_ack,
+    install_rebootstrap_checkpoint,
+    retention_preview,
+    verify_checkpoint_commit_proof,
+    verify_checkpoint_proposal,
+    write_checkpoint_object,
+)
 from pb7_api_keys import (
     PB7ApiKeysMergeWriter,
     build_tradfi_projection,
@@ -77,6 +94,7 @@ MAX_CONFIG_BLOB_BATCH_BYTES = 16 * 1024 * 1024
 MAX_SECRET_BLOB_BYTES = 1024 * 1024
 MAX_SEALED_BLOB_BYTES = 16 * 1024 * 1024
 MAX_APPLY_BUNDLE_BYTES = 24 * 1024 * 1024
+MAX_CHECKPOINT_BYTES = 32 * 1024 * 1024
 MAX_GET_OPS = 1000
 MAX_GET_BLOBS = 100
 MAILBOX_INDEX_VERBS = frozenset({"get-mailbox-index", "mailbox-list"})
@@ -99,9 +117,15 @@ READ_VERBS = frozenset({
     "materialize-v7-preview",
     "materialize-api-keys-preview",
     "materialize-credentials-preview",
+    "get-checkpoint-state",
+    "retention-preview",
+    "join-checkpoint-state",
+    "join-get-blob",
+    "join-state-vector",
+    "join-get-ops",
 })
-WRITE_VERBS = frozenset({"join", "join-hello", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "rebuild", "materialize-v7", "materialize-api-keys", "materialize-credentials", *MAILBOX_PUT_VERBS, *MAILBOX_ACK_VERBS})
-STDIN_VERBS = frozenset({"put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", *MAILBOX_PUT_VERBS})
+WRITE_VERBS = frozenset({"join", "join-hello", "join-checkpoint", "join-register", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "rebuild", "materialize-v7", "materialize-api-keys", "materialize-credentials", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", *MAILBOX_PUT_VERBS, *MAILBOX_ACK_VERBS})
+STDIN_VERBS = frozenset({"join-checkpoint", "join-register", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", *MAILBOX_PUT_VERBS})
 SUPPORTED_VERBS = READ_VERBS | WRITE_VERBS
 
 
@@ -140,6 +164,150 @@ def run_command(
             lambda: create_join_authorization(root, subject, role)
         )
         return payload
+    if verb == "join-checkpoint":
+        if not allow_join:
+            raise ClusterSyncCommandError("join-checkpoint requires allow_join")
+        _require_arity(tokens, 1)
+        payload = _read_checkpoint_control_payload(stdin_data)
+        cluster_id = _validate_cluster_id(payload.get("cluster_id"))
+        node_id = _validate_node_id(payload.get("node_id"), "node_id")
+        role = _validate_role(payload.get("role"))
+        pbname = str(payload.get("pbname") or "").strip()
+        checkpoint = payload.get("checkpoint")
+        proof = payload.get("commit_proof")
+        authorization = payload.get("authorization")
+        anchor_public_key = str(payload.get("anchor_public_key") or "")
+        if not isinstance(checkpoint, dict) or not isinstance(proof, dict) or not isinstance(authorization, dict):
+            raise ClusterSyncCommandError("join-checkpoint payload is incomplete")
+        if str(proof.get("coordinator_id") or "") != remote_node:
+            raise ClusterSyncCommandError("join-checkpoint caller must be checkpoint coordinator")
+        identity = _safe_state_call(
+            lambda: ensure_local_identity(
+                root,
+                role=role,
+                pbname=pbname,
+                cluster_id=cluster_id,
+                node_id=node_id,
+            )
+        )
+        try:
+            installed = install_rebootstrap_checkpoint(
+                root,
+                checkpoint,
+                proof,
+                join_authorization=authorization,
+                join_anchor_public_key=anchor_public_key,
+                defer_blob_validation=True,
+            )
+            membership = append_operation(
+                root,
+                "ADD_NODE",
+                {
+                    "node_id": node_id,
+                    "role": role,
+                    "pbname": pbname,
+                    "membership_authorization": authorization,
+                },
+            )
+            rebuild_materialized_state(root)
+        except (ClusterCheckpointError, ClusterStateError) as exc:
+            raise ClusterSyncCommandError(str(exc)) from exc
+        return {
+            "ok": True,
+            "cluster_id": str(identity["cluster_id"]),
+            "node_id": str(identity["node_id"]),
+            "role": role,
+            "pbname": pbname,
+            "joined_by": remote_node,
+            "checkpoint_id": str(checkpoint["checkpoint_id"]),
+            "checkpoint_epoch": int(installed["epoch"]),
+            "membership_op_id": str(membership["op_id"]),
+        }
+    if verb == "join-checkpoint-state":
+        if not allow_join:
+            raise ClusterSyncCommandError("join-checkpoint-state requires allow_join")
+        _require_arity(tokens, 2)
+        authorization = _verified_join_authorization(root, remote_node, tokens[1])
+        bundle = active_checkpoint_bundle(root)
+        if bundle is None:
+            return {"ok": True, "status": "missing", "bundle": None}
+        if str(bundle["commit_proof"].get("coordinator_id") or "") != str(authorization.get("signer_id") or ""):
+            raise ClusterSyncCommandError("join must use the elected checkpoint coordinator")
+        return {"ok": True, "status": "current", "bundle": bundle}
+    if verb == "join-state-vector":
+        if not allow_join:
+            raise ClusterSyncCommandError("join-state-vector requires allow_join")
+        _require_arity(tokens, 2)
+        _verified_join_authorization(root, remote_node, tokens[1])
+        materialized = _safe_state_call(lambda: rebuild_materialized_state(root, write=False))
+        return {
+            "ok": True,
+            "cluster_id": str((materialized.get("cluster_nodes") or {}).get("cluster_id") or ""),
+            "node_id": str(read_local_identity(root)["node_id"]),
+            "state_vector": materialized.get("state_vector") or {},
+            **checkpoint_status(root),
+        }
+    if verb == "join-get-ops":
+        if not allow_join:
+            raise ClusterSyncCommandError("join-get-ops requires allow_join")
+        _require_arity(tokens, 5)
+        _verified_join_authorization(root, remote_node, tokens[1])
+        actor = _validate_node_id(tokens[2], "actor")
+        from_seq = _parse_positive_int(tokens[3], "from_seq")
+        to_seq = _parse_positive_int(tokens[4], "to_seq")
+        if to_seq < from_seq or to_seq - from_seq + 1 > MAX_GET_OPS:
+            raise ClusterSyncCommandError("invalid join operation range")
+        baseline = active_checkpoint_baseline(root)
+        if from_seq <= int(baseline.get(actor, 0)):
+            return {"ok": False, "status": "checkpoint_required", **checkpoint_status(root)}
+        identity = read_local_identity(root)
+        operations, missing = _read_operation_range(
+            root,
+            actor,
+            from_seq,
+            to_seq,
+            expected_cluster_id=str(identity["cluster_id"]),
+        )
+        return {
+            "ok": True,
+            "cluster_id": str(identity["cluster_id"]),
+            "node_id": str(identity["node_id"]),
+            "operations": operations,
+            "missing": missing,
+        }
+    if verb == "join-get-blob":
+        if not allow_join:
+            raise ClusterSyncCommandError("join-get-blob requires allow_join")
+        _require_arity(tokens, 4)
+        _verified_join_authorization(root, remote_node, tokens[1])
+        kind = str(tokens[2])
+        blob_hash = _validate_hash(tokens[3])
+        paths = ClusterPaths.from_root(root)
+        if not _join_blob_allowed(root, kind, blob_hash):
+            raise ClusterSyncCommandError("join blob is not referenced by the active checkpoint")
+        if kind == "config":
+            return _read_blob_response(paths.config_blobs, blob_hash, secret=False, cluster_root=root)
+        if kind == "secret":
+            return _read_blob_response(paths.secret_blobs, blob_hash, secret=True)
+        if kind == "sealed":
+            return _read_blob_response(paths.sealed_blobs, blob_hash, secret=True)
+        raise ClusterSyncCommandError("invalid join blob kind")
+    if verb == "join-register":
+        if not allow_join:
+            raise ClusterSyncCommandError("join-register requires allow_join")
+        _require_arity(tokens, 2)
+        authorization = _verified_join_authorization(root, remote_node, tokens[1])
+        operation = _read_json_payload(stdin_data, MAX_OPERATION_BYTES)
+        if (
+            str(operation.get("op") or "") != "ADD_NODE"
+            or str(operation.get("actor") or "") != remote_node
+            or str(operation.get("node_id") or "") != remote_node
+            or operation.get("membership_authorization") != authorization
+        ):
+            raise ClusterSyncCommandError("join-register accepts only the authorized node self-add")
+        _safe_state_call(lambda: write_operation(root, operation, network_input=True))
+        _safe_state_call(lambda: rebuild_materialized_state(root))
+        return {"ok": True, "op_id": str(operation["op_id"]), "node_id": remote_node}
 
     identity = read_local_identity(root)
     cluster_id = str(identity["cluster_id"])
@@ -162,6 +330,7 @@ def run_command(
             "cluster_id": cluster_id,
             "node_id": str(identity["node_id"]),
             "state_vector": materialized.get("state_vector") or {},
+            **checkpoint_status(root),
         }
     if verb == "get-desired-state":
         materialized = _read_materialized_snapshot(root)
@@ -176,6 +345,15 @@ def run_command(
         actor = _validate_node_id(tokens[1], "actor")
         from_seq = _parse_positive_int(tokens[2], "from_seq")
         to_seq = _parse_positive_int(tokens[3], "to_seq") if len(tokens) == 4 else from_seq
+        baseline = active_checkpoint_baseline(root)
+        if from_seq <= int(baseline.get(actor, 0)):
+            return {
+                "ok": False,
+                "status": "checkpoint_required",
+                "cluster_id": cluster_id,
+                "node_id": str(identity["node_id"]),
+                **checkpoint_status(root),
+            }
         operations, missing = _read_operation_range(root, actor, from_seq, to_seq, expected_cluster_id=cluster_id)
         return {
             "ok": True,
@@ -223,6 +401,95 @@ def run_command(
         return _materialize_api_keys(root, write=False)
     if verb == "materialize-credentials-preview":
         return _materialize_credentials(root, write=False)
+    if verb == "get-checkpoint-state":
+        _require_arity(tokens, 1)
+        bundle = active_checkpoint_bundle(root)
+        return {
+            "ok": True,
+            "status": "current" if bundle is not None else "missing",
+            "bundle": bundle,
+        }
+    if verb == "retention-preview":
+        _require_arity(tokens, 1)
+        checkpoint = build_shadow_checkpoint(root)
+        preview = retention_preview(root, checkpoint, item_limit=200)
+        return {"ok": True, **preview}
+    if verb == "prepare-checkpoint":
+        _require_arity(tokens, 1)
+        payload = _read_checkpoint_control_payload(stdin_data)
+        checkpoint = payload.get("checkpoint")
+        proposal = payload.get("proposal")
+        if not isinstance(checkpoint, dict) or not isinstance(proposal, dict):
+            raise ClusterSyncCommandError("checkpoint prepare payload is incomplete")
+        try:
+            verified = verify_checkpoint_proposal(checkpoint, proposal)
+            with advisory_file_lock(root / ".append_sequence"):
+                local = build_shadow_checkpoint(
+                    root,
+                    created_at=int(checkpoint.get("created_at") or 0),
+                    history_seconds=int(checkpoint.get("history_seconds") or 0),
+                )
+                if local["checkpoint_id"] != checkpoint.get("checkpoint_id"):
+                    raise ClusterCheckpointError("local checkpoint does not match proposal")
+                write_checkpoint_object(root, local)
+                ack = create_checkpoint_ack(root, local, verified)
+                _cleanup_expired_prepared_checkpoints(root)
+                prepared_path = _prepared_checkpoint_path(root, str(verified["proposal_id"]))
+                atomic_write_private_bytes(
+                    prepared_path,
+                    (json.dumps({
+                        "checkpoint_id": str(local["checkpoint_id"]),
+                        "proposal_id": str(verified["proposal_id"]),
+                        "expires_at": int(verified["expires_at"]),
+                    }, indent=4, sort_keys=True) + "\n").encode("utf-8"),
+                )
+        except ClusterCheckpointError as exc:
+            raise ClusterSyncCommandError(str(exc)) from exc
+        return {"ok": True, "status": "prepared", "checkpoint_id": local["checkpoint_id"], "ack": ack}
+    if verb == "commit-checkpoint":
+        _require_arity(tokens, 1)
+        payload = _read_checkpoint_control_payload(stdin_data)
+        checkpoint = payload.get("checkpoint")
+        proof = payload.get("commit_proof")
+        if not isinstance(checkpoint, dict) or not isinstance(proof, dict):
+            raise ClusterSyncCommandError("checkpoint commit payload is incomplete")
+        try:
+            verified_proof = verify_checkpoint_commit_proof(checkpoint, proof)
+            prepared_path = _prepared_checkpoint_path(root, str(verified_proof["proposal_id"]))
+            if prepared_path.is_symlink() or not prepared_path.is_file():
+                raise ClusterCheckpointError("checkpoint was not prepared locally")
+            prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(prepared, dict)
+                or prepared.get("checkpoint_id") != checkpoint.get("checkpoint_id")
+                or int(prepared.get("expires_at") or 0) <= int(time.time())
+            ):
+                raise ClusterCheckpointError("prepared checkpoint is invalid or expired")
+            current_vector = (rebuild_materialized_state(root, write=False).get("state_vector") or {})
+            if current_vector != checkpoint.get("baseline_vector"):
+                raise ClusterCheckpointError("cluster state changed after checkpoint preparation")
+            commit = activate_checkpoint(root, checkpoint, commit_proof=proof)
+            prepared_path.unlink(missing_ok=True)
+        except ClusterCheckpointError as exc:
+            raise ClusterSyncCommandError(str(exc)) from exc
+        return {
+            "ok": True,
+            "status": "committed",
+            "checkpoint_id": str(checkpoint["checkpoint_id"]),
+            "epoch": int(commit["epoch"]),
+        }
+    if verb == "install-checkpoint":
+        _require_arity(tokens, 1)
+        payload = _read_checkpoint_control_payload(stdin_data)
+        checkpoint = payload.get("checkpoint")
+        proof = payload.get("commit_proof")
+        if not isinstance(checkpoint, dict) or not isinstance(proof, dict):
+            raise ClusterSyncCommandError("checkpoint install payload is incomplete")
+        try:
+            result = install_rebootstrap_checkpoint(root, checkpoint, proof)
+        except ClusterCheckpointError as exc:
+            raise ClusterSyncCommandError(str(exc)) from exc
+        return {"ok": True, **result}
     if verb == "rebuild":
         materialized = _safe_state_call(lambda: rebuild_materialized_state(root))
         return {
@@ -293,28 +560,32 @@ def run_command(
     if verb == "put-blob":
         _require_arity(tokens, 2)
         blob_hash = _validate_hash(tokens[1])
-        path = _write_blob(paths.config_blobs, blob_hash, stdin_data, MAX_CONFIG_BLOB_BYTES, secret=False)
+        with advisory_file_lock(root / ".append_sequence"):
+            path = _write_blob(paths.config_blobs, blob_hash, stdin_data, MAX_CONFIG_BLOB_BYTES, secret=False)
         return {"ok": True, "hash": blob_hash, "path": _relative_cluster_path(paths.root, path)}
     if verb == "put-blobs":
         _require_arity(tokens, 1)
         blobs = _read_blob_batch_payload(stdin_data)
         written: list[dict[str, str]] = []
-        for blob in blobs:
-            path = _write_blob(paths.config_blobs, str(blob["hash"]), blob["raw"], MAX_CONFIG_BLOB_BYTES, secret=False)
-            written.append({"hash": str(blob["hash"]), "path": _relative_cluster_path(paths.root, path)})
+        with advisory_file_lock(root / ".append_sequence"):
+            for blob in blobs:
+                path = _write_blob(paths.config_blobs, str(blob["hash"]), blob["raw"], MAX_CONFIG_BLOB_BYTES, secret=False)
+                written.append({"hash": str(blob["hash"]), "path": _relative_cluster_path(paths.root, path)})
         return {"ok": True, "count": len(written), "blobs": written}
     if verb == "put-secret-blob":
         _require_arity(tokens, 2)
         blob_hash = _validate_hash(tokens[1])
         if blob_hash in set((_credential_cutoff(root) or {}).get("obsolete_secret_blob_hashes") or []):
             raise ClusterSyncCommandError("pre-cutoff plaintext secret blob is obsolete")
-        path = _write_blob(paths.secret_blobs, blob_hash, stdin_data, MAX_SECRET_BLOB_BYTES, secret=True)
+        with advisory_file_lock(root / ".append_sequence"):
+            path = _write_blob(paths.secret_blobs, blob_hash, stdin_data, MAX_SECRET_BLOB_BYTES, secret=True)
         return {"ok": True, "hash": blob_hash, "path": _relative_cluster_path(paths.root, path)}
     if verb == "put-sealed-blob":
         _require_arity(tokens, 2)
         blob_hash = _validate_hash(tokens[1])
         _validate_sealed_blob_payload(root, stdin_data)
-        path = _write_blob(paths.sealed_blobs, blob_hash, stdin_data, MAX_SEALED_BLOB_BYTES, secret=True)
+        with advisory_file_lock(root / ".append_sequence"):
+            path = _write_blob(paths.sealed_blobs, blob_hash, stdin_data, MAX_SEALED_BLOB_BYTES, secret=True)
         return {"ok": True, "hash": blob_hash, "path": _relative_cluster_path(paths.root, path)}
     if verb in MAILBOX_PUT_VERBS:
         _require_arity(tokens, 1)
@@ -333,7 +604,8 @@ def run_command(
         return {"ok": True, "message_id": tokens[1], "created": bool(created)}
     if verb == "apply-bundle":
         _require_arity(tokens, 1)
-        return _apply_bundle(root, paths, cluster_id, stdin_data, remote_node=remote_node)
+        with advisory_file_lock(root / ".append_sequence"):
+            return _apply_bundle(root, paths, cluster_id, stdin_data, remote_node=remote_node)
     raise ClusterSyncCommandError(f"unsupported command: {verb}")
 
 
@@ -371,7 +643,7 @@ def _read_stdin_for_command(command_text: str) -> bytes:
     tokens = _parse_command(command_text)
     if tokens[0] not in STDIN_VERBS:
         return b""
-    return sys.stdin.buffer.read(max(MAX_CONFIG_BLOB_BATCH_BYTES, MAX_CONFIG_BLOB_BYTES, MAX_OPERATION_BATCH_BYTES, MAX_APPLY_BUNDLE_BYTES) + 1)
+    return sys.stdin.buffer.read(max(MAX_CONFIG_BLOB_BATCH_BYTES, MAX_CONFIG_BLOB_BYTES, MAX_OPERATION_BATCH_BYTES, MAX_APPLY_BUNDLE_BYTES, MAX_CHECKPOINT_BYTES) + 1)
 
 
 def _hello_payload(cluster_root: Path, identity: dict[str, Any], remote_node: str) -> dict[str, Any]:
@@ -385,6 +657,8 @@ def _hello_payload(cluster_root: Path, identity: dict[str, Any], remote_node: st
         "role": str(identity.get("role") or ""),
         "remote_node": remote_node,
         "mailbox_capability": True,
+        "checkpoint_capability": True,
+        **checkpoint_status(cluster_root),
     }
     try:
         crypto = ensure_node_key_material(cluster_root)
@@ -484,6 +758,83 @@ def _join_cluster(cluster_root: Path, remote_node: str, tokens: list[str], *, al
         "joined_by": remote_node,
         "membership_op_id": str((membership or {}).get("op_id") or ""),
     }
+
+
+def _verified_join_authorization(
+    cluster_root: Path,
+    remote_node: str,
+    encoded: str,
+) -> dict[str, Any]:
+    """Verify one node-specific join grant from the elected active master."""
+
+    try:
+        raw = base64.urlsafe_b64decode(str(encoded).encode("ascii") + b"=" * (-len(str(encoded)) % 4))
+        authorization = json.loads(raw.decode("utf-8"))
+    except (UnicodeEncodeError, UnicodeDecodeError, binascii.Error, json.JSONDecodeError) as exc:
+        raise ClusterSyncCommandError("join authorization token is invalid") from exc
+    if (
+        not isinstance(authorization, dict)
+        or str(authorization.get("kind") or "") != "join"
+        or str(authorization.get("node_id") or "") != remote_node
+    ):
+        raise ClusterSyncCommandError("join authorization does not match remote node")
+    created_at = int(authorization.get("created_at") or 0)
+    now = int(time.time())
+    if created_at < now - 900 or created_at > now + 300:
+        raise ClusterSyncCommandError("join authorization has expired")
+    materialized = _safe_state_call(lambda: rebuild_materialized_state(cluster_root, write=False))
+    if str(authorization.get("cluster_id") or "") != str((materialized.get("cluster_nodes") or {}).get("cluster_id") or ""):
+        raise ClusterSyncCommandError("join authorization belongs to another cluster")
+    nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
+    masters = sorted(
+        str(node_id)
+        for node_id, node in nodes.items()
+        if isinstance(node, dict)
+        and str(node.get("role") or "") == "master"
+        and node.get("enabled", True) is not False
+        and node.get("state_replica", True) is not False
+    )
+    signer_id = str(authorization.get("signer_id") or "")
+    if not masters or signer_id != masters[0]:
+        raise ClusterSyncCommandError("join authorization signer is not checkpoint coordinator")
+    public_key = str((nodes.get(signer_id) or {}).get("signing_public_key") or "")
+    if not public_key:
+        raise ClusterSyncCommandError("join authorization signer has no trusted key")
+    try:
+        verify_operation(authorization, public_key)
+    except ClusterCredentialError as exc:
+        raise ClusterSyncCommandError(str(exc)) from exc
+    return authorization
+
+
+def _join_blob_allowed(cluster_root: Path, kind: str, blob_hash: str) -> bool:
+    """Allow join-time reads only for blobs reachable from the active checkpoint."""
+
+    bundle = active_checkpoint_bundle(cluster_root)
+    if not isinstance(bundle, dict):
+        return False
+    checkpoint = bundle.get("checkpoint") if isinstance(bundle.get("checkpoint"), dict) else {}
+    refs = checkpoint.get("blob_refs") if isinstance(checkpoint.get("blob_refs"), dict) else {}
+    direct = {str(item) for item in refs.get(kind) or []}
+    if blob_hash in direct:
+        return True
+    if kind != "config":
+        return False
+    paths = ClusterPaths.from_root(cluster_root)
+    for manifest_hash in refs.get("config") or []:
+        try:
+            raw = _read_verified_blob(paths.config_blobs, str(manifest_hash), "config blob")
+            manifest = json.loads(raw.decode("utf-8"))
+        except (ClusterSyncCommandError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        files = manifest.get("files") if isinstance(manifest, dict) else None
+        if not isinstance(files, dict):
+            continue
+        for record in files.values():
+            digest = str((record or {}).get("sha256") or "") if isinstance(record, dict) else ""
+            if digest and blob_hash == f"sha256:{digest}":
+                return True
+    return False
 
 
 def _parse_command(command_text: str) -> list[str]:
@@ -2095,6 +2446,50 @@ def _read_blob_batch_payload(raw: bytes) -> list[dict[str, Any]]:
     return _decode_blob_items(blobs, max_size=MAX_CONFIG_BLOB_BYTES, label="blob batch")
 
 
+def _read_checkpoint_control_payload(stdin_data: bytes) -> dict[str, Any]:
+    """Decode one bounded checkpoint prepare or commit payload."""
+
+    if not stdin_data or len(stdin_data) > MAX_CHECKPOINT_BYTES:
+        raise ClusterSyncCommandError("checkpoint control payload size is invalid")
+    try:
+        payload = json.loads(stdin_data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ClusterSyncCommandError("checkpoint control payload is invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ClusterSyncCommandError("checkpoint control payload must be an object")
+    return payload
+
+
+def _prepared_checkpoint_path(cluster_root: Path, proposal_id: str) -> Path:
+    """Resolve one owner-only prepared-checkpoint marker path."""
+
+    validated = _validate_hash(proposal_id).removeprefix("sha256:")
+    directory = ensure_private_directory_tree(
+        cluster_root,
+        cluster_root / "checkpoints" / "prepared",
+    )
+    return directory / f"{validated}.json"
+
+
+def _cleanup_expired_prepared_checkpoints(cluster_root: Path) -> None:
+    """Remove expired transient proposal markers before storing a new one."""
+
+    directory = ensure_private_directory_tree(
+        cluster_root,
+        cluster_root / "checkpoints" / "prepared",
+    )
+    now = int(time.time())
+    for path in directory.glob("*.json"):
+        if path.is_symlink():
+            raise ClusterSyncCommandError("prepared checkpoint marker must not be a symlink")
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ClusterSyncCommandError("prepared checkpoint marker is unreadable") from exc
+        if not isinstance(value, dict) or int(value.get("expires_at") or 0) <= now:
+            path.unlink(missing_ok=True)
+
+
 def _read_apply_bundle_payload(raw: bytes) -> dict[str, Any]:
     """Read one bounded apply-bundle payload with blobs and operations."""
 
@@ -2170,6 +2565,13 @@ def _apply_bundle(
     secret_blobs = payload["secret_blobs"]
     sealed_blobs = payload["sealed_blobs"]
     operations = payload["operations"]
+    baseline = active_checkpoint_baseline(cluster_root)
+    if any(
+        int(operation.get("seq") or 0)
+        <= int(baseline.get(str(operation.get("actor") or ""), 0))
+        for operation in operations
+    ):
+        raise ClusterSyncCommandError("apply-bundle contains an operation at or below the checkpoint baseline")
     staged_nodes = _staged_membership_nodes(
         cluster_root,
         operations,

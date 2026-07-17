@@ -271,6 +271,75 @@ def test_get_status_reports_materialized_counts(monkeypatch, tmp_path: Path) -> 
     assert status["warnings"] == []
 
 
+def test_retention_policy_is_signed_cluster_state_with_report_only_default(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """The API publishes retention through signed CAS state and defaults safely."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    assert cluster.get_status(session=None)["retention_policy"] == {
+        "generation": 0,
+        "mode": "report_only",
+        "history_days": 7,
+        "conflicted": False,
+    }
+
+    result = cluster.save_retention_settings(
+        cluster.ClusterRetentionSettingsIn(
+            mode="oplog",
+            history_days=30,
+            expected_generation=0,
+        ),
+        session=None,
+    )
+
+    assert result["changed"] is True
+    assert result["policy"]["mode"] == "oplog"
+    assert result["policy"]["history_days"] == 30
+    operation = load_operations(root)[-1]
+    assert operation["op"] == "SET_RETENTION_POLICY"
+    assert operation["signature_algorithm"] == "Ed25519"
+    with pytest.raises(HTTPException) as exc_info:
+        cluster.save_retention_settings(
+            cluster.ClusterRetentionSettingsIn(
+                mode="report_only",
+                history_days=7,
+                expected_generation=0,
+            ),
+            session=None,
+        )
+    assert exc_info.value.status_code == 409
+
+
+def test_retention_report_is_read_only_and_main_page_exposes_no_session_token(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Reports do not mutate history and the browser relies on its HttpOnly cookie."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
+    before = sorted(path.read_bytes() for path in (root / "oplog").glob("*/*.json"))
+
+    report = asyncio.run(cluster.get_retention_report(session=None))
+    response = cluster.get_main_page(
+        SimpleNamespace(url=SimpleNamespace(scheme="https", hostname="localhost", port=None)),
+        session=SimpleNamespace(token="must-not-appear"),
+    )
+
+    assert report["read_only"] is True
+    assert report["policy"]["mode"] == "report_only"
+    assert sorted(path.read_bytes() for path in (root / "oplog").glob("*/*.json")) == before
+    html = response.body.decode("utf-8")
+    assert "must-not-appear" not in html
+    assert "%%TOKEN%%" not in html
+    assert "headers.Authorization" not in html
+
+
 def test_get_status_includes_pbcluster_sync_status(monkeypatch, tmp_path: Path) -> None:
     """Cluster status exposes the latest PBCluster peer sync result for UI key-login checks."""
 

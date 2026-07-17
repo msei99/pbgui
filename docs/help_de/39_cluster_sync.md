@@ -129,6 +129,32 @@ Stale lokaler State ist nur eine Warnung. PBRun blockiert den Start nicht nur de
 
 Das ist Absicht: Ein Host kann nachts für ein paar Stunden offline sein. Solange es kein automatisches Failover gibt, soll PBGui normale Reboot-Recovery nicht nur wegen stale State verhindern.
 
+### Checkpoints und begrenzte Historie
+
+PBCluster kann alte Operation-Historie durch einen verifizierten Checkpoint plus
+einen aktuellen Operation-Tail ersetzen. Cleanup ist standardmäßig deaktiviert.
+Unter **Cluster Sync -> Retention** siehst du die clusterweite Policy und kannst
+einen reinen Lesebericht starten.
+
+Verfügbare Modi:
+
+- **Report only**: Standard; erstellt und prüft Checkpoints, löscht aber nie Historie.
+- **Prune oplog history**: behält die konfigurierte Anzahl Tage sowie aktuellen und vorherigen Checkpoint.
+- **Prune oplog and unreachable blobs**: entfernt zusätzlich Blobs, die in zwei identischen Reports mindestens 24 Stunden unerreichbar bleiben.
+
+Eine Policy-Änderung schreibt eine signierte Cluster-Operation. Ein löschender
+Modus umgeht keine Sicherheitsprüfung: Jede aktive State-Replica muss denselben
+Checkpoint unabhängig bestätigen, die Credential-Protocol-v2-Migration muss
+versiegelt sein, der Checkpoint-Reducer muss dem Full Replay entsprechen und
+die löschende Policy muss seit 24 Stunden aktiv sein. Ein Policy-Konflikt fällt
+automatisch auf Report-only zurück.
+
+Operationen nach einem Checkpoint sind signiert und an dessen Checkpoint-ID
+gebunden. Ein Node hinter gelöschter Historie installiert zuerst den bestätigten
+Checkpoint und die benötigten Blobs. Einen divergierenden alten Tail lehnt
+PBGui ab, statt ihn zu mergen. Checkpoint-aware Join und Join Existing Cluster
+benötigen keine alten Genesis-Oplog-Dateien.
+
 ---
 
 ## Conflicts
@@ -197,7 +223,7 @@ PBGui darf keine SSH-Firewall-Regeln entfernen, die nicht für Cluster Sync erst
 
 Die dedizierte **Cluster Sync**-Seite ist der zentrale Ort zur Überwachung von Cluster Sync.
 
-Die Seite ist in Overview, Setup, Nodes, V7 State, Tombstones und Oplog aufgeteilt. Sie aktualisiert lokalen Status, Nodes, Desired State und aktuelle Oplog-Einträge im Hintergrund und ersetzt nur geänderte Karten und Node-Tabellenfelder, statt die ganze Seite neu zu laden.
+Die Seite ist in Overview, Setup, Nodes, Credentials, V7 State, Tombstones, Retention und Oplog aufgeteilt. Sie aktualisiert lokalen Status, Nodes, Desired State und aktuelle Oplog-Einträge im Hintergrund und ersetzt nur geänderte Karten und Node-Tabellenfelder, statt die ganze Seite neu zu laden.
 
 Die Seite zeigt:
 
@@ -214,6 +240,7 @@ Die Seite zeigt:
 - eine read-only Preview-Aktion für gejointe Nodes, die Remote-State für Diagnose oder Retry vergleicht
 - editierbaren Node-Sync-Modus, SSH-Endpunkt, Remote PBGui Dir und Outbound-Peer-Allowlist
 - Disabled-Node-Removal für stale Nodes, die keine V7-Configs mehr besitzen
+- signierte History-Retention-Policy und begrenzte read-only Cleanup-Reports pro Node
 
 Bootstrap schreibt explizite lokale `ADD_NODE`-Operationen für bekannte VPS-Manager-Hosts und `UPSERT_CONFIG`-Operationen für lokale Configs. Wenn VPS-Monitor-Metadaten verfügbar sind, übernimmt Bootstrap, ob ein bekannter Host Master oder VPS-Runner ist. Fehlende Dateien oder fehlende VPS-Einträge werden nie als Delete interpretiert und Tombstones werden dadurch nicht entfernt. Die Probe-Spalte führt, wenn verfügbar, nur ein read-only restricted `hello` aus; sie installiert keine Keys, schreibt keine Remote-Dateien, startet oder stoppt keine Bots und deployed nichts.
 

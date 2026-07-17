@@ -24,11 +24,13 @@ from typing import Annotated, Any
 import asyncssh
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from api.auth import SessionToken, require_auth
 from api.vps import get_monitor, get_monitor_state_snapshot
 import pbgui_purefunc
 from cluster_credential_publisher import ClusterCredentialPublisher, CredentialPublicationError
+from cluster_credentials import ensure_node_key_material
 from cluster_sync_command import _materialize_credentials, _materialize_v7_configs
 from credential_store import CredentialStore, credential_mutation_lock
 from logging_helpers import human_log as _log
@@ -57,6 +59,17 @@ from master.cluster_ssh_keys import (
     public_key_fingerprint,
     remove_authorized_cluster_key,
 )
+from master.cluster_checkpoint import (
+    ClusterCheckpointError,
+    active_checkpoint_bundle,
+    build_shadow_checkpoint,
+    checkpoint_status,
+    install_rebootstrap_checkpoint,
+    retention_policy,
+    retention_preview,
+    set_retention_policy,
+    verify_checkpoint_commit_proof,
+)
 from pb7_config import load_pb7_config
 from pbgui_purefunc import PBGDIR
 from operation_store import DurableOperationStore
@@ -76,6 +89,16 @@ _SELF_JOIN_ACTIVE_STATES = frozenset({"queued", "running"})
 _REPAIR_ALL_SSH_ACTIVE_STATES = frozenset({"queued", "running"})
 _CONFIG_BLOB_BATCH_TARGET_BYTES = 12 * 1024 * 1024
 _EDITABLE_NODE_SYNC_MODES = frozenset({"disabled", "outbound_only", "reachable"})
+
+
+class ClusterRetentionSettingsIn(BaseModel):
+    """Validated cluster-wide retention policy update."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: str
+    history_days: int = Field(ge=1, le=3650)
+    expected_generation: int = Field(ge=0)
 
 
 class _SelfJoinPasswordSSHRunner:
@@ -1467,6 +1490,80 @@ async def _complete_remote_join_sync(node: dict[str, Any], identity: dict[str, A
     return completion
 
 
+async def _push_active_checkpoint_blobs_to_remote(
+    node: dict[str, Any],
+    identity: dict[str, Any],
+    checkpoint: dict[str, Any],
+) -> dict[str, int]:
+    """Push all direct and manifest child blobs before checkpoint materialization."""
+
+    hostname = str(node.get("pbname") or node.get("hostname") or "")
+    monitor = get_monitor()
+    pool = getattr(monitor, "pool", None) if monitor else None
+    if not pool:
+        raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
+    remote_dir = str(node.get("remote_pbgui_dir") or "")
+    local_node_id = str(identity.get("node_id") or "")
+    refs = checkpoint.get("blob_refs") if isinstance(checkpoint, dict) else {}
+    refs = refs if isinstance(refs, dict) else {}
+    cluster_root = _cluster_root()
+    config_hashes = {str(item) for item in refs.get("config") or []}
+    for manifest_hash in list(config_hashes):
+        raw = _read_cluster_blob(cluster_root / "config_blobs", manifest_hash)
+        config_hashes.update(_manifest_file_hashes(raw))
+    config_blobs = [
+        {
+            "hash": blob_hash,
+            "raw": _read_cluster_blob(cluster_root / "config_blobs", blob_hash),
+        }
+        for blob_hash in sorted(config_hashes)
+    ]
+    secret_blobs = [
+        {
+            "hash": str(blob_hash),
+            "raw": _read_cluster_blob(cluster_root / "secret_blobs", str(blob_hash)),
+        }
+        for blob_hash in refs.get("secret") or []
+    ]
+    sealed_blobs = [
+        {
+            "hash": str(blob_hash),
+            "raw": _read_cluster_blob(cluster_root / "sealed_blobs", str(blob_hash)),
+        }
+        for blob_hash in refs.get("sealed") or []
+    ]
+    progress = lambda _update: None
+    config_result = await _push_config_blobs_to_remote(
+        pool,
+        hostname,
+        remote_dir,
+        local_node_id,
+        config_blobs,
+        progress,
+    )
+    secret_result = await _push_secret_blobs_to_remote(
+        pool,
+        hostname,
+        remote_dir,
+        local_node_id,
+        secret_blobs,
+        progress,
+    )
+    sealed_result = await _push_sealed_blobs_to_remote(
+        pool,
+        hostname,
+        remote_dir,
+        local_node_id,
+        sealed_blobs,
+        progress,
+    )
+    return {
+        "config": int(config_result.get("pushed") or 0),
+        "secret": int(secret_result.get("pushed") or 0),
+        "sealed": int(sealed_result.get("pushed") or 0),
+    }
+
+
 def _parse_remote_json_result(result: Any, failure_label: str) -> dict[str, Any]:
     """Parse the last JSON line from an SSH command result."""
 
@@ -2144,6 +2241,8 @@ async def _pull_missing_operations_from_host(
     local_node_id: str,
     cluster_id: str,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    join_authorization: dict[str, Any] | None = None,
+    join_hello: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Pull upstream operations and their blobs into the local cluster state."""
 
@@ -2152,19 +2251,128 @@ async def _pull_missing_operations_from_host(
             progress_callback(dict(update))
 
     root = _cluster_root()
-    report_progress({"phase": "pulling_vector", "done": 0, "total": 0, "remaining": 0})
-    vector_payload = await _run_cluster_json_command_on_host(
-        pool,
-        hostname,
-        remote_pbgui_dir,
-        local_node_id,
-        "get-state-vector",
-        timeout=30,
-        failure_label="Remote state-vector pull",
+    join_token = (
+        base64.urlsafe_b64encode(
+            json.dumps(join_authorization, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii").rstrip("=")
+        if isinstance(join_authorization, dict)
+        else ""
     )
+    report_progress({"phase": "pulling_vector", "done": 0, "total": 0, "remaining": 0})
+    join_commands_supported = bool(join_token)
+    try:
+        vector_payload = await _run_cluster_json_command_on_host(
+            pool,
+            hostname,
+            remote_pbgui_dir,
+            local_node_id,
+            f"join-state-vector {shlex.quote(join_token)}" if join_token else "get-state-vector",
+            timeout=30,
+            failure_label="Remote state-vector pull",
+        )
+    except HTTPException as exc:
+        detail = str(exc.detail or "").lower()
+        if not join_token or "unsupported" not in detail and "unexpected command" not in detail:
+            raise
+        join_commands_supported = False
+        vector_payload = await _run_cluster_json_command_on_host(
+            pool,
+            hostname,
+            remote_pbgui_dir,
+            local_node_id,
+            "get-state-vector",
+            timeout=30,
+            failure_label="Remote legacy state-vector pull",
+        )
     remote_vector = _as_state_vector(vector_payload.get("state_vector") or {})
-    local_operations = load_operations(root, expected_cluster_id=cluster_id)
-    local_vector = _state_vector_from_operations(local_operations)
+    checkpoint_result: dict[str, Any] = {"status": "not_required"}
+    join_registered = False
+    if vector_payload.get("active") is True:
+        if not isinstance(join_authorization, dict) or not isinstance(join_hello, dict):
+            raise HTTPException(status_code=409, detail="Remote history requires a checkpoint-aware join authorization")
+        checkpoint_payload = await _run_cluster_json_command_on_host(
+            pool,
+            hostname,
+            remote_pbgui_dir,
+            local_node_id,
+            f"join-checkpoint-state {shlex.quote(join_token)}",
+            timeout=60,
+            failure_label="Remote join checkpoint pull",
+        )
+        bundle = checkpoint_payload.get("bundle") if isinstance(checkpoint_payload, dict) else None
+        checkpoint = bundle.get("checkpoint") if isinstance(bundle, dict) else None
+        proof = bundle.get("commit_proof") if isinstance(bundle, dict) else None
+        if not isinstance(checkpoint, dict) or not isinstance(proof, dict):
+            raise HTTPException(status_code=409, detail="Remote checkpoint bundle is incomplete")
+        coordinator_id = str(proof.get("coordinator_id") or "")
+        if coordinator_id != str(join_hello.get("node_id") or ""):
+            raise HTTPException(status_code=409, detail="Checkpoint-aware self-join must connect to the elected coordinator")
+        anchor_public_key = str(((join_hello.get("crypto_public_bundle") or {}).get("signing_public_key") or ""))
+        if not anchor_public_key:
+            raise HTTPException(status_code=409, detail="Checkpoint coordinator did not provide a signing key")
+        verify_checkpoint_commit_proof(checkpoint, proof)
+
+        async def fetch_join_blob(kind: str, blob_hash: str, *, secret: bool) -> bytes:
+            payload = await _run_cluster_json_command_on_host(
+                pool,
+                hostname,
+                remote_pbgui_dir,
+                local_node_id,
+                f"join-get-blob {shlex.quote(join_token)} {shlex.quote(kind)} {shlex.quote(blob_hash)}",
+                timeout=30,
+                failure_label="Remote join blob pull",
+            )
+            raw = base64.b64decode(str(payload.get("content_b64") or ""))
+            _write_cluster_blob(root / f"{kind}_blobs", blob_hash, raw, secret=secret)
+            return raw
+
+        refs = checkpoint.get("blob_refs") or {}
+        for manifest_hash in refs.get("config") or []:
+            manifest_raw = await fetch_join_blob("config", str(manifest_hash), secret=False)
+            for child_hash in _manifest_file_hashes(manifest_raw):
+                await fetch_join_blob("config", child_hash, secret=False)
+        for blob_hash in refs.get("secret") or []:
+            await fetch_join_blob("secret", str(blob_hash), secret=True)
+        for blob_hash in refs.get("sealed") or []:
+            await fetch_join_blob("sealed", str(blob_hash), secret=True)
+        installed = install_rebootstrap_checkpoint(
+            root,
+            checkpoint,
+            proof,
+            join_authorization=join_authorization,
+            join_anchor_public_key=anchor_public_key,
+        )
+        local_membership = append_operation(
+            root,
+            "ADD_NODE",
+            {
+                "node_id": local_node_id,
+                "role": str(join_authorization.get("role") or "master"),
+                "pbname": str(read_local_identity(root).get("created_from_pbname") or ""),
+                "membership_authorization": join_authorization,
+            },
+        )
+        register_result = await _run_cluster_payload_command(
+            pool,
+            hostname,
+            remote_pbgui_dir,
+            local_node_id,
+            f"join-register {shlex.quote(join_token)}",
+            json.dumps(local_membership, sort_keys=True, separators=(",", ":")),
+            timeout=30,
+        )
+        if register_result is None or int(getattr(register_result, "exit_status", 1) or 0) != 0:
+            raise HTTPException(status_code=409, detail=_probe_error_text(register_result))
+        checkpoint_result = {
+            "status": "installed",
+            "checkpoint_id": str(checkpoint["checkpoint_id"]),
+            "membership_op_id": str(local_membership["op_id"]),
+            "quarantine_path": str(installed.get("quarantine_path") or ""),
+        }
+        join_registered = True
+    local_vector = _as_state_vector(
+        (rebuild_materialized_state(root, write=False).get("state_vector") or {})
+    )
     total_missing_ops = sum(max(0, int(remote_vector.get(actor) or 0) - int(local_vector.get(actor) or 0)) for actor in remote_vector)
     pulled = 0
     blob_counts = {"config": 0, "secret": 0, "sealed": 0, "missing_config": 0}
@@ -2177,12 +2385,17 @@ async def _pull_missing_operations_from_host(
         start = local_seq + 1
         while start <= remote_seq:
             end = min(remote_seq, start + 999)
+            operation_command = (
+                f"join-get-ops {shlex.quote(join_token)} {shlex.quote(actor)} {start} {end}"
+                if join_token and join_commands_supported and not join_registered
+                else f"get-ops {shlex.quote(actor)} {start} {end}"
+            )
             payload = await _run_cluster_json_command_on_host(
                 pool,
                 hostname,
                 remote_pbgui_dir,
                 local_node_id,
-                f"get-ops {shlex.quote(actor)} {start} {end}",
+                operation_command,
                 timeout=30,
                 failure_label="Remote operation pull",
             )
@@ -2211,6 +2424,34 @@ async def _pull_missing_operations_from_host(
                     pulled += 1
             start = end + 1
             report_progress({"phase": "pulling_ops", "done": pulled, "total": total_missing_ops, "remaining": max(0, total_missing_ops - pulled)})
+    if join_token and join_commands_supported and not join_registered:
+        local_membership = append_operation(
+            root,
+            "ADD_NODE",
+            {
+                "node_id": local_node_id,
+                "role": str(join_authorization.get("role") or "master"),
+                "pbname": str(read_local_identity(root).get("created_from_pbname") or ""),
+                "membership_authorization": join_authorization,
+            },
+        )
+        if join_commands_supported:
+            register_result = await _run_cluster_payload_command(
+                pool,
+                hostname,
+                remote_pbgui_dir,
+                local_node_id,
+                f"join-register {shlex.quote(join_token)}",
+                json.dumps(local_membership, sort_keys=True, separators=(",", ":")),
+                timeout=30,
+            )
+            if register_result is None or int(getattr(register_result, "exit_status", 1) or 0) != 0:
+                raise HTTPException(status_code=409, detail=_probe_error_text(register_result))
+        join_registered = True
+        checkpoint_result = {
+            "status": "legacy_history_join",
+            "membership_op_id": str(local_membership["op_id"]),
+        }
     materialized = rebuild_materialized_state(root, write=False)
     report_progress({"phase": "pulling_current_blobs", "done": pulled, "total": total_missing_ops, "remaining": 0})
     current_blob_counts = await _pull_current_desired_blobs_from_host(
@@ -2231,6 +2472,7 @@ async def _pull_missing_operations_from_host(
         "pulled_secret_blobs": blob_counts["secret"],
         "pulled_sealed_blobs": blob_counts["sealed"],
         "deferred_missing_config_blobs": blob_counts["missing_config"],
+        "checkpoint": checkpoint_result,
     }
 
 
@@ -2387,6 +2629,8 @@ async def _self_join_existing_cluster(
             local_node_id,
             upstream_cluster_id,
             progress_callback=lambda update: report_progress(str(update.get("phase") or "pulling"), 4, pull=update),
+            join_authorization=(hello.get("join_authorization") if isinstance(hello.get("join_authorization"), dict) else None),
+            join_hello=hello,
         )
         materialized = rebuild_materialized_state(root)
         local_materialization = _materialize_v7_configs(root, write=True)
@@ -2530,14 +2774,47 @@ async def _run_remote_join(node: dict[str, Any], identity: dict[str, Any]) -> di
     if role == "vps":
         pbrun_stop_result = await _stop_remote_pbrun_for_join(pool, hostname, node)
 
-    command = _cluster_join_command(
-        str(node.get("remote_pbgui_dir") or ""),
-        local_node_id,
-        str(identity.get("cluster_id") or ""),
-        node,
-    )
+    checkpoint_bundle = active_checkpoint_bundle(_cluster_root())
     try:
-        result = await pool.run(hostname, command, timeout=15)
+        if checkpoint_bundle is None:
+            command = _cluster_join_command(
+                str(node.get("remote_pbgui_dir") or ""),
+                local_node_id,
+                str(identity.get("cluster_id") or ""),
+                node,
+            )
+            result = await pool.run(hostname, command, timeout=15)
+        else:
+            proof = checkpoint_bundle["commit_proof"]
+            if str(proof.get("coordinator_id") or "") != local_node_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Checkpoint-based joins must be started from the elected checkpoint coordinator",
+                )
+            authorization = create_join_authorization(_cluster_root(), node_id, role)
+            local_keys = ensure_node_key_material(_cluster_root())
+            anchor_public_key = str(
+                local_keys.public_bundle(local_node_id, str(identity.get("role") or "master"))["signing_public_key"]
+            )
+            join_payload = json.dumps({
+                "cluster_id": str(identity.get("cluster_id") or ""),
+                "node_id": node_id,
+                "role": role,
+                "pbname": str(node.get("pbname") or node.get("hostname") or ""),
+                "authorization": authorization,
+                "anchor_public_key": anchor_public_key,
+                "checkpoint": checkpoint_bundle["checkpoint"],
+                "commit_proof": proof,
+            }, sort_keys=True, separators=(",", ":"))
+            result = await _run_cluster_payload_command(
+                pool,
+                hostname,
+                str(node.get("remote_pbgui_dir") or ""),
+                local_node_id,
+                "join-checkpoint",
+                join_payload,
+                timeout=60,
+            )
     except Exception as exc:
         _log(SERVICE, f"Remote cluster join failed for {hostname}: {exc}", level="ERROR")
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -2560,7 +2837,13 @@ async def _run_remote_join(node: dict[str, Any], identity: dict[str, Any]) -> di
     if remote_node_id != node_id:
         raise HTTPException(status_code=409, detail="Remote joined a different node_id")
     try:
+        checkpoint_blobs = (
+            await _push_active_checkpoint_blobs_to_remote(node, identity, checkpoint_bundle["checkpoint"])
+            if checkpoint_bundle is not None
+            else {"config": 0, "secret": 0, "sealed": 0}
+        )
         completion = await _complete_remote_join_sync(node, identity)
+        completion["checkpoint_blobs"] = checkpoint_blobs
     except HTTPException as exc:
         completion = {"ok": False, "status_code": exc.status_code, "error": str(exc.detail)}
     except Exception as exc:
@@ -4117,8 +4400,104 @@ def get_status(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
         },
         "api_keys": desired_state.get("api_keys"),
         "credentials": credentials,
+        "retention_policy": retention_policy(snapshot),
+        "checkpoint": checkpoint_status(root),
         "sync_status": _load_sync_status_summary(root),
         "warnings": warnings,
+    }
+
+
+@router.post("/retention/settings")
+def save_retention_settings(
+    payload: ClusterRetentionSettingsIn,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Publish one signed cluster-wide retention policy update."""
+
+    del session
+    try:
+        return set_retention_policy(
+            _cluster_root(),
+            mode=payload.mode,
+            history_days=payload.history_days,
+            expected_generation=payload.expected_generation,
+        )
+    except ClusterCheckpointError as exc:
+        detail = str(exc)
+        _log(SERVICE, f"Retention policy update rejected: {detail}", level="WARNING")
+        status_code = 409 if "generation changed" in detail or "conflicted" in detail else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    except Exception as exc:
+        _log(SERVICE, f"Retention policy update failed: {type(exc).__name__}", level="ERROR")
+        raise HTTPException(status_code=500, detail="Failed to update retention policy") from exc
+
+
+@router.get("/retention/report")
+async def get_retention_report(
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return bounded read-only retention reports for local and reachable nodes."""
+
+    del session
+    snapshot = _load_cluster_snapshot()
+    identity = snapshot["identity"]
+    local_node_id = str(identity.get("node_id") or "")
+    try:
+        checkpoint = await asyncio.to_thread(build_shadow_checkpoint, _cluster_root())
+        local_preview = await asyncio.to_thread(
+            retention_preview,
+            _cluster_root(),
+            checkpoint,
+            item_limit=200,
+        )
+    except Exception as exc:
+        _log(SERVICE, f"Local retention report failed: {type(exc).__name__}: {exc}", level="ERROR")
+        raise HTTPException(status_code=500, detail="Failed to build local retention report") from exc
+    local_items = list(local_preview.get("items") or [])[:200]
+    reports: list[dict[str, Any]] = [{
+        "node_id": local_node_id,
+        "pbname": str(identity.get("created_from_pbname") or "local"),
+        **{key: value for key, value in local_preview.items() if key != "items"},
+        "items": local_items,
+        "items_truncated": int(local_preview.get("eligible_operations") or 0) > len(local_items),
+        "migration_seal": checkpoint["migration_seal"],
+    }]
+
+    async def remote_report(node: dict[str, Any]) -> dict[str, Any]:
+        node_id = str(node.get("node_id") or "")
+        pbname = str(node.get("pbname") or node.get("hostname") or node_id)
+        try:
+            payload = await _run_remote_read_command(node, identity, "retention-preview")
+            return {"node_id": node_id, "pbname": pbname, **payload}
+        except HTTPException as exc:
+            return {
+                "node_id": node_id,
+                "pbname": pbname,
+                "status": "unavailable",
+                "error": str(exc.detail),
+            }
+
+    tasks = [
+        remote_report(node)
+        for node in _node_list(snapshot["cluster_nodes"])
+        if str(node.get("node_id") or "") != local_node_id
+        and node.get("enabled", True) is not False
+        and node.get("state_replica", True) is not False
+    ]
+    if tasks:
+        reports.extend(await asyncio.gather(*tasks))
+    return {
+        "read_only": True,
+        "policy": retention_policy(snapshot),
+        "checkpoint": checkpoint_status(_cluster_root()),
+        "reports": reports,
+        "counts": {
+            "nodes_total": len(reports),
+            "nodes_reported": sum(1 for item in reports if item.get("status") != "unavailable"),
+            "nodes_unavailable": sum(1 for item in reports if item.get("status") == "unavailable"),
+            "eligible_operations": sum(int(item.get("eligible_operations") or 0) for item in reports),
+            "eligible_bytes": sum(int(item.get("eligible_bytes") or 0) for item in reports),
+        },
     }
 
 
@@ -4997,6 +5376,7 @@ def get_main_page(
 ) -> HTMLResponse:
     """Serve the standalone Cluster Sync status page."""
 
+    del session
     html_path = Path(__file__).parent.parent / "frontend" / "cluster.html"
     html = html_path.read_text(encoding="utf-8")
 
@@ -5007,7 +5387,6 @@ def get_main_page(
     api_base = origin + "/api/cluster"
     ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
 
-    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
 

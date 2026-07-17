@@ -74,7 +74,9 @@ V2_CREDENTIAL_OPS = frozenset({
     "TRADFI_PROJECTION_ACK",
     "CREDENTIAL_SCAN_ACK",
 })
-SUPPORTED_OPS = MEMBERSHIP_OPS | V7_OPS | API_KEY_OPS | V2_CREDENTIAL_OPS
+CLUSTER_POLICY_OPS = frozenset({"SET_RETENTION_POLICY"})
+SIGNED_STATE_OPS = V2_CREDENTIAL_OPS | CLUSTER_POLICY_OPS
+SUPPORTED_OPS = MEMBERSHIP_OPS | V7_OPS | API_KEY_OPS | SIGNED_STATE_OPS
 SYNC_MODES = frozenset({"disabled", "outbound_only", "reachable"})
 CMC_KEY_STATES = frozenset({
     "pending", "active", "draining", "disabled", "invalid",
@@ -109,6 +111,8 @@ VPS_SELF_CREDENTIAL_OPS = frozenset({
     "CREDENTIAL_SCAN_ACK",
 })
 MASTER_ONLY_CREDENTIAL_OPS = V2_CREDENTIAL_OPS - VPS_SELF_CREDENTIAL_OPS
+MASTER_ONLY_SIGNED_STATE_OPS = MASTER_ONLY_CREDENTIAL_OPS | CLUSTER_POLICY_OPS
+RETENTION_MODES = frozenset({"report_only", "oplog", "oplog_and_blobs"})
 
 SYNC_EXCLUDE_FILES = frozenset({
     "approved_coins.json",
@@ -325,7 +329,17 @@ def append_operation(
     with advisory_file_lock(paths.root / ".append_sequence"):
         keys = None
         operation_name = str(op)
-        if operation_name in MEMBERSHIP_OPS | V2_CREDENTIAL_OPS:
+        try:
+            from master.cluster_checkpoint import checkpoint_status
+
+            checkpoint = checkpoint_status(paths.root)
+        except ImportError:
+            checkpoint = {"active": False}
+        requires_signature = bool(
+            operation_name in MEMBERSHIP_OPS | SIGNED_STATE_OPS
+            or checkpoint.get("active") is True and operation_name in V7_OPS | API_KEY_OPS
+        )
+        if requires_signature:
             if active_actor != str(identity["node_id"]):
                 raise ClusterStateError("signed operations can only use the local actor")
             try:
@@ -340,7 +354,9 @@ def append_operation(
                 keys.public_bundle(active_actor, str(identity.get("role") or "master")),
                 created_at=int(created_at if created_at is not None else time.time()),
             )
-        if operation_name in V2_CREDENTIAL_OPS:
+        if operation_name in SIGNED_STATE_OPS or (
+            checkpoint.get("active") is True and operation_name in V7_OPS | API_KEY_OPS
+        ):
             assert keys is not None
             _ensure_local_crypto_membership(
                 paths,
@@ -350,11 +366,14 @@ def append_operation(
             )
         seq = _next_seq(paths, active_actor)
         operation = dict(payload or {})
-        if operation_name in V2_CREDENTIAL_OPS:
+        if checkpoint.get("active") is True:
+            operation["base_checkpoint_id"] = str(checkpoint["checkpoint_id"])
+            operation["checkpoint_epoch"] = int(checkpoint["checkpoint_epoch"])
+        if operation_name in SIGNED_STATE_OPS:
             trust = _load_membership_trust(paths.root, expected_cluster_id=active_cluster_id)
             role_events = trust.role_history.get(active_actor, [])
             if not role_events:
-                raise ClusterStateError("credential operation actor has no authenticated membership epoch")
+                raise ClusterStateError("signed operation actor has no authenticated membership epoch")
             role_event = role_events[-1]
             operation["actor_role_epoch"] = int(role_event.get("role_epoch") or 0)
             operation["actor_membership_op_id"] = str(
@@ -379,7 +398,7 @@ def append_operation(
             "op": operation_name,
             "created_at": int(created_at if created_at is not None else time.time()),
         })
-        if operation_name in MEMBERSHIP_OPS | V2_CREDENTIAL_OPS:
+        if requires_signature:
             try:
                 assert keys is not None
                 operation = sign_operation(operation, keys.signing_private_key, signer_id=active_actor)
@@ -451,6 +470,15 @@ def _ensure_local_crypto_membership(
     if current is None:
         operation["membership_authorization"] = {"kind": "bootstrap"}
     try:
+        from master.cluster_checkpoint import checkpoint_status
+
+        checkpoint = checkpoint_status(paths.root)
+    except ImportError:
+        checkpoint = {"active": False}
+    if checkpoint.get("active") is True:
+        operation["base_checkpoint_id"] = str(checkpoint["checkpoint_id"])
+        operation["checkpoint_epoch"] = int(checkpoint["checkpoint_epoch"])
+    try:
         keys = ensure_node_key_material(paths.root)
         operation = sign_operation(operation, keys.signing_private_key, signer_id=node_id)
     except ClusterCredentialError as exc:
@@ -489,7 +517,47 @@ def write_operation(
     allow_legacy_membership: bool = False,
     allow_legacy_key_claim: bool = False,
 ) -> Path:
-    """Validate and atomically write one operation file."""
+    """Serialize, validate, and atomically write one operation file."""
+
+    paths = ClusterPaths.from_root(cluster_root)
+    with advisory_file_lock(paths.root / ".append_sequence"):
+        return _write_operation_unlocked(
+            cluster_root,
+            operation,
+            network_input=network_input,
+            membership_trust=membership_trust,
+            allow_legacy_membership=allow_legacy_membership,
+            allow_legacy_key_claim=allow_legacy_key_claim,
+        )
+
+
+def _write_operation_unlocked(
+    cluster_root: Path,
+    operation: dict[str, Any],
+    *,
+    network_input: bool = False,
+    membership_trust: MembershipTrust | None = None,
+    allow_legacy_membership: bool = False,
+    allow_legacy_key_claim: bool = False,
+) -> Path:
+    """Validate and write one operation while the history lock is held."""
+
+    try:
+        from master.cluster_checkpoint import active_checkpoint_baseline, checkpoint_status
+
+        baseline = active_checkpoint_baseline(cluster_root)
+        checkpoint = checkpoint_status(cluster_root)
+    except ImportError:
+        baseline = {}
+        checkpoint = {"active": False}
+    actor = str(operation.get("actor") or "")
+    seq = int(operation.get("seq") or 0)
+    if seq <= int(baseline.get(actor, 0)):
+        raise ClusterStateError("operation is at or below the committed checkpoint baseline")
+    if checkpoint.get("active") is True and (
+        str(operation.get("base_checkpoint_id") or "") != str(checkpoint.get("checkpoint_id") or "")
+    ):
+        raise ClusterStateError("operation belongs to a stale checkpoint branch")
 
     validate_operation(
         operation,
@@ -570,8 +638,22 @@ def validate_operation(
         )
     elif op in V7_OPS:
         _validate_v7_payload(operation)
+        if operation.get("base_checkpoint_id") is not None:
+            trust = membership_trust
+            if trust is None and cluster_root is not None:
+                trust = _load_membership_trust(cluster_root, expected_cluster_id=cluster_id)
+            if trust is None:
+                trust = _trust_from_nodes(membership_nodes or {})
+            _validate_v2_operation_signature(operation, trust, network_input=network_input)
     elif op in API_KEY_OPS:
         _validate_api_key_payload(operation)
+        if operation.get("base_checkpoint_id") is not None:
+            trust = membership_trust
+            if trust is None and cluster_root is not None:
+                trust = _load_membership_trust(cluster_root, expected_cluster_id=cluster_id)
+            if trust is None:
+                trust = _trust_from_nodes(membership_nodes or {})
+            _validate_v2_operation_signature(operation, trust, network_input=network_input)
         if network_input and cluster_root is not None:
             _validate_api_key_operation_after_cutoff(cluster_root, operation)
     elif op in V2_CREDENTIAL_OPS:
@@ -585,11 +667,37 @@ def validate_operation(
         _validate_v2_actor_role(operation, trust, network_input=network_input)
         if network_input and cluster_root is not None and op == "MIGRATION_SECRET_CANDIDATE":
             _validate_candidate_against_current_freeze(cluster_root, operation)
+    elif op in CLUSTER_POLICY_OPS:
+        _validate_cluster_policy_payload(operation)
+        trust = membership_trust
+        if trust is None and cluster_root is not None:
+            trust = _load_membership_trust(cluster_root, expected_cluster_id=cluster_id)
+        if trust is None:
+            trust = _trust_from_nodes(membership_nodes or {})
+        _validate_v2_operation_signature(operation, trust, network_input=network_input)
+        _validate_v2_actor_role(operation, trust, network_input=network_input)
 
 
 def load_operations(cluster_root: Path, *, expected_cluster_id: str | None = None) -> list[dict[str, Any]]:
     """Load all valid operations from an oplog in deterministic order."""
 
+    try:
+        from master.cluster_checkpoint import (
+            load_checkpoint_tail,
+            materialize_checkpoint_tail,
+            read_active_checkpoint,
+        )
+
+        active_checkpoint = read_active_checkpoint(cluster_root)
+    except ImportError:
+        active_checkpoint = None
+    if active_checkpoint is not None:
+        cluster_id = expected_cluster_id or str(read_local_identity(cluster_root)["cluster_id"])
+        if str(active_checkpoint["cluster_id"]) != cluster_id:
+            raise ClusterStateError("active checkpoint belongs to another cluster")
+        operations = load_checkpoint_tail(cluster_root, active_checkpoint)
+        materialize_checkpoint_tail(active_checkpoint, operations)
+        return operations
     paths = ClusterPaths.from_root(cluster_root)
     operations: list[dict[str, Any]] = []
     if not paths.oplog.exists():
@@ -624,12 +732,34 @@ def rebuild_materialized_state(cluster_root: Path, *, write: bool = True) -> dic
 
     identity = read_local_identity(cluster_root)
     cluster_id = str(identity["cluster_id"])
+    try:
+        from master.cluster_checkpoint import (
+            load_checkpoint_tail,
+            materialize_checkpoint_tail,
+            read_active_checkpoint,
+        )
+
+        active_checkpoint = read_active_checkpoint(cluster_root)
+    except ImportError:
+        active_checkpoint = None
+    if active_checkpoint is not None:
+        materialized = materialize_checkpoint_tail(
+            active_checkpoint,
+            load_checkpoint_tail(cluster_root, active_checkpoint),
+        )
+        if write:
+            paths = ClusterPaths.from_root(cluster_root)
+            _atomic_write_json(paths.cluster_nodes, materialized["cluster_nodes"])
+            _atomic_write_json(paths.desired_state, materialized["desired_state"])
+            _atomic_write_json(paths.state_vector, materialized["state_vector"])
+        return materialized
     operations = load_operations(cluster_root, expected_cluster_id=cluster_id)
     nodes: dict[str, dict[str, Any]] = {}
     removed_node_ids: set[str] = set()
     instances: dict[str, dict[str, Any]] = {}
     tombstones: dict[str, dict[str, Any]] = {}
     api_key_operations: list[dict[str, Any]] = []
+    retention_policy_operations: list[dict[str, Any]] = []
     actor_sequences: dict[str, set[int]] = {}
     parent_changes: dict[tuple[str, str], list[dict[str, Any]]] = {}
     generated_at = 0
@@ -649,6 +779,8 @@ def rebuild_materialized_state(cluster_root: Path, *, write: bool = True) -> dic
             _apply_v7(instances, tombstones, parent_changes, operation)
         elif op == "UPSERT_API_KEYS":
             api_key_operations.append(operation)
+        elif op in CLUSTER_POLICY_OPS:
+            retention_policy_operations.append(operation)
 
     _mark_conflicts(instances, parent_changes)
     v2_state = _materialize_v2_credentials(operations)
@@ -694,6 +826,10 @@ def rebuild_materialized_state(cluster_root: Path, *, write: bool = True) -> dic
     if api_keys is not None:
         desired_state["api_keys"] = api_keys
     desired_state.update(v2_state)
+    if retention_policy_operations:
+        desired_state["retention_policy"] = _materialize_retention_policy(
+            retention_policy_operations
+        )
     materialized = {
         "cluster_nodes": cluster_nodes,
         "desired_state": desired_state,
@@ -1486,6 +1622,20 @@ def _validate_api_key_operation_after_cutoff(
         raise ClusterStateError("credential protocol downgrade rejected after cutoff")
 
 
+def _validate_cluster_policy_payload(operation: dict[str, Any]) -> None:
+    """Validate one signed cluster-wide retention policy update."""
+
+    if str(operation.get("op") or "") != "SET_RETENTION_POLICY":
+        raise ClusterStateError("unsupported cluster policy operation")
+    if str(operation.get("mode") or "") not in RETENTION_MODES:
+        raise ClusterStateError("invalid retention mode")
+    history_days = _as_positive_int(operation.get("history_days"), "history_days")
+    if history_days > 3650:
+        raise ClusterStateError("history_days must not exceed 3650")
+    _as_positive_int(operation.get("generation"), "generation")
+    _as_nonnegative_int(operation.get("parent_generation"), "parent_generation")
+
+
 def _validate_v2_credential_payload(operation: dict[str, Any]) -> None:
     """Validate additive Cluster Sync v2 credential operation fields."""
 
@@ -1861,7 +2011,7 @@ def _validate_v2_actor_role(
     op = str(operation["op"])
     if role not in {"master", "vps"}:
         raise ClusterStateError("credential operation actor has no authenticated role")
-    if op in MASTER_ONLY_CREDENTIAL_OPS and role != "master":
+    if op in MASTER_ONLY_SIGNED_STATE_OPS and role != "master":
         raise ClusterStateError(f"{op} requires an authenticated master actor")
     if op in VPS_SELF_CREDENTIAL_OPS:
         node_id = str(operation.get("node_id") or actor)
@@ -2400,6 +2550,31 @@ def _load_membership_trust(
 ) -> MembershipTrust:
     """Replay membership history, authenticating signed changes in order."""
 
+    try:
+        from master.cluster_checkpoint import (
+            _deserialize_membership_trust,
+            load_checkpoint_tail,
+            read_active_checkpoint,
+        )
+
+        active_checkpoint = read_active_checkpoint(cluster_root)
+    except ImportError:
+        active_checkpoint = None
+    if active_checkpoint is not None:
+        if str(active_checkpoint["cluster_id"]) != expected_cluster_id:
+            raise ClusterStateError("active checkpoint belongs to another cluster")
+        trust = _deserialize_membership_trust(active_checkpoint["membership_trust"])
+        for operation in load_checkpoint_tail(cluster_root, active_checkpoint):
+            if str(operation.get("op") or "") not in MEMBERSHIP_OPS:
+                continue
+            validate_operation(
+                operation,
+                expected_cluster_id=expected_cluster_id,
+                membership_trust=trust,
+                network_input=True,
+                allow_legacy_key_claim=True,
+            )
+        return trust
     paths = ClusterPaths.from_root(cluster_root)
     membership_operations: list[dict[str, Any]] = []
     if paths.oplog.exists():
@@ -2431,6 +2606,49 @@ def _load_membership_trust(
             allow_legacy_key_claim=True,
         )
     return trust
+
+
+def _materialize_retention_policy(operations: list[dict[str, Any]]) -> dict[str, Any]:
+    """Materialize the latest signed retention policy and sibling conflicts."""
+
+    ordered = sorted(
+        operations,
+        key=lambda item: (int(item["generation"]), str(item["op_id"])),
+    )
+    winner = ordered[-1]
+    siblings: dict[int, list[dict[str, Any]]] = {}
+    for operation in ordered:
+        siblings.setdefault(int(operation["parent_generation"]), []).append(operation)
+    conflicts: list[dict[str, Any]] = []
+    for parent_generation, changes in siblings.items():
+        signatures = {
+            (
+                int(item["generation"]),
+                str(item["mode"]),
+                int(item["history_days"]),
+            )
+            for item in changes
+        }
+        if len(signatures) < 2:
+            continue
+        conflicts.extend({
+            "op_id": str(item["op_id"]),
+            "generation": int(item["generation"]),
+            "parent_generation": parent_generation,
+            "mode": str(item["mode"]),
+            "history_days": int(item["history_days"]),
+        } for item in changes)
+    return {
+        "generation": int(winner["generation"]),
+        "parent_generation": int(winner["parent_generation"]),
+        "mode": "report_only" if conflicts else str(winner["mode"]),
+        "history_days": int(winner["history_days"]),
+        "updated_by": str(winner["actor"]),
+        "updated_at": int(winner["created_at"]),
+        "op_id": str(winner["op_id"]),
+        "conflicted": bool(conflicts),
+        **({"conflicts": conflicts} if conflicts else {}),
+    }
 
 
 def _materialize_v2_credentials(operations: list[dict[str, Any]]) -> dict[str, Any]:
@@ -3092,10 +3310,16 @@ def _highest_contiguous_sequence(sequences: set[int]) -> int:
 def _next_seq(paths: ClusterPaths, actor: str) -> int:
     """Return the next local actor sequence number."""
 
+    try:
+        from master.cluster_checkpoint import active_checkpoint_baseline
+
+        baseline = int(active_checkpoint_baseline(paths.root).get(actor, 0))
+    except ImportError:
+        baseline = 0
     op_dir = paths.oplog / actor
     if not op_dir.exists():
-        return 1
-    max_seq = 0
+        return baseline + 1
+    max_seq = baseline
     for item in op_dir.glob("*.json"):
         try:
             max_seq = max(max_seq, int(item.stem))
