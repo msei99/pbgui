@@ -179,10 +179,10 @@ the 24-hour stability window, or deletes data.
 PBCluster also checks replica-relevant blob coverage after normal operation
 sync. Active masters compare validated references from the applicable shadow or
 active/previous checkpoints, the retained oplog and live mailboxes, then send
-only blobs missing on a capable peer. This repairs a converged node whose
-operation counters already match but whose local blob store is incomplete,
-including an active master repaired by another master; it does not materialize
-configs or expose secret contents in the coverage query.
+only blobs missing on a capable peer. A master with an incomplete local store
+also pulls a verified missing blob from another master before redistributing it.
+This repairs converged nodes whose operation counters already match, without
+materializing configs or exposing secret contents in the coverage query.
 
 After saving a policy, mixed rows are normal for a short time while PBCluster
 replicates the new signed operation. Different checkpoint IDs or different

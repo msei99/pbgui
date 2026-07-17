@@ -185,11 +185,11 @@ PBCluster prüft nach dem normalen Operation-Sync zusätzlich die Abdeckung der
 für die Replica relevanten Blobs. Aktive Master vergleichen validierte
 Referenzen aus dem passenden Shadow- oder aktiven/vorherigen Checkpoint, dem
 verbliebenen Oplog sowie aktiven Mailboxes und senden nur die auf einem fähigen
-Peer fehlenden Blobs. Dadurch wird auch ein konvergierter Node mit bereits
-passenden Operation-Countern und unvollständigem Blob-Store repariert; ein
-aktiver Master kann dabei von einem anderen Master geheilt werden. Die
-Coverage-Abfrage materialisiert keine Configs und gibt keine Secret-Inhalte
-preis.
+Peer fehlenden Blobs. Ein Master mit unvollständigem lokalem Store holt einen
+fehlenden Blob außerdem verifiziert von einem anderen Master, bevor er ihn
+weiterverteilt. Dadurch werden konvergierte Nodes trotz bereits passender
+Operation-Counter repariert. Die Coverage-Abfrage materialisiert keine Configs
+und gibt keine Secret-Inhalte preis.
 
 Direkt nach dem Speichern einer Policy sind gemischte Zeilen kurzzeitig normal,
 während PBCluster die neue signierte Operation repliziert. Unterschiedliche

@@ -751,6 +751,25 @@ def test_missing_blobs_enforces_verification_byte_budget(
         run_command(root, NODE_B, "missing-blobs", json.dumps(request).encode("utf-8"))
 
 
+def test_get_blob_rejects_symlinked_store_parent(tmp_path: Path) -> None:
+    """Restricted blob reads reject symlinks in store parent components."""
+
+    root = _init_cluster(tmp_path)
+    raw = b'{"external":true}'
+    digest = hashlib.sha256(raw).hexdigest()
+    blob_hash = f"sha256:{digest}"
+    external_store = tmp_path / "external_store"
+    external_path = external_store / digest[:2] / f"{digest}.json"
+    external_path.parent.mkdir(parents=True)
+    external_path.write_bytes(raw)
+    config_root = root / "config_blobs"
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "sha256").symlink_to(external_store)
+
+    with pytest.raises(ClusterSyncCommandError, match="must not contain symlinks"):
+        run_command(root, NODE_B, f"get-blob {blob_hash}")
+
+
 def test_get_blob_repairs_missing_manifest_from_existing_run_v7_config(tmp_path: Path) -> None:
     """get-blob rebuilds a missing manifest blob from matching local run_v7 files."""
 

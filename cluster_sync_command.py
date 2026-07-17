@@ -2448,6 +2448,7 @@ def _read_verified_blob(
     text = _validate_hash(blob_hash)
     digest = text.removeprefix("sha256:")
     path = Path(base_dir) / "sha256" / digest[:2] / f"{digest}.json"
+    _reject_blob_path_symlinks(base_dir, path)
     if not path.is_file():
         raise ClusterSyncCommandError(f"missing {label}: {text}")
     raw = path.read_bytes()
@@ -2456,6 +2457,15 @@ def _read_verified_blob(
     if hashlib.sha256(raw).hexdigest() != digest:
         raise ClusterSyncCommandError(f"{label} hash mismatch: {text}")
     return raw
+
+
+def _reject_blob_path_symlinks(base_dir: Path, path: Path) -> None:
+    """Reject symlinks at every fixed content-addressed store boundary."""
+
+    base = Path(base_dir)
+    for candidate in (base, base / "sha256", Path(path).parent, Path(path)):
+        if candidate.is_symlink():
+            raise ClusterSyncCommandError("blob store path must not contain symlinks")
 
 
 def _read_json_payload(raw: bytes, max_size: int) -> dict[str, Any]:
@@ -2719,6 +2729,7 @@ def _write_blob(base_dir: Path, blob_hash: str, raw: bytes, max_size: int, *, se
     if digest != expected:
         raise ClusterSyncCommandError("blob hash mismatch")
     target = Path(base_dir) / "sha256" / expected[:2] / f"{expected}.json"
+    _reject_blob_path_symlinks(base_dir, target)
     if secret:
         ensure_private_directory_tree(Path(base_dir), target.parent)
     _atomic_write_bytes(target, raw, mode=0o600 if secret else 0o644)

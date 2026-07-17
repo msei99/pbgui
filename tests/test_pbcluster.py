@@ -1,11 +1,14 @@
 """Tests for the lightweight PBCluster daemon worker."""
 
+import base64
 import json
 import hashlib
 import stat
 import threading
 import time
 from pathlib import Path
+
+import pytest
 
 from cluster_credentials import ensure_node_key_material
 from cluster_sync_command import run_command
@@ -19,7 +22,13 @@ from master.cluster_state import (
     read_local_identity,
     write_operation,
 )
-from master.cluster_sync_worker import ClusterSyncWorker, SshClusterPeerClient, _write_local_blob
+from master.cluster_sync_worker import (
+    ClusterBlobBudgetExceeded,
+    ClusterSyncWorker,
+    ClusterSyncWorkerError,
+    SshClusterPeerClient,
+    _write_local_blob,
+)
 import master.cluster_sync_worker as cluster_sync_worker
 
 
@@ -745,8 +754,151 @@ def test_blob_coverage_repairs_available_blobs_when_another_is_missing_locally(t
         {"config": sorted([available_hash, unavailable_hash]), "secret": [], "sealed": []},
     )
 
-    assert repaired == (1, 0, 0)
+    assert repaired == (1, 0, 0, 0)
     assert client.uploads == 1
+
+
+def test_blob_coverage_prioritizes_recovering_local_blob_from_peer(tmp_path: Path) -> None:
+    """A capable peer heals a locally missing hash before normal cursor scanning."""
+
+    class CoveragePeerClient:
+        """Expose every probed blob and return the missing local target."""
+
+        def __init__(self, target_hash: str, target_raw: bytes) -> None:
+            self.target_hash = target_hash
+            self.target_raw = target_raw
+            self.commands: list[str] = []
+            self.probes: list[list[str]] = []
+
+        def run(self, _peer, _local_node_id, command_text, payload=None) -> dict:
+            self.commands.append(command_text)
+            if command_text == "missing-blobs":
+                self.probes.append(list(json.loads(str(payload))["config"]))
+                return {"ok": True, "missing": {"config": [], "secret": [], "sealed": []}}
+            if command_text == f"get-blob {self.target_hash}":
+                return {
+                    "ok": True,
+                    "hash": self.target_hash,
+                    "size": len(self.target_raw),
+                    "content_b64": base64.b64encode(self.target_raw).decode("ascii"),
+                }
+            raise AssertionError(f"unexpected command: {command_text}")
+
+    root = default_cluster_root(tmp_path)
+    hashes = []
+    for index in range(cluster_sync_worker.BLOB_COVERAGE_MAX_HASHES_PER_PEER_PASS + 2):
+        raw = json.dumps({"available": index}, separators=(",", ":")).encode("utf-8")
+        blob_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+        _write_cluster_blob(root, blob_hash, raw)
+        hashes.append(blob_hash)
+    target_raw = b'{"recovered":true}'
+    target_hash = "sha256:" + hashlib.sha256(target_raw).hexdigest()
+    hashes.append(target_hash)
+    client = CoveragePeerClient(target_hash, target_raw)
+    worker = ClusterSyncWorker(tmp_path, peer_client=client)
+    target_index = sorted(hashes).index(target_hash)
+    worker._blob_coverage_cursors[NODE_B] = (target_index + 1) % len(hashes)
+    worker._blob_recovery_cursors[NODE_B] = target_index
+
+    repaired = worker._repair_remote_blob_coverage(
+        {"node_id": NODE_B, "pbname": "master-b"},
+        NODE_ID,
+        {"config": sorted(hashes), "secret": [], "sealed": []},
+    )
+
+    digest = target_hash.removeprefix("sha256:")
+    recovered_path = root / "config_blobs" / "sha256" / digest[:2] / f"{digest}.json"
+    assert repaired == (0, 0, 0, 1)
+    assert recovered_path.read_bytes() == target_raw
+    assert f"get-blob {target_hash}" in client.commands
+    assert target_hash in client.probes[0]
+    assert target_hash not in client.probes[-1]
+
+
+def test_blob_coverage_rejects_mismatched_peer_blob_response(tmp_path: Path) -> None:
+    """A peer cannot substitute another content-addressed blob during recovery."""
+
+    class MismatchedPeerClient:
+        """Return valid bytes under a hash other than the requested hash."""
+
+        def run(self, _peer, _local_node_id, _command_text, payload=None) -> dict:
+            raw = b'{"wrong":true}'
+            return {
+                "ok": True,
+                "hash": "sha256:" + hashlib.sha256(raw).hexdigest(),
+                "size": len(raw),
+                "content_b64": base64.b64encode(raw).decode("ascii"),
+            }
+
+    root = default_cluster_root(tmp_path)
+    expected_hash = "sha256:" + "f" * 64
+    worker = ClusterSyncWorker(tmp_path, peer_client=MismatchedPeerClient())
+
+    with pytest.raises(ClusterSyncWorkerError, match="different blob hash"):
+        worker._ensure_remote_blob(
+            {"node_id": NODE_B},
+            NODE_ID,
+            root / "config_blobs",
+            expected_hash,
+            secret=False,
+        )
+
+
+def test_local_blob_exists_rejects_symlink(tmp_path: Path) -> None:
+    """Content-addressed blob reads never follow a symlink outside the store."""
+
+    raw = b'{"external":true}'
+    blob_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+    digest = blob_hash.removeprefix("sha256:")
+    external = tmp_path / "external.json"
+    external.write_bytes(raw)
+    base_dir = tmp_path / "config_blobs"
+    path = base_dir / "sha256" / digest[:2] / f"{digest}.json"
+    path.parent.mkdir(parents=True)
+    path.symlink_to(external)
+
+    assert cluster_sync_worker._local_blob_exists(base_dir, blob_hash) is False
+
+    parent_base = tmp_path / "parent_symlink_store"
+    parent_base.mkdir()
+    external_store = tmp_path / "external_store"
+    external_path = external_store / digest[:2] / f"{digest}.json"
+    external_path.parent.mkdir(parents=True)
+    external_path.write_bytes(raw)
+    (parent_base / "sha256").symlink_to(external_store)
+
+    assert cluster_sync_worker._local_blob_exists(parent_base, blob_hash) is False
+
+
+def test_remote_blob_recovery_defers_when_pass_budget_is_exhausted(tmp_path: Path) -> None:
+    """A valid peer blob outside the remaining budget is deferred without writing."""
+
+    raw = b'{"deferred":true}'
+    blob_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+
+    class ValidPeerClient:
+        """Return one valid blob larger than the supplied remaining budget."""
+
+        def run(self, _peer, _local_node_id, _command_text, payload=None) -> dict:
+            return {
+                "ok": True,
+                "hash": blob_hash,
+                "size": len(raw),
+                "content_b64": base64.b64encode(raw).decode("ascii"),
+            }
+
+    root = default_cluster_root(tmp_path)
+    worker = ClusterSyncWorker(tmp_path, peer_client=ValidPeerClient())
+
+    with pytest.raises(ClusterBlobBudgetExceeded, match="coverage pass budget"):
+        worker._ensure_remote_blob(
+            {"node_id": NODE_B},
+            NODE_ID,
+            root / "config_blobs",
+            blob_hash,
+            secret=False,
+            remaining_bytes=len(raw) - 1,
+        )
 
 
 def test_blob_coverage_rotates_within_per_peer_repair_budget(
@@ -790,9 +942,9 @@ def test_blob_coverage_rotates_within_per_peer_repair_budget(
     second = worker._repair_remote_blob_coverage(peer, NODE_ID, inventory)
     third = worker._repair_remote_blob_coverage(peer, NODE_ID, inventory)
 
-    assert first == (1, 0, 0)
-    assert second == (1, 0, 0)
-    assert third == (1, 0, 0)
+    assert first == (1, 0, 0, 0)
+    assert second == (1, 0, 0, 0)
+    assert third == (1, 0, 0, 0)
     assert client.uploaded == hashes
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import base64
+import binascii
 import hashlib
 import shlex
 import subprocess
@@ -23,7 +24,10 @@ from typing import Any, Callable, Mapping
 from cluster_sync_command import (
     ClusterSyncCommandError,
     MAX_BLOB_COVERAGE_HASHES,
+    MAX_CONFIG_BLOB_BYTES,
     MAX_GET_OPS,
+    MAX_SEALED_BLOB_BYTES,
+    MAX_SECRET_BLOB_BYTES,
     _append_credential_migration_acks,
     _materialize_api_keys,
     _materialize_credentials,
@@ -92,6 +96,7 @@ CHECKPOINT_OPERATION_TRIGGER = 5000
 CHECKPOINT_BYTES_TRIGGER = 10 * 1024 * 1024
 BLOB_COVERAGE_MAX_HASHES_PER_PEER_PASS = 16
 BLOB_COVERAGE_MAX_BYTES_PER_PEER_PASS = 64 * 1024 * 1024
+BLOB_COVERAGE_RECOVERY_SCAN_HASHES_PER_PEER_PASS = 64
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -129,6 +134,7 @@ class ClusterSyncWorker:
         self.peer_client = peer_client or SshClusterPeerClient(cluster_root=self.cluster_root)
         self._peer_backoff: dict[str, dict[str, Any]] = {}
         self._blob_coverage_cursors: dict[str, int] = {}
+        self._blob_recovery_cursors: dict[str, int] = {}
         self._local_state_lock = threading.Lock()
         self._last_trigger_mtime = self._trigger_mtime()
         self._stop = threading.Event()
@@ -626,6 +632,8 @@ class ClusterSyncWorker:
         known_peer_ids = {str(node_id) for node_id in nodes if str(node_id) != local_node_id}
         for stale_peer_id in set(self._blob_coverage_cursors) - known_peer_ids:
             self._blob_coverage_cursors.pop(stale_peer_id, None)
+        for stale_peer_id in set(self._blob_recovery_cursors) - known_peer_ids:
+            self._blob_recovery_cursors.pop(stale_peer_id, None)
         results_by_peer: dict[str, dict[str, Any]] = {}
         pending: list[tuple[str, dict[str, Any]]] = []
         for peer_id in sorted(nodes):
@@ -832,6 +840,7 @@ class ClusterSyncWorker:
         repaired_config_blobs = 0
         repaired_secret_blobs = 0
         repaired_sealed_blobs = 0
+        recovered_local_blobs = 0
         blob_coverage_supported = bool(hello.get("blob_coverage_capability"))
         nodes = ((local_materialized.get("cluster_nodes") or {}).get("nodes") or {})
         active_masters = sorted(
@@ -844,7 +853,7 @@ class ClusterSyncWorker:
         )
         is_blob_repair_owner = local_node_id in active_masters
         if blob_coverage_supported and is_blob_repair_owner:
-            repaired_config_blobs, repaired_secret_blobs, repaired_sealed_blobs = self._repair_remote_blob_coverage(
+            repaired_config_blobs, repaired_secret_blobs, repaired_sealed_blobs, recovered_local_blobs = self._repair_remote_blob_coverage(
                 peer,
                 local_node_id,
                 load_local_blob_hashes(),
@@ -870,6 +879,7 @@ class ClusterSyncWorker:
             or repaired_config_blobs
             or repaired_secret_blobs
             or repaired_sealed_blobs
+            or recovered_local_blobs
             or key_changed
             or mailbox_counts["pulled"]
             or mailbox_counts["pushed"]
@@ -889,6 +899,7 @@ class ClusterSyncWorker:
             "repaired_config_blobs": repaired_config_blobs,
             "repaired_secret_blobs": repaired_secret_blobs,
             "repaired_sealed_blobs": repaired_sealed_blobs,
+            "recovered_local_blobs": recovered_local_blobs,
             "deferred_credential_ops": deferred_credential_ops,
             "remaining_push_ops": remaining_push_ops,
             "cluster_ssh_key_updated": key_changed,
@@ -1237,17 +1248,44 @@ class ClusterSyncWorker:
         *,
         secret: bool,
         sealed: bool = False,
+        remaining_bytes: int | None = None,
     ) -> bytes | None:
         """Ensure one local blob exists by pulling it from the peer when missing."""
 
         if _local_blob_exists(base_dir, blob_hash):
             return None
+        expected_hash = _validate_hash(blob_hash)
         verb = "get-sealed-blob" if sealed else "get-secret-blob" if secret else "get-blob"
-        payload = self.peer_client.run(peer, local_node_id, f"{verb} {shlex.quote(str(blob_hash))}")
-        raw = base64.b64decode(str(payload.get("content_b64") or ""))
+        payload = self.peer_client.run(peer, local_node_id, f"{verb} {shlex.quote(expected_hash)}")
+        if not isinstance(payload.get("hash"), str):
+            raise ClusterSyncWorkerError("peer returned invalid blob hash type")
+        reported_hash = _validate_hash(payload["hash"])
+        if reported_hash != expected_hash:
+            raise ClusterSyncWorkerError("peer returned a different blob hash")
+        if type(payload.get("size")) is not int:
+            raise ClusterSyncWorkerError("peer returned invalid blob size type")
+        reported_size = int(payload["size"])
+        if reported_size < 0:
+            raise ClusterSyncWorkerError("peer returned invalid blob size")
+        max_size = MAX_SEALED_BLOB_BYTES if sealed else MAX_SECRET_BLOB_BYTES if secret else MAX_CONFIG_BLOB_BYTES
+        if reported_size > max_size:
+            raise ClusterSyncWorkerError("peer blob exceeds type size limit")
+        if remaining_bytes is not None and reported_size > max(0, int(remaining_bytes)):
+            raise ClusterBlobBudgetExceeded("peer blob exceeds coverage pass budget")
+        content_b64 = payload.get("content_b64")
+        if not isinstance(content_b64, str):
+            raise ClusterSyncWorkerError("peer returned invalid blob encoding type")
+        if len(content_b64) > ((reported_size + 2) // 3) * 4:
+            raise ClusterSyncWorkerError("peer blob encoding exceeds declared size")
+        try:
+            raw = base64.b64decode(content_b64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ClusterSyncWorkerError("peer returned invalid blob encoding") from exc
+        if reported_size != len(raw):
+            raise ClusterSyncWorkerError("peer blob size does not match content")
         if sealed:
             _validate_sealed_blob_payload(self.cluster_root, raw)
-        _write_local_blob(base_dir, str(payload.get("hash") or blob_hash), raw, secret=secret)
+        _write_local_blob(base_dir, expected_hash, raw, secret=secret)
         return raw
 
     def _push_blobs_for_operations(self, peer: dict[str, Any], local_node_id: str, operations: list[dict[str, Any]]) -> tuple[int, int, int]:
@@ -1274,8 +1312,8 @@ class ClusterSyncWorker:
         peer: dict[str, Any],
         local_node_id: str,
         hashes_by_kind: dict[str, list[str]],
-    ) -> tuple[int, int, int]:
-        """Push only replica-relevant blobs missing from a converged peer."""
+    ) -> tuple[int, int, int, int]:
+        """Exchange replica-relevant blobs missing on either converged peer."""
 
         expected_kinds = ("config", "secret", "sealed")
         by_kind = {kind: sorted({_validate_hash(item) for item in hashes_by_kind.get(kind) or []}) for kind in expected_kinds}
@@ -1283,15 +1321,35 @@ class ClusterSyncWorker:
         peer_id = str(peer.get("node_id") or "")
         if not all_refs:
             self._blob_coverage_cursors.pop(peer_id, None)
-            return 0, 0, 0
+            self._blob_recovery_cursors.pop(peer_id, None)
+            return 0, 0, 0, 0
+        paths = ClusterPaths.from_root(self.cluster_root)
+        roots = {
+            "config": paths.config_blobs,
+            "secret": paths.secret_blobs,
+            "sealed": paths.sealed_blobs,
+        }
+        recovery_start = int(self._blob_recovery_cursors.get(peer_id) or 0) % len(all_refs)
+        recovery_scan = [
+            all_refs[(recovery_start + offset) % len(all_refs)]
+            for offset in range(min(BLOB_COVERAGE_RECOVERY_SCAN_HASHES_PER_PEER_PASS, len(all_refs)))
+        ]
+        self._blob_recovery_cursors[peer_id] = (recovery_start + len(recovery_scan)) % len(all_refs)
+        locally_absent = [
+            (kind, blob_hash)
+            for kind, blob_hash in recovery_scan
+            if (
+                _local_blob_path(roots[kind], blob_hash).is_symlink()
+                or not _local_blob_path(roots[kind], blob_hash).is_file()
+            )
+        ]
         start = int(self._blob_coverage_cursors.get(peer_id) or 0) % len(all_refs)
         selected = [
             all_refs[(start + offset) % len(all_refs)]
             for offset in range(min(BLOB_COVERAGE_MAX_HASHES_PER_PEER_PASS, len(all_refs)))
         ]
-        missing: dict[str, set[str]] = {kind: set() for kind in expected_kinds}
 
-        def probe(kind: str, requested: list[str]) -> None:
+        def probe(kind: str, requested: list[str], target: dict[str, set[str]]) -> None:
             request = {name: requested if name == kind else [] for name in expected_kinds}
             try:
                 response = self.peer_client.run(
@@ -1304,8 +1362,8 @@ class ClusterSyncWorker:
                 if len(requested) <= 1 or "missing-blobs verification budget exceeded" not in str(exc).lower():
                     raise
                 midpoint = len(requested) // 2
-                probe(kind, requested[:midpoint])
-                probe(kind, requested[midpoint:])
+                probe(kind, requested[:midpoint], target)
+                probe(kind, requested[midpoint:], target)
                 return
             reported = (response.get("missing") or {}).get(kind)
             if not isinstance(reported, list):
@@ -1313,8 +1371,40 @@ class ClusterSyncWorker:
             normalized = [_validate_hash(item) for item in reported]
             if normalized != sorted(set(normalized)) or not set(normalized).issubset(requested):
                 raise ClusterSyncWorkerError("peer missing-blobs response contains unexpected hashes")
-            missing[kind].update(normalized)
+            target[kind].update(normalized)
 
+        recovery_candidates = locally_absent[:BLOB_COVERAGE_MAX_HASHES_PER_PEER_PASS]
+        recovery_missing: dict[str, set[str]] = {kind: set() for kind in expected_kinds}
+        recovery_by_kind = {
+            kind: sorted(blob_hash for candidate_kind, blob_hash in recovery_candidates if candidate_kind == kind)
+            for kind in expected_kinds
+        }
+        for kind, hashes in recovery_by_kind.items():
+            if hashes:
+                probe(kind, hashes, recovery_missing)
+
+        recovered_local = 0
+        repair_bytes = 0
+        for kind, blob_hash in recovery_candidates:
+            if blob_hash in recovery_missing[kind] or repair_bytes >= BLOB_COVERAGE_MAX_BYTES_PER_PEER_PASS:
+                continue
+            try:
+                raw = self._ensure_remote_blob(
+                    peer,
+                    local_node_id,
+                    roots[kind],
+                    blob_hash,
+                    secret=kind != "config",
+                    sealed=kind == "sealed",
+                    remaining_bytes=BLOB_COVERAGE_MAX_BYTES_PER_PEER_PASS - repair_bytes,
+                )
+            except ClusterBlobBudgetExceeded:
+                break
+            if raw is not None:
+                repair_bytes += len(raw)
+                recovered_local += 1
+
+        missing: dict[str, set[str]] = {kind: set() for kind in expected_kinds}
         selected_by_kind = {
             kind: sorted(blob_hash for selected_kind, blob_hash in selected if selected_kind == kind)
             for kind in expected_kinds
@@ -1322,17 +1412,32 @@ class ClusterSyncWorker:
         for kind, hashes in selected_by_kind.items():
             for offset in range(0, len(hashes), MAX_BLOB_COVERAGE_HASHES):
                 requested = hashes[offset:offset + MAX_BLOB_COVERAGE_HASHES]
-                probe(kind, requested)
+                probe(kind, requested, missing)
 
-        paths = ClusterPaths.from_root(self.cluster_root)
         unavailable = 0
         config_blobs = []
         pushed_secret = 0
         pushed_sealed = 0
         processed = 0
-        repair_bytes = 0
         for kind, blob_hash in selected:
             if blob_hash not in missing[kind]:
+                if repair_bytes >= BLOB_COVERAGE_MAX_BYTES_PER_PEER_PASS:
+                    break
+                try:
+                    raw = self._ensure_remote_blob(
+                        peer,
+                        local_node_id,
+                        roots[kind],
+                        blob_hash,
+                        secret=kind != "config",
+                        sealed=kind == "sealed",
+                        remaining_bytes=BLOB_COVERAGE_MAX_BYTES_PER_PEER_PASS - repair_bytes,
+                    )
+                except ClusterBlobBudgetExceeded:
+                    break
+                if raw is not None:
+                    repair_bytes += len(raw)
+                    recovered_local += 1
                 processed += 1
                 continue
             try:
@@ -1368,7 +1473,7 @@ class ClusterSyncWorker:
         self._blob_coverage_cursors[peer_id] = (start + processed) % len(all_refs)
         if unavailable:
             _log(SERVICE, f"Skipped {unavailable} locally unavailable blob repairs for {peer.get('pbname') or peer.get('node_id')}", level="WARNING")
-        return len(config_blobs), pushed_secret, pushed_sealed
+        return len(config_blobs), pushed_secret, pushed_sealed, recovered_local
 
     def _push_operations(self, peer: dict[str, Any], local_node_id: str, operations: list[dict[str, Any]]) -> int:
         """Push outbound operations to the peer."""
@@ -1410,6 +1515,10 @@ class ClusterSyncWorker:
 
 class ClusterSyncWorkerError(RuntimeError):
     """Raised when PBCluster peer synchronization fails."""
+
+
+class ClusterBlobBudgetExceeded(ClusterSyncWorkerError):
+    """Raised when one valid blob cannot fit in the remaining repair budget."""
 
 
 class SshClusterPeerClient:
@@ -1573,6 +1682,7 @@ def _peer_result(peer_id: str, peer: dict[str, Any], *, ok: bool, status: str, r
         "repaired_config_blobs": 0,
         "repaired_secret_blobs": 0,
         "repaired_sealed_blobs": 0,
+        "recovered_local_blobs": 0,
         "deferred_credential_ops": 0,
         "mailbox_supported": False,
         "mailbox_pulled": 0,
@@ -1844,7 +1954,7 @@ def _local_blob_exists(base_dir: Path, blob_hash: str) -> bool:
     try:
         _read_local_blob(base_dir, blob_hash)
         return True
-    except OSError:
+    except (OSError, ClusterSyncWorkerError):
         return False
 
 
@@ -1852,7 +1962,9 @@ def _read_local_blob(base_dir: Path, blob_hash: str) -> bytes:
     """Read and verify one local blob."""
 
     validated = _validate_hash(blob_hash)
-    raw = _local_blob_path(base_dir, validated).read_bytes()
+    path = _local_blob_path(base_dir, validated)
+    _reject_blob_path_symlinks(base_dir, path)
+    raw = path.read_bytes()
     if hashlib.sha256(raw).hexdigest() != validated.removeprefix("sha256:"):
         raise ClusterSyncWorkerError("local blob hash mismatch")
     return raw
@@ -1865,6 +1977,7 @@ def _write_local_blob(base_dir: Path, blob_hash: str, raw: bytes, *, secret: boo
     if hashlib.sha256(raw).hexdigest() != validated.removeprefix("sha256:"):
         raise ClusterSyncWorkerError("blob hash mismatch")
     path = _local_blob_path(base_dir, validated)
+    _reject_blob_path_symlinks(base_dir, path)
     if secret:
         ensure_private_directory_tree(Path(base_dir), path.parent)
         atomic_write_private_bytes(path, raw)
@@ -1874,6 +1987,15 @@ def _write_local_blob(base_dir: Path, blob_hash: str, raw: bytes, *, secret: boo
     tmp.write_bytes(raw)
     os.chmod(tmp, 0o600 if secret else 0o644)
     os.replace(tmp, path)
+
+
+def _reject_blob_path_symlinks(base_dir: Path, path: Path) -> None:
+    """Reject symlinks at every fixed content-addressed store boundary."""
+
+    base = Path(base_dir)
+    for candidate in (base, base / "sha256", Path(path).parent, Path(path)):
+        if candidate.is_symlink():
+            raise ClusterSyncWorkerError("blob store path must not contain symlinks")
 
 
 def _validate_hash(value: str) -> str:
