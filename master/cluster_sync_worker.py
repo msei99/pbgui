@@ -91,7 +91,7 @@ CONFIG_BLOB_BATCH_TARGET_BYTES = 12 * 1024 * 1024
 APPLY_BUNDLE_TARGET_BYTES = 12 * 1024 * 1024
 APPLY_BUNDLE_MAX_OPERATIONS = 16
 DEFAULT_PEER_WORKERS = 4
-RETENTION_EVALUATION_SECONDS = 24 * 60 * 60
+RETENTION_EVALUATION_SECONDS = 60 * 60
 CHECKPOINT_OPERATION_TRIGGER = 5000
 CHECKPOINT_BYTES_TRIGGER = 10 * 1024 * 1024
 BLOB_COVERAGE_MAX_HASHES_PER_PEER_PASS = 16
@@ -508,7 +508,7 @@ class ClusterSyncWorker:
         if report_due:
             prune = prune_operation_history(self.cluster_root, now=now)
             result["oplog"] = prune
-            if str(policy.get("mode") or "") == "oplog_and_blobs" and prune.get("status") == "complete":
+            if str(policy.get("mode") or "report_only") != "report_only" and prune.get("status") == "complete":
                 result["blobs"] = garbage_collect_blobs(self.cluster_root, now=now)
             result["status"] = "cleanup_evaluated"
         else:

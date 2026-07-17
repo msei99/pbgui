@@ -65,6 +65,8 @@ from master.cluster_checkpoint import (
     build_shadow_checkpoint,
     checkpoint_status,
     install_rebootstrap_checkpoint,
+    read_blob_gc_report,
+    read_retention_report,
     retention_policy,
     retention_preview,
     set_retention_policy,
@@ -279,6 +281,107 @@ def _load_sync_status_summary(root: Path) -> dict[str, Any]:
             "next_retry": as_int(item.get("next_retry")),
             "retry_delay": as_int(item.get("retry_delay")),
         })
+
+    history_source = payload.get("history_retention")
+    history = history_source if isinstance(history_source, dict) else {}
+    policy_source = history.get("policy")
+    policy = policy_source if isinstance(policy_source, dict) else {}
+    policy_mode = str(policy.get("mode") or "")
+
+    def cleanup_summary(value: Any) -> dict[str, Any]:
+        source = value if isinstance(value, dict) else {}
+        raw_blockers = [str(item)[:200] for item in source.get("blockers") or []][:20]
+        blockers = [
+            item for item in raw_blockers
+            if item not in {"activation_delay", "blob_gc_stability_window"}
+        ]
+        cleanup_status = str(source.get("status") or "")
+        if cleanup_status == "blocked" and raw_blockers and not blockers:
+            cleanup_status = "pending"
+        return {
+            "status": cleanup_status,
+            "mode": str(source.get("mode") or ""),
+            "evaluated_at": as_int(source.get("evaluated_at")),
+            "checkpoint_id": str(source.get("checkpoint_id") or ""),
+            "eligible_operations": as_int(source.get("eligible_operations")),
+            "eligible_bytes": as_int(source.get("eligible_bytes")),
+            "deleted_operations": as_int(source.get("deleted_operations")),
+            "deleted_bytes": as_int(source.get("deleted_bytes")),
+            "eligible_blobs": as_int(source.get("eligible_blobs")),
+            "deleted_blobs": as_int(source.get("deleted_blobs")),
+            "reachable_blobs": as_int(source.get("reachable_blobs")),
+            "reachable_digest": str(source.get("reachable_digest") or ""),
+            "blockers": blockers,
+            "dry_run": bool(source.get("dry_run", True)),
+        }
+
+    oplog_source = history.get("oplog") if isinstance(history.get("oplog"), dict) else None
+    blob_source = history.get("blobs") if isinstance(history.get("blobs"), dict) else None
+    try:
+        persisted_oplog = read_retention_report(root)
+        if (
+            isinstance(persisted_oplog, dict)
+            and (not policy_mode or str(persisted_oplog.get("mode") or "") == policy_mode)
+            and as_int(persisted_oplog.get("evaluated_at")) >= as_int((oplog_source or {}).get("evaluated_at"))
+        ):
+            oplog_source = persisted_oplog
+        persisted_blobs = read_blob_gc_report(root)
+        if (
+            isinstance(persisted_blobs, dict)
+            and policy_mode != "report_only"
+            and as_int(persisted_blobs.get("evaluated_at")) >= as_int((blob_source or {}).get("evaluated_at"))
+        ):
+            blob_source = persisted_blobs
+    except (ClusterCheckpointError, OSError, ValueError):
+        pass
+
+    checkpoint_source = history.get("checkpoint")
+    history_checkpoint = checkpoint_source if isinstance(checkpoint_source, dict) else {}
+    commit_source = history.get("checkpoint_commit")
+    checkpoint_commit = commit_source if isinstance(commit_source, dict) else {}
+    if not as_int(checkpoint_commit.get("acknowledgements")) and history_checkpoint.get("active") is True:
+        try:
+            active_bundle = active_checkpoint_bundle(root) or {}
+            active_proof = active_bundle.get("commit_proof") or {}
+            acknowledgements = active_proof.get("acknowledgements") or []
+            if isinstance(acknowledgements, list):
+                checkpoint_commit = {
+                    "status": "committed",
+                    "checkpoint_id": str((active_bundle.get("checkpoint") or {}).get("checkpoint_id") or ""),
+                    "epoch": as_int(active_bundle.get("epoch")),
+                    "acknowledgements": len(acknowledgements),
+                    "blockers": [],
+                }
+        except (ClusterCheckpointError, OSError, ValueError):
+            pass
+    history_summary = {
+        "status": str(history.get("status") or ""),
+        "error": str(history.get("error") or ""),
+        "detail": str(history.get("detail") or "")[:240],
+        "report_due": bool(history.get("report_due", False)),
+        "policy": {
+            "generation": as_int(policy.get("generation")),
+            "mode": policy_mode,
+            "history_days": as_int(policy.get("history_days")),
+            "conflicted": bool(policy.get("conflicted", False)),
+            "updated_at": as_int(policy.get("updated_at")),
+        },
+        "checkpoint": {
+            "active": bool(history_checkpoint.get("active", False)),
+            "checkpoint_id": str(history_checkpoint.get("checkpoint_id") or ""),
+            "checkpoint_epoch": as_int(history_checkpoint.get("checkpoint_epoch")),
+            "activated_at": as_int(history_checkpoint.get("activated_at")),
+        },
+        "checkpoint_commit": {
+            "status": str(checkpoint_commit.get("status") or ""),
+            "checkpoint_id": str(checkpoint_commit.get("checkpoint_id") or ""),
+            "epoch": as_int(checkpoint_commit.get("epoch")),
+            "acknowledgements": as_int(checkpoint_commit.get("acknowledgements")),
+            "blockers": [str(item)[:200] for item in checkpoint_commit.get("blockers") or []][:20],
+        },
+        "oplog": cleanup_summary(oplog_source),
+        "blobs": cleanup_summary(blob_source),
+    }
     return {
         "ok": bool(payload.get("ok", False)),
         "status": str(payload.get("status") or ""),
@@ -287,6 +390,7 @@ def _load_sync_status_summary(root: Path) -> dict[str, Any]:
         "peers_ok": as_int(payload.get("peers_ok")),
         "peers_total": as_int(payload.get("peers_total")) or len(peers),
         "peers": peers,
+        "history_retention": history_summary,
     }
 
 

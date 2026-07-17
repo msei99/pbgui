@@ -62,8 +62,7 @@ RETENTION_REPORT_NAME = "latest_report.json"
 GC_CANDIDATES_NAME = "gc_candidates.json"
 GC_JOURNAL_NAME = "gc_journal.json"
 GC_REPORT_NAME = "latest_gc_report.json"
-RETENTION_ACTIVATION_DELAY_SECONDS = 24 * 60 * 60
-GC_STABILITY_SECONDS = 24 * 60 * 60
+BLOB_GC_MIN_AGE_SECONDS = 60 * 60
 MAX_BUILD_ATTEMPTS = 3
 
 
@@ -1315,8 +1314,6 @@ def prune_operation_history(
             blockers.append("retention_policy_conflicted")
         if str(policy.get("mode") or "") == "report_only":
             blockers.append("retention_mode_report_only")
-        if int(policy.get("updated_at") or 0) + RETENTION_ACTIVATION_DELAY_SECONDS > timestamp:
-            blockers.append("activation_delay")
         if active is None:
             blockers.append("checkpoint_missing")
         else:
@@ -1460,6 +1457,14 @@ def read_retention_report(cluster_root: Path | str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def read_blob_gc_report(cluster_root: Path | str) -> dict[str, Any] | None:
+    """Read the latest owner-only blob-GC report when available."""
+
+    root = Path(os.path.abspath(Path(cluster_root).expanduser()))
+    value = _read_json_if_exists(root / RETENTION_DIR_NAME / GC_REPORT_NAME)
+    return value if isinstance(value, dict) else None
+
+
 def replica_blob_hashes(cluster_root: Path | str) -> dict[str, list[str]]:
     """Return blob references required to reconstruct the local replica."""
 
@@ -1508,6 +1513,20 @@ def replica_blob_hashes(cluster_root: Path | str) -> dict[str, list[str]]:
     return {kind: sorted(values) for kind, values in reachable.items()}
 
 
+def _reachable_blob_report(reachable: Mapping[str, set[str]]) -> dict[str, Any]:
+    """Return deterministic required-blob counts and a cross-node set digest."""
+
+    normalized = {
+        kind: sorted(str(blob_hash) for blob_hash in reachable.get(kind, set()))
+        for kind in ("config", "secret", "sealed")
+    }
+    return {
+        "reachable": {kind: len(values) for kind, values in normalized.items()},
+        "reachable_blobs": sum(len(values) for values in normalized.values()),
+        "reachable_digest": _sha256_json(normalized),
+    }
+
+
 def _blob_gc_report_for_preview(root: Path, shadow: Mapping[str, Any], timestamp: int) -> dict[str, Any]:
     """Return an actual or projected blob-GC report without advancing GC state."""
 
@@ -1519,6 +1538,9 @@ def _blob_gc_report_for_preview(root: Path, shadow: Mapping[str, Any], timestamp
         "eligible_bytes": 0,
         "deleted_blobs": 0,
         "deleted_bytes": 0,
+        "reachable": {"config": 0, "secret": 0, "sealed": 0},
+        "reachable_blobs": 0,
+        "reachable_digest": "",
         "blockers": [],
         "dry_run": True,
         "source": "projected",
@@ -1540,6 +1562,14 @@ def _blob_gc_report_for_preview(root: Path, shadow: Mapping[str, Any], timestamp
         and shadow_vector == committed_vector
     ):
         try:
+            raw_reachable = report.get("reachable") or {}
+            reachable_counts = {
+                kind: max(0, int(raw_reachable.get(kind) or 0))
+                for kind in ("config", "secret", "sealed")
+            }
+            reachable_digest = str(report.get("reachable_digest") or "")
+            if reachable_digest and not _is_sha256(reachable_digest):
+                raise ValueError("invalid reachable digest")
             return {
                 "status": str(report.get("status") or "unknown"),
                 "checkpoint_id": committed_id,
@@ -1548,6 +1578,9 @@ def _blob_gc_report_for_preview(root: Path, shadow: Mapping[str, Any], timestamp
                 "eligible_bytes": max(0, int(report.get("eligible_bytes") or 0)),
                 "deleted_blobs": max(0, int(report.get("deleted_blobs") or 0)),
                 "deleted_bytes": max(0, int(report.get("deleted_bytes") or 0)),
+                "reachable": reachable_counts,
+                "reachable_blobs": max(0, int(report.get("reachable_blobs") or sum(reachable_counts.values()))),
+                "reachable_digest": reachable_digest,
                 "blockers": sorted(str(item) for item in report.get("blockers") or []),
                 "dry_run": bool(report.get("dry_run", True)),
                 "source": "automatic",
@@ -1560,7 +1593,7 @@ def _blob_gc_report_for_preview(root: Path, shadow: Mapping[str, Any], timestamp
     safe_baseline = committed_vector if committed is not None else shadow_vector
     cutoff = timestamp - int(shadow.get("history_seconds") or DEFAULT_HISTORY_SECONDS)
     blockers = ["blob_gc_projection_only"]
-    if current_mode != "oplog_and_blobs":
+    if current_mode == "report_only":
         blockers.append("blob_gc_not_enabled")
     if committed is None:
         blockers.append("checkpoint_missing")
@@ -1588,7 +1621,7 @@ def _blob_gc_report_for_preview(root: Path, shadow: Mapping[str, Any], timestamp
         _collect_mailbox_blob_refs(paths, reachable)
         _expand_config_manifest_refs(paths, reachable["config"])
         _verify_reachable_blobs(paths, reachable)
-        candidates = _blob_gc_candidates(paths, reachable, timestamp - GC_STABILITY_SECONDS)
+        candidates = _blob_gc_candidates(paths, reachable, timestamp - BLOB_GC_MIN_AGE_SECONDS)
     except (OSError, json.JSONDecodeError, ClusterCheckpointError) as exc:
         return {
             **empty,
@@ -1598,6 +1631,7 @@ def _blob_gc_report_for_preview(root: Path, shadow: Mapping[str, Any], timestamp
         }
     return {
         **empty,
+        **_reachable_blob_report(reachable),
         "status": "projected",
         "checkpoint_id": str(shadow.get("checkpoint_id") or ""),
         "evaluated_at": timestamp,
@@ -1627,7 +1661,7 @@ def garbage_collect_blobs(
         policy = retention_policy(materialized)
         active = read_active_checkpoint(root)
         blockers: list[str] = []
-        if str(policy.get("mode") or "") != "oplog_and_blobs":
+        if str(policy.get("mode") or "report_only") == "report_only":
             blockers.append("blob_gc_not_enabled")
         if policy.get("conflicted") is True:
             blockers.append("retention_policy_conflicted")
@@ -1656,6 +1690,7 @@ def garbage_collect_blobs(
                 blockers.append("uncommitted_checkpoint_tail")
 
         reachable: dict[str, set[str]] = {"config": set(), "secret": set(), "sealed": set()}
+        reachable_complete = True
         try:
             if current is not None:
                 _merge_blob_refs(reachable, current.get("blob_refs") or {})
@@ -1671,19 +1706,12 @@ def garbage_collect_blobs(
             _expand_config_manifest_refs(paths, reachable["config"])
             _verify_reachable_blobs(paths, reachable)
         except (OSError, json.JSONDecodeError, ClusterCheckpointError) as exc:
+            reachable_complete = False
             blockers.append(f"blob_mark_failed:{exc}")
 
-        candidates = _blob_gc_candidates(paths, reachable, timestamp - GC_STABILITY_SECONDS)
+        candidates = _blob_gc_candidates(paths, reachable, timestamp - BLOB_GC_MIN_AGE_SECONDS)
         candidate_digest = _sha256_json(candidates)
         previous_candidates = _read_json_if_exists(candidate_path)
-        stable = bool(
-            isinstance(previous_candidates, dict)
-            and previous_candidates.get("checkpoint_id") == str((active or {}).get("checkpoint_id") or "")
-            and previous_candidates.get("candidate_digest") == candidate_digest
-            and int(previous_candidates.get("first_observed_at") or timestamp) + GC_STABILITY_SECONDS <= timestamp
-        )
-        if candidates and not stable:
-            blockers.append("blob_gc_stability_window")
         candidate_state = {
             "schema_version": 1,
             "checkpoint_id": str((active or {}).get("checkpoint_id") or ""),
@@ -1705,9 +1733,15 @@ def garbage_collect_blobs(
             "mode": str(policy.get("mode") or "report_only"),
             "evaluated_at": timestamp,
             "checkpoint_id": str((active or {}).get("checkpoint_id") or ""),
-            "reachable": {
-                kind: len(values) for kind, values in reachable.items()
-            },
+            **(
+                _reachable_blob_report(reachable)
+                if reachable_complete
+                else {
+                    "reachable": {"config": 0, "secret": 0, "sealed": 0},
+                    "reachable_blobs": 0,
+                    "reachable_digest": "",
+                }
+            ),
             "candidate_digest": candidate_digest,
             "eligible_blobs": len(candidates),
             "eligible_bytes": sum(int(item["size"]) for item in candidates),

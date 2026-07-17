@@ -295,6 +295,20 @@
     .credential-detail { margin-top: 5px; color: var(--muted); font-size: var(--fs-sm); line-height: 1.4; }
     .credential-blockers { display: grid; gap: var(--sp-sm); margin-top: var(--sp-md); }
     .credential-blocker { border: 1px solid rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); color: #fcd34d; border-radius: 8px; padding: 0.55rem 0.75rem; overflow-wrap: anywhere; }
+    .retention-runtime { margin-top: var(--sp-md); border: 1px solid var(--border2); border-radius: 11px; background: #0e1623; padding: var(--sp-md); }
+    .retention-runtime-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-md); }
+    .retention-runtime-label { color: var(--faint); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.08em; }
+    .retention-runtime-title { margin-top: 4px; color: var(--text); font-size: var(--fs-lg); font-weight: 750; }
+    .retention-runtime-detail { margin-top: 5px; color: var(--muted); line-height: 1.45; }
+    .retention-runtime-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--sp-sm); margin-top: var(--sp-md); }
+    .retention-runtime-card { border: 1px solid var(--border); border-radius: 9px; background: #101724; padding: var(--sp-sm); min-width: 0; }
+    .retention-runtime-card-value { margin-top: 5px; color: var(--text); font-size: var(--fs-md); font-weight: 750; overflow-wrap: anywhere; }
+    .retention-runtime-card-detail { margin-top: 4px; color: var(--muted); font-size: var(--fs-sm); line-height: 1.4; overflow-wrap: anywhere; }
+    .retention-runtime-blockers { display: grid; gap: 6px; margin-top: var(--sp-sm); }
+    .retention-runtime-blocker { color: #fcd34d; font-size: var(--fs-sm); }
+    .retention-runtime-foot { margin-top: var(--sp-sm); color: var(--faint); font-size: var(--fs-xs); }
+    .retention-advanced { margin-top: var(--sp-md); border-top: 1px solid var(--border); padding-top: var(--sp-md); }
+    .retention-advanced summary { color: var(--muted); cursor: pointer; font-weight: 700; }
     .cluster-section, main, .panel, .panel-body { min-width: 0; }
     #preview-modal table { min-width: 0; }
 
@@ -316,6 +330,7 @@
       .credential-toolbar .bootstrap-actions { width: 100%; }
       .credential-toolbar .btn { flex: 1 1 145px; }
       .credential-card, .credential-detail { max-width: 100%; overflow-wrap: anywhere; }
+      .retention-runtime-head { align-items: stretch; flex-direction: column; }
       .table-wrap { max-width: 100%; }
     }
   </style>
@@ -527,16 +542,15 @@
             <section class="panel">
               <div class="panel-head">
                 <div class="panel-title">Cluster History Retention</div>
-                <div class="panel-note">Report-only is the fail-safe default. Oplog or blob deletion requires an explicit signed policy, a sealed credential migration, and acknowledgements from every active replica.</div>
+                <div class="panel-note">Set the history window once. PBCluster continuously applies it whenever every cluster safety condition is healthy.</div>
               </div>
               <div class="panel-body">
                 <div class="modal-form-grid">
                   <div class="modal-field">
-                    <label for="retention-mode">Mode</label>
+                    <label for="retention-mode">Retention</label>
                     <select class="modal-input" id="retention-mode">
-                      <option value="report_only">Report only (no deletion)</option>
-                      <option value="oplog">Prune oplog history</option>
-                      <option value="oplog_and_blobs">Prune oplog and unreachable blobs</option>
+                      <option value="report_only">Disabled</option>
+                      <option value="oplog_and_blobs">Enabled (automatic)</option>
                     </select>
                   </div>
                   <div class="modal-field">
@@ -546,13 +560,25 @@
                 </div>
                 <div class="setup-state-note" id="retention-policy-summary" style="margin-top:var(--sp-md)">Loading retention policy...</div>
                 <div class="bootstrap-toolbar" style="margin-top:var(--sp-md); margin-bottom:0">
-                  <div class="bootstrap-summary">The report scans local and reachable cluster nodes without deleting or changing history.</div>
+                  <div class="bootstrap-summary">Once enabled, PBCluster continuously retains the selected history window and removes unreachable blobs when the cluster is healthy.</div>
                   <div class="bootstrap-actions">
-                    <button class="btn" id="retention-report-btn" type="button">Run Report</button>
-                    <button class="btn warn" id="retention-save-btn" type="button">Save Signed Policy</button>
+                    <button class="btn warn" id="retention-save-btn" type="button">Save Retention Policy</button>
                   </div>
                 </div>
-                <div class="table-wrap" id="retention-report" style="margin-top:var(--sp-md)"></div>
+                <div class="retention-runtime" id="retention-runtime">
+                  <div class="retention-runtime-label">Automatic cluster cleanup</div>
+                  <div class="retention-runtime-title">Loading PBCluster status...</div>
+                </div>
+                <details class="retention-advanced">
+                  <summary>Advanced node diagnostics</summary>
+                  <div class="bootstrap-toolbar" style="margin-top:var(--sp-md); margin-bottom:0">
+                    <div class="bootstrap-summary">Calculate an optional read-only projection for every reachable node.</div>
+                    <div class="bootstrap-actions">
+                      <button class="btn" id="retention-report-btn" type="button">Run Node Diagnostics</button>
+                    </div>
+                  </div>
+                  <div class="table-wrap" id="retention-report" style="margin-top:var(--sp-md)"></div>
+                </details>
               </div>
             </section>
           </div>
@@ -3371,11 +3397,143 @@
       }
 
       function retentionModeText(mode) {
-        return ({
-          report_only: 'Report only (no deletion)',
-          oplog: 'Prune oplog history',
-          oplog_and_blobs: 'Prune oplog and unreachable blobs'
-        })[String(mode || '')] || 'Report only (no deletion)';
+        return String(mode || 'report_only') === 'report_only' ? 'Disabled' : 'Automatic retention';
+      }
+
+      function retentionBlockerText(blocker) {
+        var key = String(blocker || '');
+        var known = {
+          checkpoint_missing: 'Waiting for a committed cluster checkpoint.',
+          checkpoint_policy_stale: 'The committed checkpoint does not yet contain the current policy.',
+          checkpoint_migration_seal_blocked: 'Credential migration is not sealed in the checkpoint.',
+          local_credential_migration_incomplete: 'Local credential migration is not complete.',
+          operation_prune_not_complete: 'Blob cleanup is waiting for oplog cleanup to complete.',
+          retention_policy_conflicted: 'The signed retention policy is conflicted.',
+          uncommitted_checkpoint_tail: 'New cluster operations require another committed checkpoint.'
+        };
+        if (known[key]) return known[key];
+        if (key.indexOf('previous_checkpoint:') === 0) return 'Waiting for a protected previous checkpoint.';
+        if (key.indexOf('migration_seal:') === 0) return 'Credential migration seal: ' + key.slice('migration_seal:'.length);
+        return key.replace(/_/g, ' ');
+      }
+
+      function renderRetentionRuntime(status) {
+        var target = document.getElementById('retention-runtime');
+        if (!target) return;
+        status = status || {};
+        var policy = status.retention_policy || {};
+        var checkpoint = status.checkpoint || {};
+        var sync = status.sync_status || {};
+        var runtime = sync.history_retention || {};
+        var runtimePolicy = runtime.policy || {};
+        var checkpointCommit = runtime.checkpoint_commit || {};
+        var oplog = runtime.oplog || {};
+        var blobs = runtime.blobs || {};
+        var mode = String(policy.mode || runtimePolicy.mode || 'report_only');
+        var days = Math.max(1, Number(policy.history_days || runtimePolicy.history_days || 7));
+        var blockers = Array.isArray(oplog.blockers) ? oplog.blockers.slice() : [];
+        var blobBlockers = Array.isArray(blobs.blockers) ? blobs.blockers.slice() : [];
+        var allBlockers = blockers.concat(mode !== 'report_only' ? blobBlockers : []);
+        var oplogHealthy = ['ready', 'complete'].indexOf(String(oplog.status || '')) >= 0;
+        var blobsHealthy = ['ready', 'complete'].indexOf(String(blobs.status || '')) >= 0;
+        var phase = 'Waiting for PBCluster status';
+        var tone = 'warn';
+        var detail = 'The automatic status will appear after the next PBCluster worker pass.';
+        var badge = 'pending';
+
+        if (mode === 'report_only') {
+          phase = 'Retention disabled';
+          tone = 'blue';
+          badge = 'disabled';
+          detail = 'PBCluster keeps the complete operation history and does not remove unreachable blobs.';
+        } else if (policy.conflicted || runtimePolicy.conflicted) {
+          phase = 'Retention paused';
+          tone = 'bad';
+          badge = 'paused';
+          detail = 'The signed retention policy is conflicted. No history can be deleted.';
+        } else if (runtime.status === 'error' || sync.ok === false) {
+          phase = 'Retention paused';
+          tone = 'bad';
+          badge = 'error';
+          detail = runtime.detail || runtime.error || sync.reason || 'Automatic retention maintenance failed.';
+        } else if (!checkpoint.active) {
+          phase = 'Preparing cluster checkpoint';
+          tone = 'warn';
+          badge = 'preparing';
+          detail = 'PBCluster is collecting matching acknowledgements from every active state replica.';
+        } else if (String(checkpointCommit.status || '') === 'blocked') {
+          phase = 'Retention paused';
+          tone = 'bad';
+          badge = 'paused';
+          detail = 'The cluster-wide checkpoint could not be committed. Review the blockers below.';
+          allBlockers = allBlockers.concat(checkpointCommit.blockers || []);
+        } else if (allBlockers.length) {
+          phase = 'Retention paused';
+          tone = 'bad';
+          badge = 'paused';
+          detail = 'Nothing is being deleted. PBCluster resumes automatically when every condition below is healthy.';
+        } else if (oplogHealthy && blobsHealthy) {
+          phase = 'Retention healthy';
+          tone = 'good';
+          badge = 'healthy';
+          detail = 'PBCluster is continuously retaining ' + days + ' days of history and cleaning unreachable blobs.';
+        } else {
+          phase = 'Retention active';
+          tone = 'blue';
+          badge = String(oplog.status || runtime.status || 'active').replace(/_/g, ' ');
+          detail = 'PBCluster automatically evaluates and applies the ' + days + '-day retention policy at least once per hour.';
+        }
+
+        var checkpointValue = checkpoint.active
+          ? 'Epoch ' + Number(checkpoint.checkpoint_epoch || 0)
+          : 'Pending';
+        var checkpointDetail = checkpoint.active ? shortId(checkpoint.checkpoint_id) : 'No committed checkpoint';
+        if (Number(checkpointCommit.acknowledgements || 0) > 0) {
+          checkpointDetail += ' | ' + Number(checkpointCommit.acknowledgements || 0) + ' replica ACKs';
+        } else if (checkpoint.active) {
+          checkpointDetail += ' | committed cluster-wide';
+        }
+        var retainedOperations = Number(((status.counts || {}).oplog) || 0);
+        var cleanupValue = oplog.status ? retainedOperations + ' retained' : 'Not evaluated';
+        var cleanupDetail = !oplog.status
+          ? 'Waiting for the first automatic maintenance evaluation'
+          : (oplog.status === 'complete'
+            ? Number(oplog.deleted_operations || 0) + ' deleted in last cleanup'
+            : Number(oplog.eligible_operations || 0) + ' eligible at last evaluation');
+        var blobValue = blobs.status ? Number(blobs.reachable_blobs || 0) + ' required' : 'Not evaluated';
+        var blobDetail = !blobs.status
+          ? 'Waiting for oplog cleanup and blob evaluation'
+          : (blobs.status === 'complete'
+            ? Number(blobs.deleted_blobs || 0) + ' local garbage blobs deleted in last cleanup'
+            : Number(blobs.eligible_blobs || 0) + ' local garbage blobs at last evaluation');
+        var cards = [
+          ['Policy', retentionModeText(mode), days + ' days retained'],
+          ['Cluster checkpoint', checkpointValue, checkpointDetail],
+          ['Oplog', cleanupValue, cleanupDetail]
+        ];
+        if (mode !== 'report_only') {
+          cards.push(['Blobs', blobValue, blobDetail]);
+        }
+        var cardsHtml = cards.map(function (card) {
+          return '<div class="retention-runtime-card">'
+            + '<div class="retention-runtime-label">' + esc(card[0]) + '</div>'
+            + '<div class="retention-runtime-card-value">' + esc(card[1]) + '</div>'
+            + '<div class="retention-runtime-card-detail">' + esc(card[2]) + '</div>'
+            + '</div>';
+        }).join('');
+        var blockersHtml = allBlockers.map(function (blocker) {
+          return '<div class="retention-runtime-blocker">Paused: ' + esc(retentionBlockerText(blocker)) + '</div>';
+        }).join('');
+        var lastEvaluation = Math.max(Number(oplog.evaluated_at || 0), Number(blobs.evaluated_at || 0), Number(sync.finished_at || 0));
+        var html = '<div class="retention-runtime-head"><div>'
+          + '<div class="retention-runtime-label">Automatic cluster cleanup</div>'
+          + '<div class="retention-runtime-title">' + esc(phase) + '</div>'
+          + '<div class="retention-runtime-detail">' + esc(detail) + '</div>'
+          + '</div><span class="pill ' + tone + '">' + esc(badge) + '</span></div>'
+          + '<div class="retention-runtime-grid">' + cardsHtml + '</div>'
+          + (blockersHtml ? '<div class="retention-runtime-blockers">' + blockersHtml + '</div>' : '')
+          + '<div class="retention-runtime-foot">Status refreshes every 5 seconds; retention maintenance runs automatically at least hourly. Last PBCluster evaluation: ' + esc(timeText(lastEvaluation)) + '.</div>';
+        setHtmlIfChanged(target, html);
       }
 
       function renderRetentionPolicy(status) {
@@ -3386,7 +3544,9 @@
         var days = Math.max(1, Number(policy.history_days || 7));
         var modeEl = document.getElementById('retention-mode');
         var daysEl = document.getElementById('retention-history-days');
-        if (modeEl && document.activeElement !== modeEl) modeEl.value = mode;
+        if (modeEl && document.activeElement !== modeEl) {
+          modeEl.value = mode === 'report_only' ? 'report_only' : 'oplog_and_blobs';
+        }
         if (daysEl && document.activeElement !== daysEl) daysEl.value = String(days);
         var summary = document.getElementById('retention-policy-summary');
         if (summary) {
@@ -3395,7 +3555,7 @@
             ? 'checkpoint epoch ' + Number(checkpoint.checkpoint_epoch || 0) + ' (' + shortId(checkpoint.checkpoint_id) + ')'
             : 'no committed checkpoint yet');
           if (policy.conflicted) parts.push('POLICY CONFLICT: deletion is blocked');
-          summary.className = 'setup-state-note' + (mode !== 'report_only' || policy.conflicted ? ' warn' : '');
+          summary.className = 'setup-state-note' + (policy.conflicted ? ' warn' : '');
           summary.textContent = parts.join(' | ');
         }
         var localNode = (status || {}).local_node || {};
@@ -3415,12 +3575,17 @@
           target.textContent = 'No retention report is available.';
           return;
         }
-        var html = '<table><thead><tr><th>Node</th><th>Status</th><th>Checkpoint</th><th>Eligible Ops</th><th>Eligible Size</th><th>Retained Ops</th><th>Blob Candidates</th><th>Blob Size</th><th>Blob GC Status</th><th>Migration Seal / Error</th></tr></thead><tbody>';
+        var html = '<table><thead><tr><th>Node</th><th>Projection</th><th>Checkpoint</th><th>Eligible Ops</th><th>Eligible Size</th><th>Retained Ops</th><th>Required Blob Set</th><th>Local Garbage Blobs</th><th>Local Garbage Size</th><th>Blob GC Projection</th><th>Migration Seal / Error</th></tr></thead><tbody>';
         reports.forEach(function (item) {
           var seal = item.migration_seal || {};
           var blobGc = item.blob_gc || null;
           var detail = item.error || (seal.status === 'sealed' ? 'sealed' : ((seal.blockers || []).join(', ') || 'not reported'));
           var blobStatus = 'not reported';
+          var reachableDigest = blobGc ? String(blobGc.reachable_digest || '') : '';
+          var reachableCount = blobGc ? Number(blobGc.reachable_blobs || 0) : 0;
+          var reachableSet = reachableDigest
+            ? '<strong>' + esc(reachableCount) + '</strong><div class="muted mono">' + esc(shortId(reachableDigest)) + '</div>'
+            : '-';
           if (blobGc) {
             blobStatus = String(blobGc.status || 'unknown');
             if ((blobGc.blockers || []).length) blobStatus += ': ' + blobGc.blockers.join(', ');
@@ -3435,6 +3600,7 @@
             + '<td>' + esc(Number(item.eligible_operations || 0)) + '</td>'
             + '<td>' + esc(formatBytes(Number(item.eligible_bytes || 0))) + '</td>'
             + '<td>' + esc(Number(item.retained_operations || 0)) + '</td>'
+            + '<td>' + reachableSet + '</td>'
             + '<td>' + esc(blobGc ? Number(blobGc.eligible_blobs || 0) : '-') + '</td>'
             + '<td>' + esc(blobGc ? formatBytes(Number(blobGc.eligible_bytes || 0)) : '-') + '</td>'
             + '<td>' + esc(blobStatus) + '</td>'
@@ -3449,25 +3615,25 @@
         var requestGeneration = ++retentionReportGeneration;
         var btn = document.getElementById('retention-report-btn');
         if (btn) { btn.disabled = true; btn.textContent = 'Scanning...'; }
-        setMessage('Building read-only retention report...', 'warn');
+        setMessage('Building optional read-only node diagnostics...', 'warn');
         return fetchJson('/retention/report').then(function (payload) {
           if (requestGeneration !== retentionReportGeneration) return payload;
           renderRetentionReport(payload);
-          setMessage('Retention report completed without deleting history.', 'ok');
+          setMessage('Node diagnostics completed without deleting history.', 'ok');
           return payload;
         }).catch(function (err) {
-          if (requestGeneration === retentionReportGeneration) setMessage('Retention report failed: ' + err.message, 'err');
+          if (requestGeneration === retentionReportGeneration) setMessage('Node diagnostics failed: ' + err.message, 'err');
           throw err;
         }).finally(function () {
-          if (btn && requestGeneration === retentionReportGeneration) { btn.disabled = false; btn.textContent = 'Run Report'; }
+          if (btn && requestGeneration === retentionReportGeneration) { btn.disabled = false; btn.textContent = 'Run Node Diagnostics'; }
         });
       }
 
       function saveRetentionPolicy() {
         var mode = String((document.getElementById('retention-mode') || {}).value || 'report_only');
         var historyDays = Number((document.getElementById('retention-history-days') || {}).value || 0);
-        if (['report_only', 'oplog', 'oplog_and_blobs'].indexOf(mode) < 0 || !Number.isInteger(historyDays) || historyDays < 1 || historyDays > 3650) {
-          setMessage('Choose a valid retention mode and 1 to 3650 history days.', 'err');
+        if (['report_only', 'oplog_and_blobs'].indexOf(mode) < 0 || !Number.isInteger(historyDays) || historyDays < 1 || historyDays > 3650) {
+          setMessage('Choose whether retention is enabled and enter 1 to 3650 history days.', 'err');
           return;
         }
         if (typeof window.PBGuiConfirm !== 'function') {
@@ -3476,14 +3642,14 @@
         }
         var destructive = mode !== 'report_only';
         window.PBGuiConfirm({
-          title: destructive ? 'Enable Cluster History Cleanup?' : 'Switch to Report Only?',
+          title: destructive ? 'Enable Automatic Retention?' : 'Disable Automatic Retention?',
           message: destructive
-            ? 'This signed cluster-wide policy permits automatic cleanup after all safety gates pass.'
-            : 'This signed cluster-wide policy disables all future history deletion.',
+            ? 'PBCluster will continuously retain the selected history window and remove unreachable blobs.'
+            : 'PBCluster will stop deleting operation history and unreachable blobs.',
           detail: destructive
-            ? 'PBGui will retain ' + historyDays + ' days. Cleanup still requires a sealed migration, a matching checkpoint, and acknowledgements from every active replica. Already deleted history cannot be restored.'
-            : 'Checkpoints and reports continue, but oplog and blob files will not be deleted.',
-          acceptText: destructive ? 'Enable Cleanup' : 'Use Report Only',
+            ? 'PBGui will retain ' + historyDays + ' days. Automatic cleanup starts when every cluster, checkpoint, and migration safety condition is healthy. Already deleted history cannot be restored.'
+            : 'Checkpoint verification continues, but oplog and blob files will no longer be deleted.',
+          acceptText: destructive ? 'Enable Retention' : 'Disable Retention',
           tone: destructive ? 'danger' : 'default'
         }).then(function (confirmed) {
           if (!confirmed) return;
@@ -3494,12 +3660,12 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ mode: mode, history_days: historyDays, expected_generation: retentionPolicyGeneration })
           }).then(function () {
-            setMessage('Signed retention policy published. Replicas must converge before cleanup can run.', 'ok');
+            setMessage('Retention policy saved. PBCluster applies it automatically when the cluster is healthy.', 'ok');
             return loadCluster({ force: true, keepProbes: true });
           }).catch(function (err) {
             setMessage('Retention policy update failed: ' + err.message, 'err');
           }).finally(function () {
-            if (btn) { btn.disabled = false; btn.textContent = 'Save Signed Policy'; }
+            if (btn) { btn.disabled = false; btn.textContent = 'Save Retention Policy'; }
           });
         });
       }
@@ -3515,6 +3681,7 @@
         var nodesChanged = force || nodesSignature !== lastNodesSignature;
         var desiredChanged = force || desiredSignature !== lastDesiredSignature;
         var oplogChanged = force || oplogSignature !== lastOplogSignature;
+        renderRetentionRuntime(parts[0]);
         if (statusChanged) {
           updateClusterSyncPeerMap(parts[0]);
           renderStats(parts[0]);

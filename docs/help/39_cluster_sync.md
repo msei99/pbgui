@@ -132,31 +132,36 @@ This is intentional: a host may be offline for a few hours at night, and without
 
 PBCluster can replace old operation history with a verified checkpoint plus a
 recent operation tail. Cleanup is disabled by default. Open **Cluster Sync ->
-Retention** to view the cluster-wide policy and run a read-only report.
+Retention** to view the cluster-wide policy and live automatic cleanup status.
 
-The values in **Mode** and **History Days** are drafts until you click **Save
-Signed Policy**. **Run Report** always uses the effective signed policy shown in
-the blue summary, not unsaved field values. To compare another history window
-without permitting deletion, keep **Report only**, enter the new number of days,
-save the signed policy, wait until the blue summary shows the new value, and
-then run the report again. The allowed history window is 1 to 3650 days; the
+The values in **Retention** and **History Days** are drafts until you click
+**Save Retention Policy**. The allowed history window is 1 to 3650 days; the
 default is seven days.
 
-The available modes are:
+The available settings are:
 
-- **Report only**: default; builds and verifies checkpoints but never deletes history.
-- **Prune oplog history**: retains the configured number of days and the current/previous checkpoints.
-- **Prune oplog and unreachable blobs**: additionally removes blobs that remain unreachable in two identical reports for at least 24 hours.
+- **Disabled**: builds and verifies checkpoints but never deletes history or blobs.
+- **Enabled (automatic)**: continuously retains the configured operation-history window and removes unreachable blobs whenever all safety checks pass. Existing signed `oplog` and `oplog_and_blobs` policies are both treated as this automatic mode.
+
+**Automatic cluster cleanup** is the primary operational display. It refreshes
+from PBCluster's persisted status every five seconds without opening SSH
+connections or advancing cleanup. It shows the current phase, committed
+checkpoint and replica acknowledgements, retained and deleted operation/blob
+counts, blockers, and the latest evaluation time. Maintenance is evaluated
+after policy changes and at least hourly. **Run Node Diagnostics** under
+**Advanced node diagnostics** is optional and only calculates the detailed
+per-node projection.
 
 The report columns mean:
 
-- **Status**: `dry_run` means the node only calculated candidates and did not delete anything.
+- **Projection**: `dry_run` means the optional node diagnostic only calculated candidates and did not delete anything.
 - **Checkpoint**: deterministic shadow-checkpoint ID calculated from that node's current validated state and effective policy.
 - **Eligible Ops**: operation files old enough for the effective history window and at or below the checkpoint baseline.
 - **Eligible Size**: combined on-disk size of those eligible operation files; it does not include configs, credentials, checkpoints, or blobs.
 - **Retained Ops**: operation files that remain in the recent tail.
-- **Blob Candidates** and **Blob Size**: projected unreachable blobs and their combined size before cleanup, or the values from the latest matching automatic GC evaluation after cleanup starts.
-- **Blob GC Status**: `projected` for the read-only pre-cleanup simulation, or whether automatic blob GC is blocked by a safety gate, ready, or complete. The status also lists blockers such as a missing committed checkpoint or the 24-hour stability window and reports already deleted blob counts and bytes after completion.
+- **Required Blob Set**: count and digest of the exact config, secret, and sealed hashes required by the projected checkpoint and retained state. Equal digests prove required-blob convergence even when local garbage differs.
+- **Local Garbage Blobs** and **Local Garbage Size**: projected locally stored unreachable blobs and their combined size before cleanup, or the values from the latest matching automatic GC evaluation after cleanup starts.
+- **Blob GC Projection**: `projected` for the read-only simulation, or whether automatic blob GC is blocked by a state-based safety gate, ready, or complete. The projection also reports already deleted blob counts and bytes after completion.
 - **Migration Seal / Error**: local seal result or a node error. `not reported` means the remote preview does not expose its seal result; the commit protocol still verifies every replica's seal independently.
 
 Values are per node. Equal rows normally describe the same replicated operation
@@ -166,18 +171,18 @@ local durable file age to be older than the cutoff for actual deletion. The
 read-only report normalizes late replicas by projecting signed operation age
 under the verified shadow checkpoint, so a recently joined node reports the
 same hypothetical candidates without weakening the real deletion gate.
-Blob candidates describe each node's local content-addressed stores and may
+Local garbage values describe each node's local content-addressed stores and may
 legitimately differ when one node has additional orphaned copies. Checkpoint ID,
-Eligible Ops, and Retained Ops must still converge across replicas.
+Eligible Ops, Retained Ops, and Required Blob Set digest must still converge
+across replicas.
 
-Before cleanup is enabled, **Run Report** projects blob candidates from the
+**Run Node Diagnostics** projects blob candidates from the
 shadow checkpoint, the current/previous checkpoint protection, a simulated
 operation prune using the effective history window, the retained operation
 tail, and live mailbox references. `projected` values are therefore a preview;
 blockers such as `checkpoint_missing` still prevent deletion. Once a matching
 automatic GC evaluation exists, the table shows its actual candidates and
-stability status instead. **Run Report** never persists candidates, advances
-the 24-hour stability window, or deletes data.
+status instead. **Run Node Diagnostics** never changes or deletes data.
 
 PBCluster also checks replica-relevant blob coverage after normal operation
 sync. Active masters compare validated references from the applicable shadow or
@@ -187,31 +192,20 @@ also pulls a verified missing blob from another master before redistributing it.
 This repairs converged nodes whose operation counters already match, without
 materializing configs or exposing secret contents in the coverage query.
 
-After saving a policy, mixed rows are normal for a short time while PBCluster
-replicates the new signed operation. Different checkpoint IDs or different
-eligible/retained counts mean the replicas are not yet converged. Do not enable
-cleanup in that state. Wait for a completed PBCluster sync cycle and rerun the
-report. Before enabling cleanup, every active replica must be available, show
-the same checkpoint ID and operation candidate counts, and report no error; the
-local migration seal must show `sealed` and the Cluster page must show no
-conflicts. Blob candidate counts may differ for the local-store reason described
-above.
+After saving an enabled policy, PBCluster replicates it, commits a matching
+checkpoint with acknowledgements from every active state replica, and applies
+retention automatically. If a replica is unavailable or any state check fails,
+the status changes to **Retention paused**, nothing is deleted, and maintenance
+resumes automatically when the cluster is healthy. There is no time-based
+activation or stability gate. Old unreachable blobs retain a one-hour technical
+minimum age so an upload cannot be deleted before its referencing operation is
+stored.
 
-A safe first cleanup rollout is:
-
-1. Keep **Report only**, save the desired history window, and run reports until all active replicas match.
-2. Select **Prune oplog history** when only operation history should be cleaned, or select **Prune oplog and unreachable blobs** directly when both should be cleaned. Save the signed policy.
-3. Wait for PBCluster to propose the checkpoint and collect matching signed acknowledgements from every active state replica.
-4. Verify that the blue summary shows an active committed checkpoint. `no committed checkpoint yet` means deletion is still blocked.
-5. Wait at least 24 hours after the destructive policy became active. Cleanup is evaluated on policy changes, at the 5,000-operation or 10-MiB soft trigger, and at least daily so age-only transitions are eventually processed.
-6. Rerun the report and verify cluster state, V7 assignments, credentials, CMC, and TradFi after the oplog cleanup.
-7. In the combined mode, inspect **Blob Candidates**, **Blob Size**, and **Blob GC Status** after the first automatic GC evaluation. Blob deletion remains independently blocked until two identical candidate reports are at least 24 hours apart.
-
-Changing the policy writes a signed cluster operation. A destructive mode does
+Changing the policy writes a signed cluster operation. Automatic retention does
 not bypass safety checks: every active state replica must independently confirm
-the same checkpoint, credential protocol v2 migration must be sealed, the
-checkpoint reducer must match full replay, and the destructive policy must be
-active for 24 hours. A conflict automatically falls back to report-only.
+the same checkpoint, credential protocol v2 migration must be sealed, and the
+checkpoint reducer must match full replay. A conflict automatically pauses
+deletion.
 
 Operations after a checkpoint are signed and bound to its checkpoint ID. A
 node behind deleted history installs the proven checkpoint and required blobs

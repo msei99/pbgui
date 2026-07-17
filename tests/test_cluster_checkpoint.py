@@ -455,6 +455,48 @@ def test_retention_preview_drops_freshly_received_old_blob_reference(tmp_path: P
     assert not any(str(item).startswith("blob_projection_failed:") for item in preview["blob_gc"]["blockers"])
 
 
+def test_required_blob_digest_ignores_local_garbage(tmp_path: Path) -> None:
+    """Local garbage changes candidates without changing the required-set digest."""
+
+    root = _cluster(tmp_path)
+    current_raw = b'{"required":true}\n'
+    current_digest = hashlib.sha256(current_raw).hexdigest()
+    current_hash = f"sha256:{current_digest}"
+    current_path = root / "config_blobs" / "sha256" / current_digest[:2] / f"{current_digest}.json"
+    current_path.parent.mkdir(parents=True)
+    current_path.write_bytes(current_raw)
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "bybit_BTC",
+            "version": "1",
+            "parent_version": "0",
+            "assigned_host": NODE_ID,
+            "desired_state": "running",
+            "config_manifest_hash": current_hash,
+        },
+        created_at=NOW - 60,
+    )
+    checkpoint = build_shadow_checkpoint(root, created_at=NOW)
+    before = retention_preview(root, checkpoint, now=NOW)
+    orphan_raw = b'{"orphan":true}\n'
+    orphan_digest = hashlib.sha256(orphan_raw).hexdigest()
+    orphan_path = root / "config_blobs" / "sha256" / orphan_digest[:2] / f"{orphan_digest}.json"
+    orphan_path.parent.mkdir(parents=True, exist_ok=True)
+    orphan_path.write_bytes(orphan_raw)
+    os.utime(orphan_path, (NOW - 2 * 24 * 60 * 60, NOW - 2 * 24 * 60 * 60))
+
+    after = retention_preview(root, checkpoint, now=NOW)
+
+    assert before["blob_gc"]["reachable_blobs"] == 1
+    assert before["blob_gc"]["reachable"] == {"config": 1, "secret": 0, "sealed": 0}
+    assert before["blob_gc"]["reachable_digest"].startswith("sha256:")
+    assert before["blob_gc"]["reachable_digest"] == after["blob_gc"]["reachable_digest"]
+    assert before["blob_gc"]["eligible_blobs"] == 0
+    assert after["blob_gc"]["eligible_blobs"] == 1
+
+
 def test_checkpoint_refuses_actor_sequence_gaps(tmp_path: Path) -> None:
     """A missing operation prevents a checkpoint from hiding an incomplete actor log."""
 
@@ -659,7 +701,68 @@ def test_prune_requires_explicit_policy_and_reconstructs_from_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Eligible old operation files are pruned only after every safety gate passes."""
+    """Eligible history is pruned immediately after every state-based safety gate passes."""
+
+    root = _cluster(tmp_path)
+    monkeypatch.setattr(
+        checkpoint_module,
+        "build_migration_seal",
+        lambda materialized: {
+            "schema_version": 1,
+            "status": "sealed",
+            "cluster_id": materialized["cluster_nodes"]["cluster_id"],
+            "active_node_ids": [NODE_ID],
+            "blockers": [],
+        },
+    )
+    monkeypatch.setattr(credential_migration, "credential_migration_is_complete", lambda _root: True)
+    append_operation(
+        root,
+        "SET_RETENTION_POLICY",
+        {
+            "generation": 1,
+            "parent_generation": 0,
+            "mode": "oplog",
+            "history_days": 7,
+        },
+        created_at=NOW - 60,
+    )
+    checkpoint = build_shadow_checkpoint(root, created_at=NOW - 30)
+    proposal = create_checkpoint_proposal(
+        root,
+        checkpoint,
+        created_at=NOW - 200,
+        expires_at=NOW + 200,
+    )
+    ack = create_checkpoint_ack(root, checkpoint, proposal, created_at=NOW - 190)
+    proof = create_checkpoint_commit_proof(
+        root,
+        checkpoint,
+        proposal,
+        [ack],
+        created_at=NOW - 180,
+    )
+    activate_checkpoint(root, checkpoint, commit_proof=proof, activated_at=NOW - 10)
+    old_mtime = NOW - 8 * 24 * 60 * 60
+    for path in (root / "oplog").glob("*/*.json"):
+        os.utime(path, (old_mtime, old_mtime))
+
+    report = prune_operation_history(root, now=NOW)
+
+    assert report["status"] == "complete"
+    assert report["deleted_operations"] == 1
+    remaining_paths = list((root / "oplog").glob("*/*.json"))
+    assert len(remaining_paths) == 1
+    assert json.loads(remaining_paths[0].read_text(encoding="utf-8"))["op"] == "SET_RETENTION_POLICY"
+    assert "activation_delay" not in report["blockers"]
+    assert rebuild_materialized_state(root, write=False) == checkpoint["materialized"]
+
+
+def test_blob_gc_runs_automatically_without_a_stability_delay(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An old unreachable blob is swept in the first healthy automatic evaluation."""
 
     root = _cluster(tmp_path)
     monkeypatch.setattr(
@@ -685,64 +788,6 @@ def test_prune_requires_explicit_policy_and_reconstructs_from_checkpoint(
         },
         created_at=NOW - 9 * 24 * 60 * 60,
     )
-    checkpoint = build_shadow_checkpoint(root, created_at=NOW - 2 * 24 * 60 * 60)
-    proposal = create_checkpoint_proposal(
-        root,
-        checkpoint,
-        created_at=NOW - 200,
-        expires_at=NOW + 200,
-    )
-    ack = create_checkpoint_ack(root, checkpoint, proposal, created_at=NOW - 190)
-    proof = create_checkpoint_commit_proof(
-        root,
-        checkpoint,
-        proposal,
-        [ack],
-        created_at=NOW - 180,
-    )
-    activate_checkpoint(root, checkpoint, commit_proof=proof, activated_at=NOW - 170)
-    old_mtime = NOW - 8 * 24 * 60 * 60
-    for path in (root / "oplog").glob("*/*.json"):
-        os.utime(path, (old_mtime, old_mtime))
-
-    report = prune_operation_history(root, now=NOW)
-
-    assert report["status"] == "complete"
-    assert report["deleted_operations"] == 2
-    assert not list((root / "oplog").glob("*/*.json"))
-    assert rebuild_materialized_state(root, write=False) == checkpoint["materialized"]
-
-
-def test_blob_gc_requires_two_stable_reports_and_keeps_default_disabled(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """An unreachable blob is swept only after explicit mode and a stable day."""
-
-    root = _cluster(tmp_path)
-    monkeypatch.setattr(
-        checkpoint_module,
-        "build_migration_seal",
-        lambda materialized: {
-            "schema_version": 1,
-            "status": "sealed",
-            "cluster_id": materialized["cluster_nodes"]["cluster_id"],
-            "active_node_ids": [NODE_ID],
-            "blockers": [],
-        },
-    )
-    monkeypatch.setattr(credential_migration, "credential_migration_is_complete", lambda _root: True)
-    append_operation(
-        root,
-        "SET_RETENTION_POLICY",
-        {
-            "generation": 1,
-            "parent_generation": 0,
-            "mode": "oplog_and_blobs",
-            "history_days": 7,
-        },
-        created_at=NOW - 9 * 24 * 60 * 60,
-    )
     orphan_raw = b'{"orphan":true}\n'
     orphan_digest = hashlib.sha256(orphan_raw).hexdigest()
     orphan = root / "config_blobs" / "sha256" / orphan_digest[:2] / f"{orphan_digest}.json"
@@ -760,17 +805,28 @@ def test_blob_gc_requires_two_stable_reports_and_keeps_default_disabled(
 
     first = garbage_collect_blobs(root, now=NOW)
     preview = retention_preview(root, checkpoint, now=NOW)
-    second = garbage_collect_blobs(root, now=NOW + 24 * 60 * 60 + 1)
+    fresh_raw = b'{"uploading":true}\n'
+    fresh_digest = hashlib.sha256(fresh_raw).hexdigest()
+    fresh = root / "config_blobs" / "sha256" / fresh_digest[:2] / f"{fresh_digest}.json"
+    fresh.parent.mkdir(parents=True, exist_ok=True)
+    fresh.write_bytes(fresh_raw)
+    os.utime(fresh, (NOW - 30 * 60, NOW - 30 * 60))
+    second = garbage_collect_blobs(root, now=NOW + 1)
+    third = garbage_collect_blobs(root, now=NOW + 60 * 60 + 1)
 
-    assert first["status"] == "blocked"
-    assert "blob_gc_stability_window" in first["blockers"]
-    assert preview["blob_gc"]["status"] == "blocked"
+    assert first["status"] == "complete"
+    assert first["deleted_blobs"] == 1
+    assert first["blockers"] == []
+    assert preview["blob_gc"]["status"] == "complete"
     assert preview["blob_gc"]["eligible_blobs"] == 1
     assert preview["blob_gc"]["eligible_bytes"] == len(orphan_raw)
-    assert "blob_gc_stability_window" in preview["blob_gc"]["blockers"]
-    assert second["status"] == "complete"
-    assert second["deleted_blobs"] == 1
+    assert preview["blob_gc"]["deleted_blobs"] == 1
+    assert second["status"] == "ready"
+    assert second["deleted_blobs"] == 0
+    assert third["status"] == "complete"
+    assert third["deleted_blobs"] == 1
     assert not orphan.exists()
+    assert not fresh.exists()
 
 
 def test_retention_preview_projects_blob_gc_before_checkpoint_commit(tmp_path: Path) -> None:

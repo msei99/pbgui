@@ -360,7 +360,7 @@ def test_retention_report_builds_remote_preview_command(monkeypatch, tmp_path: P
                 "status": "blocked",
                 "eligible_blobs": 3,
                 "eligible_bytes": 1024,
-                "blockers": ["blob_gc_stability_window"],
+                "blockers": ["operation_prune_not_complete"],
             },
             "items": [],
         }
@@ -418,6 +418,79 @@ def test_get_status_includes_pbcluster_sync_status(monkeypatch, tmp_path: Path) 
         "last_seen": 0,
         "next_retry": 0,
         "retry_delay": 30,
+    }
+
+
+def test_get_status_includes_automatic_retention_lifecycle(monkeypatch, tmp_path: Path) -> None:
+    """The five-second status feed exposes persisted cleanup progress without a report scan."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    (root / "sync_status.json").write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "status": "local_reconciled",
+                "finished_at": 300,
+                "peers_ok": 14,
+                "peers_total": 14,
+                "history_retention": {
+                    "status": "cleanup_evaluated",
+                    "policy": {
+                        "generation": 3,
+                        "mode": "oplog",
+                        "history_days": 14,
+                        "updated_at": 200,
+                    },
+                    "checkpoint": {
+                        "active": True,
+                        "checkpoint_id": HASH_A,
+                        "checkpoint_epoch": 2,
+                        "activated_at": 250,
+                    },
+                    "checkpoint_commit": {
+                        "status": "committed",
+                        "checkpoint_id": HASH_A,
+                        "epoch": 2,
+                        "acknowledgements": 15,
+                    },
+                    "oplog": {
+                        "status": "complete",
+                        "mode": "oplog",
+                        "evaluated_at": 275,
+                        "checkpoint_id": HASH_A,
+                        "eligible_operations": 266,
+                        "eligible_bytes": 169586,
+                        "deleted_operations": 266,
+                        "blockers": [],
+                        "dry_run": False,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    retention = cluster.get_status(session=None)["sync_status"]["history_retention"]
+
+    assert retention["status"] == "cleanup_evaluated"
+    assert "activation_ready_at" not in retention["policy"]
+    assert retention["checkpoint_commit"]["acknowledgements"] == 15
+    assert retention["oplog"] == {
+        "status": "complete",
+        "mode": "oplog",
+        "evaluated_at": 275,
+        "checkpoint_id": HASH_A,
+        "eligible_operations": 266,
+        "eligible_bytes": 169586,
+        "deleted_operations": 266,
+        "deleted_bytes": 0,
+        "eligible_blobs": 0,
+        "deleted_blobs": 0,
+        "reachable_blobs": 0,
+        "reachable_digest": "",
+        "blockers": [],
+        "dry_run": False,
     }
 
 

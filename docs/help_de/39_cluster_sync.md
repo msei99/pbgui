@@ -133,32 +133,37 @@ Das ist Absicht: Ein Host kann nachts für ein paar Stunden offline sein. Solang
 
 PBCluster kann alte Operation-Historie durch einen verifizierten Checkpoint plus
 einen aktuellen Operation-Tail ersetzen. Cleanup ist standardmäßig deaktiviert.
-Unter **Cluster Sync -> Retention** siehst du die clusterweite Policy und kannst
-einen reinen Lesebericht starten.
+Unter **Cluster Sync -> Retention** siehst du die clusterweite Policy und den
+laufend aktualisierten automatischen Cleanup-Status.
 
-Die Werte in **Mode** und **History Days** sind Entwürfe, bis du **Save Signed
-Policy** anklickst. **Run Report** verwendet immer die effektive signierte Policy
-aus der blauen Zusammenfassung und nicht ungespeicherte Feldwerte. Um ein
-anderes Zeitfenster ohne Löschfreigabe zu vergleichen, lässt du **Report only**
-aktiv, trägst die neue Anzahl Tage ein, speicherst die signierte Policy, wartest
-bis die blaue Zusammenfassung den neuen Wert zeigt und startest dann den Report
-erneut. Erlaubt sind 1 bis 3650 Tage; Standard sind sieben Tage.
+Die Werte in **Retention** und **History Days** sind Entwürfe, bis du **Save
+Retention Policy** anklickst. Erlaubt sind 1 bis 3650 Tage; Standard sind sieben
+Tage.
 
-Verfügbare Modi:
+Verfügbare Einstellungen:
 
-- **Report only**: Standard; erstellt und prüft Checkpoints, löscht aber nie Historie.
-- **Prune oplog history**: behält die konfigurierte Anzahl Tage sowie aktuellen und vorherigen Checkpoint.
-- **Prune oplog and unreachable blobs**: entfernt zusätzlich Blobs, die in zwei identischen Reports mindestens 24 Stunden unerreichbar bleiben.
+- **Disabled**: erstellt und prüft Checkpoints, löscht aber nie Historie oder Blobs.
+- **Enabled (automatic)**: behält kontinuierlich das konfigurierte Operation-Historienfenster und entfernt unerreichbare Blobs, sobald alle Sicherheitsprüfungen erfüllt sind. Bestehende signierte `oplog`- und `oplog_and_blobs`-Policies gelten beide als dieser automatische Modus.
+
+**Automatic cluster cleanup** ist die primäre Betriebsanzeige. Sie aktualisiert
+sich alle fünf Sekunden aus dem persistenten PBCluster-Status, ohne SSH-
+Verbindungen zu öffnen oder Cleanup voranzutreiben. Angezeigt werden Phase,
+committed Checkpoint und Replica-ACKs, erhaltene und gelöschte Operationen und
+Blobs, Blocker und Zeitpunkt der letzten Auswertung. Maintenance läuft nach
+Policy-Änderungen und mindestens stündlich. **Run Node Diagnostics** unter
+**Advanced node diagnostics** ist optional und berechnet nur die detaillierte
+Projektion pro Node.
 
 Die Report-Spalten bedeuten:
 
-- **Status**: `dry_run` bedeutet, dass der Node nur Kandidaten berechnet und nichts gelöscht hat.
+- **Projection**: `dry_run` bedeutet, dass die optionale Node-Diagnose nur Kandidaten berechnet und nichts gelöscht hat.
 - **Checkpoint**: deterministische Shadow-Checkpoint-ID aus dem aktuell validierten Zustand und der effektiven Policy dieses Nodes.
 - **Eligible Ops**: Operation-Dateien, die für das effektive Zeitfenster alt genug sind und höchstens auf der Checkpoint-Baseline liegen.
 - **Eligible Size**: gemeinsame Dateigröße dieser löschbaren Operationen; Configs, Credentials, Checkpoints und Blobs sind darin nicht enthalten.
 - **Retained Ops**: Operation-Dateien, die im aktuellen Tail erhalten bleiben.
-- **Blob Candidates** und **Blob Size**: projizierte unerreichbare Blobs und deren gemeinsame Größe vor dem Cleanup oder die Werte der letzten passenden automatischen GC-Auswertung nach dem Cleanup-Start.
-- **Blob GC Status**: `projected` für die reine Lese-Simulation vor dem Cleanup oder der automatische Blob-GC-Zustand `blocked`, `ready` beziehungsweise `complete`. Der Status nennt außerdem Blocker wie einen fehlenden committed Checkpoint oder das 24-Stunden-Stabilitätsfenster und nach Abschluss die bereits gelöschte Blob-Anzahl und Größe.
+- **Required Blob Set**: Anzahl und Digest der exakten Config-, Secret- und Sealed-Hashes, die Checkpoint und verbleibender Zustand benötigen. Gleiche Digests belegen die Konvergenz der benötigten Blobs auch bei unterschiedlichem lokalem Garbage.
+- **Local Garbage Blobs** und **Local Garbage Size**: projizierte lokal gespeicherte unerreichbare Blobs und deren gemeinsame Größe vor dem Cleanup oder die Werte der letzten passenden automatischen GC-Auswertung nach dem Cleanup-Start.
+- **Blob GC Projection**: `projected` für die reine Lese-Simulation oder der automatische Blob-GC-Zustand `blocked`, `ready` beziehungsweise `complete`. Die Projektion zeigt außerdem nach Abschluss die bereits gelöschte Blob-Anzahl und Größe.
 - **Migration Seal / Error**: lokales Seal-Ergebnis oder Node-Fehler. `not reported` bedeutet, dass der Remote-Preview sein Seal-Ergebnis nicht liefert; das Commit-Protokoll prüft den Seal jeder Replica trotzdem unabhängig.
 
 Die Werte gelten pro Node. Gleiche Zeilen beschreiben normalerweise denselben
@@ -169,20 +174,19 @@ echte Löschung älter als der Cutoff sind. Der read-only Report normalisiert sp
 beigetretene Replicas, indem er das signierte Operation-Alter unter dem
 verifizierten Shadow-Checkpoint projiziert. Damit zeigen neue Nodes dieselben
 hypothetischen Kandidaten, ohne das echte Lösch-Gate abzuschwächen.
-Blob-Kandidaten beschreiben die lokalen Content-Addressed Stores jedes Nodes und
+Lokale Garbage-Werte beschreiben die Content-Addressed Stores jedes Nodes und
 können sich berechtigt unterscheiden, wenn ein Node zusätzliche verwaiste
-Kopien besitzt. Checkpoint-ID, Eligible Ops und Retained Ops müssen trotzdem auf
-allen Replicas konvergieren.
+Kopien besitzt. Checkpoint-ID, Eligible Ops, Retained Ops und der Required-Blob-
+Set-Digest müssen trotzdem auf allen Replicas konvergieren.
 
-Vor der Cleanup-Aktivierung projiziert **Run Report** die Blob-Kandidaten aus dem
+**Run Node Diagnostics** projiziert die Blob-Kandidaten aus dem
 Shadow-Checkpoint, dem Schutz des aktuellen/vorherigen Checkpoints, einem
 simulierten Oplog-Prune mit dem effektiven Zeitfenster, dem verbleibenden
 Operation-Tail und aktiven Mailbox-Referenzen. Werte mit Status `projected` sind
 daher eine Vorschau; Blocker wie `checkpoint_missing` verhindern weiterhin jede
 Löschung. Sobald eine passende automatische GC-Auswertung existiert, zeigt die
-Tabelle deren tatsächliche Kandidaten und Stabilitätsstatus. **Run Report**
-speichert niemals Kandidaten, verschiebt das 24-Stunden-Stabilitätsfenster nicht
-und löscht keine Daten.
+Tabelle deren tatsächliche Kandidaten und Status. **Run Node Diagnostics**
+verändert oder löscht niemals Daten.
 
 PBCluster prüft nach dem normalen Operation-Sync zusätzlich die Abdeckung der
 für die Replica relevanten Blobs. Aktive Master vergleichen validierte
@@ -194,33 +198,20 @@ weiterverteilt. Dadurch werden konvergierte Nodes trotz bereits passender
 Operation-Counter repariert. Die Coverage-Abfrage materialisiert keine Configs
 und gibt keine Secret-Inhalte preis.
 
-Direkt nach dem Speichern einer Policy sind gemischte Zeilen kurzzeitig normal,
-während PBCluster die neue signierte Operation repliziert. Unterschiedliche
-Checkpoint-IDs oder unterschiedliche Eligible-/Retained-Zahlen bedeuten, dass
-die Replicas noch nicht konvergiert sind. Aktiviere in diesem Zustand kein
-Cleanup. Warte einen abgeschlossenen PBCluster-Sync-Zyklus ab und starte den
-Report erneut. Vor der Cleanup-Aktivierung müssen alle aktiven Replicas
-erreichbar sein, dieselbe Checkpoint-ID und dieselben Oplog-Kandidatenzahlen
-zeigen und dürfen keinen Fehler melden; Blob-Kandidaten dürfen aus dem oben
-genannten lokalen Grund abweichen. Der lokale Migration Seal muss `sealed` sein
-und die Cluster-Seite darf keine Conflicts zeigen.
-
-Sicherer Ablauf für die erste Bereinigung:
-
-1. Lasse **Report only** aktiv, speichere das gewünschte Zeitfenster und wiederhole Reports, bis alle aktiven Replicas übereinstimmen.
-2. Wähle **Prune oplog history**, wenn nur die Operation-Historie bereinigt werden soll, oder direkt **Prune oplog and unreachable blobs**, wenn beides bereinigt werden soll. Speichere die signierte Policy.
-3. Warte, bis PBCluster den Checkpoint vorgeschlagen und passende signierte Bestätigungen von jeder aktiven State-Replica gesammelt hat.
-4. Prüfe, dass die blaue Zusammenfassung einen aktiven committed Checkpoint zeigt. `no committed checkpoint yet` bedeutet, dass Löschen weiterhin blockiert ist.
-5. Warte mindestens 24 Stunden, nachdem die löschende Policy aktiv wurde. Cleanup wird bei Policy-Änderungen, am Soft-Trigger von 5.000 Operationen oder 10 MiB und mindestens täglich ausgewertet, damit auch reine Altersübergänge verarbeitet werden.
-6. Starte den Report erneut und prüfe nach dem Oplog-Cleanup Cluster-State, V7-Zuweisungen, Credentials, CMC und TradFi.
-7. Prüfe im kombinierten Modus nach der ersten automatischen GC-Auswertung **Blob Candidates**, **Blob Size** und **Blob GC Status**. Blob-Löschung bleibt unabhängig blockiert, bis zwei identische Kandidaten-Reports mindestens 24 Stunden auseinanderliegen.
+Nach dem Speichern einer aktivierten Policy repliziert PBCluster sie, committed
+einen passenden Checkpoint mit Bestätigungen aller aktiven State-Replicas und
+wendet Retention automatisch an. Ist eine Replica nicht erreichbar oder schlägt
+eine Zustandsprüfung fehl, zeigt der Status **Retention paused**, es wird nichts
+gelöscht und Maintenance läuft automatisch weiter, sobald der Cluster wieder
+gesund ist. Es gibt kein zeitbasiertes Aktivierungs- oder Stabilitäts-Gate. Alte
+unerreichbare Blobs behalten ein technisches Mindestalter von einer Stunde,
+damit ein Upload nicht vor seiner referenzierenden Operation gelöscht wird.
 
 Eine Policy-Änderung schreibt eine signierte Cluster-Operation. Ein löschender
 Modus umgeht keine Sicherheitsprüfung: Jede aktive State-Replica muss denselben
 Checkpoint unabhängig bestätigen, die Credential-Protocol-v2-Migration muss
-versiegelt sein, der Checkpoint-Reducer muss dem Full Replay entsprechen und
-die löschende Policy muss seit 24 Stunden aktiv sein. Ein Policy-Konflikt fällt
-automatisch auf Report-only zurück.
+versiegelt sein und der Checkpoint-Reducer muss dem Full Replay entsprechen. Ein
+Policy-Konflikt pausiert jede Löschung automatisch.
 
 Operationen nach einem Checkpoint sind signiert und an dessen Checkpoint-ID
 gebunden. Ein Node hinter gelöschter Historie installiert zuerst den bestätigten

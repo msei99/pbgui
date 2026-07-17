@@ -211,6 +211,55 @@ def test_cluster_sync_worker_rebuilds_and_writes_status(tmp_path: Path) -> None:
     assert (cluster_root / "sync_status.json").is_file()
 
 
+def test_legacy_oplog_policy_runs_full_automatic_retention(monkeypatch, tmp_path: Path) -> None:
+    """A persisted oplog policy automatically prunes history and unreachable blobs."""
+
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(cluster_root, "ADD_NODE", {"node_id": NODE_ID, "role": "master", "pbname": "master-a"})
+    append_operation(
+        cluster_root,
+        "SET_RETENTION_POLICY",
+        {
+            "generation": 1,
+            "parent_generation": 0,
+            "mode": "oplog",
+            "history_days": 14,
+        },
+    )
+    materialized = rebuild_materialized_state(cluster_root, write=False)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        cluster_sync_worker,
+        "checkpoint_status",
+        lambda _root: {
+            "active": True,
+            "checkpoint_baseline": dict(materialized["state_vector"]),
+        },
+    )
+    monkeypatch.setattr(cluster_sync_worker, "read_retention_report", lambda _root: None)
+    monkeypatch.setattr(
+        cluster_sync_worker,
+        "prune_operation_history",
+        lambda _root, *, now: calls.append("oplog") or {"status": "complete"},
+    )
+    monkeypatch.setattr(
+        cluster_sync_worker,
+        "garbage_collect_blobs",
+        lambda _root, *, now: calls.append("blobs") or {"status": "complete"},
+    )
+
+    result = ClusterSyncWorker(tmp_path)._maintain_history(
+        read_local_identity(cluster_root),
+        materialized,
+        [],
+        reason="manual",
+    )
+
+    assert result["status"] == "cleanup_evaluated"
+    assert calls == ["oplog", "blobs"]
+
+
 def test_cluster_sync_worker_does_not_apply_current_v7_materialization(
     monkeypatch,
     tmp_path: Path,
