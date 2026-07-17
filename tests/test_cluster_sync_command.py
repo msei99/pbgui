@@ -58,6 +58,33 @@ def _init_cluster(tmp_path: Path) -> Path:
     return root
 
 
+def test_retention_preview_includes_actual_automatic_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The read-only diagnostic reports projected and actual local cleanup state."""
+
+    root = _init_cluster(tmp_path)
+    checkpoint = {"checkpoint_id": HASH_A}
+    automatic = {
+        "oplog": {"status": "blocked", "blockers": ["checkpoint_policy_stale"]},
+        "blobs": {"status": "not_evaluated", "blockers": []},
+    }
+    monkeypatch.setattr(cluster_sync_command, "build_shadow_checkpoint", lambda _root: checkpoint)
+    monkeypatch.setattr(
+        cluster_sync_command,
+        "retention_preview",
+        lambda _root, _checkpoint, item_limit: {"status": "dry_run", "items": []},
+    )
+    monkeypatch.setattr(cluster_sync_command, "retention_cleanup_status", lambda _root: automatic)
+
+    result = run_command(root, NODE_B, "retention-preview")
+
+    assert result["ok"] is True
+    assert result["status"] == "dry_run"
+    assert result["automatic_cleanup"] == automatic
+
+
 def test_current_clean_credential_scan_ack_skips_repeated_managed_scan(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

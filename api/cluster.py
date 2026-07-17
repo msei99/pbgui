@@ -68,6 +68,7 @@ from master.cluster_checkpoint import (
     install_rebootstrap_checkpoint,
     read_blob_gc_report,
     read_retention_report,
+    retention_cleanup_status,
     retention_policy,
     retention_preview,
     set_retention_policy,
@@ -4575,6 +4576,7 @@ async def get_retention_report(
         "items": local_items,
         "items_truncated": int(local_preview.get("eligible_operations") or 0) > len(local_items),
         "migration_seal": checkpoint["migration_seal"],
+        "automatic_cleanup": retention_cleanup_status(_cluster_root()),
     }]
     remote_limit = asyncio.Semaphore(4)
 
@@ -4607,6 +4609,29 @@ async def get_retention_report(
     ]
     if tasks:
         reports.extend(await asyncio.gather(*tasks))
+    active_checkpoint_id = str(checkpoint_status(_cluster_root()).get("checkpoint_id") or "")
+
+    def cleanup_verified(item: dict[str, Any]) -> bool:
+        automatic = item.get("automatic_cleanup") if isinstance(item.get("automatic_cleanup"), dict) else {}
+        oplog = automatic.get("oplog") if isinstance(automatic.get("oplog"), dict) else {}
+        blobs = automatic.get("blobs") if isinstance(automatic.get("blobs"), dict) else {}
+        return bool(
+            item.get("status") != "unavailable"
+            and str(item.get("checkpoint_id") or "") == active_checkpoint_id
+            and str(oplog.get("checkpoint_id") or "") == active_checkpoint_id
+            and str(blobs.get("checkpoint_id") or "") == active_checkpoint_id
+            and str(oplog.get("status") or "") in {"ready", "complete"}
+            and str(blobs.get("status") or "") in {"ready", "complete"}
+            and not (oplog.get("blockers") or [])
+            and not (blobs.get("blockers") or [])
+        )
+
+    nodes_cleanup_verified = sum(1 for item in reports if cleanup_verified(item))
+    checkpoint_aligned = sum(
+        1 for item in reports
+        if item.get("status") != "unavailable"
+        and str(item.get("checkpoint_id") or "") == active_checkpoint_id
+    )
     return {
         "read_only": True,
         "policy": retention_policy(snapshot),
@@ -4616,6 +4641,9 @@ async def get_retention_report(
             "nodes_total": len(reports),
             "nodes_reported": sum(1 for item in reports if item.get("status") != "unavailable"),
             "nodes_unavailable": sum(1 for item in reports if item.get("status") == "unavailable"),
+            "nodes_checkpoint_aligned": checkpoint_aligned,
+            "nodes_cleanup_verified": nodes_cleanup_verified,
+            "cluster_cleanup_verified": bool(reports) and nodes_cleanup_verified == len(reports),
             "eligible_operations": sum(int(item.get("eligible_operations") or 0) for item in reports),
             "eligible_bytes": sum(int(item.get("eligible_bytes") or 0) for item in reports),
         },

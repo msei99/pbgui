@@ -697,7 +697,7 @@ def test_active_checkpoint_advances_sequences_and_rotates_previous(
     assert read_active_checkpoint(root) == first
 
 
-def test_prune_requires_explicit_policy_and_reconstructs_from_checkpoint(
+def test_prune_uses_cluster_seal_and_reconstructs_from_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -715,7 +715,6 @@ def test_prune_requires_explicit_policy_and_reconstructs_from_checkpoint(
             "blockers": [],
         },
     )
-    monkeypatch.setattr(credential_migration, "credential_migration_is_complete", lambda _root: True)
     append_operation(
         root,
         "SET_RETENTION_POLICY",
@@ -782,7 +781,6 @@ def test_blob_gc_runs_automatically_without_a_stability_delay(
             "blockers": [],
         },
     )
-    monkeypatch.setattr(credential_migration, "credential_migration_is_complete", lambda _root: True)
     append_operation(
         root,
         "SET_RETENTION_POLICY",

@@ -566,17 +566,18 @@
                   </div>
                 </div>
                 <div class="retention-runtime" id="retention-runtime">
-                  <div class="retention-runtime-label">Automatic cluster cleanup</div>
+                  <div class="retention-runtime-label">Automatic local cleanup</div>
                   <div class="retention-runtime-title">Loading PBCluster status...</div>
                 </div>
-                <details class="retention-advanced">
-                  <summary>Advanced node diagnostics</summary>
+                <details class="retention-advanced" open>
+                  <summary>Cluster-wide retention verification</summary>
                   <div class="bootstrap-toolbar" style="margin-top:var(--sp-md); margin-bottom:0">
-                    <div class="bootstrap-summary">Calculate an optional read-only projection for every reachable node.</div>
+                    <div class="bootstrap-summary">Verify the committed checkpoint and actual automatic cleanup result on every reachable node.</div>
                     <div class="bootstrap-actions">
-                      <button class="btn" id="retention-report-btn" type="button">Run Node Diagnostics</button>
+                      <button class="btn" id="retention-report-btn" type="button">Verify All Nodes</button>
                     </div>
                   </div>
+                  <div class="setup-state-note" id="retention-report-summary" style="margin-top:var(--sp-md)">Cluster retention has not been verified in this browser session.</div>
                   <div class="table-wrap" id="retention-report" style="margin-top:var(--sp-md)"></div>
                 </details>
               </div>
@@ -3473,12 +3474,12 @@
           badge = 'paused';
           detail = 'Nothing is being deleted. PBCluster resumes automatically when every condition below is healthy.';
         } else if (oplogHealthy && blobsHealthy) {
-          phase = 'Retention healthy';
+          phase = 'Local retention healthy';
           tone = 'good';
           badge = 'healthy';
-          detail = 'PBCluster is continuously retaining ' + days + ' days of history and cleaning unreachable blobs.';
+          detail = 'This node is retaining ' + days + ' days of history and cleaning its local unreachable blobs.';
         } else {
-          phase = 'Retention active';
+          phase = 'Local retention active';
           tone = 'blue';
           badge = String(oplog.status || runtime.status || 'active').replace(/_/g, ' ');
           detail = 'PBCluster automatically evaluates and applies the ' + days + '-day retention policy at least once per hour.';
@@ -3526,7 +3527,7 @@
         }).join('');
         var lastEvaluation = Math.max(Number(oplog.evaluated_at || 0), Number(blobs.evaluated_at || 0), Number(sync.finished_at || 0));
         var html = '<div class="retention-runtime-head"><div>'
-          + '<div class="retention-runtime-label">Automatic cluster cleanup</div>'
+          + '<div class="retention-runtime-label">Automatic local cleanup</div>'
           + '<div class="retention-runtime-title">' + esc(phase) + '</div>'
           + '<div class="retention-runtime-detail">' + esc(detail) + '</div>'
           + '</div><span class="pill ' + tone + '">' + esc(badge) + '</span></div>'
@@ -3569,17 +3570,45 @@
 
       function renderRetentionReport(payload) {
         var target = document.getElementById('retention-report');
+        var summary = document.getElementById('retention-report-summary');
         if (!target) return;
         var reports = (payload && payload.reports) || [];
+        var counts = (payload && payload.counts) || {};
         if (!reports.length) {
           target.textContent = 'No retention report is available.';
+          if (summary) {
+            summary.className = 'setup-state-note warn';
+            summary.textContent = 'No node returned a retention verification result.';
+          }
           return;
         }
-        var html = '<table><thead><tr><th>Node</th><th>Projection</th><th>Checkpoint</th><th>Eligible Ops</th><th>Eligible Size</th><th>Retained Ops</th><th>Required Blob Set</th><th>Local Garbage Blobs</th><th>Local Garbage Size</th><th>Blob GC Projection</th><th>Migration Seal / Error</th></tr></thead><tbody>';
+        var verified = Number(counts.nodes_cleanup_verified || 0);
+        var total = Number(counts.nodes_total || reports.length);
+        var aligned = Number(counts.nodes_checkpoint_aligned || 0);
+        if (summary) {
+          summary.className = 'setup-state-note' + (counts.cluster_cleanup_verified ? '' : ' warn');
+          summary.textContent = counts.cluster_cleanup_verified
+            ? 'Cluster retention verified: ' + verified + '/' + total + ' nodes share the committed checkpoint and report healthy automatic cleanup.'
+            : 'Cluster retention not yet verified: ' + aligned + '/' + total + ' checkpoints aligned, ' + verified + '/' + total + ' automatic cleanups healthy.';
+        }
+        var html = '<table><thead><tr><th>Node</th><th>Automatic Cleanup</th><th>Projection</th><th>Checkpoint</th><th>Eligible Ops</th><th>Eligible Size</th><th>Retained Ops</th><th>Required Blob Set</th><th>Local Garbage Blobs</th><th>Local Garbage Size</th><th>Blob GC Projection</th><th>Migration Seal / Error</th></tr></thead><tbody>';
         reports.forEach(function (item) {
           var seal = item.migration_seal || {};
           var blobGc = item.blob_gc || null;
+          var automatic = item.automatic_cleanup || {};
+          var automaticOplog = automatic.oplog || {};
+          var automaticBlobs = automatic.blobs || {};
           var detail = item.error || (seal.status === 'sealed' ? 'sealed' : ((seal.blockers || []).join(', ') || 'not reported'));
+          var automaticBlockers = (automaticOplog.blockers || []).concat(automaticBlobs.blockers || []);
+          var automaticStatus = 'oplog ' + String(automaticOplog.status || 'not_evaluated')
+            + '; blobs ' + String(automaticBlobs.status || 'not_evaluated');
+          if (automaticBlockers.length) automaticStatus += ': ' + automaticBlockers.join(', ');
+          if (Number(automaticOplog.deleted_operations || 0) > 0) {
+            automaticStatus += '; deleted ' + Number(automaticOplog.deleted_operations || 0) + ' ops';
+          }
+          if (Number(automaticBlobs.deleted_blobs || 0) > 0) {
+            automaticStatus += '; deleted ' + Number(automaticBlobs.deleted_blobs || 0) + ' blobs';
+          }
           var blobStatus = 'not reported';
           var reachableDigest = blobGc ? String(blobGc.reachable_digest || '') : '';
           var reachableCount = blobGc ? Number(blobGc.reachable_blobs || 0) : 0;
@@ -3595,6 +3624,7 @@
           }
           html += '<tr>'
             + '<td><strong>' + esc(item.pbname || item.node_id || 'unknown') + '</strong><div class="muted mono">' + esc(shortId(item.node_id)) + '</div></td>'
+            + '<td>' + esc(automaticStatus) + '</td>'
             + '<td>' + esc(item.status || 'dry_run') + '</td>'
             + '<td class="mono">' + esc(shortId(item.checkpoint_id)) + '</td>'
             + '<td>' + esc(Number(item.eligible_operations || 0)) + '</td>'
@@ -3615,17 +3645,17 @@
         var requestGeneration = ++retentionReportGeneration;
         var btn = document.getElementById('retention-report-btn');
         if (btn) { btn.disabled = true; btn.textContent = 'Scanning...'; }
-        setMessage('Building optional read-only node diagnostics...', 'warn');
+        setMessage('Verifying cluster retention on every reachable node...', 'warn');
         return fetchJson('/retention/report').then(function (payload) {
           if (requestGeneration !== retentionReportGeneration) return payload;
           renderRetentionReport(payload);
-          setMessage('Node diagnostics completed without deleting history.', 'ok');
+          setMessage('Cluster retention verification completed without changing remote state.', 'ok');
           return payload;
         }).catch(function (err) {
           if (requestGeneration === retentionReportGeneration) setMessage('Node diagnostics failed: ' + err.message, 'err');
           throw err;
         }).finally(function () {
-          if (btn && requestGeneration === retentionReportGeneration) { btn.disabled = false; btn.textContent = 'Run Node Diagnostics'; }
+          if (btn && requestGeneration === retentionReportGeneration) { btn.disabled = false; btn.textContent = 'Verify All Nodes'; }
         });
       }
 

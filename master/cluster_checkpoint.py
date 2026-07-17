@@ -1326,15 +1326,6 @@ def prune_operation_history(
             current_seal = build_migration_seal(materialized)
             if current_seal.get("status") != "sealed":
                 blockers.extend(f"migration_seal:{item}" for item in current_seal.get("blockers") or [])
-        try:
-            from credential_migration import credential_migration_is_complete
-
-            pbgdir = root.parent.parent if root.parent.name == "data" else root.parent
-            if not credential_migration_is_complete(pbgdir):
-                blockers.append("local_credential_migration_incomplete")
-        except Exception as exc:
-            blockers.append(f"local_credential_migration_check_failed:{type(exc).__name__}")
-
         safe_baseline: dict[str, int] = {}
         previous_checkpoint_id = ""
         if active is not None:
@@ -1455,6 +1446,29 @@ def read_retention_report(cluster_root: Path | str) -> dict[str, Any] | None:
     root = Path(os.path.abspath(Path(cluster_root).expanduser()))
     value = _read_json_if_exists(root / RETENTION_DIR_NAME / RETENTION_REPORT_NAME)
     return value if isinstance(value, dict) else None
+
+
+def retention_cleanup_status(cluster_root: Path | str) -> dict[str, Any]:
+    """Return bounded automatic cleanup results suitable for diagnostics."""
+
+    def compact(value: Mapping[str, Any] | None) -> dict[str, Any]:
+        source = value if isinstance(value, Mapping) else {}
+        return {
+            "status": str(source.get("status") or "not_evaluated"),
+            "evaluated_at": max(0, int(source.get("evaluated_at") or 0)),
+            "checkpoint_id": str(source.get("checkpoint_id") or ""),
+            "eligible_operations": max(0, int(source.get("eligible_operations") or 0)),
+            "deleted_operations": max(0, int(source.get("deleted_operations") or 0)),
+            "eligible_blobs": max(0, int(source.get("eligible_blobs") or 0)),
+            "deleted_blobs": max(0, int(source.get("deleted_blobs") or 0)),
+            "deleted_bytes": max(0, int(source.get("deleted_bytes") or 0)),
+            "blockers": [str(item)[:200] for item in source.get("blockers") or []][:20],
+        }
+
+    return {
+        "oplog": compact(read_retention_report(cluster_root)),
+        "blobs": compact(read_blob_gc_report(cluster_root)),
+    }
 
 
 def read_blob_gc_report(cluster_root: Path | str) -> dict[str, Any] | None:

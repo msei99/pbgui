@@ -348,6 +348,29 @@ def test_retention_report_builds_remote_preview_command(monkeypatch, tmp_path: P
     monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
     append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=101)
     append_operation(root, "ADD_NODE", {"node_id": NODE_B, "role": "vps", "pbname": "vps-a"}, created_at=102)
+    checkpoint = {
+        "checkpoint_id": HASH_A,
+        "migration_seal": {"status": "sealed", "blockers": []},
+    }
+    automatic = {
+        "oplog": {"status": "ready", "checkpoint_id": HASH_A, "blockers": []},
+        "blobs": {"status": "ready", "checkpoint_id": HASH_A, "blockers": []},
+    }
+    monkeypatch.setattr(cluster, "build_shadow_checkpoint", lambda _root: checkpoint)
+    monkeypatch.setattr(
+        cluster,
+        "retention_preview",
+        lambda _root, _checkpoint, item_limit: {
+            "status": "dry_run",
+            "checkpoint_id": HASH_A,
+            "eligible_operations": 0,
+            "eligible_bytes": 0,
+            "blob_gc": {"status": "ready", "eligible_blobs": 0, "eligible_bytes": 0},
+            "items": [],
+        },
+    )
+    monkeypatch.setattr(cluster, "retention_cleanup_status", lambda _root: automatic)
+    monkeypatch.setattr(cluster, "checkpoint_status", lambda _root: {"checkpoint_id": HASH_A})
 
     async def remote_read(node: dict, identity: dict, verb: str, *, isolated: bool = False) -> dict:
         assert isolated is True
@@ -355,8 +378,10 @@ def test_retention_report_builds_remote_preview_command(monkeypatch, tmp_path: P
         assert "retention-preview" in command
         return {
             "status": "report_only",
+            "checkpoint_id": HASH_A,
             "eligible_operations": 0,
             "eligible_bytes": 0,
+            "automatic_cleanup": automatic,
             "blob_gc": {
                 "status": "blocked",
                 "eligible_blobs": 3,
@@ -373,6 +398,9 @@ def test_retention_report_builds_remote_preview_command(monkeypatch, tmp_path: P
     assert report["counts"]["nodes_total"] == 2
     assert report["counts"]["nodes_reported"] == 2
     assert report["counts"]["nodes_unavailable"] == 0
+    assert report["counts"]["nodes_checkpoint_aligned"] == 2
+    assert report["counts"]["nodes_cleanup_verified"] == 2
+    assert report["counts"]["cluster_cleanup_verified"] is True
     assert report["reports"][1]["blob_gc"]["eligible_blobs"] == 3
 
 

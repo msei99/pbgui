@@ -71,6 +71,7 @@ from master.cluster_checkpoint import (
     checkpoint_status,
     create_checkpoint_ack,
     install_rebootstrap_checkpoint,
+    retention_cleanup_status,
     retention_preview,
     verify_checkpoint_commit_proof,
     verify_checkpoint_proposal,
@@ -420,7 +421,11 @@ def run_command(
         _require_arity(tokens, 1)
         checkpoint = build_shadow_checkpoint(root)
         preview = retention_preview(root, checkpoint, item_limit=200)
-        return {"ok": True, **preview}
+        return {
+            "ok": True,
+            **preview,
+            "automatic_cleanup": retention_cleanup_status(root),
+        }
     if verb == "prepare-checkpoint":
         _require_arity(tokens, 1)
         payload = _read_checkpoint_control_payload(stdin_data)

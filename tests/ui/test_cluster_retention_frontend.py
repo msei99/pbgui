@@ -55,5 +55,10 @@ def test_automatic_retention_status_uses_existing_five_second_feed() -> None:
     assert "renderRetentionRuntime(parts[0]);" in HTML
     assert "Status refreshes every 5 seconds" in HTML
     assert "retention maintenance runs automatically at least hourly" in HTML
-    assert "Run Node Diagnostics" in HTML
+    assert "Verify All Nodes" in HTML
+    assert "Cluster-wide retention verification" in HTML
+    assert "Automatic local cleanup" in HTML
+    assert "Local retention healthy" in HTML
+    assert "nodes_cleanup_verified" in HTML
+    assert "automatic_cleanup" in HTML
     assert "Safety delay" not in HTML
