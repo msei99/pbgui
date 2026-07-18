@@ -18,7 +18,7 @@ The main view shows a table with all servers (Master + VPS) and their current st
 | **Online** | ✅ reachable / ❌ offline |
 | **Bots** | Count of unique running bots currently reported for that VPS |
 | **Started** | Last boot time |
-| **Updates** | Pending Linux package updates from the fixed **agent cache** source, including OK/Stale/Missing/Error provenance |
+| **Updates** | Pending Linux package updates; healthy rows show only the count, while Stale/Missing/Error states remain visible |
 | **PBGui / PBGui Branch / PBGui GitHub** | Installed version, branch, and whether it matches GitHub origin |
 | **PB7 / PB7 Branch / PB7 GitHub** | PB7 version, branch, and whether it matches GitHub origin |
 

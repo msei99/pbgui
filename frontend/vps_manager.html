@@ -9619,7 +9619,10 @@
           const packageStatus = row.package_status || {};
           const model = agentStateModel(packageStatus.state);
           const updates = packageStatus.available === true ? String(packageStatus.upgrades) : 'N/A';
-          return `<div>${esc(updates)} ${packageStatus.reboot_required === true ? levelTag('warning', 'Reboot') : ''}</div><div class='status-sub'>Source: agent cache · ${levelTag(model.tone === 'error' ? 'error' : model.tone === 'warning' ? 'warning' : 'ok', model.label)}${model.state === 'stale' ? ' · Last-known' : ''}</div>`;
+          const statusLine = model.state === 'ok'
+            ? ''
+            : `<div class='status-sub'>${levelTag(model.tone === 'error' ? 'error' : 'warning', model.label)}${model.state === 'stale' ? ' · Last-known' : ''}</div>`;
+          return `<div>${esc(updates)} ${packageStatus.reboot_required === true ? levelTag('warning', 'Reboot') : ''}</div>${statusLine}`;
         }
         if (column.key === 'pbgui') return renderOverviewVersionCell(row.pbgui, row.pbgui_github);
         if (column.key === 'pbgui_branch') return esc(row.pbgui_branch || '-');

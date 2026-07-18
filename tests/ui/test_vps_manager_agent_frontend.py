@@ -109,10 +109,13 @@ def test_overview_provisional_detail_and_sidebar_share_agent_contract() -> None:
     """All page surfaces consume the normalized package and agent objects."""
 
     source = HTML_PATH.read_text(encoding="utf-8")
+    overview_renderer = _extract_function(source, "renderOverviewTable")
 
     assert "summary.package_status || { source: 'agent_cache'" in source
     assert "summary.monitor_agent || { source: 'agent_cache'" in source
-    assert "Source: agent cache ·" in _extract_function(source, "renderOverviewTable")
+    assert "Source: agent cache" not in overview_renderer
+    assert "model.state === 'ok'" in overview_renderer
+    assert "Last-known" in overview_renderer
     assert "renderSidebarAgentStatus(st)" in _extract_function(source, "renderSidebarActions")
     assert "renderAgentCachePanel(status, true)" in _extract_function(source, "renderMasterView")
     assert "renderAgentCachePanel(status, false)" in _extract_function(source, "renderVpsView")
