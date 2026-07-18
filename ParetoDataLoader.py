@@ -956,7 +956,7 @@ class ParetoDataLoader:
 
                 parsed_count += 1
         except Exception as e:
-            _log('ParetoDataLoader', f'Error during scan: {e}', level='ERROR',
+            _log(SERVICE, f'Error during scan: {e}', level='ERROR',
                  meta={'traceback': traceback.format_exc()})
             return False
         t_scan = time.perf_counter() - t_scan0
@@ -1455,7 +1455,7 @@ class ParetoDataLoader:
                         parsed_count += 1
             except Exception as e:
                 if parsed_count < 3:  # Show first 3 errors
-                    _log('ParetoDataLoader', f'Error parsing {json_file}: {e}', level='ERROR',
+                    _log(SERVICE, f'Error parsing {json_file}: {e}', level='ERROR',
                          meta={'traceback': traceback.format_exc()})
                 continue
 
@@ -1909,7 +1909,7 @@ class ParetoDataLoader:
             return None
             
         except Exception as e:
-            _log('ParetoDataLoader', f'Error loading full config for index {config_index}: {e}', level='ERROR',
+            _log(SERVICE, f'Error loading full config for index {config_index}: {e}', level='ERROR',
                  meta={'traceback': traceback.format_exc()})
             return None
 
@@ -2422,7 +2422,7 @@ class ParetoDataLoader:
             )
         
         except Exception as e:
-            _log('ParetoDataLoader', f'Error parsing JSON config at index {idx}: {e}', level='ERROR',
+            _log(SERVICE, f'Error parsing JSON config at index {idx}: {e}', level='ERROR',
                  meta={'traceback': traceback.format_exc()})
             return None
     

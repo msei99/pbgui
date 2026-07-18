@@ -202,25 +202,33 @@ Verfügbar über die **🔄 Backtest**-Schaltfläche in der Toolbar. Optionen:
 | **Exchange(s)** | Zu verwendende Exchange(s) überschreiben |
 | **📂 Use PBGui Market Data** | Wenn aktiviert, wird `ohlcv_source_dir` auf den PBGui-Datenpfad gesetzt |
 
+Bei archivierten Ergebnissen verwenden diese Controls zunächst die Werte aus der archivierten `config.json`, einschließlich Enddatum und Market-Data-Auswahl. Das Deaktivieren von **Use PBGui Market Data** ist ein expliziter Override und wird beim Queue-Start nicht durch die globale Backtest-Einstellung ersetzt.
+
 ---
 
 ## Panel: Archive
 
-Community- und persönliche Config-Archive, gespeichert als Git-Repositories.
+Community- und persönliche Config-Archive, gespeichert als Git-Repositories. Nur das als **My Archive** ausgewählte Archiv ist für PBGui beschreibbar. Andere Archive sind inhaltlich read-only: Durchsuchen, Importieren, Vergleichen, Re-Backtests und Pulls sind möglich, PBGui fügt dort aber keine Einträge hinzu, benennt oder löscht sie nicht und führt weder Commit noch Push aus. Sobald ein Clone lokale Änderungen hat, wird Pull vor jedem Remote-Kontakt blockiert; Änderungen in **My Archive** müssen zuerst gepusht oder anderweitig aufgelöst werden, während ein Dirty-Fremdarchiv unangetastet bleibt.
 
 ### Archiv-Listenansicht
 
 | Schaltfläche | Aktion |
 |--------|--------|
 | **⬇ Pull All** | Neueste Commits aus allen konfigurierten Archiven holen |
-| **⬆ Git Push** | Eigenes Archiv auf das Remote schieben |
-| **+ Add Archive** | Neues Archiv konfigurieren (URL, lokaler Pfad) |
-| **⚙ Setup** | Archiv-Einstellungen bearbeiten |
+| **⬆ Git Push** | Änderungen aus **My Archive** committen und auf das Remote schieben |
+| **+ Add Archive** | Neues Archiv über Name und Git-URL klonen |
+| **⚙ Setup** | **My Archive**, Git-Identität, Token, Auto-Pull-Intervall und README-Text einstellen |
 | **📋 Log** | Archiv-Sync-Log in schwebenden Panel öffnen |
 
-Klick auf eine Archivzeile öffnet es und zeigt seine Ergebnisse.
+Klick auf eine Archivzeile öffnet es und zeigt seine Ergebnisse. Die Zähler stammen aus `pbgui/archive_manifest.json`, wenn das Manifest gültig ist; andernfalls verwendet PBGui einen read-only Dateisystem-Scan.
 
-### Archiv-Ergebnisansicht
+PBGui leitet Archivziele aus der PB7-`config_version` ab; einen manuell editierbaren Archivpfad gibt es nicht. Backtest-Ergebnisse liegen unter `pbgui/configs/{config_version}/backtests/`, Optimize-Configs unter `pbgui/configs/{config_version}/optimize/`. Fehlende oder ungültige Versionen verwenden ein `unknown`-Verzeichnis plus Content-Fingerprint, um Kollisionen zu vermeiden.
+
+Wenn **My Archive** sauber ist, migriert PBGui beim Öffnen des Panels einen begrenzten Batch alter Ergebnisse und prüft vor Add oder Push eine vollständige Migration. Ein Dirty Worktree oder ein fehlgeschlagener Git-Status blockiert die Migration, ohne bestehende Änderungen zu verwerfen. Die Statuszeile zeigt verbleibende Legacy-Einträge und lokal migrierte, noch zu pushende Änderungen.
+
+### Archiv-Inhaltsansicht
+
+Die Ansicht enthält die Tabs **Backtests**, **Optimize Settings** und nur für **My Archive** **Schedules**.
 
 | Schaltfläche | Aktion |
 |--------|--------|
@@ -228,7 +236,13 @@ Klick auf eine Archivzeile öffnet es und zeigt seine Ergebnisse.
 | **🔄 Backtest** | Ausgewählte Configs als neue Backtests einreihen → wechselt zu Queue |
 | **▶ Add to Run** | Live-Run erstellen |
 | **📈 Compare** | Zur Vergleichsansicht hinzufügen |
-| **🗑 Delete Selected** | Ausgewählte Archiv-Ergebnisse löschen |
+| **🧮 Balance** | Ausgewähltes Ergebnis im Balance Calculator öffnen |
+| **🧬 Score Preview** | Archiv-Scoring ohne Schreibzugriff vorab anzeigen |
+| **🗑 Delete Selected** | Ausgewählte Ergebnisse nur aus **My Archive** löschen |
+
+Weitere Aktionen für **My Archive** sind Config-Gruppen umbenennen, **Retest & Replace**, Scores neu aufbauen, Git-Historie kompaktieren, Duplikate entfernen und **Remove Liquidated**. Liquidated Cleanup zeigt immer zuerst einen Dry Run und verlangt vor der verifizierten Löschung eine ausdrückliche Bestätigung. Geplante Retests ersetzen archivierte Ergebnisse erst nach einem erfolgreichen, nicht liquidierten Lauf.
+
+Der Tab **Optimize Settings** kann archivierte Optimize-Configs aus jedem Archiv anzeigen oder importieren. Existiert der lokale Name bereits, stehen **Overwrite**, **Import as Copy** und **Cancel** zur Auswahl. Hinzufügen und Löschen archivierter Optimize-Configs ist auf **My Archive** beschränkt. Ein erneuter Export identischer Inhalte verwendet den bestehenden Fingerprint-Pfad und dessen Metadaten statt einer weiteren nummerierten Kopie.
 
 ---
 

@@ -82,8 +82,8 @@ def test_purge_rejects_non_base_or_unsafe_names(isolated_log_root, filename):
     assert exc_info.value.status_code == 400
 
 
-def test_purge_uses_effective_configured_max(isolated_log_root, monkeypatch):
-    """Purge should pass the physical log's effective max to the helper."""
+def test_purge_uses_effective_configured_rotation(isolated_log_root, monkeypatch):
+    """Purge should pass the physical log's effective size and count."""
     logfile = isolated_log_root / "PBGui.log"
     logfile.write_text("content", encoding="utf-8")
     calls = {}
@@ -92,8 +92,8 @@ def test_purge_uses_effective_configured_max(isolated_log_root, monkeypatch):
         calls["settings"] = kwargs
         return 4321, 7
 
-    def fake_purge(path, max_bytes):
-        calls["purge"] = (path, max_bytes)
+    def fake_purge(path, max_bytes, backup_count):
+        calls["purge"] = (path, max_bytes, backup_count)
         return True, "purged"
 
     monkeypatch.setattr(logging_api, "get_rotate_settings", fake_settings)
@@ -104,7 +104,25 @@ def test_purge_uses_effective_configured_max(isolated_log_root, monkeypatch):
 
     assert result == {"success": True, "message": "purged"}
     assert calls["settings"] == {"logfile": str(logfile.resolve())}
-    assert calls["purge"] == (str(logfile.resolve()), 4321)
+    assert calls["purge"] == (str(logfile.resolve()), 4321, 7)
+
+
+def test_purge_failure_is_logged_and_returns_generic_detail(isolated_log_root, monkeypatch):
+    """Operational purge failures are logged without exposing helper details."""
+    logfile = isolated_log_root / "PBGui.log"
+    logfile.write_text("content", encoding="utf-8")
+    events = []
+    monkeypatch.setattr(logging_api, "get_rotate_settings", lambda **kwargs: (4321, 2))
+    monkeypatch.setattr(logging_api, "purge_log_to_rotated", lambda *args: (False, "sanitized failure"))
+    monkeypatch.setattr(logging_api, "_log", lambda *args, **kwargs: events.append((args, kwargs)))
+
+    with pytest.raises(logging_api.HTTPException) as exc_info:
+        logging_api.purge_logfile("PBGui.log", SimpleNamespace())
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Failed to purge log file"
+    assert events[0][1]["level"] == "ERROR"
+    assert events[0][1]["meta"] == {"operation": "purge_log"}
 
 
 def test_rotation_settings_resolve_by_physical_logfile(isolated_log_root, monkeypatch):

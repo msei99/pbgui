@@ -177,15 +177,14 @@ def _wait_for_cluster_boot_sync(pbgdir: Path, *, timeout: int = 20) -> dict:
                 status = str(payload.get("status") or "")
                 if finished_at >= started_at - 2 and status:
                     if status not in {"local_reconciled", "not_configured"}:
-                        _log("PBRun", f"PBCluster boot sync status: {status}", level="WARNING")
+                        _log(SERVICE, f"PBCluster boot sync status: {status}", level="WARNING")
                     return {"status": status, "waited": max(0, int(time()) - started_at)}
         if timeout <= 0:
             break
         sleep(1)
 
     previous_status = str(last_status.get("status") or "missing") if last_status else "missing"
-    _log(
-        "PBRun",
+    _log(SERVICE,
         f"PBCluster boot sync did not complete within {max(0, int(timeout))}s; continuing with local desired state ({previous_status})",
         level="WARNING",
     )
@@ -199,9 +198,9 @@ def _kill_process(process: psutil.Process, context: str):
     except psutil.NoSuchProcess:
         pass
     except psutil.TimeoutExpired:
-        _log("PBRun", f"Timed out waiting for process to stop ({context})", level="WARNING")
+        _log(SERVICE, f"Timed out waiting for process to stop ({context})", level="WARNING")
     except psutil.AccessDenied as e:
-        _log("PBRun", f"Access denied while stopping process ({context}): {e}", level="ERROR")
+        _log(SERVICE, f"Access denied while stopping process ({context}): {e}", level="ERROR")
 
 
 def _run_subprocess(
@@ -223,13 +222,13 @@ def _run_subprocess(
     try:
         return subprocess.run(command, **kwargs)
     except subprocess.TimeoutExpired:
-        _log("PBRun", f"Command timeout after {timeout}s: {' '.join(map(str, command))}", level="WARNING")
+        _log(SERVICE, f"Command timeout after {timeout}s: {' '.join(map(str, command))}", level="WARNING")
         return None
     except FileNotFoundError as e:
-        _log("PBRun", f"Command not found: {' '.join(map(str, command))} ({e})", level="WARNING")
+        _log(SERVICE, f"Command not found: {' '.join(map(str, command))} ({e})", level="WARNING")
         return None
     except Exception as e:
-        _log("PBRun", f"Command failed: {' '.join(map(str, command))} ({e})", level="ERROR")
+        _log(SERVICE, f"Command failed: {' '.join(map(str, command))} ({e})", level="ERROR")
         return None
 
 
@@ -260,8 +259,7 @@ def _parse_git_log_output(raw_output: str, parse_context: str):
             if latest_commit_timestamp is None:
                 latest_commit_timestamp = commit_data['timestamp']
         else:
-            _log(
-                "PBRun",
+            _log(SERVICE,
                 f"Failed to parse commit block for {parse_context}: {len(parts)} parts, first 100 chars: {commit_block[:100]}",
                 level="WARNING",
             )
@@ -408,13 +406,13 @@ class DynamicIgnore():
             if ignored_changed:
                 removed_coins = sorted(set(self.ignored_coins) - set(ignored_coins))
                 added_coins = sorted(set(ignored_coins) - set(self.ignored_coins))
-                _log("PBRun", f"Change ignored_coins {self.path} Removed: {removed_coins} Added: {added_coins}")
+                _log(SERVICE, f"Change ignored_coins {self.path} Removed: {removed_coins} Added: {added_coins}")
                 self.ignored_coins = ignored_coins
 
             if approved_changed:
                 removed_coins = sorted(set(self.approved_coins) - set(approved_coins))
                 added_coins = sorted(set(approved_coins) - set(self.approved_coins))
-                _log("PBRun", f"Change approved_coins {self.path} Removed: {removed_coins} Added: {added_coins}")
+                _log(SERVICE, f"Change approved_coins {self.path} Removed: {removed_coins} Added: {added_coins}")
                 self.approved_coins = approved_coins
 
             if ignored_changed or approved_changed:
@@ -422,8 +420,8 @@ class DynamicIgnore():
                 return True
             return False
         except Exception as e:
-            _log("PBRun", f"DynamicIgnore watch error for {self.path}: {e}", level="ERROR")
-            _log("PBRun", "DynamicIgnore watch traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
+            _log(SERVICE, f"DynamicIgnore watch error for {self.path}: {e}", level="ERROR")
+            _log(SERVICE, "DynamicIgnore watch traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
             return False
     
     def save(self):
@@ -440,14 +438,14 @@ class DynamicIgnore():
             if symbol not in ignored_coins:
                 ignored_coins.append(symbol)
             if symbol in approved_coins:
-                _log("PBRun", f"Change approved_coins {self.path} Removed: {symbol} because it is in ignored_coins")
+                _log(SERVICE, f"Change approved_coins {self.path} Removed: {symbol} because it is in ignored_coins")
                 approved_coins.remove(symbol)
 
         ignored_set = set(ignored_coins)
         for symbol in self._normalize_symbol_list(self.approved_coins_long + self.approved_coins_short):
             if symbol in ignored_set:
                 if symbol in approved_coins:
-                    _log("PBRun", f"Change approved_coins {self.path} Removed: {symbol} because it is in ignored_coins")
+                    _log(SERVICE, f"Change approved_coins {self.path} Removed: {symbol} because it is in ignored_coins")
                     approved_coins.remove(symbol)
                 continue
             if symbol not in approved_coins:
@@ -564,8 +562,7 @@ class RunV7():
         log_key = (self.cluster_gate, self.cluster_blocked_reason)
         should_log = log_key != self._cluster_gate_log_key or now_ts - self._cluster_gate_log_ts >= 60
         if should_log:
-            _log(
-                "PBRun",
+            _log(SERVICE,
                 f"Cluster gate blocked passivbot_v7 {self.path}/config_run.json: {self.cluster_blocked_reason}",
                 level="WARNING",
             )
@@ -629,8 +626,7 @@ class RunV7():
                 return False
 
             if now_ts - self._dynamic_bootstrap_log_ts >= 60:
-                _log(
-                    "PBRun",
+                _log(SERVICE,
                     f"Bootstrap dynamic_ignore data for {self.path} ({exchange_id}): {reason}",
                     level="INFO",
                 )
@@ -641,8 +637,7 @@ class RunV7():
             result = self.dynamic_ignore.coindata.refresh_exchange_mapping(exchange_id)
             self._dynamic_bootstrap_refresh_ts = now_ts
             if not bool(result.get("ok")):
-                _log(
-                    "PBRun",
+                _log(SERVICE,
                     (
                         f"Dynamic_ignore bootstrap refresh failed for {self.path} ({exchange_id}): "
                         f"markets_ok={result.get('markets_ok')} mapping_ok={result.get('mapping_ok')} "
@@ -655,8 +650,8 @@ class RunV7():
             self.dynamic_ignore.watch()
             return self.dynamic_ignore.lists_ready()
         except Exception as e:
-            _log("PBRun", f"Dynamic_ignore bootstrap error for {self.path}: {e}", level="ERROR")
-            _log("PBRun", "Dynamic_ignore bootstrap traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
+            _log(SERVICE, f"Dynamic_ignore bootstrap error for {self.path}: {e}", level="ERROR")
+            _log(SERVICE, "Dynamic_ignore bootstrap traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
             return False
 
     def _dynamic_ignore_api_key_configured(self) -> bool:
@@ -675,8 +670,7 @@ class RunV7():
         _atomic_write_text(Path(self.path) / "running_version.txt", "0")
         now_ts = int(datetime.now().timestamp())
         if now_ts - self._dynamic_wait_log_ts >= 60:
-            _log(
-                "PBRun",
+            _log(SERVICE,
                 f"Delay start: passivbot_v7 {self.path}/config_run.json {reason}",
                 level="WARNING",
             )
@@ -697,7 +691,7 @@ class RunV7():
                 except (ValueError, OSError):
                     current_version = 0
             if current_version != self.version:
-                _log("PBRun", f"Repair running_version for {self.user}: {current_version} -> {self.version}")
+                _log(SERVICE, f"Repair running_version for {self.user}: {current_version} -> {self.version}")
                 self.create_v7_running_version()
             return
         if not self.is_running():
@@ -741,8 +735,7 @@ class RunV7():
     def stop(self):
         process = self.pid()
         if process:
-            _log(
-                "PBRun",
+            _log(SERVICE,
                 f"Stop: passivbot v7 {self.path}/config_run.json",
                 user=self.user,
                 meta={"operation": "stop_passivbot_v7", "instance": self.user},
@@ -787,8 +780,7 @@ class RunV7():
                 threading.Thread(target=_ts_wrap_stderr, args=(proc.stderr, err_log), daemon=True).start()
             finally:
                 os.environ['PATH'] = old_os_path
-            _log(
-                "PBRun",
+            _log(SERVICE,
                 f"Start: passivbot_v7 {self.path}/config_run.json",
                 user=self.user,
                 meta={"operation": "start_passivbot_v7", "instance": self.user},
@@ -899,10 +891,10 @@ class RunV7():
                     self.name = self._v7_config["pbgui"]["enabled_on"]
                     return False
             except Exception as e:
-                _log("PBRun", f"Something went wrong, but continue {e}", level="ERROR")
-                _log("PBRun", f"Setting version of {self.user} to 0", level="WARNING")
+                _log(SERVICE, f"Something went wrong, but continue {e}", level="ERROR")
+                _log(SERVICE, f"Setting version of {self.user} to 0", level="WARNING")
                 self.version = 0
-                _log("PBRun", "RunV7.load traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
+                _log(SERVICE, "RunV7.load traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
 
 class PBRun():
     """PBRun manages v7 passivbot instances, linking PBGui and Passivbot.
@@ -931,10 +923,10 @@ class PBRun():
             self.pb7dir = ini_snapshot.get("main", "pb7dir")
         if not self.pb7dir:
             if __name__ == '__main__':
-                _log("PBRun", "No passivbot directory configured in pbgui.ini", level="ERROR")
+                _log(SERVICE, "No passivbot directory configured in pbgui.ini", level="ERROR")
                 sys.exit(1)
             else:
-                _log("PBRun", "No passivbot directory configured in pbgui.ini", level="ERROR")
+                _log(SERVICE, "No passivbot directory configured in pbgui.ini", level="ERROR")
                 return
         # Init PB7 virtual environment
         self.pb7venv = None
@@ -942,10 +934,10 @@ class PBRun():
             self.pb7venv = ini_snapshot.get("main", "pb7venv")
         if not self.pb7venv:
             if __name__ == '__main__':
-                _log("PBRun", "No passivbot venv python interpreter configured in pbgui.ini", level="ERROR")
+                _log(SERVICE, "No passivbot venv python interpreter configured in pbgui.ini", level="ERROR")
                 sys.exit(1)
             else:
-                _log("PBRun", "No passivbot venv python interpreter configured in pbgui.ini", level="ERROR")
+                _log(SERVICE, "No passivbot venv python interpreter configured in pbgui.ini", level="ERROR")
                 return
         # Init paths
         self.v7_path = f'{self.pbgdir}/data/run_v7'
@@ -1189,7 +1181,7 @@ class PBRun():
         if signature == self._v7_runtime_signature:
             return False
         self._v7_runtime_signature = signature
-        _log("PBRun", "Cluster/run_v7 state changed — rescanning v7 instances")
+        _log(SERVICE, "Cluster/run_v7 state changed — rescanning v7 instances")
         self.watch_v7()
         return True
 
@@ -1294,7 +1286,7 @@ class PBRun():
         if free < 250:
             high_bot = self.find_high_memory_bot()
             if high_bot:
-                _log("PBRun", f"Low System memory {free:.2f}MB, restarting bot {high_bot.user}", level="WARNING")
+                _log(SERVICE, f"Low System memory {free:.2f}MB, restarting bot {high_bot.user}", level="WARNING")
                 high_bot.stop()
                 high_bot.start()
 
@@ -1311,7 +1303,7 @@ class PBRun():
             count = 0
             while True:
                 if count > 5:
-                    _log("PBRun", "Can not start PBRun", level="ERROR")
+                    _log(SERVICE, "Can not start PBRun", level="ERROR")
                     break
                 sleep(1)
                 if self.is_running():
@@ -1320,7 +1312,7 @@ class PBRun():
 
     def stop(self):
         if self.is_running():
-            _log("PBRun", "Stop: PBRun")
+            _log(SERVICE, "Stop: PBRun")
             try:
                 _kill_process(psutil.Process(self.my_pid), "PBRun")
             except psutil.NoSuchProcess:
@@ -1363,9 +1355,9 @@ def main():
 
     run = PBRun()
     if run.is_running():
-        _log("PBRun", "PBRun already started", level="ERROR")
+        _log(SERVICE, "PBRun already started", level="ERROR")
         sys.exit(1)
-    _log("PBRun", "Start: PBRun")
+    _log(SERVICE, "Start: PBRun")
     run.save_pid()
     capability = ProcessCapabilityHeartbeat(Path(run.pbgdir), "PBRun")
     capability.__enter__()
@@ -1393,8 +1385,8 @@ def main():
                 maintenance_count += 1
             sleep(1)
         except Exception as e:
-            _log("PBRun", f"Something went wrong, but continue {e}", level="ERROR")
-            _log("PBRun", "PBRun.main loop traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
+            _log(SERVICE, f"Something went wrong, but continue {e}", level="ERROR")
+            _log(SERVICE, "PBRun.main loop traceback", level="DEBUG", meta={"traceback": traceback.format_exc()})
 
 if __name__ == '__main__':
     main()

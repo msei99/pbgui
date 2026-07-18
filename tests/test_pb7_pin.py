@@ -295,3 +295,39 @@ def test_fresh_install_paths_use_the_pb7_pin_and_guard() -> None:
     assert "Clone Passivbot without checking out upstream master" in vps_source
     assert "Fetch, verify and checkout pinned Passivbot v7" in vps_source
     assert "--fetch-url" in vps_source
+
+
+@pytest.mark.parametrize("playbook_path", SWITCH_PLAYBOOKS)
+def test_pb7_upstream_shortcut_resolves_the_release_pin(playbook_path: str) -> None:
+    """The upstream shortcut must resolve the PB7 release pin instead of PB8 master."""
+    source = Path(playbook_path).read_text(encoding="utf-8")
+
+    assert "lookup('file', playbook_dir + '/pb7_ref.txt')" in source
+    assert "pb7_use_pin | default(false) | bool" in source
+    assert "pb7_ref if use_pinned_ref" in source
+    assert "Validate pinned PB7 commit when requested" in source
+
+
+def test_pb7_upstream_shortcut_requests_pin_and_task_logs_load_existing_output() -> None:
+    """The UI requests the pin and cannot miss a fast task before log subscription."""
+    source = Path("frontend/vps_manager.html").read_text(encoding="utf-8")
+
+    shortcut_start = source.index("function switchPb7ToUpstream(")
+    shortcut_end = source.index("function loadRemoteBranches(", shortcut_start)
+    shortcut = source[shortcut_start:shortcut_end]
+    assert "pb7_source_branch: 'master'" in shortcut
+    assert "pb7_use_pin: true" in shortcut
+    assert "Use pinned upstream PB7" in source
+
+    master_log_start = source.index("function openMasterTaskLog(")
+    master_log_end = source.index("function openMasterTaskLogs(", master_log_start)
+    vps_log_start = source.index("function openVpsTaskLog(")
+    vps_log_end = source.index("function openDeployLogWindow(", vps_log_start)
+    assert "startEmpty: true" in source[master_log_start:master_log_end]
+    assert "startEmpty: true" in source[vps_log_start:vps_log_end]
+
+    result_start = source.index("function handleResult(")
+    result_end = source.index("function ensureMasterUi(", result_start)
+    result_handler = source[result_start:result_end]
+    assert "task.startEmpty = false" in result_handler
+    assert "task.runKey = String(Date.now())" in result_handler

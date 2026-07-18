@@ -404,7 +404,7 @@ class Exchange:
                 else:
                     self.instance.close()
             except Exception as e:
-                _log('Exchange', f'Error closing exchange {self.id}: {e}', level='debug')
+                _log(SERVICE, f'Error closing exchange {self.id}: {e}', level='debug')
 
     @classmethod
     async def get_shared_ws_client(cls, id: str, user: User = None, caller: str = None):
@@ -476,8 +476,7 @@ class Exchange:
                     try:
                         tmp = cls(id, user)
                         # INFO for initial attempt, WARNING when retrying
-                        _log(
-                            'Exchange',
+                        _log(SERVICE,
                             f"get_shared_ws_client calling load_markets for {id} retry={retries}",
                             level=('WARNING' if retries else 'INFO'),
                             user=user,
@@ -495,8 +494,7 @@ class Exchange:
                     cls._shared_ws_markets_loaded.add(key)
                     cls._shared_ws_owners.setdefault(key, set()).add(owner)
                     try:
-                        _log(
-                            'Exchange',
+                        _log(SERVICE,
                             f"get_shared_ws_client load_markets succeeded for {id} key={key} user={uname}",
                             level='INFO',
                             user=user,
@@ -518,8 +516,7 @@ class Exchange:
                         retries += 1
                         delay = min(5 * retries, 30)
                         try:
-                            _log(
-                                'Exchange',
+                            _log(SERVICE,
                                 f"get_shared_ws_client load_markets rate-limited for {id} user={uname}; retry {retries} in {delay}s: {msg}",
                                 level='WARNING',
                                 user=user,
@@ -530,8 +527,7 @@ class Exchange:
                         continue
                     # If load_markets ultimately fails we don't cache the client; log reason
                     try:
-                        _log(
-                            'Exchange',
+                        _log(SERVICE,
                             f"get_shared_ws_client load_markets failed for {id} user={uname} after {retries} retries: {msg}",
                             level='ERROR',
                             user=user,
@@ -615,7 +611,7 @@ class Exchange:
                             msg = f"get_private_ws_client: reached GLOBAL cap ({total_private}/{global_cap}); returning None to allow REST fallback for user={user.name}"
                             if caller:
                                 msg = msg + f" caller={caller}"
-                            _log('Exchange', msg, level='WARNING', user=user)
+                            _log(SERVICE, msg, level='WARNING', user=user)
                         except Exception:
                             pass
                         return None
@@ -632,7 +628,7 @@ class Exchange:
                             msg = f"get_private_ws_client: reached cap for {base_key} ({current + inflight_for_exch}/{cap}); returning None to allow REST fallback for user={user.name}"
                             if caller:
                                 msg = msg + f" caller={caller}"
-                            _log('Exchange', msg, level='WARNING', user=user)
+                            _log(SERVICE, msg, level='WARNING', user=user)
                         except Exception:
                             pass
                         return None
@@ -1000,8 +996,7 @@ class Exchange:
                     # Otherwise wait with exponential backoff and retry
                     delay = min(2 ** retries, 10)
                     try:
-                        _log(
-                            'Exchange',
+                        _log(SERVICE,
                             f"fetch_positions timed out for {self.id}; retry {retries}/{max_retries} in {delay}s: {e}",
                             level='WARNING',
                             user=self.user,
@@ -1080,14 +1075,12 @@ class Exchange:
                                 else:
                                     transactions = self.instance.privateGetV5AccountContractTransactionLog(params = {"limit": limit, "startTime": since, "endTime": end, "cursor": cursor})
                             except Exception as e:
-                                _log(
-                                    'Exchange',
+                                _log(SERVICE,
                                     f"{e}",
                                     level='WARNING',
                                     user=self.user,
                                 )
-                                _log(
-                                    'Exchange',
+                                _log(SERVICE,
                                     f'Fetching transactions failed. Retry in 5 seconds',
                                     level='WARNING',
                                     user=self.user,
@@ -1102,8 +1095,7 @@ class Exchange:
                     last_position = positions[-1]
                     all_histories = positions + all_histories
                 if cursor:
-                    _log(
-                        'Exchange',
+                    _log(SERVICE,
                         f"Fetched {len(positions)} transactions from "
                         f"{self.instance.iso8601(int(first_position['transactionTime']))} till "
                         f"{self.instance.iso8601(int(last_position['transactionTime']))}",
@@ -1111,8 +1103,7 @@ class Exchange:
                         user=self.user,
                     )
                 else:
-                    _log(
-                        'Exchange',
+                    _log(SERVICE,
                         f"Fetched {len(positions)} transactions from "
                         f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
                         level='INFO',
@@ -1121,7 +1112,7 @@ class Exchange:
                     since = since + week
                     end = since + week
                 if since > now:
-                    _log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log(SERVICE, 'Done', level='INFO', user=self.user)
                     break
             # print(all_histories)
             for history in all_histories:
@@ -1167,20 +1158,19 @@ class Exchange:
                         num = len(fundings) if fundings is not None else 0
                     except Exception:
                         num = 0
-                    _log('Exchange', f"hyperliquid fundings page: user={getattr(self.user,'name',None)} since={since} end={end} span_ms={page_span} duration_s={page_dur:.3f} items={num}", level='DEBUG', user=self.user)
+                    _log(SERVICE, f"hyperliquid fundings page: user={getattr(self.user,'name',None)} since={since} end={end} span_ms={page_span} duration_s={page_dur:.3f} items={num}", level='DEBUG', user=self.user)
                 except Exception as e:
                     import traceback as _tb
                     tb = _tb.format_exc()
-                    _log('Exchange', f"fetch fundings ERROR for user={getattr(self.user,'name',None)} exchange={self.id} since={since} end={end}: {e}", level='ERROR', user=self.user)
-                    _log('Exchange', f"Traceback:\n{tb}", level='DEBUG', user=self.user)
+                    _log(SERVICE, f"fetch fundings ERROR for user={getattr(self.user,'name',None)} exchange={self.id} since={since} end={end}: {e}", level='ERROR', user=self.user)
+                    _log(SERVICE, "fetch fundings traceback", level='DEBUG', user=self.user, meta={"traceback": tb})
                     raise
                 if fundings:
                     first_funding = fundings[0]
                     last_funding = fundings[-1]
                     all_histories = fundings + all_histories
                 if len(fundings) == limit:
-                    _log(
-                        'Exchange',
+                    _log(SERVICE,
                         f"Fetched {len(fundings)} fundings from "
                         f"{self.instance.iso8601(int(first_funding['time']))} till "
                         f"{self.instance.iso8601(int(last_funding['time']))}",
@@ -1189,8 +1179,7 @@ class Exchange:
                     )
                     since = int(fundings[-1]['time'])
                 else:
-                    _log(
-                        'Exchange',
+                    _log(SERVICE,
                         f"Fetched {len(fundings)} fundings from "
                         f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
                         level='INFO',
@@ -1201,14 +1190,14 @@ class Exchange:
                         old_span = page_span
                         page_span = min(page_span * 2, max_span)
                         if page_span != old_span:
-                            _log('Exchange', f"Empty fundings page — doubling page span from {old_span} to {page_span} ms for user={getattr(self.user,'name',None)}", level='DEBUG', user=self.user)
+                            _log(SERVICE, f"Empty fundings page — doubling page span from {old_span} to {page_span} ms for user={getattr(self.user,'name',None)}", level='DEBUG', user=self.user)
                     else:
                         # reset to initial span after receiving results
                         page_span = initial_span
                     since = end
                     end = since + page_span
                 if since > now:
-                    _log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log(SERVICE, 'Done', level='INFO', user=self.user)
                     break
                 sleep(0.5)
             for history in all_histories:
@@ -1241,23 +1230,21 @@ class Exchange:
                         except Exception:
                             continue
                     page_dur = time.time() - start_page_ts
-                    _log('Exchange', f"hyperliquid trades page: user={getattr(self.user,'name',None)} since={since} end={end} span_ms={page_span} duration_s={page_dur:.3f} items={len(trades)}", level='DEBUG', user=self.user)
+                    _log(SERVICE, f"hyperliquid trades page: user={getattr(self.user,'name',None)} since={since} end={end} span_ms={page_span} duration_s={page_dur:.3f} items={len(trades)}", level='DEBUG', user=self.user)
                 except Exception as e:
                     import traceback as _tb
                     tb = _tb.format_exc()
-                    _log(
-                        'Exchange',
+                    _log(SERVICE,
                         f"userFillsByTime ERROR for user={getattr(self.user,'name',None)} exchange={self.id} since={since} end={end}: {e}",
                         level='ERROR',
                         user=self.user,
                     )
-                    _log('Exchange', f"Traceback:\n{tb}", level='DEBUG', user=self.user)
+                    _log(SERVICE, "fetch executions traceback", level='DEBUG', user=self.user, meta={"traceback": tb})
                     raise
                 if trades:
                     all_histories = trades + all_histories
                 # userFillsByTime returns all fills in range — always advance window
-                _log(
-                    'Exchange',
+                _log(SERVICE,
                     f"Fetched {len(trades)} trades from "
                     f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
                     level='INFO',
@@ -1267,14 +1254,14 @@ class Exchange:
                     old_span = page_span
                     page_span = min(page_span * 2, max_span)
                     if page_span != old_span:
-                        _log('Exchange', f"Empty trades page — doubling page span from {old_span} to {page_span} ms for user={getattr(self.user,'name',None)}", level='DEBUG', user=self.user)
+                        _log(SERVICE, f"Empty trades page — doubling page span from {old_span} to {page_span} ms for user={getattr(self.user,'name',None)}", level='DEBUG', user=self.user)
                 else:
                     # reset to initial span after receiving results
                     page_span = initial_span
                 since = end
                 end = since + page_span
                 if since > now:
-                    _log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log(SERVICE, 'Done', level='INFO', user=self.user)
                     break
                 sleep(0.5)
             for history in all_histories:
@@ -1301,8 +1288,7 @@ class Exchange:
                     last_position = positions[-1]
                     all_histories = positions + all_histories
                 if len(positions) == limit:
-                    _log(
-                        'Exchange',
+                    _log(SERVICE,
                         f"Fetched {len(positions)} income from "
                         f"{self.instance.iso8601(first_position['time'])} till "
                         f"{self.instance.iso8601(last_position['time'])}",
@@ -1311,8 +1297,7 @@ class Exchange:
                     )
                     end = positions[-1]['time']
                 else:
-                    _log(
-                        'Exchange',
+                    _log(SERVICE,
                         f"Fetched {len(positions)} income from "
                         f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
                         level='INFO',
@@ -1321,7 +1306,7 @@ class Exchange:
                     since = since + day
                     end = since + day
                 if since > now:
-                    _log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log(SERVICE, 'Done', level='INFO', user=self.user)
                     break
             for history in all_histories:
                 if history["type"] == "RealisedPNL":
@@ -1349,8 +1334,7 @@ class Exchange:
                     last_ledger = ledgers[-1]
                     all_histories = ledgers + all_histories
                 if len(ledgers) == limit:
-                    _log(
-                        'Exchange',
+                    _log(SERVICE,
                         f"Fetched {len(ledgers)} ledgers from "
                         f"{self.instance.iso8601(first_ledger['timestamp'])} till "
                         f"{self.instance.iso8601(last_ledger['timestamp'])}",
@@ -1359,8 +1343,7 @@ class Exchange:
                     )
                     end = ledgers[0]['timestamp']
                 else:
-                    _log(
-                        'Exchange',
+                    _log(SERVICE,
                         f"Fetched {len(ledgers)} ledgers from "
                         f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
                         level='INFO',
@@ -1369,7 +1352,7 @@ class Exchange:
                     since = since + week
                     end = since + week
                 if since > now:
-                    _log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log(SERVICE, 'Done', level='INFO', user=self.user)
                     break
                 sleep(0.5)
             for history in all_histories:
@@ -1409,8 +1392,7 @@ class Exchange:
                         if not _ccxt_should_retry(self.instance, e):
                             raise
                         last_err = e
-                        _log(
-                            'Exchange',
+                        _log(SERVICE,
                             f"bitget fetch_ledger error user={self.user.name} since={since} end={end} attempt={attempt+1}/3: {e}",
                             level='WARNING',
                             user=self.user,
@@ -1424,7 +1406,7 @@ class Exchange:
                     last_ledger = ledgers[-1]
                     all_histories = ledgers + all_histories
                 if len(ledgers) == limit:
-                    _log('Exchange',
+                    _log(SERVICE,
                         f"Fetched {len(ledgers)} ledgers from "
                         f"{self.instance.iso8601(first_ledger['timestamp'])} till "
                         f"{self.instance.iso8601(last_ledger['timestamp'])}",
@@ -1432,7 +1414,7 @@ class Exchange:
                     )
                     end = ledgers[0]['timestamp']
                 else:
-                    _log('Exchange',
+                    _log(SERVICE,
                         f"Fetched {len(ledgers)} ledgers from "
                         f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
                         user=self.user,
@@ -1440,7 +1422,7 @@ class Exchange:
                     since = since + week
                     end = since + week
                 if since > now:
-                    _log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log(SERVICE, 'Done', level='INFO', user=self.user)
                     break
             for history in all_histories:
                 # if history["info"]["symbol"] and history["info"]["amount"] != "0":
@@ -1472,7 +1454,7 @@ class Exchange:
                     last_ledger = ledgers[-1]
                     all_histories = ledgers + all_histories
                 if len(ledgers) == limit:
-                    _log('Exchange',
+                    _log(SERVICE,
                         f"Fetched {len(ledgers)} ledgers from "
                         f"{self.instance.iso8601(first_ledger['timestamp'])} till "
                         f"{self.instance.iso8601(last_ledger['timestamp'])}",
@@ -1480,7 +1462,7 @@ class Exchange:
                     )
                     end = int(ledgers[0]['timestamp']/1000)
                 else:
-                    _log('Exchange',
+                    _log(SERVICE,
                         f"Fetched {len(ledgers)} ledgers from "
                         f"{self.instance.iso8601(since*1000)} till {self.instance.iso8601(end*1000)}",
                         user=self.user,
@@ -1488,7 +1470,7 @@ class Exchange:
                     since = since + week
                     end = since + week
                 if since > now:
-                    _log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log(SERVICE, 'Done', level='INFO', user=self.user)
                     break
             for history in all_histories:
                 if history["info"]["contract"] and history["amount"] != "0":
@@ -1533,8 +1515,7 @@ class Exchange:
                         if not _ccxt_should_retry(self.instance, e):
                             raise
                         last_err = e
-                        _log(
-                            'Exchange',
+                        _log(SERVICE,
                             f"binance fapiPrivateGetIncome error user={self.user.name} since={since} end={end} attempt={attempt+1}/3: {e}",
                             level='WARNING',
                             user=self.user,
@@ -1547,7 +1528,7 @@ class Exchange:
                     last_imcome = imcomes[-1]
                     all_histories = imcomes + all_histories
                 if len(imcomes) == limit:
-                    _log('Exchange',
+                    _log(SERVICE,
                         f"Fetched {len(imcomes)} incomes from "
                         f"{self.instance.iso8601(int(first_imcome['time']))} till "
                         f"{self.instance.iso8601(int(last_imcome['time']))}",
@@ -1555,7 +1536,7 @@ class Exchange:
                     )
                     since = int(imcomes[-1]['time'])
                 else:
-                    _log('Exchange',
+                    _log(SERVICE,
                         f"Fetched {len(imcomes)} incomes from "
                         f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
                         user=self.user,
@@ -1563,7 +1544,7 @@ class Exchange:
                     since = end
                     end = since + week
                 if since > now:
-                    _log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log(SERVICE, 'Done', level='INFO', user=self.user)
                     break
             for history in all_histories:
                 if history["incomeType"] in ["REALIZED_PNL", "COMMISSION", "FUNDING_FEE"]:
@@ -1623,19 +1604,17 @@ class Exchange:
                             continue
                 except Exception as e:
                     import traceback as _tb
-                    _log(
-                        'Exchange',
+                    _log(SERVICE,
                         f"userFillsByTime ERROR for user={getattr(self.user,'name',None)} exchange={self.id} since={since} end={end}: {e}",
                         level='ERROR',
                         user=self.user,
                     )
-                    _log('Exchange', f"Traceback:\n{_tb.format_exc()}", level='DEBUG', user=self.user)
+                    _log(SERVICE, "fetch executions traceback", level='DEBUG', user=self.user, meta={"traceback": _tb.format_exc()})
                     raise
                 if trades:
                     all_histories = trades + all_histories
                 # userFillsByTime returns all fills in range — always advance window
-                _log(
-                    'Exchange',
+                _log(SERVICE,
                     f"Fetched {len(trades)} trades from "
                     f"{self.instance.iso8601(since)} till {self.instance.iso8601(end)}",
                     level='INFO',
@@ -1648,7 +1627,7 @@ class Exchange:
                 since = end
                 end = since + page_span
                 if since > now:
-                    _log('Exchange', 'Done', level='INFO', user=self.user)
+                    _log(SERVICE, 'Done', level='INFO', user=self.user)
                     break
                 sleep(0.5)
 
@@ -1738,7 +1717,7 @@ class Exchange:
 
                     ccxt_symbol = _resolve_ccxt_symbol_from_mapping(self.id, sym_id)
                     if not ccxt_symbol:
-                        _log('Exchange', f"binance execution symbol not found in CoinData mapping: {sym_id}", level='WARNING', user=self.user)
+                        _log(SERVICE, f"binance execution symbol not found in CoinData mapping: {sym_id}", level='WARNING', user=self.user)
                         continue
 
                     cursor = int(since)
@@ -1763,8 +1742,7 @@ class Exchange:
                                 if not _ccxt_should_retry(self.instance, e):
                                     raise
                                 last_err = e
-                                _log(
-                                    'Exchange',
+                                _log(SERVICE,
                                     f"binance fetch_my_trades error symbol={ccxt_symbol} attempt={attempt+1}/3: {e}",
                                     level='WARNING',
                                     user=self.user,
@@ -1911,8 +1889,7 @@ class Exchange:
                         if not _ccxt_should_retry(self.instance, e):
                             raise
                         last_err = e
-                        _log(
-                            'Exchange',
+                        _log(SERVICE,
                             f"bybit fetch_my_trades error (global) attempt={attempt+1}/3: {e}",
                             level='WARNING',
                             user=self.user,
@@ -1950,8 +1927,7 @@ class Exchange:
                                 if not _ccxt_should_retry(self.instance, e):
                                     raise
                                 page_err = e
-                                _log(
-                                    'Exchange',
+                                _log(SERVICE,
                                     f"bybit fetch_my_trades page error (global) attempt={attempt+1}/3: {e}",
                                     level='WARNING',
                                     user=self.user,
@@ -2095,8 +2071,7 @@ class Exchange:
                             if not _ccxt_should_retry(self.instance, e):
                                 raise
                             last_err = e
-                            _log(
-                                'Exchange',
+                            _log(SERVICE,
                                 f"okx fetch_my_trades error (global) attempt={attempt+1}/3: {e}",
                                 level='WARNING',
                                 user=self.user,
@@ -2241,8 +2216,7 @@ class Exchange:
                             if not _ccxt_should_retry(self.instance, e):
                                 raise
                             last_err = e
-                            _log(
-                                'Exchange',
+                            _log(SERVICE,
                                 f"kucoinfutures fetch_my_trades error (global) attempt={attempt+1}/3: {e}",
                                 level='WARNING',
                                 user=self.user,
@@ -2378,8 +2352,7 @@ class Exchange:
                         if not _ccxt_should_retry(self.instance, e):
                             raise
                         last_err = e
-                        _log(
-                            'Exchange',
+                        _log(SERVICE,
                             f"gateio fetch_my_trades error (global) attempt={attempt+1}/6: {e}",
                             level='WARNING',
                             user=self.user,
@@ -2524,7 +2497,7 @@ class Exchange:
 
                     ccxt_symbol = _resolve_ccxt_symbol_from_mapping(self.id, sym_id)
                     if not ccxt_symbol:
-                        _log('Exchange', f"bitget execution symbol not found in CoinData mapping: {sym_id}", level='WARNING', user=self.user)
+                        _log(SERVICE, f"bitget execution symbol not found in CoinData mapping: {sym_id}", level='WARNING', user=self.user)
                         continue
 
                     cursor = int(since)
@@ -2554,8 +2527,7 @@ class Exchange:
                                 if not _ccxt_should_retry(self.instance, e):
                                     raise
                                 last_err = e
-                                _log(
-                                    'Exchange',
+                                _log(SERVICE,
                                     f"bitget fetch_my_trades error symbol={ccxt_symbol} attempt={attempt+1}/3: {e}",
                                     level='WARNING',
                                     user=self.user,

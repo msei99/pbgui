@@ -45,6 +45,7 @@ LOG_GROUPS: dict[str, str] = {
     'PB7OhlcvAPI':     'PBGui',
     'PBV7UI':          'PBGui',
     'VPSManager':      'PBGui',
+    'VPSManagerApi':   'PBGui',
     'Config':          'PBGui',
     'ParetoDataLoader':'PBGui',
     'Status':          'PBGui',
@@ -391,8 +392,8 @@ def trim_logfile_to_max_bytes(path: str, max_bytes: int = DEFAULT_ROTATE_MAX_BYT
     try:
         with advisory_file_lock(Path(path)):
             _trim_logfile_to_max_bytes_unlocked(Path(path), max_bytes)
-    except Exception:
-        pass
+    except Exception as exc:
+        _write_fallback_error("trim logfile", exc)
 
 
 def _trim_logfile_to_max_bytes_unlocked(path: Path, max_bytes: int) -> None:
@@ -508,15 +509,15 @@ def rotate_logfile_if_oversize(path: str, max_bytes: int = DEFAULT_ROTATE_MAX_BY
     try:
         with advisory_file_lock(Path(path)):
             _rotate_logfile_if_oversize_unlocked(Path(path), max_bytes, backup_count)
-    except Exception:
-        # Never raise from logging helpers
-        pass
+    except Exception as exc:
+        _write_fallback_error("rotate logfile", exc)
 
 
 def _rotate_logfile_if_oversize_unlocked(path: Path, max_bytes: int, backup_count: int) -> None:
+    backup_count = _parse_nonnegative_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)
+    _prune_rotated_generations_unlocked(path, backup_count)
     if not path.exists() or path.stat().st_size <= int(max_bytes):
         return
-    backup_count = _parse_nonnegative_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)
     if backup_count <= 0:
         _trim_logfile_to_max_bytes_unlocked(path, max_bytes)
         return
@@ -527,6 +528,16 @@ def _rotate_logfile_if_oversize_unlocked(path: Path, max_bytes: int, backup_coun
         if src.exists():
             os.replace(src, Path(f"{path}.{idx + 1}"))
     os.replace(path, Path(f"{path}.1"))
+
+
+def _prune_rotated_generations_unlocked(path: Path, backup_count: int) -> None:
+    """Remove numeric generations outside the configured retention count."""
+    backup_count = _parse_nonnegative_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)
+    prefix = f"{path.name}."
+    for candidate in path.parent.glob(f"{path.name}.*"):
+        suffix = candidate.name.removeprefix(prefix)
+        if suffix.isdigit() and int(suffix) > backup_count:
+            candidate.unlink(missing_ok=True)
 
 
 def rotate_managed_log_before_open(path: str | Path, scope_id: str | None = None) -> Path:
@@ -558,84 +569,62 @@ def append_managed_transcript_line(path: str | Path, text: str, scope_id: str | 
             handle.flush()
 
 
-def purge_log_to_rotated(path: str, max_bytes: int = 10 * 1024 * 1024):
-    """Purge `path` but keep the file. If `<path>.1` exists and has room,
-    append the content of `path` to it up to `max_bytes`. Otherwise, move
-    the current file to `<path>.1` (if none exists) or truncate `path`.
+def purge_log_to_rotated(
+    path: str,
+    max_bytes: int = DEFAULT_ROTATE_MAX_BYTES,
+    backup_count: int = DEFAULT_ROTATE_BACKUP_COUNT,
+):
+    """Force-rotate `path` according to its configured retention and empty it.
 
     Returns (success: bool, message: str).
     """
     try:
         with advisory_file_lock(Path(path)):
-            return _purge_log_to_rotated_unlocked(Path(path), max_bytes)
-    except Exception as e:
-        return False, f'Failed to purge logfile: {_redact_text(e)}'
+            return _purge_log_to_rotated_unlocked(Path(path), max_bytes, backup_count)
+    except Exception as exc:
+        return False, f"Failed to purge logfile: {_redact_text(exc)}"
 
 
-def _purge_log_to_rotated_unlocked(p: Path, max_bytes: int):
+def _purge_log_to_rotated_unlocked(p: Path, max_bytes: int, backup_count: int):
+    if not p.exists():
+        return False, "Logfile does not exist"
+
+    max_bytes = _parse_positive_int(max_bytes, DEFAULT_ROTATE_MAX_BYTES)
+    backup_count = _parse_nonnegative_int(backup_count, DEFAULT_ROTATE_BACKUP_COUNT)
+    if backup_count <= 0:
+        with p.open("r+b") as handle:
+            handle.truncate(0)
+        _prune_rotated_generations_unlocked(p, backup_count)
+        return True, f"Truncated {p.name}; rotated backups are disabled"
+
+    with p.open("rb") as handle:
+        handle.seek(max(0, p.stat().st_size - max_bytes))
+        content = handle.read()
+    temp = p.with_name(f".{p.name}.purge.{os.getpid()}.tmp")
     try:
-        if not p.exists():
-            return False, 'Logfile does not exist'
-        rotated = Path(str(p) + '.1')
-        orig_size = p.stat().st_size
+        temp.write_bytes(content)
+        os.chmod(temp, p.stat().st_mode & 0o777)
+        _prune_rotated_generations_unlocked(p, backup_count)
+        oldest = Path(f"{p}.{backup_count}")
+        oldest.unlink(missing_ok=True)
+        for idx in range(backup_count - 1, 0, -1):
+            source = Path(f"{p}.{idx}")
+            if source.exists():
+                os.replace(source, Path(f"{p}.{idx + 1}"))
+        os.replace(temp, Path(f"{p}.1"))
+        with p.open("r+b") as handle:
+            handle.truncate(0)
+    finally:
+        temp.unlink(missing_ok=True)
+    return True, f"Rotated {p.name} with {backup_count} backup generation(s) and truncated the current log"
 
-        # If no rotated file exists, move current to .1 and recreate empty logfile
-        if not rotated.exists():
-            try:
-                p.replace(rotated)
-                p.open('w').close()
-                return True, f'Moved logfile to {rotated.name} and recreated {p.name}'
-            except Exception as e:
-                return False, f'Failed to move logfile to rotated: {e}'
 
-        rot_size = rotated.stat().st_size
-        # If rotated has room for the whole original, append it
-        if rot_size < max_bytes and (rot_size + orig_size) <= max_bytes:
-            try:
-                with rotated.open('ab') as rf, p.open('rb') as of:
-                    rf.write(of.read())
-                with p.open('r+') as of:
-                    of.truncate(0)
-                return True, f'Appended logfile to {rotated.name} and truncated {p.name}'
-            except Exception as e:
-                return False, f'Failed to append to rotated logfile: {e}'
-
-        # If appending would overflow the rotated file, prefer replacing the
-        # rotated file with the full current logfile so we don't lose the
-        # current content. If the current logfile itself is larger than
-        # max_bytes, write the tail of the current logfile (last max_bytes)
-        # into the rotated file instead.
-        try:
-            if orig_size <= max_bytes:
-                # Remove existing rotated and move current to rotated
-                try:
-                    try:
-                        rotated.unlink()
-                    except Exception:
-                        pass
-                    p.replace(rotated)
-                    # recreate empty original file
-                    p.open('w').close()
-                    return True, f'Replaced {rotated.name} with full logfile and recreated {p.name}'
-                except Exception as e:
-                    return False, f'Failed to replace rotated logfile: {e}'
-            else:
-                # Current logfile larger than max_bytes: write only the tail
-                try:
-                    with p.open('rb') as of:
-                        of.seek(max(0, orig_size - max_bytes))
-                        chunk = of.read()
-                    with rotated.open('wb') as rf:
-                        rf.write(chunk)
-                    with p.open('r+') as of:
-                        of.truncate(0)
-                    return True, f'Wrote last {max_bytes} bytes of logfile to {rotated.name} and truncated {p.name}'
-                except Exception as e:
-                    return False, f'Failed to write tail to rotated logfile: {e}'
-        except Exception as e:
-            return False, f'Failed to manage rotated logfile: {e}'
-    except Exception as e:
-        return False, f'Failed to purge logfile: {_redact_text(e)}'
+def _write_fallback_error(operation: str, exc: Exception) -> None:
+    """Report helper failures to sanitized stderr without recursing into logging."""
+    try:
+        sys.stderr.write(f"{_now_isoz()} [LoggingHelpers] {_redact_text(operation)} failed: {_redact_text(exc)}\n")
+    except Exception:
+        pass
 
 
 def human_log(service: str, msg: str, user: str = None, tags=None, level: str = None, code: str = None, meta: dict = None, logfile: str = None):

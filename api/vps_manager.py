@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from api.auth import SessionToken, authenticate_websocket, require_auth, validate_token
+from api.auth import SessionToken, authenticate_websocket, require_auth
 from api.vps import get_bot_log_matches
 from logging_helpers import human_log as _log
 from vps_manager_service import UnknownHostKeyError, VPSManagerService
@@ -85,6 +85,7 @@ def get_main_page(
     request: Request,
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
+    del session
     html_path = Path(__file__).resolve().parent.parent / "frontend" / "vps_manager.html"
     html = html_path.read_text(encoding="utf-8")
 
@@ -95,7 +96,6 @@ def get_main_page(
     api_base = origin + "/api/vps-manager"
     ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
 
-    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
 

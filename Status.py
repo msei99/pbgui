@@ -150,7 +150,7 @@ class InstancesStatus():
                             status.cluster_gate = str(idata.get("cluster_gate", "") or "")
                             self.add(status)
                 except json.JSONDecodeError as e:
-                    _log('Status', f'Error loading status file: {e}', level='ERROR')
+                    _log(SERVICE, f'Error loading status file: {e}', level='ERROR')
 
     def save(self):
         """Saves the current status information to the status file."""

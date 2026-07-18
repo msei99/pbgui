@@ -6,6 +6,7 @@ import json
 import asyncio
 import subprocess
 import datetime
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -284,7 +285,7 @@ def test_add_config_to_archive_accepts_missing_dest_name(tmp_path: Path, monkeyp
     (archive_root / "mine").mkdir(parents=True)
     result_dir = write_archive_result(tmp_path / "results")
     monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archive_root)
-    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "")
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
     monkeypatch.setattr(backtest_v7, "_resolve_result_dir", lambda path: Path(path).resolve())
 
     response = asyncio.run(backtest_v7.add_config_to_archive("mine", {"source_path": str(result_dir)}, session=None))
@@ -549,6 +550,110 @@ def test_rename_archive_backtest_config_refuses_collision(
 
     assert exc_info.value.status_code == 409
     assert (archive_root / "pbgui/configs/v7.4.2/backtests/my_config").exists()
+
+
+def test_rename_archive_backtest_config_rejects_malformed_config_without_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed required config JSON aborts before moving or rewriting the group."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    result_dir = write_archive_result(archive_root / "pbgui/configs/v7.4.2/backtests")
+    config_file = result_dir / "config.json"
+    config_file.write_text("{not-json", encoding="utf-8")
+    original_bytes = config_file.read_bytes()
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+
+    with pytest.raises(HTTPException) as exc_info:
+        backtest_v7.rename_archive_backtest_config(
+            "mine", {"path": str(result_dir), "new_name": "HYPE"}, session=None
+        )
+
+    assert exc_info.value.status_code == 422
+    assert config_file.read_bytes() == original_bytes
+    assert result_dir.exists()
+    assert not (archive_root / "pbgui/configs/v7.4.2/backtests/HYPE").exists()
+
+
+def test_rename_archive_backtest_config_requires_config_for_every_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every analysis result must have a regular JSON-object config before group staging."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    result_dir = write_archive_result(archive_root / "pbgui/configs/v7.4.2/backtests")
+    (result_dir / "config.json").unlink()
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+
+    with pytest.raises(HTTPException) as exc_info:
+        backtest_v7.rename_archive_backtest_config(
+            "mine", {"path": str(result_dir), "new_name": "HYPE"}, session=None
+        )
+
+    assert exc_info.value.status_code == 422
+    assert result_dir.exists()
+    assert not (archive_root / "pbgui/configs/v7.4.2/backtests/HYPE").exists()
+
+
+def test_rename_archive_backtest_config_rejects_predictable_tmp_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A legacy config.json.tmp symlink aborts rename without touching its target."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    result_dir = write_archive_result(archive_root / "pbgui/configs/v7.4.2/backtests")
+    outside = tmp_path / "outside.json"
+    outside.write_text("outside", encoding="utf-8")
+    (result_dir / "config.json.tmp").symlink_to(outside)
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+
+    with pytest.raises(HTTPException) as exc_info:
+        backtest_v7.rename_archive_backtest_config(
+            "mine", {"path": str(result_dir), "new_name": "HYPE"}, session=None
+        )
+
+    assert exc_info.value.status_code == 422
+    assert outside.read_text(encoding="utf-8") == "outside"
+    assert result_dir.exists()
+
+
+def test_rename_archive_backtest_config_restores_original_after_install_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure after staged installation restores the untouched original group."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    result_dir = write_archive_result(archive_root / "pbgui/configs/v7.4.2/backtests")
+    original_config = (result_dir / "config.json").read_bytes()
+    real_write = backtest_v7.write_archive_json
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+
+    def fail_installed_write(path: Path, payload: dict, archive_root_arg: Path) -> None:
+        """Fail only after the staged group has entered the Git archive."""
+        if archive_root_arg == archive_root:
+            raise OSError("installed write failed")
+        real_write(path, payload, archive_root_arg)
+
+    monkeypatch.setattr(backtest_v7, "write_archive_json", fail_installed_write)
+
+    with pytest.raises(HTTPException, match="installed write failed"):
+        backtest_v7.rename_archive_backtest_config(
+            "mine", {"path": str(result_dir), "new_name": "HYPE"}, session=None
+        )
+
+    assert result_dir.exists()
+    assert (result_dir / "config.json").read_bytes() == original_config
+    assert not (archive_root / "pbgui/configs/v7.4.2/backtests/HYPE").exists()
+    assert not list(archives_root.glob(".pbgui-archive-rename-stage-*"))
+    assert not list(archives_root.glob(".pbgui-archive-rename-backup-*"))
 
 
 def test_delete_archive_optimize_config_removes_config_and_meta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -934,15 +1039,16 @@ def test_archive_pull_recovers_clean_foreign_archive_after_force_update(
 
     assert result["error"] == ""
     assert result["recovered"] is True
+    assert commands[:2] == [["git", "status", "--porcelain"], ["git", "pull", "--ff-only"]]
     assert any(len(cmd) == 4 and cmd[:2] == ["git", "branch"] and cmd[2].startswith("pbgui-recovery-") for cmd in commands)
     assert ["git", "reset", "--hard", "origin/main"] in commands
 
 
-def test_archive_pull_recovers_local_layout_migration_after_force_update(
+def test_archive_pull_blocks_foreign_local_layout_migration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Archive pulls can recover the local legacy-layout migration diff."""
+    """Foreign archive pulls must not reset or clean a dirty local layout migration."""
     commands = []
 
     def fake_run(cmd, cwd=None, capture_output=True, text=True, timeout=None, input=None, env=None):
@@ -973,11 +1079,13 @@ def test_archive_pull_recovers_local_layout_migration_after_force_update(
 
     result = backtest_v7._archive_pull_sync("other", tmp_path)
 
-    assert result["error"] == ""
-    assert result["recovered"] is True
-    assert ["git", "reset", "--hard", "HEAD"] in commands
-    assert ["git", "clean", "-fd", "--", "pbgui"] in commands
-    assert ["git", "reset", "--hard", "origin/main"] in commands
+    assert "local changes" in result["error"]
+    assert "read-only" in result["error"]
+    assert result["recovered"] is False
+    assert commands == [["git", "status", "--porcelain"]]
+    assert ["git", "reset", "--hard", "HEAD"] not in commands
+    assert ["git", "clean", "-fd", "--", "pbgui"] not in commands
+    assert ["git", "reset", "--hard", "origin/main"] not in commands
 
 
 def test_archive_pull_does_not_reset_own_archive_after_divergence(
@@ -1003,26 +1111,21 @@ def test_archive_pull_does_not_reset_own_archive_after_divergence(
 
     assert result["error"]
     assert result["recovered"] is False
-    assert commands == [["git", "pull", "--ff-only"], ["git", "status", "--porcelain"]]
+    assert commands == [["git", "status", "--porcelain"], ["git", "pull", "--ff-only"]]
 
 
-def test_archive_pull_preserves_local_archive_content_when_remote_is_ahead(
+def test_archive_pull_blocks_dirty_own_archive_before_network_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Archive pulls keep local config files while refreshing generated metadata."""
+    """Own archive pulls require local content to be committed and pushed first."""
     commands = []
-    pull_count = 0
     rebuilt = []
 
     def fake_run(cmd, cwd=None, capture_output=True, text=True, timeout=None, input=None, env=None):
-        nonlocal pull_count
         commands.append(list(cmd))
         if cmd == ["git", "pull", "--ff-only"]:
-            pull_count += 1
-            if pull_count == 1:
-                return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="error: Your local changes would be overwritten\n")
-            return subprocess.CompletedProcess(cmd, 0, stdout="Updating remote changes\n", stderr="")
+            raise AssertionError("dirty archive must not pull")
         if cmd == ["git", "status", "--porcelain"]:
             return subprocess.CompletedProcess(
                 cmd,
@@ -1030,8 +1133,6 @@ def test_archive_pull_preserves_local_archive_content_when_remote_is_ahead(
                 stdout=" M pbgui/archive_manifest.json\n?? pbgui/configs/v7.12.0/optimize/sl_bt_twe_target.json\n?? pbgui/configs/v7.12.0/optimize/sl_bt_twe_target.meta.json\n",
                 stderr="",
             )
-        if cmd == ["git", "checkout", "--", "pbgui/archive_manifest.json"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         raise AssertionError(f"unexpected command: {cmd}")
 
     monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
@@ -1041,11 +1142,11 @@ def test_archive_pull_preserves_local_archive_content_when_remote_is_ahead(
 
     result = backtest_v7._archive_pull_sync("mine", tmp_path)
 
-    assert result["error"] == ""
-    assert result["recovered"] is True
-    assert pull_count == 2
-    assert ["git", "checkout", "--", "pbgui/archive_manifest.json"] in commands
-    assert rebuilt == [tmp_path]
+    assert "commit and push" in result["error"]
+    assert result["recovered"] is False
+    assert result["conflict"] is True
+    assert commands == [["git", "status", "--porcelain"]]
+    assert rebuilt == []
 
 
 def test_archive_push_pre_pull_preserves_local_archive_content(
@@ -1077,6 +1178,7 @@ def test_archive_push_pre_pull_preserves_local_archive_content(
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         raise AssertionError(f"unexpected command: {cmd}")
 
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
     monkeypatch.setattr(backtest_v7, "_log_archive", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(backtest_v7, "rebuild_archive_manifest", lambda dest: rebuilt.append(dest) or {"items": []})
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -1111,8 +1213,84 @@ def test_archive_pull_does_not_reset_dirty_foreign_archive(
     result = backtest_v7._archive_pull_sync("other", tmp_path)
 
     assert "local changes" in result["error"]
+    assert "read-only" in result["error"]
     assert result["recovered"] is False
+    assert commands == [["git", "status", "--porcelain"]]
     assert ["git", "reset", "--hard", "origin/main"] not in commands
+
+
+def test_archive_pull_fails_closed_when_status_preflight_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed status preflight prevents pull and all recovery commands."""
+    commands = []
+
+    def fake_run(cmd, cwd=None, capture_output=True, text=True, timeout=None, input=None, env=None):
+        commands.append(list(cmd))
+        if cmd == ["git", "status", "--porcelain"]:
+            return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: status failed\n")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(backtest_v7, "_log_archive", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = backtest_v7._archive_pull_sync("other", tmp_path)
+
+    assert "status failed" in result["error"]
+    assert commands == [["git", "status", "--porcelain"]]
+
+
+def test_archive_pull_route_maps_dirty_conflict_to_409(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The single-archive pull route exposes a dirty preflight as HTTP 409."""
+    archives_root = tmp_path / "archives"
+    (archives_root / "mine").mkdir(parents=True)
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(
+        backtest_v7,
+        "_archive_pull_sync",
+        lambda *_args: {
+            "name": "mine",
+            "output": "dirty",
+            "error": "Own archive has local changes; commit and push them before pulling.",
+            "recovered": False,
+            "conflict": True,
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        backtest_v7.git_pull("mine", session=None)
+
+    assert exc_info.value.status_code == 409
+
+
+def test_archive_pull_stream_emits_conflict_before_network_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Streaming pull reports a dirty conflict without invoking pull or recovery."""
+    commands = []
+
+    def fake_stream_step(name, dest, label, cmd, **kwargs):
+        commands.append(list(cmd))
+        if cmd != ["git", "status", "--porcelain"]:
+            raise AssertionError(f"unexpected command: {cmd}")
+        if False:
+            yield ""
+        return subprocess.CompletedProcess(cmd, 0, stdout=" M README.md\n", stderr=""), " M README.md"
+
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(backtest_v7, "_log_archive", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(backtest_v7, "_run_archive_git_stream_step", fake_stream_step)
+
+    events = [json.loads(line) for line in backtest_v7._archive_pull_stream_sync("mine", tmp_path)]
+
+    assert commands == [["git", "status", "--porcelain"]]
+    assert [event["type"] for event in events] == ["conflict", "archive_done"]
+    assert events[-1]["result"]["conflict"] is True
 
 
 def test_pull_all_archives_stream_yields_final_results(
@@ -1345,3 +1523,925 @@ def test_archive_retest_completion_backfills_cleanup_for_completed_runs(tmp_path
     assert not (log_dir / f"{queue_filename}.log").exists()
     assert not queue_config.exists()
     assert saved["runs"][0]["result"]["cleanup"]["errors"] == []
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["delete_result", "add_backtest", "add_optimize", "migrate", "remove_duplicates"],
+)
+def test_foreign_archive_content_mutations_are_rejected(
+    operation: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archive content mutations must stop at the ownership guard for foreign archives."""
+    archives_root = tmp_path / "archives"
+    foreign_root = archives_root / "other"
+    result_dir = write_archive_result(foreign_root / "pbgui/configs/v7.4.2/backtests")
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+
+    if operation == "delete_result":
+        call = lambda: backtest_v7.delete_archive_result("other", str(result_dir), session=None)
+    elif operation == "add_backtest":
+        call = lambda: asyncio.run(
+            backtest_v7.add_config_to_archive("other", {"source_path": str(result_dir)}, session=None)
+        )
+    elif operation == "add_optimize":
+        call = lambda: asyncio.run(
+            backtest_v7.add_optimize_config_to_archive("other", {"config_name": "demo"}, session=None)
+        )
+    elif operation == "migrate":
+        call = lambda: backtest_v7.migrate_archive("other", session=None)
+    else:
+        call = lambda: backtest_v7.remove_archive_duplicate_results(
+            "other", {"paths": [str(result_dir)], "dry_run": True}, session=None
+        )
+
+    with pytest.raises(HTTPException) as exc_info:
+        call()
+
+    assert exc_info.value.status_code == 403
+    assert result_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "delete_result",
+        "rename",
+        "push",
+        "compact",
+        "scores",
+        "add_backtest_sync",
+        "migrate",
+        "add_optimize_sync",
+        "delete_optimize",
+        "retest_replace",
+        "schedule",
+        "remove_liquidated",
+        "remove_duplicates",
+        "save_readme",
+    ],
+)
+def test_own_archive_content_mutations_validate_inside_transaction(
+    operation: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every own-archive content workflow revalidates ownership and existence under its path lock."""
+    archives_root = tmp_path / "archives"
+    candidate = archives_root / "mine"
+    candidate.mkdir(parents=True)
+    state = {"active": False, "entries": 0}
+
+    class ValidationReached(Exception):
+        """Stop a workflow once its in-transaction ownership validation runs."""
+
+    class Transaction:
+        """Track transaction entry around the ownership guard."""
+
+        def __init__(self, root: Path):
+            assert root == candidate
+
+        def __enter__(self):
+            state["active"] = True
+            state["entries"] += 1
+
+        def __exit__(self, *_args):
+            state["active"] = False
+
+    def require_locked(name: str, _action: str) -> Path:
+        """Assert the shared guard runs only after the candidate transaction is entered."""
+        assert name == "mine"
+        assert state["active"] is True
+        raise ValidationReached
+
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "archive_transaction", Transaction)
+    monkeypatch.setattr(backtest_v7, "_require_own_archive", require_locked)
+    calls = {
+        "delete_result": lambda: backtest_v7.delete_archive_result("mine", "unused", session=None),
+        "rename": lambda: backtest_v7.rename_archive_backtest_config("mine", {}, session=None),
+        "push": lambda: backtest_v7.git_push("mine", {}, session=None),
+        "compact": lambda: backtest_v7.compact_archive_history("mine", {}, session=None),
+        "scores": lambda: backtest_v7.rebuild_archive_scores("mine", session=None),
+        "add_backtest_sync": lambda: backtest_v7._add_config_to_archive_sync("mine", "unused"),
+        "migrate": lambda: backtest_v7.migrate_archive("mine", session=None),
+        "add_optimize_sync": lambda: backtest_v7._add_optimize_config_to_archive_sync("mine", "unused"),
+        "delete_optimize": lambda: backtest_v7.delete_archive_optimize_config("mine", "unused", session=None),
+        "retest_replace": lambda: backtest_v7.retest_replace_archive_results("mine", {}, session=None),
+        "schedule": lambda: backtest_v7.create_archive_retest_schedule("mine", {}, session=None),
+        "remove_liquidated": lambda: backtest_v7.remove_archive_liquidated_results("mine", {}, session=None),
+        "remove_duplicates": lambda: backtest_v7.remove_archive_duplicate_results("mine", {}, session=None),
+        "save_readme": lambda: backtest_v7.save_archive_readme_settings("mine", {}, session=None),
+    }
+
+    with pytest.raises(ValidationReached):
+        calls[operation]()
+
+    assert state == {"active": False, "entries": 1}
+
+
+@pytest.mark.parametrize("operation", ["list_results", "pull", "pull_stream"])
+def test_archive_workflows_recheck_root_after_transaction_entry(
+    operation: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archive workflows stop inside the transaction if deletion removed the candidate first."""
+    archives_root = tmp_path / "archives"
+    candidate = archives_root / "mine"
+    candidate.mkdir(parents=True)
+    entered = []
+
+    class DeleteBeforeEntry:
+        """Simulate deletion winning immediately before the waiting workflow acquires the lock."""
+
+        def __init__(self, root: Path):
+            assert root == candidate
+
+        def __enter__(self):
+            candidate.rmdir()
+            entered.append(candidate)
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "archive_transaction", DeleteBeforeEntry)
+    monkeypatch.setattr(backtest_v7, "_get_cached_archive_results", lambda _name: None)
+    monkeypatch.setattr(
+        backtest_v7,
+        "maybe_migrate_own_archive",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("missing archive must not be mutated")),
+    )
+    monkeypatch.setattr(
+        backtest_v7,
+        "_run_archive_git_step",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("missing archive must not run Git")),
+    )
+    monkeypatch.setattr(
+        backtest_v7,
+        "_run_archive_git_stream_step",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("missing archive must not run Git")),
+    )
+
+    if operation == "list_results":
+        with pytest.raises(HTTPException) as exc_info:
+            backtest_v7.list_archive_results("mine", session=None)
+        assert exc_info.value.status_code == 404
+    elif operation == "pull":
+        response = backtest_v7._archive_pull_sync("mine", candidate)
+        assert response["error"] == "Archive 'mine' not found"
+    else:
+        events = [json.loads(line) for line in backtest_v7._archive_pull_stream_sync("mine", candidate)]
+        assert [event["type"] for event in events] == ["error", "archive_done"]
+        assert events[-1]["result"]["error"] == "Archive 'mine' not found"
+
+    assert entered == [candidate]
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_archive_push_rejects_foreign_archive_before_git(
+    dry_run: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both real and dry-run pushes are restricted to the configured own archive."""
+    archives_root = tmp_path / "archives"
+    (archives_root / "other").mkdir(parents=True)
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(
+        backtest_v7.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("git must not run")),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        backtest_v7.git_push("other", {"dry_run": dry_run}, session=None)
+
+    assert exc_info.value.status_code == 403
+
+
+def test_archive_push_dry_run_holds_archive_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Credential-check pushes remain serialized for the complete dry-run."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    archive_root.mkdir(parents=True)
+    state = {"active": False, "entries": 0}
+    commands = []
+
+    class Transaction:
+        """Track the transaction lifetime around the mocked Git command."""
+
+        def __enter__(self):
+            state["active"] = True
+            state["entries"] += 1
+
+        def __exit__(self, *_args):
+            state["active"] = False
+
+    def fake_git_step(name, dest, label, cmd, **kwargs):
+        assert state["active"] is True
+        commands.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr=""), "ok"
+
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(backtest_v7, "archive_transaction", lambda _root: Transaction())
+    monkeypatch.setattr(backtest_v7, "_archive_push_url", lambda *_args: None)
+    monkeypatch.setattr(backtest_v7, "_run_archive_git_step", fake_git_step)
+    monkeypatch.setattr(backtest_v7, "_log_archive", lambda *_args, **_kwargs: None)
+
+    response = backtest_v7.git_push("mine", {"dry_run": True}, session=None)
+
+    assert response["ok"] is True
+    assert state == {"active": False, "entries": 1}
+    assert commands == [["git", "push", "--dry-run"]]
+
+
+def test_archive_results_panel_uses_cache_before_bounded_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A panel cache hit bypasses migration, while a miss limits migration to 25 items."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    archive_root.mkdir(parents=True)
+    cached_entry = [{
+        "results": [{"path": "cached"}],
+        "migration_status": {"status": "cached"},
+    }]
+    migration_calls = []
+    cached_writes = []
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(backtest_v7, "_get_cached_archive_results", lambda _name: cached_entry[0])
+
+    def fake_migrate(name: str, root: Path, own_name: str, max_items: int | None = None) -> dict:
+        """Record the panel's bounded migration request."""
+        migration_calls.append((name, root, own_name, max_items))
+        return {"status": {"status": "current"}}
+
+    monkeypatch.setattr(backtest_v7, "maybe_migrate_own_archive", fake_migrate)
+    monkeypatch.setattr(backtest_v7, "list_archive_backtest_results", lambda _root: [{"path": "fresh"}])
+    monkeypatch.setattr(backtest_v7, "score_archive_results", lambda results: results)
+    monkeypatch.setattr(
+        backtest_v7,
+        "_set_cached_archive_results",
+        lambda name, results, status: cached_writes.append((name, results, status)),
+    )
+
+    cached_response = backtest_v7.list_archive_results("mine", session=None)
+    assert cached_response["cached"] is True
+    assert cached_response["results"] == [{"path": "cached"}]
+    assert migration_calls == []
+
+    cached_entry[0] = None
+    fresh_response = backtest_v7.list_archive_results("mine", session=None)
+
+    assert fresh_response["cached"] is False
+    assert fresh_response["results"] == [{"path": "fresh"}]
+    assert migration_calls == [("mine", archive_root, "mine", 25)]
+    assert cached_writes == [("mine", [{"path": "fresh"}], {"status": "current"})]
+
+
+def test_archive_overview_uses_manifest_and_safe_scan_counts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archive overview counts come from a manifest or a safe scan when none exists."""
+    archives_root = tmp_path / "archives"
+    manifested = archives_root / "manifested"
+    scanned = archives_root / "scanned"
+    for archive_root in (manifested, scanned):
+        git_config = archive_root / ".git/config"
+        git_config.parent.mkdir(parents=True)
+        git_config.write_text('[remote "origin"]\nurl = https://example.invalid/archive.git\n', encoding="utf-8")
+
+    write_archive_json(
+        manifested / ARCHIVE_MANIFEST,
+        {
+            "schema_version": 1,
+            "items": [
+                {"type": "backtest_result"},
+                {"type": "optimize_config"},
+                {"type": "optimize_config"},
+            ],
+        },
+    )
+    write_archive_result(scanned / "pbgui/configs/v7.4.2/backtests")
+    write_archive_json(
+        scanned / "pbgui/configs/v7.4.2/optimize/scanned.json",
+        {"config_version": "v7.4.2", "optimize": {}},
+    )
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "manifested")
+    monkeypatch.setattr(backtest_v7, "_archives_list_cache", {})
+    monkeypatch.setattr(backtest_v7, "archive_migration_status", lambda _root, fast=False: {"status": "current"})
+
+    response = backtest_v7.list_archives(session=None)
+    by_name = {item["name"]: item for item in response["archives"]}
+
+    assert by_name["manifested"]["results"] == 1
+    assert by_name["manifested"]["optimize_configs"] == 2
+    assert by_name["manifested"]["manifest"] == {"present": True, "items": 3}
+    assert by_name["scanned"]["results"] == 1
+    assert by_name["scanned"]["optimize_configs"] == 1
+    assert by_name["scanned"]["manifest"] == {"present": False, "items": 0}
+
+
+def test_optimize_export_migrates_first_and_preserves_valid_sidecar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated identical exports migrate first and do not rewrite valid metadata."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    archive_root.mkdir(parents=True)
+    local_configs = tmp_path / "optimize"
+    source_file = local_configs / "demo.json"
+    write_archive_json(source_file, {"config_version": "v7.12.0", "backtest": {}, "optimize": {"n_trials": 10}})
+    events = []
+    real_resolve = backtest_v7.resolve_optimize_archive_destination
+
+    def fake_load(path: Path, **_kwargs) -> dict:
+        """Load isolated PB7 config fixtures as plain JSON objects."""
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+
+    def fake_save(config: dict, path: Path) -> None:
+        """Save isolated PB7 config fixtures without touching runtime data."""
+        write_archive_json(Path(path), config)
+
+    def fake_migrate(*_args, **_kwargs) -> dict:
+        """Record migration ordering without performing git work."""
+        events.append("migrate")
+        return {"status": {"status": "current"}}
+
+    def recording_resolve(*args, **kwargs):
+        """Record destination resolution after migration."""
+        events.append("resolve")
+        return real_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(backtest_v7, "_opt_archive_configs_dir", lambda: local_configs)
+    monkeypatch.setattr(backtest_v7, "load_pb7_config", fake_load)
+    monkeypatch.setattr(backtest_v7, "save_pb7_config", fake_save)
+    monkeypatch.setattr(backtest_v7, "get_template_config", lambda: {"config_version": "v7.12.0"})
+    monkeypatch.setattr(backtest_v7, "maybe_migrate_own_archive", fake_migrate)
+    monkeypatch.setattr(backtest_v7, "resolve_optimize_archive_destination", recording_resolve)
+
+    first = backtest_v7._add_optimize_config_to_archive_sync("mine", "demo")
+    meta_path = Path(first["path"]).with_name("demo.meta.json")
+    first_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    first_mtime = meta_path.stat().st_mtime_ns
+    monkeypatch.setattr(
+        backtest_v7,
+        "write_optimize_meta",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("valid sidecar must not be rewritten")),
+    )
+
+    second = backtest_v7._add_optimize_config_to_archive_sync("mine", "demo")
+
+    assert events == ["migrate", "resolve", "migrate", "resolve"]
+    assert second["skipped"] is True
+    assert second["metadata_repaired"] is False
+    assert second["meta"]["created_at"] == first_meta["created_at"]
+    assert meta_path.stat().st_mtime_ns == first_mtime
+
+
+def test_optimize_export_rejects_predictable_tmp_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optimize archive export never follows the former predictable JSON temp path."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    archive_root.mkdir(parents=True)
+    local_configs = tmp_path / "optimize"
+    write_archive_json(
+        local_configs / "demo.json",
+        {"config_version": "v7.12.0", "backtest": {}, "optimize": {}, "_pbgui_param_status": {"x": 1}},
+    )
+    destination = archive_root / "pbgui/configs/v7.12.0/optimize/demo.json"
+    outside = tmp_path / "outside.json"
+    outside.write_text("outside", encoding="utf-8")
+    destination.parent.mkdir(parents=True)
+    destination.with_suffix(".json.tmp").symlink_to(outside)
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(backtest_v7, "_opt_archive_configs_dir", lambda: local_configs)
+    monkeypatch.setattr(
+        backtest_v7,
+        "load_pb7_config",
+        lambda path, **_kwargs: json.loads(Path(path).read_text(encoding="utf-8")),
+    )
+    monkeypatch.setattr(
+        backtest_v7,
+        "maybe_migrate_own_archive",
+        lambda *_args, **_kwargs: {"status": {"status": "current"}},
+    )
+
+    with pytest.raises(RuntimeError, match="temporary path"):
+        backtest_v7._add_optimize_config_to_archive_sync("mine", "demo")
+
+    assert outside.read_text(encoding="utf-8") == "outside"
+    assert not destination.exists()
+
+
+def test_optimize_export_strips_pbgui_param_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optimize archive export preserves save_pb7_config's UI-status stripping behavior."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    archive_root.mkdir(parents=True)
+    local_configs = tmp_path / "optimize"
+    write_archive_json(
+        local_configs / "demo.json",
+        {
+            "config_version": "v7.12.0",
+            "backtest": {},
+            "optimize": {},
+            "_pbgui_param_status": {"long": {"entry_grid_spacing_pct": "added"}},
+        },
+    )
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(backtest_v7, "_opt_archive_configs_dir", lambda: local_configs)
+    monkeypatch.setattr(
+        backtest_v7,
+        "load_pb7_config",
+        lambda path, **_kwargs: json.loads(Path(path).read_text(encoding="utf-8")),
+    )
+    monkeypatch.setattr(
+        backtest_v7,
+        "maybe_migrate_own_archive",
+        lambda *_args, **_kwargs: {"status": {"status": "current"}},
+    )
+
+    response = backtest_v7._add_optimize_config_to_archive_sync("mine", "demo")
+    archived = json.loads(Path(response["path"]).read_text(encoding="utf-8"))
+
+    assert "_pbgui_param_status" not in archived
+
+
+@pytest.mark.parametrize("sidecar_state", ["missing", "invalid"])
+def test_optimize_export_repairs_missing_or_invalid_sidecar(
+    sidecar_state: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An identical Optimize export repairs absent or malformed metadata sidecars."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    archive_root.mkdir(parents=True)
+    local_configs = tmp_path / "optimize"
+    sidecar_roots = []
+    write_archive_json(
+        local_configs / "demo.json",
+        {"config_version": "v7.12.0", "backtest": {}, "optimize": {"n_trials": 10}},
+    )
+
+    def fake_load(path: Path, **_kwargs) -> dict:
+        """Load isolated PB7 config fixtures as plain JSON objects."""
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(backtest_v7, "_opt_archive_configs_dir", lambda: local_configs)
+    monkeypatch.setattr(backtest_v7, "load_pb7_config", fake_load)
+    monkeypatch.setattr(backtest_v7, "save_pb7_config", lambda config, path: write_archive_json(Path(path), config))
+    monkeypatch.setattr(backtest_v7, "get_template_config", lambda: {"config_version": "v7.12.0"})
+    monkeypatch.setattr(
+        backtest_v7,
+        "write_optimize_meta",
+        lambda path, meta, archive_root=None: (
+            sidecar_roots.append(archive_root),
+            archive_helpers.write_optimize_meta(path, meta, archive_root),
+        )[-1],
+    )
+    monkeypatch.setattr(
+        backtest_v7,
+        "maybe_migrate_own_archive",
+        lambda *_args, **_kwargs: {"status": {"status": "current"}},
+    )
+
+    first = backtest_v7._add_optimize_config_to_archive_sync("mine", "demo")
+    meta_path = Path(first["path"]).with_name("demo.meta.json")
+    if sidecar_state == "missing":
+        meta_path.unlink()
+    else:
+        meta_path.write_text("not-json", encoding="utf-8")
+
+    repaired = backtest_v7._add_optimize_config_to_archive_sync("mine", "demo")
+    metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    assert repaired["skipped"] is True
+    assert repaired["metadata_repaired"] is True
+    assert metadata["name"] == "demo"
+    assert metadata["created_at"]
+    assert sidecar_roots == [archive_root, archive_root]
+
+
+def test_optimize_import_collision_modes_and_foreign_source_immutability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optimize imports report collisions, overwrite or copy locally, and never alter the source."""
+    archives_root = tmp_path / "archives"
+    foreign_root = archives_root / "other"
+    source_file = foreign_root / "pbgui/configs/v7.12.0/optimize/demo.json"
+    source_config = {
+        "config_version": "v7.12.0",
+        "backtest": {"base_dir": "backtests/pbgui/foreign"},
+        "optimize": {"n_trials": 20},
+    }
+    write_archive_json(source_file, source_config)
+    source_bytes = source_file.read_bytes()
+    local_configs = tmp_path / "local-optimize"
+    write_archive_json(local_configs / "demo.json", {"config_version": "old"})
+    write_archive_json(local_configs / "demo_copy.json", {"config_version": "occupied"})
+
+    def fake_load(path: Path, **_kwargs) -> dict:
+        """Load isolated PB7 config fixtures as plain JSON objects."""
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_opt_archive_configs_dir", lambda: local_configs)
+    monkeypatch.setattr(backtest_v7, "load_pb7_config", fake_load)
+    monkeypatch.setattr(backtest_v7, "save_pb7_config", lambda config, path: write_archive_json(Path(path), config))
+    monkeypatch.setattr(backtest_v7, "get_template_config", lambda: {"config_version": "v7.99.0"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        backtest_v7.import_archive_optimize_config(
+            "other", {"path": str(source_file), "name": "demo", "collision": "error"}, session=None
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {
+        "code": "optimize_config_exists",
+        "message": "Optimize config 'demo' already exists",
+        "name": "demo",
+        "suggested_copy_name": "demo_copy_2",
+    }
+
+    overwritten = backtest_v7.import_archive_optimize_config(
+        "other", {"path": str(source_file), "name": "demo", "collision": "overwrite"}, session=None
+    )
+    copied = backtest_v7.import_archive_optimize_config(
+        "other", {"path": str(source_file), "name": "demo", "collision": "copy"}, session=None
+    )
+    overwritten_config = json.loads((local_configs / "demo.json").read_text(encoding="utf-8"))
+    copied_config = json.loads((local_configs / "demo_copy_2.json").read_text(encoding="utf-8"))
+
+    assert overwritten == {"ok": True, "name": "demo", "collision": "overwrite"}
+    assert copied == {"ok": True, "name": "demo_copy_2", "collision": "copy"}
+    assert overwritten_config["backtest"]["base_dir"] == "backtests/pbgui/demo"
+    assert copied_config["backtest"]["base_dir"] == "backtests/pbgui/demo_copy_2"
+    assert overwritten_config["config_version"] == "v7.12.0"
+    assert copied_config["config_version"] == "v7.12.0"
+    assert source_file.read_bytes() == source_bytes
+
+
+def test_concurrent_optimize_copy_imports_choose_distinct_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrent copy imports serialize name selection through the local save."""
+    archives_root = tmp_path / "archives"
+    source_file = archives_root / "other/pbgui/configs/v7.12.0/optimize/demo.json"
+    write_archive_json(
+        source_file,
+        {"config_version": "v7.12.0", "backtest": {}, "optimize": {"n_trials": 20}},
+    )
+    local_configs = tmp_path / "local-optimize"
+    barrier = threading.Barrier(3)
+    results = []
+    errors = []
+
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_opt_archive_configs_dir", lambda: local_configs)
+    monkeypatch.setattr(
+        backtest_v7,
+        "load_pb7_config",
+        lambda path, **_kwargs: json.loads(Path(path).read_text(encoding="utf-8")),
+    )
+    monkeypatch.setattr(backtest_v7, "save_pb7_config", lambda config, path: write_archive_json(Path(path), config))
+    monkeypatch.setattr(backtest_v7, "get_template_config", lambda: {"config_version": "v7.12.0"})
+
+    def run_import() -> None:
+        try:
+            barrier.wait(timeout=5)
+            results.append(
+                backtest_v7.import_archive_optimize_config(
+                    "other",
+                    {"path": str(source_file), "name": "demo", "collision": "copy"},
+                    session=None,
+                )
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run_import) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait(timeout=5)
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert errors == []
+    assert all(not thread.is_alive() for thread in threads)
+    assert {result["name"] for result in results} == {"demo", "demo_copy"}
+    assert {path.stem for path in local_configs.glob("*.json")} == {"demo", "demo_copy"}
+
+
+@pytest.mark.parametrize(
+    ("source_version", "expected_version"),
+    [("v7.12.0", "v7.12.0"), (None, "v7.99.0")],
+)
+def test_optimize_import_preserves_or_injects_config_version(
+    source_version: str | None,
+    expected_version: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optimize imports preserve source versions or inject the current template version."""
+    archives_root = tmp_path / "archives"
+    source_file = archives_root / "other/pbgui/configs/v7.12.0/optimize/source.json"
+    source_config = {"backtest": {"base_dir": "foreign/path"}, "optimize": {}}
+    if source_version is not None:
+        source_config["config_version"] = source_version
+    write_archive_json(source_file, source_config)
+    source_bytes = source_file.read_bytes()
+    local_configs = tmp_path / "local-optimize"
+
+    def fake_load(path: Path, **_kwargs) -> dict:
+        """Load isolated PB7 config fixtures as plain JSON objects."""
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_opt_archive_configs_dir", lambda: local_configs)
+    monkeypatch.setattr(backtest_v7, "load_pb7_config", fake_load)
+    monkeypatch.setattr(backtest_v7, "save_pb7_config", lambda config, path: write_archive_json(Path(path), config))
+    monkeypatch.setattr(backtest_v7, "get_template_config", lambda: {"config_version": "v7.99.0"})
+
+    response = backtest_v7.import_archive_optimize_config(
+        "other", {"path": str(source_file), "name": "imported", "collision": "error"}, session=None
+    )
+    imported = json.loads((local_configs / "imported.json").read_text(encoding="utf-8"))
+
+    assert response == {"ok": True, "name": "imported", "collision": "created"}
+    assert imported["config_version"] == expected_version
+    assert imported["backtest"]["base_dir"] == "backtests/pbgui/imported"
+    assert source_file.read_bytes() == source_bytes
+
+
+@pytest.mark.parametrize(("removed", "expects_manifest"), [(0, False), (1, True)])
+def test_liquidated_route_rebuilds_manifest_only_after_removal(
+    removed: int,
+    expects_manifest: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Liquidated cleanup rebuilds generated state only when a result was removed."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    archive_root.mkdir(parents=True)
+    rebuilt = []
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(
+        backtest_v7,
+        "remove_liquidated_results",
+        lambda *_args, **_kwargs: {"ok": True, "matched": removed, "removed": removed},
+    )
+    monkeypatch.setattr(
+        backtest_v7,
+        "rebuild_archive_manifest",
+        lambda root: rebuilt.append(root) or {"schema_version": 1, "items": []},
+    )
+
+    response = backtest_v7.remove_archive_liquidated_results(
+        "mine", {"paths": [], "dry_run": False}, session=None
+    )
+
+    assert bool(rebuilt) is expects_manifest
+    assert ("manifest" in response) is expects_manifest
+    if expects_manifest:
+        assert rebuilt == [archive_root]
+
+
+@pytest.mark.parametrize(("removed", "expects_manifest"), [(0, False), (1, True)])
+def test_duplicate_route_rebuilds_manifest_only_after_removal(
+    removed: int,
+    expects_manifest: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Duplicate cleanup leaves cache and manifest untouched for a no-op."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    archive_root.mkdir(parents=True)
+    rebuilt = []
+    invalidated = []
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(
+        backtest_v7,
+        "remove_duplicate_results",
+        lambda *_args, **_kwargs: {"ok": True, "matched": removed, "removed": removed},
+    )
+    monkeypatch.setattr(backtest_v7, "_invalidate_archive_cache", lambda name=None: invalidated.append(name))
+    monkeypatch.setattr(
+        backtest_v7,
+        "rebuild_archive_manifest",
+        lambda root: rebuilt.append(root) or {"schema_version": 1, "items": []},
+    )
+
+    response = backtest_v7.remove_archive_duplicate_results(
+        "mine", {"paths": [], "dry_run": False}, session=None
+    )
+
+    assert bool(rebuilt) is expects_manifest
+    assert bool(invalidated) is expects_manifest
+    assert ("manifest" in response) is expects_manifest
+
+
+@pytest.mark.parametrize("archive_state", ["missing", "symlink"])
+def test_archive_settings_validate_readme_archive_before_saving_ini(
+    archive_state: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An invalid README archive cannot partially persist archive settings."""
+    archives_root = tmp_path / "archives"
+    archives_root.mkdir()
+    if archive_state == "symlink":
+        target = tmp_path / "outside"
+        target.mkdir()
+        (archives_root / "requested").symlink_to(target, target_is_directory=True)
+    saved = []
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "save_ini_section", lambda *args: saved.append(args))
+
+    with pytest.raises(HTTPException) as exc_info:
+        backtest_v7.save_archive_settings(
+            {"my_archive": "requested", "username": "new-user", "readme_title": "Archive"},
+            session=None,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert saved == []
+
+
+def test_archive_settings_with_readme_can_select_a_new_own_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """README-bearing settings validate the requested new selection rather than the old own archive."""
+    archives_root = tmp_path / "archives"
+    requested = archives_root / "requested"
+    requested.mkdir(parents=True)
+    saved = []
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "old")
+    monkeypatch.setattr(backtest_v7, "save_ini_section", lambda section, values: saved.append((section, values)))
+    monkeypatch.setattr(
+        backtest_v7,
+        "apply_metadata",
+        lambda section: {"section": section},
+    )
+
+    response = backtest_v7.save_archive_settings(
+        {"my_archive": "requested", "username": "new-user", "readme_title": "Requested"},
+        session=None,
+    )
+
+    assert response == {"ok": True, "apply": {"section": "config_archive"}}
+    assert saved == [
+        ("config_archive", {"my_archive": "requested", "my_archive_username": "new-user"})
+    ]
+    assert (requested / "README.md").exists()
+
+
+def test_archive_settings_without_readme_preserve_unlocked_ini_save(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Settings without README fields retain the existing INI-only behavior."""
+    saved = []
+    monkeypatch.setattr(
+        backtest_v7,
+        "archive_transaction",
+        lambda _root: (_ for _ in ()).throw(AssertionError("INI-only save must not lock an archive")),
+    )
+    monkeypatch.setattr(backtest_v7, "save_ini_section", lambda section, values: saved.append((section, values)))
+    monkeypatch.setattr(backtest_v7, "apply_metadata", lambda section: {"section": section})
+
+    response = backtest_v7.save_archive_settings(
+        {"my_archive": "requested", "username": "new-user", "auto_pull_interval": "15"},
+        session=None,
+    )
+
+    assert response == {"ok": True, "apply": {"section": "config_archive"}}
+    assert saved == [
+        (
+            "config_archive",
+            {
+                "my_archive": "requested",
+                "my_archive_username": "new-user",
+                "auto_pull_interval": "15",
+            },
+        )
+    ]
+
+
+def test_archive_result_delete_rejects_symlink_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archive result deletion rejects a symlink even when its target is inside the archive."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    target = write_archive_result(archive_root / "pbgui/configs/v7.4.2/backtests")
+    linked = target.with_name("linked-result")
+    linked.symlink_to(target, target_is_directory=True)
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+
+    with pytest.raises(HTTPException) as exc_info:
+        backtest_v7.delete_archive_result("mine", str(linked), session=None)
+
+    assert exc_info.value.status_code == 400
+    assert linked.is_symlink()
+    assert target.exists()
+
+
+@pytest.mark.parametrize(
+    ("filename", "route"),
+    [("config.json", backtest_v7.get_result_config), ("analysis.json", backtest_v7.get_result_analysis)],
+)
+def test_archive_config_and_analysis_routes_reject_symlinks(
+    filename: str,
+    route,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archive config and analysis reads do not follow symlinked JSON files."""
+    archives_root = tmp_path / "archives"
+    result_dir = write_archive_result(archives_root / "mine/pbgui/configs/v7.4.2/backtests")
+    outside = tmp_path / f"outside-{filename}"
+    outside.write_text("{}", encoding="utf-8")
+    selected = result_dir / filename
+    selected.unlink()
+    selected.symlink_to(outside)
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_bt_results_base", lambda: str(tmp_path / "local-results"))
+    monkeypatch.setattr(backtest_v7, "_legacy_results_roots", lambda: [])
+
+    with pytest.raises(HTTPException) as exc_info:
+        route(str(result_dir), session=None)
+
+    assert exc_info.value.status_code == 404
+    assert selected.is_symlink()
+
+
+@pytest.mark.parametrize("operation", ["get", "import", "delete"])
+def test_archive_optimize_routes_reject_symlink_paths(
+    operation: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archive Optimize read, import, and delete routes reject symlinked config paths."""
+    archives_root = tmp_path / "archives"
+    archive_root = archives_root / "mine"
+    optimize_dir = archive_root / "pbgui/configs/v7.12.0/optimize"
+    outside = tmp_path / "outside-optimize.json"
+    write_archive_json(outside, {"config_version": "v7.12.0", "optimize": {}})
+    linked = optimize_dir / "linked.json"
+    linked.parent.mkdir(parents=True)
+    linked.symlink_to(outside)
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(backtest_v7, "_opt_archive_configs_dir", lambda: tmp_path / "local-optimize")
+
+    with pytest.raises(HTTPException) as exc_info:
+        if operation == "get":
+            backtest_v7.get_archive_optimize_config("mine", str(linked), session=None)
+        elif operation == "import":
+            backtest_v7.import_archive_optimize_config(
+                "mine", {"path": str(linked), "name": "linked", "collision": "error"}, session=None
+            )
+        else:
+            backtest_v7.delete_archive_optimize_config("mine", str(linked), session=None)
+
+    assert exc_info.value.status_code == 400
+    assert linked.is_symlink()
+    assert outside.exists()

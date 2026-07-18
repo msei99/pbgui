@@ -45,11 +45,15 @@
       '#pbgui-dialog-input{width:100%;height:var(--input-h);padding:0 var(--sp-sm);border-radius:8px;border:1px solid #2d3748;background:#0f172a;color:#e2e8f0;font-size:var(--fs-base);outline:none;}',
       '#pbgui-dialog-input:focus{border-color:#63b3ed;box-shadow:0 0 0 1px rgba(99,179,237,.4);}',
       '#pbgui-dialog-actions{display:flex;justify-content:flex-end;gap:var(--sp-sm);flex-wrap:wrap;}',
+      '#pbgui-dialog-choices{display:flex;justify-content:flex-end;gap:var(--sp-sm);flex-wrap:wrap;}',
+      '#pbgui-dialog-choices[hidden]{display:none!important;}',
       '.pbgui-dialog-btn{display:inline-flex;align-items:center;justify-content:center;height:var(--btn-h);padding:0 var(--sp-md);border-radius:8px;border:1px solid transparent;font-size:var(--fs-base);font-weight:600;cursor:pointer;transition:background .15s,border-color .15s,color .15s;}',
       '.pbgui-dialog-btn.secondary{background:rgba(99,179,237,.08);border-color:rgba(99,179,237,.25);color:#e2e8f0;}',
       '.pbgui-dialog-btn.secondary:hover{background:rgba(99,179,237,.16);border-color:#63b3ed;}',
       '.pbgui-dialog-btn.primary{background:#63b3ed;border-color:#63b3ed;color:#0b1220;}',
-      '.pbgui-dialog-btn.primary:hover{background:#7cc4f5;}'
+      '.pbgui-dialog-btn.primary:hover{background:#7cc4f5;}',
+      '.pbgui-dialog-btn.danger{background:#dc2626;border-color:#ef4444;color:#fff;}',
+      '.pbgui-dialog-btn.danger:hover{background:#ef4444;border-color:#f87171;}'
     ].join('');
     document.head.appendChild(style);
   }
@@ -73,6 +77,7 @@
       +         '<input type="text" id="pbgui-dialog-input" autocomplete="off">'
       +       '</div>'
       +       '<div id="pbgui-dialog-actions">'
+      +         '<div id="pbgui-dialog-choices" hidden></div>'
       +         '<button type="button" class="pbgui-dialog-btn secondary" id="pbgui-dialog-cancel">Cancel</button>'
       +         '<button type="button" class="pbgui-dialog-btn primary" id="pbgui-dialog-accept">Confirm</button>'
       +       '</div>'
@@ -102,7 +107,7 @@
       if (event.key === 'Escape') {
         event.preventDefault();
         close(false);
-      } else if (event.key === 'Enter' && currentMode !== 'prompt') {
+      } else if (event.key === 'Enter' && currentMode !== 'prompt' && currentMode !== 'choose') {
         if (event.target && event.target.id === 'pbgui-dialog-cancel') return;
         event.preventDefault();
         close(true);
@@ -126,6 +131,8 @@
       result = accepted ? String(input && input.value != null ? input.value : '') : null;
     } else if (currentMode === 'alert') {
       result = true;
+    } else if (currentMode === 'choose') {
+      result = accepted && accepted.__pbguiDialogChoice ? accepted.value : null;
     } else {
       result = Boolean(accepted);
     }
@@ -146,17 +153,18 @@
     var field = document.getElementById('pbgui-dialog-field');
     var label = document.getElementById('pbgui-dialog-label');
     var input = document.getElementById('pbgui-dialog-input');
+    var choices = document.getElementById('pbgui-dialog-choices');
     var cancelBtn = document.getElementById('pbgui-dialog-cancel');
     var acceptBtn = document.getElementById('pbgui-dialog-accept');
 
-    if (!overlay || !title || !message || !detail || !field || !label || !input || !cancelBtn || !acceptBtn) {
-      return Promise.resolve(mode === 'prompt' ? null : mode === 'alert');
+    if (!overlay || !title || !message || !detail || !field || !label || !input || !choices || !cancelBtn || !acceptBtn) {
+      return Promise.resolve(mode === 'prompt' || mode === 'choose' ? null : mode === 'alert');
     }
 
     if (typeof resolveDialog === 'function') {
       var previous = resolveDialog;
       resolveDialog = null;
-      previous(mode === 'prompt' ? null : false);
+      previous(currentMode === 'prompt' || currentMode === 'choose' ? null : currentMode === 'alert');
     }
 
     currentMode = mode;
@@ -171,7 +179,24 @@
     input.placeholder = String(options.placeholder || '');
     acceptBtn.textContent = String(options.confirmText || (mode === 'prompt' ? 'Save' : mode === 'alert' ? 'OK' : 'Confirm'));
     cancelBtn.textContent = String(options.cancelText || 'Cancel');
-    cancelBtn.hidden = mode === 'alert';
+    cancelBtn.hidden = mode === 'alert' || mode === 'choose';
+    acceptBtn.hidden = mode === 'choose';
+    choices.hidden = mode !== 'choose';
+    while (choices.firstChild) choices.removeChild(choices.firstChild);
+    if (mode === 'choose') {
+      (Array.isArray(options.actions) ? options.actions : []).forEach(function (action) {
+        if (!action || action.label == null) return;
+        var button = document.createElement('button');
+        var style = action.danger || action.type === 'danger' ? 'danger' : (action.primary || action.type === 'primary' ? 'primary' : 'secondary');
+        button.type = 'button';
+        button.className = 'pbgui-dialog-btn ' + style;
+        button.textContent = String(action.label);
+        button.addEventListener('click', function () {
+          close({ __pbguiDialogChoice: true, value: action.value });
+        });
+        choices.appendChild(button);
+      });
+    }
     returnFocus = document.activeElement;
 
     return new Promise(function (resolve) {
@@ -181,6 +206,9 @@
       if (mode === 'prompt') {
         input.focus();
         try { input.select(); } catch (_) {}
+      } else if (mode === 'choose') {
+        var firstChoice = choices.querySelector('button');
+        if (firstChoice) firstChoice.focus();
       } else {
         acceptBtn.focus();
       }
@@ -196,6 +224,9 @@
     },
     prompt: function (options) {
       return open('prompt', options);
+    },
+    choose: function (options) {
+      return open('choose', options);
     }
   };
 

@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from starlette.websockets import WebSocketState
 
 from logging_helpers import human_log as _log
+from ini_settings import apply_metadata_for
 from pbgui_purefunc import (
     PBGDIR,
     PBGUI_SERIAL,
@@ -921,8 +922,9 @@ async def change_password(
 @router.post("/setup")
 def save_setup(payload: SetupConfigRequest, session: SessionToken = Depends(require_auth)) -> dict:
     """Persist PB7 path/interpreter and host identity from the welcome page."""
+    previous_setup = pb7_runtime_status()
     role = "master" if payload.role == "master" else "slave"
-    pbname = payload.pbname.strip() or pb7_runtime_status()["pbname"]
+    pbname = payload.pbname.strip() or previous_setup["pbname"]
 
     save_ini_section("main", {
         "pb7dir": payload.pb7dir.strip(),
@@ -932,7 +934,15 @@ def save_setup(payload: SetupConfigRequest, session: SessionToken = Depends(requ
     })
 
     response = _bootstrap_payload(session)
-    response["message"] = "Setup saved"
+    current_setup = response["setup"]
+    changed_keys = {
+        ("main", key)
+        for key in ("pb7dir", "pb7venv", "pbname", "role")
+        if str(previous_setup.get(key, "")) != str(current_setup.get(key, ""))
+    }
+    apply = apply_metadata_for(changed_keys)
+    response["apply"] = apply
+    response["message"] = f"Setup saved. {apply['message']}."
     return response
 
 

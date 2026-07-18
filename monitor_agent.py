@@ -38,7 +38,6 @@ INSTANCE_INTERVAL_SECONDS = 30.0
 HOST_META_INTERVAL_SECONDS = 10.0
 SERVICE_INTERVAL_SECONDS = 60.0
 PACKAGE_INTERVAL_SECONDS = 3600.0
-NDJSON_RETENTION_SECONDS = 300.0
 HISTORY_SECONDS = 62.0
 CPU_TICKS_PER_SECOND = os.sysconf(os.sysconf_names.get("SC_CLK_TCK", "SC_CLK_TCK")) or 100
 MONITOR_CACHE_VERSION = 2
@@ -415,7 +414,14 @@ def _run_host_meta() -> None:
 def _run_package_status() -> None:
     """Write package status cache."""
 
-    payload = _run_shell_script(_embedded_monitor_script("PACKAGE_STATUS_SCRIPT"), env=_script_env(), timeout=75) or {}
+    payload = _run_shell_script(_embedded_monitor_script("PACKAGE_STATUS_SCRIPT"), env=_script_env(), timeout=75)
+    if not isinstance(payload, dict):
+        raise RuntimeError("package collector returned no payload")
+    upgrades = payload.get("upgrades")
+    if not isinstance(upgrades, str) or not upgrades.strip().isdigit():
+        raise RuntimeError("package collector returned invalid upgrade count")
+    if type(payload.get("reboot")) is not bool:
+        raise RuntimeError("package collector returned invalid reboot status")
     payload["schema_version"] = SCHEMA_VERSION
     payload["generated_at"] = time.time()
     payload["source"] = "monitor-agent"
@@ -621,8 +627,9 @@ def _collector_loop(name: str, interval: float, callback, loop_state: dict[str, 
             callback()
             _write_loop_state(loop_state, name, interval)
         except Exception as exc:
-            _log(SERVICE, f"{name} collector failed: {exc}", level="ERROR")
-            _write_loop_state(loop_state, name, interval, error=str(exc))
+            error = exc.__class__.__name__
+            _log(SERVICE, f"{name} collector failed: {error}", level="ERROR")
+            _write_loop_state(loop_state, name, interval, error=error)
         elapsed = time.time() - started
         time.sleep(max(interval - elapsed, 1.0))
 
@@ -787,7 +794,7 @@ def _append_live_sample(payload: dict[str, Any]) -> None:
     from logging_helpers import append_managed_transcript_line
 
     append_managed_transcript_line(
-        _pbgui_dir() / "data" / "logs" / "monitor-agent" / "live_metrics.ndjson",
+        DATA_DIR / "live_metrics.ndjson",
         json.dumps(payload, separators=(",", ":")),
         "monitor_agent_live",
     )
@@ -798,7 +805,7 @@ def _rotate_live_samples() -> None:
 
     from logging_helpers import rotate_managed_log_before_open
 
-    path = _pbgui_dir() / "data" / "logs" / "monitor-agent" / "live_metrics.ndjson"
+    path = DATA_DIR / "live_metrics.ndjson"
     try:
         rotate_managed_log_before_open(path, "monitor_agent_live")
     except Exception as exc:
@@ -810,6 +817,7 @@ def _collector_status(loop_state: dict[str, dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "schema_version": SCHEMA_VERSION,
+        "source": "monitor-agent",
         "hostname": socket.gethostname(),
         "agent_version": "1",
         "generated_at": time.time(),
@@ -878,6 +886,7 @@ def run() -> None:
             _trim_history(swap_history, now)
             payload = {
                 "schema_version": SCHEMA_VERSION,
+                "source": "monitor-agent",
                 "generated_at": now,
                 "ts": now,
                 "cpu": cpu,
@@ -905,8 +914,9 @@ def run() -> None:
                 _atomic_write_json(DATA_DIR / "collector_status.json", _collector_status(loop_state))
                 last_status_write = now
         except Exception as exc:
-            _log(SERVICE, f"Live metrics loop failed: {exc}", level="ERROR")
-            _write_loop_state(loop_state, "live_metrics", LIVE_INTERVAL_SECONDS, error=str(exc))
+            error = exc.__class__.__name__
+            _log(SERVICE, f"Live metrics loop failed: {error}", level="ERROR")
+            _write_loop_state(loop_state, "live_metrics", LIVE_INTERVAL_SECONDS, error=error)
             _atomic_write_json(DATA_DIR / "collector_status.json", _collector_status(loop_state))
         elapsed = time.time() - start
         time.sleep(max(LIVE_INTERVAL_SECONDS - elapsed, 0.05))

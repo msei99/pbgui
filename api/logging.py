@@ -178,10 +178,16 @@ def purge_logfile(
         if not path.is_file():
             raise HTTPException(status_code=404, detail="Log file not found")
 
-        max_bytes, _backup_count = get_rotate_settings(logfile=str(path))
-        success, msg = purge_log_to_rotated(str(path), max_bytes)
+        max_bytes, backup_count = get_rotate_settings(logfile=str(path))
+        success, msg = purge_log_to_rotated(str(path), max_bytes, backup_count)
         if not success:
-            raise HTTPException(status_code=500, detail=msg)
+            _log(
+                SERVICE,
+                f"Failed to purge log file '{filename}': {msg}",
+                level="ERROR",
+                meta={"operation": "purge_log"},
+            )
+            raise HTTPException(status_code=500, detail="Failed to purge log file")
 
         _log(SERVICE, f"Purged log file '{filename}': {msg}", level="INFO")
         return {"success": True, "message": msg}

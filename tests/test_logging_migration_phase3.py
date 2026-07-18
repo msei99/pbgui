@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import Exchange as exchange_module
+import task_worker
 import vps_manager_core
 
 
@@ -57,3 +58,35 @@ def test_vps_task_log_alias_copy_failure_is_logged(tmp_path, monkeypatch, method
     assert kwargs["meta"]["host"] == "test-host"
     assert kwargs["meta"]["task"] == "vps-update"
     assert kwargs["meta"]["operation"] == "copy_task_log_alias"
+
+
+@pytest.mark.parametrize(
+    "operation, expected_operation",
+    [("append", "append_job_log"), ("init", "init_job_log")],
+)
+def test_job_transcript_failures_are_logged_without_raising(tmp_path, monkeypatch, operation, expected_operation):
+    """Managed job transcript failures stay non-fatal and emit structured context."""
+    events = []
+    log_path = tmp_path / "job-a.log"
+    log_path.write_text("old\n", encoding="utf-8")
+    monkeypatch.setattr(task_worker, "get_job_log_path", lambda _job_id: log_path)
+    monkeypatch.setattr(task_worker, "_log", lambda *args, **kwargs: events.append((args, kwargs)))
+    if operation == "append":
+        monkeypatch.setattr(task_worker, "append_managed_transcript_line", lambda *args: (_ for _ in ()).throw(OSError("append failed")))
+        task_worker._append_to_job_log("job-a", "line")
+    else:
+        monkeypatch.setattr(task_worker.os, "replace", lambda *args: (_ for _ in ()).throw(OSError("rotate failed")))
+        task_worker._init_job_log("job-a")
+
+    assert len(events) == 1
+    args, kwargs = events[0]
+    assert args[0] == task_worker.SERVICE
+    assert kwargs["level"] == "WARNING"
+    assert kwargs["meta"] == {"operation": expected_operation, "job_id": "job-a"}
+
+
+def test_exchange_tracebacks_use_structured_metadata() -> None:
+    """Exchange diagnostics must not embed formatted tracebacks in messages."""
+    source = Path("Exchange.py").read_text(encoding="utf-8")
+    assert 'f"Traceback:\\n{' not in source
+    assert "meta={\"traceback\":" in source

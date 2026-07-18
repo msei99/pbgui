@@ -3,7 +3,10 @@
 import asyncio
 import copy
 import json
+import threading
 from pathlib import Path
+
+import pytest
 
 import pbgui_purefunc
 from api import backtest_v7
@@ -224,7 +227,7 @@ def test_delete_result_is_idempotent_for_missing_local_result(tmp_path, monkeypa
     assert response == {"ok": True, "missing": True}
 
 
-def test_add_optimize_config_to_archive_uses_worker_thread(monkeypatch):
+def test_add_optimize_config_to_archive_uses_worker_thread(tmp_path, monkeypatch):
     """Archive exports should not block the API event loop while file/git work runs."""
 
     calls = []
@@ -233,6 +236,10 @@ def test_add_optimize_config_to_archive_uses_worker_thread(monkeypatch):
         calls.append((fn, args))
         return {"ok": True, "relative_path": "pbgui/v1/optimize/demo.json"}
 
+    archives_root = tmp_path / "archives"
+    (archives_root / "demo_archive").mkdir(parents=True)
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "demo_archive")
     monkeypatch.setattr(backtest_v7.asyncio, "to_thread", fake_to_thread)
 
     result = asyncio.run(backtest_v7.add_optimize_config_to_archive("demo_archive", {"config_name": "demo_config"}, session=None))
@@ -241,7 +248,7 @@ def test_add_optimize_config_to_archive_uses_worker_thread(monkeypatch):
     assert calls == [(backtest_v7._add_optimize_config_to_archive_sync, ("demo_archive", "demo_config"))]
 
 
-def test_add_config_to_archive_uses_worker_thread(monkeypatch):
+def test_add_config_to_archive_uses_worker_thread(tmp_path, monkeypatch):
     """Backtest result archive exports should not block the API event loop."""
 
     calls = []
@@ -250,12 +257,312 @@ def test_add_config_to_archive_uses_worker_thread(monkeypatch):
         calls.append((fn, args))
         return {"ok": True, "relative_path": "pbgui/v1/backtests/demo"}
 
+    archives_root = tmp_path / "archives"
+    (archives_root / "demo_archive").mkdir(parents=True)
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "demo_archive")
     monkeypatch.setattr(backtest_v7.asyncio, "to_thread", fake_to_thread)
 
     result = asyncio.run(backtest_v7.add_config_to_archive("demo_archive", {"source_path": "/tmp/result"}, session=None))
 
     assert result == {"ok": True, "relative_path": "pbgui/v1/backtests/demo"}
     assert calls == [(backtest_v7._add_config_to_archive_sync, ("demo_archive", "/tmp/result"))]
+
+
+def test_add_config_archive_workflow_holds_one_outer_transaction(tmp_path, monkeypatch):
+    """Migration, copy, status, and manifest generation share one archive transaction."""
+    archive = tmp_path / "archives" / "mine"
+    source = tmp_path / "results" / "run"
+    archive.mkdir(parents=True)
+    source.mkdir(parents=True)
+    state = {"active": False, "entries": 0}
+
+    class Transaction:
+        """Track the outer archive transaction used by the workflow."""
+
+        def __enter__(self):
+            state["active"] = True
+            state["entries"] += 1
+
+        def __exit__(self, *_args):
+            state["active"] = False
+
+    def require_active(value):
+        """Assert archive work remains inside the tracked transaction."""
+        assert state["active"] is True
+        return value
+
+    monkeypatch.setattr(backtest_v7, "_require_own_archive", lambda *_args: archive)
+    monkeypatch.setattr(backtest_v7, "_resolve_result_dir", lambda path: Path(path))
+    monkeypatch.setattr(backtest_v7, "archive_transaction", lambda _root: Transaction())
+    monkeypatch.setattr(
+        backtest_v7,
+        "maybe_migrate_own_archive",
+        lambda *_args, **_kwargs: require_active({"status": {"status": "current"}}),
+    )
+    monkeypatch.setattr(
+        backtest_v7,
+        "copy_backtest_result_to_archive",
+        lambda *_args: require_active({"ok": True, "relative_path": "result"}),
+    )
+    monkeypatch.setattr(backtest_v7, "archive_migration_status", lambda _root: require_active({"status": "current"}))
+    monkeypatch.setattr(backtest_v7, "rebuild_archive_manifest", lambda _root: require_active({"items": []}))
+    monkeypatch.setattr(backtest_v7, "_invalidate_archive_cache", lambda _name: require_active(None))
+    monkeypatch.setattr(backtest_v7, "_log", lambda *_args, **_kwargs: None)
+
+    response = backtest_v7._add_config_to_archive_sync("mine", str(source))
+
+    assert response["manifest"] == {"items": []}
+    assert state == {"active": False, "entries": 1}
+
+
+def test_delete_archive_waits_for_archive_transaction(tmp_path, monkeypatch):
+    """Archive deletion cannot remove a clone while another archive transaction is active."""
+    archives_root = tmp_path / "archives"
+    archive = archives_root / "mine"
+    archive.mkdir(parents=True)
+    started = threading.Event()
+    finished = threading.Event()
+    errors = []
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+
+    def run_delete() -> None:
+        """Attempt deletion from a competing thread."""
+        started.set()
+        try:
+            backtest_v7.delete_archive("mine", session=None)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    with backtest_v7.archive_transaction(archive):
+        thread = threading.Thread(target=run_delete)
+        thread.start()
+        assert started.wait(timeout=5)
+        assert not finished.wait(timeout=0.1)
+        assert archive.exists()
+
+    thread.join(timeout=5)
+    assert errors == []
+    assert finished.is_set()
+    assert not archive.exists()
+
+
+def test_delete_archive_wins_before_waiting_add_without_recreating_root(tmp_path, monkeypatch):
+    """A queued archive add revalidates after deletion and cannot recreate the removed root."""
+    archives_root = tmp_path / "archives"
+    archive = archives_root / "mine"
+    source = tmp_path / "results" / "run"
+    archive.mkdir(parents=True)
+    source.mkdir(parents=True)
+    delete_locked = threading.Event()
+    release_delete = threading.Event()
+    add_started = threading.Event()
+    add_finished = threading.Event()
+    delete_errors = []
+    add_errors = []
+    real_rmtree = backtest_v7.rmtree
+
+    def blocking_rmtree(path, *args, **kwargs):
+        """Hold deletion after it owns the archive transaction."""
+        if Path(path) == archive:
+            delete_locked.set()
+            assert release_delete.wait(timeout=5)
+        return real_rmtree(path, *args, **kwargs)
+
+    def run_delete() -> None:
+        """Delete the archive while holding its transaction first."""
+        try:
+            backtest_v7.delete_archive("mine", session=None)
+        except Exception as exc:
+            delete_errors.append(exc)
+
+    def run_add() -> None:
+        """Attempt an add that must wait and then fail revalidation."""
+        add_started.set()
+        try:
+            backtest_v7._add_config_to_archive_sync("mine", str(source))
+        except Exception as exc:
+            add_errors.append(exc)
+        finally:
+            add_finished.set()
+
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(backtest_v7, "rmtree", blocking_rmtree)
+    monkeypatch.setattr(
+        backtest_v7,
+        "copy_backtest_result_to_archive",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("deleted archive must not be recreated")),
+    )
+
+    delete_thread = threading.Thread(target=run_delete)
+    delete_thread.start()
+    assert delete_locked.wait(timeout=5)
+    add_thread = threading.Thread(target=run_add)
+    add_thread.start()
+    assert add_started.wait(timeout=5)
+    assert not add_finished.wait(timeout=0.1)
+
+    release_delete.set()
+    delete_thread.join(timeout=5)
+    add_thread.join(timeout=5)
+
+    assert delete_errors == []
+    assert len(add_errors) == 1
+    assert isinstance(add_errors[0], backtest_v7.HTTPException)
+    assert add_errors[0].status_code == 404
+    assert not delete_thread.is_alive()
+    assert not add_thread.is_alive()
+    assert not archive.exists()
+
+
+def test_delete_archive_wins_before_waiting_readme_without_saving_ini(tmp_path, monkeypatch):
+    """A queued README save returns 404 after deletion without persisting archive settings."""
+    archives_root = tmp_path / "archives"
+    archive = archives_root / "mine"
+    archive.mkdir(parents=True)
+    delete_locked = threading.Event()
+    release_delete = threading.Event()
+    save_started = threading.Event()
+    save_finished = threading.Event()
+    delete_errors = []
+    save_errors = []
+    ini_saves = []
+    real_rmtree = backtest_v7.rmtree
+
+    def blocking_rmtree(path, *args, **kwargs):
+        """Hold deletion after it owns the archive transaction."""
+        if Path(path) == archive:
+            delete_locked.set()
+            assert release_delete.wait(timeout=5)
+        return real_rmtree(path, *args, **kwargs)
+
+    def run_delete() -> None:
+        """Delete the archive while holding its transaction first."""
+        try:
+            backtest_v7.delete_archive("mine", session=None)
+        except Exception as exc:
+            delete_errors.append(exc)
+
+    def run_save() -> None:
+        """Attempt a README-bearing settings save after deletion begins."""
+        save_started.set()
+        try:
+            backtest_v7.save_archive_settings(
+                {"my_archive": "mine", "username": "new-user", "readme_title": "Mine"},
+                session=None,
+            )
+        except Exception as exc:
+            save_errors.append(exc)
+        finally:
+            save_finished.set()
+
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "rmtree", blocking_rmtree)
+    monkeypatch.setattr(backtest_v7, "save_ini_section", lambda *args: ini_saves.append(args))
+
+    delete_thread = threading.Thread(target=run_delete)
+    delete_thread.start()
+    assert delete_locked.wait(timeout=5)
+    save_thread = threading.Thread(target=run_save)
+    save_thread.start()
+    assert save_started.wait(timeout=5)
+    assert not save_finished.wait(timeout=0.1)
+
+    release_delete.set()
+    delete_thread.join(timeout=5)
+    save_thread.join(timeout=5)
+
+    assert delete_errors == []
+    assert len(save_errors) == 1
+    assert isinstance(save_errors[0], backtest_v7.HTTPException)
+    assert save_errors[0].status_code == 404
+    assert ini_saves == []
+    assert not delete_thread.is_alive()
+    assert not save_thread.is_alive()
+    assert not archive.exists()
+
+
+def test_optimize_import_waits_for_archive_transaction_before_parsing(tmp_path, monkeypatch):
+    """Optimize import source parsing cannot race a pull that owns the archive lock."""
+    archives_root = tmp_path / "archives"
+    archive = archives_root / "other"
+    source = archive / "pbgui/configs/v7.12.0/optimize/demo.json"
+    source.parent.mkdir(parents=True)
+    source.write_text('{"config_version":"v7.12.0","backtest":{},"optimize":{}}', encoding="utf-8")
+    local_configs = tmp_path / "local-optimize"
+    parsed = threading.Event()
+    finished = threading.Event()
+    errors = []
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_opt_archive_configs_dir", lambda: local_configs)
+    monkeypatch.setattr(backtest_v7, "get_template_config", lambda: {"config_version": "v7.12.0"})
+
+    def fake_load(path, **_kwargs):
+        """Record when parsing begins and load the private source snapshot."""
+        parsed.set()
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(backtest_v7, "load_pb7_config", fake_load)
+    monkeypatch.setattr(
+        backtest_v7,
+        "save_pb7_config",
+        lambda config, path: Path(path).parent.mkdir(parents=True, exist_ok=True)
+        or Path(path).write_text(json.dumps(config), encoding="utf-8"),
+    )
+
+    def run_import() -> None:
+        """Attempt an import from a competing thread."""
+        try:
+            backtest_v7.import_archive_optimize_config(
+                "other", {"path": str(source), "name": "demo", "collision": "error"}, session=None
+            )
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    with backtest_v7.archive_transaction(archive):
+        thread = threading.Thread(target=run_import)
+        thread.start()
+        assert not parsed.wait(timeout=0.1)
+        assert not finished.is_set()
+
+    thread.join(timeout=5)
+    assert errors == []
+    assert parsed.is_set()
+    assert finished.is_set()
+    assert (local_configs / "demo.json").exists()
+
+
+def test_explicit_failure_only_migration_does_not_rebuild_manifest(tmp_path, monkeypatch):
+    """An explicit migration failure leaves archive-generated files untouched for retry."""
+    archive = tmp_path / "archives" / "mine"
+    archive.mkdir(parents=True)
+    rebuilt = []
+    monkeypatch.setattr(backtest_v7, "_require_own_archive", lambda *_args: archive)
+    monkeypatch.setattr(
+        backtest_v7,
+        "migrate_archive_layout",
+        lambda _root: {
+            "ok": False,
+            "skipped": False,
+            "migrated": 0,
+            "removed_duplicates": 0,
+            "failed": 1,
+            "remaining_legacy": True,
+        },
+    )
+    monkeypatch.setattr(backtest_v7, "rebuild_archive_manifest", lambda root: rebuilt.append(root))
+    monkeypatch.setattr(backtest_v7, "_invalidate_archive_cache", lambda _name: None)
+
+    response = backtest_v7.migrate_archive("mine", session=None)
+
+    assert response["failed"] == 1
+    assert "manifest" not in response
+    assert rebuilt == []
 
 
 def test_archive_rebacktest_queues_one_backtest_per_selected_exchange(tmp_path, monkeypatch):
@@ -348,3 +655,107 @@ def test_archive_sync_stop_waits_for_active_file_work(monkeypatch) -> None:
         assert worker._task is None
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("use_pbgui_market_data", [True, False])
+def test_archive_rebacktest_forwards_explicit_market_data_choice(
+    use_pbgui_market_data,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Archive rebacktest forwards either explicit market-data boolean to every queue item."""
+    archive_dir = tmp_path / "archives" / "demo"
+    result_dir = archive_dir / "pbgui/configs/v7.12.0/backtests/demo_config/bybit/result"
+    result_dir.mkdir(parents=True)
+    (result_dir / "config.json").write_text("{}", encoding="utf-8")
+    config = {
+        "backtest": {
+            "base_dir": "backtests/pbgui/demo_config",
+            "exchanges": ["bybit"],
+            "ohlcv_source_dir": "/archive/data",
+        }
+    }
+    queued = []
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: tmp_path / "archives")
+    monkeypatch.setattr(backtest_v7, "load_pb7_config", lambda *args, **kwargs: copy.deepcopy(config))
+    monkeypatch.setattr(
+        backtest_v7,
+        "_apply_pbgui_market_data_override",
+        lambda cfg, enabled: (False, "/pbgui/data") if enabled else (False, ""),
+    )
+    monkeypatch.setattr(
+        backtest_v7,
+        "add_to_queue",
+        lambda body, session=None: queued.append(copy.deepcopy(body)) or {"ok": True, "filename": "queued"},
+    )
+
+    response = backtest_v7.rebacktest_archive_results(
+        "demo",
+        {
+            "paths": [str(result_dir)],
+            "overrides": {"use_pbgui_market_data": use_pbgui_market_data},
+        },
+        session=None,
+    )
+
+    assert response["queued"] == 1
+    assert queued[0]["use_pbgui_market_data"] is use_pbgui_market_data
+
+
+@pytest.mark.parametrize(
+    ("source_path", "expected_path"),
+    [("/pbgui/data/ohlcv", None), ("/custom/ohlcv", "/custom/ohlcv")],
+    ids=["clears-managed-path", "preserves-custom-path"],
+)
+def test_backtest_worker_explicit_false_only_clears_managed_market_data_path(
+    source_path,
+    expected_path,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """An explicit false removes PBGui's path while preserving a custom OHLCV source."""
+    queue_dir = tmp_path / "queue"
+    log_dir = tmp_path / "logs"
+    source_config = tmp_path / "source" / "backtest.json"
+    source_config.parent.mkdir(parents=True)
+    source_config.write_text("{}", encoding="utf-8")
+    launched = {}
+    saved = {}
+    monkeypatch.setattr(backtest_v7, "_bt_queue_dir", lambda: queue_dir)
+    monkeypatch.setattr(backtest_v7, "_bt_log_dir", lambda: log_dir)
+    monkeypatch.setattr(backtest_v7, "_read_ini_section", lambda section="backtest_v7": {"use_pbgui_market_data": "True"})
+    monkeypatch.setattr(backtest_v7, "pb7venv", lambda: "/venv/bin/python")
+    monkeypatch.setattr(backtest_v7, "pb7dir", lambda: "/tmp/pb7")
+    monkeypatch.setattr(backtest_v7, "_get_pbgui_market_data_path", lambda: "/pbgui/data/ohlcv")
+    monkeypatch.setattr(
+        backtest_v7,
+        "save_pb7_config",
+        lambda config, path: saved.update(config=copy.deepcopy(config), path=Path(path)),
+    )
+
+    class FakePopen:
+        """Capture a fully mocked worker launch."""
+
+        def __init__(self, *args, **kwargs):
+            launched["cmd"] = args[0]
+            self.pid = 5150
+
+    monkeypatch.setattr(backtest_v7.subprocess, "Popen", FakePopen)
+
+    backtest_v7.BacktestWorker(backtest_v7._store)._launch_backtest(
+        {
+            "filename": "explicit-false",
+            "name": "demo",
+            "json": str(source_config),
+            "config_snapshot": {"backtest": {"ohlcv_source_dir": source_path}},
+            "use_pbgui_market_data": False,
+        }
+    )
+
+    if expected_path is None:
+        assert "ohlcv_source_dir" not in saved["config"]["backtest"]
+    else:
+        assert saved["config"]["backtest"]["ohlcv_source_dir"] == expected_path
+    assert saved["path"] == queue_dir / "configs/explicit-false/backtest.json"
+    assert launched["cmd"][-1] == str(queue_dir / "configs/explicit-false/backtest.json")
+    assert (queue_dir / "explicit-false.pid").read_text(encoding="utf-8").strip() == "5150"

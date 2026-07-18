@@ -75,40 +75,34 @@ class _FakeStdin:
         return None
 
 
-def test_fetch_package_status_uses_trusted_inventory_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify live package probes against the inventory alias instead of a stale IP key."""
-    connect_kwargs: dict[str, object] = {}
+def test_vps_package_status_is_monitor_agent_only() -> None:
+    """VPS pages consume agent state while only the monitor owns the package probe."""
+    relevant_paths = (
+        "api/vps.py",
+        "api/vps_manager.py",
+        "vps_manager_core.py",
+        "vps_manager_service.py",
+        "monitor_agent.py",
+        "master/async_monitor.py",
+    )
+    sources = {
+        path: Path(path).read_text(encoding="utf-8")
+        for path in relevant_paths
+    }
 
-    class FakeSshClient:
-        """SSH double returning a current package status."""
-
-        def connect(self, **kwargs) -> None:
-            """Capture the host identity used for verification."""
-            connect_kwargs.update(kwargs)
-
-        def exec_command(self, command: str, **kwargs):
-            """Return package or reboot status according to the command."""
-            del kwargs
-            output = b"0 upgraded, 0 newly installed, 0 to remove\n" if "dist-upgrade" in command else b"no\n"
-            return _FakeStdin(), _FakeStdout(output), _FakeStdout(b"")
-
-        def close(self) -> None:
-            """No-op close."""
-            return None
-
-    monkeypatch.setattr(core, "_strict_ssh_client", lambda: FakeSshClient())
-    vps = core.VPS()
-    vps.hostname = "trusted-vps"
-    vps.ip = "192.0.2.10"
-    vps.user = "mani"
-    vps.user_pw = "secret"
-    vps.firewall_ssh_port = 2222
-
-    result = vps.fetch_package_status()
-
-    assert result == {"upgrades": 0, "reboot": False}
-    assert connect_kwargs["hostname"] == "trusted-vps"
-    assert connect_kwargs["port"] == 2222
+    assert not hasattr(core.VPS, "fetch_package_status")
+    assert not hasattr(core.VPSManager, "fetch_package_status")
+    assert not hasattr(VPSManagerService, "_refresh_local_package_status")
+    for path in ("api/vps.py", "api/vps_manager.py", "vps_manager_core.py", "vps_manager_service.py"):
+        assert "fetch_package_status" not in sources[path]
+    package_probe = "['apt-get', 'dist-upgrade', '-s']"
+    assert "dist-upgrade" not in sources["vps_manager_core.py"]
+    assert "dist-upgrade" not in sources["vps_manager_service.py"]
+    assert [path for path, source in sources.items() if "dist-upgrade" in source] == [
+        "master/async_monitor.py"
+    ]
+    package_script = sources["master/async_monitor.py"].split("PACKAGE_STATUS_SCRIPT =", 1)[1]
+    assert package_probe in package_script
 
 
 class _FakeUfwSshClient:
@@ -634,10 +628,10 @@ def test_vps_monitor_refresh_enabled_host_reconnects_after_auth_fix(monkeypatch:
             self.removed.append(hostname)
             self._hosts = [host for host in self._hosts if host != hostname]
 
-        async def connect(self, hostname: str) -> bool:
-            """Capture reconnect request."""
+        async def connect_with_result(self, hostname: str) -> async_pool.ConnectionAttemptResult:
+            """Capture reconnect request with connection ownership metadata."""
             self.connected.append(hostname)
-            return True
+            return async_pool.ConnectionAttemptResult(True, None, False)
 
     pool = FakePool()
     monitor.pool = pool
@@ -1018,6 +1012,47 @@ def test_master_overview_row_is_online_without_remote_helper(monkeypatch: pytest
     row = service._build_master_overview_row()
 
     assert row["online"] is True
+
+
+def test_pinned_pb7_checkout_is_current_for_master_and_vps_status() -> None:
+    """The PBGui PB7 pin is current even when official master has moved to PB8."""
+    service = object.__new__(VPSManagerService)
+    service._get_pb7_release = lambda: {
+        "version": "v7.12.0",
+        "origin_version": "v8.0.0",
+        "origin_commit": "8" * 40,
+        "branches": {"master": [{"full": "8" * 40}]},
+    }
+    service._host_meta = lambda host_state: host_state
+
+    assert service._build_master_pb7_github_status("unknown", service_mod.PB7_PINNED_COMMIT) == "✅"
+    assert service._build_remote_pb7_github_status({
+        "pb7b": "unknown",
+        "pb7c": service_mod.PB7_PINNED_COMMIT,
+        "pb7v": "v7.12.0",
+    }) == "✅"
+    assert service_mod._pb7_branch_label("unknown", service_mod.PB7_PINNED_COMMIT) == "pinned"
+
+
+def test_master_pb7_branch_state_reads_live_checkout_after_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Branch details do not retain the pre-switch checkout from the hourly cache."""
+    service = object.__new__(VPSManagerService)
+    service._get_pb7_release = lambda: {
+        "current_branch": "unknown",
+        "current_commit": service_mod.PB7_PINNED_COMMIT,
+        "branches": {},
+    }
+    monkeypatch.setattr(service_mod, "_configured_pb7dir", lambda: "/tmp/pb7")
+    monkeypatch.setattr(service_mod, "get_current_pb7_status", lambda repo: ("master", service_mod.PB7_PINNED_COMMIT))
+    monkeypatch.setattr(service_mod, "list_git_remotes", lambda repo: ["origin"])
+    monkeypatch.setattr(service_mod, "get_git_remote_url", lambda repo, name: service_mod.PB7_UPSTREAM_REMOTE_URL)
+    monkeypatch.setattr(service_mod, "get_git_branch_remote", lambda repo, branch: "origin")
+    monkeypatch.setattr(service_mod, "get_git_branch_remotes", lambda repo, branches: {})
+
+    state = service._build_master_pb7_branch_state()
+
+    assert state["current_branch"] == "master"
+    assert state["current_commit"] == service_mod.PB7_PINNED_COMMIT
 
 
 def test_run_vps_command_passes_secret_free_inactive_capability() -> None:
@@ -1543,8 +1578,8 @@ def test_auto_heal_does_not_restart_remote_services() -> None:
     assert result["manibot02"]["PBData"]["was_restarted"] is False
 
 
-def test_host_meta_falls_back_to_direct_probe_when_agent_cache_missing() -> None:
-    """Host metadata refresh reads directly over SSH when the agent cache is unavailable."""
+def test_host_meta_cache_miss_retains_last_known_without_direct_probe() -> None:
+    """A missing agent cache retains metadata and never runs a direct collector."""
 
     class FakeStore:
         """Minimal monitor store for host metadata collection."""
@@ -1552,22 +1587,22 @@ def test_host_meta_falls_back_to_direct_probe_when_agent_cache_missing() -> None
         def __init__(self) -> None:
             """Initialize captured metadata."""
 
-            self.host_meta = {}
+            self.host_meta = {"manibot01": {"pbgv": "v1.90.7", "source": "monitor-agent"}}
             self.streams = {}
             self.changed = SimpleNamespace(set=lambda: None)
 
         def update_host_meta(self, hostname: str, data: dict) -> None:
             """Capture host metadata updates."""
 
-            self.host_meta[hostname] = data
+            self.host_meta.setdefault(hostname, {}).update(data)
 
         def update_stream_info(self, hostname: str, info: dict) -> None:
             """Capture monitor-agent diagnostics."""
 
-            self.streams[hostname] = info
+            self.streams.setdefault(hostname, {}).update(info)
 
     class FakePool:
-        """Return a missing cache first and fresh direct metadata second."""
+        """Return one missing monitor-agent cache result."""
 
         def __init__(self) -> None:
             """Initialize executed command capture."""
@@ -1581,32 +1616,33 @@ def test_host_meta_falls_back_to_direct_probe_when_agent_cache_missing() -> None
             return "software/pbgui"
 
         async def run(self, hostname: str, command: str, timeout: float = 0, check: bool = True):
-            """Simulate cache miss followed by direct SSH host-meta output."""
+            """Simulate a missing host-meta cache file."""
 
             del hostname, timeout, check
             self.commands.append(command)
-            if "host_meta.json" in command:
-                return SimpleNamespace(exit_status=1, stdout="", stderr="missing")
-            return SimpleNamespace(
-                exit_status=0,
-                stdout=json.dumps({"pbgv": "v1.90.8", "pbgc": "4573316", "pbgb": "main"}),
-                stderr="",
-            )
+            return SimpleNamespace(exit_status=1, stdout="", stderr="missing")
 
     monitor = object.__new__(VPSMonitor)
     monitor.pool = FakePool()
     monitor.store = FakeStore()
-    monitor._last_host_meta_collect = {}
-    monitor._last_package_status_collect = {}
-    monitor._debug_logging = False
-    monitor._cache_host_snapshot = lambda hostname: None
+    monitor._last_host_meta_collect = {"manibot01": 123.0}
 
-    asyncio.run(monitor._collect_host_meta("manibot01", force=True))
+    result = asyncio.run(monitor._read_monitor_agent_json(
+        "manibot01",
+        "host_meta.json",
+        stale_after=30.0,
+    ))
 
-    assert monitor.store.host_meta["manibot01"]["pbgv"] == "v1.90.8"
-    assert monitor.store.host_meta["manibot01"]["source"] == "direct-ssh"
-    assert len(monitor.pool.commands) == 2
-    assert "timeout --signal=TERM --kill-after=2s 20s python3 -u" in monitor.pool.commands[1]
+    assert result is None
+    assert monitor.store.host_meta["manibot01"] == {"pbgv": "v1.90.7", "source": "monitor-agent"}
+    assert monitor._last_host_meta_collect == {"manibot01": 123.0}
+    assert len(monitor.pool.commands) == 1
+    assert monitor.pool.commands[0].startswith("cat ")
+    assert "data/monitor_agent/host_meta.json" in monitor.pool.commands[0]
+    assert "python" not in monitor.pool.commands[0]
+    health = monitor.store.streams["manibot01"]["monitor_agent"]["files"]["host_meta.json"]
+    assert health["state"] == "missing"
+    assert "missing" in health["error"]
 
 
 def test_host_meta_skips_duplicate_collection_for_same_host() -> None:
@@ -2298,24 +2334,28 @@ def test_vps_manager_quick_master_detail_never_runs_deep_monitor_collectors(monk
     assert payload["v7"] == []
 
 
-def test_vps_manager_refresh_throttles_deep_local_probes() -> None:
-    """Repeated state pushes reuse release and package caches inside their TTLs."""
+def test_vps_manager_refresh_throttles_release_refresh_without_package_probe() -> None:
+    """Repeated state pushes refresh inventory and throttle only release metadata."""
     calls: list[str] = []
     service = object.__new__(VPSManagerService)
     service._refresh_lock = threading.Lock()
     service._first_refresh_done = False
     service._pbgui_release_ts = 0
     service._pb7_release_ts = 0
-    service._local_package_status_ts = 0
     service._sync_vps_inventory = lambda: calls.append("inventory")
     service._refresh_pbgui_release = lambda: (calls.append("pbgui"), setattr(service, "_pbgui_release_ts", int(time.time())))
     service._refresh_pb7_release = lambda repo: (calls.append("pb7"), setattr(service, "_pb7_release_ts", int(time.time())))
-    service._refresh_local_package_status = lambda: (calls.append("packages"), setattr(service, "_local_package_status_ts", int(time.time())))
 
     service.refresh()
     service.refresh()
 
-    assert calls == ["inventory", "pbgui", "pb7", "packages", "inventory"]
+    assert calls == ["inventory", "pbgui", "pb7", "inventory"]
+    assert not hasattr(service, "_local_package_status_ts")
+    assert not hasattr(service, "_refresh_local_package_status")
+    source = Path("vps_manager_service.py").read_text(encoding="utf-8")
+    refresh_body = source.split("    def refresh(self, *, force: bool = False)", 1)[1].split("\n    def ", 1)[0]
+    assert "package" not in refresh_body
+    assert "subprocess" not in refresh_body
 
 
 def test_vps_manager_cluster_status_reads_materialized_nodes_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2513,19 +2553,19 @@ def test_systemd_migration_playbook_uses_credential_capability() -> None:
     assert "PBRemote.py" in playbook
 
 
-@pytest.mark.parametrize("playbook_path", ["vps-update-pbgui.yml", "vps-update-pb.yml", "vps-switch-pbgui-branch.yml"])
+@pytest.mark.parametrize("playbook_path", ["vps-update-pbgui.yml", "vps-update-pb.yml"])
 def test_pbgui_code_update_playbooks_sync_systemd_units(playbook_path: str) -> None:
-    """PBGui code updates install new systemd units before restarting services."""
+    """PBGui updates unconditionally reconcile systemd units idempotently."""
     playbook = Path(playbook_path).read_text(encoding="utf-8")
+    tasks = playbook.split("  handlers:", 1)[0]
+    reconcile_block = tasks.split("- name: Reconcile PBGui systemd user services", 1)[1].split("\n    - name:", 1)[0]
     systemd_setup_block = playbook.split("register: systemd_setup_result", 1)[1].split("listen: \"restart pbgui\"", 1)[0]
 
-    assert "Check required PBGui systemd units" in playbook
+    assert "Check required PBGui systemd units" not in playbook
+    assert "register: systemd_reconcile_result" in reconcile_block
+    assert "'changed=true' in (systemd_reconcile_result.stdout | default(''))" in reconcile_block
+    assert "pbgui_repo.changed" not in reconcile_block
     assert "force_handlers: true" in playbook
-    assert "pbgui-pbcluster.service pbgui-pbrun.service" in playbook or "pbgui-pbcluster.service" in playbook
-    assert "required_systemd_units" in playbook
-    assert 'user: "{{ user }}"' not in playbook
-    assert "target_user={{ user | default('', true) | quote }}" in playbook
-    assert 'getent passwd "$target_user"' in playbook
     assert "pbgui_credential_capability_known" in playbook
     assert "credential_active | default(false)" in playbook
     assert "PBGUI_CREDENTIAL_ACTIVE" in playbook
@@ -2545,6 +2585,21 @@ def test_pbgui_code_update_playbooks_sync_systemd_units(playbook_path: str) -> N
     else:
         assert "setup/vps_service_control.sh restart PBCluster PBRun PBCoinData PBMonitorAgent" in playbook
     assert "setup/vps_service_control.sh restart PBCluster PBRun PBRemote PBCoinData" not in playbook
+
+
+def test_pbgui_branch_switch_playbook_retains_required_unit_probe() -> None:
+    """The VPS branch switch keeps its valid pre-handler systemd repair probe."""
+    playbook = Path("vps-switch-pbgui-branch.yml").read_text(encoding="utf-8")
+    systemd_setup_block = playbook.split("register: systemd_setup_result", 1)[1].split("listen: \"restart pbgui\"", 1)[0]
+
+    assert "Check required PBGui systemd units" in playbook
+    assert "pbgui-pbcluster.service pbgui-pbrun.service pbgui-monitor-agent.service" in playbook
+    assert "required_systemd_units" in playbook
+    assert "target_user={{ user | default('', true) | quote }}" in playbook
+    assert 'getent passwd "$target_user"' in playbook
+    assert "setup/setup_systemd.sh" in playbook
+    assert "--no-start" in playbook
+    assert "changed_when: systemd_setup_result.rc == 0" in systemd_setup_block
 
 
 @pytest.mark.parametrize(("playbook_path", "branch_variable"), [
@@ -2592,9 +2647,9 @@ def test_metrics_stream_reads_monitor_agent_cache() -> None:
 
     command = monitor_mod._monitor_agent_tail_command("software/pbgui")
 
-    assert "data/logs/monitor-agent/live_metrics.ndjson" in command
     assert "data/monitor_agent/live_metrics.ndjson" in command
-    assert command.index("data/logs/monitor-agent/live_metrics.ndjson") < command.index("data/monitor_agent/live_metrics.ndjson")
+    assert "data/logs/monitor-agent/live_metrics.ndjson" in command
+    assert " -nt " in command
     assert "tail -n 1 -F" in command
     assert "python3 -u -c" not in command
 
@@ -2639,40 +2694,52 @@ def test_host_meta_migration_status_requires_monitor_agent_unit() -> None:
     assert '"PBMonitorAgent": ("pbgui-monitor-agent.service"' in agent_source
 
 
-@pytest.mark.parametrize("playbook_path", ["master-update-pbgui.yml", "master-update-pb.yml", "master-switch-pbgui-branch.yml"])
+@pytest.mark.parametrize("playbook_path", ["master-update-pbgui.yml", "master-update-pb.yml"])
 def test_master_update_playbooks_repair_required_systemd_units(playbook_path: str) -> None:
-    """Master updates must repair required systemd units even without git changes."""
+    """Master updates unconditionally reconcile required units idempotently."""
     playbook = Path(playbook_path).read_text(encoding="utf-8")
+    tasks = playbook.split("  handlers:", 1)[0]
+    reconcile_block = tasks.split("- name: Reconcile PBGui systemd user services", 1)[1].split("\n    - name:", 1)[0]
     systemd_setup_block = playbook.split("register: systemd_setup_result", 1)[1].split("listen: \"restart pbgui\"", 1)[0]
 
-    assert "Check required PBGui systemd units" in playbook
+    assert "Check required PBGui systemd units" not in playbook
+    assert "register: systemd_reconcile_result" in reconcile_block
+    assert "'changed=true' in (systemd_reconcile_result.stdout | default(''))" in reconcile_block
+    assert "pbgui_repo.changed" not in reconcile_block
     assert "{{ target_hosts | default('localhost') }}" in playbook
     assert "pbgui_python | default(ansible_playbook_python)" in playbook
     assert "force_handlers: true" in playbook
-    assert "pbgui-pbcluster.service" in playbook
-    assert "pbgui-pbcoindata.service" in playbook
-    assert "pbgui-monitor-agent.service" in playbook
+    assert "api,pbcluster,pbcoindata,monitor-agent" in reconcile_block
     assert "pbcoindata" in playbook
     assert "monitor-agent" in playbook
     assert "PBMonitorAgent" in playbook
-    assert "is-enabled" in playbook
-    assert "is-active" in playbook
-    assert "repair=disabled" in playbook
-    assert "repair=inactive" in playbook
-    assert 'if [ "$unit" != "pbgui-api.service" ]' not in playbook
-    assert "required_systemd_units" in playbook
     assert "PBGUI_REQUIRE_PBCOINDATA" in playbook
     assert "Restart PBApiServer" in playbook
     assert "systemd-run --user" in playbook
     assert "systemctl --user enable pbgui-api.service" in playbook
     assert "systemctl --user restart pbgui-api.service" in playbook
-    assert 'user: "{{ user }}"' not in playbook
-    assert "target_user={{ user | default('', true) | quote }}" in playbook
-    assert 'getent passwd "$target_user"' in playbook
     assert "setup/setup_systemd.sh" in playbook
     assert "--no-start" in playbook
     assert "api,pbcluster,pbcoindata,monitor-agent" in playbook
     assert "failed_when: false" not in systemd_setup_block
+
+
+def test_master_branch_switch_playbook_retains_required_unit_probe() -> None:
+    """The master branch switch keeps its valid unit-state repair probe."""
+    playbook = Path("master-switch-pbgui-branch.yml").read_text(encoding="utf-8")
+    systemd_setup_block = playbook.split("register: systemd_setup_result", 1)[1].split("listen: \"restart pbgui\"", 1)[0]
+
+    assert "Check required PBGui systemd units" in playbook
+    assert "required_systemd_units" in playbook
+    assert "is-enabled" in playbook
+    assert "is-active" in playbook
+    assert "repair=disabled" in playbook
+    assert "repair=inactive" in playbook
+    assert "target_user={{ user | default('', true) | quote }}" in playbook
+    assert 'getent passwd "$target_user"' in playbook
+    assert "setup/setup_systemd.sh" in playbook
+    assert "--no-start" in playbook
+    assert "changed_when: systemd_setup_result.rc == 0" in systemd_setup_block
 
 
 def test_service_control_uses_tri_state_credential_capability() -> None:

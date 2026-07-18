@@ -304,6 +304,7 @@ class LogViewerPanel {
         this._pendingRestartCommand = null;
         this._startRemoteAtEnd = false;
         this._closed = false;
+        this._authExpired = false;
         this._reconnectTimer = 0;
 
         this._MAX    = 5000;
@@ -542,7 +543,7 @@ class LogViewerPanel {
     /* ═══════════════════════════════════════════════════════════
        Public API
        ═══════════════════════════════════════════════════════ */
-    open()  { this._closed = false; this._connect(); }
+    open()  { this._closed = false; if (!this._authExpired) this._connect(); }
     close() { this._closed = true; this._disconnect(); }
 
     /** Currently selected file (local mode) */
@@ -598,6 +599,7 @@ class LogViewerPanel {
        WebSocket
        ═══════════════════════════════════════════════════════ */
     _connect() {
+        if (this._authExpired) return;
         if (this._reconnectTimer) {
             clearTimeout(this._reconnectTimer);
             this._reconnectTimer = 0;
@@ -622,17 +624,29 @@ class LogViewerPanel {
             var ce = me._q('conn');
             if (ce) ce.textContent = 'error';
         };
-        ws.onclose = function() {
+        ws.onclose = function(event) {
             if (me._ws !== ws) return;
             me._ws = null;
             me._streaming = false;
             me._updateStreamBtn();
             var ce = me._q('conn');
+            if (event && event.code === 4001) {
+                me._authExpired = true;
+                me._closed = true;
+                me._pendingRestartCommand = null;
+                if (me._reconnectTimer) {
+                    clearTimeout(me._reconnectTimer);
+                    me._reconnectTimer = 0;
+                }
+                if (ce) ce.textContent = 'session expired';
+                window.location.replace('/');
+                return;
+            }
             if (ce) ce.textContent = 'disconnected';
-            if (!me._closed && !me._reconnectTimer) {
+            if (!me._authExpired && !me._closed && !me._reconnectTimer) {
                 me._reconnectTimer = setTimeout(function() {
                     me._reconnectTimer = 0;
-                    if (!me._closed) me._connect();
+                    if (!me._authExpired && !me._closed) me._connect();
                 }, 2000);
             }
         };
@@ -652,6 +666,7 @@ class LogViewerPanel {
     }
 
     _sendRestart(obj) {
+        if (this._authExpired) return false;
         if (this._ws && this._ws.readyState === WebSocket.OPEN) {
             this._ws.send(JSON.stringify(obj));
             return true;

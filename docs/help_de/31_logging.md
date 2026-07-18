@@ -74,6 +74,14 @@ Auf **⚙ Settings** in der Sidebar klicken, um die Log-Rotation zu konfiguriere
 nächsten verwalteten Transkripts gelesen. Die Log-Rotation besitzt bewusst
 keinen Watcher und benötigt keinen Dienstneustart.
 
+**Purge** rotiert und leert das ausgewaehlte aktuelle Log unter demselben
+prozessuebergreifenden Lock wie aktive Writer. PBGui behaelt nur die
+konfigurierte Anzahl numerischer Backup-Generationen und speichert als `.1`
+hoechstens den konfigurierten Maximalgroessen-Tail. Bei Backup-Anzahl `0` wird
+der aktuelle Inhalt verworfen und vorhandene numerische Generationen werden
+entfernt. Purge-Fehler werden geloggt; Browser-Antworten bleiben generisch und
+legen keine Dateisystem-Exceptiondetails offen.
+
 ## Fehlerbehebung
 
 - **Keine Log-Dateien aufgelistet**: Sicherstellen, dass PBGui-Dienste mindestens einmal gestartet wurden

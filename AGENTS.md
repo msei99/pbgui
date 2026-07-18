@@ -64,6 +64,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
   ```
 - Log viewing: always use shared `LogViewerPanel` from `frontend/js/log_viewer_panel.js`.
 - Navigation: `pbgui_nav.js` via `PBGUI_NAV_CONFIG`; browser authentication comes from the same-origin cookie.
+- Guide coverage: every productive page registered in `FASTAPI_PAGES` must have a `GUIDE_TOPICS` entry and matching EN/DE Markdown topics. Review the relevant guides with every productive UI change and keep the parity/mapping tests passing.
 - Cache busting: use `?v=N` on JS/CSS asset URLs, increment when file changes.
 - Never add external CDN or web-hosted frontend dependencies (`https://...` scripts, stylesheets, fonts, maps, or other runtime assets). All browser assets must be served locally from `/app/` (for example under `frontend/vendor/`) so PBGui works offline and does not leak requests to third parties.
 - Selection UI standard, full table rows: use clickable rows with `.selected`/`.is-selected`, no visible checkbox column for bulk row selection. Selected rows use `background: rgba(77,166,255,.12)` on cells and `border-left: 3px solid var(--accent)` on the first cell. Table headers use the standard sticky dark header style (`background: var(--bg2)`, `border-bottom: 2px solid var(--border)`) so the first data row is clearly separated. Support click and click-drag range selection when multiple rows can be selected.
@@ -144,6 +145,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 - Steps in `RELEASING.md`.
 - Per release: bump `pbgui_purefunc.py` `PBGUI_VERSION`, move `releases/unreleased.md` notes into a dedicated `releases/vX.YY.md` file, keep `CHANGELOG.md` index updated.
 - Per release: bump `api/serial.txt` so the UI makes the restart requirement visible for already running processes. Treat the serial bump as a normal release-prep step; do not rely on remembering it ad hoc.
+- A new minor release such as `v1.93` requires the complete offline test suite. Small `v1.92.x` patch releases need only focused tests for the changed areas unless broad shared runtime, security, or persistence behavior changed.
 - Commit: `Release vX.YY`, tag `vX.YY`, push branch + tags.
 
 ## Testing

@@ -323,11 +323,11 @@ def _read_json_with_retry(path: Path, retries: int = 1, delay_s: float = 0.2):
         except Exception as e:
             last_error = e
             if attempt < attempts:
-                _log('PBCoinData', f'Retrying JSON read for {path} ({attempt}/{attempts - 1}) after error: {e}', level='WARNING')
+                _log(SERVICE, f'Retrying JSON read for {path} ({attempt}/{attempts - 1}) after error: {e}', level='WARNING')
                 sleep(delay_s)
                 continue
             break
-    _log('PBCoinData', f'Failed to read JSON file {path}: {last_error}', level='WARNING')
+    _log(SERVICE, f'Failed to read JSON file {path}: {last_error}', level='WARNING')
     return None
 
 
@@ -522,16 +522,16 @@ class CoinData:
             if isinstance(markets, dict):
                 self._ccxt_markets[exchange] = markets
                 return markets
-            _log('PBCoinData', f'CCXT markets for {exchange} are not a dict, ignoring cache', level='WARNING')
+            _log(SERVICE, f'CCXT markets for {exchange} are not a dict, ignoring cache', level='WARNING')
         except Exception as e:
-            _log('PBCoinData', f'Error loading CCXT markets for {exchange}: {e}', level='ERROR')
+            _log(SERVICE, f'Error loading CCXT markets for {exchange}: {e}', level='ERROR')
             return {}
         return {}
     
     def save_ccxt_markets(self, exchange: str, markets: dict):
         """Save CCXT markets to cache. Only writes on success."""
         if not markets:
-            _log('PBCoinData', f'Empty markets data for {exchange}, not saving', level='WARNING')
+            _log(SERVICE, f'Empty markets data for {exchange}, not saving', level='WARNING')
             return
         
         exchange_dir = self._ensure_exchange_dir(exchange)
@@ -544,9 +544,9 @@ class CoinData:
                 json.dump(markets, f, indent=4)
             temp_file.replace(markets_file)
             self._ccxt_markets[exchange] = markets
-            _log('PBCoinData', f'Saved CCXT markets for {exchange}', level='DEBUG')
+            _log(SERVICE, f'Saved CCXT markets for {exchange}', level='DEBUG')
         except Exception as e:
-            _log('PBCoinData', f'Error saving CCXT markets for {exchange}: {e}', level='ERROR')
+            _log(SERVICE, f'Error saving CCXT markets for {exchange}: {e}', level='ERROR')
             if temp_file.exists():
                 temp_file.unlink()
     
@@ -571,10 +571,10 @@ class CoinData:
                 self._exchange_mappings[exchange] = mapping
                 self._exchange_mapping_ts[exchange] = file_sig
                 return mapping
-            _log('PBCoinData', f'Mapping for {exchange} is not a list, ignoring cache file', level='WARNING')
+            _log(SERVICE, f'Mapping for {exchange} is not a list, ignoring cache file', level='WARNING')
             return []
         except Exception as e:
-            _log('PBCoinData', f'Error loading mapping for {exchange}: {e}', level='ERROR')
+            _log(SERVICE, f'Error loading mapping for {exchange}: {e}', level='ERROR')
             return []
 
     def load_exchange_mapping(self, exchange: str) -> list:
@@ -584,7 +584,7 @@ class CoinData:
     def save_exchange_mapping(self, exchange: str, mapping: list):
         """Save exchange mapping to cache. Only writes on success."""
         if not mapping:
-            _log('PBCoinData', f'Empty mapping data for {exchange}, not saving', level='WARNING')
+            _log(SERVICE, f'Empty mapping data for {exchange}, not saving', level='WARNING')
             return
         
         exchange_dir = self._ensure_exchange_dir(exchange)
@@ -599,9 +599,9 @@ class CoinData:
             self._exchange_mappings[exchange] = mapping
             stat = mapping_file.stat()
             self._exchange_mapping_ts[exchange] = (stat.st_mtime_ns, stat.st_size)
-            _log('PBCoinData', f'Saved mapping for {exchange}', level='DEBUG')
+            _log(SERVICE, f'Saved mapping for {exchange}', level='DEBUG')
         except Exception as e:
-            _log('PBCoinData', f'Error saving mapping for {exchange}: {e}', level='ERROR')
+            _log(SERVICE, f'Error saving mapping for {exchange}: {e}', level='ERROR')
             if temp_file.exists():
                 temp_file.unlink()
 
@@ -632,16 +632,16 @@ class CoinData:
                 self._tradfi_symbol_map = data
                 self._tradfi_symbol_map_ts = file_sig
                 return data
-            _log('PBCoinData', 'tradfi_symbol_map.json is not a list, ignoring', level='WARNING')
+            _log(SERVICE, 'tradfi_symbol_map.json is not a list, ignoring', level='WARNING')
             return []
         except Exception as e:
-            _log('PBCoinData', f'Error loading tradfi_symbol_map.json: {e}', level='ERROR')
+            _log(SERVICE, f'Error loading tradfi_symbol_map.json: {e}', level='ERROR')
             return []
 
     def save_tradfi_symbol_map(self, records: list):
         """Save tradfi_symbol_map.json atomically. Preserves existing file on failure."""
         if records is None:
-            _log('PBCoinData', 'tradfi_symbol_map: nothing to save (None)', level='WARNING')
+            _log(SERVICE, 'tradfi_symbol_map: nothing to save (None)', level='WARNING')
             return
 
         path = self._tradfi_symbol_map_path()
@@ -654,9 +654,9 @@ class CoinData:
             self._tradfi_symbol_map = records
             stat = path.stat()
             self._tradfi_symbol_map_ts = (stat.st_mtime_ns, stat.st_size)
-            _log('PBCoinData', f'Saved tradfi_symbol_map.json ({len(records)} entries)', level='DEBUG')
+            _log(SERVICE, f'Saved tradfi_symbol_map.json ({len(records)} entries)', level='DEBUG')
         except Exception as e:
-            _log('PBCoinData', f'Error saving tradfi_symbol_map.json: {e}', level='ERROR')
+            _log(SERVICE, f'Error saving tradfi_symbol_map.json: {e}', level='ERROR')
             if temp_path.exists():
                 try:
                     temp_path.unlink()
@@ -968,10 +968,10 @@ class CoinData:
             if isinstance(symbols, list):
                 self._copy_trading_cache[exchange] = symbols
                 return symbols
-            _log('PBCoinData', f'Copy trading cache for {exchange} is not a list, ignoring cache file', level='WARNING')
+            _log(SERVICE, f'Copy trading cache for {exchange} is not a list, ignoring cache file', level='WARNING')
             return []
         except Exception as e:
-            _log('PBCoinData', f'Error loading copy trading symbols for {exchange}: {e}', level='ERROR')
+            _log(SERVICE, f'Error loading copy trading symbols for {exchange}: {e}', level='ERROR')
             return []
     
     def save_copy_trading_symbols(self, exchange: str, symbols: list):
@@ -985,9 +985,9 @@ class CoinData:
                 json.dump(sorted(symbols), f, indent=4)
             temp_file.replace(cpt_file)
             self._copy_trading_cache[exchange] = sorted(symbols)
-            _log('PBCoinData', f'Saved {len(symbols)} copy trading symbols for {exchange}', level='DEBUG')
+            _log(SERVICE, f'Saved {len(symbols)} copy trading symbols for {exchange}', level='DEBUG')
         except Exception as e:
-            _log('PBCoinData', f'Error saving copy trading symbols for {exchange}: {e}', level='ERROR')
+            _log(SERVICE, f'Error saving copy trading symbols for {exchange}: {e}', level='ERROR')
             if temp_file.exists():
                 temp_file.unlink()
     
@@ -1019,7 +1019,7 @@ class CoinData:
                 if not markets:
                     markets = self.load_ccxt_markets(exchange_id)
                 if not markets:
-                    _log('PBCoinData', f'No markets available for bybit copy trading detection', level='WARNING')
+                    _log(SERVICE, f'No markets available for bybit copy trading detection', level='WARNING')
                     return []
                 
                 for symbol, market in markets.items():
@@ -1033,25 +1033,25 @@ class CoinData:
                         if market_id:
                             cpt_symbols.append(market_id)
                 
-                _log('PBCoinData', f'Found {len(cpt_symbols)} copy trading symbols for bybit (from market data)', level='INFO')
+                _log(SERVICE, f'Found {len(cpt_symbols)} copy trading symbols for bybit (from market data)', level='INFO')
             
             elif exchange_id in ('binance', 'bitget'):
                 cpt_symbols = self._fetch_cpt_with_user_discovery(exchange_id)
             
             else:
                 # No copy trading API known for this exchange
-                _log('PBCoinData', f'No copy trading API for {exchange_id}', level='DEBUG')
+                _log(SERVICE, f'No copy trading API for {exchange_id}', level='DEBUG')
             
             # Cache the result
             if cpt_symbols:
                 self.save_copy_trading_symbols(exchange_id, cpt_symbols)
             
         except Exception as e:
-            _log('PBCoinData', f'Error fetching copy trading symbols for {exchange_id}: {e}', level='ERROR')
+            _log(SERVICE, f'Error fetching copy trading symbols for {exchange_id}: {e}', level='ERROR')
             # Fall back to cached data
             cpt_symbols = self.load_copy_trading_symbols(exchange_id)
             if cpt_symbols:
-                _log('PBCoinData', f'Using {len(cpt_symbols)} cached copy trading symbols for {exchange_id}', level='INFO')
+                _log(SERVICE, f'Using {len(cpt_symbols)} cached copy trading symbols for {exchange_id}', level='INFO')
         
         return cpt_symbols
     
@@ -1076,7 +1076,7 @@ class CoinData:
         candidate_users = self._get_cpt_candidate_users(users_obj, exchange_id)
         
         if not candidate_users:
-            _log('PBCoinData', f'No eligible users found for {exchange_id} copy trading', level='WARNING')
+            _log(SERVICE, f'No eligible users found for {exchange_id} copy trading', level='WARNING')
             return []
         
         # Build ordered list: remembered user first, then others
@@ -1097,13 +1097,13 @@ class CoinData:
                 # Success - remember this user
                 if user.name != remembered_user_name:
                     self._save_cpt_user(exchange_id, user.name)
-                    _log('PBCoinData', f'Remembered {user.name} as copy trading user for {exchange_id}', level='INFO')
+                    _log(SERVICE, f'Remembered {user.name} as copy trading user for {exchange_id}', level='INFO')
                 else:
-                    _log('PBCoinData', f'Using remembered user {user.name} for {exchange_id} copy trading', level='DEBUG')
-                _log('PBCoinData', f'Fetched {len(result)} copy trading symbols for {exchange_id} via user {user.name}', level='INFO')
+                    _log(SERVICE, f'Using remembered user {user.name} for {exchange_id} copy trading', level='DEBUG')
+                _log(SERVICE, f'Fetched {len(result)} copy trading symbols for {exchange_id} via user {user.name}', level='INFO')
                 return result
         
-        _log('PBCoinData', f'No user could fetch copy trading symbols for {exchange_id}', level='WARNING')
+        _log(SERVICE, f'No user could fetch copy trading symbols for {exchange_id}', level='WARNING')
         return []
     
     def _get_cpt_candidate_users(self, users_obj, exchange_id: str) -> list:
@@ -1141,7 +1141,7 @@ class CoinData:
                 return None
             
         except Exception as e:
-            _log('PBCoinData', f'User {user.name} failed for {exchange_id} copy trading: {e}', level='DEBUG')
+            _log(SERVICE, f'User {user.name} failed for {exchange_id} copy trading: {e}', level='DEBUG')
             return None
     
     def _load_cpt_user(self, exchange_id: str) -> str | None:
@@ -1318,7 +1318,7 @@ class CoinData:
             count = 0
             while True:
                 if count > 5:
-                    _log('PBCoinData', 'Can not start PBCoinData', level='ERROR')
+                    _log(SERVICE, 'Can not start PBCoinData', level='ERROR')
                     break
                 sleep(1)
                 if self.is_running():
@@ -1327,7 +1327,7 @@ class CoinData:
 
     def stop(self):
         if self.is_running():
-            _log('PBCoinData', 'Stop: PBCoinData', level='INFO')
+            _log(SERVICE, 'Stop: PBCoinData', level='INFO')
             try:
                 psutil.Process(self.my_pid).kill()
             except psutil.NoSuchProcess:
@@ -1386,9 +1386,9 @@ class CoinData:
 
             removed_count = update_ini(mutate)
             if removed_count:
-                _log('PBCoinData', f'Removed legacy [exchanges] section from pbgui.ini ({removed_count} entries)', level='INFO')
+                _log(SERVICE, f'Removed legacy [exchanges] section from pbgui.ini ({removed_count} entries)', level='INFO')
         except Exception as e:
-            _log('PBCoinData', f'Failed to remove legacy [exchanges] section from pbgui.ini: {e}', level='ERROR')
+            _log(SERVICE, f'Failed to remove legacy [exchanges] section from pbgui.ini: {e}', level='ERROR')
     
     def has_new_data(self):
         pbgdir = Path.cwd()
@@ -1482,7 +1482,7 @@ class CoinData:
         """Fetch CCXT markets for a specific exchange and save to coindata/{exchange}/ccxt_markets.json"""
         from Exchange import Exchange
         
-        _log('PBCoinData', f'Fetching CCXT markets for {exchange_id}', level='INFO')
+        _log(SERVICE, f'Fetching CCXT markets for {exchange_id}', level='INFO')
         
         try:
             # Create exchange instance without user (public API)
@@ -1493,22 +1493,22 @@ class CoinData:
             markets = exchange.instance.load_markets()
             
             if not markets:
-                _log('PBCoinData', f'No markets returned for {exchange_id}', level='WARNING')
+                _log(SERVICE, f'No markets returned for {exchange_id}', level='WARNING')
                 return False
             
             # Save raw CCXT markets (all types)
             self.save_ccxt_markets(exchange_id, markets)
             
-            _log('PBCoinData', f'Successfully fetched {len(markets)} markets for {exchange_id}', level='INFO')
+            _log(SERVICE, f'Successfully fetched {len(markets)} markets for {exchange_id}', level='INFO')
             return True
             
         except Exception as e:
-            _log('PBCoinData', f'Error fetching CCXT markets for {exchange_id}: {e}', level='ERROR')
+            _log(SERVICE, f'Error fetching CCXT markets for {exchange_id}: {e}', level='ERROR')
             return False
     
     def build_mapping(self, exchange_id: str, force_fetch: bool = False):
         """Build mapping.json for an exchange by merging CCXT markets + CMC data"""
-        _log('PBCoinData', f'Building mapping for {exchange_id}', level='INFO')
+        _log(SERVICE, f'Building mapping for {exchange_id}', level='INFO')
         
         try:
             from Exchange import Exchange
@@ -1524,12 +1524,12 @@ class CoinData:
             if not markets or force_fetch:
                 success = self.fetch_ccxt_markets(exchange_id)
                 if not success:
-                    _log('PBCoinData', f'Failed to fetch markets for {exchange_id}', level='ERROR')
+                    _log(SERVICE, f'Failed to fetch markets for {exchange_id}', level='ERROR')
                     return False
                 markets = self.load_ccxt_markets(exchange_id)
             
             if not markets:
-                _log('PBCoinData', f'No markets available for {exchange_id}', level='ERROR')
+                _log(SERVICE, f'No markets available for {exchange_id}', level='ERROR')
                 return False
             
             # Build CMC lookup dicts from self.data
@@ -1564,9 +1564,9 @@ class CoinData:
                     if slug_key:
                         cmc_slug_index.setdefault(slug_key, []).append(coin)
                 dupes = sum(1 for v in cmc_all.values() if len(v) > 1)
-                _log('PBCoinData', f'CMC data available: {len(cmc_best)} coins ({dupes} with duplicates)', level='DEBUG')
+                _log(SERVICE, f'CMC data available: {len(cmc_best)} coins ({dupes} with duplicates)', level='DEBUG')
             else:
-                _log('PBCoinData', 'No CMC data loaded, using defaults', level='WARNING')
+                _log(SERVICE, 'No CMC data loaded, using defaults', level='WARNING')
 
             cmc_best_values = list(cmc_best.values())
 
@@ -1598,11 +1598,11 @@ class CoinData:
                         try:
                             ticker_data.update(exchange.fetch_prices(linear_symbols, "swap"))
                         except Exception as e:
-                            _log('PBCoinData', f'Could not fetch linear prices for {exchange_id} disambiguation: {e}', level='WARNING')
+                            _log(SERVICE, f'Could not fetch linear prices for {exchange_id} disambiguation: {e}', level='WARNING')
                         try:
                             ticker_data.update(exchange.fetch_prices(inverse_symbols, "swap"))
                         except Exception as e:
-                            _log('PBCoinData', f'Could not fetch inverse prices for {exchange_id} disambiguation: {e}', level='WARNING')
+                            _log(SERVICE, f'Could not fetch inverse prices for {exchange_id} disambiguation: {e}', level='WARNING')
                     else:
                         ticker_data = exchange.fetch_prices(ccxt_symbols, "swap")
                     for ccxt_sym, data in ticker_data.items():
@@ -1614,9 +1614,9 @@ class CoinData:
                                 price = 0.0
                             if market_id and price > 0:
                                 prev_prices[market_id] = price
-                    _log('PBCoinData', f'Fetched {len(prev_prices)} live prices for {exchange_id} CMC disambiguation', level='INFO')
+                    _log(SERVICE, f'Fetched {len(prev_prices)} live prices for {exchange_id} CMC disambiguation', level='INFO')
                 except Exception as e:
-                    _log('PBCoinData', f'Could not fetch live prices for {exchange_id}: {e}', level='WARNING')
+                    _log(SERVICE, f'Could not fetch live prices for {exchange_id}: {e}', level='WARNING')
             
             # Load copy trading symbols (from cache, populated by update_mappings)
             cpt_symbols = self.load_copy_trading_symbols(exchange_id)
@@ -1633,8 +1633,7 @@ class CoinData:
                     if rec.get("symbol") and rec.get("copy_trading")
                 }
                 if previous_cpt_symbols:
-                    _log(
-                        'PBCoinData',
+                    _log(SERVICE,
                         f'Using {len(previous_cpt_symbols)} copy trading symbols from previous mapping for {exchange_id} (no fresh CPT data available)',
                         level='WARNING'
                     )
@@ -1769,24 +1768,22 @@ class CoinData:
 
             if unmatched_cmc_relevant:
                 sample = ", ".join(f"{coin}({symbol})" for symbol, coin in unmatched_cmc_relevant[:20])
-                _log(
-                    'PBCoinData',
+                _log(SERVICE,
                     f'CMC match missing for {len(unmatched_cmc_relevant)} relevant market(s) on {exchange_id} '
                     f'({len(relevant_unique)} unique coin(s)). Sample: {sample}',
                     level='WARNING'
                 )
             elif unmatched_cmc_all:
-                _log(
-                    'PBCoinData',
+                _log(SERVICE,
                     f'CMC match missing only on non-relevant markets for {exchange_id}: '
                     f'{len(unmatched_cmc_all)} market(s), {len(all_unique)} unique coin(s)',
                     level='DEBUG'
                 )
             
             if price_disambiguated:
-                _log('PBCoinData', f'Successfully built mapping with {len(mapping)} records for {exchange_id} ({price_disambiguated} CMC matches resolved by price)', level='INFO')
+                _log(SERVICE, f'Successfully built mapping with {len(mapping)} records for {exchange_id} ({price_disambiguated} CMC matches resolved by price)', level='INFO')
             else:
-                _log('PBCoinData', f'Successfully built mapping with {len(mapping)} records for {exchange_id}', level='INFO')
+                _log(SERVICE, f'Successfully built mapping with {len(mapping)} records for {exchange_id}', level='INFO')
             return True
             
         except Exception as e:
@@ -1796,7 +1793,7 @@ class CoinData:
                 "unmatched_relevant": 0,
                 "unmatched_relevant_unique": 0,
             }
-            _log('PBCoinData', f'Error building mapping for {exchange_id}: {e}', level='ERROR')
+            _log(SERVICE, f'Error building mapping for {exchange_id}: {e}', level='ERROR')
             return False
     
     def _detect_hip3(self, exchange_id: str, market: dict, cmc_data: dict) -> bool:
@@ -1995,7 +1992,7 @@ class CoinData:
         if rank_score < 0:
             if best_score >= 0.3:
                 if best_entry != best_rank_entry:
-                    _log('PBCoinData',
+                    _log(SERVICE,
                          f'CMC price disambiguation for {symbol}: '
                          f'rank entry has no valid price, chose "{best_entry.get("name", "?")}" '
                          f'(score={best_score:.2f})',
@@ -2012,7 +2009,7 @@ class CoinData:
         substantial_gain = score_gain >= 0.15 and best_score >= 0.85
 
         if best_entry != best_rank_entry and (strong_rank_mismatch or substantial_gain):
-            _log('PBCoinData',
+            _log(SERVICE,
                  f'CMC price disambiguation for {symbol}: '
                  f'chose "{best_entry.get("name", "?")}" (score={best_score:.2f}) '
                  f'over rank-based "{best_rank_entry.get("name", "?")}" '
@@ -2026,13 +2023,13 @@ class CoinData:
         """Update price fields in mapping.json for an exchange"""
         from Exchange import Exchange
         
-        _log('PBCoinData', f'Updating prices for {exchange_id}', level='INFO')
+        _log(SERVICE, f'Updating prices for {exchange_id}', level='INFO')
         
         try:
             # Load existing mapping
             mapping = self.load_exchange_mapping(exchange_id)
             if not mapping:
-                _log('PBCoinData', f'No mapping found for {exchange_id}', level='ERROR')
+                _log(SERVICE, f'No mapping found for {exchange_id}', level='ERROR')
                 return False
             
             # Create exchange instance
@@ -2064,7 +2061,7 @@ class CoinData:
                 else:
                     prices = exchange.fetch_prices(symbols, "swap")
             except Exception as e:
-                _log('PBCoinData', f'Error fetching prices for {exchange_id}: {e}', level='ERROR')
+                _log(SERVICE, f'Error fetching prices for {exchange_id}: {e}', level='ERROR')
                 return False
 
             # Fallback: some exchanges do not include all symbols in batch ticker
@@ -2073,8 +2070,7 @@ class CoinData:
             missing_symbols = [s for s in symbols if s not in prices]
             if missing_symbols:
                 if exchange_id == "hyperliquid":
-                    _log(
-                        'PBCoinData',
+                    _log(SERVICE,
                         f'Missing {len(missing_symbols)} prices after batch fetch on hyperliquid; skipping slow per-symbol fallback',
                         level='WARNING'
                     )
@@ -2089,8 +2085,7 @@ class CoinData:
                     except Exception:
                         continue
                 if recovered:
-                    _log(
-                        'PBCoinData',
+                    _log(SERVICE,
                         f'Recovered {recovered}/{len(missing_symbols)} missing prices via per-symbol fallback on {exchange_id}',
                         level='INFO'
                     )
@@ -2126,11 +2121,11 @@ class CoinData:
             # Save updated mapping
             self.save_exchange_mapping(exchange_id, mapping)
             
-            _log('PBCoinData', f'Successfully updated prices for {len(symbols)} symbols on {exchange_id}', level='INFO')
+            _log(SERVICE, f'Successfully updated prices for {len(symbols)} symbols on {exchange_id}', level='INFO')
             return True
             
         except Exception as e:
-            _log('PBCoinData', f'Error updating prices for {exchange_id}: {e}', level='ERROR')
+            _log(SERVICE, f'Error updating prices for {exchange_id}: {e}', level='ERROR')
             return False
 
     def fetch_api_status(self):
@@ -2198,7 +2193,7 @@ class CoinData:
             self.fetch_api_status()
             self._cmc_metrics["listings_ok"] += 1
             self._log_cmc_metrics(endpoint, True, attempts, status_code)
-            _log('PBCoinData', f'Fetched CoinMarketCap data. Credits left: {getattr(self, "credits_left", "unknown")}', level='INFO')
+            _log(SERVICE, f'Fetched CoinMarketCap data. Credits left: {getattr(self, "credits_left", "unknown")}', level='INFO')
             return True
 
         self.data = None
@@ -2256,7 +2251,7 @@ class CoinData:
             self.fetch_api_status()
             self._cmc_metrics["metadata_ok"] += 1
             self._log_cmc_metrics(endpoint, True, attempts, status_code)
-            _log('PBCoinData', f'Fetched CoinMarketCap metadata. Credits left: {getattr(self, "credits_left", "unknown")}', level='INFO')
+            _log(SERVICE, f'Fetched CoinMarketCap metadata. Credits left: {getattr(self, "credits_left", "unknown")}', level='INFO')
             return True
 
         self.metadata = None
@@ -2439,7 +2434,7 @@ class CoinData:
             if action == "retry":
                 wait_s = min(8, 2 ** (attempt - 1))
                 reason = f"HTTP {last_status}" if last_status and last_status != 200 else (last_error or "provider error")
-                _log('PBCoinData', f'CMC {endpoint} retry {attempt}/{max_retries} after {reason}, waiting {wait_s}s', level='WARNING')
+                _log(SERVICE, f'CMC {endpoint} retry {attempt}/{max_retries} after {reason}, waiting {wait_s}s', level='WARNING')
                 sleep(wait_s)
                 continue
             break
@@ -2506,9 +2501,9 @@ class CoinData:
             f'status(ok/fail)={self._cmc_metrics["status_ok"]}/{self._cmc_metrics["status_fail"]}'
         )
         if success:
-            _log('PBCoinData', summary, level='INFO')
+            _log(SERVICE, summary, level='INFO')
         else:
-            _log('PBCoinData', f'{summary} error={error}', level='WARNING')
+            _log(SERVICE, f'{summary} error={error}', level='WARNING')
             self._maybe_log_cmc_health(force=True)
 
     def _maybe_log_cmc_health(self, force: bool = False):
@@ -2517,8 +2512,7 @@ class CoinData:
             return
 
         self._cmc_metrics_last_log_ts = now_ts
-        _log(
-            'PBCoinData',
+        _log(SERVICE,
             (
                 'CMC health summary '
                 f'listings(ok/fail)={self._cmc_metrics["listings_ok"]}/{self._cmc_metrics["listings_fail"]} '
@@ -2542,7 +2536,7 @@ class CoinData:
                 json.dump(self.metadata, f)
             temp_path.replace(metadata_path)
         except Exception as e:
-            _log('PBCoinData', f'Error saving metadata: {e}', level='ERROR')
+            _log(SERVICE, f'Error saving metadata: {e}', level='ERROR')
             if temp_path.exists():
                 temp_path.unlink(missing_ok=True)
 
@@ -2560,7 +2554,7 @@ class CoinData:
                 json.dump(self.data, f)
             temp_path.replace(data_path)
         except Exception as e:
-            _log('PBCoinData', f'Error saving coindata: {e}', level='ERROR')
+            _log(SERVICE, f'Error saving coindata: {e}', level='ERROR')
             if temp_path.exists():
                 temp_path.unlink(missing_ok=True)
     
@@ -2646,7 +2640,7 @@ class CoinData:
             if now_ts < float(state.get("next_retry_ts", 0.0)):
                 continue
 
-            _log('PBCoinData', f'Self-heal mapping trigger for {exchange}: {reason}', level='WARNING')
+            _log(SERVICE, f'Self-heal mapping trigger for {exchange}: {reason}', level='WARNING')
             try:
                 result = self.refresh_exchange_mapping(exchange)
                 if not bool(result.get("ok")):
@@ -2659,7 +2653,7 @@ class CoinData:
                 refreshed_in_self_heal.add(exchange)
                 if exchange in self._mapping_self_heal_state:
                     del self._mapping_self_heal_state[exchange]
-                _log('PBCoinData', f'Self-heal mapping succeeded for {exchange}', level='INFO')
+                _log(SERVICE, f'Self-heal mapping succeeded for {exchange}', level='INFO')
             except Exception as e:
                 fails = int(state.get("fails", 0)) + 1
                 backoff_hours = min(2 ** (fails - 1), 24)
@@ -2668,8 +2662,7 @@ class CoinData:
                     "fails": fails,
                     "next_retry_ts": next_retry_ts,
                 }
-                _log(
-                    'PBCoinData',
+                _log(SERVICE,
                     f'Self-heal mapping failed for {exchange}: {e}. '
                     f'Next retry in {backoff_hours}h (fail #{fails})',
                     level='ERROR'
@@ -2678,7 +2671,7 @@ class CoinData:
         if self.update_mappings_ts < now_ts - 3600 * self._mapping_interval:
             cycle_started_ts = datetime.now().timestamp()
             cycle_results = []
-            _log('PBCoinData', 'Starting mapping update for all exchanges', level='INFO')
+            _log(SERVICE, 'Starting mapping update for all exchanges', level='INFO')
             for exchange in V7.list():
                 try:
                     if exchange in refreshed_in_self_heal:
@@ -2697,17 +2690,16 @@ class CoinData:
                         "elapsed": 0.0,
                         "ok": False,
                     })
-                    _log('PBCoinData', f'Failed to update mapping for {exchange}: {e}', level='ERROR')
+                    _log(SERVICE, f'Failed to update mapping for {exchange}: {e}', level='ERROR')
             self.update_mappings_ts = now_ts
 
             if not cycle_results:
                 total_elapsed = datetime.now().timestamp() - cycle_started_ts
-                _log(
-                    'PBCoinData',
+                _log(SERVICE,
                     f'Mapping update skipped: all exchanges were already refreshed by self-heal in {total_elapsed:.1f}s',
                     level='INFO'
                 )
-                _log('PBCoinData', 'Mapping update complete', level='INFO')
+                _log(SERVICE, 'Mapping update complete', level='INFO')
                 self._run_tradfi_sync()
                 return
 
@@ -2719,8 +2711,7 @@ class CoinData:
                 f'({r.get("elapsed", 0.0):.1f}s, {r.get("priced", 0)}/{r.get("active", 0)} priced)'
                 for r in cycle_results
             )
-            _log(
-                'PBCoinData',
+            _log(SERVICE,
                 f'Mapping update summary: {ok_count}/{total_count} exchanges ok in {total_elapsed:.1f}s | {per_exchange}',
                 level='INFO'
             )
@@ -2731,13 +2722,12 @@ class CoinData:
                 f'({int(r.get("unmatched_relevant_unique", 0) or 0)} unique)'
                 for r in cycle_results
             )
-            _log(
-                'PBCoinData',
+            _log(SERVICE,
                 f'CMC unmatched summary (relevant markets): {unmatched_total} market(s), '
                 f'{unmatched_unique_total} unique coin(s) total | {unmatched_per_exchange}',
                 level='INFO'
             )
-            _log('PBCoinData', 'Mapping update complete', level='INFO')
+            _log(SERVICE, 'Mapping update complete', level='INFO')
             self._run_tradfi_sync()
 
     @staticmethod
@@ -2864,10 +2854,9 @@ class CoinData:
             if self._is_master():
                 from tradfi_sync import fetch_xyz_spec
                 instruments = fetch_xyz_spec(pbgui_dir=Path.cwd())
-                _log('PBCoinData', f'XYZ spec refreshed: {len(instruments)} instruments', level='INFO')
+                _log(SERVICE, f'XYZ spec refreshed: {len(instruments)} instruments', level='INFO')
             summary = sync_tradfi_spec(pbgui_dir=Path.cwd())
-            _log(
-                'PBCoinData',
+            _log(SERVICE,
                 f"TradFi sync: +{summary['added_pending']} new pending, "
                 f"+{summary['added_delisted']} new delisted, "
                 f"{summary['auto_delisted']} auto-delisted, "
@@ -2875,7 +2864,7 @@ class CoinData:
                 level='INFO',
             )
         except Exception as exc:
-            _log('PBCoinData', f'TradFi sync failed (non-critical): {exc}', level='WARNING')
+            _log(SERVICE, f'TradFi sync failed (non-critical): {exc}', level='WARNING')
 
     def load_symbols(self):
         exchange = str(self.exchange or "").lower()
@@ -3026,9 +3015,9 @@ def main():
 
     pbcoindata = CoinData(defer_config=True)
     if pbcoindata.is_running():
-        _log('PBCoinData', 'PBCoinData already started', level='ERROR')
+        _log(SERVICE, 'PBCoinData already started', level='ERROR')
         sys.exit(1)
-    _log('PBCoinData', 'Start: PBCoinData', level='INFO')
+    _log(SERVICE, 'Start: PBCoinData', level='INFO')
     pbcoindata.save_pid()
     capability = ProcessCapabilityHeartbeat(Path(__file__).resolve().parent, "PBCoinData")
     capability.__enter__()
@@ -3046,13 +3035,13 @@ def main():
                 if not pbcoindata._is_master():
                     if not pbcoindata._has_dynamic_ignore_bots():
                         if not pbcoindata._logged_idle:
-                            _log('PBCoinData', 'No running dynamic_ignore bots — idle mode', level='INFO')
+                            _log(SERVICE, 'No running dynamic_ignore bots — idle mode', level='INFO')
                             pbcoindata._logged_idle = True
                         delay = min(60, 2 ** min(config_retry_count, 5)) if config_retry_count else 60
                         pbcoindata._ini_watcher.changed.wait(timeout=delay)
                         continue
                     if pbcoindata._logged_idle:
-                        _log('PBCoinData', 'Running dynamic_ignore bot detected — resuming', level='INFO')
+                        _log(SERVICE, 'Running dynamic_ignore bot detected — resuming', level='INFO')
                         pbcoindata._logged_idle = False
                 pbcoindata.load_data()
                 pbcoindata.load_metadata()
@@ -3060,8 +3049,8 @@ def main():
                 delay = min(60, 2 ** min(config_retry_count, 5)) if config_retry_count else 60
                 pbcoindata._ini_watcher.changed.wait(timeout=delay)
             except Exception as e:
-                _log('PBCoinData', f'Something went wrong, but continue: {e}', level='ERROR')
-                _log('PBCoinData', 'PBCoinData main loop traceback', level='DEBUG', meta={'traceback': traceback.format_exc()})
+                _log(SERVICE, f'Something went wrong, but continue: {e}', level='ERROR')
+                _log(SERVICE, 'PBCoinData main loop traceback', level='DEBUG', meta={'traceback': traceback.format_exc()})
     finally:
         pbcoindata._ini_watcher.stop()
         capability.close()

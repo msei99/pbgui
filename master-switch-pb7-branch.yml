@@ -19,7 +19,9 @@
     pb7venv: "{{ pb7venv }}"
     target_branch: "{{ pb7_branch }}"
     source_branch: "{{ pb7_source_branch | default(pb7_branch) }}"
-    target_commit: "{{ pb7_commit | default('') }}"
+    pb7_ref: "{{ lookup('file', playbook_dir + '/pb7_ref.txt') | trim }}"
+    use_pinned_ref: "{{ pb7_use_pin | default(false) | bool }}"
+    target_commit: "{{ pb7_ref if use_pinned_ref else (pb7_commit | default('')) }}"
     remote_name: "{{ pb7_remote_name | default('origin') }}"
     remote_url: "{{ pb7_remote_url | default('') }}"
     selected_ref: "{{ target_commit if target_commit != '' else remote_name ~ '/' ~ source_branch }}"
@@ -29,6 +31,13 @@
       debug:
         var: ansible_facts
       tags: debug,never
+
+    - name: Validate pinned PB7 commit when requested
+      assert:
+        that:
+          - pb7_ref is match('^[0-9a-f]{40}$')
+        fail_msg: "pb7_ref.txt must contain one exact lowercase 40-character commit SHA."
+      when: use_pinned_ref
 
     - name: Ensure custom remote exists (optional)
       shell: |

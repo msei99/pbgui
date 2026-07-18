@@ -1,6 +1,6 @@
 # Market Data
 
-This page manages PBGui market-data workflows for Hyperliquid, Binance USDM, and Bybit, including l2Book archive downloads, TradFi symbol mapping, 1m auto-refresh loops, and Build best 1m OHLCV jobs.
+This page manages PBGui market-data workflows for Hyperliquid, Binance USDM, Bybit, OKX, and Bitget, including l2Book archive downloads, TradFi symbol mapping, 1m auto-refresh loops, and Build best 1m OHLCV jobs.
 
 ## Recommended Workflow — Best Practice
 
@@ -8,9 +8,10 @@ This is the fastest, most storage-efficient way to have all coins up to date so 
 
 ### Step 1 — Enable all coins for Auto-Refresh
 
-1. Open **Settings (Binance USDM Latest 1m Auto-Refresh)** → click **Select all** → **Save**
-2. Open **Settings (Latest 1m Auto-Refresh) — Hyperliquid** → click **Select all** → **Save**
-3. Switch exchange dropdown to **Bybit** → open **Settings (Bybit Latest 1m Auto-Refresh)** → click **Select all** → **Save**
+1. Open **Settings (Binance USDM Latest 1m Auto-Refresh)** → clear the filter → click **Select visible** → **Save**
+2. Open **Settings (Latest 1m Auto-Refresh) — Hyperliquid** → clear the filter → click **Select visible** → **Save**
+3. Switch exchange dropdown to **Bybit** → open **Settings (Bybit Latest 1m Auto-Refresh)** → clear the filter → click **Select visible** → **Save**
+4. Repeat for **OKX** and **Bitget** if you use their local 1m datasets.
 
 This registers all coins for the rolling update loop. The loop will keep the last few days current automatically — no further manual action needed after the initial backfill.
 
@@ -29,6 +30,8 @@ This queues one background job per exchange that downloads the complete history 
 |---|---|---|
 | **Binance** | Parallel monthly + daily ZIPs (data.binance.vision) + CCXT fill | ~2–4 hours (~550 coins) |
 | **Bybit** | CCXT (async) | ~3 hours (~550 coins) |
+| **OKX** | Official archive ZIPs plus REST repair | depends on selected coins and history |
+| **Bitget** | REST-only `USDT-FUTURES`, optionally distributed | ~7–9 minutes for full BTC history on one downloader |
 | **Hyperliquid** (crypto) | l2Book archive + 1m\_api conversion | depends on l2Book archive size |
 | **Hyperliquid** (XYZ stock-perps) | Tiingo IEX/FX 1m | depends on number of mapped symbols + Tiingo quota |
 
@@ -36,6 +39,7 @@ This queues one background job per exchange that downloads the complete history 
 - Binance LINK (6+ years, 2 239 days, 74 monthly ZIPs): **41 s** with parallel ZIP download
 - Binance all ~550 coins (parallel ZIPs): **estimated 2–4 h** (extrapolated: avg. coin ~3 years ≈ 24 monthly ZIPs → ~20 s/coin)
 - Bybit all 548 coins (CCXT, observed): **~3 h** (BTC alone = 102 min, short coins add proportionally little)
+- Bitget BTC from inception (REST-only, observed): **~8 min 39 s** for 3.66 million candles; exchange-wide duration depends on selected coins and optional downloaders.
 
 Both jobs run in the background. You can close the browser and come back. Use the **Running** panel to watch progress.
 
@@ -53,6 +57,8 @@ After the initial backfill, the daily update is automatic:
 
 - Binance: latest **2–7 days** are refreshed via CCXT every 3 600 s (1 h) per cycle
 - Bybit: latest **2–7 days** are refreshed via CCXT every 3 600 s (1 h) per cycle
+- OKX: latest **2–7 days** are refreshed every 3 600 s (1 h) per cycle
+- Bitget: latest **2–7 days** are refreshed from public REST every 3 600 s (1 h) per cycle
 - Hyperliquid: latest **2–4 days** are refreshed via API every 1 800 s (30 min) per cycle
 
 For immediate refresh hit **⏩ Run now** in the respective **Market Data Status** panel.
@@ -69,13 +75,11 @@ For immediate refresh hit **⏩ Run now** in the respective **Market Data Status
 ## Page Layout
 
 Expanders are shown in this order:
-1. Settings (Latest 1m Auto-Refresh) — Hyperliquid
-2. Settings (Binance USDM Latest 1m Auto-Refresh)
-3. Market Data status (Hyperliquid)
-4. Market Data status (Binance USDM)
-5. Build best 1m OHLCV
-6. TradFi Symbol Mappings
-7. Download l2Book from AWS
+1. Settings (Latest 1m Auto-Refresh) for the selected exchange
+2. Market Data status for the selected exchange
+3. Build best 1m OHLCV
+4. TradFi Symbol Mappings
+5. Download l2Book from AWS (Hyperliquid only)
 
 ## Market Data Page
 
@@ -107,11 +111,11 @@ The focused Hyperliquid panel now also re-fits its embedded height when you swit
 
 The embedded Hyperliquid view also avoids a second internal page scrollbar now, so scrolling stays on the main Market Data page instead of splitting between the page and the focused panel.
 
-For the archive-backed exchanges, the coin chooser now uses a settings-style enabled-coins grid directly in the FastAPI panel: `Filter enabled coin list` narrows the grid, `Select visible` adds the current filtered slice, `Clear all` resets the explicit selection, and you can drag across the visible coin rows with the mouse to add or remove larger ranges quickly. Fast drag movement now fills the intermediate rows too, so quickly painting through the grid no longer loses coins between mouse events. Leaving the selection empty still queues all enabled coins, while any explicit selection limits the queued Best 1m job to exactly those coins.
+For Binance, Bybit, OKX, and Bitget, the coin chooser uses a settings-style available-coins grid directly in the FastAPI panel: `Filter available coin list` narrows the grid, `Select visible` adds the current filtered slice, `Clear all` resets the explicit selection, and you can drag across the visible coin rows with the mouse to add or remove larger ranges quickly. Fast drag movement fills the intermediate rows too. Leaving the selection empty queues all available coins, while any explicit selection limits the Best 1m job to exactly those coins.
 
-That FastAPI `Best 1m` view now also starts directly with the build fields for Binance and Bybit. The redundant intro header text and the extra top `Refresh` button were removed.
+That FastAPI `Best 1m` view starts directly with the build fields for Binance, Bybit, OKX, and Bitget. The redundant intro header text and the extra top `Refresh` button were removed.
 
-For Binance and Bybit, the FastAPI `Best 1m` build panel also shows the filtered Job Monitor directly below the full build form again, so you can watch queued, running, done, and failed `Best 1m` jobs for the selected exchange without leaving the panel.
+For Binance, Bybit, OKX, and Bitget, the FastAPI `Best 1m` build panel shows the filtered Job Monitor directly below the full build form, so you can watch queued, running, done, and failed jobs for the selected exchange without leaving the panel.
 
 That build area is flatter now as well: the coin/build section no longer sits inside an extra rounded card frame, and the embedded Job Monitor drops its standalone page chrome so the whole view reads as one continuous Market Data panel.
 
@@ -167,7 +171,7 @@ Click **Dry run** before the real copy when you want to verify the exact target 
 Controls the automatic 1m candle refresh loop for Hyperliquid symbols.
 
 - **Enabled coins** — multiselect from all known Hyperliquid symbols
-- **Select all / Clear all** — quickly enable or disable all coins
+- **Clear filter + Select visible / Clear all** — quickly enable or disable all coins
 - **Cycle interval (s)** — how often all enabled coins are refreshed (default: 1800s)
 - **Pause between coins (s)** — delay between coins to avoid rate limits (default: 0.5s)
 - **API timeout per coin (s)** — per-coin request timeout (default: 30s)
@@ -181,12 +185,18 @@ Hyperliquid latest-1m catch-up requests can now reserve the full configured 4-da
 Controls the automatic 1m candle refresh loop for Binance USDM perpetuals.
 
 - **Enabled coins** — multiselect from all known Binance USDM coins
-- **Select all / Clear all** — quickly enable or disable all coins
+- **Clear filter + Select visible / Clear all** — quickly enable or disable all coins
 - **Cycle interval (s)** — how often all enabled coins are refreshed (default: 3600s)
 - **Pause between coins (s)** — delay between coins (default: 0.5s)
 - **API timeout per coin (s)** — per-coin request timeout (default: 30s)
 - **Min / Max lookback days** — window for the latest fetch (default: 2 / 7 days)
 - Changes are saved to `pbgui.ini` and applied in the next cycle — no restart needed.
+
+## Settings (Bybit / OKX / Bitget Latest 1m Auto-Refresh)
+
+These exchanges use the same enabled-coins, cycle interval, pause, API timeout, and min/max lookback controls. Defaults are a 3,600-second cycle with a 2–7 day lookback. Changes apply on the next PBData cycle without a restart.
+
+Bitget lists active USDT linear swaps only. Its latest refresh and historical Best 1m backfill use the public `USDT-FUTURES` REST candle endpoints. Worker threads within one local download share an 18 req/s limiter and back off together on rate limits; avoid starting multiple Bitget downloads concurrently because the exchange limit applies to the public IP. There is no Bitget archive fallback. A local non-distributed backfill re-requests incomplete historical days and reports minutes Bitget cannot supply.
 
 ## Market Data Status
 
@@ -356,7 +366,7 @@ Storage path:
 
 This starts background build jobs for eligible symbols.
 
-On the FastAPI page, Binance USDM and Bybit use a settings-style enabled-coins grid directly in the `Best 1m` build panel. You can narrow the list with `Filter enabled coin list`, click single rows, drag across visible rows to add or remove larger ranges quickly, or bulk-add the current filtered slice via `Select visible`. If you leave the explicit selection empty, PBGui queues all enabled coins for the current exchange.
+On the FastAPI page, Binance USDM, Bybit, OKX, and Bitget use a settings-style available-coins grid directly in the `Best 1m` build panel. You can narrow the list with `Filter available coin list`, click single rows, drag across visible rows to add or remove larger ranges quickly, or bulk-add the current filtered slice via `Select visible`. If you leave the explicit selection empty, PBGui queues all available coins for the current exchange.
 
 On Hyperliquid, the focused `Best 1m` build panel now uses the same `Filter enabled coin list` + multi-column grid pattern for coin selection and the shared popup calendar style for `Start date` / `End date`, replacing the older single-row dropdown and browser-native date fields. The visible coin rows can be clicked directly or selected in larger ranges by dragging the mouse across the grid.
 
@@ -368,9 +378,18 @@ On Hyperliquid, the focused `Best 1m` build panel now uses the same `Filter enab
 
 **`binance_best_1m`** — Binance USDM full historical backfill:
 - Downloads complete inception-to-today 1m OHLCV from official Binance archives (data.binance.vision) — monthly + daily ZIPs — with CCXT gap-fill
-- Coin selection from all enabled Binance coins
+- Coin selection from all available Binance coins
 - Controls: Start date, End date, Refetch
 - Storage: `data/ohlcv/binanceusdm/1m/<COIN>/YYYY-MM-DD.npz` (compressed NumPy archive; PB7 cache uses uncompressed `.npy` — ~35% larger for the same data)
+
+**`bybit_best_1m`** — Bybit REST/CCXT historical backfill for available coins.
+
+**`okx_best_1m`** — OKX archive backfill with REST repair for missing candles and volumes.
+
+**`bitget_best_1m`** — Bitget USDT-FUTURES REST-only historical backfill:
+- Uses Bitget symbols from `data/coindata/bitget/mapping.json` and writes `data/ohlcv/bitget/1m/<COIN_DIR>/YYYY-MM-DD.npz`.
+- A local non-distributed backfill validates complete historical days against 1,440 minutes; the listing day and current UTC day may remain partial.
+- Optional **Distributed download** splits missing date ranges across selected VPS downloaders and/or the master. Remote downloaders stream raw candles back; only the master writes NPZ and source-index files. Later runs plan incomplete middle historical days again even while `Refetch` is off; listing/range-start and current UTC boundary days remain partial-day exceptions.
 
 ### Job Management
 

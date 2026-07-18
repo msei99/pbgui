@@ -366,27 +366,28 @@
         PIP_DISABLE_PIP_VERSION_CHECK: "1"
     
     - name: Build passivbot-rust with maturin
-      shell: |
-        source "{{ install_dir }}/venv_pb7/bin/activate"
-        maturin develop --release
+      command:
+        argv:
+          - "{{ install_dir }}/venv_pb7/bin/maturin"
+          - develop
+          - --release
       args:
         chdir: "{{ install_dir }}/pb7/passivbot-rust"
-        executable: /bin/bash
       register: maturin_result
 
     - name: Write rust source stamp after maturin build
-      shell: |
-        source "{{ install_dir }}/venv_pb7/bin/activate"
-        python - <<'PY'
-        import sys
-        sys.path.insert(0, 'src')
-        from rust_utils import stamp_compiled_extensions, source_fingerprint
-        stamp_compiled_extensions(source_fingerprint())
-        print('Rust source stamp updated.')
-        PY
+      command:
+        argv:
+          - "{{ install_dir }}/venv_pb7/bin/python"
+          - -c
+          - |
+            import sys
+            sys.path.insert(0, 'src')
+            from rust_utils import stamp_compiled_extensions, source_fingerprint
+            stamp_compiled_extensions(source_fingerprint())
+            print('Rust source stamp updated.')
       args:
         chdir: "{{ install_dir }}/pb7"
-        executable: /bin/bash
 
     - name: remove pip cache directory
       file:
@@ -442,8 +443,19 @@
         path: "{{ install_dir }}/pbgui/start.sh"
         state: absent
     
-    - name: pbgui copy pbgui.ini.example -> pbgui.ini
-      command: cp "{{ install_dir }}/pbgui/pbgui.ini.example" "{{ install_dir }}/pbgui/pbgui.ini"
+    - name: check whether pbgui.ini already exists
+      stat:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+      register: pbgui_ini_stat
+
+    - name: create pbgui.ini from the example only when absent
+      copy:
+        src: "{{ install_dir }}/pbgui/pbgui.ini.example"
+        dest: "{{ install_dir }}/pbgui/pbgui.ini"
+        remote_src: true
+        force: false
+        mode: preserve
+      when: not pbgui_ini_stat.stat.exists
     
     - name: edit pbgui.ini
       replace:
@@ -471,7 +483,8 @@
     - name: Build enabled PBGui service list
       set_fact:
         pbgui_credential_capability_known: "{{ credential_active is defined and credential_active is not none }}"
-        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if (credential_active | default(false)) else []) }}"
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if (credential_active | default(false) | default(false, true)) else []) }}"
+        systemd_units: "{{ ['pbgui-pbcluster.service', 'pbgui-pbrun.service', 'pbgui-monitor-agent.service'] + (['pbgui-pbcoindata.service'] if (credential_active | default(false) | default(false, true)) else []) }}"
 
     - name: apply VPS logging max bytes
       ini_file:
@@ -496,8 +509,55 @@
         argv: "{{ ['/bin/bash', install_dir + '/pbgui/setup/setup_systemd.sh', '--user', user, '--pbgui-dir', install_dir + '/pbgui', '--python', install_dir + '/venv_pbgui/bin/python', '--enable', pbgui_enabled_services | join(',')] + ([] if pbgui_credential_capability_known else ['--no-disable-excluded']) }}"
       become: yes
       register: systemd_setup_result
+      changed_when: "'changed=true' in (systemd_setup_result.stdout | default(''))"
+
+    - name: verify PBGui systemd services stay active
+      shell: |
+        uid="$(id -u "$PBGUI_SERVICE_USER")"
+        read -r -a units <<< "$PBGUI_SYSTEMD_UNITS"
+        run_systemctl() {
+          sudo -H -u "$PBGUI_SERVICE_USER" env XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user "$@"
+        }
+        show_prop() {
+          run_systemctl show "$1" -p "$2" --value 2>/dev/null || true
+        }
+        declare -A restarts_before
+        for unit in "${units[@]}"; do
+          restarts_before["$unit"]="$(show_prop "$unit" NRestarts)"
+          [[ "${restarts_before[$unit]}" =~ ^[0-9]+$ ]] || restarts_before["$unit"]=0
+        done
+        sleep 12
+        failed=0
+        for unit in "${units[@]}"; do
+          active="$(show_prop "$unit" ActiveState)"
+          sub="$(show_prop "$unit" SubState)"
+          result="$(show_prop "$unit" Result)"
+          status="$(show_prop "$unit" ExecMainStatus)"
+          restarts_after="$(show_prop "$unit" NRestarts)"
+          [[ "$restarts_after" =~ ^[0-9]+$ ]] || restarts_after=0
+          printf 'unit=%s active=%s sub=%s result=%s status=%s restarts_before=%s restarts_after=%s\n' "$unit" "$active" "$sub" "$result" "$status" "${restarts_before[$unit]}" "$restarts_after"
+          if [ "$active" != "active" ] || [ "$sub" != "running" ] || [ "$result" != "success" ] || [ "${status:-0}" != "0" ] || [ "$restarts_after" -gt "${restarts_before[$unit]}" ]; then
+            run_systemctl show "$unit" --no-pager --property=ActiveState,SubState,Result,ExecMainStatus,NRestarts || true
+            run_systemctl status "$unit" --no-pager -l || true
+            failed=1
+          fi
+        done
+        exit "$failed"
+      args:
+        executable: /bin/bash
+      environment:
+        PBGUI_SERVICE_USER: "{{ user }}"
+        PBGUI_SYSTEMD_UNITS: "{{ systemd_units | join(' ') }}"
+      become: yes
+      register: systemd_active_result
+      changed_when: false
 
     - name: print systemd setup result
       debug:
         var: systemd_setup_result
+      tags: debug,never
+
+    - name: print systemd active result
+      debug:
+        var: systemd_active_result
       tags: debug,never

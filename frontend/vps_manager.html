@@ -2987,17 +2987,14 @@
     </main>
   </div>
 
-  <script src='/app/js/log_viewer_panel.js?v=26'></script>
+  <script src='/app/js/log_viewer_panel.js?v=27'></script>
   <script>
-    const TOKEN = "%%TOKEN%%";
     const API_BASE = "%%API_BASE%%";
     const WS_BASE = "%%WS_BASE%%";
     const PBGUI_VERSION = "%%VERSION%%";
     const PBGUI_SERIAL = "%%SERIAL%%";
-    if (TOKEN === "%%" + "TOKEN%%") throw new Error('TOKEN placeholder was not replaced');
     if (API_BASE === "%%" + "API_BASE%%") throw new Error('API_BASE placeholder was not replaced');
     if (WS_BASE === "%%" + "WS_BASE%%") throw new Error('WS_BASE placeholder was not replaced');
-    window.TOKEN = TOKEN;
     window.API_BASE = API_BASE;
     window.WS_BASE = WS_BASE;
     window.PBGUI_VERSION = PBGUI_VERSION;
@@ -3005,7 +3002,7 @@
     window.PBGUI_NAV_CONFIG = {
       subtitle: 'VPS Manager',
       current: 'system_vps_manager_fastapi',
-      token: TOKEN,
+      authenticated: true,
       apiBase: API_BASE,
       version: PBGUI_VERSION,
       serial: PBGUI_SERIAL
@@ -3017,6 +3014,7 @@
     const store = {
       ws: null,
       reconnectTimer: 0,
+      authExpired: false,
       pendingWsMessages: [],
       contextGeneration: 1,
       detailRequestGeneration: 0,
@@ -4341,7 +4339,7 @@
 
     function renderRebootBanner(status) {
       const row = status && status.summary_row ? status.summary_row : {};
-      if (!row.reboot_required) return '';
+      if (row.reboot_required !== true) return '';
       const hostname = (status && status.name) || store.hostname || '';
       const isMasterHost = store.view === 'master' || status.is_master;
       return `
@@ -4353,7 +4351,7 @@
           </div>
           ${isMasterHost ? '' : `
           <div class='reboot-banner-action'>
-            <button class='btn danger' type='button' onclick='rebootVpsAction(${js(hostname)})'>Reboot Now</button>
+            <button class='btn danger' type='button' data-vps-action='reboot-vps' data-host='${escAttr(hostname)}'>Reboot Now</button>
           </div>`}
         </div>`;
     }
@@ -4361,15 +4359,23 @@
     function getSystemHeaderModel(status, summary, isMaster, rtd) {
       const hostname = String(status.name || summary.name || store.hostname || '-');
       const online = !!status.online;
+      const hostConnected = isMaster ? online : !!status.ssh_online;
       const telemetryStale = !!(status.telemetry_stale || summary.telemetry_stale);
-      const onlineText = telemetryStale ? 'Telemetry Stale' : (online ? 'Online' : 'Offline');
+      const onlineText = telemetryStale && hostConnected ? 'SSH Online · Telemetry Stale' : (hostConnected ? 'Online' : 'SSH Offline');
       const rtdLabel = rtd != null ? formatLatency(rtd) : null;
       const bootTime = String(summary.start || '-');
       const uptime = computeUptime(summary.start_ts || summary.start);
-      const updatesCount = Number.parseInt(String(summary.updates == null ? '' : summary.updates).trim(), 10);
-      const updatesNum = Number.isFinite(updatesCount) ? updatesCount : 0;
-      const updatesTone = updatesNum === 0 ? 'ok' : 'error';
-      const reboot = !!summary.reboot_required;
+      const packageStatus = status.package_status || summary.package_status || {};
+      const packageState = String(packageStatus.state || 'missing').toLowerCase();
+      const packageAvailable = packageStatus.available === true;
+      const updatesCount = packageAvailable ? Number.parseInt(String(packageStatus.upgrades), 10) : NaN;
+      const updatesNum = Number.isFinite(updatesCount) ? updatesCount : 'N/A';
+      const updatesTone = !packageAvailable || packageState !== 'ok' ? 'warning' : (updatesCount === 0 ? 'ok' : 'error');
+      const updatesSub = 'Source: agent cache · ' + (packageState.charAt(0).toUpperCase() + packageState.slice(1)) + (packageState === 'stale' ? ' · last-known values' : '');
+      const reboot = packageAvailable ? packageStatus.reboot_required === true : null;
+      const rebootTone = reboot === null ? 'warning' : (reboot ? 'error' : 'ok');
+      const rebootText = reboot === null ? 'N/A' : (reboot ? 'Required' : 'OK');
+      const rebootSub = reboot === null ? 'agent cache unavailable' : (reboot ? 'kernel update pending' : 'system current');
       const pbguiVer = String(summary.pbgui || '-');
       const pb7Ver = String(summary.pb7 || '-');
       const pbguiBranch = String(summary.pbgui_branch || '-');
@@ -4380,7 +4386,7 @@
       const pb7Sub = getVersionStatusSub(pb7Branch, summary.pb7_github, pb7Tone);
       const tags = [];
       if (!isMaster) {
-        tags.push(`<span class='tag ${online ? 'ok' : 'error'}'>${esc(onlineText)}</span>`);
+        tags.push(`<span class='tag ${hostConnected ? (telemetryStale ? 'warning' : 'ok') : 'error'}'>${esc(onlineText)}</span>`);
         if (!summary.pbgui) {
           if (!status.last_init) tags.push(`<span class='tag warning'>Init Pending</span>`);
           if (!status.last_setup) tags.push(`<span class='tag warning'>Setup Pending</span>`);
@@ -4391,14 +4397,18 @@
 
       return {
         hostname,
-        online,
+        online: hostConnected,
         onlineText,
         rtdLabel,
         bootTime,
         uptime,
         updatesNum,
         updatesTone,
+        updatesSub,
         reboot,
+        rebootTone,
+        rebootText,
+        rebootSub,
         pbguiVer,
         pb7Ver,
         pbguiBranch,
@@ -4428,12 +4438,12 @@
             <div class='system-metric'>
               <div class='system-metric-label'>Updates</div>
               <div class='system-metric-value'><span class='dot ${model.updatesTone}' data-role='updates-dot'></span><span data-role='updates-count'>${model.updatesNum}</span></div>
-              <div class='system-metric-sub' data-role='updates-sub'>${model.updatesNum === 0 ? 'system current' : 'pending'}</div>
+              <div class='system-metric-sub' data-role='updates-sub'>${esc(model.updatesSub)}</div>
             </div>
             <div class='system-metric'>
               <div class='system-metric-label'>Reboot</div>
-              <div class='system-metric-value'><span class='dot ${model.reboot ? 'error' : 'ok'}' data-role='reboot-dot'></span><span data-role='reboot-value'>${model.reboot ? 'Required' : 'OK'}</span></div>
-              <div class='system-metric-sub' data-role='reboot-sub'>${model.reboot ? 'kernel update pending' : 'system current'}</div>
+              <div class='system-metric-value'><span class='dot ${model.rebootTone}' data-role='reboot-dot'></span><span data-role='reboot-value'>${esc(model.rebootText)}</span></div>
+              <div class='system-metric-sub' data-role='reboot-sub'>${esc(model.rebootSub)}</div>
             </div>
             <div class='system-metric'>
               <div class='system-metric-label' data-role='pbgui-label'>PBGui ${model.pbguiTone !== 'ok' && model.pbguiVer !== '-' ? '⚠' : ''}</div>
@@ -4490,10 +4500,10 @@
       setNodeTextIfChanged(uptimeNode, model.uptime ? 'Uptime: ' + model.uptime : '');
       setNodeClassNameIfChanged(updatesDot, 'dot ' + model.updatesTone);
       setNodeTextIfChanged(updatesCountNode, model.updatesNum);
-      setNodeTextIfChanged(updatesSubNode, model.updatesNum === 0 ? 'system current' : 'pending');
-      setNodeClassNameIfChanged(rebootDot, 'dot ' + (model.reboot ? 'error' : 'ok'));
-      setNodeTextIfChanged(rebootValueNode, model.reboot ? 'Required' : 'OK');
-      setNodeTextIfChanged(rebootSubNode, model.reboot ? 'kernel update pending' : 'system current');
+      setNodeTextIfChanged(updatesSubNode, model.updatesSub);
+      setNodeClassNameIfChanged(rebootDot, 'dot ' + model.rebootTone);
+      setNodeTextIfChanged(rebootValueNode, model.rebootText);
+      setNodeTextIfChanged(rebootSubNode, model.rebootSub);
       setNodeTextIfChanged(pbguiLabelNode, 'PBGui ' + (model.pbguiTone !== 'ok' && model.pbguiVer !== '-' ? '⚠' : ''));
       setNodeClassNameIfChanged(pbguiDot, 'dot ' + model.pbguiTone);
       setNodeTextIfChanged(pbguiVerNode, model.pbguiVer);
@@ -4525,13 +4535,13 @@
     }
 
     function renderVpsSummaryTags(status) {
-      const onlineLabel = status.telemetry_stale ? 'Telemetry Stale' : (status.online ? 'Online' : 'Offline');
+      const onlineLabel = status.telemetry_stale && status.ssh_online ? 'SSH Online · Telemetry Stale' : (status.ssh_online ? 'SSH Online' : 'SSH Offline');
       const agent = status.monitor_agent || {};
       const agentState = String(agent.state || 'unknown');
       const agentTone = agentState === 'ok' ? 'ok' : (agentState === 'unknown' ? 'warning' : 'error');
       const agentLabel = agentState === 'ok' ? 'OK' : (agentState === 'stale' ? 'Stale' : (agentState === 'missing' ? 'Missing' : (agentState === 'error' ? 'Error' : 'Unknown')));
       return `
-        <span class='tag ${status.online ? 'ok' : 'error'}'>${esc(onlineLabel)}</span>
+        <span class='tag ${status.ssh_online ? (status.telemetry_stale ? 'warning' : 'ok') : 'error'}'>${esc(onlineLabel)}</span>
         <span class='tag ${agentTone}'>Monitor Agent ${esc(agentLabel)}</span>
         <span class='tag ${status.init_ok ? 'ok' : 'warning'}'>Init ${status.init_ok ? 'Done' : 'Pending'}</span>
         <span class='tag ${status.setup_ok ? 'ok' : 'warning'}'>Setup ${status.setup_ok ? 'Done' : 'Pending'}</span>
@@ -4569,6 +4579,96 @@
           <div class='status-item' data-field='last-update'><div class='status-label'>Last update</div><div class='status-value'>${esc(status.last_update || '-')}</div></div>
           <div class='status-item' data-field='last-command'><div class='status-label'>Last command</div><div class='status-value code'>${esc(status.last_command || '-')}</div></div>
         </div>`;
+    }
+
+    function agentStateModel(value) {
+      const state = String(value || 'missing').toLowerCase();
+      if (state === 'ok') return { state: 'ok', label: 'OK', tone: 'ok' };
+      if (state === 'stale') return { state: 'stale', label: 'Stale', tone: 'warning' };
+      if (state === 'error') return { state: 'error', label: 'Error', tone: 'error' };
+      return { state: 'missing', label: 'Missing', tone: 'error' };
+    }
+
+    function formatAgentAge(value) {
+      const age = Number(value);
+      return Number.isFinite(age) && age >= 0 ? formatLatency(age * 1000) : 'N/A';
+    }
+
+    function effectiveAgentAge(item, nowSeconds) {
+      const payload = item && typeof item === 'object' ? item : {};
+      const now = Number.isFinite(Number(nowSeconds)) ? Number(nowSeconds) : Date.now() / 1000;
+      const generatedAt = Number(payload.generated_at);
+      if (Number.isFinite(generatedAt) && generatedAt > 0) return Math.max(now - generatedAt, 0);
+      const age = Number(payload.age);
+      if (!Number.isFinite(age) || age < 0) return null;
+      const checkedAt = Number(payload.checked_at);
+      return age + (Number.isFinite(checkedAt) && checkedAt > 0 ? Math.max(now - checkedAt, 0) : 0);
+    }
+
+    function renderAgentCachePanel(status, isMaster) {
+      const agent = status.monitor_agent || {};
+      const packageStatus = status.package_status || (status.summary_row || {}).package_status || {};
+      const model = agentStateModel(agent.state);
+      const packageModel = agentStateModel(packageStatus.state);
+      const files = agent.files || {};
+      const loops = agent.loops || {};
+      const requiredFiles = [
+        ['live_metrics.ndjson', 'Live metrics'],
+        ['instance_snapshot.json', 'Instances'],
+        ['host_meta.json', 'Host metadata'],
+        ['service_status.json', 'Services'],
+        ['package_status.json', 'Packages'],
+        ['collector_status.json', 'Collector status']
+      ];
+      const fileCards = requiredFiles.map(function (entry) {
+        const item = files[entry[0]] || { state: 'missing' };
+        const itemModel = agentStateModel(item.state);
+        return `<div class='status-item' data-agent-file='${escAttr(entry[0])}'>
+          <div class='status-label'>${esc(entry[1])}</div>
+          <div class='status-value'>${levelTag(itemModel.tone === 'error' ? 'error' : itemModel.tone === 'warning' ? 'warning' : 'ok', itemModel.label)}</div>
+          <div class='status-sub'>Effective age: ${esc(formatAgentAge(effectiveAgentAge(item)))}</div>
+          ${item.error ? `<div class='status-sub'>${esc(item.error)}</div>` : ''}
+        </div>`;
+      }).join('');
+      const loopRows = Object.keys(loops).sort().map(function (name) {
+        const item = loops[name] || {};
+        const itemModel = agentStateModel(item.state);
+        const error = item.last_error || item.error || '';
+        return `<tr><td class='code'>${esc(name)}</td><td>${levelTag(itemModel.tone === 'error' ? 'error' : itemModel.tone === 'warning' ? 'warning' : 'ok', itemModel.label)}</td><td>${esc(formatAgentAge(effectiveAgentAge(item)))}</td><td>${esc(error || '-')}</td></tr>`;
+      }).join('');
+      const packageValue = packageStatus.available === true ? String(packageStatus.upgrades) : 'N/A';
+      const rebootValue = packageStatus.available === true ? (packageStatus.reboot_required ? 'Required' : 'No') : 'N/A';
+      const packageValueLabel = packageModel.state === 'stale' ? 'Last-known updates' : 'Updates';
+      const updateAttrs = isMaster ? "data-master='true'" : `data-host='${escAttr(store.hostname)}'`;
+      const remediation = model.state === 'ok' && packageModel.state === 'ok' ? '' : `
+        <div class='notice warning agent-remediation'>
+          <strong>Remediation</strong>
+          <div>Run <button class='table-button' type='button' data-vps-action='update-agent' ${updateAttrs}>Update PBGui</button> to install/restart the agent, then allow one 30s collector cycle.</div>
+          <div class='code'>systemctl --user status pbgui-monitor-agent.service</div>
+          <div class='code'>systemctl --user restart pbgui-monitor-agent.service</div>
+          <div class='code'>journalctl --user -u pbgui-monitor-agent.service</div>
+        </div>`;
+      return `<div class='panel agent-cache-panel'>
+        <div class='panel-head'><div><div class='panel-title'>Monitor Agent Cache</div><div class='panel-sub'>Source: agent cache · live stale after 15s · collector stale after 30s</div></div>${levelTag(model.tone === 'error' ? 'error' : model.tone === 'warning' ? 'warning' : 'ok', model.label)}</div>
+        <div class='panel-body stack'>
+          <div class='status-grid'>
+            <div class='status-item'><div class='status-label'>Package status</div><div class='status-value'>${levelTag(packageModel.tone === 'error' ? 'error' : packageModel.tone === 'warning' ? 'warning' : 'ok', packageModel.label)}</div><div class='status-sub'>${esc(packageValueLabel)}: ${esc(packageValue)} · Reboot: ${esc(rebootValue)} · Age: ${esc(formatAgentAge(packageStatus.age))}</div>${packageStatus.error ? `<div class='status-sub'>${esc(packageStatus.error)}</div>` : ''}</div>
+            <div class='status-item'><div class='status-label'>Agent provenance</div><div class='status-value'>Agent cache</div><div class='status-sub'>Effective age: ${esc(formatAgentAge(effectiveAgentAge(agent)))}</div>${agent.error ? `<div class='status-sub'>${esc(agent.error)}</div>` : ''}</div>
+          </div>
+          <div class='status-grid'>${fileCards}</div>
+          <div class='table-wrap'><table class='table-small'><thead><tr><th>Collector loop</th><th>State</th><th>Effective age</th><th>Last error</th></tr></thead><tbody>${loopRows || `<tr><td colspan='4'>No collector loop status reported.</td></tr>`}</tbody></table></div>
+          ${remediation}
+        </div>
+      </div>`;
+    }
+
+    function renderSidebarAgentStatus(status) {
+      const agent = (status || {}).monitor_agent || {};
+      const packageStatus = (status || {}).package_status || ((status || {}).summary_row || {}).package_status || {};
+      const model = agentStateModel(agent.state);
+      const packageModel = agentStateModel(packageStatus.state);
+      const value = packageStatus.available === true ? (packageModel.state === 'stale' ? 'last-known ' : '') + String(packageStatus.upgrades) + ' update(s)' : 'N/A';
+      return `<div class='notice ${model.tone === 'error' ? 'error' : model.tone === 'warning' ? 'warning' : 'info'}'><strong>Agent cache: ${esc(model.label)}</strong><br>Source: agent cache<br>Packages: ${esc(packageModel.label)} · ${esc(value)}</div>`;
     }
 
     function renderSshHostKeyNotice(status) {
@@ -4679,12 +4779,11 @@
       if ((store.view !== 'vps' && store.view !== 'vps-setup') || !store.hostname) return false;
       const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
       const ui = ensureVpsUi(store.hostname, detail);
-      const inputs = Array.from(document.querySelectorAll('.pw-wrap input[oninput]'));
+      const inputs = Array.from(document.querySelectorAll('.pw-wrap input[data-vps-field][data-vps-host]'));
       let changed = false;
       ['user_pw'].forEach(function (fieldName) {
         const input = inputs.find(function (node) {
-          const handler = String(node.getAttribute('oninput') || '');
-          if (handler.indexOf('setVpsField(') < 0) return false;
+          if (String(node.getAttribute('data-vps-field') || '') !== fieldName) return false;
           const field = node.closest('.field');
           const label = String(field && field.querySelector('label') ? field.querySelector('label').textContent || '' : '').trim().toLowerCase();
           if (fieldName === 'user_pw') return label.indexOf('vps user password') >= 0;
@@ -4847,7 +4946,8 @@
         { key: 'init_ok' },
         { key: 'setup_ok' },
         { key: 'coindata_ok', okSub: 'CoinData API OK', failSub: 'CoinData API missing/invalid' },
-        { key: 'online', okSub: 'Live telemetry received', failSub: 'No current live telemetry' }
+        { key: 'online', okSub: 'Live telemetry received', failSub: 'No current live telemetry' },
+        { key: 'ssh_online', okSub: 'SSH connected independently of agent cache health', failSub: 'SSH is not connected' }
       ];
       FLAGS.forEach(function(f) {
         if (!Object.prototype.hasOwnProperty.call(status, f.key)) return;
@@ -5019,6 +5119,7 @@
         const mRtd = detail.monitor && detail.monitor.server ? detail.monitor.server.rtd : null;
         syncSystemHeader('master-system-header', status, summary, true, mRtd);
         setHtmlIfChanged('master-status-cards', renderMasterStatusCards(status));
+        setHtmlIfChanged('master-agent-cache-live', renderAgentCachePanel(status, true));
         _liveUpdateServiceRows('master-monitor-live', (detail.monitor || {}).v7 || []);
         _liveUpdateTelemetry((detail.monitor || {}).server || null);
         return;
@@ -5033,6 +5134,7 @@
         syncSystemHeader('vps-system-header', status, summary, false, vRtd);
         _liveUpdateStatusFields('vps-status-fields', status, summary, false);
         _liveUpdateStatusFlags('vps-status-flags', status);
+        setHtmlIfChanged('vps-agent-cache-live', renderAgentCachePanel(status, false));
         setHtmlIfChanged('vps-remote-services-panel', renderVpsRemoteServicesContent(detail.hostname, status));
         _liveUpdateServiceRows('vps-monitor-live', (detail.monitor || {}).v7 || []);
         _liveUpdateTelemetry((detail.monitor || {}).server || null);
@@ -5163,7 +5265,6 @@
         vpsLogViewer = new LogViewerPanel({
           containerId: 'vps-log-viewer-target',
           wsBase: WS_BASE,
-          token: TOKEN,
           defaultHost: detail.hostname,
           defaultService: requestedTarget,
           presets: 'trading',
@@ -5217,7 +5318,6 @@
         masterHostLogViewer = new LogViewerPanel({
           containerId: 'master-host-log-viewer-target',
           wsBase: WS_BASE,
-          token: TOKEN,
           defaultHost: 'local',
           defaultService: 'PBRun',
           presets: 'trading',
@@ -5277,7 +5377,6 @@
         taskLogViewer = new LogViewerPanel({
           containerId: 'task-log-viewer-target',
           wsBase: WS_BASE,
-          token: TOKEN,
           defaultHost: 'local',
           defaultFile: requestedFile,
           taskBrowseMode: browseMode,
@@ -5329,8 +5428,8 @@
       const buttonLabel = isVisible ? '&#128584;' : '&#128065;';
       return `
         <div class='pw-wrap'>
-          <input type='${inputType}' value='${escAttr(value)}' oninput="${oninput}" ${extraAttrs || ''}>
-          <button type='button' class='pw-eye-btn' onclick='togglePwVisible(this, ${js(visibilityKey || '')}, ${js(revealHost || '')}, ${js(revealField || '')})' tabindex='-1' title='${escAttr(title || 'Show or hide value')}' aria-label='${escAttr(title || 'Show or hide value')}'>${buttonLabel}</button>
+          <input type='${inputType}' value='${escAttr(value)}'${oninput ? ` oninput="${escAttr(oninput)}"` : ''} ${extraAttrs || ''}>
+          <button type='button' class='pw-eye-btn' data-vps-action='toggle-password' data-visibility-key='${escAttr(visibilityKey || '')}' data-host='${escAttr(revealHost || '')}' data-field='${escAttr(revealField || '')}' tabindex='-1' title='${escAttr(title || 'Show or hide value')}' aria-label='${escAttr(title || 'Show or hide value')}'>${buttonLabel}</button>
         </div>`;
     }
 
@@ -5792,7 +5891,7 @@
                         <td>${esc(commandText || 'Idle')}</td>
                         <td>${renderOverviewDeployStatusCell(row)}</td>
                         <td>${esc(row.task_started ? formatTs(row.task_started || '') : '-')}</td>
-                        <td><button class='table-button' type='button' ${logFile ? '' : 'disabled'} onclick='openDeployLogWindow(${js(hostname)}, ${js(command)}, ${js(commandText)})'>Open Log</button></td>
+                        <td><button class='table-button' type='button' ${logFile ? '' : 'disabled'} data-vps-action='open-deploy-log' data-host='${escAttr(hostname)}' data-command='${escAttr(command)}' data-command-text='${escAttr(commandText)}'>Open Log</button></td>
                       </tr>`;
                   }).join('')}
                 </tbody>
@@ -5806,10 +5905,8 @@
       const safeType = ['success', 'info', 'warning', 'error'].includes(type) ? type : 'info';
       fetch('/api/notify_log', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + TOKEN
-        },
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ msg: String(message || ''), level: safeType === 'success' ? 'ok' : safeType })
       }).catch(function () {});
       if (safeType === 'error' || safeType === 'warning') {
@@ -5828,10 +5925,7 @@
 
     async function apiKeysFetch(path, options) {
       const opts = Object.assign({ credentials: 'same-origin' }, options || {});
-      opts.headers = Object.assign({
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + TOKEN
-      }, (options && options.headers) || {});
+      opts.headers = Object.assign({ 'Content-Type': 'application/json' }, (options && options.headers) || {});
       const response = await fetch(API_BASE.replace('/api/vps-manager', '/api/api-keys') + path, opts);
       const data = await response.json().catch(function () { return {}; });
       if (!response.ok) throw new Error(data && data.detail ? data.detail : 'Request failed');
@@ -6449,7 +6543,7 @@
           return;
         }
         helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+        fetch('/api/help/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { credentials: 'same-origin' })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
@@ -6467,7 +6561,7 @@
 
       function loadHelpIndex(keyword) {
         helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch('/api/help/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+        fetch('/api/help/index?lang=' + helpLang, { credentials: 'same-origin' })
           .then(function (response) {
             if (!response.ok) throw new Error('HTTP ' + response.status);
             return response.json();
@@ -6557,11 +6651,12 @@
 
       window.PBGUI_HELP_OPENER = function () {
         if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
-        window.PBGuiSharedHelp.open(helpDefaultTopic, { token: TOKEN });
+        window.PBGuiSharedHelp.open(helpDefaultTopic);
       };
     }());
 
     function connectWs() {
+      if (store.authExpired) return;
       clearTimeout(store.reconnectTimer);
       store.reconnectTimer = 0;
       const url = WS_BASE + '/api/vps-manager/ws';
@@ -6596,9 +6691,18 @@
         store.connected = false;
         renderSummaryBar();
       };
-      ws.onclose = function () {
+      ws.onclose = function (event) {
         store.connected = false;
         renderSummaryBar();
+        if (event.code === 4001) {
+          store.authExpired = true;
+          store.ws = null;
+          clearTimeout(store.reconnectTimer);
+          store.reconnectTimer = 0;
+          store.pendingWsMessages = [];
+          window.location.replace('/');
+          return;
+        }
         if (isVpsContextView()) {
           store._pendingView = store.view;
           store._pendingHostname = store.hostname;
@@ -6608,10 +6712,10 @@
     }
 
     function scheduleReconnect() {
-      if (store.reconnectTimer) return;
+      if (store.authExpired || store.reconnectTimer) return;
       store.reconnectTimer = setTimeout(function () {
         store.reconnectTimer = 0;
-        connectWs();
+        if (!store.authExpired) connectWs();
       }, 1600);
     }
 
@@ -6653,10 +6757,8 @@
     function vpsManagerPost(path, payload) {
       return fetch(API_BASE + path, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + TOKEN
-        },
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload || {})
       }).then(function (response) {
         return response.json().catch(function () { return {}; }).then(function (data) {
@@ -6673,7 +6775,7 @@
       const query = new URLSearchParams(params || {});
       const qs = query.toString();
       return fetch(API_BASE + path + (qs ? '?' + qs : ''), {
-        headers: { 'Authorization': 'Bearer ' + TOKEN }
+        credentials: 'same-origin'
       }).then(function (response) {
         return response.json().catch(function () { return {}; }).then(function (data) {
           if (!response.ok) {
@@ -6701,7 +6803,7 @@
       if (store.detailAbortController) store.detailAbortController.abort();
       store.detailAbortController = new AbortController();
       return fetch(API_BASE + '/detail/' + encodeURIComponent(hostname), {
-        headers: { 'Authorization': 'Bearer ' + TOKEN },
+        credentials: 'same-origin',
         signal: store.detailAbortController.signal,
         cache: 'no-store'
       })
@@ -6746,7 +6848,7 @@
       if (store.detailAbortController) store.detailAbortController.abort();
       store.detailAbortController = new AbortController();
       return fetch(API_BASE + '/detail-master', {
-        headers: { 'Authorization': 'Bearer ' + TOKEN },
+        credentials: 'same-origin',
         signal: store.detailAbortController.signal,
         cache: 'no-store'
       })
@@ -7454,17 +7556,21 @@
         store.detail = null;
         needsForceView = true;
       } else if (cmd === 'run_master_command' || cmd === 'run_vps_command') {
+        const task = store.taskLog || {};
         if (cmd === 'run_vps_command') {
           const data = msg.data || {};
           const actualFile = String(data.file_alias || '');
-          const task = store.taskLog || {};
-          if (actualFile && task.scope === 'vps' && task.hostname === String(data.hostname || '') && task.file !== actualFile) {
+          if (task.scope === 'vps' && task.hostname === String(data.hostname || '')) {
             task.command = String(data.command || task.command || '');
-            task.file = actualFile;
+            if (actualFile) task.file = actualFile;
             task.startEmpty = false;
-            if (taskLogViewer) taskLogViewer.setFile(actualFile);
-            taskLogViewerFile = actualFile;
+            task.runKey = String(Date.now());
+            taskLogViewerKey = '';
           }
+        } else if (task.scope === 'master') {
+          task.startEmpty = false;
+          task.runKey = String(Date.now());
+          taskLogViewerKey = '';
         }
         toast('Command started.', 'success');
         if (cmd === 'run_master_command') {
@@ -7579,7 +7685,8 @@
           last_command: String(summary.task_command_text || summary.task_command || ''),
           last_update: String(summary.task_started || ''),
           summary_row: summary,
-          monitor_agent: { state: 'unknown' }
+          package_status: summary.package_status || { source: 'agent_cache', state: 'missing', available: false, upgrades: 'N/A', reboot_required: null },
+          monitor_agent: summary.monitor_agent || { source: 'agent_cache', state: 'missing', files: {}, loops: {} }
         },
         config: {},
         branches: { pbgui: {}, pb7: {} },
@@ -7848,7 +7955,7 @@
         }
         const hostname = String(item.hostname || '').trim();
         const passwordCell = (action === 'add' || action === 'update')
-          ? `<input type='password' value='${escAttr(passwords[hostname] || '')}' oninput='setClusterImportPassword(${js(hostname)}, this.value)' placeholder='leave empty to skip'>`
+          ? `<input type='password' value='${escAttr(passwords[hostname] || '')}' data-cluster-import-host='${escAttr(hostname)}' placeholder='leave empty to skip'>`
           : '-';
         return `
           <tr>
@@ -9064,7 +9171,6 @@
           deployLogViewers[item.id] = new LogViewerPanel({
             containerId: containerId,
             wsBase: WS_BASE,
-            token: TOKEN,
             defaultHost: 'local',
             defaultFile: requestedFile,
             startLocalAtEnd: false,
@@ -9489,12 +9595,16 @@
           if (row.nav === 'master') {
             target = `<button class='table-button' type='button' onclick='selectView("master")'>${esc(row.name)}</button>`;
           } else if (row.nav === 'vps') {
-            target = `<button class='table-button' type='button' onmousedown='event.stopPropagation()' onmouseup='event.stopPropagation()' onclick='event.stopPropagation(); selectView("vps", ${js(row.hostname)})'>${esc(row.name)}</button>`;
+            target = `<button class='table-button' type='button' data-vps-action='select-vps' data-host='${escAttr(row.hostname)}'>${esc(row.name)}</button>`;
           }
           return `${target}${row.nav === 'vps' ? renderOverviewTaskSummary(row) : ''}`;
         }
         if (column.key === 'role') return `${esc(row.role_icon || '')} ${esc(row.role || '')}`;
-        if (column.key === 'online') return row.online ? levelTag('ok', 'Online') : (row.telemetry_cached ? levelTag('warning', 'Cached') : levelTag('error', row.telemetry_stale ? 'Stale' : 'Offline'));
+        if (column.key === 'online') {
+          if (row.online) return levelTag('ok', 'Online');
+          if (row.ssh_online) return levelTag('warning', row.telemetry_cached ? 'SSH Online · Cached' : 'SSH Online · Telemetry Stale');
+          return levelTag('error', 'SSH Offline');
+        }
         if (column.key === 'ssh_key') {
           const keyStatus = String(row.ssh_host_key_status || 'unknown');
           if (keyStatus === 'local') return levelTag('ok', 'Local');
@@ -9505,7 +9615,12 @@
         }
         if (column.key === 'running_bots') return esc(row.running_bots == null ? '-' : String(row.running_bots));
         if (column.key === 'start') return esc(row.start || '-');
-        if (column.key === 'updates') return `${esc(row.updates || '-')} ${row.reboot_required ? levelTag('warning', 'Reboot') : ''}`;
+        if (column.key === 'updates') {
+          const packageStatus = row.package_status || {};
+          const model = agentStateModel(packageStatus.state);
+          const updates = packageStatus.available === true ? String(packageStatus.upgrades) : 'N/A';
+          return `<div>${esc(updates)} ${packageStatus.reboot_required === true ? levelTag('warning', 'Reboot') : ''}</div><div class='status-sub'>Source: agent cache · ${levelTag(model.tone === 'error' ? 'error' : model.tone === 'warning' ? 'warning' : 'ok', model.label)}${model.state === 'stale' ? ' · Last-known' : ''}</div>`;
+        }
         if (column.key === 'pbgui') return renderOverviewVersionCell(row.pbgui, row.pbgui_github);
         if (column.key === 'pbgui_branch') return esc(row.pbgui_branch || '-');
         if (column.key === 'pbgui_github') return renderOverviewGithubCell(row.pbgui_github);
@@ -9529,7 +9644,7 @@
                 let rowAttrs = '';
                 if (row.nav === 'vps') {
                   rowClass = 'selectable-row' + (selectedHosts.has(String(row.hostname || '')) ? ' selected' : '');
-                  rowAttrs = ` data-overview-host='${escAttr(row.hostname)}' onmousedown='startOverviewSelection(${js(row.hostname)}, event)' onmouseenter='moveOverviewSelection(${js(row.hostname)})'`;
+                  rowAttrs = ` data-overview-host='${escAttr(row.hostname)}'`;
                 }
                 return `
                   <tr class='${rowClass}'${rowAttrs}>
@@ -9805,7 +9920,7 @@
               </div>
               <div class='panel-body'>
                 <div class='button-row'>
-                  <button class='btn ghost' type='button' onclick='switchPb7ToUpstream(${js(scope)})'>Use upstream master</button>
+                  <button class='btn ghost' type='button' onclick='switchPb7ToUpstream(${js(scope)})'>Use pinned upstream PB7</button>
                 </div>
                 <div class='field-grid'>
                   <div class='field'>
@@ -9944,9 +10059,11 @@
     }
 
     function switchPb7ToUpstream(scope) {
-      const label = 'Switch PB7 to upstream origin/master';
+      const label = 'Switch PB7 to pinned upstream release';
       const extraVars = {
         pb7_branch: 'master',
+        pb7_source_branch: 'master',
+        pb7_use_pin: true,
         pb7_remote_name: 'origin',
         pb7_remote_url: 'https://github.com/enarjord/passivbot.git'
       };
@@ -10058,6 +10175,7 @@
           </div>
           <button class='${masterLinuxBtnClass}' type='button' ${linuxUpdateSupported ? '' : 'disabled'} onclick='updateLinuxMasterAction()'>Update Linux</button>
           <button class='${masterRebootBtnClass}' type='button' ${localSudoSupported ? '' : 'disabled'} onclick='rebootMasterAction()'>Reboot Master</button>
+          ${renderSidebarAgentStatus(st)}
           ${blockedTasksNotice ? `<div class='notice warning'>${esc(blockedTasksNotice)}</div>` : ''}
           <div class='sb-separator'>Tools</div>
           <button class='sb-btn' type='button' ${localSudoSupported ? '' : 'disabled'} onclick='masterActionWithSudo("master-install-rustup", "Install or Update rustup")'>Install or Update rustup</button>
@@ -10093,32 +10211,33 @@
               }).join('')}
             </select>
           </div>
-          ${store.view !== 'vps' ? `<button class='sb-btn' type='button' onclick='selectView("vps", ${js(selectedHost)})'>Back</button>` : ''}
-          <button class='sb-btn' type='button' onclick='openVpsTaskLogs(${js(selectedHost)})'>Task Logs</button>
-          <button class='sb-btn' type='button' onclick='openVpsHostLogs(${js(selectedHost)})'>Host Logs</button>
-          <button class='${hostKeyBtnClass}' type='button' onclick='reviewVpsSshHostKey(${js(selectedHost)})'>Review SSH Host Key</button>
-          ${isRemoteMaster ? `<button class='sb-btn' type='button' onclick='selectView("vps-ufw", ${js(selectedHost)})'>Change UFW</button>` : ''}
-          ${!isRemoteMaster ? `<button class='sb-btn' type='button' onclick='selectView("vps-setup", ${js(selectedHost)})'>Change VPS</button>` : ''}
-          <button class='sb-btn' type='button' onclick='selectView("vps-pbgui-branch", ${js(selectedHost)})'>PBGui Branch</button>
-          <button class='sb-btn' type='button' onclick='selectView("vps-pb7-branch", ${js(selectedHost)})'>PB7 Branch</button>
-          ${showClusterNodeBtn ? `<button class='${clusterNodeBtnClass}' type='button' title='${escAttr(clusterNode.reason || '')}' onclick='addVpsToCluster(${js(selectedHost)})'>${esc(clusterNodeBtnText)}</button>` : ''}
-          <button class='sb-btn' type='button' onclick='openExistingAsInit(${js(selectedHost)})'>Initialize</button>
-          <button class='sb-btn danger' type='button' onclick='confirmDeleteVps(${js(selectedHost)})'>Delete VPS</button>
+          ${store.view !== 'vps' ? `<button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps' data-host='${escAttr(selectedHost)}'>Back</button>` : ''}
+          <button class='sb-btn' type='button' data-vps-action='open-task-logs' data-host='${escAttr(selectedHost)}'>Task Logs</button>
+          <button class='sb-btn' type='button' data-vps-action='open-host-logs' data-host='${escAttr(selectedHost)}'>Host Logs</button>
+          <button class='${hostKeyBtnClass}' type='button' data-vps-action='review-host-key' data-host='${escAttr(selectedHost)}'>Review SSH Host Key</button>
+          ${isRemoteMaster ? `<button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-ufw' data-host='${escAttr(selectedHost)}'>Change UFW</button>` : ''}
+          ${!isRemoteMaster ? `<button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-setup' data-host='${escAttr(selectedHost)}'>Change VPS</button>` : ''}
+          <button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-pbgui-branch' data-host='${escAttr(selectedHost)}'>PBGui Branch</button>
+          <button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-pb7-branch' data-host='${escAttr(selectedHost)}'>PB7 Branch</button>
+          ${showClusterNodeBtn ? `<button class='${clusterNodeBtnClass}' type='button' title='${escAttr(clusterNode.reason || '')}' data-vps-action='add-cluster-node' data-host='${escAttr(selectedHost)}'>${esc(clusterNodeBtnText)}</button>` : ''}
+          <button class='sb-btn' type='button' data-vps-action='initialize-vps' data-host='${escAttr(selectedHost)}'>Initialize</button>
+          <button class='sb-btn danger' type='button' data-vps-action='delete-vps' data-host='${escAttr(selectedHost)}'>Delete VPS</button>
           <div class='sb-separator'>Tasks</div>
           <div class='sb-field'>
-            <label class='sb-toggle'><input type='checkbox' ${ui.debug ? 'checked' : ''} onchange="setVpsUiField(${js(selectedHost)}, 'debug', this.checked)"> Debug</label>
+            <label class='sb-toggle'><input type='checkbox' ${ui.debug ? 'checked' : ''} data-vps-ui-field='debug' data-host='${escAttr(selectedHost)}'> Debug</label>
           </div>
-          <button class='${pbguiBtnClass}' type='button' onclick='runVpsWithLog(${js(selectedHost)}, "vps-update-pbgui", "Update PBGui")'>Update PBGui</button>
-          <button class='${pb7BtnClass}' type='button' onclick='runVpsWithLog(${js(selectedHost)}, "vps-update-pb7", "Update PB7")'>Update PB7</button>
-          <button class='${bothBtnClass}' type='button' onclick='runVpsWithLog(${js(selectedHost)}, "vps-update-pb", "Update PBGui and PB7")'>Update PBGui and PB7</button>
+          <button class='${pbguiBtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pbgui' data-command-text='Update PBGui'>Update PBGui</button>
+          <button class='${pb7BtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb7' data-command-text='Update PB7'>Update PB7</button>
+          <button class='${bothBtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb' data-command-text='Update PBGui and PB7'>Update PBGui and PB7</button>
           <div class='sb-field'>
-            <label class='sb-toggle'><input type='checkbox' data-update-reboot-toggle=${js(selectedHost)} ${ui.updateReboot ? 'checked' : ''} onchange="setVpsUiField(${js(selectedHost)}, 'updateReboot', this.checked)"> Reboot after Linux update</label>
+            <label class='sb-toggle'><input type='checkbox' data-update-reboot-toggle='${escAttr(selectedHost)}' data-vps-ui-field='updateReboot' data-host='${escAttr(selectedHost)}' ${ui.updateReboot ? 'checked' : ''}> Reboot after Linux update</label>
           </div>
-          <button class='${linuxUpdateBtnClass}' type='button' onclick='updateLinuxVpsAction(${js(selectedHost)})'>Update Linux</button>
-          <button class='${rebootBtnClass}' type='button' onclick='vpsActionWithPw(${js(selectedHost)}, "vps-reboot", "Reboot VPS")'>Reboot VPS</button>
-          <button class='sb-btn' type='button' onclick='vpsActionWithPw(${js(selectedHost)}, "vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>
-          <button class='sb-btn danger' type='button' onclick='confirmPurgeVpsInstall(${js(selectedHost)})'>Purge VPS Install</button>
-          <button class='${systemdMigrationBtn.className}' type='button' title='${escAttr(systemdMigrationBtn.title)}' onclick='previewVpsSystemdMigration(${js(selectedHost)})'>${esc(systemdMigrationBtn.text)}</button>`;
+          <button class='${linuxUpdateBtnClass}' type='button' data-vps-action='update-linux' data-host='${escAttr(selectedHost)}'>Update Linux</button>
+          <button class='${rebootBtnClass}' type='button' data-vps-action='password-command' data-host='${escAttr(selectedHost)}' data-command='vps-reboot' data-command-text='Reboot VPS'>Reboot VPS</button>
+          <button class='sb-btn' type='button' data-vps-action='password-command' data-host='${escAttr(selectedHost)}' data-command='vps-cleanup' data-command-text='Cleanup VPS'>Cleanup VPS</button>
+          <button class='sb-btn danger' type='button' data-vps-action='purge-vps' data-host='${escAttr(selectedHost)}'>Purge VPS Install</button>
+          <button class='${systemdMigrationBtn.className}' type='button' title='${escAttr(systemdMigrationBtn.title)}' data-vps-action='preview-systemd' data-host='${escAttr(selectedHost)}'>${esc(systemdMigrationBtn.text)}</button>
+          ${renderSidebarAgentStatus(st)}`;
       } else if (store.view === 'add') {
         html = `
           <button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>
@@ -10265,7 +10384,7 @@
                         empty_until_started: useEmptyUntilStarted
                       });
                       const commandText = String((logInfo && logInfo.command_text) || item.command_text || item.command || 'Deploy');
-                      return `<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px'><span>${esc(host)}</span><button class='table-button' type='button' ${fileAlias ? '' : 'disabled'} onclick='openDeployLogWindowForFile(${js(host)}, ${js(fileAlias)}, ${js(commandText)})'>Open Log</button></div>`;
+                      return `<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px'><span>${esc(host)}</span><button class='table-button' type='button' ${fileAlias ? '' : 'disabled'} data-vps-action='open-deploy-file-log' data-host='${escAttr(host)}' data-file='${escAttr(fileAlias)}' data-command-text='${escAttr(commandText)}'>Open Log</button></div>`;
                     }).join('') : '-'}</td>
                   </tr>`;
               }).join('')}
@@ -11185,7 +11304,7 @@
       showCpuHistoryOverlay();
       prepareCpuHistoryWindow(980, 560);
       fetch(API_BASE + '/metric-history/' + encodeURIComponent(host) + '?metric=' + encodeURIComponent(requestMetric) + (bot ? '&bot_name=' + encodeURIComponent(bot) : ''), {
-        headers: { 'Authorization': 'Bearer ' + TOKEN },
+        credentials: 'same-origin',
         signal: cpuHistoryAbortController.signal,
         cache: 'no-store'
       })
@@ -11472,6 +11591,9 @@
           : 'No current live telemetry';
         cards.push({ key:'online', label: 'Online', ok: !!status.online, sub: status.online ? 'Live telemetry received' : staleSub });
       }
+      if (Object.prototype.hasOwnProperty.call(status, 'ssh_online')) {
+        cards.push({ key:'ssh_online', label: 'SSH Connection', ok: !!status.ssh_online, sub: status.ssh_online ? 'SSH connected independently of agent cache health' : 'SSH is not connected' });
+      }
       if (store.detail && store.detail.kind === 'vps' && store.detail.hostname) {
         const userPwStatus = getSecretStatus(store.detail.hostname, 'user_pw');
         if (userPwStatus.stored) {
@@ -11667,6 +11789,7 @@
             <div id='master-status-cards'>${renderMasterStatusCards(status)}</div>
           </div>
         </div>
+        <div id='master-agent-cache-live'>${renderAgentCachePanel(status, true)}</div>
         <div id='master-monitor-live'>${renderMonitorPanel(detail.monitor || {}, true, status)}</div>`;
     }
 
@@ -11806,6 +11929,7 @@
             <div id='vps-status-flags'>${renderStatusFlags(status)}</div>
           </div>
         </div>
+        <div id='vps-agent-cache-live'>${renderAgentCachePanel(status, false)}</div>
         ${renderVpsRemoteServices(detail.hostname, status)}
         <div id='vps-monitor-live'>${renderMonitorPanel(detail.monitor || {}, false, status)}</div>`;
     }
@@ -11832,8 +11956,8 @@
             <div class='panel-body stack'>
               <div class='notice warning'>This host is reported as a master. The VPS setup form is hidden to avoid changing master firewall settings through the legacy VPS apply path.</div>
               <div class='button-row'>
-                <button class='btn' type='button' onclick='selectView("vps", ${js(detail.hostname)})'>Back to Host</button>
-                <button class='btn primary' type='button' onclick='selectView("vps-ufw", ${js(detail.hostname)})'>Change UFW</button>
+                <button class='btn' type='button' data-vps-action='select-view' data-view='vps' data-host='${escAttr(detail.hostname)}'>Back to Host</button>
+                <button class='btn primary' type='button' data-vps-action='select-view' data-view='vps-ufw' data-host='${escAttr(detail.hostname)}'>Change UFW</button>
               </div>
             </div>
           </div>`;
@@ -11871,17 +11995,17 @@
             <div class='field-grid'>
               <div class='field'>
                 <label>VPS User Password</label>
-                ${renderVisibilityInput('password', ui.form.user_pw || '', `setVpsField(${js(detail.hostname)}, 'user_pw', this.value)`, 'Show or hide VPS user password', vpsUserPwVisibilityKey, detail.hostname, 'user_pw', `data-vps-field='user_pw' ${formHostAttr}`)}
+                ${renderVisibilityInput('password', ui.form.user_pw || '', '', 'Show or hide VPS user password', vpsUserPwVisibilityKey, detail.hostname, 'user_pw', `data-vps-field='user_pw' ${formHostAttr}`)}
                 ${renderSecretHint(detail.hostname, 'user_pw')}
               </div>
               <div class='field'>
                 <label>Install Path</label>
-                <input type='text' value='${escAttr(ui.form.install_dir || '')}' data-vps-field='install_dir' ${formHostAttr} oninput="setVpsField(${js(detail.hostname)}, 'install_dir', this.value)" placeholder='/home/user/software'>
+                <input type='text' value='${escAttr(ui.form.install_dir || '')}' data-vps-field='install_dir' ${formHostAttr} placeholder='/home/user/software'>
                 <div class='field-help'>Parent directory for pbgui, pb7, and virtualenvs.</div>
               </div>
               <div class='field'>
                 <label>Swap Size</label>
-                <select data-vps-field='swap' ${formHostAttr} onchange="setVpsField(${js(detail.hostname)}, 'swap', this.value)">
+                <select data-vps-field='swap' ${formHostAttr}>
                   ${(((store.state || {}).config || {}).swap_options || ['0']).map(function (option) {
                     return `<option value='${escAttr(option)}'${String(option) === String(ui.form.swap || '0') ? ' selected' : ''}>${esc(option)}</option>`;
                   }).join('')}
@@ -11889,21 +12013,21 @@
               </div>
               <div class='field'>
                 <label>Firewall SSH Port</label>
-                <input type='number' value='${escAttr(ui.form.firewall_ssh_port || 22)}' data-vps-field='firewall_ssh_port' ${formHostAttr} oninput="setVpsField(${js(detail.hostname)}, 'firewall_ssh_port', this.value)">
+                <input type='number' value='${escAttr(ui.form.firewall_ssh_port || 22)}' data-vps-field='firewall_ssh_port' ${formHostAttr}>
               </div>
               <div class='field span-2'>
                 <label>Allowed SSH IPs</label>
-                <input type='text' value='${escAttr(ui.form.firewall_ssh_ips || '')}' data-vps-field='firewall_ssh_ips' ${formHostAttr} oninput="setVpsField(${js(detail.hostname)}, 'firewall_ssh_ips', this.value)" placeholder='198.51.100.1, 203.0.113.7'>
+                <input type='text' value='${escAttr(ui.form.firewall_ssh_ips || '')}' data-vps-field='firewall_ssh_ips' ${formHostAttr} placeholder='198.51.100.1, 203.0.113.7'>
               </div>
               <div class='field'>
                 <label>&nbsp;</label>
-                <label class='checkbox-row'><input type='checkbox' ${ui.form.firewall ? 'checked' : ''} data-vps-field='firewall' ${formHostAttr} onchange="setVpsBool(${js(detail.hostname)}, 'firewall', this.checked)"> Enable UFW</label>
+                <label class='checkbox-row'><input type='checkbox' ${ui.form.firewall ? 'checked' : ''} data-vps-field='firewall' data-vps-field-kind='bool' ${formHostAttr}> Enable UFW</label>
               </div>
             </div>
             <div class='button-row'>
-              <button class='btn ghost' type='button' ${readSettingsLoading ? 'disabled' : ''} onclick='refreshVpsSettings(${js(detail.hostname)})'>${readSettingsLoading ? 'Reading...' : 'Read VPS settings'}</button>
-              <button class='btn ok' id='vps-save-btn' type='button' ${canSave ? '' : 'disabled'} onclick='saveVpsConfig(${js(detail.hostname)})'>Apply VPS Changes</button>
-              ${setupPending ? `<button class='btn' id='vps-setup-btn' type='button' ${canSetup ? '' : 'disabled'} onclick='setupVps(${js(detail.hostname)})'>Initial Setup VPS</button>` : ''}
+              <button class='btn ghost' type='button' ${readSettingsLoading ? 'disabled' : ''} data-vps-action='refresh-settings' data-host='${escAttr(detail.hostname)}'>${readSettingsLoading ? 'Reading...' : 'Read VPS settings'}</button>
+              <button class='btn ok' id='vps-save-btn' type='button' ${canSave ? '' : 'disabled'} data-vps-action='save-config' data-host='${escAttr(detail.hostname)}'>Apply VPS Changes</button>
+              ${setupPending ? `<button class='btn' id='vps-setup-btn' type='button' ${canSetup ? '' : 'disabled'} data-vps-action='setup-vps' data-host='${escAttr(detail.hostname)}'>Initial Setup VPS</button>` : ''}
             </div>
             ${renderReadSettingsProgress(ui)}
           </div>
@@ -12089,7 +12213,7 @@
       const pnlsHistTotal = Number(item.pnls_hist_total || 0);
       return {
         name: {
-          html: `<div><span class='tag' style='cursor:pointer;color:var(--accent);background:rgba(93,196,255,0.12)' onclick='openBotLog(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)})' title='Open bot log'>${esc(item.name || '-')}</span></div><div class='field-help' title='Bot start time'>${esc(item.start_time || '-')}</div>`,
+          html: `<div><button class='tag table-button' type='button' style='cursor:pointer;color:var(--accent);background:rgba(93,196,255,0.12)' data-vps-action='open-bot-log' data-host='${escAttr(host)}' data-bot='${escAttr(item.name || '')}' data-pb-version='${escAttr(pbVersion)}' title='Open bot log'>${esc(item.name || '-')}</button></div><div class='field-help' title='Bot start time'>${esc(item.start_time || '-')}</div>`,
           sig: [host, pbVersion, String(item.name || ''), String(item.start_time || '')].join('|')
         },
         cpu: {
@@ -12105,7 +12229,7 @@
           sig: [String(Number(item.swap_mb) || 0), swapLevel].join('|')
         },
         errors_today: {
-          html: hasErrorsToday ? `<span onclick='fetchBotLogMatches(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)}, "errors", "today", ${Number(item.errors_today || 0)})' style='cursor:pointer'>${_metricTag(item.errors_today)}</span>` : _metricTag(item.errors_today),
+          html: hasErrorsToday ? `<button class='table-button' type='button' data-vps-action='bot-log-matches' data-host='${escAttr(host)}' data-bot='${escAttr(item.name || '')}' data-pb-version='${escAttr(pbVersion)}' data-kind='errors' data-bucket='today' data-expected-count='${Number(item.errors_today || 0)}'>${_metricTag(item.errors_today)}</button>` : _metricTag(item.errors_today),
           sig: [host, pbVersion, String(item.name || ''), 'errors', 'today', String(Number(item.errors_today) || 0), hasErrorsToday ? '1' : '0'].join('|')
         },
         errors_4w: {
@@ -12113,7 +12237,7 @@
           sig: [host, String(item.name || ''), 'errors', String(Number(item.errors_4w) || 0)].join('|')
         },
         tracebacks_today: {
-          html: hasTracebacksToday ? `<span onclick='fetchBotLogMatches(${js(host)}, ${js(item.name || '')}, ${js(pbVersion)}, "tracebacks", "today", ${Number(item.tracebacks_today || 0)})' style='cursor:pointer'>${_metricTag(item.tracebacks_today)}</span>` : _metricTag(item.tracebacks_today),
+          html: hasTracebacksToday ? `<button class='table-button' type='button' data-vps-action='bot-log-matches' data-host='${escAttr(host)}' data-bot='${escAttr(item.name || '')}' data-pb-version='${escAttr(pbVersion)}' data-kind='tracebacks' data-bucket='today' data-expected-count='${Number(item.tracebacks_today || 0)}'>${_metricTag(item.tracebacks_today)}</button>` : _metricTag(item.tracebacks_today),
           sig: [host, pbVersion, String(item.name || ''), 'tracebacks', 'today', String(Number(item.tracebacks_today) || 0), hasTracebacksToday ? '1' : '0'].join('|')
         },
         tracebacks_4w: {
@@ -12380,6 +12504,100 @@
       scheduleVpsSecretSyncPasses();
     }
 
+    function handleVpsManagerAction(event) {
+      const trigger = event.target && event.target.closest ? event.target.closest('[data-vps-action]') : null;
+      if (!trigger) return;
+      const action = String(trigger.getAttribute('data-vps-action') || '');
+      const host = String(trigger.getAttribute('data-host') || '');
+      const bot = String(trigger.getAttribute('data-bot') || '');
+      const pbVersion = String(trigger.getAttribute('data-pb-version') || '7');
+      if (action === 'select-vps') {
+        event.preventDefault();
+        event.stopPropagation();
+        selectView('vps', host);
+      } else if (action === 'reboot-vps') {
+        rebootVpsAction(host);
+      } else if (action === 'update-agent') {
+        if (trigger.getAttribute('data-master') === 'true') runMasterWithLog('master-update-pbgui', 'Update PBGui');
+        else runVpsWithLog(host, 'vps-update-pbgui', 'Update PBGui');
+      } else if (action === 'open-bot-log') {
+        openBotLog(host, bot, pbVersion);
+      } else if (action === 'bot-log-matches') {
+        fetchBotLogMatches(
+          host,
+          bot,
+          pbVersion,
+          String(trigger.getAttribute('data-kind') || ''),
+          String(trigger.getAttribute('data-bucket') || ''),
+          Number(trigger.getAttribute('data-expected-count') || 0)
+        );
+      } else if (action === 'toggle-password') {
+        togglePwVisible(
+          trigger,
+          String(trigger.getAttribute('data-visibility-key') || ''),
+          host,
+          String(trigger.getAttribute('data-field') || '')
+        );
+      } else if (action === 'open-deploy-log') {
+        openDeployLogWindow(host, String(trigger.getAttribute('data-command') || ''), String(trigger.getAttribute('data-command-text') || ''));
+      } else if (action === 'open-deploy-file-log') {
+        openDeployLogWindowForFile(host, String(trigger.getAttribute('data-file') || ''), String(trigger.getAttribute('data-command-text') || ''));
+      } else if (action === 'select-view') {
+        selectView(String(trigger.getAttribute('data-view') || 'overview'), host);
+      } else if (action === 'open-task-logs') {
+        openVpsTaskLogs(host);
+      } else if (action === 'open-host-logs') {
+        openVpsHostLogs(host);
+      } else if (action === 'review-host-key') {
+        reviewVpsSshHostKey(host);
+      } else if (action === 'add-cluster-node') {
+        addVpsToCluster(host);
+      } else if (action === 'initialize-vps') {
+        openExistingAsInit(host);
+      } else if (action === 'delete-vps') {
+        confirmDeleteVps(host);
+      } else if (action === 'run-command') {
+        runVpsWithLog(host, String(trigger.getAttribute('data-command') || ''), String(trigger.getAttribute('data-command-text') || ''));
+      } else if (action === 'update-linux') {
+        updateLinuxVpsAction(host);
+      } else if (action === 'password-command') {
+        vpsActionWithPw(host, String(trigger.getAttribute('data-command') || ''), String(trigger.getAttribute('data-command-text') || ''));
+      } else if (action === 'purge-vps') {
+        confirmPurgeVpsInstall(host);
+      } else if (action === 'preview-systemd') {
+        previewVpsSystemdMigration(host);
+      } else if (action === 'refresh-settings') {
+        refreshVpsSettings(host);
+      } else if (action === 'save-config') {
+        saveVpsConfig(host);
+      } else if (action === 'setup-vps') {
+        setupVps(host);
+      }
+    }
+
+    function handleVpsManagerFieldEvent(event) {
+      const target = event.target;
+      if (!target || typeof target.getAttribute !== 'function') return;
+      const clusterHost = String(target.getAttribute('data-cluster-import-host') || '');
+      if (clusterHost) {
+        setClusterImportPassword(clusterHost, target.value);
+        return;
+      }
+      const uiField = String(target.getAttribute('data-vps-ui-field') || '');
+      const host = String(target.getAttribute('data-host') || target.getAttribute('data-vps-host') || '');
+      if (uiField && host) {
+        setVpsUiField(host, uiField, target.type === 'checkbox' ? !!target.checked : target.value);
+        return;
+      }
+      const field = String(target.getAttribute('data-vps-field') || '');
+      if (!field || !host) return;
+      if (target.getAttribute('data-vps-field-kind') === 'bool' || target.type === 'checkbox') {
+        setVpsBool(host, field, !!target.checked);
+      } else {
+        setVpsField(host, field, target.value);
+      }
+    }
+
     document.addEventListener('focusin', function (event) {
       const target = event.target;
       if (!(target instanceof HTMLInputElement)) return;
@@ -12388,6 +12606,16 @@
     });
 
     document.addEventListener('pointerdown', handleCpuHistoryInteraction, true);
+    document.addEventListener('mousedown', function (event) {
+      const row = event.target && event.target.closest ? event.target.closest('tr[data-overview-host]') : null;
+      if (!row || (event.target.closest && event.target.closest('.table-button'))) return;
+      startOverviewSelection(row.getAttribute('data-overview-host') || '', event);
+    });
+    document.addEventListener('mouseover', function (event) {
+      const row = event.target && event.target.closest ? event.target.closest('tr[data-overview-host]') : null;
+      if (!row || (event.relatedTarget && row.contains(event.relatedTarget))) return;
+      moveOverviewSelection(row.getAttribute('data-overview-host') || '');
+    });
     document.addEventListener('mouseup', function () {
       endOverviewSelection();
     });
@@ -12406,6 +12634,9 @@
       }
     });
     initCpuHistoryModalInteractions();
+    document.addEventListener('click', handleVpsManagerAction);
+    document.addEventListener('input', handleVpsManagerFieldEvent);
+    document.addEventListener('change', handleVpsManagerFieldEvent);
     document.addEventListener('click', handleCpuHistoryInteraction, true);
 
     loadOverviewPrefs();

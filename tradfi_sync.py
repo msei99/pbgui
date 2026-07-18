@@ -22,7 +22,7 @@ from typing import Any
 
 from logging_helpers import human_log as _log
 
-SERVICE = "TradFiSync"
+SERVICE = "tradfi_sync"
 
 _MAP_FILE = "tradfi_symbol_map.json"
 _CACHE_FILE = "xyz_spec_cache.json"
@@ -84,8 +84,7 @@ def sync_tradfi_spec(pbgui_dir: Path | None = None) -> dict[str, Any]:
         if e.get("is_hip3") and str(e.get("dex") or "").lower() == "xyz"
     ]
 
-    _log(
-        "tradfi_sync",
+    _log(SERVICE,
         f"mapping.json: {len(mapping_raw)} total entries, {len(xyz_entries)} XYZ HIP-3",
         level="INFO",
     )
@@ -108,8 +107,7 @@ def sync_tradfi_spec(pbgui_dir: Path | None = None) -> dict[str, Any]:
 
     active_count = sum(1 for v in active_map.values() if v)
     delisted_count = sum(1 for v in active_map.values() if not v)
-    _log(
-        "tradfi_sync",
+    _log(SERVICE,
         f"XYZ coins from mapping.json: {active_count} active, {delisted_count} delisted",
         level="INFO",
     )
@@ -226,7 +224,7 @@ def sync_tradfi_spec(pbgui_dir: Path | None = None) -> dict[str, Any]:
     cache_tmp.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     cache_tmp.replace(cache_path)
 
-    _log("tradfi_sync", f"Spec sync done: {summary}", level="INFO")
+    _log(SERVICE, f"Spec sync done: {summary}", level="INFO")
     return summary
 
 
@@ -376,14 +374,12 @@ def fetch_xyz_spec(pbgui_dir: Path | None = None) -> list[dict]:
             underlying_href = "https://" + underlying_href.split("://", 1)[1]
         entry["underlying_href"] = underlying_href
         results.append(entry)
-        _log(
-            "tradfi_sync",
+        _log(SERVICE,
             f"spec: {entry['xyz_coin']} → {entry['canonical_type']} ({entry['underlying']})",
             level="DEBUG",
         )
 
-    _log(
-        "tradfi_sync",
+    _log(SERVICE,
         f"XYZ spec fetched: {len(results)} instruments from {_XYZ_SPEC_URL}",
         level="INFO",
     )
@@ -409,9 +405,9 @@ def fetch_xyz_spec(pbgui_dir: Path | None = None) -> list[dict]:
             if ps and ps in _sym_to_desc and not str(entry.get("description") or "").strip():
                 entry["description"] = _sym_to_desc[ps]
                 _enriched += 1
-        _log("tradfi_sync", f"Pyth Hermes: {_enriched}/{len(results)} descriptions enriched", level="INFO")
+        _log(SERVICE, f"Pyth Hermes: {_enriched}/{len(results)} descriptions enriched", level="INFO")
     except Exception as _exc:
-        _log("tradfi_sync", f"Pyth Hermes description lookup skipped: {_exc}", level="WARNING")
+        _log(SERVICE, f"Pyth Hermes description lookup skipped: {_exc}", level="WARNING")
 
     # Cache to disk
     coindata.mkdir(parents=True, exist_ok=True)
@@ -499,14 +495,14 @@ def fetch_tiingo_meta(
             data = json.loads(cache_path.read_text(encoding="utf-8"))
             meta = data.get("meta") or {}
             if meta:
-                _log("tradfi_sync", f"Tiingo meta: {len(meta)} tickers from cache", level="INFO")
+                _log(SERVICE, f"Tiingo meta: {len(meta)} tickers from cache", level="INFO")
                 return meta
         except Exception:
             pass
 
     import urllib.request as _urlreq
     url = f"{_TIINGO_META_URL}?token={api_key}"
-    _log("tradfi_sync", "Fetching Tiingo fundamentals/meta (one-time API call)…", level="INFO")
+    _log(SERVICE, "Fetching Tiingo fundamentals/meta (one-time API call)…", level="INFO")
     req = _urlreq.Request(
         url,
         headers={"Accept": "application/json", "Content-Type": "application/json"},
@@ -531,7 +527,7 @@ def fetch_tiingo_meta(
         encoding="utf-8",
     )
     tmp.replace(cache_path)
-    _log("tradfi_sync", f"Tiingo meta: fetched and cached {len(meta_index)} tickers", level="INFO")
+    _log(SERVICE, f"Tiingo meta: fetched and cached {len(meta_index)} tickers", level="INFO")
     return meta_index
 
 
@@ -732,7 +728,7 @@ def auto_map_tradfi(
             details["mapped_fx"].append(
                 f"{coin} -> FX:{fx['tiingo_fx_ticker']}" + (" (inv)" if fx.get("tiingo_fx_invert") else "")
             )
-            _log("tradfi_sync", f"auto-map FX: {coin} → {fx['tiingo_fx_ticker']}", level="DEBUG")
+            _log(SERVICE, f"auto-map FX: {coin} → {fx['tiingo_fx_ticker']}", level="DEBUG")
             continue
 
         # 2. Type-driven no provider
@@ -741,7 +737,7 @@ def auto_map_tradfi(
             entry["last_verified"] = now_utc
             counts["no_provider"] += 1
             details["no_provider"].append(f"{coin} ({canonical_type or 'unknown'})")
-            _log("tradfi_sync", f"auto-map no_provider: {coin} ({canonical_type})", level="DEBUG")
+            _log(SERVICE, f"auto-map no_provider: {coin} ({canonical_type})", level="DEBUG")
             continue
 
         # 3. Known alias (KR/JP OTC and ETF tickers not covered by fundamentals/meta)
@@ -752,7 +748,7 @@ def auto_map_tradfi(
             entry["last_verified"] = now_utc
             counts["mapped_equity"] += 1
             details["mapped_equity"].append(f"{coin} -> {alias}")
-            _log("tradfi_sync", f"auto-map alias: {coin} → {alias}", level="DEBUG")
+            _log(SERVICE, f"auto-map alias: {coin} → {alias}", level="DEBUG")
             continue
 
         # 4. Direct equity lookup + name validation
@@ -767,11 +763,10 @@ def auto_map_tradfi(
                 entry["last_verified"] = now_utc
                 counts["mapped_equity"] += 1
                 details["mapped_equity"].append(coin)
-                _log("tradfi_sync", f"auto-map equity: {coin} ('{tiingo_name}')", level="DEBUG")
+                _log(SERVICE, f"auto-map equity: {coin} ('{tiingo_name}')", level="DEBUG")
                 continue
             else:
-                _log(
-                    "tradfi_sync",
+                _log(SERVICE,
                     f"auto-map skipped name mismatch: {coin} pyth='{pyth_desc}' tiingo='{tiingo_name}'",
                     level="DEBUG",
                 )
@@ -788,7 +783,7 @@ def auto_map_tradfi(
 
     result: dict[str, Any] = dict(counts)
     result["details"] = details
-    _log("tradfi_sync", f"auto_map_tradfi done: {counts}", level="INFO")
+    _log(SERVICE, f"auto_map_tradfi done: {counts}", level="INFO")
     return result
 
 
@@ -819,5 +814,5 @@ def load_xyz_spec(pbgui_dir: Path | None = None, max_age_hours: float = 24.0) ->
     try:
         return fetch_xyz_spec(pbgui_dir)
     except Exception as exc:
-        _log("tradfi_sync", f"Failed to fetch XYZ spec: {exc}", level="WARNING")
+        _log(SERVICE, f"Failed to fetch XYZ spec: {exc}", level="WARNING")
         return None

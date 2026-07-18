@@ -102,7 +102,7 @@ def _cluster_sync_extra_vars() -> dict[str, str]:
     try:
         material = ensure_local_cluster_ssh_material(PBGDIR, role="master")
     except Exception as exc:
-        _log("VPSManager", f"Could not prepare Cluster Sync SSH key for VPS update: {exc}", level="WARNING")
+        _log(SERVICE, f"Could not prepare Cluster Sync SSH key for VPS update: {exc}", level="WARNING")
         return {}
     return {
         "cluster_sync_source_node_id": str(material.get("node_id") or ""),
@@ -122,10 +122,10 @@ def _register_vps_cluster_node(hostname: str) -> dict:
         result = cluster.apply_bootstrap_node(host, session=None)
     except Exception as exc:
         detail = getattr(exc, "detail", None) or str(exc)
-        _log("VPSManager", f"Could not add {host} to Cluster: {detail}", level="WARNING")
+        _log(SERVICE, f"Could not add {host} to Cluster: {detail}", level="WARNING")
         return {"ok": False, "changed": False, "error": str(detail)}
     if result.get("changed"):
-        _log("VPSManager", f"Added {host} as Cluster node candidate", level="INFO")
+        _log(SERVICE, f"Added {host} as Cluster node candidate", level="INFO")
     return result
 
 
@@ -430,7 +430,7 @@ class VPS:
         ssh_dir.mkdir(mode=0o700, exist_ok=True)
 
         if not pubkey_path.exists() or not privkey_path.exists():
-            _log("VPSManager", "No SSH key found - generating a new ed25519 key pair...", level="INFO")
+            _log(SERVICE, "No SSH key found - generating a new ed25519 key pair...", level="INFO")
             try:
                 subprocess.run(
                     [
@@ -446,19 +446,19 @@ class VPS:
                     ],
                     check=True,
                 )
-                _log("VPSManager", f"SSH key generated: {pubkey_path}", level="INFO")
+                _log(SERVICE, f"SSH key generated: {pubkey_path}", level="INFO")
             except Exception as exc:
-                _log("VPSManager", f"Failed to generate SSH key: {exc}", level="ERROR")
+                _log(SERVICE, f"Failed to generate SSH key: {exc}", level="ERROR")
                 return
         else:
-            _log("VPSManager", f"Found existing SSH key: {pubkey_path}", level="INFO")
+            _log(SERVICE, f"Found existing SSH key: {pubkey_path}", level="INFO")
 
         if not self.user_pw:
-            _log("VPSManager", "Password is required to install the SSH key.", level="ERROR")
+            _log(SERVICE, "Password is required to install the SSH key.", level="ERROR")
             return
 
         target = f"{self.user}@{self.hostname}"
-        _log("VPSManager", f"Installing SSH key to {target}...", level="INFO")
+        _log(SERVICE, f"Installing SSH key to {target}...", level="INFO")
         try:
             result = subprocess.run(
                 [
@@ -474,27 +474,26 @@ class VPS:
                 text=True,
             )
             if result.returncode == 0:
-                _log("VPSManager", f"SSH key successfully installed to {target}", level="INFO")
+                _log(SERVICE, f"SSH key successfully installed to {target}", level="INFO")
             else:
-                _log(
-                    "VPSManager",
+                _log(SERVICE,
                     f"Failed to install SSH key. Output:\n{result.stdout}\n{result.stderr}",
                     level="WARNING",
                 )
         except FileNotFoundError:
-            _log("VPSManager", "ssh-copy-id or sshpass is not installed on this machine.", level="ERROR")
+            _log(SERVICE, "ssh-copy-id or sshpass is not installed on this machine.", level="ERROR")
         except Exception as exc:
-            _log("VPSManager", f"Unexpected error: {exc}", level="ERROR")
+            _log(SERVICE, f"Unexpected error: {exc}", level="ERROR")
 
     def can_login_ssh(self, timeout: int = 5) -> bool:
         if not all([self.ip, self.user]):
-            _log("VPSManager", "Missing SSH credentials (IP or username).", level="WARNING")
+            _log(SERVICE, "Missing SSH credentials (IP or username).", level="WARNING")
             return False
 
         ssh = _strict_ssh_client()
 
         try:
-            _log("VPSManager", f"Trying SSH connection to {self.user}@{self.ip} with key authentication...", level="INFO")
+            _log(SERVICE, f"Trying SSH connection to {self.user}@{self.ip} with key authentication...", level="INFO")
             ssh.connect(
                 hostname=self.ip,
                 username=self.user,
@@ -504,26 +503,26 @@ class VPS:
                 allow_agent=True,
                 look_for_keys=True,
             )
-            _log("VPSManager", f"Successfully connected to {self.user}@{self.ip} using key authentication", level="INFO")
+            _log(SERVICE, f"Successfully connected to {self.user}@{self.ip} using key authentication", level="INFO")
             ssh.close()
             return True
         except paramiko.AuthenticationException:
-            _log("VPSManager", f"Key authentication failed for {self.user}@{self.ip}. Trying password login...", level="WARNING")
+            _log(SERVICE, f"Key authentication failed for {self.user}@{self.ip}. Trying password login...", level="WARNING")
         except paramiko.SSHException as exc:
             if "No authentication methods available" in str(exc):
-                _log("VPSManager", "Key login not available, will try password", level="WARNING")
+                _log(SERVICE, "Key login not available, will try password", level="WARNING")
             else:
-                _log("VPSManager", f"SSH error: {exc}", level="WARNING")
+                _log(SERVICE, f"SSH error: {exc}", level="WARNING")
                 ssh.close()
                 return False
         except Exception as exc:
-            _log("VPSManager", f"Unexpected error: {exc}", level="ERROR")
+            _log(SERVICE, f"Unexpected error: {exc}", level="ERROR")
             ssh.close()
             return False
 
-        _log("VPSManager", f"Trying SSH connection to {self.user}@{self.ip} with password authentication...", level="INFO")
+        _log(SERVICE, f"Trying SSH connection to {self.user}@{self.ip} with password authentication...", level="INFO")
         if getattr(self, "user_pw", None):
-            _log("VPSManager", f"Using password authentication for {self.user}@{self.ip}", level="INFO")
+            _log(SERVICE, f"Using password authentication for {self.user}@{self.ip}", level="INFO")
             try:
                 ssh.connect(
                     hostname=self.ip,
@@ -535,36 +534,36 @@ class VPS:
                     allow_agent=False,
                     look_for_keys=False,
                 )
-                _log("VPSManager", f"Successfully connected to {self.user}@{self.ip} using password", level="INFO")
+                _log(SERVICE, f"Successfully connected to {self.user}@{self.ip} using password", level="INFO")
                 try:
-                    _log("VPSManager", f"Installing SSH key for {self.user}@{self.ip}...", level="INFO")
+                    _log(SERVICE, f"Installing SSH key for {self.user}@{self.ip}...", level="INFO")
                     self.install_ssh_key()
-                    _log("VPSManager", "SSH key installed successfully", level="INFO")
+                    _log(SERVICE, "SSH key installed successfully", level="INFO")
                 except Exception as exc:
-                    _log("VPSManager", f"Failed to install SSH key: {exc}", level="WARNING")
+                    _log(SERVICE, f"Failed to install SSH key: {exc}", level="WARNING")
                 ssh.close()
                 return True
             except paramiko.AuthenticationException:
-                _log("VPSManager", f"Password authentication failed for {self.user}@{self.ip}.", level="ERROR")
+                _log(SERVICE, f"Password authentication failed for {self.user}@{self.ip}.", level="ERROR")
             except (paramiko.SSHException, socket.timeout) as exc:
-                _log("VPSManager", f"SSH error while connecting with password: {exc}", level="WARNING")
+                _log(SERVICE, f"SSH error while connecting with password: {exc}", level="WARNING")
             except Exception as exc:
-                _log("VPSManager", f"Unexpected error during password login: {exc}", level="ERROR")
+                _log(SERVICE, f"Unexpected error during password login: {exc}", level="ERROR")
         else:
-            _log("VPSManager", "No password provided; cannot fallback to password login.", level="WARNING")
+            _log(SERVICE, "No password provided; cannot fallback to password login.", level="WARNING")
 
         ssh.close()
-        _log("VPSManager", f"SSH session to {self.ip} closed.", level="DEBUG")
+        _log(SERVICE, f"SSH session to {self.ip} closed.", level="DEBUG")
         return False
 
     def fetch_vps_info(self):
         result = {"swap": "0"}
         if not self.ip or not self.user:
-            _log("VPSManager", "Missing VPS IP or username.", level="WARNING")
+            _log(SERVICE, "Missing VPS IP or username.", level="WARNING")
             return result
 
         try:
-            _log("VPSManager", f"Connecting to VPS {self.hostname} ({self.ip})...", level="INFO")
+            _log(SERVICE, f"Connecting to VPS {self.hostname} ({self.ip})...", level="INFO")
             ssh = _strict_ssh_client()
             ssh.connect(self.ip, username=self.user, password=self.user_pw, timeout=5)
 
@@ -575,19 +574,19 @@ class VPS:
                 del stdin, stderr
                 swap_size = stdout.read().decode().strip()
                 result["swap"] = swap_size if swap_size else "0"
-                _log("VPSManager", f"Swap size on VPS {self.hostname}: {result['swap']}", level="DEBUG")
+                _log(SERVICE, f"Swap size on VPS {self.hostname}: {result['swap']}", level="DEBUG")
             except Exception as exc:
-                _log("VPSManager", f"Failed to get swap size on VPS {self.hostname}: {exc}", level="WARNING")
+                _log(SERVICE, f"Failed to get swap size on VPS {self.hostname}: {exc}", level="WARNING")
 
             ssh.close()
         except Exception as exc:
-            _log("VPSManager", f"Error connecting to VPS {self.hostname} ({self.ip}): {exc}", level="ERROR")
+            _log(SERVICE, f"Error connecting to VPS {self.hostname} ({self.ip}): {exc}", level="ERROR")
 
         return result
 
     def write_vps_firewall_info(self) -> bool:
         if not self.ip or not self.user:
-            _log("VPSManager", "Missing VPS IP or username.", level="WARNING")
+            _log(SERVICE, "Missing VPS IP or username.", level="WARNING")
             return False
         try:
             ssh = _strict_ssh_client()
@@ -613,7 +612,7 @@ class VPS:
                     except FileNotFoundError:
                         continue
                 if not remote_path:
-                    _log("VPSManager", f"pbgui.ini not found on VPS {self.hostname} ({self.ip})", level="WARNING")
+                    _log(SERVICE, f"pbgui.ini not found on VPS {self.hostname} ({self.ip})", level="WARNING")
                     return False
 
                 script = f"""python3 - <<'PY'
@@ -653,7 +652,7 @@ PY"""
                 rc = stdout.channel.recv_exit_status()
                 if rc != 0:
                     error = stderr.read().decode(errors="ignore").strip()
-                    _log("VPSManager", f"Remote firewall config write failed on {self.hostname}: {error or rc}", level="WARNING")
+                    _log(SERVICE, f"Remote firewall config write failed on {self.hostname}: {error or rc}", level="WARNING")
                     return False
                 return True
             finally:
@@ -662,19 +661,19 @@ PY"""
                 finally:
                     ssh.close()
         except Exception as exc:
-            _log("VPSManager", f"Failed to write firewall settings to pbgui.ini on {self.hostname}: {exc}", level="WARNING")
+            _log(SERVICE, f"Failed to write firewall settings to pbgui.ini on {self.hostname}: {exc}", level="WARNING")
             return False
 
     def fetch_ufw_settings(self, timeout: int = 5) -> tuple:
         allowed_ips = []
         fw_enabled = False
         if not all([self.ip, self.user, self.user_pw]):
-            _log("VPSManager", "Missing SSH credentials (IP, username, or sudo password).", level="WARNING")
+            _log(SERVICE, "Missing SSH credentials (IP, username, or sudo password).", level="WARNING")
             return fw_enabled, ""
 
         ssh = _strict_ssh_client()
         try:
-            _log("VPSManager", f"Connecting to {self.user}@{self.ip} to fetch UFW settings...", level="INFO")
+            _log(SERVICE, f"Connecting to {self.user}@{self.ip} to fetch UFW settings...", level="INFO")
             ssh.connect(
                 hostname=self.ip,
                 username=self.user,
@@ -694,9 +693,9 @@ PY"""
             errors = stderr.read().decode(errors="ignore")
             errors = re.sub(r"\[sudo\] password for .*?:\s*", "", errors).strip()
 
-            _log("VPSManager", f"Raw UFW output: {output}", level="DEBUG")
+            _log(SERVICE, f"Raw UFW output: {output}", level="DEBUG")
             if errors:
-                _log("VPSManager", f"Raw errors from UFW command: {errors}", level="WARNING")
+                _log(SERVICE, f"Raw errors from UFW command: {errors}", level="WARNING")
 
             if any(
                 err in errors.lower()
@@ -708,14 +707,14 @@ PY"""
                     "1 incorrect password attempt",
                 ]
             ):
-                _log("VPSManager", "Wrong sudo password provided.", level="ERROR")
+                _log(SERVICE, "Wrong sudo password provided.", level="ERROR")
                 ssh.close()
                 return fw_enabled, ""
 
             if re.search(r"Status:\s+active", output, re.IGNORECASE):
                 fw_enabled = True
             else:
-                _log("VPSManager", "Firewall is disabled!", level="WARNING")
+                _log(SERVICE, "Firewall is disabled!", level="WARNING")
 
             preferred_port = int(self.firewall_ssh_port or 22)
             detected_port = None
@@ -745,22 +744,22 @@ PY"""
                     continue
                 if source_lower.startswith("anywhere") or source_lower == "0.0.0.0/0":
                     allowed_ips = []
-                    _log("VPSManager", "SSH is open to any IP!", level="WARNING")
+                    _log(SERVICE, "SSH is open to any IP!", level="WARNING")
                     break
                 ip = source.split()[0].strip()
                 if ip and ip not in allowed_ips:
                     allowed_ips.append(ip)
 
-            _log("VPSManager", f"Firewall enabled: {fw_enabled}, SSH port: {self.firewall_ssh_port}, Allowed SSH IPs: {allowed_ips}", level="INFO")
+            _log(SERVICE, f"Firewall enabled: {fw_enabled}, SSH port: {self.firewall_ssh_port}, Allowed SSH IPs: {allowed_ips}", level="INFO")
         except paramiko.AuthenticationException:
-            _log("VPSManager", f"SSH authentication failed for {self.user}@{self.ip}.", level="ERROR")
+            _log(SERVICE, f"SSH authentication failed for {self.user}@{self.ip}.", level="ERROR")
         except (paramiko.SSHException, socket.timeout) as exc:
-            _log("VPSManager", f"SSH connection error: {exc}", level="WARNING")
+            _log(SERVICE, f"SSH connection error: {exc}", level="WARNING")
         except Exception as exc:
-            _log("VPSManager", f"Unexpected error: {exc}", level="ERROR")
+            _log(SERVICE, f"Unexpected error: {exc}", level="ERROR")
         finally:
             ssh.close()
-            _log("VPSManager", f"SSH session to {self.ip} closed.", level="DEBUG")
+            _log(SERVICE, f"SSH session to {self.ip} closed.", level="DEBUG")
 
         return fw_enabled, ",".join(allowed_ips)
 
@@ -774,54 +773,6 @@ PY"""
             return result == 0
         finally:
             sock.close()
-
-    def fetch_package_status(self, timeout: int = 10) -> dict | None:
-        result = {"upgrades": "N/A", "reboot": False}
-        if not all([self.ip, self.user, self.user_pw]):
-            return None
-
-        ssh = _strict_ssh_client()
-        try:
-            ssh_host = str(self.hostname or self.ip)
-            ssh_port = int(self.firewall_ssh_port or 22)
-            ssh.connect(
-                hostname=ssh_host,
-                port=ssh_port,
-                username=self.user,
-                password=self.user_pw,
-                timeout=timeout,
-                banner_timeout=timeout,
-                auth_timeout=timeout,
-                look_for_keys=False,
-                allow_agent=False,
-            )
-
-            stdin, stdout, stderr = ssh.exec_command(
-                "LANG=C sudo -S -p '' apt-get dist-upgrade -s",
-                timeout=timeout,
-                get_pty=True,
-            )
-            stdin.write(self.user_pw + "\n")
-            stdin.flush()
-            output = stdout.read().decode(errors="ignore")
-            errors = stderr.read().decode(errors="ignore")
-            combined = (output + "\n" + errors).strip()
-            match = re.search(r"(\d+) upgraded", combined)
-            if match:
-                result["upgrades"] = int(match.group(1))
-
-            stdin, stdout, stderr = ssh.exec_command(
-                "test -f /var/run/reboot-required && echo yes || echo no",
-                timeout=timeout,
-            )
-            del stdin, stderr
-            result["reboot"] = stdout.read().decode(errors="ignore").strip().lower() == "yes"
-            return result
-        except Exception as exc:
-            _log("VPSManager", f"Failed to fetch live package status for {self.hostname}: {exc}", level="WARNING")
-            return None
-        finally:
-            ssh.close()
 
     def has_init_parameters(self):
         if self.ip and self.user and self.user_pw and self.root_pw and self.initial_root_pw:
@@ -1059,7 +1010,7 @@ class VPSManager:
                 try:
                     vps.load(host)
                 except (OSError, ValueError, json.JSONDecodeError) as exc:
-                    _log("VPSManager", f"Skipping invalid VPS inventory file {host}: {exc}", level="WARNING")
+                    _log(SERVICE, f"Skipping invalid VPS inventory file {host}: {exc}", level="WARNING")
                     continue
                 self.vpss.append(vps)
         if self.vpss:

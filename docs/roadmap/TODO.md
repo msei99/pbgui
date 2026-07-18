@@ -1,6 +1,6 @@
 # PBGui – Gemeinsame TODO / Roadmap
 
-Stand: 2026-07-13
+Stand: 2026-07-17
 Ziel: Nur offene Produktarbeit festhalten. Bereits vorhandene Grundlagen werden als Ist-Stand genannt und nicht erneut geplant.
 
 ## Prioritäten
@@ -10,40 +10,7 @@ Ziel: Nur offene Produktarbeit festhalten. Bereits vorhandene Grundlagen werden 
 
 ---
 
-## P0 – Sicherheit & Stabilität
-
-### CMC API Pool mit globaler Usage-Steuerung
-**Abgeschlossen**
-- Der clusterweite Pool, transitive HPKE-Verteilung, Authority-Epochs,
-  Best-effort-Leases, lokales Failover und Usage-Warnungen sind umgesetzt.
-- Master und VPS materialisieren CMC-Secrets nur für ihre aktuelle signierte
-  Recipient-Generation; VPS-Relays können Master-only TradFi-Secrets nicht
-  entschlüsseln.
-- Die Migration ist als Zero-Order Rolling Upgrade umgesetzt: lokale Shadows
-  halten alte und neue Consumer in beliebiger Update-/Restart-Reihenfolge aktiv,
-  der globale Freeze startet erst nach All-Active-v2 und der letzte v2-Sync
-  setzt den Cutover automatisch fort.
-- Migration, beliebige Update-Reihenfolgen, lange Pausen, Neustarts,
-  gleichzeitige Requests, Key-Rotation, erschöpfte Keys, Recipient-Rewrap und
-  Failover sind offline getestet.
-
----
-
 ## P2 – Qualität & Dokumentation
-
-### Guide-Abdeckung und Pflegeprozess abschließen
-**Ist-Stand**
-- Shared Help Overlay, automatische Topic-Erkennung und nahezu vollständige EN/DE-Guides sind vorhanden.
-
-**Offen**
-- Einen dedizierten DB-Tools-Guide in EN und DE ergänzen.
-- Produktive Seiten/Routes verbindlich auf eigene oder gemeinsame Guide-Topics abbilden.
-- Strategy Explorer an die vorhandenen vollständigen zweisprachigen Shared-Help-Themen anbinden.
-- EN/DE-Parität und Page-to-Topic-Mapping automatisiert testen.
-- In `AGENTS.md` Guide-Review bei produktiven UI-Änderungen verpflichtend machen.
-
-**Done wenn**
-- Jede produktive Seite besitzt ein definiertes aktuelles Help-Topic und die Zuordnung wird automatisch geprüft.
 
 ### Flexibles Dashboard-Widget-Layout
 **Ist-Stand**

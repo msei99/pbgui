@@ -59,6 +59,8 @@ def _get_missing_lag_minutes(exchange: str) -> int:
             sec = int(str(load_ini("bybit_data", "latest_1m_interval_seconds") or "3600").strip())
         elif ex == "bitget":
             sec = int(str(load_ini("bitget_data", "latest_1m_interval_seconds") or "3600").strip())
+        elif ex == "okx":
+            sec = int(str(load_ini("okx_data", "latest_1m_interval_seconds") or "3600").strip())
         else:
             sec = int(str(load_ini("pbdata", "latest_1m_interval_seconds") or "1800").strip())
         return max(0, int((sec + 59) // 60))

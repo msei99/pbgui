@@ -26,7 +26,7 @@ import random
 import re
 import time
 import zipfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -66,8 +66,12 @@ ARCHIVE_INDEX_RATE_PER_SECOND = 2.2
 VOLUME_ENRICH_WINDOW_DAYS = 60
 MAX_RETRIES = 5
 RETRY_WAIT_BASE_S = 1.0
+RETRY_STOP_POLL_S = 0.1
 DEFAULT_LATEST_LOOKBACK_DAYS = 3
 MIN_DAY_CANDLES = 1440
+
+# OKX documents these public API codes as temporary load, timeout, or service failures.
+_TRANSIENT_OKX_CODES = frozenset({"50011", "50013", "50026", "50040"})
 
 _HEADERS = {
     "Accept": "application/json",
@@ -142,8 +146,25 @@ class RateLimiter:
             self.next_time = max(now, self.next_time) + self.interval
 
 
-class _RetryableOkxError(RuntimeError):
-    """Internal marker for retryable OKX HTTP/API failures."""
+class _OkxStopped(RuntimeError):
+    """Internal marker for cooperative cancellation."""
+
+
+def _raise_if_stopped(stop_check: Callable[[], bool] | None) -> None:
+    if stop_check and stop_check():
+        raise _OkxStopped("OKX request stopped")
+
+
+def _wait_before_retry(delay_s: float, stop_check: Callable[[], bool] | None) -> None:
+    """Wait in bounded intervals so cancellation interrupts retry backoff."""
+
+    remaining = max(0.0, float(delay_s))
+    while remaining > 0:
+        _raise_if_stopped(stop_check)
+        interval = min(RETRY_STOP_POLL_S, remaining)
+        time.sleep(interval)
+        remaining -= interval
+    _raise_if_stopped(stop_check)
 
 
 def _day_tag(day: str | date) -> str:
@@ -206,55 +227,90 @@ def _okx_get_json(
     timeout_s: float = 30.0,
     retries: int = MAX_RETRIES,
     limiter: RateLimiter | None = None,
+    stop_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
-    """GET OKX JSON with retry handling for public endpoints."""
+    """GET OKX JSON, retrying only temporary HTTP, transport, JSON, and API failures."""
 
     url = OKX_BASE + path
     delay = RETRY_WAIT_BASE_S
-    last_error: Exception | None = None
-    for attempt in range(1, int(retries) + 1):
+    attempts = max(1, int(retries))
+    last_failure = "temporary failure"
+    for attempt in range(1, attempts + 1):
+        _raise_if_stopped(stop_check)
         if limiter is not None:
             limiter.wait()
+        _raise_if_stopped(stop_check)
         try:
             response = requests.get(url, params=params, headers=_HEADERS, timeout=float(timeout_s))
+        except requests.RequestException as exc:
+            last_failure = f"transport {type(exc).__name__}"
+        else:
+            _raise_if_stopped(stop_check)
             status = int(response.status_code)
             if status == 429 or status >= 500:
-                raise _RetryableOkxError(f"HTTP {status}: {response.text[:300]}")
-            response.raise_for_status()
-            payload = response.json()
-            if str(payload.get("code")) != "0":
-                raise _RetryableOkxError(f"OKX code={payload.get('code')} msg={payload.get('msg')}")
-            return payload
-        except Exception as exc:
-            last_error = exc
-            if attempt >= int(retries):
-                break
-            sleep_s = delay + random.random() * min(delay, 1.0)
-            time.sleep(sleep_s)
-            delay *= 1.7
-    raise RuntimeError(f"OKX GET failed path={path} params={params}: {last_error}")
+                last_failure = f"HTTP {status}"
+            elif 400 <= status < 500:
+                raise RuntimeError(f"OKX GET failed path={path}: HTTP {status}")
+            else:
+                response.raise_for_status()
+                try:
+                    payload = response.json()
+                except ValueError:
+                    last_failure = "malformed JSON"
+                else:
+                    if not isinstance(payload, dict):
+                        last_failure = "malformed JSON"
+                    else:
+                        code = str(payload.get("code"))
+                        if code == "0":
+                            return payload
+                        if code in _TRANSIENT_OKX_CODES:
+                            last_failure = f"OKX code={code}"
+                        else:
+                            raise RuntimeError(f"OKX GET failed path={path}: OKX code={code}")
+
+        if attempt >= attempts:
+            break
+        sleep_s = delay + random.random() * min(delay, 1.0)
+        _wait_before_retry(sleep_s, stop_check)
+        delay *= 1.7
+    raise RuntimeError(f"OKX GET failed path={path}: {last_failure}")
 
 
-def _download_bytes(url: str, *, timeout_s: float = 60.0, retries: int = MAX_RETRIES) -> bytes:
+def _download_bytes(
+    url: str,
+    *,
+    timeout_s: float = 60.0,
+    retries: int = MAX_RETRIES,
+    stop_check: Callable[[], bool] | None = None,
+) -> bytes:
     """Download one static archive object with retries."""
 
     delay = RETRY_WAIT_BASE_S
-    last_error: Exception | None = None
-    for attempt in range(1, int(retries) + 1):
+    attempts = max(1, int(retries))
+    last_failure = "temporary failure"
+    for attempt in range(1, attempts + 1):
+        _raise_if_stopped(stop_check)
         try:
             response = requests.get(url, headers=_HEADERS, timeout=float(timeout_s))
+        except requests.RequestException as exc:
+            last_failure = f"transport {type(exc).__name__}"
+        else:
+            _raise_if_stopped(stop_check)
             status = int(response.status_code)
             if status == 429 or status >= 500:
-                raise _RetryableOkxError(f"HTTP {status}: {response.text[:300]}")
-            response.raise_for_status()
-            return bytes(response.content)
-        except Exception as exc:
-            last_error = exc
-            if attempt >= int(retries):
-                break
-            time.sleep(delay + random.random() * min(delay, 1.0))
-            delay *= 1.7
-    raise RuntimeError(f"download failed url={url}: {last_error}")
+                last_failure = f"HTTP {status}"
+            elif 400 <= status < 500:
+                raise RuntimeError(f"OKX archive download failed: HTTP {status}")
+            else:
+                response.raise_for_status()
+                return bytes(response.content)
+
+        if attempt >= attempts:
+            break
+        _wait_before_retry(delay + random.random() * min(delay, 1.0), stop_check)
+        delay *= 1.7
+    raise RuntimeError(f"OKX archive download failed: {last_failure}")
 
 
 def _load_okx_usdt_map() -> dict[str, str]:
@@ -498,6 +554,7 @@ def _fetch_rest_chunk(
     chunk_end_ms: int,
     limiter: RateLimiter,
     timeout_s: float,
+    stop_check: Callable[[], bool] | None = None,
 ) -> tuple[int, int, list[list[Any]], str]:
     try:
         payload = _okx_get_json(
@@ -510,6 +567,7 @@ def _fetch_rest_chunk(
             },
             timeout_s=timeout_s,
             limiter=limiter,
+            stop_check=stop_check,
         )
         return chunk_start_ms, chunk_end_ms, list(payload.get("data") or []), ""
     except Exception as exc:
@@ -545,6 +603,8 @@ def _rest_fetch_range(
     chunks = _build_rest_chunks(int(since_ms), int(end_ms))
     if not chunks:
         return {}, 0, []
+    if stop_check and stop_check():
+        return {}, 0, []
     own_limiter = limiter or RateLimiter(REST_RATE_PER_SECOND)
     errors: list[str] = []
     buckets: dict[str, dict[int, dict[str, Any]]] = {}
@@ -558,41 +618,68 @@ def _rest_fetch_range(
         except Exception:
             pass
 
-    with ThreadPoolExecutor(max_workers=max(1, int(workers))) as pool:
+    pool = ThreadPoolExecutor(max_workers=max(1, int(workers)))
+    futures = []
+    try:
         futures = [
-            pool.submit(_fetch_rest_chunk, inst_id, chunk_start, chunk_end, own_limiter, timeout_s)
+            pool.submit(_fetch_rest_chunk, inst_id, chunk_start, chunk_end, own_limiter, timeout_s, stop_check)
             for chunk_start, chunk_end in chunks
         ]
-        for done, future in enumerate(as_completed(futures), start=1):
+        pending = set(futures)
+        done = 0
+        while pending:
             if stop_check and stop_check():
                 break
-            chunk_start, chunk_end, rows, error = future.result()
-            pages += 1
-            if error:
-                errors.append(error)
-            for row in rows:
-                candle = _parse_rest_row(row)
-                if not candle:
-                    continue
-                ts_ms = int(candle["t"])
-                if chunk_start <= ts_ms < chunk_end:
-                    _add_candle_to_bucket(buckets, candle)
-            if done == 1 or done % 100 == 0 or done == len(futures):
-                emit(done)
+            completed, pending = wait(pending, timeout=RETRY_STOP_POLL_S, return_when=FIRST_COMPLETED)
+            for future in completed:
+                if stop_check and stop_check():
+                    break
+                chunk_start, chunk_end, rows, error = future.result()
+                done += 1
+                pages += 1
+                if error:
+                    errors.append(error)
+                for row in rows:
+                    candle = _parse_rest_row(row)
+                    if not candle:
+                        continue
+                    ts_ms = int(candle["t"])
+                    if chunk_start <= ts_ms < chunk_end:
+                        _add_candle_to_bucket(buckets, candle)
+                if done == 1 or done % 100 == 0 or done == len(futures):
+                    emit(done)
+    finally:
+        if stop_check and stop_check():
+            for future in futures:
+                future.cancel()
+        pool.shutdown(wait=True, cancel_futures=True)
     return buckets, pages, errors
 
 
-def _has_rest_data_before(inst_id: str, ts_ms: int, limiter: RateLimiter, timeout_s: float) -> bool:
+def _has_rest_data_before(
+    inst_id: str,
+    ts_ms: int,
+    limiter: RateLimiter,
+    timeout_s: float,
+    stop_check: Callable[[], bool] | None = None,
+) -> bool:
     payload = _okx_get_json(
         HISTORY_ENDPOINT,
         {"instId": inst_id, "bar": BAR, "limit": "1", "after": str(int(ts_ms))},
         timeout_s=timeout_s,
         limiter=limiter,
+        stop_check=stop_check,
     )
     return bool(payload.get("data"))
 
 
-def _find_inception_ms(coin: str, *, timeout_s: float = 30.0, limiter: RateLimiter | None = None) -> int | None:
+def _find_inception_ms(
+    coin: str,
+    *,
+    timeout_s: float = 30.0,
+    limiter: RateLimiter | None = None,
+    stop_check: Callable[[], bool] | None = None,
+) -> int | None:
     """Return earliest available OKX 1m candle timestamp for *coin*."""
 
     inst_id = _coin_to_okx_inst_id(coin)
@@ -600,13 +687,13 @@ def _find_inception_ms(coin: str, *, timeout_s: float = 30.0, limiter: RateLimit
     low = int(datetime(2018, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
     high = int((datetime.now(tz=timezone.utc) + timedelta(days=1)).timestamp() * 1000)
     try:
-        if not _has_rest_data_before(inst_id, high, rest_limiter, timeout_s):
+        if not _has_rest_data_before(inst_id, high, rest_limiter, timeout_s, stop_check):
             return None
         while high - low > MS_PER_MINUTE:
             mid = ((low + high) // (2 * MS_PER_MINUTE)) * MS_PER_MINUTE
             if mid <= low:
                 mid = low + MS_PER_MINUTE
-            if _has_rest_data_before(inst_id, mid, rest_limiter, timeout_s):
+            if _has_rest_data_before(inst_id, mid, rest_limiter, timeout_s, stop_check):
                 high = mid
             else:
                 low = mid
@@ -615,6 +702,7 @@ def _find_inception_ms(coin: str, *, timeout_s: float = 30.0, limiter: RateLimit
             {"instId": inst_id, "bar": BAR, "limit": "3", "after": str(int(high + MS_PER_MINUTE))},
             timeout_s=timeout_s,
             limiter=rest_limiter,
+            stop_check=stop_check,
         )
         rows = payload.get("data") or []
         ts_values = []
@@ -624,9 +712,11 @@ def _find_inception_ms(coin: str, *, timeout_s: float = 30.0, limiter: RateLimit
             except Exception:
                 continue
         return min(ts_values) if ts_values else high - MS_PER_MINUTE
+    except _OkxStopped:
+        raise
     except Exception as exc:
         append_exchange_download_log(STORAGE_EXCHANGE, f"[okx_best_1m] inception_error coin={coin} inst={inst_id} err={exc}", level="WARNING")
-        return None
+        raise
 
 
 def _archive_file_date(item: ArchiveFile) -> date | None:
@@ -693,7 +783,10 @@ def _collect_archive_files(
             },
             timeout_s=timeout_s,
             limiter=limiter,
+            stop_check=stop_check,
         )
+        if stop_check and stop_check():
+            break
         calls += 1
         for block in payload.get("data") or []:
             for detail in block.get("details") or []:
@@ -772,13 +865,17 @@ def _download_one_archive_file(
     *,
     skip_existing: bool,
     timeout_s: float,
+    stop_check: Callable[[], bool] | None = None,
 ) -> tuple[str, dict[str, dict[int, dict[str, Any]]], bool, str]:
+    if stop_check and stop_check():
+        return item.filename, {}, False, "stopped"
     if skip_existing:
         candidate_days = _archive_candidate_days(item)
         if candidate_days and all(_is_day_complete_on_disk(coin, day_d) for day_d in candidate_days):
             return item.filename, {}, True, ""
     try:
-        raw = _download_bytes(item.url, timeout_s=timeout_s)
+        raw = _download_bytes(item.url, timeout_s=timeout_s, stop_check=stop_check)
+        _raise_if_stopped(stop_check)
         return item.filename, _parse_archive_zip(raw, inst_id), False, ""
     except Exception as exc:
         return item.filename, {}, False, str(exc)
@@ -801,7 +898,11 @@ def _download_archive_files_bulk(
     errors: list[str] = []
     if not files:
         return parsed, skipped, errors
-    with ThreadPoolExecutor(max_workers=max(1, int(ARCHIVE_DOWNLOAD_WORKERS))) as pool:
+    if stop_check and stop_check():
+        return parsed, skipped, errors
+    pool = ThreadPoolExecutor(max_workers=max(1, int(ARCHIVE_DOWNLOAD_WORKERS)))
+    futures = []
+    try:
         futures = [
             pool.submit(
                 _download_one_archive_file,
@@ -810,33 +911,56 @@ def _download_archive_files_bulk(
                 coin,
                 skip_existing=skip_existing,
                 timeout_s=timeout_s,
+                stop_check=stop_check,
             )
             for item in files
         ]
-        for done, future in enumerate(as_completed(futures), start=1):
+        pending = set(futures)
+        done = 0
+        while pending:
             if stop_check and stop_check():
                 break
-            filename, buckets, was_skipped, error = future.result()
-            if was_skipped:
-                skipped += 1
-            elif error:
-                errors.append(f"{filename}: {error}")
-            else:
-                parsed.append((filename, buckets))
-            if progress_cb and (done == 1 or done % 50 == 0 or done == len(futures)):
-                try:
-                    progress_cb({"stage": "archive_download", "done": done, "planned": len(futures), "errors": len(errors), "skipped": skipped})
-                except Exception:
-                    pass
+            completed, pending = wait(pending, timeout=RETRY_STOP_POLL_S, return_when=FIRST_COMPLETED)
+            for future in completed:
+                if stop_check and stop_check():
+                    break
+                filename, buckets, was_skipped, error = future.result()
+                done += 1
+                if was_skipped:
+                    skipped += 1
+                elif error:
+                    errors.append(f"{filename}: {error}")
+                else:
+                    parsed.append((filename, buckets))
+                if progress_cb and (done == 1 or done % 50 == 0 or done == len(futures)):
+                    try:
+                        progress_cb({"stage": "archive_download", "done": done, "planned": len(futures), "errors": len(errors), "skipped": skipped})
+                    except Exception:
+                        pass
+    finally:
+        if stop_check and stop_check():
+            for future in futures:
+                future.cancel()
+        pool.shutdown(wait=True, cancel_futures=True)
     parsed.sort(key=lambda item: item[0])
     return parsed, skipped, errors
 
 
-def _get_contract_meta(inst_id: str, *, timeout_s: float = 30.0) -> dict[str, Any]:
+def _get_contract_meta(
+    inst_id: str,
+    *,
+    timeout_s: float = 30.0,
+    stop_check: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     cached = _CONTRACT_CACHE.get(inst_id)
     if cached:
         return dict(cached)
-    payload = _okx_get_json(INSTRUMENTS_ENDPOINT, {"instType": INST_TYPE, "instId": inst_id}, timeout_s=timeout_s)
+    payload = _okx_get_json(
+        INSTRUMENTS_ENDPOINT,
+        {"instType": INST_TYPE, "instId": inst_id},
+        timeout_s=timeout_s,
+        stop_check=stop_check,
+    )
     row = (payload.get("data") or [{}])[0]
     base = inst_id.split("-", 1)[0].upper()
     quote = "USDT"
@@ -873,13 +997,14 @@ def _derive_missing_archive_volumes_from_contract(
     day_buckets: dict[str, dict[int, dict[str, Any]]],
     *,
     timeout_s: float,
+    stop_check: Callable[[], bool] | None = None,
 ) -> tuple[int, int]:
     """Fill missing archive vol_ccy values using OKX contract volume metadata."""
 
     if not any(any(candle.get("v") is None for candle in candles.values()) for candles in day_buckets.values()):
         return 0, 0
     try:
-        meta = _get_contract_meta(_coin_to_okx_inst_id(coin), timeout_s=timeout_s)
+        meta = _get_contract_meta(_coin_to_okx_inst_id(coin), timeout_s=timeout_s, stop_check=stop_check)
     except Exception:
         return 0, 0
 
@@ -995,6 +1120,7 @@ def _enrich_missing_archive_volumes_bulk(
         coin,
         day_buckets,
         timeout_s=timeout_s,
+        stop_check=stop_check,
     )
     if contract_filled:
         notes.append(f"volume_contract_derived={contract_days}:{contract_filled}")
@@ -1036,6 +1162,8 @@ def _enrich_missing_archive_volumes_bulk(
             stage="volume_enrich",
         )
         pages_total += pages
+        if stop_check and stop_check():
+            return enriched, pages_total
         if errors:
             notes.append(f"volume_enrich_errors={window_start.strftime('%Y-%m-%d')}..{window_end.strftime('%Y-%m-%d')}:{len(errors)}")
 
@@ -1064,9 +1192,11 @@ def _enrich_missing_archive_volumes_bulk(
         for day_s, candles in sorted(day_buckets.items())
         if any(candle.get("v") is None for candle in candles.values())
     ]
+    if stop_check and stop_check():
+        return enriched, pages_total
     if remaining_days:
         try:
-            meta = _get_contract_meta(_coin_to_okx_inst_id(coin), timeout_s=timeout_s)
+            meta = _get_contract_meta(_coin_to_okx_inst_id(coin), timeout_s=timeout_s, stop_check=stop_check)
         except Exception:
             meta = {}
         for day_s in remaining_days:
@@ -1122,10 +1252,14 @@ def _repair_missing_minutes_for_day(
         stop_check=stop_check,
         stage="repair",
     )
+    if stop_check and stop_check():
+        return 0, 0, len(missing)
     if errors:
         append_exchange_download_log(STORAGE_EXCHANGE, f"[okx_best_1m] repair_errors coin={coin} day={day_s} count={len(errors)}", level="WARNING")
     rest_candles = rest_days.get(day_s, {})
     repair = {idx: rest_candles[idx] for idx in missing if idx in rest_candles and rest_candles[idx].get("v") is not None}
+    if stop_check and stop_check():
+        return 0, 0, len(missing)
     written = _write_candles_for_day(coin, day_s, repair, overwrite=False, source_code=SOURCE_CODE_API) if repair else 0
     after = _read_day_npz(path, day=day_s)
     remaining = len(_missing_minute_indices(after))
@@ -1206,7 +1340,10 @@ def improve_best_okx_1m_for_coin(
 
     _emit(progress_cb, {"stage": "starting", "coin": coin_u})
     _emit(progress_cb, {"stage": "finding_inception", "coin": coin_u})
-    inception_ms = _find_inception_ms(coin_u, timeout_s=timeout_s, limiter=rest_limiter)
+    try:
+        inception_ms = _find_inception_ms(coin_u, timeout_s=timeout_s, limiter=rest_limiter, stop_check=stop_check)
+    except _OkxStopped:
+        return ImproveBest1mOkxResult(coin_u, d_end.strftime("%Y-%m-%d"), 0, 0, 0, 0, 0, notes + ["stopped"])
     if inception_ms is None:
         notes.append("inception_not_found")
         append_exchange_download_log(STORAGE_EXCHANGE, f"[okx_best_1m] {coin_u} inception not found")
@@ -1239,9 +1376,13 @@ def improve_best_okx_1m_for_coin(
                 progress_cb=progress_cb,
                 stage="rest_gap",
             )
+            if stopped():
+                return ImproveBest1mOkxResult(coin_u, d_end.strftime("%Y-%m-%d"), total_planned_days, archive_daily_downloaded, rest_minutes_fetched, repair_minutes_fetched, minutes_written, notes + ["stopped"])
             if errors:
-                notes.append(f"rest_gap_errors={len(errors)}")
+                raise RuntimeError(f"OKX rest_gap failed chunks={len(errors)}")
             for day_s, candles in sorted(days_data.items()):
+                if stopped():
+                    return ImproveBest1mOkxResult(coin_u, d_end.strftime("%Y-%m-%d"), total_planned_days, archive_daily_downloaded, rest_minutes_fetched, repair_minutes_fetched, minutes_written, notes + ["stopped"])
                 written = _write_candles_for_day(coin_u, day_s, candles, overwrite=refetch, source_code=SOURCE_CODE_API)
                 minutes_written += written
                 rest_minutes_fetched += len(candles)
@@ -1324,6 +1465,8 @@ def improve_best_okx_1m_for_coin(
             stop_check=stop_check,
             progress_cb=progress_cb,
         )
+        if stopped():
+            return ImproveBest1mOkxResult(coin_u, d_end.strftime("%Y-%m-%d"), total_planned_days, archive_daily_downloaded, rest_minutes_fetched, repair_minutes_fetched, minutes_written, notes + ["stopped"])
         if archive_errors:
             notes.append(f"archive_download_errors={len(archive_errors)}")
             append_exchange_download_log(STORAGE_EXCHANGE, f"[okx_best_1m] archive_download_errors coin={coin_u} count={len(archive_errors)}", level="WARNING")
@@ -1352,6 +1495,8 @@ def improve_best_okx_1m_for_coin(
                 progress_cb=progress_cb,
                 rest_limiter=rest_limiter,
             )
+            if stopped():
+                return ImproveBest1mOkxResult(coin_u, d_end.strftime("%Y-%m-%d"), total_planned_days, archive_daily_downloaded, rest_minutes_fetched, repair_minutes_fetched, minutes_written, notes + ["stopped"])
 
         archive_days = sorted(archive_day_buckets.items())
         for day_i, (day_s, candles) in enumerate(archive_days, start=1):
@@ -1404,13 +1549,20 @@ def improve_best_okx_1m_for_coin(
                 progress_cb=progress_cb,
                 stage="rest_recent",
             )
+            if stopped():
+                return ImproveBest1mOkxResult(coin_u, d_end.strftime("%Y-%m-%d"), total_planned_days, archive_daily_downloaded, rest_minutes_fetched, repair_minutes_fetched, minutes_written, notes + ["stopped"])
             if errors:
-                notes.append(f"rest_recent_errors={len(errors)}")
+                raise RuntimeError(f"OKX rest_recent failed chunks={len(errors)}")
             for day_s, candles in sorted(days_data.items()):
+                if stopped():
+                    return ImproveBest1mOkxResult(coin_u, d_end.strftime("%Y-%m-%d"), total_planned_days, archive_daily_downloaded, rest_minutes_fetched, repair_minutes_fetched, minutes_written, notes + ["stopped"])
                 written = _write_candles_for_day(coin_u, day_s, candles, overwrite=True, source_code=SOURCE_CODE_API)
                 minutes_written += written
                 rest_minutes_fetched += len(candles)
                 _emit(progress_cb, {"stage": "rest_recent", "day": day_s, "minutes_written": minutes_written, "total_days": total_planned_days})
+
+    if stopped():
+        return ImproveBest1mOkxResult(coin_u, d_end.strftime("%Y-%m-%d"), total_planned_days, archive_daily_downloaded, rest_minutes_fetched, repair_minutes_fetched, minutes_written, notes + ["stopped"])
 
     result = ImproveBest1mOkxResult(
         coin=coin_u,
@@ -1453,6 +1605,8 @@ def update_latest_okx_1m_for_coin(
             workers=max(1, min(REST_WORKERS, 4)),
             stage="latest",
         )
+        if errors:
+            raise RuntimeError(f"OKX latest REST failed chunks={len(errors)}")
         minutes_written = 0
         for day_s, candles in sorted(days_data.items()):
             d_day = datetime.strptime(day_s, "%Y-%m-%d").date()

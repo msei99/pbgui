@@ -202,25 +202,33 @@ Available from the **🔄 Backtest** toolbar button. Options:
 | **Exchange(s)** | Override which exchange(s) to use |
 | **📂 Use PBGui Market Data** | When checked, sets `ohlcv_source_dir` to the PBGui-managed data path |
 
+For archived results, these controls initially use the values stored in the archived `config.json`, including the end date and market-data choice. Clearing **Use PBGui Market Data** is an explicit override and is not replaced by the global Backtest setting when the queued job starts.
+
 ---
 
 ## Archive panel
 
-Community and personal config archives stored as Git repositories.
+Community and personal config archives stored as Git repositories. PBGui treats the archive selected as **My Archive** as writable. Other archives are read-only for content: you can browse, import, compare, re-backtest, and pull remote updates, but PBGui does not add, rename, delete, commit, or push their items. Pull is blocked before contacting the remote whenever a clone has local changes; push or otherwise resolve changes in **My Archive** first, while a dirty foreign clone remains untouched.
 
 ### Archive list view
 
 | Button | Action |
 |--------|--------|
 | **⬇ Pull All** | Pull the latest commits from all configured archives |
-| **⬆ Git Push** | Push your personal archive changes to its remote |
-| **+ Add Archive** | Configure a new archive (URL, local path) |
-| **⚙ Setup** | Edit archive settings |
+| **⬆ Git Push** | Commit and push changes from **My Archive** to its remote |
+| **+ Add Archive** | Clone a new archive by name and Git URL |
+| **⚙ Setup** | Select **My Archive**, Git identity, token, auto-pull interval, and README text |
 | **📋 Log** | Open the archive sync log in a floating panel |
 
-Click an archive row to open it and browse its results.
+Click an archive row to open it and browse its results. Counts come from `pbgui/archive_manifest.json` when available and fall back to a read-only filesystem scan when the manifest is missing or invalid.
 
-### Archive results view
+PBGui derives archive destinations from the PB7 `config_version`; there is no manually editable archive path. Backtest results are stored below `pbgui/configs/{config_version}/backtests/`, and Optimize configs below `pbgui/configs/{config_version}/optimize/`. Missing or invalid versions use an `unknown` directory plus a content fingerprint to avoid collisions.
+
+When **My Archive** is clean, PBGui migrates a bounded batch of legacy results when its panel is opened and checks for a full migration before adding or pushing content. A dirty worktree or failed Git status blocks migration without discarding existing changes. The status line reports whether legacy entries remain or migrated changes still need to be pushed.
+
+### Archive content view
+
+The view has **Backtests**, **Optimize Settings**, and, for **My Archive**, **Schedules** tabs.
 
 | Button | Action |
 |--------|--------|
@@ -228,7 +236,13 @@ Click an archive row to open it and browse its results.
 | **🔄 Backtest** | Re-run selected configs as new backtests → switches to Queue |
 | **▶ Add to Run** | Create a live run |
 | **📈 Compare** | Add to comparison view |
-| **🗑 Delete Selected** | Remove selected archive results |
+| **🧮 Balance** | Open the selected result in the Balance Calculator |
+| **🧬 Score Preview** | Preview archive scoring without writing the archive |
+| **🗑 Delete Selected** | Remove selected results from **My Archive** only |
+
+Additional **My Archive** actions include renaming a config group, **Retest & Replace**, rebuilding scores, compacting Git history, removing duplicates, and **Remove Liquidated**. Liquidated cleanup always shows a dry-run result and requires explicit confirmation before verified deletion. Scheduled retests can replace archived results only after a successful non-liquidated rerun.
+
+The **Optimize Settings** tab can view or import archived Optimize configs from any archive. If the local name already exists, choose **Overwrite**, **Import as Copy**, or **Cancel**. Adding or deleting archived Optimize configs is restricted to **My Archive**. Re-exporting identical content reuses the existing fingerprint path and metadata instead of creating another numbered copy.
 
 ---
 

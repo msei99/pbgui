@@ -111,6 +111,56 @@ def test_run_job_records_actual_run_timestamps(monkeypatch, tmp_path) -> None:
     assert obj["finished_ts"] >= obj["run_started_ts"]
 
 
+def test_run_job_dispatches_persisted_okx_best_1m_job(monkeypatch, tmp_path) -> None:
+    """The central worker dispatches persisted OKX Best 1m jobs and marks them done."""
+
+    job_path = tmp_path / "okx-job.json"
+    payload = {
+        "coins": ["BTC", "ETH"],
+        "start_day": "20260101",
+        "end_day": "20260131",
+        "refetch": True,
+    }
+    job_path.write_text(
+        json.dumps(
+            {
+                "id": "okx-job",
+                "type": "okx_best_1m",
+                "exchange": "okx",
+                "status": "running",
+                "created_ts": 100,
+                "updated_ts": 100,
+                "run_requested": True,
+                "run_requested_ts": 100,
+                "payload": payload,
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[object, dict]] = []
+    moved: list[tuple[object, str]] = []
+
+    def fake_run_okx(path, received_payload):
+        calls.append((path, received_payload))
+        running = json.loads(job_path.read_text(encoding="utf-8"))
+        assert running["status"] == "running"
+        assert running["run_started_ts"] > running["created_ts"]
+        assert running["finished_ts"] == 0
+
+    monkeypatch.setattr(task_worker, "_run_okx_best_1m", fake_run_okx)
+    monkeypatch.setattr(task_worker, "move_job_file", lambda path, state: moved.append((path, state)) or path)
+
+    task_worker._run_job(job_path)
+
+    obj = json.loads(job_path.read_text(encoding="utf-8"))
+    assert calls == [(job_path, payload)]
+    assert moved == [(job_path, "done")]
+    assert obj["status"] == "done"
+    assert obj["run_requested"] is False
+    assert obj["run_requested_ts"] == 0
+    assert obj["finished_ts"] >= obj["run_started_ts"] > obj["created_ts"]
+
+
 def test_ohlcv_copy_rsync_command_updates_changed_files(tmp_path) -> None:
     """OHLCV copy rsync command updates changed files and never deletes target files."""
 

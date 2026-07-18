@@ -173,11 +173,50 @@ can_use_systemd() {
 
 if can_use_systemd; then
   echo "Using systemd user units: ${units[*]}"
-  run_as_service_user systemctl --user "$action" "${units[@]}"
+  declare -A restarts_before
+  if ! run_as_service_user systemctl --user "$action" "${units[@]}"; then
+    printf 'Systemd %s action failed for requested units.\n' "$action" >&2
+    for unit in "${units[@]}"; do
+      run_as_service_user systemctl --user show "$unit" --no-pager \
+        --property=LoadState,UnitFileState,ActiveState,SubState,Result,ExecMainStatus,NRestarts,FragmentPath,NeedDaemonReload >&2 || true
+      run_as_service_user systemctl --user status "$unit" --no-pager -l >&2 || true
+    done
+    exit 1
+  fi
   if [[ "$action" != "stop" ]]; then
     for unit in "${units[@]}"; do
-      run_as_service_user systemctl --user is-active "$unit" >/dev/null
+      restarts_before["$unit"]="$(run_as_service_user systemctl --user show "$unit" --property=NRestarts --value 2>/dev/null || true)"
+      [[ "${restarts_before[$unit]}" =~ ^[0-9]+$ ]] || restarts_before["$unit"]=0
     done
+    sleep 12
+    failed=0
+    for unit in "${units[@]}"; do
+      active_state="$(run_as_service_user systemctl --user show "$unit" --property=ActiveState --value 2>/dev/null || true)"
+      sub_state="$(run_as_service_user systemctl --user show "$unit" --property=SubState --value 2>/dev/null || true)"
+      result_state="$(run_as_service_user systemctl --user show "$unit" --property=Result --value 2>/dev/null || true)"
+      exec_status="$(run_as_service_user systemctl --user show "$unit" --property=ExecMainStatus --value 2>/dev/null || true)"
+      restarts_after="$(run_as_service_user systemctl --user show "$unit" --property=NRestarts --value 2>/dev/null || true)"
+      if [[ -z "$active_state" ]] && run_as_service_user systemctl --user is-active --quiet "$unit" >/dev/null 2>&1; then
+        active_state=active
+      fi
+      [[ -n "$sub_state" ]] || sub_state="$([[ "$active_state" == active ]] && printf running || printf unknown)"
+      [[ -n "$result_state" ]] || result_state="$([[ "$active_state" == active ]] && printf success || printf unknown)"
+      [[ -n "$exec_status" ]] || exec_status=0
+      [[ "$restarts_after" =~ ^[0-9]+$ ]] || restarts_after=0
+      printf 'unit=%s active=%s sub=%s result=%s status=%s restarts_before=%s restarts_after=%s\n' \
+        "$unit" "$active_state" "$sub_state" "$result_state" "$exec_status" "${restarts_before[$unit]}" "$restarts_after"
+      if [[ "$active_state" == active && "$sub_state" == running && "$result_state" == success && "${exec_status:-0}" == 0 && "$restarts_after" -le "${restarts_before[$unit]}" ]]; then
+        continue
+      fi
+      printf 'Systemd stability verification failed for %s\n' "$unit" >&2
+      run_as_service_user systemctl --user show "$unit" --no-pager \
+        --property=LoadState,UnitFileState,ActiveState,SubState,Result,ExecMainStatus,NRestarts,FragmentPath,NeedDaemonReload >&2 || true
+      run_as_service_user systemctl --user status "$unit" --no-pager -l >&2 || true
+      failed=1
+    done
+    if [[ "$failed" -ne 0 ]]; then
+      exit 1
+    fi
   fi
   exit 0
 fi

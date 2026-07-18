@@ -74,6 +74,13 @@ Changes are read on the next log write or before the next managed transcript is
 opened. Logging rotation deliberately has no watcher and does not require a
 service restart.
 
+**Purge** force-rotates and empties the selected current log under the same
+cross-process lock used by writers. PBGui keeps only the configured number of
+numeric backup generations and stores at most the configured maximum-size tail
+as `.1`. A backup count of `0` discards the current content and removes existing
+numeric generations. Purge failures are logged, while browser error responses
+remain generic and do not expose filesystem exception details.
+
 ## Troubleshooting
 
 - **No log files listed**: make sure PBGui services have been started at least once

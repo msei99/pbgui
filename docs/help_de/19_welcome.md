@@ -43,7 +43,9 @@ Wichtige Felder:
 
 Mit den **Browse**-Buttons kannst du Verzeichnisse und den Python-Interpreter direkt aus dem Server-Dateisystem auswaehlen.
 
-Nach dem Speichern gelten die Aenderungen sofort und werden von den PBGui-Laufzeitpfaden verwendet.
+Die Rolle wird nach dem Speichern von neuen Arbeitszyklen uebernommen.
+Aenderungen an PB7-Pfad, PB7-Interpreter oder Bot-Namen erfordern einen Neustart
+des PBRun-Dienstes; die Speicherbestaetigung zeigt die jeweilige Apply-Semantik.
 
 ## Bereich Password
 

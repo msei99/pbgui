@@ -11,10 +11,12 @@ from types import SimpleNamespace
 import pytest
 
 import PBApiServer
+import api.auth as auth_api
 import api.logging as logging_api
 import api.market_data as market_data_api
 import api.services as services
 from ini_settings import APPLY_GROUPS, SETTING_APPLY_REGISTRY, apply_metadata
+from ini_settings import apply_metadata_for
 
 
 def test_registry_covers_editable_setting_families_without_values() -> None:
@@ -44,6 +46,49 @@ def test_apply_metadata_has_stable_shape_and_mixed_group_priority() -> None:
     assert payload["restart_required"] is True
     assert payload["message"] == "API restart required"
     assert APPLY_GROUPS["pbdata"]
+
+
+def test_welcome_setup_registry_classifies_role_and_empty_changes() -> None:
+    """Welcome settings classify role separately and support unchanged saves."""
+    role = SETTING_APPLY_REGISTRY[("main", "role")]
+    assert role.owner == "PBGui"
+    assert role.timing == "next_cycle"
+    assert role.restart_required is False
+    assert set(APPLY_GROUPS["welcome_setup"]) == {
+        ("main", "pbname"),
+        ("main", "pb7dir"),
+        ("main", "pb7venv"),
+        ("main", "role"),
+    }
+    unchanged = apply_metadata_for(())
+    assert unchanged["timing"] == "immediate"
+    assert unchanged["restart_required"] is False
+    assert unchanged["message"] == "No runtime changes"
+    assert unchanged["settings"] == []
+
+
+def test_welcome_setup_returns_apply_metadata_for_changed_fields(monkeypatch) -> None:
+    """Welcome setup reports only settings whose persisted values changed."""
+    previous = {"pb7dir": "/old/pb7", "pb7venv": "/old/python", "pbname": "master-a", "role": "slave"}
+    current = {"pb7dir": "/new/pb7", "pb7venv": "/new/python", "pbname": "master-a", "role": "master"}
+    saved: list[tuple[str, dict[str, str]]] = []
+    monkeypatch.setattr(auth_api, "pb7_runtime_status", lambda: previous)
+    monkeypatch.setattr(auth_api, "save_ini_section", lambda section, values: saved.append((section, values)))
+    monkeypatch.setattr(auth_api, "_bootstrap_payload", lambda session: {"setup": current})
+
+    result = auth_api.save_setup(
+        auth_api.SetupConfigRequest(pb7dir="/new/pb7", pb7venv="/new/python", pbname="master-a", role="master"),
+        SimpleNamespace(),
+    )
+
+    assert saved == [("main", {"pb7dir": "/new/pb7", "pb7venv": "/new/python", "pbname": "master-a", "role": "master"})]
+    assert result["apply"]["timing"] == "service_restart"
+    assert result["apply"]["restart_required"] is True
+    assert {
+        (item["section"], item["key"])
+        for item in result["apply"]["settings"]
+    } == {("main", "pb7dir"), ("main", "pb7venv"), ("main", "role")}
+    assert result["message"] == "Setup saved. Service restart required."
 
 
 def test_settings_payloads_add_apply_metadata_without_removing_existing_fields(monkeypatch) -> None:

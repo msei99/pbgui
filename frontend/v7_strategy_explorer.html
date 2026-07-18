@@ -143,22 +143,6 @@ pre.debug-json { max-height: 460px; white-space: pre-wrap; word-break: break-wor
 .movie-export-panel details { margin-top: var(--sp-sm); }
 .movie-export-download { display: none; justify-content: center; align-items: center; min-height: 36px; color: var(--green); text-decoration: none; border: 1px solid rgba(80, 200, 120, .45); border-radius: var(--radius-sm); padding: 0 12px; }
 .movie-export-download.active { display: inline-flex; }
-.guide-overlay { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 3000; width: min(920px, 95vw); height: min(680px, 88vh); min-width: 360px; min-height: 280px; background: #131b2b; border: 1px solid #2d3748; border-radius: 12px; box-shadow: 0 20px 70px rgba(0,0,0,.9); resize: both; overflow: hidden; }
-.guide-overlay.visible { display: flex; flex-direction: column; }
-#help-drag-handle { position: absolute; top: 0; left: 0; right: 48px; height: 46px; cursor: move; z-index: 2; }
-.guide-overlay .ovl-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
-.ovl-header { display: flex; align-items: center; justify-content: space-between; padding: .85rem 1.1rem .85rem 1.25rem; border-bottom: 1px solid #1e2736; background: #111827; }
-.ovl-header-title { font-size: var(--fs-sm); font-weight: 700; color: #e2e8f0; }
-.ovl-header-actions { display: flex; align-items: center; gap: .5rem; position: relative; z-index: 3; }
-.ovl-close, .ovl-tool { background: transparent; border: none; color: #94a3b8; font-size: var(--fs-md); cursor: pointer; padding: .2rem .35rem; border-radius: 5px; line-height: 1; }
-.ovl-close:hover, .ovl-tool:hover { color: #e2e8f0; background: rgba(255,255,255,.06); }
-.guide-body { overflow: auto; padding: 1.5rem 1.8rem; color: #cbd5e0; line-height: 1.65; }
-.guide-body h2 { margin: 0 0 .75rem; color: #e2e8f0; }
-.guide-body h3 { margin: 1.25rem 0 .35rem; color: #e2e8f0; }
-.guide-body p { margin: .45rem 0; }
-.guide-body ul { padding-left: 1.35rem; margin: .5rem 0; }
-.guide-body li { margin: .2rem 0; }
-.guide-body code { background: #1a202c; color: #f6ad55; padding: .1em .35em; border-radius: 3px; font-family: var(--mono); font-size: var(--fs-xs); }
 .segment-tabs { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); border: 1px solid var(--border); border-radius: 7px; overflow: hidden; margin: 6px 0 10px; background: #0b0e14; }
 .segment-tabs button { min-width: 0; border: 0; border-right: 1px solid var(--border); background: transparent; color: var(--text-dim); padding: 6px 6px; font-size: var(--fs-xs); transition: color .15s, background .15s; }
 .segment-tabs button:last-child { border-right: 0; }
@@ -197,25 +181,6 @@ input.param-slider::-moz-range-thumb { width: 12px; height: 12px; border-radius:
 <body>
 <nav id="topnav"></nav>
 <div id="data-tip-tooltip"></div>
-<div id="help-ovl" class="guide-overlay">
-  <div class="ovl-panel">
-    <div id="help-drag-handle"></div>
-    <div class="ovl-header">
-      <div class="ovl-header-title">Guide &amp; Help</div>
-      <div class="ovl-header-actions"><button class="ovl-close" id="help-close" type="button">&#x2715;</button></div>
-    </div>
-    <div class="guide-body">
-      <h2>Strategy Explorer Guide</h2>
-      <p>Use Strategy Explorer to inspect PB7 grid/trailing behavior, run local simulations, compare PBGui against PB7 output, and build replay movies from candle windows or backtest result folders.</p>
-      <h3>Analysis</h3>
-      <ul><li>Select the OHLCV source, market, analysis time, balance, and chart context.</li><li>Move sliders to tune LONG/SHORT parameters; valid changes recalculate the Rust-derived snapshot.</li><li>Use Raw Config for direct JSON edits when a field is not exposed as a slider.</li></ul>
-      <h3>Simulation And Compare</h3>
-      <ul><li>PBGui Simulation walks candles locally and can start flat or from a manual position.</li><li>PB7 Backtest Engine uses the Rust engine path for fill comparison.</li><li>Compare can use a PB7 result folder with <code>fills.csv</code> to align the tested time window.</li></ul>
-      <h3>Movie Builder</h3>
-      <ul><li>PB7 fills.csv mode replays an existing backtest result without recomputing fills.</li><li>Duration presets compute frame counts from the selected step size.</li><li>Export MP4 after generating frames, or export directly from the current settings.</li></ul>
-    </div>
-  </div>
-</div>
 <div id="page-body">
   <aside id="sidebar">
     <div id="sidebar-inner">
@@ -2693,13 +2658,6 @@ document.addEventListener('fullscreenchange', function() {
     }
   });
 })();
-window.PBGUI_HELP_OPENER = function() {
-  var ovl = document.getElementById('help-ovl');
-  if (ovl) ovl.classList.add('visible');
-};
-document.getElementById('help-close').addEventListener('click', function() {
-  document.getElementById('help-ovl').classList.remove('visible');
-});
 window.PBGUI_NAV_CONFIG = { subtitle: 'Strategy Explorer', current: 'v7_strategy_explorer', token: TOKEN, apiBase: API_BASE, version: PBGUI_VERSION, serial: PBGUI_SERIAL };
 syncMovieDurationOptions();
 applyInitialResultPath(RESULT_PATH || '');

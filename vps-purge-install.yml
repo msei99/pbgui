@@ -35,7 +35,7 @@
     - name: stop and remove PBGui systemd user units
       shell: |
         set -u
-        target_user={{ user | quote }}
+        target_user="$PBGUI_PURGE_USER"
         target_home="$(getent passwd "$target_user" | cut -d: -f6)"
         if [ -z "$target_home" ]; then
           target_home="$HOME"
@@ -49,7 +49,7 @@
           systemctl --user stop "$unit" >/dev/null 2>&1 || true
           systemctl --user disable "$unit" >/dev/null 2>&1 || true
           systemctl --user reset-failed "$unit" >/dev/null 2>&1 || true
-          if [ -e "$wants_dir/$unit" ] || [ -e "$unit_dir/$unit" ]; then
+          if [ -e "$wants_dir/$unit" ] || [ -L "$wants_dir/$unit" ] || [ -e "$unit_dir/$unit" ]; then
             changed=1
           fi
           rm -f "$wants_dir/$unit" "$unit_dir/$unit"
@@ -58,6 +58,8 @@
         echo "changed=$changed"
       args:
         executable: /bin/bash
+      environment:
+        PBGUI_PURGE_USER: "{{ user }}"
       register: systemd_purge_result
       changed_when: "'changed=1' in systemd_purge_result.stdout"
 
@@ -85,7 +87,7 @@
         new="$(mktemp)"
         trap 'rm -f "$tmp" "$new"' EXIT
         crontab -l > "$tmp" 2>/dev/null || true
-        grep -Fv -- {{ pbgui_dir | quote }} "$tmp" > "$new" || true
+        grep -Fv -- "$PBGUI_PURGE_DIR" "$tmp" > "$new" || true
         if ! cmp -s "$tmp" "$new"; then
           crontab "$new"
           echo changed=1
@@ -94,6 +96,8 @@
         fi
       args:
         executable: /bin/bash
+      environment:
+        PBGUI_PURGE_DIR: "{{ pbgui_dir }}"
       register: user_crontab_purge_result
       changed_when: "'changed=1' in user_crontab_purge_result.stdout"
 
@@ -110,10 +114,14 @@
             str(install / 'pbgui' / 'PBApiServer.py'),
             str(install / 'pbgui' / 'PBCluster.py'),
             str(install / 'pbgui' / 'PBRun.py'),
+            str(install / 'pbgui' / 'PBData.py'),
             str(install / 'pbgui' / 'PBCoinData.py'),
+            str(install / 'pbgui' / 'PBRemote.py'),
+            str(install / 'pbgui' / 'monitor_agent.py'),
             str(install / 'pb7' / 'src' / 'main.py'),
             str(install / 'venv_pb7' / 'bin' / 'python'),
             str(install / 'venv_pbgui' / 'bin' / 'python'),
+            str(install / 'venv_pbgui312' / 'bin' / 'python'),
         ]
         protected = {os.getpid()}
         pid = os.getppid()
@@ -124,32 +132,47 @@
                 pid = int(stat.rsplit(')', 1)[1].split()[1])
             except Exception:
                 break
-        targets = []
-        for proc in Path('/proc').iterdir():
-            if not proc.name.isdigit():
-                continue
-            pid = int(proc.name)
-            if pid in protected:
-                continue
-            try:
-                raw = (proc / 'cmdline').read_bytes().replace(b'\x00', b' ').decode('utf-8', errors='ignore')
-            except Exception:
-                continue
-            if any(pattern in raw for pattern in patterns):
-                targets.append(pid)
+        def collect_targets():
+            targets = set()
+            for proc in Path('/proc').iterdir():
+                if not proc.name.isdigit():
+                    continue
+                pid = int(proc.name)
+                if pid in protected:
+                    continue
+                try:
+                    raw = (proc / 'cmdline').read_bytes().replace(b'\x00', b' ').decode('utf-8', errors='ignore')
+                except Exception:
+                    continue
+                if any(pattern in raw for pattern in patterns):
+                    targets.add(pid)
+            return targets
+
+        targets = collect_targets()
         for pid in targets:
             try:
                 os.kill(pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-        if targets:
-            time.sleep(2)
-        for pid in targets:
+        deadline = time.monotonic() + 8
+        remaining = collect_targets()
+        while remaining and time.monotonic() < deadline:
+            time.sleep(0.25)
+            remaining = collect_targets()
+        for pid in remaining:
             try:
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        print('changed=%d pids=%s' % (1 if targets else 0, ','.join(str(pid) for pid in targets)))
+        deadline = time.monotonic() + 3
+        remaining = collect_targets()
+        while remaining and time.monotonic() < deadline:
+            time.sleep(0.25)
+            remaining = collect_targets()
+        if remaining:
+            print('remaining_pids=' + ','.join(str(pid) for pid in sorted(remaining)))
+            raise SystemExit(1)
+        print('changed=%d pids=%s' % (1 if targets else 0, ','.join(str(pid) for pid in sorted(targets))))
         PY
       args:
         executable: /bin/bash
@@ -161,27 +184,68 @@
     - name: remove Cluster Sync authorized_keys entries for this install
       shell: |
         python3 - <<'PY'
-        from pathlib import Path
+        import fcntl
         import os
+        import stat
+        import tempfile
+        from pathlib import Path
 
         pbgui_dir = os.environ.get('PBGUI_PURGE_DIR', '').rstrip('/')
         path = Path.home() / '.ssh' / 'authorized_keys'
-        if not pbgui_dir or not path.exists():
+        if not pbgui_dir:
             print('changed=0')
             raise SystemExit(0)
-        lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
-        kept = []
-        removed = 0
-        marker = f"{pbgui_dir}/cluster_sync_forced_command.sh"
-        for line in lines:
-            if marker in line and 'pbgui-cluster:' in line:
-                removed += 1
-                continue
-            kept.append(line)
-        if removed:
-            path.write_text(('\n'.join(kept).rstrip() + '\n') if kept else '', encoding='utf-8')
-            path.chmod(0o600)
-        print(f'changed={1 if removed else 0} removed={removed}')
+        if not path.parent.exists():
+            print('changed=0')
+            raise SystemExit(0)
+
+        lock_path = path.with_name(f'{path.name}.lock')
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        temp_name = None
+        try:
+            os.fchmod(lock_fd, 0o600)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            if not path.exists():
+                print('changed=0')
+                raise SystemExit(0)
+            path_stat = path.stat(follow_symlinks=False)
+            if not stat.S_ISREG(path_stat.st_mode):
+                raise RuntimeError(f'Refusing non-regular authorized_keys: {path}')
+            with path.open('r', encoding='utf-8', errors='ignore') as handle:
+                lines = handle.read().splitlines()
+            kept = []
+            removed = 0
+            marker = f"{pbgui_dir}/cluster_sync_forced_command.sh"
+            for line in lines:
+                if marker in line and 'pbgui-cluster:' in line:
+                    removed += 1
+                    continue
+                kept.append(line)
+            if removed:
+                temp_fd, temp_name = tempfile.mkstemp(prefix='.authorized_keys.pbgui.', dir=path.parent)
+                os.fchmod(temp_fd, 0o600)
+                with os.fdopen(temp_fd, 'w', encoding='utf-8') as handle:
+                    os.fchown(handle.fileno(), path_stat.st_uid, path_stat.st_gid)
+                    os.fchmod(handle.fileno(), stat.S_IMODE(path_stat.st_mode))
+                    handle.write(('\n'.join(kept).rstrip() + '\n') if kept else '')
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temp_name, path)
+                temp_name = None
+                dir_fd = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            print(f'changed={1 if removed else 0} removed={removed}')
+        finally:
+            if temp_name is not None:
+                try:
+                    os.unlink(temp_name)
+                except FileNotFoundError:
+                    pass
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
         PY
       args:
         executable: /bin/bash

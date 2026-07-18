@@ -128,9 +128,22 @@ class TestVpsManagerFrontendLogic:
         handle_result = _extract_function(source, "handleResult")
 
         assert "const actualFile = String(data.file_alias || '')" in handle_result
-        assert "task.file = actualFile" in handle_result
+        assert "if (actualFile) task.file = actualFile" in handle_result
         assert "task.startEmpty = false" in handle_result
-        assert "taskLogViewer.setFile(actualFile)" in handle_result
+        assert "task.runKey = String(Date.now())" in handle_result
+        assert "taskLogViewerKey = ''" in handle_result
+
+    def test_new_task_log_stays_empty_until_backend_confirms_rotation(self) -> None:
+        """Do not show the prior run, then reload the new file from its beginning."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        open_master = _extract_function(source, "openMasterTaskLog")
+        open_vps = _extract_function(source, "openVpsTaskLog")
+        handle_result = _extract_function(source, "handleResult")
+
+        assert "startEmpty: true" in open_master
+        assert "startEmpty: true" in open_vps
+        assert "task.startEmpty = false" in handle_result
+        assert handle_result.count("taskLogViewerKey = ''") >= 2
 
     def test_host_detail_context_and_full_hydration_have_separate_generations(self) -> None:
         """Quick socket updates must not cancel same-host background detail hydration."""
@@ -206,7 +219,8 @@ class TestVpsManagerFrontendLogic:
         assert "This only removes the saved VPS Manager record from PBGui" in source
         assert "function confirmPurgeVpsInstall(hostname)" in source
         assert "vpsActionWithPw(hostname, 'vps-purge-install', 'Purge VPS Install')" in source
-        assert "onclick='confirmPurgeVpsInstall(${js(selectedHost)})'>Purge VPS Install</button>" in source
+        assert "data-vps-action='purge-vps'" in source
+        assert "data-host='${escAttr(selectedHost)}'>Purge VPS Install</button>" in source
 
     def test_existing_vps_host_key_can_be_repaired_in_gui(self) -> None:
         """Expose review, exact confirmation, replacement, and reconnect in the VPS sidebar."""
@@ -217,7 +231,8 @@ class TestVpsManagerFrontendLogic:
         assert "function reviewVpsSshHostKey(hostname)" in source
         assert "function openSshHostKeyReviewModal(data)" in source
         assert "const hostKeyBtnClass = st.host_key_error || (hostKeyStatus !== 'known' && hostKeyStatus !== 'local') ? 'sb-btn warning' : 'sb-btn'" in sidebar_source
-        assert "onclick='reviewVpsSshHostKey(${js(selectedHost)})'>Review SSH Host Key</button>" in sidebar_source
+        assert "data-vps-action='review-host-key'" in sidebar_source
+        assert "data-host='${escAttr(selectedHost)}'>Review SSH Host Key</button>" in sidebar_source
         assert "reviewVpsSshHostKey" not in main_source
         assert "Replace Key & Reconnect" in source
         assert "expected_fingerprint: fingerprint" in source

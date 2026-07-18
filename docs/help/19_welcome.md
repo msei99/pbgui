@@ -43,7 +43,9 @@ Important fields:
 
 Use the **Browse** buttons to pick directories and the Python interpreter from the server filesystem.
 
-Changes are applied immediately after saving and are used by the PBGui runtime paths.
+The role is picked up by fresh operation cycles after saving. Changes to the
+PB7 path, PB7 interpreter, or bot name require the PBRun service to restart;
+the save confirmation reports the required apply timing.
 
 ## Password section
 

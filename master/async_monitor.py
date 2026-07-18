@@ -41,9 +41,28 @@ INSTANCE_COLLECT_INTERVAL = 30  # seconds
 HOST_META_INTERVAL = 10     # seconds
 PACKAGE_STATUS_INTERVAL = 3600  # seconds
 METRICS_STREAM_STARTUP_GRACE_SECONDS = 30.0
-METRICS_STREAM_STALE_SECONDS = 45.0
+METRICS_STREAM_STALE_SECONDS = 15.0
 METRICS_STREAM_RECONNECT_AFTER_STALE_RESTARTS = 2
 METRICS_STREAM_STALE_LOG_INTERVAL = 60.0
+MONITOR_AGENT_SCHEMA_VERSION = 1
+MONITOR_AGENT_SOURCE = "monitor-agent"
+MONITOR_AGENT_CLOCK_SKEW_SECONDS = 300.0
+MONITOR_AGENT_FILE_TTLS = {
+    "live_metrics.ndjson": 15.0,
+    "instance_snapshot.json": 90.0,
+    "host_meta.json": 30.0,
+    "service_status.json": 120.0,
+    "package_status.json": 7200.0,
+    "collector_status.json": 30.0,
+}
+MONITOR_AGENT_LOOP_FILES = {
+    "live_metrics": "live_metrics.ndjson",
+    "instances": "instance_snapshot.json",
+    "host_meta": "host_meta.json",
+    "services": "service_status.json",
+    "package_status": "package_status.json",
+}
+MONITOR_AGENT_STATE_RANK = {"ok": 0, "unknown": 1, "stale": 2, "missing": 3, "error": 4}
 MONITOR_CACHE_VERSION = 2
 STATE_SNAPSHOT_VERSION = 1
 CPU_HISTORY_VERSION = 1
@@ -324,6 +343,171 @@ def _count_hourly_log_occurrences(lines: list[str], *, needle: str) -> dict[int,
 
 def _shell_quote(value: str) -> str:
     return "'" + str(value or '').replace("'", "'\"'\"'") + "'"
+
+
+class MonitorAgentPayloadError(ValueError):
+    """A stable, non-sensitive monitor-agent contract validation error."""
+
+
+def _monitor_agent_number(value: Any) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(float(value))
+
+
+def _monitor_agent_require(payload: dict[str, Any], fields: tuple[str, ...]) -> None:
+    for field in fields:
+        if field not in payload:
+            raise MonitorAgentPayloadError(f"missing field {field}")
+
+
+def _monitor_agent_require_type(payload: dict[str, Any], field: str, expected: type | tuple[type, ...]) -> Any:
+    value = payload.get(field)
+    if isinstance(value, bool) and expected in {(int, float), (int, float, type(None))}:
+        raise MonitorAgentPayloadError(f"invalid type for {field}")
+    if not isinstance(value, expected):
+        raise MonitorAgentPayloadError(f"invalid type for {field}")
+    return value
+
+
+def _monitor_agent_require_number(payload: dict[str, Any], field: str, *, minimum: float | None = None) -> float:
+    value = payload.get(field)
+    if not _monitor_agent_number(value):
+        raise MonitorAgentPayloadError(f"invalid number for {field}")
+    numeric = float(value)
+    if minimum is not None and numeric < minimum:
+        raise MonitorAgentPayloadError(f"invalid range for {field}")
+    return numeric
+
+
+def _validate_monitor_agent_payload(filename: str, payload: Any, *, now: float | None = None) -> tuple[float, float]:
+    """Validate one cache payload and return its generated timestamp and age."""
+
+    if filename not in MONITOR_AGENT_FILE_TTLS:
+        raise MonitorAgentPayloadError("unsupported cache file")
+    if not isinstance(payload, dict):
+        raise MonitorAgentPayloadError("payload must be an object")
+    _monitor_agent_require(payload, ("schema_version", "generated_at"))
+    if type(payload.get("schema_version")) is not int or payload["schema_version"] != MONITOR_AGENT_SCHEMA_VERSION:
+        raise MonitorAgentPayloadError("unsupported schema_version")
+    if "source" not in payload and filename in {"live_metrics.ndjson", "collector_status.json"}:
+        payload["source"] = MONITOR_AGENT_SOURCE
+    elif "source" not in payload:
+        raise MonitorAgentPayloadError("missing field source")
+    if type(payload.get("source")) is not str or payload["source"] != MONITOR_AGENT_SOURCE:
+        raise MonitorAgentPayloadError("invalid source")
+    generated_at = _monitor_agent_require_number(payload, "generated_at", minimum=0.000001)
+    checked_at = float(time.time() if now is None else now)
+    if not math.isfinite(checked_at):
+        raise MonitorAgentPayloadError("invalid validation time")
+    if generated_at > checked_at + MONITOR_AGENT_CLOCK_SKEW_SECONDS:
+        raise MonitorAgentPayloadError("generated_at is in the future")
+
+    if filename == "live_metrics.ndjson":
+        _monitor_agent_require(payload, (
+            "ts", "cpu", "cpu_60s", "cpu_60s_window", "cpu_60s_samples",
+            "mem", "disk", "swap", "mem_60s_peak", "mem_60s_window",
+            "disk_60s_peak", "disk_60s_window", "swap_60s_peak",
+            "swap_60s_window", "bots",
+        ))
+        timestamp = _monitor_agent_require_number(payload, "ts", minimum=0.000001)
+        if timestamp > checked_at + MONITOR_AGENT_CLOCK_SKEW_SECONDS:
+            raise MonitorAgentPayloadError("ts is in the future")
+        for field in (
+            "cpu", "cpu_60s", "cpu_60s_window", "mem_60s_peak", "mem_60s_window",
+            "disk_60s_peak", "disk_60s_window", "swap_60s_peak", "swap_60s_window",
+        ):
+            _monitor_agent_require_number(payload, field, minimum=0.0)
+        if type(payload.get("cpu_60s_samples")) is not int or payload["cpu_60s_samples"] < 0:
+            raise MonitorAgentPayloadError("invalid type for cpu_60s_samples")
+        for field in ("mem", "disk", "swap"):
+            values = _monitor_agent_require_type(payload, field, list)
+            if len(values) != 4 or any(not _monitor_agent_number(value) for value in values):
+                raise MonitorAgentPayloadError(f"invalid metrics array {field}")
+        bots = _monitor_agent_require_type(payload, "bots", list)
+        for bot in bots:
+            if not isinstance(bot, dict):
+                raise MonitorAgentPayloadError("invalid bot entry")
+            _monitor_agent_require(bot, ("name", "cpu", "cpu_60s", "cpu_60s_window", "rss_mb", "swap_mb"))
+            if not isinstance(bot.get("name"), str) or not bot["name"].strip():
+                raise MonitorAgentPayloadError("invalid bot name")
+            for field in ("cpu", "cpu_60s", "cpu_60s_window", "rss_mb", "swap_mb"):
+                _monitor_agent_require_number(bot, field, minimum=0.0)
+    elif filename == "instance_snapshot.json":
+        _monitor_agent_require(payload, ("monitors", "v7", "cache", "bot_logs"))
+        for field in ("monitors", "v7"):
+            values = _monitor_agent_require_type(payload, field, list)
+            if any(not isinstance(value, dict) for value in values):
+                raise MonitorAgentPayloadError(f"invalid entries for {field}")
+        _monitor_agent_require_type(payload, "cache", dict)
+        bot_logs = _monitor_agent_require_type(payload, "bot_logs", dict)
+        if any(not isinstance(name, str) for name in bot_logs):
+            raise MonitorAgentPayloadError("invalid bot_logs keys")
+    elif filename == "host_meta.json":
+        _monitor_agent_require(payload, (
+            "role", "boot", "reboot", "pbgv", "pbgc", "pbgb", "pbgpy",
+            "pb7v", "pb7c", "pb7b", "pb7py", "optional_services",
+            "available_logs", "systemd_migration",
+        ))
+        for field in ("role", "pbgv", "pbgc", "pbgb", "pbgpy", "pb7v", "pb7c", "pb7b", "pb7py"):
+            _monitor_agent_require_type(payload, field, str)
+        _monitor_agent_require_number(payload, "boot", minimum=0.0)
+        if type(payload.get("reboot")) is not bool:
+            raise MonitorAgentPayloadError("invalid type for reboot")
+        optional_services = _monitor_agent_require_type(payload, "optional_services", dict)
+        if any(not isinstance(name, str) or (value is not None and type(value) is not bool) for name, value in optional_services.items()):
+            raise MonitorAgentPayloadError("invalid optional_services")
+        available_logs = _monitor_agent_require_type(payload, "available_logs", list)
+        if any(not isinstance(value, str) for value in available_logs):
+            raise MonitorAgentPayloadError("invalid available_logs")
+        _monitor_agent_require_type(payload, "systemd_migration", dict)
+    elif filename == "service_status.json":
+        _monitor_agent_require(payload, ("services",))
+        services = _monitor_agent_require_type(payload, "services", dict)
+        for name, service in services.items():
+            if not isinstance(name, str) or not isinstance(service, dict):
+                raise MonitorAgentPayloadError("invalid service entry")
+            _monitor_agent_require(service, ("status", "pid", "error", "was_restarted", "expected"))
+            if not isinstance(service.get("status"), str):
+                raise MonitorAgentPayloadError("invalid service status")
+            if service.get("pid") is not None and (type(service["pid"]) is not int or service["pid"] < 0):
+                raise MonitorAgentPayloadError("invalid service pid")
+            if service.get("error") is not None and not isinstance(service["error"], str):
+                raise MonitorAgentPayloadError("invalid service error")
+            if (type(service.get("was_restarted")) is not bool
+                    or (service.get("expected") is not None and type(service.get("expected")) is not bool)):
+                raise MonitorAgentPayloadError("invalid service flags")
+    elif filename == "package_status.json":
+        _monitor_agent_require(payload, ("upgrades", "reboot"))
+        _monitor_agent_require_type(payload, "upgrades", str)
+        if type(payload.get("reboot")) is not bool:
+            raise MonitorAgentPayloadError("invalid type for reboot")
+    elif filename == "collector_status.json":
+        _monitor_agent_require(payload, ("hostname", "agent_version", "loops"))
+        if not _monitor_agent_require_type(payload, "hostname", str).strip():
+            raise MonitorAgentPayloadError("invalid hostname")
+        if not _monitor_agent_require_type(payload, "agent_version", str).strip():
+            raise MonitorAgentPayloadError("invalid agent_version")
+        loops = _monitor_agent_require_type(payload, "loops", dict)
+        missing_loops = set(MONITOR_AGENT_LOOP_FILES) - set(loops)
+        if missing_loops:
+            raise MonitorAgentPayloadError("missing required collector loop")
+        for name, loop in loops.items():
+            if not isinstance(name, str) or not isinstance(loop, dict):
+                raise MonitorAgentPayloadError("invalid collector loop")
+            _monitor_agent_require(loop, ("interval", "last_ok", "last_error"))
+            _monitor_agent_require_number(loop, "interval", minimum=0.000001)
+            last_ok = _monitor_agent_require_number(loop, "last_ok", minimum=0.0)
+            if last_ok > checked_at + MONITOR_AGENT_CLOCK_SKEW_SECONDS:
+                raise MonitorAgentPayloadError("last_ok is in the future")
+            if not isinstance(loop.get("last_error"), str):
+                raise MonitorAgentPayloadError("invalid collector last_error")
+
+    return generated_at, max(checked_at - generated_at, 0.0)
+
+
+def _monitor_agent_error(filename: str, detail: str) -> str:
+    """Return a bounded diagnostic assembled only from controlled text."""
+
+    return f"monitor-agent cache {detail}: {filename}"[:160]
 
 
 def _metrics_last_update(stream: dict[str, Any], metrics: dict[str, Any]) -> float:
@@ -1243,30 +1427,21 @@ class BotPnlHistoryStore:
 
 
 def _monitor_agent_tail_command(remote_pbgui_dir: str) -> str:
-    canonical = remote_shell_path(remote_path_join(remote_pbgui_dir, "data", "logs", "monitor-agent", "live_metrics.ndjson"))
-    legacy = remote_shell_path(remote_path_join(remote_pbgui_dir, "data", "monitor_agent", "live_metrics.ndjson"))
-    return f"canonical={canonical}; legacy={legacy}; while [ ! -f \"$canonical\" ] && [ ! -f \"$legacy\" ]; do sleep 1; done; if [ -f \"$canonical\" ]; then p=\"$canonical\"; else p=\"$legacy\"; fi; tail -n 1 -F \"$p\""
+    cache_path = remote_shell_path(remote_path_join(remote_pbgui_dir, "data", "monitor_agent", "live_metrics.ndjson"))
+    legacy_path = remote_shell_path(remote_path_join(remote_pbgui_dir, "data", "logs", "monitor-agent", "live_metrics.ndjson"))
+    return (
+        f"while [ ! -f {cache_path} ] && [ ! -f {legacy_path} ]; do sleep 1; done; "
+        f"if [ ! -f {cache_path} ]; then monitor_path={legacy_path}; "
+        f"elif [ -f {legacy_path} ] && [ {legacy_path} -nt {cache_path} ]; "
+        f"then monitor_path={legacy_path}; else monitor_path={cache_path}; fi; "
+        f"tail -n 1 -F \"$monitor_path\""
+    )
 
 
 def _monitor_agent_cache_read_command(remote_pbgui_dir: str, filename: str) -> str:
     cache_path = remote_path_join(remote_pbgui_dir, "data", "monitor_agent", filename)
     return f"cat {remote_shell_path(cache_path)}"
 
-
-def _host_meta_direct_command(remote_pbgui_dir: str) -> str:
-    """Return a direct remote host-metadata probe command."""
-
-    raw_dir = str(remote_pbgui_dir or "software/pbgui").strip().rstrip("/") or "software/pbgui"
-    if raw_dir.startswith("/"):
-        pbgdir_expr = json.dumps(raw_dir)
-    else:
-        pbgdir_expr = f"os.path.join(HOME, {json.dumps(raw_dir)})"
-    command = HOST_META_SCRIPT.replace("os.path.join(HOME, '__PBGDIR__')", pbgdir_expr)
-    return command.replace(
-        "python3 -u - <<'PY'",
-        "timeout --signal=TERM --kill-after=2s 20s python3 -u - <<'PY'",
-        1,
-    )
 
 INSTANCE_COLLECT_SCRIPT = r'''python3 -u -c "
 import hashlib, json, os, re, subprocess, sys, time
@@ -2667,27 +2842,25 @@ PY'''
 PACKAGE_STATUS_SCRIPT = r'''python3 -u -c "
 import json, os, re, subprocess
 
-result = {
-    'upgrades': 'N/A',
-    'reboot': os.path.exists('/var/run/reboot-required'),
-}
 env = os.environ.copy()
 env['LANG'] = 'C'
-try:
-    res = subprocess.run(
-        ['apt-get', 'dist-upgrade', '-s'],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        timeout=60,
-        env=env,
-    )
-    if res.returncode == 0:
-        match = re.search(r'(\d+) upgraded', res.stdout or '')
-        if match:
-            result['upgrades'] = match.group(1)
-except Exception:
-    pass
+res = subprocess.run(
+    ['apt-get', 'dist-upgrade', '-s'],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    timeout=60,
+    env=env,
+)
+if res.returncode != 0:
+    raise RuntimeError(f'apt probe failed rc={res.returncode}')
+match = re.search(r'(\d+) upgraded', res.stdout or '')
+if not match:
+    raise RuntimeError('apt output did not contain an upgrade count')
+result = {
+    'upgrades': match.group(1),
+    'reboot': os.path.exists('/var/run/reboot-required'),
+}
 
 print(json.dumps(result))
 "'''
@@ -2846,6 +3019,11 @@ class VPSMonitor:
 
         # Background tasks
         self._tasks: list[asyncio.Task] = []
+        self._host_meta_tasks: set[asyncio.Task] = set()
+        self._host_meta_task_admission_open = False
+        self._host_meta_lifecycle_generation = 0
+        self._host_meta_host_generations: dict[str, int] = {}
+        self._host_meta_blocked_hosts: set[str] = set()
         self._stream_tasks: dict[str, asyncio.Task] = {}
         self._stream_generations: dict[str, int] = {}
         self._stream_started_at: dict[str, float] = {}
@@ -3489,6 +3667,9 @@ class VPSMonitor:
             return
         self.loop = asyncio.get_running_loop()
         self._running = True
+        self._host_meta_lifecycle_generation += 1
+        self._host_meta_task_admission_open = True
+        self._host_meta_blocked_hosts.clear()
         _log(SERVICE, "Starting VPS monitor...")
 
         self.pool.load_vps_configs()
@@ -3528,8 +3709,9 @@ class VPSMonitor:
             for hostname, success in results.items():
                 if success:
                     self._start_metrics_stream(hostname)
-                    asyncio.create_task(
+                    self._create_host_meta_task(
                         self.collect_host_meta_now(hostname, include_package_status=True),
+                        hostname=hostname,
                         name=f"host-meta-startup-{hostname}",
                     )
 
@@ -3545,9 +3727,14 @@ class VPSMonitor:
 
     async def stop(self):
         """Cancel all tasks and disconnect."""
-        if not self._running:
+        if (not self._running and self.loop is None and not self._tasks
+                and not self._stream_tasks and not getattr(self, '_host_meta_tasks', set())
+                and not getattr(self, '_host_meta_task_admission_open', False)):
             return
         self._running = False
+        self._ensure_host_meta_task_state()
+        self._host_meta_task_admission_open = False
+        self._host_meta_lifecycle_generation += 1
         _log(SERVICE, "Stopping VPS monitor...")
 
         # Cancel stream tasks
@@ -3556,6 +3743,7 @@ class VPSMonitor:
         # Cancel main tasks
         for task in self._tasks:
             task.cancel()
+        await self._cancel_host_meta_tasks()
 
         # Wait for cancellation
         all_tasks = list(self._tasks) + list(self._stream_tasks.values())
@@ -3638,8 +3826,9 @@ class VPSMonitor:
                 self._start_metrics_stream(hostname)
                 self._last_host_meta_collect.pop(hostname, None)
                 self._last_package_status_collect.pop(hostname, None)
-                asyncio.create_task(
+                self._create_host_meta_task(
                     self.collect_host_meta_now(hostname, include_package_status=True),
+                    hostname=hostname,
                     name=f"host-meta-reconnect-{hostname}",
                 )
 
@@ -3693,7 +3882,9 @@ class VPSMonitor:
         if newly_disabled:
             _log(SERVICE, f"Hosts disabled: {', '.join(sorted(newly_disabled))}")
             for h in newly_disabled:
+                self._set_host_meta_host_admission(h, enabled=False)
                 self._stop_metrics_stream(h)
+                await self._cancel_host_meta_tasks(h)
                 await self.pool.disconnect(h)
                 self.pool.remove_host(h)
                 self.store.remove_host(h)
@@ -3708,9 +3899,11 @@ class VPSMonitor:
             for h in newly_enabled:
                 if h in self.pool.hostnames():
                     if await self.pool.connect(h):
+                        self._set_host_meta_host_admission(h, enabled=True)
                         self._start_metrics_stream(h)
-                        self._create_owned_task(
+                        self._create_host_meta_task(
                             self.collect_host_meta_now(h, include_package_status=True),
+                            hostname=h,
                             name=f"host-meta-enable-{h}",
                         )
 
@@ -3718,6 +3911,66 @@ class VPSMonitor:
         task = asyncio.create_task(coroutine, name=name)
         self._tasks.append(task)
         return task
+
+    def _register_host_meta_task(self, task: asyncio.Task, hostname: str) -> None:
+        tasks = getattr(self, '_host_meta_tasks', None)
+        if tasks is None:
+            tasks = set()
+            self._host_meta_tasks = tasks
+        setattr(task, '_pbgui_host_meta_host', str(hostname or ''))
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    def _ensure_host_meta_task_state(self) -> None:
+        if not hasattr(self, '_host_meta_task_admission_open'):
+            self._host_meta_task_admission_open = bool(getattr(self, '_running', True))
+        if not hasattr(self, '_host_meta_lifecycle_generation'):
+            self._host_meta_lifecycle_generation = 1
+        if not hasattr(self, '_host_meta_host_generations'):
+            self._host_meta_host_generations = {}
+        if not hasattr(self, '_host_meta_blocked_hosts'):
+            self._host_meta_blocked_hosts = set()
+
+    def _set_host_meta_host_admission(self, hostname: str, *, enabled: bool) -> None:
+        self._ensure_host_meta_task_state()
+        host = str(hostname or '')
+        self._host_meta_host_generations[host] = self._host_meta_host_generations.get(host, 0) + 1
+        if enabled:
+            self._host_meta_blocked_hosts.discard(host)
+        else:
+            self._host_meta_blocked_hosts.add(host)
+
+    def _create_host_meta_task(self, coroutine, *, hostname: str, name: str) -> asyncio.Task | None:
+        self._ensure_host_meta_task_state()
+        host = str(hostname or '')
+        if not self._host_meta_task_admission_open or host in self._host_meta_blocked_hosts:
+            close = getattr(coroutine, 'close', None)
+            if callable(close):
+                close()
+            return None
+        task = asyncio.create_task(coroutine, name=name)
+        setattr(task, '_pbgui_host_meta_lifecycle_generation', self._host_meta_lifecycle_generation)
+        setattr(task, '_pbgui_host_meta_host_generation', self._host_meta_host_generations.get(host, 0))
+        self._register_host_meta_task(task, host)
+        return task
+
+    async def _cancel_host_meta_tasks(self, hostname: str | None = None) -> None:
+        tasks = getattr(self, '_host_meta_tasks', set())
+        current = asyncio.current_task()
+        while True:
+            selected = [
+                task for task in list(tasks)
+                if task is not current
+                and (hostname is None or getattr(task, '_pbgui_host_meta_host', '') == hostname)
+            ]
+            if not selected:
+                break
+            for task in selected:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*selected, return_exceptions=True)
+            for task in selected:
+                tasks.discard(task)
 
     def _schedule_config_retry(self) -> None:
         if not self._running or self._config_retry_count >= 3:
@@ -3741,19 +3994,61 @@ class VPSMonitor:
         host = str(hostname or "").strip()
         if not host:
             return False
+        self._ensure_host_meta_task_state()
+        if not getattr(self, '_running', True):
+            return False
         enabled = set(self.enabled_hosts)
         self.pool.load_vps_configs()
         for h in list(self.pool.hostnames()):
             if h not in enabled:
+                self._set_host_meta_host_admission(h, enabled=False)
+                await self._cancel_host_meta_tasks(h)
                 self.pool.remove_host(h)
         if host not in enabled or host not in self.pool.hostnames():
             return False
-        if await self.pool.connect(host):
+
+        if not self._host_meta_task_admission_open or host in self._host_meta_blocked_hosts:
+            return False
+        self._host_meta_host_generations[host] = self._host_meta_host_generations.get(host, 0) + 1
+        lifecycle_generation = self._host_meta_lifecycle_generation
+        host_generation = self._host_meta_host_generations[host]
+        connect_result = await self.pool.connect_with_result(host)
+        connected = connect_result.success
+        monitor_running = getattr(self, '_running', True)
+        admission_open = self._host_meta_task_admission_open
+        host_blocked = host in self._host_meta_blocked_hosts
+        host_enabled = host in set(self.enabled_hosts)
+        host_present = host in self.pool.hostnames()
+        lifecycle_current = self._host_meta_lifecycle_generation == lifecycle_generation
+        host_generation_current = self._host_meta_host_generations.get(host) == host_generation
+        attempt_invalidated = not (
+            monitor_running
+            and admission_open
+            and not host_blocked
+            and host_enabled
+            and host_present
+            and lifecycle_current
+        )
+        refresh_is_current = (
+            connected
+            and not attempt_invalidated
+            and host_generation_current
+        )
+        if not refresh_is_current:
+            if attempt_invalidated and connect_result.created and connect_result.connection is not None:
+                try:
+                    await self.pool.close_created_connection(host, connect_result.connection)
+                except Exception as exc:
+                    _log(SERVICE, f"Failed to close stale monitor connection for {host}: {exc}", level="WARNING")
+            return False
+
+        if connected:
             self._start_metrics_stream(host)
             self._last_host_meta_collect.pop(host, None)
             self._last_package_status_collect.pop(host, None)
-            asyncio.create_task(
+            self._create_host_meta_task(
                 self.collect_host_meta_now(host, include_package_status=True),
+                hostname=host,
                 name=f"host-meta-refresh-{host}",
             )
             _log(SERVICE, f"Refreshed monitor connection for {host}")
@@ -4055,14 +4350,28 @@ class VPSMonitor:
                     continue
                 try:
                     data = json.loads(line)
+                    generated_at, age = _validate_monitor_agent_payload(
+                        "live_metrics.ndjson", data, now=time.time()
+                    )
+                    if age > MONITOR_AGENT_FILE_TTLS["live_metrics.ndjson"]:
+                        self._update_monitor_agent_file_status(hostname, "live_metrics.ndjson", {
+                            "state": "stale",
+                            "error": _monitor_agent_error("live_metrics.ndjson", f"stale age={int(age)}s"),
+                            "age": round(age, 1),
+                            "generated_at": generated_at,
+                            "checked_at": time.time(),
+                            "source": MONITOR_AGENT_SOURCE,
+                        })
+                        continue
                     metrics = SystemMetrics.from_json(data)
                     self.store.update_system(hostname, metrics)
                     self._update_monitor_agent_file_status(hostname, "live_metrics.ndjson", {
                         "state": "ok",
                         "error": None,
-                        "age": round(max(time.time() - float(data.get("generated_at") or metrics.timestamp or time.time()), 0.0), 1),
-                        "generated_at": float(data.get("generated_at") or metrics.timestamp or 0.0),
+                        "age": round(age, 1),
+                        "generated_at": generated_at,
                         "checked_at": time.time(),
+                        "source": MONITOR_AGENT_SOURCE,
                     })
                     self._stream_stale_counts.pop(hostname, None)
                     self._record_host_metric_history(hostname, metrics)
@@ -4090,13 +4399,27 @@ class VPSMonitor:
                         "last_update": metrics.timestamp,
                     })
                 except json.JSONDecodeError:
+                    self._update_monitor_agent_file_status(hostname, "live_metrics.ndjson", {
+                        "state": "error",
+                        "error": _monitor_agent_error("live_metrics.ndjson", "invalid JSON"),
+                        "checked_at": time.time(),
+                        "source": MONITOR_AGENT_SOURCE,
+                    })
+                    continue
+                except MonitorAgentPayloadError as exc:
+                    self._update_monitor_agent_file_status(hostname, "live_metrics.ndjson", {
+                        "state": "error",
+                        "error": _monitor_agent_error("live_metrics.ndjson", f"invalid ({exc})"),
+                        "checked_at": time.time(),
+                        "source": MONITOR_AGENT_SOURCE,
+                    })
                     continue
 
         except asyncio.CancelledError:
             cancelled = True
         except Exception as e:
-            stream_error = str(e)
-            _log(SERVICE, f"[metrics] Stream error for {hostname}: {e}",
+            stream_error = f"metrics stream error: {e.__class__.__name__}"[:160]
+            _log(SERVICE, f"[metrics] Stream error for {hostname}: {e.__class__.__name__}",
                  level="WARNING")
             if self._stream_generations.get(hostname) == generation:
                 self.store.update_stream_info(hostname, {
@@ -4138,63 +4461,196 @@ class VPSMonitor:
         current_agent = current_stream.get("monitor_agent") if isinstance(current_stream, dict) else None
         if not isinstance(current_agent, dict):
             current_agent = {}
-        files = dict(current_agent.get("files") or {})
-        files[filename] = dict(status)
-        rank = {"ok": 0, "unknown": 1, "stale": 2, "missing": 3, "error": 4}
-        state = "ok"
-        for item in files.values():
-            item_state = str((item or {}).get("state") or "unknown")
-            if rank.get(item_state, 1) > rank.get(state, 0):
-                state = item_state
-        errors = [str((item or {}).get("error") or "") for item in files.values() if (item or {}).get("error")]
-        self.store.update_stream_info(hostname, {
-            "monitor_agent": {
-                "state": state,
-                "error": errors[0] if errors else None,
-                "files": files,
-                "checked_at": time.time(),
-            },
+        files = {
+            name: dict((current_agent.get("files") or {}).get(name) or {
+                "state": "unknown",
+                "error": None,
+                "age": None,
+                "generated_at": 0.0,
+                "checked_at": 0.0,
+                "source": MONITOR_AGENT_SOURCE,
+            })
+            for name in MONITOR_AGENT_FILE_TTLS
+        }
+        merged = dict(files.get(filename) or {})
+        merged.update(status)
+        files[filename] = merged
+        heartbeat_unavailable = (
+            filename == "collector_status.json"
+            and str(merged.get("state") or "unknown") in {"missing", "stale"}
+        )
+        if heartbeat_unavailable:
+            for cache_file in MONITOR_AGENT_LOOP_FILES.values():
+                item = files[cache_file]
+                if item.pop("collector_error", False):
+                    item.update({"state": "unknown", "error": None})
+        now = float(status.get("checked_at") or time.time())
+        for name, ttl in MONITOR_AGENT_FILE_TTLS.items():
+            item = files[name]
+            item.setdefault("source", MONITOR_AGENT_SOURCE)
+            item.setdefault("checked_at", 0.0)
+            try:
+                generated_at = float(item.get("generated_at") or 0.0)
+            except (TypeError, ValueError):
+                generated_at = 0.0
+            item["generated_at"] = generated_at
+            if generated_at > 0.0:
+                age = max(now - generated_at, 0.0)
+                item["age"] = round(age, 1)
+                item_state = str(item.get("state") or "unknown")
+                if item_state in {"ok", "stale", "unknown"} and not item.get("collector_error"):
+                    if age > ttl:
+                        item["state"] = "stale"
+                        item["error"] = _monitor_agent_error(name, f"stale age={int(age)}s")
+                    else:
+                        item["state"] = "ok"
+                        item["error"] = None
+            else:
+                item.setdefault("age", None)
+            if item.get("collector_error") is False:
+                item.pop("collector_error", None)
+        state = max(
+            (str(item.get("state") or "unknown") for item in files.values()),
+            key=lambda value: MONITOR_AGENT_STATE_RANK.get(value, 1),
+        )
+        errors = [
+            str(item.get("error") or "")[:160]
+            for item in files.values()
+            if str(item.get("state") or "unknown") == state and item.get("error")
+        ]
+        next_agent = dict(current_agent)
+        if heartbeat_unavailable:
+            next_agent.pop("collector", None)
+            next_agent["loops"] = {}
+        collector = next_agent.get("collector")
+        if isinstance(collector, dict):
+            collector = dict(collector)
+            try:
+                collector_generated_at = float(collector.get("generated_at") or 0.0)
+            except (TypeError, ValueError):
+                collector_generated_at = 0.0
+            collector["generated_at"] = collector_generated_at
+            collector["age"] = round(max(now - collector_generated_at, 0.0), 1) if collector_generated_at > 0 else None
+            collector["checked_at"] = now
+            next_agent["collector"] = collector
+        next_agent.update({
+            "source": MONITOR_AGENT_SOURCE,
+            "state": state,
+            "error": errors[0] if errors else None,
+            "files": files,
+            "checked_at": now,
         })
+        self.store.update_stream_info(hostname, {
+            "monitor_agent": next_agent,
+        })
+
+    def _apply_collector_status(self, hostname: str, payload: dict[str, Any]) -> None:
+        """Merge collector heartbeat and loop health into cache diagnostics."""
+
+        checked_at = time.time()
+        safe_loops: dict[str, dict[str, Any]] = {}
+        loops = payload.get("loops") or {}
+        for loop_name, raw_loop in loops.items():
+            loop = dict(raw_loop)
+            has_error = bool(loop.get("last_error"))
+            safe_loops[loop_name] = {
+                "interval": loop.get("interval"),
+                "last_ok": loop.get("last_ok"),
+                "last_error": f"{loop_name} collector error" if has_error else "",
+            }
+            cache_file = MONITOR_AGENT_LOOP_FILES.get(loop_name)
+            if not cache_file:
+                continue
+            current_agent = ((self.store.streams.get(hostname) or {}).get("monitor_agent") or {})
+            current_file = dict((current_agent.get("files") or {}).get(cache_file) or {})
+            if has_error:
+                current_file.update({
+                    "state": "error",
+                    "error": f"monitor-agent collector error: {loop_name}"[:160],
+                    "collector_error": True,
+                    "checked_at": checked_at,
+                    "source": MONITOR_AGENT_SOURCE,
+                })
+            elif current_file.pop("collector_error", False):
+                current_file.update({
+                    "state": "unknown",
+                    "error": None,
+                    "collector_error": False,
+                    "checked_at": checked_at,
+                    "source": MONITOR_AGENT_SOURCE,
+                })
+            else:
+                continue
+            self._update_monitor_agent_file_status(hostname, cache_file, current_file)
+
+        current_agent = dict(((self.store.streams.get(hostname) or {}).get("monitor_agent") or {}))
+        generated_at = float(payload["generated_at"])
+        current_agent.update({
+            "source": MONITOR_AGENT_SOURCE,
+            "collector": {
+                "source": payload["source"],
+                "hostname": payload["hostname"],
+                "agent_version": payload["agent_version"],
+                "generated_at": generated_at,
+                "age": round(max(checked_at - generated_at, 0.0), 1),
+                "checked_at": checked_at,
+            },
+            "loops": safe_loops,
+            "checked_at": checked_at,
+        })
+        self.store.update_stream_info(hostname, {"monitor_agent": current_agent})
 
     async def _read_monitor_agent_json(self, hostname: str, filename: str, *, stale_after: float,
                                        timeout: float = 10.0) -> dict[str, Any] | None:
         """Read one monitor-agent JSON cache file from a VPS and validate freshness."""
 
+        stale_after = MONITOR_AGENT_FILE_TTLS.get(filename, stale_after)
         pbgui_dir = self.pool.get_remote_pbgui_dir(hostname)
-        result = await self.pool.run(
-            hostname,
-            _monitor_agent_cache_read_command(pbgui_dir, filename),
-            timeout=timeout,
-            check=False,
-        )
         now = time.time()
+        try:
+            result = await self.pool.run(
+                hostname,
+                _monitor_agent_cache_read_command(pbgui_dir, filename),
+                timeout=timeout,
+                check=False,
+            )
+        except Exception as exc:
+            error = _monitor_agent_error(filename, f"read error ({exc.__class__.__name__})")
+            self._update_monitor_agent_file_status(hostname, filename, {
+                "state": "error", "error": error, "checked_at": now, "source": MONITOR_AGENT_SOURCE,
+            })
+            return None
         if not result or result.exit_status != 0 or not result.stdout:
-            error = f"monitor-agent cache missing: {filename}"
-            self._update_monitor_agent_file_status(hostname, filename, {"state": "missing", "error": error, "checked_at": now})
+            error = _monitor_agent_error(filename, "missing")
+            self._update_monitor_agent_file_status(hostname, filename, {
+                "state": "missing", "error": error, "checked_at": now, "source": MONITOR_AGENT_SOURCE,
+            })
             return None
         try:
             payload = json.loads(result.stdout.strip())
         except json.JSONDecodeError:
-            error = f"monitor-agent cache invalid JSON: {filename}"
-            self._update_monitor_agent_file_status(hostname, filename, {"state": "error", "error": error, "checked_at": now})
-            return None
-        if not isinstance(payload, dict):
-            error = f"monitor-agent cache invalid payload: {filename}"
-            self._update_monitor_agent_file_status(hostname, filename, {"state": "error", "error": error, "checked_at": now})
+            error = _monitor_agent_error(filename, "invalid JSON")
+            self._update_monitor_agent_file_status(hostname, filename, {
+                "state": "error", "error": error, "checked_at": now, "source": MONITOR_AGENT_SOURCE,
+            })
             return None
         try:
-            generated_at = float(payload.get("generated_at") or 0.0)
-        except (TypeError, ValueError):
-            generated_at = 0.0
-        age = max(now - generated_at, 0.0) if generated_at > 0 else stale_after + 1.0
+            generated_at, age = _validate_monitor_agent_payload(filename, payload, now=now)
+        except MonitorAgentPayloadError as exc:
+            error = _monitor_agent_error(filename, f"invalid ({exc})")
+            self._update_monitor_agent_file_status(hostname, filename, {
+                "state": "error", "error": error, "checked_at": now, "source": MONITOR_AGENT_SOURCE,
+            })
+            return None
         if age > stale_after:
-            error = f"monitor-agent cache stale: {filename} age={int(age)}s"
+            error = _monitor_agent_error(filename, f"stale age={int(age)}s")
             self._update_monitor_agent_file_status(hostname, filename, {
                 "state": "stale",
                 "error": error,
                 "age": round(age, 1),
                 "generated_at": generated_at,
                 "checked_at": now,
+                "source": MONITOR_AGENT_SOURCE,
             })
             return None
         self._update_monitor_agent_file_status(hostname, filename, {
@@ -4203,37 +4659,8 @@ class VPSMonitor:
             "age": round(age, 1),
             "generated_at": generated_at,
             "checked_at": now,
+            "source": MONITOR_AGENT_SOURCE,
         })
-        return payload
-
-    async def _collect_host_meta_direct(self, hostname: str, *, timeout: float = 25.0) -> dict[str, Any] | None:
-        """Collect host metadata directly when the remote agent cache is unavailable."""
-
-        pbgui_dir = self.pool.get_remote_pbgui_dir(hostname)
-        result = await self.pool.run(
-            hostname,
-            _host_meta_direct_command(pbgui_dir),
-            timeout=timeout,
-            check=False,
-        )
-        if not result or result.exit_status != 0 or not result.stdout:
-            error = f"direct host-meta probe failed for {hostname}"
-            if result and (result.stderr or result.stdout):
-                error = f"{error}: {(result.stderr or result.stdout).strip()[:200]}"
-            _log(SERVICE, f"[host-meta] {error}", level="WARNING")
-            return None
-        try:
-            payload = json.loads(result.stdout.strip())
-        except json.JSONDecodeError as exc:
-            _log(SERVICE, f"[host-meta] direct probe invalid JSON on {hostname}: {exc}", level="WARNING")
-            return None
-        if not isinstance(payload, dict):
-            _log(SERVICE, f"[host-meta] direct probe invalid payload on {hostname}", level="WARNING")
-            return None
-        payload.pop("coinmarketcap" + "_api_key", None)
-        payload["schema_version"] = payload.get("schema_version") or 1
-        payload["generated_at"] = time.time()
-        payload["source"] = "direct-ssh"
         return payload
 
     def _record_host_metric_history(self, hostname: str, metrics: SystemMetrics) -> None:
@@ -4630,20 +5057,31 @@ class VPSMonitor:
     async def collect_host_meta_now(self, hostname: str,
                                     *, include_package_status: bool = False):
         """Public: immediately collect host metadata from a single VPS."""
-        entry = self.pool.get_connection(hostname)
-        if not entry:
-            _log(SERVICE, f"[host-meta] collect_host_meta_now: "
-                 f"{hostname} not connected", level="WARNING")
-            return
-        try:
-            await self._collect_host_meta(hostname,
-                                          include_package_status=include_package_status,
-                                          force=True)
-            _log(SERVICE, f"[host-meta] Immediate collect for {hostname}",
-                 level="DEBUG")
-        except Exception as e:
-            _log(SERVICE, f"[host-meta] Immediate collect error on "
-                 f"{hostname}: {e}", level="WARNING")
+        async def collect() -> None:
+            try:
+                entry = self.pool.get_connection(hostname)
+                if not entry:
+                    _log(SERVICE, f"[host-meta] collect_host_meta_now: "
+                         f"{hostname} not connected", level="WARNING")
+                    return
+                await self._collect_host_meta(hostname,
+                                              include_package_status=include_package_status,
+                                              force=True)
+                _log(SERVICE, f"[host-meta] Immediate collect for {hostname}",
+                     level="DEBUG")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                _log(SERVICE, f"[host-meta] Immediate collect error on "
+                     f"{hostname}: {e.__class__.__name__}", level="WARNING")
+
+        task = self._create_host_meta_task(
+            collect(),
+            hostname=hostname,
+            name=f"host-meta-manual-{hostname}",
+        )
+        if task is not None:
+            await asyncio.shield(task)
 
     async def _collect_host_meta_all(self):
         """Collect host metadata from all connected VPS via the shared SSH pool."""
@@ -4666,14 +5104,21 @@ class VPSMonitor:
         if not scheduled:
             return
 
-        results = await asyncio.gather(
-            *(
-                self._collect_host_meta(hostname, include_package_status=include_package_status)
-                for hostname, include_package_status in scheduled
-            ),
-            return_exceptions=True,
-        )
-        for (hostname, include_package_status), result in zip(scheduled, results):
+        admitted: list[tuple[str, bool]] = []
+        tasks = []
+        for hostname, include_package_status in scheduled:
+            task = self._create_host_meta_task(
+                self._collect_host_meta(hostname, include_package_status=include_package_status),
+                hostname=hostname,
+                name=f"host-meta-cycle-{hostname}",
+            )
+            if task is not None:
+                admitted.append((hostname, include_package_status))
+                tasks.append(task)
+        if not tasks:
+            return
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for (hostname, include_package_status), result in zip(admitted, results):
             if isinstance(result, Exception):
                 label = "Package status" if include_package_status else "host-meta"
                 _log(SERVICE, f"[{label}] Error on {hostname}: {result}",
@@ -4692,6 +5137,14 @@ class VPSMonitor:
         collecting.add(hostname)
         try:
             now = time.time()
+            collector_status = await self._read_monitor_agent_json(
+                hostname,
+                "collector_status.json",
+                stale_after=30.0,
+                timeout=10,
+            )
+            if collector_status:
+                self._apply_collector_status(hostname, collector_status)
             collect_host_meta = force or (
                 now - self._last_host_meta_collect.get(hostname, 0.0) >= HOST_META_INTERVAL
             )
@@ -4709,8 +5162,6 @@ class VPSMonitor:
                     stale_after=30.0,
                     timeout=10,
                 )
-                if not parsed:
-                    parsed = await self._collect_host_meta_direct(hostname)
                 if parsed:
                     self.store.update_host_meta(hostname, parsed)
                     self._last_host_meta_collect[hostname] = now
@@ -4726,11 +5177,11 @@ class VPSMonitor:
                     timeout=10,
                 )
                 if package_data:
-                    current_meta = dict(self.store.host_meta.get(hostname, {}))
-                    # Keep the last known package count when a slow probe falls back to N/A.
-                    if package_data.get('upgrades') == 'N/A' and current_meta.get('upgrades') not in (None, '', 'N/A'):
-                        package_data['upgrades'] = current_meta.get('upgrades')
-                    self.store.update_host_meta(hostname, package_data)
+                    self.store.update_host_meta(hostname, {
+                        'package_status': package_data,
+                        # Existing VPS consumers still read this legacy projection.
+                        'upgrades': package_data.get('upgrades', 'N/A'),
+                    })
                     self._last_package_status_collect[hostname] = now
                     self._cache_host_snapshot(hostname)
         finally:

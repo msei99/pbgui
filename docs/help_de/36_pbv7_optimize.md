@@ -25,8 +25,14 @@ Sidebar-Aktionen:
 | **New Config** | Neue Config im strukturierten Editor öffnen |
 | **Edit Selected** | Genau eine ausgewählte Config im Editor öffnen |
 | **Duplicate** | Die ausgewählte Config unter neuem Namen kopieren |
+| **Import Config** | JSON aus Text, einer lokalen Datei oder einem Backtest Archive importieren |
+| **Add to Archive** | Ausgewählte Configs im PB7-versionierten Layout nach **My Archive** exportieren |
 | **Queue Selected** | Alle ausgewählten Configs zur Queue hinzufügen |
 | **Delete Selected** | Alle ausgewählten Configs löschen |
+
+Archiv-Importe werden als lokale Optimize-Configs gespeichert, bevor der Editor geöffnet wird. Existiert der gewünschte lokale Name bereits, bietet PBGui **Overwrite**, **Import as Copy** und **Cancel** an; die Copy-Option wählt einen freien Namen und passt `backtest.base_dir` entsprechend an. Die archivierte Quelle bleibt dabei unverändert, auch in read-only Community-Archiven.
+
+**Add to Archive** ist nur verfügbar, wenn auf der Backtest-Seite ein beschreibbares **My Archive** konfiguriert ist. PBGui erhält oder ergänzt `config_version`, migriert ein sauberes eigenes Legacy-Archiv vor dem Export und verwendet bei identischem Inhalt die bestehende archivierte Config samt ursprünglichen Metadaten statt weiterer nummerierter Kopien.
 
 Wenn du eine bestehende Optimize-Config öffnest und vor dem Speichern `config_name` änderst, speichert PBGui diesen Editorzustand jetzt als neue Config-Datei unter dem neuen Namen. Die ursprünglich geöffnete Config bleibt unverändert; das ist also ein Save-as-new und kein Rename der alten Datei.
 

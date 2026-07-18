@@ -1361,7 +1361,7 @@ def get_minute_presence_for_dataset(
     s0 = _normalize_day_str(start_day) if start_day else ""
     s1 = _normalize_day_str(end_day) if end_day else ""
 
-    if ds_l in ("1m", "candles_1m") and ex in ("hyperliquid", "binanceusdm", "okx"):
+    if ds_l in ("1m", "candles_1m") and ex in ("hyperliquid", "binanceusdm", "okx", "bitget"):
         idx_days = get_source_minutes_for_range(
             exchange=ex,
             coin=cn,

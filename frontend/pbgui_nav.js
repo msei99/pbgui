@@ -25,6 +25,7 @@
     var c = window.PBGUI_NAV_CONFIG || {};
     return {
       token:    c.token    !== undefined ? c.token    : (window.TOKEN    || ''),
+      authenticated: c.authenticated === true,
       apiBase:  c.apiBase  !== undefined ? c.apiBase  : (window.API_BASE || ''),
       version:  c.version  !== undefined ? c.version  : (window.PBGUI_VERSION || ''),
       serial:   c.serial   !== undefined ? c.serial   : (window.PBGUI_SERIAL  || ''),
@@ -404,7 +405,7 @@
   function _ensureLogViewer(cb) {
     if (typeof window.LogViewerPanel === 'function') { cb(); return; }
     var s = document.createElement('script');
-    s.src = '/app/js/log_viewer_panel.js?v=8';
+    s.src = '/app/js/log_viewer_panel.js?v=27';
     s.onload = cb;
     s.onerror = function() { console.warn('Failed to load log_viewer_panel.js'); };
     document.head.appendChild(s);
@@ -989,6 +990,28 @@
     'v7_balance_calc':    '/api/balance-calc/main_page'
   };
 
+  /* Every registered page must resolve to an existing EN/DE shared-help topic. */
+  var GUIDE_TOPICS = {
+    '/':                           '19_welcome',
+    'dashboards':                  '33_dashboard',
+    'info_coin_data':              '27_coin_data',
+    'info_market_data_fastapi':    '26_market_data',
+    'system_api_keys':             '20_api_keys',
+    'system_cluster':              '39_cluster_sync',
+    'system_vps_manager_fastapi':  '32_vps_manager',
+    'system_logging':              '31_logging',
+    'system_vps_monitor':          '29_vps_monitor',
+    'system_services':             '23_services_overview',
+    'system_db_tools':             '41_db_tools',
+    'help':                        '00_overview',
+    'v7_run':                      '34_pbv7_run',
+    'v7_backtest':                 '35_pbv7_backtest',
+    'v7_optimize':                 '36_pbv7_optimize',
+    'v7_pareto_explorer':          '37_pareto_explorer',
+    'v7_strategy_explorer':        '00_strategy_explorer_help',
+    'v7_balance_calc':             '38_balance_calc'
+  };
+
   function syncHelpOverlayState() {
     var legacyHelpOvl = document.getElementById('help-ovl');
     var sharedHelpOvl = document.getElementById('pbgui-shared-help-ovl');
@@ -1103,6 +1126,7 @@
   function setupHandlers() {
     var c = cfg();
     var TOKEN   = c.token;
+    var guideTopic = GUIDE_TOPICS[c.current] || '00_overview';
     installNotificationHooks();
 
     /* Derive API origin (scheme + host + port) from apiBase or current location */
@@ -1175,7 +1199,7 @@
         return;
       }
       if (window.PBGuiSharedHelp && typeof window.PBGuiSharedHelp.open === 'function') {
-        window.PBGuiSharedHelp.open('overview', { token: TOKEN });
+        window.PBGuiSharedHelp.open(guideTopic, { token: TOKEN });
         return;
       }
 
@@ -1185,7 +1209,7 @@
       script.onload = function () {
         guideBtn.disabled = false;
         if (window.PBGuiSharedHelp && typeof window.PBGuiSharedHelp.open === 'function') {
-          window.PBGuiSharedHelp.open('overview', { token: TOKEN });
+          window.PBGuiSharedHelp.open(guideTopic, { token: TOKEN });
           return;
         }
         navTo('help');
@@ -1219,7 +1243,7 @@
 
     var logoutBtn = document.getElementById('pbgui-logout-btn');
     if (logoutBtn) {
-      logoutBtn.style.display = TOKEN ? 'inline-flex' : 'none';
+      logoutBtn.style.display = (TOKEN || c.authenticated) ? 'inline-flex' : 'none';
       logoutBtn.addEventListener('click', function () { performLogout(); });
     }
 
@@ -1456,7 +1480,8 @@
     };
 
     fetch(origin + '/api/auth/logout', authOptions(c.token, {
-      method: 'POST'
+      method: 'POST',
+      credentials: 'same-origin'
     })).finally(function () {
       redirect();
     });

@@ -29,10 +29,17 @@ from api.vps import get_monitor, get_monitor_state_snapshot, get_metric_history_
 from cmc_pool import CmcPoolClient
 from logging_helpers import human_log as _log
 from credential_store import CredentialStore
-from master.async_monitor import INSTANCE_COLLECT_SCRIPT, METRICS_STREAM_STALE_SECONDS, MONITOR_CACHE_VERSION
+from master.async_monitor import (
+    INSTANCE_COLLECT_SCRIPT,
+    METRICS_STREAM_STALE_SECONDS,
+    MONITOR_CACHE_VERSION,
+    MonitorAgentPayloadError,
+    _validate_monitor_agent_payload,
+)
 from master.cluster_state import ClusterStateError, default_cluster_root, local_cmc_credential_readiness, normalize_node_sync_mode, read_local_identity, rebuild_materialized_state
 from MonitorConfig import MonitorConfig
 from PBCoinData import CoinData
+from pb7_guard import PB7_PINNED_COMMIT
 from pb7_release import build_local_pb7_release_info, get_current_pb7_status, load_more_pb7_commits
 from pbgui_release import build_local_pbgui_release_info, load_more_pbgui_commits
 from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, load_ini_section, pb7dir as configured_pb7dir, save_ini, save_ini_section
@@ -48,7 +55,33 @@ INIT_METHODS = ["root", "password", "private_key"]
 SESSION_SECRET_TTL_SECONDS = 15 * 60
 CLUSTER_IMPORT_JOB_TTL_SECONDS = 30 * 60
 LOCAL_RELEASE_REFRESH_SECONDS = 60 * 60
-LOCAL_PACKAGE_REFRESH_SECONDS = 5 * 60
+MONITOR_AGENT_SCHEMA_VERSION = 1
+MONITOR_AGENT_LIVE_STALE_SECONDS = 15.0
+MONITOR_AGENT_COLLECTOR_STALE_SECONDS = 30.0
+PACKAGE_STATUS_STALE_SECONDS = 2 * 60 * 60
+MONITOR_AGENT_REQUIRED_FILES = (
+    "live_metrics.ndjson",
+    "instance_snapshot.json",
+    "host_meta.json",
+    "service_status.json",
+    "package_status.json",
+    "collector_status.json",
+)
+MONITOR_AGENT_FILE_STALE_SECONDS = {
+    "live_metrics.ndjson": MONITOR_AGENT_LIVE_STALE_SECONDS,
+    "instance_snapshot.json": 90.0,
+    "host_meta.json": 30.0,
+    "service_status.json": 120.0,
+    "package_status.json": PACKAGE_STATUS_STALE_SECONDS,
+    "collector_status.json": MONITOR_AGENT_COLLECTOR_STALE_SECONDS,
+}
+MONITOR_AGENT_LOOP_FILES = {
+    "live_metrics": "live_metrics.ndjson",
+    "instances": "instance_snapshot.json",
+    "host_meta": "host_meta.json",
+    "services": "service_status.json",
+    "package_status": "package_status.json",
+}
 IMPORT_KEY_INSTALL_WARNING = "SSH key login is not available yet; saving the import will attempt to install this master's SSH public key for live monitoring."
 # Guardrail: every field listed here is sensitive bootstrap/auth material and
 # must never be written to host JSON or included in normal config/detail payloads.
@@ -68,6 +101,16 @@ VPS_LOGGING_DEFAULT_MB = 1
 VPS_LOGGING_CLEANUP_MB = 64 / 1024
 VPS_LOGGING_DEPLOY_HISTORY_FILE = Path(PBGDIR) / "data" / "vpsmanager" / "vps_logging_deploy_history.json"
 VPS_LOGGING_DEPLOY_HISTORY_LIMIT = 20
+
+
+def _pb7_branch_label(branch: Any, commit: Any) -> str:
+    """Label a detached release-pin checkout without implying unknown provenance."""
+    value = str(branch or "unknown")
+    if str(commit or "") == PB7_PINNED_COMMIT and value == "unknown":
+        return "pinned"
+    return value
+
+
 VPS_DEPLOY_SECTION = "vps_deploy"
 COMMAND_VPS_DEPLOY_LOGGING = "vps-deploy-logging"
 COMMAND_VPS_UPDATE = "vps-update"
@@ -875,6 +918,190 @@ def _safe_float_str(value: Any, default: float) -> float:
         return default
 
 
+def _agent_effective_age(payload: dict[str, Any] | None, now: float) -> float | None:
+    """Return cache age advanced from its source timestamp or last check."""
+
+    item = payload if isinstance(payload, dict) else {}
+    generated_at = _safe_float(item.get("generated_at"), 0.0)
+    if generated_at > 0:
+        return max(now - generated_at, 0.0)
+    age = _safe_float(item.get("effective_age", item.get("age")), -1.0)
+    if age < 0:
+        return None
+    checked_at = _safe_float(item.get("checked_at"), 0.0)
+    return max(age + (max(now - checked_at, 0.0) if checked_at > 0 else 0.0), 0.0)
+
+
+def _normalized_agent_file(
+    raw: dict[str, Any] | None,
+    filename: str,
+    *,
+    now: float,
+) -> dict[str, Any]:
+    """Normalize one monitor-agent file state and advance its effective age."""
+
+    item = dict(raw) if isinstance(raw, dict) else {}
+    state = str(item.get("state") or "missing").strip().lower()
+    if state == "unknown":
+        state = "missing"
+    elif state not in {"ok", "stale", "missing", "error"}:
+        state = "error"
+        item["error"] = item.get("error") or f"Invalid cache state for {filename}"
+    effective_age = _agent_effective_age(item, now)
+    reported_age = _safe_float(item.get("age"), -1.0)
+    if state == "ok" and effective_age is not None and effective_age > MONITOR_AGENT_FILE_STALE_SECONDS[filename]:
+        state = "stale"
+    error = str(item.get("error") or "").strip()
+    if state == "missing" and not error:
+        error = f"Agent cache missing: {filename}"
+    elif state == "stale" and not error:
+        error = f"Agent cache stale: {filename}"
+    return {
+        "state": state,
+        "generated_at": _safe_float(item.get("generated_at"), 0.0) or None,
+        "checked_at": _safe_float(item.get("checked_at"), 0.0) or None,
+        "age": round(reported_age, 1) if reported_age >= 0 else (round(effective_age, 1) if effective_age is not None else None),
+        "effective_age": round(effective_age, 1) if effective_age is not None else None,
+        "error": error or None,
+    }
+
+
+def _normalize_monitor_agent(
+    raw: dict[str, Any] | None,
+    *,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Normalize the monitor-agent provenance, files, and collector loops."""
+
+    current = float(now if now is not None else time.time())
+    source = raw if isinstance(raw, dict) else {}
+    raw_files = source.get("files") if isinstance(source.get("files"), dict) else {}
+    files = {
+        filename: _normalized_agent_file(raw_files.get(filename), filename, now=current)
+        for filename in MONITOR_AGENT_REQUIRED_FILES
+    }
+    raw_loops = source.get("loops")
+    if not isinstance(raw_loops, dict):
+        raw_loops = source.get("collector_loops")
+    if not isinstance(raw_loops, dict):
+        collector_status = source.get("collector_status")
+        raw_loops = collector_status.get("loops") if isinstance(collector_status, dict) else None
+    loops: dict[str, dict[str, Any]] = {}
+    for name, raw_loop in (raw_loops.items() if isinstance(raw_loops, dict) else []):
+        loop = raw_loop if isinstance(raw_loop, dict) else {}
+        interval = max(_safe_float(loop.get("interval"), 0.0), 0.0)
+        last_ok = _safe_float(loop.get("last_ok"), 0.0)
+        age = max(current - last_ok, 0.0) if last_ok > 0 else None
+        error = str(loop.get("last_error") or loop.get("error") or "").strip()
+        stale_after = max(MONITOR_AGENT_COLLECTOR_STALE_SECONDS, interval * 2)
+        state = "error" if error else "missing" if last_ok <= 0 else "stale" if age is not None and age > stale_after else "ok"
+        loops[str(name)] = {
+            "state": state,
+            "interval": interval,
+            "last_ok": last_ok or None,
+            "last_error": error or None,
+            "age": round(age, 1) if age is not None else None,
+            "effective_age": round(age, 1) if age is not None else None,
+        }
+
+    rank = {"ok": 0, "stale": 1, "missing": 2, "error": 3}
+    state = str(source.get("state") or "ok").strip().lower()
+    if state == "unknown":
+        state = "missing"
+    elif state not in rank:
+        state = "missing" if not raw else "error"
+    source_value = source.get("source")
+    source_error = ""
+    if raw and source_value not in {"agent_cache", "monitor-agent"}:
+        state = "error"
+        source_error = "Monitor-agent status has an invalid source"
+    for item in [*files.values(), *loops.values()]:
+        item_state = str(item.get("state") or "missing")
+        if rank.get(item_state, 3) > rank.get(state, 0):
+            state = item_state
+    age_source = source
+    if _agent_effective_age(age_source, current) is None and isinstance(source.get("collector"), dict):
+        age_source = source["collector"]
+    age = _agent_effective_age(age_source, current)
+    errors = [source_error, str(source.get("error") or "").strip()]
+    errors.extend(str(item.get("error") or item.get("last_error") or "").strip() for item in [*files.values(), *loops.values()])
+    return {
+        "source": "agent_cache",
+        "state": state,
+        "error": next((error for error in errors if error), None),
+        "generated_at": _safe_float(age_source.get("generated_at"), 0.0) or None,
+        "age": round(age, 1) if age is not None else None,
+        "effective_age": round(age, 1) if age is not None else None,
+        "checked_at": _safe_float(source.get("checked_at"), 0.0) or None,
+        "files": files,
+        "loops": loops,
+    }
+
+
+def _normalize_package_status(
+    payload: dict[str, Any] | None,
+    *,
+    file_status: dict[str, Any] | None = None,
+    now: float | None = None,
+    read_error: str = "",
+) -> dict[str, Any]:
+    """Validate and normalize one package-status agent payload."""
+
+    current = float(now if now is not None else time.time())
+    raw = payload if isinstance(payload, dict) else {}
+    checked_at = _safe_float((file_status or {}).get("checked_at"), 0.0) or current
+    generated_at = _safe_float(raw.get("generated_at"), 0.0)
+    age = max(current - generated_at, 0.0) if generated_at > 0 else None
+    state = str((file_status or {}).get("state") or "ok").strip().lower()
+    errors: list[str] = [str(read_error or "").strip(), str((file_status or {}).get("error") or "").strip()]
+    if not isinstance(payload, dict):
+        state = "missing" if not read_error or str(read_error).startswith("Agent cache missing:") else "error"
+        errors.append("Package-status agent cache is missing")
+    elif raw.get("source") != "monitor-agent":
+        state = "error"
+        errors.append("Package-status cache has an invalid source")
+    elif _safe_int(raw.get("schema_version"), -1) != MONITOR_AGENT_SCHEMA_VERSION:
+        state = "error"
+        errors.append("Package-status cache has an unsupported schema")
+    elif generated_at <= 0 or generated_at > current + 300:
+        state = "error"
+        errors.append("Package-status cache has an invalid generated_at timestamp")
+    elif age is not None and age > PACKAGE_STATUS_STALE_SECONDS and state == "ok":
+        state = "stale"
+        errors.append("Package-status agent cache is stale")
+    if state not in {"ok", "stale", "missing", "error"}:
+        state = "error"
+        errors.append("Package-status cache has an invalid state")
+
+    upgrades_raw = raw.get("upgrades")
+    if isinstance(upgrades_raw, bool):
+        upgrades = None
+    elif isinstance(upgrades_raw, int) and upgrades_raw >= 0:
+        upgrades = upgrades_raw
+    elif isinstance(upgrades_raw, str) and upgrades_raw.strip().isdigit():
+        upgrades = int(upgrades_raw.strip())
+    else:
+        upgrades = None
+    reboot_raw = raw.get("reboot_required", raw.get("reboot"))
+    reboot_required = reboot_raw if isinstance(reboot_raw, bool) else None
+    available = upgrades is not None and reboot_required is not None and state in {"ok", "stale"}
+    if isinstance(payload, dict) and (upgrades is None or reboot_required is None):
+        state = "error"
+        errors.append("Package-status cache does not contain valid upgrade and reboot values")
+        available = False
+    return {
+        "source": "agent_cache",
+        "state": state if state in {"ok", "stale", "missing", "error"} else "error",
+        "available": available,
+        "upgrades": upgrades if available else "N/A",
+        "reboot_required": reboot_required if available else None,
+        "generated_at": generated_at or None,
+        "checked_at": checked_at,
+        "age": round(age, 1) if age is not None else None,
+        "error": next((error for error in errors if error), None),
+    }
+
+
 def _python_major_minor(executable: str | None) -> str:
     candidate = str(executable or "").strip()
     if not candidate:
@@ -1179,10 +1406,7 @@ class VPSManagerService:
         self._pbgui_release_ts = 0
         self._pb7_release: dict[str, Any] = {}
         self._pb7_release_ts = 0
-        self._local_package_status: dict[str, Any] = {"upgrades": "N/A", "reboot": False}
-        self._local_package_status_ts = 0
         self._refresh_lock = threading.Lock()
-        self._vps_package_status_cache: dict[str, dict[str, Any]] = {}
         # Quick detail is pushed every second. Any status that requires a slower
         # validation step must reuse the last full-detail result instead of
         # falling back to a weaker default on the next quick push.
@@ -1463,36 +1687,99 @@ class VPSManagerService:
         self._pb7_release = build_local_pb7_release_info(repo_dir)
         self._pb7_release_ts = _now_ts()
 
-    def _get_local_package_status(self) -> dict[str, Any]:
-        return self._local_package_status or {"upgrades": "N/A", "reboot": False}
+    def _read_local_agent_json(self, filename: str) -> tuple[dict[str, Any] | None, str]:
+        """Read one local monitor-agent cache without executing system commands."""
 
-    def _refresh_local_package_status(self) -> None:
-        upgrades: str | int = "N/A"
-        reboot_required = Path("/var/run/reboot-required").exists()
+        path = Path(PBGDIR) / "data" / "monitor_agent" / filename
         try:
-            result = subprocess.run(
-                ["apt-get", "dist-upgrade", "-s"],
-                text=True,
-                timeout=15,
-                env={**os.environ, "LANG": "C"},
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-            if result.returncode == 0:
-                match = re.search(r"(\d+) upgraded", result.stdout or "")
-                if match:
-                    upgrades = match.group(1)
-        except FileNotFoundError:
-            upgrades = "N/A"
-        except subprocess.TimeoutExpired:
-            _log(SERVICE, "local package probe timed out", level="WARNING")
-        except Exception as exc:
-            _log(SERVICE, f"local package probe failed: {exc}", level="WARNING")
-        self._local_package_status = {
-            "upgrades": upgrades,
-            "reboot": reboot_required,
+            if path.is_symlink():
+                return None, f"Agent cache must not be a symlink: {filename}"
+            if not path.is_file():
+                return None, f"Agent cache missing: {filename}"
+            if path.stat().st_size > 16 * 1024 * 1024:
+                return None, f"Agent cache is too large: {filename}"
+            raw = path.read_text(encoding="utf-8")
+            if filename.endswith(".ndjson"):
+                lines = [line for line in raw.splitlines() if line.strip()]
+                if not lines:
+                    return None, f"Agent cache contains no JSON records: {filename}"
+                raw = lines[-1]
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                return None, f"Agent cache payload is not an object: {filename}"
+            return payload, ""
+        except (OSError, json.JSONDecodeError) as exc:
+            return None, f"Could not read agent cache {filename}: {exc}"
+
+    def _get_local_agent_contract(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Return normalized local package and monitor-agent cache status."""
+
+        now = time.time()
+        payloads: dict[str, dict[str, Any] | None] = {}
+        errors: dict[str, str] = {}
+        file_statuses: dict[str, dict[str, Any]] = {}
+        for filename in MONITOR_AGENT_REQUIRED_FILES:
+            payload, read_error = self._read_local_agent_json(filename)
+            payloads[filename] = payload
+            errors[filename] = read_error
+            generated_at = _safe_float((payload or {}).get("generated_at"), 0.0)
+            age = max(now - generated_at, 0.0) if generated_at > 0 else None
+            state = "missing" if payload is None and read_error.startswith("Agent cache missing:") else "error" if payload is None else "ok"
+            validation_error = read_error
+            if payload is not None:
+                try:
+                    generated_at, age = _validate_monitor_agent_payload(filename, payload, now=now)
+                    if age > MONITOR_AGENT_FILE_STALE_SECONDS[filename]:
+                        state = "stale"
+                        validation_error = f"Agent cache stale: {filename}"
+                except MonitorAgentPayloadError as exc:
+                    state = "error"
+                    validation_error = f"Invalid agent cache {filename}: {exc}"
+            file_statuses[filename] = {
+                "state": state,
+                "generated_at": generated_at or None,
+                "checked_at": now,
+                "age": age,
+                "error": validation_error or None,
+            }
+
+        package_payload = payloads["package_status.json"]
+        package_error = errors["package_status.json"]
+        collector_payload = payloads["collector_status.json"]
+        collector_valid = file_statuses["collector_status.json"]["state"] in {"ok", "stale"}
+        collector_generated = _safe_float((collector_payload or {}).get("generated_at"), 0.0)
+        raw_agent = {
+            "source": "agent_cache",
+            "state": "ok",
+            "checked_at": now,
+            "generated_at": collector_generated or None,
+            "loops": (collector_payload or {}).get("loops") if collector_valid else {},
+            "files": file_statuses,
         }
-        self._local_package_status_ts = _now_ts()
+        monitor_agent = _normalize_monitor_agent(raw_agent, now=now)
+        package_status = _normalize_package_status(
+            package_payload,
+            file_status=monitor_agent["files"]["package_status.json"],
+            now=now,
+            read_error=package_error,
+        )
+        return package_status, monitor_agent
+
+    def _get_local_package_status(self) -> dict[str, Any]:
+        return self._get_local_agent_contract()[0]
+
+    def _get_remote_agent_contract(self, host_state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Return normalized remote status from the monitor snapshot only."""
+
+        stream = (host_state or {}).get("stream") or {}
+        raw_agent = stream.get("monitor_agent") if isinstance(stream, dict) else None
+        monitor_agent = _normalize_monitor_agent(raw_agent)
+        package_payload = self._host_meta(host_state).get("package_status")
+        package_status = _normalize_package_status(
+            package_payload if isinstance(package_payload, dict) else None,
+            file_status=monitor_agent["files"]["package_status.json"],
+        )
+        return package_status, monitor_agent
 
     def clear_session_secrets(self, token: str) -> None:
         token = str(token or "").strip()
@@ -1672,15 +1959,6 @@ class VPSManagerService:
                     self._refresh_pb7_release(_configured_pb7dir())
                 except Exception as exc:
                     _log(SERVICE, f"refresh local commit data failed: {exc}", level="WARNING")
-
-            package_stale = (
-                now - int(getattr(self, "_local_package_status_ts", 0) or 0)
-            ) > LOCAL_PACKAGE_REFRESH_SECONDS
-            if force or package_stale or not self._first_refresh_done:
-                try:
-                    self._refresh_local_package_status()
-                except Exception as exc:
-                    _log(SERVICE, f"refresh package status failed: {exc}", level="WARNING")
 
             self._first_refresh_done = True
         finally:
@@ -2455,25 +2733,6 @@ class VPSManagerService:
         })
         return verified
 
-    def _refresh_host_meta_now(self, hostname: str, *, include_package_status: bool = True) -> None:
-        monitor = get_monitor()
-        if monitor is None:
-            return
-        host = str(hostname or "").strip()
-        if not host:
-            return
-        try:
-            loop = getattr(monitor, "loop", None)
-            if loop is None or loop.is_closed():
-                _log(SERVICE, f"immediate host-meta refresh skipped for {host}: monitor loop unavailable", level="WARNING")
-                return
-            asyncio.run_coroutine_threadsafe(
-                monitor.collect_host_meta_now(host, include_package_status=include_package_status),
-                loop,
-            ).result(timeout=30)
-        except Exception as exc:
-            _log(SERVICE, f"immediate host-meta refresh failed for {host}: {exc}", level="WARNING")
-
     def build_state(self) -> dict[str, Any]:
         self._sync_vps_inventory()
         monitor_state = self._get_monitor_state()
@@ -2824,14 +3083,18 @@ class VPSManagerService:
 
     def _build_master_overview_row(self) -> dict[str, Any]:
         pbgui_release = self._get_pbgui_release()
-        pb7_release = self._get_pb7_release()
-        local_package_status = self._get_local_package_status()
+        pb7_release = dict(self._get_pb7_release())
+        live_pb7_branch, live_pb7_commit = get_current_pb7_status(_configured_pb7dir())
+        if live_pb7_commit:
+            pb7_release["current_branch"] = live_pb7_branch
+            pb7_release["current_commit"] = live_pb7_commit
+        local_package_status, monitor_agent = self._get_local_agent_contract()
         local_pbgui_python = f"{sys.version_info.major}.{sys.version_info.minor}"
         local_pb7_python = _python_major_minor(load_ini("main", "pb7venv"))
         master_name = _local_master_name()
         master_branch = str(pbgui_release.get("current_branch") or "unknown")
         master_commit = str(pbgui_release.get("current_commit") or "")
-        master_pb7_branch = str(pb7_release.get("current_branch") or "unknown")
+        master_pb7_branch = _pb7_branch_label(pb7_release.get("current_branch"), pb7_release.get("current_commit"))
         master_pb7_commit = str(pb7_release.get("current_commit") or "")
         boot_ts = int(psutil.boot_time() or 0)
         return {
@@ -2844,8 +3107,11 @@ class VPSManagerService:
             "role_icon": "🧠",
             "start": datetime.fromtimestamp(boot_ts).strftime("%Y-%m-%d %H:%M:%S"),
             "start_ts": boot_ts,
-            "reboot_required": bool(local_package_status.get("reboot", False)),
-            "updates": local_package_status.get("upgrades", "N/A"),
+            "reboot_required": bool(local_package_status.get("reboot_required", False)),
+            "reboot": bool(local_package_status.get("reboot_required", False)),
+            "updates": local_package_status.get("upgrades") if local_package_status.get("available") else "N/A",
+            "package_status": local_package_status,
+            "monitor_agent": monitor_agent,
             "running_bots": "-",
             "pbgui": f"{str(pbgui_release.get('version') or 'N/A')}{'' if local_pbgui_python in (None, '', 'N/A') else ' /' + str(local_pbgui_python)}",
             "pbgui_branch": f"{master_branch} ({_short_commit(master_commit)})",
@@ -2905,6 +3171,7 @@ class VPSManagerService:
             for instance in (host_state or {}).get("v7_instances") or []
             if _truthy((instance or {}).get("running")) and str((instance or {}).get("name") or "").strip()
         )
+        package_status, monitor_agent = self._get_remote_agent_contract(host_state)
         row = {
             "name": hostname,
             "hostname": hostname,
@@ -2921,14 +3188,17 @@ class VPSManagerService:
             "role_icon": role_icon,
             "start": datetime.fromtimestamp(boot).strftime("%Y-%m-%d %H:%M:%S") if boot else "",
             "start_ts": boot,
-            "reboot_required": bool(meta.get("reboot", False)),
-            "updates": meta.get("upgrades", "N/A"),
+            "reboot_required": bool(package_status.get("reboot_required", False)),
+            "reboot": bool(package_status.get("reboot_required", False)),
+            "updates": package_status.get("upgrades") if package_status.get("available") else "N/A",
+            "package_status": package_status,
+            "monitor_agent": monitor_agent,
             "running_bots": len(running_v7_names),
             "pbgui": f"{meta.get('pbgv', 'N/A')}{'' if meta.get('pbgpy', 'N/A') in (None, '', 'N/A') else ' /' + str(meta.get('pbgpy'))}",
             "pbgui_branch": f"{meta.get('pbgb', 'unknown')} ({_short_commit(meta.get('pbgc'))})",
             "pbgui_github": self._build_remote_pbgui_github_status(host_state),
             "pb7": f"{meta.get('pb7v', 'N/A')}{'' if meta.get('pb7py', 'N/A') in (None, '', 'N/A') else ' /' + str(meta.get('pb7py'))}",
-            "pb7_branch": f"{meta.get('pb7b', 'unknown')} ({_short_commit(meta.get('pb7c'))})",
+            "pb7_branch": f"{_pb7_branch_label(meta.get('pb7b'), meta.get('pb7c'))} ({_short_commit(meta.get('pb7c'))})",
             "pb7_github": self._build_remote_pb7_github_status(host_state),
             "rtd": min(self._build_remote_rtd(host_state), 9999),
             "task_command": str(getattr(vps, "command", "") or "") if vps else "",
@@ -2945,12 +3215,6 @@ class VPSManagerService:
             "task_current_label": str(task_progress.get("current_label") or ""),
             "task_phase": task_phase,
         }
-        if vps:
-            live_package_status = self._get_live_vps_package_status(vps, host_state)
-            if live_package_status:
-                if live_package_status.get("upgrades") not in (None, ""):
-                    row["updates"] = live_package_status.get("upgrades")
-                row["reboot_required"] = bool(live_package_status.get("reboot", False))
         return row
 
     def _build_master_pbgui_github_status(self, current_branch: str, current_commit: str) -> str:
@@ -2968,6 +3232,8 @@ class VPSManagerService:
         return f"⚠️ {str(release_info.get('version') or 'N/A')}"
 
     def _build_master_pb7_github_status(self, current_branch: str, current_commit: str) -> str:
+        if current_commit == PB7_PINNED_COMMIT:
+            return "✅"
         release_info = self._get_pb7_release()
         branches = release_info.get("branches") or {}
         if current_branch in branches and branches[current_branch]:
@@ -3005,6 +3271,8 @@ class VPSManagerService:
         server_branch = str(meta.get("pb7b") or "unknown")
         server_commit = str(meta.get("pb7c") or "")
         server_version = str(meta.get("pb7v") or "N/A")
+        if server_commit == PB7_PINNED_COMMIT:
+            return "✅"
         release_info = self._get_pb7_release()
         branches = release_info.get("branches") or {}
         if server_branch != "unknown" and server_branch in branches and branches[server_branch]:
@@ -3021,6 +3289,7 @@ class VPSManagerService:
 
     def _build_master_status(self, coindata_ok: bool) -> dict[str, Any]:
         summary_row = self._build_master_overview_row()
+        package_status = summary_row.get("package_status") or _normalize_package_status(None)
         local_no_new_privs = _local_no_new_privileges()
         local_sudo_blocked_reason = "Local sudo blocked by runtime (`NoNewPrivs`)." if local_no_new_privs else ""
         pbgui_github = str(summary_row.get("pbgui_github") or "")
@@ -3032,6 +3301,8 @@ class VPSManagerService:
             "update_ok": self.vpsmanager.update_status == "successful",
             "update_ready": True,
             "pending_updates": summary_row.get("updates", "N/A"),
+            "package_status": package_status,
+            "monitor_agent": summary_row.get("monitor_agent") or _normalize_monitor_agent(None),
             "last_command": self.vpsmanager.command_text,
             "last_update": self.vpsmanager.last_update,
             "local_sudo_supported": not local_no_new_privs,
@@ -3049,37 +3320,20 @@ class VPSManagerService:
         hostname = str(vps.hostname or "")
         summary_row = self._build_vps_overview_row(vps.hostname, host_state)
         cluster_node = self._cluster_node_status(hostname)
-        live_package_status = None
-        if quick:
-            # Keep the last full package probe visible between quick pushes.
-            cached_package_status = self._vps_package_status_cache.get(hostname) or {}
-            live_package_status = cached_package_status.get("data") or None
-        else:
-            live_package_status = self._get_live_vps_package_status(vps, host_state)
-        if live_package_status:
-            summary_row = dict(summary_row)
-            if live_package_status.get("upgrades") not in (None, ""):
-                summary_row["updates"] = live_package_status.get("upgrades")
-            summary_row["reboot_required"] = bool(live_package_status.get("reboot", False))
+        package_status = summary_row.get("package_status") or _normalize_package_status(None)
         pbgui_github = self._build_remote_pbgui_github_status(host_state)
         pb7_github = self._build_remote_pb7_github_status(host_state)
         ssh_online = self._host_online(host_state)
         telemetry_fresh = self._host_telemetry_fresh(host_state)
         telemetry_age = self._host_telemetry_age(host_state)
         host_meta = self._host_meta(host_state)
-        stream = (host_state or {}).get("stream") or {}
         connection = (host_state or {}).get("connection") or {}
         ssh_connection_error = str(connection.get("last_error") or "")
         host_key_error = "host key" in ssh_connection_error.lower() and any(
             marker in ssh_connection_error.lower()
             for marker in ("not trusted", "mismatch", "does not match", "verification")
         )
-        monitor_agent = stream.get("monitor_agent") if isinstance(stream, dict) else None
-        if not isinstance(monitor_agent, dict):
-            monitor_agent = {
-                "state": "missing" if ssh_online else "unknown",
-                "error": "No monitor-agent status has been reported" if ssh_online else "Host is not connected",
-            }
+        monitor_agent = summary_row.get("monitor_agent") or _normalize_monitor_agent(None)
         if quick:
             if not ssh_online:
                 ssh_ok = False
@@ -3099,6 +3353,7 @@ class VPSManagerService:
             "update_ok": vps.update_status == "successful",
             "update_ready": bool(vps.user_pw),
             "pending_updates": summary_row.get("updates", "N/A"),
+            "package_status": package_status,
             **self._credential_capability_metadata(hostname, host_state),
             "online": ssh_online and telemetry_fresh,
             "ssh_online": ssh_online,
@@ -3290,40 +3545,6 @@ class VPSManagerService:
         host_state = self._get_host_telemetry(monitor_state, hostname)
         self._sync_vps_config_from_host_meta(vps, host_state)
         return self._build_vps_status(vps, host_state, quick=quick)
-
-    def _get_live_vps_package_status(self, vps: VPS, host_state: dict[str, Any]) -> dict[str, Any] | None:
-        hostname = str(vps.hostname or "")
-        if not hostname:
-            return None
-        cached = self._vps_package_status_cache.get(hostname)
-        fingerprint = (
-            str(vps.command or ""),
-            str(vps.update_status or ""),
-            str(vps.last_update or ""),
-        )
-        now = time.time()
-        if cached:
-            cached_fingerprint = tuple(cached.get("fingerprint") or ())
-            age = now - float(cached.get("checked_at") or 0)
-            if cached_fingerprint == fingerprint and age < 120:
-                return cached.get("data") or None
-
-        if not self._host_online(host_state):
-            return (cached or {}).get("data") or None
-        if not getattr(vps, "user_pw", None):
-            return (cached or {}).get("data") or None
-        if _status_running(vps.init_status) or _status_running(vps.setup_status) or _status_running(vps.update_status):
-            return (cached or {}).get("data") or None
-
-        live = vps.fetch_package_status()
-        if live is None:
-            return (cached or {}).get("data") or None
-        self._vps_package_status_cache[hostname] = {
-            "fingerprint": fingerprint,
-            "checked_at": now,
-            "data": live,
-        }
-        return live
 
     def _build_remote_rtd(self, host_state: dict[str, Any]) -> int:
         system = (host_state or {}).get("system") or {}
@@ -3797,8 +4018,11 @@ class VPSManagerService:
     def _build_master_pb7_branch_state(self) -> dict[str, Any]:
         repo_dir = _configured_pb7dir()
         release_info = self._get_pb7_release()
-        current_branch = str(release_info.get("current_branch") or "unknown")
-        current_commit = str(release_info.get("current_commit") or "")
+        current_branch, current_commit = get_current_pb7_status(repo_dir)
+        if not current_commit:
+            current_branch = str(release_info.get("current_branch") or "unknown")
+            current_commit = str(release_info.get("current_commit") or "")
+        current_branch = _pb7_branch_label(current_branch, current_commit)
         branches = release_info.get("branches") or {}
         known_remotes = list_git_remotes(repo_dir) if repo_dir else []
         for opt in ("origin", "fork"):
@@ -3839,14 +4063,15 @@ class VPSManagerService:
             if opt not in known_remotes:
                 known_remotes.append(opt)
         remote_urls = {name: get_git_remote_url(repo_dir, name) for name in known_remotes if repo_dir}
-        current_branch = str(meta.get("pb7b") or "unknown")
+        current_commit = str(meta.get("pb7c") or "")
+        current_branch = _pb7_branch_label(meta.get("pb7b"), current_commit)
         tracking_remote_name = get_git_branch_remote(repo_dir, current_branch or "") if repo_dir else ""
         branch_tracking_remotes = get_git_branch_remotes(repo_dir, list(branches.keys())) if repo_dir else {}
         default_remote_name = tracking_remote_name if tracking_remote_name in known_remotes else ("origin" if "origin" in known_remotes else (known_remotes[0] if known_remotes else ""))
         return {
             "hostname": hostname,
             "current_branch": current_branch,
-            "current_commit": str(meta.get("pb7c") or ""),
+            "current_commit": current_commit,
             "branches": branches,
             "known_remotes": known_remotes,
             "remote_urls": remote_urls,

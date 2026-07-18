@@ -57,34 +57,44 @@
       changed_when: (pbgui_repo.changed | default(false)) or (pbgui_requirements.changed | default(false))
       notify: restart pbgui
 
-    - name: Check required PBGui systemd units
-      shell: |
-        target_user={{ user | default('', true) | quote }}
-        target_home=""
-        if [ -n "$target_user" ]; then
-          target_home="$(getent passwd "$target_user" | cut -d: -f6)"
-        fi
-        unit_dir="${target_home:-$HOME}/.config/systemd/user"
-        uid="$(id -u "$target_user" 2>/dev/null || id -u)"
-        run_user_systemctl() {
-          env XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$uid}" systemctl --user "$@" 2>/dev/null || true
-        }
-        for unit in pbgui-api.service pbgui-pbcluster.service pbgui-pbcoindata.service pbgui-monitor-agent.service; do
-          if [ ! -f "$unit_dir/$unit" ]; then
-            echo "repair=missing:$unit"
-            continue
-          fi
-          enabled="$(run_user_systemctl is-enabled "$unit")"
-          active="$(run_user_systemctl is-active "$unit")"
-          case "$enabled" in enabled|enabled-runtime) ;; *) echo "repair=disabled:$unit:$enabled" ;; esac
-          case "$active" in active|activating|reloading) ;; *) echo "repair=inactive:$unit:$active" ;; esac
-        done
-      args:
-        executable: /bin/bash
+    - name: Reconcile PBGui systemd user services
+      command:
+        argv:
+          - /bin/bash
+          - "{{ pbgdir }}/setup/setup_systemd.sh"
+          - --pbgui-dir
+          - "{{ pbgdir }}"
+          - --python
+          - "{{ pbgui_python | default(ansible_playbook_python) }}"
+          - --enable
+          - api,pbcluster,pbcoindata,monitor-agent
+          - --no-disable-excluded
+          - --no-start
       when: pbgdir != ""
-      register: required_systemd_units
-      changed_when: "'repair=' in required_systemd_units.stdout"
-      notify: restart pbgui
+      register: systemd_reconcile_result
+      changed_when: "'changed=true' in (systemd_reconcile_result.stdout | default(''))"
+
+    - name: Check whether monitor-agent needs recovery
+      command:
+        argv:
+          - systemctl
+          - --user
+          - is-active
+          - --quiet
+          - pbgui-monitor-agent.service
+      when: pbgdir != ""
+      register: monitor_agent_before
+      changed_when: false
+      failed_when: false
+
+    - name: Recover and verify monitor-agent without touching PBApiServer
+      script: setup/vps_service_control.sh start PBMonitorAgent
+      environment:
+        PBGUI_DIR: "{{ pbgdir }}"
+        PBGUI_PYTHON: "{{ pbgui_python | default(ansible_playbook_python) }}"
+      when: pbgdir != ""
+      register: monitor_agent_recovery
+      changed_when: monitor_agent_before.rc != 0
 
     - name: print pbgui_repo
       debug:
@@ -106,7 +116,7 @@
           - --no-disable-excluded
           - --no-start
       register: systemd_setup_result
-      changed_when: systemd_setup_result.rc == 0
+      changed_when: "'changed=true' in (systemd_setup_result.stdout | default(''))"
       listen: "restart pbgui"
 
     - name: Restart PBCluster, PBCoinData and PBMonitorAgent
@@ -121,7 +131,29 @@
       shell: |
         set -euo pipefail
         restart_unit="pbgui-api-restart-$(date +%s%N)"
-        systemd-run --user --unit="$restart_unit" --collect /bin/bash -lc 'sleep 1; systemctl --user enable pbgui-api.service; systemctl --user restart pbgui-api.service'
+        systemd-run --user --unit="$restart_unit" --collect /bin/bash -c '
+          sleep 1
+          systemctl --user enable pbgui-api.service
+          if ! systemctl --user restart pbgui-api.service; then
+            systemctl --user show pbgui-api.service --no-pager --property=ActiveState,SubState,Result,ExecMainStatus,NRestarts
+            systemctl --user status pbgui-api.service --no-pager -l
+            exit 1
+          fi
+          baseline="$(systemctl --user show pbgui-api.service --property=NRestarts --value)"
+          case "$baseline" in ""|*[!0-9]*) baseline=0 ;; esac
+          sleep 12
+          active="$(systemctl --user show pbgui-api.service --property=ActiveState --value)"
+          sub="$(systemctl --user show pbgui-api.service --property=SubState --value)"
+          result="$(systemctl --user show pbgui-api.service --property=Result --value)"
+          status="$(systemctl --user show pbgui-api.service --property=ExecMainStatus --value)"
+          after="$(systemctl --user show pbgui-api.service --property=NRestarts --value)"
+          case "$after" in ""|*[!0-9]*) after=0 ;; esac
+          if [ "$active" != active ] || [ "$sub" != running ] || [ "$result" != success ] || [ "${status:-0}" != 0 ] || [ "$after" -gt "$baseline" ]; then
+            systemctl --user show pbgui-api.service --no-pager --property=ActiveState,SubState,Result,ExecMainStatus,NRestarts
+            systemctl --user status pbgui-api.service --no-pager -l
+            exit 1
+          fi
+        '
       args:
         executable: /bin/bash
       changed_when: true

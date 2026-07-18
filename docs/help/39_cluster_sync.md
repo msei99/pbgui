@@ -166,11 +166,11 @@ The report columns mean:
 
 Values are per node. Equal rows normally describe the same replicated operation
 set on each node and must not be added together as different cluster
-operations. Eligibility requires both the signed operation timestamp and the
-local durable file age to be older than the cutoff for actual deletion. The
-read-only report normalizes late replicas by projecting signed operation age
-under the verified shadow checkpoint, so a recently joined node reports the
-same hypothetical candidates without weakening the real deletion gate.
+operations. Eligibility requires the signed operation timestamp to be older
+than the cutoff and the operation sequence to be at or below the committed
+checkpoint baseline. Local file age is deliberately not a second waiting gate:
+late replicas contain the same signed operation age, and the verified
+checkpoint plus replica acknowledgements provide the deletion safety.
 Local garbage values describe each node's local content-addressed stores and may
 legitimately differ when one node has additional orphaned copies. Checkpoint ID,
 Eligible Ops, Retained Ops, and Required Blob Set digest must still converge
@@ -269,11 +269,12 @@ This limits the damage if a cluster-sync key is leaked: the key should not allow
 
 ## VPS-to-VPS firewall rules
 
-Cluster Sync manages VPS-to-VPS SSH firewall rules automatically for peer sync.
+Cluster Sync does not modify host firewall rules. Administrators must allow the
+configured SSH port from each enabled peer that needs inbound access, using the
+VPS Manager firewall controls or their own firewall tooling.
 
-PBGui adds allow rules for enabled peer VPS nodes that need to exchange cluster state. Old PBGui-managed peer rules are removed only after replacement connectivity has been confirmed.
-
-PBGui must not remove SSH firewall rules that were not created for Cluster Sync.
+**Repair SSH** and **Repair All SSH** install restricted Cluster Sync keys but
+do not open network ports. PBGui leaves every existing firewall rule untouched.
 
 ---
 

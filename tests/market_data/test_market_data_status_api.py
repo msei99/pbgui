@@ -416,6 +416,53 @@ def test_bitget_best_1m_queue_uses_fresh_one_shot_worker(monkeypatch) -> None:
     assert popen_calls[0][2] == "--run-job"
 
 
+def test_okx_best_1m_queue_enqueues_selected_range(monkeypatch, tmp_path) -> None:
+    """OKX Best 1m jobs retain the selected coins, date range, and refetch flag."""
+
+    enqueued: list[dict] = []
+
+    def fake_enqueue_job(**kwargs):
+        enqueued.append(kwargs)
+        return SimpleNamespace(job_id="okx-1", path=str(tmp_path / "okx-1.json"))
+
+    monkeypatch.setattr("task_queue.enqueue_job", fake_enqueue_job)
+    monkeypatch.setattr("task_queue.read_worker_pid", lambda: 12345)
+    monkeypatch.setattr("task_queue.is_pid_running", lambda _pid: True)
+    monkeypatch.setattr("market_data.append_exchange_download_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("resident worker should be reused")),
+    )
+    monkeypatch.setattr(market_data_api, "_get_best_1m_available_coins", lambda _exchange: ["BTC", "ETH", "SOL"])
+
+    result = market_data_api.queue_best_1m_job(
+        "okx",
+        {
+            "coins": ["BTC", "ETH"],
+            "selected_only": True,
+            "start_day": "20260101",
+            "end_day": "20260131",
+            "refetch": True,
+        },
+        None,
+    )
+
+    assert result["success"] is True
+    assert result["job_type"] == "okx_best_1m"
+    assert enqueued == [
+        {
+            "job_type": "okx_best_1m",
+            "exchange": "okx",
+            "payload": {
+                "coins": ["BTC", "ETH"],
+                "start_day": "20260101",
+                "end_day": "20260131",
+                "refetch": True,
+            },
+        }
+    ]
+
+
 def test_bitget_distributed_queue_uses_selected_vps_hosts(monkeypatch) -> None:
     """Distributed Bitget queue requests store selected known VPS hosts in the worker payload."""
 

@@ -168,12 +168,12 @@ Die Report-Spalten bedeuten:
 
 Die Werte gelten pro Node. Gleiche Zeilen beschreiben normalerweise denselben
 replizierten Operation-Satz auf jedem Node und dürfen nicht als unterschiedliche
-Cluster-Operationen addiert werden. Eine Operation ist nur eligible, wenn sowohl
-ihr signierter Zeitstempel als auch das lokale dauerhafte Dateialter für eine
-echte Löschung älter als der Cutoff sind. Der read-only Report normalisiert spät
-beigetretene Replicas, indem er das signierte Operation-Alter unter dem
-verifizierten Shadow-Checkpoint projiziert. Damit zeigen neue Nodes dieselben
-hypothetischen Kandidaten, ohne das echte Lösch-Gate abzuschwächen.
+Cluster-Operationen addiert werden. Eine Operation ist nur eligible, wenn ihr
+signierter Zeitstempel älter als der Cutoff ist und ihre Sequenz höchstens auf
+der committed Checkpoint-Baseline liegt. Das lokale Dateialter ist bewusst kein
+zweites Warte-Gate: Spät beigetretene Replicas enthalten dasselbe signierte
+Operation-Alter, während verifizierter Checkpoint und Replica-ACKs die
+Löschsicherheit herstellen.
 Lokale Garbage-Werte beschreiben die Content-Addressed Stores jedes Nodes und
 können sich berechtigt unterscheiden, wenn ein Node zusätzliche verwaiste
 Kopien besitzt. Checkpoint-ID, Eligible Ops, Retained Ops und der Required-Blob-
@@ -275,11 +275,14 @@ Das begrenzt den Schaden, falls ein Cluster-Sync-Key geleakt wird: Der Key soll 
 
 ## VPS-zu-VPS-Firewall-Regeln
 
-Cluster Sync verwaltet VPS-zu-VPS-SSH-Firewall-Regeln für Peer-Sync automatisch.
+Cluster Sync ändert keine Host-Firewall-Regeln. Administratoren müssen den
+konfigurierten SSH-Port für jeden aktivierten Peer mit benötigtem Inbound-Zugriff
+selbst freigeben, entweder über die Firewall-Steuerung im VPS Manager oder mit
+eigenen Firewall-Werkzeugen.
 
-PBGui fügt Allow-Regeln für aktivierte Peer-VPS-Nodes hinzu, die Cluster-State austauschen müssen. Alte von PBGui verwaltete Peer-Regeln werden erst entfernt, wenn die neue Erreichbarkeit bestätigt wurde.
-
-PBGui darf keine SSH-Firewall-Regeln entfernen, die nicht für Cluster Sync erstellt wurden.
+**Repair SSH** und **Repair All SSH** installieren eingeschränkte Cluster-Sync-
+Keys, öffnen aber keine Netzwerkports. PBGui lässt alle vorhandenen Firewall-
+Regeln unverändert.
 
 ---
 

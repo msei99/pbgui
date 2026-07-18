@@ -53,8 +53,8 @@
     - name: build enabled PBGui migration service list
       set_fact:
         pbgui_credential_capability_known: "{{ credential_active is defined and credential_active is not none }}"
-        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if (credential_active | default(false)) else []) }}"
-        systemd_units: "{{ ['pbgui-pbcluster.service', 'pbgui-pbrun.service', 'pbgui-monitor-agent.service'] + (['pbgui-pbcoindata.service'] if (credential_active | default(false)) else []) }}"
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if (credential_active | default(false) | default(false, true)) else []) }}"
+        systemd_units: "{{ ['pbgui-pbcluster.service', 'pbgui-pbrun.service', 'pbgui-monitor-agent.service'] + (['pbgui-pbcoindata.service'] if (credential_active | default(false) | default(false, true)) else []) }}"
         migration_stop_units: "{{ all_systemd_units if (credential_active is defined and credential_active is not none) else (all_systemd_units | reject('equalto', 'pbgui-pbcoindata.service') | list) }}"
 
     - name: copy systemd setup helper
@@ -74,21 +74,27 @@
         argv: "{{ ['/bin/bash', pbgui_dir + '/setup/setup_systemd.sh', '--user', user, '--pbgui-dir', pbgui_dir, '--python', python_bin, '--enable', pbgui_enabled_services | join(','), '--no-start'] + ([] if pbgui_credential_capability_known else ['--no-disable-excluded']) }}"
       become: yes
       register: systemd_preinstall_result
+      changed_when: "'changed=true' in (systemd_preinstall_result.stdout | default(''))"
 
     - name: stop existing PBGui systemd user services before migration
       shell: |
-        uid="$(id -u {{ user | quote }})"
-        for unit in {{ migration_stop_units | join(' ') }}; do
-          sudo -H -u {{ user | quote }} env XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user stop "$unit" >/dev/null 2>&1 || true
+        uid="$(id -u "$PBGUI_MIGRATION_USER")"
+        read -r -a units <<< "$PBGUI_MIGRATION_UNITS"
+        for unit in "${units[@]}"; do
+          sudo -H -u "$PBGUI_MIGRATION_USER" env XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user stop "$unit" >/dev/null 2>&1 || true
         done
       args:
         executable: /bin/bash
+      environment:
+        PBGUI_MIGRATION_USER: "{{ user }}"
+        # Replaces the unsafe legacy shell interpolation: for unit in {{ migration_stop_units | join(' ') }}
+        PBGUI_MIGRATION_UNITS: "{{ migration_stop_units | join(' ') }}"
       become: yes
       changed_when: false
 
     - name: stop remaining legacy PBGui processes
       shell: |
-        PBGUI_MIGRATION_DIR={{ pbgui_dir | quote }} PBGUI_CREDENTIAL_ACTIVE={{ credential_active | default('') | quote }} python3 - <<'PY'
+        python3 - <<'PY'
         import os
         import signal
         import sys
@@ -200,6 +206,9 @@
         PY
       args:
         executable: /bin/bash
+      environment:
+        PBGUI_MIGRATION_DIR: "{{ pbgui_dir }}"
+        PBGUI_CREDENTIAL_ACTIVE: "{{ credential_active | default('', true) }}"
       register: legacy_process_stop
       changed_when: "'legacy_processes=0 removed_pidfiles=0' not in legacy_process_stop.stdout"
 
@@ -208,13 +217,14 @@
         argv: "{{ ['/bin/bash', pbgui_dir + '/setup/setup_systemd.sh', '--user', user, '--pbgui-dir', pbgui_dir, '--python', python_bin, '--enable', pbgui_enabled_services | join(',')] + ([] if pbgui_credential_capability_known else ['--no-disable-excluded']) }}"
       become: yes
       register: systemd_setup_result
+      changed_when: "'changed=true' in (systemd_setup_result.stdout | default(''))"
 
     - name: verify PBGui systemd services stay active
       shell: |
-        uid="$(id -u {{ user | quote }})"
-        units=({{ systemd_units | join(' ') }})
+        uid="$(id -u "$PBGUI_MIGRATION_USER")"
+        read -r -a units <<< "$PBGUI_SYSTEMD_UNITS"
         run_systemctl() {
-          sudo -H -u {{ user | quote }} env XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user "$@"
+          sudo -H -u "$PBGUI_MIGRATION_USER" env XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user "$@"
         }
         show_prop() {
           run_systemctl show "$1" -p "$2" --value 2>/dev/null || true
@@ -235,6 +245,7 @@
           [[ "$restarts_after" =~ ^[0-9]+$ ]] || restarts_after=0
           printf 'unit=%s active=%s sub=%s result=%s status=%s restarts_before=%s restarts_after=%s\n' "$unit" "$active" "$sub" "$result" "$status" "${restarts_before[$unit]}" "$restarts_after"
           if [ "$active" != "active" ] || [ "$sub" != "running" ] || [ "$result" != "success" ] || [ "${status:-0}" != "0" ] || [ "$restarts_after" -gt "${restarts_before[$unit]}" ]; then
+            run_systemctl show "$unit" --no-pager --property=ActiveState,SubState,Result,ExecMainStatus,NRestarts || true
             run_systemctl status "$unit" --no-pager -l || true
             failed=1
           fi
@@ -242,6 +253,9 @@
         exit "$failed"
       args:
         executable: /bin/bash
+      environment:
+        PBGUI_MIGRATION_USER: "{{ user }}"
+        PBGUI_SYSTEMD_UNITS: "{{ systemd_units | join(' ') }}"
       become: yes
       register: systemd_active_result
       changed_when: false
@@ -253,7 +267,7 @@
 
     - name: remove legacy pbgui start.sh crontab lines
       shell: |
-        PBGUI_MIGRATION_DIR={{ pbgui_dir | quote }} PBGUI_MIGRATION_USER={{ user | quote }} python3 - <<'PY'
+        python3 - <<'PY'
         import os
         import pwd
         import subprocess
@@ -296,6 +310,9 @@
         PY
       args:
         executable: /bin/bash
+      environment:
+        PBGUI_MIGRATION_DIR: "{{ pbgui_dir }}"
+        PBGUI_MIGRATION_USER: "{{ user }}"
       register: legacy_crontab_cleanup
       changed_when: "'changed=1' in legacy_crontab_cleanup.stdout"
 

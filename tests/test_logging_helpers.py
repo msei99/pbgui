@@ -37,6 +37,21 @@ def _process_writer(logfile: str, ini_path: str, start: int, count: int) -> None
         logging_helpers.human_log("ProcessTest", f"record-{index}", logfile=logfile)
 
 
+def _slow_process_writer(logfile: str, ini_path: str, start: int, count: int, started) -> None:
+    """Write slowly enough for a parent purge to overlap active writers."""
+    logging_helpers.PBGUI_INI = Path(ini_path)
+    for index in range(start, start + count):
+        logging_helpers.human_log("ProcessTest", f"record-{index}", logfile=logfile)
+        started.set()
+        time.sleep(0.002)
+
+
+def _process_set_rotation(ini_path: str, service: str, max_bytes: int, backup_count: int) -> None:
+    """Persist one isolated service override from a child process."""
+    logging_helpers.PBGUI_INI = Path(ini_path)
+    logging_helpers.set_rotate_settings(service, max_bytes, backup_count)
+
+
 @pytest.fixture
 def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     """Redirect every canonical logging path away from repository data."""
@@ -145,6 +160,29 @@ def test_redacts_basic_auth_set_cookie_and_extended_query_secrets(isolated_paths
     for secret in ("basic-secret", "cookie-secret", "oauth-secret", "proxy-secret", "totp-value"):
         assert secret not in content
     assert "&safe=yes" in content
+
+
+def test_redaction_bounds_unicode_tuples_sets_and_depth(isolated_paths):
+    """Container variants and bounded Unicode metadata remain JSON-safe."""
+    _, log_root = isolated_paths
+    nested = {"level": {"level": {"level": {"level": {"level": {"level": {"level": {"level": {"token": "deep-secret"}}}}}}}}}
+    logging_helpers.human_log(
+        "Secrets",
+        "unicode Grüße token=message-secret " + ("x" * (logging_helpers._MAX_REDACT_TEXT + 100)),
+        meta={
+            "tuple": ("password=tuple-secret", "Grüße"),
+            "set": {"api_key=set-secret", "safe"},
+            "many": list(range(logging_helpers._MAX_REDACT_ITEMS + 5)),
+            "nested": nested,
+        },
+    )
+
+    content = (log_root / "Secrets.log").read_text(encoding="utf-8")
+    for secret in ("message-secret", "tuple-secret", "set-secret", "deep-secret"):
+        assert secret not in content
+    assert "Grüße" in content
+    assert "[TRUNCATED]" in content
+    assert "[MAX_DEPTH]" in content
 
 
 def test_nested_logging_context_resets_and_explicit_metadata_wins(isolated_paths):
@@ -275,6 +313,84 @@ def test_process_safe_writes_have_complete_lines(isolated_paths, tmp_path):
     assert {line.rsplit(" ", 1)[-1] for line in lines} == {f"record-{index}" for index in range(200)}
 
 
+@pytest.mark.skipif(multiprocessing.get_start_method(allow_none=True) == "spawn", reason="fork-oriented lock stress test")
+def test_process_rotation_preserves_all_records(isolated_paths, tmp_path):
+    """Concurrent process writers retain every record across rotations."""
+    ini_path, _ = isolated_paths
+    logging_helpers.set_rotate_defaults(200, 100)
+    logfile = tmp_path / "process-rotate.log"
+    context = multiprocessing.get_context("fork")
+    processes = [
+        context.Process(target=_process_writer, args=(str(logfile), str(ini_path), worker * 20, 20))
+        for worker in range(4)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(20)
+        assert process.exitcode == 0
+
+    lines = []
+    for path in [logfile, *sorted(tmp_path.glob("process-rotate.log.*"))]:
+        if path.suffix == ".lock":
+            continue
+        lines.extend(path.read_text(encoding="utf-8").splitlines())
+    assert len(lines) == 80
+    assert {line.rsplit(" ", 1)[-1] for line in lines} == {f"record-{index}" for index in range(80)}
+
+
+@pytest.mark.skipif(multiprocessing.get_start_method(allow_none=True) == "spawn", reason="fork-oriented lock stress test")
+def test_process_purge_preserves_records_from_active_writers(isolated_paths, tmp_path):
+    """A purge serialized with process writers loses no completed records."""
+    ini_path, _ = isolated_paths
+    logfile = tmp_path / "process-purge.log"
+    context = multiprocessing.get_context("fork")
+    started = context.Event()
+    processes = [
+        context.Process(target=_slow_process_writer, args=(str(logfile), str(ini_path), worker * 100, 100, started))
+        for worker in range(2)
+    ]
+    for process in processes:
+        process.start()
+    assert started.wait(5)
+    success, _message = logging_helpers.purge_log_to_rotated(str(logfile), 1024 * 1024, 2)
+    assert success is True
+    for process in processes:
+        process.join(20)
+        assert process.exitcode == 0
+
+    lines = []
+    for path in (logfile, Path(f"{logfile}.1"), Path(f"{logfile}.2")):
+        if path.exists():
+            lines.extend(path.read_text(encoding="utf-8").splitlines())
+    assert len(lines) == 200
+    assert {line.rsplit(" ", 1)[-1] for line in lines} == {f"record-{index}" for index in range(200)}
+
+
+@pytest.mark.skipif(multiprocessing.get_start_method(allow_none=True) == "spawn", reason="fork-oriented lock stress test")
+def test_process_settings_updates_preserve_unrelated_values(isolated_paths):
+    """Concurrent process settings updates share the INI transaction lock."""
+    ini_path, _ = isolated_paths
+    ini_path.parent.mkdir(parents=True)
+    ini_path.write_text("[main]\nname = keep-me\n", encoding="utf-8")
+    context = multiprocessing.get_context("fork")
+    processes = [
+        context.Process(target=_process_set_rotation, args=(str(ini_path), "PBRun", 2048, 2)),
+        context.Process(target=_process_set_rotation, args=(str(ini_path), "PBData", 4096, 3)),
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(20)
+        assert process.exitcode == 0
+
+    cfg = configparser.ConfigParser()
+    cfg.read(ini_path, encoding="utf-8")
+    assert cfg.get("main", "name") == "keep-me"
+    assert logging_helpers.get_rotate_settings(service="PBRun") == (2048, 2)
+    assert logging_helpers.get_rotate_settings(service="PBData") == (4096, 3)
+
+
 @pytest.mark.parametrize("operation", ["rotate", "purge"])
 def test_rotation_and_purge_use_physical_log_lock(isolated_paths, tmp_path, operation):
     """Rotation and purge should wait for the same lock used by writers."""
@@ -313,3 +429,72 @@ def test_rotate_logfile_keeps_configured_backup_count(tmp_path):
     assert (tmp_path / "service.log.2").exists()
     assert (tmp_path / "service.log.3").exists()
     assert not (tmp_path / "service.log.4").exists()
+
+
+def test_rotation_prunes_generations_above_reduced_count(tmp_path):
+    """Rotation removes stale numeric generations even before the next rollover."""
+    log_path = tmp_path / "service.log"
+    log_path.write_text("current\n", encoding="utf-8")
+    for index in range(1, 5):
+        Path(f"{log_path}.{index}").write_text(f"old-{index}\n", encoding="utf-8")
+
+    logging_helpers.rotate_logfile_if_oversize(str(log_path), max_bytes=1024, backup_count=2)
+
+    assert Path(f"{log_path}.1").exists()
+    assert Path(f"{log_path}.2").exists()
+    assert not Path(f"{log_path}.3").exists()
+    assert not Path(f"{log_path}.4").exists()
+
+
+def test_purge_honors_backup_count_size_and_zero_retention(tmp_path):
+    """Forced purge shifts configured generations, keeps a bounded tail, and supports zero backups."""
+    log_path = tmp_path / "service.log"
+    log_path.write_bytes(b"0123456789")
+    Path(f"{log_path}.1").write_bytes(b"old-one")
+    Path(f"{log_path}.2").write_bytes(b"old-two")
+    Path(f"{log_path}.3").write_bytes(b"excess")
+
+    success, _message = logging_helpers.purge_log_to_rotated(str(log_path), max_bytes=4, backup_count=2)
+
+    assert success is True
+    assert log_path.read_bytes() == b""
+    assert Path(f"{log_path}.1").read_bytes() == b"6789"
+    assert Path(f"{log_path}.2").read_bytes() == b"old-one"
+    assert not Path(f"{log_path}.3").exists()
+
+    log_path.write_bytes(b"discard")
+    success, _message = logging_helpers.purge_log_to_rotated(str(log_path), max_bytes=4, backup_count=0)
+    assert success is True
+    assert log_path.read_bytes() == b""
+    assert not Path(f"{log_path}.1").exists()
+    assert not Path(f"{log_path}.2").exists()
+
+
+def test_purge_redacts_internal_failure_text(tmp_path, monkeypatch):
+    """Purge helper failures never return credential text to API callers."""
+    log_path = tmp_path / "service.log"
+    log_path.touch()
+
+    def fail_lock(_path):
+        raise OSError("token=purge-secret")
+
+    monkeypatch.setattr(logging_helpers, "advisory_file_lock", fail_lock)
+    success, message = logging_helpers.purge_log_to_rotated(str(log_path), 1024, 1)
+    assert success is False
+    assert "purge-secret" not in message
+    assert "[REDACTED]" in message
+
+
+def test_rotation_fallback_stderr_is_sanitized(tmp_path, monkeypatch, capsys):
+    """Best-effort rotation failures use only redacted fallback stderr."""
+    log_path = tmp_path / "service.log"
+    log_path.touch()
+
+    def fail_lock(_path):
+        raise OSError("password=rotation-secret")
+
+    monkeypatch.setattr(logging_helpers, "advisory_file_lock", fail_lock)
+    logging_helpers.rotate_logfile_if_oversize(str(log_path), 1, 1)
+    stderr = capsys.readouterr().err
+    assert "rotation-secret" not in stderr
+    assert "[REDACTED]" in stderr

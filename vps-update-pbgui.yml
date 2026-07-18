@@ -57,25 +57,39 @@
         var: pbgui_repo
       tags: debug,never
 
-    - name: Check required PBGui systemd units
-      shell: |
-        target_user={{ user | default('', true) | quote }}
-        target_home=""
-        if [ -n "$target_user" ]; then
-          target_home="$(getent passwd "$target_user" | cut -d: -f6)"
-        fi
-        unit_dir="${target_home:-$HOME}/.config/systemd/user"
-        for unit in pbgui-pbcluster.service pbgui-pbrun.service pbgui-monitor-agent.service; do
-          if [ ! -f "$unit_dir/$unit" ]; then
-            echo "missing=$unit"
-          fi
-        done
-      args:
-        executable: /bin/bash
-      register: required_systemd_units
-      changed_when: "'missing=' in required_systemd_units.stdout"
-      notify: restart pbgui
+    - name: Build enabled PBGui service list
+      set_fact:
+        pbgui_credential_capability_known: "{{ credential_active is defined and credential_active is not none }}"
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if (credential_active | default(false) | default(false, true)) else []) + (['api'] if (pbgui_role | default('') | lower) == 'master' else []) }}"
 
+    - name: Reconcile PBGui systemd user services
+      command:
+        argv: "{{ ['/bin/bash', install_dir + '/pbgui/setup/setup_systemd.sh', '--user', user, '--pbgui-dir', install_dir + '/pbgui', '--python', install_dir + '/venv_pbgui/bin/python', '--enable', pbgui_enabled_services | join(',')] + (['--no-start'] if (pbgui_role | default('') | string | lower) == 'master' else []) + ([] if pbgui_credential_capability_known else ['--no-disable-excluded']) }}"
+      register: systemd_reconcile_result
+      changed_when: "'changed=true' in (systemd_reconcile_result.stdout | default(''))"
+
+    - name: Check whether master monitor-agent needs recovery
+      command:
+        argv:
+          - systemctl
+          - --user
+          - is-active
+          - --quiet
+          - pbgui-monitor-agent.service
+      register: monitor_agent_before
+      changed_when: false
+      failed_when: false
+      when: (pbgui_role | default('') | string | lower) == 'master'
+
+    - name: Recover and verify master monitor-agent without touching PBApiServer
+      script: setup/vps_service_control.sh start PBMonitorAgent
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
+        PBGUI_USER: "{{ user }}"
+      register: monitor_agent_recovery
+      changed_when: monitor_agent_before.rc != 0
+      when: (pbgui_role | default('') | string | lower) == 'master'
 
   handlers:
     - name: Remove pip cache directory
@@ -113,17 +127,11 @@
       when: (cluster_sync_source_node_id | default('') | string | length) > 0 and (cluster_sync_source_public_key | default('') | string | length) > 0
       listen: "restart pbgui"
 
-    - name: Build enabled PBGui service list
-      set_fact:
-        pbgui_credential_capability_known: "{{ credential_active is defined and credential_active is not none }}"
-        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if (credential_active | default(false)) else []) + (['api'] if (pbgui_role | default('') | lower) == 'master' else []) }}"
-      listen: "restart pbgui"
-
     - name: Sync PBGui systemd user services
       command:
         argv: "{{ ['/bin/bash', install_dir + '/pbgui/setup/setup_systemd.sh', '--user', user, '--pbgui-dir', install_dir + '/pbgui', '--python', install_dir + '/venv_pbgui/bin/python', '--enable', pbgui_enabled_services | join(','), '--no-start'] + ([] if pbgui_credential_capability_known else ['--no-disable-excluded']) }}"
       register: systemd_setup_result
-      changed_when: systemd_setup_result.rc == 0
+      changed_when: "'changed=true' in (systemd_setup_result.stdout | default(''))"
       listen: "restart pbgui"
 
     - name: Restart PBCluster, PBRun, PBCoinData and PBMonitorAgent
@@ -132,7 +140,7 @@
         PBGUI_DIR: "{{ install_dir }}/pbgui"
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
         PBGUI_USER: "{{ user }}"
-        PBGUI_CREDENTIAL_ACTIVE: "{{ credential_active | default('') }}"
+        PBGUI_CREDENTIAL_ACTIVE: "{{ credential_active | default('', true) }}"
       register: pbgui_process_health
       retries: 8
       delay: 3
@@ -143,7 +151,29 @@
       shell: |
         set -euo pipefail
         restart_unit="pbgui-api-restart-$(date +%s%N)"
-        systemd-run --user --unit="$restart_unit" --collect /bin/bash -lc 'sleep 1; systemctl --user enable pbgui-api.service; systemctl --user restart pbgui-api.service'
+        systemd-run --user --unit="$restart_unit" --collect /bin/bash -c '
+          sleep 1
+          systemctl --user enable pbgui-api.service
+          if ! systemctl --user restart pbgui-api.service; then
+            systemctl --user show pbgui-api.service --no-pager --property=ActiveState,SubState,Result,ExecMainStatus,NRestarts
+            systemctl --user status pbgui-api.service --no-pager -l
+            exit 1
+          fi
+          baseline="$(systemctl --user show pbgui-api.service --property=NRestarts --value)"
+          case "$baseline" in ""|*[!0-9]*) baseline=0 ;; esac
+          sleep 12
+          active="$(systemctl --user show pbgui-api.service --property=ActiveState --value)"
+          sub="$(systemctl --user show pbgui-api.service --property=SubState --value)"
+          result="$(systemctl --user show pbgui-api.service --property=Result --value)"
+          status="$(systemctl --user show pbgui-api.service --property=ExecMainStatus --value)"
+          after="$(systemctl --user show pbgui-api.service --property=NRestarts --value)"
+          case "$after" in ""|*[!0-9]*) after=0 ;; esac
+          if [ "$active" != active ] || [ "$sub" != running ] || [ "$result" != success ] || [ "${status:-0}" != 0 ] || [ "$after" -gt "$baseline" ]; then
+            systemctl --user show pbgui-api.service --no-pager --property=ActiveState,SubState,Result,ExecMainStatus,NRestarts
+            systemctl --user status pbgui-api.service --no-pager -l
+            exit 1
+          fi
+        '
       args:
         executable: /bin/bash
       changed_when: true

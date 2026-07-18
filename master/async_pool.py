@@ -91,6 +91,15 @@ class VPSConnection:
     data: dict = field(default_factory=dict)  # Cached per-host info (ini, paths)
 
 
+@dataclass(frozen=True)
+class ConnectionAttemptResult:
+    """Immutable identity snapshot returned by one connection attempt."""
+
+    success: bool
+    connection: Optional[asyncssh.SSHClientConnection]
+    created: bool
+
+
 # ── Constants ───────────────────────────────────────────────
 
 CONNECT_TIMEOUT = 10        # seconds
@@ -234,23 +243,30 @@ class AsyncSSHPool:
 
         Returns True on success.
         """
+        result = await self.connect_with_result(hostname)
+        return result.success
+
+    async def connect_with_result(self, hostname: str) -> ConnectionAttemptResult:
+        """Connect and return the exact connection observed by this attempt."""
+
         entry = self._connections.get(hostname)
         if not entry:
             _log(SERVICE, f"Unknown VPS: {hostname}", level="ERROR")
-            return False
+            return ConnectionAttemptResult(False, None, False)
 
         lock = self._get_connect_lock(hostname)
         async with lock:
             entry = self._connections.get(hostname)
             if not entry:
                 _log(SERVICE, f"Unknown VPS: {hostname}", level="ERROR")
-                return False
+                return ConnectionAttemptResult(False, None, False)
 
             if entry.status == ConnectionStatus.CONNECTED and self._is_alive(entry):
-                return True
+                return ConnectionAttemptResult(True, entry.conn, False)
 
             entry.status = ConnectionStatus.CONNECTING
             cfg = entry.config
+            conn = None
             try:
                 conn = await asyncio.wait_for(
                     asyncssh.connect(
@@ -292,14 +308,14 @@ class AsyncSSHPool:
                         _cb(hostname),
                         name=f"on-connect-{_i}-{hostname}",
                     )
-                return True
+                return ConnectionAttemptResult(True, conn, True)
 
             except asyncssh.PermissionDenied as e:
                 entry.status = ConnectionStatus.AUTH_FAILED
                 entry.last_error = f"Authentication failed: {e}"
                 entry.reconnect_attempts += 1
                 _log(SERVICE, f"SSH auth failed for {hostname}: {e}", level="ERROR")
-                return False
+                return ConnectionAttemptResult(False, conn, conn is not None)
 
             except Exception as e:
                 entry.status = ConnectionStatus.DISCONNECTED
@@ -308,7 +324,22 @@ class AsyncSSHPool:
                 entry.reconnect_attempts += 1
                 _log(SERVICE, f"SSH connect failed for {hostname}: {e}",
                      level="ERROR")
-                return False
+                return ConnectionAttemptResult(False, conn, conn is not None)
+
+    async def close_created_connection(
+        self,
+        hostname: str,
+        connection: asyncssh.SSHClientConnection,
+    ) -> None:
+        """Close an attempt-owned handle without disturbing a newer pool entry."""
+
+        lock = self._get_connect_lock(hostname)
+        async with lock:
+            entry = self._connections.get(hostname)
+            if entry is not None and entry.conn is connection:
+                entry.conn = None
+                entry.status = ConnectionStatus.DISCONNECTED
+            connection.close()
 
     async def connect_enabled(self, enabled_hosts: set[str]) -> dict[str, bool]:
         """Connect to all enabled hosts concurrently.

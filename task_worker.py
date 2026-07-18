@@ -228,8 +228,13 @@ def _append_to_job_log(job_id: str, msg: str) -> None:
         p = get_job_log_path(job_id)
         ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         append_managed_transcript_line(p, f"{ts}  {msg}", "jobs")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log(
+            SERVICE,
+            f"Failed to append job transcript: {exc}",
+            level="WARNING",
+            meta={"operation": "append_job_log", "job_id": job_id},
+        )
 
 
 def _init_job_log(job_id: str) -> None:
@@ -247,8 +252,13 @@ def _init_job_log(job_id: str) -> None:
             if p.exists():
                 prev = p.with_name(f"{job_id}.prev.log")
                 os.replace(p, prev)
-    except Exception:
-        pass
+    except Exception as exc:
+        _log(
+            SERVICE,
+            f"Failed to initialize job transcript: {exc}",
+            level="WARNING",
+            meta={"operation": "init_job_log", "job_id": job_id},
+        )
 
 
 def _recent_corrupt_l2book_files(*, coin: str, since_ts: float) -> list[str]:

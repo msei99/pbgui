@@ -24,6 +24,7 @@ import queue
 import secrets
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import traceback
@@ -38,8 +39,12 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from api.archive_helpers import (
     ARCHIVE_LAYOUT_ROOT,
+    _read_json_object_nofollow,
+    _validate_directory_tree_no_symlinks,
     atomic_write_json,
+    archive_item_counts,
     archive_migration_status,
+    archive_transaction,
     archive_config_group_dir,
     build_archive_score_payload,
     cleanup_empty_parents,
@@ -64,6 +69,7 @@ from api.archive_helpers import (
     update_archive_readme,
     update_archive_scores_and_readme,
     utc_now_iso,
+    write_archive_json,
     write_optimize_meta,
 )
 from api.auth import SessionToken, authenticate_websocket, require_auth, validate_token
@@ -85,6 +91,7 @@ from pareto_preset_generator import OPTIMIZE_PRESET_DIRECTIONS, build_optimize_p
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config
 from pbgui_purefunc import PBGDIR, load_ini, load_ini_section, load_ini_snapshot, save_ini, save_ini_section, pb7dir, pb7venv
 from ini_settings import apply_metadata
+from file_lock import advisory_file_lock
 
 SERVICE = "BacktestQueueAPI"
 ARCHIVE_SERVICE = "ArchiveSync"
@@ -97,6 +104,7 @@ _queue_draft_store: dict[str, tuple[float, list[dict]]] = {}
 _OPT_DRAFT_TTL = 600  # 10 minutes
 _ARCHIVE_LIST_CACHE_TTL = 2
 _ARCHIVE_RESULTS_CACHE_TTL = 60
+_ARCHIVE_PANEL_MIGRATION_MAX_ITEMS = 25
 _archives_list_cache: dict[str, Any] = {}
 _archive_results_cache: dict[str, dict[str, Any]] = {}
 
@@ -223,13 +231,16 @@ def _queue_config_snapshot(data: dict | None) -> dict | None:
 
 
 def _queue_launch_item_from_data(filename: str, data: dict) -> dict:
-    return {
+    item = {
         "filename": filename,
         "name": data.get("name", filename),
         "json": data.get("json", ""),
         "exchange": data.get("exchange", ""),
         "config_snapshot": _queue_config_snapshot(data),
     }
+    if isinstance(data.get("use_pbgui_market_data"), bool):
+        item["use_pbgui_market_data"] = data["use_pbgui_market_data"]
+    return item
 
 
 def _queue_public_item(item: dict) -> dict:
@@ -445,6 +456,17 @@ def _own_archive_name() -> str:
     return load_ini("config_archive", "my_archive") or ""
 
 
+def _require_own_archive(name: str, action: str) -> Path:
+    """Return the configured own archive or reject content mutations."""
+    _validate_name(name)
+    if not name or name != _own_archive_name():
+        raise HTTPException(403, f"{action} is only available for the configured own archive")
+    archive_dir = _archives_dir() / name
+    if not archive_dir.exists() or not archive_dir.is_dir() or archive_dir.is_symlink():
+        raise HTTPException(404, f"Archive '{name}' not found")
+    return archive_dir
+
+
 def _read_ini_section(section: str = "backtest_v7") -> dict:
     """Read backtest_v7 settings from pbgui.ini."""
     settings = load_ini_section(section)
@@ -463,12 +485,22 @@ def _get_pbgui_market_data_path() -> str:
 
 
 def _apply_pbgui_market_data_override(cfg: dict, enabled: bool) -> tuple[bool, str | None]:
-    if not enabled:
-        return False, None
-    backtest = cfg.setdefault("backtest", {})
     target_path = _get_pbgui_market_data_path()
+    backtest = cfg.get("backtest")
+    if not isinstance(backtest, dict):
+        if not enabled:
+            return False, target_path
+        backtest = {}
+        cfg["backtest"] = backtest
     current_path = str(backtest.get("ohlcv_source_dir") or "").strip()
-    if current_path == target_path:
+    current_normalized = current_path.rstrip("/\\")
+    target_normalized = target_path.rstrip("/\\")
+    if not enabled:
+        if current_normalized != target_normalized:
+            return False, target_path
+        backtest.pop("ohlcv_source_dir", None)
+        return True, target_path
+    if current_normalized == target_normalized:
         return False, target_path
     backtest["ohlcv_source_dir"] = target_path
     return True, target_path
@@ -522,7 +554,9 @@ def _archive_retest_options(body: dict | None) -> dict:
         "last_days": _clamped_days(source.get("last_days"), 365),
         "starting_balance": source.get("starting_balance"),
         "exchanges": exchanges if isinstance(exchanges, list) else [],
-        "use_pbgui_market_data": bool(source.get("use_pbgui_market_data", False)),
+        "use_pbgui_market_data": source.get("use_pbgui_market_data")
+        if isinstance(source.get("use_pbgui_market_data"), bool)
+        else False,
         "skip_liquidated": bool(source.get("skip_liquidated", True)),
     }
 
@@ -600,7 +634,7 @@ def _queue_archive_retest_run(
         backtest["starting_balance"] = options["starting_balance"]
     if options.get("exchanges"):
         backtest["exchanges"] = options["exchanges"]
-    if options.get("use_pbgui_market_data"):
+    if options.get("use_pbgui_market_data") is True:
         _apply_pbgui_market_data_override(cfg, True)
     _normalize_backtest_base_dir(cfg, queue_name)
 
@@ -627,6 +661,7 @@ def _queue_archive_retest_run(
         "json": str(snapshot_file),
         "exchange": exchange_list,
         "archive_retest": {"run_id": run_id},
+        "use_pbgui_market_data": bool(options.get("use_pbgui_market_data", False)),
     }
     queue_dir = _bt_queue_dir()
     queue_dir.mkdir(parents=True, exist_ok=True)
@@ -785,46 +820,47 @@ def _cleanup_archive_retest_local_artifacts(run: dict, local_result: Path | None
 
 def _replace_archive_result_from_local(run: dict) -> dict:
     archive_name = str(run.get("archive_name") or "")
-    archive_dir = (_archives_dir() / archive_name).resolve()
-    if archive_name != _own_archive_name():
-        raise RuntimeError("Archive retest replacement is only allowed for the configured own archive")
-    if not archive_dir.exists():
-        raise RuntimeError(f"Archive '{archive_name}' not found")
-    old_result = (archive_dir / str(run.get("source_relative_path") or "")).resolve()
-    if not is_inside_archive(old_result, archive_dir) or not old_result.exists():
-        raise RuntimeError("Original archive result no longer exists")
-    local_result = _find_archive_retest_local_result(run)
-    if not local_result or not local_result.exists():
-        raise RuntimeError("Finished local retest result not found")
-    if bool((run.get("options") or {}).get("skip_liquidated", True)):
-        liquidated, reason = _archive_retest_result_liquidated(local_result)
-        if liquidated:
-            raise RuntimeError(f"New retest result is liquidated ({reason}); archive unchanged")
+    archive_dir = _archives_dir() / archive_name
+    with archive_transaction(archive_dir):
+        if archive_name != _own_archive_name():
+            raise RuntimeError("Archive retest replacement is only allowed for the configured own archive")
+        if not archive_dir.exists() or not archive_dir.is_dir() or archive_dir.is_symlink():
+            raise RuntimeError(f"Archive '{archive_name}' not found")
+        old_result = archive_dir / str(run.get("source_relative_path") or "")
+        if not is_inside_archive(old_result, archive_dir) or not old_result.exists():
+            raise RuntimeError("Original archive result no longer exists")
+        local_result = _find_archive_retest_local_result(run)
+        if not local_result or not local_result.exists():
+            raise RuntimeError("Finished local retest result not found")
+        if bool((run.get("options") or {}).get("skip_liquidated", True)):
+            liquidated, reason = _archive_retest_result_liquidated(local_result)
+            if liquidated:
+                raise RuntimeError(f"New retest result is liquidated ({reason}); archive unchanged")
 
-    staged, stage_parent = _stage_archive_retest_result(local_result, run)
-    try:
-        copied = copy_backtest_result_to_archive(staged, archive_dir)
-        new_result = Path(copied["path"]).resolve()
-        if not is_inside_archive(new_result, archive_dir):
-            raise RuntimeError("Copied result escaped archive root")
-        if new_result == old_result:
-            raise RuntimeError("Replacement would overwrite the original result path")
-        rmtree(str(old_result), ignore_errors=True)
-        if old_result.exists():
-            raise RuntimeError("Failed to remove original archive result")
-        cleanup_empty_parents(old_result, archive_dir)
-        _invalidate_archive_cache(archive_name)
-        manifest = rebuild_archive_manifest(archive_dir)
-        cleanup = _cleanup_archive_retest_local_artifacts(run, local_result)
-        return {
-            "old_relative_path": str(run.get("source_relative_path") or ""),
-            "new_relative_path": new_result.relative_to(archive_dir).as_posix(),
-            "new_path": str(new_result),
-            "manifest": manifest,
-            "cleanup": cleanup,
-        }
-    finally:
-        rmtree(str(stage_parent), ignore_errors=True)
+        staged, stage_parent = _stage_archive_retest_result(local_result, run)
+        try:
+            copied = copy_backtest_result_to_archive(staged, archive_dir)
+            new_result = Path(copied["path"]).resolve()
+            if not is_inside_archive(new_result, archive_dir):
+                raise RuntimeError("Copied result escaped archive root")
+            if new_result == old_result:
+                raise RuntimeError("Replacement would overwrite the original result path")
+            rmtree(str(old_result), ignore_errors=True)
+            if old_result.exists():
+                raise RuntimeError("Failed to remove original archive result")
+            cleanup_empty_parents(old_result, archive_dir)
+            _invalidate_archive_cache(archive_name)
+            manifest = rebuild_archive_manifest(archive_dir)
+            cleanup = _cleanup_archive_retest_local_artifacts(run, local_result)
+            return {
+                "old_relative_path": str(run.get("source_relative_path") or ""),
+                "new_relative_path": new_result.relative_to(archive_dir).as_posix(),
+                "new_path": str(new_result),
+                "manifest": manifest,
+                "cleanup": cleanup,
+            }
+        finally:
+            rmtree(str(stage_parent), ignore_errors=True)
 
 
 # ── BacktestStore — in-memory state with change notification ──
@@ -869,6 +905,8 @@ class BacktestStore:
                         "log_path": str(log_path),
                         "created": datetime.datetime.fromtimestamp(mtime).isoformat(),
                     }
+                    if isinstance(data.get("use_pbgui_market_data"), bool):
+                        found[filename]["use_pbgui_market_data"] = data["use_pbgui_market_data"]
                 except Exception as e:
                     _log(SERVICE, f"Error loading queue item {fp}: {e}", level="ERROR")
             self.items = found
@@ -1045,8 +1083,16 @@ class BacktestWorker:
             snapshot = _queue_config_snapshot(item)
             cfg = snapshot if snapshot is not None else load_pb7_config(source_config_path)
             settings = _read_ini_section()
-            use_pbgui_market_data = settings.get("use_pbgui_market_data", "False").lower() == "true"
-            changed, pbgui_data_path = _apply_pbgui_market_data_override(cfg, use_pbgui_market_data)
+            explicit_market_data = item.get("use_pbgui_market_data")
+            if isinstance(explicit_market_data, bool):
+                use_pbgui_market_data = explicit_market_data
+                changed, pbgui_data_path = _apply_pbgui_market_data_override(cfg, explicit_market_data)
+            else:
+                use_pbgui_market_data = settings.get("use_pbgui_market_data", "False").lower() == "true"
+                if use_pbgui_market_data:
+                    changed, pbgui_data_path = _apply_pbgui_market_data_override(cfg, True)
+                else:
+                    changed, pbgui_data_path = False, None
             if snapshot is not None:
                 config_path = _bt_queue_config_file(filename)
                 config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1054,9 +1100,12 @@ class BacktestWorker:
                 save_pb7_config(cfg, config_path)
             elif changed:
                 save_pb7_config(cfg, source_config_path)
+            if changed:
+                action = "Set" if use_pbgui_market_data else "Cleared"
+                detail = f" to {pbgui_data_path}" if use_pbgui_market_data else ""
                 _log(
                     SERVICE,
-                    f"Adjusted backtest.ohlcv_source_dir to PBGui market data before launch for {item.get('name') or filename}: {pbgui_data_path}",
+                    f"{action} backtest.ohlcv_source_dir{detail} before launch for {item.get('name') or filename}",
                     level="INFO",
                 )
         except Exception as exc:
@@ -1577,6 +1626,8 @@ def _archive_status_is_preservable_local_content(status: str) -> bool:
 
 def _archive_prepare_dirty_pull(name: str, dest: Path, status: str, log_lines: list[str]) -> tuple[bool, str]:
     """Drop generated metadata so remote updates can pull without losing local archive content."""
+    if name != _own_archive_name():
+        return False, "Foreign archive has local changes; pull is blocked to keep it read-only."
     if not _archive_status_is_preservable_local_content(status):
         return False, ""
     entries = _archive_status_entries(status)
@@ -1654,242 +1705,190 @@ def _archive_pre_push_pull(name: str, dest: Path, access_token: str, log_lines: 
 
 def _archive_pull_sync(name: str, dest: Path) -> dict:
     """Pull one archive and recover foreign clones after remote history compaction."""
-    result, output = _run_archive_git_step(
-        name, dest, "git pull", ["git", "pull", "--ff-only"], timeout=60,
-    )
-    if result.returncode == 0:
-        return {"name": name, "output": output, "error": "", "recovered": False}
-
-    log_lines = [output] if output else []
-    status_result, status = _run_archive_git_step(
-        name, dest, "git status", ["git", "status", "--porcelain"], timeout=10,
-    )
-    if status_result.returncode != 0:
-        log_lines.append(status)
-        return {"name": name, "output": "\n".join(log_lines).strip(), "error": status or "git status failed", "recovered": False}
-    if status:
-        if not _archive_status_is_local_layout_migration(status):
-            prepared, prepare_error = _archive_prepare_dirty_pull(name, dest, status, log_lines)
-            if prepare_error:
-                return {"name": name, "output": "\n".join(log_lines).strip(), "error": prepare_error, "recovered": False}
-            if prepared:
-                pull_again_result, pull_again_out = _run_archive_git_step(
-                    name, dest, "git pull after preserving local archive content", ["git", "pull", "--ff-only"], timeout=60,
-                )
-                log_lines.append(pull_again_out)
-                if pull_again_result.returncode != 0:
-                    error = pull_again_out or "git pull failed after preserving local archive content"
-                    return {"name": name, "output": "\n".join(log_lines).strip(), "error": error, "recovered": False}
-                rebuilt, rebuild_error = _archive_rebuild_manifest_after_pull(name, dest, log_lines)
-                if not rebuilt:
-                    return {"name": name, "output": "\n".join(log_lines).strip(), "error": rebuild_error, "recovered": False}
-                return {"name": name, "output": "\n".join(line for line in log_lines if line).strip(), "error": "", "recovered": True}
-            msg = "Archive has local changes; not resetting divergent history automatically."
+    with archive_transaction(dest):
+        if not dest.exists() or not dest.is_dir() or dest.is_symlink():
+            error = f"Archive '{name}' not found"
+            return {"name": name, "output": error, "error": error, "recovered": False}
+        status_result, status = _run_archive_git_step(
+            name, dest, "git status", ["git", "status", "--porcelain"], timeout=10,
+        )
+        if status_result.returncode != 0:
+            return {"name": name, "output": status, "error": status or "git status failed", "recovered": False}
+        if status:
+            if name == _own_archive_name():
+                msg = "Own archive has local changes; commit and push them before pulling."
+            else:
+                msg = "Foreign archive has local changes; pull is blocked to keep it read-only."
             _log_archive(f"[{name}] {msg}", level="ERROR")
-            log_lines.extend([status, msg])
-            return {"name": name, "output": "\n".join(log_lines).strip(), "error": msg, "recovered": False}
-        reset_local_result, reset_local_out = _run_archive_git_step(
-            name, dest, "git undo local layout migration", ["git", "reset", "--hard", "HEAD"], timeout=120,
+            return {
+                "name": name,
+                "output": "\n".join([status, msg]).strip(),
+                "error": msg,
+                "recovered": False,
+                "conflict": True,
+            }
+
+        result, output = _run_archive_git_step(
+            name, dest, "git pull", ["git", "pull", "--ff-only"], timeout=60,
         )
-        log_lines.append(reset_local_out)
-        if reset_local_result.returncode != 0:
-            return {"name": name, "output": "\n".join(log_lines).strip(), "error": reset_local_out or "git reset failed", "recovered": False}
-        clean_result, clean_out = _run_archive_git_step(
-            name, dest, "git clean local layout migration", ["git", "clean", "-fd", "--", "pbgui"], timeout=120,
+        if result.returncode == 0:
+            return {"name": name, "output": output, "error": "", "recovered": False}
+        if name == _own_archive_name():
+            return {"name": name, "output": output or "git pull failed", "error": output or "git pull failed", "recovered": False}
+
+        log_lines = [output] if output else []
+        branch_result, branch = _run_archive_git_step(
+            name, dest, "git branch", ["git", "branch", "--show-current"], timeout=10,
         )
-        log_lines.append(clean_out)
-        if clean_result.returncode != 0:
-            return {"name": name, "output": "\n".join(log_lines).strip(), "error": clean_out or "git clean failed", "recovered": False}
-    elif name == _own_archive_name():
-        return {"name": name, "output": output or "git pull failed", "error": output or "git pull failed", "recovered": False}
+        branch = branch.strip()
+        if branch_result.returncode != 0 or not branch:
+            log_lines.append(branch)
+            return {"name": name, "output": "\n".join(log_lines).strip(), "error": "Could not determine archive branch", "recovered": False}
 
-    branch_result, branch = _run_archive_git_step(
-        name, dest, "git branch", ["git", "branch", "--show-current"], timeout=10,
-    )
-    branch = branch.strip()
-    if branch_result.returncode != 0 or not branch:
-        log_lines.append(branch)
-        return {"name": name, "output": "\n".join(log_lines).strip(), "error": "Could not determine archive branch", "recovered": False}
+        fetch_result, fetch_out = _run_archive_git_step(
+            name, dest, "git fetch", ["git", "fetch", "origin", branch], timeout=120,
+        )
+        log_lines.append(fetch_out)
+        if fetch_result.returncode != 0:
+            return {"name": name, "output": "\n".join(log_lines).strip(), "error": fetch_out or "git fetch failed", "recovered": False}
 
-    fetch_result, fetch_out = _run_archive_git_step(
-        name, dest, "git fetch", ["git", "fetch", "origin", branch], timeout=120,
-    )
-    log_lines.append(fetch_out)
-    if fetch_result.returncode != 0:
-        return {"name": name, "output": "\n".join(log_lines).strip(), "error": fetch_out or "git fetch failed", "recovered": False}
+        remote_ref = f"origin/{branch}"
+        verify_result, verify_out = _run_archive_git_step(
+            name, dest, "git remote ref", ["git", "rev-parse", "--verify", remote_ref], timeout=10,
+        )
+        log_lines.append(verify_out)
+        if verify_result.returncode != 0:
+            return {"name": name, "output": "\n".join(log_lines).strip(), "error": verify_out or f"Remote ref {remote_ref} not found", "recovered": False}
 
-    remote_ref = f"origin/{branch}"
-    verify_result, verify_out = _run_archive_git_step(
-        name, dest, "git remote ref", ["git", "rev-parse", "--verify", remote_ref], timeout=10,
-    )
-    log_lines.append(verify_out)
-    if verify_result.returncode != 0:
-        return {"name": name, "output": "\n".join(log_lines).strip(), "error": verify_out or f"Remote ref {remote_ref} not found", "recovered": False}
+        backup_branch = f"pbgui-recovery-{uuid.uuid4().hex[:8]}"
+        backup_result, backup_out = _run_archive_git_step(
+            name, dest, "git backup local head", ["git", "branch", backup_branch, "HEAD"], timeout=30,
+        )
+        log_lines.append(backup_out)
+        if backup_result.returncode != 0:
+            return {"name": name, "output": "\n".join(log_lines).strip(), "error": backup_out or "git backup branch failed", "recovered": False}
 
-    backup_branch = f"pbgui-recovery-{uuid.uuid4().hex[:8]}"
-    backup_result, backup_out = _run_archive_git_step(
-        name, dest, "git backup local head", ["git", "branch", backup_branch, "HEAD"], timeout=30,
-    )
-    log_lines.append(backup_out)
-    if backup_result.returncode != 0:
-        return {"name": name, "output": "\n".join(log_lines).strip(), "error": backup_out or "git backup branch failed", "recovered": False}
+        reset_result, reset_out = _run_archive_git_step(
+            name, dest, "git reset to remote", ["git", "reset", "--hard", remote_ref], timeout=120,
+        )
+        log_lines.append(reset_out)
+        if reset_result.returncode != 0:
+            return {"name": name, "output": "\n".join(log_lines).strip(), "error": reset_out or "git reset failed", "recovered": False}
 
-    reset_result, reset_out = _run_archive_git_step(
-        name, dest, "git reset to remote", ["git", "reset", "--hard", remote_ref], timeout=120,
-    )
-    log_lines.append(reset_out)
-    if reset_result.returncode != 0:
-        return {"name": name, "output": "\n".join(log_lines).strip(), "error": reset_out or "git reset failed", "recovered": False}
-
-    msg = f"Recovered force-updated archive by backing up previous HEAD to {backup_branch} and resetting clone to {remote_ref}."
-    _log_archive(f"[{name}] {msg}")
-    log_lines.append(msg)
-    return {"name": name, "output": "\n".join(line for line in log_lines if line).strip(), "error": "", "recovered": True}
+        msg = f"Recovered force-updated archive by backing up previous HEAD to {backup_branch} and resetting clone to {remote_ref}."
+        _log_archive(f"[{name}] {msg}")
+        log_lines.append(msg)
+        return {"name": name, "output": "\n".join(line for line in log_lines if line).strip(), "error": "", "recovered": True}
 
 
 def _archive_pull_stream_sync(name: str, dest: Path):
     """Yield live progress events while pulling one archive."""
-    result, output = yield from _run_archive_git_stream_step(
-        name, dest, "git pull", ["git", "pull", "--ff-only"], timeout=60,
-    )
-    if result.returncode == 0:
-        final = {"name": name, "output": output, "error": "", "recovered": False}
-        yield _archive_stream_event("archive_done", archive=name, result=final)
-        return final
-
-    log_lines = [output] if output else []
-    status_result, status = yield from _run_archive_git_stream_step(
-        name, dest, "git status", ["git", "status", "--porcelain"], timeout=10, stream_output=False,
-    )
-    if status_result.returncode != 0:
-        log_lines.append(status)
-        final = {"name": name, "output": "\n".join(log_lines).strip(), "error": status or "git status failed", "recovered": False}
-        yield _archive_stream_event("error", archive=name, message=final["error"])
-        yield _archive_stream_event("archive_done", archive=name, result=final)
-        return final
-    if status:
-        if not _archive_status_is_local_layout_migration(status):
-            yield _archive_stream_event("status", archive=name, message="Checking local archive changes before pull")
-            prepared, prepare_error = _archive_prepare_dirty_pull(name, dest, status, log_lines)
-            if prepare_error:
-                final = {"name": name, "output": "\n".join(log_lines).strip(), "error": prepare_error, "recovered": False}
-                yield _archive_stream_event("error", archive=name, message=prepare_error)
-                yield _archive_stream_event("archive_done", archive=name, result=final)
-                return final
-            if prepared:
-                yield _archive_stream_event("status", archive=name, message="Pulling remote changes while preserving local archive content")
-                pull_again_result, pull_again_out = yield from _run_archive_git_stream_step(
-                    name, dest, "git pull after preserving local archive content", ["git", "pull", "--ff-only"], timeout=60,
-                )
-                log_lines.append(pull_again_out)
-                if pull_again_result.returncode != 0:
-                    error = pull_again_out or "git pull failed after preserving local archive content"
-                    final = {"name": name, "output": "\n".join(log_lines).strip(), "error": error, "recovered": False}
-                    yield _archive_stream_event("error", archive=name, message=error)
-                    yield _archive_stream_event("archive_done", archive=name, result=final)
-                    return final
-                rebuilt, rebuild_error = _archive_rebuild_manifest_after_pull(name, dest, log_lines)
-                if not rebuilt:
-                    final = {"name": name, "output": "\n".join(log_lines).strip(), "error": rebuild_error, "recovered": False}
-                    yield _archive_stream_event("error", archive=name, message=rebuild_error)
-                    yield _archive_stream_event("archive_done", archive=name, result=final)
-                    return final
-                final = {"name": name, "output": "\n".join(line for line in log_lines if line).strip(), "error": "", "recovered": True}
-                yield _archive_stream_event("status", archive=name, message="Pulled remote changes and regenerated archive manifest")
-                yield _archive_stream_event("archive_done", archive=name, result=final)
-                return final
-            msg = "Archive has local changes; not resetting divergent history automatically."
+    with archive_transaction(dest):
+        if not dest.exists() or not dest.is_dir() or dest.is_symlink():
+            error = f"Archive '{name}' not found"
+            final = {"name": name, "output": error, "error": error, "recovered": False}
+            yield _archive_stream_event("error", archive=name, message=error)
+            yield _archive_stream_event("archive_done", archive=name, result=final)
+            return final
+        status_result, status = yield from _run_archive_git_stream_step(
+            name, dest, "git status", ["git", "status", "--porcelain"], timeout=10, stream_output=False,
+        )
+        if status_result.returncode != 0:
+            final = {"name": name, "output": status, "error": status or "git status failed", "recovered": False}
+            yield _archive_stream_event("error", archive=name, message=final["error"])
+            yield _archive_stream_event("archive_done", archive=name, result=final)
+            return final
+        if status:
+            if name == _own_archive_name():
+                msg = "Own archive has local changes; commit and push them before pulling."
+            else:
+                msg = "Foreign archive has local changes; pull is blocked to keep it read-only."
             _log_archive(f"[{name}] {msg}", level="ERROR")
-            log_lines.extend([status, msg])
-            final = {"name": name, "output": "\n".join(log_lines).strip(), "error": msg, "recovered": False}
-            yield _archive_stream_event("error", archive=name, message=msg)
+            final = {
+                "name": name,
+                "output": "\n".join([status, msg]).strip(),
+                "error": msg,
+                "recovered": False,
+                "conflict": True,
+            }
+            yield _archive_stream_event("conflict", archive=name, message=msg)
             yield _archive_stream_event("archive_done", archive=name, result=final)
             return final
-        yield _archive_stream_event("status", archive=name, message="Detected local PBGui layout migration; undoing it before recovery")
-        reset_local_result, reset_local_out = yield from _run_archive_git_stream_step(
-            name, dest, "git undo local layout migration", ["git", "reset", "--hard", "HEAD"], timeout=120,
+
+        result, output = yield from _run_archive_git_stream_step(
+            name, dest, "git pull", ["git", "pull", "--ff-only"], timeout=60,
         )
-        log_lines.append(reset_local_out)
-        if reset_local_result.returncode != 0:
-            final = {"name": name, "output": "\n".join(log_lines).strip(), "error": reset_local_out or "git reset failed", "recovered": False}
+        if result.returncode == 0:
+            final = {"name": name, "output": output, "error": "", "recovered": False}
+            yield _archive_stream_event("archive_done", archive=name, result=final)
+            return final
+        if name == _own_archive_name():
+            final = {"name": name, "output": output or "git pull failed", "error": output or "git pull failed", "recovered": False}
             yield _archive_stream_event("error", archive=name, message=final["error"])
             yield _archive_stream_event("archive_done", archive=name, result=final)
             return final
-        clean_result, clean_out = yield from _run_archive_git_stream_step(
-            name, dest, "git clean local layout migration", ["git", "clean", "-fd", "--", "pbgui"], timeout=120,
+
+        log_lines = [output] if output else []
+        branch_result, branch = yield from _run_archive_git_stream_step(
+            name, dest, "git branch", ["git", "branch", "--show-current"], timeout=10, stream_output=False,
         )
-        log_lines.append(clean_out)
-        if clean_result.returncode != 0:
-            final = {"name": name, "output": "\n".join(log_lines).strip(), "error": clean_out or "git clean failed", "recovered": False}
+        branch = branch.strip()
+        if branch_result.returncode != 0 or not branch:
+            log_lines.append(branch)
+            final = {"name": name, "output": "\n".join(log_lines).strip(), "error": "Could not determine archive branch", "recovered": False}
             yield _archive_stream_event("error", archive=name, message=final["error"])
             yield _archive_stream_event("archive_done", archive=name, result=final)
             return final
-    elif name == _own_archive_name():
-        final = {"name": name, "output": output or "git pull failed", "error": output or "git pull failed", "recovered": False}
-        yield _archive_stream_event("error", archive=name, message=final["error"])
+
+        fetch_result, fetch_out = yield from _run_archive_git_stream_step(
+            name, dest, "git fetch", ["git", "fetch", "origin", branch], timeout=120,
+        )
+        log_lines.append(fetch_out)
+        if fetch_result.returncode != 0:
+            final = {"name": name, "output": "\n".join(log_lines).strip(), "error": fetch_out or "git fetch failed", "recovered": False}
+            yield _archive_stream_event("error", archive=name, message=final["error"])
+            yield _archive_stream_event("archive_done", archive=name, result=final)
+            return final
+
+        remote_ref = f"origin/{branch}"
+        verify_result, verify_out = yield from _run_archive_git_stream_step(
+            name, dest, "git remote ref", ["git", "rev-parse", "--verify", remote_ref], timeout=10, stream_output=False,
+        )
+        log_lines.append(verify_out)
+        if verify_result.returncode != 0:
+            final = {"name": name, "output": "\n".join(log_lines).strip(), "error": verify_out or f"Remote ref {remote_ref} not found", "recovered": False}
+            yield _archive_stream_event("error", archive=name, message=final["error"])
+            yield _archive_stream_event("archive_done", archive=name, result=final)
+            return final
+
+        backup_branch = f"pbgui-recovery-{uuid.uuid4().hex[:8]}"
+        backup_result, backup_out = yield from _run_archive_git_stream_step(
+            name, dest, "git backup local head", ["git", "branch", backup_branch, "HEAD"], timeout=30, stream_output=False,
+        )
+        log_lines.append(backup_out)
+        if backup_result.returncode != 0:
+            final = {"name": name, "output": "\n".join(log_lines).strip(), "error": backup_out or "git backup branch failed", "recovered": False}
+            yield _archive_stream_event("error", archive=name, message=final["error"])
+            yield _archive_stream_event("archive_done", archive=name, result=final)
+            return final
+
+        reset_result, reset_out = yield from _run_archive_git_stream_step(
+            name, dest, "git reset to remote", ["git", "reset", "--hard", remote_ref], timeout=120,
+        )
+        log_lines.append(reset_out)
+        if reset_result.returncode != 0:
+            final = {"name": name, "output": "\n".join(log_lines).strip(), "error": reset_out or "git reset failed", "recovered": False}
+            yield _archive_stream_event("error", archive=name, message=final["error"])
+            yield _archive_stream_event("archive_done", archive=name, result=final)
+            return final
+
+        msg = f"Recovered force-updated archive by backing up previous HEAD to {backup_branch} and resetting clone to {remote_ref}."
+        _log_archive(f"[{name}] {msg}")
+        log_lines.append(msg)
+        final = {"name": name, "output": "\n".join(line for line in log_lines if line).strip(), "error": "", "recovered": True}
+        yield _archive_stream_event("status", archive=name, message=msg)
         yield _archive_stream_event("archive_done", archive=name, result=final)
         return final
-
-    branch_result, branch = yield from _run_archive_git_stream_step(
-        name, dest, "git branch", ["git", "branch", "--show-current"], timeout=10, stream_output=False,
-    )
-    branch = branch.strip()
-    if branch_result.returncode != 0 or not branch:
-        log_lines.append(branch)
-        final = {"name": name, "output": "\n".join(log_lines).strip(), "error": "Could not determine archive branch", "recovered": False}
-        yield _archive_stream_event("error", archive=name, message=final["error"])
-        yield _archive_stream_event("archive_done", archive=name, result=final)
-        return final
-
-    fetch_result, fetch_out = yield from _run_archive_git_stream_step(
-        name, dest, "git fetch", ["git", "fetch", "origin", branch], timeout=120,
-    )
-    log_lines.append(fetch_out)
-    if fetch_result.returncode != 0:
-        final = {"name": name, "output": "\n".join(log_lines).strip(), "error": fetch_out or "git fetch failed", "recovered": False}
-        yield _archive_stream_event("error", archive=name, message=final["error"])
-        yield _archive_stream_event("archive_done", archive=name, result=final)
-        return final
-
-    remote_ref = f"origin/{branch}"
-    verify_result, verify_out = yield from _run_archive_git_stream_step(
-        name, dest, "git remote ref", ["git", "rev-parse", "--verify", remote_ref], timeout=10, stream_output=False,
-    )
-    log_lines.append(verify_out)
-    if verify_result.returncode != 0:
-        final = {"name": name, "output": "\n".join(log_lines).strip(), "error": verify_out or f"Remote ref {remote_ref} not found", "recovered": False}
-        yield _archive_stream_event("error", archive=name, message=final["error"])
-        yield _archive_stream_event("archive_done", archive=name, result=final)
-        return final
-
-    backup_branch = f"pbgui-recovery-{uuid.uuid4().hex[:8]}"
-    backup_result, backup_out = yield from _run_archive_git_stream_step(
-        name, dest, "git backup local head", ["git", "branch", backup_branch, "HEAD"], timeout=30, stream_output=False,
-    )
-    log_lines.append(backup_out)
-    if backup_result.returncode != 0:
-        final = {"name": name, "output": "\n".join(log_lines).strip(), "error": backup_out or "git backup branch failed", "recovered": False}
-        yield _archive_stream_event("error", archive=name, message=final["error"])
-        yield _archive_stream_event("archive_done", archive=name, result=final)
-        return final
-
-    reset_result, reset_out = yield from _run_archive_git_stream_step(
-        name, dest, "git reset to remote", ["git", "reset", "--hard", remote_ref], timeout=120,
-    )
-    log_lines.append(reset_out)
-    if reset_result.returncode != 0:
-        final = {"name": name, "output": "\n".join(log_lines).strip(), "error": reset_out or "git reset failed", "recovered": False}
-        yield _archive_stream_event("error", archive=name, message=final["error"])
-        yield _archive_stream_event("archive_done", archive=name, result=final)
-        return final
-
-    msg = f"Recovered force-updated archive by backing up previous HEAD to {backup_branch} and resetting clone to {remote_ref}."
-    _log_archive(f"[{name}] {msg}")
-    log_lines.append(msg)
-    final = {"name": name, "output": "\n".join(line for line in log_lines if line).strip(), "error": "", "recovered": True}
-    yield _archive_stream_event("status", archive=name, message=msg)
-    yield _archive_stream_event("archive_done", archive=name, result=final)
-    return final
 
 
 def _pull_all_archives_sync() -> list[dict]:
@@ -3262,6 +3261,8 @@ def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)):
         "exchange": exchange_str,
         "config_snapshot": copy.deepcopy(cfg),
     }
+    if isinstance(body.get("use_pbgui_market_data"), bool):
+        queue_data["use_pbgui_market_data"] = body["use_pbgui_market_data"]
     atomic_write_json(queue_file, queue_data)
 
     _store.notify()
@@ -3546,7 +3547,7 @@ def get_result_analysis(path: str, session: SessionToken = Depends(require_auth)
     """Get full analysis.json for a result. Path is the result directory."""
     result_dir = _resolve_result_dir(path)
     analysis_file = result_dir / "analysis.json"
-    if not analysis_file.exists():
+    if not analysis_file.exists() or analysis_file.is_symlink():
         raise HTTPException(404, "analysis.json not found")
     with open(analysis_file, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -3557,7 +3558,7 @@ def get_result_config(path: str, session: SessionToken = Depends(require_auth)):
     """Get config.json for a result, with missing params neutralized."""
     result_dir = _resolve_result_dir(path)
     config_file = result_dir / "config.json"
-    if not config_file.exists():
+    if not config_file.exists() or config_file.is_symlink():
         raise HTTPException(404, "config.json not found")
     return load_pb7_config(config_file, neutralize_added=True)
 
@@ -3732,8 +3733,10 @@ def list_archives(session: SessionToken = Depends(require_auth)):
     archives = []
     if base.exists():
         for d in sorted(base.iterdir()):
+            if not d.is_dir() or d.is_symlink():
+                continue
             git_config = d / ".git" / "config"
-            if git_config.exists():
+            if git_config.exists() and not (d / ".git").is_symlink() and not git_config.is_symlink():
                 # Parse remote URL
                 url = ""
                 try:
@@ -3744,20 +3747,14 @@ def list_archives(session: SessionToken = Depends(require_auth)):
                     pass
                 migration = archive_migration_status(d, fast=True)
                 manifest = load_archive_manifest(d)
-                if manifest:
-                    result_count = len([item for item in manifest["items"] if item.get("type") == "backtest_result"])
-                    optimize_count = len([item for item in manifest["items"] if item.get("type") == "optimize_config"])
-                else:
-                    cached = _get_cached_archive_results(d.name)
-                    result_count = len(cached["results"]) if cached else 0
-                    optimize_count = 0
+                counts = archive_item_counts(d, manifest)
                 archives.append({
                     "name": d.name,
                     "path": str(d),
                     "url": url,
-                    "configs": result_count,
-                    "results": result_count,
-                    "optimize_configs": optimize_count,
+                    "configs": counts["configs"],
+                    "results": counts["results"],
+                    "optimize_configs": counts["optimize_configs"],
                     "is_own": d.name == own_archive,
                     "migration_status": migration,
                     "manifest": {"present": bool(manifest), "items": len(manifest["items"]) if manifest else 0},
@@ -3774,17 +3771,25 @@ def list_archive_results(name: str, session: SessionToken = Depends(require_auth
     archive_dir = _archives_dir() / name
     if not archive_dir.exists():
         raise HTTPException(404, f"Archive '{name}' not found")
-    migration = maybe_migrate_own_archive(name, archive_dir, _own_archive_name())
-    if (migration.get("result") or {}).get("migrated") or (migration.get("result") or {}).get("removed_duplicates"):
-        _invalidate_archive_cache(name)
-        rebuild_archive_manifest(archive_dir)
-    migration_status = migration.get("status") or archive_migration_status(archive_dir)
     cached = _get_cached_archive_results(name)
     if cached:
-        return {"results": cached["results"], "migration_status": cached.get("migration_status") or migration_status, "cached": True}
-    results = score_archive_results(list_archive_backtest_results(archive_dir))
-    _set_cached_archive_results(name, results, migration_status)
-    return {"results": results, "migration_status": migration_status, "cached": False}
+        return {"results": cached["results"], "migration_status": cached.get("migration_status") or archive_migration_status(archive_dir, fast=True), "cached": True}
+    with archive_transaction(archive_dir):
+        if not archive_dir.exists() or not archive_dir.is_dir() or archive_dir.is_symlink():
+            raise HTTPException(404, f"Archive '{name}' not found")
+        migration = maybe_migrate_own_archive(
+            name,
+            archive_dir,
+            _own_archive_name(),
+            max_items=_ARCHIVE_PANEL_MIGRATION_MAX_ITEMS,
+        )
+        if (migration.get("result") or {}).get("migrated") or (migration.get("result") or {}).get("removed_duplicates"):
+            _invalidate_archive_cache(name)
+            rebuild_archive_manifest(archive_dir)
+        migration_status = migration.get("status") or archive_migration_status(archive_dir)
+        results = score_archive_results(list_archive_backtest_results(archive_dir))
+        _set_cached_archive_results(name, results, migration_status)
+        return {"results": results, "migration_status": migration_status, "cached": False}
 
 
 @router.post("/archives")
@@ -3797,19 +3802,19 @@ def create_archive(body: dict, session: SessionToken = Depends(require_auth)):
     _validate_name(name)
 
     dest = _archives_dir() / name
-    if dest.exists():
-        raise HTTPException(409, f"Archive '{name}' already exists")
-
     _archives_dir().mkdir(parents=True, exist_ok=True)
-    try:
-        result = subprocess.run(
-            ["git", "clone", url, str(dest)],
-            capture_output=True, text=True, timeout=120, env=_archive_git_env()
-        )
-        if result.returncode != 0:
-            raise HTTPException(500, f"git clone failed: {result.stderr}")
-    except subprocess.TimeoutExpired:
-        raise HTTPException(500, "git clone timed out")
+    with archive_transaction(dest):
+        if dest.exists():
+            raise HTTPException(409, f"Archive '{name}' already exists")
+        try:
+            result = subprocess.run(
+                ["git", "clone", url, str(dest)],
+                capture_output=True, text=True, timeout=120, env=_archive_git_env()
+            )
+            if result.returncode != 0:
+                raise HTTPException(500, f"git clone failed: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            raise HTTPException(500, "git clone timed out")
 
     _invalidate_archive_cache()
     return {"ok": True, "name": name}
@@ -3819,35 +3824,45 @@ def create_archive(body: dict, session: SessionToken = Depends(require_auth)):
 def delete_archive(name: str, session: SessionToken = Depends(require_auth)):
     _validate_name(name)
     dest = _archives_dir() / name
-    if not dest.exists():
-        raise HTTPException(404, f"Archive '{name}' not found")
-    rmtree(str(dest), ignore_errors=True)
-    _invalidate_archive_cache(name)
-    return {"ok": True}
+    with archive_transaction(dest):
+        if not dest.exists() or not dest.is_dir() or dest.is_symlink():
+            raise HTTPException(404, f"Archive '{name}' not found")
+        rmtree(str(dest), ignore_errors=True)
+        if dest.exists() or dest.is_symlink():
+            raise HTTPException(500, f"Archive '{name}' deletion failed")
+        _invalidate_archive_cache(name)
+        return {"ok": True}
 
 
 @router.delete("/archives/{name}/results")
 def delete_archive_result(name: str, path: str, session: SessionToken = Depends(require_auth)):
     """Delete a single result directory from an archive."""
     _validate_name(name)
-    result_dir = Path(path).resolve()
-    archive_base = (_archives_dir() / name).resolve()
-    if not is_inside_archive(result_dir, archive_base):
-        raise HTTPException(400, "Invalid result path")
-    if not result_dir.exists():
-        raise HTTPException(404, "Result not found")
-    rmtree(str(result_dir), ignore_errors=True)
-    # Remove empty parent directories up to (but not including) the archive root
-    parent = result_dir.parent
-    while parent != archive_base and parent.is_dir():
+    candidate = _archives_dir() / name
+    with archive_transaction(candidate):
+        archive_base = _require_own_archive(name, "Archive result deletion")
+        result_dir = Path(path)
+        if not is_inside_archive(result_dir, archive_base):
+            raise HTTPException(400, "Invalid result path")
+        if not result_dir.exists():
+            raise HTTPException(404, "Result not found")
         try:
-            parent.rmdir()  # only succeeds if directory is empty
-        except OSError:
-            break  # not empty — stop climbing
-        parent = parent.parent
-    _invalidate_archive_cache(name)
-    rebuild_archive_manifest(archive_base)
-    return {"ok": True}
+            rmtree(str(result_dir))
+        except OSError as exc:
+            _log(SERVICE, f"Failed to delete archived result {result_dir}: {exc}", level="WARNING")
+            raise HTTPException(500, "Archive result deletion failed") from exc
+        if result_dir.exists() or result_dir.is_symlink():
+            raise HTTPException(500, "Archive result deletion failed")
+        parent = result_dir.parent
+        while parent != archive_base and parent.is_dir():
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+        _invalidate_archive_cache(name)
+        rebuild_archive_manifest(archive_base)
+        return {"ok": True}
 
 
 def _validate_archive_config_rename_name(value: Any) -> str:
@@ -3865,72 +3880,123 @@ def _validate_archive_config_rename_name(value: Any) -> str:
 def rename_archive_backtest_config(name: str, body: dict, session: SessionToken = Depends(require_auth)):
     """Rename one versioned backtest config group in the configured own archive."""
     _validate_name(name)
-    if name != _own_archive_name():
-        raise HTTPException(403, "Archive config rename is only allowed for the configured own archive")
-    archive_base = (_archives_dir() / name).resolve()
-    if not archive_base.exists():
-        raise HTTPException(404, f"Archive '{name}' not found")
+    candidate = _archives_dir() / name
+    with archive_transaction(candidate):
+        archive_base = _require_own_archive(name, "Archive config rename")
+        source_path = str((body or {}).get("path") or "")
+        result_dir = Path(source_path)
+        if not is_inside_archive(result_dir, archive_base):
+            raise HTTPException(400, "Invalid result path")
+        if not (result_dir / "analysis.json").exists():
+            raise HTTPException(404, "Result not found")
 
-    source_path = str((body or {}).get("path") or "")
-    result_dir = Path(source_path).resolve()
-    if not is_inside_archive(result_dir, archive_base):
-        raise HTTPException(400, "Invalid result path")
-    if not (result_dir / "analysis.json").exists():
-        raise HTTPException(404, "Result not found")
+        try:
+            rel_parts = result_dir.relative_to(archive_base).parts
+        except ValueError as exc:
+            raise HTTPException(400, "Invalid result path") from exc
+        layout_parts = ARCHIVE_LAYOUT_ROOT.parts
+        if len(rel_parts) < 6 or rel_parts[:2] != layout_parts or rel_parts[3] != "backtests":
+            raise HTTPException(400, "Only versioned archive backtest configs can be renamed")
 
-    try:
-        rel_parts = result_dir.relative_to(archive_base).parts
-    except ValueError as exc:
-        raise HTTPException(400, "Invalid result path") from exc
-    layout_parts = ARCHIVE_LAYOUT_ROOT.parts
-    if len(rel_parts) < 6 or rel_parts[:2] != layout_parts or rel_parts[3] != "backtests":
-        raise HTTPException(400, "Only versioned archive backtest configs can be renamed")
+        config_dir = archive_config_group_dir(result_dir, archive_base)
+        if not is_inside_archive(config_dir, archive_base) or not config_dir.is_dir():
+            raise HTTPException(404, "Archive config group not found")
+        old_name = config_dir.name
+        new_name = _validate_archive_config_rename_name((body or {}).get("new_name"))
+        try:
+            _validate_directory_tree_no_symlinks(config_dir)
+            analysis_files = sorted(config_dir.glob("**/analysis.json"))
+            config_payloads = {}
+            for cfg_file in sorted(config_dir.glob("**/config.json")):
+                config_payloads[cfg_file.relative_to(config_dir)] = _read_json_object_nofollow(
+                    cfg_file, archive_base, required=True
+                )
+            for analysis_file in analysis_files:
+                _read_json_object_nofollow(analysis_file, archive_base, required=True)
+                cfg_file = analysis_file.parent / "config.json"
+                relative_config = cfg_file.relative_to(config_dir)
+                if relative_config not in config_payloads:
+                    raise RuntimeError(f"Required archive JSON is missing: {cfg_file}")
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(422, f"Invalid archive config group: {exc}") from exc
+        if not analysis_files:
+            raise HTTPException(422, "Archive config group contains no valid results")
+        if new_name == old_name:
+            return {"ok": True, "changed": False, "old_name": old_name, "new_name": new_name, "path": str(result_dir)}
 
-    config_dir = archive_config_group_dir(result_dir, archive_base).resolve()
-    if not is_inside_archive(config_dir, archive_base) or not config_dir.is_dir():
-        raise HTTPException(404, "Archive config group not found")
-    old_name = config_dir.name
-    new_name = _validate_archive_config_rename_name((body or {}).get("new_name"))
-    if new_name == old_name:
-        return {"ok": True, "changed": False, "old_name": old_name, "new_name": new_name, "path": str(result_dir)}
+        target_dir = config_dir.with_name(new_name)
+        if not is_inside_archive(target_dir, archive_base):
+            raise HTTPException(400, "Invalid new name")
+        if target_dir.exists() or target_dir.is_symlink():
+            raise HTTPException(409, f"Archive config '{new_name}' already exists")
 
-    target_dir = config_dir.with_name(new_name).resolve()
-    if not is_inside_archive(target_dir, archive_base):
-        raise HTTPException(400, "Invalid new name")
-    if target_dir.exists():
-        raise HTTPException(409, f"Archive config '{new_name}' already exists")
+        work_root = Path(tempfile.mkdtemp(prefix=".pbgui-archive-rename-stage-", dir=str(archive_base.parent)))
+        stage_root = work_root / "stage"
+        backup_root = work_root / "backup"
+        staged_group = stage_root / new_name
+        backup_group = backup_root / old_name
+        original_moved = False
+        preserve_backup = False
+        updated_payloads: dict[Path, dict] = {}
+        try:
+            stage_root.mkdir(mode=0o700)
+            backup_root.mkdir(mode=0o700)
+            shutil.copytree(str(config_dir), str(staged_group), symlinks=True)
+            _validate_directory_tree_no_symlinks(staged_group)
+            for relative_path, original in config_payloads.items():
+                cfg = copy.deepcopy(original)
+                backtest = cfg.get("backtest")
+                if not isinstance(backtest, dict):
+                    backtest = {}
+                    cfg["backtest"] = backtest
+                backtest["base_dir"] = _managed_backtest_base_dir(new_name)
+                updated_payloads[relative_path] = cfg
+                write_archive_json(staged_group / relative_path, cfg, stage_root)
+            _validate_directory_tree_no_symlinks(staged_group)
+            for relative_path in updated_payloads:
+                _read_json_object_nofollow(staged_group / relative_path, stage_root, required=True)
 
-    try:
-        config_dir.rename(target_dir)
-    except OSError as exc:
-        raise HTTPException(500, f"Rename failed: {exc}") from exc
+            os.rename(config_dir, backup_group)
+            original_moved = True
+            os.rename(staged_group, target_dir)
+            for relative_path, cfg in updated_payloads.items():
+                write_archive_json(target_dir / relative_path, cfg, archive_base)
+            manifest = rebuild_archive_manifest(archive_base)
+        except Exception as exc:
+            if original_moved:
+                try:
+                    if target_dir.is_symlink():
+                        target_dir.unlink()
+                    elif target_dir.exists():
+                        _validate_directory_tree_no_symlinks(target_dir)
+                        shutil.rmtree(target_dir)
+                    if config_dir.exists() or config_dir.is_symlink():
+                        raise RuntimeError(f"Original restore destination is occupied: {config_dir}")
+                    os.rename(backup_group, config_dir)
+                    original_moved = False
+                except Exception as restore_exc:
+                    preserve_backup = True
+                    raise HTTPException(
+                        500,
+                        f"Rename failed: {exc}; restoration failed: {restore_exc}; backup retained at {backup_group}",
+                    ) from exc
+            raise HTTPException(500, f"Rename failed: {exc}") from exc
+        finally:
+            if work_root.exists() and not preserve_backup:
+                shutil.rmtree(work_root, ignore_errors=True)
 
-    updated_configs = 0
-    for cfg_file in sorted(target_dir.glob("**/config.json")):
-        cfg = load_json_file(cfg_file)
-        if not isinstance(cfg, dict):
-            continue
-        backtest = cfg.get("backtest")
-        if not isinstance(backtest, dict):
-            backtest = {}
-            cfg["backtest"] = backtest
-        backtest["base_dir"] = _managed_backtest_base_dir(new_name)
-        atomic_write_json(cfg_file, cfg)
-        updated_configs += 1
-
-    new_result_dir = target_dir / Path(*rel_parts[5:])
-    _invalidate_archive_cache(name)
-    manifest = rebuild_archive_manifest(archive_base)
-    return {
-        "ok": True,
-        "changed": True,
-        "old_name": old_name,
-        "new_name": new_name,
-        "old_path": str(result_dir),
-        "path": str(new_result_dir),
-        "updated_configs": updated_configs,
-        "manifest": {"schema_version": manifest.get("schema_version"), "items": len(manifest.get("items", []))},
-    }
+        new_result_dir = target_dir / Path(*rel_parts[5:])
+        _invalidate_archive_cache(name)
+        return {
+            "ok": True,
+            "changed": True,
+            "old_name": old_name,
+            "new_name": new_name,
+            "old_path": str(result_dir),
+            "path": str(new_result_dir),
+            "updated_configs": len(config_payloads),
+            "manifest": {"schema_version": manifest.get("schema_version"), "items": len(manifest.get("items", []))},
+        }
 
 
 @router.post("/archives/{name}/pull")
@@ -3943,7 +4009,7 @@ def git_pull(name: str, session: SessionToken = Depends(require_auth)):
     try:
         result = _archive_pull_sync(name, dest)
         if result.get("error"):
-            raise HTTPException(500, result["error"])
+            raise HTTPException(409 if result.get("conflict") else 500, result["error"])
         _invalidate_archive_cache(name)
         return {"ok": True, "output": result.get("output", ""), "recovered": bool(result.get("recovered"))}
     except subprocess.TimeoutExpired:
@@ -4003,10 +4069,14 @@ def git_push(name: str, body: dict = None, session: SessionToken = Depends(requi
     Pass dry_run=true to test credentials without actually pushing.
     """
     _validate_name(name)
-    dest = _archives_dir() / name
-    if not dest.exists():
-        raise HTTPException(404, f"Archive '{name}' not found")
+    candidate = _archives_dir() / name
+    with archive_transaction(candidate):
+        dest = _require_own_archive(name, "Archive push")
+        return _git_push_locked(name, dest, body)
 
+
+def _git_push_locked(name: str, dest: Path, body: dict | None) -> dict:
+    """Run a complete own-archive push while its archive transaction is held."""
     body = body or {}
     username = body.get("username", "")
     email = body.get("email", "")
@@ -4108,19 +4178,15 @@ def git_push(name: str, body: dict = None, session: SessionToken = Depends(requi
 def compact_archive_history(name: str, body: dict = None, session: SessionToken = Depends(require_auth)):
     """Compact own archive git history into one root commit and force-push with lease."""
     _validate_name(name)
-    if name != _own_archive_name():
-        raise HTTPException(403, "Archive history compaction is only allowed for the configured own archive")
-    dest = _archives_dir() / name
-    if not dest.exists():
-        raise HTTPException(404, f"Archive '{name}' not found")
-
-    body = body or {}
-    dry_run = bool(body.get("dry_run", True))
-
-    if dry_run:
-        preview = _archive_compact_preview(name, dest, str(body.get("access_token") or ""))
-        return {"ok": True, "dry_run": True, **preview}
-    return _compact_archive_history(name, dest, body)
+    candidate = _archives_dir() / name
+    with archive_transaction(candidate):
+        dest = _require_own_archive(name, "Archive history compaction")
+        body = body or {}
+        dry_run = bool(body.get("dry_run", True))
+        if dry_run:
+            preview = _archive_compact_preview(name, dest, str(body.get("access_token") or ""))
+            return {"ok": True, "dry_run": True, **preview}
+        return _compact_archive_history(name, dest, body)
 
 
 @router.get("/archives/{name}/scores/preview")
@@ -4137,21 +4203,19 @@ def preview_archive_scores(name: str, session: SessionToken = Depends(require_au
 def rebuild_archive_scores(name: str, session: SessionToken = Depends(require_auth)):
     """Recalculate scores and update manifest/README for the configured own archive."""
     _validate_name(name)
-    if name != _own_archive_name():
-        raise HTTPException(403, "Score rebuild is only available for the configured own archive")
-    archive_dir = _archives_dir() / name
-    if not archive_dir.exists():
-        raise HTTPException(404, f"Archive '{name}' not found")
-    payload = update_archive_scores_and_readme(archive_dir)
-    _invalidate_archive_cache(name)
-    return payload
+    candidate = _archives_dir() / name
+    with archive_transaction(candidate):
+        archive_dir = _require_own_archive(name, "Score rebuild")
+        payload = update_archive_scores_and_readme(archive_dir)
+        _invalidate_archive_cache(name)
+        return payload
 
 
 @router.post("/archives/{name}/add-config")
 async def add_config_to_archive(name: str, body: dict,
                                 session: SessionToken = Depends(require_auth)):
     """Copy a result directory into an archive using the versioned layout."""
-    _validate_name(name)
+    _require_own_archive(name, "Adding backtest results")
     source_path = body.get("source_path", "")
     if not source_path:
         raise HTTPException(400, "source_path is required")
@@ -4160,48 +4224,46 @@ async def add_config_to_archive(name: str, body: dict,
 
 def _add_config_to_archive_sync(name: str, source_path: str) -> dict[str, Any]:
     """Synchronous result archive copy used from a worker thread."""
+    _validate_name(name)
+    candidate = _archives_dir() / name
+    with archive_transaction(candidate):
+        archive_dir = _require_own_archive(name, "Adding backtest results")
+        src = Path(source_path)
+        if not src.exists():
+            raise HTTPException(404, "Source path not found")
 
-    src = Path(source_path)
-    if not src.exists():
-        raise HTTPException(404, "Source path not found")
-
-    # Security: validate source is under current results, legacy results, or archives
-    src = _resolve_result_dir(src)
-
-    archive_dir = _archives_dir() / name
-    if not archive_dir.exists():
-        raise HTTPException(404, f"Archive '{name}' not found")
-
-    _log(SERVICE, f"Archiving backtest result {src} to archive {name}", level="INFO")
-    migration = maybe_migrate_own_archive(name, archive_dir, _own_archive_name())
-    copied = copy_backtest_result_to_archive(src, archive_dir)
-    copied["migration_status"] = migration.get("status") or archive_migration_status(archive_dir)
-    _invalidate_archive_cache(name)
-    copied["manifest"] = rebuild_archive_manifest(archive_dir)
-    _log(SERVICE, f"Archived backtest result to archive {name}: {copied.get('relative_path', '')}", level="INFO")
-    return copied
+        # Security: validate source is under current results, legacy results, or archives
+        src = _resolve_result_dir(src)
+        _log(SERVICE, f"Archiving backtest result {src} to archive {name}", level="INFO")
+        migration = maybe_migrate_own_archive(name, archive_dir, _own_archive_name())
+        copied = copy_backtest_result_to_archive(src, archive_dir)
+        copied["migration_status"] = migration.get("status") or archive_migration_status(archive_dir)
+        _invalidate_archive_cache(name)
+        copied["manifest"] = rebuild_archive_manifest(archive_dir)
+        _log(SERVICE, f"Archived backtest result to archive {name}: {copied.get('relative_path', '')}", level="INFO")
+        return copied
 
 
 @router.post("/archives/{name}/migrate")
 def migrate_archive(name: str, session: SessionToken = Depends(require_auth)):
     """Explicitly migrate the configured own archive to the versioned layout."""
     _validate_name(name)
-    if name != _own_archive_name():
-        raise HTTPException(403, "Only the configured own archive can be migrated")
-    archive_dir = _archives_dir() / name
-    if not archive_dir.exists():
-        raise HTTPException(404, f"Archive '{name}' not found")
-    result = migrate_archive_layout(archive_dir)
-    if not result.get("skipped"):
-        _invalidate_archive_cache(name)
-        result["manifest"] = rebuild_archive_manifest(archive_dir)
-    return result
+    candidate = _archives_dir() / name
+    with archive_transaction(candidate):
+        archive_dir = _require_own_archive(name, "Archive migration")
+        result = migrate_archive_layout(archive_dir)
+        if not result.get("skipped"):
+            _invalidate_archive_cache(name)
+            changed = bool(result.get("migrated") or result.get("removed_duplicates"))
+            if changed or not result.get("failed"):
+                result["manifest"] = rebuild_archive_manifest(archive_dir)
+        return result
 
 
 @router.post("/archives/{name}/add-optimize-config")
 async def add_optimize_config_to_archive(name: str, body: dict, session: SessionToken = Depends(require_auth)):
     """Copy an Optimize config into the versioned archive layout."""
-    _validate_name(name)
+    _require_own_archive(name, "Adding Optimize configs")
     config_name = str((body or {}).get("config_name") or "").strip()
     _validate_name(config_name)
     try:
@@ -4215,26 +4277,52 @@ async def add_optimize_config_to_archive(name: str, body: dict, session: Session
 
 def _add_optimize_config_to_archive_sync(name: str, config_name: str) -> dict[str, Any]:
     """Synchronous Optimize config archive copy used from a worker thread."""
-
-    archive_dir = _archives_dir() / name
-    if not archive_dir.exists():
-        raise HTTPException(404, f"Archive '{name}' not found")
-    cfg_file = _opt_archive_configs_dir() / f"{config_name}.json"
-    if not cfg_file.exists():
-        raise HTTPException(404, f"Optimize config '{config_name}' not found")
-    _log(SERVICE, f"Archiving optimize config {config_name} to archive {name}", level="INFO")
-    cfg = load_pb7_config(cfg_file)
-    cfg = ensure_config_version(cfg, get_template_config)
-    dest, meta, skipped = resolve_optimize_archive_destination(archive_dir, config_name, cfg)
-    if not skipped:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        save_pb7_config(cfg, dest)
-    meta_path = dest.with_name(dest.stem + ".meta.json")
-    write_optimize_meta(meta_path, meta)
-    _invalidate_archive_cache(name)
-    manifest = rebuild_archive_manifest(archive_dir)
-    _log(SERVICE, f"Archived optimize config {config_name} to archive {name}: {dest.relative_to(archive_dir)}", level="INFO")
-    return {"ok": True, "path": str(dest), "relative_path": str(dest.relative_to(archive_dir)), "skipped": skipped, "meta": meta, "manifest": manifest}
+    _validate_name(name)
+    candidate = _archives_dir() / name
+    with archive_transaction(candidate):
+        archive_dir = _require_own_archive(name, "Adding Optimize configs")
+        cfg_file = _opt_archive_configs_dir() / f"{config_name}.json"
+        if not cfg_file.exists():
+            raise HTTPException(404, f"Optimize config '{config_name}' not found")
+        _log(SERVICE, f"Archiving optimize config {config_name} to archive {name}", level="INFO")
+        cfg = load_pb7_config(cfg_file)
+        cfg = ensure_config_version(cfg, get_template_config)
+        migration = maybe_migrate_own_archive(name, archive_dir, _own_archive_name())
+        dest, meta, skipped = resolve_optimize_archive_destination(archive_dir, config_name, cfg)
+        metadata_repaired = False
+        if not skipped:
+            write_archive_json(dest, cfg, archive_dir)
+        meta_path = dest.with_name(dest.stem + ".meta.json")
+        if skipped and meta_path.exists() and not meta_path.is_symlink():
+            existing_meta = load_json_file(meta_path)
+            if existing_meta:
+                meta = existing_meta
+            else:
+                write_optimize_meta(meta_path, meta, archive_dir)
+                metadata_repaired = True
+        elif skipped:
+            write_optimize_meta(meta_path, meta, archive_dir)
+            metadata_repaired = True
+        else:
+            write_optimize_meta(meta_path, meta, archive_dir)
+        _invalidate_archive_cache(name)
+        migration_changed = bool((migration.get("result") or {}).get("migrated") or (migration.get("result") or {}).get("removed_duplicates"))
+        manifest = (
+            rebuild_archive_manifest(archive_dir)
+            if not skipped or metadata_repaired or migration_changed
+            else load_archive_manifest(archive_dir) or rebuild_archive_manifest(archive_dir)
+        )
+        _log(SERVICE, f"Archived optimize config {config_name} to archive {name}: {dest.relative_to(archive_dir)}", level="INFO")
+        return {
+            "ok": True,
+            "path": str(dest),
+            "relative_path": str(dest.relative_to(archive_dir)),
+            "skipped": skipped,
+            "metadata_repaired": metadata_repaired,
+            "meta": meta,
+            "manifest": manifest,
+            "migration_status": migration.get("status") or archive_migration_status(archive_dir),
+        }
 
 
 @router.get("/archives/{name}/optimize-configs")
@@ -4251,8 +4339,8 @@ def list_archive_optimize(name: str, session: SessionToken = Depends(require_aut
 def get_archive_optimize_config(name: str, path: str, session: SessionToken = Depends(require_auth)):
     """Load one archived Optimize config JSON."""
     _validate_name(name)
-    archive_dir = (_archives_dir() / name).resolve()
-    config_file = Path(path).resolve()
+    archive_dir = _archives_dir() / name
+    config_file = Path(path)
     if not is_inside_archive(config_file, archive_dir):
         raise HTTPException(400, "Invalid optimize config path")
     if not config_file.exists() or not config_file.is_file():
@@ -4260,74 +4348,125 @@ def get_archive_optimize_config(name: str, path: str, session: SessionToken = De
     return load_pb7_config(config_file, neutralize_added=True)
 
 
+def _next_optimize_import_copy_name(name: str) -> str:
+    """Return the first free local Optimize config copy name."""
+    base = safe_path_part(f"{name}_copy", "optimize_config_copy")
+    candidate = base
+    index = 2
+    while (_opt_archive_configs_dir() / f"{candidate}.json").exists():
+        candidate = safe_path_part(f"{base}_{index}", "optimize_config_copy")
+        index += 1
+    return candidate
+
+
 @router.post("/archives/{name}/optimize-configs/import")
 def import_archive_optimize_config(name: str, body: dict, session: SessionToken = Depends(require_auth)):
     """Import one archived Optimize config into local Optimize configs."""
     _validate_name(name)
-    archive_dir = (_archives_dir() / name).resolve()
+    archive_dir = _archives_dir() / name
     source_path = str((body or {}).get("path") or "").strip()
     if not source_path:
         raise HTTPException(400, "path is required")
-    source_file = Path(source_path).resolve()
-    if not is_inside_archive(source_file, archive_dir):
-        raise HTTPException(400, "Invalid optimize config path")
-    if not source_file.exists() or not source_file.is_file():
-        raise HTTPException(404, "Optimize config not found")
+    source_file = Path(source_path)
     import_name = str((body or {}).get("name") or source_file.stem).strip()
     _validate_name(import_name)
-    overwrite = bool((body or {}).get("overwrite", False))
-    target_file = _opt_archive_configs_dir() / f"{import_name}.json"
-    if target_file.exists() and not overwrite:
-        raise HTTPException(409, f"Optimize config '{import_name}' already exists")
-    cfg = load_pb7_config(source_file, neutralize_added=True)
-    cfg = ensure_config_version(cfg, get_template_config)
-    save_pb7_config(cfg, target_file)
-    return {"ok": True, "name": import_name}
+    collision = str((body or {}).get("collision") or "").strip().lower()
+    if not collision:
+        collision = "overwrite" if bool((body or {}).get("overwrite", False)) else "error"
+    if collision not in {"error", "overwrite", "copy"}:
+        raise HTTPException(400, "collision must be error, overwrite, or copy")
+    with archive_transaction(archive_dir):
+        if not archive_dir.exists() or not archive_dir.is_dir() or archive_dir.is_symlink():
+            raise HTTPException(404, f"Archive '{name}' not found")
+        if not is_inside_archive(source_file, archive_dir):
+            raise HTTPException(400, "Invalid optimize config path")
+        if not source_file.exists() or not source_file.is_file():
+            raise HTTPException(404, "Optimize config not found")
+        snapshot_path = ""
+        try:
+            raw_cfg = _read_json_object_nofollow(source_file, archive_dir, required=True)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                suffix=".json",
+                delete=False,
+            ) as snapshot:
+                snapshot_path = snapshot.name
+                json.dump(raw_cfg, snapshot, indent=4)
+                snapshot.write("\n")
+            cfg = load_pb7_config(snapshot_path, neutralize_added=True)
+            cfg = ensure_config_version(cfg, get_template_config)
+        except Exception as exc:
+            _log(SERVICE, f"Invalid archived optimize config {source_file}: {exc}", level="WARNING")
+            raise HTTPException(422, f"Invalid optimize config: {exc}") from exc
+        finally:
+            if snapshot_path:
+                Path(snapshot_path).unlink(missing_ok=True)
+    local_configs = _opt_archive_configs_dir()
+    lock_target = local_configs.parent / ".pbgui-locks" / "optimize-import"
+    with advisory_file_lock(lock_target):
+        target_file = local_configs / f"{import_name}.json"
+        collision_action = "created"
+        if target_file.exists():
+            if collision == "error":
+                raise HTTPException(409, detail={
+                    "code": "optimize_config_exists",
+                    "message": f"Optimize config '{import_name}' already exists",
+                    "name": import_name,
+                    "suggested_copy_name": _next_optimize_import_copy_name(import_name),
+                })
+            if collision == "copy":
+                import_name = _next_optimize_import_copy_name(import_name)
+                target_file = local_configs / f"{import_name}.json"
+                collision_action = "copy"
+            else:
+                collision_action = "overwrite"
+        cfg = _normalize_backtest_base_dir(cfg, import_name)
+        save_pb7_config(cfg, target_file)
+        return {"ok": True, "name": import_name, "collision": collision_action}
 
 
 @router.delete("/archives/{name}/optimize-configs/config")
 def delete_archive_optimize_config(name: str, path: str, session: SessionToken = Depends(require_auth)):
     """Delete one archived Optimize config from the configured own archive."""
     _validate_name(name)
-    if name != _own_archive_name():
-        raise HTTPException(403, "Optimize config deletion is only available for the configured own archive")
-    archive_dir = (_archives_dir() / name).resolve()
-    if not archive_dir.exists():
-        raise HTTPException(404, f"Archive '{name}' not found")
-    config_file = Path(path).resolve()
-    if not is_inside_archive(config_file, archive_dir):
-        raise HTTPException(400, "Invalid optimize config path")
-    try:
-        rel_parts = config_file.relative_to(archive_dir).parts
-    except ValueError:
-        raise HTTPException(400, "Invalid optimize config path")
-    if len(rel_parts) != 5 or rel_parts[0] != "pbgui" or rel_parts[1] != "configs" or rel_parts[3] != "optimize":
-        raise HTTPException(400, "Invalid optimize config path")
-    if config_file.name.endswith(".meta.json") or config_file.suffix.lower() != ".json":
-        raise HTTPException(400, "Invalid optimize config path")
-    if not config_file.exists() or not config_file.is_file():
-        raise HTTPException(404, "Optimize config not found")
-    meta_file = config_file.with_name(config_file.stem + ".meta.json")
-    try:
-        config_file.unlink()
-        if meta_file.exists() and meta_file.is_file() and is_inside_archive(meta_file, archive_dir):
-            meta_file.unlink()
-        cleanup_empty_parents(config_file, archive_dir)
-        _invalidate_archive_cache(name)
-        manifest = rebuild_archive_manifest(archive_dir)
-        return {"ok": True, "relative_path": str(config_file.relative_to(archive_dir)), "manifest": manifest}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _log(SERVICE, f"Failed to delete archived optimize config {config_file}: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
-        raise HTTPException(500, f"Failed to delete optimize config: {exc}") from exc
+    candidate = _archives_dir() / name
+    with archive_transaction(candidate):
+        archive_dir = _require_own_archive(name, "Optimize config deletion")
+        config_file = Path(path)
+        if not is_inside_archive(config_file, archive_dir):
+            raise HTTPException(400, "Invalid optimize config path")
+        try:
+            rel_parts = config_file.relative_to(archive_dir).parts
+        except ValueError:
+            raise HTTPException(400, "Invalid optimize config path")
+        if len(rel_parts) != 5 or rel_parts[0] != "pbgui" or rel_parts[1] != "configs" or rel_parts[3] != "optimize":
+            raise HTTPException(400, "Invalid optimize config path")
+        if config_file.name.endswith(".meta.json") or config_file.suffix.lower() != ".json":
+            raise HTTPException(400, "Invalid optimize config path")
+        if not config_file.exists() or not config_file.is_file():
+            raise HTTPException(404, "Optimize config not found")
+        meta_file = config_file.with_name(config_file.stem + ".meta.json")
+        try:
+            config_file.unlink()
+            if meta_file.exists() and meta_file.is_file() and is_inside_archive(meta_file, archive_dir):
+                meta_file.unlink()
+            cleanup_empty_parents(config_file, archive_dir)
+            _invalidate_archive_cache(name)
+            manifest = rebuild_archive_manifest(archive_dir)
+            return {"ok": True, "relative_path": str(config_file.relative_to(archive_dir)), "manifest": manifest}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _log(SERVICE, f"Failed to delete archived optimize config {config_file}: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
+            raise HTTPException(500, f"Failed to delete optimize config: {exc}") from exc
 
 
 @router.post("/archives/{name}/results/rebacktest")
 def rebacktest_archive_results(name: str, body: dict, session: SessionToken = Depends(require_auth)):
     """Queue local backtests from archived result configs without mutating the archive."""
     _validate_name(name)
-    archive_dir = (_archives_dir() / name).resolve()
+    archive_dir = _archives_dir() / name
     if not archive_dir.exists():
         raise HTTPException(404, f"Archive '{name}' not found")
     paths = (body or {}).get("paths") or []
@@ -4340,11 +4479,11 @@ def rebacktest_archive_results(name: str, body: dict, session: SessionToken = De
     exchange_runs = requested_exchanges if isinstance(requested_exchanges, list) and requested_exchanges else [None]
     queue_items = []
     for raw_path in paths:
-        result_dir = Path(str(raw_path)).resolve()
+        result_dir = Path(str(raw_path))
         if not is_inside_archive(result_dir, archive_dir):
             raise HTTPException(400, "Invalid result path")
         cfg_file = result_dir / "config.json"
-        if not cfg_file.exists():
+        if not cfg_file.exists() or cfg_file.is_symlink():
             raise HTTPException(404, f"config.json not found: {result_dir}")
         base_cfg = load_pb7_config(cfg_file, neutralize_added=True)
         for exchange in exchange_runs:
@@ -4358,11 +4497,15 @@ def rebacktest_archive_results(name: str, body: dict, session: SessionToken = De
                 backtest["starting_balance"] = overrides["starting_balance"]
             if exchange is not None:
                 backtest["exchanges"] = [exchange]
-            if overrides.get("use_pbgui_market_data"):
+            explicit_market_data = overrides.get("use_pbgui_market_data")
+            if explicit_market_data is True:
                 _apply_pbgui_market_data_override(cfg, True)
             base_dir = str(backtest.get("base_dir") or "").strip()
             queue_name = Path(base_dir).name if base_dir else result_dir.parent.parent.name
-            queued = add_to_queue({"name": queue_name, "config": cfg}, session=session)
+            queue_body = {"name": queue_name, "config": cfg}
+            if isinstance(explicit_market_data, bool):
+                queue_body["use_pbgui_market_data"] = explicit_market_data
+            queued = add_to_queue(queue_body, session=session)
             queue_items.append(queued)
     return {"ok": True, "queued": len(queue_items), "queue_items": queue_items}
 
@@ -4371,28 +4514,26 @@ def rebacktest_archive_results(name: str, body: dict, session: SessionToken = De
 def retest_replace_archive_results(name: str, body: dict, session: SessionToken = Depends(require_auth)):
     """Queue archive retests that replace the original archive result after success."""
     _validate_name(name)
-    if name != _own_archive_name():
-        raise HTTPException(403, "Retest & Replace is only allowed for the configured own archive")
-    archive_dir = (_archives_dir() / name).resolve()
-    if not archive_dir.exists():
-        raise HTTPException(404, f"Archive '{name}' not found")
-    paths = (body or {}).get("paths") or []
-    if not isinstance(paths, list) or not paths:
-        raise HTTPException(400, "paths must be a non-empty list")
-    options = _archive_retest_options(body)
-    runs = _load_archive_retest_runs()
-    queued = []
-    for raw_path in paths:
-        result_dir = Path(str(raw_path)).resolve()
-        if not is_inside_archive(result_dir, archive_dir):
-            raise HTTPException(400, "Invalid result path")
-        if not result_dir.exists():
-            raise HTTPException(404, f"Archive result not found: {result_dir}")
-        run = _queue_archive_retest_run(name, archive_dir, result_dir, options)
-        runs.append(run)
-        queued.append(run)
-    _save_archive_retest_runs(runs)
-    return {"ok": True, "queued": len(queued), "runs": queued}
+    candidate = _archives_dir() / name
+    with archive_transaction(candidate):
+        archive_dir = _require_own_archive(name, "Retest & Replace")
+        paths = (body or {}).get("paths") or []
+        if not isinstance(paths, list) or not paths:
+            raise HTTPException(400, "paths must be a non-empty list")
+        options = _archive_retest_options(body)
+        runs = _load_archive_retest_runs()
+        queued = []
+        for raw_path in paths:
+            result_dir = Path(str(raw_path))
+            if not is_inside_archive(result_dir, archive_dir):
+                raise HTTPException(400, "Invalid result path")
+            if not result_dir.exists():
+                raise HTTPException(404, f"Archive result not found: {result_dir}")
+            run = _queue_archive_retest_run(name, archive_dir, result_dir, options)
+            runs.append(run)
+            queued.append(run)
+        _save_archive_retest_runs(runs)
+        return {"ok": True, "queued": len(queued), "runs": queued}
 
 
 @router.get("/archives/{name}/retest-schedules")
@@ -4409,52 +4550,50 @@ def list_archive_retest_schedules(name: str, session: SessionToken = Depends(req
 def create_archive_retest_schedule(name: str, body: dict, session: SessionToken = Depends(require_auth)):
     """Create a daily or weekly archive retest schedule for selected archive results."""
     _validate_name(name)
-    if name != _own_archive_name():
-        raise HTTPException(403, "Scheduled retests are only allowed for the configured own archive")
-    archive_dir = (_archives_dir() / name).resolve()
-    if not archive_dir.exists():
-        raise HTTPException(404, f"Archive '{name}' not found")
-    paths = (body or {}).get("paths") or []
-    if not isinstance(paths, list) or not paths:
-        raise HTTPException(400, "paths must be a non-empty list")
-    cadence = str((body or {}).get("cadence") or "daily")
-    if cadence not in {"daily", "weekly"}:
-        cadence = "daily"
-    try:
-        weekday = max(0, min(6, int((body or {}).get("weekday", 0))))
-    except (TypeError, ValueError):
-        weekday = 0
-    schedule_id = uuid.uuid4().hex
-    targets = []
-    for raw_path in paths:
-        result_dir = Path(str(raw_path)).resolve()
-        if not is_inside_archive(result_dir, archive_dir):
-            raise HTTPException(400, "Invalid result path")
-        if not result_dir.exists():
-            raise HTTPException(404, f"Archive result not found: {result_dir}")
-        targets.append({
-            "id": uuid.uuid4().hex,
-            "relative_path": result_dir.relative_to(archive_dir).as_posix(),
-            "label": result_dir.name,
-        })
-    schedule = {
-        "id": schedule_id,
-        "archive_name": name,
-        "enabled": bool((body or {}).get("enabled", True)),
-        "cadence": cadence,
-        "time": str((body or {}).get("time") or "02:00"),
-        "weekday": weekday,
-        "targets": targets,
-        "options": _archive_retest_options(body),
-        "created_at": utc_now_iso(),
-        "last_status": "created",
-        "last_message": "",
-    }
-    schedule["next_run_at"] = _next_archive_retest_run_at(schedule)
-    schedules = _load_archive_retest_schedules()
-    schedules.append(schedule)
-    _save_archive_retest_schedules(schedules)
-    return {"ok": True, "schedule": schedule}
+    candidate = _archives_dir() / name
+    with archive_transaction(candidate):
+        archive_dir = _require_own_archive(name, "Scheduled retests")
+        paths = (body or {}).get("paths") or []
+        if not isinstance(paths, list) or not paths:
+            raise HTTPException(400, "paths must be a non-empty list")
+        cadence = str((body or {}).get("cadence") or "daily")
+        if cadence not in {"daily", "weekly"}:
+            cadence = "daily"
+        try:
+            weekday = max(0, min(6, int((body or {}).get("weekday", 0))))
+        except (TypeError, ValueError):
+            weekday = 0
+        schedule_id = uuid.uuid4().hex
+        targets = []
+        for raw_path in paths:
+            result_dir = Path(str(raw_path))
+            if not is_inside_archive(result_dir, archive_dir):
+                raise HTTPException(400, "Invalid result path")
+            if not result_dir.exists():
+                raise HTTPException(404, f"Archive result not found: {result_dir}")
+            targets.append({
+                "id": uuid.uuid4().hex,
+                "relative_path": result_dir.relative_to(archive_dir).as_posix(),
+                "label": result_dir.name,
+            })
+        schedule = {
+            "id": schedule_id,
+            "archive_name": name,
+            "enabled": bool((body or {}).get("enabled", True)),
+            "cadence": cadence,
+            "time": str((body or {}).get("time") or "02:00"),
+            "weekday": weekday,
+            "targets": targets,
+            "options": _archive_retest_options(body),
+            "created_at": utc_now_iso(),
+            "last_status": "created",
+            "last_message": "",
+        }
+        schedule["next_run_at"] = _next_archive_retest_run_at(schedule)
+        schedules = _load_archive_retest_schedules()
+        schedules.append(schedule)
+        _save_archive_retest_schedules(schedules)
+        return {"ok": True, "schedule": schedule}
 
 
 @router.post("/archives/{name}/retest-schedules/{schedule_id}/run")
@@ -4516,42 +4655,38 @@ def delete_archive_retest_schedule(name: str, schedule_id: str, session: Session
 def remove_archive_liquidated_results(name: str, body: dict, session: SessionToken = Depends(require_auth)):
     """Remove liquidated archived results from the configured own archive."""
     _validate_name(name)
-    if name != _own_archive_name():
-        raise HTTPException(403, "Liquidated cleanup is only allowed for the configured own archive")
-    archive_dir = (_archives_dir() / name).resolve()
-    if not archive_dir.exists():
-        raise HTTPException(404, f"Archive '{name}' not found")
-    paths = (body or {}).get("paths") or []
-    if not isinstance(paths, list):
-        raise HTTPException(400, "paths must be a list")
-    scope = str((body or {}).get("scope") or "selected_results")
-    dry_run = bool((body or {}).get("dry_run", True))
-    result = remove_liquidated_results(archive_dir, paths, scope, dry_run)
-    if not dry_run:
-        _invalidate_archive_cache(name)
-        result["manifest"] = rebuild_archive_manifest(archive_dir)
-    return result
+    candidate = _archives_dir() / name
+    with archive_transaction(candidate):
+        archive_dir = _require_own_archive(name, "Liquidated cleanup")
+        paths = (body or {}).get("paths") or []
+        if not isinstance(paths, list):
+            raise HTTPException(400, "paths must be a list")
+        scope = str((body or {}).get("scope") or "selected_results")
+        dry_run = bool((body or {}).get("dry_run", True))
+        result = remove_liquidated_results(archive_dir, paths, scope, dry_run)
+        if not dry_run and int(result.get("removed") or 0) > 0:
+            _invalidate_archive_cache(name)
+            result["manifest"] = rebuild_archive_manifest(archive_dir)
+        return result
 
 
 @router.post("/archives/{name}/results/remove-duplicates")
 def remove_archive_duplicate_results(name: str, body: dict, session: SessionToken = Depends(require_auth)):
     """Remove duplicate archived results from the configured own archive."""
     _validate_name(name)
-    if name != _own_archive_name():
-        raise HTTPException(403, "Duplicate cleanup is only allowed for the configured own archive")
-    archive_dir = (_archives_dir() / name).resolve()
-    if not archive_dir.exists():
-        raise HTTPException(404, f"Archive '{name}' not found")
-    paths = (body or {}).get("paths") or []
-    if not isinstance(paths, list):
-        raise HTTPException(400, "paths must be a list")
-    scope = str((body or {}).get("scope") or "selected_results")
-    dry_run = bool((body or {}).get("dry_run", True))
-    result = remove_duplicate_results(archive_dir, paths, scope, dry_run)
-    if not dry_run:
-        _invalidate_archive_cache(name)
-        result["manifest"] = rebuild_archive_manifest(archive_dir)
-    return result
+    candidate = _archives_dir() / name
+    with archive_transaction(candidate):
+        archive_dir = _require_own_archive(name, "Duplicate cleanup")
+        paths = (body or {}).get("paths") or []
+        if not isinstance(paths, list):
+            raise HTTPException(400, "paths must be a list")
+        scope = str((body or {}).get("scope") or "selected_results")
+        dry_run = bool((body or {}).get("dry_run", True))
+        result = remove_duplicate_results(archive_dir, paths, scope, dry_run)
+        if not dry_run and int(result.get("removed") or 0) > 0:
+            _invalidate_archive_cache(name)
+            result["manifest"] = rebuild_archive_manifest(archive_dir)
+        return result
 
 
 @router.get("/archives/settings")
@@ -4591,6 +4726,13 @@ def get_archive_settings(session: SessionToken = Depends(require_auth)):
 def save_archive_settings(body: dict, session: SessionToken = Depends(require_auth)):
     """Save archive configuration to INI using the legacy config_archive keys."""
     section = "config_archive"
+    archive_name = ""
+    archive_dir: Path | None = None
+    if "readme_title" in body or "readme_static_markdown" in body:
+        archive_name = str(body.get("my_archive") or _own_archive_name() or "").strip()
+        _validate_name(archive_name)
+        archive_dir = _archives_dir() / archive_name
+
     mapping = {
         "my_archive":      "my_archive",
         "username":        "my_archive_username",
@@ -4607,20 +4749,20 @@ def save_archive_settings(body: dict, session: SessionToken = Depends(require_au
         except (ValueError, TypeError):
             interval = 0
         ini_values["auto_pull_interval"] = str(interval)
-    if ini_values:
+    if archive_dir is not None:
+        with archive_transaction(archive_dir):
+            if not archive_dir.exists() or not archive_dir.is_dir() or archive_dir.is_symlink():
+                raise HTTPException(404, f"Archive '{archive_name}' not found")
+            if ini_values:
+                save_ini_section(section, ini_values)
+            config = save_archive_readme_config(archive_dir, {
+                "title": body.get("readme_title", archive_name),
+                "static_markdown": body.get("readme_static_markdown", ""),
+            })
+            update_archive_readme(archive_dir, config)
+            _invalidate_archive_cache(archive_name)
+    elif ini_values:
         save_ini_section(section, ini_values)
-    if "readme_title" in body or "readme_static_markdown" in body:
-        archive_name = str(body.get("my_archive") or _own_archive_name() or "").strip()
-        _validate_name(archive_name)
-        archive_dir = _archives_dir() / archive_name
-        if not archive_dir.exists():
-            raise HTTPException(404, f"Archive '{archive_name}' not found")
-        config = save_archive_readme_config(archive_dir, {
-            "title": body.get("readme_title", archive_name),
-            "static_markdown": body.get("readme_static_markdown", ""),
-        })
-        update_archive_readme(archive_dir, config)
-        _invalidate_archive_cache(archive_name)
     return {"ok": True, "apply": apply_metadata("config_archive")}
 
 
@@ -4639,12 +4781,10 @@ def get_archive_readme_config(name: str, session: SessionToken = Depends(require
 def save_archive_readme_settings(name: str, body: dict, session: SessionToken = Depends(require_auth)):
     """Save README static-section config for the configured own archive."""
     _validate_name(name)
-    if name != _own_archive_name():
-        raise HTTPException(403, "README configuration is only available for the configured own archive")
-    archive_dir = _archives_dir() / name
-    if not archive_dir.exists():
-        raise HTTPException(404, f"Archive '{name}' not found")
-    config = save_archive_readme_config(archive_dir, body or {})
-    update_archive_readme(archive_dir, config)
-    _invalidate_archive_cache(name)
-    return {"ok": True, **config}
+    candidate = _archives_dir() / name
+    with archive_transaction(candidate):
+        archive_dir = _require_own_archive(name, "README configuration")
+        config = save_archive_readme_config(archive_dir, body or {})
+        update_archive_readme(archive_dir, config)
+        _invalidate_archive_cache(name)
+        return {"ok": True, **config}

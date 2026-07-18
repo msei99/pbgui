@@ -36,6 +36,7 @@ def _entries(section: str, keys: Iterable[str], owner: str, timing: ApplyTiming,
 _REGISTRY_ENTRIES = [
     *_entries("api_server", ("host", "port", "cors_origins", "ssh_log_level"), "PBApiServer", "api_restart", "API restart required"),
     *_entries("main", ("pbname", "pb7dir", "pb7venv"), "PBRun", "service_restart", "Service restart required"),
+    *_entries("main", ("role",), "PBGui", "next_cycle", "Applies next cycle"),
     *_entries("vps_monitor", ("auto_restart", "enabled_hosts", "debug_logging"), "VPSMonitor", "immediate", "Applied immediately"),
     *_entries("vps_monitor_alerts", ("offline_gui", "service_gui", "system_gui", "instance_gui", "ssh_lost_telegram", "ssh_recovered_telegram", "service_down_telegram", "service_restart_started_telegram", "service_recovered_telegram", "system_problem_telegram", "system_recovered_telegram", "instance_problem_telegram", "instance_recovered_telegram"), "VPSMonitor", "immediate", "Applied immediately"),
     *_entries("main", ("telegram_token", "telegram_chat_id"), "VPSMonitor", "immediate", "Applied immediately"),
@@ -65,6 +66,7 @@ APPLY_GROUPS = {
     "pbcoindata": tuple(key for key in SETTING_APPLY_REGISTRY if key[0] == "coinmarketcap"),
     "logging_rotation": tuple(key for key in SETTING_APPLY_REGISTRY if key[0] == "logging"),
     "config_archive": tuple(key for key in SETTING_APPLY_REGISTRY if key[0] == "config_archive"),
+    "welcome_setup": tuple(key for key in SETTING_APPLY_REGISTRY if key[0] == "main" and key[1] in {"pbname", "pb7dir", "pb7venv", "role"}),
     "market_data": tuple(
         key for key in SETTING_APPLY_REGISTRY
         if key[0].endswith("_data")
@@ -81,7 +83,7 @@ def apply_metadata_for(keys: Iterable[tuple[str, str]]) -> dict[str, object]:
 
     keys = set(keys)
     settings = [SETTING_APPLY_REGISTRY[key] for key in sorted(keys)]
-    timing = max((item.timing for item in settings), key=_TIMING_PRIORITY.__getitem__)
+    timing = max((item.timing for item in settings), key=_TIMING_PRIORITY.__getitem__, default="immediate")
     messages = {
         "immediate": "Applied immediately",
         "next_cycle": "Applies next cycle",
@@ -94,7 +96,7 @@ def apply_metadata_for(keys: Iterable[tuple[str, str]]) -> dict[str, object]:
         "version": 1,
         "timing": timing,
         "restart_required": timing in {"api_restart", "service_restart"},
-        "message": messages[timing],
+        "message": messages[timing] if settings else "No runtime changes",
         "owners": sorted({item.owner for item in settings}),
         "settings": [asdict(item) for item in settings],
     }

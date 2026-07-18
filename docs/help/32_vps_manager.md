@@ -18,7 +18,7 @@ The main view shows a table with all servers (Master + VPS) and their current st
 | **Online** | ✅ reachable / ❌ offline |
 | **Bots** | Count of unique running bots currently reported for that VPS |
 | **Started** | Last boot time |
-| **Updates** | Pending Linux package updates |
+| **Updates** | Pending Linux package updates from the fixed **agent cache** source, including OK/Stale/Missing/Error provenance |
 | **PBGui / PBGui Branch / PBGui GitHub** | Installed version, branch, and whether it matches GitHub origin |
 | **PB7 / PB7 Branch / PB7 GitHub** | PB7 version, branch, and whether it matches GitHub origin |
 
@@ -44,7 +44,7 @@ The overview uses the normal shared PBGui FastAPI shell. When you switch to **Ma
 
 **Import Cluster Nodes** reads the local materialized `cluster_nodes` state and imports non-local nodes that have SSH metadata, regardless of their Cluster Sync mode. Disabled Cluster Sync nodes can still be imported into VPS Manager; disabled only means PBCluster should not replicate through that node. The import writes only safe local VPS Manager metadata such as hostname, SSH host, SSH user, SSH port and Remote PBGui Dir; passwords and private keys are not imported. CMC secrets are never VPS Manager fields: Cluster Sync materializes sealed pool generations separately. If local `/etc/hosts` is missing or points the hostname at a different IP, the import preview shows the required host entry changes and the apply step asks for the local sudo password before writing them. The modal asks for each imported host's VPS user password; rows left without a password are skipped, while entered passwords are used once to refresh remote settings, install the monitoring SSH key and keep the password only in the current browser/API session for later SSH-backed actions.
 
-The page keeps a live WebSocket connection for overview rows, progress logs, and branch state.
+The page keeps a live WebSocket connection for overview rows, progress logs, and branch state. Browser authentication is cookie-only; PBGui never renders the session token into this page or sends a browser Bearer header.
 
 Live updates do not close the **VPS** selector anymore while you are choosing another host from the sidebar.
 
@@ -128,11 +128,20 @@ The sidebar keeps the detailed log workflows separate from the normal host overv
 - structured ansible result payloads with JSON bodies are now pretty-printed into multiline blocks, which makes nested metadata like `stat` results readable directly in the shared viewer
 
 The status cards above the setup grid are live operator hints:
-- **Update Ready** turns green as soon as a VPS user password is entered locally and shows how many Linux updates are pending.
+- Linux package status is independent of the VPS session password. It is read only from the monitor-agent cache and never triggers a direct local or remote package probe.
 - **Credential Capability** and **Credential Protocol** report secret-free CMC pool readiness, active-key count, and catalog/materialized generations when available.
-- **Monitor Agent** shows whether the remote `pbgui-monitor-agent.service` cache is OK, stale, missing, or in error. Missing/stale states should be fixed by running **Update PBGui** on the VPS or checking `systemctl --user status pbgui-monitor-agent.service` and `journalctl --user -u pbgui-monitor-agent.service` on the VPS.
-- Pending Linux updates and reboot-needed hints are refreshed from the monitor-agent package-status cache.
+- **Monitor Agent Cache** always shows **Source: agent cache** and an explicit **OK**, **Stale**, **Missing**, or **Error** state. A non-OK cache does not mean SSH is offline; SSH connection and telemetry/cache health are displayed separately.
+- The panel lists `live_metrics.ndjson`, `instance_snapshot.json`, `host_meta.json`, `service_status.json`, `package_status.json`, and `collector_status.json` with each file's effective age. Live data becomes stale after 15 seconds and collector status after 30 seconds. Collector loops and their last errors are listed separately.
+- Pending Linux updates and reboot-needed hints come only from the validated `package_status.json` agent payload. Stale payloads retain and clearly label their last-known update/reboot values. Missing, invalid, or error payloads remain **N/A** and are never shown as zero updates or as a current system.
 - The detail page also includes a one-row summary table plus a remote server resource snapshot similar to the previous server view.
+
+For a non-OK agent, use **Update PBGui** in the inline remediation. That action installs or refreshes the agent service, restarts it, and the UI then allows the next 30-second collector cycle to repopulate status. To inspect or recover it manually on the affected host, run exactly:
+
+```bash
+systemctl --user status pbgui-monitor-agent.service
+systemctl --user restart pbgui-monitor-agent.service
+journalctl --user -u pbgui-monitor-agent.service
+```
 
 `Cleanup VPS` also installs or refreshes two small daily cleanup cron jobs on the VPS: one user-level job for pip and rustup caches, plus one root-level job for `journalctl --vacuum-time=1d`. The periodic jobs run quietly and do not keep their own log history.
 
@@ -165,7 +174,7 @@ The reveal state is preserved during live updates, so opening an eye button does
 1. Click **Master (local)** → **Update PBGui and PB7** → wait for the log to show *successful*
 2. For each VPS: click the hostname → **Update PBGui and PB7**
 
-The PBGui update workflow restarts PBCluster for cluster-mode hosts and installs/restarts `pbgui-monitor-agent.service` on VPS hosts. If you update any host manually with `git pull`, restart PBCluster and the monitor agent on that host afterward with `systemctl --user restart pbgui-pbcluster.service pbgui-monitor-agent.service`.
+The PBGui update workflow restarts PBCluster for cluster-mode hosts and installs/restarts `pbgui-monitor-agent.service` on VPS hosts. Agent-backed package and collector status may remain stale for up to the next 30-second collector cycle. If you update any host manually with `git pull`, restart PBCluster and the monitor agent on that host afterward with `systemctl --user restart pbgui-pbcluster.service pbgui-monitor-agent.service`.
 
 ### Switch to a feature branch
 1. Open Master or VPS detail

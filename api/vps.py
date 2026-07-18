@@ -22,7 +22,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, Request, HTTPException
 from fastapi.responses import HTMLResponse
 
-from api.auth import SessionToken, authenticate_websocket, require_auth, validate_token
+from api.auth import SessionToken, authenticate_websocket, require_auth
 from MonitorConfig import MonitorConfig
 from pbgui_purefunc import load_ini, save_ini
 from logging_helpers import human_log as _log
@@ -316,7 +316,7 @@ def get_main_page(
     request: Request,
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
-    """Serve the standalone VPS Monitor page with token injected server-side."""
+    """Serve the standalone VPS Monitor page using cookie authentication."""
     from pathlib import Path as _P
 
     html_path = _P(__file__).parent.parent / "frontend" / "vps_monitor.html"
@@ -328,7 +328,6 @@ def get_main_page(
     origin = f"{scheme}://{host}" + (f":{port}" if port else "")
     ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
 
-    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
 
     from pbgui_purefunc import PBGUI_VERSION

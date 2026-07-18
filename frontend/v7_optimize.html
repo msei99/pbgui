@@ -2308,7 +2308,7 @@ textarea.json-invalid:focus {
   <div class="modal-head">
     <div>
       <h3>Import Optimize Config</h3>
-      <div class="muted-line">Paste a PB7 optimize JSON config, choose a local .json file, or load one from a Backtest Archive. Import opens an unsaved editor draft.</div>
+      <div class="muted-line">Paste a PB7 optimize JSON config, choose a local .json file, or import one from a Backtest Archive. Paste and file imports open an unsaved draft; archive imports create a local config.</div>
     </div>
     <button class="btn ghost" id="btn-close-import-config">Close</button>
   </div>
@@ -2515,8 +2515,8 @@ textarea.json-invalid:focus {
 
 <script src="/app/js/editor_shared.js?v=10"></script>
 <script src="/app/js/suite_editor.js?v=7"></script>
-<script src="/app/js/log_viewer_panel.js?v=26"></script>
-<script src="/app/js/pbgui_dialogs.js?v=4"></script>
+<script src="/app/js/log_viewer_panel.js?v=27"></script>
+<script src="/app/js/pbgui_dialogs.js?v=5"></script>
 <script>
 var TOKEN = "%%TOKEN%%";
 var API_BASE = "%%API_BASE%%";
@@ -10340,6 +10340,28 @@ async function handleImportConfigFileChange(event) {
   }
 }
 
+function requestArchiveOptimizeConfigImport(archiveName, path, name, collision) {
+  return authFetch(archiveApiBase() + '/archives/' + encodeURIComponent(archiveName) + '/optimize-configs/import', {
+    method: 'POST',
+    body: JSON.stringify({ path: path, name: name, collision: collision })
+  });
+}
+
+function chooseOptimizeArchiveImportCollision(error, importName) {
+  var detail = error && error.detail && typeof error.detail === 'object' ? error.detail : {};
+  if (!error || error.status !== 409 || detail.code !== 'optimize_config_exists') throw error;
+  return window.PBGuiDialogs.choose({
+    title: 'Optimize config already exists',
+    message: detail.message || ('Local Optimize config "' + importName + '" already exists.'),
+    detail: detail.suggested_copy_name ? 'Suggested copy name: ' + detail.suggested_copy_name : '',
+    actions: [
+      { label: 'Overwrite', value: 'overwrite', danger: true },
+      { label: 'Import as Copy', value: 'copy', primary: true },
+      { label: 'Cancel', value: null }
+    ]
+  });
+}
+
 async function importArchiveOptimizeConfigDraft() {
   var archiveName = String((el('import-config-archive') || {}).value || '').trim();
   var item = selectedImportArchiveConfig();
@@ -10352,22 +10374,30 @@ async function importArchiveOptimizeConfigDraft() {
     return;
   }
   try {
-    setImportConfigStatus('Loading archived config...', '');
-    var archivedConfig = await authFetch(archiveApiBase() + '/archives/' + encodeURIComponent(archiveName) + '/optimize-configs/config?path=' + encodeURIComponent(item.path));
     var suggestedName = normalizeOptimizeImportName(el('import-config-name').value)
       || suggestArchiveOptimizeImportName(item)
-      || suggestOptimizeImportName(archivedConfig, item.name || item.relative_path || item.path || '');
-    setImportConfigStatus('Preparing archived config...', '');
-    var prepared = await apiFetch('/configs/prepare', {
-      method: 'POST',
-      body: JSON.stringify({ config: archivedConfig })
-    });
+      || 'imported_optimize';
+    setImportConfigStatus('Importing archived config...', '');
+    var imported;
+    try {
+      imported = await requestArchiveOptimizeConfigImport(archiveName, item.path, suggestedName, 'error');
+    } catch (error) {
+      var collision = await chooseOptimizeArchiveImportCollision(error, suggestedName);
+      if (!collision) {
+        setImportConfigStatus('Archive import cancelled.', '');
+        return;
+      }
+      setImportConfigStatus(collision === 'copy' ? 'Importing archived config as a copy...' : 'Overwriting local Optimize config...', '');
+      imported = await requestArchiveOptimizeConfigImport(archiveName, item.path, suggestedName, collision);
+    }
+    var localName = normalizeOptimizeImportName((imported || {}).name) || suggestedName;
     closeAllModals();
-    openEditorWithConfig(prepared, suggestedName, '');
-    setPageEditorStatus('Imported archived config draft. Review it, then Save or Save & Queue.', 'ok');
-    toast('Archived config imported into editor draft.', 'ok');
+    await openConfigEditor(localName);
+    setPageEditorStatus('Imported archived config as local Optimize config "' + localName + '".', 'ok');
+    toast('Archived config imported as ' + localName + ' and opened.', 'ok');
   } catch (error) {
     setImportConfigStatus(error && error.message ? error.message : 'Archive import failed.', 'err');
+    toast(error && error.message ? error.message : 'Archive import failed.', 'err');
   }
 }
 

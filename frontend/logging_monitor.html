@@ -377,8 +377,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
   var PBGUI_VERSION  = "%%VERSION%%";
   var PBGUI_SERIAL   = "%%SERIAL%%";
 </script>
-<script src="/app/js/log_viewer_panel.js?v=26"></script>
-<script src="/app/js/pbgui_dialogs.js?v=4"></script>
+<script src="/app/js/log_viewer_panel.js?v=27"></script>
+<script src="/app/js/pbgui_dialogs.js?v=5"></script>
 <script src="/app/js/shared_help_overlay.js?v=6"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
@@ -490,7 +490,7 @@ async function purgeCurrentFile() {
   if (!(await window.PBGuiDialogs.confirm({
     title: 'Purge log file',
     message: 'Purge "' + currentFile + '"?',
-    detail: 'The file will be rotated to .1 and a new empty file will be created.',
+    detail: 'The current log will be emptied. Its tail is rotated according to the configured maximum size and backup count; a backup count of 0 discards it.',
     confirmText: 'Purge'
   }))) return;
   apiPost('/purge/' + encodeURIComponent(currentFile), {})

@@ -232,7 +232,10 @@ def _bitget_get_json(
                     raise BitgetUnavailableSymbolError(f"Bitget code={code} msg={msg}")
                 raise RuntimeError(f"HTTP {status}: {response.text[:300]}")
             response.raise_for_status()
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise _RetryableBitgetError(f"Invalid JSON response: {exc}") from exc
             code = str(payload.get("code") or "")
             if code != "00000":
                 msg = str(payload.get("msg") or payload.get("message") or "")
@@ -250,8 +253,10 @@ def _bitget_get_json(
             if isinstance(exc, RuntimeError) and not retryable:
                 raise
             if not retryable:
-                retryable = not isinstance(exc, requests.HTTPError)
+                retryable = isinstance(exc, requests.RequestException) and not isinstance(exc, requests.HTTPError)
             if attempt >= int(retries) or not retryable:
+                if not retryable:
+                    raise
                 break
             is_rate_limit = "429" in str(exc) or "Too Many Requests" in str(exc)
             floor = RATE_LIMIT_PENALTY_S if is_rate_limit else 0.0
@@ -792,7 +797,7 @@ def improve_best_bitget_1m_for_coin(
             repaired, fetched = _repair_missing_minutes_for_day(coin_u, day_s, timeout_s=timeout_s, limiter=limiter)
             repair_minutes_fetched += fetched
             if repaired:
-                _write_candles_for_day(coin_u, day_s, repaired, overwrite=False)
+                minutes_written += _write_candles_for_day(coin_u, day_s, repaired, overwrite=False)
                 existing = _read_day_npz(_bitget_day_path(coin_u, day_s), day=day_s)
                 missing = _validate_day_minutes(existing)
             if missing:

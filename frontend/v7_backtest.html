@@ -965,6 +965,7 @@ textarea.json-invalid:focus {
 <script src="/app/js/editor_shared.js?v=10"></script>
 <script src="/app/js/json_panel.js?v=1"></script>
 <script src="/app/js/optimize_preset_builder.js?v=2"></script>
+<script src="/app/js/pbgui_dialogs.js?v=5"></script>
 <script>
 /* ════════════════════════════════════════════════
    GLOBALS (injected by server)
@@ -5178,6 +5179,7 @@ function getSelectedLegacyResults() {
 }
 
 function deleteSelectedArchiveResults() {
+  if (!selectedArchiveIsOwn()) { toast('Result deletion is only available for your own archive', 'err'); return; }
   var sel = getSelectedArchiveResults();
   if (!sel.length) { toast('Nothing selected', 'err'); return; }
   showModal('Delete Archive Results', '\x3Cp>Delete ' + sel.length + ' result(s) from archive <b>' + esc(selectedArchiveName) + '</b>? This cannot be undone.\x3C/p>', [
@@ -6910,15 +6912,32 @@ function rebacktestSelected() {
   }).catch(function(e) { toast('Failed to load config: ' + e.message, 'err'); });
 }
 
+function normalizeArchiveMarketDataPath(value) {
+  return String(value || '').trim().replace(/[\\/]+$/, '');
+}
+
+function archiveConfigUsesPbguiMarketData(cfg, pbguiPath) {
+  var sourceDir = normalizeArchiveMarketDataPath((((cfg || {}).backtest || {}).ohlcv_source_dir));
+  var marketDataDir = normalizeArchiveMarketDataPath(pbguiPath);
+  return !!sourceDir && !!marketDataDir && sourceDir === marketDataDir;
+}
+
 function rebacktestSelectedArchive() {
   var sel = getSelectedArchiveResults();
   if (!sel.length) { toast('Nothing selected', 'err'); return; }
   var today = new Date().toISOString().slice(0, 10);
   var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'kucoin', 'combined'];
-  apiFetch('/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
+  Promise.all([
+    apiFetch('/results/config?path=' + encodeURIComponent(sel[0])),
+    apiFetch('/pbgui_data_path')
+  ]).then(function(payload) {
+    var cfg = payload[0] || {};
+    var pbguiPath = (payload[1] || {}).path || '';
     var defExchanges = (cfg.backtest && cfg.backtest.exchanges) || ['bybit'];
     var defStart = (cfg.backtest && cfg.backtest.start_date) || '2020-01-01';
+    var defEnd = (cfg.backtest && cfg.backtest.end_date) || today;
     var defBalance = (cfg.backtest && cfg.backtest.starting_balance) || 1000;
+    var usePbguiMarketData = archiveConfigUsesPbguiMarketData(cfg, pbguiPath);
     var exOpts = allExchanges.map(function(e) {
       return '\x3Coption value="' + e + '"' + (defExchanges.indexOf(e) >= 0 ? ' selected' : '') + '>' + e + '\x3C/option>';
     }).join('');
@@ -6927,7 +6946,7 @@ function rebacktestSelectedArchive() {
         '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">start_date\x3C/div>' +
           '\x3Cinput type="date" id="rbt-start" class="sb-input" style="width:100%" value="' + esc(defStart) + '">\x3C/div>' +
         '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">end_date\x3C/div>' +
-          '\x3Cinput type="date" id="rbt-end" class="sb-input" style="width:100%" value="' + esc(today) + '">\x3C/div>' +
+          '\x3Cinput type="date" id="rbt-end" class="sb-input" style="width:100%" value="' + esc(defEnd) + '">\x3C/div>' +
         '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">Starting Balance\x3C/div>' +
           '\x3Cdiv style="display:flex;align-items:center;gap:var(--sp-xs)">' +
             '\x3Cinput id="rbt-balance" class="sb-input" style="flex:1;text-align:right" type="number" min="1" step="100" value="' + defBalance + '">' +
@@ -6937,7 +6956,7 @@ function rebacktestSelectedArchive() {
         '\x3Cdiv style="flex:1;display:flex;flex-direction:column;min-height:60px">\x3Cdiv class="sb-label">Exchanges\x3C/div>' +
           '\x3Cselect id="rbt-exchanges" class="sb-input" multiple style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '\x3C/select>\x3C/div>' +
         '\x3Cdiv style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
-          '\x3Cinput type="checkbox" id="rbt-pbgui-data"' + pbguiMarketDataDefaultCheckedAttr() + ' style="width:auto;margin:0">' +
+          '\x3Cinput type="checkbox" id="rbt-pbgui-data"' + (usePbguiMarketData ? ' checked' : '') + ' style="width:auto;margin:0">' +
           '\x3Clabel for="rbt-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data\x3C/label>' +
         '\x3C/div>' +
       '\x3C/div>';
@@ -7883,10 +7902,12 @@ function updateArchiveActionVisibility() {
   var isBacktests = archiveResultsMode === 'backtests';
   var isOptimize = archiveResultsMode === 'optimize';
   var own = selectedArchiveIsOwn();
-  ['archive-btn-rebacktest', 'archive-btn-add-run', 'archive-btn-compare', 'archive-btn-balance-calc', 'archive-btn-delete'].forEach(function(id) {
+  ['archive-btn-rebacktest', 'archive-btn-add-run', 'archive-btn-compare', 'archive-btn-balance-calc'].forEach(function(id) {
     var node = document.getElementById(id);
     if (node) node.style.display = isBacktests ? '' : 'none';
   });
+  var deleteBtn = document.getElementById('archive-btn-delete');
+  if (deleteBtn) deleteBtn.style.display = isBacktests && own ? '' : 'none';
   var renameBtn = document.getElementById('archive-btn-rename-config');
   if (renameBtn) renameBtn.style.display = isBacktests && own ? '' : 'none';
   var replaceBtn = document.getElementById('archive-btn-retest-replace');
@@ -7908,6 +7929,7 @@ function updateArchiveActionVisibility() {
 }
 
 function setArchiveResultsMode(mode) {
+  if (mode === 'schedules' && !selectedArchiveIsOwn()) mode = 'backtests';
   archiveResultsMode = mode === 'optimize' || mode === 'schedules' ? mode : 'backtests';
   persistBacktestViewState();
   var backBtn = document.getElementById('arc-tab-backtests');
@@ -7949,6 +7971,7 @@ function loadLegacyResults() {
 }
 
 function renderArchiveResults(name) {
+  if (archiveResultsMode === 'schedules' && !selectedArchiveIsOwn()) archiveResultsMode = 'backtests';
   var tableEl = document.getElementById('archive-results-table');
   var chartsEl = document.getElementById('archive-charts');
   var selectedPaths = currentPanel === 'archive' && archiveResultsMode === 'backtests' ? getSelectedArchiveResults() : [];
@@ -8043,9 +8066,13 @@ function setArchiveResultsModeButtons() {
   var selectBtn = document.getElementById('arc-btn-select-all');
   var deselectBtn = document.getElementById('arc-btn-deselect');
   var selectable = archiveResultsMode === 'backtests';
+  var own = selectedArchiveIsOwn();
   if (backBtn) backBtn.style.opacity = archiveResultsMode === 'backtests' ? '1' : '.55';
   if (optBtn) optBtn.style.opacity = archiveResultsMode === 'optimize' ? '1' : '.55';
-  if (schedBtn) schedBtn.style.opacity = archiveResultsMode === 'schedules' ? '1' : '.55';
+  if (schedBtn) {
+    schedBtn.style.display = own ? '' : 'none';
+    schedBtn.style.opacity = archiveResultsMode === 'schedules' ? '1' : '.55';
+  }
   if (selectBtn) selectBtn.style.display = selectable ? '' : 'none';
   if (deselectBtn) deselectBtn.style.display = selectable ? '' : 'none';
 }
@@ -8065,8 +8092,10 @@ function renderArchiveRetestSchedules() {
     return;
   }
   var weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  var own = selectedArchiveIsOwn();
   var html = '\x3Ctable class="tbl">\x3Cthead>\x3Ctr>' +
-    '\x3Cth>Status\x3C/th>\x3Cth>Cadence\x3C/th>\x3Cth>Targets\x3C/th>\x3Cth>Date Mode\x3C/th>\x3Cth>Next Run\x3C/th>\x3Cth>Last Status\x3C/th>\x3Cth>Actions\x3C/th>' +
+    '\x3Cth>Status\x3C/th>\x3Cth>Cadence\x3C/th>\x3Cth>Targets\x3C/th>\x3Cth>Date Mode\x3C/th>\x3Cth>Next Run\x3C/th>\x3Cth>Last Status\x3C/th>' +
+    (own ? '\x3Cth>Actions\x3C/th>' : '') +
     '\x3C/tr>\x3C/thead>\x3Ctbody>';
   filtered.forEach(function(item) {
     var cadence = item.cadence === 'weekly' ? 'Weekly ' + (weekdays[item.weekday || 0] || 'Mon') + ' ' + esc(item.time || '') : 'Daily ' + esc(item.time || '');
@@ -8082,11 +8111,11 @@ function renderArchiveRetestSchedules() {
       '\x3Ctd>' + esc(mode) + '\x3C/td>' +
       '\x3Ctd>' + esc(item.next_run_at || '') + '\x3C/td>' +
       '\x3Ctd class="muted-line" style="max-width:320px;word-break:break-word">' + esc(statusText) + '\x3C/td>' +
-      '\x3Ctd class="actions-cell">' +
+      (own ? '\x3Ctd class="actions-cell">' +
         '\x3Cbutton class="icon-btn good archive-sched-run" data-id="' + esc(item.id) + '" title="Run now">▶\x3C/button>' +
         '\x3Cbutton class="icon-btn archive-sched-toggle" data-id="' + esc(item.id) + '" title="Enable/disable">' + (item.enabled === false ? '✅' : '⏸') + '\x3C/button>' +
         '\x3Cbutton class="icon-btn danger archive-sched-delete" data-id="' + esc(item.id) + '" title="Delete">🗑\x3C/button>' +
-      '\x3C/td>\x3C/tr>';
+      '\x3C/td>' : '') + '\x3C/tr>';
   });
   html += '\x3C/tbody>\x3C/table>';
   tableEl.innerHTML = html;
@@ -8102,18 +8131,21 @@ function renderArchiveRetestSchedules() {
 }
 
 function runArchiveRetestSchedule(id) {
+  if (!selectedArchiveIsOwn()) { toast('Schedule controls are only available for your own archive', 'err'); return; }
   apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/retest-schedules/' + encodeURIComponent(id) + '/run', { method: 'POST' })
     .then(function(d) { toast('Queued ' + (d.queued || 0) + ' archive retest(s)', 'ok'); viewArchive(selectedArchiveName); wsRefresh(); })
     .catch(function(e) { toast('Run failed: ' + e.message, 'err'); });
 }
 
 function toggleArchiveRetestSchedule(id) {
+  if (!selectedArchiveIsOwn()) { toast('Schedule controls are only available for your own archive', 'err'); return; }
   apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/retest-schedules/' + encodeURIComponent(id) + '/toggle', { method: 'POST' })
     .then(function() { toast('Schedule updated', 'ok'); viewArchive(selectedArchiveName); })
     .catch(function(e) { toast('Update failed: ' + e.message, 'err'); });
 }
 
 function deleteArchiveRetestSchedule(id) {
+  if (!selectedArchiveIsOwn()) { toast('Schedule controls are only available for your own archive', 'err'); return; }
   showModal('Delete Retest Schedule', '\x3Cp>Delete this archive retest schedule? Already queued retests are not removed.\x3C/p>', [
     { text: 'Cancel', cls: '' },
     { text: 'Delete', cls: 'modal-btn-danger', action: function() {
@@ -8216,19 +8248,46 @@ function archiveOptimizeDefaultName(path, name) {
   return name || (path || '').split('/').pop().replace(/\.json$/, '');
 }
 
-function requestArchiveOptimizeImport(path, importName, overwrite) {
+function requestArchiveOptimizeImport(path, importName, collision) {
   return fetch(API_BASE + '/archives/' + encodeURIComponent(selectedArchiveName) + '/optimize-configs/import', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
-    body: JSON.stringify({ path: path, name: importName.trim(), overwrite: !!overwrite })
+    body: JSON.stringify({ path: path, name: importName.trim(), collision: collision })
   }).then(function(response) {
     return response.json().catch(function() { return {}; }).then(function(payload) {
       if (!response.ok) {
-        var err = new Error(payload.detail || response.statusText);
+        var detail = payload.detail;
+        var message = detail && typeof detail === 'object' ? detail.message : detail;
+        var err = new Error(message || response.statusText);
         err.status = response.status;
+        err.detail = detail;
         throw err;
       }
       return payload;
+    });
+  });
+}
+
+function chooseArchiveOptimizeCollision(error, importName) {
+  var detail = error && error.detail && typeof error.detail === 'object' ? error.detail : {};
+  if (!error || error.status !== 409 || detail.code !== 'optimize_config_exists') return Promise.reject(error);
+  return window.PBGuiDialogs.choose({
+    title: 'Optimize config already exists',
+    message: detail.message || ('Local Optimize config "' + importName + '" already exists.'),
+    detail: detail.suggested_copy_name ? 'Suggested copy name: ' + detail.suggested_copy_name : '',
+    actions: [
+      { label: 'Overwrite', value: 'overwrite', danger: true },
+      { label: 'Import as Copy', value: 'copy', primary: true },
+      { label: 'Cancel', value: null }
+    ]
+  });
+}
+
+function importArchiveOptimizeWithCollision(path, importName) {
+  return requestArchiveOptimizeImport(path, importName, 'error').catch(function(error) {
+    return chooseArchiveOptimizeCollision(error, importName).then(function(collision) {
+      if (!collision) return null;
+      return requestArchiveOptimizeImport(path, importName, collision);
     });
   });
 }
@@ -8239,21 +8298,11 @@ function openOptimizeEditorForConfig(configName) {
 
 function optimizeFromArchiveOptimizeConfig(path, name) {
   var importName = archiveOptimizeDefaultName(path, name).trim();
-  requestArchiveOptimizeImport(path, importName, false).then(function(data) {
+  importArchiveOptimizeWithCollision(path, importName).then(function(data) {
+    if (!data) return;
     toast('Opening Optimize config', 'ok');
     openOptimizeEditorForConfig(data.name || importName);
   }).catch(function(e) {
-    if (e.status === 409) {
-      showModal('Overwrite Optimize Config', '<p>Local Optimize config <b>' + esc(importName) + '</b> already exists. Overwrite it and open V7 Optimize?</p>', [
-        { text: 'Cancel', cls: '' },
-        { text: 'Overwrite & Open', cls: 'modal-btn-danger', action: function() {
-          requestArchiveOptimizeImport(path, importName, true).then(function(data) {
-            openOptimizeEditorForConfig(data.name || importName);
-          }).catch(function(err) { toast('Open failed: ' + err.message, 'err'); });
-        }}
-      ]);
-      return;
-    }
     toast('Open failed: ' + e.message, 'err');
   });
 }
@@ -8267,20 +8316,11 @@ function importArchiveOptimizeConfig(path, name) {
     { text: 'Cancel', cls: '' },
     { text: 'Import', cls: 'modal-btn-primary', action: function() {
       var importName = (document.getElementById('archive-opt-import-name') || {}).value || defaultName;
-      requestArchiveOptimizeImport(path, importName, false).then(function() {
-        toast('Optimize config imported', 'ok');
+      importArchiveOptimizeWithCollision(path, importName).then(function(data) {
+        if (!data) return;
+        toast('Optimize config imported as ' + (data.name || importName), 'ok');
         closeModal();
       }).catch(function(e) {
-        if (e.status === 409) {
-          showModal('Overwrite Optimize Config', '<p>Local Optimize config <b>' + esc(importName) + '</b> already exists. Overwrite it?</p>', [
-            { text: 'Cancel', cls: '' },
-            { text: 'Overwrite', cls: 'modal-btn-danger', action: function() {
-              requestArchiveOptimizeImport(path, importName, true).then(function() { toast('Optimize config overwritten', 'ok'); closeModal(); })
-                .catch(function(err) { toast('Import failed: ' + err.message, 'err'); });
-            }}
-          ]);
-          return;
-        }
         toast('Import failed: ' + e.message, 'err');
       });
     }}
@@ -8958,7 +8998,7 @@ window.PBGUI_NAV_CONFIG = {
   });
 })();
 </script>
-<script src="/app/js/log_viewer_panel.js?v=26"></script>
+<script src="/app/js/log_viewer_panel.js?v=27"></script>
 <script src="/app/js/shared_help_overlay.js?v=6"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 

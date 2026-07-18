@@ -504,8 +504,35 @@ body.compact .tab-content      { padding: 8px 10px; }
 .badge-green { background: var(--green); color: #000; }
 .badge-red   { background: var(--red);   color: #fff; }
 .badge-orange { background: var(--orange); color: #000; }
+.badge-neutral { background: #4b5563; color: #fff; }
 .vps-body { padding: 0 16px 16px; }
 .vps-body.collapsed { display: none; }
+
+.agent-panel {
+  margin: 0 0 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(14, 17, 23, 0.55);
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.agent-panel strong { color: var(--text); }
+.agent-summary { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.agent-files { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.agent-file {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg2);
+}
+.agent-file-ok { color: var(--green); }
+.agent-file-stale { color: var(--orange); }
+.agent-file-missing, .agent-file-error { color: var(--red); }
+.agent-file-unknown { color: var(--text-dim); }
+.agent-errors { margin-top: 7px; color: var(--red); overflow-wrap: anywhere; }
+.agent-help { margin-top: 7px; }
+.agent-help code { color: #f6ad55; }
 
 /* ─── Metrics Grid ─────────────────────────────────────────── */
 .metrics-grid {
@@ -680,6 +707,9 @@ tr.row-inactive td { opacity: 0.45; }
 /* ─── Instance Detail Panel ────────────────────────────────── */
 /* ─── Instance action icons ───────────────────────────── */
 .inst-action {
+  border: 0;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
   font-size: 14px;
   opacity: 0.6;
@@ -919,7 +949,7 @@ tr.row-inactive td { opacity: 0.45; }
 </div><!-- /#main-content -->
 </div><!-- /#page-body -->
 
-<script src="/app/js/log_viewer_panel.js?v=26"></script>
+<script src="/app/js/log_viewer_panel.js?v=27"></script>
 <script>
 /* ═══════════════════════════════════════════════════════════════
    VPS Monitor — WebSocket-powered real-time dashboard
@@ -929,7 +959,7 @@ tr.row-inactive td { opacity: 0.45; }
 let ws = null;
 let state = null;      // Latest full state from daemon
 let reconnectTimer = null;
-var TOKEN         = "%%TOKEN%%";
+let authExpired = false;
 var WS_BASE       = "%%WS_BASE%%";
 var PBGUI_VERSION = "%%VERSION%%";
 var PBGUI_SERIAL  = "%%SERIAL%%";
@@ -954,6 +984,7 @@ let cpuHistoryRequestId = 0;
 
 // ── WebSocket ──────────────────────────────────────────────
 function connect() {
+  if (authExpired) return;
   const url = WS_BASE + '/ws/vps';
   
   ws = new WebSocket(url);
@@ -970,7 +1001,20 @@ function connect() {
     } catch (e) { console.error('WS parse error:', e); }
   };
   
-  ws.onclose = () => {
+  ws.onclose = (event) => {
+    if (event.code === 4001) {
+      authExpired = true;
+      ws = null;
+      if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
+      const banner = document.getElementById('conn-banner');
+      if (banner) {
+        banner.className = 'conn-lost';
+        banner.style.display = 'block';
+        banner.textContent = 'Session expired. Returning to login...';
+      }
+      window.location.replace('/');
+      return;
+    }
     setBanner('lost');
     scheduleReconnect();
   };
@@ -981,9 +1025,9 @@ function connect() {
 }
 
 function scheduleReconnect() {
-  if (reconnectTimer) return;
+  if (authExpired || reconnectTimer) return;
   reconnectTimer = setInterval(() => {
-    if (!ws || ws.readyState === WebSocket.CLOSED) {
+    if (!authExpired && (!ws || ws.readyState === WebSocket.CLOSED)) {
       connect();
     }
   }, 3000);
@@ -1151,7 +1195,10 @@ function initMetricTooltipHandlers() {
 function handleResult(msg) {
   if (msg.cmd === 'restart_service') {
     // Update service button state
-    const btn = document.querySelector(`[data-restart="${msg.host}:${msg.service}"]`);
+    const btn = Array.from(document.querySelectorAll('[data-monitor-action="restart-service"]')).find(function (candidate) {
+      return candidate.getAttribute('data-host') === String(msg.host || '')
+        && candidate.getAttribute('data-service') === String(msg.service || '');
+    });
     if (btn) {
       btn.disabled = false;
       btn.classList.remove('restarting');
@@ -1246,7 +1293,16 @@ function ageStr(ts) {
   return (age / 60).toFixed(1) + 'm ago';
 }
 
-const TELEMETRY_STALE_SECONDS = 45;
+const TELEMETRY_STALE_SECONDS = 15;
+const MONITOR_AGENT_COLLECTOR_STALE_SECONDS = 30;
+const MONITOR_AGENT_REQUIRED_FILES = [
+  'live_metrics.ndjson',
+  'instance_snapshot.json',
+  'host_meta.json',
+  'service_status.json',
+  'package_status.json',
+  'collector_status.json',
+];
 
 function telemetryLastUpdate(metrics, stream) {
   const values = [];
@@ -1267,6 +1323,122 @@ function telemetryFresh(metrics, stream) {
   if (stream && stream.stale) return false;
   const age = telemetryAgeSeconds(metrics, stream);
   return age !== null && age <= TELEMETRY_STALE_SECONDS;
+}
+
+function effectiveAgeSeconds(age, checkedAt, generatedAt, nowSeconds) {
+  const now = Number.isFinite(Number(nowSeconds)) ? Number(nowSeconds) : Date.now() / 1000;
+  const generated = Number(generatedAt);
+  if (Number.isFinite(generated) && generated > 0) return Math.max(now - generated, 0);
+  const baseAge = Number(age);
+  if (!Number.isFinite(baseAge) || baseAge < 0) return null;
+  const checked = Number(checkedAt);
+  return baseAge + (Number.isFinite(checked) && checked > 0 ? Math.max(now - checked, 0) : 0);
+}
+
+function monitorAgentFile(agent, filename) {
+  const files = agent && typeof agent.files === 'object' ? agent.files : {};
+  const value = files && files[filename];
+  return value && typeof value === 'object' ? value : null;
+}
+
+function boundedAgentError(value) {
+  const text = String(value == null ? '' : value).replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
+  return text.length > 240 ? text.slice(0, 237) + '...' : text;
+}
+
+function monitorAgentHealth(agent, metrics, stream, nowSeconds) {
+  const now = Number.isFinite(Number(nowSeconds)) ? Number(nowSeconds) : Date.now() / 1000;
+  if (!agent || typeof agent !== 'object' || !Object.keys(agent).length) {
+    return {
+      state: 'unknown',
+      label: 'Unknown',
+      badgeClass: 'badge-neutral',
+      liveAge: telemetryAgeSeconds(metrics, stream),
+      heartbeatAge: null,
+      heartbeatBaseAge: null,
+      files: MONITOR_AGENT_REQUIRED_FILES.map(function (name) { return { name: name, state: 'unknown', age: null }; }),
+      errors: [],
+    };
+  }
+
+  const collector = agent.collector && typeof agent.collector === 'object' ? agent.collector : {};
+  const loops = agent.loops && typeof agent.loops === 'object'
+    ? agent.loops
+    : (collector.loops && typeof collector.loops === 'object' ? collector.loops : {});
+  const heartbeatBaseAge = Number.isFinite(Number(collector.age)) ? Number(collector.age) : (Number.isFinite(Number(agent.age)) ? Number(agent.age) : null);
+  const heartbeatCheckedAt = Number(collector.checked_at || agent.checked_at || 0);
+  const heartbeatGeneratedAt = Number(collector.generated_at || agent.generated_at || 0);
+  const heartbeatAge = effectiveAgeSeconds(heartbeatBaseAge, heartbeatCheckedAt, heartbeatGeneratedAt, now);
+  const liveFile = monitorAgentFile(agent, 'live_metrics.ndjson') || monitorAgentFile(agent, 'live_metrics.latest.json');
+  const liveAge = liveFile
+    ? effectiveAgeSeconds(liveFile.age, liveFile.checked_at || agent.checked_at, liveFile.generated_at, now)
+    : telemetryAgeSeconds(metrics, stream);
+  const files = MONITOR_AGENT_REQUIRED_FILES.map(function (filename) {
+    const file = monitorAgentFile(agent, filename);
+    const fileState = String(file && file.state || 'unknown').toLowerCase();
+    return {
+      name: filename,
+      state: ['ok', 'stale', 'missing', 'error'].includes(fileState) ? fileState : 'unknown',
+      age: file ? effectiveAgeSeconds(file.age, file.checked_at || agent.checked_at, file.generated_at, now) : null,
+    };
+  });
+  const errors = [];
+  if (agent.error) errors.push(boundedAgentError(agent.error));
+  if (collector.error) errors.push(boundedAgentError(collector.error));
+  let hasLoopError = false;
+  Object.entries(loops).forEach(function (entry) {
+    const loopName = entry[0];
+    const loop = entry[1] && typeof entry[1] === 'object' ? entry[1] : {};
+    if (loop.last_error) {
+      hasLoopError = true;
+      errors.push(boundedAgentError(loopName + ': ' + loop.last_error));
+    }
+  });
+
+  const explicitState = String(agent.state || 'unknown').toLowerCase();
+  const fileStates = files.map(function (file) { return file.state; });
+  let healthState = ['ok', 'stale', 'missing', 'error'].includes(explicitState) ? explicitState : 'unknown';
+  if (explicitState === 'error' || fileStates.includes('error') || hasLoopError) healthState = 'error';
+  else if (explicitState === 'missing' || fileStates.includes('missing')) healthState = 'missing';
+  else if (explicitState === 'stale' || fileStates.includes('stale') || (liveAge !== null && liveAge > TELEMETRY_STALE_SECONDS) || (heartbeatAge !== null && heartbeatAge > MONITOR_AGENT_COLLECTOR_STALE_SECONDS)) healthState = 'stale';
+  else if (explicitState === 'ok') healthState = 'ok';
+
+  const models = {
+    ok: { label: 'OK', badgeClass: 'badge-green' },
+    stale: { label: 'Stale', badgeClass: 'badge-orange' },
+    missing: { label: 'Missing', badgeClass: 'badge-red' },
+    error: { label: 'Error', badgeClass: 'badge-red' },
+    unknown: { label: 'Unknown', badgeClass: 'badge-neutral' },
+  };
+  return { state: healthState, label: models[healthState].label, badgeClass: models[healthState].badgeClass, liveAge, heartbeatAge, heartbeatBaseAge, files, errors: errors.filter(Boolean).slice(0, 4) };
+}
+
+function formatAgentAge(age) {
+  if (!Number.isFinite(Number(age)) || Number(age) < 0) return 'unknown';
+  const seconds = Number(age);
+  if (seconds < 60) return Math.round(seconds) + 's';
+  if (seconds < 3600) return (seconds / 60).toFixed(1) + 'm';
+  return (seconds / 3600).toFixed(1) + 'h';
+}
+
+function renderMonitorAgentDetails(agent, metrics, stream, nowSeconds) {
+  const health = monitorAgentHealth(agent, metrics, stream, nowSeconds);
+  const fileHtml = health.files.map(function (file) {
+    return `<span class="agent-file agent-file-${file.state}">${esc(file.name)}: ${esc(file.state)}${file.age === null ? '' : ' (' + esc(formatAgentAge(file.age)) + ')'}</span>`;
+  }).join('');
+  const errorHtml = health.errors.length
+    ? `<div class="agent-errors"><strong>Collector errors:</strong> ${health.errors.map(esc).join(' | ')}</div>`
+    : '';
+  const helpHtml = health.state === 'ok' ? '' : '<div class="agent-help">Troubleshooting: inspect <code>systemctl --user status pbgui-monitor-agent.service</code> and <code>journalctl --user -u pbgui-monitor-agent.service</code>. Restart with <code>systemctl --user restart pbgui-monitor-agent.service</code>. SSH can remain connected while telemetry is stale.</div>';
+  return `<div class="agent-panel agent-${health.state}">
+    <div class="agent-summary">
+      <span><strong>Source:</strong> monitor-agent cache</span>
+      <span><strong>Live effective age:</strong> ${esc(formatAgentAge(health.liveAge))} (healthy through ${TELEMETRY_STALE_SECONDS}s)</span>
+      <span><strong>Collector heartbeat:</strong> ${esc(formatAgentAge(health.heartbeatBaseAge))}; <strong>effective age:</strong> ${esc(formatAgentAge(health.heartbeatAge))} (healthy through ${MONITOR_AGENT_COLLECTOR_STALE_SECONDS}s)</span>
+    </div>
+    <div class="agent-files"><strong>Required files:</strong> ${fileHtml}</div>
+    ${errorHtml}${helpHtml}
+  </div>`;
 }
 
 // ── Dashboard ──────────────────────────────────────────────
@@ -1311,6 +1483,7 @@ function renderDashboard() {
     const isConnecting = status === 'connecting';
     const metrics = sys[host];
     const stream = streams[host] || {};
+    const agentHealth = monitorAgentHealth(stream.monitor_agent, metrics, stream);
     const metricsFresh = telemetryFresh(metrics, stream);
     const lastUpdate = telemetryLastUpdate(metrics, stream);
     // compactToggled tracks manual open/close; reset on mode switch
@@ -1318,10 +1491,11 @@ function renderDashboard() {
       ? compactToggled[host]
       : (compactMode ? true : !isConn);  // compact: default closed, normal: default open if connected
 
-    html += `<div class="vps-card ${isConn ? 'connected' : (isConnecting ? 'connecting' : 'disconnected')}" data-host="${host}">`;
-    html += `<div class="vps-header" onclick="toggleCard(this)">`;
-    html += `<span class="vps-title">${isConn ? '✅' : (isConnecting ? '⏳' : '❌')} ${host}`;
-    html += ` <span class="vps-badge ${isConn ? 'badge-green' : (isConnecting ? 'badge-orange' : 'badge-red')}"${hideIP ? ' style="display:none"' : ''}>${info.ip || '?'}</span>`;
+    html += `<div class="vps-card ${isConn ? 'connected' : (isConnecting ? 'connecting' : 'disconnected')}" data-host="${escAttr(host)}">`;
+    html += `<div class="vps-header" data-monitor-action="toggle-card">`;
+    html += `<span class="vps-title">${isConn ? '✅' : (isConnecting ? '⏳' : '❌')} ${esc(host)}`;
+    html += ` <span class="vps-badge ${isConn ? 'badge-green' : (isConnecting ? 'badge-orange' : 'badge-red')}"${hideIP ? ' style="display:none"' : ''}>${esc(info.ip || '?')}</span>`;
+    html += ` <span class="vps-badge ${agentHealth.badgeClass}" style="font-size:10px">Monitor Agent: ${agentHealth.label}</span>`;
     if (lastUpdate) {
       const streamAge = lastUpdate ? (Date.now()/1000 - lastUpdate) : -1;
       const ageColor = metricsFresh ? (streamAge < 5 ? 'green' : 'orange') : 'red';
@@ -1348,6 +1522,7 @@ function renderDashboard() {
     html += `<span style="font-size:18px">${isCollapsed ? '▸' : '▾'}</span>`;
     html += `</div>`;
     html += `<div class="vps-body ${isCollapsed ? 'collapsed' : ''}">`;
+    html += renderMonitorAgentDetails(stream.monitor_agent, metrics, stream);
 
     if (!isConn) {
       const err = info.error || info.last_error || '';
@@ -1357,7 +1532,7 @@ function renderDashboard() {
     } else if (!metrics) {
       html += `<div style="color:var(--text-dim);padding:8px 0">Waiting for system metrics...</div>`;
     } else if (!metricsFresh) {
-      html += `<div style="color:var(--red);padding:8px 0">Live system metrics are stale. Last update: ${esc(ageStr(lastUpdate))}. Restarting the metrics stream...</div>`;
+      html += `<div style="color:var(--orange);padding:8px 0">Live system metrics are stale after ${TELEMETRY_STALE_SECONDS}s. Last update: ${esc(ageStr(lastUpdate))}. The cache stream will reconnect without marking SSH disconnected.</div>`;
     } else {
       const cpuUi = cpuTelemetry(metrics);
       html += `<div class="metrics-grid">`;
@@ -1841,8 +2016,8 @@ function renderInstances() {
   // Only rebuild filters if they changed
   if (!filtersEl.dataset.built) {
     filtersEl.innerHTML = `
-      <label>Server: <select id="f-server">${servers.map(s => `<option${s===instFilterServer?' selected':''}>${s}</option>`).join('')}</select></label>
-      <label>Version: <select id="f-version">${versions.map(v => `<option${v===instFilterVersion?' selected':''}>${v}</option>`).join('')}</select></label>
+      <label>Server: <select id="f-server">${servers.map(s => `<option${s===instFilterServer?' selected':''}>${esc(s)}</option>`).join('')}</select></label>
+      <label>Version: <select id="f-version">${versions.map(v => `<option${v===instFilterVersion?' selected':''}>${esc(v)}</option>`).join('')}</select></label>
       <label><input type="checkbox" id="f-errors" ${instFilterErrors?'checked':''}> Only with errors</label>
       <label><input type="checkbox" id="f-others" ${instFilterOthers?'checked':''}> Show other</label>
     `;
@@ -1933,12 +2108,16 @@ function renderInstances() {
       <td class="cpu-clickable ${errClass(r.errors4w)}" data-history-host="${escAttr(r.host)}" data-history-bot="${escAttr(r.name)}" data-history-metric="errors">${r.errors4w}</td>
       <td class="cpu-clickable ${errClass(r.tbsToday)}" data-history-host="${escAttr(r.host)}" data-history-bot="${escAttr(r.name)}" data-history-metric="tracebacks">${r.tbsToday}</td>
       <td class="cpu-clickable ${errClass(r.tbs4w)}" data-history-host="${escAttr(r.host)}" data-history-bot="${escAttr(r.name)}" data-history-metric="tracebacks">${r.tbs4w}</td>
-      <td class="inst-actions">
-        <span class="inst-action" title="View Log" onclick="event.stopPropagation();viewInstanceLog('${esc(r.host)}','${esc(r.name)}','${esc(r.pbVersion)}')">📋</span>
-        <span class="inst-action" title="Restart (kill)" onclick="event.stopPropagation();killInstance('${esc(r.host)}','${esc(r.name)}','${esc(r.pbVersion)}',this)">🔄</span>
-      </td>
+      <td class="inst-actions">${renderInstanceActions(r)}</td>
     </tr>
   `).join('');
+}
+
+function renderInstanceActions(row) {
+  const r = row || {};
+  const attrs = `data-host="${escAttr(r.host)}" data-bot="${escAttr(r.name)}" data-pb-version="${escAttr(r.pbVersion)}"`;
+  return `<button class="inst-action" type="button" title="View Log" data-monitor-action="view-instance-log" ${attrs}>📋</button>
+    <button class="inst-action" type="button" title="Restart (kill)" data-monitor-action="kill-instance" ${attrs}>🔄</button>`;
 }
 
 function instanceCpuCell(host, name, liveCpu, cpu60s, cpu60sWindow) {
@@ -2253,8 +2432,8 @@ function renderServices() {
     const isExpanded = svcCompactToggled[host] !== undefined
       ? svcCompactToggled[host]
       : !compactMode;  // default: expanded in normal, collapsed in compact
-    html += `<div class="vps-card connected svc-host-card" data-svc-host="${esc(host)}">`;
-    html += `<div class="svc-host-header" onclick="toggleSvcCard(this)">`;
+    html += `<div class="vps-card connected svc-host-card" data-svc-host="${escAttr(host)}">`;
+    html += `<div class="svc-host-header" data-monitor-action="toggle-service-card">`;
     html += `<span class="svc-host-title">🖥️ ${esc(host)}</span>`;
     const hostSvc = services[host];
     if (hostSvc && Object.keys(hostSvc).length) {
@@ -2300,7 +2479,7 @@ function renderServices() {
         html += `<div class="svc-status" style="color:${color}">${esc(label)}${check.pid ? ' (PID: ' + check.pid + ')' : ''}</div>`;
         if (!expected && check.reason) html += `<div style="font-size:10px;color:var(--text-dim);margin-bottom:4px">${esc(check.reason)}</div>`;
         if (check.error) html += `<div style="font-size:10px;color:var(--red);margin-bottom:4px">${esc(check.error)}</div>`;
-        if (expected) html += `<button class="svc-btn" data-restart="${host}:${svcName}" onclick="restartService('${esc(host)}','${esc(svcName)}',this)">Restart</button>`;
+        if (expected) html += renderServiceRestartButton(host, svcName);
         html += `</div>`;
       }
       html += `</div>`;
@@ -2309,6 +2488,10 @@ function renderServices() {
   }
 
   document.getElementById('svc-container').innerHTML = html;
+}
+
+function renderServiceRestartButton(host, service) {
+  return `<button class="svc-btn" type="button" data-monitor-action="restart-service" data-host="${escAttr(host)}" data-service="${escAttr(service)}">Restart</button>`;
 }
 
 function restartService(host, service, btn) {
@@ -2336,6 +2519,20 @@ function toggleSvcCard(header) {
   if (card) svcCompactToggled[card.dataset.svcHost] = !isNowCollapsed;
 }
 
+function handleMonitorAction(event) {
+  const trigger = event.target && event.target.closest ? event.target.closest('[data-monitor-action]') : null;
+  if (!trigger) return;
+  const action = String(trigger.getAttribute('data-monitor-action') || '');
+  const host = String(trigger.getAttribute('data-host') || '');
+  const bot = String(trigger.getAttribute('data-bot') || '');
+  const pbVersion = String(trigger.getAttribute('data-pb-version') || '7');
+  if (action === 'toggle-card') toggleCard(trigger);
+  else if (action === 'toggle-service-card') toggleSvcCard(trigger);
+  else if (action === 'view-instance-log') viewInstanceLog(host, bot, pbVersion);
+  else if (action === 'kill-instance') killInstance(host, bot, pbVersion, trigger);
+  else if (action === 'restart-service') restartService(host, String(trigger.getAttribute('data-service') || ''), trigger);
+}
+
 // ── Live Logs (LogViewerPanel) ──────────────────────────────
 function serviceStatusForLogViewer(host, service) {
   const services = (state && state.services) || {};
@@ -2348,7 +2545,6 @@ function initVpsLogViewer() {
   vpsLogViewer = new LogViewerPanel({
     containerId:    'log-viewer-vps',
     wsBase:         WS_BASE,
-    token:          TOKEN,
     defaultHost:    'local',
     defaultService: 'PBRun',
     presets:        'trading',
@@ -2406,8 +2602,7 @@ initMetricTooltipHandlers();
   var _sMarks = [], _sIdx = -1, _sTimer = null, _rawHtml = null;
   var _topicCache = {}, _globalMode = false;
 
-  /* Docs base: strip ws(s):// from WS_BASE and use http(s):// */
-  var docsBase = WS_BASE.replace('ws://', 'http://').replace('wss://', 'https://');
+  var docsBase = window.location.origin;
 
   function mdToHtml(md) {
     var lines = md.split('\n'), html = '', inPre = false, preBuf = '', inUl = false, inOl = false;
@@ -2459,7 +2654,7 @@ initMetricTooltipHandlers();
   function _ensureTopicCached(idx, cb) {
     if (_topicCache[idx] !== undefined) { cb(_topicCache[idx]); return; }
     var t = helpTopics[idx]; if (!t) { cb(''); return; }
-    fetch(docsBase + '/api/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(docsBase + '/api/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { credentials: 'same-origin', cache: 'no-store' })
       .then(function(r) { return r.json(); })
       .then(function(d) { _topicCache[idx] = mdToHtml(d.content || ''); cb(_topicCache[idx]); })
       .catch(function() { _topicCache[idx] = ''; cb(''); });
@@ -2527,14 +2722,14 @@ initMetricTooltipHandlers();
     var t = helpTopics[idx]; if (!t) return;
     _rawHtml = null; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = '';
     helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/api/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(docsBase + '/api/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { credentials: 'same-origin', cache: 'no-store' })
       .then(function(r) { return r.json(); })
       .then(function(d) { _rawHtml = mdToHtml(d.content || ''); _topicCache[idx] = _rawHtml; helpContent.innerHTML = _rawHtml; helpContent.scrollTop = 0; var st = helpSearch.value.trim(); if (st) _applySearch(st); })
       .catch(function() { helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>'; });
   }
   function loadHelpIndex(keyword) {
     helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/api/docs/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(docsBase + '/api/docs/index?lang=' + helpLang, { credentials: 'same-origin', cache: 'no-store' })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         helpTopics = data || []; renderToc();
@@ -2563,7 +2758,7 @@ initMetricTooltipHandlers();
   }());
   window._openVpsHelp = function() {
     if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
-    window.PBGuiSharedHelp.open('vps_monitor', { token: TOKEN });
+    window.PBGuiSharedHelp.open('vps_monitor');
   };
   window.PBGUI_HELP_OPENER = window._openVpsHelp;
 }());
@@ -2574,7 +2769,7 @@ initMetricTooltipHandlers();
 window.PBGUI_NAV_CONFIG = {
   subtitle: 'VPS MONITOR',
   current:  'system_vps_monitor',
-  token:    TOKEN,
+  authenticated: true,
   version:  PBGUI_VERSION,
   serial:   PBGUI_SERIAL
 };
@@ -2582,6 +2777,7 @@ window.PBGUI_NAV_CONFIG = {
 <script src="/app/js/shared_help_overlay.js?v=6"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 <script>
+document.addEventListener('click', handleMonitorAction);
 document.addEventListener('click', handleCpuHistoryInteraction, true);
 window.addEventListener('resize', function () {
   const overlay = document.getElementById('cpu-history-ovl');

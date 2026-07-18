@@ -9,11 +9,19 @@ import json
 import math
 import os
 import re
+import secrets
 import shutil
+import stat
 import subprocess
+import tempfile
+from contextlib import contextmanager
+from itertools import islice
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 from urllib.parse import quote
+
+from file_lock import advisory_file_lock
+from secure_files import read_regular_file_nofollow
 
 
 ARCHIVE_LAYOUT_ROOT = Path("pbgui") / "configs"
@@ -28,6 +36,7 @@ README_SCORES_END = "<!-- pbgui:scores:end -->"
 README_SCORES_PLACEHOLDER = "_PBGui score overview has not been generated yet._"
 ARCHIVE_SCORE_VERSION = 2
 _SAFE_PART_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_SAFE_VERSION_RE = re.compile(r"[A-Za-z0-9._-]{1,120}\Z")
 
 _SCORE_GROUP_WEIGHTS = {
     "returns": 0.25,
@@ -91,6 +100,228 @@ def load_json_file(path: Path) -> dict:
         return {}
 
 
+def _absolute_path(path: Path) -> Path:
+    """Return an absolute normalized path without resolving symlinks."""
+    return Path(os.path.abspath(Path(path).expanduser()))
+
+
+@contextmanager
+def archive_transaction(archive_root: Path) -> Iterator[None]:
+    """Serialize archive mutations across threads and processes, reentrantly."""
+    absolute_root = _absolute_path(archive_root)
+    lock_id = hashlib.sha256(str(absolute_root).encode("utf-8")).hexdigest()
+    lock_target = absolute_root.parent / ".pbgui-archive-locks" / lock_id
+    with advisory_file_lock(lock_target):
+        yield
+
+
+def _reject_symlink_components(path: Path) -> None:
+    """Reject any existing symlink component in an absolute path."""
+    absolute = _absolute_path(path)
+    for component in reversed([absolute, *absolute.parents]):
+        if component.is_symlink():
+            raise RuntimeError(f"Path contains a symlink component: {component}")
+
+
+def _validate_archive_path(path: Path, archive_root: Path, *, require_exists: bool = False) -> Path:
+    """Validate lexical/resolved containment and reject symlink path components."""
+    absolute_root = _absolute_path(archive_root)
+    absolute_path = _absolute_path(path)
+    try:
+        relative = absolute_path.relative_to(absolute_root)
+    except ValueError as exc:
+        raise RuntimeError(f"Archive path escaped root: {path}") from exc
+    if absolute_root.is_symlink():
+        raise RuntimeError(f"Archive root must not be a symlink: {archive_root}")
+    if absolute_root.exists() and not absolute_root.is_dir():
+        raise RuntimeError(f"Archive root is not a directory: {archive_root}")
+    current = absolute_root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise RuntimeError(f"Archive path contains a symlink: {current}")
+    try:
+        absolute_path.resolve(strict=False).relative_to(absolute_root.resolve(strict=False))
+    except ValueError as exc:
+        raise RuntimeError(f"Resolved archive path escaped root: {path}") from exc
+    if require_exists and not absolute_path.exists():
+        raise RuntimeError(f"Archive path does not exist: {path}")
+    return absolute_path
+
+
+def _ensure_archive_directory(path: Path, archive_root: Path) -> Path:
+    """Create an archive directory tree after validating every destination component."""
+    absolute_root = _absolute_path(archive_root)
+    absolute_path = _validate_archive_path(path, archive_root)
+    if not absolute_root.exists():
+        if absolute_root.is_symlink():
+            raise RuntimeError(f"Archive root must not be a symlink: {archive_root}")
+        absolute_root.mkdir()
+    current = absolute_root
+    relative = absolute_path.relative_to(absolute_root)
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise RuntimeError(f"Archive destination contains a symlink: {current}")
+        current.mkdir(exist_ok=True)
+        if not current.is_dir():
+            raise RuntimeError(f"Archive destination is not a directory: {current}")
+    return absolute_path
+
+
+def _read_json_object_nofollow(path: Path, approved_root: Path, *, required: bool = False) -> dict | None:
+    """Read a regular JSON object below a trusted root without following symlinks."""
+    try:
+        absolute_path = _validate_archive_path(path, approved_root)
+    except RuntimeError:
+        if required:
+            raise
+        return None
+    if not absolute_path.exists():
+        if required:
+            raise RuntimeError(f"Required archive JSON is missing: {path}")
+        return None
+    try:
+        raw = read_regular_file_nofollow(absolute_path, _absolute_path(approved_root))
+        data = json.loads(raw.decode("utf-8"))
+    except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        if required:
+            raise RuntimeError(f"Invalid archive JSON object: {path}") from exc
+        return None
+    if not isinstance(data, dict):
+        if required:
+            raise RuntimeError(f"Archive JSON must contain an object: {path}")
+        return None
+    return data
+
+
+@contextmanager
+def _archive_directory_fd(path: Path, archive_root: Path, *, create: bool) -> Iterator[int]:
+    """Open an archive directory through no-follow directory descriptors."""
+    absolute_root = _absolute_path(archive_root)
+    absolute_path = _validate_archive_path(path, absolute_root)
+    _reject_symlink_components(absolute_root.parent)
+    if not absolute_root.exists():
+        if not create:
+            raise RuntimeError(f"Archive root does not exist: {archive_root}")
+        absolute_root.mkdir(mode=0o700)
+    flags = os.O_RDONLY | os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    current_fd = os.open(absolute_root, flags)
+    try:
+        for part in absolute_path.relative_to(absolute_root).parts:
+            try:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(part, mode=0o700, dir_fd=current_fd)
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        yield current_fd
+    finally:
+        os.close(current_fd)
+
+
+def _atomic_write_archive_bytes(path: Path, content: bytes, archive_root: Path) -> None:
+    """Atomically write bytes below an archive root without following symlinks."""
+    absolute_path = _validate_archive_path(path, archive_root)
+    temp_name = ""
+    with _archive_directory_fd(absolute_path.parent, archive_root, create=True) as parent_fd:
+        try:
+            destination_stat = os.stat(absolute_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            destination_stat = None
+        if destination_stat is not None and stat.S_ISLNK(destination_stat.st_mode):
+            raise RuntimeError(f"Archive destination must not be a symlink: {absolute_path}")
+
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        temp_fd = -1
+        for _ in range(100):
+            temp_name = f".{absolute_path.name}.{secrets.token_hex(12)}.tmp"
+            try:
+                temp_fd = os.open(temp_name, flags, 0o600, dir_fd=parent_fd)
+                break
+            except FileExistsError:
+                continue
+        if temp_fd < 0:
+            raise RuntimeError(f"Unable to allocate archive temporary file for: {absolute_path}")
+        try:
+            with os.fdopen(temp_fd, "wb") as handle:
+                temp_fd = -1
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                destination_stat = os.stat(absolute_path.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                destination_stat = None
+            if destination_stat is not None and stat.S_ISLNK(destination_stat.st_mode):
+                raise RuntimeError(f"Archive destination must not be a symlink: {absolute_path}")
+            os.replace(temp_name, absolute_path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            temp_name = ""
+        finally:
+            if temp_fd >= 0:
+                os.close(temp_fd)
+            if temp_name:
+                try:
+                    os.unlink(temp_name, dir_fd=parent_fd)
+                except FileNotFoundError:
+                    pass
+
+
+def _atomic_write_archive_json(path: Path, payload: dict, archive_root: Path) -> None:
+    """Atomically write archive JSON with a unique no-follow temporary file."""
+    encoded = (json.dumps(payload, indent=4) + "\n").encode("utf-8")
+    _atomic_write_archive_bytes(path, encoded, archive_root)
+
+
+def write_archive_json(path: Path, payload: dict, archive_root: Path) -> None:
+    """Write a JSON object below an archive root through the secure archive writer."""
+    cleaned = dict(payload)
+    cleaned.pop("_pbgui_param_status", None)
+    with archive_transaction(archive_root):
+        absolute_path = _validate_archive_path(path, archive_root)
+        legacy_temp = absolute_path.with_suffix(absolute_path.suffix + ".tmp")
+        if legacy_temp.is_symlink():
+            raise RuntimeError(f"Archive temporary path must not be a symlink: {legacy_temp}")
+        _atomic_write_archive_json(absolute_path, cleaned, archive_root)
+
+
+def _atomic_write_archive_text(path: Path, content: str, archive_root: Path) -> None:
+    """Atomically write archive text with a unique no-follow temporary file."""
+    _atomic_write_archive_bytes(path, content.encode("utf-8"), archive_root)
+
+
+def _read_archive_text_nofollow(path: Path, archive_root: Path) -> str:
+    """Read optional archive text without following a destination symlink."""
+    absolute_path = _validate_archive_path(path, archive_root)
+    if not absolute_path.exists():
+        return ""
+    try:
+        return read_regular_file_nofollow(absolute_path, _absolute_path(archive_root)).decode("utf-8")
+    except (OSError, RuntimeError, UnicodeDecodeError) as exc:
+        raise RuntimeError(f"Invalid archive text file: {path}") from exc
+
+
+def _validate_directory_tree_no_symlinks(path: Path) -> Path:
+    """Validate that an existing directory and all descendants contain no symlinks."""
+    absolute = _absolute_path(path)
+    _reject_symlink_components(absolute)
+    if absolute.is_symlink() or not absolute.is_dir():
+        raise RuntimeError(f"Source must be a regular directory, not a symlink: {path}")
+    for root, dirs, files in os.walk(absolute, followlinks=False):
+        for name in [*dirs, *files]:
+            item = Path(root) / name
+            if item.is_symlink():
+                raise RuntimeError(f"Source tree contains a symlink: {item}")
+    return absolute
+
+
 def atomic_write_json(path: Path, payload: dict) -> None:
     """Write JSON atomically with PBGui's standard temp-file replacement pattern."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,12 +348,14 @@ def archive_manifest_path(archive_root: Path) -> Path:
 
 def load_archive_manifest(archive_root: Path) -> dict | None:
     """Load and minimally validate an archive manifest."""
-    manifest = load_json_file(archive_manifest_path(archive_root))
+    manifest = _read_json_object_nofollow(archive_manifest_path(archive_root), archive_root)
     if not manifest:
         return None
     if manifest.get("schema_version") != 1:
         return None
     if not isinstance(manifest.get("items"), list):
+        return None
+    if any(not isinstance(item, dict) for item in manifest["items"]):
         return None
     return manifest
 
@@ -242,7 +475,7 @@ def normalize_archive_readme_config(config: dict | None, archive_name: str = "")
 
 def load_archive_readme_config(archive_root: Path) -> dict:
     """Load the per-archive README config, returning defaults when absent."""
-    config = load_json_file(archive_readme_config_path(archive_root))
+    config = _read_json_object_nofollow(archive_readme_config_path(archive_root), archive_root) or {}
     if config.get("schema_version") != 1:
         config = {}
     return normalize_archive_readme_config(config, archive_root.name)
@@ -250,9 +483,10 @@ def load_archive_readme_config(archive_root: Path) -> dict:
 
 def save_archive_readme_config(archive_root: Path, config: dict) -> dict:
     """Persist the per-archive README config and return the normalized payload."""
-    normalized = normalize_archive_readme_config(config, archive_root.name)
-    atomic_write_json(archive_readme_config_path(archive_root), normalized)
-    return normalized
+    with archive_transaction(archive_root):
+        normalized = normalize_archive_readme_config(config, archive_root.name)
+        _atomic_write_archive_json(archive_readme_config_path(archive_root), normalized, archive_root)
+        return normalized
 
 
 def _extract_readme_scores_block(existing: str, scores_markdown: str | None = None) -> str:
@@ -292,19 +526,17 @@ def update_archive_readme(
     scores_markdown: str | None = None,
 ) -> str:
     """Write README.md while preserving/replacing only PBGui's generated score block."""
-    readme = archive_readme_path(archive_root)
-    try:
-        existing = readme.read_text(encoding="utf-8")
-    except OSError:
-        existing = ""
-    content = build_archive_readme_content(
-        archive_root,
-        config or load_archive_readme_config(archive_root),
-        scores_markdown=scores_markdown,
-        existing_content=existing,
-    )
-    atomic_write_text(readme, content)
-    return content
+    with archive_transaction(archive_root):
+        readme = archive_readme_path(archive_root)
+        existing = _read_archive_text_nofollow(readme, archive_root)
+        content = build_archive_readme_content(
+            archive_root,
+            config or load_archive_readme_config(archive_root),
+            scores_markdown=scores_markdown,
+            existing_content=existing,
+        )
+        _atomic_write_archive_text(readme, content, archive_root)
+        return content
 
 
 def json_fingerprint(data: Any) -> str:
@@ -343,9 +575,10 @@ def directory_fingerprint(path: Path) -> str:
 
 def config_version_info(config: dict, *, fingerprint: str | None = None) -> dict:
     """Return normalized PB7 config version metadata for archive paths."""
-    raw_version = str((config or {}).get("config_version") or "").strip()
-    has_version = bool(raw_version)
-    version_segment = safe_path_part(raw_version, "unknown") if has_version else "unknown"
+    value = (config or {}).get("config_version")
+    raw_version = value if isinstance(value, str) else ""
+    has_version = bool(_SAFE_VERSION_RE.fullmatch(raw_version))
+    version_segment = raw_version if has_version else "unknown"
     return {
         "pb7_config_version": version_segment,
         "pb7_config_version_raw": raw_version,
@@ -366,11 +599,11 @@ def is_new_backtest_result_path(result_dir: Path, archive_root: Path) -> bool:
 
 
 def is_inside_archive(path: Path, archive_root: Path) -> bool:
-    """Return true if path resolves inside archive_root."""
+    """Return true for a non-symlink path contained inside archive_root."""
     try:
-        path.resolve().relative_to(archive_root.resolve())
+        _validate_archive_path(path, archive_root)
         return True
-    except ValueError:
+    except (OSError, RuntimeError, ValueError):
         return False
 
 
@@ -440,9 +673,13 @@ def _normalized_coin_values(value: Any) -> list[str]:
     return coins
 
 
-def _coins_from_result_metadata(result_dir: Path, config: dict) -> list[str]:
+def _coins_from_result_metadata(result_dir: Path, config: dict, archive_root: Path | None = None) -> list[str]:
     """Extract the visible coin list for an archived backtest result."""
-    dataset = load_json_file(result_dir / "dataset.json")
+    dataset = (
+        _read_json_object_nofollow(result_dir / "dataset.json", archive_root) or {}
+        if archive_root is not None
+        else load_json_file(result_dir / "dataset.json")
+    )
     for value in (
         dataset.get("coins"),
         dataset.get("approved_coins"),
@@ -458,7 +695,10 @@ def _coins_from_result_metadata(result_dir: Path, config: dict) -> list[str]:
 
 def derive_backtest_archive_relative_path(result_dir: Path, archive_root: Path) -> tuple[Path, dict]:
     """Derive the new versioned archive-relative path for a backtest result."""
-    config = read_result_config(result_dir)
+    source_root = _absolute_path(result_dir)
+    _reject_symlink_components(source_root)
+    config = _read_json_object_nofollow(source_root / "config.json", source_root, required=True)
+    _read_json_object_nofollow(source_root / "analysis.json", source_root, required=True)
     fingerprint = directory_fingerprint(result_dir)
     version = config_version_info(config, fingerprint=fingerprint)
     config_name = _config_name_from_result(result_dir, config, archive_root)
@@ -485,38 +725,95 @@ def derive_backtest_archive_relative_path(result_dir: Path, archive_root: Path) 
     return rel, meta
 
 
-def _unique_path_for_collision(path: Path, fingerprint: str) -> Path:
-    """Return a sibling path with a fingerprint suffix for non-identical collisions."""
+def _unique_path_for_collision(
+    path: Path,
+    fingerprint: str,
+    identical: Callable[[Path], bool] | None = None,
+) -> tuple[Path, bool]:
+    """Return a free collision path or an existing identical fingerprint candidate."""
     base = path.with_name(f"{path.name}__{safe_path_part(fingerprint, 'copy')}")
     if not base.exists():
-        return base
+        return base, False
+    if identical is not None and identical(base):
+        return base, True
     index = 2
     while True:
         candidate = path.with_name(f"{path.name}__{safe_path_part(fingerprint, 'copy')}_{index}")
         if not candidate.exists():
-            return candidate
+            return candidate, False
+        if identical is not None and identical(candidate):
+            return candidate, True
         index += 1
 
 
-def copy_backtest_result_to_archive(source_dir: Path, archive_root: Path) -> dict:
-    """Copy a local backtest result into the versioned archive layout."""
+def _valid_backtest_fingerprint(result_dir: Path, archive_root: Path) -> str | None:
+    """Return a fingerprint only for a safe result with valid required JSON objects."""
+    try:
+        _validate_archive_path(result_dir, archive_root, require_exists=True)
+        _read_json_object_nofollow(result_dir / "config.json", archive_root, required=True)
+        _read_json_object_nofollow(result_dir / "analysis.json", archive_root, required=True)
+        return directory_fingerprint(result_dir)
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _copy_backtest_result_to_archive_locked(source_dir: Path, archive_root: Path) -> dict:
+    """Copy one result while its archive transaction lock is held."""
+    source_dir = _validate_directory_tree_no_symlinks(source_dir)
     rel, meta = derive_backtest_archive_relative_path(source_dir, archive_root)
-    dest = archive_root / rel
+    dest = _validate_archive_path(archive_root / rel, archive_root)
     source_fingerprint = meta["fingerprint"]
     copied = True
     skipped = False
     if dest.exists():
-        if directory_fingerprint(dest) == source_fingerprint:
+        if _valid_backtest_fingerprint(dest, archive_root) == source_fingerprint:
             copied = False
             skipped = True
         else:
-            dest = _unique_path_for_collision(dest, source_fingerprint)
+            dest, skipped = _unique_path_for_collision(
+                dest,
+                source_fingerprint,
+                lambda candidate: _valid_backtest_fingerprint(candidate, archive_root) == source_fingerprint,
+            )
+            copied = not skipped
             meta["result_name"] = dest.name
-            meta["relative_path"] = dest.relative_to(archive_root).as_posix()
+            meta["relative_path"] = dest.relative_to(_absolute_path(archive_root)).as_posix()
     if copied:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(str(source_dir), str(dest))
+        _ensure_archive_directory(dest.parent, archive_root)
+        _validate_archive_path(dest, archive_root)
+        staging: Path | None = Path(tempfile.mkdtemp(prefix=f".{dest.name}.stage-", dir=str(dest.parent)))
+        try:
+            shutil.copytree(str(source_dir), str(staging), symlinks=True, dirs_exist_ok=True)
+            _validate_directory_tree_no_symlinks(staging)
+            _read_json_object_nofollow(staging / "config.json", archive_root, required=True)
+            _read_json_object_nofollow(staging / "analysis.json", archive_root, required=True)
+            staged_fingerprint = directory_fingerprint(staging)
+            _validate_directory_tree_no_symlinks(source_dir)
+            _read_json_object_nofollow(source_dir / "config.json", source_dir, required=True)
+            _read_json_object_nofollow(source_dir / "analysis.json", source_dir, required=True)
+            current_source_fingerprint = directory_fingerprint(source_dir)
+            if staged_fingerprint != source_fingerprint or current_source_fingerprint != source_fingerprint:
+                raise RuntimeError("Backtest source changed while it was being copied")
+            _validate_archive_path(dest, archive_root)
+            if dest.exists() or dest.is_symlink():
+                raise RuntimeError(f"Archive destination appeared during copy: {dest}")
+            os.rename(staging, dest)
+            staging = None
+        finally:
+            if staging is not None and (staging.exists() or staging.is_symlink()):
+                if staging.is_symlink():
+                    staging.unlink()
+                else:
+                    shutil.rmtree(staging)
+                if staging.exists() or staging.is_symlink():
+                    raise RuntimeError(f"Archive staging path still exists after cleanup: {staging}")
     return {"ok": True, "path": str(dest), "relative_path": meta["relative_path"], "skipped": skipped, "meta": meta}
+
+
+def copy_backtest_result_to_archive(source_dir: Path, archive_root: Path) -> dict:
+    """Copy a local backtest result into the versioned archive layout."""
+    with archive_transaction(archive_root):
+        return _copy_backtest_result_to_archive_locked(source_dir, archive_root)
 
 
 def detect_liquidation(analysis: dict, config: dict) -> tuple[bool, str]:
@@ -544,9 +841,10 @@ def detect_liquidation(analysis: dict, config: dict) -> tuple[bool, str]:
 
 def summarize_backtest_result(result_dir: Path, archive_root: Path) -> dict:
     """Return the UI/API summary for one archived backtest result directory."""
+    result_dir = _validate_archive_path(result_dir, archive_root, require_exists=True)
     analysis_file = result_dir / "analysis.json"
-    analysis = load_json_file(analysis_file)
-    config = read_result_config(result_dir)
+    analysis = _read_json_object_nofollow(analysis_file, archive_root, required=True)
+    config = _read_json_object_nofollow(result_dir / "config.json", archive_root, required=True)
     backtest = config.get("backtest", {}) if isinstance(config, dict) else {}
     bot = config.get("bot", {}) if isinstance(config, dict) else {}
     adg = analysis.get("adg_usd", analysis.get("adg", 0))
@@ -559,7 +857,7 @@ def summarize_backtest_result(result_dir: Path, archive_root: Path) -> dict:
     liquidated, liquidation_reason = detect_liquidation(analysis, config)
     rel = result_dir.resolve().relative_to(archive_root.resolve())
     config_name = _config_name_from_result(result_dir, config, archive_root)
-    coins = _coins_from_result_metadata(result_dir, config)
+    coins = _coins_from_result_metadata(result_dir, config, archive_root)
     version = config_version_info(config)
     return {
         "path": str(result_dir),
@@ -597,15 +895,17 @@ def summarize_backtest_result(result_dir: Path, archive_root: Path) -> dict:
 def list_archive_backtest_results(archive_root: Path) -> list[dict]:
     """List archived backtest results across current and legacy layouts."""
     results = []
+    try:
+        archive_root = _validate_archive_path(archive_root, archive_root)
+    except RuntimeError:
+        return results
     if not archive_root.exists():
         return results
     for analysis_file in sorted(archive_root.glob("**/analysis.json")):
         if ".git" in analysis_file.parts:
             continue
-        result_dir = analysis_file.parent.resolve()
-        if not is_inside_archive(result_dir, archive_root):
-            continue
         try:
+            result_dir = _validate_archive_path(analysis_file.parent, archive_root, require_exists=True)
             results.append(summarize_backtest_result(result_dir, archive_root))
         except Exception:
             continue
@@ -1235,26 +1535,36 @@ def build_archive_score_payload(archive_root: Path, limit: int = 100) -> dict:
     }
 
 
-def legacy_result_dirs(archive_root: Path) -> list[Path]:
-    """Return legacy result directories that need layout migration."""
-    legacy = []
+def _iter_legacy_result_dirs(archive_root: Path):
+    """Yield safe legacy result directories lazily."""
+    try:
+        archive_root = _validate_archive_path(archive_root, archive_root)
+    except RuntimeError:
+        return
     if not archive_root.exists():
-        return legacy
-    for analysis_file in sorted(archive_root.glob("**/analysis.json")):
+        return
+    for analysis_file in archive_root.glob("**/analysis.json"):
         if ".git" in analysis_file.parts:
             continue
-        result_dir = analysis_file.parent.resolve()
-        if not is_inside_archive(result_dir, archive_root):
+        try:
+            result_dir = _validate_archive_path(analysis_file.parent, archive_root, require_exists=True)
+            _read_json_object_nofollow(result_dir / "config.json", archive_root, required=True)
+            _read_json_object_nofollow(result_dir / "analysis.json", archive_root, required=True)
+        except (OSError, RuntimeError, ValueError):
             continue
         if not is_new_backtest_result_path(result_dir, archive_root):
-            legacy.append(result_dir)
-    return legacy
+            yield result_dir
+
+
+def legacy_result_dirs(archive_root: Path) -> list[Path]:
+    """Return safe legacy result directories that need layout migration."""
+    return sorted(_iter_legacy_result_dirs(archive_root))
 
 
 def git_worktree_state(archive_root: Path) -> dict:
     """Return simple git status information for an archive clone."""
     if not (archive_root / ".git").exists():
-        return {"is_git": False, "dirty": False, "porcelain": ""}
+        return {"is_git": False, "dirty": False, "porcelain": "", "status_ok": True, "returncode": None}
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -1264,16 +1574,23 @@ def git_worktree_state(archive_root: Path) -> dict:
             timeout=15,
         )
     except Exception:
-        return {"is_git": True, "dirty": True, "porcelain": "status_failed"}
+        return {"is_git": True, "dirty": True, "porcelain": "", "status_ok": False, "returncode": None}
     porcelain = (result.stdout or "").strip()
-    return {"is_git": True, "dirty": bool(porcelain), "porcelain": porcelain}
+    status_ok = result.returncode == 0
+    return {
+        "is_git": True,
+        "dirty": not status_ok or bool(porcelain),
+        "porcelain": porcelain,
+        "status_ok": status_ok,
+        "returncode": result.returncode,
+    }
 
 
 def cleanup_empty_parents(path: Path, stop_at: Path) -> None:
     """Remove empty parent directories up to but not including stop_at."""
-    parent = path.parent
-    stop = stop_at.resolve()
-    while parent.resolve() != stop and parent.is_dir():
+    stop = _validate_archive_path(stop_at, stop_at)
+    parent = _validate_archive_path(path, stop).parent
+    while parent != stop and parent.is_dir() and not parent.is_symlink():
         try:
             parent.rmdir()
         except OSError:
@@ -1281,15 +1598,46 @@ def cleanup_empty_parents(path: Path, stop_at: Path) -> None:
         parent = parent.parent
 
 
+def _safe_nonnegative_int(value: Any) -> int:
+    """Return a nonnegative integer for untrusted report counters."""
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _porcelain_sha256(porcelain: str) -> str:
+    """Return the exact SHA256 digest of a git porcelain string."""
+    return hashlib.sha256(str(porcelain).encode("utf-8")).hexdigest()
+
+
 def archive_migration_status(archive_root: Path, fast: bool = False) -> dict:
     """Return compact layout migration status for UI display."""
     git_state = git_worktree_state(archive_root)
-    report = load_json_file(archive_root / ARCHIVE_REPORT)
-    migrated = int(report.get("migrated", 0) or 0) if isinstance(report, dict) else 0
-    if migrated > 0 and git_state["dirty"]:
+    report = _read_json_object_nofollow(archive_root / ARCHIVE_REPORT, archive_root) or {}
+    migrated = _safe_nonnegative_int(report.get("migrated"))
+    removed_duplicates = _safe_nonnegative_int(report.get("removed_duplicates"))
+    legacy_git_state = "status_ok" not in git_state
+    status_ok = bool(git_state.get("status_ok", legacy_git_state))
+    report_hash = report.get("post_migration_porcelain_sha256")
+    current_hash = _porcelain_sha256(git_state.get("porcelain", "")) if status_ok else ""
+    if legacy_git_state and report_hash is None:
+        report_hash = current_hash
+    if not status_ok:
+        return {
+            "status": "git_status_failed",
+            "label": "Archive layout: git status failed",
+            "legacy_count": 0,
+            "git": git_state,
+            "report": report,
+        }
+    if migrated + removed_duplicates > 0 and git_state["dirty"] and isinstance(report_hash, str) and report_hash == current_hash:
         status = "migrated_pending_push"
+        remaining = bool(report.get("remaining_legacy"))
         label = "Archive layout: migrated locally, push pending"
-        return {"status": status, "label": label, "legacy_count": 0, "git": git_state, "report": report}
+        if remaining:
+            label += "; legacy entries remain"
+        return {"status": status, "label": label, "legacy_count": 1 if remaining else 0, "git": git_state, "report": report}
 
     if fast:
         manifest = load_archive_manifest(archive_root)
@@ -1314,63 +1662,123 @@ def archive_migration_status(archive_root: Path, fast: bool = False) -> dict:
     return {"status": status, "label": label, "legacy_count": legacy_count, "git": git_state, "report": report}
 
 
-def migrate_archive_layout(archive_root: Path) -> dict:
-    """Move legacy backtest results into the versioned archive layout when safe."""
+def _migrate_archive_layout_locked(archive_root: Path, max_items: int | None = None) -> dict:
+    """Move legacy results while the archive transaction lock is held."""
+    try:
+        archive_root = _validate_archive_path(archive_root, archive_root, require_exists=True)
+    except RuntimeError as exc:
+        return {"ok": False, "skipped": True, "reason": "unsafe_archive", "error": str(exc), "migrated": 0, "removed_duplicates": 0, "collisions": 0, "failed": 0, "skipped_items": 0, "remaining_legacy": False, "items": []}
     git_state = git_worktree_state(archive_root)
     if not git_state["is_git"]:
-        return {"ok": False, "skipped": True, "reason": "not_git", "git": git_state, "migrated": 0, "removed_duplicates": 0, "collisions": 0, "items": []}
+        return {"ok": False, "skipped": True, "reason": "not_git", "git": git_state, "migrated": 0, "removed_duplicates": 0, "collisions": 0, "failed": 0, "skipped_items": 0, "remaining_legacy": False, "items": []}
+    if not git_state.get("status_ok", False):
+        return {"ok": False, "skipped": True, "reason": "git_status_failed", "git": git_state, "migrated": 0, "removed_duplicates": 0, "collisions": 0, "failed": 0, "skipped_items": 0, "remaining_legacy": False, "items": []}
     if git_state["dirty"]:
-        return {"ok": False, "skipped": True, "reason": "dirty_worktree", "git": git_state, "migrated": 0, "removed_duplicates": 0, "collisions": 0, "items": []}
+        return {"ok": False, "skipped": True, "reason": "dirty_worktree", "git": git_state, "migrated": 0, "removed_duplicates": 0, "collisions": 0, "failed": 0, "skipped_items": 0, "remaining_legacy": False, "items": []}
     items = []
     migrated = 0
     removed_duplicates = 0
     collisions = 0
-    for result_dir in legacy_result_dirs(archive_root):
+    failed = 0
+    skipped_items = 0
+    limit = None if max_items is None else int(max_items)
+    candidates = _iter_legacy_result_dirs(archive_root)
+    selected = list(candidates) if limit is None else list(islice(candidates, limit + 1))
+    truncated = limit is not None and len(selected) > limit
+    if truncated:
+        selected = selected[:limit]
+    for result_dir in selected:
         if not result_dir.exists():
+            skipped_items += 1
+            items.append({"source": str(result_dir), "target": "", "action": "skipped", "outcome": "missing_source"})
             continue
         try:
             rel, meta = derive_backtest_archive_relative_path(result_dir, archive_root)
             dest = archive_root / rel
             source_fingerprint = meta["fingerprint"]
             action = "moved"
+            dest = _validate_archive_path(dest, archive_root)
             if dest.exists():
-                if directory_fingerprint(dest) == source_fingerprint:
-                    shutil.rmtree(str(result_dir), ignore_errors=True)
+                if _valid_backtest_fingerprint(dest, archive_root) == source_fingerprint:
+                    shutil.rmtree(str(result_dir))
+                    if result_dir.exists():
+                        raise RuntimeError(f"Duplicate source still exists after removal: {result_dir}")
                     cleanup_empty_parents(result_dir, archive_root)
                     removed_duplicates += 1
                     action = "removed_duplicate"
                     items.append({"source": str(result_dir), "target": str(dest), "action": action})
                     continue
-                dest = _unique_path_for_collision(dest, source_fingerprint)
+                dest, identical = _unique_path_for_collision(
+                    dest,
+                    source_fingerprint,
+                    lambda candidate: _valid_backtest_fingerprint(candidate, archive_root) == source_fingerprint,
+                )
+                if identical:
+                    shutil.rmtree(str(result_dir))
+                    if result_dir.exists():
+                        raise RuntimeError(f"Duplicate source still exists after removal: {result_dir}")
+                    cleanup_empty_parents(result_dir, archive_root)
+                    removed_duplicates += 1
+                    items.append({"source": str(result_dir), "target": str(dest), "action": "removed_duplicate"})
+                    continue
                 collisions += 1
                 action = "moved_with_suffix"
-            dest.parent.mkdir(parents=True, exist_ok=True)
+            _ensure_archive_directory(dest.parent, archive_root)
+            _validate_archive_path(dest, archive_root)
             shutil.move(str(result_dir), str(dest))
             cleanup_empty_parents(result_dir, archive_root)
             migrated += 1
             items.append({"source": str(result_dir), "target": str(dest), "action": action})
         except Exception as exc:
-            items.append({"source": str(result_dir), "target": "", "action": "skipped", "error": str(exc)})
+            failed += 1
+            items.append({"source": str(result_dir), "target": "", "action": "skipped", "outcome": "failed", "error": str(exc)})
     report = {
-        "ok": True,
+        "ok": failed == 0,
         "skipped": False,
         "migrated": migrated,
         "removed_duplicates": removed_duplicates,
         "collisions": collisions,
+        "failed": failed,
+        "skipped_items": skipped_items,
         "items": items,
+        "truncated": truncated,
+        "remaining_legacy": truncated or failed > 0,
         "created_at": utc_now_iso(),
     }
-    if migrated or removed_duplicates or collisions:
-        atomic_write_json(archive_root / ARCHIVE_REPORT, report)
-        report["manifest"] = rebuild_archive_manifest(archive_root)
+    if migrated or removed_duplicates:
+        if limit is None:
+            report["manifest"] = rebuild_archive_manifest(archive_root)
+        else:
+            report["manifest"] = {"skipped": True, "reason": "bounded_migration"}
+        _atomic_write_archive_json(archive_root / ARCHIVE_REPORT, report, archive_root)
+        post_state = git_worktree_state(archive_root)
+        if post_state.get("status_ok"):
+            report["post_migration_porcelain_sha256"] = _porcelain_sha256(post_state.get("porcelain", ""))
+            _atomic_write_archive_json(archive_root / ARCHIVE_REPORT, report, archive_root)
+        else:
+            report["post_migration_git_status_failed"] = True
+            _atomic_write_archive_json(archive_root / ARCHIVE_REPORT, report, archive_root)
     return report
 
 
-def maybe_migrate_own_archive(archive_name: str, archive_root: Path, own_archive: str) -> dict:
+def migrate_archive_layout(archive_root: Path, max_items: int | None = None) -> dict:
+    """Move legacy backtest results into the versioned archive layout when safe."""
+    if max_items is not None and int(max_items) <= 0:
+        raise ValueError("max_items must be greater than zero")
+    with archive_transaction(archive_root):
+        return _migrate_archive_layout_locked(archive_root, max_items=max_items)
+
+
+def maybe_migrate_own_archive(
+    archive_name: str,
+    archive_root: Path,
+    own_archive: str,
+    max_items: int | None = None,
+) -> dict:
     """Run automatic migration only for the configured own archive."""
     if not own_archive or archive_name != own_archive:
         return {"ran": False, "reason": "not_own_archive", "status": archive_migration_status(archive_root)}
-    result = migrate_archive_layout(archive_root)
+    result = migrate_archive_layout(archive_root, max_items=max_items)
     return {"ran": not result.get("skipped"), "result": result, "status": archive_migration_status(archive_root)}
 
 
@@ -1397,60 +1805,107 @@ def derive_optimize_archive_relative_path(config_name: str, config: dict) -> tup
 def resolve_optimize_archive_destination(archive_root: Path, config_name: str, config: dict) -> tuple[Path, dict, bool]:
     """Return a collision-safe destination for an optimize config archive export."""
     rel, meta = derive_optimize_archive_relative_path(config_name, config)
-    dest = archive_root / rel
+    dest = _validate_archive_path(archive_root / rel, archive_root)
     skipped = False
     if dest.exists():
-        existing = load_json_file(dest)
-        if json_fingerprint(existing) == meta["fingerprint"]:
+        existing = _read_json_object_nofollow(dest, archive_root)
+        if existing is not None and json_fingerprint(existing) == meta["fingerprint"]:
             skipped = True
         else:
             base = dest.with_name(f"{dest.stem}__{safe_path_part(meta['fingerprint'], 'copy')}.json")
-            if base.exists():
-                index = 2
-                while True:
-                    candidate = dest.with_name(f"{dest.stem}__{safe_path_part(meta['fingerprint'], 'copy')}_{index}.json")
-                    if not candidate.exists():
-                        base = candidate
-                        break
-                    index += 1
+            index = 2
+            while base.exists():
+                candidate_data = _read_json_object_nofollow(base, archive_root)
+                if candidate_data is not None and json_fingerprint(candidate_data) == meta["fingerprint"]:
+                    skipped = True
+                    break
+                base = dest.with_name(f"{dest.stem}__{safe_path_part(meta['fingerprint'], 'copy')}_{index}.json")
+                index += 1
             dest = base
-            meta["relative_path"] = dest.relative_to(archive_root).as_posix()
+            meta["relative_path"] = dest.relative_to(_absolute_path(archive_root)).as_posix()
     return dest, meta, skipped
 
 
-def write_optimize_meta(meta_path: Path, meta: dict) -> None:
+def _infer_archive_root(path: Path) -> Path:
+    """Infer an archive root from a generated path, with a safe parent fallback."""
+    absolute_path = _absolute_path(path)
+    for candidate in absolute_path.parents:
+        try:
+            absolute_path.relative_to(candidate / ARCHIVE_LAYOUT_ROOT)
+            return candidate
+        except ValueError:
+            continue
+    return absolute_path.parent
+
+
+def write_optimize_meta(meta_path: Path, meta: dict, archive_root: Path | None = None) -> None:
     """Write sidecar metadata for an archived optimize config."""
-    atomic_write_json(meta_path, meta)
+    selected_root = _absolute_path(archive_root) if archive_root is not None else _infer_archive_root(meta_path)
+    with archive_transaction(selected_root):
+        _atomic_write_archive_json(meta_path, meta, selected_root)
 
 
 def list_archive_optimize_configs(archive_root: Path) -> list[dict]:
     """List archived optimize config JSON files from the versioned archive layout."""
-    base = archive_root / ARCHIVE_LAYOUT_ROOT
     items = []
+    try:
+        archive_root = _validate_archive_path(archive_root, archive_root)
+        base = _validate_archive_path(archive_root / ARCHIVE_LAYOUT_ROOT, archive_root)
+    except RuntimeError:
+        return items
     if not base.exists():
         return items
     for config_file in sorted(base.glob("*/optimize/*.json")):
         if config_file.name.endswith(".meta.json"):
             continue
-        if not is_inside_archive(config_file, archive_root):
+        try:
+            config_file = _validate_archive_path(config_file, archive_root, require_exists=True)
+            config = _read_json_object_nofollow(config_file, archive_root, required=True)
+            meta_file = config_file.with_name(config_file.stem + ".meta.json")
+            meta = _read_json_object_nofollow(meta_file, archive_root) or {}
+            version = config_version_info(config)
+            rel = config_file.relative_to(archive_root).as_posix()
+            items.append({
+                "name": str(meta.get("name") or config_file.stem),
+                "path": str(config_file),
+                "relative_path": rel,
+                "pb7_config_version": str(meta.get("pb7_config_version") or version["pb7_config_version"]),
+                "pbgui_version": str(meta.get("pbgui_version") or version["pbgui_version"]),
+                "fingerprint": str(meta.get("fingerprint") or json_fingerprint(config)),
+                "created_at": str(meta.get("created_at") or ""),
+                "modified": datetime.datetime.fromtimestamp(config_file.stat().st_mtime).isoformat(),
+                "meta": meta,
+            })
+        except (OSError, RuntimeError, ValueError):
             continue
-        config = load_json_file(config_file)
-        meta_file = config_file.with_name(config_file.stem + ".meta.json")
-        meta = load_json_file(meta_file)
-        version = config_version_info(config)
-        rel = config_file.relative_to(archive_root).as_posix()
-        items.append({
-            "name": str(meta.get("name") or config_file.stem),
-            "path": str(config_file),
-            "relative_path": rel,
-            "pb7_config_version": str(meta.get("pb7_config_version") or version["pb7_config_version"]),
-            "pbgui_version": str(meta.get("pbgui_version") or version["pbgui_version"]),
-            "fingerprint": str(meta.get("fingerprint") or json_fingerprint(config)),
-            "created_at": str(meta.get("created_at") or ""),
-            "modified": datetime.datetime.fromtimestamp(config_file.stat().st_mtime).isoformat(),
-            "meta": meta,
-        })
     return items
+
+
+def archive_item_counts(archive_root: Path, manifest: dict | None = None) -> dict:
+    """Return archive item counts from a valid manifest or a safe read-only scan."""
+    selected = manifest
+    if not (
+        isinstance(selected, dict)
+        and selected.get("schema_version") == 1
+        and isinstance(selected.get("items"), list)
+        and all(isinstance(item, dict) for item in selected["items"])
+    ):
+        selected = load_archive_manifest(archive_root)
+    if selected is not None:
+        backtests = sum(item.get("type") == "backtest_result" for item in selected["items"])
+        optimize = sum(item.get("type") == "optimize_config" for item in selected["items"])
+        source = "manifest"
+    else:
+        backtests = len(list_archive_backtest_results(archive_root))
+        optimize = len(list_archive_optimize_configs(archive_root))
+        source = "scan"
+    return {
+        "configs": backtests,
+        "results": backtests,
+        "optimize_configs": optimize,
+        "items": backtests + optimize,
+        "source": source,
+    }
 
 
 def build_archive_manifest(archive_root: Path, scored_results: list[dict] | None = None) -> dict:
@@ -1488,37 +1943,39 @@ def build_archive_manifest(archive_root: Path, scored_results: list[dict] | None
 
 def rebuild_archive_manifest(archive_root: Path) -> dict:
     """Rebuild and atomically write the archive manifest."""
-    manifest = build_archive_manifest(archive_root)
-    atomic_write_json(archive_manifest_path(archive_root), manifest)
-    return manifest
+    with archive_transaction(archive_root):
+        manifest = build_archive_manifest(archive_root)
+        _atomic_write_archive_json(archive_manifest_path(archive_root), manifest, archive_root)
+        return manifest
 
 
 def update_archive_scores_and_readme(archive_root: Path) -> dict:
     """Recalculate scores, write manifest, README score summary, and full score page."""
-    scored = score_archive_results(list_archive_backtest_results(archive_root))
-    manifest = build_archive_manifest(archive_root, scored_results=scored)
-    atomic_write_json(archive_manifest_path(archive_root), manifest)
-    markdown = build_archive_scores_markdown(scored)
-    scores_page_markdown = build_archive_scores_page_markdown(scored, archive_root)
-    scores_page_html = build_archive_scores_html(scored, archive_root)
-    atomic_write_text(archive_scores_path(archive_root), scores_page_markdown)
-    atomic_write_text(archive_scores_html_path(archive_root), scores_page_html)
-    readme_markdown = update_archive_readme(archive_root, scores_markdown=build_archive_scores_summary_markdown(scored, archive_root))
-    return {
-        "ok": True,
-        "score_version": ARCHIVE_SCORE_VERSION,
-        "generated_at": manifest.get("generated_at", utc_now_iso()),
-        "total": len(scored),
-        "scored": len([result for result in scored if result.get("pbgui_score")]),
-        "rows": archive_score_rows(scored, limit=100),
-        "markdown": markdown,
-        "readme_markdown": readme_markdown,
-        "scores_page_markdown": scores_page_markdown,
-        "scores_page_html": scores_page_html,
-        "scores_path": ARCHIVE_SCORES.as_posix(),
-        "scores_html_path": ARCHIVE_SCORES_HTML.as_posix(),
-        "manifest": {"schema_version": manifest.get("schema_version"), "items": len(manifest.get("items", []))},
-    }
+    with archive_transaction(archive_root):
+        scored = score_archive_results(list_archive_backtest_results(archive_root))
+        manifest = build_archive_manifest(archive_root, scored_results=scored)
+        _atomic_write_archive_json(archive_manifest_path(archive_root), manifest, archive_root)
+        markdown = build_archive_scores_markdown(scored)
+        scores_page_markdown = build_archive_scores_page_markdown(scored, archive_root)
+        scores_page_html = build_archive_scores_html(scored, archive_root)
+        _atomic_write_archive_text(archive_scores_path(archive_root), scores_page_markdown, archive_root)
+        _atomic_write_archive_text(archive_scores_html_path(archive_root), scores_page_html, archive_root)
+        readme_markdown = update_archive_readme(archive_root, scores_markdown=build_archive_scores_summary_markdown(scored, archive_root))
+        return {
+            "ok": True,
+            "score_version": ARCHIVE_SCORE_VERSION,
+            "generated_at": manifest.get("generated_at", utc_now_iso()),
+            "total": len(scored),
+            "scored": len([result for result in scored if result.get("pbgui_score")]),
+            "rows": archive_score_rows(scored, limit=100),
+            "markdown": markdown,
+            "readme_markdown": readme_markdown,
+            "scores_page_markdown": scores_page_markdown,
+            "scores_page_html": scores_page_html,
+            "scores_path": ARCHIVE_SCORES.as_posix(),
+            "scores_html_path": ARCHIVE_SCORES_HTML.as_posix(),
+            "manifest": {"schema_version": manifest.get("schema_version"), "items": len(manifest.get("items", []))},
+        }
 
 
 def archive_config_group_dir(result_dir: Path, archive_root: Path) -> Path:
@@ -1531,50 +1988,107 @@ def archive_config_group_dir(result_dir: Path, archive_root: Path) -> Path:
     return result_dir.parent
 
 
-def remove_liquidated_results(archive_root: Path, paths: list[str], scope: str, dry_run: bool) -> dict:
-    """Remove or preview liquidated archived result directories with safety checks."""
+def _remove_liquidated_results_locked(archive_root: Path, paths: list[str], scope: str, dry_run: bool) -> dict:
+    """Remove liquidated results while the archive transaction lock is held."""
     result_paths = []
+    rejected = []
+    seen_paths = set()
     for raw_path in paths or []:
-        result_dir = Path(str(raw_path)).resolve()
-        if not is_inside_archive(result_dir, archive_root):
+        try:
+            result_dir = _validate_archive_path(Path(str(raw_path)), archive_root, require_exists=True)
+            _validate_directory_tree_no_symlinks(result_dir)
+            _read_json_object_nofollow(result_dir / "analysis.json", archive_root, required=True)
+            _read_json_object_nofollow(result_dir / "config.json", archive_root, required=True)
+        except (OSError, RuntimeError, ValueError) as exc:
+            rejected.append({"path": str(raw_path), "ok": False, "removed": False, "outcome": "rejected", "error": str(exc)})
             continue
-        if (result_dir / "analysis.json").exists():
-            result_paths.append(result_dir)
+        text_path = str(result_dir)
+        if text_path in seen_paths:
+            continue
+        seen_paths.add(text_path)
+        result_paths.append(result_dir)
     scope = scope or "selected_results"
-    items = []
+    items = list(rejected)
     removed = 0
+    failed = len(rejected)
+
+    def remove_path(target: Path, item: dict) -> None:
+        """Remove one validated directory and record a verified outcome."""
+        nonlocal removed, failed
+        item["removed"] = False
+        item["ok"] = True
+        if dry_run:
+            item["outcome"] = "dry_run"
+            return
+        try:
+            _validate_archive_path(target, archive_root, require_exists=True)
+            _validate_directory_tree_no_symlinks(target)
+            shutil.rmtree(str(target))
+            if target.exists() or target.is_symlink():
+                raise RuntimeError(f"Archive path still exists after removal: {target}")
+            cleanup_empty_parents(target, archive_root)
+        except Exception as exc:
+            item["ok"] = False
+            item["outcome"] = "failed"
+            item["error"] = str(exc)
+            failed += 1
+            return
+        item["removed"] = True
+        item["outcome"] = "removed"
+        removed += 1
+
     if scope == "config_if_all_results_liquidated":
         groups = sorted({archive_config_group_dir(path, archive_root) for path in result_paths})
         for group in groups:
             summaries = []
-            for analysis_file in sorted(group.glob("**/analysis.json")):
-                result_dir = analysis_file.parent.resolve()
-                if is_inside_archive(result_dir, archive_root):
+            valid_group = True
+            try:
+                _validate_archive_path(group, archive_root, require_exists=True)
+                _validate_directory_tree_no_symlinks(group)
+                for analysis_file in sorted(group.glob("**/analysis.json")):
+                    result_dir = _validate_archive_path(analysis_file.parent, archive_root, require_exists=True)
                     summaries.append(summarize_backtest_result(result_dir, archive_root))
+            except Exception as exc:
+                items.append({"path": str(group), "config_name": group.name, "reason": "unsafe_or_invalid_group", "ok": False, "removed": False, "outcome": "rejected", "error": str(exc)})
+                failed += 1
+                valid_group = False
+            if not valid_group:
+                continue
             if not summaries or not all(item.get("liquidated") for item in summaries):
                 continue
-            items.append({"path": str(group), "config_name": group.name, "reason": "all_results_liquidated", "results": len(summaries)})
-            if not dry_run:
-                shutil.rmtree(str(group), ignore_errors=True)
-                cleanup_empty_parents(group, archive_root)
-                removed += 1
-        return {"ok": True, "dry_run": dry_run, "matched": len(items), "removed": removed, "items": items}
+            item = {"path": str(group), "config_name": group.name, "reason": "all_results_liquidated", "results": len(summaries)}
+            items.append(item)
+            remove_path(group, item)
+        matched = sum(item.get("reason") == "all_results_liquidated" for item in items)
+        return {"ok": failed == 0, "dry_run": dry_run, "matched": matched, "removed": removed, "failed": failed, "items": items}
     for result_dir in result_paths:
-        summary = summarize_backtest_result(result_dir, archive_root)
+        try:
+            summary = summarize_backtest_result(result_dir, archive_root)
+        except Exception as exc:
+            items.append({"path": str(result_dir), "ok": False, "removed": False, "outcome": "rejected", "error": str(exc)})
+            failed += 1
+            continue
         if not summary.get("liquidated"):
             continue
-        items.append({"path": str(result_dir), "config_name": summary.get("config_name", ""), "reason": summary.get("liquidation_reason", "liquidated")})
-        if not dry_run:
-            shutil.rmtree(str(result_dir), ignore_errors=True)
-            cleanup_empty_parents(result_dir, archive_root)
-            removed += 1
-    return {"ok": True, "dry_run": dry_run, "matched": len(items), "removed": removed, "items": items}
+        item = {"path": str(result_dir), "config_name": summary.get("config_name", ""), "reason": summary.get("liquidation_reason", "liquidated")}
+        items.append(item)
+        remove_path(result_dir, item)
+    matched = sum(bool(item.get("reason")) and item.get("reason") != "unsafe_or_invalid_group" for item in items)
+    return {"ok": failed == 0, "dry_run": dry_run, "matched": matched, "removed": removed, "failed": failed, "items": items}
+
+
+def remove_liquidated_results(archive_root: Path, paths: list[str], scope: str, dry_run: bool) -> dict:
+    """Remove or preview liquidated archived result directories with safety checks."""
+    with archive_transaction(archive_root):
+        return _remove_liquidated_results_locked(archive_root, paths, scope, dry_run)
 
 
 def _archive_duplicate_key(result_dir: Path, archive_root: Path) -> tuple | None:
     """Return a conservative duplicate key for an archived result."""
-    if not (result_dir / "analysis.json").exists():
-        return None
+    _validate_archive_path(result_dir, archive_root, require_exists=True)
+    _validate_directory_tree_no_symlinks(result_dir)
+    _read_json_object_nofollow(result_dir / "analysis.json", archive_root, required=True)
+    _read_json_object_nofollow(result_dir / "config.json", archive_root, required=True)
     summary = summarize_backtest_result(result_dir, archive_root)
 
     def rounded(value: Any, digits: int) -> float | str:
@@ -1605,58 +2119,104 @@ def _archive_duplicate_key(result_dir: Path, archive_root: Path) -> tuple | None
     )
 
 
-def remove_duplicate_results(archive_root: Path, paths: list[str], scope: str, dry_run: bool) -> dict:
-    """Remove or preview duplicate archived results, keeping the newest result in each duplicate group."""
+def _remove_duplicate_results_locked(archive_root: Path, paths: list[str], scope: str, dry_run: bool) -> dict:
+    """Remove duplicate results while the archive transaction lock is held."""
     result_paths = []
-    seen_paths = set()
+    items = []
+    seen_paths: set[str] = set()
+    failed = 0
     for raw_path in paths or []:
-        result_dir = Path(str(raw_path)).resolve()
-        if not is_inside_archive(result_dir, archive_root):
+        lexical_path = str(_absolute_path(Path(str(raw_path))))
+        if lexical_path in seen_paths:
             continue
-        if not (result_dir / "analysis.json").exists():
+        seen_paths.add(lexical_path)
+        try:
+            result_dir = _validate_archive_path(Path(str(raw_path)), archive_root, require_exists=True)
+            _validate_directory_tree_no_symlinks(result_dir)
+            _read_json_object_nofollow(result_dir / "analysis.json", archive_root, required=True)
+            _read_json_object_nofollow(result_dir / "config.json", archive_root, required=True)
+        except (OSError, RuntimeError, ValueError) as exc:
+            items.append({"path": str(raw_path), "ok": False, "removed": False, "outcome": "rejected", "error": str(exc)})
+            failed += 1
             continue
-        text_path = str(result_dir)
-        if text_path in seen_paths:
-            continue
-        seen_paths.add(text_path)
         result_paths.append(result_dir)
 
     groups: dict[tuple, list[Path]] = {}
     for result_dir in result_paths:
-        key = _archive_duplicate_key(result_dir, archive_root)
-        if key is None:
+        try:
+            key = _archive_duplicate_key(result_dir, archive_root)
+        except (OSError, RuntimeError, ValueError) as exc:
+            items.append({"path": str(result_dir), "ok": False, "removed": False, "outcome": "rejected", "error": str(exc)})
+            failed += 1
             continue
         groups.setdefault(key, []).append(result_dir)
 
-    items = []
     removed = 0
     for group_paths in groups.values():
         if len(group_paths) < 2:
             continue
-        ordered = sorted(
-            group_paths,
-            key=lambda path: ((path / "analysis.json").stat().st_mtime, path.name),
-            reverse=True,
-        )
-        keep = ordered[0]
-        keep_summary = summarize_backtest_result(keep, archive_root)
+        try:
+            ordered = sorted(
+                group_paths,
+                key=lambda path: ((path / "analysis.json").stat(follow_symlinks=False).st_mtime, path.name),
+                reverse=True,
+            )
+            keep = ordered[0]
+            keep_summary = summarize_backtest_result(keep, archive_root)
+        except (OSError, RuntimeError, ValueError) as exc:
+            for result_dir in group_paths:
+                items.append({"path": str(result_dir), "ok": False, "removed": False, "outcome": "failed", "error": str(exc)})
+                failed += 1
+            continue
         for duplicate in ordered[1:]:
-            summary = summarize_backtest_result(duplicate, archive_root)
-            items.append({
+            try:
+                summary = summarize_backtest_result(duplicate, archive_root)
+            except (OSError, RuntimeError, ValueError) as exc:
+                items.append({"path": str(duplicate), "keep_path": str(keep), "ok": False, "removed": False, "outcome": "rejected", "error": str(exc)})
+                failed += 1
+                continue
+            item = {
                 "path": str(duplicate),
                 "keep_path": str(keep),
                 "config_name": summary.get("config_name", ""),
                 "result_name": summary.get("result_name", ""),
                 "keep_result_name": keep_summary.get("result_name", ""),
                 "reason": "duplicate_of_newer_result",
-            })
-            if not dry_run:
-                shutil.rmtree(str(duplicate), ignore_errors=True)
+                "ok": True,
+                "removed": False,
+                "outcome": "dry_run" if dry_run else "pending",
+            }
+            items.append(item)
+            if dry_run:
+                continue
+            try:
+                _validate_archive_path(duplicate, archive_root, require_exists=True)
+                _validate_directory_tree_no_symlinks(duplicate)
+                _read_json_object_nofollow(duplicate / "analysis.json", archive_root, required=True)
+                _read_json_object_nofollow(duplicate / "config.json", archive_root, required=True)
+                shutil.rmtree(str(duplicate))
+                if duplicate.exists() or duplicate.is_symlink():
+                    raise RuntimeError(f"Archive path still exists after removal: {duplicate}")
                 cleanup_empty_parents(duplicate, archive_root)
-                removed += 1
+            except Exception as exc:
+                item["ok"] = False
+                item["outcome"] = "failed"
+                item["error"] = str(exc)
+                failed += 1
+                continue
+            item["removed"] = True
+            item["outcome"] = "removed"
+            removed += 1
 
     scope = scope or "selected_results"
-    return {"ok": True, "dry_run": dry_run, "scope": scope, "matched": len(items), "removed": removed, "items": items}
+    matched = sum(item.get("reason") == "duplicate_of_newer_result" for item in items)
+    return {"ok": failed == 0, "dry_run": dry_run, "scope": scope, "matched": matched, "removed": removed, "failed": failed, "items": items}
+
+
+def remove_duplicate_results(archive_root: Path, paths: list[str], scope: str, dry_run: bool) -> dict:
+    """Remove or preview duplicate archived results, keeping the newest result in each duplicate group."""
+    with archive_transaction(archive_root):
+        return _remove_duplicate_results_locked(archive_root, paths, scope, dry_run)
 
 
 def ensure_config_version(config: dict, template_loader: Callable[[], dict]) -> dict:
