@@ -28,6 +28,7 @@ from pbgui_purefunc import (
     legacy_auth_secrets_path,
     load_ini,
     pb7_runtime_status,
+    pb8_runtime_status,
     pbgui_auth_secrets_path,
     save_ini_section,
 )
@@ -277,6 +278,8 @@ class PasswordChangeRequest(BaseModel):
 class SetupConfigRequest(BaseModel):
     pb7dir: str = ""
     pb7venv: str = ""
+    pb8dir: Optional[str] = None
+    pb8venv: Optional[str] = None
     pbname: str = ""
     role: str = "slave"
 
@@ -298,6 +301,22 @@ def _resolve_browse_path(raw_path: str) -> tuple[Path, str]:
         current_dir = Path.home().resolve()
 
     return current_dir, selected_path
+
+
+def _validated_setup_path(value: str, label: str) -> str:
+    """Validate a new runtime path before publishing it to pbgui.ini."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if len(raw) > 4096 or any(ord(char) < 32 or ord(char) == 127 for char in raw):
+        raise HTTPException(status_code=400, detail=f"{label} contains invalid characters")
+    path = Path(raw)
+    if not path.is_absolute() or raw.startswith("~"):
+        raise HTTPException(status_code=400, detail=f"{label} must be an absolute path")
+    try:
+        return str(path.resolve(strict=False))
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"{label} is invalid") from exc
 
 
 def get_tokens_dir() -> Path:
@@ -430,6 +449,10 @@ def build_root_entry_response(
 
 def _bootstrap_payload(session: SessionToken | None = None) -> dict:
     auth_state = _password_state()
+    setup = pb7_runtime_status()
+    pb8_setup = pb8_runtime_status()
+    pb8_setup["required"] = bool(setup.get("master"))
+    setup["pb8"] = pb8_setup
     return {
         "version": PBGUI_VERSION,
         "serial": PBGUI_SERIAL,
@@ -445,7 +468,7 @@ def _bootstrap_payload(session: SessionToken | None = None) -> dict:
             "user_id": session.user_id if session else "",
             "expires_at": session.expires_at if session else 0,
         },
-        "setup": pb7_runtime_status(),
+        "setup": setup,
     }
 
 
@@ -791,7 +814,7 @@ def optional_auth(
 
 @router.get("/bootstrap")
 def bootstrap(session: Optional[SessionToken] = Depends(optional_auth)) -> dict:
-    """Return welcome-page bootstrap data for auth and PB7 runtime status."""
+    """Return welcome-page bootstrap data for auth and runtime status."""
     return _bootstrap_payload(session)
 
 
@@ -921,17 +944,23 @@ async def change_password(
 
 @router.post("/setup")
 def save_setup(payload: SetupConfigRequest, session: SessionToken = Depends(require_auth)) -> dict:
-    """Persist PB7 path/interpreter and host identity from the welcome page."""
+    """Persist PB7/PB8 paths and host identity from the welcome page."""
     previous_setup = pb7_runtime_status()
+    previous_pb8 = pb8_runtime_status()
     role = "master" if payload.role == "master" else "slave"
     pbname = payload.pbname.strip() or previous_setup["pbname"]
 
-    save_ini_section("main", {
+    setup_values = {
         "pb7dir": payload.pb7dir.strip(),
         "pb7venv": payload.pb7venv.strip(),
         "pbname": pbname,
         "role": role,
-    })
+    }
+    if payload.pb8dir is not None:
+        setup_values["pb8dir"] = _validated_setup_path(payload.pb8dir, "Passivbot V8 path")
+    if payload.pb8venv is not None:
+        setup_values["pb8venv"] = _validated_setup_path(payload.pb8venv, "Passivbot V8 python interpreter")
+    save_ini_section("main", setup_values)
 
     response = _bootstrap_payload(session)
     current_setup = response["setup"]
@@ -940,6 +969,12 @@ def save_setup(payload: SetupConfigRequest, session: SessionToken = Depends(requ
         for key in ("pb7dir", "pb7venv", "pbname", "role")
         if str(previous_setup.get(key, "")) != str(current_setup.get(key, ""))
     }
+    current_pb8 = current_setup.get("pb8") or {}
+    changed_keys.update(
+        ("main", key)
+        for key in ("pb8dir", "pb8venv")
+        if str(previous_pb8.get(key, "")) != str(current_pb8.get(key, ""))
+    )
     apply = apply_metadata_for(changed_keys)
     response["apply"] = apply
     response["message"] = f"Setup saved. {apply['message']}."

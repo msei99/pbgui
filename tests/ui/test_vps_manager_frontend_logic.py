@@ -105,13 +105,15 @@ class TestVpsManagerFrontendLogic:
         )
 
     def test_log_viewer_restart_waits_for_websocket_reconnect(self) -> None:
-        """Restart commands must not be dropped when the log WebSocket reconnects."""
+        """Reconnects pre-arm the log cursor before sending a queued restart."""
         source = LOG_VIEWER_PATH.read_text(encoding="utf-8")
 
-        assert "this._pendingRestartCommand = obj" in source
-        assert "me._flushPendingRestart(ws)" in source
-        assert "!this._sendRestart({ cmd: 'restart_service'" in source
-        assert "!this._sendRestart({ cmd: 'kill_instance'" in source
+        assert "this._pendingRestartCommand = command" in source
+        assert "if (!me._flushPendingRestart(ws)) me._subscribe()" in source
+        assert "this._prepareRestartStream(cmd)" in source
+        assert "this._sendPreparedRestart(msg.sid)" in source
+        assert "this._send(attempt.command)" in source
+        assert "_sendRestart(" not in source
 
     def test_vps_manager_send_queues_commands_while_websocket_reconnects(self) -> None:
         """VPS Manager commands must not be dropped while its WebSocket reconnects."""

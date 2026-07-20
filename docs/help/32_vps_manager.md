@@ -69,6 +69,7 @@ Sidebar actions:
 | **Update PBGui and PB7** | Update all components |
 | **Update PBGui** | Update only PBGui |
 | **Update PB7** | Update only PB7 |
+| **Install PB8 / Update PB8** | Install PB8 from upstream `master`, or update the existing separate PB8 checkout and virtualenv |
 | **Update Linux** | Run Linux package updates (optional reboot checkbox) |
 | **Reboot Master** | Restart the local server |
 | **Install or Update rustup** | Install or refresh the Rust toolchain |
@@ -81,6 +82,8 @@ The **Master** content area also contains:
 - a **Progress** section with separate status buckets; when a sidebar action starts a master ansible task, the main pane switches to the shared **Command Log Viewer** for the full output, and **Home** returns to the normal master overview
 
 In cluster mode, **Update PBGui** and PBGui branch switches sync the local PBCluster systemd user unit and restart PBCluster. PBCluster is also visible in local service monitoring and service-control views. A manual `git pull` does not restart PBCluster; use `systemctl --user restart pbgui-pbcluster.service` afterward.
+
+PB8 installation is master-only. It uses `<install_dir>/pb8` and `<install_dir>/venv_pb8`, validates the PB8 CLI, Rust extension, and V8 config schema, and then saves `pb8dir` and `pb8venv` in `pbgui.ini`. It does not stop PBRun, PB7, or running PB8 jobs. A selected managed remote master exposes the same action; normal VPS/slave hosts and bulk deployments do not.
 
 ---
 
@@ -104,6 +107,7 @@ Sidebar actions:
 | **Delete VPS** | Remove this VPS from PBGui |
 | **Update PBGui** | Update PBGui on this VPS |
 | **Update PBGui and PB7** | Update all components |
+| **Install PB8 / Update PB8** | Available only when the selected host reports a fresh `master` role; installs or updates the separate PB8 runtime |
 | **Update Linux** | Run `apt upgrade` (optional reboot checkbox) |
 | **Reboot VPS** | Restart the VPS |
 | **Cleanup VPS** | Remove old packages and logs |

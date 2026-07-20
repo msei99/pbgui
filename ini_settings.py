@@ -36,6 +36,7 @@ def _entries(section: str, keys: Iterable[str], owner: str, timing: ApplyTiming,
 _REGISTRY_ENTRIES = [
     *_entries("api_server", ("host", "port", "cors_origins", "ssh_log_level"), "PBApiServer", "api_restart", "API restart required"),
     *_entries("main", ("pbname", "pb7dir", "pb7venv"), "PBRun", "service_restart", "Service restart required"),
+    *_entries("main", ("pb8dir", "pb8venv"), "PB8Runtime", "next_operation", "Applies to next PB8 operation"),
     *_entries("main", ("role",), "PBGui", "next_cycle", "Applies next cycle"),
     *_entries("vps_monitor", ("auto_restart", "enabled_hosts", "debug_logging"), "VPSMonitor", "immediate", "Applied immediately"),
     *_entries("vps_monitor_alerts", ("offline_gui", "service_gui", "system_gui", "instance_gui", "ssh_lost_telegram", "ssh_recovered_telegram", "service_down_telegram", "service_restart_started_telegram", "service_recovered_telegram", "system_problem_telegram", "system_recovered_telegram", "instance_problem_telegram", "instance_recovered_telegram"), "VPSMonitor", "immediate", "Applied immediately"),
@@ -66,7 +67,7 @@ APPLY_GROUPS = {
     "pbcoindata": tuple(key for key in SETTING_APPLY_REGISTRY if key[0] == "coinmarketcap"),
     "logging_rotation": tuple(key for key in SETTING_APPLY_REGISTRY if key[0] == "logging"),
     "config_archive": tuple(key for key in SETTING_APPLY_REGISTRY if key[0] == "config_archive"),
-    "welcome_setup": tuple(key for key in SETTING_APPLY_REGISTRY if key[0] == "main" and key[1] in {"pbname", "pb7dir", "pb7venv", "role"}),
+    "welcome_setup": tuple(key for key in SETTING_APPLY_REGISTRY if key[0] == "main" and key[1] in {"pbname", "pb7dir", "pb7venv", "pb8dir", "pb8venv", "role"}),
     "market_data": tuple(
         key for key in SETTING_APPLY_REGISTRY
         if key[0].endswith("_data")

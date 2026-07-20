@@ -62,6 +62,7 @@ from vps_inventory_store import inventory_file_lock
 
 SERVICE = "CredentialMigration"
 STATE_VERSION = 1
+MANAGED_SCAN_CACHE_VERSION = 1
 PHASES = (
     "protocol_barrier",
     "inventory",
@@ -161,6 +162,8 @@ class CredentialMigrationCoordinator:
         self.root = Path(pbgdir or Path(__file__).resolve().parent).expanduser().resolve(strict=False)
         self.migration_root = self.root / "data" / "credentials" / "migration"
         self.state_path = self.migration_root / "state.json"
+        self.managed_scan_cache_path = self.migration_root / "managed_scan_cache.json"
+        self.managed_scan_cache_key_path = self.migration_root / "managed_scan_cache.key"
         self.backup_root = self.migration_root / "backups"
         self.cluster_root = Path(cluster_root or default_cluster_root(self.root)).resolve(strict=False)
         self.store = credential_store or CredentialStore(self.root / "data" / "credentials")
@@ -1304,9 +1307,42 @@ class CredentialMigrationCoordinator:
                 "_projection_generation" in tradfi and "_source_fingerprint" in tradfi
             ):
                 findings.append("PB7 api-keys.json:legacy tradfi")
-        findings.extend(self._scan_managed_files(sentinels))
+        findings.extend(
+            self._scan_managed_files(
+                sentinels,
+                cache_scope=self._managed_scan_cache_scope(state, sentinels),
+            )
+        )
         findings.extend(self._scan_owned_process_argv(sentinels))
         return sorted(set(findings))
+
+    def _managed_scan_cache_scope(self, state: Mapping[str, Any], sentinels: set[str]) -> str:
+        """Bind cache reuse to the exact in-memory sentinel set without persisting a secret oracle."""
+        try:
+            if self.managed_scan_cache_key_path.is_symlink():
+                raise RuntimeError("Managed credential scan cache key must not be a symlink")
+            secure_private_file(self.managed_scan_cache_key_path)
+            scope_key = bytes.fromhex(self.managed_scan_cache_key_path.read_text(encoding="ascii").strip())
+            if len(scope_key) != 32:
+                raise ValueError("invalid key length")
+        except (OSError, UnicodeError, ValueError):
+            scope_key = os.urandom(32)
+            atomic_write_private_text(self.managed_scan_cache_key_path, scope_key.hex() + "\n")
+        sentinel_mac = hmac.new(scope_key, digestmod=hashlib.sha256)
+        for value in sorted(sentinels):
+            encoded = value.encode("utf-8")
+            sentinel_mac.update(len(encoded).to_bytes(8, "big"))
+            sentinel_mac.update(encoded)
+        payload = {
+            "state_version": state.get("version"),
+            "operation_id": state.get("operation_id"),
+            "freeze_generation": state.get("freeze_generation"),
+            "cutoff_generation": state.get("cutoff_generation"),
+            "sentinel_mac": sentinel_mac.hexdigest(),
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
 
     def _known_migration_sentinels(self, state: Mapping[str, Any]) -> set[str]:
         """Retain migration plaintexts only in memory from approved private records."""
@@ -1386,11 +1422,25 @@ class CredentialMigrationCoordinator:
             sentinels.update(_legacy_backup_values(path.read_bytes()))
         return sentinels
 
-    def _scan_managed_files(self, sentinels: set[str]) -> list[str]:
+    def _scan_managed_files(self, sentinels: set[str], *, cache_scope: str = "") -> list[str]:
         """Scan only PBGui-managed logs, task metadata, and Cluster blobs."""
 
         findings: list[str] = []
         encoded = [value.encode("utf-8") for value in sentinels]
+        cached_files: dict[str, list[int]] = {}
+        if cache_scope and self.managed_scan_cache_path.is_file() and not self.managed_scan_cache_path.is_symlink():
+            try:
+                cached = json.loads(self.managed_scan_cache_path.read_text(encoding="utf-8"))
+                if (
+                    isinstance(cached, dict)
+                    and cached.get("version") == MANAGED_SCAN_CACHE_VERSION
+                    and cached.get("scope") == cache_scope
+                    and isinstance(cached.get("files"), dict)
+                ):
+                    cached_files = cached["files"]
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                cached_files = {}
+        current_files: dict[str, list[int]] = {}
         roots = (
             (self.root / "data" / "logs", "managed-log", None),
             (self.root / "data" / "ohlcv" / "_tasks", "task-metadata", {".json"}),
@@ -1409,9 +1459,27 @@ class CredentialMigrationCoordinator:
                     continue
                 if suffixes is not None and path.suffix.lower() not in suffixes:
                     continue
+                try:
+                    file_stat = path.stat()
+                except OSError:
+                    continue
+                cache_key = str(path)
+                signature = [
+                    int(file_stat.st_dev),
+                    int(file_stat.st_ino),
+                    int(file_stat.st_size),
+                    int(file_stat.st_mtime_ns),
+                    int(file_stat.st_ctime_ns),
+                ]
+                previous_signature = cached_files.get(cache_key)
+                if previous_signature == signature:
+                    current_files[cache_key] = signature
+                    continue
                 if label == "managed-log":
                     if _file_contains_any(path, encoded):
                         findings.append(f"{self._relative_source_name(path)}:{label}")
+                    else:
+                        current_files[cache_key] = signature
                     continue
                 try:
                     raw = path.read_bytes()
@@ -1424,13 +1492,29 @@ class CredentialMigrationCoordinator:
                     except (UnicodeDecodeError, json.JSONDecodeError):
                         payload = None
                     if payload is not None:
-                        findings.extend(
+                        file_findings = [
                             f"{relative}:{field}"
                             for field in _json_secret_locations(payload, sentinels)
-                        )
+                        ]
+                        findings.extend(file_findings)
+                        if not file_findings:
+                            current_files[cache_key] = signature
                         continue
                 if any(value in raw for value in encoded):
                     findings.append(f"{relative}:{label}")
+                else:
+                    current_files[cache_key] = signature
+        if cache_scope:
+            cache_payload = {
+                "version": MANAGED_SCAN_CACHE_VERSION,
+                "scope": cache_scope,
+                "files": current_files,
+            }
+            if current_files != cached_files:
+                atomic_write_private_text(
+                    self.managed_scan_cache_path,
+                    json.dumps(cache_payload, sort_keys=True, separators=(",", ":")) + "\n",
+                )
         return findings
 
     def _scan_owned_process_argv(self, sentinels: set[str]) -> list[str]:
@@ -2769,7 +2853,7 @@ def _legacy_backup_values(raw: bytes) -> set[str]:
     return values
 
 
-def _file_contains_any(path: Path, needles: list[bytes]) -> bool:
+def _file_contains_any(path: Path, needles: list[bytes], *, start_offset: int = 0) -> bool:
     """Search a managed file in bounded chunks without rendering its content."""
 
     if not needles:
@@ -2778,6 +2862,8 @@ def _file_contains_any(path: Path, needles: list[bytes]) -> bool:
     previous = b""
     try:
         with path.open("rb") as handle:
+            if start_offset > 0:
+                handle.seek(start_offset)
             while True:
                 chunk = handle.read(1024 * 1024)
                 if not chunk:

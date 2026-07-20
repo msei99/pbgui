@@ -25,6 +25,7 @@ Table columns:
 | **G** | Set global Graceful Stop forced mode for long and short positions, save the config, and sync it after a safety confirmation |
 | **T** | Set global Take Profit Only forced mode for long and short positions, save the config, and sync it after a safety confirmation |
 | **Edit** | Open the instance in the edit form |
+| **V8** | Convert this exact V7 run config with PB8's official migrator and open the new config in PBv8 Backtest |
 | **User** | API-key user assigned to this instance |
 | **Enabled On** | VPS where the bot is deployed (`disabled` = not deployed) |
 | **TWE** | Total Wallet Exposure — `L=` long / `S=` short |
@@ -35,6 +36,8 @@ Table columns:
 | **Delete** | Remove the instance (not allowed while running) |
 
 The `P`, `G`, and `T` row buttons write PB7 `live.forced_mode_long` and `live.forced_mode_short` in `config.json`, bump the instance config version, create a backup of the previous config, and sync the changed config to the target host. They are Passivbot forced-mode actions, not direct exchange orders.
+
+**V8** leaves the V7 run config unchanged. PBGui removes only its own metadata and stale temporary loader path before invoking PB8. If PB8 reports unsupported or manual-review strategy fields, conversion stops and shows those fields instead of publishing a runnable V8 config.
 
 **Remote status icons:**
 

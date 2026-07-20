@@ -125,6 +125,18 @@ tr.row-inactive td  { opacity: 0.45; }
   cursor: pointer;
 }
 .btn-edit:hover { background: var(--bg3); }
+.btn-v8 {
+  height: 24px; min-width: 28px;
+  padding: 0 4px;
+  font-size: var(--fs-xs);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg2);
+  color: var(--accent);
+  cursor: pointer;
+  margin-left: 4px;
+}
+.btn-v8:hover { background: var(--bg3); }
 .btn-del {
   height: 24px; width: 28px;
   padding: 0;
@@ -631,6 +643,8 @@ function buildCells(r) {
     '<button class="btn-graceful" data-forced-mode="graceful_stop" data-forced-name="' + esc(r.name) + '" title="Graceful stop all positions">G</button>' +
     '<button class="btn-tp-only" data-forced-mode="tp_only" data-forced-name="' + esc(r.name) + '" title="Take Profit Only all positions">T</button>' +
     '<button class="btn-edit" data-edit="' + esc(r.name) + '" title="Edit">\u270E</button>' +
+    '<button class="btn-edit" data-balance="' + esc(r.name) + '" title="Open Balance Calculator">$</button>' +
+    '<button class="btn-v8" data-convert-v8="' + esc(r.name) + '" title="Convert this V7 run config to V8">V8</button>' +
     '<button class="btn-del" data-delete="' + esc(r.name) + '" title="Delete">\u2716</button>',
   ];
 }
@@ -780,6 +794,39 @@ function addInstance() {
   window.location.href = url;
 }
 
+async function convertInstanceToV8(name) {
+  var targetName = String(name || '').replace(/[\\/\x00-\x1f]/g, '_').slice(0, 120) + '_v8';
+  try {
+    var response = await fetch(window.location.origin + '/api/backtest-v8/migrate-v7', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_type: 'run_config', source_name: name, target_name: targetName })
+    });
+    var payload = await response.json().catch(function() { return {}; });
+    if (response.status === 409) {
+      await window.PBGuiDialogs.alert({
+        title: 'V8 config already exists',
+        message: payload.detail || ('Config "' + targetName + '" already exists.'),
+        detail: 'The existing V8 config will be opened without overwriting it.',
+        confirmText: 'Open'
+      });
+      window.location.href = window.location.origin + '/api/backtest-v8/main_page?config=' + encodeURIComponent(targetName);
+      return;
+    }
+    if (!response.ok) throw new Error(payload.detail || ('HTTP ' + response.status));
+    window.location.href = window.location.origin + '/api/backtest-v8/main_page?config=' + encodeURIComponent(payload.name || targetName);
+  } catch (error) {
+    toast('V8 conversion failed: ' + error.message, 'err');
+    await window.PBGuiDialogs.alert({
+      title: 'V8 conversion failed',
+      message: error.message,
+      detail: 'The V7 run config was not changed and no runnable V8 config was published.',
+      confirmText: 'OK'
+    });
+  }
+}
+
 /* ─── Delete Instance (modal confirm → API DELETE) ────────── */
 function confirmDelete(name) {
   var inst = instances.find(function(r) { return r.name === name; });
@@ -838,6 +885,13 @@ function executeDelete(name) {
     closeModal();
     toast('Delete failed: ' + e.message, 'err');
   });
+}
+
+function openBalanceCalculator(name) {
+  var inst = instances.find(function(item) { return item.name === name; }) || {};
+  var params = new URLSearchParams({ instance: name });
+  if (inst.exchange) params.set('exchange', String(inst.exchange).toLowerCase());
+  window.location.href = window.location.origin + '/api/balance-calc/main_page?' + params.toString();
 }
 
 function confirmForcedMode(name, mode) {
@@ -1240,6 +1294,10 @@ document.getElementById('f-status').onchange = function(e) {
 document.getElementById('tbody').addEventListener('click', function(e) {
   var btn = e.target.closest('[data-edit]');
   if (btn) { editInstance(btn.dataset.edit); return; }
+  btn = e.target.closest('[data-balance]');
+  if (btn) { openBalanceCalculator(btn.dataset.balance); return; }
+  btn = e.target.closest('[data-convert-v8]');
+  if (btn) { convertInstanceToV8(btn.dataset.convertV8); return; }
   btn = e.target.closest('[data-forced-mode]');
   if (btn) { confirmForcedMode(btn.dataset.forcedName, btn.dataset.forcedMode); return; }
   btn = e.target.closest('[data-delete]');
@@ -1247,7 +1305,7 @@ document.getElementById('tbody').addEventListener('click', function(e) {
 });
 
 document.getElementById('tbody').addEventListener('dblclick', function(e) {
-  if (e.target.closest('[data-edit],[data-delete],[data-forced-mode]')) return;
+  if (e.target.closest('[data-edit],[data-balance],[data-delete],[data-forced-mode],[data-convert-v8]')) return;
   var tr = e.target.closest('tr[data-key]');
   if (tr) editInstance(tr.dataset.key);
 });

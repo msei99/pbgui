@@ -2649,6 +2649,10 @@ def main_page(
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
     html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
     html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
+    html = html.replace("%%BACKTEST_VERSION%%", "v7")
+    html = html.replace("%%BACKTEST_LABEL%%", "V7")
+    html = html.replace("%%BACKTEST_SUBTITLE%%", "PBv7 BACKTEST")
+    html = html.replace("%%BACKTEST_NAV_CURRENT%%", "v7_backtest")
 
     nav_js = Path(__file__).resolve().parent.parent / "frontend" / "pbgui_nav.js"
     nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION

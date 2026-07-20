@@ -2987,7 +2987,7 @@
     </main>
   </div>
 
-  <script src='/app/js/log_viewer_panel.js?v=27'></script>
+  <script src='/app/js/log_viewer_panel.js?v=28'></script>
   <script>
     const API_BASE = "%%API_BASE%%";
     const WS_BASE = "%%WS_BASE%%";
@@ -4053,6 +4053,9 @@
           hosts: getManagedRows().map(function (row) { return row.hostname; }),
           pbgui_up: !!st.pbgui_update_available,
           pb7_up: !!st.pb7_update_available,
+          pb8_installed: !!st.pb8_installed,
+          pb8_up: !!st.pb8_update_available,
+          pb8_allowed: !!st.pb8_action_allowed,
           pending_updates: st.pending_updates == null ? String(((st.summary_row || {}).updates) || '') : String(st.pending_updates),
           reboot_required: !!((st.summary_row || {}).reboot_required),
           host_key_error: !!st.host_key_error,
@@ -4066,6 +4069,9 @@
           view: store.view,
           pbgui_up: !!st.pbgui_update_available,
           pb7_up: !!st.pb7_update_available,
+          pb8_installed: !!st.pb8_installed,
+          pb8_up: !!st.pb8_update_available,
+          pb8_allowed: !!st.pb8_action_allowed,
           pending_updates: st.pending_updates == null ? '' : String(st.pending_updates),
           reboot_required: !!((st.summary_row || {}).reboot_required),
           debug: !!store.master.debug,
@@ -10145,6 +10151,8 @@
         const st = (detail && detail.status) || {};
         const masterPbguiBtnClass = st.pbgui_update_available ? 'sb-btn warning' : 'sb-btn ok';
         const masterPb7BtnClass = st.pb7_update_available ? 'sb-btn warning' : 'sb-btn ok';
+        const masterPb8BtnClass = st.pb8_update_available ? 'sb-btn warning' : (st.pb8_installed ? 'sb-btn ok' : 'sb-btn info');
+        const masterPb8ButtonText = st.pb8_installed ? 'Update PB8' : 'Install PB8';
         const masterBothBtnClass = (st.pbgui_update_available || st.pb7_update_available) ? 'sb-btn warning' : 'sb-btn ok';
         const pendingSrc = st.pending_updates != null ? st.pending_updates : ((st.summary_row || {}).updates);
         const hasLinuxUpdates = String(pendingSrc || '').trim() && String(pendingSrc).trim() !== '0' && String(pendingSrc).trim() !== 'N/A';
@@ -10173,6 +10181,7 @@
           <button class='${masterBothBtnClass} primary' type='button' onclick='runMasterWithLog("master-update-pb", "Update PBGui and PB7")'>Update PBGui and PB7</button>
           <button class='${masterPbguiBtnClass}' type='button' onclick='runMasterWithLog("master-update-pbgui", "Update PBGui")'>Update PBGui</button>
           <button class='${masterPb7BtnClass}' type='button' onclick='runMasterWithLog("master-update-pb7", "Update PB7")'>Update PB7</button>
+          ${st.pb8_action_allowed ? `<button class='${masterPb8BtnClass}' type='button' onclick='runMasterWithLog("master-update-pb8", "${masterPb8ButtonText}")'>${masterPb8ButtonText}</button>` : ''}
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' ${store.master.updateReboot ? 'checked' : ''} ${linuxUpdateSupported ? '' : 'disabled'} onchange="setMasterBool('updateReboot', this.checked)"> Reboot after Linux update</label>
           </div>
@@ -10191,6 +10200,8 @@
         const isRemoteMaster = String(((st.summary_row || {}).role) || '').toLowerCase() === 'master';
         const pbguiBtnClass = st.pbgui_update_available ? 'sb-btn warning' : 'sb-btn ok';
         const pb7BtnClass = st.pb7_update_available ? 'sb-btn warning' : 'sb-btn ok';
+        const pb8BtnClass = st.pb8_update_available ? 'sb-btn warning' : (st.pb8_installed ? 'sb-btn ok' : 'sb-btn info');
+        const pb8ButtonText = st.pb8_installed ? 'Update PB8' : 'Install PB8';
         const bothBtnClass = (st.pbgui_update_available || st.pb7_update_available) ? 'sb-btn warning' : 'sb-btn ok';
         const pendingSrc = st.pending_updates != null ? st.pending_updates : ((st.summary_row || {}).updates);
         const hasLinuxUpdates = String(pendingSrc || '').trim() && String(pendingSrc).trim() !== '0' && String(pendingSrc).trim() !== 'N/A';
@@ -10231,6 +10242,7 @@
           </div>
           <button class='${pbguiBtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pbgui' data-command-text='Update PBGui'>Update PBGui</button>
           <button class='${pb7BtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb7' data-command-text='Update PB7'>Update PB7</button>
+          ${isRemoteMaster && st.pb8_action_allowed ? `<button class='${pb8BtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb8' data-command-text='${pb8ButtonText}'>${pb8ButtonText}</button>` : ''}
           <button class='${bothBtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb' data-command-text='Update PBGui and PB7'>Update PBGui and PB7</button>
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' data-update-reboot-toggle='${escAttr(selectedHost)}' data-vps-ui-field='updateReboot' data-host='${escAttr(selectedHost)}' ${ui.updateReboot ? 'checked' : ''}> Reboot after Linux update</label>

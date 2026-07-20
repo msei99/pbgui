@@ -61,6 +61,7 @@
       { page: 'dashboards',           icon: '&#128202;', label: 'Dashboards'        },
       { page: 'info_coin_data',       icon: '&#129689;', label: 'Coin Data'         },
       { page: 'info_market_data_fastapi', icon: '&#128187;', label: 'Market Data' },
+      { page: 'info_balance_calc',    icon: '&#128176;', label: 'Balance Calculator'},
       { page: 'help',                 icon: '&#10067;',  label: 'Help'              }
     ]},
     { id: 'pbv7', label: 'PBv7', items: [
@@ -68,8 +69,10 @@
       { page: 'v7_backtest',          icon: '&#9194;',   label: 'Backtest'          },
       { page: 'v7_optimize',          icon: '&#9881;',   label: 'Optimize'          },
       { page: 'v7_strategy_explorer', icon: '&#128065;', label: 'Strategy Explorer' },
-      { page: 'v7_balance_calc',      icon: '&#128176;', label: 'Balance Calculator'},
       { page: 'v7_pareto_explorer',   icon: '&#127919;', label: 'Pareto Explorer'   }
+    ]},
+    { id: 'pbv8', label: 'PBv8', items: [
+      { page: 'v8_backtest',          icon: '&#9194;',   label: 'Backtest'          }
     ]}
   ];
 
@@ -134,6 +137,7 @@
     'font-size:var(--fs-xs);font-weight:800;letter-spacing:.05em;white-space:nowrap;}',
     '#pbgui-auth-mode-pill.visible{display:inline-flex;}',
     '@media(max-width:920px){#pbgui-master-pill{display:none!important;}}',
+    '@media(max-width:760px){#nav-logo{width:42px;padding-right:5px;overflow:hidden;}button.nav-group-btn{width:32px;padding:.3rem .2rem;font-size:0;justify-content:center;}button.nav-group-btn[data-group="system"]::before{content:"S";}button.nav-group-btn[data-group="information"]::before{content:"I";}button.nav-group-btn[data-group="pbv7"]::before{content:"7";}button.nav-group-btn[data-group="pbv8"]::before{content:"8";}button.nav-group-btn::before{font-size:12px;font-weight:700;}#nav-right{padding-right:0;gap:2px;}#nav-right .nav-divider{display:none!important;}#pbgui-restart-btn,#pbgui-notify-btn,#pbgui-alert-btn,#pbgui-guide-btn,#pbgui-about-btn{width:26px;min-width:26px;padding:0;justify-content:center;font-size:0;}#pbgui-restart-btn .nav-restart-dot,#pbgui-alert-badge{display:none;}#pbgui-restart-btn::after{content:"R";}#pbgui-notify-btn::after{content:"N";}#pbgui-alert-btn::after{content:"A";}#pbgui-guide-btn::after{content:"G";}#pbgui-about-btn::after{content:"i";}#pbgui-restart-btn::after,#pbgui-notify-btn::after,#pbgui-alert-btn::after,#pbgui-guide-btn::after,#pbgui-about-btn::after{font-size:12px;font-weight:700;}.nav-dropdown{position:fixed;top:53px;left:8px;right:8px;min-width:0;}}',
     '.nav-action-btn{display:flex;align-items:center;gap:0.35rem;padding:0.3rem 0.75rem;',
     'border-radius:6px;background:transparent;border:1px solid transparent;',
     'color:#64748b;font-size:var(--fs-sm);font-weight:500;cursor:pointer;',
@@ -405,7 +409,7 @@
   function _ensureLogViewer(cb) {
     if (typeof window.LogViewerPanel === 'function') { cb(); return; }
     var s = document.createElement('script');
-    s.src = '/app/js/log_viewer_panel.js?v=27';
+    s.src = '/app/js/log_viewer_panel.js?v=28';
     s.onload = cb;
     s.onerror = function() { console.warn('Failed to load log_viewer_panel.js'); };
     document.head.appendChild(s);
@@ -500,7 +504,7 @@
         wsBase: _getWsBase(),
         token: cfg().token,
         defaultHost: 'local',
-        defaultFile: 'PBV7UI.log',
+        defaultFile: 'PBGui.log',
         presets: 'system',
         showRestart: false,
         height: '100%'
@@ -981,13 +985,14 @@
     'system_vps_monitor': '/api/vps/main_page',
     'system_services':    '/api/services/main_page',
     'system_db_tools':    '/api/db-tools/main_page',
-    'help':               '/app/help.html?v=1765',
+    'help':               '/app/help.html?v=1766',
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',
     'v7_optimize':        '/api/optimize-v7/main_page',
     'v7_pareto_explorer': '/api/pareto-explorer/main_page',
     'v7_strategy_explorer': '/api/strategy-explorer/main_page',
-    'v7_balance_calc':    '/api/balance-calc/main_page'
+    'info_balance_calc':  '/api/balance-calc/main_page',
+    'v8_backtest':        '/api/backtest-v8/main_page'
   };
 
   /* Every registered page must resolve to an existing EN/DE shared-help topic. */
@@ -1009,7 +1014,8 @@
     'v7_optimize':                 '36_pbv7_optimize',
     'v7_pareto_explorer':          '37_pareto_explorer',
     'v7_strategy_explorer':        '00_strategy_explorer_help',
-    'v7_balance_calc':             '38_balance_calc'
+    'info_balance_calc':           '38_balance_calc',
+    'v8_backtest':                 '42_pbv8_backtest'
   };
 
   function syncHelpOverlayState() {
@@ -1453,7 +1459,26 @@
      ════════════════════════════════════ */
 
   /* Redirect to the standalone root login when token is invalid/expired. */
+  var _authRedirecting = false;
+  function replaceTopLocation(url) {
+    try {
+      if (window.top) {
+        window.top.location.replace(url);
+        return;
+      }
+    } catch (e) {
+      /* Fall back when a browser blocks top-level access. */
+    }
+    window.location.replace(url);
+  }
+
   function redirectToLogin() {
+    if (_authRedirecting) return;
+    _authRedirecting = true;
+    if (_refreshTimer) {
+      clearInterval(_refreshTimer);
+      _refreshTimer = null;
+    }
     var c = cfg();
     var origin = '';
     if (c.apiBase) {
@@ -1462,7 +1487,7 @@
     }
     if (!origin) origin = window.location.origin;
     var url = new URL(origin + '/');
-    window.location.replace(url.toString());
+    replaceTopLocation(url.toString());
   }
 
   function performLogout() {
@@ -1474,16 +1499,11 @@
     }
     if (!origin) origin = window.location.origin;
 
-    var redirect = function () {
-      var url = new URL(origin + '/');
-      window.location.replace(url.toString());
-    };
-
     fetch(origin + '/api/auth/logout', authOptions(c.token, {
       method: 'POST',
       credentials: 'same-origin'
     })).finally(function () {
-      redirect();
+      redirectToLogin();
     });
   }
 
@@ -1519,6 +1539,7 @@
     if (_refreshTimer) return;
     var c = cfg();
     function doRefresh() {
+      if (_authRedirecting) return;
       _origFetch(tokenRefreshUrl(), authOptions(c.token, { method: 'POST' }))
         .then(function (r) {
           if (r.status === 401) { redirectToLogin(); }

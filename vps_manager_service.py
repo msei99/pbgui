@@ -40,9 +40,9 @@ from master.cluster_state import ClusterStateError, default_cluster_root, local_
 from MonitorConfig import MonitorConfig
 from PBCoinData import CoinData
 from pb7_guard import PB7_PINNED_COMMIT
-from pb7_release import build_local_pb7_release_info, get_current_pb7_status, load_more_pb7_commits
+from pb7_release import build_local_pb7_release_info, get_current_pb7_status, load_more_pb7_commits, read_local_pb7_version
 from pbgui_release import build_local_pbgui_release_info, load_more_pbgui_commits
-from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, load_ini_section, pb7dir as configured_pb7dir, save_ini, save_ini_section
+from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, load_ini_section, pb7dir as configured_pb7dir, pb8dir as configured_pb8dir, pb8venv as configured_pb8venv, save_ini, save_ini_section
 from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir, _register_vps_cluster_node, _strict_ssh_client, _validate_vps_hostname, strip_ansi
 from vps_inventory_store import delete_inventory_path
 
@@ -50,6 +50,7 @@ SERVICE = "VPSManagerApi"
 
 PB7_UPSTREAM_REMOTE_NAME = "origin"
 PB7_UPSTREAM_REMOTE_URL = "https://github.com/enarjord/passivbot.git"
+COMMAND_MASTER_UPDATE_PB8 = "master-update-pb8"
 SWAP_OPTIONS = ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"]
 INIT_METHODS = ["root", "password", "private_key"]
 SESSION_SECRET_TTL_SECONDS = 15 * 60
@@ -111,11 +112,45 @@ def _pb7_branch_label(branch: Any, commit: Any) -> str:
     return value
 
 
+def _pb8_runtime_info(repo_dir: str, python_path: str) -> dict[str, Any]:
+    """Return static PB8 readiness details without importing PB8 into PBGui."""
+    branch, commit = get_current_pb7_status(repo_dir)
+    version = read_local_pb7_version(repo_dir)
+    schema = "N/A"
+    schema_path = Path(repo_dir) / "src" / "config" / "schema.py" if repo_dir else None
+    try:
+        content = schema_path.read_text(encoding="utf-8") if schema_path and schema_path.is_file() else ""
+        match = re.search(r'CONFIG_SCHEMA_VERSION\s*=\s*["\']([^"\']+)["\']', content)
+        if match:
+            schema = match.group(1)
+    except OSError:
+        pass
+    cli_path = Path(python_path).parent / "passivbot" if python_path else None
+    ready = bool(
+        version.startswith("v8.")
+        and schema.startswith("v8.")
+        and commit
+        and python_path
+        and Path(python_path).is_file()
+        and cli_path
+        and cli_path.is_file()
+    )
+    return {
+        "installed": ready,
+        "version": version,
+        "config_version": schema,
+        "branch": branch,
+        "commit": commit,
+        "python_version": _python_major_minor(python_path),
+    }
+
+
 VPS_DEPLOY_SECTION = "vps_deploy"
 COMMAND_VPS_DEPLOY_LOGGING = "vps-deploy-logging"
 COMMAND_VPS_UPDATE = "vps-update"
 COMMAND_VPS_UPDATE_PBGUI = "vps-update-pbgui"
 COMMAND_VPS_UPDATE_PB7 = "vps-update-pb7"
+COMMAND_VPS_UPDATE_PB8 = "vps-update-pb8"
 COMMAND_VPS_UPDATE_PB = "vps-update-pb"
 COMMAND_VPS_CLEANUP = "vps-cleanup"
 COMMAND_VPS_APPLY_CONFIG = "vps-apply-config"
@@ -1646,6 +1681,13 @@ class VPSManagerService:
                 "status": master_status or "running",
                 "command_text": str(getattr(self.vpsmanager, "command_text", "") or "Master Task"),
             })
+        elif getattr(self.vpsmanager, "_master_update_lease", None) is not None:
+            items.append({
+                "hostname": "local",
+                "phase": "master-lock",
+                "status": master_status or "starting",
+                "command_text": str(getattr(self.vpsmanager, "command_text", "") or "Master Update"),
+            })
         cluster_imports: list[dict[str, Any]] = []
         cluster_import_lock = getattr(self, "_cluster_import_jobs_lock", None)
         if cluster_import_lock is not None:
@@ -1922,12 +1964,13 @@ class VPSManagerService:
             if current_item is None:
                 next_items.append(loaded)
                 continue
-            if not (
-                _status_running(current_item.init_status)
-                or _status_running(current_item.setup_status)
-                or _status_running(current_item.update_status)
-            ):
-                current_item.load(str(host_file))
+            with self._host_task_start_lock(loaded.hostname):
+                if not (
+                    _status_running(current_item.init_status)
+                    or _status_running(current_item.setup_status)
+                    or _status_running(current_item.update_status)
+                ):
+                    current_item.load(str(host_file))
             next_items.append(current_item)
         for item in self.vpsmanager.vpss:
             if item.hostname and item.hostname not in existing_hosts:
@@ -3084,6 +3127,7 @@ class VPSManagerService:
     def _build_master_overview_row(self) -> dict[str, Any]:
         pbgui_release = self._get_pbgui_release()
         pb7_release = dict(self._get_pb7_release())
+        pb8_info = _pb8_runtime_info(configured_pb8dir(), configured_pb8venv())
         live_pb7_branch, live_pb7_commit = get_current_pb7_status(_configured_pb7dir())
         if live_pb7_commit:
             pb7_release["current_branch"] = live_pb7_branch
@@ -3119,6 +3163,10 @@ class VPSManagerService:
             "pb7": f"{str(pb7_release.get('version') or 'N/A')}{'' if local_pb7_python in (None, '', 'N/A') else ' /' + str(local_pb7_python)}",
             "pb7_branch": f"{master_pb7_branch} ({_short_commit(master_pb7_commit)})",
             "pb7_github": self._build_master_pb7_github_status(master_pb7_branch, master_pb7_commit),
+            "pb8": f"{str(pb8_info.get('version') or 'N/A')}{'' if pb8_info.get('python_version') in (None, '', 'N/A') else ' /' + str(pb8_info.get('python_version'))}",
+            "pb8_branch": f"{str(pb8_info.get('branch') or 'unknown')} ({_short_commit(pb8_info.get('commit'))})",
+            "pb8_github": self._build_pb8_github_status(str(pb8_info.get('commit') or "")),
+            "pb8_installed": bool(pb8_info.get("installed")),
         }
 
     def _build_vps_overview_row(self,
@@ -3200,6 +3248,10 @@ class VPSManagerService:
             "pb7": f"{meta.get('pb7v', 'N/A')}{'' if meta.get('pb7py', 'N/A') in (None, '', 'N/A') else ' /' + str(meta.get('pb7py'))}",
             "pb7_branch": f"{_pb7_branch_label(meta.get('pb7b'), meta.get('pb7c'))} ({_short_commit(meta.get('pb7c'))})",
             "pb7_github": self._build_remote_pb7_github_status(host_state),
+            "pb8": f"{meta.get('pb8v', 'N/A')}{'' if meta.get('pb8py', 'N/A') in (None, '', 'N/A') else ' /' + str(meta.get('pb8py'))}",
+            "pb8_branch": f"{meta.get('pb8b', 'unknown')} ({_short_commit(meta.get('pb8c'))})",
+            "pb8_github": self._build_pb8_github_status(str(meta.get('pb8c') or "")),
+            "pb8_installed": bool(meta.get("pb8ready")),
             "rtd": min(self._build_remote_rtd(host_state), 9999),
             "task_command": str(getattr(vps, "command", "") or "") if vps else "",
             "task_command_text": str(getattr(vps, "command_text", "") or "") if vps else "",
@@ -3287,6 +3339,18 @@ class VPSManagerService:
             return f"❌ {str(release_info.get('origin_version') or 'N/A')} ({_short_commit(str(release_info.get('origin_commit') or ''))})"
         return f"⚠️ {server_version}"
 
+    def _build_pb8_github_status(self, current_commit: str) -> str:
+        """Compare one PB8 checkout with the latest upstream master commit."""
+        if not current_commit:
+            return ""
+        release_info = self._get_pb7_release()
+        origin_commit = str(release_info.get("origin_commit") or "")
+        if not origin_commit:
+            return "⚠️ upstream unavailable"
+        if current_commit == origin_commit:
+            return "✅"
+        return f"❌ {str(release_info.get('origin_version') or 'v8')} ({_short_commit(origin_commit)})"
+
     def _build_master_status(self, coindata_ok: bool) -> dict[str, Any]:
         summary_row = self._build_master_overview_row()
         package_status = summary_row.get("package_status") or _normalize_package_status(None)
@@ -3294,6 +3358,7 @@ class VPSManagerService:
         local_sudo_blocked_reason = "Local sudo blocked by runtime (`NoNewPrivs`)." if local_no_new_privs else ""
         pbgui_github = str(summary_row.get("pbgui_github") or "")
         pb7_github = str(summary_row.get("pb7_github") or "")
+        pb8_github = str(summary_row.get("pb8_github") or "")
         return {
             "name": _local_master_name(),
             "online": bool(summary_row.get("online")),
@@ -3312,6 +3377,9 @@ class VPSManagerService:
             "summary_row": summary_row,
             "pbgui_update_available": pbgui_github.startswith("❌"),
             "pb7_update_available": pb7_github.startswith("❌"),
+            "pb8_installed": bool(summary_row.get("pb8_installed")),
+            "pb8_update_available": pb8_github.startswith("❌"),
+            "pb8_action_allowed": load_ini("main", "role").strip().lower() == "master",
             **self._local_credential_capability_metadata(),
         }
 
@@ -3323,6 +3391,7 @@ class VPSManagerService:
         package_status = summary_row.get("package_status") or _normalize_package_status(None)
         pbgui_github = self._build_remote_pbgui_github_status(host_state)
         pb7_github = self._build_remote_pb7_github_status(host_state)
+        pb8_github = str(summary_row.get("pb8_github") or "")
         ssh_online = self._host_online(host_state)
         telemetry_fresh = self._host_telemetry_fresh(host_state)
         telemetry_age = self._host_telemetry_age(host_state)
@@ -3371,6 +3440,9 @@ class VPSManagerService:
             "summary_row": summary_row,
             "pbgui_update_available": pbgui_github.startswith("\u274c"),
             "pb7_update_available": pb7_github.startswith("\u274c"),
+            "pb8_installed": bool(summary_row.get("pb8_installed")),
+            "pb8_update_available": pb8_github.startswith("\u274c"),
+            "pb8_action_allowed": telemetry_fresh and str(host_meta.get("role") or "").strip().lower() == "master",
             "server_metrics": self._build_remote_server_metrics(vps.hostname, host_state),
             "systemd_migration": self._get_vps_systemd_migration_status(vps, host_state, quick=quick),
             "cluster_node": cluster_node,
@@ -5174,9 +5246,20 @@ class VPSManagerService:
         return list_remote_git_branch_commits(remote_url, branch_name, limit=int(limit))
 
     def run_master_command(self, *, command: str, command_text: str, debug: bool = False, sudo_pw: str | None = None, extra_vars: dict[str, Any] | None = None) -> None:
-        self.vpsmanager.command = command
-        self.vpsmanager.command_text = command_text
-        self.vpsmanager.update_master(debug=debug, sudo_pw=sudo_pw, extra_vars=extra_vars)
+        if command == COMMAND_MASTER_UPDATE_PB8:
+            if load_ini("main", "role").strip().lower() != "master":
+                raise ValueError("PB8 can only be installed or updated on a PBGui master.")
+            if extra_vars:
+                raise ValueError("PB8 update does not accept custom playbook variables.")
+            pb8_info = _pb8_runtime_info(configured_pb8dir(), configured_pb8venv())
+            command_text = "Update PB8" if pb8_info.get("installed") else "Install PB8"
+        self.vpsmanager.update_master(
+            debug=debug,
+            sudo_pw=sudo_pw,
+            extra_vars=extra_vars,
+            command=command,
+            command_text=command_text,
+        )
 
     def run_vps_command(self, *, token: str, hostname: str, command: str, command_text: str, debug: bool = False, extra_vars: dict[str, Any] | None = None) -> dict[str, str]:
         with self._host_task_start_lock(hostname):
@@ -5187,6 +5270,15 @@ class VPSManagerService:
             command_extra_vars = dict(extra_vars or {})
             monitor_state = self._get_monitor_state()
             host_state = self._get_host_telemetry(monitor_state, hostname)
+            if command == COMMAND_VPS_UPDATE_PB8:
+                if extra_vars:
+                    raise ValueError("PB8 update does not accept custom playbook variables.")
+                if not self._host_telemetry_fresh(host_state):
+                    raise ValueError("Fresh host telemetry is required before installing or updating PB8.")
+                host_meta = self._host_meta(host_state)
+                if str(host_meta.get("role") or "").strip().lower() != "master":
+                    raise ValueError("PB8 can only be installed or updated on a PBGui master.")
+                command_text = "Update PB8" if bool(host_meta.get("pb8ready")) else "Install PB8"
             command_extra_vars.update(self._credential_playbook_vars(hostname, host_state))
             if command in {COMMAND_VPS_UPDATE_PBGUI, COMMAND_VPS_UPDATE_PB}:
                 self._sync_vps_config_from_host_meta(vps, host_state)
@@ -5205,9 +5297,13 @@ class VPSManagerService:
                         "pb7venv": f"{install_dir}/venv_pb7",
                     })
             self._raise_if_vps_task_active(vps, command_text)
-            vps.command = command
-            vps.command_text = command_text
-            self.vpsmanager.update_vps(vps, debug=debug, extra_vars=command_extra_vars or None)
+            self.vpsmanager.update_vps(
+                vps,
+                debug=debug,
+                extra_vars=command_extra_vars or None,
+                command=command,
+                command_text=command_text,
+            )
             run_id = str(getattr(vps, "command_run_id", "") or "")
             task_log_name = ""
             try:

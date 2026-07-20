@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PBv7 Balance Calculator</title>
+<title>Balance Calculator</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; }
@@ -220,7 +220,7 @@ body {
 
   <!-- Toolbar -->
   <div class="toolbar">
-    <label for="sel-instance">Instance:</label>
+    <label for="sel-instance">PBv7 Instance:</label>
     <select id="sel-instance"><option value="">— load from instance —</option></select>
 
     <label for="sel-exchange">Exchange:</label>
@@ -239,7 +239,7 @@ body {
 
     <!-- Right: Results -->
     <div class="results-panel" id="results-panel">
-      <div class="msg-info">Select an instance or paste a config, choose an exchange, and click <b>Calculate</b>.</div>
+      <div class="msg-info">Select a PBv7 instance or paste a PBv7/PBv8 config, choose an exchange, and click <b>Calculate</b>.</div>
     </div>
   </div>
 </div>
@@ -258,7 +258,7 @@ body {
 
 <!-- Nav bar -->
 <script>
-  window.PBGUI_NAV_CONFIG = { subtitle: 'Balance Calculator', current: 'v7_balance_calc' };
+  window.PBGUI_NAV_CONFIG = { subtitle: 'Balance Calculator', current: 'info_balance_calc' };
 </script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 

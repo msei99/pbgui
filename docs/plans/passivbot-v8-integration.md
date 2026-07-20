@@ -1,61 +1,65 @@
 # Plan: Passivbot v8 in PBGui integrieren
 
-**Status: vorgeschlagen.** Passivbot v8.0.0 ist ein inkompatibler neuer
-Runtime- und Config-Vertrag. Die Integration wird additiv neben PB7 aufgebaut;
-PB7 wird nicht in-place auf PB8 aktualisiert.
+**Status: vereinfacht, vorgeschlagen.** PB8 wird nach demselben Grundmuster wie
+PB7 integriert. Es entstehen getrennte PB8-Pfade und PBv8-Seiten, aber keine
+neue allgemeine Runtime-, Queue- oder Release-Plattform.
 
-**Umsetzungsstand:** Die erste Sicherheitsmassnahme ist implementiert, aber
-nicht auf entfernte Hosts ausgerollt. Alle PB7-Installer und Standard-Updates
-verwenden den exakten bekannten V7-Commit
-`befaa9b7aa89e00ee55704221b39621ad700ac36`. Branch-Switches pruefen den
-Ziel-Ref vor dem Checkout und lehnen andere Major-Versionen ab.
+Die ersten beiden Schritte sind:
 
-## Entscheidung
+1. PB8 auf PBGui-Mastern installieren und aktualisieren.
+2. V7-Backtest-Configs nach V8 konvertieren und PB8-Backtests verwalten.
 
-1. PB7 und PB8 erhalten getrennte Checkouts, Python-Umgebungen, Configs,
-   Queues, Ergebnisse, Logs, Caches und Cluster-Identitaeten.
-2. Auf dem Master ist der Parallelbetrieb vorgesehen. Standardpfade sind
-   `pb7`/`venv_pb7` und `pb8`/`venv_pb8`.
-3. Auf kleinen VPS mit etwa 10 GB Disk und 1 GB RAM wird kein Parallelbetrieb
-   angeboten. Bestehende kleine PB7-Nodes bleiben PB7-Nodes, bis ihre Workloads
-   auf neu installierte, dedizierte PB8-Nodes migriert werden.
-4. Fuer PB8 werden eigene Run-, Backtest- und Optimize-Oberflaechen sowie eigene
-   serverseitig aus PB8 erzeugte v8.0.0-Defaults angeboten. PB7-Formulare und
-   PB7-Defaults werden nicht wiederverwendet.
-5. Das offizielle Migrationstool wird als kontrollierter Import angeboten. Eine
-   Migration erzeugt eine deprecated `trailing_grid_v7`-Kompatibilitaetsconfig,
-   keine native v8-Strategie und keine automatisch live-faehige Config.
-6. PBGui importiert PB7- und PB8-Module mit identischen Namen nicht gemeinsam in
-   den API-Prozess. Generationseigene Schema-, Migrations- und Metadatenzugriffe
-   laufen ueber den jeweils konfigurierten Interpreter in einem isolierten
-   Helper-Subprozess.
-7. Eine Passivbot-Generation wird pro Slave-Node zugewiesen. Dual-faehige grosse
-   Hosts bleiben eine Ausnahme, nicht der Standard fuer die Bot-Flotte.
+PB8 auf Slave-VPS, PB8 Live und PB8 Optimize sind nicht Bestandteil dieser
+beiden Schritte.
 
-## Sofortige Schutzmassnahme
+## Grundsaetze
 
-Upstream `origin/master` zeigt seit v8.0.0 auf PB8. Die bestehenden Installer-
-und Update-Playbooks klonen oder aktualisieren jedoch `master` in den Pfad
-`pb7` und bauen danach dieselbe `venv_pb7` neu auf. Damit kann ein normales
-PB7-Update derzeit unbeabsichtigt:
+1. PB7 bleibt unveraendert und weiterhin auf seinem bekannten V7-Commit.
+2. PB8 verwendet die festen Pfade `<install_dir>/pb8` und
+   `<install_dir>/venv_pb8`.
+3. PB8 ist nicht gepinnt. Install und Update verwenden den neuesten V8-Stand
+   von Upstream `origin/master`.
+4. PB8 wird in Schritt 1 nur auf Hosts mit Rolle `master` installiert. Slave-
+   VPS werden nicht veraendert.
+5. PBv7 und PBv8 erhalten getrennte Menues, Seiten, APIs, Configs, Queues, Logs
+   und Resultate.
+6. Gemeinsame vorhandene UI-Helfer werden wiederverwendet. Die V7-Seiten werden
+   dafuer nicht vorab gross refaktoriert.
+7. PB8-Configs werden mit den Loadern der installierten PB8-Version geladen und
+   vorbereitet.
+8. Eine V7-zu-V8-Konvertierung verwendet das offizielle PB8-Migrationstool und
+   veraendert die V7-Quelle nicht.
+9. PB8-Jobs werden nicht an einen Commit gebunden. Ein neuer Start verwendet
+   immer die zu diesem Zeitpunkt installierte PB8-Version.
+10. Ein laufender PB8-Backtest wird durch `Update PB8` nicht gestoppt, nicht neu
+    gequeued und nicht neu gestartet. Er laeuft einfach bis zum Ende.
 
-1. PB8 in den PB7-Checkout ziehen,
-2. die PB7-Umgebung und das Rust-Modul ueberschreiben,
-3. alle PB7-Bots stoppen,
-4. PB8 mit nicht migrierten PB7-Configs starten,
-5. einen vollstaendigen Rollback erschweren.
+## Bewusst nicht vorgesehen
 
-Vor jeder PB8-Funktion muss deshalb der bestehende PB7-Installations- und
-Updatepfad auf einen bekannten PB7-Commit oder einen gepflegten PB7-Branch
-gepinnt werden. Update- und Branch-Aktionen muessen die Major-Version pruefen
-und bei einem Wechsel von 7 auf 8 hart abbrechen.
+Fuer die ersten beiden Schritte bauen wir nicht:
+
+- commitbezogene PB8-Release-Verzeichnisse,
+- aktive Release-Symlinks,
+- Job-Pinning auf alte PB8-Versionen,
+- einen neuen allgemeinen Job-Supervisor,
+- eine gemeinsame V7/V8-Queue-Plattform,
+- ein neues Cluster-Schema,
+- PB8 auf Slave-VPS,
+- native V8-Config-Erzeugung,
+- PB8 Live oder Optimize.
+
+## Bereits umgesetzte Voraussetzung
+
+PB7 ist gegen einen unbeabsichtigten Wechsel auf PB8 abgesichert. Die PB7-
+Installer und Standard-Updates verwenden den bekannten V7-Commit
+`befaa9b7aa89e00ee55704221b39621ad700ac36`. PB8 wird daneben in `pb8` und
+`venv_pb8` installiert.
 
 ## Verifizierte PB8-Vertraege
 
-### Installation und Entry Points
+### Installation
 
-PB8.0.0 unterstuetzt Python 3.12 und pinnt Rust 1.90.0. Die kanonische
-Installation erfolgt in einer eigenen Umgebung:
+PB8 verwendet Python 3.12 und auf dem Master das Full-Profil:
 
 ```bash
 python3.12 -m venv venv_pb8
@@ -63,49 +67,30 @@ venv_pb8/bin/python -m pip install --upgrade pip
 venv_pb8/bin/python -m pip install -e "./pb8[full]"
 ```
 
-Auf reinen Live-Slaves reicht das Live-Profil:
-
-```bash
-venv_pb8/bin/python -m pip install -e ./pb8
-```
-
-Die bevorzugten Entry Points sind:
+### CLI
 
 ```text
-venv_pb8/bin/passivbot live <config>
+venv_pb8/bin/passivbot --help
 venv_pb8/bin/passivbot backtest <config>
-venv_pb8/bin/passivbot optimize <config>
-venv_pb8/bin/passivbot download <config>
+venv_pb8/bin/passivbot tool migrate-config-v7 <v7> <v8> --report <report>
 ```
 
-Die direkten Skripte `src/main.py`, `src/backtest.py` und `src/optimize.py`
-existieren weiterhin. PBGui sollte fuer PB8 dennoch den installierten CLI-Pfad
-verwenden, damit Installation, Diagnose und Migration denselben Paketvertrag
-nutzen.
+### Config
 
-### Config-Schema
-
-PB8 verwendet `config_version: "v8.0.0"` und die Top-Level-Bereiche
-`backtest`, `bot`, `coin_overrides`, `live`, `logging`, `monitor` und
-`optimize`. Die Strategieparameter sind nicht mehr flach, sondern nach
-Strategie geschachtelt:
+PB8 verwendet unter anderem:
 
 ```text
+config_version: "v8.0.0"
 live.strategy_kind
 bot.long.strategy.<strategy_kind>.*
 bot.short.strategy.<strategy_kind>.*
-optimize.bounds.long.strategy.<strategy_kind>.*
-optimize.bounds.short.strategy.<strategy_kind>.*
 ```
 
-PB8.0.0 bietet `trailing_martingale`, `ema_anchor` und das deprecated
-`trailing_grid_v7`. Der native PB8-Default ist `trailing_martingale`. Alte
-flache PB7-Felder duerfen daher nicht in einem wiederverwendeten PB7-Editor
-bearbeitet oder stillschweigend als PB8 gespeichert werden.
+PB8 stellt in `src/config/load.py` `load_prepared_config()` und
+`prepare_config()` bereit. Diese Funktionen bleiben die Quelle fuer Laden,
+Normalisierung und Validierung.
 
-### Offizielle Migration
-
-Der verifizierte Befehl lautet:
+### Migration
 
 ```bash
 passivbot tool migrate-config-v7 \
@@ -114,460 +99,496 @@ passivbot tool migrate-config-v7 \
   --report migration_report.json
 ```
 
-Die Migration:
+Eine erfolgreiche Migration erzeugt eine V8-Config mit
+`live.strategy_kind = "trailing_grid_v7"`. Gibt das Tool wegen manueller oder
+verworfener Felder keine Config aus, zeigt PBGui den Report und legt keine
+V8-Config an. Der unsichere Schalter `--allow-manual-review-output` wird in den
+ersten beiden Schritten nicht automatisch angeboten.
 
-- erkennt nur passende PB7-Trailing-Grid-Configs,
-- setzt `live.strategy_kind` auf `trailing_grid_v7`,
-- protokolliert neue PB8-Defaults, manuell zu pruefende Felder und verworfene
-  nicht unterstuetzte Felder,
-- schreibt standardmaessig keine Ausgabe, solange manuelle oder verworfene
-  Felder offen sind,
-- kann mit `--allow-manual-review-output` eine unsichere Best-Effort-Ausgabe
-  erzeugen, die ausdruecklich nicht live-ready ist.
+# Schritt 1: PB8 auf Mastern installieren und aktualisieren
 
-PBGui darf den unsicheren Modus nicht automatisch verwenden. Ein Import wird
-als PB8-Draft neben der PB7-Quelle gespeichert und ueberschreibt nie die
-PB7-Config. Der Report bleibt dauerhaft mit dem Draft verknuepft.
+## Zielverhalten im VPS Manager
 
-### Datenpfade
+Im Kontext eines lokalen oder verwalteten Remote-Masters erscheint unter
+`Tasks` genau eine PB8-Aktion:
 
-PB8 nutzt unter anderem:
+- `Install PB8`, wenn PB8 noch nicht vollstaendig installiert ist.
+- `Update PB8`, wenn PB8 installiert ist.
+- Warnungsfarbe, wenn der installierte Commit nicht dem aktuellen
+  `origin/master` entspricht.
+
+Bei einem Host mit Rolle `vps` oder `slave` wird keine PB8-Aktion angezeigt.
+Das Backend und das Playbook pruefen die Master-Rolle ebenfalls. Die Aktion wird
+nicht in die Bulk-Aktionen aufgenommen.
+
+## Runtime-Pfade
+
+PBGui erhaelt analog zu PB7:
 
 ```text
-caches/ohlcvs/
-caches/hlcvs_data/
-caches/ohlcv/
-backtests/
-optimize_results/
-logs/
-monitor/
+[main]
+pb8dir = <install_dir>/pb8
+pb8venv = <install_dir>/venv_pb8/bin/python
 ```
 
-Das moderne `caches/ohlcvs`-Layout existierte bereits in spaeten PB7-Versionen,
-ist aber nicht als gemeinsam beschreibbarer Cross-Major-Store garantiert.
-PBGui teilt deshalb keine schreibbaren Passivbot-Caches zwischen PB7 und PB8.
+Die Werte werden nach erfolgreicher Erstinstallation gesetzt. Es gibt keine
+versionierten PB8-Verzeichnisse und keine Umschalt-Symlinks.
 
-## Impact auf PBGui
+## Installationsstatus
 
-### Gemessener Blast-Radius
-
-Der aktualisierte GitNexus-Index zeigt fuer zentrale PB7-Vertraege:
-
-| Symbol | Direkte Nutzer | Betroffene Symbole | Prozesse | Risiko |
-| --- | ---: | ---: | ---: | --- |
-| `pb7_runtime_status` | 6 | 72 | 13 | CRITICAL |
-| `load_pb7_config` | 47 | 83 | 12 | CRITICAL |
-| `_apply_v7` | 1 | 121 | 8 | CRITICAL |
-| `RunV7` | 3 | 16 | 0 | LOW |
-| `BacktestWorker._launch_backtest` | 3 | 5 | 0 | LOW |
-| `OptimizeWorker` | 2 | 12 | 0 | LOW |
-| `run_local_master_install` | 2 | 3 | 0 | LOW |
-
-Die hohe Gefahr liegt nicht im einzelnen Prozessstart, sondern in gemeinsam
-genutzter Runtime-Erkennung, Config-Normalisierung und Cluster-Zustandslogik.
-Diese Bereiche werden deshalb nicht zuerst verallgemeinert. PB8 entsteht als
-separater Vertrag; gemeinsame Abstraktionen werden erst nach funktionierender
-PB8-Paritaet extrahiert.
-
-### Betroffene Bereiche
-
-| Bereich | Heutige PB7-Annahme | PB8-Ziel |
-| --- | --- | --- |
-| Runtime-Config | nur `pb7dir`, `pb7venv` | zusaetzlich `pb8dir`, `pb8venv` |
-| API-Imports | globale Module `config`, `utils`, `passivbot_rust` | generationseigene Helper-Subprozesse |
-| Live | `data/run_v7`, `RunV7`, `src/main.py` | `data/run_v8`, `RunV8`, PB8 CLI |
-| Backtest | `data/bt_v7`, `bt_v7_queue`, PB7 results | getrennte PB8 Configs, Queue und Results |
-| Optimize | `data/opt_v7`, `opt_v7_queue`, PB7 Pareto | getrennte PB8 Configs, Queue und Parser |
-| Cluster | V7-Operationen und ein `instances`-Namensraum | zusaetzliche V8-Operationen und Identitaet |
-| Prozesse | Erkennung ueber `main.py`/`backtest.py` | absolute Runtime- und Config-Pfade |
-| API Keys | ein `<pb7dir>/api-keys.json` | getrennte Materialisierung je Runtime |
-| Logs | PB7-Pfade und V7-Fehlerlog | generationseigene, validierte Log-Pfade |
-| Monitoring | nur `pb7v`, PB7 Schema und Commit | PB8 Version, Schema, Commit und Capability |
-| Installer | ein Checkout und ein Venv | selektierbare PB7/PB8-Profile |
-| Updates | ein Passivbot-Update | strikt getrennte Major-Version-Aktionen |
-| Frontend | `/api/v7` und PBv7-Seiten | `/api/v8` und eigenstaendige PBv8-Seiten |
-
-## Zielarchitektur
-
-### Runtime-Registry
-
-PBGui erhaelt eine kleine generationseigene Runtime-Beschreibung mit mindestens:
+Der Status enthaelt mindestens:
 
 ```text
-generation
-checkout_dir
-python_path
-cli_path
-config_adapter
-run_root
-backtest_root
-optimize_root
-result_roots
-log_roots
+installed
+version
+commit
+python_version
+config_version
+update_available
+error
 ```
 
-PB7 behaelt zunaechst seine bestehenden Funktionen. PB8 verwendet die neue
-Beschreibung ab dem ersten Schritt. Erst nach abgeschlossener PB8-Integration
-kann entschieden werden, ob PB7 ebenfalls ohne Verhaltensaenderung auf die
-Registry umgestellt wird.
+PB8 gilt als installiert, wenn:
 
-### Prozessisolierter PB8-Adapter
+1. `<install_dir>/pb8` existiert und ein Passivbot-Git-Checkout ist.
+2. `<install_dir>/venv_pb8/bin/python` existiert.
+3. `<install_dir>/venv_pb8/bin/passivbot` existiert.
+4. `passivbot --help` funktioniert.
+5. `passivbot_rust` importiert werden kann.
+6. Der Config-Loader eine V8-Config meldet.
 
-Ein schmaler PB8-Helper wird mit `pb8venv` ausgefuehrt und tauscht JSON ueber
-stdin/stdout aus. Er kapselt:
+Ein unvollstaendiger Stand bleibt `Install PB8` und kann durch erneutes Starten
+der Aktion repariert werden.
 
-- Runtime- und Schema-Status,
-- kanonische Default-Config,
-- Load, Normalize und Validate,
-- Bot-, Bounds-, Metric- und Override-Metadaten,
-- V7-zu-V8-Migration samt Report.
-
-Der Helper bekommt begrenzte Laufzeit und Ausgabegroesse. Secrets werden weder
-ueber Kommandozeilenargumente noch Logs transportiert. Diese Grenze verhindert
-Kollisionen, weil PB7 und PB8 beide `config`, `passivbot`, `passivbot_rust` und
-den CLI-Namen `passivbot` bereitstellen.
-
-### Persistenz
-
-PB8 verwendet von Anfang an eigene Pfade:
+## Commands und Playbooks
 
 ```text
-data/run_v8/<instance>/
-data/backup/v8/<instance>/
-data/bt_v8/<config>/
+master-update-pb8
+vps-update-pb8
+```
+
+Die Playbooks folgen dem bestehenden PB7-Muster:
+
+1. Zielhost und Master-Rolle pruefen.
+2. Python 3.12, Rust und Build-Tools pruefen beziehungsweise installieren.
+3. Repository nach `<install_dir>/pb8` klonen oder den bestehenden Checkout auf
+   den neuesten `origin/master` aktualisieren.
+4. Pruefen, dass der geladene Stand weiterhin PB8 ist.
+5. `venv_pb8` anlegen, falls es fehlt.
+6. Pip aktualisieren und `.[full]` installieren.
+7. CLI, Rust-Import und Config-Loader pruefen.
+8. `pb8dir` und `pb8venv` speichern.
+9. Taskstatus und Log aktualisieren.
+
+Ein fehlgeschlagener Lauf wird im vorhandenen VPS-Manager-Tasklog angezeigt.
+Die Aktion kann danach erneut gestartet werden. PB7-Pfade und PB7-Prozesse
+werden nicht angefasst.
+
+## Verhalten bei laufenden Backtests
+
+`Update PB8` greift nicht in laufende PB8-Backtests ein. Der bereits gestartete
+Prozess laeuft weiter. Wartende und neue Jobs verwenden beim naechsten Start die
+aktualisierte PB8-Installation.
+
+## Monitoring
+
+Der bestehende Monitor-Status wird additiv um PB8-Version, Commit, Python und
+Config-Version erweitert. Der VPS Manager vergleicht den installierten Commit
+mit dem aktuellen Upstream-Commit und setzt `update_available`.
+
+## Voraussichtlich betroffene Dateien
+
+```text
+master-update-pb8.yml
+vps-update-pb8.yml
+vps_manager_service.py
+vps_manager_core.py
+frontend/vps_manager.html
+master/async_monitor.py
+pbgui_purefunc.py
+ini_settings.py
+tests/test_pb8_installation.py
+tests/ui/test_vps_manager_frontend_logic.py
+docs/help/32_vps_manager.md
+docs/help_de/32_vps_manager.md
+```
+
+## Tests
+
+- Lokaler Master ohne PB8 zeigt `Install PB8`.
+- Installierter lokaler Master zeigt `Update PB8`.
+- Remote-Master ohne PB8 zeigt `Install PB8`.
+- Installierter Remote-Master zeigt `Update PB8`.
+- Slave-VPS zeigt keine PB8-Aktion.
+- Ein direkter PB8-Request fuer einen Slave wird abgelehnt.
+- Install erstellt `pb8` und `venv_pb8`.
+- Update verwendet den neuesten `origin/master`.
+- Unvollstaendige Installation kann repariert werden.
+- PB8-Install und -Update veraendern PB7 nicht.
+- Ein laufender PB8-Backtest wird durch Update nicht gestoppt.
+- Ein nach dem Update gestarteter Job verwendet die aktualisierte Installation.
+
+## Exit-Kriterien
+
+- `Install PB8` und `Update PB8` funktionieren auf lokalem und Remote-Master.
+- Auf Slave-VPS gibt es keine PB8-Installation.
+- PB8 CLI, Rust und Config-Loader funktionieren im eigenen Venv.
+- PB8-Version und Update-Status sind im VPS Manager sichtbar.
+- PB7 bleibt unveraendert.
+
+# Schritt 2: PBv8 Backtest
+
+## Navigation
+
+PBv8 erhaelt ein eigenes Hauptmenue. In Schritt 2 wird nur der implementierte
+Punkt angezeigt:
+
+```text
+PBv8
+  Backtest
+```
+
+Der Page-Key lautet `v8_backtest` und verweist auf
+`/api/backtest-v8/main_page`. Noch nicht implementierte Punkte werden nicht als
+Platzhalter angezeigt.
+
+Langfristig ist vorgesehen:
+
+```text
+PBv8
+  Run
+  Backtest
+  Optimize
+  Strategy Explorer
+  Pareto Explorer
+```
+
+## Convert to V8
+
+Auf der bestehenden PBv7-Backtest-Seite erscheint bei einer gespeicherten
+V7-Config in der Sidebar `Convert to V8`.
+
+Ablauf:
+
+1. V7-Config speichern, falls noch Aenderungen offen sind.
+2. Zielnamen abfragen; Standard ist `<v7-name>_v8`.
+3. Offizielles PB8-Migrationstool ausfuehren.
+4. Migration-Report speichern.
+5. Erzeugte Config mit dem PB8-Loader laden und validieren.
+6. Config unter `data/bt_v8/<name>/backtest.json` speichern.
+7. Zur PBv8-Backtest-Seite wechseln und die Config oeffnen.
+
+Die V7-Quelle wird nicht geaendert. Existiert der V8-Zielname bereits, wird die
+Konvertierung mit HTTP 409 abgelehnt. Bei einem Migrationsfehler zeigt PBGui den
+Report und speichert keine V8-Config.
+
+## PB8-Config-Adapter
+
+PB7 und PB8 besitzen Module mit gleichen Namen. Deshalb wird PB8 nicht direkt
+in den API-Prozess importiert. Ein kleiner Helper wird mit `pb8venv` gestartet
+und bietet:
+
+```text
+status
+load
+prepare
+migrate_v7
+```
+
+Der Helper liest JSON ueber stdin/stdout, verwendet die offiziellen PB8-Loader
+und liefert JSON oder eine klare Fehlermeldung zurueck. Er bekommt ein Timeout
+und wird nach dem Request beendet. Weitere Helper-Infrastruktur ist nicht
+vorgesehen.
+
+## Datenpfade
+
+Analog zu V7:
+
+```text
+data/bt_v8/<config>/backtest.json
+data/bt_v8/<config>/migration_report.json
 data/bt_v8_queue/
-data/opt_v8/
-data/opt_v8_queue/
 data/logs/backtests_v8/
-data/logs/optimizes_v8/
-<pb8dir>/backtests/pbgui/
-<pb8dir>/optimize_results/
+<pb8dir>/backtests/pbgui/<config>/
 ```
 
-Drafts, Browser-View-State, WebSockets, Archive-Metadaten, Preload-Jobs und
-Result-Caches enthalten die Generation explizit. Gleiche Instanz- oder
-Config-Namen duerfen in PB7 und PB8 gleichzeitig existieren.
-
-### Gemeinsame Ressourcen
-
-| Ressource | Entscheidung |
-| --- | --- |
-| Python 3.12 und OS-Buildpakete | gemeinsam |
-| Rust 1.90 Toolchain und Cargo Registry | gemeinsam |
-| Checkout, Venv und Rust Build-Artefakt | getrennt |
-| PBGui Coin-Mappings | gemeinsam, mit Generation-Capability |
-| PBGui `data/ohlcv` | gemeinsam nur als explizite Quelle |
-| Passivbot writable caches | getrennt |
-| Configs, Results, Logs und Monitor-State | getrennt |
-| Credentials | eine PBGui-Quelle, getrennte Runtime-Dateien |
-| Exchange-Account | nie gleichzeitig durch PB7 und PB8 steuern |
-
-Auf dem Master soll grosse historische Rohdaten nicht verdoppelt werden.
-PB7 und PB8 koennen PBGui `data/ohlcv` ueber einen generationseigenen Adapter
-lesen; materialisierte HLCV-Caches und Resultate bleiben jeweils lokal im
-PB7- bzw. PB8-Checkout.
-
-### Cluster-Modell
-
-Wegen des CRITICAL Blast-Radius von `_apply_v7` wird der bestehende V7-Vertrag
-nicht in-place umgebaut. Zunaechst entstehen additive `V8_OPS`, ein separater
-`instances_v8`-Desired-State und `materialize-v8`:
-
-- Node-Capabilities: installierte Generationen, Version, Config-Schema,
-  Interpreter und freier Speicher,
-- generationseigene Manifest-Hashes, Tombstones und Backups,
-- generationseigene API-Key-Materialisierung,
-- Ablehnung einer V8-Zuweisung an einen Node ohne passende Capability,
-- Ablehnung einer gleichzeitigen PB7/PB8-Aktivierung desselben Accounts,
-- exakte Prozesssteuerung ueber Checkout-, Interpreter- und Config-Pfad.
-
-Ein spaeteres gemeinsames `instances`-Schema ist eine optionale Nacharbeit und
-kein Bestandteil der ersten PB8-Produktionsfreigabe.
-
-## Betriebsmodell fuer Master und Slaves
-
-### Messwerte
-
-Die lokale Master-Installation hat ausreichend Reserve fuer einen zweiten
-Checkout und ein zweites Full-Venv. Die vorhandenen grossen Datenmengen liegen
-vor allem in historischen Daten, PB7-Caches und Optimize-Ergebnissen; sie
-sollen nicht pauschal dupliziert werden.
-
-Vier read-only gepruefte kleine Slaves besitzen jeweils etwa 8.7 GB nutzbaren
-Root-Speicher und 848 MB RAM. Verfuegbar waren nur etwa 0.9 bis 1.8 GB Disk und
-59 bis 69 MB RAM; alle Nodes nutzten bereits deutlich Swap. Ein zusaetzliches
-Live-Venv plus Checkout, Cache, Logs und Update-Reserve benoetigt geschaetzt
-0.75 bis 1.15 GB, ein weiterer Bot-Prozess typischerweise etwa 50 bis 250 MB
-RAM. Damit fehlt sowohl Disk- als auch RAM-Sicherheitsreserve.
-
-### Empfohlene Topologie
-
-| Hostklasse | PB7 + PB8 parallel | Empfehlung |
-| --- | --- | --- |
-| Master mit grosser Disk/RAM-Reserve | ja | PB7 produktiv, PB8 Full-Venv fuer Migration, Backtest und Optimize |
-| Kleiner 10-GB-/1-GB-Slave | nein | genau eine Generation; bestehend vorerst PB7 |
-| Neuer PB8-Live-Slave | nicht erforderlich | mindestens 20-30 GB Disk und 2 GB RAM, bevorzugt 4 GB |
-| Grosser Spezial-Slave | technisch ja | nur bei begruendetem Bedarf, standardmaessig generationsexklusiv |
-
-Die bevorzugte Migration ist daher nicht, PB8 auf allen vorhandenen Slaves
-zusaetzlich zu installieren. Stattdessen werden ein oder mehrere neue PB8-Nodes
-aufgesetzt. Accounts werden kontrolliert von einem PB7-Node auf einen PB8-Node
-verschoben. Kleine Nodes koennen spaeter sauber als Single-Version-PB8-Node
-neu installiert werden, bleiben mit 1 GB RAM aber nur eingeschraenkt geeignet.
-
-### Account-Umschaltung und Rollback
-
-1. PB8-Config migrieren oder nativ erstellen und Report abschliessen.
-2. PB8-Backtest und fachlichen Vergleich ausfuehren.
-3. PB8 auf einem getrennten Test-Account oder ohne Live-Aktivierung pruefen.
-4. PB7-Instanz stoppen und offene Orders/Positionen verifizieren.
-5. Erst danach PB8 fuer denselben Account aktivieren.
-6. Fuer Rollback PB8 vollstaendig stoppen und Zustand erneut verifizieren.
-7. Danach die unveraenderte PB7-Instanz auf dem erhaltenen PB7-Node starten.
-
-PB7 und PB8 duerfen denselben Account nie ueberlappend steuern. PB8 erkennt
-konkurrierende Passivbot-Orders und stoppt nach wiederholter Erkennung; PBGui
-soll die Fehlkonfiguration bereits vor dem Start verhindern.
-
-## Integrationsphasen
-
-## Phase 0: PB7 einfrieren und Major-Version absichern
-
-### Aufgaben
-
-1. Alle PB7-Installer und -Updater auf einen expliziten PB7-Ref umstellen.
-2. Vor Pull, Switch und Rebuild die erwartete Major-Version pruefen.
-3. Einen Major-Wechsel in `pb7`/`venv_pb7` mit klarer Fehlermeldung blockieren.
-4. PB7-Update, PB8-Update und kombiniertes Update als getrennte Aktionen
-   modellieren.
-5. Update- und Rollback-Metadaten um Checkout-Commit, Paketversion,
-   Rust-Fingerprint und Interpreter erweitern.
-
-### Exit-Kriterien
-
-- Kein bestehender PB7-Updatepfad kann `origin/master` ungeprueft nach v8 folgen.
-- Ein fehlgeschlagener PB8-Installationsversuch veraendert PB7 nicht.
-- PB7-Update und -Rollback sind mit dem gepinnten Ref getestet.
-
-## Phase 1: PB8 Runtime, Installer und isolierter Config-Adapter
-
-### Aufgaben
-
-1. `pb8dir` und `pb8venv` als restart-required Settings einfuehren.
-2. Local-, Remote-Master- und VPS-Installer um getrennte PB8-Profile erweitern.
-3. Auf dem Master `.[full]`, auf Live-Slaves das Live-Profil installieren.
-4. PB8 auf einen Release-Tag oder Commit pinnen, nicht auf bewegliches `master`.
-5. PB8-Version, Schema, CLI, Rust-Import und Full-Abhaengigkeiten pruefen.
-6. Den JSON-Helper fuer Defaults, Validierung, Metadaten und Migration bauen.
-7. Uninstaller, Cleanup und Disk-Preflight generationseigen erweitern.
-
-### Exit-Kriterien
-
-- PB7 und PB8 sind gleichzeitig installiert und unabhaengig diagnostizierbar.
-- Beide Rust-Module funktionieren in ihren eigenen Venvs.
-- Der API-Prozess importiert PB8 nicht direkt.
-- Install, Update und Remove einer Generation veraendern die andere nicht.
-
-## Phase 2: PB8 Configs und Migration UI
-
-### Aufgaben
-
-1. Eigene `/api/v8`-Routen und PBv8-Editorseite anlegen.
-2. Native v8.0.0-Defaults aus dem PB8-Helper laden.
-3. Strategieauswahl und geschachtelte Parameter fuer `trailing_martingale`,
-   `ema_anchor` und `trailing_grid_v7` abbilden.
-4. Unbekannte PB8-Felder beim Roundtrip erhalten.
-5. Migration einer ausgewaehlten PB7-Config in einen neuen PB8-Draft anbieten.
-6. Reportbereiche `inserted_v8_defaults`, `manual_review_fields` und
-   `dropped_unsupported_fields` in English darstellen.
-7. Speichern/Aktivieren blockieren, solange harte Reportpunkte offen sind.
-8. PB7-Quelle, PB8-Draft und Report revisionssicher miteinander verknuepfen.
-
-### Exit-Kriterien
-
-- Native PB8-Configs und migrierte Kompatibilitaetsconfigs sind klar getrennt.
-- Kein PB8-Speichervorgang schreibt nach `data/run_v7`.
-- Eine Migration ueberschreibt nie die PB7-Quelle.
-- Fehlerhafte oder manuell zu pruefende Migrationen werden nicht live aktiviert.
-
-## Phase 3: PB8 Backtest
-
-### Aufgaben
-
-1. Eigene Backtest-Config-, Queue-, Log-, PID- und Result-Pfade einfuehren.
-2. PB8 ueber `venv_pb8/bin/passivbot backtest` starten.
-3. Prozesswiederaufnahme ueber absolute Pfade und Generation absichern.
-4. PBGui OHLCV als explizite Quelle anbinden; PB8-Caches getrennt halten.
-5. PB8-Ergebnisformat, Statusmeldungen, Archive und Retest-Vertrag separat
-   validieren.
-6. Einen Vergleichsworkflow PB7 versus migriertes PB8 `trailing_grid_v7`
-   anbieten, ohne Ergebnisgleichheit vorauszusetzen.
-
-### Exit-Kriterien
-
-- PB7- und PB8-Backtests laufen parallel ohne Queue- oder Result-Kollision.
-- Stop, Restart und Cleanup treffen nur die gewaehlte Generation.
-- Migrierte Configs koennen vor jeder Live-Freigabe reproduzierbar getestet
-  werden.
-
-## Phase 4: PB8 Optimize und Pareto
-
-### Aufgaben
-
-1. Eigene Optimize-Configs, Queue, Logs und Result-Roots einfuehren.
-2. Bounds und Scoring ausschliesslich aus PB8-Metadaten erzeugen.
-3. PB8 ueber `venv_pb8/bin/passivbot optimize` starten.
-4. Result-, Pareto- und Seed-Formate gegen PB8.0.0 separat implementieren.
-5. PB7 Pareto Explorer und PB7 `pareto_dash.py` nicht stillschweigend fuer PB8
-   wiederverwenden.
-6. CPU-, Disk- und Cache-Preflights generationseigen ausgeben.
-
-### Exit-Kriterien
-
-- PB7 und PB8 Optimize koennen unabhaengig verwaltet werden.
-- Kein PB8-Ergebnis wird vom PB7-Parser aufgrund aehnlicher Dateinamen
-  fehlklassifiziert.
-- Aus einem PB8-Ergebnis entsteht eine valide PB8-Config.
-
-## Phase 5: PB8 Live auf dem Master
-
-### Aufgaben
-
-1. `RunV8` mit PB8 CLI, eigenem Working Directory und `data/run_v8` einfuehren.
-2. Runtime-Dateien, Coin Overrides, Forced Modes und Logging gegen PB8.0.0
-   modellieren.
-3. Prozessdetektoren in PBRun, API, Monitor und Logs generationseigen machen.
-4. API Keys aus der PBGui-Quelle getrennt nach `<pb7dir>` und `<pb8dir>`
-   materialisieren.
-5. Einen Account-Ownership-Guard vor Start und Aktivierung einfuehren.
-6. PB8-Version, Config-Schema, Commit, Python und Prozessstatus publizieren.
-7. Update und Stop nur ueber exakte PB8-Pfade ausfuehren.
-
-### Exit-Kriterien
-
-- PB7 und PB8 laufen auf dem Master gleichzeitig mit verschiedenen Accounts.
-- PB7 Update/Restart beeinflusst PB8 nicht und umgekehrt.
-- Gleichzeitige PB7/PB8-Aktivierung desselben Accounts wird blockiert.
-- API-Neustart kann beide Runner-Zustaende korrekt rekonstruieren.
-
-## Phase 6: Cluster und dedizierte PB8-Slaves
-
-### Aufgaben
-
-1. V8 Desired State, Operationen, Materialisierung, Tombstones und Backups
-   additiv implementieren.
-2. Node-Capabilities und Generation-Zuweisung im VPS Manager anzeigen.
-3. PB8-Live-Installer fuer dedizierte Slaves bereitstellen.
-4. Disk- und RAM-Preflight vor Installation und Zuweisung erzwingen.
-5. Remote Logs, Monitor, Start/Stop und Update generationseigen absichern.
-6. Einen Canary-Node und einen Canary-Account migrieren.
-7. Rollback auf einen unveraenderten PB7-Node praktisch testen.
-
-### Exit-Kriterien
-
-- Ein PB8-Manifest kann niemals in `run_v7` materialisiert werden.
-- Ein Node ohne PB8-Capability akzeptiert keine PB8-Zuweisung.
-- Kleine Nodes werden nicht versehentlich dual installiert.
-- Canary-Betrieb und Rollback sind dokumentiert und erfolgreich getestet.
-
-## Phase 7: Produktionsfreigabe und Nacharbeit
-
-### Aufgaben
-
-1. English/German Guides fuer PB8 Run, Backtest, Optimize und Migration
-   veroeffentlichen.
-2. Betriebsdokumentation fuer Node-Groessen, Account-Umschaltung und Rollback
-   ergaenzen.
-3. PB7/PB8-Telemetrie, Logs, Diskwachstum und Fehler fuer eine definierte
-   Canary-Periode beobachten.
-4. Erst danach weitere Accounts und Nodes schrittweise migrieren.
-5. Gemeinsame Abstraktionen nur dort extrahieren, wo PB7- und PB8-Vertraege
-   nachweislich identisch sind.
-6. PB7-Rueckbau als separates spaeteres Projekt behandeln; keine automatische
-   Frist aus der PB8-Einfuehrung ableiten.
-
-### Exit-Kriterien
-
-- Mindestens ein kompletter PB8 Run/Backtest/Optimize-Lebenszyklus ist
-  produktionsnah validiert.
-- PB7 bleibt unveraendert nutzbar und rollback-faehig.
-- Monitoring zeigt Generation, Version und Node-Capability eindeutig.
-
-## Teststrategie
-
-### Offline-Vertragstests
-
-- Runtime-Erkennung fuer PB7 und PB8,
-- Helper-Protokoll, Timeout, ungueltiges JSON und grosse Ausgabe,
-- PB8 Default-, Load-, Save- und unbekannte-Felder-Roundtrips,
-- Migrationsreports mit Erfolg, Defaults, Manual Review und Dropped Fields,
-- gleiche Instanznamen in `run_v7` und `run_v8`,
-- getrennte Backtest-/Optimize-Queues und Resultate,
-- Prozessdetektor-Kollisionen bei gleichnamigen `main.py`/`backtest.py`,
-- getrennte API-Key-Materialisierung,
-- Cluster-Manifest, Tombstone, Backup und Materialisierung je Generation,
-- Update-/Stop-Kommandos duerfen die jeweils andere Generation nicht treffen,
-- Disk-/RAM-Preflight fuer kleine Nodes.
-
-### Externe PB8-Integration
-
-PB8-abhaengige Tests erhalten wie bestehende externe PB7-Tests einen expliziten
-Marker und laufen gegen einen gepinnten PB8.0.0-Checkout in temporaeren
-Verzeichnissen. Standard-Pytest bleibt offline und schreibt keine realen
-Runtime-Daten.
-
-### Manuelle Freigabe
-
-1. Native PB8-Default-Config erstellen, speichern und erneut laden.
-2. Eine representative PB7-Config migrieren und jeden Reportpunkt pruefen.
-3. PB7/PB8-Backtestvergleich mit derselben historischen Quelle ausfuehren.
-4. PB8 Optimize starten, stoppen, fortsetzen und Resultat laden.
-5. PB7 und PB8 auf dem Master mit getrennten Test-Accounts parallel starten.
-6. PB8 auf Canary-Slave verschieben und Remote-Logs/Monitoring pruefen.
-7. Canary kontrolliert auf PB7 zurueckrollen.
-
-## Hauptrisiken und Gegenmassnahmen
-
-| Risiko | Gegenmassnahme |
-| --- | --- |
-| PB7 wird versehentlich auf PB8 aktualisiert | PB7 sofort pinnen und Major-Guard einfuehren |
-| Python-/Rust-Modulkollision | getrennte Venvs und Helper-Subprozess |
-| Config wird still falsch interpretiert | eigene PB8-Pipeline und serverseitige Defaults |
-| Migration vermittelt falsche Sicherheit | Reportpflicht, kein Auto-Live, Backtest-Gate |
-| PB7/PB8 steuern denselben Account | Ownership-Guard und kontrollierter Handover |
-| Prozess wird falscher Generation zugeordnet | absolute Interpreter-, Script- und Config-Pfade |
-| Cluster ueberschreibt gleichnamige Instanz | additive V8-Identitaet und getrennte Roots |
-| Kleine VPS laufen voll | kein Dualbetrieb, Preflight, dedizierte PB8-Nodes |
-| Historische Daten verdoppeln Diskbedarf | PBGui OHLCV read-only teilen, writable Caches trennen |
-| Rollback setzt nur Git zurueck | komplette Runtime als Rollback-Einheit erhalten |
-
-## Empfohlene Umsetzungsreihenfolge
-
-Die Freigabereihenfolge lautet bewusst:
+V7 und V8 duerfen denselben Config-Namen verwenden, weil die Roots getrennt
+sind.
+
+## PBv8-Backtest-Seite
+
+Die PBv8-Route rendert direkt `frontend/v7_backtest.html`. Dadurch verwenden V7
+und V8 nicht nur denselben grundsaetzlichen Aufbau, sondern exakt dieselbe
+Editor-, Sidebar-, Tabellen- und Panelimplementierung:
+
+- Configs,
+- Queue,
+- Results,
+- Editor-Sidebar,
+- Log-Panel.
+
+In Schritt 2 werden nicht uebernommen:
+
+- Archive,
+- Legacy Results,
+- Add to Run,
+- Optimize,
+- Strategy Explorer.
+
+Die gemeinsame Seite verwendet vorhandene Helfer wie `editor_shared.js`,
+`pbgui_dialogs.js`, `sidebar_resize.js`, `json_panel.js` und
+`log_viewer_panel.js`. Es gibt keine kopierte `v8_backtest.html` und keine
+zweite Editorimplementierung. `backtest_editor_adapter.js` kapselt nur die
+unterschiedlichen V7/V8-Pfade, API-Endpunkte, Navigation und Logpfade.
+
+## Editor
+
+Der erste PBv8-Editor unterstuetzt migrierte
+`live.strategy_kind = "trailing_grid_v7"`-Configs.
+
+Wiederverwendbare Felder werden mit V8-Pfaden angebunden:
+
+- Backtest-Zeitraum,
+- Exchanges,
+- Startbalance und Gebuehren,
+- Approved/Ignored Coins,
+- gemeinsame Live- und Backtest-Felder,
+- Long/Short-Einstellungen,
+- Raw JSON fuer noch nicht strukturierte V8-Felder.
+
+V8-spezifische Pfade liegen unter anderem unter:
 
 ```text
-PB7 absichern
--> PB8 installieren und Config isolieren
--> Migration UI
--> Backtest
--> Optimize
--> Live auf Master
--> Cluster/Canary-Slave
--> schrittweiser Produktionsrollout
+bot.<side>.strategy.trailing_grid_v7.*
+bot.<side>.risk.*
+bot.<side>.unstuck.*
+bot.<side>.forager.*
+bot.<side>.hsl.*
 ```
 
-Damit werden inkompatible Configs zuerst offline sichtbar und getestet. Live-
-und Cluster-Aenderungen folgen erst, wenn PB8-Erzeugung, Migration, Backtest und
-Optimize belastbar sind.
+Laden, neue Configs und Import laufen durch den PB8-Loader. Vor Save und Queue
+wird die Config mit der aktuell installierten PB8-Version vorbereitet und
+validiert. `New Config` verwendet das Template der installierten PB8-Version.
 
-## Referenzen
+## API
+
+Additive Routen unter `/api/backtest-v8`:
+
+```text
+GET    /main_page
+GET    /runtime
+GET    /settings
+POST   /settings
+GET    /configs
+GET    /configs/new-config
+POST   /configs/prepare
+GET    /configs/{name}
+PUT    /configs/{name}
+DELETE /configs/{name}
+POST   /migrate-v7
+GET    /bot-params
+GET    /override-params
+GET    /override-config/{config_name}/{filename}
+PUT    /override-config/{config_name}/{filename}
+GET    /queue
+POST   /queue
+POST   /queue/{id}/start
+POST   /queue/{id}/stop
+POST   /queue/{id}/restart
+DELETE /queue/{id}
+GET    /queue/{id}/log
+GET    /results
+GET    /results/config
+GET    /results/analysis
+GET    /results/equity
+GET    /results/fills
+GET    /results/files
+DELETE /results
+WS     /ws/bt7
+```
+
+Browserzugriffe verwenden die HttpOnly-Session-Cookie. Namen und Pfade werden
+wie bei den aktuellen FastAPI-Seiten validiert.
+
+## Queue und Worker
+
+Die V8-Queue folgt dem einfachen V7-Muster:
+
+1. Queue-Eintrag als JSON unter `data/bt_v8_queue` speichern.
+2. Config-Snapshot im Queue-Eintrag beziehungsweise Queue-Arbeitsordner
+   speichern.
+3. Worker liest queued Eintraege und beachtet das konfigurierte CPU-Limit.
+4. Vor dem Start Snapshot mit dem aktuellen PB8-Loader validieren.
+5. PB8 starten:
+
+```text
+cwd: <pb8dir>
+command: <venv_pb8>/bin/passivbot backtest <snapshot_config>
+```
+
+6. PID und Logdatei speichern.
+7. Start, Stop, Restart, Delete und Clear Finished wie bei V7 anbieten.
+8. Beim API-Start Queue-, PID- und Logstatus erneut einlesen.
+9. Beim API-Shutdown nur den Queue-Worker stoppen; laufende Backtests laufen
+   weiter.
+
+Queue-Eintraege speichern keinen PB8-Commit. Jeder neue Start verwendet die
+aktuell installierte PB8-Version. Der beim Start verwendete Commit kann fuer
+Diagnose und Resultanzeige geloggt werden.
+
+## Update waehrend Backtests
+
+- Laufende PB8-Backtests laufen unveraendert weiter.
+- Wartende Jobs bleiben in der Queue.
+- Neue Starts nach dem Update verwenden die aktualisierte PB8-Version.
+- Es gibt kein automatisches Stoppen, Requeue oder Wiederholen.
+
+## Results
+
+Vor der Implementierung der Results-Ansicht wird ein kleiner echter PB8-
+Backtest ausgefuehrt. Danach werden die tatsaechlichen PB8-Dateien und Metriken
+in einem einfachen V8-Resultparser abgebildet.
+
+Die Results-Seite zeigt in Schritt 2 nur die grundlegenden vorhandenen Daten.
+PB7-Parser und PB7-Archive werden nicht fuer V8 verwendet.
+
+## Startup und Shutdown
+
+`api/backtest_v8.py` erhaelt wie `api/backtest_v7.py`:
+
+```text
+startup()
+shutdown()
+```
+
+Der API-Start startet den Queue-Worker. Der API-Shutdown beendet den Worker und
+laesst laufende Backtest-Prozesse bestehen. Die Hooks werden in
+`PBApiServer.py` registriert.
+
+## Voraussichtlich betroffene Dateien
+
+```text
+pb8_config.py
+pb8_config_helper.py
+api/backtest_v8.py
+PBApiServer.py
+frontend/pbgui_nav.js
+frontend/v7_backtest.html
+frontend/js/backtest_editor_adapter.js
+tests/test_pb8_config.py
+tests/test_backtest_v8_api.py
+tests/ui/test_backtest_v8_frontend_logic.py
+docs/help/35_pbv7_backtest.md
+docs/help_de/35_pbv7_backtest.md
+docs/help/42_pbv8_backtest.md
+docs/help_de/42_pbv8_backtest.md
+```
+
+API- und Startup-Aenderungen erhoehen `api/serial.txt`. Neue oder geaenderte
+Browserassets erhalten die projektuebliche Cache-Busting-Version.
+
+## Tests
+
+### Config und Migration
+
+- V7-Quelle bleibt unveraendert.
+- Saubere Migration erzeugt `trailing_grid_v7` und einen Report.
+- Migrationsfehler erzeugt keine V8-Config.
+- Namenskonflikt liefert HTTP 409.
+- V8-Config wird mit dem aktuell installierten PB8-Loader geladen.
+- Save schreibt nie nach `data/bt_v7`.
+
+### Frontend und Navigation
+
+- PBv8-Menue zeigt in Schritt 2 nur `Backtest`.
+- `Convert to V8` erscheint bei gespeicherter V7-Config.
+- Nach erfolgreicher Migration wird die PBv8-Seite geoeffnet.
+- PBv8 verwendet nur `/api/backtest-v8`.
+- EN-/DE-Guide-Mapping bleibt vollstaendig.
+
+### Queue und Prozess
+
+- V7- und V8-Queue kollidieren nicht.
+- V8 startet ueber `<venv_pb8>/bin/passivbot backtest`.
+- Queue verwendet den gespeicherten Config-Snapshot.
+- Stop/Restart/Delete eines V8-Jobs trifft keinen V7-Prozess.
+- Laufende Jobs werden nach API-Neustart wieder erkannt.
+- `Update PB8` stoppt keinen laufenden V8-Backtest.
+- Ein nach Update gestarteter Job verwendet die neue Installation.
+
+### Results
+
+- PB8-Resultate werden nur unter dem PB8-Resultroot gesucht.
+- PB8-Resultate werden nicht mit dem PB7-Parser gelesen.
+- Grundlegende PB8-Metriken werden korrekt angezeigt.
+
+## Exit-Kriterien
+
+- Eine V7-Backtest-Config kann nach V8 konvertiert werden.
+- Die konvertierte Config oeffnet sich unter `PBv8 > Backtest`.
+- Die Config wird mit dem PB8-Loader geladen und gespeichert.
+- Ein PB8-Backtest kann gequeued, gestartet, gestoppt und erneut gestartet
+  werden.
+- Laufende PB8-Backtests ueberstehen API-Neustart und PB8-Update.
+- Grundlegende PB8-Resultate werden angezeigt.
+- PB7 bleibt unveraendert nutzbar.
+
+# Spaetere PBv8-Menuepunkte
+
+Nach den ersten beiden Schritten werden separat geplant:
+
+1. `PBv8 > Run`
+2. `PBv8 > Optimize`
+3. `PBv8 > Strategy Explorer`
+4. `PBv8 > Pareto Explorer`
+
+Optimize muss vor Pareto Explorer umgesetzt werden, weil der Pareto Explorer
+die Optimize-Ergebnisse liest. Strategy Explorer kann nach Backtest umgesetzt
+werden.
+
+## Balance Calculator
+
+Der Balance Calculator liegt als gemeinsame PBv7-/PBv8-Funktion unter
+`Information`. V7- und V8-Backtest-Configs werden über denselben Draft-Flow
+übergeben; der Calculator liest die Parameter über versionsspezifische
+Config-Pfade.
+
+# Umsetzungsreihenfolge
+
+## Lieferung A: Installation
+
+1. PB8-Pfade und Runtime-Status ergaenzen.
+2. Lokales Install-/Update-Playbook bauen.
+3. Remote-Master-Playbook bauen.
+4. VPS-Manager-Status und Button anbinden.
+5. Tests und VPS-Manager-Guides aktualisieren.
+
+## Lieferung B: PB8-Config und Migration
+
+1. Kleinen PB8-Helper und Client bauen.
+2. PB8 Load/Prepare testen.
+3. Migration und Report speichern.
+4. Getrennte PB8-Config-Routen bauen.
+
+## Lieferung C: PBv8 Backtest
+
+1. Echten kleinen PB8-Backtest ausfuehren und Resultformat pruefen.
+2. V8-Queue und Worker nach dem V7-Muster bauen.
+3. V8-Resultparser bauen.
+4. Minimale PBv8-Backtest-Seite bauen.
+5. `Convert to V8` in PBv7 ergaenzen.
+6. Navigation, Guides und Tests abschliessen.
+
+# Referenzen
 
 - Passivbot v8.0.0 Release:
   `https://github.com/enarjord/passivbot/releases/tag/v8.0.0`
-- Offizielle v8.0.0 Release Notes und Migration:
+- Offizielle v8.0.0 Release Notes:
   `https://github.com/enarjord/passivbot/blob/v8.0.0/docs/release_notes_v8.0.0.md`
 - Offizielle Installation:
   `https://github.com/enarjord/passivbot/blob/v8.0.0/docs/installation.md`
-- Lokal verifizierter PB8-Commit:
-  `a0897f83932db5e6888c1c96f8f1c668d452013f`
-- Bestehendes PBGui PB7-Inventar: `docs/pb7_integration_inventory.md`
+- Offizieller PB8-Config-Loader:
+  `https://github.com/enarjord/passivbot/blob/v8.0.0/src/config/load.py`
+- Offizielles Migrationstool:
+  `https://github.com/enarjord/passivbot/blob/v8.0.0/src/tools/migrate_config_v7.py`
+- Bestehendes PBGui-PB7-Inventar: `docs/pb7_integration_inventory.md`

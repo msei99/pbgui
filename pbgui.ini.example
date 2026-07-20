@@ -2,6 +2,8 @@
 pbname = <hostname>
 pb7dir = <install_dir>/pb7
 pb7venv = <install_dir>/venv_pb7/bin/python
+pb8dir = <install_dir>/pb8
+pb8venv = <install_dir>/venv_pb8/bin/python
 
 [coinmarketcap]
 fetch_limit = 1000

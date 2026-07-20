@@ -236,6 +236,23 @@ else
   run_as_user "git clone --no-checkout https://github.com/enarjord/passivbot.git '$INSTALL_DIR/pb7'"
 fi
 run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb7' --ref '$PB7_REF' --expected-major 7 --fetch-url https://github.com/enarjord/passivbot.git --checkout"
+PB8_UPDATE_OWNER="$INSTALL_DIR/.pbgui-pb8-update-active"
+run_as_user "python3 '$INSTALL_DIR/pbgui/master_update_lock.py' --acquire-writer '$INSTALL_DIR'"
+trap 'run_as_user "rmdir '\''$PB8_UPDATE_OWNER'\'' 2>/dev/null || true"' EXIT
+run_as_user "umask 077; mkdir -p '$INSTALL_DIR/pbgui/data/locks'; : > '$INSTALL_DIR/pbgui/data/locks/pb8-runtime-invalid'"
+run_as_user "python3 '$INSTALL_DIR/pbgui/master_update_lock.py' --barrier '$INSTALL_DIR/pbgui' --timeout 120"
+if [[ -d "$INSTALL_DIR/pb8/.git" ]]; then
+  info "Fetching and verifying official PB8 master without changing origin."
+  run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb8' --ref refs/remotes/pbgui-pb7-pin/master --expected-major 8 --fetch-url https://github.com/enarjord/passivbot.git"
+else
+  if [[ -e "$INSTALL_DIR/pb8" ]]; then
+    printf 'PB8 target exists but is not a Git checkout: %s\n' "$INSTALL_DIR/pb8" >&2
+    exit 1
+  fi
+  run_as_user "git clone --no-checkout https://github.com/enarjord/passivbot.git '$INSTALL_DIR/pb8'"
+  run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb8' --ref refs/remotes/pbgui-pb7-pin/master --expected-major 8 --fetch-url https://github.com/enarjord/passivbot.git"
+fi
+run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb8' --ref refs/remotes/pbgui-pb7-pin/master --expected-major 8 --checkout"
 if [[ -n "$UPLOADED_SETUP_SYSTEMD_PATH" && -f "$UPLOADED_SETUP_SYSTEMD_PATH" ]]; then
   info "Installing local systemd setup helper into PBGui checkout..."
   install -D -m 755 -o "$TARGET_USER" -g "$TARGET_GROUP" "$UPLOADED_SETUP_SYSTEMD_PATH" "$INSTALL_DIR/pbgui/setup/setup_systemd.sh"
@@ -249,6 +266,8 @@ run_as_user "python3.12 -m venv '$INSTALL_DIR/venv_pb7'"
 run_as_user "'$INSTALL_DIR/venv_pb7/bin/python' -m pip install --upgrade pip"
 run_as_user "'$INSTALL_DIR/venv_pb7/bin/python' -m pip install -r '$PB7_REQUIREMENTS'"
 run_as_user "'$INSTALL_DIR/venv_pb7/bin/python' -m pip install maturin"
+run_as_user "python3.12 -m venv '$INSTALL_DIR/venv_pb8'"
+run_as_user "'$INSTALL_DIR/venv_pb8/bin/python' -m pip install --upgrade pip"
 run_as_user "python3.12 -m venv '$INSTALL_DIR/venv_pbgui'"
 run_as_user "'$INSTALL_DIR/venv_pbgui/bin/python' -m pip install --upgrade pip"
 run_as_user "'$INSTALL_DIR/venv_pbgui/bin/python' -m pip install -r '$PBGUI_REQUIREMENTS'"
@@ -258,6 +277,11 @@ run_as_user "if ! command -v rustup >/dev/null 2>&1; then curl --proto '=https' 
 run_as_user "source '$TARGET_HOME/.cargo/env' && rustup toolchain install 1.90.0 && rustup default 1.90.0"
 run_as_user "source '$TARGET_HOME/.cargo/env' && source '$INSTALL_DIR/venv_pb7/bin/activate' && cd '$INSTALL_DIR/pb7/passivbot-rust' && maturin develop --release"
 run_as_user "source '$INSTALL_DIR/venv_pb7/bin/activate' && cd '$INSTALL_DIR/pb7' && python -c \"import sys; sys.path.insert(0, 'src'); from rust_utils import stamp_compiled_extensions, source_fingerprint; stamp_compiled_extensions(source_fingerprint()); print('Rust source stamp updated.')\""
+
+info "Installing Passivbot v8 full profile..."
+run_as_user "source '$TARGET_HOME/.cargo/env' && '$INSTALL_DIR/venv_pb8/bin/python' -m pip install --upgrade -e '$INSTALL_DIR/pb8[full]'"
+run_as_user "'$INSTALL_DIR/venv_pb8/bin/passivbot' --help"
+run_as_user "'$INSTALL_DIR/venv_pb8/bin/python' -c \"import passivbot_rust; from config.schema import CONFIG_SCHEMA_VERSION; assert str(CONFIG_SCHEMA_VERSION).startswith('v8.'), CONFIG_SCHEMA_VERSION; print(CONFIG_SCHEMA_VERSION)\""
 
 info "Writing PBGui configuration..."
 run_as_user "mkdir -p '$INSTALL_DIR/pbgui/data/auth'"
@@ -269,6 +293,8 @@ cfg['main'] = {
     'pbname': hostname,
     'pb7dir': f'{install_dir}/pb7',
     'pb7venv': f'{install_dir}/venv_pb7/bin/python',
+    'pb8dir': f'{install_dir}/pb8',
+    'pb8venv': f'{install_dir}/venv_pb8/bin/python',
     'role': 'master',
 }
 cfg['api_server'] = {'host': bind_host, 'port': port}
@@ -281,6 +307,9 @@ os.replace(tmp, path)
 PY
 chown "$TARGET_USER:$TARGET_GROUP" "$INSTALL_DIR/pbgui/pbgui.ini"
 chmod 600 "$INSTALL_DIR/pbgui/pbgui.ini"
+run_as_user "rm -f '$INSTALL_DIR/pbgui/data/locks/pb8-runtime-invalid'"
+run_as_user "rmdir '$PB8_UPDATE_OWNER'"
+trap - EXIT
 PBG_PASSWORD_ENV="$PBG_PASSWORD" python3 - "$INSTALL_DIR/pbgui/data/auth/secrets.toml" <<'PY'
 import os, pathlib, sys
 path = pathlib.Path(sys.argv[1])
@@ -553,14 +582,16 @@ if [[ "$api_ready" != true ]]; then
 fi
 success "PBGui API is listening on $API_CHECK_HOST:$PBG_PORT."
 
-python3 - "$RESULT_PATH" "$CLIENT_FILE" "$GA_FILE" "$PBG_PORT" "$OVPN_GATEWAY" <<'PY'
+python3 - "$RESULT_PATH" "$CLIENT_FILE" "$GA_FILE" "$PBG_PORT" "$OVPN_GATEWAY" "$INSTALL_DIR" <<'PY'
 import json, sys
-path, ovpn, qr, port, gateway = sys.argv[1:]
+path, ovpn, qr, port, gateway, install_dir = sys.argv[1:]
 payload = {
     'ok': True,
     'ovpn_path': ovpn,
     'totp_qr_path': qr,
     'vpn_url': f'http://{gateway}:{port}/',
+    'pb7_dir': f'{install_dir}/pb7',
+    'pb8_dir': f'{install_dir}/pb8',
 }
 with open(path, 'w', encoding='utf-8') as handle:
     json.dump(payload, handle, indent=2)

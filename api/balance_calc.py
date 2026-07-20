@@ -81,43 +81,80 @@ def _load_mapping(exchange: str) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
-def _extract_coins(config: dict) -> tuple[set[str], set[str], set[str]]:
+def _extract_coins(config: dict, available_coins: set[str] | None = None) -> tuple[set[str], set[str], set[str]]:
     """Extract (all_coins, coins_long, coins_short) from config dict."""
-    live = config.get("live", {})
+    available = available_coins or set()
+    live = config.get("live", {}) if isinstance(config.get("live"), dict) else {}
     ac = live.get("approved_coins", {})
-    if isinstance(ac, list):
+    if isinstance(ac, (str, list, tuple)):
         long_list = ac
         short_list = ac
-    else:
+    elif isinstance(ac, dict):
         long_list = ac.get("long", [])
         short_list = ac.get("short", [])
-    coins_long = set(_norm_coin(c) for c in long_list if c)
-    coins_short = set(_norm_coin(c) for c in short_list if c)
+    else:
+        long_list = []
+        short_list = []
+
+    def resolve(value: object) -> set[str]:
+        values = [value] if isinstance(value, str) else list(value) if isinstance(value, (list, tuple, set)) else []
+        if len(values) == 1 and str(values[0]).strip().lower() == "all":
+            return set(available)
+        return {_norm_coin(str(coin)) for coin in values if str(coin).strip()}
+
+    coins_long = resolve(long_list)
+    coins_short = resolve(short_list)
+    ignored = live.get("ignored_coins", {})
+    if isinstance(ignored, (str, list, tuple)):
+        ignored_long = resolve(ignored)
+        ignored_short = resolve(ignored)
+    elif isinstance(ignored, dict):
+        ignored_long = resolve(ignored.get("long", []))
+        ignored_short = resolve(ignored.get("short", []))
+    else:
+        ignored_long = set()
+        ignored_short = set()
+    coins_long -= ignored_long
+    coins_short -= ignored_short
+    if available_coins is not None:
+        coins_long &= available
+        coins_short &= available
     coins = coins_long | coins_short
     return coins, coins_long, coins_short
 
 
 def _extract_bot_params(config: dict) -> dict:
-    """Extract bot long/short parameters needed for balance calculation."""
+    """Extract V7 or V8 bot-side parameters needed for balance calculation."""
     bot = config.get("bot", {})
+    live = config.get("live", {})
+    strategy_kind = str(live.get("strategy_kind") or "").strip()
     result = {}
     for side in ("long", "short"):
         s = bot.get(side, {})
+        risk = s.get("risk", {}) if isinstance(s.get("risk"), dict) else {}
+        strategies = s.get("strategy", {}) if isinstance(s.get("strategy"), dict) else {}
+        strategy = strategies.get(strategy_kind) if strategy_kind else None
+        if not isinstance(strategy, dict) and len(strategies) == 1:
+            strategy = next(iter(strategies.values()))
+        strategy = strategy if isinstance(strategy, dict) else {}
+        entry = strategy.get("entry", {}) if isinstance(strategy.get("entry"), dict) else {}
         result[side] = {
-            "n_positions": float(s.get("n_positions", 0)),
-            "total_wallet_exposure_limit": float(s.get("total_wallet_exposure_limit", 0)),
-            "entry_initial_qty_pct": float(s.get("entry_initial_qty_pct", 0)),
+            "n_positions": float(risk.get("n_positions", s.get("n_positions", 0)) or 0),
+            "total_wallet_exposure_limit": float(
+                risk.get("total_wallet_exposure_limit", s.get("total_wallet_exposure_limit", 0)) or 0
+            ),
+            "entry_initial_qty_pct": float(entry.get("initial_qty_pct", s.get("entry_initial_qty_pct", 0)) or 0),
         }
     return result
 
 
-def _apply_dynamic_ignore(config: dict, exchange: str) -> tuple[set[str], set[str], set[str]]:
+def _apply_dynamic_ignore(config: dict, exchange: str, available_coins: set[str]) -> tuple[set[str], set[str], set[str]]:
     """If dynamic_ignore is enabled, filter mapping and override approved_coins."""
     from PBCoinData import CoinData
 
     pbgui = config.get("pbgui", {})
     if not pbgui.get("dynamic_ignore", False):
-        return _extract_coins(config)
+        return _extract_coins(config, available_coins)
 
     coindata = CoinData()
     approved, _ = coindata.filter_mapping(
@@ -127,55 +164,79 @@ def _apply_dynamic_ignore(config: dict, exchange: str) -> tuple[set[str], set[st
         only_cpt=pbgui.get("only_cpt", False),
         notices_ignore=pbgui.get("notices_ignore", False),
         tags=pbgui.get("tags", []),
-        quote_filter=None,
+        active_only=True,
+        quote_filter=["USDC" if exchange == "hyperliquid" else "USDT"],
         use_cache=True,
     )
-    coins_long = set(_norm_coin(c) for c in approved if c)
-    coins_short = set(_norm_coin(c) for c in approved if c)
+    coins_long = {_norm_coin(c) for c in approved if c} & available_coins
+    coins_short = {_norm_coin(c) for c in approved if c} & available_coins
     coins = coins_long | coins_short
     return coins, coins_long, coins_short
 
 
 def _calculate(config: dict, exchange: str) -> dict:
     """Run the balance calculation and return results."""
-    # Determine coins
-    coins, coins_long, coins_short = _apply_dynamic_ignore(config, exchange)
-    if not coins:
-        return {"error": "No approved coins found in config."}
+    from PBCoinData import compute_coin_name
 
-    bot_params = _extract_bot_params(config)
     mapping = _load_mapping(exchange)
     if not mapping:
         return {"error": f"No mapping data for exchange '{exchange}'. Check Coin Data configuration."}
 
     preferred_quote = "USDC" if exchange == "hyperliquid" else "USDT"
 
+    def eligible(record: dict) -> bool:
+        if not bool(record.get("active", True)) or not bool(record.get("swap", False)) or not bool(record.get("linear", True)):
+            return False
+        if str(record.get("quote") or "").upper() != preferred_quote:
+            return False
+        if exchange == "hyperliquid":
+            if bool(record.get("is_hip3", False)) and str(record.get("dex") or "").strip().lower() != "xyz":
+                return False
+            try:
+                open_interest = float(record.get("open_interest")) if record.get("open_interest") is not None else None
+            except (TypeError, ValueError):
+                open_interest = None
+            if open_interest is not None and open_interest <= 0:
+                return False
+        return True
+
     # Find best mapping row per coin
     best_rows_by_coin = {}
     for record in mapping:
-        coin = (record.get("coin") or "").upper()
-        if not coin or coin not in coins:
+        if not isinstance(record, dict) or not eligible(record):
             continue
-        quote = (record.get("quote") or "").upper()
-        price = float(record.get("price_last") or 0.0)
-        contract_size = float(record.get("contract_size") or 1.0)
-        min_amount = float(record.get("min_amount") or record.get("precision_amount") or 0.0)
-        min_cost = float(record.get("min_cost") or 0.0)
-        min_order_price = float(record.get("min_order_price") or 0.0)
+        quote = str(record.get("quote") or "").upper()
+        raw_coin = str(record.get("coin") or compute_coin_name(str(record.get("symbol") or ""), quote))
+        coin = _norm_coin(raw_coin)
+        if not coin:
+            continue
+        try:
+            price = float(record.get("price_last") or 0.0)
+            contract_size = float(record.get("contract_size") or 1.0)
+            min_amount = float(record.get("min_amount") or record.get("precision_amount") or 0.0)
+            min_cost = float(record.get("min_cost") or 0.0)
+            min_order_price = float(record.get("min_order_price") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not all(math.isfinite(value) for value in (price, contract_size, min_amount, min_cost, min_order_price)):
+            continue
         if min_order_price <= 0 and price > 0:
             min_order_price = max(min_cost, min_amount * contract_size * price)
+        if min_order_price <= 0:
+            continue
 
-        score = (
-            0 if quote == preferred_quote else 1,
-            0 if bool(record.get("active", True)) else 1,
-            0 if bool(record.get("linear", True)) else 1,
-            0 if min_order_price > 0 else 1,
-            -price,
-        )
+        score = (0 if min_order_price > 0 else 1, -price, str(record.get("symbol") or ""))
 
         prev = best_rows_by_coin.get(coin)
         if prev is None or score < prev[0]:
             best_rows_by_coin[coin] = (score, record, min_order_price, price, contract_size, min_amount, min_cost)
+
+    available_coins = set(best_rows_by_coin)
+    coins, coins_long, coins_short = _apply_dynamic_ignore(config, exchange, available_coins)
+    if not coins:
+        return {"error": "No eligible approved coins with usable minimum-order data were found."}
+
+    bot_params = _extract_bot_params(config)
 
     coin_infos = []
     balance_long = []
@@ -237,7 +298,7 @@ def _calculate(config: dict, exchange: str) -> dict:
         symbol = bl[0]["coin"]
         min_op = next((c["min_order_price"] for c in coin_infos if c["coin"] == symbol), 0)
         calculated = min_op / ((bp["total_wallet_exposure_limit"] / bp["n_positions"]) * bp["entry_initial_qty_pct"])
-        recommended = math.ceil(calculated * 1.1 / 10) * 10
+        recommended = math.ceil(round(calculated * 1.1, 10) / 10) * 10
         result["recommendation"] = {
             "side": side,
             "symbol": symbol,

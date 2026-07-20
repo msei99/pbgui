@@ -449,6 +449,13 @@ def _validate_monitor_agent_payload(filename: str, payload: Any, *, now: float |
         ))
         for field in ("role", "pbgv", "pbgc", "pbgb", "pbgpy", "pb7v", "pb7c", "pb7b", "pb7py"):
             _monitor_agent_require_type(payload, field, str)
+        pb8_fields = ("pb8v", "pb8_config_schema", "pb8c", "pb8b", "pb8py", "pb8ready")
+        if any(field in payload for field in pb8_fields):
+            _monitor_agent_require(payload, pb8_fields)
+            for field in pb8_fields[:-1]:
+                _monitor_agent_require_type(payload, field, str)
+            if type(payload.get("pb8ready")) is not bool:
+                raise MonitorAgentPayloadError("invalid type for pb8ready")
         _monitor_agent_require_number(payload, "boot", minimum=0.0)
         if type(payload.get("reboot")) is not bool:
             raise MonitorAgentPayloadError("invalid type for reboot")
@@ -2753,6 +2760,8 @@ role = cfg.get('main', 'role', fallback='slave')
 pbname = cfg.get('main', 'pbname', fallback=platform.node()).strip() or platform.node()
 pb7dir = cfg.get('main', 'pb7dir', fallback='')
 pb7venv = cfg.get('main', 'pb7venv', fallback='')
+pb8dir = cfg.get('main', 'pb8dir', fallback='')
+pb8venv = cfg.get('main', 'pb8venv', fallback='')
 firewall_settings_present = cfg.has_section('firewall')
 firewall_enabled = config_bool('firewall', 'enabled', False)
 firewall_ssh_port = config_value('firewall', 'ssh_port') or '22'
@@ -2775,6 +2784,12 @@ result = {
     'pb7c': '',
     'pb7b': 'unknown',
     'pb7py': 'N/A',
+    'pb8v': read_pb7_version(pb8dir),
+    'pb8_config_schema': read_pb7_config_schema(pb8dir),
+    'pb8c': '',
+    'pb8b': 'unknown',
+    'pb8py': 'N/A',
+    'pb8ready': False,
     **credentials,
     'firewall_settings_present': firewall_settings_present,
     'firewall': firewall_enabled,
@@ -2811,6 +2826,10 @@ pb7_git = str(Path(pb7dir) / '.git') if pb7dir else ''
 result['pb7c'] = git_value(pb7_git, ['log', '-n', '1', '--pretty=format:%H'])
 result['pb7b'] = git_value(pb7_git, ['rev-parse', '--abbrev-ref', 'HEAD'], 'unknown')
 
+pb8_git = str(Path(pb8dir) / '.git') if pb8dir else ''
+result['pb8c'] = git_value(pb8_git, ['log', '-n', '1', '--pretty=format:%H'])
+result['pb8b'] = git_value(pb8_git, ['rev-parse', '--abbrev-ref', 'HEAD'], 'unknown')
+
 for candidate in (
     str(Path(PBGDIR) / '.venv' / 'bin' / 'python'),
     str(Path(PBGDIR).parent / 'venv_pbgui' / 'bin' / 'python'),
@@ -2825,6 +2844,17 @@ if result['pbgpy'] == 'N/A':
 pb7_python = python_version(pb7venv)
 if pb7_python:
     result['pb7py'] = pb7_python
+
+pb8_python = python_version(pb8venv)
+if pb8_python:
+    result['pb8py'] = pb8_python
+result['pb8ready'] = bool(
+    result['pb8v'].startswith('v8.')
+    and result['pb8_config_schema'].startswith('v8.')
+    and result['pb8c']
+    and pb8_python
+    and Path(pb8venv).parent.joinpath('passivbot').is_file()
+)
 
 available = []
 logs_dir = os.path.join(PBGDIR, 'data', 'logs')

@@ -1,7 +1,10 @@
 """Regression tests for shared API restart authentication."""
 
+import asyncio
 from pathlib import Path
 
+import pytest
+from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
 import PBApiServer
@@ -29,3 +32,42 @@ def test_shared_nav_does_not_send_an_undefined_bearer_token() -> None:
     assert "authOptions(c2.token" in restart_block
     assert "'Authorization': 'Bearer ' + c2.token" not in restart_block
     assert "JSON.stringify({ token: c2.token })" not in restart_block
+
+
+def test_server_status_stream_closes_before_api_restart() -> None:
+    """The persistent nav SSE must not consume Uvicorn's graceful-shutdown timeout."""
+    async def scenario() -> None:
+        response = await PBApiServer.server_status_stream(session=object())
+        iterator = response.body_iterator
+        first = await anext(iterator)
+        assert str(first).startswith("data:")
+
+        PBApiServer._close_server_status_streams()
+
+        try:
+            await anext(iterator)
+        except StopAsyncIteration:
+            pass
+        else:
+            raise AssertionError("Server status stream stayed open after restart signal")
+
+    asyncio.run(scenario())
+
+
+def test_blocked_restart_releases_master_update_reservation(monkeypatch) -> None:
+    """Restart reserves against new updates and releases that reservation when another blocker wins."""
+    class Lease:
+        released = False
+
+        def release(self) -> None:
+            self.released = True
+
+    lease = Lease()
+    monkeypatch.setattr(PBApiServer, "acquire_master_update_lock", lambda _path: lease)
+    monkeypatch.setattr(PBApiServer, "_restart_block_state", lambda: asyncio.sleep(0, result=(True, "busy")))
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(PBApiServer.server_restart(session=object()))
+
+    assert error.value.status_code == 409
+    assert lease.released is True

@@ -58,8 +58,12 @@ def test_welcome_setup_registry_classifies_role_and_empty_changes() -> None:
         ("main", "pbname"),
         ("main", "pb7dir"),
         ("main", "pb7venv"),
+        ("main", "pb8dir"),
+        ("main", "pb8venv"),
         ("main", "role"),
     }
+    assert SETTING_APPLY_REGISTRY[("main", "pb8dir")].timing == "next_operation"
+    assert SETTING_APPLY_REGISTRY[("main", "pb8venv")].restart_required is False
     unchanged = apply_metadata_for(())
     assert unchanged["timing"] == "immediate"
     assert unchanged["restart_required"] is False
@@ -73,8 +77,9 @@ def test_welcome_setup_returns_apply_metadata_for_changed_fields(monkeypatch) ->
     current = {"pb7dir": "/new/pb7", "pb7venv": "/new/python", "pbname": "master-a", "role": "master"}
     saved: list[tuple[str, dict[str, str]]] = []
     monkeypatch.setattr(auth_api, "pb7_runtime_status", lambda: previous)
+    monkeypatch.setattr(auth_api, "pb8_runtime_status", lambda: {"pb8dir": "", "pb8venv": ""})
     monkeypatch.setattr(auth_api, "save_ini_section", lambda section, values: saved.append((section, values)))
-    monkeypatch.setattr(auth_api, "_bootstrap_payload", lambda session: {"setup": current})
+    monkeypatch.setattr(auth_api, "_bootstrap_payload", lambda session: {"setup": {**current, "pb8": {"pb8dir": "", "pb8venv": ""}}})
 
     result = auth_api.save_setup(
         auth_api.SetupConfigRequest(pb7dir="/new/pb7", pb7venv="/new/python", pbname="master-a", role="master"),

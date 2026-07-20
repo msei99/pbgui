@@ -38,7 +38,7 @@ except OSError:
 
 import psutil
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -82,6 +82,8 @@ from api.coin_data import (
 )
 from api.backtest_v7 import router as backtest_v7_router
 from api.backtest_v7 import startup as bt7_startup, shutdown as bt7_shutdown
+from api.backtest_v8 import router as backtest_v8_router
+from api.backtest_v8 import startup as bt8_startup, shutdown as bt8_shutdown
 from api.cluster import router as cluster_router, shutdown as cluster_shutdown
 from api.optimize_v7 import router as optimize_v7_router
 from api.optimize_v7 import startup as opt7_startup, shutdown as opt7_shutdown
@@ -95,6 +97,7 @@ from logging_helpers import (
     rotate_logfile_if_oversize,
     set_service_min_level,
 )
+from master_update_lock import MasterUpdateBusyError, acquire_master_update_lock
 from startup_migrations import run_startup_migrations
 from credential_migration import (
     credential_migration_restart_block_reason,
@@ -117,6 +120,8 @@ _startup_serial: int = 0
 _needs_restart: bool = False
 _runtime_restart_reasons: list[str] = []
 _sse_subscribers: list[tuple[asyncio.Queue, asyncio.AbstractEventLoop]] = []
+_SSE_CLOSE = object()
+_api_restart_lease = None
 
 
 def _read_serial() -> int:
@@ -143,6 +148,23 @@ def mark_runtime_restart_required(reason: str) -> None:
     for queue, loop in list(_sse_subscribers):
         try:
             loop.call_soon_threadsafe(queue.put_nowait, True)
+        except RuntimeError:
+            if (queue, loop) in _sse_subscribers:
+                _sse_subscribers.remove((queue, loop))
+
+
+def _close_server_status_streams() -> None:
+    """Wake all nav status streams so Uvicorn need not time them out on restart."""
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    for queue, loop in list(_sse_subscribers):
+        try:
+            if loop is current_loop:
+                queue.put_nowait(_SSE_CLOSE)
+            else:
+                loop.call_soon_threadsafe(queue.put_nowait, _SSE_CLOSE)
         except RuntimeError:
             if (queue, loop) in _sse_subscribers:
                 _sse_subscribers.remove((queue, loop))
@@ -176,10 +198,10 @@ async def _restart_block_state() -> tuple[bool, str]:
         )
     except asyncio.TimeoutError:
         _log(SERVICE, "[restart] timed out while inspecting active VPS deploys", level="WARNING")
-        return False, ""
+        return True, "Could not verify whether a VPS or master update is still active. Retry shortly."
     except Exception as exc:
         _log(SERVICE, f"[restart] failed to inspect active VPS deploys: {exc}", level="WARNING")
-        return False, ""
+        return True, "Could not verify whether a VPS or master update is still active. Retry shortly."
     restart_blocked = bool(deploy_state.get("active")) if isinstance(deploy_state, dict) else False
     restart_block_reason = str(deploy_state.get("summary") or "") if restart_blocked and isinstance(deploy_state, dict) else ""
     return restart_blocked, restart_block_reason
@@ -463,7 +485,6 @@ async def _lifespan(app: FastAPI):
     capability_heartbeat.__enter__()
     _runtime_restart_reasons.clear()
     try:
-        harden_sensitive_paths(_PBGUI_ROOT, None, Path.home() / ".aws")
         configured_pb7 = str(load_ini("main", "pb7dir") or "").strip()
         harden_sensitive_paths(
             _PBGUI_ROOT,
@@ -556,10 +577,12 @@ async def _lifespan(app: FastAPI):
         # Start SSH connections + watchers in background so the server
         # can accept requests immediately (connections take ~2 min).
         async def _deferred_startup():
+            await asyncio.sleep(0.1)
             await monitor.start()
             _log(SERVICE, "[lifespan] deferred startup complete", level="INFO")
 
         bt7_startup()
+        bt8_startup()
         opt7_startup()
         coin_data_startup()
         ohlcv_preload_startup()
@@ -589,6 +612,7 @@ async def _lifespan(app: FastAPI):
             ("cluster", cluster_shutdown),
             ("db-tools", db_tools_shutdown),
             ("backtest-v7", bt7_shutdown),
+            ("backtest-v8", bt8_shutdown),
             ("optimize-v7", opt7_shutdown),
         )
 
@@ -715,6 +739,7 @@ app.include_router(v7_router, prefix="/api/v7", tags=["v7"])
 app.include_router(balance_calc_router, prefix="/api/balance-calc", tags=["balance-calc"])
 app.include_router(coin_data_router, prefix="/api/coin-data", tags=["coin-data"])
 app.include_router(backtest_v7_router, prefix="/api/backtest-v7", tags=["backtest-v7"])
+app.include_router(backtest_v8_router, prefix="/api/backtest-v8", tags=["backtest-v8"])
 app.include_router(cluster_router, prefix="/api/cluster", tags=["cluster"])
 app.include_router(optimize_v7_router, prefix="/api/optimize-v7", tags=["optimize-v7"])
 app.include_router(pareto_explorer_router, prefix="/api/pareto-explorer", tags=["pareto-explorer"])
@@ -1289,7 +1314,9 @@ async def server_status_stream(session: SessionToken = Depends(require_auth)):
                 force_send = False
                 try:
                     # wait for change notification (or 25s keepalive)
-                    await asyncio.wait_for(queue.get(), timeout=25)
+                    notification = await asyncio.wait_for(queue.get(), timeout=25)
+                    if notification is _SSE_CLOSE:
+                        return
                     force_send = True
                 except asyncio.TimeoutError:
                     pass
@@ -1336,62 +1363,83 @@ async def server_status(session: SessionToken = Depends(require_auth)):
 
 
 @app.post("/api/token-refresh")
-async def token_refresh(session: SessionToken = Depends(require_auth)):
+async def token_refresh(request: Request, response: Response, session: SessionToken = Depends(require_auth)):
     """Extend the current token's expiry by another 24 hours.
 
     Called periodically by frontend pages to prevent token expiry
     while the user is actively using the page.
     """
-    from api.auth import refresh_token
+    from api.auth import refresh_token, set_session_cookie
     updated = refresh_token(session.token)
     if not updated:
         raise HTTPException(status_code=401, detail="Token refresh failed")
+    set_session_cookie(response, request, updated)
     return {"ok": True, "expires_at": updated.expires_at}
 
 
 @app.post("/api/server-restart")
 async def server_restart(session: SessionToken = Depends(require_auth)):
     """Restart the API server process. Auth required."""
-    restart_blocked, restart_block_reason = await _restart_block_state()
-    if restart_blocked:
-        detail = restart_block_reason or "An API-owned mutable operation is still running."
-        raise HTTPException(status_code=409, detail=f"Cannot restart API server: {detail}")
+    global _api_restart_lease
+    try:
+        restart_lease = acquire_master_update_lock(Path(PBGDIR))
+    except MasterUpdateBusyError as exc:
+        raise HTTPException(status_code=409, detail=f"Cannot restart API server: {exc}") from exc
+    try:
+        restart_blocked, restart_block_reason = await _restart_block_state()
+        if restart_blocked:
+            detail = restart_block_reason or "An API-owned mutable operation is still running."
+            raise HTTPException(status_code=409, detail=f"Cannot restart API server: {detail}")
+    except Exception:
+        restart_lease.release()
+        raise
+    _api_restart_lease = restart_lease
 
     _log(SERVICE, "[restart] restart requested by user", level="WARNING")
 
     async def _do_restart():
-        await asyncio.sleep(0.3)  # let response reach the client first
-        if _restart_current_api_systemd_unit():
-            return
-        pbgdir = Path(__file__).resolve().parent
-        venv_python = None
-        for candidate in [
-            pbgdir.parent / "venv_pbgui" / "bin" / "python",
-            pbgdir.parent / "venv_pbgui312" / "bin" / "python",
-            pbgdir.parent / "venv" / "bin" / "python",
-            Path(sys.executable),
-        ]:
-            if candidate.exists():
-                venv_python = candidate
-                break
-        if venv_python:
-            # Delete the PID file BEFORE spawning the new process so the new
-            # process doesn't see "Already running" and exit immediately.
-            pid_file = Path(PBGDIR) / "data" / "pid" / "api_server.pid"
-            pid_file.unlink(missing_ok=True)
-            env = os.environ.copy()
-            env["PBGUI_RESTART_DELAY"] = "3"  # wait for old process to free the port
-            with _open_api_console_log() as console_log:
-                subprocess.Popen(
-                    [str(venv_python), str(pbgdir / "PBApiServer.py")],
-                    stdin=subprocess.DEVNULL,
-                    stdout=console_log,
-                    stderr=subprocess.STDOUT,
-                    close_fds=True,
-                    cwd=str(pbgdir),
-                    env=env,
-                )
-        os.kill(os.getpid(), signal.SIGTERM)
+        global _api_restart_lease
+        try:
+            await asyncio.sleep(0.3)  # let response reach the client first
+            _close_server_status_streams()
+            await asyncio.sleep(0)
+            if _restart_current_api_systemd_unit():
+                await asyncio.sleep(5)
+                raise RuntimeError("The scheduled systemd API restart did not stop the current process")
+            pbgdir = Path(__file__).resolve().parent
+            venv_python = None
+            for candidate in [
+                pbgdir.parent / "venv_pbgui" / "bin" / "python",
+                pbgdir.parent / "venv_pbgui312" / "bin" / "python",
+                pbgdir.parent / "venv" / "bin" / "python",
+                Path(sys.executable),
+            ]:
+                if candidate.exists():
+                    venv_python = candidate
+                    break
+            if venv_python:
+                # Delete the PID file BEFORE spawning the new process so the new
+                # process doesn't see "Already running" and exit immediately.
+                pid_file = Path(PBGDIR) / "data" / "pid" / "api_server.pid"
+                pid_file.unlink(missing_ok=True)
+                env = os.environ.copy()
+                env["PBGUI_RESTART_DELAY"] = "3"  # wait for old process to free the port
+                with _open_api_console_log() as console_log:
+                    subprocess.Popen(
+                        [str(venv_python), str(pbgdir / "PBApiServer.py")],
+                        stdin=subprocess.DEVNULL,
+                        stdout=console_log,
+                        stderr=subprocess.STDOUT,
+                        close_fds=True,
+                        cwd=str(pbgdir),
+                        env=env,
+                    )
+            os.kill(os.getpid(), signal.SIGTERM)
+        except Exception as exc:
+            _log(SERVICE, f"[restart] failed after restart reservation: {exc}", level="ERROR", meta={"traceback": traceback.format_exc()})
+            if _api_restart_lease is restart_lease:
+                _api_restart_lease = None
+            restart_lease.release()
 
     asyncio.create_task(_do_restart())
     return {"ok": True, "message": "Restarting…"}

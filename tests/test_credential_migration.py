@@ -801,6 +801,56 @@ def test_coordinator_cross_source_values_share_one_credential(tmp_path: Path) ->
     assert "shared-coordinator-cmc" not in json.dumps(rescanned)
 
 
+def test_completed_scan_reuses_safe_files_and_checks_appended_log_content(tmp_path: Path) -> None:
+    """Repeated startup scans skip unchanged bytes but inspect every appended log byte."""
+    coordinator = CredentialMigrationCoordinator(tmp_path)
+    log_path = tmp_path / "data" / "logs" / "service.log"
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text("clean\n", encoding="utf-8")
+
+    assert coordinator._scan_managed_files({"scan-secret"}, cache_scope="scope") == []
+    cache_before = coordinator.managed_scan_cache_path.read_text(encoding="utf-8")
+    assert coordinator._scan_managed_files({"scan-secret"}, cache_scope="scope") == []
+    assert coordinator.managed_scan_cache_path.read_text(encoding="utf-8") == cache_before
+
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write("scan-secret\n")
+
+    assert coordinator._scan_managed_files({"scan-secret"}, cache_scope="scope") == [
+        "data/logs/service.log:managed-log"
+    ]
+
+
+def test_managed_scan_scope_changes_with_exact_sentinel_set(tmp_path: Path) -> None:
+    """An unchanged file must be rescanned whenever another migration sentinel becomes relevant."""
+    coordinator = CredentialMigrationCoordinator(tmp_path)
+    state = {"version": 2, "operation_id": "same", "freeze_generation": 3}
+
+    first = coordinator._managed_scan_cache_scope(state, {"first-secret"})
+    second = coordinator._managed_scan_cache_scope(state, {"first-secret", "second-secret"})
+    after_restart = CredentialMigrationCoordinator(tmp_path)._managed_scan_cache_scope(state, {"first-secret"})
+
+    assert first != second
+    assert after_restart == first
+    assert "first-secret" not in first
+    assert "second-secret" not in second
+
+
+def test_changed_log_is_fully_rescanned_after_in_place_rewrite(tmp_path: Path) -> None:
+    """A same-inode log rewrite must not hide a secret inserted before the former tail offset."""
+    coordinator = CredentialMigrationCoordinator(tmp_path)
+    log_path = tmp_path / "data" / "logs" / "service.log"
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text("x" * 200, encoding="utf-8")
+    assert coordinator._scan_managed_files({"scan-secret"}, cache_scope="scope") == []
+
+    log_path.write_text("scan-secret" + "y" * 240, encoding="utf-8")
+
+    assert coordinator._scan_managed_files({"scan-secret"}, cache_scope="scope") == [
+        "data/logs/service.log:managed-log"
+    ]
+
+
 @pytest.mark.parametrize(
     ("kind", "provider", "value"),
     [

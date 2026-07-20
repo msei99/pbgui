@@ -114,7 +114,10 @@ def fetch_passivbot_ref(
 def checkout_passivbot_ref(repo_dir: str | Path, ref: str) -> bool:
     """Force a detached checkout and report whether the commit changed."""
     root = Path(repo_dir)
-    before = _run_git(root, ["rev-parse", "HEAD"])
+    try:
+        before = _run_git(root, ["rev-parse", "HEAD"])
+    except RuntimeError:
+        before = ""
     was_dirty = bool(_run_git(root, ["status", "--porcelain", "--untracked-files=no"]))
     _run_git(root, ["checkout", "--detach", "--force", ref])
     after = _run_git(root, ["rev-parse", "HEAD"])
@@ -124,7 +127,10 @@ def checkout_passivbot_ref(repo_dir: str | Path, ref: str) -> bool:
 def passivbot_ref_differs(repo_dir: str | Path, ref: str) -> bool:
     """Return whether a ref resolves to a commit other than current HEAD."""
     root = Path(repo_dir)
-    current = _run_git(root, ["rev-parse", "HEAD"])
+    try:
+        current = _run_git(root, ["rev-parse", "HEAD"])
+    except RuntimeError:
+        return True
     target = _run_git(root, ["rev-parse", f"{ref}^{{commit}}"])
     dirty = bool(_run_git(root, ["status", "--porcelain", "--untracked-files=no"]))
     return current != target or dirty
@@ -267,7 +273,7 @@ def main() -> int:
             changed = checkout_passivbot_ref(args.repo, args.ref.strip())
             verify_passivbot_major(args.repo, args.expected_major)
     except RuntimeError as exc:
-        print(f"PB7 guard failed: {exc}", file=sys.stderr)
+        print(f"Passivbot guard failed: {exc}", file=sys.stderr)
         return 1
     print(f"Passivbot v{version} verified.")
     if args.ref.strip():

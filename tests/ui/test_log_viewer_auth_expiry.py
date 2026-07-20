@@ -90,6 +90,61 @@ def test_cookie_authenticated_pages_keep_logout_visible_without_a_token() -> Non
         assert "Bearer" not in source
 
 
+def test_restart_arms_stream_before_kill_and_keeps_it_after_success() -> None:
+    """Restart startup lines follow an acknowledged EOF cursor without resubscribe loss."""
+    source = LOG_VIEWER.read_text(encoding="utf-8")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        globalThis.window = {{}};
+        globalThis.WebSocket = {{OPEN: 1, CLOSING: 2, CLOSED: 3}};
+        globalThis.setTimeout = () => 1;
+        globalThis.clearTimeout = () => {{}};
+        {source}
+        const sent = [];
+        const restartButton = {{disabled: false, textContent: ''}};
+        const panel = Object.create(LogViewerPanel.prototype);
+        panel._host = 'remote-a';
+        panel._service = 'Bot:demo:7';
+        panel._file = '';
+        panel._ws = {{readyState: 1, send: raw => sent.push(JSON.parse(raw))}};
+        panel._sid = 4;
+        panel._streaming = true;
+        panel._showRestart = true;
+        panel._startLocalAtEnd = false;
+        panel._pendingRestartCommand = null;
+        panel._restartAttempt = null;
+        panel._restartGeneration = 0;
+        panel._restartTimeout = 0;
+        panel._lines = [];
+        panel._lineBase = 0;
+        panel._q = name => name === 'restart-btn' ? restartButton : (name === 'lines-sel' ? {{value: '200'}} : null);
+        panel._unsubscribe = () => {{ panel._streaming = false; }};
+        panel._clear = () => {{ panel._lines = []; }};
+        panel._updateStreamBtn = () => {{}};
+        panel._renderFull = () => {{}};
+        panel._normalizeIncomingLines = lines => lines;
+        panel._restartBlockerFor = () => '';
+
+        panel._restart();
+        const subscribe = sent.find(item => item.cmd === 'subscribe_logs');
+        assert.ok(subscribe);
+        assert.equal(subscribe.start_at_end, true);
+        assert.equal(sent.some(item => item.cmd === 'kill_instance'), false);
+
+        panel._handleMsg({{type: 'logs', sid: subscribe.sid, lines: [], streaming: true}});
+        assert.equal(sent.filter(item => item.cmd === 'kill_instance').length, 1);
+        const sentBeforeResult = sent.length;
+
+        panel._handleMsg({{type: 'result', cmd: 'kill_instance', success: true}});
+        assert.equal(sent.length, sentBeforeResult);
+        assert.equal(panel._restartAttempt, null);
+        """
+    )
+    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+
 def test_every_log_viewer_asset_reference_uses_current_cache_version() -> None:
     """All HTML and dynamic loader references must fetch the fixed shared asset."""
 
@@ -99,5 +154,5 @@ def test_every_log_viewer_asset_reference_uses_current_cache_version() -> None:
         references.extend((path, match.group(0)) for match in re.finditer(r"log_viewer_panel\.js\?v=\d+", source))
 
     assert references
-    assert all(reference.endswith("?v=27") for _path, reference in references), references
-    assert "log_viewer_panel.js?v=27" in NAV.read_text(encoding="utf-8")
+    assert all(reference.endswith("?v=28") for _path, reference in references), references
+    assert "log_viewer_panel.js?v=28" in NAV.read_text(encoding="utf-8")

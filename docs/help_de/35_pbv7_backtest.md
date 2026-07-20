@@ -3,6 +3,7 @@
 Die **PBv7 Backtest** Seite ermöglicht das Erstellen, Ausführen und Auswerten von Passivbot v7 Backtests.
 Es handelt sich um eine eigenständige FastAPI-Seite — kein Seitenneustart nötig. Queue-Updates kommen in Echtzeit per WebSocket.
 Draft-Übergaben aus den FastAPI-Seiten **Run** und **Optimize** landen jetzt ebenfalls direkt hier als FastAPI-Drafts, sodass der Wechsel zwischen diesen PBv7-Seiten keinen Legacy-Relay-Pfad mehr benötigt.
+PBv8 Backtest rendert dieselbe Seitenvorlage und denselben visuellen Editor; ein kleiner Versionsadapter ändert ausschließlich generationsspezifische Config-Pfade und API-Endpunkte.
 
 Die Seite ist in fünf Panels gegliedert, die über die linke Sidebar gewechselt werden:
 
@@ -69,7 +70,8 @@ Die Bearbeitung öffnet sich inline im Hauptbereich. Felder:
 | **Add to Queue** | Speichern und einreihen → wechselt in Queue-Panel |
 | **Apply Filters** | Approved/Ignored-Coin-Listen anhand der aktuellen Filter befüllen |
 | **📊 View Results** | Zu den Ergebnissen dieser Config im Results-Panel springen |
-| **💰 Balance Calculator** | Die eigenständige Balance-Calculator-Seite mit der aktuellen Editor-Config als Draft öffnen |
+| **⏩ Convert to V8** | Die aktuell gespeicherte V7-Config mit PB8s offiziellem Migrator konvertieren und in PBv8 Backtest öffnen; bis zum ersten Speichern deaktiviert |
+| **💰 Balance Calculator** | Den gemeinsamen Balance Calculator unter Information mit der aktuellen Editor-Config als Draft öffnen |
 | **⚡ Calc Balance** | Dieselbe Balance-Berechnung inline in einem Modal ausführen, ohne die Backtest-Seite zu verlassen |
 | **🧭 OHLCV Readiness** | Öffnet ein verschiebbares und resizebares Floating-Fenster und führt darin einen PB7-basierten Read-only-Preflight für die aktuelle Config aus. Angezeigt wird, ob die aktuellen Approved Coins lokal bereit sind, aus Legacy-OHLCV-Daten importiert werden können, beim Start nachgeladen würden oder durch persistente Gaps blockiert sind; ausgewertet wird die Vereinigung aus `approved_coins_long` und `approved_coins_short`, und jeder Eintrag zeigt jetzt direkt, ob er aus `long`, `short` oder aus beiden Listen stammt. Wenn PB7 fehlende Bereiche sonst erst beim Start fetchen würde, bietet das Fenster zusätzlich **Preload OHLCV Data** zum Vorwärmen des Caches im Hintergrund an, springt beim Start dieses Preloads automatisch zum Job-Logbereich, zeigt den laufenden Download jetzt mit echten, aus den PB7-Archiv-/CCXT-Logzeilen abgeleiteten Fortschrittsbalken plus Laufzeit, PID, Log-Zählern und Zeitstempel der letzten Aktualisierung an, leitet den CCXT-Fortschritt dabei aus dem vorwärts laufenden Request-Cursor ab statt bei Börsen mit neueren Rückgabedaten ständig auf 100% zu springen, verwendet für den Preload jetzt denselben warmup-korrigierten effektiven Start wie der Readiness-Check, damit nach einem fertigen Preload nicht mehr genau diese Warmup-Tage fehlen, stuft Märkte, die erst nach dem angeforderten Fenster gestartet sind, jetzt korrekt als zu jung ein statt so zu tun, als ließen sich diese alten Kerzen noch preloaden, blendet während des laufenden Downloads zusätzlich eine **Stop Preload**-Aktion ein, bietet oben rechts außerdem einen Button zum Aufziehen des Fensters auf die Browserfläche, hält dieses Log sauber am Live-Tail statt wieder nach oben zu springen und lässt das fertige Preload-Ergebnis sichtbar, bis ein frischer Readiness-Check es ersetzt |
 | **📥 Import** | Den Run-ähnlichen Paste-JSON-Dialog öffnen und die importierte Config zur Prüfung in den Editor laden; gepastete Configs laufen dabei durch dieselbe PB7-Ladepipeline wie normal geladene Backtest-Configs, sodass ergänzte Parameter sowie `neutralized`- / `review`-Markierungen erhalten bleiben |
@@ -155,6 +157,7 @@ Alle abgeschlossenen Backtest-Ergebnisse durchsuchen.
 
 ### Filter & Sortierung
 
+- **Version**-Dropdown — PBv7-Ergebnisse, PBv8-Ergebnisse oder beide anzeigen; auf dieser Seite ist PBv7 vorausgewählt
 - **Config**-Dropdown — nach Config-Name filtern (exakte Übereinstimmung)
 - **Suchfeld** — Freitext-Filter über alle Spalten
 - Spaltenheader anklicken zum Sortieren; erneut klicken für umgekehrte Reihenfolge
@@ -176,7 +179,10 @@ Abgeschlossene Queue-Jobs invalidieren jetzt sofort den gecachten Results-Stand.
 | Symbol | Aktion |
 |--------|--------|
 | 📊 | Ergebnis-Charts öffnen (Equity-Kurve, TWE, etc.) |
+| **V8** | Die exakte `config.json` dieses Ergebnisses mit PB8s offiziellem Migrator konvertieren und in PBv8 Backtest öffnen |
 | 🗑 | Dieses einzelne Ergebnis löschen |
+
+Auch die Configs-Tabelle bietet **V8** für die gespeicherte V7-Backtest-Config. Beide Konvertierungen lassen die V7-Quelle unverändert. Bei der Konvertierung eines Results ermittelt PBGui vor der Migration die effektiv verwendeten Maker- und Taker-Raten aus dessen linearen `fills.csv`-Daten. Dadurch kann ein normalisierter Default aus der Result-Config nicht mehr die tatsächlich von V7 verwendeten Exchange-Gebühren ersetzen. PBGui entfernt vor der Migration ausschließlich eigene Metadaten und einen veralteten temporären Loader-Pfad; verbleiben echte nicht unterstützte oder manuell zu prüfende Felder, veröffentlicht PB8 keine lauffähige Config.
 
 ### Ergebnis-Charts
 
@@ -189,7 +195,7 @@ Ein Klick auf eine Zeile öffnet ein vollständiges Chart-Panel mit:
 - **Config JSON** Viewer
 
 📌 **Pin** drücken, um das Chart beim Durchsuchen anderer Ergebnisse sichtbar zu lassen.
-📈 **Compare** drücken, um mehrere Ergebnisse auf einem Chart zu überlagern.
+📈 **Compare** drücken, um mehrere Ergebnisse auf einem Chart zu überlagern. Mit **Version: Both** können PBv7- und PBv8-Ergebnisse gemeinsam ausgewählt werden; PBGui lädt jede Equity-Datei vom passenden Backend und kennzeichnet die Chart-Serien mit ihrer Version.
 
 ### Re-Backtest Modal
 

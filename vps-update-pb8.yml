@@ -1,0 +1,223 @@
+---
+# Install or update PB8 on a selected remote PBGui master only.
+
+- hosts: "{{ hostname }}"
+  gather_facts: no
+  force_handlers: true
+
+  vars:
+    install_dir: "{{ install_dir }}"
+    pbgdir: "{{ install_dir }}/pbgui"
+    pbgui_python: "{{ install_dir }}/venv_pbgui/bin/python"
+    pb8dir: "{{ install_dir }}/pb8"
+    pb8venv: "{{ install_dir }}/venv_pb8"
+
+  tasks:
+    - name: Read remote PBGui role before PB8 changes
+      command:
+        argv:
+          - python3
+          - -c
+          - "import configparser,sys; c=configparser.ConfigParser(); c.read(sys.argv[1]); print(c.get('main','role',fallback=''))"
+          - "{{ pbgdir }}/pbgui.ini"
+      register: pbgui_role
+      changed_when: false
+
+    - name: Require remote master role for PB8
+      assert:
+        that:
+          - pbgui_role.stdout | trim | lower == 'master'
+        fail_msg: "PB8 can only be installed or updated on a PBGui master."
+
+    - name: Acquire PB8 update writer ownership
+      script:
+        cmd: "master_update_lock.py --acquire-writer {{ install_dir | quote }}"
+        executable: "{{ pbgui_python }}"
+      notify: Release PB8 update writer ownership
+
+    - name: Check PB8 prerequisites
+      shell: |
+        command -v git
+        command -v curl
+        command -v gcc
+        command -v python3.12
+        python3.12 -c 'import venv, ensurepip'
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Install rustup when missing
+      shell: |
+        if ! command -v rustup >/dev/null 2>&1; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+        fi
+      args:
+        executable: /bin/bash
+
+    - name: Install PB8 Rust toolchain
+      shell: |
+        source "$HOME/.cargo/env"
+        rustup toolchain install 1.90.0
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Ensure PB8 update state directory exists
+      file:
+        path: "{{ pbgdir }}/data/locks"
+        state: directory
+        mode: "0700"
+
+    - name: Mark PB8 runtime unavailable until validation completes
+      copy:
+        dest: "{{ pbgdir }}/data/locks/pb8-runtime-invalid"
+        content: "PB8 installation or update in progress\n"
+        mode: "0600"
+
+    - name: Wait for already-starting PB8 runners to cross the launch boundary
+      script:
+        cmd: "master_update_lock.py --barrier {{ pbgdir | quote }} --timeout 120"
+        executable: "{{ pbgui_python }}"
+      changed_when: false
+
+    - name: Inspect existing PB8 checkout
+      stat:
+        path: "{{ pb8dir }}/.git"
+      register: pb8_git
+
+    - name: Inspect PB8 target
+      stat:
+        path: "{{ pb8dir }}"
+      register: pb8_target
+
+    - name: Refuse a non-Git PB8 target
+      fail:
+        msg: "PB8 target exists but is not a Git checkout: {{ pb8dir }}"
+      when: not pb8_git.stat.exists and pb8_target.stat.exists
+
+    - name: Clone official Passivbot without checking out source
+      command:
+        argv:
+          - git
+          - clone
+          - --no-checkout
+          - https://github.com/enarjord/passivbot.git
+          - "{{ pb8dir }}"
+      when: not pb8_git.stat.exists
+
+    - name: Fetch and verify latest official Passivbot v8 for an existing checkout
+      command:
+        argv:
+          - "{{ pbgui_python }}"
+          - "{{ pbgdir }}/pb7_guard.py"
+          - --repo
+          - "{{ pb8dir }}"
+          - --ref
+          - refs/remotes/pbgui-pb7-pin/master
+          - --expected-major
+          - "8"
+          - --fetch-url
+          - https://github.com/enarjord/passivbot.git
+      changed_when: false
+      when: pb8_git.stat.exists
+
+    - name: Fetch and verify latest official Passivbot v8 for a new checkout
+      command:
+        argv:
+          - "{{ pbgui_python }}"
+          - "{{ pbgdir }}/pb7_guard.py"
+          - --repo
+          - "{{ pb8dir }}"
+          - --ref
+          - refs/remotes/pbgui-pb7-pin/master
+          - --expected-major
+          - "8"
+          - --fetch-url
+          - https://github.com/enarjord/passivbot.git
+      changed_when: false
+      when: not pb8_git.stat.exists
+
+    - name: Checkout verified official Passivbot v8 commit
+      command:
+        argv:
+          - "{{ pbgui_python }}"
+          - "{{ pbgdir }}/pb7_guard.py"
+          - --repo
+          - "{{ pb8dir }}"
+          - --ref
+          - refs/remotes/pbgui-pb7-pin/master
+          - --expected-major
+          - "8"
+          - --checkout
+      register: pb8_repo
+      changed_when: "'checkout_changed=true' in pb8_repo.stdout"
+
+    - name: Check PB8 virtualenv
+      stat:
+        path: "{{ pb8venv }}/bin/python"
+      register: pb8_python
+
+    - name: Create PB8 virtualenv
+      command:
+        argv:
+          - python3.12
+          - -m
+          - venv
+          - "{{ pb8venv }}"
+      when: not pb8_python.stat.exists
+
+    - name: Upgrade PB8 pip
+      command:
+        argv:
+          - "{{ pb8venv }}/bin/python"
+          - -m
+          - pip
+          - install
+          - --upgrade
+          - pip
+
+    - name: Install PB8 full profile
+      shell: |
+        source "$HOME/.cargo/env"
+        "{{ pb8venv }}/bin/python" -m pip install --upgrade -e "{{ pb8dir }}[full]"
+      args:
+        executable: /bin/bash
+
+    - name: Validate PB8 CLI
+      command:
+        argv:
+          - "{{ pb8venv }}/bin/passivbot"
+          - --help
+      changed_when: false
+
+    - name: Validate PB8 Rust module and config schema
+      command:
+        argv:
+          - "{{ pb8venv }}/bin/python"
+          - -c
+          - "import passivbot_rust; from config.schema import CONFIG_SCHEMA_VERSION; assert str(CONFIG_SCHEMA_VERSION).startswith('v8.'), CONFIG_SCHEMA_VERSION; print(CONFIG_SCHEMA_VERSION)"
+      changed_when: false
+
+    - name: Save PB8 runtime paths after validation
+      command:
+        argv:
+          - "{{ pbgui_python }}"
+          - -c
+          - "import configparser,sys; from pbgui_purefunc import save_ini_section; c=configparser.ConfigParser(); c.read('pbgui.ini'); desired={'pb8dir':sys.argv[1],'pb8venv':sys.argv[2]}; changed=any(c.get('main',k,fallback='') != v for k,v in desired.items()); save_ini_section('main', desired) if changed else None; print('changed=' + str(changed).lower())"
+          - "{{ pb8dir }}"
+          - "{{ pb8venv }}/bin/python"
+      args:
+        chdir: "{{ pbgdir }}"
+      register: save_pb8_paths
+      changed_when: "'changed=true' in save_pb8_paths.stdout"
+
+    - name: Mark validated PB8 runtime available
+      file:
+        path: "{{ pbgdir }}/data/locks/pb8-runtime-invalid"
+        state: absent
+
+  handlers:
+    - name: Release PB8 update writer ownership
+      file:
+        path: "{{ install_dir }}/.pbgui-pb8-update-active"
+        state: absent

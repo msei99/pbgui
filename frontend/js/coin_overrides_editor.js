@@ -21,6 +21,9 @@ var _covState = {
   apiBase: '',
   configName: '',       // current config folder name (for override_config_path lookups)
   overrideConfigs: {},  // cache: { COIN: { long: {...}, short: {...} } } loaded from override files
+  deferConfigFileWrites: false,
+  pendingConfigFileWrites: {},
+  loadGeneration: 0,
 };
 
 function _covNotifyStructuredSync() {
@@ -444,6 +447,7 @@ function covRevealCfgJsonError(side) {
 function coinOvInit(containerId, opts) {
   _covState.containerId = containerId;
   _covState.apiBase = (opts && opts.apiBase) || '';
+  _covState.deferConfigFileWrites = !!(opts && opts.deferConfigFileWrites);
   _covEnsureValidationStyles();
   _fetchAllowedParams();
 }
@@ -457,10 +461,19 @@ function _fetchAllowedParams() {
 }
 
 /* ── Load from config ───────────────────────────────────────── */
-function coinOvLoad(cfg) {
+function coinOvLoad(cfg, opts) {
+  _covState.loadGeneration += 1;
+  var preservePending = !!(opts && opts.preservePending);
+  var previousPaths = {};
+  Object.keys(_covState.overrides || {}).forEach(function(coin) {
+    previousPaths[coin] = (_covState.overrides[coin] || {}).override_config_path || '';
+  });
   _covState.overrides = {};
   _covState.editCoin = null;
-  _covState.overrideConfigs = {};
+  if (!preservePending) {
+    _covState.overrideConfigs = {};
+    _covState.pendingConfigFileWrites = {};
+  }
   var co = (cfg && cfg.coin_overrides) || {};
   for (var coin in co) {
     if (!co.hasOwnProperty(coin)) continue;
@@ -479,12 +492,24 @@ function coinOvLoad(cfg) {
       if (incoming.live && !existing.live) existing.live = JSON.parse(JSON.stringify(incoming.live));
     } else {
       var data = JSON.parse(JSON.stringify(co[coin]));
-      // Normalize override_config_path to match the normalized coin name
-      if (data.override_config_path) {
-        data.override_config_path = norm + '.json';
-      }
       _covState.overrides[norm] = data;
     }
+  }
+  if (preservePending) {
+    Object.keys(_covState.overrideConfigs).forEach(function(coin) {
+      var override = _covState.overrides[coin];
+      if (!override || previousPaths[coin] !== (override.override_config_path || '')) {
+        delete _covState.overrideConfigs[coin];
+      }
+    });
+    Object.keys(_covState.pendingConfigFileWrites).forEach(function(coin) {
+      var override = _covState.overrides[coin];
+      var pending = _covState.pendingConfigFileWrites[coin];
+      if (!override || !pending || override.override_config_path !== pending.filename) {
+        delete _covState.pendingConfigFileWrites[coin];
+        delete _covState.overrideConfigs[coin];
+      }
+    });
   }
   _covRender();
 }
@@ -522,7 +547,11 @@ function coinOvSetCoins(coins) {
 
 /** Set the current config folder name (needed for loading override_config_path files) */
 function coinOvSetConfigName(name) {
-  _covState.configName = name || '';
+  var nextName = name || '';
+  if (_covState.configName !== nextName) {
+    _covState.configName = nextName;
+    _covState.loadGeneration += 1;
+  }
 }
 
 /** Preload override_config_path file contents, e.g. from an editor draft. */
@@ -544,15 +573,23 @@ function _covLoadOverrideFile(coin) {
   // Check cache
   if (_covState.overrideConfigs[coin] !== undefined) return Promise.resolve(_covState.overrideConfigs[coin]);
   var filename = data.override_config_path;
+  var generation = _covState.loadGeneration;
+  var configName = _covState.configName;
   return apiFetch('/override-config/' + encodeURIComponent(_covState.configName) + '/' + encodeURIComponent(filename))
     .then(function(resp) {
       var cfg = resp.config || {};
       cfg = _covFilterOverrideConfig(cfg);
-      _covState.overrideConfigs[coin] = cfg;
+      var current = _covState.overrides[coin];
+      if (generation === _covState.loadGeneration && configName === _covState.configName && current && current.override_config_path === filename) {
+        _covState.overrideConfigs[coin] = cfg;
+      }
       return cfg;
     })
     .catch(function() {
-      _covState.overrideConfigs[coin] = null;
+      var current = _covState.overrides[coin];
+      if (generation === _covState.loadGeneration && configName === _covState.configName && current && current.override_config_path === filename) {
+        _covState.overrideConfigs[coin] = null;
+      }
       return null;
     });
 }
@@ -573,10 +610,11 @@ function _covFilterOverrideConfig(cfg) {
       src = src.bot[side];
     }
     var keys = (allowed.bot[side]) ? allowed.bot[side] : {};
+    var flatSource = _covFlattenForAllowed(src, keys);
     var filtered = {};
-    for (var k in src) {
-      if (src.hasOwnProperty(k) && keys.hasOwnProperty(k)) {
-        filtered[k] = src[k];
+    for (var k in flatSource) {
+      if (flatSource.hasOwnProperty(k) && keys.hasOwnProperty(k)) {
+        _covSetDotted(filtered, k, flatSource[k]);
       }
     }
     if (Object.keys(filtered).length > 0) {
@@ -589,10 +627,57 @@ function _covFilterOverrideConfig(cfg) {
 
 /* ── Collect → config ───────────────────────────────────────── */
 function coinOvCollect() {
-  if (_covState.editCoin) _covSaveEdit();
+  if (_covState.editCoin && _covSaveEdit() === false) {
+    throw new Error('Coin override values are invalid');
+  }
   var ov = _covState.overrides;
   if (Object.keys(ov).length === 0) return {};
   return { coin_overrides: JSON.parse(JSON.stringify(ov)) };
+}
+
+function coinOvFlushPendingFiles(configName) {
+  if (!_covState.deferConfigFileWrites) return Promise.resolve({ ok: true });
+  var targetName = configName || _covState.configName;
+  var pending = _covState.pendingConfigFileWrites || {};
+  var coins = Object.keys(pending);
+  if (!targetName || !coins.length) return Promise.resolve({ ok: true });
+  var writes = coins.map(function(coin) {
+    var item = pending[coin];
+    return apiFetch('/override-config/' + encodeURIComponent(targetName) + '/' + encodeURIComponent(item.filename), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(item.config)
+    });
+  });
+  return Promise.all(writes).then(function() {
+    coins.forEach(function(coin) { delete _covState.pendingConfigFileWrites[coin]; });
+    return { ok: true };
+  });
+}
+
+function coinOvSnapshotPendingFiles() {
+  var pending = _covState.pendingConfigFileWrites || {};
+  var snapshot = { files: {}, entries: {} };
+  Object.keys(pending).forEach(function(coin) {
+    var item = pending[coin];
+    if (!item || !item.filename || !item.config) return;
+    if (snapshot.files[item.filename] !== undefined) {
+      throw new Error('Multiple coin overrides use ' + item.filename);
+    }
+    snapshot.files[item.filename] = JSON.parse(JSON.stringify(item.config));
+    snapshot.entries[coin] = JSON.parse(JSON.stringify(item));
+  });
+  return snapshot;
+}
+
+function coinOvAcknowledgePendingFiles(snapshot) {
+  var entries = (snapshot && snapshot.entries) || {};
+  Object.keys(entries).forEach(function(coin) {
+    var current = _covState.pendingConfigFileWrites[coin];
+    if (current && JSON.stringify(current) === JSON.stringify(entries[coin])) {
+      delete _covState.pendingConfigFileWrites[coin];
+    }
+  });
 }
 
 /* ── Render ──────────────────────────────────────────────────── */
@@ -799,10 +884,10 @@ function _covShowParamDd(secId, filter) {
   var akey = secId === 'live' ? ['live'] : ['bot', secId.replace('bot-', '')];
   var secAllowed = _covGetNested(allowed, akey) || {};
   var data = _covState.overrides[coin] || {};
-  var secData = _covGetNested(data, akey) || {};
+  var secData = _covFlattenForAllowed(_covGetNested(data, akey) || {}, secAllowed);
   var f = (filter || '').toUpperCase();
   var html = '';
-  var paramKeys = Object.keys(secAllowed).filter(function(k) { return secAllowed[k] === true; }).sort();
+  var paramKeys = Object.keys(secAllowed).filter(function(k) { return _covParamIsAllowed(secAllowed[k]); }).sort();
   var st = _covParamPickerState[secId] || { hiIdx: -1 };
   var visIdx = 0;
   for (var i = 0; i < paramKeys.length; i++) {
@@ -842,16 +927,16 @@ function _covDescribe(data) {
   var parts = [];
   if (data.bot) {
     if (data.bot.long) {
-      var lk = Object.keys(data.bot.long);
+      var lk = Object.keys(_covFlattenLeaves(data.bot.long));
       if (lk.length) parts.push('long: ' + lk.join(', '));
     }
     if (data.bot.short) {
-      var sk = Object.keys(data.bot.short);
+      var sk = Object.keys(_covFlattenLeaves(data.bot.short));
       if (sk.length) parts.push('short: ' + sk.join(', '));
     }
   }
   if (data.live) {
-    var lvk = Object.keys(data.live);
+    var lvk = Object.keys(_covFlattenLeaves(data.live));
     if (lvk.length) parts.push('live: ' + lvk.join(', '));
   }
   if (data.override_config_path) {
@@ -864,13 +949,13 @@ function _covDescribe(data) {
 function _covBadge(data) {
   var parts = [];
   if (data.bot) {
-    if (data.bot.long && Object.keys(data.bot.long).length)
-      parts.push('long\u00a0' + Object.keys(data.bot.long).length);
-    if (data.bot.short && Object.keys(data.bot.short).length)
-      parts.push('short\u00a0' + Object.keys(data.bot.short).length);
+    if (data.bot.long && Object.keys(_covFlattenLeaves(data.bot.long)).length)
+      parts.push('long\u00a0' + Object.keys(_covFlattenLeaves(data.bot.long)).length);
+    if (data.bot.short && Object.keys(_covFlattenLeaves(data.bot.short)).length)
+      parts.push('short\u00a0' + Object.keys(_covFlattenLeaves(data.bot.short)).length);
   }
-  if (data.live && Object.keys(data.live).length)
-    parts.push('live\u00a0' + Object.keys(data.live).length);
+  if (data.live && Object.keys(_covFlattenLeaves(data.live)).length)
+    parts.push('live\u00a0' + Object.keys(_covFlattenLeaves(data.live)).length);
   if (data.override_config_path) parts.push('file');
   if (!parts.length) return '(empty)';
   return parts.join('\u2002·\u2002');
@@ -880,11 +965,12 @@ function _covBadge(data) {
 function _covTooltipHtml(data) {
   var rows = [];
   function addSection(label, obj) {
-    if (!obj || !Object.keys(obj).length) return;
-    var keys = Object.keys(obj).sort();
+    var flat = _covFlattenLeaves(obj || {});
+    if (!Object.keys(flat).length) return;
+    var keys = Object.keys(flat).sort();
     rows.push('<tr class="cov-tt-hdr"><td colspan="2">' + label + '</td></tr>');
     for (var i = 0; i < keys.length; i++) {
-      var v = obj[keys[i]];
+      var v = flat[keys[i]];
       var vs = (typeof v === 'object' && v !== null) ? JSON.stringify(v) : String(v);
       rows.push('<tr><td>' + escHtml(keys[i]) + '</td><td>' + escHtml(vs) + '</td></tr>');
     }
@@ -909,6 +995,8 @@ function escHtml(s) {
 /* ── Remove coin ─────────────────────────────────────────────── */
 function coinOvRemove(coin) {
   delete _covState.overrides[coin];
+  delete _covState.overrideConfigs[coin];
+  delete _covState.pendingConfigFileWrites[coin];
   if (_covState.editCoin === coin) _covState.editCoin = null;
   _covRender();
   _covNotifyStructuredSync();
@@ -918,6 +1006,7 @@ function coinOvRemove(coin) {
 function coinOvEdit(coin) {
   if (_covState.editCoin && _covState.editCoin !== coin && _covSaveEdit() === false) return;
   if (_covState.editCoin === coin) {
+    if (_covSaveEdit() === false) return;
     _covState.editCoin = null;
     _covRender();
     return;
@@ -952,9 +1041,9 @@ function _covEditHtml(coin) {
 
   for (var s = 0; s < sections.length; s++) {
     var sec = sections[s];
-    var secData = _covGetNested(data, sec.akey) || {};
     var secAllowed = _covGetNested(allowed, sec.akey) || {};
-    var paramKeys = Object.keys(secAllowed).filter(function(k) { return secAllowed[k] === true; }).sort();
+    var secData = _covFlattenForAllowed(_covGetNested(data, sec.akey) || {}, secAllowed);
+    var paramKeys = Object.keys(secAllowed).filter(function(k) { return _covParamIsAllowed(secAllowed[k]); }).sort();
 
     h += '\x3Cdiv style="margin-bottom:var(--sp-sm);padding-bottom:var(--sp-sm);border-bottom:1px solid var(--border)">';
     h += '\x3Cdiv style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--sp-xs)">';
@@ -973,7 +1062,7 @@ function _covEditHtml(coin) {
         var inputId = 'cov-' + sec.key.replace('.', '-') + '-' + pk;
         h += '\x3Ctr>';
         h += '\x3Ctd>' + esc(pk) + '\x3C/td>';
-        h += '\x3Ctd>' + _covInputHtml(inputId, pk, pv) + '\x3C/td>';
+        h += '\x3Ctd>' + _covInputHtml(inputId, pk, pv, secAllowed[pk]) + '\x3C/td>';
         h += '\x3Ctd>\x3Cbutton type="button" class="act-btn act-btn-danger" onclick="covRemoveParam(\'' +
              esc(coin) + '\',\'' + sec.key + '\',\'' + esc(pk) + '\')">\u00d7\x3C/button>\x3C/td>';
         h += '\x3C/tr>';
@@ -1051,7 +1140,49 @@ function _covEditHtml(coin) {
 /* ── Input HTML for a parameter ──────────────────────────────── */
 var _covInputStyle = 'height:24px;font-size:var(--fs-xs);background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0 var(--sp-xs);outline:none;font-family:var(--font)';
 
-function _covInputHtml(id, key, value) {
+function _covParamIsAllowed(metadata) {
+  return metadata === true || !!(metadata && typeof metadata === 'object');
+}
+
+function _covParamType(metadata, value) {
+  if (metadata && typeof metadata === 'object' && metadata.type) return String(metadata.type);
+  if (typeof value === 'boolean') return 'boolean';
+  if (typeof value === 'number') return 'number';
+  if (value && typeof value === 'object') return 'json';
+  return 'string';
+}
+
+function _covParseParamValue(rawValue, metadata, key) {
+  var type = _covParamType(metadata, metadata && metadata.default);
+  var raw = String(rawValue == null ? '' : rawValue).trim();
+  if (key === 'forced_mode_long' || key === 'forced_mode_short') return raw || 'normal';
+  if (!raw && metadata && typeof metadata === 'object' && metadata.hasOwnProperty('default')) return metadata.default;
+  if (!raw && key === 'leverage') return 7;
+  if (type === 'boolean') {
+    var boolRaw = raw.toLowerCase();
+    if (boolRaw === 'true') return true;
+    if (boolRaw === 'false') return false;
+    throw new Error('must be true or false');
+  }
+  if (type === 'number') {
+    if (!raw) throw new Error('must be a number');
+    var number = Number(raw);
+    if (!Number.isFinite(number)) throw new Error('must be a number');
+    return number;
+  }
+  if (type === 'null' && (!raw || raw === 'null')) return null;
+  if (type === 'array' || type === 'json') {
+    try { return JSON.parse(raw); } catch (_) { throw new Error('must be valid JSON'); }
+  }
+  if (metadata === true && raw !== '' && !isNaN(Number(raw))) return Number(raw);
+  return raw;
+}
+
+function _covAttr(value) {
+  return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function _covInputHtml(id, key, value, metadata) {
   if (key === 'forced_mode_long' || key === 'forced_mode_short') {
     var modes = ['normal', 'graceful_stop', 'manual', 'panic', 'tp_only'];
     var h = '\x3Cselect id="' + id + '" style="' + _covInputStyle + ';width:140px">';
@@ -1061,14 +1192,22 @@ function _covInputHtml(id, key, value) {
     h += '\x3C/select>';
     return h;
   }
-  var v = (value !== undefined && value !== null) ? value : '';
-  return '\x3Cinput type="text" id="' + id + '" value="' + v + '" ' +
+  var type = _covParamType(metadata, value);
+  if (type === 'boolean') {
+    return '\x3Cselect id="' + id + '" style="' + _covInputStyle + ';width:100px">' +
+      '\x3Coption value="true"' + (value === true ? ' selected' : '') + '>true\x3C/option>' +
+      '\x3Coption value="false"' + (value === false ? ' selected' : '') + '>false\x3C/option>\x3C/select>';
+  }
+  var v = value !== undefined && value !== null
+    ? (typeof value === 'object' ? JSON.stringify(value) : String(value))
+    : '';
+  return '\x3Cinput type="text" id="' + id + '" value="' + _covAttr(v) + '" ' +
          'style="' + _covInputStyle + ';width:100px">';
 }
 
 /* ── Add/remove parameter actions ────────────────────────────── */
 function covAddParam(coin, secKey) {
-  _covSaveEdit();
+  if (_covSaveEdit() === false) return;
   var secId = secKey.replace('.', '-');
   var st = _covParamPickerState[secId];
   var param = (st && st.selected) ? st.selected : '';
@@ -1085,15 +1224,13 @@ function covAddParam(coin, secKey) {
   var parts = secKey.split('.');
   _covEnsureNested(data, parts);
   var target = _covGetNested(data, parts);
-  if (param === 'forced_mode_long' || param === 'forced_mode_short') {
-    target[param] = rawVal || 'normal';
-  } else if (rawVal !== '') {
-    var num = parseFloat(rawVal);
-    target[param] = isNaN(num) ? rawVal : num;
-  } else if (param === 'leverage') {
-    target[param] = 7;
-  } else {
-    target[param] = 0;
+  var allowed = _covGetNested(_covState.allowedParams || {}, parts) || {};
+  try {
+    _covSetDotted(target, param, _covParseParamValue(rawVal, allowed[param], param));
+  } catch (e) {
+    toast('Invalid value for ' + param + ': ' + ((e && e.message) || e), 'err');
+    if (valInput) valInput.focus();
+    return;
   }
   _covRender();
   _covNotifyStructuredSync();
@@ -1106,7 +1243,7 @@ function covRemoveParam(coin, secKey, param) {
   var parts = secKey.split('.');
   var target = _covGetNested(data, parts);
   if (target) {
-    delete target[param];
+    _covDeleteDotted(target, param);
     // Clean up empty nested objects
     _covCleanEmpty(data);
   }
@@ -1131,17 +1268,19 @@ function _covSaveEdit() {
     var sec = sections[s];
     var target = _covGetNested(data, sec.akey);
     if (!target) continue;
-    var keys = Object.keys(target);
+    var allowed = _covGetNested(_covState.allowedParams || {}, sec.akey) || {};
+    var keys = Object.keys(_covFlattenForAllowed(target, allowed));
     for (var k = 0; k < keys.length; k++) {
       var param = keys[k];
       var inputId = 'cov-' + sec.key.replace('.', '-') + '-' + param;
       var el = document.getElementById(inputId);
       if (!el) continue;
-      if (param === 'forced_mode_long' || param === 'forced_mode_short') {
-        target[param] = el.value;
-      } else {
-        var v = parseFloat(el.value);
-        if (!isNaN(v)) target[param] = v;
+      try {
+        _covSetDotted(target, param, _covParseParamValue(el.value, allowed[param], param));
+      } catch (e) {
+        toast('Invalid value for ' + param + ': ' + ((e && e.message) || e), 'err');
+        el.focus();
+        return false;
       }
     }
   }
@@ -1191,6 +1330,13 @@ function _covSaveConfigFile(coin) {
     data.override_config_path = filename;
     // Update cache
     _covState.overrideConfigs[coin] = fileContent;
+    if (_covState.deferConfigFileWrites) {
+      _covState.pendingConfigFileWrites[coin] = {
+        filename: filename,
+        config: JSON.parse(JSON.stringify(fileContent))
+      };
+      return true;
+    }
     // Save via API if config name is known
     if (_covState.configName) {
       apiFetch('/override-config/' + encodeURIComponent(_covState.configName) + '/' + encodeURIComponent(filename), {
@@ -1203,6 +1349,7 @@ function _covSaveConfigFile(coin) {
     // No file content → remove override_config_path
     delete data.override_config_path;
     delete _covState.overrideConfigs[coin];
+    delete _covState.pendingConfigFileWrites[coin];
   }
   return true;
 }
@@ -1260,6 +1407,7 @@ function covFilterCfgPaste(evt, side) {
   } else if (parsed[side] && typeof parsed[side] === 'object' && !Array.isArray(parsed[side])) {
     flat = parsed[side]; /* { long: {...}, short: {...} } */
   }
+  flat = _covFlattenForAllowed(flat, keys);
   /* Only filter if the paste contains non-override keys */
   var hasNonOverride = false;
   for (var k in flat) {
@@ -1271,7 +1419,7 @@ function covFilterCfgPaste(evt, side) {
   for (var k in flat) {
     if (!flat.hasOwnProperty(k)) continue;
     if (keys.hasOwnProperty(k)) {
-      filtered[k] = flat[k];
+      _covSetDotted(filtered, k, flat[k]);
     } else {
       removed.push(k);
     }
@@ -1317,8 +1465,66 @@ function _covEnsureNested(obj, path) {
   return cur;
 }
 
+function _covFlattenLeaves(obj, prefix, result) {
+  prefix = prefix || '';
+  result = result || {};
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return result;
+  Object.keys(obj).forEach(function(key) {
+    var path = prefix ? prefix + '.' + key : key;
+    var value = obj[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      _covFlattenLeaves(value, path, result);
+    } else {
+      result[path] = value;
+    }
+  });
+  return result;
+}
+
+function _covFlattenForAllowed(obj, allowed, prefix, result) {
+  prefix = prefix || '';
+  result = result || {};
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return result;
+  Object.keys(obj).forEach(function(key) {
+    var path = prefix ? prefix + '.' + key : key;
+    var value = obj[key];
+    if (allowed && allowed.hasOwnProperty(path)) {
+      result[path] = value;
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      _covFlattenForAllowed(value, allowed, path, result);
+    } else {
+      result[path] = value;
+    }
+  });
+  return result;
+}
+
+function _covSetDotted(obj, path, value) {
+  var parts = String(path || '').split('.').filter(Boolean);
+  if (!parts.length) return;
+  var target = _covEnsureNested(obj, parts.slice(0, -1));
+  target[parts[parts.length - 1]] = value;
+}
+
+function _covDeleteDotted(obj, path) {
+  var parts = String(path || '').split('.').filter(Boolean);
+  if (!parts.length) return;
+  var target = _covGetNested(obj, parts.slice(0, -1));
+  if (target && typeof target === 'object') delete target[parts[parts.length - 1]];
+}
+
 function _covCleanEmpty(data) {
-  // Remove empty nested objects
+  function clean(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    Object.keys(value).forEach(function(key) {
+      clean(value[key]);
+      if (value[key] && typeof value[key] === 'object' && !Array.isArray(value[key]) && Object.keys(value[key]).length === 0) {
+        delete value[key];
+      }
+    });
+  }
+  clean(data);
+  // Retain the explicit top-level cleanup for existing V7 data shapes.
   if (data.bot) {
     if (data.bot.long && Object.keys(data.bot.long).length === 0) delete data.bot.long;
     if (data.bot.short && Object.keys(data.bot.short).length === 0) delete data.bot.short;

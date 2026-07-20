@@ -16,6 +16,7 @@ import paramiko
 
 from file_lock import advisory_file_lock
 from logging_helpers import append_managed_transcript_line, human_log as _log, rotate_managed_log_before_open
+from master_update_lock import acquire_master_update_lock
 from master.cluster_ssh_keys import ensure_local_cluster_ssh_material
 from pbgui_purefunc import load_ini, pb7dir, pb7venv, save_ini
 from vps_inventory_store import delete_inventory_path, write_inventory_json, write_versioned_inventory_json
@@ -947,6 +948,7 @@ class VPSManager:
         self.command_text = "unknown"
         self.update_status = None
         self.update_log = ""
+        self._master_update_lease = None
         self.find_vps()
         self.load_hostname()
         self.load_master()
@@ -1119,7 +1121,12 @@ class VPSManager:
             shutil.rmtree(vps.privat_data_dir, ignore_errors=True)
             raise
 
-    def update_vps(self, vps: VPS, debug=False, extra_vars=None):
+    def update_vps(self, vps: VPS, debug=False, extra_vars=None, command=None, command_text=None):
+        if command is not None:
+            vps.command = command
+        if command_text is not None:
+            vps.command_text = command_text
+        accepted_command = vps.command
         vps.update_status = "starting"
         vps.last_update = None
         vps.command_run_id = f"run-{int(datetime.now().timestamp() * 1000)}"
@@ -1147,7 +1154,7 @@ class VPSManager:
             "debug": debug,
             "install_dir": _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user),
         }
-        if _command_updates_pbgui(vps.command):
+        if _command_updates_pbgui(accepted_command):
             ansible_extravars.update(_cluster_sync_extra_vars())
         if extra_vars:
             ansible_extravars.update(extra_vars)
@@ -1160,7 +1167,7 @@ class VPSManager:
 
         try:
             ansible_runner.run_async(
-                playbook=str(PurePath(f"{PBGDIR}/{vps.command}.yml")),
+                playbook=str(PurePath(f"{PBGDIR}/{accepted_command}.yml")),
                 inventory=vps.hostname,
                 extravars=ansible_extravars,
                 quiet=True,
@@ -1176,6 +1183,9 @@ class VPSManager:
                 ),
             )
         except Exception:
+            vps.update_status = "failed"
+            vps.last_update = datetime.now().isoformat()
+            vps.save()
             _cleanup_runner_private_data_dir(private_data_dir)
             raise
 
@@ -1211,41 +1221,61 @@ class VPSManager:
             shutil.rmtree(vps.privat_data_dir, ignore_errors=True)
             raise
 
-    def update_master(self, debug=False, sudo_pw=None, extra_vars=None):
-        self.update_status = None
-        self.privat_data_dir = Path(f"{PBGDIR}/data/vpsmanager/tmp")
-        self.privat_data_dir.mkdir(parents=True, exist_ok=True)
-        self.remove_update_log()
-        self.update_log = ""
-        if debug:
-            tags = "debug,all"
-            verbosity = 3
-        else:
-            tags = None
-            verbosity = 1
+    def update_master(self, debug=False, sudo_pw=None, extra_vars=None, command=None, command_text=None):
+        update_lease = acquire_master_update_lock(PBGDIR)
+        try:
+            self._master_update_lease = update_lease
+            if command is not None:
+                self.command = command
+            if command_text is not None:
+                self.command_text = command_text
+            self.update_status = None
+            self.privat_data_dir = Path(f"{PBGDIR}/data/vpsmanager/tmp")
+            self.privat_data_dir.mkdir(parents=True, exist_ok=True)
+            self.remove_update_log()
+            self.update_log = ""
+            if debug:
+                tags = "debug,all"
+                verbosity = 3
+            else:
+                tags = None
+                verbosity = 1
 
-        ansible_extravars = {
-            "pbgdir": str(PBGDIR),
-            "pb7dir": str(PB7DIR),
-            "pb7venv": str(PurePath(PB7VENV).parents[1]),
-            "user_pw": sudo_pw,
-            "debug": debug,
-        }
-        if extra_vars:
-            ansible_extravars.update(extra_vars)
+            ansible_extravars = {
+                "pbgdir": str(PBGDIR),
+                "pb7dir": str(PB7DIR),
+                "pb7venv": str(PurePath(PB7VENV).parents[1]),
+                "user_pw": sudo_pw,
+                "debug": debug,
+            }
+            if extra_vars:
+                ansible_extravars.update(extra_vars)
 
-        ansible_runner.run_async(
-            playbook=str(PurePath(f"{PBGDIR}/{self.command}.yml")),
-            extravars=ansible_extravars,
-            quiet=True,
-            envvars=_ansible_envvars(),
-            tags=tags,
-            verbosity=verbosity,
-            private_data_dir=self.privat_data_dir,
-            event_handler=self.update_event_handler,
-            status_handler=self.update_status_handler,
-            finished_callback=self.update_finished,
-        )
+            def _update_finished(runner_config=None):
+                try:
+                    self.update_finished(runner_config)
+                finally:
+                    update_lease.release()
+                    if self._master_update_lease is update_lease:
+                        self._master_update_lease = None
+
+            ansible_runner.run_async(
+                playbook=str(PurePath(f"{PBGDIR}/{self.command}.yml")),
+                extravars=ansible_extravars,
+                quiet=True,
+                envvars=_ansible_envvars(),
+                tags=tags,
+                verbosity=verbosity,
+                private_data_dir=self.privat_data_dir,
+                event_handler=self.update_event_handler,
+                status_handler=self.update_status_handler,
+                finished_callback=_update_finished,
+            )
+        except Exception:
+            update_lease.release()
+            if self._master_update_lease is update_lease:
+                self._master_update_lease = None
+            raise
 
     def load_hostname(self):
         self.hostname = load_ini("main", "pbname")

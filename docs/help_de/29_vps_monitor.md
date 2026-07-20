@@ -62,6 +62,7 @@ Der Detailbereich zeigt Heartbeat- und effektive Alter, den Status jeder erforde
 - Volltextsuche mit Hervorhebung
 - Auto-Scroll und Compact Mode
 - Host- und Service-Auswahl mit Stream-Steuerung
+- Restart aktiviert den ausgewaehlten Log-Stream vorab, damit fruehe Startzeilen ohne manuellen Fetch sichtbar bleiben
 
 ## Voraussetzungen
 

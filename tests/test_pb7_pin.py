@@ -124,6 +124,29 @@ def test_ensure_git_checkout_uses_detached_revision_for_existing_repo(tmp_path: 
     assert calls == [["git", "checkout", "--detach", PINNED_COMMIT]]
 
 
+def test_ensure_git_checkout_verifies_official_pb8_branch_before_checkout(tmp_path: Path, monkeypatch) -> None:
+    """PB8 branch maintenance must preserve origin and check out only the verified official ref."""
+    target = tmp_path / "pb8"
+    (target / ".git").mkdir(parents=True)
+    calls: list[list[str]] = []
+    fetches = []
+    monkeypatch.setattr(core, "_git_output", lambda *_args: "")
+    monkeypatch.setattr(core, "_run_command", lambda args, _log, **_kwargs: calls.append([str(arg) for arg in args]) or "")
+    monkeypatch.setattr(core, "fetch_passivbot_ref", lambda repo, url, **kwargs: fetches.append((Path(repo), url, kwargs)))
+    monkeypatch.setattr(core, "verify_passivbot_major", lambda *_args, **_kwargs: "8.0.0")
+
+    core._ensure_git_checkout(
+        "https://github.com/enarjord/passivbot.git",
+        target,
+        lambda _message: None,
+        branch="master",
+        expected_major=8,
+    )
+
+    assert fetches == [(target, "https://github.com/enarjord/passivbot.git", {"branch": "master"})]
+    assert calls == [["git", "checkout", "--detach", "--force", "refs/remotes/pbgui-pb7-pin/master"]]
+
+
 def test_official_fetch_unshallows_without_replacing_custom_origin(tmp_path: Path) -> None:
     """The pin fetch reaches old commits while preserving a configured origin."""
     upstream = tmp_path / "upstream"

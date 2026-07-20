@@ -69,6 +69,7 @@ Sidebar-Aktionen:
 | **Update PBGui and PB7** | Alle Komponenten aktualisieren |
 | **Update PBGui** | Nur PBGui aktualisieren |
 | **Update PB7** | Nur PB7 aktualisieren |
+| **Install PB8 / Update PB8** | PB8 aus Upstream `master` installieren oder den getrennten PB8-Checkout und dessen Virtualenv aktualisieren |
 | **Update Linux** | Linux-Paketupdates ausführen (optionale Reboot-Checkbox) |
 | **Reboot Master** | Den lokalen Server neu starten |
 | **Install or Update rustup** | Rust-Toolchain installieren oder aktualisieren |
@@ -81,6 +82,8 @@ Der **Master**-Inhaltsbereich enthält zusätzlich:
 - einen **Progress**-Bereich mit getrennten Status-Buckets; sobald eine Sidebar-Aktion einen Master-Ansible-Task startet, schaltet die Hauptfläche auf den gemeinsamen **Command Log Viewer** um, und **Home** bringt zurück zur normalen Master-Ansicht
 
 Im Cluster-Modus synchronisieren **Update PBGui** und PBGui-Branch-Wechsel die lokale PBCluster-systemd-User-Unit und starten PBCluster neu. PBCluster ist außerdem in lokaler Service-Überwachung und Service-Control sichtbar. Ein manueller `git pull` startet PBCluster nicht neu; nutze danach `systemctl --user restart pbgui-pbcluster.service`.
+
+Die PB8-Installation ist nur auf Mastern erlaubt. Sie verwendet `<install_dir>/pb8` und `<install_dir>/venv_pb8`, validiert PB8-CLI, Rust-Erweiterung und V8-Config-Schema und speichert danach `pb8dir` und `pb8venv` in `pbgui.ini`. PBRun, PB7 und laufende PB8-Jobs werden dabei nicht gestoppt. Ein ausgewählter verwalteter Remote-Master zeigt dieselbe Aktion; normale VPS-/Slave-Hosts und Bulk-Deployments nicht.
 
 ---
 
@@ -104,6 +107,7 @@ Sidebar-Aktionen:
 | **Delete VPS** | Diesen VPS aus PBGui entfernen |
 | **Update PBGui** | PBGui auf diesem VPS aktualisieren |
 | **Update PBGui and PB7** | Alle Komponenten aktualisieren |
+| **Install PB8 / Update PB8** | Nur bei frisch gemeldeter `master`-Rolle verfügbar; installiert oder aktualisiert die getrennte PB8-Runtime |
 | **Update Linux** | `apt upgrade` ausführen (optionale Reboot-Checkbox) |
 | **Reboot VPS** | VPS neu starten |
 | **Cleanup VPS** | Alte Pakete und Logs entfernen |

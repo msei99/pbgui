@@ -112,6 +112,24 @@ def test_validator_accepts_each_contract_and_additional_fields(filename: str) ->
     assert age == 1.0
 
 
+def test_host_meta_accepts_complete_optional_pb8_contract_and_rejects_partial_data() -> None:
+    """Rolling upgrades accept old metadata, while reported PB8 state stays strict."""
+    payload = _valid_payloads(1000.0)["host_meta.json"]
+    payload.update({
+        "pb8v": "v8.0.0",
+        "pb8_config_schema": "v8.0.0",
+        "pb8c": "abc",
+        "pb8b": "master",
+        "pb8py": "3.12",
+        "pb8ready": True,
+    })
+
+    monitor_mod._validate_monitor_agent_payload("host_meta.json", payload, now=1001.0)
+    payload.pop("pb8py")
+    with pytest.raises(MonitorAgentPayloadError, match="missing field pb8py"):
+        monitor_mod._validate_monitor_agent_payload("host_meta.json", payload, now=1001.0)
+
+
 @pytest.mark.parametrize(
     ("mutation", "expected"),
     [

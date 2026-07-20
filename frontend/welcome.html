@@ -751,6 +751,7 @@
                     <div class="sb-meta">
                         <span class="sb-count" id="sb-auth-state">Guest</span>
                         <span class="sb-count" id="sb-ready-state">PB7 blocked</span>
+                        <span class="sb-count" id="sb-pb8-state">PB8 blocked</span>
                     </div>
                 </div>
                 <div id="sidebar-toolbar">
@@ -789,6 +790,11 @@
                                 <p class="summary-copy" id="summary-pb7-copy">Runtime health is still loading.</p>
                             </div>
                             <div class="summary-card">
+                                <span class="summary-label">PB8</span>
+                                <strong id="summary-pb8">Checking…</strong>
+                                <p class="summary-copy" id="summary-pb8-copy">Runtime health is still loading.</p>
+                            </div>
+                            <div class="summary-card">
                                 <span class="summary-label">Identity</span>
                                 <strong id="summary-identity">Unnamed host</strong>
                                 <p class="summary-copy" id="summary-role">Role not loaded yet.</p>
@@ -798,7 +804,7 @@
                 </div>
                 <div class="section-heading">
                     <span class="section-kicker">Runtime</span>
-                    <p class="section-copy">Import readiness keeps the API server up. Full readiness also requires a valid PB7 interpreter.</p>
+                    <p class="section-copy">PB7 and PB8 are checked independently. PB8 readiness includes source, config schema, Python, CLI, and the compiled Rust extension.</p>
                 </div>
                 <div class="panel">
                     <h2 class="panel-title">Runtime Status</h2>
@@ -813,8 +819,8 @@
                     <p class="section-copy">These values are read from pbgui.ini and used by PBGui runtime paths.</p>
                 </div>
                 <div class="panel">
-                    <h2 class="panel-title">PB7 Setup</h2>
-                    <p class="panel-copy">Setup changes are available immediately to the lazy PB7 config loader. Login is required to save.</p>
+                    <h2 class="panel-title">Passivbot Setup</h2>
+                    <p class="panel-copy">PB7 path changes require PBRun to restart. PB8 paths apply to the next PB8 operation. Login is required to save.</p>
                     <div class="field-grid">
                         <div class="field full">
                             <label for="pb7dir">Passivbot V7 path</label>
@@ -828,6 +834,20 @@
                             <div class="field-browse">
                                 <input id="pb7venv" type="text" placeholder="/path/to/venv/bin/python">
                                 <button id="browse-pb7venv-btn" class="btn btn-secondary browse-btn" type="button">Browse</button>
+                            </div>
+                        </div>
+                        <div class="field full">
+                            <label for="pb8dir">Passivbot V8 path</label>
+                            <div class="field-browse">
+                                <input id="pb8dir" type="text" placeholder="/path/to/pb8">
+                                <button id="browse-pb8dir-btn" class="btn btn-secondary browse-btn" type="button">Browse</button>
+                            </div>
+                        </div>
+                        <div class="field full">
+                            <label for="pb8venv">Passivbot V8 python interpreter</label>
+                            <div class="field-browse">
+                                <input id="pb8venv" type="text" placeholder="/path/to/venv_pb8/bin/python">
+                                <button id="browse-pb8venv-btn" class="btn btn-secondary browse-btn" type="button">Browse</button>
                             </div>
                         </div>
                         <div class="field">
@@ -1012,9 +1032,11 @@
         }
 
         function fileBrowserTitle() {
-            return state.fileBrowser.target === "pb7venv"
-                ? "Select Passivbot V7 Python Interpreter"
-                : "Select Passivbot V7 Path";
+            var target = state.fileBrowser.target || "";
+            var version = target.indexOf("pb8") === 0 ? "V8" : "V7";
+            return target.endsWith("venv")
+                ? "Select Passivbot " + version + " Python Interpreter"
+                : "Select Passivbot " + version + " Path";
         }
 
         function closeFileBrowser() {
@@ -1195,6 +1217,21 @@
                 item.textContent = message;
                 issues.appendChild(item);
             });
+            var pb8 = setup.pb8 || {};
+            if (setup.master || pb8.configured) {
+                (pb8.errors || []).forEach(function (message) {
+                    var item = document.createElement("div");
+                    item.className = "issue error";
+                    item.textContent = message;
+                    issues.appendChild(item);
+                });
+                (pb8.warnings || []).forEach(function (message) {
+                    var item = document.createElement("div");
+                    item.className = "issue warning";
+                    item.textContent = message;
+                    issues.appendChild(item);
+                });
+            }
             if (!issues.childElementCount) {
                 var item = document.createElement("div");
                 item.className = "issue warning";
@@ -1240,6 +1277,8 @@
             var loginSecurity = auth.login_security || {};
             var blockedAttempts = Number(loginSecurity.blocked_attempts || 0);
             var activeBlocks = Number(loginSecurity.active_blocks || 0);
+            var pb8 = setup.pb8 || {};
+            var pb8Optional = !pb8.required && !pb8.configured;
             var rows = [
                 {
                     label: "Login security",
@@ -1249,6 +1288,10 @@
                 { label: "PB7 source", state: setup.import_ready ? "ready" : "missing", detail: setup.src_dir || "No PB7 path configured" },
                 { label: "PB7 config", state: setup.config_load_exists ? "available" : "missing", detail: setup.config_load_file || "No config/load.py path" },
                 { label: "PB7 python", state: setup.venv_ready ? "ready" : "missing", detail: setup.pb7venv || "No interpreter configured" },
+                { label: "PB8 source", state: pb8Optional ? "optional" : (pb8.source_ready ? "ready" : "missing"), detail: pb8.version ? ((pb8.src_dir || "") + " (v" + String(pb8.version).replace(/^v/, "") + ")") : (pb8.src_dir || "No PB8 path configured") },
+                { label: "PB8 config", state: pb8Optional ? "optional" : (pb8.config_ready ? "ready" : "missing"), detail: pb8.config_schema ? ((pb8.config_schema_file || "") + " (" + pb8.config_schema + ")") : (pb8.config_schema_file || "No PB8 config schema") },
+                { label: "PB8 python", state: pb8Optional ? "optional" : (pb8.python_ready ? "ready" : "missing"), detail: pb8.pb8venv || "No PB8 interpreter configured" },
+                { label: "PB8 CLI / Rust", state: pb8Optional ? "optional" : (pb8.cli_ready && pb8.rust_ready ? "ready" : "missing"), detail: "CLI: " + (pb8.cli_file || "missing") + " | Rust: " + (pb8.rust_file || "missing") },
                 { label: "Identity", state: setup.master ? "master" : "slave", detail: setup.pbname || "Unnamed host" }
             ];
             var list = document.getElementById("status-list");
@@ -1288,6 +1331,19 @@
                     ? "The source path is valid, but the configured Python interpreter still needs attention."
                     : "The API page stays up so you can fix PB7 path problems here.");
 
+            var pb8 = setup.pb8 || {};
+            var pb8Optional = !pb8.required && !pb8.configured;
+            document.getElementById("summary-pb8").textContent = pb8.ready
+                ? "PB8 ready"
+                : (pb8Optional ? "PB8 optional" : (pb8.source_ready ? "PB8 partial" : "PB8 blocked"));
+            document.getElementById("summary-pb8-copy").textContent = pb8.ready
+                ? "Source, schema, Python, CLI, and Rust extension look valid."
+                : (pb8Optional
+                    ? "PB8 is not configured on this slave."
+                    : (pb8.source_ready
+                        ? "PB8 source is valid, but one or more runtime artifacts need attention."
+                        : "Install PB8 or correct its paths in Setup."));
+
             document.getElementById("summary-identity").textContent = setup.pbname || "Unnamed host";
             document.getElementById("summary-role").textContent = (setup.master ? "Master" : "Slave") + " role";
         }
@@ -1312,9 +1368,15 @@
             document.getElementById("save-setup-btn").disabled = !auth.authenticated;
             document.getElementById("browse-pb7dir-btn").disabled = !auth.authenticated;
             document.getElementById("browse-pb7venv-btn").disabled = !auth.authenticated;
+            document.getElementById("browse-pb8dir-btn").disabled = !auth.authenticated;
+            document.getElementById("browse-pb8venv-btn").disabled = !auth.authenticated;
             document.getElementById("sidebar-password-btn").disabled = !auth.authenticated;
             document.getElementById("sb-auth-state").textContent = auth.authenticated ? "Authenticated" : "Guest";
             document.getElementById("sb-ready-state").textContent = setup.ready ? "PB7 ready" : (setup.import_ready ? "Import only" : "PB7 blocked");
+            var pb8 = setup.pb8 || {};
+            document.getElementById("sb-pb8-state").textContent = pb8.ready
+                ? "PB8 ready"
+                : (!pb8.required && !pb8.configured ? "PB8 optional" : (pb8.source_ready ? "PB8 partial" : "PB8 blocked"));
             var authDisabled = auth.auth_mode === "disabled";
             document.getElementById("current-password").disabled = authDisabled;
             document.getElementById("disable-auth-btn").hidden = authDisabled;
@@ -1347,9 +1409,12 @@
             document.getElementById("meta-origin").textContent = API_ORIGIN;
 
             var setup = data.setup || {};
+            var pb8 = setup.pb8 || {};
             var auth = data.auth || {};
             document.getElementById("pb7dir").value = setup.pb7dir || "";
             document.getElementById("pb7venv").value = setup.pb7venv || "";
+            document.getElementById("pb8dir").value = pb8.pb8dir || "";
+            document.getElementById("pb8venv").value = pb8.pb8venv || "";
             document.getElementById("pbname").value = setup.pbname || "";
             document.getElementById("role").value = setup.role === "master" ? "master" : "slave";
 
@@ -1380,6 +1445,8 @@
                     body: JSON.stringify({
                         pb7dir: document.getElementById("pb7dir").value,
                         pb7venv: document.getElementById("pb7venv").value,
+                        pb8dir: document.getElementById("pb8dir").value,
+                        pb8venv: document.getElementById("pb8venv").value,
                         pbname: document.getElementById("pbname").value,
                         role: document.getElementById("role").value
                     })
@@ -1464,6 +1531,12 @@
         });
         document.getElementById("browse-pb7venv-btn").addEventListener("click", function () {
             openFileBrowser("pb7venv", "python");
+        });
+        document.getElementById("browse-pb8dir-btn").addEventListener("click", function () {
+            openFileBrowser("pb8dir", "directory");
+        });
+        document.getElementById("browse-pb8venv-btn").addEventListener("click", function () {
+            openFileBrowser("pb8venv", "python");
         });
         document.getElementById("file-browser-close").addEventListener("click", closeFileBrowser);
         document.getElementById("file-browser-up").addEventListener("click", function () {

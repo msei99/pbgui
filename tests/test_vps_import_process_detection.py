@@ -1059,9 +1059,9 @@ def test_run_vps_command_passes_secret_free_inactive_capability() -> None:
     """Update playbooks receive inactive capability without any raw key."""
     captured: dict[str, object] = {}
 
-    def fake_update_vps(vps, debug=False, extra_vars=None) -> None:
+    def fake_update_vps(vps, debug=False, extra_vars=None, command=None, command_text=None) -> None:
         """Capture the command extra vars instead of running Ansible."""
-        del vps, debug
+        del vps, debug, command, command_text
         captured["extra_vars"] = extra_vars or {}
 
     service = object.__new__(VPSManagerService)
@@ -1370,9 +1370,9 @@ def test_run_vps_command_uses_fresh_remote_capability_values() -> None:
     """A second master's update command uses monitor-reported capability values."""
     captured: dict[str, object] = {}
 
-    def fake_update_vps(vps, debug=False, extra_vars=None) -> None:
+    def fake_update_vps(vps, debug=False, extra_vars=None, command=None, command_text=None) -> None:
         """Capture the updated VPS object instead of running Ansible."""
-        del debug
+        del vps, debug, command, command_text
         captured["extra_vars"] = extra_vars
 
     service = object.__new__(VPSManagerService)
@@ -1414,9 +1414,11 @@ def test_run_vps_command_uses_master_playbook_for_remote_master_updates() -> Non
     """Remote master updates use master playbooks, not VPS playbooks."""
     captured: dict[str, object] = {}
 
-    def fake_update_vps(vps, debug=False, extra_vars=None) -> None:
+    def fake_update_vps(vps, debug=False, extra_vars=None, command=None, command_text=None) -> None:
         """Capture extra vars instead of running Ansible."""
-        captured["command"] = vps.command
+        captured["command"] = command
+        vps.command = command
+        vps.command_text = command_text
         del debug
         captured["extra_vars"] = extra_vars
 

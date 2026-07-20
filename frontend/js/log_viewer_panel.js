@@ -299,10 +299,10 @@ class LogViewerPanel {
         this._contextLines = 5;
         this._blocksCollapsed = true;
         this._fileSize     = null;
-        this._restartResetTimer = 0;
-        this._restartTargetService = null;
         this._pendingRestartCommand = null;
-        this._startRemoteAtEnd = false;
+        this._restartAttempt = null;
+        this._restartGeneration = 0;
+        this._restartTimeout = 0;
         this._closed = false;
         this._authExpired = false;
         this._reconnectTimer = 0;
@@ -614,8 +614,7 @@ class LogViewerPanel {
             var ce = me._q('conn');
             if (ce) ce.textContent = 'connected';
             ws.send(JSON.stringify({ cmd: 'list_local_logs' }));
-            me._subscribe();
-            me._flushPendingRestart(ws);
+            if (!me._flushPendingRestart(ws)) me._subscribe();
         };
         ws.onmessage = function(evt) {
             try { me._handleMsg(JSON.parse(evt.data)); } catch(e) { /* ignore parse errors */ }
@@ -634,6 +633,11 @@ class LogViewerPanel {
                 me._authExpired = true;
                 me._closed = true;
                 me._pendingRestartCommand = null;
+                me._restartAttempt = null;
+                if (me._restartTimeout) {
+                    clearTimeout(me._restartTimeout);
+                    me._restartTimeout = 0;
+                }
                 if (me._reconnectTimer) {
                     clearTimeout(me._reconnectTimer);
                     me._reconnectTimer = 0;
@@ -665,24 +669,12 @@ class LogViewerPanel {
             this._ws.send(JSON.stringify(obj));
     }
 
-    _sendRestart(obj) {
-        if (this._authExpired) return false;
-        if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-            this._ws.send(JSON.stringify(obj));
-            return true;
-        }
-        this._pendingRestartCommand = obj;
-        if (!this._ws || this._ws.readyState === WebSocket.CLOSING || this._ws.readyState === WebSocket.CLOSED) {
-            this._connect();
-        }
-        return false;
-    }
-
     _flushPendingRestart(ws) {
-        if (!this._pendingRestartCommand || this._ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+        if (!this._pendingRestartCommand || this._ws !== ws || ws.readyState !== WebSocket.OPEN) return false;
         var cmd = this._pendingRestartCommand;
         this._pendingRestartCommand = null;
-        ws.send(JSON.stringify(cmd));
+        this._prepareRestartStream(cmd);
+        return true;
     }
 
     /* ── Message handling ─────────────────────────────────────── */
@@ -714,6 +706,7 @@ class LogViewerPanel {
             if (msg.file_size !== undefined) this._showFileSize(msg.file_size);
             this._updateStreamBtn();
             this._renderFull();
+            this._sendPreparedRestart(msg.sid);
             break;
 
         case 'local_log_lines':
@@ -728,6 +721,7 @@ class LogViewerPanel {
             if (msg.streaming) this._streaming = true;
             this._updateStreamBtn();
             this._renderFull();
+            this._sendPreparedRestart(msg.sid);
             break;
 
         case 'log_lines':
@@ -747,35 +741,43 @@ class LogViewerPanel {
                     rb.textContent = msg.success ? '\u2705 Restarted' : '\u274c Failed';
                     setTimeout(function() { rb.textContent = '\ud83d\udd04 Restart'; }, 3000);
                 }
-                if (msg.success) this._resetAfterRestart(this._restartTargetService || this._activeItem());
-                this._restartTargetService = null;
+                this._finishRestartAttempt();
             }
             break;
         }
     }
 
-    _resetAfterRestart(nextItem) {
-        var me = this;
-        if (this._restartResetTimer) {
-            clearTimeout(this._restartResetTimer);
-            this._restartResetTimer = 0;
+    _finishRestartAttempt() {
+        if (this._restartTimeout) {
+            clearTimeout(this._restartTimeout);
+            this._restartTimeout = 0;
         }
-        this._unsubscribe();
-        this._clear();
-        this._showFileSize(null);
-        this._streaming = false;
-        if (!this._isLocal() && nextItem) {
-            this._service = nextItem;
-            this._startRemoteAtEnd = true;
-            this._buildServiceList();
+        this._restartAttempt = null;
+        this._pendingRestartCommand = null;
+    }
+
+    _cancelPreparedRestart() {
+        if ((!this._restartAttempt || this._restartAttempt.sent) && !this._pendingRestartCommand) return;
+        ++this._restartGeneration;
+        this._finishRestartAttempt();
+        var rb = this._q('restart-btn');
+        if (rb) {
+            rb.disabled = false;
+            rb.textContent = '\ud83d\udd04 Restart';
         }
-        this._updateStreamBtn();
-        this._updateBadge();
-        this._updateRestartBtn();
-        this._restartResetTimer = setTimeout(function() {
-            me._restartResetTimer = 0;
-            me._subscribe();
-        }, 2500);
+    }
+
+    _sendPreparedRestart(sid) {
+        var attempt = this._restartAttempt;
+        if (!attempt || attempt.sent || sid !== attempt.sid || sid !== this._sid) return;
+        if (attempt.host !== this._host || attempt.item !== this._activeItem()) {
+            this._finishRestartAttempt();
+            return;
+        }
+        attempt.sent = true;
+        this._send(attempt.command);
+        var rb = this._q('restart-btn');
+        if (rb) rb.textContent = '\u231b Restarting\u2026';
     }
 
     _ingestLines(newLines) {
@@ -1415,24 +1417,29 @@ class LogViewerPanel {
         return parseInt((this._q('lines-sel') || {}).value || '200', 10);
     }
 
-    _subscribe() {
-        if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
+    _subscribe(options) {
+        options = options || {};
+        if (!options.forRestart && ((this._restartAttempt && !this._restartAttempt.sent) || this._pendingRestartCommand)) {
+            this._cancelPreparedRestart();
+        }
+        if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return null;
         this._unsubscribe();
         this._clear();
         var sid = ++this._sid;
         if (this._isLocal()) {
-            if (!this._file) return;
-            this._send({ cmd: 'subscribe_local_logs', file: this._file, lines: this._getLines(), sid: sid, start_at_end: !!this._startLocalAtEnd });
+            if (!this._file) return null;
+            var startLocalAtEnd = options.startAtEnd === true || !!this._startLocalAtEnd;
+            this._send({ cmd: 'subscribe_local_logs', file: this._file, lines: this._getLines(), sid: sid, start_at_end: startLocalAtEnd });
             this._startLocalAtEnd = false;
         } else {
-            if (!this._host || !this._service) return;
-            var startAtEnd = !!this._startRemoteAtEnd;
-            this._startRemoteAtEnd = false;
+            if (!this._host || !this._service) return null;
+            var startAtEnd = options.startAtEnd === true;
             this._send({ cmd: 'subscribe_logs', host: this._host, service: this._service, lines: this._getLines(), sid: sid, start_at_end: startAtEnd });
             this._send({ cmd: 'get_log_info', host: this._host, service: this._service });
         }
         this._streaming = true;
         this._updateStreamBtn();
+        return sid;
     }
 
     _unsubscribe() {
@@ -1446,6 +1453,7 @@ class LogViewerPanel {
 
     _fetchOnce() {
         if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
+        this._cancelPreparedRestart();
         this._unsubscribe();
         this._clear();
         var sid = ++this._sid;
@@ -1462,7 +1470,10 @@ class LogViewerPanel {
        Controls
        ═══════════════════════════════════════════════════════ */
     _toggleStream() {
-        if (this._streaming) this._unsubscribe();
+        if (this._streaming) {
+            this._cancelPreparedRestart();
+            this._unsubscribe();
+        }
         else this._subscribe();
         this._updateStreamBtn();
     }
@@ -1580,23 +1591,47 @@ class LogViewerPanel {
         if (this._restartBlockerFor(svc)) return;
         var host = this._host || 'local';
         var rb = this._q('restart-btn');
-        this._restartTargetService = (!this._isLocal() && svc.indexOf('Bot:') === 0) ? svc : this._activeItem();
-        if (rb) { rb.disabled = true; rb.textContent = '\u231b Restarting\u2026'; }
+        this._finishRestartAttempt();
+        var generation = ++this._restartGeneration;
+        if (rb) { rb.disabled = true; rb.textContent = '\u231b Preparing log\u2026'; }
 
+        var command;
         if (svc.indexOf('Bot:') === 0) {
             var parts = svc.substring(4).split(':');
-            if (!this._sendRestart({ cmd: 'kill_instance', host: host, name: parts[0], pb_version: parts[1] || '7' }) && rb) {
-                rb.textContent = 'Connecting...';
-            }
+            command = { cmd: 'kill_instance', host: host, name: parts[0], pb_version: parts[1] || '7' };
         } else {
-            if (!this._sendRestart({ cmd: 'restart_service', host: host, service: svc }) && rb) {
-                rb.textContent = 'Connecting...';
-            }
+            command = { cmd: 'restart_service', host: host, service: svc };
         }
+
+        if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+            this._prepareRestartStream(command);
+        } else {
+            this._pendingRestartCommand = command;
+            if (rb) rb.textContent = 'Connecting...';
+            this._connect();
+        }
+
         var me = this;
-        setTimeout(function() {
+        this._restartTimeout = setTimeout(function() {
+            if (generation !== me._restartGeneration) return;
+            me._finishRestartAttempt();
             if (rb) { rb.disabled = false; rb.textContent = '\ud83d\udd04 Restart'; }
-        }, 4000);
+        }, 15000);
+    }
+
+    _prepareRestartStream(command) {
+        var sid = this._subscribe({ startAtEnd: true, forRestart: true });
+        if (sid == null) {
+            this._pendingRestartCommand = command;
+            return;
+        }
+        this._restartAttempt = {
+            sid: sid,
+            command: command,
+            host: this._host,
+            item: this._activeItem(),
+            sent: false
+        };
     }
 
     _showFileSize(bytes) {

@@ -105,6 +105,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 
 ### Security Boundaries
 - Never place passwords, private keys, API keys, session tokens, or other secrets in PBGui-controlled URLs/query strings, rendered HTML, browser storage, command lines, or logs. If a third-party provider requires a server-side query token, keep that URL out of browsers and logs. Send unsaved secrets to PBGui in authenticated request bodies and redact diagnostic payloads.
+- Never read or print an entire secret-bearing file such as `pbgui.ini`, `.env`, credential stores, auth state, private keys, or token files during diagnostics. Query only explicitly allowlisted non-secret keys with narrowly scoped tools, and ensure surrounding lines or unrelated values cannot appear in tool output.
 - Render untrusted values with `textContent` or context-correct escaping. Do not interpolate user-controlled values into `innerHTML`, inline JavaScript handlers, shell commands, or selectors.
 - Validate every filesystem or remote identifier at the boundary. Resolve paths below an approved root, reject traversal and control characters, and revalidate persisted names before reads, writes, deletes, SSH actions, or process control.
 - Build subprocess and SSH commands from validated argv elements. Never concatenate untrusted values into a shell command and never disable SSH host-key verification.
@@ -161,7 +162,7 @@ SSE /api/live/stream → delta applies on top of DB snapshot
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **pbgui** (13960 symbols, 43243 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **pbgui** (16058 symbols, 49461 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

@@ -18,6 +18,7 @@ import webbrowser
 
 from .core import (
     LocalMasterConfig,
+    LocalMasterMaintenanceConfig,
     LocalUninstallConfig,
     TOTP_QR_BEGIN,
     TOTP_QR_END,
@@ -29,8 +30,10 @@ from .core import (
     default_target_user,
     detect_public_ip,
     generate_pbgui_password,
+    inspect_local_master_install,
     local_prerequisite_status,
     run_local_master_install,
+    run_local_master_maintenance,
     run_local_master_uninstall,
     run_remote_master_install,
 )
@@ -184,6 +187,9 @@ def _new_job(payload: dict) -> str:
             elif mode == "local":
                 cfg = LocalMasterConfig.from_mapping(payload)
                 result = run_local_master_install(cfg, log, artifact_dir)
+            elif mode in {"local-pb8", "local-update-all"}:
+                cfg = LocalMasterMaintenanceConfig.from_mapping(payload)
+                result = run_local_master_maintenance(cfg, log, artifact_dir)
             else:
                 cfg = RemoteMasterConfig.from_mapping(payload)
                 result = run_remote_master_install(cfg, log, artifact_dir)
@@ -215,6 +221,8 @@ def _html() -> str:
     target_user = default_target_user()
     pbgui_password = generate_pbgui_password()
     prereqs = local_prerequisite_status()
+    initial_local_status = inspect_local_master_install(default_local_install_dir())
+    maintenance_default = bool(initial_local_status.get("installed"))
     missing_prereqs = [str(item) for item in prereqs.get("missing") or []]
     if missing_prereqs:
         local_prereq_status_html = "Missing local prerequisites: " + html.escape(", ".join(missing_prereqs))
@@ -282,7 +290,7 @@ def _html() -> str:
 <main>
   <section>
     <h1>PBGui Master Installer</h1>
-    <p style="color:var(--muted)">Install a fresh PBGui master either on a remote VPS or on this local machine.</p>
+    <p style="color:var(--muted)">Install a fresh PBGui master or safely maintain an existing local master.</p>
   </section>
   <section class="panel">
     <h2 id="mode-title">Local Master Install</h2>
@@ -290,7 +298,9 @@ def _html() -> str:
     <form id="install-form" class="grid">
       <label class="full">Install mode
         <select name="install_mode" id="install-mode">
-          <option value="local">Local Master Install</option>
+          <option value="local-pb8" %%MAINTENANCE_SELECTED%%>Install/Update PB8</option>
+          <option value="local-update-all">Update PBGui, PB7 and PB8</option>
+          <option value="local" %%FRESH_SELECTED%%>Fresh/Reinstall Local Master</option>
           <option value="remote">Remote Master VPS</option>
           <option value="local-uninstall">Local Master Uninstall</option>
         </select>
@@ -325,6 +335,7 @@ def _html() -> str:
       </label>
       <label class="full">Install parent directory <input name="install_dir" id="install-dir" value="%%INSTALL_DIR%%" placeholder="/home/%%TARGET_USER%%/software"></label>
       <div class="path-preview" id="install-preview"></div>
+      <div class="path-preview maintenance-only" id="local-master-status"></div>
       <div class="path-preview local-only" id="local-prereq-status">%%LOCAL_PREREQ_STATUS%%</div>
       <label class="local-only" id="local-sudo-wrap">Local sudo password (only if apt prerequisites are missing)
         <span class="password-wrap">
@@ -372,8 +383,12 @@ def _html() -> str:
         <input type="hidden" name="accept_unknown_host" id="accept-unknown-host" value="">
         <input type="hidden" name="accepted_host_key_fingerprint" id="accepted-host-key-fingerprint" value="">
       </div>
+      <div class="danger-panel full fresh-local-only" id="fresh-local-warning">
+        <strong>Fresh/Reinstall is disruptive when PBGui already exists.</strong>
+        <span>It stops PBRun and PB7 processes and replaces PBGui configuration and authentication. Use a maintenance action above for an existing master.</span>
+      </div>
       <div class="danger-panel full uninstall-only" id="uninstall-warning">
-        <strong>Local uninstall removes PBGui/PB7 checkouts, virtualenvs, and PBGui systemd user services under the selected parent directory.</strong>
+        <strong>Local uninstall removes PBGui/PB7/PB8 checkouts, virtualenvs, and PBGui systemd user services under the selected parent directory.</strong>
         <span>After clicking Uninstall Local Master, a safety dialog will ask for one final confirmation.</span>
       </div>
       <div class="full"><button id="start-btn" type="submit">Install Local Master</button></div>
@@ -393,7 +408,7 @@ def _html() -> str:
   <div class="modal">
     <h3 id="uninstall-modal-title">Confirm Local Uninstall</h3>
     <p id="uninstall-modal-message"></p>
-    <p>This removes the local PBGui/PB7 checkouts, virtualenvs, and PBGui systemd user services for the selected install parent.</p>
+    <p>This removes the local PBGui/PB7/PB8 checkouts, virtualenvs, and PBGui systemd user services for the selected install parent.</p>
     <div class="modal-actions">
       <button type="button" class="secondary" id="uninstall-cancel-btn">Cancel</button>
       <button type="button" class="danger-button" id="uninstall-confirm-btn">Uninstall Local Master</button>
@@ -452,12 +467,15 @@ const swapCustomWrap = document.getElementById('swap-custom-wrap');
 const swapCustom = document.getElementById('swap-custom');
 const swapSizeValue = document.getElementById('swap-size-value');
 const confirmFreshHost = document.getElementById('confirm-fresh-host');
+const localMasterStatusEl = document.getElementById('local-master-status');
 const acceptUnknownHost = document.getElementById('accept-unknown-host');
 const acceptedHostKeyFingerprint = document.getElementById('accepted-host-key-fingerprint');
 const defaultTargetUser = %%TARGET_USER_JSON%%;
 const defaultLocalInstallDir = %%LOCAL_INSTALL_DIR_JSON%%;
 const defaultLocalMasterName = %%LOCAL_MASTER_NAME_JSON%%;
 const localSudoPasswordUseful = %%LOCAL_SUDO_PASSWORD_USEFUL_JSON%%;
+let localMasterStatus = %%LOCAL_MASTER_STATUS_JSON%%;
+let localStatusGeneration = 0;
 let pollTimer = null;
 let progressTimer = null;
 let progressStartedAt = 0;
@@ -472,7 +490,7 @@ let bindHostTouched = false;
 let pendingUninstallConfirm = null;
 let pendingHostKeyConfirm = null;
 function defaultInstallDir() {
-  if (installMode.value === 'local' || installMode.value === 'local-uninstall') return defaultLocalInstallDir;
+  if (installMode.value !== 'remote') return defaultLocalInstallDir;
   const user = (targetUser.value || defaultTargetUser || 'pbgui').trim() || 'pbgui';
   return '/home/' + user + '/software';
 }
@@ -488,12 +506,51 @@ function joinPath(parent, child) {
 function syncInstallPreview() {
   const parent = (installDir.value || defaultInstallDir()).trim();
   const valid = parent.startsWith('/') || parent === '~' || parent.startsWith('~/');
-  const action = installMode.value === 'local-uninstall' ? 'Will remove ' : '';
+  const action = installMode.value === 'local-uninstall' ? 'Will remove ' : (installMode.value.startsWith('local-') ? 'Existing ' : '');
   installPreview.innerHTML = (valid ? '' : '<div style="color:var(--danger)">Install parent directory must be an absolute path or start with ~.</div>')
     + '<div><strong>' + action + 'PBGui:</strong> ' + escapeHtml(joinPath(parent, 'pbgui')) + '</div>'
     + '<div><strong>' + action + 'PB7:</strong> ' + escapeHtml(joinPath(parent, 'pb7')) + '</div>'
-    + '<div><strong>' + action + 'Venvs:</strong> ' + escapeHtml(joinPath(parent, 'venv_pbgui')) + ', ' + escapeHtml(joinPath(parent, 'venv_pb7')) + '</div>'
+    + '<div><strong>' + action + 'PB8:</strong> ' + escapeHtml(joinPath(parent, 'pb8')) + '</div>'
+    + '<div><strong>' + action + 'Venvs:</strong> ' + escapeHtml(joinPath(parent, 'venv_pbgui')) + ', ' + escapeHtml(joinPath(parent, 'venv_pb7')) + ', ' + escapeHtml(joinPath(parent, 'venv_pb8')) + '</div>'
     + (installMode.value === 'local-uninstall' ? '<div><strong>Will remove systemd user units:</strong> pbgui-api, pbgui-pbcluster, pbgui-pbrun, pbgui-pbdata, pbgui-pbcoindata, obsolete pbgui-pbremote if present</div>' : '');
+}
+function isMaintenanceMode() { return installMode.value === 'local-pb8' || installMode.value === 'local-update-all'; }
+function renderLocalMasterStatus() {
+  if (!localMasterStatusEl) return;
+  const installed = !!localMasterStatus.installed;
+  const pb8Installed = !!localMasterStatus.pb8_installed;
+  const errors = installMode.value === 'local-update-all' ? (localMasterStatus.update_all_errors || []) : (localMasterStatus.maintenance_errors || []);
+  localMasterStatusEl.innerHTML = installed
+    ? '<div><strong>Existing local master detected.</strong></div><div>PBGui: ' + escapeHtml(localMasterStatus.pbgui_dir || '') + '</div><div>PB8: ' + (pb8Installed ? 'installed' : 'not installed') + '</div>'
+      + (errors.length ? '<div style="color:var(--danger)">' + errors.map(escapeHtml).join('<br>') + '</div>' : '<div style="color:var(--ok)">Maintenance preflight passed.</div>')
+    : '<div style="color:var(--danger)">No existing local PBGui master was detected under this install parent.</div>';
+  const pb8Option = installMode.querySelector('option[value="local-pb8"]');
+  if (pb8Option) pb8Option.textContent = pb8Installed ? 'Update PB8' : 'Install PB8';
+  if (installMode.value === 'local-pb8') {
+    modeTitle.textContent = pb8Installed ? 'Update PB8' : 'Install PB8';
+    startBtn.textContent = pb8Installed ? 'Update PB8' : 'Install PB8';
+  }
+  if (isMaintenanceMode() && !currentJobId) startBtn.disabled = !installed || errors.length > 0;
+}
+let statusTimer = null;
+function refreshLocalMasterStatus() {
+  if (statusTimer) clearTimeout(statusTimer);
+  const generation = ++localStatusGeneration;
+  statusTimer = setTimeout(() => {
+    const parent = (installDir.value || defaultLocalInstallDir).trim();
+    fetch('/api/local-master-status?install_dir=' + encodeURIComponent(parent))
+      .then(r => r.json().then(data => ({ok:r.ok, data})))
+      .then(({ok, data}) => {
+        if (generation !== localStatusGeneration) return;
+        localMasterStatus = ok ? data : {installed:false, maintenance_errors:[data.error || 'Inspection failed'], update_all_errors:[data.error || 'Inspection failed']};
+        renderLocalMasterStatus();
+      })
+      .catch(err => {
+        if (generation !== localStatusGeneration) return;
+        localMasterStatus = {installed:false, maintenance_errors:[String(err)], update_all_errors:[String(err)]};
+        renderLocalMasterStatus();
+      });
+  }, 250);
 }
 function syncMode() {
   if (installMode.value !== 'remote') {
@@ -525,13 +582,16 @@ function syncLogin() {
 function syncInstallMode() {
   const isRemote = installMode.value === 'remote';
   const isUninstall = installMode.value === 'local-uninstall';
+  const isMaintenance = isMaintenanceMode();
+  const isFreshInstall = installMode.value === 'local' || isRemote;
+  if (!isMaintenance && !currentJobId) startBtn.disabled = false;
   document.querySelectorAll('.remote-only').forEach(el => {
     el.style.display = isRemote ? '' : 'none';
     el.querySelectorAll('input,select,button,textarea').forEach(ctrl => { ctrl.disabled = !isRemote; });
   });
   document.querySelectorAll('.install-only').forEach(el => {
-    el.style.display = isUninstall ? 'none' : '';
-    el.querySelectorAll('input,select,button,textarea').forEach(ctrl => { ctrl.disabled = isUninstall; });
+    el.style.display = isFreshInstall ? '' : 'none';
+    el.querySelectorAll('input,select,button,textarea').forEach(ctrl => { ctrl.disabled = !isFreshInstall; });
   });
   document.querySelectorAll('.uninstall-only').forEach(el => {
     el.style.display = isUninstall ? 'grid' : 'none';
@@ -541,25 +601,33 @@ function syncInstallMode() {
     el.style.display = installMode.value === 'local' ? '' : 'none';
     el.querySelectorAll('input,select,button,textarea').forEach(ctrl => { ctrl.disabled = installMode.value !== 'local'; });
   });
+  document.querySelectorAll('.maintenance-only').forEach(el => {
+    el.style.display = isMaintenance ? '' : 'none';
+  });
+  document.querySelectorAll('.fresh-local-only').forEach(el => {
+    el.style.display = installMode.value === 'local' ? 'grid' : 'none';
+  });
   if (localSudoWrap) {
     const showSudo = installMode.value === 'local' && localSudoPasswordUseful;
     localSudoWrap.style.display = showSudo ? '' : 'none';
     localSudoWrap.querySelectorAll('input,select,button,textarea').forEach(ctrl => { ctrl.disabled = !showSudo; });
   }
-  modeTitle.textContent = isUninstall ? 'Local Master Uninstall' : (isRemote ? 'Remote Master VPS' : 'Local Master Install');
-  startBtn.textContent = isUninstall ? 'Uninstall Local Master' : (isRemote ? 'Install Remote Master' : 'Install Local Master');
+  modeTitle.textContent = isUninstall ? 'Local Master Uninstall' : (isRemote ? 'Remote Master VPS' : (installMode.value === 'local-pb8' ? (localMasterStatus.pb8_installed ? 'Update PB8' : 'Install PB8') : (installMode.value === 'local-update-all' ? 'Update Local Master' : 'Fresh/Reinstall Local Master')));
+  startBtn.textContent = isUninstall ? 'Uninstall Local Master' : (isRemote ? 'Install Remote Master' : (installMode.value === 'local-pb8' ? (localMasterStatus.pb8_installed ? 'Update PB8' : 'Install PB8') : (installMode.value === 'local-update-all' ? 'Update PBGui, PB7 and PB8' : 'Fresh/Reinstall Local Master')));
   if (!masterNameTouched && !isUninstall) masterName.value = defaultMasterName();
   if (!bindHostTouched && !isUninstall) pbguiBindHost.value = defaultBindHost();
   syncMode();
   syncLogin();
   syncInstallDir();
+  renderLocalMasterStatus();
+  if (isMaintenance) refreshLocalMasterStatus();
 }
 function syncSwapSize() {
   const isCustom = swapSizeSelect.value === 'custom';
   swapCustomWrap.style.display = isCustom ? 'grid' : 'none';
   swapSizeValue.value = isCustom ? (swapCustom.value.trim() || '6G') : swapSizeSelect.value;
 }
-installMode.addEventListener('change', syncInstallMode); sshMode.addEventListener('change', syncMode); loginMode.addEventListener('change', syncLogin); sshUsername.addEventListener('input', () => { if (loginMode.value === 'sudo') { targetUser.value = sshUsername.value; syncInstallDir(); } }); targetUser.addEventListener('input', syncInstallDir); installDir.addEventListener('input', () => { installDirTouched = true; syncInstallPreview(); }); masterName.addEventListener('input', () => { masterNameTouched = true; }); pbguiBindHost.addEventListener('input', () => { bindHostTouched = true; }); swapSizeSelect.addEventListener('change', syncSwapSize); swapCustom.addEventListener('input', syncSwapSize);
+installMode.addEventListener('change', syncInstallMode); sshMode.addEventListener('change', syncMode); loginMode.addEventListener('change', syncLogin); sshUsername.addEventListener('input', () => { if (loginMode.value === 'sudo') { targetUser.value = sshUsername.value; syncInstallDir(); } }); targetUser.addEventListener('input', syncInstallDir); installDir.addEventListener('input', () => { installDirTouched = true; syncInstallPreview(); if (isMaintenanceMode()) refreshLocalMasterStatus(); }); masterName.addEventListener('input', () => { masterNameTouched = true; }); pbguiBindHost.addEventListener('input', () => { bindHostTouched = true; }); swapSizeSelect.addEventListener('change', syncSwapSize); swapCustom.addEventListener('input', syncSwapSize);
 syncInstallMode();
 syncSwapSize();
 document.querySelectorAll('.password-toggle').forEach(btn => {
@@ -667,14 +735,17 @@ function appendLogs(lines) {
   if (nearBottom && !selectionInsideLog()) logEl.scrollTop = logEl.scrollHeight;
 }
 const progressPhases = [
-  { pct: 5, label: 'Starting installer', re: /Starting installation|Connecting to|Using local install parent directory/ },
+  { pct: 5, label: 'Starting installer', re: /Starting installation|Starting update|Connecting to|Using local install parent directory|Existing local PBGui master detected/ },
+  { pct: 15, label: 'Running maintenance preflight', re: /Maintenance preflight|existing local PBGui master detected/i },
+  { pct: 30, label: 'Updating PBGui and PB7', re: /Updating PBGui and pinned PB7|master-update-pb\.yml/ },
   { pct: 12, label: 'Installing prerequisites', re: /Ensuring local installer prerequisites|Installing system packages|apt-get install/ },
   { pct: 22, label: 'Preparing repositories', re: /Cloning PBGui|Updating existing checkout|git clone|Using current PBGui checkout/ },
   { pct: 38, label: 'Creating virtualenvs', re: /Creating Python virtualenvs|python3\.12 -m venv/ },
   { pct: 52, label: 'Installing Python dependencies', re: /pip install -r|requirements\.txt|pip install maturin/ },
-  { pct: 72, label: 'Building passivbot-rust', re: /Building passivbot-rust|maturin develop|Rust source stamp updated/ },
+  { pct: 68, label: 'Building passivbot-rust', re: /Building passivbot-rust|maturin develop|Rust source stamp updated/ },
+  { pct: 76, label: 'Installing Passivbot v8', re: /Installing Passivbot v8 full profile|pb8\[full\]|passivbot --help|CONFIG_SCHEMA_VERSION/ },
   { pct: 82, label: 'Writing configuration', re: /Writing PBGui configuration|secrets\.toml|pbgui\.ini/ },
-  { pct: 82, label: 'Removing local install', re: /Uninstalling local PBGui master|Removed PBGui|Removed PB7|Removed PBGui venv|Removed PB7 venv/ },
+  { pct: 82, label: 'Removing local install', re: /Uninstalling local PBGui master|Removed PBGui|Removed PB7|Removed PB8|Removed PBGui venv|Removed PB7 venv|Removed PB8 venv/ },
   { pct: 87, label: 'Configuring remote access', re: /Setting up OpenVPN|Configuring firewall|TOTP|OpenVPN/ },
   { pct: 93, label: 'Installing systemd services', re: /Installing PBGui systemd user services|setup_systemd|Enabled pbgui-/ },
   { pct: 97, label: 'Checking PBGui API', re: /Checking PBGui API service|PBGui API is listening/ },
@@ -689,8 +760,9 @@ function setProgress(pct, label, state) {
 function updateProgress(job) {
   const status = job.status || 'running';
   const mode = (job.result || {}).mode || currentJobMode;
-  if (status === 'done') { setProgress(100, mode === 'local-uninstall' ? 'Uninstall complete' : 'Installation complete', 'done'); return; }
-  if (status === 'error') { setProgress(100, mode === 'local-uninstall' ? 'Uninstall failed' : 'Installation failed', 'error'); return; }
+  const maintenance = mode === 'local-pb8' || mode === 'local-update-all';
+  if (status === 'done') { setProgress(100, mode === 'local-uninstall' ? 'Uninstall complete' : (maintenance ? 'Update complete' : 'Installation complete'), 'done'); return; }
+  if (status === 'error') { setProgress(100, mode === 'local-uninstall' ? 'Uninstall failed' : (maintenance ? 'Update failed' : 'Installation failed'), 'error'); return; }
   const text = (job.logs || []).join('\n');
   let pct = text ? 5 : 0;
   let label = text ? 'Starting installer' : 'Waiting for installer input...';
@@ -706,6 +778,7 @@ function renderResult(job) {
   currentJobId = job.id || currentJobId;
   const r = job.result || {};
   const isUninstall = r.mode === 'local-uninstall' || currentJobMode === 'local-uninstall';
+  const isMaintenance = ['local-pb8', 'local-update-all'].includes(r.mode || currentJobMode);
   if (job.status !== 'done' && job.status !== 'error' && !r.totp_qr_text) return;
   const vpnUrl = escapeHtml(r.vpn_url || '');
   const vpnHref = escapeHtml(r.vpn_url || '#');
@@ -715,12 +788,14 @@ function renderResult(job) {
   resultEl.style.display = 'grid';
   resultEl.innerHTML = (job.status === 'done' && r.mode === 'local-uninstall'
     ? '<strong style="color:var(--ok)">Local uninstall complete.</strong><div style="color:var(--muted)">Removed install parent targets under: ' + escapeHtml(r.install_dir || '') + '</div>'
+    : job.status === 'done' && isMaintenance
+    ? '<strong style="color:var(--ok)">Local master update complete.</strong><div style="color:var(--muted)">PBGui: ' + escapeHtml(r.pbgui_dir || '') + '<br>PB7: ' + escapeHtml(r.pb7_dir || '') + '<br>PB8: ' + escapeHtml(r.pb8_dir || '') + '</div>'
     : job.status === 'done' && r.mode === 'local'
-    ? '<strong style="color:var(--ok)">Local installation complete.</strong><div>Open PBGui: <a href="' + localHref + '" target="_blank">' + localUrl + '</a></div><div style="color:var(--muted)">PBGui: ' + escapeHtml(r.pbgui_dir || '') + '<br>PB7: ' + escapeHtml(r.pb7_dir || '') + '<br>Python: ' + escapeHtml(r.pbgui_python || '') + '</div>'
+    ? '<strong style="color:var(--ok)">Local installation complete.</strong><div>Open PBGui: <a href="' + localHref + '" target="_blank">' + localUrl + '</a></div><div style="color:var(--muted)">PBGui: ' + escapeHtml(r.pbgui_dir || '') + '<br>PB7: ' + escapeHtml(r.pb7_dir || '') + '<br>PB8: ' + escapeHtml(r.pb8_dir || '') + '<br>Python: ' + escapeHtml(r.pbgui_python || '') + '</div>'
     : job.status === 'done'
     ? '<strong style="color:var(--ok)">Installation complete.</strong><div>Connect OpenVPN, then open: <a href="' + vpnHref + '" target="_blank">' + vpnUrl + '</a></div><div style="color:var(--muted)">Use the NetworkManager button to import the profile as split tunnel. If you import it manually, enable <strong>Use this connection only for resources on its network</strong> so the VPN does not become your default internet route.</div>'
     : job.status === 'error'
-      ? '<strong style="color:var(--danger)">' + (isUninstall ? 'Uninstall' : 'Installation') + ' failed: ' + escapeHtml(job.error || 'unknown error') + '</strong>'
+      ? '<strong style="color:var(--danger)">' + (isUninstall ? 'Uninstall' : (isMaintenance ? 'Update' : 'Installation')) + ' failed: ' + escapeHtml(job.error || 'unknown error') + '</strong>'
       : '<strong style="color:var(--ok)">TOTP QR code is ready.</strong><div>Scan this now. The installation is still running.</div>')
     + (r.ovpn_local ? '<div><a href="/download/ovpn?job=' + encodeURIComponent(job.id) + '">Download OpenVPN profile</a> <button class="secondary" type="button" id="nm-install-btn">Install in NetworkManager as split tunnel</button></div><div id="nm-install-result" style="color:var(--muted)"></div>' : '')
     + (qrText ? '<div><strong>TOTP QR code</strong><div class="qr-wrap"><pre class="qr-code">' + qrText + '</pre></div></div>' : '');
@@ -749,6 +824,8 @@ function poll(jobId) {
     renderResult(job);
     if (job.status === 'done' || job.status === 'error') {
       startBtn.disabled = false;
+      currentJobId = '';
+      if (isMaintenanceMode()) refreshLocalMasterStatus();
       stopProgressTimer();
       stopPolling();
       return;
@@ -854,7 +931,8 @@ function startJob(confirmedUninstall, confirmedHostKey) {
     return;
   }
   currentJobMode = installMode.value;
-  const startText = currentJobMode === 'local-uninstall' ? 'Starting uninstall...' : 'Starting installation...';
+  const maintenance = currentJobMode === 'local-pb8' || currentJobMode === 'local-update-all';
+  const startText = currentJobMode === 'local-uninstall' ? 'Starting uninstall...' : (maintenance ? 'Starting update...' : 'Starting installation...');
   stopPolling();
   startProgressTimer();
   startBtn.disabled = true; resultEl.style.display = 'none'; logEl.textContent = startText;
@@ -872,7 +950,7 @@ form.addEventListener('submit', ev => {
 </script>
 </body>
 </html>
-""".replace("%%TARGET_USER%%", html.escape(target_user, quote=True)).replace("%%TARGET_USER_JSON%%", json.dumps(target_user)).replace("%%INSTALL_DIR%%", html.escape(default_remote_install_dir(target_user), quote=True)).replace("%%LOCAL_INSTALL_DIR_JSON%%", json.dumps(default_local_install_dir())).replace("%%LOCAL_MASTER_NAME_JSON%%", json.dumps(default_local_master_name())).replace("%%LOCAL_PREREQ_STATUS%%", local_prereq_status_html).replace("%%LOCAL_SUDO_PASSWORD_USEFUL_JSON%%", json.dumps(bool(prereqs.get("sudo_password_useful")))).replace("%%PBGUI_PASSWORD%%", html.escape(pbgui_password, quote=True))
+""".replace("%%TARGET_USER%%", html.escape(target_user, quote=True)).replace("%%TARGET_USER_JSON%%", json.dumps(target_user)).replace("%%INSTALL_DIR%%", html.escape(default_remote_install_dir(target_user), quote=True)).replace("%%LOCAL_INSTALL_DIR_JSON%%", json.dumps(default_local_install_dir())).replace("%%LOCAL_MASTER_NAME_JSON%%", json.dumps(default_local_master_name())).replace("%%LOCAL_PREREQ_STATUS%%", local_prereq_status_html).replace("%%LOCAL_SUDO_PASSWORD_USEFUL_JSON%%", json.dumps(bool(prereqs.get("sudo_password_useful")))).replace("%%LOCAL_MASTER_STATUS_JSON%%", json.dumps(initial_local_status).replace("</", "<\\/")).replace("%%MAINTENANCE_SELECTED%%", "selected" if maintenance_default else "").replace("%%FRESH_SELECTED%%", "" if maintenance_default else "selected").replace("%%PBGUI_PASSWORD%%", html.escape(pbgui_password, quote=True))
 
 
 class InstallerHandler(BaseHTTPRequestHandler):
@@ -913,6 +991,13 @@ class InstallerHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/public-ip":
             self._send_json({"ip": detect_public_ip()})
+            return
+        if parsed.path == "/api/local-master-status":
+            install_dir = urllib.parse.parse_qs(parsed.query).get("install_dir", [default_local_install_dir()])[0]
+            try:
+                self._send_json(inspect_local_master_install(str(install_dir)))
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
         if parsed.path == "/api/ssh-host-key":
             query = urllib.parse.parse_qs(parsed.query)

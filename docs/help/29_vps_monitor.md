@@ -62,6 +62,7 @@ The detail panel shows heartbeat and effective ages, every required file state, 
 - Full-text search with highlighting
 - Auto-scroll and compact mode
 - Host and service selectors with stream control
+- Restart pre-arms the selected log stream so early startup lines remain visible without a manual Fetch
 
 ## Requirements
 

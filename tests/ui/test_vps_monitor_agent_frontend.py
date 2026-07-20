@@ -104,6 +104,20 @@ def test_frontend_is_cookie_only_and_websocket_url_has_no_credentials() -> None:
     assert "authenticated: true" in source
 
 
+def test_compact_desktop_status_keeps_identity_badges_on_one_line() -> None:
+    """Wide compact rows reserve enough aligned space without wrapping badges."""
+    source = HTML_PATH.read_text(encoding="utf-8")
+    media = re.search(
+        r"@media \(min-width: 1200px\)\s*\{\s*body\.compact \.vps-title\s*\{(?P<rules>[^}]*)\}",
+        source,
+    )
+
+    assert media is not None
+    assert "min-width: 420px" in media.group("rules")
+    assert "width: 420px" in media.group("rules")
+    assert "white-space: nowrap" in media.group("rules")
+
+
 def test_close_4001_stops_reconnect_and_returns_to_login() -> None:
     """Session expiry must terminate reconnect attempts before safe navigation."""
     source = HTML_PATH.read_text(encoding="utf-8")

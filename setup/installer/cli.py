@@ -40,7 +40,8 @@ def _print_install_preview(install_dir: str) -> None:
     install_parent = install_dir.rstrip("/")
     print(f"PBGui: {install_parent}/pbgui")
     print(f"PB7: {install_parent}/pb7")
-    print(f"Venvs: {install_parent}/venv_pbgui, {install_parent}/venv_pb7")
+    print(f"PB8: {install_parent}/pb8")
+    print(f"Venvs: {install_parent}/venv_pbgui, {install_parent}/venv_pb7, {install_parent}/venv_pb8")
 
 
 def _fingerprint_matches(value: str, fingerprint: str) -> bool:
@@ -212,6 +213,7 @@ def _run_local_cli() -> int:
     print(f"PBGui URL: {result.get('local_url')}")
     print(f"PBGui directory: {result.get('pbgui_dir')}")
     print(f"PB7 directory: {result.get('pb7_dir')}")
+    print(f"PB8 directory: {result.get('pb8_dir')}")
     return 0
 
 

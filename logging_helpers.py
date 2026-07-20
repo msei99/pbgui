@@ -66,6 +66,7 @@ MANAGED_LOG_SCOPES: dict[str, dict[str, object]] = {
     "api_console": {"label": "API console", "description": "PBApiServer.console.log", "paths": ("PBApiServer.console.log",)},
     "jobs": {"label": "Jobs", "description": "jobs/*.log", "paths": ("jobs",)},
     "backtests": {"label": "Backtests", "description": "backtests/*.log", "paths": ("backtests",)},
+    "backtests_v8": {"label": "PB8 backtests", "description": "backtests_v8/*.log", "paths": ("backtests_v8",)},
     "optimizes": {"label": "Optimizes", "description": "optimizes/*.log", "paths": ("optimizes",)},
     "pareto_sessions": {"label": "Pareto sessions", "description": "pareto*.log", "paths": ("pareto_dash.log", "pareto_sessions")},
     "api_handoff": {"label": "API handoff", "description": "api-systemd-handoff.log", "paths": ("api-systemd-handoff.log",)},

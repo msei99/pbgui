@@ -83,6 +83,18 @@ function suiteInit(containerId, opts) {
   _suiteState.containerId = containerId;
   _suiteState.apiBase = opts.apiBase || '';
   _suiteState.aggregateMetrics = _suiteNormalizeAggMetrics(opts.aggregateMetrics);
+  if (String(opts.version || '').toLowerCase() === 'v8') {
+    ['TWE Sensitivity', 'n_positions Sensitivity'].forEach(function(name) {
+      var template = _suiteTemplates[name];
+      (template && template.scenarios || []).forEach(function(scenario) {
+        var migrated = {};
+        Object.keys(scenario.overrides || {}).forEach(function(key) {
+          migrated[key.replace(/^(bot\.(?:long|short))\.(total_wallet_exposure_limit|n_positions)$/, '$1.risk.$2')] = scenario.overrides[key];
+        });
+        scenario.overrides = migrated;
+      });
+    });
+  }
   _suiteLoadBotParams();
 }
 

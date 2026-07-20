@@ -30,6 +30,15 @@ def test_log_group_ownership_contract():
     assert DEDICATED_SERVICES.isdisjoint(logging_helpers.LOG_GROUPS)
 
 
+def test_pb8_backtest_logs_have_a_managed_rotation_scope(isolated_paths):
+    """PB8 queue logs must rotate under their declared nested log directory."""
+    _ini_path, log_root = isolated_paths
+    target = log_root / "backtests_v8" / "job.log"
+
+    assert logging_helpers.resolve_managed_log_scope(target) == "backtests_v8"
+    assert logging_helpers.rotate_managed_log_before_open(target, "backtests_v8") == target
+
+
 def _process_writer(logfile: str, ini_path: str, start: int, count: int) -> None:
     """Write an isolated range from a child process."""
     logging_helpers.PBGUI_INI = Path(ini_path)

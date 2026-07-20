@@ -1,6 +1,7 @@
 import json
 import hjson
 import pprint
+import ast
 import configparser
 import io
 import os
@@ -246,7 +247,7 @@ def _normalize_path_setting(value: str) -> str:
 
 
 def _normalize_ini_value(parameter: str, value: str) -> str:
-    if parameter in {"pb7dir", "pb7venv"}:
+    if parameter in {"pb7dir", "pb7venv", "pb8dir", "pb8venv"}:
         return _normalize_path_setting(value)
     return str(value)
 
@@ -344,6 +345,10 @@ def pb7dir(): return load_ini("main", "pb7dir")
 
 def pb7venv(): return load_ini("main", "pb7venv")
 
+def pb8dir(): return load_ini("main", "pb8dir")
+
+def pb8venv(): return load_ini("main", "pb8venv")
+
 
 def pb7_runtime_status() -> dict:
     current_pb7dir = pb7dir()
@@ -411,6 +416,154 @@ def pb7_runtime_status() -> dict:
         "warnings": warnings,
     }
 
+
+def _literal_string_assignment(path: Path, name: str) -> str:
+    """Read one bounded top-level string assignment without importing runtime code."""
+    if path.stat().st_size > 256 * 1024:
+        raise ValueError(f"{path.name} is too large to inspect safely")
+    module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    values: list[str] = []
+    for node in module.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        value = node.value
+        if any(isinstance(target, ast.Name) and target.id == name for target in targets):
+            if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+                raise ValueError(f"{name} must be a string literal")
+            values.append(value.value)
+    if len(values) != 1:
+        raise ValueError(f"{name} must be declared exactly once")
+    return values[0]
+
+
+def pb8_runtime_status() -> dict:
+    """Return static PB8 artifact readiness without importing PB8 into PBGui."""
+    current_pb8dir = pb8dir()
+    current_pb8venv = pb8venv()
+    src_dir = Path(current_pb8dir) / "src" if current_pb8dir else None
+    version_file = src_dir / "passivbot_version.py" if src_dir else None
+    schema_file = src_dir / "config" / "schema.py" if src_dir else None
+    python_file = Path(current_pb8venv) if current_pb8venv else None
+    cli_file = python_file.parent / "passivbot" if python_file else None
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    version = ""
+    config_schema = ""
+    pb8dir_exists = bool(current_pb8dir) and Path(current_pb8dir).is_dir()
+    version_file_exists = version_file is not None and version_file.is_file()
+    schema_file_exists = schema_file is not None and schema_file.is_file()
+    python_exists = python_file is not None and python_file.is_file()
+    interpreter_name_ok = python_file is not None and python_file.name.startswith("python")
+    interpreter_executable = python_exists and os.access(python_file, os.X_OK)
+    cli_exists = cli_file is not None and cli_file.is_file()
+    cli_executable = cli_exists and os.access(cli_file, os.X_OK)
+    rust_files = list(src_dir.glob("passivbot_rust*.so")) if src_dir and src_dir.is_dir() else []
+    runtime_invalid_marker = Path(PBGDIR) / "data" / "locks" / "pb8-runtime-invalid"
+    runtime_marked_invalid = runtime_invalid_marker.exists() or runtime_invalid_marker.is_symlink()
+    if runtime_marked_invalid:
+        errors.append("Passivbot V8 installation or update did not complete successfully; rerun the PB8 update.")
+    if python_file:
+        venv_dir = python_file.parent.parent
+        site_packages_dirs = [venv_dir / "Lib" / "site-packages"]
+        venv_lib = venv_dir / "lib"
+        if venv_lib.is_dir():
+            site_packages_dirs.extend(sorted(venv_lib.glob("python*/site-packages")))
+        for site_packages in site_packages_dirs:
+            if not site_packages.is_dir():
+                continue
+            for suffix in ("so", "pyd", "dll", "dylib"):
+                rust_files.extend(site_packages.glob(f"passivbot_rust*.{suffix}"))
+                rust_files.extend(site_packages.glob(f"passivbot_rust/passivbot_rust*.{suffix}"))
+    rust_files = sorted(set(rust_files), key=str)
+
+    if not current_pb8dir:
+        errors.append("Passivbot V8 path is not configured.")
+    elif not pb8dir_exists:
+        errors.append(f"Passivbot V8 path does not exist: {current_pb8dir}")
+    else:
+        if not version_file_exists:
+            errors.append(f"Passivbot V8 path is missing src/passivbot_version.py: {version_file}")
+        else:
+            try:
+                version = _literal_string_assignment(version_file, "__version__")
+            except (OSError, SyntaxError, ValueError) as exc:
+                errors.append(f"Passivbot V8 version is invalid: {exc}")
+        if not schema_file_exists:
+            errors.append(f"Passivbot V8 path is missing src/config/schema.py: {schema_file}")
+        else:
+            try:
+                config_schema = _literal_string_assignment(schema_file, "CONFIG_SCHEMA_VERSION")
+            except (OSError, SyntaxError, ValueError) as exc:
+                errors.append(f"Passivbot V8 config schema is invalid: {exc}")
+        if not rust_files:
+            errors.append(
+                f"Passivbot V8 Rust extension is missing from the configured runtime: "
+                f"{current_pb8venv or src_dir}"
+            )
+
+    version_major_ok = version.lstrip("v").startswith("8.")
+    schema_major_ok = config_schema.lstrip("v").startswith("8.")
+    if version and not version_major_ok:
+        errors.append(f"Passivbot V8 source reports an unexpected version: {version}")
+    if config_schema and not schema_major_ok:
+        errors.append(f"Passivbot V8 config schema reports an unexpected version: {config_schema}")
+
+    if not current_pb8venv:
+        errors.append("Passivbot V8 python interpreter is not configured.")
+    elif not python_exists:
+        errors.append(f"Passivbot V8 python interpreter does not exist: {current_pb8venv}")
+    elif not interpreter_name_ok:
+        errors.append(f"Passivbot V8 python interpreter must point to a python executable (got {python_file.name}).")
+    elif not interpreter_executable:
+        errors.append(f"Passivbot V8 python interpreter is not executable: {current_pb8venv}")
+    if current_pb8venv and not cli_exists:
+        errors.append(f"Passivbot V8 CLI does not exist: {cli_file}")
+    elif cli_exists and not cli_executable:
+        errors.append(f"Passivbot V8 CLI is not executable: {cli_file}")
+
+    source_ready = pb8dir_exists and version_file_exists and version_major_ok
+    config_ready = schema_file_exists and schema_major_ok
+    python_ready = python_exists and interpreter_name_ok and interpreter_executable
+    cli_ready = cli_exists and cli_executable
+    rust_ready = bool(rust_files)
+    ready = source_ready and config_ready and python_ready and cli_ready and rust_ready and not runtime_marked_invalid
+    if source_ready and not ready:
+        warnings.append("PB8 source is available, but one or more runtime artifacts are not ready.")
+
+    return {
+        "pb8dir": current_pb8dir,
+        "pb8venv": current_pb8venv,
+        "configured": bool(current_pb8dir or current_pb8venv),
+        "src_dir": str(src_dir) if src_dir else "",
+        "version_file": str(version_file) if version_file else "",
+        "version": version,
+        "config_schema_file": str(schema_file) if schema_file else "",
+        "config_schema": config_schema,
+        "cli_file": str(cli_file) if cli_file else "",
+        "rust_file": str(rust_files[0]) if rust_files else "",
+        "pb8dir_exists": pb8dir_exists,
+        "version_file_exists": version_file_exists,
+        "version_major_ok": version_major_ok,
+        "config_schema_exists": schema_file_exists,
+        "config_schema_major_ok": schema_major_ok,
+        "pb8venv_exists": python_exists,
+        "interpreter_name_ok": interpreter_name_ok,
+        "interpreter_executable": interpreter_executable,
+        "cli_exists": cli_exists,
+        "cli_executable": cli_executable,
+        "rust_exists": rust_ready,
+        "source_ready": source_ready,
+        "config_ready": config_ready,
+        "python_ready": python_ready,
+        "cli_ready": cli_ready,
+        "rust_ready": rust_ready,
+        "ready": ready,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
 def is_pb7_installed():
     return pb7_runtime_status()["import_ready"]
 
@@ -439,7 +592,7 @@ def import_passivbot_rust():
     return pbr
 
 PBGDIR = Path(__file__).resolve().parent
-PBGUI_VERSION = "v1.93.1"
+PBGUI_VERSION = "v1.94"
 _serial_path = PBGDIR / 'api' / 'serial.txt'
 PBGUI_SERIAL = _serial_path.read_text().strip() if _serial_path.exists() else ''
 

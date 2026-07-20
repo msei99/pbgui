@@ -8,7 +8,7 @@ Nutze die Welcome-Seite, um:
 
 - dich mit dem aktuellen PBGui-Passwort anzumelden
 - das Passwort zu ändern
-- den lokalen PBv7-Pfad und Interpreter zu konfigurieren
+- die lokalen PBv7- und PBv8-Pfade und Interpreter zu konfigurieren
 - festzulegen, ob diese Maschine als **Master** oder **Slave** arbeitet
 - zu prüfen, ob der API-Server die aktuelle Runtime-Konfiguration korrekt lesen kann
 
@@ -18,6 +18,7 @@ Der Standardbereich **Overview** fasst den aktuellen lokalen Zustand zusammen:
 
 - **Session**: ob du eingeloggt bist oder noch als Gast arbeitest
 - **PB7**: ob die konfigurierte PBv7-Runtime verwendbar aussieht
+- **PB8**: ob Source, V8-Config-Schema, Python, CLI und die kompilierte Rust-Erweiterung bereit sind
 - **Identity**: aktuelle Host-Rolle und konfigurierter Bot-Name
 - **Runtime Status**: detaillierte Readiness-Pruefungen aus dem Backend
 - **Login security**: aktive Login-Sperren und behaltene Brute-Force-Lockout-Historie
@@ -38,6 +39,8 @@ Wichtige Felder:
 
 - **Passivbot V7 path**: Stammverzeichnis des lokalen PBv7-Checkouts
 - **Passivbot V7 python interpreter**: voller Pfad zur Python-Binary in der PBv7-Virtualenv
+- **Passivbot V8 path**: Stammverzeichnis des lokalen PBv8-Checkouts
+- **Passivbot V8 python interpreter**: voller Pfad zur Python-Binary in `venv_pb8`
 - **Bot name**: lokale Bot-Identitaet von PBGui
 - **Role**: **Master** waehlen, wenn dieser Host Remote-VPS verwaltet, sonst **Slave**
 
@@ -46,6 +49,10 @@ Mit den **Browse**-Buttons kannst du Verzeichnisse und den Python-Interpreter di
 Die Rolle wird nach dem Speichern von neuen Arbeitszyklen uebernommen.
 Aenderungen an PB7-Pfad, PB7-Interpreter oder Bot-Namen erfordern einen Neustart
 des PBRun-Dienstes; die Speicherbestaetigung zeigt die jeweilige Apply-Semantik.
+PB8-Pfadaenderungen gelten ab der naechsten PB8-Operation und benoetigen keinen
+API- oder PBRun-Neustart. Auf Mastern wird PB8 erwartet; auf nicht konfigurierten
+Slaves bleibt PB8 optional. Welcome prueft die Artefakte statisch. Der Installer
+fuehrt waehrend der Installation zusaetzlich die PB8-CLI aus und validiert den Rust-Import.
 
 ## Bereich Password
 
@@ -66,12 +73,14 @@ Ein leeres Passwort allein wird abgelehnt. Jeder Passwort- oder Auth-Modus-Wechs
 3. Den **Passivbot V7 path** setzen.
 4. Den **Passivbot V7 python interpreter** setzen.
 5. Die richtige **Role** waehlen.
-6. Das Setup speichern.
-7. Den **Runtime Status** erneut pruefen, bis PBv7 bereit ist.
+6. Auf einem Master den PBv8-Pfad und Interpreter setzen oder PB8 mit dem Master Installer installieren.
+7. Das Setup speichern.
+8. Den **Runtime Status** erneut pruefen, bis die benoetigten Runtimes bereit sind.
 
 ## Schnelle Fehlersuche
 
 - **PB7 blocked**: der konfigurierte PBv7-Pfad oder Interpreter fehlt oder ist ungueltig
+- **PB8 blocked/partial**: PBv8-Source, Schema, Interpreter, CLI oder Rust-Erweiterung fehlt oder ist ungueltig
 - **Save Setup** bleibt deaktiviert: zuerst einloggen
 - **Browse** funktioniert nicht: Authentifizierung und Server-Pfadrechte pruefen
 - **Du willst nur das Passwort aendern**: die Sidebar-Aktion **Password** verwenden statt die Setup-Felder anzupassen

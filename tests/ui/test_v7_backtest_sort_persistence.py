@@ -96,6 +96,7 @@ def test_backtest_sort_state_validates_restores_and_persists() -> None:
     )
     config_header_keys = re.findall(r"thSort\('[^']+',\s*'([^']+)'\)", source)
     result_header_keys = re.findall(r"rthFn\('[^']+',\s*'([^']+)'\)", source)
+    shared_result_header_keys = [key for key in result_header_keys if key != "backtest_version"]
     assert config_header_keys
     assert result_header_keys
     assert source.index("applyBacktestSortState(initialViewState.sorts);") < source.index("loadConfigs();", source.index("var initialViewState"))
@@ -134,8 +135,8 @@ def test_backtest_sort_state_validates_restores_and_persists() -> None:
         const loaded = loadStoredBacktestViewState();
         assert.equal(loaded.panel, 'legacy');
         for (const key of {json.dumps(config_header_keys)}) assert.ok(BACKTEST_SORT_COLUMNS.configs.includes(key));
-        for (const key of {json.dumps(result_header_keys)}) {{
-          assert.ok(BACKTEST_SORT_COLUMNS.results.includes(key));
+        for (const key of {json.dumps(result_header_keys)}) assert.ok(BACKTEST_SORT_COLUMNS.results.includes(key));
+        for (const key of {json.dumps(shared_result_header_keys)}) {{
           assert.ok(BACKTEST_SORT_COLUMNS.archive.includes(key));
           assert.ok(BACKTEST_SORT_COLUMNS.legacy.includes(key));
         }}

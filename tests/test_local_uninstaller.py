@@ -208,6 +208,7 @@ def test_bootstrap_exposes_security_warning_only_after_authentication(monkeypatc
         },
     )
     monkeypatch.setattr(auth, "pb7_runtime_status", lambda: {})
+    monkeypatch.setattr(auth, "pb8_runtime_status", lambda: {})
     session = auth.SessionToken(token="test", user_id="test", created_at=1, expires_at=2)
 
     assert auth._bootstrap_payload()["auth"]["security_warnings"] == []
@@ -524,6 +525,7 @@ def test_bootstrap_hides_login_security_from_unauthenticated_clients(monkeypatch
         },
     )
     monkeypatch.setattr(auth, "pb7_runtime_status", lambda: {})
+    monkeypatch.setattr(auth, "pb8_runtime_status", lambda: {})
     monkeypatch.setattr(
         auth,
         "_login_security_status",

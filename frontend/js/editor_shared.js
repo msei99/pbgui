@@ -604,8 +604,10 @@
     return base
       .replace(/\/api\/v7$/, '/api/balance-calc')
       .replace(/\/api\/backtest-v7$/, '/api/balance-calc')
+      .replace(/\/api\/backtest-v8$/, '/api/balance-calc')
       .replace(/\/v7$/, '/balance-calc')
-      .replace(/\/backtest-v7$/, '/balance-calc');
+      .replace(/\/backtest-v7$/, '/balance-calc')
+      .replace(/\/backtest-v8$/, '/balance-calc');
   }
 
   async function createBalanceCalcDraft(opts) {

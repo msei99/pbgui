@@ -125,6 +125,22 @@
 
         if (API_ORIGIN === "%%" + "API_ORIGIN%%") API_ORIGIN = window.location.origin;
 
+        function replaceTopLocation(url) {
+            try {
+                if (window.top) {
+                    window.top.location.replace(url);
+                    return;
+                }
+            } catch (error) {
+                // Fall back to the current context if a browser blocks top access.
+            }
+            window.location.replace(url);
+        }
+
+        if (window.self !== window.top) {
+            replaceTopLocation(new URL(API_ORIGIN + "/").toString());
+        }
+
         function setBanner(message) {
             var banner = document.getElementById("banner");
             if (!message) {
@@ -155,7 +171,7 @@
 
         function redirectToWelcome() {
             var target = new URL(API_ORIGIN + "/api/auth/main_page");
-            window.location.replace(target.toString());
+            replaceTopLocation(target.toString());
         }
 
         async function submitLogin(event) {

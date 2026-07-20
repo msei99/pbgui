@@ -3,11 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PBGui — V7 Backtest</title>
+<title>PBGui — %%BACKTEST_LABEL%% Backtest</title>
 <script src="/app/plotly.min.js?v=1"></script>
 <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
+<script src="/app/js/backtest_shell.js?v=4"></script>
+<script src="/app/js/backtest_editor_adapter.js?v=4"></script>
+<script src="/app/js/backtest_advanced_fields.js?v=1"></script>
 <style>
 /* ── Design Tokens ─────────────────────────────── */
 :root {
@@ -266,6 +269,37 @@ a:hover { text-decoration: underline; }
   opacity:.8; text-transform:uppercase;
 }
 .kv-chip-ex::after { content:':'; }
+.advanced-table-wrap { overflow-x:auto; border:1px solid var(--border); border-radius:5px; }
+.advanced-table { width:100%; min-width:1120px; border-collapse:collapse; font-size:var(--fs-xs); }
+.advanced-table th { position:sticky; top:0; z-index:1; padding:6px; text-align:left;
+  background:var(--bg2); color:var(--text-dim); border-bottom:2px solid var(--border); white-space:nowrap; }
+.advanced-table td { padding:5px; border-bottom:1px solid var(--border); vertical-align:middle; }
+.advanced-table tbody tr:last-child td { border-bottom:none; }
+.advanced-table input, .advanced-table select { width:100%; min-width:88px; height:30px; padding:0 6px;
+  background:var(--bg2); color:var(--text); border:1px solid var(--border); border-radius:4px; font-size:var(--fs-xs); }
+.advanced-table .market-coin { min-width:120px; text-transform:uppercase; }
+.advanced-table .market-exchange { min-width:115px; }
+.advanced-empty { padding:18px; text-align:center; color:var(--text-dim); font-size:var(--fs-sm); }
+.advanced-help { color:var(--text-dim); font-size:var(--fs-xs); line-height:1.45; margin-bottom:var(--sp-sm); }
+.metric-mode-row { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:var(--sp-sm); }
+.metric-mode-button { position:relative; display:inline-flex; align-items:center; gap:6px; padding:6px 12px;
+  border:1px solid var(--border); border-radius:5px; background:var(--bg2); color:var(--text); cursor:pointer; font-size:var(--fs-sm); }
+.metric-mode-button:has(input:checked) { border-color:var(--accent); background:rgba(77,166,255,.12); }
+.metric-mode-button input { margin:0; accent-color:var(--accent); }
+.metric-picker-toolbar { display:flex; gap:var(--sp-sm); align-items:center; flex-wrap:wrap; margin-bottom:var(--sp-sm); }
+.metric-picker-search { flex:1 1 260px; height:var(--input-h); padding:0 var(--sp-sm); background:var(--bg2);
+  color:var(--text); border:1px solid var(--border); border-radius:4px; font-size:var(--fs-sm); }
+.metric-category { margin-top:var(--sp-sm); }
+.metric-category-title { color:var(--text-dim); font-size:var(--fs-xs); font-weight:600; margin-bottom:4px; }
+.metric-picker-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; }
+.metric-picker-row.metric-picker-button { border:1px solid var(--border); border-radius:4px; background:var(--bg2);
+  color:var(--text); padding:6px 8px; text-align:left; cursor:pointer; font:inherit; font-size:var(--fs-xs);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.metric-picker-row.metric-picker-button:hover { border-color:var(--accent); }
+.metric-picker-row.metric-picker-button.selected { border-color:rgba(99,179,237,.24); background:rgba(99,179,237,.12); color:var(--accent); }
+.metric-selected-summary { color:var(--text-dim); font-size:var(--fs-xs); }
+@media (max-width:900px) { .metric-picker-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:560px) { .metric-picker-grid { grid-template-columns:1fr; } }
 .ms-input {
   border: none; background: transparent; color: var(--text);
   font-size: var(--fs-sm); outline: none; min-width: 60px; flex: 1;
@@ -620,6 +654,7 @@ textarea.json-invalid:focus {
 .gs-topic { color:#93c5fd; font-weight:600; font-size: var(--fs-sm); margin-bottom:5px; }
 .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
 </style>
+<link rel="stylesheet" href="/app/css/backtest_shell.css?v=3">
 </head>
 <body>
 
@@ -696,14 +731,14 @@ textarea.json-invalid:focus {
       <div id="ctx-results" class="ctx-actions" style="display:none">
         <button class="sb-btn" onclick="rebacktestSelected()">🔄 Backtest</button>
         <button class="sb-btn" onclick="addToRun()">▶ Add to Run</button>
-        <button class="sb-btn" onclick="compareSelected()">📈 Compare</button>
+        <button class="sb-btn" data-cross-version-action onclick="compareSelected()">📈 Compare</button>
         <button class="sb-btn" onclick="strategyExplorerFromResult()">🔍 Strategy Explorer</button>
         <button class="sb-btn" onclick="goBalanceCalculatorFromResult()">💰 Balance Calculator</button>
         <button class="sb-btn" onclick="calcBalanceFromResult()">⚡ Calc Balance</button>
         <button class="sb-btn" onclick="optimizeFromResult()">🧬 Optimize from Result</button>
         <button class="sb-btn" onclick="optimizePresetFromResult()">Refine Optimize Preset</button>
         <button class="sb-btn" id="btn-result-add-archive" onclick="addResultToArchive()">🗄 Add to Archive</button>
-        <button class="sb-btn danger" onclick="deleteSelectedResults()">🗑 Delete Selected</button>
+        <button class="sb-btn danger" data-cross-version-action onclick="deleteSelectedResults()">🗑 Delete Selected</button>
       </div>
       <div id="ctx-optimize-preset" class="ctx-actions" style="display:none">
         <button class="sb-btn" onclick="closeOptimizePresetPanel()">Back to Results</button>
@@ -754,6 +789,7 @@ textarea.json-invalid:focus {
         <button class="sb-btn" onclick="importConfig()" title="Import JSON config">📥 Import</button>
         <hr class="sb-sep">
         <button class="sb-btn" id="sb-btn-results" onclick="goEditorResults()" title="Jump to results for this config" disabled>📊 Results</button>
+        <button class="sb-btn" id="sb-btn-convert-v8" onclick="convertConfigToV8(editingConfig)" title="Convert the saved V7 config to V8" disabled>⏩ Convert to V8</button>
         <button class="sb-btn" id="sb-btn-add-to-run" onclick="addConfigToRunByName(editingConfig)" title="Open this config in Run V7 editor" disabled>▶ Add to Run</button>
         <button class="sb-btn" onclick="goStrategyExplorer()" title="Open Strategy Explorer">🔍 Strategy Explorer</button>
         <button class="sb-btn" onclick="goBalanceCalc()" title="Open Balance Calculator">💰 Balance Calculator</button>
@@ -798,6 +834,10 @@ textarea.json-invalid:focus {
       <!-- Sticky top area: toolbar + table stay visible while charts scroll -->
       <div id="results-fixed-top" style="background:var(--bg);padding-bottom:var(--sp-sm);border-bottom:2px solid var(--border);box-shadow:0 4px 12px rgba(0,0,0,.6);margin-bottom:var(--sp-md)">
         <div id="results-toolbar" style="display:flex;gap:var(--sp-sm);align-items:center;margin-bottom:var(--sp-md);flex-wrap:wrap;padding-top:var(--sp-sm)">
+          <label style="font-size:var(--fs-sm);color:var(--text-dim)">Version:</label>
+          <select id="results-version-filter" class="sb-input" style="max-width:100px" onchange="loadResults()">
+            <option value="v7">PBv7</option><option value="v8">PBv8</option><option value="both">Both</option>
+          </select>
           <label style="font-size:var(--fs-sm);color:var(--text-dim)">Config:</label>
           <select id="results-config-filter" class="sb-input" style="max-width:200px" onchange="renderResults()">
             <option value="">All configs</option>
@@ -962,7 +1002,7 @@ textarea.json-invalid:focus {
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=10"></script>
+<script src="/app/js/editor_shared.js?v=11"></script>
 <script src="/app/js/json_panel.js?v=1"></script>
 <script src="/app/js/optimize_preset_builder.js?v=2"></script>
 <script src="/app/js/pbgui_dialogs.js?v=5"></script>
@@ -975,6 +1015,11 @@ var API_BASE      = "%%API_BASE%%";
 var WS_BASE       = "%%WS_BASE%%";
 var PBGUI_VERSION = "%%VERSION%%";
 var PBGUI_SERIAL  = "%%SERIAL%%";
+var BACKTEST_VERSION = "%%BACKTEST_VERSION%%";
+var backtestEditorAdapter = window.PBGuiBacktestEditorAdapter.create(BACKTEST_VERSION);
+var BACKTEST_SUBTITLE = backtestEditorAdapter.isV8 ? 'PBv8 BACKTEST' : 'PBv7 BACKTEST';
+var BACKTEST_NAV_CURRENT = backtestEditorAdapter.isV8 ? 'v8_backtest' : 'v7_backtest';
+var backtestShell = null;
 
 /* ════════════════════════════════════════════════
    STATE
@@ -983,6 +1028,10 @@ var configs     = [];          // saved backtest configs
 var queueItems  = [];          // queue items from WS
 var _lastQueueHash = '';       // JSON hash of last queue state (skip re-render if unchanged)
 var results     = [];          // backtest results
+var resultsByVersion = { v7: [], v8: [] };
+var _resultsLoadGeneration = 0;
+var _resultsEmptyRetryTimer = null;
+var _resultsEmptyRetryCount = 0;
 var archives    = [];          // git archives
 var archiveResults = [];       // results in selected archive
 var archiveOptimizeConfigs = []; // optimize settings in selected archive
@@ -998,13 +1047,21 @@ var _pendingResultFilter = '';  /* config name to pre-filter when next loadResul
 var sortCol     = 'modified';  // current sort column
 var sortAsc     = false;       // sort direction
 var editingConfig = null;      // name of config being edited, or null
+var configEditRevision = 0;
+var configEditorGeneration = 0;
 var _extraBtKeys  = [];        // unknown backtest keys found when loading a config
 var _rawEditorSyncing = false;
 var _rawEditorLastApplied = '';
 var _btJsonSync = null;
 var _cfgBotParamStatus = { long: {}, short: {} };
+var _marketSettingsRows = [];
+var _marketSettingsRootExtras = {};
+var _marketSettingsLoadError = '';
+var _marketSettingsCoins = [];
+var _resultMetricsLoadError = '';
+var _resultMetricsState = { mode: 'default', selected: [], available: [], loading: false, loaded: false, error: '' };
 var ws = null;
-var BACKTEST_VIEW_STATE_KEY = 'pbgui:v7_backtest:view_state';
+var BACKTEST_VIEW_STATE_KEY = 'pbgui:' + backtestEditorAdapter.version + '_backtest:view_state';
 var BACKTEST_SORT_DEFAULTS = {
   configs: { col: 'modified', asc: false },
   results: { col: 'modified', asc: false },
@@ -1013,7 +1070,7 @@ var BACKTEST_SORT_DEFAULTS = {
 };
 var BACKTEST_SORT_COLUMNS = {
   configs: ['name', 'exchanges', 'coins', 'twe_long', 'start_date', 'end_date', 'results', 'modified'],
-  results: ['config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
+  results: ['backtest_version', 'config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
   archive: ['config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
   legacy: ['config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance']
 };
@@ -1029,6 +1086,7 @@ var _archivePullStartedAt = 0;
    Any key in cfg.backtest NOT in this set will be auto-rendered
    in the "Additional Parameters" expander. */
 var KNOWN_BT_PARAMS = new Set([
+  'base_dir',
   'start_date', 'end_date', 'starting_balance', 'balance_sample_divider',
   'exchanges', 'btc_collateral_cap', 'btc_collateral_ltv_cap',
   'maker_fee_override', 'taker_fee_override', 'market_order_slippage_pct',
@@ -1038,17 +1096,22 @@ var KNOWN_BT_PARAMS = new Set([
   'coin_sources', 'market_settings_sources', 'suite_enabled', 'scenarios', 'aggregate'
 ]);
 
+var PB8_ADVANCED_BT_PARAMS = new Set([
+  'market_settings', 'visible_metrics'
+]);
+
 /* Per-key metadata for fields in the Additional Parameters expander.
    tip: shown as hover tooltip on the label.
    fmt: static format hint shown below the input field. */
 var EXTRA_BT_META = {
-  'base_dir': {
-    tip: 'Location to save backtest results.\nLeave empty to use the default path (backtests/pbgui/{config-name}).',
-    fmt: 'e.g. "backtests/my_custom_dir"  —  leave empty for default'
+  'hlcvs_data_dir': {
+    tip: 'Optional PB8 server path to a verified prepared HLCVS dataset. Leave null for normal automatic dataset resolution.',
+    fmt: 'Expert option: requires an existing PB8 dataset directory with a valid manifest.json.'
   },
-  'visible_metrics': {
-    tip: 'Controls which metrics are printed to the terminal after a standalone backtest.\nnull = metrics implied by optimize.scoring / optimize.limits\n[] = all metrics\n[\'adg\', \'sharpe_ratio\'] = specific metrics added to the default view\nAffects CLI output only; full metrics are always computed and saved.',
-    fmt: "null  |  []  |  ['adg', 'sharpe_ratio', ...]"
+  'hlcvs_data_override_mode': {
+    tip: 'intersection clips the current config to the prepared dataset. dataset replays the dataset coin universe and timestamp window.',
+    fmt: 'intersection | dataset',
+    options: ['intersection', 'dataset']
   }
 };
 var wsReconnectTimer = null;
@@ -1058,29 +1121,57 @@ var wsReconnectDelay = 1000;
    API HELPERS
    ════════════════════════════════════════════════ */
 function apiFetch(path, opts) {
+  return apiFetchFrom(API_BASE, path, opts);
+}
+
+function apiFetchFrom(base, path, opts) {
   opts = opts || {};
-  var url = API_BASE + path;
-  opts.headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN }, opts.headers || {});
+  var url = base + path;
+  opts.headers = bearerHeaders(opts.headers);
   return fetch(url, opts).then(function(r) {
     return r.text().then(function(text) {
       var payload = null;
       if (text) {
         try { payload = JSON.parse(text); }
         catch (error) {
-          if (!r.ok) throw new Error(text.slice(0, 240) || r.statusText);
+          if (!r.ok) throw apiHttpError(text.slice(0, 240) || r.statusText, r.status);
           throw new Error('Unexpected non-JSON response from server: ' + text.slice(0, 240));
         }
       }
-      if (!r.ok) throw new Error((payload && payload.detail) || r.statusText);
+      if (!r.ok) throw apiHttpError((payload && payload.detail) || r.statusText, r.status);
       return payload;
     });
   });
 }
 
+function backtestApiBase(version) {
+  return String(API_BASE || '').replace(/\/backtest-v[78]$/, '/backtest-' + version);
+}
+
+function resultApiBase(result) {
+  return backtestApiBase((result && result.backtest_version) || backtestEditorAdapter.version);
+}
+
+function resultApiFetch(result, path, opts) {
+  return apiFetchFrom(resultApiBase(result), path, opts);
+}
+
+function apiHttpError(message, status) {
+  var error = new Error(message || ('HTTP ' + status));
+  error.status = status;
+  return error;
+}
+
+function bearerHeaders(extra) {
+  var headers = Object.assign({}, extra || {});
+  if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
+  return headers;
+}
+
 function apiFetchNdjson(path, opts, onEvent) {
   opts = opts || {};
   var url = API_BASE + path;
-  opts.headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN }, opts.headers || {});
+  opts.headers = bearerHeaders(opts.headers);
   return fetch(url, opts).then(function(r) {
     if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || r.statusText); });
     if (!r.body || !r.body.getReader || typeof TextDecoder === 'undefined') {
@@ -1128,7 +1219,7 @@ function toast(msg, type) {
   /* ── write to server log (fire-and-forget) ── */
   fetch('/api/notify_log', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+    headers: bearerHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ msg: msg, level: type })
   }).catch(function() {});
   var el = document.createElement('div');
@@ -1154,7 +1245,7 @@ function setBanner(state) {
    ════════════════════════════════════════════════ */
 function connectWS() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-  var url = WS_BASE + '/api/backtest-v7/ws/bt7';
+  var url = WS_BASE + backtestEditorAdapter.websocketPath;
   ws = new WebSocket(url);
   ws.onopen = function() { wsReconnectDelay = 1000; setBanner('ok'); };
   ws.onmessage = function(ev) {
@@ -1327,16 +1418,13 @@ function selectPanel(id, opts) {
     document.getElementById('ctx-archive-results').style.display = 'none';
   }
   currentPanel = id;
+  if (id !== 'results' && _resultsEmptyRetryTimer) {
+    clearTimeout(_resultsEmptyRetryTimer);
+    _resultsEmptyRetryTimer = null;
+    _resultsEmptyRetryCount = 0;
+  }
   var navPanel = id === 'optimize-preset' ? 'results' : id;
-  document.querySelectorAll('.sb-section').forEach(function(b) {
-    b.classList.toggle('active', b.getAttribute('data-panel') === navPanel);
-  });
-  document.querySelectorAll('.view-panel').forEach(function(p) {
-    p.classList.toggle('active', p.id === 'panel-' + id);
-  });
-  document.querySelectorAll('.ctx-actions').forEach(function(c) {
-    c.style.display = c.id === 'ctx-' + id ? '' : 'none';
-  });
+  backtestShell.selectPanel(id, { navPanel: navPanel });
   if (opts.persist !== false) persistBacktestViewState();
   // Lazy-load data when switching panels
   if (id === 'configs') {
@@ -1534,6 +1622,8 @@ function renderConfigs() {
     '<th>Actions</th></tr></thead><tbody>';
 
   sorted.forEach(function(c) {
+    var convertAction = backtestEditorAdapter.isV8 ? '' :
+      '<button class="act-btn convert-v8-btn" data-config-name="' + esc(c.name) + '" title="Convert to V8">V8</button> ';
     html += '<tr data-name="' + esc(c.name) + '">' +
       '<td title="' + esc(c.name) + '">' + esc(c.name) + '</td>' +
       '<td>' + esc(Array.isArray(c.exchanges) ? c.exchanges.join(', ') : c.exchanges) + '</td>' +
@@ -1546,11 +1636,18 @@ function renderConfigs() {
       '<td class="actions-cell">' +
         '<button class="act-btn" onclick="editConfig(\'' + esc(c.name) + '\')" title="Edit">✏️</button> ' +
         '<button class="act-btn" onclick="addConfigToQueue(\'' + esc(c.name) + '\')" title="Add to Queue">▶</button> ' +
+        convertAction +
         '<button class="act-btn" onclick="event.stopPropagation();viewConfigResults(\'' + esc(c.name) + '\')" title="View Results">📊</button>' +
       '</td></tr>';
   });
   html += '</tbody></table>';
   el.innerHTML = html;
+  el.querySelectorAll('.convert-v8-btn').forEach(function(button) {
+    button.addEventListener('click', function(event) {
+      event.stopPropagation();
+      convertConfigToV8(button.dataset.configName || '');
+    });
+  });
 }
 
 function thSort(label, key) {
@@ -1583,6 +1680,63 @@ function editConfig(name) {
     editingConfig = data && data.name ? data.name : name;
     showConfigEditor(editingConfig, (data && data.config) || {}, null, (data && data.param_status) || {});
   }).catch(function(e) { toast('Load failed: ' + e.message, 'err'); });
+}
+
+function v8MigrationTargetName(parts) {
+  var value = (parts || []).filter(Boolean).join('_').replace(/[\\/\x00-\x1f]/g, '_').trim();
+  return value.slice(0, 120) + '_v8';
+}
+
+async function migrateV7SourceToV8(requestBody) {
+  var targetName = requestBody.target_name;
+  try {
+    var response = await fetch(window.location.origin + '/api/backtest-v8/migrate-v7', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+    var payload = await response.json().catch(function() { return {}; });
+    if (response.status === 409) {
+      await window.PBGuiDialogs.alert({
+        title: 'V8 config already exists',
+        message: payload.detail || ('Config "' + targetName + '" already exists.'),
+        detail: 'The existing V8 config will be opened without overwriting it.',
+        confirmText: 'Open'
+      });
+      window.location.href = window.location.origin + '/api/backtest-v8/main_page?config=' + encodeURIComponent(targetName);
+      return;
+    }
+    if (!response.ok) throw new Error(payload.detail || ('HTTP ' + response.status));
+    window.location.href = window.location.origin + '/api/backtest-v8/main_page?config=' + encodeURIComponent(payload.name || targetName);
+  } catch (error) {
+    toast('V8 conversion failed: ' + error.message, 'err');
+    await window.PBGuiDialogs.alert({
+      title: 'V8 conversion failed',
+      message: error.message,
+      detail: 'The V7 source was not changed and no runnable V8 config was published.',
+      confirmText: 'OK'
+    });
+  }
+}
+
+function convertConfigToV8(name) {
+  return migrateV7SourceToV8({
+    source_type: 'backtest_config',
+    source_name: name,
+    target_name: v8MigrationTargetName([name])
+  });
+}
+
+function convertResultToV8(index) {
+  var result = (_activeResultsCtx.data || [])[index];
+  if (!result || !result.path) return;
+  return migrateV7SourceToV8({
+    source_type: 'backtest_result',
+    source_name: result.config_name || result.result_name || 'result',
+    source_path: result.path,
+    target_name: v8MigrationTargetName([result.config_name, result.result_name])
+  });
 }
 
 var _ohlcvPreflightController = null;
@@ -1618,8 +1772,13 @@ function showEditorSidebar() {
   // Enable Results button only if results exist for this config
   var btn = document.getElementById('sb-btn-results');
   var btnRun = document.getElementById('sb-btn-add-to-run');
+  var btnConvertV8 = document.getElementById('sb-btn-convert-v8');
   var isExisting = editingConfig && editingConfig !== '__new__';
   if (btnRun) btnRun.disabled = !isExisting;
+  if (btnConvertV8) {
+    btnConvertV8.style.display = backtestEditorAdapter.isV8 ? 'none' : '';
+    btnConvertV8.disabled = !isExisting;
+  }
   if (btn) {
     var hasResults = editingConfig && editingConfig !== '__new__' &&
       results.some(function(r) { return r.config_name === editingConfig; });
@@ -1633,14 +1792,12 @@ function showEditorSidebar() {
       }).catch(function() {});
     }
   }
-  document.getElementById('sidebar-inner').style.display = 'none';
-  document.getElementById('sidebar-editor').style.display = '';
+  backtestShell.setEditorMode(true);
 }
 
 function hideEditorSidebar() {
   if (_ohlcvPreflightController) _ohlcvPreflightController.close();
-  document.getElementById('sidebar-editor').style.display = 'none';
-  document.getElementById('sidebar-inner').style.display = '';
+  backtestShell.setEditorMode(false);
 }
 
 function goEditorResults() {
@@ -1657,7 +1814,7 @@ function goStrategyExplorer() {
     var cfg = collectConfig();
     fetch(explorerBase + '/draft', {
       method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      headers: bearerHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ config: cfg })
     }).then(function(res) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -1751,7 +1908,7 @@ function clearInitialBacktestUrlParams(url, keys) {
 
 async function fetchRunBacktestDraft(draftId) {
   var response = await fetch(window.location.origin + '/api/v7/draft/' + encodeURIComponent(draftId), {
-    headers: { 'Authorization': 'Bearer ' + TOKEN }
+    headers: bearerHeaders()
   });
   if (!response.ok) {
     var message = '';
@@ -1895,6 +2052,12 @@ async function openInitialBacktestQueueDraftFromUrl() {
 }
 
 async function initializeBacktestPageFromUrl() {
+  var requestedConfig = new URL(window.location.href).searchParams.get('config');
+  if (requestedConfig) {
+    selectPanel('configs');
+    editConfig(requestedConfig);
+    return;
+  }
   if (await openInitialBacktestDraftFromUrl()) return;
   await openInitialBacktestQueueDraftFromUrl();
 }
@@ -1912,7 +2075,10 @@ function syncManagedBacktestBaseDirField() {
 }
 
 function buildExtraBtExpanderHtml(bt, configName) {
-  var extraBtKeys = Object.keys(bt || {}).filter(function(k) { return !KNOWN_BT_PARAMS.has(k); }).sort();
+  var extraBtKeys = Object.keys(bt || {}).filter(function(k) {
+    if (KNOWN_BT_PARAMS.has(k)) return false;
+    return !(backtestEditorAdapter.isV8 && PB8_ADVANCED_BT_PARAMS.has(k));
+  }).sort();
   var html = '';
   var managedBaseDir = getManagedBacktestBaseDir(configName);
 
@@ -1920,37 +2086,48 @@ function buildExtraBtExpanderHtml(bt, configName) {
     html += '<div class="expander" id="exp-extra-bt">' +
       '<div class="expander-header" onclick="toggleExpander(\'exp-extra-bt\')">' +
         '<span class="arrow">▶</span> Additional Parameters' +
-        '<span style="margin-left:auto;font-size:var(--fs-xs);color:var(--text-dim)">Parameters not yet in the GUI — edit and they will be preserved on save</span>' +
+        '<span style="margin-left:auto;font-size:var(--fs-xs);color:var(--text-dim)">Managed and advanced backtest parameters</span>' +
       '</div>' +
       '<div class="expander-body">' +
         '<div class="form-row cols-3">';
-    html += '<div class="form-group" style="grid-column:span 3"><label><span data-tip="PBGui-managed result path for this config. The FastAPI Backtest views and result discovery expect results below this directory.">base_dir</span></label>' +
-      '<input type="text" id="managed-bt-base_dir" class="form-input" value="' + esc(managedBaseDir) + '" readonly>' +
-      '<div style="font-size:var(--fs-xs);color:var(--text-dim);margin-top:2px">Shown for visibility only. PBGui keeps this aligned to the config name and stores results below backtests/pbgui/&lt;config-name&gt;.</div></div>';
+    html += '<div class="form-group" style="grid-column:span 3"><label><span data-tip="PBGui-managed result path. It always follows the config name.">base_dir</span></label>' +
+      '<input type="text" id="managed-bt-base_dir" value="' + escAttr(managedBaseDir) + '" readonly>' +
+      '<div style="font-size:var(--fs-xs);color:var(--text-dim);margin-top:2px">Managed by PBGui so result discovery remains reliable.</div></div>';
     extraBtKeys.forEach(function(k) {
       var v = bt[k];
       var t = typeof v;
       var meta = EXTRA_BT_META[k] || {};
-      var lbl = meta.tip ? '<span data-tip="' + esc(meta.tip) + '">' + esc(k) + '</span>' : esc(k);
+      var lbl = meta.tip ? '<span data-tip="' + escAttr(meta.tip) + '">' + esc(k) + '</span>' : esc(k);
       var hint = meta.fmt ? '<div style="font-size:var(--fs-xs);color:var(--text-dim);margin-top:2px">' + esc(meta.fmt) + '</div>' : '';
       var fld = '';
-      if (t === 'boolean') {
+      if (Array.isArray(meta.options)) {
+        var optionValues = meta.options.slice();
+        if (v !== null && v !== undefined && optionValues.indexOf(String(v)) < 0) optionValues.unshift(String(v));
+        fld = '<div class="form-group"><label>' + lbl + '</label><select id="extra-bt-' + escAttr(k) + '" data-extra-bt-type="string">' +
+          optionValues.map(function(option) {
+            return '<option value="' + escAttr(option) + '"' + (String(v) === option ? ' selected' : '') + '>' + esc(option) + '</option>';
+          }).join('') + '</select>' + hint + '</div>';
+      } else if (v === null) {
         fld = '<div class="form-group"><label>' + lbl + '</label>' +
-          '<div class="chk-row"><input type="checkbox" id="extra-bt-' + esc(k) + '" data-extra-bt-type="boolean"' + (v ? ' checked' : '') + '></div>' + hint + '</div>';
+          '<input type="text" id="extra-bt-' + escAttr(k) + '" data-extra-bt-type="null" class="form-input" value="" placeholder="null">' + hint + '</div>';
+      } else if (t === 'boolean') {
+        fld = '<div class="form-group"><label>' + lbl + '</label>' +
+          '<div class="chk-row"><input type="checkbox" id="extra-bt-' + escAttr(k) + '" data-extra-bt-type="boolean"' + (v ? ' checked' : '') + '></div>' + hint + '</div>';
       } else if (t === 'number') {
         fld = '<div class="form-group"><label>' + lbl + '</label>' +
-          '<input type="number" id="extra-bt-' + esc(k) + '" data-extra-bt-type="number" class="form-input" value="' + esc(String(v)) + '">' + hint + '</div>';
+          '<input type="number" id="extra-bt-' + escAttr(k) + '" data-extra-bt-type="number" class="form-input" value="' + escAttr(String(v)) + '">' + hint + '</div>';
       } else if (t === 'object' || Array.isArray(v)) {
         fld = '<div class="form-group" style="grid-column:span 3"><label>' + lbl + '</label>' +
-          '<textarea id="extra-bt-' + esc(k) + '" data-extra-bt-type="json" style="overflow:hidden;resize:vertical" oninput="autoResizeTa(this)">' + esc(JSON.stringify(v, null, 2)) + '</textarea>' +
-          '<div id="extra-bt-' + esc(k) + '-status" class="field-status field-status-inline" aria-live="polite"></div>' + hint + '</div>';
+          '<textarea id="extra-bt-' + escAttr(k) + '" data-extra-bt-type="json" style="overflow:hidden;resize:vertical" oninput="autoResizeTa(this)">' + esc(JSON.stringify(v, null, 2)) + '</textarea>' +
+          '<div id="extra-bt-' + escAttr(k) + '-status" class="field-status field-status-inline" aria-live="polite"></div>' + hint + '</div>';
       } else {
         fld = '<div class="form-group"><label>' + lbl + '</label>' +
-          '<input type="text" id="extra-bt-' + esc(k) + '" data-extra-bt-type="' + (v === null ? 'null' : 'string') + '" class="form-input" value="' + esc(v === null ? '' : String(v)) + '" placeholder="' + (v === null ? 'null' : '') + '">' + hint + '</div>';
+          '<input type="text" id="extra-bt-' + escAttr(k) + '" data-extra-bt-type="' + (v === null ? 'null' : 'string') + '" class="form-input" value="' + escAttr(v === null ? '' : String(v)) + '" placeholder="' + (v === null ? 'null' : '') + '">' + hint + '</div>';
       }
       html += fld;
     });
     html +=     '</div>' +
+      buildResultMetricsHtml() +
       '</div>' +
     '</div>';
   }
@@ -1966,6 +2143,314 @@ function setCfgBotParamStatus(paramStatus) {
   };
 }
 
+function formatFeeInputValue(value) {
+  var number = Number(value);
+  if (!isFinite(number)) return String(value == null ? '' : value);
+  return String(Number(number.toPrecision(12)));
+}
+
+function marketSettingsLoad(value) {
+  try {
+    _marketSettingsRows = window.PBGuiBacktestAdvancedFields.flattenMarketSettings(value);
+    _marketSettingsRootExtras = window.PBGuiBacktestAdvancedFields.marketSettingsExtras(value);
+    _marketSettingsLoadError = '';
+  } catch (error) {
+    _marketSettingsRows = [];
+    _marketSettingsRootExtras = {};
+    _marketSettingsLoadError = error.message || String(error);
+  }
+  marketSettingsRender();
+}
+
+function marketSettingsUnknownCount(row) {
+  var known = new Set(window.PBGuiBacktestAdvancedFields.MARKET_FIELDS);
+  return Object.keys((row && row.values) || {}).filter(function(key) { return !known.has(key); }).length;
+}
+
+function marketSettingsRowHtml(row, index) {
+  var exchanges = ['binance','bybit','bitget','okx','hyperliquid','kucoin','gateio','defx','paradex'];
+  var exchangeValue = String(row.exchange || '').toLowerCase();
+  if (exchangeValue && exchanges.indexOf(exchangeValue) < 0) exchanges.push(exchangeValue);
+  var scopeOptions = '<option value="global"' + (row.scope === 'global' ? ' selected' : '') + '>All exchanges</option>' +
+    '<option value="exchange"' + (row.scope === 'exchange' ? ' selected' : '') + '>Specific exchange</option>';
+  var exchangeOptions = exchanges.map(function(exchange) {
+    return '<option value="' + escAttr(exchange) + '"' + (exchange === exchangeValue ? ' selected' : '') + '>' + esc(exchange) + '</option>';
+  }).join('');
+  var cells = window.PBGuiBacktestAdvancedFields.MARKET_FIELDS.map(function(field) {
+    var value = row.values && row.values[field] !== undefined ? row.values[field] : '';
+    var min = field === 'min_cost' ? ' min="0"' : ' min="0.000000000001"';
+    return '<td><input type="number" step="any"' + min + ' value="' + escAttr(String(value)) + '" ' +
+      'oninput="marketSettingsSet(' + index + ',\'value\',\'' + field + '\',this.value)" placeholder="inherit"></td>';
+  }).join('');
+  var unknownCount = marketSettingsUnknownCount(row);
+  return '<tr>' +
+    '<td><select onchange="marketSettingsSet(' + index + ',\'scope\',\'\',this.value)">' + scopeOptions + '</select></td>' +
+    '<td><select class="market-exchange"' + (row.scope === 'global' ? ' disabled' : '') +
+      ' onchange="marketSettingsSet(' + index + ',\'exchange\',\'\',this.value)">' + exchangeOptions + '</select></td>' +
+    '<td><input class="market-coin" list="market-settings-coin-list" value="' + escAttr(row.coin || '') + '" ' +
+      'oninput="marketSettingsSet(' + index + ',\'coin\',\'\',this.value)" placeholder="BTC"></td>' +
+    cells +
+    '<td style="white-space:nowrap"><button type="button" class="act-btn danger" onclick="marketSettingsRemove(' + index + ')">Delete</button>' +
+      (unknownCount ? '<div title="Preserved but not editable by this PBGui version" style="margin-top:3px;color:var(--orange)">+' + unknownCount + ' preserved</div>' : '') +
+    '</td></tr>';
+}
+
+function buildMarketSettingsHtml() {
+  if (!backtestEditorAdapter.isV8) return '';
+  var rows = _marketSettingsRows.map(marketSettingsRowHtml).join('');
+  return '<div class="expander" id="exp-market-settings">' +
+    '<div class="expander-header" onclick="toggleExpander(\'exp-market-settings\')">' +
+      '<span class="arrow">▶</span> Market Settings Overrides <span id="market-settings-count">(' + _marketSettingsRows.length + ' configured)</span>' +
+    '</div>' +
+    '<div class="expander-body">' +
+      '<div class="advanced-help">Override historical exchange metadata after <code>market_settings_sources</code> is resolved. Blank values inherit from the selected source. Exchange-specific rows take precedence over all-exchange rows.</div>' +
+      '<datalist id="market-settings-coin-list">' + _marketSettingsCoins.map(function(coin) { return '<option value="' + escAttr(coin) + '">'; }).join('') + '</datalist>' +
+      '<div class="advanced-table-wrap"><table class="advanced-table"><thead><tr>' +
+        '<th>Scope</th><th>Exchange</th><th>Coin</th><th>Qty Step</th><th>Price Step</th><th>Min Qty</th><th>Min Cost</th><th>c_mult</th><th></th>' +
+      '</tr></thead><tbody id="market-settings-body">' + (rows || '<tr><td colspan="9" class="advanced-empty">No market-setting overrides configured.</td></tr>') + '</tbody></table></div>' +
+      '<div id="market-settings-status" class="field-status field-status-inline" aria-live="polite"></div>' +
+      '<button type="button" class="act-btn" style="margin-top:var(--sp-sm)" onclick="marketSettingsAdd()">+ Add Override</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function marketSettingsRender() {
+  var body = document.getElementById('market-settings-body');
+  if (body) {
+    body.innerHTML = _marketSettingsRows.length
+      ? _marketSettingsRows.map(marketSettingsRowHtml).join('')
+      : '<tr><td colspan="9" class="advanced-empty">No market-setting overrides configured.</td></tr>';
+  }
+  var count = document.getElementById('market-settings-count');
+  if (count) count.textContent = '(' + _marketSettingsRows.length + ' configured)';
+  var dataList = document.getElementById('market-settings-coin-list');
+  if (dataList) dataList.innerHTML = _marketSettingsCoins.map(function(coin) { return '<option value="' + escAttr(coin) + '">'; }).join('');
+}
+
+function marketSettingsAdd() {
+  _marketSettingsLoadError = '';
+  _marketSettingsRows.push({ scope: 'global', exchange: 'binance', coin: '', values: {} });
+  marketSettingsRender();
+  var expander = document.getElementById('exp-market-settings');
+  if (expander) expander.classList.add('open');
+  var inputs = document.querySelectorAll('#market-settings-body .market-coin');
+  if (inputs.length) inputs[inputs.length - 1].focus();
+}
+
+function marketSettingsRemove(index) {
+  _marketSettingsLoadError = '';
+  _marketSettingsRows.splice(index, 1);
+  marketSettingsRender();
+  scheduleStructuredEditorSync();
+}
+
+function marketSettingsSet(index, kind, field, value) {
+  var row = _marketSettingsRows[index];
+  if (!row) return;
+  _marketSettingsLoadError = '';
+  if (kind === 'value') {
+    if (!row.values) row.values = {};
+    if (String(value).trim() === '') delete row.values[field];
+    else row.values[field] = value;
+  } else if (kind === 'coin') {
+    row.coin = String(value || '').toUpperCase();
+  } else {
+    row[kind] = value;
+    if (kind === 'scope') marketSettingsRender();
+  }
+}
+
+function marketSettingsCollect() {
+  var rows = _marketSettingsRows.map(function(row) {
+    var next = { scope: row.scope, exchange: row.exchange, coin: row.coin, values: Object.assign({}, row.values || {}) };
+    window.PBGuiBacktestAdvancedFields.MARKET_FIELDS.forEach(function(field) {
+      if (next.values[field] === undefined || next.values[field] === '') return;
+      var number = Number(next.values[field]);
+      next.values[field] = isFinite(number) ? number : next.values[field];
+    });
+    return next;
+  });
+  return window.PBGuiBacktestAdvancedFields.serializeMarketSettings(rows, _marketSettingsRootExtras);
+}
+
+function marketSettingsValidate() {
+  if (!backtestEditorAdapter.isV8) return '';
+  if (_marketSettingsLoadError) return 'Market Settings is invalid: ' + _marketSettingsLoadError + '.';
+  var seen = new Set();
+  var positiveFields = new Set(['qty_step', 'price_step', 'min_qty', 'c_mult']);
+  for (var i = 0; i < _marketSettingsRows.length; i++) {
+    var row = _marketSettingsRows[i];
+    var coin = String(row.coin || '').trim().toUpperCase();
+    var exchange = row.scope === 'exchange' ? String(row.exchange || '').trim().toLowerCase() : '*';
+    if (!coin) return 'Market Settings row ' + (i + 1) + ' requires a coin.';
+    if (row.scope === 'exchange' && !exchange) return 'Market Settings row ' + (i + 1) + ' requires an exchange.';
+    var key = exchange + ':' + coin;
+    if (seen.has(key)) return 'Market Settings contains a duplicate override for ' + key + '.';
+    seen.add(key);
+    var fields = window.PBGuiBacktestAdvancedFields.MARKET_FIELDS;
+    for (var j = 0; j < fields.length; j++) {
+      var field = fields[j];
+      var raw = row.values && row.values[field];
+      if (raw === undefined || raw === '') continue;
+      var number = Number(raw);
+      if (!isFinite(number)) return 'Market Settings ' + coin + ' ' + field + ' must be numeric.';
+      if (positiveFields.has(field) && number <= 0) return 'Market Settings ' + coin + ' ' + field + ' must be greater than zero.';
+      if (field === 'min_cost' && number < 0) return 'Market Settings ' + coin + ' min_cost cannot be negative.';
+    }
+  }
+  return '';
+}
+
+function resultMetricsLoad(value) {
+  try {
+    var normalized = window.PBGuiBacktestAdvancedFields.visibleMetricsState(value);
+    _resultMetricsState.mode = normalized.mode;
+    _resultMetricsState.selected = normalized.selected.slice();
+    _resultMetricsLoadError = '';
+  } catch (error) {
+    _resultMetricsState.mode = 'custom';
+    _resultMetricsState.selected = [];
+    _resultMetricsLoadError = error.message || String(error);
+  }
+  resultMetricsRender();
+}
+
+function buildResultMetricsHtml() {
+  if (!backtestEditorAdapter.isV8) return '';
+  return '<div class="expander" id="exp-result-metrics">' +
+    '<div class="expander-header" onclick="toggleExpander(\'exp-result-metrics\')">' +
+      '<span class="arrow">▶</span> Result Metrics <span id="result-metrics-count"></span>' +
+    '</div>' +
+    '<div class="expander-body">' +
+      '<div class="advanced-help">Controls terminal result visibility only. All metrics are still computed and saved. Optimize scoring and limit metrics are always included in Default and Custom modes.</div>' +
+      '<div class="metric-mode-row">' +
+        '<label class="metric-mode-button"><input type="radio" name="result-metrics-mode" value="default" onchange="resultMetricsSetMode(this.value)"> Default</label>' +
+        '<label class="metric-mode-button"><input type="radio" name="result-metrics-mode" value="all" onchange="resultMetricsSetMode(this.value)"> All</label>' +
+        '<label class="metric-mode-button"><input type="radio" name="result-metrics-mode" value="custom" onchange="resultMetricsSetMode(this.value)"> Custom additions</label>' +
+      '</div>' +
+      '<div id="result-metrics-custom">' +
+        '<div class="metric-picker-toolbar"><input id="result-metrics-search" class="metric-picker-search" type="search" placeholder="Search installed PB8 metrics..." oninput="resultMetricsRender()">' +
+          '<span id="result-metrics-summary" class="metric-selected-summary"></span></div>' +
+        '<div id="result-metrics-list"></div>' +
+      '</div>' +
+      '<div id="result-metrics-status" class="field-status field-status-inline" aria-live="polite"></div>' +
+    '</div>' +
+  '</div>';
+}
+
+function resultMetricsSetMode(mode) {
+  _resultMetricsLoadError = '';
+  _resultMetricsState.mode = mode;
+  resultMetricsRender();
+  scheduleStructuredEditorSync();
+}
+
+function resultMetricsToggle(metric) {
+  _resultMetricsLoadError = '';
+  var index = _resultMetricsState.selected.indexOf(metric);
+  if (index >= 0) _resultMetricsState.selected.splice(index, 1);
+  else _resultMetricsState.selected.push(metric);
+  resultMetricsRender();
+  scheduleStructuredEditorSync();
+}
+
+function resultMetricsToggleAt(index) {
+  var metric = _resultMetricsState.available[index];
+  if (metric !== undefined) resultMetricsToggle(metric);
+}
+
+function resultMetricsRender() {
+  if (!backtestEditorAdapter.isV8) return;
+  document.querySelectorAll('input[name="result-metrics-mode"]').forEach(function(input) {
+    input.checked = input.value === _resultMetricsState.mode;
+  });
+  var custom = document.getElementById('result-metrics-custom');
+  if (custom) custom.style.display = _resultMetricsState.mode === 'custom' ? '' : 'none';
+  var count = document.getElementById('result-metrics-count');
+  if (count) count.textContent = _resultMetricsState.mode === 'custom' ? '(' + _resultMetricsState.selected.length + ' selected)' : '(' + _resultMetricsState.mode + ')';
+  var summary = document.getElementById('result-metrics-summary');
+  if (summary) summary.textContent = _resultMetricsState.selected.length + ' selected';
+  var list = document.getElementById('result-metrics-list');
+  if (!list || _resultMetricsState.mode !== 'custom') return;
+  if (_resultMetricsState.loading) {
+    list.innerHTML = '<div class="advanced-empty">Loading metrics from the installed PB8 runtime...</div>';
+    return;
+  }
+  if (_resultMetricsState.error) {
+    list.innerHTML = '<div class="advanced-empty">' + esc(_resultMetricsState.error) +
+      ' <button type="button" class="act-btn" onclick="loadPb8ResultMetrics()">Retry</button></div>';
+    return;
+  }
+  var search = document.getElementById('result-metrics-search');
+  var filter = String(search ? search.value : '').trim().toLowerCase();
+  var categories = {};
+  _resultMetricsState.available.forEach(function(metric, index) {
+    if (filter && metric.toLowerCase().indexOf(filter) < 0) return;
+    var category = window.PBGuiBacktestAdvancedFields.metricCategory(metric);
+    if (!categories[category]) categories[category] = [];
+    categories[category].push({ metric: metric, index: index });
+  });
+  var order = ['Returns & Growth', 'Performance Ratios', 'Risk & Recovery', 'Trading Activity', 'Hard Stop'];
+  var html = order.filter(function(category) { return categories[category] && categories[category].length; }).map(function(category) {
+    var buttons = categories[category].map(function(item) {
+      var selected = _resultMetricsState.selected.indexOf(item.metric) >= 0;
+      return '<button type="button" class="metric-picker-row metric-picker-button' + (selected ? ' selected' : '') + '" ' +
+        'title="' + escAttr(item.metric) + '" onclick="resultMetricsToggleAt(' + item.index + ')">' + esc(item.metric) + '</button>';
+    }).join('');
+    return '<div class="metric-category"><div class="metric-category-title">' + category + '</div><div class="metric-picker-grid">' + buttons + '</div></div>';
+  }).join('');
+  list.innerHTML = html || '<div class="advanced-empty">No matching metrics.</div>';
+}
+
+function loadPb8ResultMetrics() {
+  if (!backtestEditorAdapter.isV8 || _resultMetricsState.loaded || _resultMetricsState.loading) return;
+  _resultMetricsState.loading = true;
+  _resultMetricsState.error = '';
+  resultMetricsRender();
+  apiFetch('/result-metrics').then(function(data) {
+    var metrics = Array.isArray(data.metrics) ? data.metrics.filter(function(item) { return typeof item === 'string'; }) : [];
+    _resultMetricsState.selected.forEach(function(metric) {
+      if (metrics.indexOf(metric) < 0) metrics.push(metric);
+    });
+    _resultMetricsState.available = Array.from(new Set(metrics)).sort();
+    _resultMetricsState.loaded = true;
+    _resultMetricsState.loading = false;
+    _resultMetricsState.error = '';
+    resultMetricsRender();
+  }).catch(function(error) {
+    _resultMetricsState.available = _resultMetricsState.selected.slice().sort();
+    _resultMetricsState.loaded = false;
+    _resultMetricsState.loading = false;
+    _resultMetricsState.error = 'Could not load installed PB8 metrics: ' + error.message;
+    resultMetricsRender();
+  });
+}
+
+function resultMetricsCollect() {
+  if (_resultMetricsState.mode === 'default') return null;
+  if (_resultMetricsState.mode === 'all') return [];
+  return _resultMetricsState.selected.slice();
+}
+
+function pb8AdvancedFieldsValidate() {
+  if (!backtestEditorAdapter.isV8) return true;
+  var error = marketSettingsValidate();
+  if (!error && _resultMetricsLoadError) error = 'Result Metrics is invalid: ' + _resultMetricsLoadError + '.';
+  if (!error && _resultMetricsState.mode === 'custom' && !_resultMetricsState.selected.length) {
+    error = 'Select at least one custom result metric, or choose Default or All.';
+  }
+  var marketStatus = document.getElementById('market-settings-status');
+  var metricsStatus = document.getElementById('result-metrics-status');
+  if (marketStatus) marketStatus.textContent = error && error.indexOf('Market Settings') === 0 ? error : '';
+  if (metricsStatus) metricsStatus.textContent = error && error.indexOf('Market Settings') !== 0 ? error : '';
+  if (!error) return true;
+  var expanderId = error.indexOf('Market Settings') === 0 ? 'exp-market-settings' : 'exp-result-metrics';
+  var expander = document.getElementById(expanderId);
+  if (expander) expander.classList.add('open');
+  toast(error, 'err');
+  return false;
+}
+
 function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   resetBacktestEditorUiState();
   document.getElementById('configs-list').style.display = 'none';
@@ -1978,6 +2463,10 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   var bot    = cfg.bot      || {};
   var live   = cfg.live     || {};
   var pbgui  = cfg.pbgui    || {};
+  if (backtestEditorAdapter.isV8) {
+    marketSettingsLoad(bt.market_settings || {});
+    resultMetricsLoad(bt.visible_metrics);
+  }
 
   /* ── Show editor sidebar ── */
   showEditorSidebar();
@@ -2026,7 +2515,7 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   /* ── Row 3: Fees & Controls (cols-8: 2+2+1+1+1) ── */
   html += '<div class="form-row cols-8" style="align-items:end">';
   var mfEnabled = bt.maker_fee_override !== null && bt.maker_fee_override !== undefined;
-  var mfVal = mfEnabled ? bt.maker_fee_override : 0;
+  var mfVal = mfEnabled ? formatFeeInputValue(bt.maker_fee_override) : 0;
   html += '<div class="form-group" style="grid-column:span 2"><label>&nbsp;</label>' +
     '<div class="chk-row"><input type="checkbox" id="cfg-maker-fee-enabled"' + (mfEnabled ? ' checked' : '') +
     ' onchange="document.getElementById(\'cfg-maker-fee-val\').disabled=!this.checked">' +
@@ -2037,7 +2526,7 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
       '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-maker-fee-val\');i.value=+(+i.value+0.00001).toFixed(5)">+</button>' +
     '</div></div>';
   var tfEnabled = bt.taker_fee_override !== null && bt.taker_fee_override !== undefined;
-  var tfVal = tfEnabled ? bt.taker_fee_override : 0;
+  var tfVal = tfEnabled ? formatFeeInputValue(bt.taker_fee_override) : 0;
   html += '<div class="form-group" style="grid-column:span 2"><label>&nbsp;</label>' +
     '<div class="chk-row"><input type="checkbox" id="cfg-taker-fee-enabled"' + (tfEnabled ? ' checked' : '') +
     ' onchange="document.getElementById(\'cfg-taker-fee-val\').disabled=!this.checked">' +
@@ -2137,6 +2626,7 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
       '</div>' +
     '</div>' +
   '</div>';
+  html += buildMarketSettingsHtml();
 
   /* ── Coins & Filters ── */
   html += '<div class="section-title">Coins &amp; Filters</div>';
@@ -2207,13 +2697,13 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
       '<div class="form-group"><label><span data-tip="Maximum exposure allowed.\ne.g. 0.75 = 75% of wallet balance.">total_wallet_exposure_limit</span></label>' +
       '<div class="num-stepper">' +
       '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-twe-long\');i.value=+(+i.value-0.05).toFixed(10);botSyncFromFields(\'long\')">\u2212</button>' +
-      '<input type="number" id="cfg-twe-long" value="' + ((bot.long || {}).total_wallet_exposure_limit || 1) + '" step="0.05" oninput="botSyncFromFields(\'long\')"> ' +
+      '<input type="number" id="cfg-twe-long" value="' + backtestEditorAdapter.getSideValue(bot.long, 'total_wallet_exposure_limit', 1) + '" step="0.05" oninput="botSyncFromFields(\'long\')"> ' +
       '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-twe-long\');i.value=+(+i.value+0.05).toFixed(10);botSyncFromFields(\'long\')">+</button>' +
       '</div></div>' +
       '<div class="form-group"><label><span data-tip="Maximum number of long positions.\nSet to 0 to disable long.">n_positions</span></label>' +
       '<div class="num-stepper">' +
       '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-npos-long\');i.value=+(+i.value-1).toFixed(10);botSyncFromFields(\'long\')">\u2212</button>' +
-      '<input type="number" id="cfg-npos-long" value="' + ((bot.long || {}).n_positions || 1) + '" step="1" oninput="botSyncFromFields(\'long\')"> ' +
+      '<input type="number" id="cfg-npos-long" value="' + backtestEditorAdapter.getSideValue(bot.long, 'n_positions', 1) + '" step="1" oninput="botSyncFromFields(\'long\')"> ' +
       '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-npos-long\');i.value=+(+i.value+1).toFixed(10);botSyncFromFields(\'long\')">+</button>' +
       '</div></div>' +
     '</div>' +
@@ -2235,13 +2725,13 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
       '<div class="form-group"><label><span data-tip="Maximum exposure allowed.\ne.g. 0.75 = 75% of wallet balance.">total_wallet_exposure_limit</span></label>' +
       '<div class="num-stepper">' +
       '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-twe-short\');i.value=+(+i.value-0.05).toFixed(10);botSyncFromFields(\'short\')">\u2212</button>' +
-      '<input type="number" id="cfg-twe-short" value="' + ((bot.short || {}).total_wallet_exposure_limit || 0) + '" step="0.05" oninput="botSyncFromFields(\'short\')"> ' +
+      '<input type="number" id="cfg-twe-short" value="' + backtestEditorAdapter.getSideValue(bot.short, 'total_wallet_exposure_limit', 0) + '" step="0.05" oninput="botSyncFromFields(\'short\')"> ' +
       '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-twe-short\');i.value=+(+i.value+0.05).toFixed(10);botSyncFromFields(\'short\')">+</button>' +
       '</div></div>' +
       '<div class="form-group"><label><span data-tip="Maximum number of short positions.\nSet to 0 to disable short.">n_positions</span></label>' +
       '<div class="num-stepper">' +
       '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-npos-short\');i.value=+(+i.value-1).toFixed(10);botSyncFromFields(\'short\')">\u2212</button>' +
-      '<input type="number" id="cfg-npos-short" value="' + ((bot.short || {}).n_positions || 0) + '" step="1" oninput="botSyncFromFields(\'short\')"> ' +
+      '<input type="number" id="cfg-npos-short" value="' + backtestEditorAdapter.getSideValue(bot.short, 'n_positions', 0) + '" step="1" oninput="botSyncFromFields(\'short\')"> ' +
       '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'cfg-npos-short\');i.value=+(+i.value+1).toFixed(10);botSyncFromFields(\'short\')">+</button>' +
       '</div></div>' +
     '</div>' +
@@ -2300,14 +2790,19 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   _cfgEditorCfg = cfg;
   loadCfgSymbols(cfg);
   // Init and populate suite editor
-  suiteInit('suite-container', { apiBase: API_BASE });
+  suiteInit('suite-container', { apiBase: API_BASE, version: backtestEditorAdapter.version });
   suiteLoad(cfg, { preserveEdit: false });
   cfgWireDateRange('cfg-start-date', 'cfg-end-date');
+  var cfgEndDateEl = document.getElementById('cfg-end-date');
+  if (cfgEndDateEl) cfgEndDateEl.dataset.semanticValue = bt.end_date === 'now' ? 'now' : '';
   var cfgNameEl = document.getElementById('cfg-name');
   if (cfgNameEl) cfgNameEl.addEventListener('input', syncManagedBacktestBaseDirField);
   syncManagedBacktestBaseDirField();
+  marketSettingsRender();
+  resultMetricsRender();
+  loadPb8ResultMetrics();
   // Init and populate coin overrides editor
-  coinOvInit('coin-overrides-container', { apiBase: API_BASE });
+  coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: true });
   coinOvSetConfigName(name);
   coinOvLoad(cfg);
 
@@ -2320,13 +2815,17 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
 
   bindStructuredJsonFieldValidation();
   bindStructuredEditorSync();
+  configEditorGeneration += 1;
+  configEditRevision = 0;
 }
 
 function scheduleRawJsonEditorSync() {
+  configEditRevision += 1;
   _btJsonSync.scheduleRaw();
 }
 
 function scheduleStructuredEditorSync() {
+  configEditRevision += 1;
   _btJsonSync.scheduleStructured();
 }
 
@@ -2614,7 +3113,7 @@ function ensureStructuredJsonFieldsValidForSave() {
     if (!validation.error || firstInvalid) return;
     firstInvalid = { textarea: textarea, validation: validation };
   });
-  if (!firstInvalid) return true;
+  if (!firstInvalid) return pb8AdvancedFieldsValidate();
 
   var expander = firstInvalid.textarea.closest('.expander');
   if (expander) expander.classList.add('open');
@@ -2631,7 +3130,15 @@ function ensureRawJsonValidForSave() {
   var rawEl = document.getElementById('cfg-raw-json');
   var validation = validateRawJson(rawEl ? rawEl.value : '');
   setRawJsonValidationError(validation.error);
-  if (!validation.error) return true;
+  if (!validation.error) {
+    var raw = rawEl ? rawEl.value : '';
+    if (validation.parsed && raw !== _rawEditorLastApplied) {
+      var nameEl = document.getElementById('cfg-name');
+      cfgSyncEditorFromParsed(nameEl ? nameEl.value.trim() : '', validation.parsed);
+      _rawEditorLastApplied = raw;
+    }
+    return true;
+  }
   var rawExpander = document.getElementById('exp-raw');
   if (rawExpander) rawExpander.classList.add('open');
   revealRawJsonError();
@@ -2646,6 +3153,7 @@ function ensureRawJsonValidForSave() {
 function cfgShouldIgnoreStructuredSyncTarget(target, phase) {
   if (!target) return true;
   if (target.id === 'cfg-raw-json') return true;
+  if (target.id === 'result-metrics-search') return true;
   if (target.classList && target.classList.contains('ms-input')) return true;
   if (phase === 'input' && target.tagName === 'TEXTAREA') {
     if (target.id === 'cfg-bot-long' || target.id === 'cfg-bot-short') return true;
@@ -2667,7 +3175,7 @@ function cfgSyncExtraBtFields(bt) {
 
   if (!sameKeys) {
     if (currentEl) currentEl.remove();
-    if (nextKeys.length && rawEl) {
+    if (extraBtInfo.html && rawEl) {
       rawEl.insertAdjacentHTML('beforebegin', extraBtInfo.html);
       var nextEl = document.getElementById('exp-extra-bt');
       if (nextEl && wasOpen) nextEl.classList.add('open');
@@ -2675,6 +3183,7 @@ function cfgSyncExtraBtFields(bt) {
         var el = document.getElementById('extra-bt-' + k);
         if (el && el.tagName === 'TEXTAREA') autoResizeTa(el);
       });
+      resultMetricsRender();
     }
     bindStructuredJsonFieldValidation();
     return;
@@ -2719,6 +3228,7 @@ function cfgSyncEditorFromParsed(name, cfg) {
   var tfEnabled = bt.taker_fee_override !== null && bt.taker_fee_override !== undefined;
 
   cfgSetFieldValue('cfg-name', name || '');
+  syncManagedBacktestBaseDirField();
   cfgSetFieldValue('cfg-start-date', bt.start_date || '2020-01-01');
   cfgSetFieldValue('cfg-end-date', (bt.end_date && bt.end_date !== 'now') ? bt.end_date : new Date().toISOString().slice(0,10));
   cfgSetFieldValue('cfg-starting-balance', bt.starting_balance || 1000);
@@ -2742,18 +3252,21 @@ function cfgSyncEditorFromParsed(name, cfg) {
   cfgSetCheckedValue('cfg-only-cpt', !!pbgui.only_cpt);
   cfgSetCheckedValue('cfg-notices-ignore', !!pbgui.notices_ignore);
   cfgSetCheckedValue('cfg-maker-fee-enabled', mfEnabled);
-  cfgSetFieldValue('cfg-maker-fee-val', mfEnabled ? bt.maker_fee_override : 0);
+  cfgSetFieldValue('cfg-maker-fee-val', mfEnabled ? formatFeeInputValue(bt.maker_fee_override) : 0);
   cfgSetCheckedValue('cfg-taker-fee-enabled', tfEnabled);
-  cfgSetFieldValue('cfg-taker-fee-val', tfEnabled ? bt.taker_fee_override : 0);
-  cfgSetFieldValue('cfg-twe-long', ((bot.long || {}).total_wallet_exposure_limit || 1));
-  cfgSetFieldValue('cfg-npos-long', ((bot.long || {}).n_positions || 1));
-  cfgSetFieldValue('cfg-twe-short', ((bot.short || {}).total_wallet_exposure_limit || 0));
-  cfgSetFieldValue('cfg-npos-short', ((bot.short || {}).n_positions || 0));
+  cfgSetFieldValue('cfg-taker-fee-val', tfEnabled ? formatFeeInputValue(bt.taker_fee_override) : 0);
+  cfgSetFieldValue('cfg-twe-long', backtestEditorAdapter.getSideValue(bot.long, 'total_wallet_exposure_limit', 1));
+  cfgSetFieldValue('cfg-npos-long', backtestEditorAdapter.getSideValue(bot.long, 'n_positions', 1));
+  cfgSetFieldValue('cfg-twe-short', backtestEditorAdapter.getSideValue(bot.short, 'total_wallet_exposure_limit', 0));
+  cfgSetFieldValue('cfg-npos-short', backtestEditorAdapter.getSideValue(bot.short, 'n_positions', 0));
 
   var startDateEl = document.getElementById('cfg-start-date');
   if (startDateEl) startDateEl.dataset.prev = startDateEl.value;
   var endDateEl = document.getElementById('cfg-end-date');
-  if (endDateEl) endDateEl.dataset.prev = endDateEl.value;
+  if (endDateEl) {
+    endDateEl.dataset.prev = endDateEl.value;
+    endDateEl.dataset.semanticValue = bt.end_date === 'now' ? 'now' : '';
+  }
   var makerFeeEl = document.getElementById('cfg-maker-fee-val');
   if (makerFeeEl) makerFeeEl.disabled = !mfEnabled;
   var takerFeeEl = document.getElementById('cfg-taker-fee-val');
@@ -2768,12 +3281,16 @@ function cfgSyncEditorFromParsed(name, cfg) {
   kvInit('kv-mss', bt.market_settings_sources || {});
   kvUpdateExpanderCount('kv-mss');
   kvLoadCoins('kv-mss');
+  if (backtestEditorAdapter.isV8) {
+    marketSettingsLoad(bt.market_settings || {});
+    resultMetricsLoad(bt.visible_metrics);
+  }
 
   _cfgEditorCfg = cfg;
   cfgRebuildMs('ms-cfg-exchanges', exAll, bt.exchanges || []);
   suiteLoad(cfg, { preserveEdit: true });
   coinOvSetConfigName(name);
-  coinOvLoad(cfg);
+  coinOvLoad(cfg, { preservePending: true });
   cfgSyncExtraBtFields(bt);
   cfgRestoreRawAnchor(anchor);
   if (cfg._pbgui_param_status) setCfgBotParamStatus(cfg._pbgui_param_status);
@@ -2823,6 +3340,16 @@ function bindStructuredEditorSync() {
     scheduleStructured: scheduleStructuredEditorSync,
     clickSelector: '.stepper-btn'
   });
+  var root = document.getElementById('configs-editor');
+  if (root && !root.dataset.revisionTrackingBound) {
+    root.dataset.revisionTrackingBound = '1';
+    root.addEventListener('input', function(event) {
+      var target = event.target;
+      if (target && target.tagName === 'TEXTAREA' && cfgShouldIgnoreStructuredSyncTarget(target, 'input')) {
+        configEditRevision += 1;
+      }
+    });
+  }
 }
 
 function toggleExpander(id) {
@@ -2904,10 +3431,18 @@ function resetBacktestEditorUiState() {
     _cfgMsController.rebuild(id, [], [], { silent: true });
   });
   _cfgEditorCfg = null;
-  _cfgSymbolsLoadSeq = 0;
+  _cfgSymbolsLoadSeq += 1;
   _kvData = {};
   _kvSymCache = {};
   _kvHighlight = {};
+  _marketSettingsRows = [];
+  _marketSettingsRootExtras = {};
+  _marketSettingsLoadError = '';
+  _marketSettingsCoins = [];
+  _resultMetricsLoadError = '';
+  _resultMetricsState.mode = 'default';
+  _resultMetricsState.selected = [];
+  _resultMetricsState.error = '';
   if (typeof _suiteState !== 'undefined') {
     _suiteState.enabled = false;
     _suiteState.scenarios = [];
@@ -2962,8 +3497,8 @@ function cfgRemoveAllInvalidCoins() {
 
 async function cfgFetchV7Json(path, opts) {
   opts = opts || {};
-  var v7Base = API_BASE.replace('/backtest-v7', '/v7');
-  opts.headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN }, opts.headers || {});
+  var v7Base = backtestEditorAdapter.metadataApiBase(API_BASE);
+  opts.headers = bearerHeaders(opts.headers);
   var resp = await fetch(v7Base + path, opts);
   var data = await resp.json();
   if (!resp.ok) throw new Error((data && data.detail) || resp.statusText || 'Request failed');
@@ -3057,6 +3592,8 @@ async function loadCfgSymbols(cfg) {
   var cfgTags   = pbgui2.tags || [];
   var seededCoins = appLong2.concat(appShort2).concat(ignLong2).concat(ignShort2)
     .filter(function(v, i, a) { return v !== 'all' && a.indexOf(v) === i; }).sort();
+  _marketSettingsCoins = seededCoins.slice();
+  marketSettingsRender();
   var seededAnchor = cfgCaptureRawAnchor();
 
   cfgRebuildMs('ms-cfg-app-long',  ['all'].concat(seededCoins), appLong2);
@@ -3092,6 +3629,7 @@ async function loadCfgSymbols(cfg) {
     });
     if (requestSeq !== _cfgSymbolsLoadSeq) return;
     var symbols = Array.from(symbolSet).sort();
+    _marketSettingsCoins = symbols.slice();
     var allTags = Array.from(tagSet).sort();
     var loadedAnchor = cfgCaptureRawAnchor();
     cfgRebuildMs('ms-cfg-app-long',  ['all'].concat(symbols), appLong2);
@@ -3100,6 +3638,7 @@ async function loadCfgSymbols(cfg) {
     cfgRebuildMs('ms-cfg-ign-short', symbols, ignShort2);
     cfgRebuildMs('ms-cfg-tags', allTags, cfgTags);
     coinOvSetCoins(symbols);
+    marketSettingsRender();
     cfgRestoreRawAnchor(loadedAnchor);
     cfgRefreshCoinStatuses(exchanges);
   } catch (e) {
@@ -3221,10 +3760,10 @@ async function kvLoadCoins(prefix) {
   }
 
   if (_kvSymCache[exchange]) { return; }
-  var v7Base = API_BASE.replace('/backtest-v7', '/v7');
+  var v7Base = backtestEditorAdapter.metadataApiBase(API_BASE);
   try {
     var r = await fetch(v7Base + '/symbols?exchange=' + encodeURIComponent(exchange), {
-      headers: { 'Authorization': 'Bearer ' + TOKEN }
+      headers: bearerHeaders()
     });
     var data = await r.json();
     _kvSymCache[exchange] = (data.symbols || []).slice().sort();
@@ -3310,7 +3849,7 @@ function kvHighlightItem(dd, items, idx) {
 async function cfgApplyFilters() {
   var exchanges = cfgGetMs('ms-cfg-exchanges');
   if (!exchanges.length) { toast('Select at least one exchange', 'err'); return; }
-  var v7Base = API_BASE.replace('/backtest-v7', '/v7');
+  var v7Base = backtestEditorAdapter.metadataApiBase(API_BASE);
   var mcap = parseFloat(document.getElementById('cfg-market-cap').value) || 0;
   var volMcap = parseFloat(document.getElementById('cfg-vol-mcap').value) || 10;
   var onlyCpt = document.getElementById('cfg-only-cpt').checked;
@@ -3327,7 +3866,7 @@ async function cfgApplyFilters() {
         '&market_cap=' + mcap + '&vol_mcap=' + volMcap +
         '&only_cpt=' + onlyCpt + '&notices_ignore=' + noticesIgnore;
       if (tags.length) url += '&tags=' + encodeURIComponent(tags.join(','));
-      var resp = await fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } });
+      var resp = await fetch(url, { headers: bearerHeaders() });
       var data = await resp.json();
       (data.approved || []).forEach(function(c) { allApproved.add(c); });
       (data.ignored || []).forEach(function(c) { allIgnored.add(c); });
@@ -3620,7 +4159,7 @@ function fieldDate2(id, label, value, tip, span) {
   var dateVal = value || '';
   var inputHtml = '<div style="position:relative">' +
     '<input type="text" id="' + id + '" value="' + esc(dateVal) + '"' +
-    ' data-prev="' + esc(dateVal) + '" style="width:100%;box-sizing:border-box;padding-right:26px" onchange="this.dataset.prev=this.value">' +
+    ' data-prev="' + esc(dateVal) + '" style="width:100%;box-sizing:border-box;padding-right:26px" onchange="this.dataset.prev=this.value;this.dataset.semanticValue=\'\'">' +
     '<button type="button" data-dp="' + id + '" onclick="window.__dp.show(\'' + id + '\',this)"' +
     ' style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:transparent;border:none;' +
     'padding:0 3px;font-size:var(--fs-sm);line-height:1;cursor:pointer" title="Open calendar">📅</button>' +
@@ -3655,6 +4194,7 @@ function cfgEnsureDateOrder(startId, endId, changedSide, silent) {
   if (changedSide === 'start') {
     endEl.value = startVal;
     endEl.dataset.prev = startVal;
+    endEl.dataset.semanticValue = '';
   } else {
     startEl.value = endVal;
     startEl.dataset.prev = endVal;
@@ -3898,8 +4438,8 @@ function botSyncFromFields(side) {
   var npos = parseInt(document.getElementById('cfg-npos-' + side).value);
   try {
     var obj = JSON.parse(taEl.value);
-    if (!isNaN(twe))  obj.total_wallet_exposure_limit = twe;
-    if (!isNaN(npos)) obj.n_positions = npos;
+    if (!isNaN(twe))  backtestEditorAdapter.setSideValue(obj, 'total_wallet_exposure_limit', twe);
+    if (!isNaN(npos)) backtestEditorAdapter.setSideValue(obj, 'n_positions', npos);
     taEl.value = JSON.stringify(obj, null, 2);
     autoResizeTa(taEl);
   } catch(e) {}
@@ -3912,8 +4452,8 @@ function botSyncFromJson(side) {
     var obj = JSON.parse(taEl.value);
     var tweEl  = document.getElementById('cfg-twe-'  + side);
     var nposEl = document.getElementById('cfg-npos-' + side);
-    if (tweEl  && obj.total_wallet_exposure_limit !== undefined) tweEl.value  = obj.total_wallet_exposure_limit;
-    if (nposEl && obj.n_positions !== undefined)                 nposEl.value = obj.n_positions;
+    if (tweEl) tweEl.value = backtestEditorAdapter.getSideValue(obj, 'total_wallet_exposure_limit', tweEl.value);
+    if (nposEl) nposEl.value = backtestEditorAdapter.getSideValue(obj, 'n_positions', nposEl.value);
   } catch(e) {}
   autoResizeTa(taEl);
 }
@@ -3930,7 +4470,8 @@ function collectConfig() {
   if (!cfg.backtest) cfg.backtest = {};
   cfg.backtest.exchanges = exchanges;
   cfg.backtest.start_date = document.getElementById('cfg-start-date').value;
-  cfg.backtest.end_date = document.getElementById('cfg-end-date').value;
+  var endDateInput = document.getElementById('cfg-end-date');
+  cfg.backtest.end_date = endDateInput.dataset.semanticValue || endDateInput.value;
   cfg.backtest.starting_balance = parseFloat(document.getElementById('cfg-starting-balance').value) || 10000;
   cfg.backtest.balance_sample_divider = parseFloat(document.getElementById('cfg-balance-divider').value) || 1;
   cfg.backtest.gap_tolerance_ohlcvs_minutes = parseFloat(document.getElementById('cfg-gap-tolerance').value) || 5;
@@ -3943,6 +4484,8 @@ function collectConfig() {
   cfg.backtest.btc_collateral_ltv_cap = ltvVal === 0 ? null : ltvVal;
   var ohlcvDir = document.getElementById('cfg-ohlcv-dir').value.trim();
   cfg.backtest.ohlcv_source_dir = ohlcvDir || null;
+  var configNameEl = document.getElementById('cfg-name');
+  cfg.backtest.base_dir = getManagedBacktestBaseDir(configNameEl ? configNameEl.value : '');
 
   // maker_fee_override
   if (document.getElementById('cfg-maker-fee-enabled').checked) {
@@ -3970,6 +4513,12 @@ function collectConfig() {
   var mss = mssCollect();
   if (Object.keys(mss).length > 0) { cfg.backtest.market_settings_sources = mss; }
   else { delete cfg.backtest.market_settings_sources; }
+  if (document.getElementById('exp-market-settings') && !_marketSettingsLoadError) {
+    cfg.backtest.market_settings = marketSettingsCollect();
+  }
+  if (document.getElementById('exp-result-metrics') && !_resultMetricsLoadError) {
+    cfg.backtest.visible_metrics = resultMetricsCollect();
+  }
 
   if (!cfg.logging) cfg.logging = {};
   cfg.logging.level = parseInt(normalizeLogLevelValue(document.getElementById('cfg-logging').value, 1), 10);
@@ -4009,10 +4558,10 @@ function collectConfig() {
   try { cfg.bot.short = JSON.parse(document.getElementById('cfg-bot-short').value); } catch(e) {
     if (!cfg.bot.short) cfg.bot.short = {};
   }
-  cfg.bot.long.total_wallet_exposure_limit = parseFloat(document.getElementById('cfg-twe-long').value) || 0;
-  cfg.bot.long.n_positions = parseInt(document.getElementById('cfg-npos-long').value) || 0;
-  cfg.bot.short.total_wallet_exposure_limit = parseFloat(document.getElementById('cfg-twe-short').value) || 0;
-  cfg.bot.short.n_positions = parseInt(document.getElementById('cfg-npos-short').value) || 0;
+  backtestEditorAdapter.setSideValue(cfg.bot.long, 'total_wallet_exposure_limit', parseFloat(document.getElementById('cfg-twe-long').value) || 0);
+  backtestEditorAdapter.setSideValue(cfg.bot.long, 'n_positions', parseInt(document.getElementById('cfg-npos-long').value) || 0);
+  backtestEditorAdapter.setSideValue(cfg.bot.short, 'total_wallet_exposure_limit', parseFloat(document.getElementById('cfg-twe-short').value) || 0);
+  backtestEditorAdapter.setSideValue(cfg.bot.short, 'n_positions', parseInt(document.getElementById('cfg-npos-short').value) || 0);
 
   // Suite mode
   var suite = suiteCollect();
@@ -4069,6 +4618,38 @@ function finalizeBacktestConfigForSave(name, cfg) {
   return cfg;
 }
 
+function putEditorConfig(name, cfg, oldName, overrideSnapshot) {
+  var query = [];
+  if (oldName && oldName !== name) query.push('source_name=' + encodeURIComponent(oldName));
+  var creatingV8 = backtestEditorAdapter.isV8 && (!oldName || oldName !== name);
+  if (creatingV8) query.push('create_only=true');
+  if (backtestEditorAdapter.isV8 && !oldName) query.push('inherit_existing_overrides=false');
+  var path = '/configs/' + encodeURIComponent(name) + (query.length ? '?' + query.join('&') : '');
+  var options = {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(backtestEditorAdapter.isV8 ? {
+      config: cfg,
+      override_configs: (overrideSnapshot && overrideSnapshot.files) || {}
+    } : cfg)
+  };
+  return apiFetch(path, options).catch(function(error) {
+    if (!creatingV8 || error.status !== 409) throw error;
+    return window.PBGuiConfirm({
+      title: 'Replace V8 config',
+      message: 'Config "' + name + '" already exists.',
+      confirmText: 'Replace'
+    }).then(function(confirmed) {
+      if (!confirmed) return null;
+      var replaceParts = [];
+      if (oldName && oldName !== name) replaceParts.push('source_name=' + encodeURIComponent(oldName));
+      if (!oldName) replaceParts.push('inherit_existing_overrides=false');
+      var replaceQuery = replaceParts.length ? '?' + replaceParts.join('&') : '';
+      return apiFetch('/configs/' + encodeURIComponent(name) + replaceQuery, options);
+    });
+  });
+}
+
 function saveEditor() {
   var name = document.getElementById('cfg-name').value.trim();
   if (!name) { toast('Config name is required', 'err'); return; }
@@ -4086,16 +4667,31 @@ function saveEditor() {
   if (dateErr) { toast(dateErr, 'err'); return; }
   var oldName = (editingConfig && editingConfig !== '__new__') ? editingConfig : null;
   var isNewName = oldName && oldName !== name;
-  var url = '/configs/' + encodeURIComponent(name);
-  if (isNewName) url += '?source_name=' + encodeURIComponent(oldName);
-  apiFetch(url, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(cfg)
-  }).then(function() {
+  var overrideSnapshot;
+  try {
+    overrideSnapshot = backtestEditorAdapter.isV8 ? coinOvSnapshotPendingFiles() : null;
+  } catch (e) {
+    toast('Cannot save coin overrides: ' + ((e && e.message) || e), 'err');
+    return;
+  }
+  var saveRevision = configEditRevision;
+  var saveGeneration = configEditorGeneration;
+  putEditorConfig(name, cfg, oldName, overrideSnapshot).then(function(saved) {
+    if (!saved || configEditorGeneration !== saveGeneration) return null;
+    if (backtestEditorAdapter.isV8) {
+      coinOvAcknowledgePendingFiles(overrideSnapshot);
+      return saved;
+    }
+    return coinOvFlushPendingFiles(name).then(function() { return saved; });
+  }).then(function(saved) {
+    if (!saved) return;
     toast(isNewName ? 'Saved as new config "' + name + '"' : 'Config saved', 'ok');
     editingConfig = name;
     loadConfigs();
+    if (configEditorGeneration !== saveGeneration || configEditRevision !== saveRevision) {
+      toast('Saved. Newer editor changes remain open and are not saved yet.', 'info');
+      return;
+    }
     closeEditor();
   }).catch(function(e) { toast('Save failed: ' + e.message, 'err'); });
 }
@@ -4116,22 +4712,41 @@ function saveAndQueue() {
   var dateErr = cfgValidateDateRanges(cfg);
   if (dateErr) { toast(dateErr, 'err'); return; }
   var oldName = (editingConfig && editingConfig !== '__new__') ? editingConfig : null;
-  var isNewName = oldName && oldName !== name;
+  var overrideSnapshot;
+  try {
+    overrideSnapshot = backtestEditorAdapter.isV8 ? coinOvSnapshotPendingFiles() : null;
+  } catch (e) {
+    toast('Cannot save coin overrides: ' + ((e && e.message) || e), 'err');
+    return;
+  }
+  var saveRevision = configEditRevision;
+  var saveGeneration = configEditorGeneration;
   // Save first (always as new config if name changed, never delete original)
-  var url = '/configs/' + encodeURIComponent(name);
-  if (isNewName) url += '?source_name=' + encodeURIComponent(oldName);
-  apiFetch(url, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(cfg)
-  }).then(function() {
+  putEditorConfig(name, cfg, oldName, overrideSnapshot).then(function(saved) {
+    if (!saved || configEditorGeneration !== saveGeneration) return null;
+    editingConfig = name;
+    coinOvSetConfigName(name);
+    if (backtestEditorAdapter.isV8) {
+      coinOvAcknowledgePendingFiles(overrideSnapshot);
+      return saved;
+    }
+    return coinOvFlushPendingFiles(name);
+  }).then(function(flushed) {
+    if (!flushed) return null;
     // Then add to queue — config is already saved on disk
     return apiFetch('/queue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: name })
     });
-  }).then(function() {
+  }).then(function(queued) {
+    if (!queued) return;
+    if (configEditorGeneration !== saveGeneration || configEditRevision !== saveRevision) {
+      toast('Saved and queued. Newer editor changes remain open and are not saved yet.', 'info');
+      loadConfigs();
+      selectPanel('queue');
+      return;
+    }
     toast('Saved and queued', 'ok');
     editingConfig = null;
     loadConfigs();
@@ -4269,7 +4884,7 @@ async function doImport() {
     });
     return;
   }
-  var raw = jsonEl.value;
+  var raw = backtestEditorAdapter.isV8 ? JSON.stringify(prepared.config, null, 2) : jsonEl.value;
   editingConfig = '__new__';
   closeImportModal();
   showConfigEditor(name, prepared.config, raw, prepared.param_status || {});
@@ -4332,7 +4947,7 @@ function renderQueue() {
     qth('Status', 'status') + qth('Name', 'name') + qth('Exchange', 'exchange') + qth('Created', 'created') + '<th>Actions</th>' +
     '</tr></thead><tbody>';
   sorted.forEach(function(q) {
-    var bc = 'badge-' + q.status.replace('...', '');
+    var bc = backtestShell.statusClass(q.status);
     html += '<tr data-filename="' + esc(q.filename) + '">' +
       '<td><span class="badge ' + bc + '">' + esc(q.status) + '</span></td>' +
       '<td title="' + esc(q.filename) + '" ondblclick="editConfig(\'' + esc(q.name).replace(/'/g, "\\'") + '\');selectPanel(\'configs\')" style="cursor:pointer">' + esc(q.name) + '</td>' +
@@ -4505,7 +5120,7 @@ function _openLogPanel(title, logViewerOpts) {
 function showLog(filename) {
   _openLogPanel('Log: ' + filename, {
     defaultHost: 'local',
-    defaultFile: 'backtests/' + filename + '.log'
+    defaultFile: backtestEditorAdapter.queueLogFile(filename)
   });
 }
 
@@ -4517,29 +5132,83 @@ function closeLogPanel() {
 /* ════════════════════════════════════════════════
    RESULTS VIEW
    ════════════════════════════════════════════════ */
+function selectedResultsVersion() {
+  var versionFilter = document.getElementById('results-version-filter');
+  return (versionFilter && versionFilter.value) || backtestEditorAdapter.version;
+}
+
+function resultsForSelectedVersion(resultItems) {
+  var selectedVersion = selectedResultsVersion();
+  return (resultItems || []).filter(function(result) {
+    return selectedVersion === 'both' || result.backtest_version === selectedVersion;
+  });
+}
+
+function updateVersionBoundResultActions() {
+  var currentOnly = selectedResultsVersion() === backtestEditorAdapter.version;
+  document.querySelectorAll('#ctx-results button:not([data-cross-version-action])').forEach(function(button) {
+    button.disabled = !currentOnly;
+    button.title = currentOnly ? '' : 'This action is available for ' + backtestEditorAdapter.version.toUpperCase() + ' results on this page.';
+  });
+}
+
 function _applyResultsData(resultItems, filterName) {
   results = resultItems || [];
   var cfgSel = document.getElementById('results-config-filter');
   if (cfgSel) {
     var savedVal = typeof filterName === 'string' ? filterName : cfgSel.value;
     var names = {};
-    results.forEach(function(r) { if (r.config_name) names[r.config_name] = true; });
+    resultsForSelectedVersion(results).forEach(function(r) { if (r.config_name) names[r.config_name] = true; });
     var sorted = Object.keys(names).sort();
     cfgSel.innerHTML = '\x3Coption value="">All configs\x3C/option>';
     sorted.forEach(function(n) {
       cfgSel.innerHTML += '\x3Coption value="' + esc(n) + '"' + (n === savedVal ? ' selected' : '') + '>' + esc(n) + '\x3C/option>';
     });
   }
+  updateVersionBoundResultActions();
   renderResults();
   return results;
 }
 
-function loadResults(filterName) {
-  var selectedFilter = arguments.length ? filterName : _pendingResultFilter;
+function loadResults(filterName, loadOptions) {
+  loadOptions = loadOptions || {};
+  var selectedFilter = typeof filterName === 'string' ? filterName : _pendingResultFilter;
   _pendingResultFilter = '';
-  return apiFetch('/results').then(function(d) {
-    return _applyResultsData(d.results || [], selectedFilter);
+  if (!loadOptions.emptyRetry) _resultsEmptyRetryCount = 0;
+  if (_resultsEmptyRetryTimer) {
+    clearTimeout(_resultsEmptyRetryTimer);
+    _resultsEmptyRetryTimer = null;
+  }
+  var loadGeneration = ++_resultsLoadGeneration;
+  var selectedVersion = selectedResultsVersion();
+  var versions = selectedVersion === 'both' ? ['v7', 'v8'] : [selectedVersion];
+  return Promise.all(versions.map(function(version) {
+    return apiFetchFrom(backtestApiBase(version), '/results').then(function(d) {
+      resultsByVersion[version] = (d.results || []).map(function(result) {
+        return Object.assign({}, result, { backtest_version: version });
+      });
+    });
+  })).then(function() {
+    if (loadGeneration !== _resultsLoadGeneration) return results;
+    var applied = _applyResultsData(resultsByVersion.v7.concat(resultsByVersion.v8), selectedFilter);
+    var selectedItems = resultsForSelectedVersion(applied);
+    if (currentPanel === 'results' && selectedItems.length === 0 && _resultsEmptyRetryCount < 3) {
+      _resultsEmptyRetryCount += 1;
+      var list = document.getElementById('results-list');
+      if (list) list.innerHTML = '\x3Cdiv class="empty-state">Checking for results…\x3C/div>';
+      var retryDelay = 400 * _resultsEmptyRetryCount;
+      _resultsEmptyRetryTimer = setTimeout(function() {
+        _resultsEmptyRetryTimer = null;
+        if (currentPanel === 'results' && loadGeneration === _resultsLoadGeneration) {
+          loadResults(selectedFilter, { emptyRetry: true });
+        }
+      }, retryDelay);
+    } else {
+      _resultsEmptyRetryCount = 0;
+    }
+    return applied;
   }).catch(function(e) {
+    if (loadGeneration !== _resultsLoadGeneration) return results;
     toast('Load results failed: ' + e.message, 'err');
     throw e;
   });
@@ -4566,9 +5235,9 @@ function parseCSV(text) {
 }
 
 /* ── Fetch CSV from file-streaming endpoint ── */
-function fetchCSV(path, file) {
-  var url = API_BASE + '/results/' + file + '?path=' + encodeURIComponent(path);
-  return fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+function fetchCSV(path, file, result) {
+  var url = resultApiBase(result) + '/results/' + file + '?path=' + encodeURIComponent(path);
+  return fetch(url, { headers: bearerHeaders() })
     .then(function(r) {
       if (!r.ok) throw new Error(r.statusText);
       return r.text();
@@ -4640,8 +5309,9 @@ function hideResultsCountLabel(id) {
 }
 
 /* ── Shared results table renderer (used by both Results tab and Archive panel) ── */
-function _renderResultsTableInto(el, data, chartsEl, rthFn) {
+function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
   if (!el) return;
+  options = options || {};
   data = Array.isArray(data) ? data : [];
   _activeResultsCtx = { data: data, chartsEl: chartsEl };
   window._filteredResults = data;
@@ -4652,10 +5322,11 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn) {
   var showCoins = data.some(function(r) {
     return !!((r && r.coins_text) || (r && Array.isArray(r.coins) && r.coins.length));
   });
+  var showVersion = !!options.showVersion;
 
-  /* Columns: Backtest Name | Exch. | Result Time | ADG | Gain | Worst DD | Sharpe | Start B. | Final B. | TWE | POS | Actions */
+  /* Columns: Version (main Results only) | Backtest Name | Exch. | Result Time | ADG | Gain | Worst DD | Sharpe | Start B. | Final B. | TWE | POS | Actions */
   var html = '\x3Ctable class="tbl">\x3Cthead>\x3Ctr>' +
-    rthFn('Backtest Name', 'config_name') + (showCoins ? rthFn('Coins', 'coins_text') : '') + rthFn('Exch.', 'exchange_dir') + rthFn('Result Time', 'modified') +
+    (showVersion ? rthFn('Version', 'backtest_version') : '') + rthFn('Backtest Name', 'config_name') + (showCoins ? rthFn('Coins', 'coins_text') : '') + rthFn('Exch.', 'exchange_dir') + rthFn('Result Time', 'modified') +
     rthFn('ADG', 'adg') + rthFn('Gain', 'gain') + rthFn('Worst DD', 'drawdown_worst') + rthFn('Sharpe', 'sharpe_ratio') +
     rthFn('Start B.', 'starting_balance') + rthFn('Final B.', 'final_balance') +
     '\x3Cth>TWE\x3C/th>\x3Cth>POS\x3C/th>' +
@@ -4668,7 +5339,11 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn) {
     var coinsText = r.coins_text || (Array.isArray(r.coins) ? r.coins.join(', ') : '');
     var liqStyle = r.liquidated ? ' style="background:rgba(255,75,75,.10)"' : '';
     var liqTitle = r.liquidated ? ' ⚠ liquidated' : '';
+    var convertAction = options.allowV8Convert && r.backtest_version === 'v7'
+      ? '\x3Cbutton class="icon-btn" onclick="convertResultToV8(' + i + ')" title="Convert this V7 result config to V8">V8\x3C/button>'
+      : '';
     html += '\x3Ctr data-idx="' + i + '" data-path="' + esc(r.path) + '"' + liqStyle + '>' +
+      (showVersion ? '\x3Ctd>PB' + esc((r.backtest_version || '').toUpperCase()) + '\x3C/td>' : '') +
       '\x3Ctd title="' + esc(btName) + esc(liqTitle) + '" style="max-width:250px">' + (r.liquidated ? '\x3Cspan style="color:var(--red)" title="Liquidated">\u26a0\ufe0f\x3C/span> ' : '') + esc(btName) + '\x3C/td>' +
       (showCoins ? '\x3Ctd title="' + esc(coinsText) + '" style="max-width:140px">' + esc(coinsText) + '\x3C/td>' : '') +
       '\x3Ctd>' + esc(Array.isArray(r.exchanges) ? r.exchanges.join(', ') : '') + '\x3C/td>' +
@@ -4685,8 +5360,9 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn) {
         '\x3Cbutton class="icon-btn" data-action="view" data-idx="' + i + '" onclick="toggleResultAction(this)" title="Balance &amp; Equity, PnL, Drawdown, WE charts">👁\x3C/button>' +
         '\x3Cbutton class="icon-btn" data-action="analysis" data-idx="' + i + '" onclick="toggleResultAction(this)" title="Analysis JSON">🔬\x3C/button>' +
         '\x3Cbutton class="icon-btn" data-action="config" data-idx="' + i + '" onclick="toggleResultAction(this)" title="Config JSON">📄\x3C/button>' +
-        '\x3Cbutton class="icon-btn" data-action="plot" data-idx="' + i + '" onclick="toggleResultAction(this)" title="PB7 plot images">🖼\x3C/button>' +
+        '\x3Cbutton class="icon-btn" data-action="plot" data-idx="' + i + '" onclick="toggleResultAction(this)" title="' + backtestEditorAdapter.version.toUpperCase() + ' plot images">🖼\x3C/button>' +
         '\x3Cbutton class="icon-btn" data-action="fills" data-idx="' + i + '" onclick="toggleResultAction(this)" title="Fills plots">📋\x3C/button>' +
+        convertAction +
       '\x3C/td>' +
       '\x3C/tr>';
   });
@@ -4703,7 +5379,7 @@ function renderResults() {
     var filter = ((filterEl && filterEl.value) || '').toLowerCase();
     var cfgFilter = (cfgSel && cfgSel.value) || '';
 
-    var resultItems = Array.isArray(results) ? results : [];
+    var resultItems = resultsForSelectedVersion(Array.isArray(results) ? results : []);
     var filtered = resultItems.filter(function(r) {
       r = r || {};
       if (cfgFilter && r.config_name !== cfgFilter) return false;
@@ -4727,7 +5403,7 @@ function renderResults() {
       return 0;
     });
 
-    _renderResultsTableInto(el, filtered, chartsEl, rth);
+    _renderResultsTableInto(el, filtered, chartsEl, rth, { showVersion: true, allowV8Convert: !backtestEditorAdapter.isV8 });
   } catch (e) {
     if (el) el.innerHTML = '\x3Cdiv class="empty-state">Failed to render results: ' + esc(e.message || e) + '\x3C/div>';
     toast('Render results failed: ' + (e.message || e), 'err');
@@ -5533,18 +6209,7 @@ function toggleLegacyResultsSticky() {
 /* ── Pin / un-pin the sticky table header ── */
 var _resultsSticky = true;
 function toggleResultsSticky() {
-  _resultsSticky = !_resultsSticky;
-  var panel = document.getElementById('panel-results');
-  var btn = document.getElementById('results-pin-btn');
-  if (_resultsSticky) {
-    panel.classList.remove('unpinned');
-    btn.style.opacity = '1';
-    btn.title = 'Unpin table';
-  } else {
-    panel.classList.add('unpinned');
-    btn.style.opacity = '0.4';
-    btn.title = 'Pin table';
-  }
+  _resultsSticky = window.PBGuiBacktestShell.toggleResultsSticky();
 }
 
 /* ── Icon button toggle → triggers chart rendering ── */
@@ -5886,7 +6551,7 @@ function loadAndRenderBEChart(cd) {
     requestAnimationFrame(function() { renderBEChart(cd, _cached); });
     return;
   }
-  fetchCSV(cd.path, 'equity').then(function(csv) {
+  fetchCSV(cd.path, 'equity', cd.result).then(function(csv) {
     var be = normalizeBE(csv, cd.result);
     _beCache[cd.path] = be;
     requestAnimationFrame(function() { renderBEChart(cd, be); });
@@ -5988,12 +6653,12 @@ function renderBEChart(cd, be) {
 function loadAndRenderHardStopDrawdownChart(cd) {
   var equityPromise = _beCache[cd.path]
     ? Promise.resolve(_beCache[cd.path])
-    : fetchCSV(cd.path, 'equity').then(function(csv) {
+    : fetchCSV(cd.path, 'equity', cd.result).then(function(csv) {
         var be = normalizeBE(csv, cd.result);
         _beCache[cd.path] = be;
         return be;
       });
-  var configPromise = apiFetch('/results/config?path=' + encodeURIComponent(cd.path));
+  var configPromise = resultApiFetch(cd.result, '/results/config?path=' + encodeURIComponent(cd.path));
   Promise.all([equityPromise, configPromise]).then(function(parts) {
     requestAnimationFrame(function() { renderHardStopDrawdownChart(cd, parts[0], parts[1]); });
   }).catch(function(e) {
@@ -6005,12 +6670,12 @@ function loadAndRenderHardStopDrawdownChart(cd) {
 function _hardStopSideConfig(config, side) {
   var bot = (config && config.bot) || {};
   var cfg = bot[side] || {};
-  var twel = parseFloat(cfg.total_wallet_exposure_limit || 0) || 0;
-  var nPositions = Math.round(parseFloat(cfg.n_positions || 0) || 0);
-  var redThreshold = parseFloat(cfg.hsl_red_threshold || 0) || 0;
-  var emaSpan = parseFloat(cfg.hsl_ema_span_minutes || 0) || 0;
-  if (!cfg.hsl_enabled || twel <= 0 || nPositions <= 0 || redThreshold <= 0 || emaSpan <= 0) return null;
-  var ratios = cfg.hsl_tier_ratios || {};
+  var twel = parseFloat(backtestEditorAdapter.getSideValue(cfg, 'total_wallet_exposure_limit', 0)) || 0;
+  var nPositions = Math.round(parseFloat(backtestEditorAdapter.getSideValue(cfg, 'n_positions', 0)) || 0);
+  var redThreshold = parseFloat(backtestEditorAdapter.getHslValue(cfg, 'red_threshold', 0)) || 0;
+  var emaSpan = parseFloat(backtestEditorAdapter.getHslValue(cfg, 'ema_span_minutes', 0)) || 0;
+  if (!backtestEditorAdapter.getHslValue(cfg, 'enabled', false) || twel <= 0 || nPositions <= 0 || redThreshold <= 0 || emaSpan <= 0) return null;
+  var ratios = backtestEditorAdapter.getHslValue(cfg, 'tier_ratios', {}) || {};
   return {
     side: side,
     redThreshold: redThreshold,
@@ -6193,7 +6858,7 @@ function loadAndRenderPnlChart(cd) {
     requestAnimationFrame(function() { renderPnlChart(cd, _cached); });
     return;
   }
-  fetchCSV(cd.path, 'fills').then(function(csv) {
+  fetchCSV(cd.path, 'fills', cd.result).then(function(csv) {
     _fillsCache[cd.path] = csv;
     requestAnimationFrame(function() { renderPnlChart(cd, csv); });
   }).catch(function(e) {
@@ -6310,7 +6975,7 @@ function loadAndRenderTWEChart(cd) {
     requestAnimationFrame(function() { renderTWEChart(cd, _cached2, resolution); });
     return;
   }
-  fetchCSV(cd.path, 'fills').then(function(csv) {
+  fetchCSV(cd.path, 'fills', cd.result).then(function(csv) {
     _fillsCache[cd.path] = csv;
     _tweCache[cd.path] = csv;
     requestAnimationFrame(function() { renderTWEChart(cd, csv, resolution); });
@@ -6493,7 +7158,7 @@ function loadAnalysis(cd) {
   if (cd.result.analysis) {
     window.PBGuiJsonPanel.setContent(el.id, cd.result.analysis);
   } else {
-    apiFetch('/results/analysis?path=' + encodeURIComponent(cd.path))
+    resultApiFetch(cd.result, '/results/analysis?path=' + encodeURIComponent(cd.path))
       .then(function(d) {
         if (el.isConnected) {
           window.PBGuiJsonPanel.setContent(el.id, d);
@@ -6506,7 +7171,7 @@ function loadAnalysis(cd) {
 function loadConfig(cd) {
   var el = document.getElementById('config-json-' + cd.idx);
   if (!el) return;
-  apiFetch('/results/config?path=' + encodeURIComponent(cd.path))
+  resultApiFetch(cd.result, '/results/config?path=' + encodeURIComponent(cd.path))
     .then(function(d) {
       if (el.isConnected) {
         window.PBGuiJsonPanel.setContent(el.id, d);
@@ -6518,13 +7183,13 @@ function loadConfig(cd) {
 /* ── Plot images (PB7-generated PNGs) ── */
 function loadPlotImages(cd) {
   var el = document.getElementById(cd.id);
-  apiFetch('/results/files?path=' + encodeURIComponent(cd.path))
+  resultApiFetch(cd.result, '/results/files?path=' + encodeURIComponent(cd.path))
     .then(function(d) {
       var files = (d.files || []).filter(function(f) { return f.toLowerCase().endsWith('.png'); });
       if (!files.length) { el.innerHTML = '<div style="color:var(--text-dim)">No plot images found</div>'; return; }
       var html = '';
       files.forEach(function(f) {
-        var url = API_BASE + '/results/image?path=' + encodeURIComponent(cd.path) +
+        var url = resultApiBase(cd.result) + '/results/image?path=' + encodeURIComponent(cd.path) +
           '&filename=' + encodeURIComponent(f);
         html += '<img src="' + url + '" style="width:100%;margin-bottom:var(--sp-sm);border-radius:4px" onerror="this.style.display=\'none\'" alt="' + esc(f) + '">';
       });
@@ -6536,13 +7201,13 @@ function loadPlotImages(cd) {
 /* ── Fills images (per-coin PNGs) ── */
 function loadFillsImages(cd) {
   var el = document.getElementById(cd.id);
-  apiFetch('/results/files?path=' + encodeURIComponent(cd.path))
+  resultApiFetch(cd.result, '/results/files?path=' + encodeURIComponent(cd.path))
     .then(function(d) {
       var files = (d.files || []).filter(function(f) { return f.startsWith('fills_plots/') && f.endsWith('.png'); });
       if (!files.length) { el.innerHTML = '<div style="color:var(--text-dim)">No fills plots found</div>'; return; }
       var html = '';
       files.forEach(function(f) {
-        var url = API_BASE + '/results/image?path=' + encodeURIComponent(cd.path) +
+        var url = resultApiBase(cd.result) + '/results/image?path=' + encodeURIComponent(cd.path) +
           '&filename=' + encodeURIComponent(f);
         html += '<img src="' + url + '" style="width:100%;margin-bottom:var(--sp-sm);border-radius:4px" onerror="this.style.display=\'none\'" alt="' + esc(f) + '">';
       });
@@ -6569,14 +7234,16 @@ function _compareResultPaths(paths, resultSet, compareEl, chartId) {
   compareEl.innerHTML = '\x3Cdiv style="text-align:center;padding:var(--sp-lg);color:var(--text-dim)">Loading equity data for comparison…\x3C/div>';
 
   var promises = paths.map(function(path) {
-    if (_beCache[path]) return Promise.resolve({ path: path, be: _beCache[path] });
-    return fetchCSV(path, 'equity').then(function(csv) {
-      var r = resultSet.find(function(rr) { return rr.path === path; }) || {};
+    var r = resultSet.find(function(rr) { return rr.path === path; }) || {};
+    var version = r.backtest_version || backtestEditorAdapter.version;
+    var cacheKey = version + ':' + path;
+    if (_beCache[cacheKey]) return Promise.resolve({ path: path, version: version, be: _beCache[cacheKey] });
+    return fetchCSV(path, 'equity', r).then(function(csv) {
       var be = normalizeBE(csv, r);
-      _beCache[path] = be;
-      return { path: path, be: be };
+      _beCache[cacheKey] = be;
+      return { path: path, version: version, be: be };
     }).catch(function() {
-      return { path: path, be: { time: [], equity: [], balance: [] } };
+      return { path: path, version: version, be: { time: [], equity: [], balance: [] } };
     });
   });
 
@@ -6585,7 +7252,7 @@ function _compareResultPaths(paths, resultSet, compareEl, chartId) {
     var colors = ['#4da6ff', '#21c354', '#ff8c00', '#ff4b4b', '#b366ff', '#ffcc00', '#00cccc', '#ff66b2'];
     allData.forEach(function(item, i) {
       if (!item.be.time.length) return;
-      var label = item.path.split('/').slice(-3).join('/');
+      var label = 'PB' + item.version.toUpperCase() + ' ' + item.path.split('/').slice(-3).join('/');
       traces.push({ x: item.be.time, y: item.be.equity, name: 'eq ' + label, line: { width: 0.75, color: colors[i % colors.length] } });
       traces.push({ x: item.be.time, y: item.be.balance, name: 'bal ' + label, line: { width: 2.5, color: colors[i % colors.length], dash: 'dot' } });
     });
@@ -7222,7 +7889,7 @@ function addConfigToRunByName(name) {
     cfgToSend.pbgui.enabled_on = 'disabled';
     return fetch(v7Base + '/draft', {
       method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      headers: bearerHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ config: cfgToSend })
     }).then(function(r) { return r.json(); }).then(function(d) {
       var editUrl = v7Base + '/edit_page?new=1&draft_id=' + encodeURIComponent(d.draft_id);
@@ -7460,11 +8127,17 @@ function closeAllSectionsForPaths(paths) {
 function deleteSelectedResults() {
   var sel = getSelectedResults();
   if (!sel.length) { toast('Nothing selected', 'err'); return; }
+  var selectedResults = sel.map(function(path) {
+    return results.find(function(result) { return result.path === path; }) || {
+      path: path,
+      backtest_version: backtestEditorAdapter.version
+    };
+  });
   showModal('Delete Results', '<p>Delete ' + sel.length + ' result(s)? This cannot be undone.</p>', [
     { text: 'Cancel', cls: '' },
     { text: 'Delete', cls: 'modal-btn-danger', action: function() {
-      var promises = sel.map(function(p) {
-        return apiFetch('/results?path=' + encodeURIComponent(p), { method: 'DELETE' });
+      var promises = selectedResults.map(function(result) {
+        return resultApiFetch(result, '/results?path=' + encodeURIComponent(result.path), { method: 'DELETE' });
       });
       Promise.all(promises).then(function() {
         closeAllSectionsForPaths(sel);
@@ -8251,7 +8924,7 @@ function archiveOptimizeDefaultName(path, name) {
 function requestArchiveOptimizeImport(path, importName, collision) {
   return fetch(API_BASE + '/archives/' + encodeURIComponent(selectedArchiveName) + '/optimize-configs/import', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+    headers: bearerHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ path: path, name: importName.trim(), collision: collision })
   }).then(function(response) {
     return response.json().catch(function() { return {}; }).then(function(payload) {
@@ -8915,6 +9588,22 @@ function fmtDate(iso) {
 /* ════════════════════════════════════════════════
    INIT
    ════════════════════════════════════════════════ */
+backtestShell = window.PBGuiBacktestShell.upgradeLegacy({
+  source: document.getElementById('page-body'),
+  navItems: backtestEditorAdapter.navItems(),
+  callbacks: {
+    'selectPanel:configs': function() { selectPanel('configs'); },
+    'selectPanel:queue': function() { selectPanel('queue'); },
+    'selectPanel:results': function() { selectPanel('results'); },
+    'selectPanel:archive': function() { selectPanel('archive'); },
+    'selectPanel:legacy': function() { selectPanel('legacy'); },
+    filterConfigs: renderConfigs,
+    filterResults: renderResults,
+    changeResultsVersion: function() { loadResults(''); }
+  }
+});
+document.getElementById('results-version-filter').value = backtestEditorAdapter.version;
+backtestEditorAdapter.configureUi();
 // Restore panel/archive state from URL hash or localStorage.
 var initialViewState = loadStoredBacktestViewState();
 applyBacktestSortState(initialViewState.sorts);
@@ -8926,23 +9615,23 @@ if (initialViewState.panel === 'archive' && initialViewState.archive) {
   selectedArchiveName = initialViewState.archive;
   archiveResultsMode = archiveModeFromValue(initialViewState.archiveMode);
 }
-if (['configs', 'queue', 'results', 'archive', 'legacy'].indexOf(initialViewState.panel) >= 0) selectPanel(initialViewState.panel);
+if (backtestEditorAdapter.initialPanels.indexOf(initialViewState.panel) >= 0) selectPanel(initialViewState.panel);
 initializeBacktestPageFromUrl();
 </script>
 
 <!-- ── Nav bar ──────────────────────────────────── -->
 <script>
 window.PBGUI_NAV_CONFIG = {
-  subtitle: 'PBv7 BACKTEST',
-  current:  'v7_backtest',
+  subtitle: BACKTEST_SUBTITLE,
+  current:  BACKTEST_NAV_CURRENT,
   token:    TOKEN,
   apiBase:  API_BASE,
   version:  PBGUI_VERSION,
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/suite_editor.js?v=7"></script>
-<script src="/app/js/coin_overrides_editor.js?v=12"></script>
+<script src="/app/js/suite_editor.js?v=8"></script>
+<script src="/app/js/coin_overrides_editor.js?v=18"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */
 (function() {
@@ -8998,7 +9687,7 @@ window.PBGUI_NAV_CONFIG = {
   });
 })();
 </script>
-<script src="/app/js/log_viewer_panel.js?v=27"></script>
+<script src="/app/js/log_viewer_panel.js?v=28"></script>
 <script src="/app/js/shared_help_overlay.js?v=6"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
@@ -9029,7 +9718,7 @@ window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize
   var _topicCache = {}, _globalMode = false;
 
   /* Docs endpoints: strip the router prefix from API_BASE */
-  var docsBase = API_BASE.replace('/backtest-v7', '');
+  var docsBase = backtestEditorAdapter.docsApiBase(API_BASE);
 
   function mdToHtml(md) {
     var lines = md.split('\n'), html = '', inPre = false, preBuf = '', inUl = false, inOl = false;
@@ -9091,7 +9780,7 @@ window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize
     if (_topicCache[idx] !== undefined) { cb(_topicCache[idx]); return; }
     var t = helpTopics[idx];
     if (!t) { cb(''); return; }
-    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: bearerHeaders() })
       .then(function(r) { return r.json(); })
       .then(function(d) { _topicCache[idx] = mdToHtml(d.content || ''); cb(_topicCache[idx]); })
       .catch(function() { _topicCache[idx] = ''; cb(''); });
@@ -9152,7 +9841,7 @@ window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize
 
   function loadHelpIndex(keyword) {
     helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/docs/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(docsBase + '/docs/index?lang=' + helpLang, { headers: bearerHeaders() })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         helpTopics = data || [];
@@ -9193,7 +9882,7 @@ window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize
     if (!t) return;
     _rawHtml = null; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = '';
     helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: bearerHeaders() })
       .then(function(r) { return r.json(); })
       .then(function(d) {
         _rawHtml = mdToHtml(d.content || '');

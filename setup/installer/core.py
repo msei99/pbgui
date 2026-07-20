@@ -16,6 +16,7 @@ import secrets
 import shlex
 import shutil
 import subprocess
+import tempfile
 import time
 from typing import Callable
 from urllib.request import urlopen
@@ -25,6 +26,12 @@ from pb7_guard import (
     fetch_passivbot_ref,
     stop_passivbot_processes,
     verify_passivbot_major,
+)
+from master_update_lock import (
+    acquire_master_update_lock,
+    acquire_pb8_update_writer,
+    release_pb8_update_writer,
+    wait_for_master_update_barrier,
 )
 from secure_files import atomic_write_private_text, ensure_private_directory
 
@@ -222,6 +229,28 @@ class LocalMasterConfig:
 
 
 @dataclass
+class LocalMasterMaintenanceConfig:
+    """Settings for maintaining an existing local PBGui master."""
+
+    install_dir: str = field(default_factory=default_local_install_dir)
+    action: str = "local-pb8"
+
+    @classmethod
+    def from_mapping(cls, data: dict) -> "LocalMasterMaintenanceConfig":
+        """Build maintenance config from web input."""
+        return cls(
+            install_dir=str(data.get("install_dir") or default_local_install_dir()).strip(),
+            action=str(data.get("install_mode") or "local-pb8").strip(),
+        )
+
+    def validate(self) -> None:
+        """Validate maintenance action and install parent."""
+        self.install_dir = normalize_local_install_dir(self.install_dir)
+        if self.action not in {"local-pb8", "local-update-all"}:
+            raise ValueError("Unsupported local master maintenance action.")
+
+
+@dataclass
 class LocalUninstallConfig:
     """Local master uninstall settings."""
 
@@ -396,6 +425,38 @@ def _run_command(
     return output
 
 
+def _run_streaming_command(
+    args: list[str | Path],
+    log: LogCallback,
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> None:
+    """Run a long command while forwarding combined output line by line."""
+    command = [str(arg) for arg in args]
+    log("$ " + shlex.join(command))
+    proc = subprocess.Popen(
+        command,
+        cwd=str(cwd) if cwd else None,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    output: list[str] = []
+    assert proc.stdout is not None
+    for raw_line in proc.stdout:
+        line = raw_line.rstrip("\r\n")
+        output.append(line)
+        if line:
+            log(line)
+    returncode = proc.wait()
+    if returncode != 0:
+        message = "\n".join(output[-30:]).strip()
+        raise RuntimeError(message or f"Command failed with exit code {returncode}: {shlex.join(command)}")
+
+
 def _require_command(name: str, hint: str = "") -> str:
     """Return a command path or raise a clear install error."""
     path = shutil.which(name)
@@ -515,6 +576,12 @@ def _ensure_git_checkout(
             _run_command(["git", "checkout", "--detach", revision], log, cwd=target)
             return
         if branch:
+            if expected_major is not None:
+                fetched_ref = f"refs/remotes/pbgui-pb7-pin/{branch}"
+                fetch_passivbot_ref(target, repo_url, branch=branch)
+                verify_passivbot_major(target, expected_major, ref=fetched_ref)
+                _run_command(["git", "checkout", "--detach", "--force", fetched_ref], log, cwd=target)
+                return
             _run_command(["git", "fetch", "origin", f"{branch}:refs/remotes/origin/{branch}"], log, cwd=target)
             _run_command(["git", "checkout", "-B", branch, f"refs/remotes/origin/{branch}"], log, cwd=target)
             _run_command(["git", "pull", "--ff-only", "origin", branch], log, cwd=target)
@@ -527,9 +594,9 @@ def _ensure_git_checkout(
         raise RuntimeError(f"Target directory exists and is not an empty git checkout: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
     clone_cmd: list[str | Path] = ["git", "clone"]
-    if revision:
+    if revision or (branch and expected_major is not None):
         clone_cmd.append("--no-checkout")
-    if branch:
+    if branch and expected_major is None:
         clone_cmd.extend(["--branch", branch, "--single-branch"])
     clone_cmd.extend([repo_url, target])
     _run_command(clone_cmd, log)
@@ -537,6 +604,32 @@ def _ensure_git_checkout(
         if expected_major is not None:
             verify_passivbot_major(target, expected_major, ref=revision)
         _run_command(["git", "checkout", "--detach", revision], log, cwd=target)
+    elif branch and expected_major is not None:
+        fetched_ref = f"refs/remotes/pbgui-pb7-pin/{branch}"
+        fetch_passivbot_ref(target, repo_url, branch=branch)
+        verify_passivbot_major(target, expected_major, ref=fetched_ref)
+        _run_command(["git", "checkout", "--detach", "--force", fetched_ref], log, cwd=target)
+
+
+def _validate_pb8_install(pb8_dir: Path, pb8_venv: Path, log: LogCallback) -> str:
+    """Validate the installed PB8 source, CLI, Rust module, and config schema."""
+    version = verify_passivbot_major(pb8_dir, 8)
+    _run_command([pb8_venv / "bin" / "passivbot", "--help"], log, timeout=60)
+    _run_command(
+        [
+            pb8_venv / "bin" / "python",
+            "-c",
+            (
+                "import passivbot_rust; "
+                "from config.schema import CONFIG_SCHEMA_VERSION; "
+                "assert str(CONFIG_SCHEMA_VERSION).startswith('v8.'), CONFIG_SCHEMA_VERSION; "
+                "print(CONFIG_SCHEMA_VERSION)"
+            ),
+        ],
+        log,
+        timeout=60,
+    )
+    return version
 
 
 def _write_pbgui_config(config: LocalMasterConfig, install_dir: Path, pbgui_dir: Path) -> None:
@@ -546,6 +639,8 @@ def _write_pbgui_config(config: LocalMasterConfig, install_dir: Path, pbgui_dir:
         "pbname": config.master_name,
         "pb7dir": str(install_dir / "pb7"),
         "pb7venv": str(install_dir / "venv_pb7" / "bin" / "python"),
+        "pb8dir": str(install_dir / "pb8"),
+        "pb8venv": str(install_dir / "venv_pb8" / "bin" / "python"),
         "role": "master",
     }
     cfg["api_server"] = {"host": config.pbgui_bind_host, "port": str(config.pbgui_port)}
@@ -575,8 +670,10 @@ def _local_install_targets(install_dir: Path) -> dict[str, Path]:
     return {
         "PBGui": install_dir / "pbgui",
         "PB7": install_dir / "pb7",
+        "PB8": install_dir / "pb8",
         "PBGui venv": install_dir / "venv_pbgui",
         "PB7 venv": install_dir / "venv_pb7",
+        "PB8 venv": install_dir / "venv_pb8",
     }
 
 
@@ -648,6 +745,164 @@ def _local_systemd_unit_pbgui_dir(unit: str) -> Path | None:
         if pbgui_dir:
             return pbgui_dir
     return None
+
+
+def _local_systemd_unit_text(unit: str) -> str:
+    """Return the first readable definition for a local systemd unit."""
+    for path in _local_systemd_unit_paths(unit):
+        if not path.exists() and not path.is_symlink():
+            continue
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return ""
+
+
+def _extract_execstart_python(text: str) -> Path | None:
+    """Extract an absolute Python executable from a systemd ExecStart line."""
+    for line in str(text or "").splitlines():
+        key, sep, value = line.strip().partition("=")
+        if key != "ExecStart" or not sep:
+            continue
+        try:
+            tokens = shlex.split(value)
+        except ValueError:
+            return None
+        if tokens:
+            candidate = Path(tokens[0])
+            if candidate.is_absolute() and candidate.name.startswith("python"):
+                return candidate
+    return None
+
+
+def _git_output(checkout: Path, *args: str) -> str:
+    """Return stripped Git output for an existing checkout."""
+    proc = subprocess.run(
+        ["git", "-C", str(checkout), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "Git inspection failed.").strip())
+    return str(proc.stdout or "").strip()
+
+
+def inspect_local_master_install(install_dir_value: str) -> dict[str, object]:
+    """Inspect an existing local master without changing runtime state."""
+    install_dir = Path(normalize_local_install_dir(install_dir_value))
+    pbgui_dir = install_dir / "pbgui"
+    ini_path = pbgui_dir / "pbgui.ini"
+    status: dict[str, object] = {
+        "install_dir": str(install_dir),
+        "pbgui_dir": str(pbgui_dir),
+        "installed": False,
+        "pb8_installed": False,
+        "maintenance_errors": [],
+        "update_all_errors": [],
+    }
+    common_errors: list[str] = []
+    update_all_errors: list[str] = []
+
+    if not (pbgui_dir / ".git").is_dir() or not ini_path.exists():
+        return status
+    status["installed"] = True
+    if ini_path.is_symlink():
+        common_errors.append("pbgui.ini must not be a symbolic link.")
+
+    cfg = configparser.ConfigParser(interpolation=None)
+    if not ini_path.is_symlink():
+        try:
+            with ini_path.open("r", encoding="utf-8") as handle:
+                cfg.read_file(handle)
+        except (OSError, configparser.Error) as exc:
+            common_errors.append(f"Could not read pbgui.ini: {exc}")
+    role = str(cfg.get("main", "role", fallback="") or "").strip().lower()
+    if role != "master":
+        common_errors.append("The existing PBGui installation is not configured as role=master.")
+
+    referenced_dirs = {
+        str(path.expanduser().resolve(strict=False))
+        for unit in LOCAL_SYSTEMD_UNITS
+        if (path := _local_systemd_unit_pbgui_dir(unit)) is not None
+    }
+    selected_dir = str(pbgui_dir.resolve(strict=False))
+    if referenced_dirs and referenced_dirs != {selected_dir}:
+        common_errors.append("PBGui systemd units reference conflicting installation directories.")
+    api_unit_text = _local_systemd_unit_text("pbgui-api.service")
+    if _extract_pbgui_dir_from_unit_text(api_unit_text) is None:
+        common_errors.append("The pbgui-api.service unit could not be found or validated.")
+    elif not _same_local_path(_extract_pbgui_dir_from_unit_text(api_unit_text), pbgui_dir):
+        common_errors.append("pbgui-api.service does not belong to the selected installation.")
+
+    pbgui_python = _extract_execstart_python(api_unit_text)
+    if pbgui_python is None or not pbgui_python.is_file():
+        common_errors.append("The installed PBGui Python executable could not be determined from pbgui-api.service.")
+        pbgui_python = None
+    ansible_playbook = pbgui_python.parent / "ansible-playbook" if pbgui_python else None
+    if ansible_playbook is None or not ansible_playbook.is_file() or not os.access(ansible_playbook, os.X_OK):
+        common_errors.append("ansible-playbook is missing from the installed PBGui virtualenv.")
+
+    pb7_dir_text = str(cfg.get("main", "pb7dir", fallback="") or "").strip()
+    pb7_python_text = str(cfg.get("main", "pb7venv", fallback="") or "").strip()
+    pb7_dir = Path(pb7_dir_text).expanduser() if pb7_dir_text else None
+    pb7_python = Path(pb7_python_text).expanduser() if pb7_python_text else None
+    if pb7_dir is None or not pb7_dir.is_absolute() or not (pb7_dir / ".git").is_dir():
+        update_all_errors.append("Configured PB7 checkout is missing or invalid.")
+    if pb7_python is None or not pb7_python.is_absolute() or pb7_python.parent.name != "bin" or not pb7_python.is_file():
+        update_all_errors.append("Configured PB7 virtualenv Python is missing or invalid.")
+        pb7_venv = None
+    else:
+        pb7_venv = pb7_python.parent.parent
+
+    pb8_dir = install_dir / "pb8"
+    pb8_venv = install_dir / "venv_pb8"
+    pb8_exists = (pb8_dir / ".git").is_dir()
+    status["pb8_installed"] = bool(pb8_exists and (pb8_venv / "bin" / "passivbot").is_file())
+    if pb8_dir.exists() and not pb8_exists and any(pb8_dir.iterdir()):
+        common_errors.append("PB8 target exists but is not a Git checkout.")
+
+    try:
+        if pb8_exists and _git_output(pb8_dir, "status", "--porcelain", "--untracked-files=no"):
+            common_errors.append("PB8 has local changes; refusing to overwrite them.")
+    except RuntimeError as exc:
+        common_errors.append(f"Could not inspect PB8 checkout: {exc}")
+    try:
+        if _git_output(pbgui_dir, "status", "--porcelain", "--untracked-files=no"):
+            update_all_errors.append("PBGui has local changes; Update All would overwrite them.")
+        branch = _git_output(pbgui_dir, "rev-parse", "--abbrev-ref", "HEAD")
+        if branch == "HEAD":
+            update_all_errors.append("PBGui is on a detached HEAD; Update All requires a branch.")
+        origin = _git_output(pbgui_dir, "remote", "get-url", "origin")
+        if origin != "https://github.com/msei99/pbgui.git":
+            update_all_errors.append("PBGui origin is not the supported official HTTPS repository.")
+    except RuntimeError as exc:
+        update_all_errors.append(f"Could not inspect PBGui checkout: {exc}")
+    if pb7_dir is not None and (pb7_dir / ".git").is_dir():
+        try:
+            if _git_output(pb7_dir, "status", "--porcelain", "--untracked-files=no"):
+                update_all_errors.append("PB7 has local changes; Update All would overwrite them.")
+        except RuntimeError as exc:
+            update_all_errors.append(f"Could not inspect PB7 checkout: {exc}")
+
+    status.update(
+        {
+            "role": role,
+            "pbgui_python": str(pbgui_python) if pbgui_python is not None else "",
+            "ansible_playbook": str(ansible_playbook) if ansible_playbook is not None else "",
+            "pb7_dir": str(pb7_dir) if pb7_dir is not None else "",
+            "pb7_venv": str(pb7_venv) if pb7_venv is not None else "",
+            "pb8_dir": str(pb8_dir),
+            "pb8_venv": str(pb8_venv),
+            "maintenance_errors": common_errors,
+            "update_all_errors": [*common_errors, *update_all_errors],
+            "can_maintain_pb8": not common_errors,
+            "can_update_all": not common_errors and not update_all_errors,
+        }
+    )
+    return status
 
 
 def _detected_local_install_dir() -> str:
@@ -778,7 +1033,103 @@ def run_local_master_uninstall(config: LocalUninstallConfig, log: LogCallback, a
     }
 
 
-def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifact_dir: Path | None = None) -> dict:
+def run_local_master_maintenance(
+    config: LocalMasterMaintenanceConfig,
+    log: LogCallback,
+    artifact_dir: Path | None = None,
+) -> dict:
+    """Install/update PB8 or update all components of an existing local master."""
+    config.validate()
+    install_dir = Path(config.install_dir)
+    pbgui_dir = install_dir / "pbgui"
+    status = inspect_local_master_install(config.install_dir)
+    errors_key = "update_all_errors" if config.action == "local-update-all" else "maintenance_errors"
+    errors = [str(item) for item in status.get(errors_key) or []]
+    if not status.get("installed"):
+        raise RuntimeError("No existing local PBGui master was found under the selected install parent.")
+    if errors:
+        raise RuntimeError("Maintenance preflight failed: " + " ".join(errors))
+
+    artifact_dir = artifact_dir or Path(tempfile.mkdtemp(prefix="pbgui-master-maintenance-"))
+    ensure_private_directory(artifact_dir)
+    root = _installer_root()
+
+    def run_playbook(playbook: Path, variables: dict[str, object], stage: str) -> None:
+        if not playbook.is_file():
+            raise RuntimeError(f"Required update playbook is missing: {playbook}")
+        vars_path = artifact_dir / f"{stage}-vars.json"
+        atomic_write_private_text(vars_path, json.dumps(variables, indent=4) + "\n")
+        env = os.environ.copy()
+        ansible_bin = str(Path(str(status["ansible_playbook"])).parent)
+        env["PATH"] = ansible_bin + os.pathsep + env.get("PATH", "")
+        _run_streaming_command(
+            [
+                str(status["ansible_playbook"]),
+                "-i",
+                "localhost,",
+                "-c",
+                "local",
+                "--extra-vars",
+                f"@{vars_path}",
+                playbook,
+            ],
+            log,
+            cwd=playbook.parent,
+            env=env,
+        )
+
+    log(f"Existing local PBGui master detected: {pbgui_dir}")
+    with acquire_master_update_lock(pbgui_dir):
+        locked_status = inspect_local_master_install(config.install_dir)
+        locked_errors = [str(item) for item in locked_status.get(errors_key) or []]
+        if locked_errors:
+            raise RuntimeError("Maintenance preflight changed while acquiring the update lock: " + " ".join(locked_errors))
+        status = locked_status
+        common_vars = {
+            "debug": False,
+            "target_hosts": "localhost",
+            "pbgdir": str(status["pbgui_dir"]),
+            "pbgui_python": str(status["pbgui_python"]),
+        }
+        if config.action == "local-update-all":
+            log("Updating PBGui and pinned PB7 without replacing pbgui.ini or authentication...")
+            run_playbook(
+                root / "master-update-pb.yml",
+                {
+                    **common_vars,
+                    "pb7dir": str(status["pb7_dir"]),
+                    "pb7venv": str(status["pb7_venv"]),
+                },
+                "update-pbgui-pb7",
+            )
+            pb8_playbook = pbgui_dir / "master-update-pb8.yml"
+            pb8_guard = pbgui_dir / "pb7_guard.py"
+        else:
+            pb8_playbook = root / "master-update-pb8.yml"
+            pb8_guard = root / "pb7_guard.py"
+
+        log("Installing or updating Passivbot v8 without stopping PB7 or PBRun...")
+        run_playbook(
+            pb8_playbook,
+            {**common_vars, "pb8_guard": str(pb8_guard)},
+            "update-pb8",
+        )
+
+    final_status = inspect_local_master_install(config.install_dir)
+    result = {
+        "ok": True,
+        "mode": config.action,
+        "install_dir": str(install_dir),
+        "pbgui_dir": str(final_status.get("pbgui_dir") or pbgui_dir),
+        "pb7_dir": str(final_status.get("pb7_dir") or ""),
+        "pb8_dir": str(final_status.get("pb8_dir") or install_dir / "pb8"),
+        "completed_at": int(time.time()),
+    }
+    log("Local master maintenance completed successfully.")
+    return result
+
+
+def _run_local_master_install_impl(config: LocalMasterConfig, log: LogCallback, artifact_dir: Path | None = None) -> dict:
     """Install a local PBGui master on this machine."""
     config.validate()
     _install_local_prerequisites(log, config.local_sudo_password)
@@ -791,8 +1142,10 @@ def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifa
     install_dir = Path(config.install_dir)
     pbgui_dir = install_dir / "pbgui"
     pb7_dir = install_dir / "pb7"
+    pb8_dir = install_dir / "pb8"
     pbgui_venv = install_dir / "venv_pbgui"
     pb7_venv = install_dir / "venv_pb7"
+    pb8_venv = install_dir / "venv_pb8"
     root = _installer_root()
 
     if artifact_dir:
@@ -800,7 +1153,8 @@ def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifa
     log(f"Using local install parent directory: {install_dir}")
     log(f"PBGui: {pbgui_dir}")
     log(f"PB7: {pb7_dir}")
-    log(f"Venvs: {pbgui_venv}, {pb7_venv}")
+    log(f"PB8: {pb8_dir}")
+    log(f"Venvs: {pbgui_venv}, {pb7_venv}, {pb8_venv}")
 
     existing_pb7_runtime = (pb7_dir / ".git").exists() or pb7_venv.exists()
     if (pb7_dir / ".git").exists():
@@ -831,6 +1185,10 @@ def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifa
         current_source=root,
         branch=_current_installer_branch(),
     )
+    pb8_invalid_marker = pbgui_dir / "data" / "locks" / "pb8-runtime-invalid"
+    ensure_private_directory(pb8_invalid_marker.parent)
+    atomic_write_private_text(pb8_invalid_marker, "PB8 installation or update in progress\n")
+    wait_for_master_update_barrier(pbgui_dir)
     _ensure_git_checkout(
         "https://github.com/enarjord/passivbot.git",
         pb7_dir,
@@ -840,6 +1198,15 @@ def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifa
     )
     verified_pb7_version = verify_passivbot_major(pb7_dir, 7)
     log(f"Verified pinned Passivbot v{verified_pb7_version} ({PB7_PINNED_COMMIT[:12]}).")
+    _ensure_git_checkout(
+        "https://github.com/enarjord/passivbot.git",
+        pb8_dir,
+        log,
+        branch="master",
+        expected_major=8,
+    )
+    verified_pb8_version = verify_passivbot_major(pb8_dir, 8)
+    log(f"Verified Passivbot v{verified_pb8_version} from official master.")
 
     setup_systemd_source = root / "setup" / "setup_systemd.sh"
     setup_systemd_target = pbgui_dir / "setup" / "setup_systemd.sh"
@@ -853,6 +1220,8 @@ def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifa
     _run_command([pb7_venv / "bin" / "python", "-m", "pip", "install", "--upgrade", "pip"], log)
     _run_command([pb7_venv / "bin" / "python", "-m", "pip", "install", "-r", pb7_dir / "requirements.txt"], log)
     _run_command([pb7_venv / "bin" / "python", "-m", "pip", "install", "maturin"], log)
+    _run_command([python312, "-m", "venv", pb8_venv], log)
+    _run_command([pb8_venv / "bin" / "python", "-m", "pip", "install", "--upgrade", "pip"], log)
 
     pbgui_requirements = pbgui_dir / "requirements.txt"
     if not pbgui_requirements.exists():
@@ -892,9 +1261,26 @@ def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifa
         ],
         log,
     )
+    log("Installing Passivbot v8 full profile...")
+    _run_command(
+        [
+            "bash",
+            "-lc",
+            "source "
+            + shlex.quote(str(cargo_env))
+            + " && "
+            + shlex.quote(str(pb8_venv / "bin" / "python"))
+            + " -m pip install --upgrade -e "
+            + shlex.quote(f"{pb8_dir}[full]"),
+        ],
+        log,
+        timeout=1800,
+    )
+    _validate_pb8_install(pb8_dir, pb8_venv, log)
 
     log("Writing PBGui configuration...")
     _write_pbgui_config(config, install_dir, pbgui_dir)
+    pb8_invalid_marker.unlink(missing_ok=True)
     _write_auth_secret(config, pbgui_dir)
 
     if config.start_services:
@@ -923,11 +1309,25 @@ def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifa
         "install_dir": str(install_dir),
         "pbgui_dir": str(pbgui_dir),
         "pb7_dir": str(pb7_dir),
+        "pb8_dir": str(pb8_dir),
         "pbgui_python": str(pbgui_venv / "bin" / "python"),
         "pb7_python": str(pb7_venv / "bin" / "python"),
+        "pb8_python": str(pb8_venv / "bin" / "python"),
         "local_url": _local_url(config.pbgui_bind_host, config.pbgui_port),
         "completed_at": int(time.time()),
     }
+
+
+def run_local_master_install(config: LocalMasterConfig, log: LogCallback, artifact_dir: Path | None = None) -> dict:
+    """Install a local master while excluding every other PB8 update writer."""
+    config.validate()
+    install_dir = Path(config.install_dir)
+    install_dir.mkdir(parents=True, exist_ok=True)
+    acquire_pb8_update_writer(install_dir)
+    try:
+        return _run_local_master_install_impl(config, log, artifact_dir)
+    finally:
+        release_pb8_update_writer(install_dir)
 
 
 def ensure_local_public_key(log: LogCallback) -> str:

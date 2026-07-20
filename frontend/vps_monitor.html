@@ -412,6 +412,14 @@ body.compact .progress-bar     { height: 4px; margin-top: 3px; }
 body.compact .summary-bar      { padding: 6px 0; margin-bottom: 6px; font-size: 12px; }
 body.compact .tab-content      { padding: 8px 10px; }
 
+@media (min-width: 1200px) {
+  body.compact .vps-title {
+    min-width: 420px;
+    width: 420px;
+    white-space: nowrap;
+  }
+}
+
 /* Compact inline metrics in header row — sits between vps-title and arrow */
 .compact-metrics {
   display: grid;
@@ -949,7 +957,7 @@ tr.row-inactive td { opacity: 0.45; }
 </div><!-- /#main-content -->
 </div><!-- /#page-body -->
 
-<script src="/app/js/log_viewer_panel.js?v=27"></script>
+<script src="/app/js/log_viewer_panel.js?v=28"></script>
 <script>
 /* ═══════════════════════════════════════════════════════════════
    VPS Monitor — WebSocket-powered real-time dashboard
