@@ -61,6 +61,10 @@ def test_non_elected_master_does_not_coordinate_migration(
         cluster_root = tmp_path / "data" / "cluster"
 
         @staticmethod
+        def _ensure_local_cluster_identity_without_legacy_read() -> None:
+            """Preserve the already prepared multi-master identity fixture."""
+
+        @staticmethod
         def run() -> dict:
             pytest.fail("non-elected master must not run the migration coordinator")
 
@@ -102,6 +106,20 @@ def _write_ini(root: Path, body: str) -> Path:
     path = root / "pbgui.ini"
     path.write_text(body.strip() + "\n", encoding="utf-8")
     return path
+
+
+def test_standalone_master_initializes_private_migration_identity(tmp_path: Path) -> None:
+    """A standalone master uses private local protocol state without a pre-existing Cluster."""
+    _write_ini(tmp_path, "[main]\nrole = master\npbname = standalone")
+
+    result = credential_migration.run_credential_migration(tmp_path)
+    identity = read_local_identity(tmp_path / "data" / "cluster")
+    materialized = rebuild_materialized_state(tmp_path / "data" / "cluster", write=False)
+    nodes = (materialized.get("cluster_nodes") or {}).get("nodes") or {}
+
+    assert result["phase"] == "complete"
+    assert identity["role"] == "master"
+    assert list(nodes) == [identity["node_id"]]
 
 
 def _json(path: Path, payload: object) -> None:

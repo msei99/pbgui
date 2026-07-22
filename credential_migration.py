@@ -1649,6 +1649,8 @@ def run_credential_migration(pbgdir: Path | str | None = None) -> dict[str, Any]
     """Run or resume the local credential migration coordinator."""
 
     coordinator = CredentialMigrationCoordinator(pbgdir)
+    # Standalone masters still need private local protocol state, but do not join any remote cluster.
+    coordinator._ensure_local_cluster_identity_without_legacy_read()
     materialized = read_materialized_state(coordinator.cluster_root)
     local_node_id = str(read_local_identity(coordinator.cluster_root)["node_id"])
     nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
