@@ -52,6 +52,19 @@ def test_websetup_installs_pb7_pin_and_latest_pb8() -> None:
     assert "wait_for_master_update_barrier(pbgui_dir)" in local_source
 
 
+@pytest.mark.parametrize("playbook_path", ["master-update-pbgui.yml", "master-update-pb.yml"])
+def test_master_updates_migrate_missing_legacy_master_role(playbook_path: str) -> None:
+    """Master updates repair old configs without replacing an explicit role."""
+    source = Path(playbook_path).read_text(encoding="utf-8")
+
+    task = source.split("- name: Migrate missing legacy master role", 1)[1]
+    task = task.split("\n    - name:", 1)[0]
+    assert "role=load_ini('main', 'role').strip()" in task
+    assert "changed=not role" in task
+    assert "save_ini('main', 'role', 'master') if changed else None" in task
+    assert "'changed=true' in (legacy_master_role.stdout | default(''))" in task
+
+
 @pytest.mark.parametrize("playbook_path", ["master-update-pb8.yml", "vps-update-pb8.yml"])
 def test_pb8_playbooks_gate_role_validate_and_leave_processes_running(playbook_path: str) -> None:
     """PB8 updates validate master role before writes and never signal bot processes."""

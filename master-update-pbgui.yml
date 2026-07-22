@@ -51,6 +51,18 @@
       register: pbgui_requirements
       changed_when: "'Successfully installed' in ((pbgui_requirements.stdout | default('')) + (pbgui_requirements.stderr | default('')))"
 
+    - name: Migrate missing legacy master role
+      command:
+        argv:
+          - "{{ pbgui_python | default(ansible_playbook_python) }}"
+          - -c
+          - "from pbgui_purefunc import load_ini, save_ini; role=load_ini('main', 'role').strip(); changed=not role; save_ini('main', 'role', 'master') if changed else None; print('changed=' + str(changed).lower())"
+      args:
+        chdir: "{{ pbgdir }}"
+      when: pbgdir != ""
+      register: legacy_master_role
+      changed_when: "'changed=true' in (legacy_master_role.stdout | default(''))"
+
     - name: Schedule PBGui restart after successful update
       command: /bin/true
       when: pbgdir != ""
