@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import sys
 import textwrap
 import time
 
@@ -15,6 +16,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SETUP_SCRIPT = ROOT / "setup" / "setup_systemd.sh"
+API_HANDOFF_SCRIPT = ROOT / "setup" / "stop_legacy_api.sh"
 UPDATE_PLAYBOOKS = (
     "vps-update-pbgui.yml",
     "vps-update-pb.yml",
@@ -252,6 +254,8 @@ def test_setup_systemd_first_run_then_idempotent_second_run(tmp_path: Path) -> N
         unit_source = (unit_dir / unit_name).read_text(encoding="utf-8")
         assert f"WorkingDirectory={pbgui_dir}" in unit_source
         assert f"ExecStart={python_bin} -u {pbgui_dir}/{script_name}" in unit_source
+    api_source = (unit_dir / "pbgui-api.service").read_text(encoding="utf-8")
+    assert f"ExecStartPre=/bin/bash {pbgui_dir}/setup/stop_legacy_api.sh --pbgui-dir {pbgui_dir}" in api_source
     first_inode = unit_path.stat().st_ino
     calls_path.write_text("", encoding="utf-8")
     second = _run_setup(env, pbgui_dir, python_bin)
@@ -262,6 +266,42 @@ def test_setup_systemd_first_run_then_idempotent_second_run(tmp_path: Path) -> N
     for action in ("daemon-reload", " enable ", " restart ", " start ", "reset-failed"):
         assert action not in second_calls
     assert not list(unit_path.parent.glob(".pbgui-*.tmp.*"))
+
+
+def test_api_handoff_stops_only_exact_legacy_process(tmp_path: Path) -> None:
+    """The API pre-start helper terminates only the exact legacy checkout process."""
+    pbgui_dir = tmp_path / "pbgui"
+    api_script = pbgui_dir / "PBApiServer.py"
+    decoy_script = tmp_path / "other" / "PBApiServer.py"
+    pidfile = pbgui_dir / "data" / "pid" / "api_server.pid"
+    api_script.parent.mkdir(parents=True)
+    decoy_script.parent.mkdir(parents=True)
+    pidfile.parent.mkdir(parents=True)
+    api_script.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+    decoy_script.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+
+    legacy = subprocess.Popen([sys.executable, str(api_script)])
+    decoy = subprocess.Popen([sys.executable, str(decoy_script)])
+    try:
+        pidfile.write_text(f"{legacy.pid}\n", encoding="utf-8")
+
+        result = subprocess.run(
+            ["bash", str(API_HANDOFF_SCRIPT), "--pbgui-dir", str(pbgui_dir)],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=40,
+        )
+
+        assert result.returncode == 0, result.stderr
+        legacy.wait(timeout=5)
+        assert decoy.poll() is None
+        assert not pidfile.exists()
+    finally:
+        for process in (legacy, decoy):
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=5)
 
 
 def test_setup_systemd_restarts_only_a_changed_requested_unit(tmp_path: Path) -> None:

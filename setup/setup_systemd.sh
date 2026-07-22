@@ -159,6 +159,7 @@ write_unit() {
   local unit_name="$1"
   local description="$2"
   local script_name="$3"
+  local exec_start_pre="${4:-}"
   local unit_path="$unit_dir/$unit_name"
   local temp_path
   temp_path="$(mktemp "$unit_dir/.${unit_name}.tmp.XXXXXX")"
@@ -172,6 +173,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$PBGUI_DIR
+$exec_start_pre
 ExecStart=$PYTHON_BIN -u $PBGUI_DIR/$script_name
 Restart=on-failure
 RestartSec=5
@@ -222,7 +224,7 @@ EOF
 }
 
 declare -A unit_changed
-write_unit "pbgui-api.service" "PBGui API Server" "PBApiServer.py"
+write_unit "pbgui-api.service" "PBGui API Server" "PBApiServer.py" "ExecStartPre=/bin/bash $PBGUI_DIR/setup/stop_legacy_api.sh --pbgui-dir $PBGUI_DIR"
 write_unit "pbgui-pbcluster.service" "PBGui PBCluster Service" "PBCluster.py"
 write_unit "pbgui-pbrun.service" "PBGui PBRun Service" "PBRun.py"
 write_unit "pbgui-pbdata.service" "PBGui PBData Service" "PBData.py"
