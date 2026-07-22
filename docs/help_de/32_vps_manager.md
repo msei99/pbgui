@@ -21,6 +21,7 @@ Die Hauptansicht zeigt eine Tabelle mit allen Servern (Master + VPS) und ihrem a
 | **Updates** | Ausstehende Linux-Paketupdates; gesunde Zeilen zeigen nur die Anzahl, während Stale/Missing/Error sichtbar bleiben |
 | **PBGui / PBGui Branch / PBGui GitHub** | Installierte Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
 | **PB7 / PB7 Branch / PB7 GitHub** | PB7-Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
+| **PB8 / PB8 Branch / PB8 GitHub** | PB8-Version, Branch und ob sie mit der aktuellen Upstream-PB8-Revision uebereinstimmt |
 
 Interaktionen in der Übersicht:
 
@@ -41,6 +42,10 @@ Linke Sidebar:
 | **Import Cluster Nodes** | Sichere SSH-Metadaten aus Cluster-Sync-Nodes als lokale VPS-Manager-Hosts vorab anzeigen und importieren; Secrets werden nicht importiert |
 
 Die Übersicht nutzt jetzt die normale gemeinsame PBGui-FastAPI-Shell. Beim Wechsel zu **Master** oder zu einem konkreten **VPS** wird die linke Sidebar zu einer kontextabhängigen Aktionsliste umgeschaltet. Der Hauptbereich der Übersicht bleibt dabei auf die Tabelle fokussiert, während der Host-Import als manuelle Hostname-Aktion oder nach einem Cluster-Sync-Join als **Import Cluster Nodes** in der Sidebar verfügbar bleibt.
+
+Die Detailkoepfe fuer Master und VPS wiederholen die Versionskarten fuer PBGui, PB7 und PB8 samt Branch/Commit und Update-Status. Die Werte stammen aus demselben Monitor-Agent-Snapshot wie die Overview-Zeile.
+
+PB8-Updates verwenden absichtlich einen Detached Checkout auf dem verifizierten Upstream-`master`-Commit. Wenn dieser Detached Commit exakt der verifizierten Upstream-Revision entspricht, zeigt VPS Manager `master` statt des technischen Git-Zustands `unknown` an.
 
 **Import Cluster Nodes** liest den lokal materialisierten `cluster_nodes`-State und importiert nicht-lokale Nodes mit SSH-Metadaten, unabhängig vom Cluster-Sync-Modus. Deaktivierte Cluster-Sync-Nodes können trotzdem in den VPS Manager importiert werden; disabled bedeutet nur, dass PBCluster nicht über diesen Node replizieren soll. Importiert werden nur sichere lokale VPS-Manager-Metadaten wie Hostname, SSH-Host, SSH-User, SSH-Port und Remote PBGui Dir; Passwörter und Private Keys werden nicht importiert. CMC-Secrets sind keine VPS-Manager-Felder: Cluster Sync materialisiert versiegelte Pool-Generationen getrennt. Wenn lokale `/etc/hosts`-Einträge fehlen oder auf eine andere IP zeigen, zeigt die Import-Vorschau die nötigen Host-Eintragsänderungen und fragt beim Anwenden nach dem lokalen sudo-Passwort, bevor sie geschrieben werden. Das Modal fragt das VPS-User-Passwort pro importiertem Host ab; Zeilen ohne Passwort werden übersprungen, während eingegebene Passwörter einmalig genutzt werden, um Remote-Settings zu lesen, den Monitoring-SSH-Key zu installieren und das Passwort nur in der aktuellen Browser/API-Session für spätere SSH-Aktionen zu halten.
 

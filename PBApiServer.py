@@ -87,6 +87,8 @@ from api.backtest_v8 import startup as bt8_startup, shutdown as bt8_shutdown
 from api.cluster import router as cluster_router, shutdown as cluster_shutdown
 from api.optimize_v7 import router as optimize_v7_router
 from api.optimize_v7 import startup as opt7_startup, shutdown as opt7_shutdown
+from api.optimize_v8 import router as optimize_v8_router
+from api.optimize_v8 import startup as opt8_startup, shutdown as opt8_shutdown
 from api.pareto_explorer import router as pareto_explorer_router, shutdown as pareto_explorer_shutdown
 from api.pb7_ohlcv_tools import startup as ohlcv_preload_startup
 from api.strategy_explorer import router as strategy_explorer_router
@@ -446,16 +448,17 @@ async def _worker_watchdog_loop() -> None:
     while True:
         try:
             await asyncio.sleep(_WATCHDOG_INTERVAL_S)
-            active = list_jobs(states=["pending", "running"], limit=1)
-            if not active:
+            pid = await asyncio.to_thread(read_worker_pid)
+            if pid and await asyncio.to_thread(is_pid_running, int(pid)):
                 continue
-            pid = read_worker_pid()
-            if pid and is_pid_running(int(pid)):
+            active = await asyncio.to_thread(list_jobs, states=["pending", "running"], limit=1)
+            if not active:
                 continue
             # Worker is dead but jobs are queued — restart it.
             try:
-                clear_worker_pid()
-                subprocess.Popen(
+                await asyncio.to_thread(clear_worker_pid)
+                await asyncio.to_thread(
+                    subprocess.Popen,
                     [sys.executable, str(Path(__file__).resolve().parent / "task_worker.py")],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -584,6 +587,7 @@ async def _lifespan(app: FastAPI):
         bt7_startup()
         bt8_startup()
         opt7_startup()
+        opt8_startup()
         coin_data_startup()
         ohlcv_preload_startup()
         vps_manager_startup()
@@ -614,6 +618,7 @@ async def _lifespan(app: FastAPI):
             ("backtest-v7", bt7_shutdown),
             ("backtest-v8", bt8_shutdown),
             ("optimize-v7", opt7_shutdown),
+            ("optimize-v8", opt8_shutdown),
         )
 
         async def _run_shutdown(name, shutdown_step):
@@ -687,7 +692,7 @@ app = FastAPI(
         "- `/ws/dashboard`: `balance_updated`, `income_updated`, `positions_updated`, `nav_request`, or `dashboard_action`.\n"
         "- `/ws/candles`: `candle`, `position`, `orders`, or `ping`. Query params: `user`, `symbol`, `tf`, `side`.\n"
         "- `/api/v7/ws/v7`: `{\"type\": \"instances\", \"data\": [...]}`.\n"
-        "- `/api/backtest-v7/ws/bt7` and `/api/optimize-v7/ws/opt7`: `queue_update`; Backtest may also send `archive_update`.\n"
+        "- `/api/backtest-v7/ws/bt7`, `/api/backtest-v8/ws/bt7`, `/api/optimize-v7/ws/opt7`, and `/api/optimize-v8/ws/opt8`: `queue_update`; Backtest may also send `archive_update`.\n"
         "- `/api/vps-manager/ws`: `state`, `detail`, `result`, `error`, and command-specific response envelopes.\n"
     ),
     version=PBGUI_VERSION,
@@ -742,6 +747,7 @@ app.include_router(backtest_v7_router, prefix="/api/backtest-v7", tags=["backtes
 app.include_router(backtest_v8_router, prefix="/api/backtest-v8", tags=["backtest-v8"])
 app.include_router(cluster_router, prefix="/api/cluster", tags=["cluster"])
 app.include_router(optimize_v7_router, prefix="/api/optimize-v7", tags=["optimize-v7"])
+app.include_router(optimize_v8_router, prefix="/api/optimize-v8", tags=["optimize-v8"])
 app.include_router(pareto_explorer_router, prefix="/api/pareto-explorer", tags=["pareto-explorer"])
 app.include_router(strategy_explorer_router, prefix="/api/strategy-explorer", tags=["strategy-explorer"])
 

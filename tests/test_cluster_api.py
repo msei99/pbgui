@@ -1925,6 +1925,63 @@ def test_remote_status_reports_node_mismatch(monkeypatch, tmp_path: Path) -> Non
     assert payload["probes"][0]["remote_node_id"] == unexpected_node
 
 
+def test_immediate_v7_instance_sync_targets_only_assigned_node(monkeypatch) -> None:
+    """Emergency config sync must push and materialize only the instance's assigned host."""
+    node = {"node_id": NODE_B, "pbname": "vps-a"}
+    snapshot = {
+        "identity": {"node_id": NODE_A},
+        "cluster_nodes": {"nodes": {NODE_A: {"node_id": NODE_A}, NODE_B: node}},
+        "desired_state": {
+            "instances": {
+                "panic-bot": {"version": "8", "assigned_host": NODE_B},
+            }
+        },
+    }
+    calls = []
+
+    async def push(target, identity, rebuild=True):
+        calls.append(("push", target["node_id"], identity["node_id"], rebuild))
+        return {"ok": True, "counts": {"pushed": 1}}
+
+    async def materialize(target, identity, verb, timeout=30):
+        calls.append(("materialize", target["node_id"], identity["node_id"], verb, timeout))
+        return {"ok": True, "counts": {"error": 0, "written_instances": 1}}
+
+    monkeypatch.setattr(cluster, "_load_cluster_snapshot", lambda: snapshot)
+    monkeypatch.setattr(cluster, "_push_missing_operations_to_remote", push)
+    monkeypatch.setattr(cluster, "_run_remote_materialize_command", materialize)
+
+    result = asyncio.run(cluster.sync_and_materialize_v7_instance("panic-bot", expected_version=8))
+
+    assert result["ok"] is True
+    assert result["hostname"] == "vps-a"
+    assert result["version"] == "8"
+    assert calls == [
+        ("push", NODE_B, NODE_A, True),
+        ("materialize", NODE_B, NODE_A, "materialize-v7", 120),
+    ]
+
+
+def test_immediate_v7_instance_sync_rejects_unrecorded_version(monkeypatch) -> None:
+    """An emergency action must not report success for stale desired state."""
+    snapshot = {
+        "identity": {"node_id": NODE_A},
+        "cluster_nodes": {"nodes": {}},
+        "desired_state": {
+            "instances": {
+                "panic-bot": {"version": "7", "assigned_host": NODE_B},
+            }
+        },
+    }
+    monkeypatch.setattr(cluster, "_load_cluster_snapshot", lambda: snapshot)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(cluster.sync_and_materialize_v7_instance("panic-bot", expected_version=8))
+
+    assert exc_info.value.status_code == 409
+    assert "expected 8" in exc_info.value.detail
+
+
 def test_remote_join_writes_identity_for_known_node(monkeypatch, tmp_path: Path) -> None:
     """Remote join invokes the restricted wrapper for a known uninitialized node."""
 

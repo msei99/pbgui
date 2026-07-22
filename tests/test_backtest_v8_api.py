@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
+import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -27,6 +30,75 @@ def _patch_roots(tmp_path: Path, monkeypatch) -> tuple[Path, Path, Path, Path]:
     monkeypatch.setattr(backtest_v8, "_log_dir", lambda: logs)
     monkeypatch.setattr(backtest_v8, "PBGDIR", str(tmp_path))
     return configs, v7_configs, queue, logs
+
+
+def test_optimize_and_queue_drafts_round_trip_isolated_copies() -> None:
+    """PB8 cross-page drafts must validate payloads and not expose mutable store values."""
+    backtest_v8._opt_draft_store.clear()
+    backtest_v8._queue_draft_store.clear()
+    config = {"config_version": "v8.0.0", "bot": {"long": {"risk": {"n_positions": 3}}}}
+
+    optimize_id = backtest_v8.create_optimize_draft({"config": config}, session=None)["draft_id"]
+    config["bot"]["long"]["risk"]["n_positions"] = 99
+    optimize_payload = backtest_v8.get_optimize_draft(optimize_id, session=None)
+    assert optimize_payload["config"]["bot"]["long"]["risk"]["n_positions"] == 3
+
+    queue_id = backtest_v8.create_queue_draft(
+        {"items": [{"name": "candidate", "config": optimize_payload["config"]}]},
+        session=None,
+    )["draft_id"]
+    queue_payload = backtest_v8.get_queue_draft(queue_id, session=None)
+    assert queue_payload["items"] == [{"name": "candidate", "config": optimize_payload["config"]}]
+
+    with pytest.raises(HTTPException) as error:
+        backtest_v8.create_queue_draft({"items": []}, session=None)
+    assert error.value.status_code == 422
+
+
+def test_concurrent_pb8_draft_creation_stays_bounded() -> None:
+    """Parallel FastAPI worker threads must not corrupt or overfill draft stores."""
+    backtest_v8._opt_draft_store.clear()
+    backtest_v8._queue_draft_store.clear()
+    errors: list[Exception] = []
+
+    def create_drafts(worker: int) -> None:
+        try:
+            for index in range(40):
+                backtest_v8.create_optimize_draft({"config": {"worker": worker, "index": index}}, session=None)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=create_drafts, args=(worker,)) for worker in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert errors == []
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(backtest_v8._opt_draft_store) == backtest_v8._MAX_DRAFTS
+
+
+def test_ohlcv_preload_logs_and_transforms_validation_failure(monkeypatch) -> None:
+    """PB8 preload validation failures must be logged and exposed as HTTP 422."""
+    messages = []
+    monkeypatch.setattr(
+        backtest_v8,
+        "start_pb8_ohlcv_preload_job",
+        lambda _config: (_ for _ in ()).throw(ValueError("source not ready")),
+    )
+    monkeypatch.setattr(
+        backtest_v8,
+        "_log",
+        lambda service, message, **kwargs: messages.append((service, message, kwargs)),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        backtest_v8.start_ohlcv_preload({"config": {}}, None)
+
+    assert error.value.status_code == 422
+    assert error.value.detail == "source not ready"
+    assert any("OHLCV preload failed" in message for _service, message, _kwargs in messages)
 
 
 def test_migrate_v7_keeps_source_and_persists_report(tmp_path, monkeypatch) -> None:
@@ -858,3 +930,125 @@ def test_second_start_cannot_launch_same_queue_item_twice(tmp_path, monkeypatch)
 
     assert error.value.status_code == 409
     assert len(launches) == 1
+
+
+def test_backtest_settings_share_the_pb7_configuration(monkeypatch) -> None:
+    """PB8 must read and write the one existing PB7 Backtest queue settings section."""
+    saved = {}
+    monkeypatch.setattr(backtest_v8.multiprocessing, "cpu_count", lambda: 16)
+    monkeypatch.setattr(
+        backtest_v8,
+        "load_ini_section",
+        lambda section: {
+            "autostart": "True",
+            "cpu": "8",
+            "use_pbgui_market_data": "True",
+            "hlcvs_cleanup_enabled": "True",
+            "hlcvs_cleanup_days": "9",
+            "hlcvs_cleanup_interval_h": "12",
+        }
+        if section == "backtest_v7"
+        else pytest.fail(f"Unexpected settings section: {section}"),
+    )
+    monkeypatch.setattr(backtest_v8, "save_ini_section", lambda section, values: saved.update(section=section, values=values))
+
+    settings = backtest_v8.get_settings(None)
+    assert settings == {
+        "autostart": True,
+        "cpu": 8,
+        "cpu_max": 16,
+        "use_pbgui_market_data": True,
+        "hsl_signal_modes": ["coin", "pside", "unified"],
+        "hlcvs_cleanup_enabled": True,
+        "hlcvs_cleanup_days": 9,
+        "hlcvs_cleanup_interval_h": 12,
+    }
+
+    backtest_v8.update_settings(
+        {
+            "autostart": False,
+            "cpu": 6,
+            "use_pbgui_market_data": False,
+            "hlcvs_cleanup_enabled": False,
+            "hlcvs_cleanup_days": 7,
+            "hlcvs_cleanup_interval_h": 24,
+        },
+        None,
+    )
+    assert saved["section"] == "backtest_v7"
+    assert backtest_v8._QUEUE_SETTINGS_SECTION == "backtest_v7"
+    source = Path(backtest_v8.__file__).read_text(encoding="utf-8")
+    assert 'load_ini_section("backtest_v8")' not in source
+    assert 'save_ini_section("backtest_v8"' not in source
+
+
+def test_pb8_cache_cleanup_preserves_active_foreign_and_unknown_materialized_locks(tmp_path, monkeypatch) -> None:
+    """PB8 cleanup removes stale data but never deletes materialized runs with unsafe locks."""
+    pb8_dir = tmp_path / "pb8"
+    hlcvs_root = pb8_dir / "caches" / "hlcvs_data"
+    materialized_root = pb8_dir / "caches" / "ohlcvs" / "materialized"
+    hlcvs_root.mkdir(parents=True)
+    materialized_root.mkdir(parents=True)
+    old_time = time.time() - 3 * 86400
+
+    def old_directory(root: Path, name: str, lock_payload=None) -> Path:
+        directory = root / name
+        directory.mkdir()
+        (directory / "payload.dat").write_bytes(b"data")
+        if lock_payload is not None:
+            lock_text = lock_payload if isinstance(lock_payload, str) else json.dumps(lock_payload)
+            (directory / ".materialized.lock.json").write_text(lock_text, encoding="utf-8")
+        os.utime(directory, (old_time, old_time))
+        return directory
+
+    old_directory(hlcvs_root, "old-dataset")
+    unlocked = old_directory(materialized_root, "unlocked")
+    stale = old_directory(
+        materialized_root,
+        "stale",
+        {"pid": 333, "hostname": backtest_v8.socket.gethostname()},
+    )
+    active = old_directory(
+        materialized_root,
+        "active",
+        {"pid": 111, "hostname": backtest_v8.socket.gethostname()},
+    )
+    foreign = old_directory(materialized_root, "foreign", {"pid": 222, "hostname": "another-host"})
+    malformed = old_directory(materialized_root, "malformed", "{not-json")
+
+    monkeypatch.setattr(backtest_v8, "pb8_runtime_status", lambda: {"pb8dir": str(pb8_dir)})
+    monkeypatch.setattr(backtest_v8.psutil, "pid_exists", lambda pid: pid == 111)
+
+    result = backtest_v8._cleanup_pb8_caches(1)
+
+    assert result == {"removed": 3, "freed_mb": 0, "errors": 0, "skipped_locked": 3}
+    assert not unlocked.exists()
+    assert not stale.exists()
+    assert active.exists()
+    assert foreign.exists()
+    assert malformed.exists()
+
+
+def test_pb8_cache_cleanup_respects_active_materialized_operation_lock(tmp_path, monkeypatch) -> None:
+    """PBGui must not race PB8 while its root-level materialized operation lock is active."""
+    pb8_dir = tmp_path / "pb8"
+    materialized_root = pb8_dir / "caches" / "ohlcvs" / "materialized"
+    run_dir = materialized_root / "old-run"
+    operation_lock = materialized_root / ".materialized.op.lock"
+    run_dir.mkdir(parents=True)
+    operation_lock.mkdir()
+    (operation_lock / "lock.json").write_text(
+        json.dumps({"pid": 111, "hostname": backtest_v8.socket.gethostname()}),
+        encoding="utf-8",
+    )
+    old_time = time.time() - 3 * 86400
+    os.utime(run_dir, (old_time, old_time))
+    monkeypatch.setattr(backtest_v8, "pb8_runtime_status", lambda: {"pb8dir": str(pb8_dir)})
+    monkeypatch.setattr(backtest_v8.psutil, "pid_exists", lambda pid: pid == 111)
+
+    result = backtest_v8._cleanup_pb8_caches(1)
+
+    assert result["removed"] == 0
+    assert result["skipped_locked"] == 1
+    assert run_dir.exists()
+    assert operation_lock.exists()

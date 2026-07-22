@@ -1,10 +1,12 @@
 """Tests for market-data status API filtering."""
 
+import asyncio
 from pathlib import Path
 import configparser
 import importlib
 import importlib.util
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +22,54 @@ sys.modules["PBCoinData"] = pbcoindata_module
 pbcoindata_spec.loader.exec_module(pbcoindata_module)
 
 market_data_api = importlib.import_module("api.market_data")
+
+
+def test_internal_status_decodes_large_payload_off_event_loop(monkeypatch) -> None:
+    """PBData snapshot decoding must not block unrelated API requests."""
+    calls = []
+
+    class Request:
+        client = SimpleNamespace(host="127.0.0.1")
+
+        async def body(self) -> bytes:
+            return b'{"latest_1m":{"coins_done":42}}'
+
+    async def run_in_thread(function, *args):
+        calls.append(function)
+        return function(*args)
+
+    monkeypatch.setattr(market_data_api.asyncio, "to_thread", run_in_thread)
+    monkeypatch.setattr(market_data_api, "_market_data_status_snapshot", {"binance_latest_1m": {"coins_done": 3}})
+    result = asyncio.run(market_data_api.update_market_data_status_snapshot(Request()))
+
+    assert result == {"ok": True}
+    assert calls == [market_data_api.json.loads]
+    assert market_data_api._market_data_status_snapshot["latest_1m"]["coins_done"] == 42
+    assert market_data_api._market_data_status_snapshot["binance_latest_1m"]["coins_done"] == 3
+
+
+def test_internal_status_decode_keeps_event_loop_responsive(monkeypatch) -> None:
+    """A slow snapshot decode must not delay unrelated event-loop work."""
+    real_loads = market_data_api.json.loads
+
+    class Request:
+        client = SimpleNamespace(host="127.0.0.1")
+
+        async def body(self) -> bytes:
+            return b'{"latest_1m":{"coins_done":42}}'
+
+    def slow_loads(payload):
+        time.sleep(0.05)
+        return real_loads(payload)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(market_data_api.update_market_data_status_snapshot(Request()))
+        await asyncio.sleep(0.005)
+        assert task.done() is False
+        assert await task == {"ok": True}
+
+    monkeypatch.setattr(market_data_api.json, "loads", slow_loads)
+    asyncio.run(scenario())
 
 
 def test_filter_status_coins_to_enabled_prunes_removed_coin(monkeypatch) -> None:

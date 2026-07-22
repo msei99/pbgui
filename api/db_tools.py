@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import traceback
 import uuid
 from dataclasses import dataclass
@@ -26,7 +27,7 @@ from logging_helpers import human_log as _log
 from master.async_pool import remote_path_join
 import pbgui_purefunc
 from pbgui_purefunc import PBGDIR
-from task_queue import enqueue_running_job, force_fail_job, is_pid_running, list_jobs, retry_failed_job
+from task_queue import enqueue_running_job, force_fail_job, get_task_state_dir, is_pid_running, list_jobs, retry_failed_job
 
 SERVICE = "DbTools"
 
@@ -38,6 +39,7 @@ _sync_jobs: dict[str, dict[str, Any]] = {}
 _sync_scheduler_task: asyncio.Task | None = None
 _background_tasks: set[asyncio.Task] = set()
 _sync_job_locks: set[str] = set()
+_SYNC_STATE_LOCK = threading.RLock()
 
 MAIN_DB_NAME = "pbgui.db"
 TRADES_DB_NAME = "pbgui_trades.db"
@@ -300,7 +302,8 @@ async def shutdown() -> None:
         if operation.status == "running":
             operation.fail("Interrupted by API shutdown")
     _background_tasks.clear()
-    _sync_job_locks.clear()
+    with _SYNC_STATE_LOCK:
+        _sync_job_locks.clear()
     _sync_scheduler_task = None
     _log(SERVICE, f"DB Tools shutdown completed; stopped {len(tasks)} background task(s)", level="INFO")
 
@@ -972,35 +975,37 @@ async def _assert_known_target(target: str) -> None:
 def _load_sync_jobs() -> None:
     """Load persisted sync jobs into memory."""
 
-    _sync_jobs.clear()
-    path = _sync_jobs_file()
-    if not path.exists():
-        return
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        _log(SERVICE, f"failed to load sync jobs: {exc}", level="WARNING")
-        return
-    for item in data if isinstance(data, list) else []:
-        if not isinstance(item, dict):
-            continue
-        job_id = str(item.get("id") or "").strip()
-        if job_id:
-            if item.get("running") and not item.get("worker_job_id"):
-                item["running"] = False
-                item["last_error"] = "Interrupted before persistent worker migration"
-                item["next_run"] = datetime.now(timezone.utc).isoformat() if item.get("enabled") else ""
-            _sync_jobs[job_id] = item
+    with _SYNC_STATE_LOCK:
+        _sync_jobs.clear()
+        path = _sync_jobs_file()
+        if not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            _log(SERVICE, f"failed to load sync jobs: {exc}", level="WARNING")
+            return
+        for item in data if isinstance(data, list) else []:
+            if not isinstance(item, dict):
+                continue
+            job_id = str(item.get("id") or "").strip()
+            if job_id:
+                if item.get("running") and not item.get("worker_job_id"):
+                    item["running"] = False
+                    item["last_error"] = "Interrupted before persistent worker migration"
+                    item["next_run"] = datetime.now(timezone.utc).isoformat() if item.get("enabled") else ""
+                _sync_jobs[job_id] = item
 
 
 def _save_sync_jobs() -> None:
     """Persist sync jobs atomically."""
 
-    path = _sync_jobs_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(list(_sync_jobs.values()), indent=4), encoding="utf-8")
-    os.replace(tmp, path)
+    with _SYNC_STATE_LOCK:
+        path = _sync_jobs_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(list(_sync_jobs.values()), indent=4), encoding="utf-8")
+        os.replace(tmp, path)
 
 
 def _sync_job_public(job: dict[str, Any]) -> dict[str, Any]:
@@ -1182,7 +1187,8 @@ def _validate_sync_job_payload(payload: SyncJobRequest) -> dict[str, Any]:
     name = str(payload.name or "").strip() or f"{source} sync"
     job_id = str(payload.id or "").strip() or uuid.uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
-    existing = _sync_jobs.get(job_id, {})
+    with _SYNC_STATE_LOCK:
+        existing = dict(_sync_jobs.get(job_id, {}))
     job = {
         "id": job_id,
         "name": name,
@@ -1208,9 +1214,16 @@ async def _validate_sync_job_safety(job: dict[str, Any]) -> None:
     for target in job.get("targets") or []:
         await _assert_known_target(str(target))
         await _assert_target_users_not_active(str(target), list(job.get("users") or []))
+    _validate_sync_job_conflicts(job)
+
+
+def _validate_sync_job_conflicts(job: dict[str, Any]) -> None:
+    """Reject conflicting enabled jobs against the current in-memory state."""
     if not job.get("enabled"):
         return
-    for other in _sync_jobs.values():
+    with _SYNC_STATE_LOCK:
+        others = list(_sync_jobs.values())
+    for other in others:
         if other.get("id") == job.get("id") or not other.get("enabled"):
             continue
         other_users = set(other.get("users") or [])
@@ -1336,11 +1349,30 @@ async def run_sync_job_snapshot(job: dict[str, Any], operation: Any = None) -> d
 
 
 def _task_jobs_by_id() -> dict[str, dict[str, Any]]:
-    return {
+    tasks = {
         str(item.get("id") or ""): item
-        for item in list_jobs(states=["pending", "running", "done", "failed"], limit=0)
+        for item in list_jobs(states=["pending", "running"], limit=0)
         if str(item.get("type") or "") == "db_sync"
     }
+    known_ids = {
+        str(job.get("worker_job_id") or "").strip()
+        for job in _sync_jobs.values()
+        if str(job.get("worker_job_id") or "").strip()
+    }
+    for job_id in known_ids - tasks.keys():
+        for state in ("done", "failed"):
+            path = get_task_state_dir(state) / f"{job_id}.json"
+            if not path.is_file():
+                continue
+            try:
+                item = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(item, dict) and str(item.get("type") or "") == "db_sync":
+                item["_path"] = str(path)
+                tasks[job_id] = item
+            break
+    return tasks
 
 
 def _start_db_sync_worker(job_path: str) -> None:
@@ -1398,74 +1430,76 @@ def _task_job_operation(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _reconcile_sync_worker_jobs() -> None:
-    tasks = _task_jobs_by_id()
-    for task in tasks.values():
-        _recover_db_sync_task(task)
-    tasks = _task_jobs_by_id()
-    changed = False
-    for job in _sync_jobs.values():
-        worker_job_id = str(job.get("worker_job_id") or "")
-        if not worker_job_id:
-            active_matches = [
-                task
-                for task in tasks.values()
-                if str(task.get("status") or "") in {"pending", "running", "cancelling"}
-                and str((((task.get("payload") or {}).get("job") or {}).get("id") or "")) == str(job.get("id") or "")
-            ]
-            if active_matches:
-                active = max(active_matches, key=lambda task: int(task.get("created_ts") or 0))
-                worker_job_id = str(active.get("id") or "")
-                job["worker_job_id"] = worker_job_id
+    with _SYNC_STATE_LOCK:
+        tasks = _task_jobs_by_id()
+        for task in tasks.values():
+            _recover_db_sync_task(task)
+        tasks = _task_jobs_by_id()
+        changed = False
+        for job in _sync_jobs.values():
+            worker_job_id = str(job.get("worker_job_id") or "")
+            if not worker_job_id:
+                active_matches = [
+                    task
+                    for task in tasks.values()
+                    if str(task.get("status") or "") in {"pending", "running", "cancelling"}
+                    and str((((task.get("payload") or {}).get("job") or {}).get("id") or "")) == str(job.get("id") or "")
+                ]
+                if active_matches:
+                    active = max(active_matches, key=lambda task: int(task.get("created_ts") or 0))
+                    worker_job_id = str(active.get("id") or "")
+                    job["worker_job_id"] = worker_job_id
+                    job["running"] = True
+                    changed = True
+            if not worker_job_id:
+                continue
+            task = tasks.get(worker_job_id)
+            state = str((task or {}).get("status") or "missing")
+            if state in {"pending", "running", "cancelling"}:
                 job["running"] = True
-                changed = True
-        if not worker_job_id:
-            continue
-        task = tasks.get(worker_job_id)
-        state = str((task or {}).get("status") or "missing")
-        if state in {"pending", "running", "cancelling"}:
-            job["running"] = True
-            continue
-        job["running"] = False
-        job["worker_job_id"] = ""
-        job["updated_at"] = datetime.now(timezone.utc).isoformat()
-        job["next_run"] = _next_sync_run_iso(int(job.get("interval_seconds") or 60)) if job.get("enabled") else ""
-        if state == "done":
-            job["last_ok"] = job["updated_at"]
-            job["last_error"] = ""
-            job["last_result"] = task.get("result") if isinstance(task, dict) else None
-        else:
-            job["last_error"] = str((task or {}).get("error") or "Persistent DB Sync job disappeared")
-        changed = True
-    if changed:
-        _save_sync_jobs()
+                continue
+            job["running"] = False
+            job["worker_job_id"] = ""
+            job["updated_at"] = datetime.now(timezone.utc).isoformat()
+            job["next_run"] = _next_sync_run_iso(int(job.get("interval_seconds") or 60)) if job.get("enabled") else ""
+            if state == "done":
+                job["last_ok"] = job["updated_at"]
+                job["last_error"] = ""
+                job["last_result"] = task.get("result") if isinstance(task, dict) else None
+            else:
+                job["last_error"] = str((task or {}).get("error") or "Persistent DB Sync job disappeared")
+            changed = True
+        if changed:
+            _save_sync_jobs()
 
 
 def _dispatch_sync_job(job: dict[str, Any], *, manual: bool) -> dict[str, Any]:
-    if job.get("running") or job.get("worker_job_id"):
-        raise HTTPException(status_code=409, detail="Sync job is already running")
-    target_steps = sum(len(TABLE_SPECS) + 1 for _target in job.get("targets") or [])
-    total = _operation_total("sync-job", target_steps)
-    snapshot = dict(job)
-    snapshot["manual"] = manual
-    active = [
-        task for task in _task_jobs_by_id().values()
-        if str(task.get("status") or "") in {"pending", "running", "cancelling"}
-    ]
-    if active:
-        raise HTTPException(status_code=409, detail="Another DB Sync worker is already running")
-    queued = enqueue_running_job(job_type="db_sync", payload={"job": snapshot, "total": total})
-    try:
-        _start_db_sync_worker(queued.path)
-    except OSError as exc:
-        force_fail_job(queued.job_id, error=str(exc))
-        raise HTTPException(status_code=500, detail="Unable to start persistent DB Sync worker") from exc
-    job["running"] = True
-    job["worker_job_id"] = queued.job_id
-    job["last_run"] = datetime.now(timezone.utc).isoformat()
-    job["updated_at"] = job["last_run"]
-    job["next_run"] = ""
-    _save_sync_jobs()
-    return _task_job_operation(_task_jobs_by_id().get(queued.job_id, {"id": queued.job_id, "status": "pending", "progress": {"total": total}}))
+    with _SYNC_STATE_LOCK:
+        if job.get("running") or job.get("worker_job_id"):
+            raise HTTPException(status_code=409, detail="Sync job is already running")
+        target_steps = sum(len(TABLE_SPECS) + 1 for _target in job.get("targets") or [])
+        total = _operation_total("sync-job", target_steps)
+        snapshot = dict(job)
+        snapshot["manual"] = manual
+        active = [
+            task for task in _task_jobs_by_id().values()
+            if str(task.get("status") or "") in {"pending", "running", "cancelling"}
+        ]
+        if active:
+            raise HTTPException(status_code=409, detail="Another DB Sync worker is already running")
+        queued = enqueue_running_job(job_type="db_sync", payload={"job": snapshot, "total": total})
+        try:
+            _start_db_sync_worker(queued.path)
+        except OSError as exc:
+            force_fail_job(queued.job_id, error=str(exc))
+            raise HTTPException(status_code=500, detail="Unable to start persistent DB Sync worker") from exc
+        job["running"] = True
+        job["worker_job_id"] = queued.job_id
+        job["last_run"] = datetime.now(timezone.utc).isoformat()
+        job["updated_at"] = job["last_run"]
+        job["next_run"] = ""
+        _save_sync_jobs()
+        return _task_job_operation(_task_jobs_by_id().get(queued.job_id, {"id": queued.job_id, "status": "pending", "progress": {"total": total}}))
 
 
 def _ensure_sync_scheduler() -> None:
@@ -1479,34 +1513,38 @@ def _ensure_sync_scheduler() -> None:
     _sync_scheduler_task = loop.create_task(_sync_scheduler_loop(), name="db-tools-sync-scheduler")
 
 
+def _run_sync_scheduler_tick() -> None:
+    """Reconcile and dispatch DB Sync work without blocking the API event loop."""
+    with _SYNC_STATE_LOCK:
+        _reconcile_sync_worker_jobs()
+        now_ts = datetime.now(timezone.utc).timestamp()
+        tasks = _task_jobs_by_id()
+        for job_id, job in list(_sync_jobs.items()):
+            if not job.get("enabled") or job.get("running") or job_id in _sync_job_locks:
+                continue
+            next_raw = str(job.get("next_run") or "")
+            if next_raw:
+                try:
+                    next_ts = datetime.fromisoformat(next_raw).timestamp()
+                except Exception:
+                    next_ts = 0
+            else:
+                next_ts = 0
+            if next_ts and next_ts > now_ts:
+                continue
+            if any(
+                str(task.get("status") or "") in {"pending", "running", "cancelling"}
+                for task in tasks.values()
+            ):
+                continue
+            _dispatch_sync_job(job, manual=False)
+            break
+
+
 async def _sync_scheduler_loop() -> None:
     while True:
         try:
-            _reconcile_sync_worker_jobs()
-            now_ts = datetime.now(timezone.utc).timestamp()
-            changed = False
-            for job_id, job in list(_sync_jobs.items()):
-                if not job.get("enabled") or job.get("running") or job_id in _sync_job_locks:
-                    continue
-                next_raw = str(job.get("next_run") or "")
-                if next_raw:
-                    try:
-                        next_ts = datetime.fromisoformat(next_raw).timestamp()
-                    except Exception:
-                        next_ts = 0
-                else:
-                    next_ts = 0
-                if next_ts and next_ts > now_ts:
-                    continue
-                if any(
-                    str(task.get("status") or "") in {"pending", "running", "cancelling"}
-                    for task in _task_jobs_by_id().values()
-                ):
-                    continue
-                _dispatch_sync_job(job, manual=False)
-                changed = True
-            if changed:
-                _save_sync_jobs()
+            await asyncio.to_thread(_run_sync_scheduler_tick)
         except Exception as exc:
             _log(SERVICE, f"sync scheduler failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
         await asyncio.sleep(10)
@@ -2738,7 +2776,9 @@ async def get_sync_jobs(session: SessionToken = Depends(require_auth)) -> dict[s
     del session
     _ensure_sync_scheduler()
     _reconcile_sync_worker_jobs()
-    return {"jobs": [_sync_job_public(job) for job in sorted(_sync_jobs.values(), key=lambda item: str(item.get("name") or "").lower())]}
+    with _SYNC_STATE_LOCK:
+        jobs = [_sync_job_public(job) for job in sorted(_sync_jobs.values(), key=lambda item: str(item.get("name") or "").lower())]
+    return {"jobs": jobs}
 
 
 @router.post("/sync/safety")
@@ -2761,7 +2801,9 @@ async def sync_safety(payload: SyncJobRequest, session: SessionToken = Depends(r
             blocked[str(target)] = hits
     conflicts: list[dict[str, Any]] = []
     if job.get("enabled"):
-        for other in _sync_jobs.values():
+        with _SYNC_STATE_LOCK:
+            others = list(_sync_jobs.values())
+        for other in others:
             if other.get("id") == job.get("id") or not other.get("enabled"):
                 continue
             shared_users = sorted(set(other.get("users") or []).intersection(users), key=str.lower)
@@ -2776,15 +2818,17 @@ async def save_sync_job(payload: SyncJobRequest, session: SessionToken = Depends
 
     del session
     _reconcile_sync_worker_jobs()
-    existing = _sync_jobs.get(str(payload.id or "").strip())
-    if existing and existing.get("running"):
-        raise HTTPException(status_code=409, detail="Sync job is running")
     job = _validate_sync_job_payload(payload)
     await _validate_sync_job_safety(job)
-    if job.get("enabled") and not job.get("next_run"):
-        job["next_run"] = _next_sync_run_iso(int(job.get("interval_seconds") or 60))
-    _sync_jobs[str(job["id"])] = job
-    _save_sync_jobs()
+    with _SYNC_STATE_LOCK:
+        existing = _sync_jobs.get(str(job["id"]))
+        if existing and existing.get("running"):
+            raise HTTPException(status_code=409, detail="Sync job is running")
+        _validate_sync_job_conflicts(job)
+        if job.get("enabled") and not job.get("next_run"):
+            job["next_run"] = _next_sync_run_iso(int(job.get("interval_seconds") or 60))
+        _sync_jobs[str(job["id"])] = job
+        _save_sync_jobs()
     _ensure_sync_scheduler()
     _log_sync_job(str(job["id"]), "job_saved", name=job.get("name"), source=job.get("source"), targets=job.get("targets"), users=job.get("users"), enabled=job.get("enabled"))
     _log(SERVICE, f"save sync job name={job.get('name')} source={job.get('source')} targets={job.get('targets')} users={job.get('users')} enabled={job.get('enabled')}", level="INFO")
@@ -2797,13 +2841,14 @@ async def delete_sync_job(job_id: str, session: SessionToken = Depends(require_a
 
     del session
     _reconcile_sync_worker_jobs()
-    if job_id in _sync_job_locks or bool((_sync_jobs.get(job_id) or {}).get("running")):
-        raise HTTPException(status_code=409, detail="Sync job is running")
-    removed = _sync_jobs.pop(job_id, None)
-    if not removed:
-        raise HTTPException(status_code=404, detail="Sync job not found")
-    _log_sync_job(job_id, "job_deleted", name=removed.get("name"))
-    _save_sync_jobs()
+    with _SYNC_STATE_LOCK:
+        if job_id in _sync_job_locks or bool((_sync_jobs.get(job_id) or {}).get("running")):
+            raise HTTPException(status_code=409, detail="Sync job is running")
+        removed = _sync_jobs.pop(job_id, None)
+        if not removed:
+            raise HTTPException(status_code=404, detail="Sync job not found")
+        _log_sync_job(job_id, "job_deleted", name=removed.get("name"))
+        _save_sync_jobs()
     _log(SERVICE, f"delete sync job name={removed.get('name')}", level="INFO")
     return {"ok": True, "deleted": job_id}
 
@@ -2814,10 +2859,12 @@ async def run_sync_job(job_id: str, session: SessionToken = Depends(require_auth
 
     del session
     _reconcile_sync_worker_jobs()
-    job = _sync_jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Sync job not found")
-    return {"operation": _dispatch_sync_job(job, manual=True)}
+    with _SYNC_STATE_LOCK:
+        job = _sync_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Sync job not found")
+        operation = _dispatch_sync_job(job, manual=True)
+    return {"operation": operation}
 
 
 @router.get("/users")

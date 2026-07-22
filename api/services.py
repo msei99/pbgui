@@ -1142,7 +1142,7 @@ async def _get_optimize_worker_item() -> dict[str, Any]:
     summary = f"{counts.get('queued', 0)} queued, {counts.get('running', 0) + counts.get('optimizing', 0)} active"
     return _worker_item(
         worker_id="optimize-queue",
-        label="Optimize Queue",
+        label="PB7 Optimize Queue",
         group="queue",
         worker_type="scheduler task",
         running=running,
@@ -1160,6 +1160,36 @@ async def _get_optimize_worker_item() -> dict[str, Any]:
             _worker_stat("CPU override", "On" if cpu_override else "Off"),
         ],
         log_file="OptimizeQueueAPI.log",
+    )
+
+
+def _get_optimize_v8_worker_item() -> dict[str, Any]:
+    import api.optimize_v8 as opt8
+
+    items = opt8._load_queue()
+    counts = Counter(str(item.get("status") or "unknown").strip().lower() for item in items)
+    settings = opt8.load_ini_section(opt8._QUEUE_SETTINGS_SECTION)
+    task = getattr(opt8._worker, "_task", None)
+    running = _task_active(task)
+    health = "running" if running else "failed" if task is not None and task.done() else "stopped"
+    return _worker_item(
+        worker_id="optimize-v8-queue",
+        label="PB8 Optimize Queue",
+        group="queue",
+        worker_type="scheduler task",
+        running=running,
+        summary=f"{counts.get('queued', 0)} queued, {counts.get('running', 0)} active",
+        description="Schedules queued PB8 optimize jobs and launches detached PB8 optimizer subprocesses.",
+        note="Stopping the controller pauses automatic queue processing only. Detached PB8 optimizers continue running.",
+        stats=[
+            _worker_stat("Health", health),
+            _worker_stat("Queued", counts.get("queued", 0)),
+            _worker_stat("Running", counts.get("running", 0)),
+            _worker_stat("Complete", counts.get("complete", 0)),
+            _worker_stat("Error", counts.get("error", 0)),
+            _worker_stat("Autostart", "On" if str(settings.get("autostart", "False")).lower() == "true" else "Off"),
+        ],
+        log_file="OptimizeV8.log",
     )
 
 
@@ -1218,6 +1248,7 @@ async def _collect_worker_groups() -> list[dict[str, Any]]:
                 _get_task_worker_item(),
                 await _get_backtest_worker_item(),
                 await _get_optimize_worker_item(),
+                _get_optimize_v8_worker_item(),
             ],
         },
         {
@@ -1278,6 +1309,10 @@ async def _start_worker(worker_id: str) -> None:
         import api.optimize_v7 as opt7
         opt7._worker.start()
         return
+    if worker_id == "optimize-v8-queue":
+        import api.optimize_v8 as opt8
+        opt8._worker.start()
+        return
     if worker_id == "archive-sync":
         import api.backtest_v7 as bt7
         bt7._archive_sync_worker.start()
@@ -1310,6 +1345,10 @@ async def _stop_worker(worker_id: str) -> None:
     if worker_id == "optimize-queue":
         import api.optimize_v7 as opt7
         await opt7._worker.stop()
+        return
+    if worker_id == "optimize-v8-queue":
+        import api.optimize_v8 as opt8
+        await opt8._worker.stop()
         return
     if worker_id == "archive-sync":
         import api.backtest_v7 as bt7

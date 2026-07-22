@@ -32,7 +32,7 @@ _MSGSPEC_MSGPACK_DECODER = msgspec.msgpack.Decoder() if _HAS_MSGSPEC else None
 
 _DISABLE_SCAN_CACHE = os.environ.get("PBG_DISABLE_SCAN_CACHE") == "1"
 _FULL_SCAN_CACHE = os.environ.get("PBG_FULL_SCAN_CACHE") == "1"
-_SCAN_CACHE_VERSION = 5
+_SCAN_CACHE_VERSION = 6
 
 
 @dataclass
@@ -140,6 +140,103 @@ def _scoring_goal_for_metric(scoring_goals: Dict[str, str], metric_name: str, de
     return default
 
 
+def _apply_incremental_result_diff(base: Dict, diff: Dict) -> Dict:
+    """Apply one PB8 incremental result entry without mutating the prior snapshot."""
+    result: Dict = {}
+    for key in base.keys() | diff.keys():
+        if key not in diff:
+            result[key] = base[key]
+            continue
+        value = diff[key]
+        delete_marker = isinstance(value, dict) and (
+            value == {"__passivbot_diff_delete__": True}
+            or value == {b"__passivbot_diff_delete__": True}
+        )
+        if delete_marker:
+            continue
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            result[key] = _apply_incremental_result_diff(base[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _suite_metrics_payload(config_data: Dict) -> Tuple[Dict, List[str]]:
+    """Return one metric-per-key suite shape for current and legacy PB8 payloads."""
+    suite_metrics = config_data.get('suite_metrics', {}) or {}
+    if not isinstance(suite_metrics, dict):
+        return {}, []
+    labels = suite_metrics.get('scenario_labels') or suite_metrics.get('scenarios') or []
+    labels = [str(label) for label in labels] if isinstance(labels, list) else []
+    metrics = suite_metrics.get('metrics')
+    if isinstance(metrics, dict):
+        return metrics, labels
+
+    aggregate = suite_metrics.get('aggregate', {}) or {}
+    if not isinstance(aggregate, dict):
+        return {}, labels
+    stats = aggregate.get('stats', {}) or {}
+    aggregated = aggregate.get('aggregated', {}) or {}
+    if not isinstance(stats, dict):
+        stats = {}
+    if not isinstance(aggregated, dict):
+        aggregated = {}
+    normalized = {}
+    for metric_name in stats.keys() | aggregated.keys():
+        metric_stats = stats.get(metric_name, {}) or {}
+        aggregated_value = aggregated.get(metric_name)
+        if aggregated_value is None and isinstance(metric_stats, dict):
+            aggregated_value = metric_stats.get('mean')
+        normalized[metric_name] = {
+            'stats': metric_stats if isinstance(metric_stats, dict) else {},
+            'aggregated': aggregated_value,
+            'scenarios': {},
+        }
+    return normalized, labels
+
+
+def _backtest_scenarios(backtest_config: Any) -> List[Dict]:
+    """Read PB8 canonical suite fields or PB7's nested suite block."""
+    if not isinstance(backtest_config, dict):
+        return []
+    if backtest_config.get('suite_enabled'):
+        scenarios = backtest_config.get('scenarios', []) or []
+        return scenarios if isinstance(scenarios, list) else []
+    suite = backtest_config.get('suite', {}) or {}
+    if isinstance(suite, dict) and suite.get('enabled'):
+        scenarios = suite.get('scenarios', []) or []
+        return scenarios if isinstance(scenarios, list) else []
+    return []
+
+
+def _flatten_bot_params(bot_config: Any) -> Dict[str, Any]:
+    """Preserve flat PB7 keys and expose nested PB8 leaves as dotted keys."""
+    flattened: Dict[str, Any] = {}
+    if not isinstance(bot_config, dict):
+        return flattened
+
+    def _walk(value: Dict, prefix: str) -> None:
+        for raw_key, item in value.items():
+            key = raw_key.decode('utf-8', errors='replace') if isinstance(raw_key, bytes) else str(raw_key)
+            path = f'{prefix}.{key}'
+            if isinstance(item, dict):
+                _walk(item, path)
+            else:
+                flattened[path] = item
+
+    for raw_side, side_config in bot_config.items():
+        side = raw_side.decode('utf-8', errors='replace') if isinstance(raw_side, bytes) else str(raw_side)
+        if side not in {'long', 'short'} or not isinstance(side_config, dict):
+            continue
+        for raw_key, item in side_config.items():
+            key = raw_key.decode('utf-8', errors='replace') if isinstance(raw_key, bytes) else str(raw_key)
+            if isinstance(item, dict):
+                _walk(item, f'{side}.{key}')
+            else:
+                flattened[f'{side}_{key}'] = item
+    return flattened
+
+
 class ParetoDataLoader:
     """Loads and analyzes all_results.bin from optimize runs"""
     
@@ -175,6 +272,8 @@ class ParetoDataLoader:
         self.optimize_bounds: Dict[str, Tuple[float, float]] = {}
         self.optimize_limits: List[Dict] = []
         self.backtest_scenarios: List[Dict] = []
+        self.optimize_version = "v7"
+        self._diff_compressed_results = False
 
     def _scan_cache_paths(self) -> Tuple[str, str]:
         """Return (meta_json_path, npz_path) for the persistent scan cache."""
@@ -183,9 +282,10 @@ class ParetoDataLoader:
 
     @staticmethod
     def _normalize_optimize_bounds(bounds: Dict) -> Dict[str, Tuple[float, float]]:
-        """Normalize PB7 optimize bounds to a simple (lower, upper) tuple per parameter.
+        """Normalize flat PB7 or nested PB8 bounds to dotted (lower, upper) pairs.
 
         PB7 may store bounds as e.g. [lower, upper, step].
+        PB8 nests bounds under side/strategy/risk objects.
         This converts list/tuple/dict formats into (lower, upper) floats.
         Unparseable entries are skipped.
         """
@@ -215,16 +315,21 @@ class ParetoDataLoader:
         out: Dict[str, Tuple[float, float]] = {}
         if not isinstance(bounds, dict):
             return out
-        for k, v in bounds.items():
-            if not isinstance(k, str):
-                continue
-            pair = _to_pair(v)
-            if not pair:
-                continue
-            lo, hi = pair
-            if lo > hi:
-                lo, hi = hi, lo
-            out[k] = (lo, hi)
+        def _walk(node: Dict, prefix: str = '') -> None:
+            for k, v in node.items():
+                if not isinstance(k, str):
+                    continue
+                key = f'{prefix}.{k}' if prefix else k
+                pair = _to_pair(v)
+                if pair:
+                    lo, hi = pair
+                    if lo > hi:
+                        lo, hi = hi, lo
+                    out[key] = (lo, hi)
+                elif isinstance(v, dict):
+                    _walk(v, key)
+
+        _walk(bounds)
         return out
 
     def _is_scan_cache_valid(self) -> bool:
@@ -407,9 +512,17 @@ class ParetoDataLoader:
                 u0 = msgpack.Unpacker(f, raw=False, strict_map_key=False, read_size=1024 * 1024)
                 first_obj = next(iter(u0))
             if isinstance(first_obj, dict):
+                if str(first_obj.get('config_version') or '').lower().startswith('v8'):
+                    self.optimize_version = 'v8'
+                optimize_block = first_obj.get('optimize', {}) or {}
+                self._diff_compressed_results = bool(
+                    self.optimize_version == 'v8'
+                    and isinstance(optimize_block, dict)
+                    and optimize_block.get('compress_results_file')
+                )
                 # populate scoring_metrics, optimize bounds/limits, scenarios, scenario_labels
                 try:
-                    optimize_config = first_obj.get('optimize', {}) or {}
+                    optimize_config = optimize_block
                     scoring = optimize_config.get('scoring', []) or []
                     self.scoring_metrics = _extract_scoring_metric_names(scoring)
                     self.scoring_goals = _extract_scoring_metric_goals(scoring)
@@ -420,13 +533,11 @@ class ParetoDataLoader:
 
                 try:
                     if 'suite_metrics' in first_obj:
-                        suite_metrics_block = first_obj.get('suite_metrics', {}) or {}
+                        _metrics, labels = _suite_metrics_payload(first_obj)
                         if not self.scenario_labels:
-                            self.scenario_labels = suite_metrics_block.get('scenario_labels', []) or []
+                            self.scenario_labels = labels
                     backtest_config = first_obj.get('backtest', {}) or {}
-                    suite_config = backtest_config.get('suite', {}) or {}
-                    if suite_config.get('enabled'):
-                        self.backtest_scenarios = suite_config.get('scenarios', []) or []
+                    self.backtest_scenarios = _backtest_scenarios(backtest_config)
                 except Exception:
                     pass
         except Exception:
@@ -436,7 +547,11 @@ class ParetoDataLoader:
         # If the cache is valid, avoid decoding the entire all_results.bin.
         # We'll select indices from cached arrays and only unpack selected configs by offsets.
         t_cache_load0 = time.perf_counter()
-        scan_cache = self._load_scan_cache() if (not _DISABLE_SCAN_CACHE and self._is_scan_cache_valid()) else None
+        scan_cache = self._load_scan_cache() if (
+            not _DISABLE_SCAN_CACHE
+            and not self._diff_compressed_results
+            and self._is_scan_cache_valid()
+        ) else None
         t_cache_load = time.perf_counter() - t_cache_load0
 
         if scan_cache is not None:
@@ -671,10 +786,10 @@ class ParetoDataLoader:
 
         def _metrics_dict_from_config_data(config_data: Dict) -> Dict:
             if 'suite_metrics' in config_data:
-                suite_metrics_block = config_data.get('suite_metrics', {}) or {}
+                metrics, labels = _suite_metrics_payload(config_data)
                 if not self.scenario_labels:
-                    self.scenario_labels = suite_metrics_block.get('scenario_labels', []) or []
-                return suite_metrics_block.get('metrics', {}) or {}
+                    self.scenario_labels = labels
+                return metrics
             metrics_block = config_data.get('metrics', {}) or {}
             return metrics_block.get('stats', {}) or {}
 
@@ -692,9 +807,7 @@ class ParetoDataLoader:
 
             if not self.backtest_scenarios and 'backtest' in config_data:
                 backtest_config = config_data.get('backtest', {}) or {}
-                suite_config = backtest_config.get('suite', {}) or {}
-                if suite_config.get('enabled'):
-                    self.backtest_scenarios = suite_config.get('scenarios', []) or []
+                self.backtest_scenarios = _backtest_scenarios(backtest_config)
 
         def _aggregated_metric_value(metric_data: Any) -> float:
             if isinstance(metric_data, dict):
@@ -804,7 +917,27 @@ class ParetoDataLoader:
         def _metrics_dict_from_raw(obj: Dict) -> Dict:
             if b'suite_metrics' in obj:
                 suite = _get(obj, b'suite_metrics', {}) or {}
-                return _get(suite, b'metrics', {}) or {}
+                metrics = _get(suite, b'metrics')
+                if isinstance(metrics, dict):
+                    return metrics
+                aggregate = _get(suite, b'aggregate', {}) or {}
+                stats = _get(aggregate, b'stats', {}) or {}
+                aggregated = _get(aggregate, b'aggregated', {}) or {}
+                if not isinstance(stats, dict):
+                    stats = {}
+                if not isinstance(aggregated, dict):
+                    aggregated = {}
+                normalized = {}
+                for metric_name in stats.keys() | aggregated.keys():
+                    metric_stats = stats.get(metric_name, {}) or {}
+                    value = aggregated.get(metric_name)
+                    if value is None and isinstance(metric_stats, dict):
+                        value = metric_stats.get(b'mean')
+                    normalized[metric_name] = {
+                        b'stats': metric_stats if isinstance(metric_stats, dict) else {},
+                        b'aggregated': value,
+                    }
+                return normalized
             m = _get(obj, b'metrics', {}) or {}
             return _get(m, b'stats', {}) or {}
 
@@ -993,63 +1126,82 @@ class ParetoDataLoader:
             progress_callback(0, max(1, len(selected_order)), "Parsing selected configs (offsets)...")
 
         t_parse_selected0 = time.perf_counter()
-        pairs = [(int(offsets_all[i]), int(i)) for i in selected_order if 0 <= int(i) < len(offsets_all)]
-        pairs.sort(key=lambda x: x[0])
-
         parsed_selected: Dict[int, ConfigMetrics] = {}
         raw_selected: Dict[int, Dict] = {}
-        with open(self.all_results_path, 'rb') as f:
-            file_size = os.path.getsize(self.all_results_path)
-            for n_done, (off, idx) in enumerate(pairs, 1):
-                try:
-                    # Prefer decoding from a bounded bytes slice so msgspec can be used.
-                    end = int(offsets_all[idx + 1]) if (int(idx) + 1) < len(offsets_all) else int(file_size)
-                    if end <= int(off):
-                        raise ValueError("invalid offset range")
-                    f.seek(int(off))
-                    payload = f.read(int(end - int(off)))
-
-                    config_data = self._decode_msgpack_object(payload)
-
-                    # Use precomputed robustness from the scan phase (if available) to skip recomputation here.
-                    pre_rob = None
-                    if overall_rob_all is not None:
-                        try:
-                            pre_rob = float(overall_rob_all[idx])
-                        except Exception:
-                            pre_rob = None
-
-                    if isinstance(config_data, dict) and any(isinstance(k, bytes) for k in config_data.keys()):
-                        metrics = self._parse_config_light_raw(idx, config_data, precomputed_overall_robustness=pre_rob)
-                    else:
-                        metrics = self._parse_config_light(
-                            idx,
-                            config_data,
-                            precomputed_overall_robustness=pre_rob,
-                            compute_overall_robustness=False,
-                        )
-
-                    parsed_selected[idx] = metrics
-                    raw_selected[idx] = config_data
-                except Exception:
-                    # Fall back to legacy per-object unpack
+        if self._diff_compressed_results:
+            selected_set = set(selected_order)
+            selected_items = (
+                (idx, config_data)
+                for idx, config_data in enumerate(self._iter_binary_file(raw_mode=True))
+                if idx in selected_set
+            )
+            for n_done, (idx, config_data) in enumerate(selected_items, 1):
+                pre_rob = None
+                if overall_rob_all is not None:
                     try:
+                        pre_rob = float(overall_rob_all[idx])
+                    except Exception:
+                        pre_rob = None
+                metrics = self._parse_config_light_raw(idx, config_data, precomputed_overall_robustness=pre_rob)
+                parsed_selected[idx] = metrics
+                raw_selected[idx] = config_data
+                if progress_callback and (n_done % 50 == 0 or n_done == len(selected_order)):
+                    progress_callback(n_done, len(selected_order), f"Parsed {n_done}/{len(selected_order)} selected configs")
+        else:
+            pairs = [(int(offsets_all[i]), int(i)) for i in selected_order if 0 <= int(i) < len(offsets_all)]
+            pairs.sort(key=lambda x: x[0])
+            with open(self.all_results_path, 'rb') as f:
+                file_size = os.path.getsize(self.all_results_path)
+                for n_done, (off, idx) in enumerate(pairs, 1):
+                    try:
+                        # Prefer decoding from a bounded bytes slice so msgspec can be used.
+                        end = int(offsets_all[idx + 1]) if (int(idx) + 1) < len(offsets_all) else int(file_size)
+                        if end <= int(off):
+                            raise ValueError("invalid offset range")
                         f.seek(int(off))
-                        unpacker = msgpack.Unpacker(f, raw=True, strict_map_key=False)
-                        config_data = next(iter(unpacker))
+                        payload = f.read(int(end - int(off)))
+
+                        config_data = self._decode_msgpack_object(payload)
+
+                        # Use precomputed robustness from the scan phase (if available) to skip recomputation here.
                         pre_rob = None
                         if overall_rob_all is not None:
                             try:
                                 pre_rob = float(overall_rob_all[idx])
                             except Exception:
                                 pre_rob = None
-                        metrics = self._parse_config_light_raw(idx, config_data, precomputed_overall_robustness=pre_rob)
+
+                        if isinstance(config_data, dict) and any(isinstance(k, bytes) for k in config_data.keys()):
+                            metrics = self._parse_config_light_raw(idx, config_data, precomputed_overall_robustness=pre_rob)
+                        else:
+                            metrics = self._parse_config_light(
+                                idx,
+                                config_data,
+                                precomputed_overall_robustness=pre_rob,
+                                compute_overall_robustness=False,
+                            )
+
                         parsed_selected[idx] = metrics
                         raw_selected[idx] = config_data
                     except Exception:
-                        continue
-                if progress_callback and (n_done % 50 == 0 or n_done == len(pairs)):
-                    progress_callback(n_done, len(pairs), f"Parsed {n_done}/{len(pairs)} selected configs")
+                        # Fall back to legacy per-object unpack
+                        try:
+                            f.seek(int(off))
+                            unpacker = msgpack.Unpacker(f, raw=True, strict_map_key=False)
+                            config_data = next(iter(unpacker))
+                            pre_rob = None
+                            if overall_rob_all is not None:
+                                try:
+                                    pre_rob = float(overall_rob_all[idx])
+                                except Exception:
+                                    pre_rob = None
+                            metrics = self._parse_config_light_raw(idx, config_data, precomputed_overall_robustness=pre_rob)
+                            parsed_selected[idx] = metrics
+                            raw_selected[idx] = config_data
+                        except Exception:
+                            continue
+                    if progress_callback and (n_done % 50 == 0 or n_done == len(pairs)):
+                        progress_callback(n_done, len(pairs), f"Parsed {n_done}/{len(pairs)} selected configs")
 
         self.raw_configs_cache = raw_selected
         self.configs = [parsed_selected[i] for i in selected_order if i in parsed_selected]
@@ -1059,12 +1211,14 @@ class ParetoDataLoader:
         t_parse = t_scan + t_parse_selected
 
         # Write persistent scan cache (best-effort)
-        if not _DISABLE_SCAN_CACHE:
+        if not _DISABLE_SCAN_CACHE and not self._diff_compressed_results:
             try:
                 st_bin = os.stat(self.all_results_path)
                 cache_meta = {
                     "version": _SCAN_CACHE_VERSION,
                     "source": {"size": int(st_bin.st_size), "mtime": float(st_bin.st_mtime)},
+                    "optimize_version": self.optimize_version,
+                    "diff_compressed": False,
                     "scoring_metrics": self.scoring_metrics,
                     "scoring_goals": self.scoring_goals,
                     "scenario_labels": self.scenario_labels,
@@ -1446,6 +1600,8 @@ class ParetoDataLoader:
             try:
                 with open(json_file, 'r', encoding='utf-8') as f:
                     config_data = json.load(f)
+                    if str(config_data.get('config_version') or '').lower().startswith('v8'):
+                        self.optimize_version = 'v8'
                     
                     # Create ConfigMetrics from JSON
                     metrics = self._parse_json_config(config_data, parsed_count)
@@ -1615,8 +1771,12 @@ class ParetoDataLoader:
             unpacker = msgpack.Unpacker(f, raw=bool(raw_mode), strict_map_key=False, read_size=8 * 1024 * 1024)
             count = 0
             last_pos = unpacker.tell()
+            current: Dict = {}
             for obj in unpacker:
                 cur_pos = unpacker.tell()
+                if self._diff_compressed_results and isinstance(obj, dict):
+                    current = obj if count % 100 == 0 else _apply_incremental_result_diff(current, obj)
+                    obj = current
                 count += 1
                 if progress_callback and count % 100 == 0:
                     progress = (f.tell() / file_size) if file_size else 1.0
@@ -1768,9 +1928,24 @@ class ParetoDataLoader:
 
         if b'suite_metrics' in config_data:
             suite_metrics_block = _get(config_data, b'suite_metrics', {}) or {}
-            metrics_dict = _get(suite_metrics_block, b'metrics', {}) or {}
+            metrics_dict = _get(suite_metrics_block, b'metrics')
+            if not isinstance(metrics_dict, dict):
+                aggregate = _get(suite_metrics_block, b'aggregate', {}) or {}
+                stats = _get(aggregate, b'stats', {}) or {}
+                aggregated = _get(aggregate, b'aggregated', {}) or {}
+                if not isinstance(stats, dict):
+                    stats = {}
+                if not isinstance(aggregated, dict):
+                    aggregated = {}
+                metrics_dict = {}
+                for metric_name in stats.keys() | aggregated.keys():
+                    metric_stats = stats.get(metric_name, {}) or {}
+                    value = aggregated.get(metric_name)
+                    if value is None and isinstance(metric_stats, dict):
+                        value = metric_stats.get(b'mean')
+                    metrics_dict[metric_name] = {b'stats': metric_stats, b'aggregated': value}
             if not self.scenario_labels:
-                raw_labels = _get(suite_metrics_block, b'scenario_labels', []) or []
+                raw_labels = _get(suite_metrics_block, b'scenario_labels') or _get(suite_metrics_block, b'scenarios', []) or []
                 if isinstance(raw_labels, list):
                     self.scenario_labels = [
                         (x.decode('utf-8', errors='ignore') if isinstance(x, bytes) else str(x)) for x in raw_labels
@@ -1817,9 +1992,12 @@ class ParetoDataLoader:
         scenario_details = None
         backtest = _get(config_data, b'backtest')
         if isinstance(backtest, dict):
-            suite = backtest.get(b'suite')
-            if isinstance(suite, dict) and suite.get(b'enabled'):
-                scenario_details = suite.get(b'scenarios', []) or []
+            if backtest.get(b'suite_enabled'):
+                scenario_details = backtest.get(b'scenarios', []) or []
+            else:
+                suite = backtest.get(b'suite')
+                if isinstance(suite, dict) and suite.get(b'enabled'):
+                    scenario_details = suite.get(b'scenarios', []) or []
 
         config_hash = self._compute_config_hash(config_data)
         is_pareto = config_hash in self.pareto_hashes
@@ -1866,9 +2044,7 @@ class ParetoDataLoader:
         
         try:
             # Get sorted pareto JSON files
-            pareto_files = sorted([f for f in os.listdir(self.pareto_dir) if f.endswith('.json')])
-            if not pareto_files:
-                return None
+            pareto_files = sorted([f for f in os.listdir(self.pareto_dir) if f.endswith('.json')]) if os.path.isdir(self.pareto_dir) else []
             
             # FAST MODE: Configs loaded from pareto/*.json
             # In this mode, config_index is the position in sorted pareto files
@@ -1884,19 +2060,18 @@ class ParetoDataLoader:
                     return full_config
                 return None
             
-            # ALL RESULTS MODE: Configs loaded from all_results.bin
-            # Load template from any pareto JSON (they share same base structure)
-            template_file = os.path.join(self.pareto_dir, pareto_files[0])
-            with open(template_file, 'r') as f:
-                full_config = json.load(f)
-            
             # Get config_data from cache (avoids re-reading entire file!)
             config_data = self.raw_configs_cache.get(config_index)
             if config_data:
                 if isinstance(config_data, dict) and any(isinstance(k, bytes) for k in config_data.keys()):
                     config_data = self._deep_decode_bytes(config_data)
                 if isinstance(config_data, dict):
-                    merged_config = copy.deepcopy(full_config)
+                    if pareto_files:
+                        template_file = os.path.join(self.pareto_dir, pareto_files[0])
+                        with open(template_file, 'r', encoding='utf-8') as f:
+                            merged_config = json.load(f)
+                    else:
+                        merged_config = {}
                     for key, value in config_data.items():
                         key_name = key.decode('utf-8', errors='ignore') if isinstance(key, bytes) else str(key)
                         merged_config[key_name] = value
@@ -1941,10 +2116,9 @@ class ParetoDataLoader:
             constraint_violation = 0.0
 
         if 'suite_metrics' in config_data:
-            suite_metrics_block = config_data.get('suite_metrics', {}) or {}
-            metrics_dict = suite_metrics_block.get('metrics', {}) or {}
+            metrics_dict, labels = _suite_metrics_payload(config_data)
             if not self.scenario_labels:
-                self.scenario_labels = suite_metrics_block.get('scenario_labels', []) or []
+                self.scenario_labels = labels
         else:
             metrics_dict = metrics_block.get('stats', {}) or {}
 
@@ -1959,9 +2133,7 @@ class ParetoDataLoader:
 
         if not self.backtest_scenarios and 'backtest' in config_data:
             backtest_config = config_data.get('backtest', {}) or {}
-            suite_config = backtest_config.get('suite', {}) or {}
-            if suite_config.get('enabled'):
-                self.backtest_scenarios = suite_config.get('scenarios', []) or []
+            self.backtest_scenarios = _backtest_scenarios(backtest_config)
 
         suite_metrics: Dict[str, float] = {}
         do_robustness = bool(compute_overall_robustness) and precomputed_overall_robustness is None
@@ -2025,9 +2197,7 @@ class ParetoDataLoader:
 
         scenario_details = None
         if 'backtest' in config_data:
-            suite_config = (config_data.get('backtest', {}) or {}).get('suite', {}) or {}
-            if suite_config.get('enabled'):
-                scenario_details = suite_config.get('scenarios', []) or []
+            scenario_details = _backtest_scenarios(config_data.get('backtest', {}) or {}) or None
 
         config_hash = self._compute_config_hash(config_data)
         is_pareto = config_hash in self.pareto_hashes
@@ -2059,36 +2229,10 @@ class ParetoDataLoader:
         if not isinstance(config_data, dict):
             return
 
-        bot_params: Dict[str, Any] = {}
         bot_config = config_data.get('bot')
         if bot_config is None:
             bot_config = config_data.get(b'bot')
-        bot_config = bot_config or {}
-        if isinstance(bot_config, dict):
-            long_cfg = bot_config.get('long')
-            if long_cfg is None:
-                long_cfg = bot_config.get(b'long')
-            if isinstance(long_cfg, dict):
-                for param, value in long_cfg.items():
-                    if isinstance(param, bytes):
-                        try:
-                            param = param.decode('utf-8', errors='ignore')
-                        except Exception:
-                            param = str(param)
-                    bot_params[f'long_{param}'] = value
-            short_cfg = bot_config.get('short')
-            if short_cfg is None:
-                short_cfg = bot_config.get(b'short')
-            if isinstance(short_cfg, dict):
-                for param, value in short_cfg.items():
-                    if isinstance(param, bytes):
-                        try:
-                            param = param.decode('utf-8', errors='ignore')
-                        except Exception:
-                            param = str(param)
-                    bot_params[f'short_{param}'] = value
-
-        config.bot_params = bot_params
+        config.bot_params = _flatten_bot_params(bot_config or {})
         config.bot_params_loaded = True
 
     def ensure_details(self, config: ConfigMetrics) -> None:
@@ -2135,11 +2279,10 @@ class ParetoDataLoader:
         # Suite format: {"suite_metrics": {"metrics": {...}}}
         # Non-suite format: {"metrics": {"stats": {...}, "objectives": {...}}}
         if 'suite_metrics' in config_data:
-            suite_metrics_block = config_data.get('suite_metrics', {})
-            metrics_dict = suite_metrics_block.get('metrics', {})
+            metrics_dict, labels = _suite_metrics_payload(config_data)
             # Store scenario labels (first time only)
             if not self.scenario_labels:
-                self.scenario_labels = suite_metrics_block.get('scenario_labels', [])
+                self.scenario_labels = labels
         else:
             # Non-suite format: metrics.stats contains the actual metrics
             metrics_block = config_data.get('metrics', {})
@@ -2160,9 +2303,7 @@ class ParetoDataLoader:
         # Extract backtest scenarios (first time only)
         if not self.backtest_scenarios and 'backtest' in config_data:
             backtest_config = config_data['backtest']
-            suite_config = backtest_config.get('suite', {})
-            if suite_config.get('enabled'):
-                self.backtest_scenarios = suite_config.get('scenarios', [])
+            self.backtest_scenarios = _backtest_scenarios(backtest_config)
         
         # Parse aggregated suite metrics
         suite_metrics = {}
@@ -2217,14 +2358,7 @@ class ParetoDataLoader:
                     scenario_metrics[scenario_label][metric_name] = scenario_value
         
         # Extract bot parameters
-        bot_params = {}
-        bot_config = config_data.get('bot', {})
-        if 'long' in bot_config:
-            for param, value in bot_config['long'].items():
-                bot_params[f'long_{param}'] = value
-        if 'short' in bot_config:
-            for param, value in bot_config['short'].items():
-                bot_params[f'short_{param}'] = value
+        bot_params = _flatten_bot_params(config_data.get('bot', {}))
         
         # Extract optimize settings for this config
         optimize_settings = {}
@@ -2241,9 +2375,7 @@ class ParetoDataLoader:
         # Extract scenario details
         scenario_details = None
         if 'backtest' in config_data:
-            suite_config = config_data['backtest'].get('suite', {})
-            if suite_config.get('enabled'):
-                scenario_details = suite_config.get('scenarios', [])
+            scenario_details = _backtest_scenarios(config_data['backtest']) or None
         
         # Compute config hash
         config_hash = self._compute_config_hash(config_data)
@@ -2283,11 +2415,10 @@ class ParetoDataLoader:
             
             # Extract suite metrics - support both suite and non-suite formats
             if 'suite_metrics' in config_data:
-                suite_metrics_block = config_data.get('suite_metrics', {})
-                metrics_dict = suite_metrics_block.get('metrics', {})
+                metrics_dict, labels = _suite_metrics_payload(config_data)
                 # Store scenario labels (first time only)
                 if not self.scenario_labels:
-                    self.scenario_labels = suite_metrics_block.get('scenario_labels', [])
+                    self.scenario_labels = labels
             else:
                 # Non-suite format
                 metrics_dict = metrics_block.get('stats', {})
@@ -2307,9 +2438,7 @@ class ParetoDataLoader:
             # Extract backtest scenarios (first time only)
             if not self.backtest_scenarios and 'backtest' in config_data:
                 backtest_config = config_data['backtest']
-                suite_config = backtest_config.get('suite', {})
-                if suite_config.get('enabled'):
-                    self.backtest_scenarios = suite_config.get('scenarios', [])
+                self.backtest_scenarios = _backtest_scenarios(backtest_config)
             
             # Parse metrics (same logic as _parse_config)
             suite_metrics = {}
@@ -2369,14 +2498,7 @@ class ParetoDataLoader:
                         suite_metrics[metric_name] = 0.0
             
             # Extract bot parameters
-            bot_params = {}
-            bot_config = config_data.get('bot', {})
-            if 'long' in bot_config:
-                for param, value in bot_config['long'].items():
-                    bot_params[f'long_{param}'] = value
-            if 'short' in bot_config:
-                for param, value in bot_config['short'].items():
-                    bot_params[f'short_{param}'] = value
+            bot_params = _flatten_bot_params(config_data.get('bot', {}))
             
             # Extract optimize settings
             optimize_settings = {}
@@ -2393,9 +2515,7 @@ class ParetoDataLoader:
             # Extract scenario details
             scenario_details = None
             if 'backtest' in config_data:
-                suite_config = config_data['backtest'].get('suite', {})
-                if suite_config.get('enabled'):
-                    scenario_details = suite_config.get('scenarios', [])
+                scenario_details = _backtest_scenarios(config_data['backtest']) or None
             
             # Compute config hash
             config_hash = self._compute_config_hash(config_data)

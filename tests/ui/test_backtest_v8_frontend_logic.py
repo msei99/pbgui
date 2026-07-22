@@ -8,6 +8,39 @@ import textwrap
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _extract_function(source: str, name: str) -> str:
+    """Extract one named inline JavaScript function."""
+    marker = f"function {name}("
+    start = source.find(marker)
+    assert start >= 0, f"Could not find JavaScript function {name!r}"
+    async_start = source.rfind("async ", max(0, start - 8), start)
+    if async_start >= 0:
+        start = async_start
+    brace_start = source.find("{", start)
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for index in range(brace_start, len(source)):
+        char = source[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ("'", '"', "`"):
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start : index + 1]
+    raise AssertionError(f"Could not extract complete JavaScript function {name!r}")
+
+
 def test_v8_route_renders_the_v7_backtest_template() -> None:
     """PB8 must use the exact V7 page instead of maintaining a second editor."""
     api_source = (ROOT / "api" / "backtest_v8.py").read_text(encoding="utf-8")
@@ -17,6 +50,45 @@ def test_v8_route_renders_the_v7_backtest_template() -> None:
     assert not (ROOT / "frontend" / "v8_backtest.html").exists()
     assert '"%%BACKTEST_VERSION%%": "v8"' in api_source
     assert '"%%BACKTEST_NAV_CURRENT%%": "v8_backtest"' in api_source
+
+
+def test_v8_optimize_result_draft_opens_without_repreparing() -> None:
+    """A complete PB8 Pareto config must enter the Backtest editor unchanged."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "openInitialBacktestDraftFromUrl")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const resultConfig = {{
+          bot: {{long: {{forager: {{volume_ema_span_1m: 0}}}}}},
+          optimize: {{bounds: {{long: {{forager: {{volume_ema_span_1m: [0, 0, 1]}}}}}}}}
+        }};
+        const window = {{
+          location: {{href: 'https://example.test/backtest?opt_draft_id=draft-1&draft_name=pareto'}},
+          history: {{replaceState() {{}}}}
+        }};
+        const document = {{title: 'Backtest'}};
+        const backtestEditorAdapter = {{isV8: true}};
+        let prepareCalls = 0;
+        let openedConfig = null;
+        async function apiFetch() {{ return {{config: resultConfig}}; }}
+        async function prepareImportedBacktestConfig() {{ prepareCalls += 1; throw new Error('must not prepare'); }}
+        function getInitialBacktestDraftName() {{ return 'pareto'; }}
+        function clearInitialBacktestUrlParams() {{}}
+        function selectPanel() {{}}
+        function showConfigEditor(_name, config) {{ openedConfig = config; }}
+        function toast() {{}}
+        let editingConfig = '';
+        {function}
+        (async () => {{
+          assert.equal(await openInitialBacktestDraftFromUrl(), true);
+          assert.equal(prepareCalls, 0);
+          assert.equal(openedConfig, resultConfig);
+        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 def test_v7_page_offers_saved_config_conversion() -> None:
@@ -53,7 +125,7 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
 
     assert '/app/css/backtest_shell.css?v=3' in v7_source
     assert '/app/js/backtest_shell.js?v=4' in v7_source
-    assert '/app/js/backtest_editor_adapter.js?v=4' in v7_source
+    assert '/app/js/backtest_editor_adapter.js?v=5' in v7_source
     assert "PBGuiBacktestShell.upgradeLegacy" in v7_source
     assert "PBGuiBacktestEditorAdapter.create(BACKTEST_VERSION)" in v7_source
     assert "sideConfig.risk" in adapter_source
@@ -61,6 +133,60 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
     for required_id in ("sidebar", "sidebar-inner", "sidebar-editor", "panel-configs", "panel-queue", "panel-results"):
         assert required_id in shell_source
     assert "source.remove()" in shell_source
+
+
+def test_backtest_settings_modal_opens_immediately_then_refreshes_authoritative_values() -> None:
+    """The settings dialog must render before its deduplicated backend refresh finishes."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in ("loadSettings", "renderSettingsModal", "syncOpenSettingsModal", "openSettingsModal", "settingsAdjustCpu")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let settings = {{cpu: 1, cpu_max: null, autostart: false, use_pbgui_market_data: false, hlcvs_cleanup_enabled: false, hlcvs_cleanup_days: 7, hlcvs_cleanup_interval_h: 24}};
+        let settingsLoadPromise = null;
+        let settingsModalDirty = false;
+        let modalBody = '';
+        let toastMessage = '';
+        const elements = {{
+          'set-cpu-val': {{value: '1'}},
+          'set-cpu-max': {{textContent: ''}},
+          'set-autostart': {{checked: false}},
+          'set-pbgui-market-data': {{checked: false}},
+          'set-cleanup-enabled': {{checked: false}},
+          'set-cleanup-days': {{value: '7'}},
+          'set-cleanup-interval': {{value: '24'}},
+          'cleanup-opts': {{style: {{}}}}
+        }};
+        const window = {{navigator: {{hardwareConcurrency: 4}}}};
+        const document = {{getElementById: id => elements[id] || null}};
+        function showModal(_title, body) {{ modalBody = body; }}
+        function toast(message) {{ toastMessage = message; }}
+        function saveSettingsFromModal() {{}}
+        let resolveFetch;
+        let apiFetch = () => new Promise(resolve => {{ resolveFetch = resolve; }});
+        {functions}
+        (async () => {{
+          const refresh = openSettingsModal();
+          assert.match(modalBody, /max 4/);
+          resolveFetch({{cpu: 8, cpu_max: 16, autostart: true, use_pbgui_market_data: true, hlcvs_cleanup_enabled: true, hlcvs_cleanup_days: 9, hlcvs_cleanup_interval_h: 12}});
+          await refresh;
+          assert.equal(elements['set-cpu-val'].value, 8);
+          assert.equal(elements['set-cpu-max'].textContent, 'max 16');
+          assert.equal(elements['set-autostart'].checked, true);
+          settingsAdjustCpu(1);
+          assert.equal(elements['set-cpu-val'].value, 9);
+          apiFetch = () => Promise.reject(new Error('offline'));
+          await openSettingsModal();
+          assert.match(modalBody, /max 16/);
+          assert.match(toastMessage, /Failed to refresh settings: offline/);
+        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 def test_shared_results_compare_routes_each_version_to_its_own_api() -> None:
@@ -83,6 +209,21 @@ def test_shared_results_delete_routes_each_version_to_its_own_api() -> None:
     assert 'data-cross-version-action onclick="deleteSelectedResults()"' in page_source
     assert "return resultApiFetch(result, '/results?path='" in page_source
     assert "encodeURIComponent(result.path)" in page_source
+
+
+def test_v8_uses_shared_archive_service_without_exposing_add_to_run() -> None:
+    """PB8 keeps the shared Archive panel but archive requests and actions remain owner-safe."""
+    page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    adapter = (ROOT / "frontend" / "js" / "backtest_editor_adapter.js").read_text(encoding="utf-8")
+
+    assert "items.push({ panel: 'archive'" in adapter
+    assert "'/backtest-v7'" in adapter
+    assert "'addToRunFromArchive'" in adapter
+    assert "'addResultToArchive'" not in adapter.split("var unsupported =", 1)[1].split("];", 1)[0]
+    assert "backtest_version: selectedResult.backtest_version || backtestEditorAdapter.version" in page
+    assert "archiveResultApiFetch" in page
+    assert "{ showVersion: true }" in page
+    assert "Add to Run is available only for PB7 archive results." in page
 
 
 def test_v8_supports_every_shared_native_backtest_operation() -> None:
@@ -114,6 +255,10 @@ def test_v8_supports_every_shared_native_backtest_operation() -> None:
         '@router.get("/results/fills")',
         '@router.get("/results/image")',
         '@router.delete("/results")',
+        '@router.post("/optimize-draft")',
+        '@router.get("/optimize-draft/{draft_id}")',
+        '@router.post("/queue-draft")',
+        '@router.get("/queue-draft/{draft_id}")',
     )
 
     for route in required_routes:
@@ -286,7 +431,8 @@ def test_editor_adapter_preserves_v7_paths_and_writes_v8_risk_paths() -> None:
         assert.equal(v8.docsApiBase('https://example.test/api/backtest-v8'), 'https://example.test/api');
         assert.equal(v8.getHslValue({ hsl: { enabled: true } }, 'enabled', false), true);
         assert.equal(v7.getHslValue({ hsl_enabled: true }, 'enabled', false), true);
-        assert.deepEqual(v8.initialPanels, ['configs', 'queue', 'results']);
+        assert.deepEqual(v8.initialPanels, ['configs', 'queue', 'results', 'archive']);
+        assert.equal(v8.archiveApiBase('https://example.test/api/backtest-v8'), 'https://example.test/api/backtest-v7');
         """
     )
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)

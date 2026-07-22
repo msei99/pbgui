@@ -574,12 +574,21 @@ def directory_fingerprint(path: Path) -> str:
 
 
 def config_version_info(config: dict, *, fingerprint: str | None = None) -> dict:
-    """Return normalized PB7 config version metadata for archive paths."""
+    """Return normalized generation-neutral config version metadata for archive paths."""
     value = (config or {}).get("config_version")
     raw_version = value if isinstance(value, str) else ""
     has_version = bool(_SAFE_VERSION_RE.fullmatch(raw_version))
     version_segment = raw_version if has_version else "unknown"
+    is_v8 = bool(re.match(r"^v8(?:[._-]|$)", raw_version, re.IGNORECASE))
+    config_family = "pb8" if is_v8 else "pb7"
+    generation = "v8" if is_v8 else "v7"
     return {
+        "config_version": version_segment,
+        "config_version_raw": raw_version,
+        "has_config_version": has_version,
+        "config_family": config_family,
+        "backtest_version": generation,
+        "optimize_version": generation,
         "pb7_config_version": version_segment,
         "pb7_config_version_raw": raw_version,
         "has_pb7_config_version": has_version,
@@ -708,7 +717,7 @@ def derive_backtest_archive_relative_path(result_dir: Path, archive_root: Path) 
         result_name = f"{result_name}__{fingerprint}"
     rel = (
         ARCHIVE_LAYOUT_ROOT
-        / version["pb7_config_version"]
+        / version["config_version"]
         / "backtests"
         / config_name
         / exchange_dir
@@ -867,6 +876,9 @@ def summarize_backtest_result(result_dir: Path, archive_root: Path) -> dict:
         "exchange_dir": _exchange_dir_from_config(config),
         "coins": coins,
         "coins_text": ", ".join(coins),
+        "config_version": version["config_version"],
+        "config_family": version["config_family"],
+        "backtest_version": version["backtest_version"],
         "pb7_config_version": version["pb7_config_version"],
         "pbgui_version": version["pbgui_version"],
         "layout": "current" if is_new_backtest_result_path(result_dir, archive_root) else "legacy",
@@ -883,10 +895,10 @@ def summarize_backtest_result(result_dir: Path, archive_root: Path) -> dict:
         "start_date": backtest.get("start_date", ""),
         "end_date": backtest.get("end_date", ""),
         "btc_collateral_cap": float(backtest.get("btc_collateral_cap") or 0),
-        "twe_long": bot.get("long", {}).get("total_wallet_exposure_limit", 0),
-        "twe_short": bot.get("short", {}).get("total_wallet_exposure_limit", 0),
-        "pos_long": bot.get("long", {}).get("n_positions", 0),
-        "pos_short": bot.get("short", {}).get("n_positions", 0),
+        "twe_long": (bot.get("long", {}).get("risk", {}) if version["backtest_version"] == "v8" else bot.get("long", {})).get("total_wallet_exposure_limit", 0),
+        "twe_short": (bot.get("short", {}).get("risk", {}) if version["backtest_version"] == "v8" else bot.get("short", {})).get("total_wallet_exposure_limit", 0),
+        "pos_long": (bot.get("long", {}).get("risk", {}) if version["backtest_version"] == "v8" else bot.get("long", {})).get("n_positions", 0),
+        "pos_short": (bot.get("short", {}).get("risk", {}) if version["backtest_version"] == "v8" else bot.get("short", {})).get("n_positions", 0),
         "modified": datetime.datetime.fromtimestamp(analysis_file.stat().st_mtime).isoformat(),
         "analysis": analysis,
     }
@@ -1787,9 +1799,9 @@ def derive_optimize_archive_relative_path(config_name: str, config: dict) -> tup
     fingerprint = json_fingerprint(config or {})
     version = config_version_info(config or {}, fingerprint=fingerprint)
     stem = safe_path_part(config_name, "optimize_config")
-    if not version["has_pb7_config_version"]:
+    if not version["has_config_version"]:
         stem = f"{stem}__{fingerprint}"
-    rel = ARCHIVE_LAYOUT_ROOT / version["pb7_config_version"] / "optimize" / f"{stem}.json"
+    rel = ARCHIVE_LAYOUT_ROOT / version["config_version"] / "optimize" / f"{stem}.json"
     meta = {
         **version,
         "schema_version": 1,
@@ -1869,7 +1881,10 @@ def list_archive_optimize_configs(archive_root: Path) -> list[dict]:
                 "name": str(meta.get("name") or config_file.stem),
                 "path": str(config_file),
                 "relative_path": rel,
-                "pb7_config_version": str(meta.get("pb7_config_version") or version["pb7_config_version"]),
+                "config_version": str(meta.get("config_version") or meta.get("pb7_config_version") or version["config_version"]),
+                "config_family": str(meta.get("config_family") or version["config_family"]),
+                "optimize_version": str(meta.get("optimize_version") or version["optimize_version"]),
+                "pb7_config_version": str(meta.get("pb7_config_version") or meta.get("config_version") or version["pb7_config_version"]),
                 "pbgui_version": str(meta.get("pbgui_version") or version["pbgui_version"]),
                 "fingerprint": str(meta.get("fingerprint") or json_fingerprint(config)),
                 "created_at": str(meta.get("created_at") or ""),
@@ -1917,6 +1932,9 @@ def build_archive_manifest(archive_root: Path, scored_results: list[dict] | None
         items.append({
             "type": "backtest_result",
             "name": result.get("config_name", ""),
+            "config_version": result.get("config_version", result.get("pb7_config_version", "")),
+            "config_family": result.get("config_family", "pb7"),
+            "backtest_version": result.get("backtest_version", "v7"),
             "pb7_config_version": result.get("pb7_config_version", ""),
             "pbgui_version": result.get("pbgui_version", ""),
             "path": result.get("display_name", ""),
@@ -1930,6 +1948,9 @@ def build_archive_manifest(archive_root: Path, scored_results: list[dict] | None
         items.append({
             "type": "optimize_config",
             "name": config.get("name", ""),
+            "config_version": config.get("config_version", config.get("pb7_config_version", "")),
+            "config_family": config.get("config_family", "pb7"),
+            "optimize_version": config.get("optimize_version", "v7"),
             "pb7_config_version": config.get("pb7_config_version", ""),
             "pbgui_version": config.get("pbgui_version", ""),
             "path": config.get("relative_path", ""),
@@ -2098,7 +2119,8 @@ def _archive_duplicate_key(result_dir: Path, archive_root: Path) -> tuple | None
             return str(value or "")
 
     return (
-        summary.get("pb7_config_version", ""),
+        summary.get("config_version", summary.get("pb7_config_version", "")),
+        summary.get("backtest_version", "v7"),
         summary.get("config_name", ""),
         summary.get("exchange_dir", ""),
         tuple(summary.get("exchanges") or []),

@@ -112,6 +112,14 @@ def _pb7_branch_label(branch: Any, commit: Any) -> str:
     return value
 
 
+def _pb8_branch_label(branch: Any, github_status: Any) -> str:
+    """Label the verified detached PB8 upstream checkout as master."""
+    value = str(branch or "unknown")
+    if value == "unknown" and str(github_status or "").startswith("✅"):
+        return "master"
+    return value
+
+
 def _pb8_runtime_info(repo_dir: str, python_path: str) -> dict[str, Any]:
     """Return static PB8 readiness details without importing PB8 into PBGui."""
     branch, commit = get_current_pb7_status(repo_dir)
@@ -3140,6 +3148,8 @@ class VPSManagerService:
         master_commit = str(pbgui_release.get("current_commit") or "")
         master_pb7_branch = _pb7_branch_label(pb7_release.get("current_branch"), pb7_release.get("current_commit"))
         master_pb7_commit = str(pb7_release.get("current_commit") or "")
+        master_pb8_github = self._build_pb8_github_status(str(pb8_info.get("commit") or ""))
+        master_pb8_branch = _pb8_branch_label(pb8_info.get("branch"), master_pb8_github)
         boot_ts = int(psutil.boot_time() or 0)
         return {
             "name": f"{master_name} (local)",
@@ -3164,8 +3174,8 @@ class VPSManagerService:
             "pb7_branch": f"{master_pb7_branch} ({_short_commit(master_pb7_commit)})",
             "pb7_github": self._build_master_pb7_github_status(master_pb7_branch, master_pb7_commit),
             "pb8": f"{str(pb8_info.get('version') or 'N/A')}{'' if pb8_info.get('python_version') in (None, '', 'N/A') else ' /' + str(pb8_info.get('python_version'))}",
-            "pb8_branch": f"{str(pb8_info.get('branch') or 'unknown')} ({_short_commit(pb8_info.get('commit'))})",
-            "pb8_github": self._build_pb8_github_status(str(pb8_info.get('commit') or "")),
+            "pb8_branch": f"{master_pb8_branch} ({_short_commit(pb8_info.get('commit'))})",
+            "pb8_github": master_pb8_github,
             "pb8_installed": bool(pb8_info.get("installed")),
         }
 
@@ -3220,6 +3230,8 @@ class VPSManagerService:
             if _truthy((instance or {}).get("running")) and str((instance or {}).get("name") or "").strip()
         )
         package_status, monitor_agent = self._get_remote_agent_contract(host_state)
+        remote_pb8_github = self._build_pb8_github_status(str(meta.get("pb8c") or ""))
+        remote_pb8_branch = _pb8_branch_label(meta.get("pb8b"), remote_pb8_github)
         row = {
             "name": hostname,
             "hostname": hostname,
@@ -3249,8 +3261,8 @@ class VPSManagerService:
             "pb7_branch": f"{_pb7_branch_label(meta.get('pb7b'), meta.get('pb7c'))} ({_short_commit(meta.get('pb7c'))})",
             "pb7_github": self._build_remote_pb7_github_status(host_state),
             "pb8": f"{meta.get('pb8v', 'N/A')}{'' if meta.get('pb8py', 'N/A') in (None, '', 'N/A') else ' /' + str(meta.get('pb8py'))}",
-            "pb8_branch": f"{meta.get('pb8b', 'unknown')} ({_short_commit(meta.get('pb8c'))})",
-            "pb8_github": self._build_pb8_github_status(str(meta.get('pb8c') or "")),
+            "pb8_branch": f"{remote_pb8_branch} ({_short_commit(meta.get('pb8c'))})",
+            "pb8_github": remote_pb8_github,
             "pb8_installed": bool(meta.get("pb8ready")),
             "rtd": min(self._build_remote_rtd(host_state), 9999),
             "task_command": str(getattr(vps, "command", "") or "") if vps else "",

@@ -7,12 +7,15 @@ from pathlib import Path
 
 import pb8_config
 import pb8_config_helper
+import pytest
+from master_update_lock import MasterUpdateBusyError
 
 
 def _reset_cache(monkeypatch) -> None:
     """Keep cache tests isolated from process-global PB8 client state."""
     monkeypatch.setattr(pb8_config, "_template_cache", None)
     monkeypatch.setattr(pb8_config, "_result_metrics_cache", None)
+    monkeypatch.setattr(pb8_config, "_optimize_metadata_cache", None)
     pb8_config._config_cache.clear()
 
 
@@ -56,6 +59,103 @@ def test_result_metrics_use_bounded_helper_cache(monkeypatch) -> None:
 
     assert pb8_config.get_pb8_result_metrics() == ["adg", "sharpe_ratio"]
     assert calls == [("result_metrics", {})]
+
+
+def test_runtime_fingerprint_change_invalidates_optimize_metadata_cache(monkeypatch) -> None:
+    """A PB8 update must invalidate metadata before the 30-second TTL expires."""
+    _reset_cache(monkeypatch)
+    fingerprint = ["commit-a"]
+    calls = []
+
+    def fake_call(operation: str, **_payload) -> dict:
+        calls.append(operation)
+        return {"template": {"runtime": fingerprint[0]}, "strategies": []}
+
+    monkeypatch.setattr(pb8_config, "_runtime_fingerprint", lambda *_args: tuple(fingerprint))
+    monkeypatch.setattr(pb8_config, "_call_helper", fake_call)
+
+    assert pb8_config.get_pb8_optimize_metadata()["template"]["runtime"] == "commit-a"
+    assert pb8_config.get_pb8_optimize_metadata()["template"]["runtime"] == "commit-a"
+    fingerprint[0] = "commit-b"
+    assert pb8_config.get_pb8_optimize_metadata()["template"]["runtime"] == "commit-b"
+    assert calls == ["optimize_metadata", "optimize_metadata"]
+
+
+def test_runtime_fingerprint_change_invalidates_loaded_config_cache(tmp_path, monkeypatch) -> None:
+    """Canonical configs cached by file signature must also belong to the current PB8 runtime."""
+    _reset_cache(monkeypatch)
+    source = tmp_path / "backtest.json"
+    source.write_text("{}", encoding="utf-8")
+    fingerprint = ["commit-a"]
+    calls = []
+
+    def fake_call(operation: str, **_payload) -> dict:
+        calls.append(operation)
+        return {"config": {"runtime": fingerprint[0]}}
+
+    monkeypatch.setattr(pb8_config, "_runtime_fingerprint", lambda *_args: tuple(fingerprint))
+    monkeypatch.setattr(pb8_config, "_call_helper", fake_call)
+
+    assert pb8_config.load_pb8_config(source) == {"runtime": "commit-a"}
+    assert pb8_config.load_pb8_config(source) == {"runtime": "commit-a"}
+    fingerprint[0] = "commit-b"
+    assert pb8_config.load_pb8_config(source) == {"runtime": "commit-b"}
+    assert calls == ["load", "load"]
+
+
+def test_call_helper_uses_pb8_venv_cwd_and_releases_update_lock(monkeypatch) -> None:
+    """PB8 helper subprocesses hold and release the master runtime lease."""
+    released = []
+    captured = {}
+
+    class Lease:
+        def release(self) -> None:
+            released.append(True)
+
+    class Proc:
+        returncode = 0
+        stdout = '{"ok":true,"result":{"version":"v8"}}'
+        stderr = ""
+
+    monkeypatch.setattr(pb8_config, "acquire_master_runtime_lock", lambda _root: Lease())
+    monkeypatch.setattr(
+        pb8_config,
+        "pb8_runtime_status",
+        lambda: {"ready": True, "pb8dir": "/runtime/pb8", "pb8venv": "/runtime/venv/bin/python"},
+    )
+
+    def fake_run(command, **kwargs):
+        captured.update(command=command, kwargs=kwargs)
+        return Proc()
+
+    monkeypatch.setattr(pb8_config.subprocess, "run", fake_run)
+
+    assert pb8_config._call_helper("status") == {"version": "v8"}
+    assert captured["command"][0] == "/runtime/venv/bin/python"
+    assert captured["kwargs"]["cwd"] == "/runtime/pb8"
+    assert released == [True]
+
+
+def test_call_helper_transforms_update_lock_busy_without_subprocess(monkeypatch) -> None:
+    """A PB8 update remains distinguishable and never starts a helper process."""
+    busy = MasterUpdateBusyError("update active")
+    monkeypatch.setattr(
+        pb8_config,
+        "acquire_master_runtime_lock",
+        lambda _root: (_ for _ in ()).throw(busy),
+    )
+    monkeypatch.setattr(
+        pb8_config.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("subprocess started")),
+    )
+
+    with pytest.raises(pb8_config.PB8RuntimeBusyError, match="Retry") as error:
+        pb8_config._call_helper("status")
+
+    assert error.value.retryable is True
+    assert error.value.status_code == 503
+    assert error.value.__cause__ is busy
 
 
 def test_save_pb8_config_writes_prepared_config_atomically(tmp_path, monkeypatch) -> None:
@@ -165,3 +265,48 @@ def test_helper_load_restores_nested_pbgui_metadata(tmp_path, monkeypatch) -> No
     result = pb8_config_helper.handle({"operation": "load", "pb8_dir": str(tmp_path), "config_path": str(source)})
 
     assert result["config"]["pbgui"] == metadata
+
+
+def test_optimize_metadata_builds_nonempty_bounds_and_bot_defaults_for_every_strategy() -> None:
+    """The strategy selector must receive real per-strategy controls, not empty placeholders."""
+    strategies = ("trailing_martingale", "ema_anchor", "trailing_grid_v7")
+    all_bounds = {
+        side: {
+            "risk": {"n_positions": [1, 10, 1]},
+            "strategy": {kind: {"entry": {"value": [index, index + 1, 0.1]}} for index, kind in enumerate(strategies)},
+        }
+        for side in ("long", "short")
+    }
+    template = {
+        "bot": {side: {"strategy": {strategies[0]: {"entry": {"value": 0}}}} for side in ("long", "short")},
+        "live": {"strategy_kind": strategies[0]},
+        "optimize": {"bounds": {side: {"risk": {"n_positions": [1, 10, 1]}, "strategy": {strategies[0]: {"entry": {"value": [0, 1, 0.1]}}}} for side in ("long", "short")}},
+    }
+    modules = {
+        "get_template_config": lambda: template,
+        "prepare_config": lambda config, **_kwargs: config,
+        "sanitize": lambda value: value,
+        "get_supported_strategy_kinds": lambda: strategies,
+        "get_strategy_spec": lambda kind: {"kind": kind},
+        "get_all_strategy_defaults": lambda: {side: {kind: {"entry": {"value": index}} for index, kind in enumerate(strategies)} for side in ("long", "short")},
+        "get_optimize_bounds_defaults": lambda: all_bounds,
+        "result_metrics": [],
+        "default_objective_goals": {},
+        "backends": ["pymoo"],
+        "pymoo_algorithms": ["nsga2"],
+        "pymoo_ref_dir_methods": ["das_dennis"],
+        "objective_goals": ["min", "max"],
+        "limit_statistics": ["mean"],
+        "optimizer_overrides": [],
+        "fixed_runtime_overrides": {},
+    }
+
+    metadata = pb8_config_helper._optimize_metadata(modules)
+
+    assert set(metadata["active_bounds"]) == set(strategies)
+    for kind in strategies:
+        for side in ("long", "short"):
+            assert metadata["active_bounds"][kind][side]["strategy"] == {
+                kind: all_bounds[side]["strategy"][kind]
+            }
+            assert metadata["strategy_defaults"][side][kind]

@@ -72,7 +72,7 @@ Key settings in the edit form:
 | Section | Description |
 |---------|-------------|
 | **User** | Select the API-key user (exchange account) |
-| **Enabled On** | Target VPS for deployment |
+| **Enabled On** | Target VPS for deployment. The selector shows host names only; technical credential diagnostics are reported only when an affected action is validated |
 | **Note** | Optional label shown in the list |
 | **Logging level** | Passivbot logging verbosity selector with `warning`, `info`, `debug`, and `trace` |
 | **Long / Short** | Bot parameters — positions, TWE, entry/close ranges |

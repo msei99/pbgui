@@ -21,6 +21,7 @@ The main view shows a table with all servers (Master + VPS) and their current st
 | **Updates** | Pending Linux package updates; healthy rows show only the count, while Stale/Missing/Error states remain visible |
 | **PBGui / PBGui Branch / PBGui GitHub** | Installed version, branch, and whether it matches GitHub origin |
 | **PB7 / PB7 Branch / PB7 GitHub** | PB7 version, branch, and whether it matches GitHub origin |
+| **PB8 / PB8 Branch / PB8 GitHub** | PB8 version, branch, and whether it matches the current upstream PB8 revision |
 
 Overview interactions:
 
@@ -41,6 +42,10 @@ Left sidebar:
 | **Import Cluster Nodes** | Preview and import safe SSH metadata from Cluster Sync nodes into local VPS Manager host entries; secrets are not imported |
 
 The overview uses the normal shared PBGui FastAPI shell. When you switch to **Master** or a specific **VPS**, the left sidebar changes into the view-specific action list. The main overview area stays focused on the table, while host import stays available from the sidebar as a manual hostname-based action or as an **Import Cluster Nodes** action after joining an existing Cluster Sync state.
+
+The Master and VPS detail headers repeat PBGui, PB7, and PB8 version cards with their branch/commit and update status. These values come from the same monitor-agent snapshot as the Overview row.
+
+PB8 updates intentionally use a detached checkout at the verified upstream `master` commit. When that detached commit exactly matches the verified upstream revision, VPS Manager labels it `master` instead of showing the low-level Git state as `unknown`.
 
 **Import Cluster Nodes** reads the local materialized `cluster_nodes` state and imports non-local nodes that have SSH metadata, regardless of their Cluster Sync mode. Disabled Cluster Sync nodes can still be imported into VPS Manager; disabled only means PBCluster should not replicate through that node. The import writes only safe local VPS Manager metadata such as hostname, SSH host, SSH user, SSH port and Remote PBGui Dir; passwords and private keys are not imported. CMC secrets are never VPS Manager fields: Cluster Sync materializes sealed pool generations separately. If local `/etc/hosts` is missing or points the hostname at a different IP, the import preview shows the required host entry changes and the apply step asks for the local sudo password before writing them. The modal asks for each imported host's VPS user password; rows left without a password are skipped, while entered passwords are used once to refresh remote settings, install the monitoring SSH key and keep the password only in the current browser/API session for later SSH-backed actions.
 

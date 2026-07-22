@@ -72,7 +72,7 @@ Wichtige Einstellungen im Bearbeitungsformular:
 | Bereich | Beschreibung |
 |---------|------|
 | **User** | API-Key-Benutzer (Exchange-Konto) auswählen |
-| **Enabled On** | Ziel-VPS für den Einsatz |
+| **Enabled On** | Ziel-VPS für den Einsatz. Der Selektor zeigt nur Hostnamen; technische Credential-Diagnosen werden erst bei der Validierung einer betroffenen Aktion gemeldet |
 | **Note** | Optionales Label, das in der Liste angezeigt wird |
 | **Logging level** | Passivbot-Selektor für die Log-Verbosity mit `warning`, `info`, `debug` und `trace` |
 | **Long / Short** | Bot-Parameter — Positionen, TWE, Entry/Close-Bereiche |

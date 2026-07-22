@@ -671,8 +671,9 @@ def _backup_dashboard_instance_config(instance_dir: Path, name: str, cfg: dict) 
 
 
 async def _save_dashboard_panic_config(name: str, config_path: Path, cfg: dict) -> dict:
-    """Save a panic config mutation and trigger the existing V7 SSH sync."""
-    from api.v7_instances import _ensure_target_runtime_compatible, _record_cluster_config_upsert, _ssh_sync_instance
+    """Save a forced-mode mutation and materialize it immediately on the bot host."""
+    from api.cluster import sync_and_materialize_v7_instance
+    from api.v7_instances import _ensure_target_runtime_compatible, _record_cluster_config_upsert
     from pb7_config import save_pb7_config
 
     await _ensure_target_runtime_compatible(name, cfg)
@@ -681,8 +682,8 @@ async def _save_dashboard_panic_config(name: str, config_path: Path, cfg: dict) 
     cfg.setdefault("pbgui", {})["version"] = cfg["pbgui"].get("version", 0) + 1
     save_pb7_config(cfg, config_path)
     _record_cluster_config_upsert(name, config_path.parent, cfg, parent_version=previous_version)
-    sync_result = await _ssh_sync_instance(name)
     version = cfg["pbgui"]["version"]
+    sync_result = await sync_and_materialize_v7_instance(name, expected_version=version)
     return {"name": name, "version": version, "sync": sync_result}
 
 

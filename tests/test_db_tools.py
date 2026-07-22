@@ -455,6 +455,45 @@ def test_run_sync_job_does_not_create_backups(tmp_path: Path, monkeypatch) -> No
         db_tools._sync_job_locks.discard("job1")
 
 
+def test_sync_scheduler_tick_serializes_concurrent_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Concurrent scheduler ticks must dispatch one due DB Sync job only once."""
+    job = {"id": "job1", "enabled": True, "running": False, "next_run": "", "targets": ["local"]}
+    entered = threading.Event()
+    release = threading.Event()
+    start = threading.Barrier(3)
+    dispatches: list[str] = []
+
+    def dispatch(current: dict, *, manual: bool) -> dict:
+        assert manual is False
+        dispatches.append(str(current["id"]))
+        entered.set()
+        assert release.wait(timeout=2)
+        current["running"] = True
+        return {}
+
+    def run_tick() -> None:
+        start.wait(timeout=2)
+        db_tools._run_sync_scheduler_tick()
+
+    monkeypatch.setattr(db_tools, "_sync_jobs", {"job1": job})
+    monkeypatch.setattr(db_tools, "_sync_job_locks", set())
+    monkeypatch.setattr(db_tools, "_reconcile_sync_worker_jobs", lambda: None)
+    monkeypatch.setattr(db_tools, "_task_jobs_by_id", lambda: {})
+    monkeypatch.setattr(db_tools, "_dispatch_sync_job", dispatch)
+
+    threads = [threading.Thread(target=run_tick) for _index in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait(timeout=2)
+    assert entered.wait(timeout=2)
+    release.set()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert dispatches == ["job1"]
+
+
 def test_local_pbdata_stop_start_prefers_systemd(monkeypatch) -> None:
     """Local PBData restart helpers use systemd when the PBData user service is active."""
 
@@ -955,6 +994,30 @@ def test_reconcile_completed_worker_job_schedules_next_run(monkeypatch: pytest.M
     assert job["last_error"] == ""
     assert job["next_run"]
     assert saved == [True]
+
+
+def test_task_jobs_only_scans_active_queue_and_known_completed_jobs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """DB Sync reconciliation never decodes the unrelated completed-job archive."""
+    done_dir = tmp_path / "done"
+    done_dir.mkdir()
+    completed = {"id": "task-a", "type": "db_sync", "status": "done"}
+    (done_dir / "task-a.json").write_text(json.dumps(completed), encoding="utf-8")
+    monkeypatch.setattr(db_tools, "_sync_jobs", {"sync-a": {"worker_job_id": "task-a"}})
+
+    def active_jobs(*, states, limit):
+        assert states == ["pending", "running"]
+        assert limit == 0
+        return [{"id": "task-b", "type": "db_sync", "status": "running"}]
+
+    monkeypatch.setattr(db_tools, "list_jobs", active_jobs)
+    monkeypatch.setattr(db_tools, "get_task_state_dir", lambda state: tmp_path / state)
+
+    assert db_tools._task_jobs_by_id() == {
+        "task-a": {**completed, "_path": str(done_dir / "task-a.json")},
+        "task-b": {"id": "task-b", "type": "db_sync", "status": "running"},
+    }
 
 
 def test_db_sync_worker_uses_own_ssh_pool_and_persists_result(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

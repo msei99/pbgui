@@ -105,6 +105,13 @@ def test_pb8_runtime_info_requires_source_schema_interpreter_and_cli(tmp_path: P
     assert ready["config_version"] == "v8.0.0"
 
 
+def test_verified_detached_pb8_upstream_is_labelled_master() -> None:
+    """The hardened detached checkout should not be presented as an unknown branch."""
+    assert service_mod._pb8_branch_label("unknown", "✅") == "master"
+    assert service_mod._pb8_branch_label("unknown", "❌ v8.1.0 (abcdef0)") == "unknown"
+    assert service_mod._pb8_branch_label("feature", "✅") == "feature"
+
+
 def test_local_pb8_command_requires_master_and_rejects_custom_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     """Direct local PB8 requests cannot bypass role or inject playbook variables."""
     calls: list[dict] = []

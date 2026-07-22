@@ -137,17 +137,19 @@ Wenn du mehrere abgeschlossene Queue-Zeilen auswählst und **📈 Compare** klic
 
 ### Einstellungs-Modal
 
-Der Queue-Settings-Dialog enthält jetzt zusätzlich `Use PBGui Market Data`. Wenn diese Option aktiv ist, setzt PBGui `backtest.ohlcv_source_dir` unmittelbar vor jedem gequeueeten oder manuell gestarteten Backtest auf das aktuelle PBGui-Market-Data-Root um, unabhängig davon, welcher Pfad im Config-Editor gespeichert ist.
+PB7 und PB8 verwenden eine gemeinsame Queue-Settings-Konfiguration. Speichern auf einer der beiden Backtest-Seiten aktualisiert beide Worker. Der CPU-Wert ist ein globales automatisches PB7/PB8-Prozesslimit und keine separate Freigabe pro Version. Der Dialog erscheint sofort mit dem aktuellen Zustand und aktualisiert verbindliche Host-Werte im Hintergrund, ohne Eingaben zu ueberschreiben.
+
+Der Queue-Settings-Dialog enthält zusätzlich `Use PBGui Market Data`. Wenn diese Option aktiv ist, setzt PBGui `backtest.ohlcv_source_dir` unmittelbar vor jedem gequeueeten oder manuell gestarteten Backtest auf das aktuelle PBGui-Market-Data-Root um, unabhängig davon, welcher Pfad im Config-Editor gespeichert ist.
 
 | Einstellung | Beschreibung |
 |-------------|-------------|
-| **CPU** | Anzahl paralleler Backtest-Prozesse (max = CPU-Kernanzahl) |
-| **Autostart** | Wenn aktiviert, startet der Worker `queued`-Jobs automatisch |
+| **CPU** | Globale Anzahl automatischer PB7/PB8-Backtest-Prozesse (max = CPU-Kernanzahl) |
+| **Autostart** | Wenn aktiviert, starten beide Versions-Worker `queued`-Jobs innerhalb des gemeinsamen CPU-Limits |
 | **Use PBGui Market Data** | Überschreibt `backtest.ohlcv_source_dir` direkt vor dem Start, sodass Queue-Jobs immer den von PBGui verwalteten OHLCV-Datensatz verwenden |
-| **HLCVS Cache Cleanup — Enabled** | Alte Verzeichnisse unter `pb7/caches/hlcvs_data` und `pb7/caches/ohlcvs/materialized` regelmäßig löschen |
+| **HLCVS Cache Cleanup — Enabled** | Die versionsspezifischen PB7- und PB8-Cache-Roots regelmaessig bereinigen |
 | **Retention (days)** | Verzeichnisse löschen, die älter als dieser Wert sind (Standard: 7) |
 | **Check interval (h)** | Prüfintervall in Stunden (Standard: 24) |
-| **🧹 Clean Now** | Bereinigung sofort mit dem aktuellen Retention-Wert über beide Cache-Pfade ausführen; zeigt per Toast wie viele Verzeichnisse gelöscht und wie viel Speicher freigegeben wurden |
+| **🧹 Clean Now** | Bereinigung sofort fuer die Runtime der aktuell geoeffneten PB7- oder PB8-Seite ausfuehren |
 
 ---
 

@@ -246,6 +246,69 @@ def test_interval_change_cancels_and_awaits_each_poller_once(tmp_path: Path) -> 
     asyncio.run(exercise())
 
 
+def test_market_data_status_updates_are_coalesced_and_latest_wins(monkeypatch) -> None:
+    """Rapid market-data progress updates publish one complete latest snapshot."""
+    async def exercise() -> None:
+        owner = PBData.__new__(PBData)
+        owner._market_data_status = {}
+        owner._market_data_status_lock = asyncio.Lock()
+        owner._market_data_status_generation = 0
+        owner._market_data_status_pending_generations = {}
+        owner._market_data_status_notify_task = None
+        owner._market_data_status_notify_interval = 0.01
+        published = []
+
+        async def capture(payload: dict) -> None:
+            published.append(payload)
+
+        monkeypatch.setattr(pbdata_module, "_notify_api_market_data_status", capture)
+        for index in range(20):
+            await owner._update_market_data_status("latest_1m", {"processed": index})
+        task = owner._market_data_status_notify_task
+        assert task is not None
+        await task
+
+        assert len(published) == 1
+        assert published[0]["latest_1m"] == {"processed": 19}
+        assert owner._market_data_status_notify_task is None
+        assert owner._market_data_status_pending_generations == {}
+
+    asyncio.run(exercise())
+
+
+def test_market_data_status_publish_only_sends_changed_sections(monkeypatch) -> None:
+    """Unchanged exchange sections are not repeated in every PBData status request."""
+    async def exercise() -> None:
+        owner = PBData.__new__(PBData)
+        owner._market_data_status = {"stale_exchange": {"coins": {"OLD": {}}}}
+        owner._market_data_status_lock = asyncio.Lock()
+        owner._market_data_status_generation = 0
+        owner._market_data_status_pending_generations = {}
+        owner._market_data_status_notify_task = None
+        owner._market_data_status_notify_interval = 0.01
+        published = []
+
+        async def capture(payload: dict) -> None:
+            published.append(payload)
+
+        monkeypatch.setattr(pbdata_module, "_notify_api_market_data_status", capture)
+        await owner._update_market_data_status("latest_1m", {"coins_done": 7})
+        await owner._market_data_status_notify_task
+
+        assert len(published) == 1
+        assert published[0]["latest_1m"] == {"coins_done": 7}
+        assert "stale_exchange" not in published[0]
+
+    asyncio.run(exercise())
+
+
+def test_market_data_status_does_not_embed_raw_fetch_results() -> None:
+    """Per-coin monitoring must not accumulate potentially huge fetch result payloads."""
+    source = Path("PBData.py").read_text(encoding="utf-8")
+
+    assert 'coin_status["api_result"]' not in source
+
+
 def test_protected_sleeps_are_not_config_interruptible() -> None:
     """Config wakeups remain outside rate/backoff and per-coin pacing sleeps."""
     source = inspect.getsource(pbdata_module)

@@ -1,10 +1,10 @@
-# Pareto Explorer (PBv7)
+# Pareto Explorer (PBv7 / PBv8)
 
-Pareto Explorer helps you analyze PBv7 optimize results, compare tradeoffs, shortlist configs, and create follow-up Optimize presets. It is designed for multi-objective results where no single metric is the whole answer.
+Pareto Explorer helps you analyze PBv7 and PBv8 optimize results, compare tradeoffs, shortlist configs, and create follow-up Optimize presets. It is designed for multi-objective results where no single metric is the whole answer.
 
 ## Where to Open It
 
-- PBGui: **PBv7 -> Optimize -> Results**.
+- PBGui: **PBv7/PBv8 -> Optimize -> Results**, or the matching **Pareto Explorer** navigation entry.
 - Open a result with **Pareto Explorer** from the Optimize results table or result sidebar.
 - The page can start in fast pareto-only mode and later load the full `all_results.bin` dataset from the sidebar.
 
@@ -33,7 +33,9 @@ Recommended flow:
 2. Click a champion or chart point.
 3. Review Metrics, Trading Style, Robustness, Scenario Metrics, and Full Configuration.
 4. Use **Run Backtest** before trusting a candidate.
-5. Use **Create PBv7 Optimize Preset from this Config** only after the config looks worth refining.
+5. Use **Create Optimize Preset from this Config** only after the config looks worth refining. PBGui preserves the result's PB7/PB8 generation.
+
+PB8 full mode reconstructs incremental compressed `all_results.bin` entries before analysis. Nested PB8 bot parameters and bounds are shown as dotted paths and converted back to canonical nested config objects for presets and Backtest handoffs.
 
 ## Explorer
 

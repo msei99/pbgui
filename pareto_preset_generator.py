@@ -385,7 +385,12 @@ def _is_side_enabled(bot_params: dict[str, Any], side: str) -> bool | None:
         return None
     has_any = False
     disabled = False
-    for key in (f"{side}_n_positions", f"{side}_total_wallet_exposure_limit"):
+    for key in (
+        f"{side}_n_positions",
+        f"{side}_total_wallet_exposure_limit",
+        f"{side}.risk.n_positions",
+        f"{side}.risk.total_wallet_exposure_limit",
+    ):
         value = _to_float(bot_params.get(key))
         if value is not None:
             has_any = True
@@ -506,6 +511,43 @@ def _normalize_near_map(near_bounds: dict[str, Any] | None) -> dict[str, dict[st
     return out
 
 
+def _flatten_dotted_bounds(bounds: Any, prefix: str = "") -> dict[str, Any]:
+    """Flatten canonical PB8 bounds while preserving each bound value exactly."""
+    if not isinstance(bounds, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for raw_key, value in bounds.items():
+        key = str(raw_key)
+        path = f"{prefix}.{key}" if prefix else key
+        is_bound_object = isinstance(value, dict) and any(
+            low in value and high in value
+            for low, high in (("lower", "upper"), ("min", "max"), ("lo", "hi"))
+        )
+        if isinstance(value, dict) and not is_bound_object and "bounds" not in value:
+            out.update(_flatten_dotted_bounds(value, path))
+        else:
+            out[path] = copy.deepcopy(value)
+    return out
+
+
+def _restore_dotted_bounds(bounds: dict[str, Any]) -> dict[str, Any]:
+    """Restore dotted PB8 bound paths to the canonical nested object shape."""
+    restored: dict[str, Any] = {}
+    for dotted_key, value in bounds.items():
+        parts = [part for part in str(dotted_key).split(".") if part]
+        if not parts:
+            continue
+        target = restored
+        for part in parts[:-1]:
+            child = target.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                target[part] = child
+            target = child
+        target[parts[-1]] = copy.deepcopy(value)
+    return restored
+
+
 def _build_near_rows(near_map: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for key, info in sorted(near_map.items(), key=lambda item: item[0]):
@@ -526,6 +568,7 @@ def _build_scoring_and_limits(
     direction: str,
     risk_adjust: int,
     currency_metrics: set[str],
+    default_goal_map_override: dict[str, str] | None = None,
 ) -> tuple[list[Any], Any, str]:
     optimize_block = full_config_data.get("optimize", {}) if isinstance(full_config_data, dict) else {}
     base_scoring = optimize_block.get("scoring") if isinstance(optimize_block, dict) else None
@@ -577,9 +620,16 @@ def _build_scoring_and_limits(
         "high_exposure_hours_mean_long",
         "high_exposure_hours_mean_short",
     ], suite_metrics)
-    default_goal_map = get_optimize_scoring_default_goals(
-        _unique_keep_order(base_metric_names + profit_set + ratio_set + risk_set + smooth_set + turnover_set + exposure_set)
-    )
+    if default_goal_map_override:
+        default_goal_map = {
+            str(metric): str(goal).lower()
+            for metric, goal in default_goal_map_override.items()
+            if str(goal).lower() in {"min", "max"}
+        }
+    else:
+        default_goal_map = get_optimize_scoring_default_goals(
+            _unique_keep_order(base_metric_names + profit_set + ratio_set + risk_set + smooth_set + turnover_set + exposure_set)
+        )
 
     if direction not in OPTIMIZE_PRESET_DIRECTIONS:
         direction = OPTIMIZE_PRESET_DIRECTIONS[0]
@@ -698,10 +748,10 @@ def _build_new_bounds(
 
     for param_name, bound_value in base_bounds.items():
         name = str(param_name)
-        if name.startswith("long_") and long_enabled is False:
+        if name.startswith(("long_", "long.")) and long_enabled is False:
             new_bounds[param_name] = bound_value
             continue
-        if name.startswith("short_") and short_enabled is False:
+        if name.startswith(("short_", "short.")) and short_enabled is False:
             new_bounds[param_name] = bound_value
             continue
         if only_near_bounds and str(param_name) not in near_map:
@@ -760,11 +810,16 @@ def build_optimize_preset(
     params: dict[str, Any],
     near_bounds: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a PB7 optimize preset from a selected Pareto config."""
+    """Build a version-aware optimize preset from a selected Pareto config."""
     metric_sets = get_optimize_metric_sets()
     currency_metrics = set(metric_sets.get("currency_metrics") or [])
 
-    bounds = copy.deepcopy(config_context.get("bounds") or {})
+    optimize_version = str(config_context.get("optimize_version") or "v7").lower()
+    source_optimize = full_config_data.get("optimize", {}) if isinstance(full_config_data, dict) else {}
+    if optimize_version == "v8" and isinstance(source_optimize, dict):
+        bounds = _flatten_dotted_bounds(source_optimize.get("bounds") or {})
+    else:
+        bounds = copy.deepcopy(config_context.get("bounds") or {})
     bot_params = copy.deepcopy(config_context.get("bot_params") or {})
     suite_metrics = copy.deepcopy(config_context.get("suite_metrics") or {})
     optimize_settings = copy.deepcopy(config_context.get("optimize_settings") or {})
@@ -822,6 +877,7 @@ def build_optimize_preset(
         direction=direction,
         risk_adjust=risk_adjust,
         currency_metrics=currency_metrics,
+        default_goal_map_override=(config_context.get("scoring_goals") or {}) if optimize_version == "v8" else None,
     )
 
     expand_notes: dict[str, str] = {}
@@ -917,10 +973,15 @@ def build_optimize_preset(
 
     preset_config = copy.deepcopy(full_config_data or {})
     optimize = dict(preset_config.get("optimize") or {})
-    optimize["bounds"] = result_bounds
+    optimize["bounds"] = _restore_dotted_bounds(result_bounds) if optimize_version == "v8" else result_bounds
     optimize["scoring"] = scoring_out
     optimize["limits"] = limits_out
     preset_config["optimize"] = optimize
+    if optimize_version == "v8":
+        pbgui = preset_config.get("pbgui")
+        runtime = pbgui.get("optimize_runtime") if isinstance(pbgui, dict) else None
+        if isinstance(runtime, dict) and runtime.get("mode") == "checkpoint_resume":
+            pbgui.pop("optimize_runtime", None)
 
     return {
         "preset_config": preset_config,

@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
+<script src="/app/js/optimize_editor_adapter.js?v=9"></script>
 <style>
 :root {
   --bg: #0e1117;
@@ -1579,6 +1580,19 @@ textarea.json-invalid:focus {
   max-height: calc(100vh - var(--sp-lg) * 2);
 }
 
+.plot-modal.windowed {
+  inset: auto;
+  max-width: none;
+  max-height: none;
+  transform: none;
+}
+
+.plot-modal .modal-head {
+  flex: 0 0 auto;
+  cursor: move;
+  user-select: none;
+}
+
 .plot-modal .modal-body {
   flex: 1;
   padding: 0;
@@ -2145,6 +2159,7 @@ textarea.json-invalid:focus {
         <button class="sb-btn" id="btn-open-result-pareto-dash">PD Pareto Dash</button>
         <button class="sb-btn" id="btn-open-result-3d">3D Plot</button>
         <button class="sb-btn" id="btn-continue-result">🌱 Continue Optimize</button>
+        <button class="sb-btn" id="btn-resume-result" style="display:none">Resume Checkpoint</button>
         <button class="sb-btn" id="btn-open-result-config">📄 Config Draft</button>
         <button class="sb-btn danger" id="btn-delete-selected-results">🗑 Delete Selected</button>
       </div>
@@ -2308,7 +2323,7 @@ textarea.json-invalid:focus {
   <div class="modal-head">
     <div>
       <h3>Import Optimize Config</h3>
-      <div class="muted-line">Paste a PB7 optimize JSON config, choose a local .json file, or import one from a Backtest Archive. Paste and file imports open an unsaved draft; archive imports create a local config.</div>
+      <div class="muted-line">Paste a <span id="optimize-import-version">PB7</span> optimize JSON config, choose a local .json file, or import one from a Backtest Archive. Paste and file imports open an unsaved draft; archive imports create a local config.</div>
     </div>
     <button class="btn ghost" id="btn-close-import-config">Close</button>
   </div>
@@ -2433,6 +2448,14 @@ textarea.json-invalid:focus {
 </section>
 
 <section id="plot-modal" class="modal plot-modal">
+  <div class="pnr pnr-n" data-dir="n"></div>
+  <div class="pnr pnr-s" data-dir="s"></div>
+  <div class="pnr pnr-w" data-dir="w"></div>
+  <div class="pnr pnr-e" data-dir="e"></div>
+  <div class="pnr pnr-nw" data-dir="nw"></div>
+  <div class="pnr pnr-ne" data-dir="ne"></div>
+  <div class="pnr pnr-sw" data-dir="sw"></div>
+  <div class="pnr pnr-se" data-dir="se"></div>
   <div class="modal-head">
     <div>
       <h3 id="plot-modal-title">PB7 3D plot</h3>
@@ -2524,6 +2547,17 @@ var WS_BASE = "%%WS_BASE%%";
 var LIMITS_META = %%LIMITS_META%%;
 var PBGUI_VERSION = "%%VERSION%%";
 var PBGUI_SERIAL = "%%SERIAL%%";
+var OPTIMIZE_VERSION = "%%OPTIMIZE_VERSION%%";
+var BACKTEST_VERSION = "%%BACKTEST_VERSION%%";
+var optimizeEditorAdapter = window.PBGuiOptimizeEditorAdapter.create(OPTIMIZE_VERSION, {
+  backtestVersion: BACKTEST_VERSION,
+  apiBase: API_BASE,
+  wsBase: WS_BASE,
+  navSubtitle: "%%OPTIMIZE_NAV_TITLE%%",
+  navCurrent: "%%OPTIMIZE_NAV_CURRENT%%"
+});
+API_BASE = optimizeEditorAdapter.apiBase;
+WS_BASE = optimizeEditorAdapter.wsBase;
 
 var state = {
   panel: 'configs',
@@ -2539,6 +2573,9 @@ var state = {
     optimize_backend_default: 'pymoo',
     pymoo_algorithm_options: [],
     pymoo_ref_dir_method_options: [],
+    strategies: [],
+    strategy_bounds: {},
+    strategy_defaults: {},
     optimize_defaults: {}
   },
   settingsModalDirty: false,
@@ -2583,6 +2620,8 @@ var state = {
   returnRefreshInFlight: false,
   editingConfig: '',
   editorSourceName: '',
+  editorQueueFilename: '',
+  editorReturnPanel: 'configs',
   editorDraftName: '',
   editorBackendHint: '',
   editorLastConfig: null,
@@ -2595,6 +2634,11 @@ var state = {
   limitsMeta: null,
   optimizeBounds: [],
   optimizeFixedParams: [],
+  optimizeStrategyBoundsCache: {},
+  optimizeStrategyFixedCache: {},
+  optimizeSharedBoundsCache: {},
+  optimizeSharedFixedCache: [],
+  optimizeStrategyBotCache: { long: {}, short: {} },
   runtimeOverrideValues: {},
   scoringEntries: [],
   scoringEditIndex: -1,
@@ -2615,8 +2659,17 @@ var state = {
   plotSessionId: '',
   plotSessionKind: '',
   logStatusTimer: null,
+  logStatusInFlight: false,
   hadActiveOptimizeRuns: false,
-  livePanelRefreshInFlight: false
+  livePanelRefreshInFlight: false,
+  initialLoadPending: true,
+  settingsLoadSeq: 0,
+  settingsPushSeq: 0,
+  queueLoadSeq: 0,
+  queuePushSeq: 0,
+  resultsLoadSeq: 0,
+  navigationSeq: 0,
+  paretoStatisticOptions: []
 };
 
 var PANEL_META = {
@@ -2638,7 +2691,7 @@ var PANEL_META = {
   }
 };
 
-var PARETO_STAT_OPTIONS = ['mean', 'min', 'max', 'std'];
+var PARETO_STAT_OPTIONS = ['mean', 'min', 'max', 'std', 'median'];
 var METRIC_PILL_LABELS = {
   adg: 'adg',
   gain: 'gain',
@@ -2657,7 +2710,8 @@ function el(id) {
 
 function normalizeParetoStatistic(value) {
   var normalized = String(value || '').trim().toLowerCase();
-  return PARETO_STAT_OPTIONS.indexOf(normalized) >= 0 ? normalized : 'mean';
+  var available = state.paretoStatisticOptions.length ? state.paretoStatisticOptions : PARETO_STAT_OPTIONS;
+  return available.indexOf(normalized) >= 0 ? normalized : 'mean';
 }
 
 function normalizeParetoScenario(value, labels) {
@@ -2673,6 +2727,7 @@ function clearParetoMeta(options) {
   state.paretoScenario = 'Aggregated';
   if (!keepStatistic) state.paretoStatistic = 'mean';
   state.paretoStatisticEnabled = true;
+  state.paretoStatisticOptions = [];
 }
 
 function applyParetoMeta(meta) {
@@ -2684,6 +2739,9 @@ function applyParetoMeta(meta) {
     : [];
   state.paretoMode = nextMode;
   state.paretoScenarioLabels = labels;
+  state.paretoStatisticOptions = Array.isArray(meta && meta.available_statistics)
+    ? meta.available_statistics.map(function(value) { return String(value || '').trim().toLowerCase(); }).filter(Boolean)
+    : PARETO_STAT_OPTIONS.slice();
   state.paretoStatistic = normalizeParetoStatistic(meta && meta.selected_statistic ? meta.selected_statistic : state.paretoStatistic);
   state.paretoScenario = nextMode === 'suite'
     ? normalizeParetoScenario(meta && meta.selected_scenario ? meta.selected_scenario : state.paretoScenario, labels)
@@ -2729,7 +2787,7 @@ function renderParetoToolbar() {
   var scenarioOptions = ['Aggregated'].concat(state.paretoScenarioLabels);
   state.paretoScenario = normalizeParetoScenario(state.paretoScenario, state.paretoScenarioLabels);
   fillSelectOptions('pareto-scenario-select', scenarioOptions, state.paretoScenario);
-  fillSelectOptions('pareto-stat-select', PARETO_STAT_OPTIONS, state.paretoStatistic);
+  fillSelectOptions('pareto-stat-select', state.paretoStatisticOptions, state.paretoStatistic);
   scenarioWrap.style.display = hasSuite ? 'inline-flex' : 'none';
   statWrap.style.display = isLegacy ? 'none' : 'inline-flex';
   statSelect.disabled = isLegacy || !state.paretoStatisticEnabled;
@@ -4427,6 +4485,176 @@ function getOptimizeHslSignalModeOptions(selectedValue) {
   });
 }
 
+function getOptimizeStrategyOptions(selectedValue) {
+  var configured = state.settings && Array.isArray(state.settings.strategies)
+    ? state.settings.strategies
+    : [];
+  var options = configured.map(function(value) { return String(value || '').trim(); }).filter(Boolean);
+  var selected = String(selectedValue || '').trim();
+  if (selected && options.indexOf(selected) < 0) options.unshift(selected);
+  return options;
+}
+
+function getOptimizeStrategyBotDefault(side, strategy) {
+  var defaults = state.settings && state.settings.strategy_defaults;
+  var sideDefaults = defaults && defaults[side] && typeof defaults[side] === 'object' ? defaults[side] : {};
+  return deepClone(sideDefaults[strategy] || {});
+}
+
+function getOptimizeStrategyFromPath(path) {
+  var match = String(path || '').replace(/^bot\./, '').match(/^(?:long|short)\.strategy\.([^.]+)(?:\.|$)/);
+  return match && match[1] !== '*' ? match[1] : '';
+}
+
+function initializeOptimizeStrategyState(config) {
+  var cfg = config || {};
+  var optimize = cfg.optimize || {};
+  var bot = cfg.bot || {};
+  var allBounds = optimizeEditorAdapter.getBounds(optimize);
+  var allFixed = normalizeOptimizeFixedParamKeys(optimize.fixed_params);
+  var strategies = getOptimizeStrategyOptions(((cfg.live || {}).strategy_kind));
+  ['long', 'short'].forEach(function(side) {
+    var blocks = ((bot[side] || {}).strategy) || {};
+    Object.keys(blocks).forEach(function(strategy) {
+      if (strategies.indexOf(strategy) < 0) strategies.push(strategy);
+      if (blocks[strategy] && typeof blocks[strategy] === 'object') {
+        state.optimizeStrategyBotCache[side][strategy] = deepClone(blocks[strategy]);
+      }
+    });
+  });
+  Object.keys(allBounds).forEach(function(key) {
+    var strategy = getOptimizeStrategyFromPath(key);
+    if (strategy && strategies.indexOf(strategy) < 0) strategies.push(strategy);
+  });
+  strategies.forEach(function(strategy) {
+    state.optimizeStrategyBoundsCache[strategy] = {};
+    state.optimizeStrategyFixedCache[strategy] = [];
+  });
+  state.optimizeSharedBoundsCache = {};
+  Object.keys(allBounds).forEach(function(key) {
+    var strategy = getOptimizeStrategyFromPath(key);
+    if (strategy) {
+      state.optimizeStrategyBoundsCache[strategy] = state.optimizeStrategyBoundsCache[strategy] || {};
+      state.optimizeStrategyBoundsCache[strategy][key] = deepClone(allBounds[key]);
+    } else {
+      state.optimizeSharedBoundsCache[key] = deepClone(allBounds[key]);
+    }
+  });
+  state.optimizeSharedFixedCache = [];
+  allFixed.forEach(function(key) {
+    var strategy = getOptimizeStrategyFromPath(key);
+    if (strategy) {
+      state.optimizeStrategyFixedCache[strategy] = state.optimizeStrategyFixedCache[strategy] || [];
+      state.optimizeStrategyFixedCache[strategy].push(key);
+    } else {
+      state.optimizeSharedFixedCache.push(key);
+    }
+  });
+}
+
+function getOptimizeStrategyBoundsView(strategy) {
+  var loaded = deepClone(state.optimizeStrategyBoundsCache[strategy] || {});
+  var configured = Object.keys(loaded).length ? {} : deepClone((state.settings.strategy_bounds || {})[strategy] || {});
+  return Object.assign(configured, deepClone(state.optimizeSharedBoundsCache), loaded);
+}
+
+function getOptimizeStrategyFixedView(strategy) {
+  return normalizeOptimizeFixedParamKeys((state.optimizeSharedFixedCache || []).concat(state.optimizeStrategyFixedCache[strategy] || []));
+}
+
+function cacheOptimizeStrategyState(strategy) {
+  var cleanStrategy = String(strategy || '').trim();
+  if (!cleanStrategy) return;
+  var currentBounds = collectOptimizeBounds({ strict: false });
+  state.optimizeStrategyBoundsCache[cleanStrategy] = {};
+  Object.keys(currentBounds).forEach(function(key) {
+    if (getOptimizeStrategyFromPath(key) === cleanStrategy) {
+      state.optimizeStrategyBoundsCache[cleanStrategy][key] = deepClone(currentBounds[key]);
+    } else if (!getOptimizeStrategyFromPath(key)) {
+      state.optimizeSharedBoundsCache[key] = deepClone(currentBounds[key]);
+    }
+  });
+  state.optimizeStrategyFixedCache[cleanStrategy] = [];
+  state.optimizeSharedFixedCache = [];
+  normalizeOptimizeFixedParamKeys(state.optimizeFixedParams).forEach(function(key) {
+    if (getOptimizeStrategyFromPath(key) === cleanStrategy) state.optimizeStrategyFixedCache[cleanStrategy].push(key);
+    else if (!getOptimizeStrategyFromPath(key)) state.optimizeSharedFixedCache.push(key);
+  });
+  ['long', 'short'].forEach(function(side) {
+    var node = el('opted-bot-' + side);
+    var sideConfig = {};
+    try {
+      sideConfig = JSON.parse((node && node.value) || '{}');
+    } catch (error) {
+      sideConfig = deepClone((((state.editorLastConfig || {}).bot || {})[side] || {}));
+    }
+    var strategyStore = sideConfig.strategy && typeof sideConfig.strategy === 'object' ? sideConfig.strategy : {};
+    Object.keys(strategyStore).forEach(function(strategyName) {
+      if (strategyStore[strategyName] && typeof strategyStore[strategyName] === 'object') {
+        state.optimizeStrategyBotCache[side][strategyName] = deepClone(strategyStore[strategyName]);
+      }
+    });
+  });
+}
+
+function collectAllOptimizeStrategyBounds(activeStrategy) {
+  cacheOptimizeStrategyState(activeStrategy);
+  var result = deepClone(state.optimizeSharedBoundsCache);
+  Object.keys(state.optimizeStrategyBoundsCache).forEach(function(strategy) {
+    Object.assign(result, deepClone(state.optimizeStrategyBoundsCache[strategy]));
+  });
+  return result;
+}
+
+function collectAllOptimizeStrategyFixed(activeStrategy) {
+  cacheOptimizeStrategyState(activeStrategy);
+  var result = (state.optimizeSharedFixedCache || []).slice();
+  Object.keys(state.optimizeStrategyFixedCache).forEach(function(strategy) {
+    result = result.concat(state.optimizeStrategyFixedCache[strategy] || []);
+  });
+  return normalizeOptimizeFixedParamKeys(result);
+}
+
+function changeOptimizeStrategyKind(nextStrategy) {
+  if (!optimizeEditorAdapter.isV8) return;
+  var selector = el('opted-strategy-kind');
+  var cleanNext = String(nextStrategy || '').trim();
+  var allowed = getOptimizeStrategyOptions(cleanNext);
+  if (!cleanNext || allowed.indexOf(cleanNext) < 0) return;
+  var current = String((selector && selector.getAttribute('data-current-strategy')) || (((state.editorLastConfig || {}).live || {}).strategy_kind) || '').trim();
+  if (current === cleanNext) return;
+  cacheOptimizeStrategyState(current);
+
+  var editorConfig = state.editorLastConfig || {};
+  editorConfig.live = editorConfig.live && typeof editorConfig.live === 'object' ? editorConfig.live : {};
+  editorConfig.bot = editorConfig.bot && typeof editorConfig.bot === 'object' ? editorConfig.bot : {};
+  editorConfig.live.strategy_kind = cleanNext;
+  ['long', 'short'].forEach(function(side) {
+    var node = el('opted-bot-' + side);
+    var sideConfig = {};
+    try {
+      sideConfig = JSON.parse((node && node.value) || '{}');
+    } catch (error) {
+      sideConfig = deepClone(editorConfig.bot[side] || {});
+    }
+    var nextBot = state.optimizeStrategyBotCache[side][cleanNext]
+      || getOptimizeStrategyBotDefault(side, cleanNext);
+    sideConfig.strategy = Object.assign({}, state.optimizeStrategyBotCache[side], sideConfig.strategy || {});
+    sideConfig.strategy[cleanNext] = deepClone(nextBot);
+    editorConfig.bot[side] = sideConfig;
+    if (node) node.value = prettyJson(sideConfig);
+  });
+
+  var nextBounds = getOptimizeStrategyBoundsView(cleanNext);
+  var nextFixed = getOptimizeStrategyFixedView(cleanNext);
+  setOptimizeBoundsData(nextBounds, nextFixed, state.runtimeOverrideValues, { suppressSync: true });
+  if (selector) {
+    selector.value = cleanNext;
+    selector.setAttribute('data-current-strategy', cleanNext);
+  }
+  scheduleStructuredEditorSync();
+}
+
 function normalizeOptimizeHslSignalModeValue(value) {
   var selected = String(value == null ? '' : value).trim();
   var options = getOptimizeHslSignalModeOptions(selected);
@@ -4465,9 +4693,10 @@ function toggleExpander(id) {
 }
 
 function toast(message, kind) {
+  var notifyHeaders = authenticatedHeaders({ 'Content-Type': 'application/json' });
   fetch('/api/notify_log', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+    headers: notifyHeaders,
     body: JSON.stringify({ msg: String(message == null ? '' : message), level: kind || 'info' })
   }).catch(function() {});
   var stack = el('toast-stack');
@@ -4478,6 +4707,12 @@ function toast(message, kind) {
   window.setTimeout(function() {
     node.remove();
   }, 3200);
+}
+
+function authenticatedHeaders(extra) {
+  var headers = Object.assign({}, extra || {});
+  if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
+  return headers;
 }
 
 function setBanner(kind, message) {
@@ -4512,7 +4747,7 @@ function buildHttpError(response, text) {
 
 async function apiFetch(path, opts) {
   var init = opts || {};
-  var headers = Object.assign({}, init.headers || {}, { Authorization: 'Bearer ' + TOKEN });
+  var headers = authenticatedHeaders(init.headers);
   if (!headers['Content-Type'] && init.body) headers['Content-Type'] = 'application/json';
   var response = await fetch(API_BASE + path, Object.assign({}, init, { headers: headers }));
   var text = await response.text();
@@ -4527,9 +4762,38 @@ async function apiFetch(path, opts) {
   }
 }
 
+async function loadOptimizeMetadata() {
+  if (!optimizeEditorAdapter.metadataPath) return;
+  var payload = await apiFetch(optimizeEditorAdapter.metadataPath);
+  var metadata = optimizeEditorAdapter.normalizeMetadata(payload || {});
+  if (metadata.optimizeDefaults && Object.keys(metadata.optimizeDefaults).length) {
+    state.settings.optimize_defaults = metadata.optimizeDefaults;
+  }
+  if (metadata.limitsMeta) state.limitsMeta = normalizeLimitsMeta(metadata.limitsMeta);
+  if (Array.isArray(metadata.backendOptions)) state.settings.optimize_backend_options = metadata.backendOptions.slice();
+  if (metadata.backendDefault) state.settings.optimize_backend_default = metadata.backendDefault;
+  if (Array.isArray(metadata.pymooAlgorithmOptions)) state.settings.pymoo_algorithm_options = metadata.pymooAlgorithmOptions.slice();
+  if (Array.isArray(metadata.pymooRefDirMethodOptions)) state.settings.pymoo_ref_dir_method_options = metadata.pymooRefDirMethodOptions.slice();
+  if (Array.isArray(metadata.strategies)) state.settings.strategies = metadata.strategies.slice();
+  if (Array.isArray(metadata.hslSignalModes)) state.settings.hsl_signal_modes = metadata.hslSignalModes.slice();
+  if (metadata.strategyBounds && typeof metadata.strategyBounds === 'object') state.settings.strategy_bounds = deepClone(metadata.strategyBounds);
+  if (metadata.strategyDefaults && typeof metadata.strategyDefaults === 'object') state.settings.strategy_defaults = deepClone(metadata.strategyDefaults);
+  if (metadata.boundsMeta && typeof metadata.boundsMeta === 'object') {
+    Object.keys(metadata.boundsMeta).forEach(function(key) {
+      var item = metadata.boundsMeta[key];
+      if (Array.isArray(item)) {
+        OPT_BOUNDS_META[key] = item.slice();
+      } else if (item && typeof item === 'object') {
+        OPT_BOUNDS_META[key] = [item.min, item.max, item.step, item.widget_step == null ? item.step : item.widget_step, item.decimals];
+      }
+    });
+  }
+  if (Array.isArray(metadata.runtimeOverrides)) OPT_FIXED_RUNTIME_OVERRIDE_FIELDS = metadata.runtimeOverrides.slice();
+}
+
 async function authFetch(url, opts) {
   var init = opts || {};
-  var headers = Object.assign({}, init.headers || {}, { Authorization: 'Bearer ' + TOKEN });
+  var headers = authenticatedHeaders(init.headers);
   if (!headers['Content-Type'] && init.body) headers['Content-Type'] = 'application/json';
   var response = await fetch(url, Object.assign({}, init, { headers: headers }));
   var text = await response.text();
@@ -4765,6 +5029,8 @@ function renderOptimizeLogDashboard(status) {
 }
 
 async function refreshOptimizeLogStatus(filename) {
+  if (state.logStatusInFlight || document.visibilityState !== 'visible') return;
+  state.logStatusInFlight = true;
   try {
     var status = await apiFetch('/queue/' + encodeURIComponent(filename) + '/status');
     if (state.logFilename !== filename) return;
@@ -4774,6 +5040,8 @@ async function refreshOptimizeLogStatus(filename) {
     renderOptimizeLogDashboard(null);
     el('optlog-activity').textContent = 'Status unavailable';
     el('optlog-error').textContent = error && error.message ? error.message : 'Failed to load optimize status';
+  } finally {
+    state.logStatusInFlight = false;
   }
 }
 
@@ -4964,7 +5232,14 @@ function collectOptimizeEnableOverrides(existingValue) {
 }
 
 function normalizeOptimizeFixedParamKeys(value) {
-  return normalizeOptimizeEnableOverrides(value);
+  var seen = {};
+  return normalizeOptimizeEnableOverrides(value).map(function(item) {
+    return optimizeEditorAdapter.canonicalFixedParam(item);
+  }).filter(function(item) {
+    if (!item || seen[item]) return false;
+    seen[item] = true;
+    return true;
+  });
 }
 
 function normalizeOptimizeRuntimeOverrideMap(rawOverrides) {
@@ -5023,7 +5298,7 @@ function formatOptimizeRuntimeOverrideValueText(rawValue) {
 
 function normalizeOptimizeRuntimeOverrideValues(rawOverrides) {
   var overrides = normalizeOptimizeRuntimeOverrideMap(rawOverrides);
-  var result = {};
+  var result = normalizeOptimizeRuntimeOverrideMap(overrides);
   OPT_FIXED_RUNTIME_OVERRIDE_FIELDS.forEach(function(field) {
     if (field.type === 'boolean') {
       if (Object.prototype.hasOwnProperty.call(overrides, field.key)) {
@@ -5032,36 +5307,35 @@ function normalizeOptimizeRuntimeOverrideValues(rawOverrides) {
       return;
     }
     if (Object.prototype.hasOwnProperty.call(overrides, field.key)) {
-      result[field.key] = formatOptimizeRuntimeOverrideValueText(overrides[field.key]);
+      result[field.key] = field.type === 'number'
+        ? formatOptimizeRuntimeOverrideValueText(overrides[field.key])
+        : serializeOptimizeRuntimeOverrideValue(overrides[field.key]);
       return;
     }
-    result[field.key] = formatOptimizeRuntimeOverrideValueText(field.defaultValueText);
+    result[field.key] = field.type === 'number'
+      ? formatOptimizeRuntimeOverrideValueText(field.defaultValueText)
+      : String(field.defaultValueText == null ? '' : field.defaultValueText);
   });
   return result;
 }
 
 function getOptimizeBoundGroup(key) {
-  if (String(key || '').indexOf('long_') === 0) return 'long';
-  if (String(key || '').indexOf('short_') === 0) return 'short';
-  return 'other';
+  return optimizeEditorAdapter.boundGroup(key);
 }
 
 function getOptimizeBoundSuffix(key) {
-  var cleanKey = String(key || '');
-  if (cleanKey.indexOf('long_') === 0) return cleanKey.slice(5);
-  if (cleanKey.indexOf('short_') === 0) return cleanKey.slice(6);
-  return cleanKey;
+  return optimizeEditorAdapter.boundSuffix(key);
 }
 
 function getOptimizeHslEnabledOverrideKey(side) {
-  return 'bot.' + side + '.hsl_enabled';
+  return optimizeEditorAdapter.hslRuntimeOverrideKey(side, 'enabled');
 }
 
 function getOptimizeConfigBotHslEnabled(side) {
   var cfg = state.editorLastConfig || {};
   var bot = cfg.bot || {};
   var sideCfg = bot[side] || {};
-  return !!sideCfg.hsl_enabled;
+  return !!optimizeEditorAdapter.getBotHslValue(sideCfg, 'enabled', false);
 }
 
 function normalizeOptimizeRuntimeOverrideBooleanValue(value, fallback) {
@@ -5090,7 +5364,7 @@ function isOptimizeHslAutoFixedBound(key) {
   var group = getOptimizeBoundGroup(cleanKey);
   if (group !== 'long' && group !== 'short') return false;
   var suffix = getOptimizeBoundSuffix(cleanKey);
-  if (['hsl_red_threshold', 'hsl_ema_span_minutes', 'hsl_cooldown_minutes_after_red'].indexOf(suffix) === -1) {
+  if (['hsl_red_threshold', 'hsl_ema_span_minutes', 'hsl_cooldown_minutes_after_red', 'hsl.red_threshold', 'hsl.ema_span_minutes', 'hsl.cooldown_minutes_after_red'].indexOf(suffix) === -1) {
     return false;
   }
   return !isOptimizeHslEnabledForSide(group);
@@ -5099,7 +5373,8 @@ function isOptimizeHslAutoFixedBound(key) {
 function isOptimizeHslRedThresholdBound(key) {
   var cleanKey = String(key || '');
   var group = getOptimizeBoundGroup(cleanKey);
-  return (group === 'long' || group === 'short') && getOptimizeBoundSuffix(cleanKey) === 'hsl_red_threshold';
+  var suffix = getOptimizeBoundSuffix(cleanKey);
+  return (group === 'long' || group === 'short') && (suffix === 'hsl_red_threshold' || suffix === 'hsl.red_threshold');
 }
 
 function getOptimizeHslRedThresholdRequiredMin(key) {
@@ -5110,7 +5385,12 @@ function getOptimizeHslRedThresholdRequiredMin(key) {
 }
 
 function getOptimizeBoundRequiredMin(key) {
-  return getOptimizeHslRedThresholdRequiredMin(key);
+  var hslMinimum = getOptimizeHslRedThresholdRequiredMin(key);
+  if (Number.isFinite(hslMinimum)) return hslMinimum;
+  if (!optimizeEditorAdapter.isV8) return null;
+  var suffix = getOptimizeBoundSuffix(key);
+  if (suffix === 'forager.volume_ema_span_1m' || suffix === 'forager.volatility_ema_span_1m') return 1;
+  return null;
 }
 
 function constrainOptimizeBoundEntry(entry) {
@@ -5151,7 +5431,7 @@ function constrainOptimizeBoundEntry(entry) {
 function getOptimizeEffectiveFixedParamSet() {
   var fixedSet = new Set(state.optimizeFixedParams || []);
   (state.optimizeBounds || []).forEach(function(entry) {
-    if (isOptimizeHslAutoFixedBound(entry.key)) fixedSet.add(entry.key);
+    if (isOptimizeHslAutoFixedBound(entry.key)) fixedSet.add(optimizeEditorAdapter.canonicalFixedParam(entry.key));
   });
   return fixedSet;
 }
@@ -5186,7 +5466,11 @@ function getOptimizeBoundPrecisionFromStep(step) {
 
 function getOptimizeBoundMeta(key, low, high, step) {
   var suffix = getOptimizeBoundSuffix(key);
-  var rawMeta = OPT_BOUNDS_META[suffix] || null;
+  var rawMeta = null;
+  optimizeEditorAdapter.boundMetaKeys(key).some(function(metaKey) {
+    rawMeta = OPT_BOUNDS_META[metaKey] || null;
+    return !!rawMeta;
+  });
   var min = rawMeta ? Number(rawMeta[0]) : 0;
   var max = rawMeta ? Number(rawMeta[1]) : 1;
   if (Number.isFinite(low)) min = Math.min(min, low);
@@ -5688,7 +5972,9 @@ function getOptimizeBoundGroupSortRank(group) {
 }
 
 function getOptimizeBoundLifecycleSortRank(suffix) {
-  var rank = OPT_BOUNDS_LIFECYCLE_ORDER_MAP[String(suffix || '')];
+  var clean = String(suffix || '');
+  var rank = OPT_BOUNDS_LIFECYCLE_ORDER_MAP[clean];
+  if (!Number.isFinite(rank)) rank = OPT_BOUNDS_LIFECYCLE_ORDER_MAP[clean.split('.').slice(-1)[0]];
   return Number.isFinite(rank) ? rank : OPT_BOUNDS_UNKNOWN_SORT_RANK;
 }
 
@@ -5748,7 +6034,7 @@ function renderOptimizeBoundRow(entry, fixedSet) {
     +     '</div>'
     +     '<div class="optimize-bound-step-col">'
     +       '<input class="optimize-bound-step-input" type="text" inputmode="decimal" spellcheck="false" autocomplete="off" value="' + escapeHtml(entry.stepText) + '" oninput="updateOptimizeBoundField(' + escAttr(JSON.stringify(entry.key)) + ', &quot;step&quot;, this.value, this)" onblur="finalizeOptimizeBoundStepField(' + escAttr(JSON.stringify(entry.key)) + ', this)">'
-    +       '<label class="optimize-bound-fixed"><input type="checkbox" ' + (fixedSet.has(entry.key) ? 'checked ' : '') + (autoFixed ? 'disabled ' : '') + 'onchange="toggleOptimizeFixedParam(' + escAttr(JSON.stringify(entry.key)) + ', this.checked)"><span data-tip="' + escAttr(fixedTip) + '">fixed</span></label>'
+    +       '<label class="optimize-bound-fixed"><input type="checkbox" ' + (fixedSet.has(optimizeEditorAdapter.canonicalFixedParam(entry.key)) ? 'checked ' : '') + (autoFixed ? 'disabled ' : '') + 'onchange="toggleOptimizeFixedParam(' + escAttr(JSON.stringify(entry.key)) + ', this.checked)"><span data-tip="' + escAttr(fixedTip) + '">fixed</span></label>'
     +     '</div>'
     +   '</div>'
     + '</div>';
@@ -5793,6 +6079,57 @@ function renderOptimizeBoundsEditor() {
 function renderOptimizeRuntimeOverridesEditor() {
   var panel = el('opted-runtime-overrides-panel');
   if (!panel) return;
+  if (optimizeEditorAdapter.isV8) {
+    function renderRuntimeOverrideField(field) {
+      var hasRuntimeValue = Object.prototype.hasOwnProperty.call(state.runtimeOverrideValues || {}, field.key);
+      var value = hasRuntimeValue
+        ? state.runtimeOverrideValues[field.key]
+        : (field.defaultValue === undefined ? field.defaultValueText : field.defaultValue);
+      if (!hasRuntimeValue && field.storage === 'bot_hsl') {
+        var bot = ((state.editorLastConfig || {}).bot || {});
+        value = optimizeEditorAdapter.getBotHslValue(bot[field.side] || {}, field.botKey, value);
+      }
+      var label = field.label || field.key;
+      var tip = field.tip || ('Optimize-only runtime override for ' + field.key + '.');
+      if (field.type === 'boolean') {
+        return fieldCheckboxInline('', label, normalizeOptimizeRuntimeOverrideBooleanValue(value, false), tip)
+          .replace('id=""', '')
+          .replace('<input type="checkbox"', '<input type="checkbox" data-runtime-override="' + escAttr(field.key) + '" onchange="toggleOptimizeRuntimeOverrideCheckbox(' + escAttr(JSON.stringify(field.key)) + ', this.checked)"');
+      }
+      var choices = Array.isArray(field.choices) ? field.choices : [];
+      if (choices.length) {
+        return '<label class="runtime-override-field"><span class="runtime-override-label" data-tip="' + escAttr(tip) + '">' + escapeHtml(label) + '</span>'
+          + '<select data-runtime-override="' + escAttr(field.key) + '" onchange="updateOptimizeRuntimeOverrideRawValue(' + escAttr(JSON.stringify(field.key)) + ', this.value)">'
+          + choices.map(function(choice) { return '<option value="' + escAttr(choice) + '"' + (String(choice) === String(value) ? ' selected' : '') + '>' + escapeHtml(choice) + '</option>'; }).join('')
+          + '</select></label>';
+      }
+      return '<label class="runtime-override-field"><span class="runtime-override-label" data-tip="' + escAttr(tip) + '">' + escapeHtml(label) + '</span>'
+        + '<input class="runtime-override-input" type="' + (field.type === 'number' ? 'number' : 'text') + '" data-runtime-override="' + escAttr(field.key) + '" value="' + escAttr(value == null ? '' : value) + '" '
+          + (field.type === 'number'
+            ? 'oninput="updateOptimizeRuntimeOverrideValue(' + escAttr(JSON.stringify(field.key)) + ', this.value, this)"'
+            : 'oninput="updateOptimizeRuntimeOverrideRawValue(' + escAttr(JSON.stringify(field.key)) + ', this.value)"')
+          + '></label>';
+    }
+    var groups = { long: [], short: [], other: [] };
+    (OPT_FIXED_RUNTIME_OVERRIDE_FIELDS || []).forEach(function(field) {
+      var side = field.side || ((String(field.key || '').match(/^bot\.(long|short)\./) || [])[1]);
+      groups[side === 'long' || side === 'short' ? side : 'other'].push(field);
+    });
+    function renderRuntimeOverrideGroup(title, fields, wide) {
+      if (!fields.length) return '';
+      return '<div class="bounds-side-card' + (wide ? ' bounds-side-card-wide' : '') + '">'
+        + '<div class="bounds-side-title">' + escapeHtml(title) + '</div>'
+        + '<div class="runtime-override-simple-grid">' + fields.map(renderRuntimeOverrideField).join('') + '</div>'
+        + '</div>';
+    }
+    var fields = renderRuntimeOverrideGroup('Runtime overrides long', groups.long, false)
+      + renderRuntimeOverrideGroup('Runtime overrides short', groups.short, false)
+      + renderRuntimeOverrideGroup('Other runtime overrides', groups.other, true);
+    panel.innerHTML = fields
+      ? '<div class="limits-panel runtime-overrides-panel"><div class="bounds-surface">' + fields + '</div></div>'
+      : '<div class="limits-empty">No runtime overrides reported by the installed PB8 runtime.</div>';
+    return;
+  }
   function renderRuntimeOverrideField(field) {
     var meta = getOptimizeRuntimeOverrideFieldMeta(field.key) || field;
     if (field.type === 'boolean') {
@@ -5884,7 +6221,19 @@ function toggleOptimizeRuntimeOverrideCheckbox(key, checked) {
   if (!cleanKey) return;
   state.runtimeOverrideValues = state.runtimeOverrideValues || {};
   state.runtimeOverrideValues[cleanKey] = !!checked;
+  var field = getOptimizeRuntimeOverrideFieldMeta(cleanKey);
+  if (field && field.storage === 'bot_hsl') {
+    setOptimizeBotHslField(field.side, field.botKey, !!checked);
+  }
   renderOptimizeBoundsEditor();
+  scheduleStructuredEditorSync();
+}
+
+function updateOptimizeRuntimeOverrideRawValue(key, value) {
+  var cleanKey = String(key || '').trim();
+  if (!cleanKey) return;
+  state.runtimeOverrideValues = state.runtimeOverrideValues || {};
+  state.runtimeOverrideValues[cleanKey] = value;
   scheduleStructuredEditorSync();
 }
 
@@ -5974,8 +6323,9 @@ function refreshOptimizeBoundsPrecision() {
 
 function toggleOptimizeFixedParam(key, checked) {
   var current = new Set(state.optimizeFixedParams || []);
-  if (checked) current.add(key);
-  else current.delete(key);
+  var canonical = optimizeEditorAdapter.canonicalFixedParam(key);
+  if (checked) current.add(canonical);
+  else current.delete(canonical);
   state.optimizeFixedParams = Array.from(current).sort();
   scheduleStructuredEditorSync();
 }
@@ -5986,6 +6336,11 @@ function updateOptimizeRuntimeOverrideValue(key, rawValue, inputNode) {
   var normalized = normalizeOptimizeRuntimeOverrideInputText(rawValue);
   state.runtimeOverrideValues = state.runtimeOverrideValues || {};
   state.runtimeOverrideValues[cleanKey] = normalized;
+  var field = getOptimizeRuntimeOverrideFieldMeta(cleanKey);
+  var numericValue = Number(normalized);
+  if (field && field.storage === 'bot_hsl' && Number.isFinite(numericValue)) {
+    setOptimizeBotHslField(field.side, field.botKey, numericValue);
+  }
   if (inputNode && inputNode.value !== normalized) inputNode.value = normalized;
   scheduleStructuredEditorSync();
 }
@@ -6022,7 +6377,7 @@ function collectOptimizeBounds(opts) {
     }
     var requiredMin = getOptimizeBoundRequiredMin(entry.key);
     if (Number.isFinite(requiredMin) && entry.lowValue < requiredMin) {
-      if (strict) throw new Error(entry.key + ' lower bound must be > 0.0 when HSL is enabled.');
+      if (strict) throw new Error(entry.key + ' lower bound must be at least ' + requiredMin + '.');
       entry.lowValue = requiredMin;
       entry.lowText = formatOptimizeBoundValue(entry.lowValue, entry.meta.decimals);
     }
@@ -6049,7 +6404,23 @@ function collectOptimizeRuntimeOverrides(opts) {
   opts = opts || {};
   var strict = !!opts.strict;
   var fallback = normalizeOptimizeRuntimeOverrideMap(opts.fallbackValue);
-  var result = {};
+  var result = optimizeEditorAdapter.isV8
+    ? normalizeOptimizeRuntimeOverrideMap(Object.assign({}, fallback, state.runtimeOverrideValues || {}))
+    : {};
+  if (optimizeEditorAdapter.isV8) {
+    OPT_FIXED_RUNTIME_OVERRIDE_FIELDS.forEach(function(field) {
+      if (field.storage === 'bot_hsl') {
+        delete result[field.key];
+        return;
+      }
+      var hasValue = Object.prototype.hasOwnProperty.call(state.runtimeOverrideValues || {}, field.key);
+      var value = hasValue ? state.runtimeOverrideValues[field.key] : fallback[field.key];
+      if (value === undefined || value === null || String(value).trim() === '') return;
+      if (field.type === 'boolean') result[field.key] = normalizeOptimizeRuntimeOverrideBooleanValue(value, false);
+      else result[field.key] = parseOptimizeRuntimeOverrideValue(value);
+    });
+    return result;
+  }
   OPT_FIXED_RUNTIME_OVERRIDE_FIELDS.forEach(function(field) {
     if (field.type === 'boolean') {
       if (Object.prototype.hasOwnProperty.call(state.runtimeOverrideValues || {}, field.key)) {
@@ -6254,6 +6625,11 @@ function resetOptimizeEditorUiState() {
   _optKvHighlight = {};
   state.optimizeBounds = [];
   state.optimizeFixedParams = [];
+  state.optimizeStrategyBoundsCache = {};
+  state.optimizeStrategyFixedCache = {};
+  state.optimizeSharedBoundsCache = {};
+  state.optimizeSharedFixedCache = [];
+  state.optimizeStrategyBotCache = { long: {}, short: {} };
   state.runtimeOverrideValues = {};
   state.scoringEntries = [];
   state.scoringEditIndex = -1;
@@ -6317,6 +6693,11 @@ var KNOWN_OPT_EXTRA_PARAMS = {
     'scoring', 'limits', 'bounds', 'pymoo'
   ])
 };
+if (optimizeEditorAdapter.isV8) {
+  ['seed'].forEach(function(key) {
+    KNOWN_OPT_EXTRA_PARAMS.optimize.add(key);
+  });
+}
 var OPT_ENABLE_OVERRIDE_VALUES = [
   'lossless_close_trailing',
   'forward_tp_grid',
@@ -6477,6 +6858,19 @@ function normalizeOptimizeSeedMode(mode) {
 function getOptimizeSeedState(cfg) {
   var pbgui = cfg && cfg.pbgui && typeof cfg.pbgui === 'object' && !Array.isArray(cfg.pbgui) ? cfg.pbgui : {};
   var optimize = cfg && cfg.optimize && typeof cfg.optimize === 'object' && !Array.isArray(cfg.optimize) ? cfg.optimize : {};
+  var runtime = pbgui.optimize_runtime && typeof pbgui.optimize_runtime === 'object' && !Array.isArray(pbgui.optimize_runtime)
+    ? pbgui.optimize_runtime
+    : null;
+  if (runtime) {
+    var runtimeMode = String(runtime.mode || 'fresh').trim().toLowerCase();
+    var runtimeSource = String(runtime.source || '').trim();
+    if (runtimeMode === 'pareto_seed' && runtimeSource) {
+      return runtimeSource === '__self__' ? { mode: 'self', path: '' } : { mode: 'path', path: runtimeSource };
+    }
+    if (runtimeMode === 'fresh' || runtimeMode === 'checkpoint_resume' || runtimeMode === 'pareto_seed') {
+      return { mode: 'none', path: '' };
+    }
+  }
   var mode = normalizeOptimizeSeedMode(pbgui.optimize_seed_mode);
   var path = String(pbgui.optimize_seed_path || '').trim();
   var legacySelf = !!pbgui.starting_config;
@@ -6724,9 +7118,10 @@ function getOptimizePymooRefDirMethodOptions(currentValue) {
 function buildOptimizePymooRefDirMethodField(currentValue) {
   var options = getOptimizePymooRefDirMethodOptions(currentValue);
   var normalizedValue = normalizeOptimizePymooRefDirMethodValue(currentValue);
-  var tip = 'Reference direction generator used by PB7 for NSGA-III.';
+  var versionLabel = typeof optimizeEditorAdapter === 'undefined' ? 'PB7' : optimizeEditorAdapter.label;
+  var tip = 'Reference direction generator used by ' + versionLabel + ' for NSGA-III.';
   if (options.length <= 1) {
-    return fieldText2('opted-pymoo-ref-dir-method', 'ref_dirs_method', normalizedValue, false, '', 'PB7 currently supports only one NSGA-III reference-direction generator, so this value is fixed.', 1);
+    return fieldText2('opted-pymoo-ref-dir-method', 'ref_dirs_method', normalizedValue, false, '', versionLabel + ' currently supports only one NSGA-III reference-direction generator, so this value is fixed.', 1);
   }
   return fieldSelect2('opted-pymoo-ref-dir-method', 'ref_dirs_method', options, normalizedValue, false, tip, 1);
 }
@@ -6764,6 +7159,13 @@ function normalizeOptimizeCpuCount(value, fallbackValue) {
 function resolveOptimizePymooRequestedPopulationSize(populationModeValue, rawPopulationSize) {
   if (normalizeOptimizePymooPopulationMode(populationModeValue) !== 'value') return null;
   return normalizeOptimizePositiveInteger(rawPopulationSize);
+}
+
+function shouldPreserveOptimizePymooAutoPopulation(backend, effectiveAlgorithm, populationMode) {
+  var isV8Editor = typeof optimizeEditorAdapter !== 'undefined' && optimizeEditorAdapter.isV8;
+  return normalizeOptimizeBackendValue(backend) === 'pymoo'
+    && normalizeOptimizePymooPopulationMode(populationMode) === 'auto'
+    && (isV8Editor || effectiveAlgorithm !== 'nsga2');
 }
 
 function optimizeObjectiveCount(fallbackCount) {
@@ -6849,6 +7251,7 @@ function resolveOptimizePymooEffectivePopulationSize(
 
 function formatOptimizePymooPopulationAutoLabel(visibility) {
   if (!visibility || !visibility.showPymoo) return '';
+  var isV8Editor = typeof optimizeEditorAdapter !== 'undefined' && optimizeEditorAdapter.isV8;
   if (visibility.effectiveAlgorithm === 'nsga3') {
     var populationMode = el('opted-pymoo-population-mode');
     var populationInput = el('opted-pymoo-population-size');
@@ -6862,7 +7265,11 @@ function formatOptimizePymooPopulationAutoLabel(visibility) {
       refDirMode ? refDirMode.value : 'auto',
       refDirInput ? refDirInput.value : null
     );
-    return 'auto (' + actualPopulationSize + ' from NSGA-III ref_dirs)';
+    return 'auto (' + actualPopulationSize + ' from NSGA-III ref_dirs'
+      + (isV8Editor ? ', budget 500' : '') + ')';
+  }
+  if (visibility.effectiveAlgorithm === 'nsga2' && isV8Editor) {
+    return 'auto (250 PB8 native NSGA-II default)';
   }
   return 'explicit population size required';
 }
@@ -6892,11 +7299,13 @@ function resolveOptimizePymooAutoRefDirPartitions(nObj, populationSize) {
   var objectiveCount = Math.max(0, Math.round(Number(nObj) || 0));
   if (objectiveCount <= 1) return 1;
   var normalizedPopulationSize = populationSize == null ? null : Math.max(1, Math.round(Number(populationSize) || 0));
+  var isV8Editor = typeof optimizeEditorAdapter !== 'undefined' && optimizeEditorAdapter.isV8;
+  var autoBudget = isV8Editor ? 500 : 330;
   var best = 1;
   for (var nPartitions = 1; nPartitions <= 32; nPartitions += 1) {
     var refDirCount = optimizeReferenceDirectionCount(objectiveCount, nPartitions);
     if (normalizedPopulationSize == null) {
-      if (refDirCount > 330) break;
+      if (refDirCount > autoBudget) break;
     } else if (refDirCount > normalizedPopulationSize) {
       break;
     }
@@ -6962,7 +7371,9 @@ function updateOptimizeBackendSections() {
   if (effectiveLabel) effectiveLabel.value = formatOptimizeEffectiveAlgorithmLabel(visibility);
   if (populationMode) {
     var autoOption = populationMode.querySelector ? populationMode.querySelector('option[value="auto"]') : null;
-    var allowAutoPopulation = visibility.showPymoo && visibility.effectiveAlgorithm !== 'nsga2';
+    var isV8Editor = typeof optimizeEditorAdapter !== 'undefined' && optimizeEditorAdapter.isV8;
+    var allowAutoPopulation = visibility.showPymoo
+      && (isV8Editor || visibility.effectiveAlgorithm !== 'nsga2');
     if (autoOption) autoOption.disabled = !allowAutoPopulation;
     if (!allowAutoPopulation && normalizeOptimizePymooPopulationMode(populationMode.value) === 'auto') {
       populationMode.value = 'value';
@@ -7047,6 +7458,7 @@ function applyOptimizeSeedConfig(cfg, mode, path) {
   var normalizedPath = String(path || '').trim();
   var pbgui = ensureObjectSection(cfg, 'pbgui');
   var optimize = ensureObjectSection(cfg, 'optimize');
+  var runtime = ensureObjectSection(pbgui, 'optimize_runtime');
 
   if (normalizedMode === 'path' && !normalizedPath) normalizedMode = 'none';
 
@@ -7057,12 +7469,22 @@ function applyOptimizeSeedConfig(cfg, mode, path) {
     delete pbgui.optimize_seed_path;
   }
   pbgui.starting_config = normalizedMode === 'self';
+  runtime.mode = normalizedMode === 'none' ? 'fresh' : 'pareto_seed';
+  runtime.source = normalizedMode === 'self' ? '__self__' : (normalizedMode === 'path' ? normalizedPath : '');
 
   if (Object.prototype.hasOwnProperty.call(optimize, 'starting_config')) {
     delete optimize.starting_config;
   }
 
   return { mode: normalizedMode, path: normalizedMode === 'path' ? normalizedPath : '' };
+}
+
+function syncOptimizeSeedRuntimeFromControls() {
+  var modeNode = el('opted-seed-mode');
+  var pathNode = el('opted-seed-path');
+  if (!modeNode || !state.editorLastConfig) return;
+  applyOptimizeSeedConfig(state.editorLastConfig, modeNode.value, pathNode ? pathNode.value : '');
+  scheduleStructuredEditorSync();
 }
 
 function toggleOptimizeSeedPathInput() {
@@ -7098,13 +7520,13 @@ function renderOptimizeSeedConfigSection(bot, visible) {
             + '<div class="form-group"><label><span data-tip="Maximum exposure allowed.">total_wallet_exposure_limit</span></label>'
               + '<div class="num-stepper">'
                 + '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'opted-long-twe\');i.value=+(+i.value-0.05).toFixed(10);optBotSyncFromFields(\'long\')">−</button>'
-                + '<input type="number" id="opted-long-twe" value="' + escapeHtml(((bot.long || {}).total_wallet_exposure_limit) == null ? '0' : String((bot.long || {}).total_wallet_exposure_limit)) + '" step="0.05" oninput="optBotSyncFromFields(\'long\')">'
+                + '<input type="number" id="opted-long-twe" value="' + escapeHtml(String(optimizeEditorAdapter.getBotValue(bot.long || {}, 'total_wallet_exposure_limit', 0))) + '" step="0.05" oninput="optBotSyncFromFields(\'long\')">'
                 + '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'opted-long-twe\');i.value=+(+i.value+0.05).toFixed(10);optBotSyncFromFields(\'long\')">+</button>'
               + '</div></div>'
             + '<div class="form-group"><label><span data-tip="Maximum number of long positions.">n_positions</span></label>'
               + '<div class="num-stepper">'
                 + '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'opted-long-npos\');i.value=+(+i.value-1).toFixed(10);optBotSyncFromFields(\'long\')">−</button>'
-                + '<input type="number" id="opted-long-npos" value="' + escapeHtml(((bot.long || {}).n_positions) == null ? '0' : String((bot.long || {}).n_positions)) + '" step="1" oninput="optBotSyncFromFields(\'long\')">'
+                + '<input type="number" id="opted-long-npos" value="' + escapeHtml(String(optimizeEditorAdapter.getBotValue(bot.long || {}, 'n_positions', 0))) + '" step="1" oninput="optBotSyncFromFields(\'long\')">'
                 + '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'opted-long-npos\');i.value=+(+i.value+1).toFixed(10);optBotSyncFromFields(\'long\')">+</button>'
               + '</div></div>'
           + '</div>'
@@ -7125,13 +7547,13 @@ function renderOptimizeSeedConfigSection(bot, visible) {
             + '<div class="form-group"><label><span data-tip="Maximum exposure allowed.">total_wallet_exposure_limit</span></label>'
               + '<div class="num-stepper">'
                 + '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'opted-short-twe\');i.value=+(+i.value-0.05).toFixed(10);optBotSyncFromFields(\'short\')">−</button>'
-                + '<input type="number" id="opted-short-twe" value="' + escapeHtml(((bot.short || {}).total_wallet_exposure_limit) == null ? '0' : String((bot.short || {}).total_wallet_exposure_limit)) + '" step="0.05" oninput="optBotSyncFromFields(\'short\')">'
+                + '<input type="number" id="opted-short-twe" value="' + escapeHtml(String(optimizeEditorAdapter.getBotValue(bot.short || {}, 'total_wallet_exposure_limit', 0))) + '" step="0.05" oninput="optBotSyncFromFields(\'short\')">'
                 + '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'opted-short-twe\');i.value=+(+i.value+0.05).toFixed(10);optBotSyncFromFields(\'short\')">+</button>'
               + '</div></div>'
             + '<div class="form-group"><label><span data-tip="Maximum number of short positions.">n_positions</span></label>'
               + '<div class="num-stepper">'
                 + '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'opted-short-npos\');i.value=+(+i.value-1).toFixed(10);optBotSyncFromFields(\'short\')">−</button>'
-                + '<input type="number" id="opted-short-npos" value="' + escapeHtml(((bot.short || {}).n_positions) == null ? '0' : String((bot.short || {}).n_positions)) + '" step="1" oninput="optBotSyncFromFields(\'short\')">'
+                + '<input type="number" id="opted-short-npos" value="' + escapeHtml(String(optimizeEditorAdapter.getBotValue(bot.short || {}, 'n_positions', 0))) + '" step="1" oninput="optBotSyncFromFields(\'short\')">'
                 + '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'opted-short-npos\');i.value=+(+i.value+1).toFixed(10);optBotSyncFromFields(\'short\')">+</button>'
               + '</div></div>'
           + '</div>'
@@ -7460,8 +7882,8 @@ function setOptBotParamStatus(paramStatus) {
 
 async function optFetchV7Json(path, opts) {
   opts = opts || {};
-  var v7Base = API_BASE.replace('/optimize-v7', '/v7');
-  opts.headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN }, opts.headers || {});
+  var v7Base = optimizeEditorAdapter.metadataApiBase();
+  opts.headers = authenticatedHeaders(opts.headers);
   var response = await fetch(v7Base + path, opts);
   var data = await response.json();
   if (!response.ok) throw new Error((data && data.detail) || response.statusText || 'Request failed');
@@ -7562,8 +7984,8 @@ function optBotSyncFromFields(side) {
   var npos = parseFloat(document.getElementById('opted-' + side + '-npos').value);
   try {
     var obj = JSON.parse(textarea.value);
-    if (!isNaN(twe)) obj.total_wallet_exposure_limit = twe;
-    if (!isNaN(npos)) obj.n_positions = npos;
+    if (!isNaN(twe)) optimizeEditorAdapter.setBotValue(obj, 'total_wallet_exposure_limit', twe);
+    if (!isNaN(npos)) optimizeEditorAdapter.setBotValue(obj, 'n_positions', npos);
     textarea.value = JSON.stringify(obj, null, 2);
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     autoResizeTa(textarea);
@@ -7578,8 +8000,8 @@ function optBotSyncFromJson(side) {
     var obj = JSON.parse(textarea.value);
     var tweEl = document.getElementById('opted-' + side + '-twe');
     var nposEl = document.getElementById('opted-' + side + '-npos');
-    if (tweEl && obj.total_wallet_exposure_limit !== undefined) tweEl.value = obj.total_wallet_exposure_limit;
-    if (nposEl && obj.n_positions !== undefined) nposEl.value = obj.n_positions;
+    if (tweEl) tweEl.value = optimizeEditorAdapter.getBotValue(obj, 'total_wallet_exposure_limit', tweEl.value);
+    if (nposEl) nposEl.value = optimizeEditorAdapter.getBotValue(obj, 'n_positions', nposEl.value);
   } catch (error) {}
   autoResizeTa(textarea);
 }
@@ -7589,7 +8011,20 @@ function setOptimizeBotBoolField(side, key, value) {
   if (!textarea) return;
   try {
     var obj = JSON.parse(textarea.value || '{}');
-    obj[key] = !!value;
+    if (key === 'hsl_enabled') optimizeEditorAdapter.setBotHslValue(obj, 'enabled', !!value);
+    else obj[key] = !!value;
+    textarea.value = JSON.stringify(obj, null, 2);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    autoResizeTa(textarea);
+  } catch (error) {}
+}
+
+function setOptimizeBotHslField(side, key, value) {
+  var textarea = el('opted-bot-' + side);
+  if (!textarea) return;
+  try {
+    var obj = JSON.parse(textarea.value || '{}');
+    optimizeEditorAdapter.setBotHslValue(obj, key, value);
     textarea.value = JSON.stringify(obj, null, 2);
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     autoResizeTa(textarea);
@@ -7795,6 +8230,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
     )
     : optimize.population_size;
   var enableOverrides = normalizeOptimizeEnableOverrides(optimize.enable_overrides);
+  var strategyOptions = getOptimizeStrategyOptions(live.strategy_kind);
   var endDate = resolveOptimizeEditorEndDateValue(backtest.end_date);
   return '<div class="editor-shell">'
     + '<div id="cfg-editor-status" class="editor-status-inline"></div>'
@@ -7890,6 +8326,12 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
     + '</div>'
 
     + '<div class="section-title">Optimization</div>'
+    + (optimizeEditorAdapter.isV8
+      ? '<div class="form-row cols-8">'
+        + fieldSelect2('opted-strategy-kind', 'strategy_kind', strategyOptions, live.strategy_kind || strategyOptions[0] || '', false, 'PB8 strategy used by both optimizer sides. Changing it loads that strategy\'s runtime-provided bot defaults and bounds.', 2)
+          .replace('<select id="opted-strategy-kind"', '<select id="opted-strategy-kind" data-current-strategy="' + escapeHtml(live.strategy_kind || strategyOptions[0] || '') + '" onchange="changeOptimizeStrategyKind(this.value)"')
+        + '</div>'
+      : '')
     + '<div id="suite-container"></div>'
 
     + '<div class="expander' + (normalizeScoringEntries(optimize.scoring).length ? ' open' : '') + '" id="exp-opt-scoring">'
@@ -7912,7 +8354,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
 
     + '<div class="expander open" id="exp-opt-bounds">'
       + '<div class="expander-header" onclick="toggleExpander(\'exp-opt-bounds\')">'
-        + '<span class="arrow">▶</span> <span id="opted-bounds-summary">Bounds & Overrides (' + Object.keys(optimize.bounds || {}).length + ')</span>'
+        + '<span class="arrow">▶</span> <span id="opted-bounds-summary">Bounds & Overrides (' + Object.keys(optimizeEditorAdapter.getBounds(optimize)).length + ')</span>'
       + '</div>'
       + '<div class="expander-body">'
         + '<input type="checkbox" id="opted-enable-lossless-close-trailing" style="display:none"' + (enableOverrides.indexOf('lossless_close_trailing') >= 0 ? ' checked' : '') + '>'
@@ -7923,15 +8365,15 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
     + '</div>'
 
     + '<div class="form-row cols-8">'
-      + fieldSelect2('opted-opt-backend', 'backend', getOptimizeBackendOptions(optimize.backend), backendValue, false, 'Optimizer backend resolved directly from PB7. Pymoo is the current default backend.', 2)
+      + fieldSelect2('opted-opt-backend', 'backend', getOptimizeBackendOptions(optimize.backend), backendValue, false, 'Optimizer backend resolved directly from ' + optimizeEditorAdapter.label + '. Pymoo is the current default backend.', 2)
     + '</div>'
 
     + '<div id="optimize-pymoo-section" style="display:' + (backendValue === 'pymoo' ? '' : 'none') + '">'
       + '<div class="form-row cols-8">'
-        + fieldSelect('opted-pymoo-algorithm', 'pymoo_algorithm', getOptimizePymooAlgorithmOptions(pymoo.algorithm), pymooAlgorithmValue, false, 'PB7 supports auto, nsga2 and nsga3. Auto resolves from the current objective count.')
-        + fieldText2('opted-pymoo-effective-algorithm', 'effective_algorithm', formatOptimizeEffectiveAlgorithmLabel({ showPymoo: true, algorithm: pymooAlgorithmValue, effectiveAlgorithm: effectiveAlgorithm }), false, '', 'PB7 derives the effective algorithm from backend plus objective count.', 1)
-        + fieldSelect('opted-pymoo-population-mode', 'population_size_mode', [{ value: 'auto', label: 'auto' }, { value: 'value', label: 'explicit' }], pymooPopulationMode, false, 'For NSGA-III, auto lets PB7 derive the effective population from reference directions. NSGA-II requires an explicit value.')
-        + '<div class="form-group"><label>' + tipSpan('population_size', 'Auto mode is read-only and shows that PB7 derives the size from the active NSGA-III reference directions. NSGA-II requires an explicit value.') + '</label>'
+        + fieldSelect('opted-pymoo-algorithm', 'pymoo_algorithm', getOptimizePymooAlgorithmOptions(pymoo.algorithm), pymooAlgorithmValue, false, optimizeEditorAdapter.label + ' supports auto, nsga2 and nsga3. Auto resolves from the current objective count.')
+        + fieldText2('opted-pymoo-effective-algorithm', 'effective_algorithm', formatOptimizeEffectiveAlgorithmLabel({ showPymoo: true, algorithm: pymooAlgorithmValue, effectiveAlgorithm: effectiveAlgorithm }), false, '', optimizeEditorAdapter.label + ' derives the effective algorithm from backend plus objective count.', 1)
+        + fieldSelect('opted-pymoo-population-mode', 'population_size_mode', [{ value: 'auto', label: 'auto' }, { value: 'value', label: 'explicit' }], pymooPopulationMode, false, optimizeEditorAdapter.isV8 ? 'Auto preserves null so PB8 uses its native default: NSGA-II 250 or the NSGA-III reference-direction budget of 500.' : 'For NSGA-III, auto lets ' + optimizeEditorAdapter.label + ' derive the effective population from reference directions. NSGA-II requires an explicit value.')
+        + '<div class="form-group"><label>' + tipSpan('population_size', optimizeEditorAdapter.isV8 ? 'Auto preserves null and previews PB8 native population defaults.' : 'Auto mode is read-only and shows that ' + optimizeEditorAdapter.label + ' derives the size from the active NSGA-III reference directions. NSGA-II requires an explicit value.') + '</label>'
           + '<input type="number" id="opted-pymoo-population-size" value="' + esc(String(pymooPopulationInputValue == null ? '' : pymooPopulationInputValue)) + '"' + (pymooPopulationMode === 'value' ? '' : ' style="display:none"') + '>'
           + '<input type="text" id="opted-pymoo-population-size-auto" readonly value="' + esc(formatOptimizePymooPopulationAutoLabel(populationVisibility)) + '"' + (pymooPopulationMode === 'auto' ? '' : ' style="display:none"') + '>'
         + '</div>'
@@ -7940,8 +8382,8 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
         + fieldNumber2('opted-pymoo-crossover-eta', 'crossover_eta', pymooShared.crossover_eta == null ? optimizePymooSharedDefaults().crossover_eta : pymooShared.crossover_eta, 0.5, 'SBX crossover eta under optimize.pymoo.shared.crossover_eta.', 1)
         + fieldNumber2('opted-pymoo-crossover-prob-var', 'crossover_prob_var', pymooShared.crossover_prob_var == null ? optimizePymooSharedDefaults().crossover_prob_var : pymooShared.crossover_prob_var, 0.01, 'Per-variable crossover probability under optimize.pymoo.shared.crossover_prob_var.', 1)
         + fieldNumber2('opted-pymoo-mutation-eta', 'mutation_eta', pymooShared.mutation_eta == null ? optimizePymooSharedDefaults().mutation_eta : pymooShared.mutation_eta, 0.5, 'Polynomial mutation eta under optimize.pymoo.shared.mutation_eta.', 1)
-        + fieldSelect('opted-pymoo-mutation-prob-mode', 'mutation_prob_var_mode', [{ value: 'auto', label: 'auto' }, { value: 'value', label: 'explicit' }], pymooMutationProbMode, false, 'Auto keeps PB7 mutation probability scaling at 1 / n_params.')
-        + '<div class="form-group"><label>' + tipSpan('mutation_prob_var', 'Auto mode shows the PB7-derived value 1 / n_params and is read-only. Switch to explicit to override it manually.') + '</label>'
+        + fieldSelect('opted-pymoo-mutation-prob-mode', 'mutation_prob_var_mode', [{ value: 'auto', label: 'auto' }, { value: 'value', label: 'explicit' }], pymooMutationProbMode, false, 'Auto keeps ' + optimizeEditorAdapter.label + ' mutation probability scaling at 1 / n_params.')
+        + '<div class="form-group"><label>' + tipSpan('mutation_prob_var', 'Auto mode shows the ' + optimizeEditorAdapter.label + '-derived value 1 / n_params and is read-only. Switch to explicit to override it manually.') + '</label>'
           + '<input type="number" id="opted-pymoo-mutation-prob-value" step="0.01" value="' + esc(String(pymooMutationProbMode === 'value' ? pymooShared.mutation_prob_var : '')) + '"' + (pymooMutationProbMode === 'value' ? '' : ' style="display:none"') + '>'
           + '<input type="text" id="opted-pymoo-mutation-prob-auto" readonly value="' + esc(formatOptimizePymooMutationAutoLabel()) + '"' + (pymooMutationProbMode === 'auto' ? '' : ' style="display:none"') + '>'
         + '</div>'
@@ -7952,8 +8394,8 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
     + '<div id="optimize-pymoo-nsga3-section" style="display:' + (backendValue === 'pymoo' && effectiveAlgorithm === 'nsga3' ? '' : 'none') + '">'
       + '<div class="form-row cols-8">'
         + buildOptimizePymooRefDirMethodField(pymooRefDirs.method)
-        + fieldSelect('opted-pymoo-ref-dir-npartitions-mode', 'ref_dirs_n_partitions_mode', [{ value: 'auto', label: 'auto' }, { value: 'value', label: 'explicit' }], pymooRefDirPartitionsMode, false, 'Auto lets PB7 choose n_partitions from the active objective count and current requested population size.')
-        + '<div class="form-group"><label>' + tipSpan('ref_dirs_n_partitions', 'Auto mode is read-only and shows the PB7-derived NSGA-III partition count for the current objective count and requested population size.') + '</label>'
+        + fieldSelect('opted-pymoo-ref-dir-npartitions-mode', 'ref_dirs_n_partitions_mode', [{ value: 'auto', label: 'auto' }, { value: 'value', label: 'explicit' }], pymooRefDirPartitionsMode, false, 'Auto lets ' + optimizeEditorAdapter.label + ' choose n_partitions from the active objective count and current requested population size.')
+        + '<div class="form-group"><label>' + tipSpan('ref_dirs_n_partitions', 'Auto mode is read-only and shows the ' + optimizeEditorAdapter.label + '-derived NSGA-III partition count for the current objective count and requested population size.') + '</label>'
           + '<input type="number" id="opted-pymoo-ref-dir-npartitions" value="' + esc(String(pymooRefDirPartitionsMode === 'value' ? pymooRefDirs.n_partitions : '')) + '"' + (pymooRefDirPartitionsMode === 'value' ? '' : ' style="display:none"') + '>'
           + '<input type="text" id="opted-pymoo-ref-dir-npartitions-auto" readonly value="' + esc(String(resolveOptimizePymooAutoRefDirPartitions(objectiveCount, pymooPopulationMode === 'value' ? optimize.population_size : null))) + '"' + (pymooRefDirPartitionsMode === 'auto' ? '' : ' style="display:none"') + '>'
         + '</div>'
@@ -7962,7 +8404,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
 
     + '<div id="optimize-deap-section" style="display:' + (backendValue === 'deap' ? '' : 'none') + '">'
       + '<div class="form-row cols-8">'
-        + fieldNumber2('opted-deap-population-size', 'population_size', resolveOptimizeDeapPopulationDisplayValue(optimize.population_size), 1, 'Population size used by the DEAP backend. Legacy null values resolve to 500 in PB7.', 1)
+        + fieldNumber2('opted-deap-population-size', 'population_size', resolveOptimizeDeapPopulationDisplayValue(optimize.population_size), 1, 'Population size used by the DEAP backend. Legacy null values resolve to 500 in ' + optimizeEditorAdapter.label + '.', 1)
         + fieldNumber2('opted-offspring-multiplier', 'offspring_multiplier', optimize.offspring_multiplier == null ? 2.0 : optimize.offspring_multiplier, 0.1, 'Population offspring multiplier used by DEAP.', 1)
         + fieldOptimizeProbability2('opted-crossover-prob', 'crossover_probability', optimize.crossover_probability == null ? 0.7 : optimize.crossover_probability, 'Probability of crossover. Together with mutation_probability it must stay at or below 1.0.', 1, 'crossover')
         + fieldOptimizeProbability2('opted-mutation-prob', 'mutation_probability', optimize.mutation_probability == null ? 0.2 : optimize.mutation_probability, 'Probability of mutation. Together with crossover_probability it must stay at or below 1.0.', 1, 'mutation')
@@ -7974,8 +8416,8 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
 
     + '<div class="section-title">Run Settings</div>'
     + '<div class="form-row cols-8" style="align-items:end">'
-      + fmtGroupSpan('opted-seed-mode', 'seed_mode', '<select id="opted-seed-mode" onchange="toggleOptimizeSeedPathInput()"><option value="none"' + (seedState.mode === 'none' ? ' selected' : '') + '>none</option><option value="self"' + (seedState.mode === 'self' ? ' selected' : '') + '>self</option><option value="path"' + (seedState.mode === 'path' ? ' selected' : '') + '>path</option></select>', 'Choose how Passivbot should populate --start for this optimize run. `self` uses the current config. `path` uses a config file, pareto file, or directory of seeds.', 2)
-      + '<div class="form-group" id="opted-seed-path-wrap" style="grid-column:span 6;' + (seedState.mode === 'path' ? '' : 'display:none;') + '"><label><span data-tip="Passivbot --start accepts config files, pareto files, or directories of seed configs.">seed_path</span></label><input type="text" id="opted-seed-path" value="' + escapeHtml(seedState.path || '') + '" placeholder="Path to config, pareto file, or pareto directory"></div>'
+      + fmtGroupSpan('opted-seed-mode', 'seed_mode', '<select id="opted-seed-mode" onchange="toggleOptimizeSeedPathInput();syncOptimizeSeedRuntimeFromControls()"><option value="none"' + (seedState.mode === 'none' ? ' selected' : '') + '>none</option><option value="self"' + (seedState.mode === 'self' ? ' selected' : '') + '>self</option><option value="path"' + (seedState.mode === 'path' ? ' selected' : '') + '>path</option></select>', 'Choose how Passivbot should populate --start for this optimize run. `self` uses the current config. `path` uses a config file, pareto file, or directory of seeds.', 2)
+      + '<div class="form-group" id="opted-seed-path-wrap" style="grid-column:span 6;' + (seedState.mode === 'path' ? '' : 'display:none;') + '"><label><span data-tip="Passivbot --start accepts config files, pareto files, or directories of seed configs.">seed_path</span></label><input type="text" id="opted-seed-path" value="' + escapeHtml(seedState.path || '') + '" placeholder="Path to config, pareto file, or pareto directory" oninput="syncOptimizeSeedRuntimeFromControls()"></div>'
     + '</div>'
     + renderOptimizeSeedConfigSection(bot, seedState.mode === 'self')
 
@@ -7983,12 +8425,14 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
       + fieldNumber2('opted-iters', 'iters', optimize.iters == null ? 100000 : optimize.iters, 1000, 'Number of optimize iterations/evaluations.', 1)
       + fieldOptimizeCpuCount2('opted-n-cpus', 'n_cpus', optimize.n_cpus == null ? 1 : optimize.n_cpus, 1, 'Number of worker processes.', 1)
       + fieldNumber2('opted-pareto-max-size', 'pareto_max_size', optimize.pareto_max_size == null ? 100 : optimize.pareto_max_size, 10, 'Maximum number of pareto configs retained.', 1)
-      + fieldNumber2('opted-max-pending-starting-evals', 'max_pending_starting_evals_per_cpu', optimize.max_pending_starting_evals_per_cpu == null ? 1 : optimize.max_pending_starting_evals_per_cpu, 1, 'Throttle for starting-seed evaluations per CPU during optimizer bootstrap.', 1)
+      + (optimizeEditorAdapter.isV8 ? '' : fieldNumber2('opted-max-pending-starting-evals', 'max_pending_starting_evals_per_cpu', optimize.max_pending_starting_evals_per_cpu == null ? 1 : optimize.max_pending_starting_evals_per_cpu, 1, 'Throttle for starting-seed evaluations per CPU during optimizer bootstrap.', 1))
       + fieldSelect('opted-log-level', 'logging_level', LOG_LEVEL_OPTIONS, normalizeLogLevelValue(logging.level, 1), false, 'Controls global verbosity for Passivbot and tooling.')
       + fieldNumber2('opted-memory-snapshot', 'memory_snapshot_interval_minutes', logging.memory_snapshot_interval_minutes == null ? 30 : logging.memory_snapshot_interval_minutes, 1, 'Minutes between optimize memory snapshots.', 1)
       + fieldNumber2('opted-volume-refresh-threshold', 'volume_refresh_info_threshold_seconds', logging.volume_refresh_info_threshold_seconds == null ? 30 : logging.volume_refresh_info_threshold_seconds, 1, 'Seconds between volume refresh info messages.', 1)
       + fieldNumber2('opted-round-significant-digits', 'round_to_n_significant_digits', optimize.round_to_n_significant_digits == null ? 5 : optimize.round_to_n_significant_digits, 1, 'Rounds optimized parameter values to this many significant digits.', 1)
     + '</div>'
+
+    + optimizeEditorAdapter.versionRunSettingsHtml(cfg, escapeHtml)
 
     + '<div class="form-row cols-8">'
       + '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-compress-results"' + (optimize.compress_results_file ? ' checked' : '') + '><label for="opted-compress-results"><span data-tip="Compress the result artifacts written by optimize.">compress_results_file</span></label></div></div>'
@@ -8053,7 +8497,15 @@ function populateOptimizeEditor(config, opts) {
   el('opted-pareto-max-size').value = optimize.pareto_max_size == null ? '' : String(optimize.pareto_max_size);
   el('opted-opt-backend').value = resolveOptimizeEditorBackendValue(optimize);
   el('opted-opt-backend').setAttribute('data-current-backend', resolveOptimizeEditorBackendValue(optimize));
-  el('opted-max-pending-starting-evals').value = optimize.max_pending_starting_evals_per_cpu == null ? '1' : String(optimize.max_pending_starting_evals_per_cpu);
+  var maxPendingInput = el('opted-max-pending-starting-evals');
+  if (maxPendingInput) {
+    maxPendingInput.value = optimize.max_pending_starting_evals_per_cpu == null ? '1' : String(optimize.max_pending_starting_evals_per_cpu);
+  }
+  var strategyInput = el('opted-strategy-kind');
+  if (strategyInput) {
+    strategyInput.value = live.strategy_kind || '';
+    strategyInput.setAttribute('data-current-strategy', live.strategy_kind || '');
+  }
   el('opted-pymoo-algorithm').value = normalizeOptimizePymooAlgorithmValue(optimize.pymoo.algorithm);
   el('opted-pymoo-population-mode').value = normalizeOptimizePymooPopulationMode(optimize.population_size == null ? 'auto' : 'value');
   el('opted-pymoo-population-size').value = el('opted-pymoo-population-mode').value === 'value' && getEffectiveOptimizePymooAlgorithm(resolveOptimizeEditorBackendValue(optimize), optimize.pymoo.algorithm, getScoringEntries().length) === 'nsga3'
@@ -8108,13 +8560,19 @@ function populateOptimizeEditor(config, opts) {
     : !!optimize.write_all_results;
   el('opted-only-cpt').checked = !!pbgui.only_cpt;
   el('opted-notices-ignore').checked = !!pbgui.notices_ignore;
-  el('opted-long-twe').value = ((bot.long || {}).total_wallet_exposure_limit) == null ? '' : String((bot.long || {}).total_wallet_exposure_limit);
-  el('opted-long-npos').value = ((bot.long || {}).n_positions) == null ? '' : String((bot.long || {}).n_positions);
-  el('opted-short-twe').value = ((bot.short || {}).total_wallet_exposure_limit) == null ? '' : String((bot.short || {}).total_wallet_exposure_limit);
-  el('opted-short-npos').value = ((bot.short || {}).n_positions) == null ? '' : String((bot.short || {}).n_positions);
+  el('opted-long-twe').value = String(optimizeEditorAdapter.getBotValue(bot.long || {}, 'total_wallet_exposure_limit', ''));
+  el('opted-long-npos').value = String(optimizeEditorAdapter.getBotValue(bot.long || {}, 'n_positions', ''));
+  el('opted-short-twe').value = String(optimizeEditorAdapter.getBotValue(bot.short || {}, 'total_wallet_exposure_limit', ''));
+  el('opted-short-npos').value = String(optimizeEditorAdapter.getBotValue(bot.short || {}, 'n_positions', ''));
   el('opted-bot-long').value = prettyJson(bot.long || {});
   el('opted-bot-short').value = prettyJson(bot.short || {});
-  setOptimizeBoundsData(optimize.bounds, optimize.fixed_params, optimize.fixed_runtime_overrides, { suppressSync: true });
+  if (optimizeEditorAdapter.isV8) initializeOptimizeStrategyState(cfg);
+  setOptimizeBoundsData(
+    optimizeEditorAdapter.isV8 ? getOptimizeStrategyBoundsView(live.strategy_kind) : optimizeEditorAdapter.getBounds(optimize),
+    optimizeEditorAdapter.isV8 ? getOptimizeStrategyFixedView(live.strategy_kind) : optimize.fixed_params,
+    optimize.fixed_runtime_overrides,
+    { suppressSync: true }
+  );
   optKvInit('opt-kv-cs', coinSources);
   var coinSourceExchangeNode = el('opt-kv-cs-exchange');
   if (coinSourceExchangeNode) {
@@ -8127,7 +8585,7 @@ function populateOptimizeEditor(config, opts) {
     });
   }
   if (typeof suiteInit === 'function') {
-    suiteInit('suite-container', { apiBase: API_BASE, aggregateMetrics: currentLimitsMeta().all_valid_metrics });
+    suiteInit('suite-container', { apiBase: API_BASE, version: optimizeEditorAdapter.version, aggregateMetrics: currentLimitsMeta().all_valid_metrics });
     suiteLoad(cfg, { preserveEdit: false });
   }
   setScoringEntries(optimize.scoring, { suppressSync: true });
@@ -8248,7 +8706,11 @@ function collectEditorConfig(baseConfig, opts) {
   optimize.n_cpus = normalizeOptimizeCpuCount(el('opted-n-cpus').value, 1);
   optimize.pareto_max_size = toNumberOr(el('opted-pareto-max-size').value, 100);
   optimize.backend = normalizeOptimizeBackendValue(el('opted-opt-backend').value);
-  optimize.max_pending_starting_evals_per_cpu = toNumberOr(el('opted-max-pending-starting-evals').value, 1);
+  if (optimizeEditorAdapter.isV8) {
+    delete optimize.max_pending_starting_evals_per_cpu;
+  } else {
+    optimize.max_pending_starting_evals_per_cpu = toNumberOr(el('opted-max-pending-starting-evals').value, 1);
+  }
   optimize.offspring_multiplier = toNumberOr(el('opted-offspring-multiplier').value, 2.0);
   var probabilityPair = getOptimizeProbabilityPair();
   optimize.crossover_probability = probabilityPair.crossover;
@@ -8281,7 +8743,7 @@ function collectEditorConfig(baseConfig, opts) {
   delete backtest.compress_results_file;
   delete backtest.write_all_results;
   var effectiveAlgorithm = getEffectiveOptimizePymooAlgorithm(optimize.backend, optimize.pymoo.algorithm, getScoringEntries().length);
-  if (optimize.backend === 'pymoo' && effectiveAlgorithm !== 'nsga2' && normalizeOptimizePymooPopulationMode(el('opted-pymoo-population-mode').value) === 'auto') {
+  if (shouldPreserveOptimizePymooAutoPopulation(optimize.backend, effectiveAlgorithm, el('opted-pymoo-population-mode').value)) {
     optimize.population_size = null;
   } else if (optimize.backend === 'deap') {
     optimize.population_size = resolveOptimizeDeapPopulationDisplayValue(el('opted-deap-population-size').value);
@@ -8308,11 +8770,22 @@ function collectEditorConfig(baseConfig, opts) {
   optimize.scoring = getScoringEntries();
   if (strict && !optimize.scoring.length) throw new Error('At least one scoring objective is required.');
   optimize.limits = getLimitEntries();
-  optimize.bounds = collectOptimizeBounds({
-    strict: strict,
-    fallbackValue: optimize.bounds
-  });
-  optimize.fixed_params = (state.optimizeFixedParams || []).slice();
+  var activeStrategy = optimizeEditorAdapter.isV8 && el('opted-strategy-kind')
+    ? String(el('opted-strategy-kind').value || '').trim()
+    : '';
+  if (optimizeEditorAdapter.isV8) {
+    collectOptimizeBounds({ strict: strict, fallbackValue: optimizeEditorAdapter.getBounds(optimize) });
+  }
+  var collectedBounds = optimizeEditorAdapter.isV8
+    ? collectAllOptimizeStrategyBounds(activeStrategy)
+    : collectOptimizeBounds({
+        strict: strict,
+        fallbackValue: optimizeEditorAdapter.getBounds(optimize)
+      });
+  optimizeEditorAdapter.setBounds(optimize, collectedBounds);
+  optimize.fixed_params = optimizeEditorAdapter.isV8
+    ? collectAllOptimizeStrategyFixed(activeStrategy)
+    : normalizeOptimizeFixedParamKeys(state.optimizeFixedParams);
   optimize.fixed_runtime_overrides = collectOptimizeRuntimeOverrides({
     strict: strict,
     fallbackValue: optimize.fixed_runtime_overrides
@@ -8325,10 +8798,10 @@ function collectEditorConfig(baseConfig, opts) {
     strict: strict,
     fallbackValue: bot.short
   });
-  longBot.total_wallet_exposure_limit = toNumberOr(el('opted-long-twe').value, 0);
-  longBot.n_positions = toNumberOr(el('opted-long-npos').value, 0);
-  shortBot.total_wallet_exposure_limit = toNumberOr(el('opted-short-twe').value, 0);
-  shortBot.n_positions = toNumberOr(el('opted-short-npos').value, 0);
+  optimizeEditorAdapter.setBotValue(longBot, 'total_wallet_exposure_limit', toNumberOr(el('opted-long-twe').value, 0));
+  optimizeEditorAdapter.setBotValue(longBot, 'n_positions', toNumberOr(el('opted-long-npos').value, 0));
+  optimizeEditorAdapter.setBotValue(shortBot, 'total_wallet_exposure_limit', toNumberOr(el('opted-short-twe').value, 0));
+  optimizeEditorAdapter.setBotValue(shortBot, 'n_positions', toNumberOr(el('opted-short-npos').value, 0));
   bot.long = longBot;
   bot.short = shortBot;
   var suite = typeof suiteCollect === 'function' ? suiteCollect() : { suite_enabled: false };
@@ -8348,6 +8821,9 @@ function collectEditorConfig(baseConfig, opts) {
   };
   live.minimum_coin_age_days = toNumberOr(el('opted-min-coin-age').value, 0);
   live.hsl_signal_mode = normalizeOptimizeHslSignalModeValue(el('opted-hsl-signal-mode').value);
+  if (optimizeEditorAdapter.isV8 && el('opted-strategy-kind')) {
+    live.strategy_kind = el('opted-strategy-kind').value;
+  }
   logging.level = toNumberOr(el('opted-log-level').value, 1);
   logging.memory_snapshot_interval_minutes = toNumberOr(el('opted-memory-snapshot').value, 30);
   logging.volume_refresh_info_threshold_seconds = toNumberOr(el('opted-volume-refresh-threshold').value, 30);
@@ -8368,6 +8844,7 @@ function collectEditorConfig(baseConfig, opts) {
     throw new Error('Seed path is required when seed mode is path.');
   }
   applyOptimizeSeedConfig(cfg, seedMode, seedPath);
+  optimizeEditorAdapter.collectVersionRunSettings(cfg, el, strict);
   applyOptimizeExtraParamValues(cfg);
   return { name: name, config: cfg };
 }
@@ -8879,6 +9356,8 @@ function showStructuredEditor(config, name, sourceName, paramStatusOverride, bac
   closeAllModals();
   resetOptimizeEditorUiState();
   state.editorSourceName = sourceName || '';
+  state.editorQueueFilename = '';
+  state.editorReturnPanel = 'configs';
   state.editorDraftName = name || '';
   state.editingConfig = name || '';
   state.editorBackendHint = String(backendHint || '').trim().toLowerCase();
@@ -8900,6 +9379,7 @@ function showStructuredEditor(config, name, sourceName, paramStatusOverride, bac
 
 function closeEditor() {
   if (!editorVisible()) return;
+  var returnPanel = state.editorReturnPanel || 'configs';
   if (_optOhlcvPreflightController) _optOhlcvPreflightController.close();
   window.PBGuiEditorShared.clearFixedValidationStatus();
   el('configs-editor').style.display = 'none';
@@ -8910,11 +9390,14 @@ function closeEditor() {
   el('sidebar-editor').style.display = 'none';
   state.editingConfig = '';
   state.editorSourceName = '';
+  state.editorQueueFilename = '';
+  state.editorReturnPanel = 'configs';
   state.editorDraftName = '';
   state.editorBackendHint = '';
   state.editorLastConfig = null;
   resetOptimizeEditorUiState();
   setOptBotParamStatus({});
+  setPanel(returnPanel);
 }
 
 function fillOptimizePbguiDataPath() {
@@ -8944,18 +9427,23 @@ function clearOptimizeOhlcvSourceDir() {
 }
 
 function openFastApiParetoExplorer(resultPath) {
+  if (!optimizeEditorAdapter.supportsParetoExplorer) {
+    toast('Pareto Explorer is not available for PB8 Optimize results yet.', 'warn');
+    return;
+  }
   var path = String(resultPath || '').trim();
   if (!path) {
     toast('Select an optimize result first.', 'warn');
     return;
   }
-  var apiRoot = String(API_BASE || '').replace(/\/api\/optimize-v7\/?$/, '');
+  var apiRoot = String(API_BASE || '').replace(/\/api\/optimize-v[78]\/?$/, '');
   if (!apiRoot) {
     toast('Pareto Explorer route is unavailable.', 'err');
     return;
   }
   var params = new URLSearchParams();
   params.set('result_path', path);
+  params.set('optimize_version', optimizeEditorAdapter.version);
   window.location.href = apiRoot + '/api/pareto-explorer/main_page?' + params.toString();
 }
 
@@ -8983,34 +9471,34 @@ function syncSelectedResultFromSelection() {
 }
 
 async function launchResult3dPlot(path, name) {
-  var response = await apiFetch('/results/3d-plot', {
+  var response = await apiFetch(optimizeEditorAdapter.result3dPlotPath, {
     method: 'POST',
     body: JSON.stringify({ path: path })
   });
   if (response && response.html) {
-    openPlotModal('PB7 3D plot - ' + (name || 'result'), response.html);
-    toast((response && response.message) || ('PB7 3D plot opened for ' + (name || 'result') + '.'), 'ok');
+    openPlotModal(optimizeEditorAdapter.label + ' 3D plot - ' + (name || 'result'), response.html);
+    toast((response && response.message) || (optimizeEditorAdapter.label + ' 3D plot opened for ' + (name || 'result') + '.'), 'ok');
     return;
   }
   if (response && response.output) {
-    openJsonModal('PB7 3D plot details - ' + (name || 'result'), response.output);
+    openJsonModal(optimizeEditorAdapter.label + ' 3D plot details - ' + (name || 'result'), response.output);
   }
   toast(
-    (response && response.message) || ('PB7 3D plot command finished for ' + (name || 'result') + '.'),
+    (response && response.message) || (optimizeEditorAdapter.label + ' 3D plot command finished for ' + (name || 'result') + '.'),
     response && response.ok === false ? 'warn' : 'ok'
   );
 }
 
 async function launchResultParetoDash(path, name) {
-  var response = await apiFetch('/results/pareto-dash', {
+  var response = await apiFetch(optimizeEditorAdapter.resultParetoDashPath, {
     method: 'POST',
     body: JSON.stringify({ path: path })
   });
   if (!response || !response.url || !response.session_id) {
     throw new Error('Pareto Dash launch returned no URL.');
   }
-  openPlotUrlModal('PB7 Pareto Dash - ' + (name || 'result'), response.url, response.session_id, 'pareto-dash');
-  toast('Original PB7 Pareto Dash opened for ' + (name || 'result') + '.', 'ok');
+  openPlotUrlModal(optimizeEditorAdapter.label + ' Pareto Dash - ' + (name || 'result'), response.url, response.session_id, 'pareto-dash');
+  toast(optimizeEditorAdapter.label + ' Pareto Dash opened for ' + (name || 'result') + '.', 'ok');
 }
 
 function normalizeAutostart(raw) {
@@ -9190,6 +9678,7 @@ function filterResults() {
 }
 
 function setPanel(panel) {
+  if (state.panel !== panel) state.navigationSeq += 1;
   state.panel = panel;
   Object.keys(PANEL_META).forEach(function(name) {
     var active = name === panel;
@@ -9448,6 +9937,7 @@ function renderConfigs() {
       + '<td class="actions-cell">'
       + '<button class="icon-btn cfg-edit" data-name="' + escapeHtml(cfg.name) + '" title="Edit config">✏️</button>'
       + '<button class="icon-btn cfg-queue" data-name="' + escapeHtml(cfg.name) + '" title="Queue config">▶</button>'
+      + (!optimizeEditorAdapter.isV8 ? '<button class="icon-btn cfg-migrate-v8" data-name="' + escapeHtml(cfg.name) + '" title="Convert to PB8 Optimize">V8</button>' : '')
       + '<button class="icon-btn danger cfg-delete" data-name="' + escapeHtml(cfg.name) + '" title="Delete config">🗑</button>'
       + '</td>';
     tbody.appendChild(tr);
@@ -9961,8 +10451,12 @@ function renderResults() {
     var tr = document.createElement('tr');
     tr.setAttribute('data-path', result.path);
     if (state.selectedResults.has(result.path)) tr.classList.add('selected');
-    var continueAction = result.pareto_count
+    var capabilities = optimizeEditorAdapter.resultCapabilities(result);
+    var continueAction = capabilities.hasPareto
       ? '<button class="icon-btn good result-continue" data-path="' + escapeHtml(result.path) + '" data-name="' + escapeHtml(result.name || result.result) + '" title="Continue optimize from this result\'s pareto seeds">🌱</button>'
+      : '';
+    var resumeAction = optimizeEditorAdapter.isV8 && capabilities.resumable
+      ? '<button class="icon-btn warn result-resume" data-path="' + escapeHtml(result.path) + '" data-name="' + escapeHtml(result.name || result.result) + '" title="Resume this exact optimizer checkpoint">↻</button>'
       : '';
     tr.innerHTML = ''
       + '<td><strong>' + escapeHtml(result.name || result.result) + '</strong></td>'
@@ -9971,12 +10465,13 @@ function renderResults() {
       + '<td class="result-mode-cell">' + resultModeMarkup(result) + '</td>'
       + '<td class="muted">' + escapeHtml(formatIso(result.modified)) + '</td>'
       + '<td class="actions-cell">'
-      + '<button class="icon-btn result-paretos" data-path="' + escapeHtml(result.path) + '" data-name="' + escapeHtml(result.name || result.result) + '" title="Open pareto list">🗂</button>'
-      + '<button class="icon-btn result-explorer" data-path="' + escapeHtml(result.path) + '" data-name="' + escapeHtml(result.name || result.result) + '" title="Open Pareto Explorer">🎯</button>'
-      + '<button class="icon-btn result-dash" data-path="' + escapeHtml(result.path) + '" data-name="' + escapeHtml(result.name || result.result) + '" title="Open original PB7 Pareto Dash">PD</button>'
-      + '<button class="icon-btn result-3d" data-path="' + escapeHtml(result.path) + '" data-name="' + escapeHtml(result.name || result.result) + '" title="Launch PB7 3D plot">3D</button>'
+      + (capabilities.hasPareto ? '<button class="icon-btn result-paretos" data-path="' + escapeHtml(result.path) + '" data-name="' + escapeHtml(result.name || result.result) + '" title="Open pareto list">🗂</button>' : '')
+      + (optimizeEditorAdapter.supportsParetoExplorer && capabilities.hasPareto ? '<button class="icon-btn result-explorer" data-path="' + escapeHtml(result.path) + '" data-name="' + escapeHtml(result.name || result.result) + '" title="Open Pareto Explorer">🎯</button>' : '')
+      + (optimizeEditorAdapter.supportsResultPlots && capabilities.supportsDash ? '<button class="icon-btn result-dash" data-path="' + escapeHtml(result.path) + '" data-name="' + escapeHtml(result.name || result.result) + '" title="Open ' + optimizeEditorAdapter.label + ' Pareto Dash">PD</button>' : '')
+      + (optimizeEditorAdapter.supportsResultPlots && capabilities.supports3d ? '<button class="icon-btn result-3d" data-path="' + escapeHtml(result.path) + '" data-name="' + escapeHtml(result.name || result.result) + '" title="Launch ' + optimizeEditorAdapter.label + ' 3D plot">3D</button>' : '')
       + continueAction
-      + '<button class="icon-btn result-config" data-path="' + escapeHtml(result.path) + '" data-name="' + escapeHtml(result.name || result.result) + '" title="Open config draft">📄</button>'
+      + resumeAction
+      + (capabilities.hasConfig ? '<button class="icon-btn result-config" data-path="' + escapeHtml(result.path) + '" data-name="' + escapeHtml(result.name || result.result) + '" title="Open config draft">📄</button>' : '')
       + '</td>';
     tbody.appendChild(tr);
   });
@@ -9989,22 +10484,23 @@ function updateResultSelectionUi(filteredResults) {
   pruneSelectionSet('selectedResults', state.results.map(function(result) { return result.path; }));
   var selectedCount = state.selectedResults.size;
   var selected = selectedCount === 1 ? syncSelectedResultFromSelection() : null;
+  var capabilities = selected ? optimizeEditorAdapter.resultCapabilities(selected) : null;
   el('result-selection-summary').textContent = selectedCount
     ? selectedCount + ' result' + (selectedCount === 1 ? '' : 's') + ' selected.'
     : 'No results selected.';
-  el('btn-open-result-paretos').disabled = !selected;
-  el('btn-open-pareto-explorer-results').disabled = !selected;
-  el('btn-open-result-pareto-dash').disabled = !selected;
-  el('btn-open-result-3d').disabled = !selected;
-  el('btn-continue-result').disabled = !selected || !selected.pareto_count;
-  el('btn-open-result-config').disabled = !selected;
+  el('btn-open-result-paretos').disabled = !capabilities || !capabilities.hasPareto;
+  el('btn-open-pareto-explorer-results').disabled = !capabilities || !capabilities.hasPareto;
+  el('btn-open-result-pareto-dash').disabled = !capabilities || !capabilities.supportsDash;
+  el('btn-open-result-3d').disabled = !capabilities || !capabilities.supports3d;
+  el('btn-continue-result').disabled = !capabilities || !capabilities.hasPareto;
+  el('btn-resume-result').disabled = !capabilities || !capabilities.resumable;
+  el('btn-open-result-config').disabled = !capabilities || !capabilities.hasConfig;
 }
 
 function renderParetos() {
   var tbody = el('paretos-tbody');
   var summaryKeys = getParetoSummaryKeys(state.paretos);
   renderParetoTableHead(summaryKeys);
-  tbody.innerHTML = '';
   el('pareto-result-chip').textContent = state.selectedResultName || 'No result selected';
   renderParetoToolbar();
   if (!state.selectedResultPath) {
@@ -10020,11 +10516,8 @@ function renderParetos() {
     updateMetaCounts();
     return;
   }
-  sortParetos(state.paretos, summaryKeys).forEach(function(item) {
-    var tr = document.createElement('tr');
-    tr.setAttribute('data-path', item.path);
-    if (state.selectedParetos.has(item.path)) tr.classList.add('selected');
-    var rowHtml = ''
+  var rows = sortParetos(state.paretos, summaryKeys).map(function(item) {
+    var rowHtml = '<tr data-path="' + escapeHtml(item.path) + '"' + (state.selectedParetos.has(item.path) ? ' class="selected"' : '') + '>'
       + '<td><strong>' + escapeHtml(item.name) + '</strong></td>';
     if (summaryKeys.length) {
       summaryKeys.forEach(function(key) {
@@ -10038,10 +10531,11 @@ function renderParetos() {
       + '<td class="actions-cell">'
       + '<button class="icon-btn pareto-open" data-path="' + escapeHtml(item.path) + '" title="View JSON">👁</button>'
       + '<button class="icon-btn pareto-seed" data-path="' + escapeHtml(item.path) + '" data-name="' + escapeHtml(item.name) + '" title="Use as seed">🧬</button>'
-      + '</td>';
-    tr.innerHTML = rowHtml;
-    tbody.appendChild(tr);
+      + (!optimizeEditorAdapter.isV8 ? '<button class="icon-btn pareto-migrate-v8" data-path="' + escapeHtml(item.path) + '" data-name="' + escapeHtml(item.name) + '" title="Convert Pareto config to PB8 Optimize">V8</button>' : '')
+      + '</td></tr>';
+    return rowHtml;
   });
+  tbody.innerHTML = rows.join('');
   updateParetoSelectionUi();
   updateMetaCounts();
 }
@@ -10068,7 +10562,7 @@ function stopActivePlotSession() {
   state.plotSessionId = '';
   state.plotSessionKind = '';
   if (!sessionId || sessionKind !== 'pareto-dash') return;
-  apiFetch('/results/pareto-dash/' + encodeURIComponent(sessionId), {
+  apiFetch(optimizeEditorAdapter.resultParetoDashSessionPath(sessionId), {
     method: 'DELETE'
   }).catch(function() {});
 }
@@ -10239,7 +10733,8 @@ async function loadImportArchiveConfigs(archiveName) {
   }
   setImportArchiveConfigPlaceholder('Loading archived Optimize configs...');
   setImportConfigStatus('Loading archived Optimize configs...', '');
-  var data = await authFetch(archiveApiBase() + '/archives/' + encodeURIComponent(archiveName) + '/optimize-configs');
+  var data = await authFetch(archiveApiBase() + '/archives/' + encodeURIComponent(archiveName) +
+    '/optimize-configs?version=' + encodeURIComponent(optimizeEditorAdapter.version));
   state.importArchiveConfigs = (Array.isArray(data.configs) ? data.configs : []).sort(function(a, b) {
     return importArchiveConfigLabel(a).localeCompare(importArchiveConfigLabel(b));
   });
@@ -10343,7 +10838,12 @@ async function handleImportConfigFileChange(event) {
 function requestArchiveOptimizeConfigImport(archiveName, path, name, collision) {
   return authFetch(archiveApiBase() + '/archives/' + encodeURIComponent(archiveName) + '/optimize-configs/import', {
     method: 'POST',
-    body: JSON.stringify({ path: path, name: name, collision: collision })
+    body: JSON.stringify({
+      path: path,
+      name: name,
+      collision: collision,
+      optimize_version: optimizeEditorAdapter.version
+    })
   });
 }
 
@@ -10532,6 +11032,8 @@ async function openQueueConfigEditor(filename) {
     var data = await apiFetch('/queue/' + encodeURIComponent(filename) + '/config');
     var configName = data && data.name ? String(data.name) : '';
     openEditorWithConfig(data, configName, configName);
+    state.editorQueueFilename = String(filename || '');
+    state.editorReturnPanel = 'queue';
   } catch (error) {
     if (queueConfigChoiceCandidates(error && error.detail).length) {
       openQueueConfigChoiceModal(error.detail, 'edit');
@@ -10541,14 +11043,23 @@ async function openQueueConfigEditor(filename) {
   }
 }
 
+async function refreshOpenedQueueSnapshot(filename, name) {
+  var queueFilename = String(filename || '').trim();
+  if (!queueFilename) return;
+  await apiFetch('/queue/' + encodeURIComponent(queueFilename) + '/repair-config', {
+    method: 'POST',
+    body: JSON.stringify({ name: name })
+  });
+}
+
 async function openResultConfig(path, suggestedName) {
-  var config = await apiFetch('/results/config?path=' + encodeURIComponent(path));
+  var config = await apiFetch(optimizeEditorAdapter.resultConfigPath(path));
   openEditorWithConfig(config, suggestedName || '', '');
 }
 
 async function openSeededOptimizeFromResult(resultPath, seedPath, suggestedName, statusMessage) {
   var resultPayload = normalizeOptimizeEditorPayload(
-    await apiFetch('/results/config?path=' + encodeURIComponent(resultPath))
+    await apiFetch(optimizeEditorAdapter.resultConfigPath(resultPath))
   );
   var draft = extractConfigSections(resultPayload.config);
   applyOptimizeSeedConfig(draft, 'path', seedPath);
@@ -10569,9 +11080,21 @@ async function continueOptimizeFromResult(path, suggestedName) {
   );
 }
 
+async function resumeOptimizeResult(path, suggestedName) {
+  if (!optimizeEditorAdapter.isV8) throw new Error('Checkpoint resume is available only for PB8 Optimize results.');
+  var baseName = (normalizeOptimizeImportName(suggestedName || '') || 'checkpoint').slice(0, 96);
+  var queueName = normalizeOptimizeImportName(baseName + '_resume');
+  var request = optimizeEditorAdapter.resultResumeRequest(queueName, path);
+  var queued = await apiFetch(request.path, request.options);
+  if (!queued || !queued.filename) throw new Error('Could not create a managed queue item for checkpoint resume.');
+  toast('Checkpoint resume queued.', 'ok');
+  await loadQueue();
+  setPanel('queue');
+}
+
 function extractConfigSections(raw) {
   var out = {};
-  ['backtest', 'bot', 'live', 'optimize', 'pbgui', 'coin_overrides'].forEach(function(key) {
+  ['config_version', 'backtest', 'bot', 'live', 'logging', 'monitor', 'optimize', 'pbgui', 'coin_overrides'].forEach(function(key) {
     if (raw && Object.prototype.hasOwnProperty.call(raw, key)) out[key] = raw[key];
   });
   return out;
@@ -10582,7 +11105,7 @@ async function openParetoSeedDraft(path, suggestedName) {
 }
 
 function buildBacktestMainPageUrl(extraParams) {
-  var base = window.location.origin + '/api/backtest-v7/main_page';
+  var base = optimizeEditorAdapter.backtestMainPageUrl();
   var params = new URLSearchParams();
   Object.keys(extraParams || {}).forEach(function(key) {
     var value = extraParams[key];
@@ -10592,7 +11115,7 @@ function buildBacktestMainPageUrl(extraParams) {
 }
 
 async function openBacktestDraft(config, draftName) {
-  var draft = await authFetch(window.location.origin + '/api/backtest-v7/optimize-draft', {
+  var draft = await authFetch(optimizeEditorAdapter.backtestApiBase() + '/optimize-draft', {
     method: 'POST',
     body: JSON.stringify({ config: extractConfigSections(config) })
   });
@@ -10603,7 +11126,7 @@ async function openBacktestDraft(config, draftName) {
 }
 
 async function openBacktestQueueDraft(items) {
-  var draft = await authFetch(window.location.origin + '/api/backtest-v7/queue-draft', {
+  var draft = await authFetch(optimizeEditorAdapter.backtestApiBase() + '/queue-draft', {
     method: 'POST',
     body: JSON.stringify({ items: items || [] })
   });
@@ -10624,11 +11147,11 @@ async function backtestSelectedParetos(paths) {
     };
   });
   if (selectedItems.length === 1) {
-    var singleData = await apiFetch('/paretos/file?path=' + encodeURIComponent(selectedItems[0].path));
+    var singleData = await apiFetch(optimizeEditorAdapter.paretoFilePath(selectedItems[0].path));
     return openBacktestDraft(singleData || {}, selectedItems[0].name || state.selectedResultName || 'pareto_backtest');
   }
   var queueItems = await Promise.all(selectedItems.map(function(item) {
-    return apiFetch('/paretos/file?path=' + encodeURIComponent(item.path)).then(function(data) {
+    return apiFetch(optimizeEditorAdapter.paretoFilePath(item.path)).then(function(data) {
       return {
         name: item.name || 'pareto_backtest',
         config: extractConfigSections(data || {})
@@ -10649,7 +11172,7 @@ async function buildParetoSeedBundle(resultPath, paretoPaths) {
   });
   if (!uniquePaths.length) throw new Error('No paretos selected.');
   if (uniquePaths.length === 1) return { path: uniquePaths[0], count: 1 };
-  return apiFetch('/paretos/seed-bundle', {
+  return apiFetch(optimizeEditorAdapter.paretoSeedBundlePath, {
     method: 'POST',
     body: JSON.stringify({ result_path: resultPath, paths: uniquePaths })
   });
@@ -10709,6 +11232,7 @@ async function saveEditor(andQueue) {
   var name = '';
   var configPayload = null;
   var isNewName = false;
+  var queueFilename = state.editorQueueFilename;
   if (editorVisible()) {
     if (!ensureRawJsonValidForSave()) {
       setPageEditorStatus('Raw JSON is invalid.', 'err');
@@ -10744,6 +11268,7 @@ async function saveEditor(andQueue) {
     method: 'PUT',
     body: JSON.stringify(configPayload)
   });
+  await refreshOpenedQueueSnapshot(queueFilename, name);
   if (queueAfterSave) {
     await apiFetch('/queue', {
       method: 'POST',
@@ -10797,6 +11322,105 @@ function openPlotUrlModal(title, url, sessionId, sessionKind) {
   el('plot-frame').src = url || 'about:blank';
   openBackdrop();
   el('plot-modal').classList.add('open');
+  window.requestAnimationFrame(clampPlotModalWindow);
+}
+
+function clampPlotModalWindow() {
+  var modal = el('plot-modal');
+  if (!modal || !modal.classList.contains('windowed')) return;
+  var rect = modal.getBoundingClientRect();
+  var width = Math.min(rect.width, Math.max(280, window.innerWidth - 8));
+  var height = Math.min(rect.height, Math.max(220, window.innerHeight - 8));
+  modal.style.width = width + 'px';
+  modal.style.height = height + 'px';
+  modal.style.left = Math.max(4, Math.min(rect.left, window.innerWidth - width - 4)) + 'px';
+  modal.style.top = Math.max(4, Math.min(rect.top, window.innerHeight - height - 4)) + 'px';
+}
+
+function initPlotModalWindow() {
+  var modal = el('plot-modal');
+  var header = modal ? modal.querySelector('.modal-head') : null;
+  var frame = el('plot-frame');
+  if (!modal || !header || modal._windowBound) return;
+  modal._windowBound = true;
+
+  function beginInteraction() {
+    var rect = modal.getBoundingClientRect();
+    modal.classList.add('windowed');
+    modal.style.left = rect.left + 'px';
+    modal.style.top = rect.top + 'px';
+    modal.style.width = rect.width + 'px';
+    modal.style.height = rect.height + 'px';
+    if (frame) frame.style.pointerEvents = 'none';
+  }
+
+  function endInteraction(moveHandler, upHandler) {
+    document.removeEventListener('mousemove', moveHandler);
+    document.removeEventListener('mouseup', upHandler);
+    if (frame) frame.style.pointerEvents = '';
+    document.body.style.userSelect = '';
+  }
+
+  header.addEventListener('mousedown', function(event) {
+    if (event.button !== 0 || event.target.closest('button')) return;
+    beginInteraction();
+    var rect = modal.getBoundingClientRect();
+    var startX = event.clientX;
+    var startY = event.clientY;
+    document.body.style.userSelect = 'none';
+    function onMove(moveEvent) {
+      var left = rect.left + moveEvent.clientX - startX;
+      var top = rect.top + moveEvent.clientY - startY;
+      modal.style.left = Math.max(4, Math.min(left, window.innerWidth - rect.width - 4)) + 'px';
+      modal.style.top = Math.max(4, Math.min(top, window.innerHeight - rect.height - 4)) + 'px';
+    }
+    function onUp() { endInteraction(onMove, onUp); }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    event.preventDefault();
+  });
+
+  modal.querySelectorAll('.pnr').forEach(function(handle) {
+    handle.addEventListener('mousedown', function(event) {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      beginInteraction();
+      var direction = handle.dataset.dir || '';
+      var rect = modal.getBoundingClientRect();
+      var startX = event.clientX;
+      var startY = event.clientY;
+      var minWidth = Math.min(520, Math.max(280, window.innerWidth - 8));
+      var minHeight = Math.min(320, Math.max(220, window.innerHeight - 8));
+      document.body.style.userSelect = 'none';
+      function onMove(moveEvent) {
+        var dx = moveEvent.clientX - startX;
+        var dy = moveEvent.clientY - startY;
+        var left = rect.left;
+        var top = rect.top;
+        var width = rect.width;
+        var height = rect.height;
+        if (direction.indexOf('w') >= 0) { left += dx; width -= dx; }
+        if (direction.indexOf('e') >= 0) width += dx;
+        if (direction.indexOf('n') >= 0) { top += dy; height -= dy; }
+        if (direction.indexOf('s') >= 0) height += dy;
+        if (width < minWidth) { if (direction.indexOf('w') >= 0) left -= minWidth - width; width = minWidth; }
+        if (height < minHeight) { if (direction.indexOf('n') >= 0) top -= minHeight - height; height = minHeight; }
+        left = Math.max(4, left);
+        top = Math.max(4, top);
+        width = Math.min(width, window.innerWidth - left - 4);
+        height = Math.min(height, window.innerHeight - top - 4);
+        modal.style.left = left + 'px';
+        modal.style.top = top + 'px';
+        modal.style.width = width + 'px';
+        modal.style.height = height + 'px';
+      }
+      function onUp() { endInteraction(onMove, onUp); }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+  window.addEventListener('resize', clampPlotModalWindow);
 }
 
 function ensureLogViewer() {
@@ -10815,7 +11439,7 @@ function ensureLogViewer() {
 }
 
 function openLogPanel(filename, name) {
-  state.logFile = 'optimizes/' + filename + '.log';
+  state.logFile = optimizeEditorAdapter.queueLogFile(filename);
   state.logFilename = filename;
   state.logResultName = name || '';
   var panel = el('log-panel');
@@ -10934,7 +11558,17 @@ function closeLogPanel() {
 }
 
 async function loadSettings() {
-  state.settings = await apiFetch('/settings');
+  var requestSeq = ++state.settingsLoadSeq;
+  var pushSeq = state.settingsPushSeq;
+  var navigationSeq = state.navigationSeq;
+  var settings = await apiFetch('/settings');
+  if (requestSeq !== state.settingsLoadSeq || navigationSeq !== state.navigationSeq) return;
+  var mutableQueueSettings = ['autostart', 'cpu', 'cpu_override', 'use_pbgui_market_data'];
+  var queueSettingsWerePushed = pushSeq !== state.settingsPushSeq;
+  Object.keys(settings || {}).forEach(function(key) {
+    if (queueSettingsWerePushed && mutableQueueSettings.indexOf(key) >= 0) return;
+    state.settings[key] = settings[key];
+  });
   if (el('settings-modal').classList.contains('open')) syncQueueSettingsModalFields();
   updateMetaCounts();
 }
@@ -10957,7 +11591,11 @@ function removeConfigsFromState(names) {
 }
 
 async function loadQueue() {
+  var requestSeq = ++state.queueLoadSeq;
+  var pushSeq = state.queuePushSeq;
+  var navigationSeq = state.navigationSeq;
   var data = await apiFetch('/queue');
+  if (requestSeq !== state.queueLoadSeq || pushSeq !== state.queuePushSeq || navigationSeq !== state.navigationSeq) return;
   state.queue = data.items || [];
   renderQueue();
 }
@@ -10974,7 +11612,10 @@ function removeQueueItemsFromState(filenames) {
 }
 
 async function loadResults() {
-  var data = await apiFetch('/results');
+  var requestSeq = ++state.resultsLoadSeq;
+  var navigationSeq = state.navigationSeq;
+  var data = await apiFetch(optimizeEditorAdapter.resultsPath);
+  if (requestSeq !== state.resultsLoadSeq || navigationSeq !== state.navigationSeq) return;
   state.results = data.results || [];
   renderResults();
 }
@@ -11037,7 +11678,7 @@ async function loadParetos(path, name) {
   if (state.paretoMode === 'suite' || requestScenario !== 'Aggregated') {
     query.push('scenario=' + encodeURIComponent(requestScenario));
   }
-  var data = await apiFetch('/paretos?' + query.join('&'));
+  var data = await apiFetch(optimizeEditorAdapter.paretosPath(query.join('&')));
   if (loadSeq !== state.paretoLoadSeq || requestPath !== state.selectedResultPath) return;
   state.paretos = data.paretos || [];
   applyParetoMeta(data.meta || {});
@@ -11059,6 +11700,28 @@ async function queueConfig(name) {
   await apiFetch('/queue', { method: 'POST', body: JSON.stringify({ name: name }) });
   toast('Config queued.', 'ok');
   await loadQueue();
+}
+
+async function migrateOptimizeConfigToV8(name) {
+  var targetName = (String(name || '').trim() + '_v8').slice(0, 120);
+  var response = await authFetch(window.location.origin + '/api/optimize-v8/migrate-v7', {
+    method: 'POST',
+    body: JSON.stringify({ source_name: name, target_name: targetName })
+  });
+  var migratedName = response && response.name ? response.name : targetName;
+  toast('Converted Optimize config to PB8: ' + migratedName, 'ok');
+  window.location.href = window.location.origin + '/api/optimize-v8/main_page?open_config=' + encodeURIComponent(migratedName);
+}
+
+async function migrateParetoConfigToV8(path, name) {
+  var targetName = (String(name || 'pareto').trim() + '_v8').slice(0, 120);
+  var response = await authFetch(window.location.origin + '/api/optimize-v8/migrate-v7', {
+    method: 'POST',
+    body: JSON.stringify({ source_path: path, target_name: targetName })
+  });
+  var migratedName = response && response.name ? response.name : targetName;
+  toast('Converted Pareto config to PB8: ' + migratedName, 'ok');
+  window.location.href = window.location.origin + '/api/optimize-v8/main_page?open_config=' + encodeURIComponent(migratedName);
 }
 
 async function duplicateSelected() {
@@ -11143,7 +11806,7 @@ async function queueSelectedConfigs() {
 }
 
 function archiveApiBase() {
-  return API_BASE.replace('/optimize-v7', '/backtest-v7');
+  return optimizeEditorAdapter.archiveApiBase();
 }
 
 async function addSelectedOptimizeConfigsToArchive() {
@@ -11175,7 +11838,7 @@ async function addSelectedOptimizeConfigsToArchive() {
       setProgress('🗄 Archiving ' + (i + 1) + '/' + selected.length + ': ' + selected[i]);
       await authFetch(base + '/archives/' + encodeURIComponent(archiveName) + '/add-optimize-config', {
         method: 'POST',
-        body: JSON.stringify({ config_name: selected[i] })
+        body: JSON.stringify({ config_name: selected[i], optimize_version: optimizeEditorAdapter.version })
       });
       toast('Archived ' + (i + 1) + '/' + selected.length + ': ' + selected[i], 'ok');
     }
@@ -11218,12 +11881,13 @@ function syncQueueSettingsModalFields() {
   el('settings-use-pbgui-market-data').checked = !!state.settings.use_pbgui_market_data;
 
   var override = !!el('settings-cpu-override').checked;
-  el('settings-cpu-value').disabled = !override;
-  el('btn-settings-cpu-down').disabled = !override;
-  el('btn-settings-cpu-up').disabled = !override;
+  el('settings-cpu-value').disabled = false;
+  el('btn-settings-cpu-down').disabled = false;
+  el('btn-settings-cpu-up').disabled = false;
   el('settings-cpu-effective').textContent = override
     ? ('Autostart uses: ' + (normalizeOptimizePositiveInteger(el('settings-cpu-value').value) || 1) + ' CPU')
-    : 'Autostart uses: config value (optimize.n_cpus)';
+    : ('Autostart uses: config value (saved override: '
+      + (normalizeOptimizePositiveInteger(el('settings-cpu-value').value) || 1) + ' CPU)');
 }
 
 function openQueueSettingsModal() {
@@ -11294,7 +11958,7 @@ async function deleteResultsByPaths(paths) {
     message: 'Delete ' + label + '?',
     confirmText: 'Delete'
   }))) return;
-  await apiFetch('/results/delete', {
+  await apiFetch(optimizeEditorAdapter.resultDeletePath, {
     method: 'POST',
     body: JSON.stringify({ paths: selected })
   });
@@ -11338,6 +12002,7 @@ async function refreshLiveResultsDuringRun(force) {
 
 function attachEventHandlers() {
   window.addEventListener('pageshow', function(event) {
+    if (state.initialLoadPending) return;
     if (event && event.persisted) {
       refreshOptimizePageOnReturn();
       return;
@@ -11347,7 +12012,16 @@ function attachEventHandlers() {
     }
   });
   document.addEventListener('visibilitychange', function() {
-    if (document.visibilityState !== 'visible') return;
+    if (document.visibilityState !== 'visible') {
+      if (state.logStatusTimer) {
+        window.clearInterval(state.logStatusTimer);
+        state.logStatusTimer = null;
+      }
+      return;
+    }
+    if (state.logFilename && el('log-panel').classList.contains('visible') && !state.logStatusTimer) {
+      startOptimizeLogStatusPolling(state.logFilename);
+    }
     if (!state.results.length && (state.configs.length || state.queue.length)) {
       refreshOptimizePageOnReturn();
     }
@@ -11422,6 +12096,14 @@ function attachEventHandlers() {
   });
   el('btn-delete-selected-results').addEventListener('click', function() {
     deleteSelectedResults().catch(handleError);
+  });
+  el('btn-resume-result').addEventListener('click', function() {
+    var selected = syncSelectedResultFromSelection();
+    if (!selected || !optimizeEditorAdapter.resultCapabilities(selected).resumable) {
+      toast('Select one resumable checkpoint result first.', 'warn');
+      return;
+    }
+    resumeOptimizeResult(selected.path, selected.name || selected.result).catch(handleError);
   });
   el('btn-backtest-selected-paretos').addEventListener('click', function() {
     backtestSelectedParetos().catch(handleError);
@@ -11509,6 +12191,7 @@ function attachEventHandlers() {
     if (target.id === 'empty-create-config') return openNewConfig().catch(handleError);
     if (target.classList.contains('cfg-edit')) return openConfigEditor(target.dataset.name).catch(handleError);
     if (target.classList.contains('cfg-queue')) return queueConfig(target.dataset.name).catch(handleError);
+    if (target.classList.contains('cfg-migrate-v8')) return migrateOptimizeConfigToV8(target.dataset.name).catch(handleError);
     if (target.classList.contains('cfg-delete')) return deleteConfig(target.dataset.name).catch(handleError);
   });
 
@@ -11563,10 +12246,12 @@ function attachEventHandlers() {
     if (target.classList.contains('result-dash')) return launchResultParetoDash(path, target.dataset.name).catch(handleError);
     if (target.classList.contains('result-3d')) return launchResult3dPlot(path, target.dataset.name).catch(handleError);
     if (target.classList.contains('result-continue')) return continueOptimizeFromResult(path, target.dataset.name).catch(handleError);
+    if (target.classList.contains('result-resume')) return resumeOptimizeResult(path, target.dataset.name).catch(handleError);
     if (target.classList.contains('result-config')) return openResultConfig(path, target.dataset.name).catch(handleError);
   });
 
   el('results-tbody').addEventListener('dblclick', function(event) {
+    if (!optimizeEditorAdapter.supportsParetoExplorer) return;
     var cell = event.target.closest('td.result-pareto-count');
     if (!cell) return;
     event.preventDefault();
@@ -11585,13 +12270,14 @@ function attachEventHandlers() {
     if (!target || !event.currentTarget.contains(target)) return;
     var path = target.dataset.path;
     if (target.classList.contains('pareto-open')) {
-      return apiFetch('/paretos/file?path=' + encodeURIComponent(path))
+      return apiFetch(optimizeEditorAdapter.paretoFilePath(path))
         .then(function(data) {
           openJsonModal('Pareto JSON - ' + path.split('/').slice(-1)[0], data);
         })
         .catch(handleError);
     }
     if (target.classList.contains('pareto-seed')) return openParetoSeedDraft(path, target.dataset.name).catch(handleError);
+    if (target.classList.contains('pareto-migrate-v8')) return migrateParetoConfigToV8(path, target.dataset.name).catch(handleError);
   });
 
   el('paretos-thead').addEventListener('click', function(event) {
@@ -11697,7 +12383,7 @@ function initSelections() {
       toast('Select exactly one result first.', 'warn');
       return;
     }
-    if (!selected.pareto_count) {
+    if (!optimizeEditorAdapter.resultCapabilities(selected).hasPareto) {
       toast('Selected result has no pareto seeds to continue from.', 'warn');
       return;
     }
@@ -11732,7 +12418,7 @@ function connectWS() {
     try { state.ws.close(); } catch (error) {}
   }
   setBanner('conn-waiting', 'Connecting to Optimize queue...');
-  var wsUrl = WS_BASE + '/api/optimize-v7/ws/opt7';
+  var wsUrl = WS_BASE + optimizeEditorAdapter.websocketPath;
   var socket = new WebSocket(wsUrl);
   state.ws = socket;
   socket.onopen = function() {
@@ -11744,8 +12430,10 @@ function connectWS() {
     var msg = JSON.parse(event.data);
     if (msg.type === 'queue_update') {
       var hadActiveOptimizeRuns = state.hadActiveOptimizeRuns;
+      state.queuePushSeq += 1;
       state.queue = msg.items || [];
       if (msg.settings) {
+        state.settingsPushSeq += 1;
         state.settings.autostart = normalizeAutostart(msg.settings.autostart);
         if (Object.prototype.hasOwnProperty.call(msg.settings, 'cpu')) {
           // Don't overwrite unsaved modal edits with backend-pushed settings.
@@ -11805,7 +12493,7 @@ async function handleIncomingDraft() {
   if (!draftId) return;
   var draftName = url.searchParams.get('draft_name') || '';
   try {
-    var draft = await authFetch(window.location.origin + '/api/backtest-v7/optimize-draft/' + encodeURIComponent(draftId));
+    var draft = await authFetch(optimizeEditorAdapter.backtestApiBase() + '/optimize-draft/' + encodeURIComponent(draftId));
     var prepared = await apiFetch('/configs/prepare', {
       method: 'POST',
       body: JSON.stringify({ config: draft.config || {} })
@@ -11893,16 +12581,24 @@ async function handleOpenConfigParam() {
 })();
 
 async function init() {
-  attachEventHandlers();
-  initSelections();
-  initSidebarResize();
-  initOptimizeOhlcvPreflightController();
-  var initialPanel = location.hash.replace('#', '');
-  if (PANEL_META[initialPanel]) setPanel(initialPanel);
-  connectWS();
-  await refreshOptimizePageData();
-  await handleIncomingDraft();
-  await handleOpenConfigParam();
+  try {
+    optimizeEditorAdapter.configureUi();
+    attachEventHandlers();
+    initSelections();
+    initSidebarResize();
+    initPlotModalWindow();
+    initOptimizeOhlcvPreflightController();
+    var initialPanel = location.hash.replace('#', '');
+    if (PANEL_META[initialPanel]) setPanel(initialPanel);
+    connectWS();
+    await loadSettings();
+    await loadOptimizeMetadata();
+    await Promise.all([loadConfigs(), loadQueue(), loadResults()]);
+    await handleIncomingDraft();
+    await handleOpenConfigParam();
+  } finally {
+    state.initialLoadPending = false;
+  }
 }
 
 init().catch(handleError);
@@ -11930,7 +12626,7 @@ init().catch(handleError);
   var helpSel = 0;
   var _sMarks = [], _sIdx = -1, _sTimer = null, _rawHtml = null;
   var _topicCache = {}, _globalMode = false;
-  var docsBase = API_BASE.replace(/\/optimize-v7$/, '');
+  var docsBase = optimizeEditorAdapter.docsApiBase();
 
   function mdToHtml(md) {
     var lines = md.split('\n'), html = '', inPre = false, preBuf = '', inUl = false, inOl = false;
@@ -12024,7 +12720,7 @@ init().catch(handleError);
     if (_topicCache[idx] !== undefined) { callback(_topicCache[idx]); return; }
     var topic = helpTopics[idx];
     if (!topic) { callback(''); return; }
-    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: authenticatedHeaders() })
       .then(function(response) { return response.json(); })
       .then(function(data) {
         _topicCache[idx] = mdToHtml(data.content || '');
@@ -12132,7 +12828,7 @@ init().catch(handleError);
     _sIdx = -1;
     helpSearchCount.textContent = '';
     helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(docsBase + '/docs/content?file=' + encodeURIComponent(topic.file) + '&lang=' + helpLang, { headers: authenticatedHeaders() })
       .then(function(response) { return response.json(); })
       .then(function(data) {
         _rawHtml = mdToHtml(data.content || '');
@@ -12149,7 +12845,7 @@ init().catch(handleError);
 
   function loadHelpIndex(keyword) {
     helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/docs/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(docsBase + '/docs/index?lang=' + helpLang, { headers: authenticatedHeaders() })
       .then(function(response) { return response.json(); })
       .then(function(data) {
         helpTopics = data || [];
@@ -12266,8 +12962,8 @@ init().catch(handleError);
 }());
 
 window.PBGUI_NAV_CONFIG = {
-  subtitle: 'PBv7 OPTIMIZE',
-  current: 'v7_optimize',
+  subtitle: optimizeEditorAdapter.navSubtitle,
+  current: optimizeEditorAdapter.navCurrent,
   token: TOKEN,
   apiBase: API_BASE,
   version: PBGUI_VERSION,

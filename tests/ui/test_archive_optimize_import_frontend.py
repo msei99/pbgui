@@ -146,10 +146,12 @@ def test_backtest_archive_optimize_import_uses_collision_modes_and_three_choices
     assert "value: 'overwrite'" in choose
     assert "value: 'copy'" in choose
     assert "value: null" in choose
-    assert "requestArchiveOptimizeImport(path, importName, 'error')" in retry
-    assert "requestArchiveOptimizeImport(path, importName, collision)" in retry
-    assert "openOptimizeEditorForConfig(data.name || importName)" in open_flow
+    assert "requestArchiveOptimizeImport(path, importName, 'error', version)" in retry
+    assert "requestArchiveOptimizeImport(path, importName, collision, version)" in retry
+    assert "openOptimizeEditorForConfig(data.name || importName, data.optimize_version || version)" in open_flow
     assert "data.name || importName" in import_flow
+    assert "optimize_version: version || 'v7'" in request
+    assert "archiveApiBase() + '/archives/'" in request
     for function_source in (choose, retry, open_flow, import_flow):
         _assert_no_native_dialog(function_source)
 

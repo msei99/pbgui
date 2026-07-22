@@ -49,6 +49,7 @@ from api.archive_helpers import (
     build_archive_score_payload,
     cleanup_empty_parents,
     copy_backtest_result_to_archive,
+    config_version_info,
     detect_liquidation,
     ensure_config_version,
     is_inside_archive,
@@ -86,6 +87,7 @@ from api.pb7_ohlcv_tools import (
     start_ohlcv_preload_job,
     stop_ohlcv_preload_job,
 )
+from backtest_autostart import claim_backtest_slot, publish_backtest_process, release_backtest_slot
 from logging_helpers import human_log as _log
 from pareto_preset_generator import OPTIMIZE_PRESET_DIRECTIONS, build_optimize_preset
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config
@@ -286,6 +288,13 @@ def _resolve_result_dir(
         allowed_roots.append(_archives_dir().resolve())
     for root in allowed_roots:
         if result_dir.is_relative_to(root):
+            if root == _archives_dir().resolve():
+                config_file = result_dir / "config.json"
+                if config_file.is_symlink() or not config_file.is_file():
+                    raise HTTPException(404, "config.json not found")
+                config = _read_json_object_nofollow(config_file, root, required=True)
+                if config_version_info(config)["backtest_version"] != "v7":
+                    raise HTTPException(400, "Archived result belongs to PB8")
             return result_dir
     raise HTTPException(400, "Invalid result path")
 
@@ -450,6 +459,126 @@ def _archive_retest_stage_dir() -> Path:
 
 def _opt_archive_configs_dir() -> Path:
     return Path(PBGDIR) / "data" / "opt_v7"
+
+
+def _normalize_archive_version(value: Any, *, default: str | None = None) -> str | None:
+    """Normalize a public archive generation selector."""
+    if value is None or not isinstance(value, str):
+        return default
+    text = str(value or "").strip().lower()
+    if not text:
+        return default
+    aliases = {"v7": "v7", "pb7": "v7", "v8": "v8", "pb8": "v8"}
+    if text not in aliases:
+        raise HTTPException(400, "version must be v7 or v8")
+    return aliases[text]
+
+
+def _archived_backtest_version(result_dir: Path, archive_dir: Path) -> str:
+    """Return the generation declared by a safe archived result config."""
+    config_file = result_dir / "config.json"
+    if config_file.is_symlink() or not config_file.is_file():
+        raise HTTPException(404, f"config.json not found: {result_dir}")
+    try:
+        config = _read_json_object_nofollow(config_file, archive_dir, required=True)
+    except RuntimeError as exc:
+        raise HTTPException(422, f"Invalid archived result config: {exc}") from exc
+    return config_version_info(config)["backtest_version"]
+
+
+def _load_archived_backtest_config(result_dir: Path, archive_dir: Path) -> tuple[dict, str]:
+    """Load an archived backtest config through its owning generation adapter."""
+    version = _archived_backtest_version(result_dir, archive_dir)
+    config_file = result_dir / "config.json"
+    try:
+        if version == "v8":
+            from pb8_config import load_pb8_config
+
+            return load_pb8_config(config_file), version
+        return load_pb7_config(config_file, neutralize_added=True), version
+    except Exception as exc:
+        raise HTTPException(422, f"Invalid {version.upper()} backtest config: {exc}") from exc
+
+
+def _resolve_managed_backtest_result(path: str | Path, declared_version: str | None = None) -> tuple[Path, str]:
+    """Resolve a local result under the managed root for its declared or inferred version."""
+    requested = _normalize_archive_version(declared_version)
+    versions = [requested] if requested else ["v7", "v8"]
+    last_error: HTTPException | None = None
+    for version in versions:
+        try:
+            if version == "v8":
+                from api import backtest_v8
+
+                result_dir = backtest_v8._resolve_result_dir(str(path), allow_archives=False)
+            else:
+                result_dir = _resolve_result_dir(path, allow_archives=False)
+        except HTTPException as exc:
+            last_error = exc
+            continue
+        config_file = result_dir / "config.json"
+        if config_file.is_symlink() or not config_file.is_file():
+            raise HTTPException(400, "Path is not a managed backtest result")
+        raw_config = load_json_file(config_file)
+        actual = config_version_info(raw_config)["backtest_version"]
+        if actual != version:
+            raise HTTPException(422, f"Result config belongs to {actual.upper()}, not {version.upper()}")
+        return result_dir, version
+    if requested and last_error and last_error.status_code == 404:
+        raise last_error
+    raise HTTPException(400, "Source path is outside the managed PB7/PB8 result roots")
+
+
+def _optimize_config_file(config_name: str, version: str) -> Path:
+    """Return one generation-owned local Optimize config path."""
+    if version == "v8":
+        from api import optimize_v8
+
+        return optimize_v8._config_file(config_name)
+    return _opt_archive_configs_dir() / f"{config_name}.json"
+
+
+def _load_local_optimize_config(config_name: str, version: str) -> dict:
+    """Load a managed local Optimize config through the correct generation loader."""
+    config_file = _optimize_config_file(config_name, version)
+    if config_file.is_symlink() or not config_file.is_file():
+        raise HTTPException(404, f"{version.upper()} Optimize config '{config_name}' not found")
+    if version == "v8":
+        from pb8_config import load_pb8_config
+
+        config = load_pb8_config(config_file)
+    else:
+        config = ensure_config_version(load_pb7_config(config_file), get_template_config)
+    actual_version = config_version_info(config)["optimize_version"]
+    if actual_version != version:
+        raise HTTPException(422, f"Optimize config belongs to {actual_version.upper()}, not {version.upper()}")
+    return config
+
+
+def _resolve_archive_optimize_file(archive_dir: Path, path: str | Path) -> tuple[Path, dict]:
+    """Resolve one versioned Optimize JSON file and return its ownership metadata."""
+    config_file = Path(path)
+    if not is_inside_archive(config_file, archive_dir):
+        raise HTTPException(400, "Invalid optimize config path")
+    try:
+        rel_parts = config_file.relative_to(archive_dir).parts
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid optimize config path") from exc
+    if (
+        len(rel_parts) != 5
+        or rel_parts[:2] != ARCHIVE_LAYOUT_ROOT.parts
+        or rel_parts[3] != "optimize"
+        or config_file.name.endswith(".meta.json")
+        or config_file.suffix.lower() != ".json"
+        or config_file.is_symlink()
+        or not config_file.is_file()
+    ):
+        raise HTTPException(404, "Optimize config not found")
+    try:
+        config = _read_json_object_nofollow(config_file, archive_dir, required=True)
+    except RuntimeError as exc:
+        raise HTTPException(422, f"Invalid optimize config: {exc}") from exc
+    return config_file, config_version_info(config)
 
 
 def _own_archive_name() -> str:
@@ -619,10 +748,7 @@ def _queue_archive_retest_run(
     schedule_id: str | None = None,
     schedule_target_id: str | None = None,
 ) -> dict:
-    cfg_file = result_dir / "config.json"
-    if not cfg_file.exists():
-        raise HTTPException(404, f"config.json not found: {result_dir}")
-    cfg = load_pb7_config(cfg_file, neutralize_added=True)
+    cfg, backtest_version = _load_archived_backtest_config(result_dir, archive_dir)
     run_id = uuid.uuid4().hex
     source_relative_path = result_dir.resolve().relative_to(archive_dir.resolve()).as_posix()
     archive_config_name = _archive_retest_config_name(result_dir, cfg)
@@ -647,26 +773,39 @@ def _queue_archive_retest_run(
         "created_at": utc_now_iso(),
     }
 
-    snapshot_dir = _archive_retest_queue_configs_dir()
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_file = snapshot_dir / f"{run_id}.json"
-    save_pb7_config(cfg, snapshot_file)
-
-    filename = str(uuid.uuid4())
     exchange_value = backtest.get("exchanges", [])
     exchange_list = exchange_value if isinstance(exchange_value, list) else [exchange_value]
-    queue_data = {
-        "name": archive_config_name,
-        "filename": filename,
-        "json": str(snapshot_file),
-        "exchange": exchange_list,
-        "archive_retest": {"run_id": run_id},
-        "use_pbgui_market_data": bool(options.get("use_pbgui_market_data", False)),
-    }
-    queue_dir = _bt_queue_dir()
-    queue_dir.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(queue_dir / f"{filename}.json", queue_data)
-    _store.notify()
+    if backtest_version == "v8":
+        from api import backtest_v8
+
+        queued = backtest_v8.add_to_queue(
+            {
+                "name": queue_name,
+                "config": cfg,
+                "use_pbgui_market_data": bool(options.get("use_pbgui_market_data", False)),
+            },
+            session=None,
+        )
+        filename = str(queued["filename"])
+        snapshot_file = backtest_v8._snapshot_file(filename)
+    else:
+        snapshot_dir = _archive_retest_queue_configs_dir()
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_file = snapshot_dir / f"{run_id}.json"
+        save_pb7_config(cfg, snapshot_file)
+        filename = str(uuid.uuid4())
+        queue_data = {
+            "name": archive_config_name,
+            "filename": filename,
+            "json": str(snapshot_file),
+            "exchange": exchange_list,
+            "archive_retest": {"run_id": run_id},
+            "use_pbgui_market_data": bool(options.get("use_pbgui_market_data", False)),
+        }
+        queue_dir = _bt_queue_dir()
+        queue_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(queue_dir / f"{filename}.json", queue_data)
+        _store.notify()
 
     now = utc_now_iso()
     return {
@@ -677,6 +816,8 @@ def _queue_archive_retest_run(
         "queue_name": queue_name,
         "queue_filename": filename,
         "queue_config": str(snapshot_file),
+        "backtest_version": backtest_version,
+        "config_family": "pb8" if backtest_version == "v8" else "pb7",
         "schedule_id": schedule_id or "",
         "schedule_target_id": schedule_target_id or "",
         "status": "queued",
@@ -692,7 +833,13 @@ def _find_archive_retest_local_result(run: dict) -> Path | None:
     run_id = str(run.get("id") or "")
     if not queue_name or not run_id:
         return None
-    root = Path(_bt_results_base()) / queue_name
+    version = _normalize_archive_version(run.get("backtest_version"), default="v7")
+    if version == "v8":
+        from api import backtest_v8
+
+        root = backtest_v8._results_root() / queue_name
+    else:
+        root = Path(_bt_results_base()) / queue_name
     if not root.exists():
         return None
     candidates = sorted(root.glob("**/analysis.json"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -702,10 +849,7 @@ def _find_archive_retest_local_result(run: dict) -> Path | None:
         cfg_file = result_dir / "config.json"
         if not cfg_file.exists():
             continue
-        try:
-            cfg = load_pb7_config(cfg_file, neutralize_added=True)
-        except Exception:
-            continue
+        cfg = load_json_file(cfg_file)
         meta = ((cfg.get("pbgui") or {}).get("archive_retest") or {}) if isinstance(cfg, dict) else {}
         if meta.get("run_id") == run_id:
             return result_dir
@@ -714,10 +858,7 @@ def _find_archive_retest_local_result(run: dict) -> Path | None:
 
 def _archive_retest_result_liquidated(result_dir: Path) -> tuple[bool, str]:
     analysis = load_json_file(result_dir / "analysis.json")
-    try:
-        cfg = load_pb7_config(result_dir / "config.json", neutralize_added=True)
-    except Exception:
-        cfg = {}
+    cfg = load_json_file(result_dir / "config.json")
     return detect_liquidation(analysis, cfg)
 
 
@@ -730,15 +871,12 @@ def _stage_archive_retest_result(result_dir: Path, run: dict) -> tuple[Path, Pat
     shutil.copytree(str(result_dir), str(staged))
     cfg_file = staged / "config.json"
     if cfg_file.exists():
-        try:
-            cfg = load_pb7_config(cfg_file)
-        except Exception:
-            cfg = load_json_file(cfg_file)
+        cfg = load_json_file(cfg_file)
         archive_config_name = safe_path_part(run.get("archive_config_name"), "retest")
         _normalize_backtest_base_dir(cfg, archive_config_name)
-        try:
+        if _normalize_archive_version(run.get("backtest_version"), default="v7") == "v7":
             save_pb7_config(cfg, cfg_file)
-        except Exception:
+        else:
             atomic_write_json(cfg_file, cfg)
     return staged, stage_parent
 
@@ -756,7 +894,13 @@ def _cleanup_archive_retest_local_artifacts(run: dict, local_result: Path | None
         except Exception as exc:
             errors.append(f"{label}: {exc}")
 
-    results_base = Path(_bt_results_base()).resolve()
+    version = _normalize_archive_version(run.get("backtest_version"), default="v7")
+    if version == "v8":
+        from api import backtest_v8
+
+        results_base = backtest_v8._results_root().resolve()
+    else:
+        results_base = Path(_bt_results_base()).resolve()
     queue_name = str(run.get("queue_name") or "").strip()
     local_root: Path | None = None
     if queue_name.startswith("archive_retest_"):
@@ -791,9 +935,20 @@ def _cleanup_archive_retest_local_artifacts(run: dict, local_result: Path | None
     if queue_filename:
         try:
             _validate_name(queue_filename)
-            remove_file(_bt_queue_dir() / f"{queue_filename}.json", "queue_json")
-            remove_file(_bt_queue_dir() / f"{queue_filename}.pid", "queue_pid")
-            remove_file(_bt_log_dir() / f"{queue_filename}.log", "queue_log")
+            if version == "v8":
+                remove_file(backtest_v8._queue_file(queue_filename), "queue_json")
+                remove_file(backtest_v8._pid_file(queue_filename), "queue_pid")
+                remove_file(backtest_v8._state_file(queue_filename), "queue_state")
+                remove_file(backtest_v8._launch_ready_file(queue_filename), "queue_ready")
+                remove_file(backtest_v8._log_dir() / f"{queue_filename}.log", "queue_log")
+                snapshot_dir = backtest_v8._snapshot_file(queue_filename).parent
+                if snapshot_dir.is_dir() and not snapshot_dir.is_symlink():
+                    rmtree(snapshot_dir, ignore_errors=True)
+                    removed.append("queue_snapshot")
+            else:
+                remove_file(_bt_queue_dir() / f"{queue_filename}.json", "queue_json")
+                remove_file(_bt_queue_dir() / f"{queue_filename}.pid", "queue_pid")
+                remove_file(_bt_log_dir() / f"{queue_filename}.log", "queue_log")
         except Exception as exc:
             errors.append(f"queue_files: {exc}")
 
@@ -802,7 +957,7 @@ def _cleanup_archive_retest_local_artifacts(run: dict, local_result: Path | None
         try:
             queue_config_path = Path(queue_config).resolve()
             config_root = _archive_retest_queue_configs_dir().resolve()
-            if queue_config_path.is_relative_to(config_root):
+            if version == "v7" and queue_config_path.is_relative_to(config_root):
                 remove_file(queue_config_path, "queue_config")
         except Exception as exc:
             errors.append(f"queue_config: {exc}")
@@ -1056,8 +1211,25 @@ class BacktestWorker:
                     if self.store.items[filename]["status"] != "queued":
                         continue
 
-                    self._launch_backtest(item)
-                    _log(SERVICE, f"Launched backtest: {item['name']} ({filename})", level="INFO")
+                    if not claim_backtest_slot("v7", filename, cpu_limit):
+                        break
+                    try:
+                        record = self._launch_backtest(item)
+                        if not isinstance(record, dict):
+                            release_backtest_slot("v7", filename)
+                            continue
+                        publish_backtest_process(
+                            "v7",
+                            filename,
+                            record["pid"],
+                            record["create_time"],
+                            record["command_markers"],
+                        )
+                        _log(SERVICE, f"Launched backtest: {item['name']} ({filename})", level="INFO")
+                    except Exception as exc:
+                        release_backtest_slot("v7", filename)
+                        _log(SERVICE, f"Failed to publish automatic backtest {filename}: {exc}", level="ERROR")
+                        continue
                     running_count += 1
                     await asyncio.sleep(1)
                     await self.store.refresh_from_disk()
@@ -1138,6 +1310,11 @@ class BacktestWorker:
         # Write PID file
         pidfile = _bt_queue_dir() / f"{filename}.pid"
         pidfile.write_text(str(proc.pid))
+        return {
+            "pid": proc.pid,
+            "create_time": psutil.Process(proc.pid).create_time(),
+            "command_markers": [str(PurePath(f"{pb7}/src/backtest.py")), str(PurePath(config_path))],
+        }
 
 
 _worker = BacktestWorker(_store)
@@ -2000,7 +2177,14 @@ class ArchiveSyncWorker:
 _archive_sync_worker = ArchiveSyncWorker()
 
 
-def _queue_status(filename: str) -> str:
+def _queue_status(filename: str, version: str = "v7") -> str:
+    if _normalize_archive_version(version, default="v7") == "v8":
+        from api import backtest_v8
+
+        for item in backtest_v8._load_queue():
+            if item.get("filename") == filename:
+                return str(item.get("status") or "")
+        return "missing"
     for item in _load_queue_sync():
         if item.get("filename") == filename:
             return str(item.get("status") or "")
@@ -2047,8 +2231,11 @@ def _process_archive_retest_completions() -> None:
             continue
         if run.get("status") not in {"queued", "processing"}:
             continue
-        status = _queue_status(str(run.get("queue_filename") or ""))
-        if status in {"queued", "running", "backtesting"}:
+        status = _queue_status(
+            str(run.get("queue_filename") or ""),
+            str(run.get("backtest_version") or "v7"),
+        )
+        if status in {"queued", "running", "backtesting", "unknown"}:
             continue
         if status == "missing":
             local_result = _find_archive_retest_local_result(run)
@@ -2061,7 +2248,7 @@ def _process_archive_retest_completions() -> None:
                 _mark_archive_retest_schedule_result(run, "error", run["error"])
                 changed = True
                 continue
-        if status == "error":
+        if status in {"error", "stopped"}:
             run["status"] = "error"
             run["error"] = "Backtest queue item failed"
             run["completed_at"] = utc_now_iso()
@@ -2798,21 +2985,33 @@ def get_settings(session: SessionToken = Depends(require_auth)):
 
 @router.post("/settings")
 def update_settings(body: dict, session: SessionToken = Depends(require_auth)):
+    updates = {}
     if "autostart" in body:
-        _write_ini("autostart", str(bool(body["autostart"])))
+        if type(body["autostart"]) is not bool:
+            raise HTTPException(status_code=422, detail="autostart must be a boolean")
+        updates["autostart"] = str(body["autostart"])
     if "cpu" in body:
-        cpu = max(1, min(int(body["cpu"]), multiprocessing.cpu_count()))
-        _write_ini("cpu", str(cpu))
+        if type(body["cpu"]) is not int:
+            raise HTTPException(status_code=422, detail="cpu must be an integer")
+        updates["cpu"] = str(max(1, min(body["cpu"], multiprocessing.cpu_count())))
     if "use_pbgui_market_data" in body:
-        _write_ini("use_pbgui_market_data", str(bool(body["use_pbgui_market_data"])))
+        if type(body["use_pbgui_market_data"]) is not bool:
+            raise HTTPException(status_code=422, detail="use_pbgui_market_data must be a boolean")
+        updates["use_pbgui_market_data"] = str(body["use_pbgui_market_data"])
     if "hlcvs_cleanup_enabled" in body:
-        _write_ini("hlcvs_cleanup_enabled", str(bool(body["hlcvs_cleanup_enabled"])))
+        if type(body["hlcvs_cleanup_enabled"]) is not bool:
+            raise HTTPException(status_code=422, detail="hlcvs_cleanup_enabled must be a boolean")
+        updates["hlcvs_cleanup_enabled"] = str(body["hlcvs_cleanup_enabled"])
     if "hlcvs_cleanup_days" in body:
-        days = max(1, min(int(body["hlcvs_cleanup_days"]), 365))
-        _write_ini("hlcvs_cleanup_days", str(days))
+        if type(body["hlcvs_cleanup_days"]) is not int:
+            raise HTTPException(status_code=422, detail="hlcvs_cleanup_days must be an integer")
+        updates["hlcvs_cleanup_days"] = str(max(1, min(body["hlcvs_cleanup_days"], 365)))
     if "hlcvs_cleanup_interval_h" in body:
-        interval = max(1, min(int(body["hlcvs_cleanup_interval_h"]), 168))
-        _write_ini("hlcvs_cleanup_interval_h", str(interval))
+        if type(body["hlcvs_cleanup_interval_h"]) is not int:
+            raise HTTPException(status_code=422, detail="hlcvs_cleanup_interval_h must be an integer")
+        updates["hlcvs_cleanup_interval_h"] = str(max(1, min(body["hlcvs_cleanup_interval_h"], 168)))
+    if updates:
+        save_ini_section("backtest_v7", updates)
     _store.notify()
     return {"ok": True}
 
@@ -4223,24 +4422,29 @@ async def add_config_to_archive(name: str, body: dict,
     source_path = body.get("source_path", "")
     if not source_path:
         raise HTTPException(400, "source_path is required")
-    return await asyncio.to_thread(_add_config_to_archive_sync, name, source_path)
+    declared_version = _normalize_archive_version(
+        (body or {}).get("backtest_version") or (body or {}).get("version")
+    )
+    if declared_version is None:
+        return await asyncio.to_thread(_add_config_to_archive_sync, name, source_path)
+    return await asyncio.to_thread(_add_config_to_archive_sync, name, source_path, declared_version)
 
 
-def _add_config_to_archive_sync(name: str, source_path: str) -> dict[str, Any]:
+def _add_config_to_archive_sync(
+    name: str,
+    source_path: str,
+    declared_version: str | None = None,
+) -> dict[str, Any]:
     """Synchronous result archive copy used from a worker thread."""
     _validate_name(name)
     candidate = _archives_dir() / name
     with archive_transaction(candidate):
         archive_dir = _require_own_archive(name, "Adding backtest results")
-        src = Path(source_path)
-        if not src.exists():
-            raise HTTPException(404, "Source path not found")
-
-        # Security: validate source is under current results, legacy results, or archives
-        src = _resolve_result_dir(src)
+        src, backtest_version = _resolve_managed_backtest_result(source_path, declared_version)
         _log(SERVICE, f"Archiving backtest result {src} to archive {name}", level="INFO")
         migration = maybe_migrate_own_archive(name, archive_dir, _own_archive_name())
         copied = copy_backtest_result_to_archive(src, archive_dir)
+        copied["backtest_version"] = backtest_version
         copied["migration_status"] = migration.get("status") or archive_migration_status(archive_dir)
         _invalidate_archive_cache(name)
         copied["manifest"] = rebuild_archive_manifest(archive_dir)
@@ -4270,8 +4474,14 @@ async def add_optimize_config_to_archive(name: str, body: dict, session: Session
     _require_own_archive(name, "Adding Optimize configs")
     config_name = str((body or {}).get("config_name") or "").strip()
     _validate_name(config_name)
+    version = _normalize_archive_version(
+        (body or {}).get("optimize_version") or (body or {}).get("version"),
+        default="v7",
+    )
     try:
-        return await asyncio.to_thread(_add_optimize_config_to_archive_sync, name, config_name)
+        if version == "v7" and not ((body or {}).get("optimize_version") or (body or {}).get("version")):
+            return await asyncio.to_thread(_add_optimize_config_to_archive_sync, name, config_name)
+        return await asyncio.to_thread(_add_optimize_config_to_archive_sync, name, config_name, version)
     except HTTPException:
         raise
     except Exception as exc:
@@ -4279,18 +4489,19 @@ async def add_optimize_config_to_archive(name: str, body: dict, session: Session
         raise HTTPException(500, f"Failed to archive optimize config: {exc}") from exc
 
 
-def _add_optimize_config_to_archive_sync(name: str, config_name: str) -> dict[str, Any]:
+def _add_optimize_config_to_archive_sync(
+    name: str,
+    config_name: str,
+    version: str = "v7",
+) -> dict[str, Any]:
     """Synchronous Optimize config archive copy used from a worker thread."""
     _validate_name(name)
     candidate = _archives_dir() / name
     with archive_transaction(candidate):
         archive_dir = _require_own_archive(name, "Adding Optimize configs")
-        cfg_file = _opt_archive_configs_dir() / f"{config_name}.json"
-        if not cfg_file.exists():
-            raise HTTPException(404, f"Optimize config '{config_name}' not found")
-        _log(SERVICE, f"Archiving optimize config {config_name} to archive {name}", level="INFO")
-        cfg = load_pb7_config(cfg_file)
-        cfg = ensure_config_version(cfg, get_template_config)
+        version = _normalize_archive_version(version, default="v7") or "v7"
+        cfg = _load_local_optimize_config(config_name, version)
+        _log(SERVICE, f"Archiving {version.upper()} optimize config {config_name} to archive {name}", level="INFO")
         migration = maybe_migrate_own_archive(name, archive_dir, _own_archive_name())
         dest, meta, skipped = resolve_optimize_archive_destination(archive_dir, config_name, cfg)
         metadata_repaired = False
@@ -4330,34 +4541,51 @@ def _add_optimize_config_to_archive_sync(name: str, config_name: str) -> dict[st
 
 
 @router.get("/archives/{name}/optimize-configs")
-def list_archive_optimize(name: str, session: SessionToken = Depends(require_auth)):
+def list_archive_optimize(
+    name: str,
+    version: str | None = Query(default=None),
+    session: SessionToken = Depends(require_auth),
+):
     """List Optimize configs stored in an archive."""
     _validate_name(name)
     archive_dir = _archives_dir() / name
     if not archive_dir.exists():
         raise HTTPException(404, f"Archive '{name}' not found")
-    return {"configs": list_archive_optimize_configs(archive_dir)}
+    selected_version = _normalize_archive_version(version)
+    configs = list_archive_optimize_configs(archive_dir)
+    if selected_version:
+        configs = [item for item in configs if item.get("optimize_version") == selected_version]
+    return {"configs": configs}
 
 
 @router.get("/archives/{name}/optimize-configs/config")
-def get_archive_optimize_config(name: str, path: str, session: SessionToken = Depends(require_auth)):
+def get_archive_optimize_config(
+    name: str,
+    path: str,
+    version: str | None = Query(default=None),
+    session: SessionToken = Depends(require_auth),
+):
     """Load one archived Optimize config JSON."""
     _validate_name(name)
     archive_dir = _archives_dir() / name
-    config_file = Path(path)
-    if not is_inside_archive(config_file, archive_dir):
-        raise HTTPException(400, "Invalid optimize config path")
-    if not config_file.exists() or not config_file.is_file():
-        raise HTTPException(404, "Optimize config not found")
+    config_file, metadata = _resolve_archive_optimize_file(archive_dir, path)
+    selected_version = _normalize_archive_version(version)
+    actual_version = metadata["optimize_version"]
+    if selected_version and selected_version != actual_version:
+        raise HTTPException(409, f"Optimize config belongs to {actual_version.upper()}")
+    if actual_version == "v8":
+        from pb8_config import load_pb8_config
+
+        return load_pb8_config(config_file)
     return load_pb7_config(config_file, neutralize_added=True)
 
 
-def _next_optimize_import_copy_name(name: str) -> str:
+def _next_optimize_import_copy_name(name: str, version: str = "v7") -> str:
     """Return the first free local Optimize config copy name."""
     base = safe_path_part(f"{name}_copy", "optimize_config_copy")
     candidate = base
     index = 2
-    while (_opt_archive_configs_dir() / f"{candidate}.json").exists():
+    while _optimize_config_file(candidate, version).exists():
         candidate = safe_path_part(f"{base}_{index}", "optimize_config_copy")
         index += 1
     return candidate
@@ -4379,13 +4607,16 @@ def import_archive_optimize_config(name: str, body: dict, session: SessionToken 
         collision = "overwrite" if bool((body or {}).get("overwrite", False)) else "error"
     if collision not in {"error", "overwrite", "copy"}:
         raise HTTPException(400, "collision must be error, overwrite, or copy")
+    requested_version = _normalize_archive_version(
+        (body or {}).get("optimize_version") or (body or {}).get("version")
+    )
     with archive_transaction(archive_dir):
         if not archive_dir.exists() or not archive_dir.is_dir() or archive_dir.is_symlink():
             raise HTTPException(404, f"Archive '{name}' not found")
-        if not is_inside_archive(source_file, archive_dir):
-            raise HTTPException(400, "Invalid optimize config path")
-        if not source_file.exists() or not source_file.is_file():
-            raise HTTPException(404, "Optimize config not found")
+        source_file, metadata = _resolve_archive_optimize_file(archive_dir, source_file)
+        version = metadata["optimize_version"]
+        if requested_version and requested_version != version:
+            raise HTTPException(409, f"Optimize config belongs to {version.upper()}")
         snapshot_path = ""
         try:
             raw_cfg = _read_json_object_nofollow(source_file, archive_dir, required=True)
@@ -4398,58 +4629,81 @@ def import_archive_optimize_config(name: str, body: dict, session: SessionToken 
                 snapshot_path = snapshot.name
                 json.dump(raw_cfg, snapshot, indent=4)
                 snapshot.write("\n")
-            cfg = load_pb7_config(snapshot_path, neutralize_added=True)
-            cfg = ensure_config_version(cfg, get_template_config)
+            if version == "v8":
+                from pb8_config import load_pb8_config
+
+                cfg = load_pb8_config(snapshot_path)
+            else:
+                cfg = ensure_config_version(
+                    load_pb7_config(snapshot_path, neutralize_added=True),
+                    get_template_config,
+                )
         except Exception as exc:
             _log(SERVICE, f"Invalid archived optimize config {source_file}: {exc}", level="WARNING")
             raise HTTPException(422, f"Invalid optimize config: {exc}") from exc
         finally:
             if snapshot_path:
                 Path(snapshot_path).unlink(missing_ok=True)
-    local_configs = _opt_archive_configs_dir()
-    lock_target = local_configs.parent / ".pbgui-locks" / "optimize-import"
-    with advisory_file_lock(lock_target):
-        target_file = local_configs / f"{import_name}.json"
+    if version == "v8":
+        from api import optimize_v8
+
+        local_configs = optimize_v8._configs_dir()
+        config_lock = optimize_v8._config_lock()
+    else:
+        local_configs = _opt_archive_configs_dir()
+        lock_target = local_configs.parent / ".pbgui-locks" / "optimize-import"
+        config_lock = advisory_file_lock(lock_target)
+    with config_lock:
+        target_file = _optimize_config_file(import_name, version)
         collision_action = "created"
         if target_file.exists():
             if collision == "error":
-                raise HTTPException(409, detail={
+                detail = {
                     "code": "optimize_config_exists",
                     "message": f"Optimize config '{import_name}' already exists",
                     "name": import_name,
-                    "suggested_copy_name": _next_optimize_import_copy_name(import_name),
-                })
+                    "suggested_copy_name": _next_optimize_import_copy_name(import_name, version),
+                }
+                if version == "v8":
+                    detail["optimize_version"] = version
+                raise HTTPException(409, detail=detail)
             if collision == "copy":
-                import_name = _next_optimize_import_copy_name(import_name)
-                target_file = local_configs / f"{import_name}.json"
+                import_name = _next_optimize_import_copy_name(import_name, version)
+                target_file = _optimize_config_file(import_name, version)
                 collision_action = "copy"
             else:
                 collision_action = "overwrite"
-        cfg = _normalize_backtest_base_dir(cfg, import_name)
-        save_pb7_config(cfg, target_file)
-        return {"ok": True, "name": import_name, "collision": collision_action}
+        if version == "v8":
+            optimize_v8._save_config_bundle(import_name, cfg, create_only=collision_action != "overwrite")
+        else:
+            cfg = _normalize_backtest_base_dir(cfg, import_name)
+            save_pb7_config(cfg, target_file)
+        response = {
+            "ok": True,
+            "name": import_name,
+            "collision": collision_action,
+        }
+        if version == "v8":
+            response["optimize_version"] = version
+        return response
 
 
 @router.delete("/archives/{name}/optimize-configs/config")
-def delete_archive_optimize_config(name: str, path: str, session: SessionToken = Depends(require_auth)):
+def delete_archive_optimize_config(
+    name: str,
+    path: str,
+    version: str | None = Query(default=None),
+    session: SessionToken = Depends(require_auth),
+):
     """Delete one archived Optimize config from the configured own archive."""
     _validate_name(name)
     candidate = _archives_dir() / name
     with archive_transaction(candidate):
         archive_dir = _require_own_archive(name, "Optimize config deletion")
-        config_file = Path(path)
-        if not is_inside_archive(config_file, archive_dir):
-            raise HTTPException(400, "Invalid optimize config path")
-        try:
-            rel_parts = config_file.relative_to(archive_dir).parts
-        except ValueError:
-            raise HTTPException(400, "Invalid optimize config path")
-        if len(rel_parts) != 5 or rel_parts[0] != "pbgui" or rel_parts[1] != "configs" or rel_parts[3] != "optimize":
-            raise HTTPException(400, "Invalid optimize config path")
-        if config_file.name.endswith(".meta.json") or config_file.suffix.lower() != ".json":
-            raise HTTPException(400, "Invalid optimize config path")
-        if not config_file.exists() or not config_file.is_file():
-            raise HTTPException(404, "Optimize config not found")
+        config_file, metadata = _resolve_archive_optimize_file(archive_dir, path)
+        selected_version = _normalize_archive_version(version)
+        if selected_version and selected_version != metadata["optimize_version"]:
+            raise HTTPException(409, f"Optimize config belongs to {metadata['optimize_version'].upper()}")
         meta_file = config_file.with_name(config_file.stem + ".meta.json")
         try:
             config_file.unlink()
@@ -4486,10 +4740,7 @@ def rebacktest_archive_results(name: str, body: dict, session: SessionToken = De
         result_dir = Path(str(raw_path))
         if not is_inside_archive(result_dir, archive_dir):
             raise HTTPException(400, "Invalid result path")
-        cfg_file = result_dir / "config.json"
-        if not cfg_file.exists() or cfg_file.is_symlink():
-            raise HTTPException(404, f"config.json not found: {result_dir}")
-        base_cfg = load_pb7_config(cfg_file, neutralize_added=True)
+        base_cfg, backtest_version = _load_archived_backtest_config(result_dir, archive_dir)
         for exchange in exchange_runs:
             cfg = copy.deepcopy(base_cfg)
             backtest = cfg.setdefault("backtest", {})
@@ -4509,7 +4760,13 @@ def rebacktest_archive_results(name: str, body: dict, session: SessionToken = De
             queue_body = {"name": queue_name, "config": cfg}
             if isinstance(explicit_market_data, bool):
                 queue_body["use_pbgui_market_data"] = explicit_market_data
-            queued = add_to_queue(queue_body, session=session)
+            if backtest_version == "v8":
+                from api import backtest_v8
+
+                queued = backtest_v8.add_to_queue(queue_body, session=None)
+            else:
+                queued = add_to_queue(queue_body, session=session)
+            queued["backtest_version"] = backtest_version
             queue_items.append(queued)
     return {"ok": True, "queued": len(queue_items), "queue_items": queue_items}
 
@@ -4579,7 +4836,9 @@ def create_archive_retest_schedule(name: str, body: dict, session: SessionToken 
                 "id": uuid.uuid4().hex,
                 "relative_path": result_dir.relative_to(archive_dir).as_posix(),
                 "label": result_dir.name,
+                "backtest_version": _archived_backtest_version(result_dir, archive_dir),
             })
+        backtest_versions = sorted({target["backtest_version"] for target in targets})
         schedule = {
             "id": schedule_id,
             "archive_name": name,
@@ -4588,6 +4847,7 @@ def create_archive_retest_schedule(name: str, body: dict, session: SessionToken 
             "time": str((body or {}).get("time") or "02:00"),
             "weekday": weekday,
             "targets": targets,
+            "backtest_versions": backtest_versions,
             "options": _archive_retest_options(body),
             "created_at": utc_now_iso(),
             "last_status": "created",

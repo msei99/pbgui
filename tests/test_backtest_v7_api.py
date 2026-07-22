@@ -43,6 +43,7 @@ def test_launch_backtest_applies_pbgui_market_data_override(tmp_path, monkeypatc
 
     monkeypatch.setattr(backtest_v7, "save_pb7_config", fake_save)
     monkeypatch.setattr(backtest_v7.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(backtest_v7.psutil, "Process", lambda _pid: type("Proc", (), {"create_time": lambda self: 123.0})())
 
     item = {
         "filename": "queue-btc",
@@ -99,6 +100,7 @@ def test_launch_backtest_uses_queued_config_snapshot(tmp_path, monkeypatch):
 
     monkeypatch.setattr(backtest_v7, "save_pb7_config", fake_save)
     monkeypatch.setattr(backtest_v7.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(backtest_v7.psutil, "Process", lambda _pid: type("Proc", (), {"create_time": lambda self: 123.0})())
 
     item = {
         "filename": "queue-hype",
@@ -203,11 +205,14 @@ def test_worker_rereads_cpu_limit_while_waiting_for_slot(monkeypatch):
         launched.append(item["filename"])
         store.items[item["filename"]]["status"] = "backtesting"
         worker._running = False
+        return {"pid": 42, "create_time": 123.0, "command_markers": ["backtest.py"]}
 
     monkeypatch.setattr(backtest_v7, "_read_ini_section", fake_read_ini_section)
     monkeypatch.setattr(backtest_v7.multiprocessing, "cpu_count", lambda: 16)
     monkeypatch.setattr(backtest_v7.asyncio, "sleep", fake_sleep)
     monkeypatch.setattr(worker, "_launch_backtest", fake_launch)
+    monkeypatch.setattr(backtest_v7, "claim_backtest_slot", lambda *_args: True)
+    monkeypatch.setattr(backtest_v7, "publish_backtest_process", lambda *_args: None)
     monkeypatch.setattr(backtest_v7, "_log", lambda *args, **kwargs: None)
 
     asyncio.run(worker._loop())
@@ -293,7 +298,11 @@ def test_add_config_archive_workflow_holds_one_outer_transaction(tmp_path, monke
         return value
 
     monkeypatch.setattr(backtest_v7, "_require_own_archive", lambda *_args: archive)
-    monkeypatch.setattr(backtest_v7, "_resolve_result_dir", lambda path: Path(path))
+    monkeypatch.setattr(
+        backtest_v7,
+        "_resolve_managed_backtest_result",
+        lambda path, declared_version=None: (Path(path), declared_version or "v7"),
+    )
     monkeypatch.setattr(backtest_v7, "archive_transaction", lambda _root: Transaction())
     monkeypatch.setattr(
         backtest_v7,
@@ -741,6 +750,7 @@ def test_backtest_worker_explicit_false_only_clears_managed_market_data_path(
             self.pid = 5150
 
     monkeypatch.setattr(backtest_v7.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(backtest_v7.psutil, "Process", lambda _pid: type("Proc", (), {"create_time": lambda self: 123.0})())
 
     backtest_v7.BacktestWorker(backtest_v7._store)._launch_backtest(
         {

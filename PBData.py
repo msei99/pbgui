@@ -589,6 +589,10 @@ class PBData():
         self._bitget_latest_1m_task = None
         self._market_data_status: dict = {}
         self._market_data_status_lock = asyncio.Lock()
+        self._market_data_status_generation = 0
+        self._market_data_status_pending_generations: dict[str, int] = {}
+        self._market_data_status_notify_task = None
+        self._market_data_status_notify_interval = 5.0
         # Caller-side private-client manager (Queue + background manager task)
         # This manager serializes private-client creation requests from PBData
         # so that check+reserve logic can be performed atomically on the caller
@@ -882,11 +886,36 @@ class PBData():
             existing[key] = value
             existing["timestamp"] = datetime.now().isoformat(sep=" ", timespec="seconds")
             self._market_data_status = existing
-            try:
-                payload = json.loads(json.dumps(existing))
-                asyncio.create_task(_notify_api_market_data_status(payload))
-            except Exception:
-                pass
+            self._market_data_status_generation += 1
+            self._market_data_status_pending_generations[key] = self._market_data_status_generation
+            if self._market_data_status_notify_task is None or self._market_data_status_notify_task.done():
+                self._market_data_status_notify_task = asyncio.create_task(self._publish_market_data_status())
+
+    async def _publish_market_data_status(self) -> None:
+        """Coalesce rapid status changes while ensuring the latest snapshot is published."""
+        current_task = asyncio.current_task()
+        try:
+            while True:
+                await asyncio.sleep(self._market_data_status_notify_interval)
+                async with self._market_data_status_lock:
+                    pending = dict(self._market_data_status_pending_generations)
+                    snapshot = self._market_data_status or {}
+                    payload = {"timestamp": snapshot.get("timestamp")}
+                    payload.update({key: snapshot.get(key) for key in pending})
+                    payload = json.loads(json.dumps(payload))
+                await _notify_api_market_data_status(payload)
+                async with self._market_data_status_lock:
+                    for key, generation in pending.items():
+                        if self._market_data_status_pending_generations.get(key) == generation:
+                            self._market_data_status_pending_generations.pop(key, None)
+                    if not self._market_data_status_pending_generations:
+                        if self._market_data_status_notify_task is current_task:
+                            self._market_data_status_notify_task = None
+                        return
+        finally:
+            async with self._market_data_status_lock:
+                if self._market_data_status_notify_task is current_task:
+                    self._market_data_status_notify_task = None
 
     async def _latest_1m_loop(self):
         await asyncio.sleep(5)
@@ -995,7 +1024,6 @@ class PBData():
                             coin_status["result"] = "ok"
                             coin_status["lookback_days"] = int(lookback_days)
                             coin_status["newest_day"] = newest_day
-                            coin_status["api_result"] = res
                             try:
                                 if isinstance(res, dict) and bool(res.get("skipped")) and str(res.get("skip_reason") or "") == "not_in_live_meta":
                                     invalid_live_meta_coins.add(str(coin).strip().upper())
@@ -1184,7 +1212,6 @@ class PBData():
                         coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
                         coin_status["result"] = "ok"
                         coin_status["lookback_days"] = int(lookback_days)
-                        coin_status["api_result"] = res
                         try:
                             _refresh_inventory_coin("binanceusdm", "1m_api", coin)
                         except Exception:
@@ -1336,7 +1363,6 @@ class PBData():
                         coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
                         coin_status["result"] = "ok"
                         coin_status["lookback_days"] = int(lookback_days)
-                        coin_status["api_result"] = res
                         try:
                             _refresh_inventory_coin("bybit", "1m", coin)
                         except Exception:
@@ -1484,7 +1510,6 @@ class PBData():
                         coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
                         coin_status["result"] = "ok"
                         coin_status["lookback_days"] = int(lookback_days)
-                        coin_status["api_result"] = res
                         try:
                             from okx_best_1m import get_storage_coin_dir as okx_storage_coin_dir
                             _refresh_inventory_coin("okx", "1m", okx_storage_coin_dir(coin))
@@ -1633,7 +1658,6 @@ class PBData():
                         coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
                         coin_status["result"] = "ok"
                         coin_status["lookback_days"] = int(lookback_days)
-                        coin_status["api_result"] = res
                         try:
                             from bitget_best_1m import get_storage_coin_dir as bitget_storage_coin_dir
                             _refresh_inventory_coin("bitget", "1m", bitget_storage_coin_dir(coin))

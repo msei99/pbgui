@@ -1866,7 +1866,6 @@ def get_hosts(
         "request_id": request_id,
         "generated_at": time.time(),
         "hosts": hosts,
-        "host_details": [_host_dropdown_detail(host) for host in hosts],
     }
 
 
@@ -2426,6 +2425,5 @@ async def _v7_push_loop(ws: WebSocket):
 
 async def _send_v7_state(ws: WebSocket):
     """Build and push the v7 instance list."""
-    instances = _load_local_instances()
-    instances = _enrich_with_vps_data(instances)
+    instances = await asyncio.to_thread(lambda: _enrich_with_vps_data(_load_local_instances()))
     await ws.send_json({"type": "instances", "data": instances})

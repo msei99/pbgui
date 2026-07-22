@@ -286,7 +286,11 @@ def test_add_config_to_archive_accepts_missing_dest_name(tmp_path: Path, monkeyp
     result_dir = write_archive_result(tmp_path / "results")
     monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archive_root)
     monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
-    monkeypatch.setattr(backtest_v7, "_resolve_result_dir", lambda path: Path(path).resolve())
+    monkeypatch.setattr(
+        backtest_v7,
+        "_resolve_managed_backtest_result",
+        lambda path, declared_version=None: (Path(path).resolve(), declared_version or "v7"),
+    )
 
     response = asyncio.run(backtest_v7.add_config_to_archive("mine", {"source_path": str(result_dir)}, session=None))
 

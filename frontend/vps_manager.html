@@ -3090,7 +3090,10 @@
       { key: 'pbgui_github', label: 'PBGui GitHub', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).pbgui_github || ''); } },
       { key: 'pb7', label: 'PB7', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).pb7 || ''); } },
       { key: 'pb7_branch', label: 'PB7 Branch', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).pb7_branch || ''); } },
-      { key: 'pb7_github', label: 'PB7 GitHub', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).pb7_github || ''); } }
+      { key: 'pb7_github', label: 'PB7 GitHub', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).pb7_github || ''); } },
+      { key: 'pb8', label: 'PB8', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).pb8 || ''); } },
+      { key: 'pb8_branch', label: 'PB8 Branch', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).pb8_branch || ''); } },
+      { key: 'pb8_github', label: 'PB8 GitHub', defaultVisible: true, sortable: true, getValue: function (row) { return String((row || {}).pb8_github || ''); } }
     ];
 
     let vpsLogViewer = null;
@@ -4384,12 +4387,16 @@
       const rebootSub = reboot === null ? 'agent cache unavailable' : (reboot ? 'kernel update pending' : 'system current');
       const pbguiVer = String(summary.pbgui || '-');
       const pb7Ver = String(summary.pb7 || '-');
+      const pb8Ver = String(summary.pb8 || '-');
       const pbguiBranch = String(summary.pbgui_branch || '-');
       const pb7Branch = String(summary.pb7_branch || '-');
+      const pb8Branch = String(summary.pb8_branch || '-');
       const pbguiTone = getOverviewVersionTone(summary.pbgui_github, summary.pbgui);
       const pb7Tone = getOverviewVersionTone(summary.pb7_github, summary.pb7);
+      const pb8Tone = getOverviewVersionTone(summary.pb8_github, summary.pb8);
       const pbguiSub = getVersionStatusSub(pbguiBranch, summary.pbgui_github, pbguiTone);
       const pb7Sub = getVersionStatusSub(pb7Branch, summary.pb7_github, pb7Tone);
+      const pb8Sub = getVersionStatusSub(pb8Branch, summary.pb8_github, pb8Tone);
       const tags = [];
       if (!isMaster) {
         tags.push(`<span class='tag ${hostConnected ? (telemetryStale ? 'warning' : 'ok') : 'error'}'>${esc(onlineText)}</span>`);
@@ -4417,12 +4424,16 @@
         rebootSub,
         pbguiVer,
         pb7Ver,
+        pb8Ver,
         pbguiBranch,
         pb7Branch,
+        pb8Branch,
         pbguiSub,
         pb7Sub,
+        pb8Sub,
         pbguiTone,
         pb7Tone,
+        pb8Tone,
         tagsHtml: tags.join(''),
       };
     }
@@ -4461,6 +4472,11 @@
               <div class='system-metric-value'><span class='dot ${model.pb7Tone}' data-role='pb7-dot'></span><span data-role='pb7-ver'>${esc(model.pb7Ver)}</span></div>
               <div class='system-metric-sub' data-role='pb7-branch'>${esc(model.pb7Sub)}</div>
             </div>
+            <div class='system-metric'>
+              <div class='system-metric-label' data-role='pb8-label'>PB8 ${model.pb8Tone !== 'ok' && model.pb8Ver !== '-' ? '⚠' : ''}</div>
+              <div class='system-metric-value'><span class='dot ${model.pb8Tone}' data-role='pb8-dot'></span><span data-role='pb8-ver'>${esc(model.pb8Ver)}</span></div>
+              <div class='system-metric-sub' data-role='pb8-branch'>${esc(model.pb8Sub)}</div>
+            </div>
           </div>
         </div>`;
     }
@@ -4493,8 +4509,12 @@
       const pb7Dot = header.querySelector('[data-role="pb7-dot"]');
       const pb7VerNode = header.querySelector('[data-role="pb7-ver"]');
       const pb7BranchNode = header.querySelector('[data-role="pb7-branch"]');
+      const pb8LabelNode = header.querySelector('[data-role="pb8-label"]');
+      const pb8Dot = header.querySelector('[data-role="pb8-dot"]');
+      const pb8VerNode = header.querySelector('[data-role="pb8-ver"]');
+      const pb8BranchNode = header.querySelector('[data-role="pb8-branch"]');
 
-      if (!onlineDot || !hostnameNode || !tagsNode || !bootTimeNode || !updatesDot || !updatesCountNode || !rebootDot || !pbguiLabelNode || !pbguiDot || !pbguiVerNode || !pbguiBranchNode || !pb7LabelNode || !pb7Dot || !pb7VerNode || !pb7BranchNode) {
+      if (!onlineDot || !hostnameNode || !tagsNode || !bootTimeNode || !updatesDot || !updatesCountNode || !rebootDot || !pbguiLabelNode || !pbguiDot || !pbguiVerNode || !pbguiBranchNode || !pb7LabelNode || !pb7Dot || !pb7VerNode || !pb7BranchNode || !pb8LabelNode || !pb8Dot || !pb8VerNode || !pb8BranchNode) {
         container.innerHTML = renderSystemHeader(status, summary, isMaster, rtd);
         return;
       }
@@ -4518,6 +4538,10 @@
       setNodeClassNameIfChanged(pb7Dot, 'dot ' + model.pb7Tone);
       setNodeTextIfChanged(pb7VerNode, model.pb7Ver);
       setNodeTextIfChanged(pb7BranchNode, model.pb7Sub);
+      setNodeTextIfChanged(pb8LabelNode, 'PB8 ' + (model.pb8Tone !== 'ok' && model.pb8Ver !== '-' ? '⚠' : ''));
+      setNodeClassNameIfChanged(pb8Dot, 'dot ' + model.pb8Tone);
+      setNodeTextIfChanged(pb8VerNode, model.pb8Ver);
+      setNodeTextIfChanged(pb8BranchNode, model.pb8Sub);
     }
 
     function renderMasterSummaryTags(status) {
@@ -9636,6 +9660,9 @@
         if (column.key === 'pb7') return renderOverviewVersionCell(row.pb7, row.pb7_github);
         if (column.key === 'pb7_branch') return esc(row.pb7_branch || '-');
         if (column.key === 'pb7_github') return renderOverviewGithubCell(row.pb7_github);
+        if (column.key === 'pb8') return renderOverviewVersionCell(row.pb8, row.pb8_github);
+        if (column.key === 'pb8_branch') return esc(row.pb8_branch || '-');
+        if (column.key === 'pb8_github') return renderOverviewGithubCell(row.pb8_github);
         return esc(column.getValue(row));
       }
       return `

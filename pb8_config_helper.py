@@ -17,9 +17,16 @@ def _load_pb8_modules(pb8_dir: Path):
 
     from config.load import load_prepared_config, prepare_config
     from config.metrics import ANALYSIS_SHARED_KEYS, CURRENCY_METRICS
+    from config.limits import SUPPORTED_LIMIT_STATS
+    from config.scoring import DEFAULT_OBJECTIVE_GOALS, OBJECTIVE_GOALS
     from config.schema import CONFIG_SCHEMA_VERSION, get_template_config
+    from config.optimize_bounds import get_optimize_bounds_defaults
+    from config.strategy_spec import get_all_strategy_defaults, get_supported_strategy_kinds, get_strategy_spec
     from config.migrations.trailing_grid_v7 import migrate_v7_trailing_grid_file
     from config_utils import sanitize_prepared_config_for_dump
+    from optimization.backends import BACKEND_RUNNERS
+    from optimization.backends.pymoo_backend import SUPPORTED_PYMOO_ALGORITHMS, SUPPORTED_REF_DIR_METHODS
+    from optimizer_overrides import KNOWN_OPTIMIZER_OVERRIDES
     from passivbot_version import __version__
 
     return {
@@ -27,6 +34,17 @@ def _load_pb8_modules(pb8_dir: Path):
         "prepare_config": prepare_config,
         "schema_version": CONFIG_SCHEMA_VERSION,
         "get_template_config": get_template_config,
+        "get_supported_strategy_kinds": get_supported_strategy_kinds,
+        "get_strategy_spec": get_strategy_spec,
+        "get_all_strategy_defaults": get_all_strategy_defaults,
+        "get_optimize_bounds_defaults": get_optimize_bounds_defaults,
+        "backends": sorted(BACKEND_RUNNERS),
+        "pymoo_algorithms": sorted(SUPPORTED_PYMOO_ALGORITHMS),
+        "pymoo_ref_dir_methods": sorted(SUPPORTED_REF_DIR_METHODS),
+        "objective_goals": list(OBJECTIVE_GOALS),
+        "default_objective_goals": dict(DEFAULT_OBJECTIVE_GOALS),
+        "limit_statistics": sorted(SUPPORTED_LIMIT_STATS),
+        "optimizer_overrides": sorted(KNOWN_OPTIMIZER_OVERRIDES),
         "migrate_v7": migrate_v7_trailing_grid_file,
         "result_metrics": sorted(
             set(ANALYSIS_SHARED_KEYS)
@@ -39,6 +57,103 @@ def _load_pb8_modules(pb8_dir: Path):
         ),
         "sanitize": sanitize_prepared_config_for_dump,
         "version": __version__,
+    }
+
+
+def _leaf_metadata(value, prefix: str = "") -> list[dict]:
+    """Describe every runtime-provided leaf without imposing a PB7 schema."""
+    result = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            result.extend(_leaf_metadata(item, path))
+        return result
+    if isinstance(value, bool):
+        value_type = "boolean"
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        value_type = "number"
+    elif isinstance(value, str):
+        value_type = "string"
+    elif value is None:
+        value_type = "null"
+    elif isinstance(value, list):
+        value_type = "array"
+    else:
+        value_type = "json"
+    result.append({"path": prefix, "type": value_type, "default": copy.deepcopy(value)})
+    return result
+
+
+def _optimize_metadata(modules: dict) -> dict:
+    """Build one coherent metadata model from the installed PB8 runtime."""
+    template = _prepare(modules, modules["get_template_config"]())
+    optimize = copy.deepcopy(template.get("optimize") or {})
+    strategies = list(modules["get_supported_strategy_kinds"]())
+    bounds = optimize.get("bounds") if isinstance(optimize.get("bounds"), dict) else {}
+    all_bounds = modules["get_optimize_bounds_defaults"]()
+    active_bounds = {}
+    strategy_specs = {}
+    for strategy in strategies:
+        strategy_specs[strategy] = copy.deepcopy(modules["get_strategy_spec"](strategy))
+        selected = copy.deepcopy(all_bounds)
+        for side in ("long", "short"):
+            side_bounds = selected.get(side) if isinstance(selected.get(side), dict) else {}
+            strategy_bounds = side_bounds.get("strategy") if isinstance(side_bounds.get("strategy"), dict) else {}
+            side_bounds["strategy"] = {
+                strategy: copy.deepcopy(strategy_bounds.get(strategy) or {})
+            }
+        active_bounds[strategy] = selected
+    metrics = sorted(set(modules["result_metrics"]) | set(modules["default_objective_goals"]))
+    return {
+        "template": template,
+        "strategies": strategies,
+        "strategy_specs": strategy_specs,
+        "strategy_defaults": modules["get_all_strategy_defaults"](),
+        "bounds": copy.deepcopy(bounds),
+        "all_bounds": all_bounds,
+        "active_bounds": active_bounds,
+        "optimize_defaults": optimize,
+        "optimize_parameters": _leaf_metadata(optimize, "optimize"),
+        "bot_parameter_paths": [entry["path"] for entry in _leaf_metadata(template.get("bot") or {}, "bot")],
+        "backends": modules["backends"],
+        "pymoo": {
+            "algorithms": modules["pymoo_algorithms"],
+            "ref_dir_methods": modules["pymoo_ref_dir_methods"],
+            "defaults": copy.deepcopy(optimize.get("pymoo") or {}),
+        },
+        "scoring": {
+            "metrics": metrics,
+            "goals": modules["objective_goals"],
+            "default_goals": modules["default_objective_goals"],
+            "defaults": copy.deepcopy(optimize.get("scoring") or []),
+        },
+        "limits": {
+            "metrics": metrics,
+            "statistics": modules["limit_statistics"],
+            "operators": [
+                "greater_than",
+                "greater_than_or_equal",
+                "less_than",
+                "less_than_or_equal",
+                "equal_to",
+                "not_equal",
+                "outside_range",
+                "inside_range",
+                "auto",
+            ],
+            "defaults": copy.deepcopy(optimize.get("limits") or []),
+        },
+        "optimizer_overrides": modules["optimizer_overrides"],
+        "fixed_runtime_overrides": copy.deepcopy(optimize.get("fixed_runtime_overrides") or {}),
+        "runtime_options": {
+            "mode": {"choices": ["fresh", "pareto_seed", "checkpoint_resume"], "default": "fresh"},
+            "fine_tune_params": {"type": "array", "default": []},
+            "polish_percentage": {"type": "number_or_null", "default": None, "minimum": 0},
+            "polish_bounds_mode": {
+                "choices": ["clamp", "override-tunable", "override-all"],
+                "default": "clamp",
+            },
+        },
     }
 
 
@@ -78,6 +193,8 @@ def handle(payload: dict) -> dict:
         return {"config": _prepare(modules, modules["get_template_config"]())}
     if operation == "result_metrics":
         return {"metrics": modules["result_metrics"]}
+    if operation == "optimize_metadata":
+        return _optimize_metadata(modules)
     if operation == "prepare":
         config = payload.get("config")
         if not isinstance(config, dict):

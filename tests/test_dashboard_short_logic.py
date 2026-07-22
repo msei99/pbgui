@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from api import dashboard, live
+from api import cluster, dashboard, live, v7_instances
+import pb7_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -714,6 +715,46 @@ def test_manage_position_panic_all_dry_run_does_not_save(monkeypatch, tmp_path):
     assert cfg["pbgui"]["version"] == 7
     assert "forced_mode_long" not in cfg["live"]
     assert "forced_mode_short" not in cfg["live"]
+
+
+def test_dashboard_forced_mode_waits_for_immediate_cluster_materialization(monkeypatch, tmp_path):
+    """A saved emergency mode returns only after the assigned host accepts its version."""
+    config_path = tmp_path / "panic-bot" / "config.json"
+    cfg = {"live": {"user": "alice"}, "pbgui": {"version": 7}}
+    calls = []
+
+    async def ensure_compatible(name, config):
+        calls.append(("compatible", name, config["pbgui"]["version"]))
+
+    def save(config, path):
+        calls.append(("save", str(path), config["pbgui"]["version"]))
+
+    def record(name, instance_dir, config, parent_version=None):
+        calls.append(("record", name, str(instance_dir), config["pbgui"]["version"], parent_version))
+
+    async def sync(name, expected_version=None):
+        calls.append(("sync", name, expected_version))
+        return {"ok": True, "hostname": "manibot51", "version": str(expected_version)}
+
+    monkeypatch.setattr(v7_instances, "_ensure_target_runtime_compatible", ensure_compatible)
+    monkeypatch.setattr(v7_instances, "_record_cluster_config_upsert", record)
+    monkeypatch.setattr(cluster, "sync_and_materialize_v7_instance", sync)
+    monkeypatch.setattr(pb7_config, "save_pb7_config", save)
+    monkeypatch.setattr(dashboard, "_backup_dashboard_instance_config", lambda *_args: None)
+
+    result = asyncio.run(dashboard._save_dashboard_panic_config("panic-bot", config_path, cfg))
+
+    assert result == {
+        "name": "panic-bot",
+        "version": 8,
+        "sync": {"ok": True, "hostname": "manibot51", "version": "8"},
+    }
+    assert calls == [
+        ("compatible", "panic-bot", 7),
+        ("save", str(config_path), 8),
+        ("record", "panic-bot", str(config_path.parent), 8, 7),
+        ("sync", "panic-bot", 8),
+    ]
 
 
 def test_manage_position_graceful_stop_all_dry_run_does_not_save(monkeypatch, tmp_path):

@@ -65,6 +65,35 @@ def test_read_ini_section_uses_pbgui_ini_path_when_cwd_differs(tmp_path, monkeyp
     assert settings["cpu_override"] == "True"
 
 
+def test_update_settings_is_strict_and_uses_one_atomic_section_save(monkeypatch):
+    """Shared Optimize settings reject coercion and persist all accepted keys in one transaction."""
+    saved = []
+    notified = []
+    monkeypatch.setattr(optimize_v7.multiprocessing, "cpu_count", lambda: 8)
+    monkeypatch.setattr(optimize_v7, "save_ini_section", lambda section, values: saved.append((section, values)))
+    monkeypatch.setattr(optimize_v7._store, "notify", lambda: notified.append(True))
+
+    result = optimize_v7.update_settings(
+        {"autostart": True, "cpu": 99, "cpu_override": False, "use_pbgui_market_data": True},
+        None,
+    )
+
+    assert result == {"ok": True}
+    assert saved == [
+        (
+            "optimize_v7",
+            {"autostart": "True", "cpu_override": "False", "use_pbgui_market_data": "True", "cpu": "8"},
+        )
+    ]
+    assert notified == [True]
+
+    for invalid in ({"autostart": 1}, {"cpu": True}, {"cpu": "4"}):
+        with pytest.raises(optimize_v7.HTTPException) as exc_info:
+            optimize_v7.update_settings(invalid, None)
+        assert exc_info.value.status_code == 422
+    assert len(saved) == 1
+
+
 def build_process_descriptor(proc: FakeProcess, config_path: Path, log_path: Path | None = None) -> dict:
     """Build a minimal optimize process index entry for tests."""
     log_paths = set()

@@ -145,7 +145,7 @@ Aktionen pro Zeile:
 
 Aktionen für alle Positionen unten im Dialog:
 - **Preview Panic**, **Preview Graceful stop**, **Preview TP only** zeigen die Config, die gespeichert würde, ohne zu schreiben oder zu synchronisieren.
-- **Panic**, **Graceful stop**, **Take Profit Only** speichern den entsprechenden globalen PB7 Forced Mode für Long und Short und synchronisieren die Config zum Bot-Host.
+- **Panic**, **Graceful stop**, **Take Profit Only** speichern den entsprechenden globalen PB7 Forced Mode für Long und Short und übertragen und materialisieren die Config sofort auf dem zugewiesenen Cluster-Bot-Host. Die Aktion meldet Erfolg erst, nachdem dieser Host die neue Config-Version angenommen hat; nicht erreichbare oder veraltete Ziele liefern einen Fehler statt einer falschen Sync-Erfolgsmeldung.
 
 Panic, Graceful Stop und Take Profit Only sind Passivbot-Config-/Sync-Aktionen. Sie senden keine direkten Exchange-Orders. **Market close amount** verwenden, wenn PBGui explizit eine direkte reduce-only Market-Order senden soll.
 

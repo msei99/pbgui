@@ -68,6 +68,7 @@ MANAGED_LOG_SCOPES: dict[str, dict[str, object]] = {
     "backtests": {"label": "Backtests", "description": "backtests/*.log", "paths": ("backtests",)},
     "backtests_v8": {"label": "PB8 backtests", "description": "backtests_v8/*.log", "paths": ("backtests_v8",)},
     "optimizes": {"label": "Optimizes", "description": "optimizes/*.log", "paths": ("optimizes",)},
+    "optimizes_v8": {"label": "PB8 optimizes", "description": "optimizes_v8/*.log", "paths": ("optimizes_v8",)},
     "pareto_sessions": {"label": "Pareto sessions", "description": "pareto*.log", "paths": ("pareto_dash.log", "pareto_sessions")},
     "api_handoff": {"label": "API handoff", "description": "api-systemd-handoff.log", "paths": ("api-systemd-handoff.log",)},
     "vps_manager_runs": {"label": "VPS Manager runs", "description": "vps-manager/**/*.log", "paths": ("vps-manager",)},

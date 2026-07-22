@@ -12,13 +12,16 @@ import math
 import multiprocessing
 import os
 import platform
+import secrets
 import signal
 import shutil
+import socket
 import subprocess
+import threading
 import time
 import traceback
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from shutil import rmtree
 from typing import Optional
@@ -27,11 +30,19 @@ import psutil
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 
-from api.archive_helpers import atomic_write_json
+from api.archive_helpers import _read_json_object_nofollow, atomic_write_json, config_version_info
 from api.auth import SessionToken, authenticate_websocket, require_auth
+from api.pb8_ohlcv_tools import (
+    PB8OhlcvUnavailableError,
+    build_pb8_ohlcv_preflight,
+    get_pb8_ohlcv_preload_job,
+    start_pb8_ohlcv_preload_job,
+    stop_pb8_ohlcv_preload_job,
+)
 from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log, rotate_managed_log_before_open
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
+from backtest_autostart import claim_backtest_slot, publish_backtest_process, release_backtest_slot
 from pb8_config import (
     PB8ConfigurationError,
     cache_prepared_pb8_config,
@@ -56,11 +67,36 @@ from secure_files import atomic_write_private_text
 SERVICE = "BacktestV8"
 router = APIRouter()
 
+_QUEUE_SETTINGS_SECTION = "backtest_v7"
+_MATERIALIZED_LOCK_FILENAME = ".materialized.lock.json"
+_MATERIALIZED_OP_LOCK_DIRNAME = ".materialized.op.lock"
+_MATERIALIZED_OP_LOCK_FILENAME = "lock.json"
+_opt_draft_store: dict[str, tuple[float, dict]] = {}
+_queue_draft_store: dict[str, tuple[float, list[dict]]] = {}
+_DRAFT_TTL_SECONDS = 600
+_MAX_DRAFTS = 100
+_DRAFT_LOCK = threading.RLock()
+
+
+def _clean_drafts(*, reserve_slot: bool = False) -> None:
+    """Expire old cross-page handoffs and bound their in-memory footprint."""
+    with _DRAFT_LOCK:
+        now = time.time()
+        for store in (_opt_draft_store, _queue_draft_store):
+            expired = [key for key, (created_at, _) in store.items() if now - created_at > _DRAFT_TTL_SECONDS]
+            for key in expired:
+                store.pop(key, None)
+            excess = len(store) - _MAX_DRAFTS + (1 if reserve_slot else 0)
+            if excess > 0:
+                oldest = sorted(store.items(), key=lambda item: item[1][0])[:excess]
+                for key, _entry in oldest:
+                    store.pop(key, None)
+
 
 def _configuration_error(operation: str, exc: Exception, status_code: int = 422) -> HTTPException:
     """Log a PB8 config failure before returning a browser-safe HTTP error."""
     _log(SERVICE, f"{operation} failed: {exc}", level="WARNING")
-    return HTTPException(status_code=status_code, detail=str(exc))
+    return HTTPException(status_code=int(getattr(exc, "status_code", status_code)), detail=str(exc))
 
 
 def _data_dir() -> Path:
@@ -718,6 +754,66 @@ def _bounded_setting(settings: dict, key: str, default: int, minimum: int, maxim
     return max(minimum, min(value, maximum))
 
 
+def _pb8_materialized_lock_state(lock_path: Path) -> str:
+    """Classify a PB8 materialized lock without importing its runtime modules."""
+    if not lock_path.exists() and not lock_path.is_symlink():
+        return "absent"
+    if lock_path.is_symlink() or not lock_path.is_file():
+        return "unknown"
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+        pid = int(payload.get("pid"))
+        hostname = str(payload.get("hostname") or "")
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError, ValueError):
+        return "unknown"
+    if pid <= 0 or not hostname:
+        return "unknown"
+    if hostname != socket.gethostname():
+        return "active"
+    return "active" if psutil.pid_exists(pid) else "stale"
+
+
+@contextmanager
+def _pb8_materialized_cleanup_guard(root: Path):
+    """Acquire PB8's native operation-lock shape before pruning scratch runs."""
+    lock_dir = root / _MATERIALIZED_OP_LOCK_DIRNAME
+    acquired = False
+    for _attempt in range(2):
+        try:
+            lock_dir.mkdir(mode=0o700)
+            acquired = True
+            now_ms = int(time.time() * 1000)
+            atomic_write_private_text(
+                lock_dir / _MATERIALIZED_OP_LOCK_FILENAME,
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "hostname": socket.gethostname(),
+                        "created_at_ms": now_ms,
+                        "updated_at_ms": now_ms,
+                    },
+                    indent=4,
+                )
+                + "\n",
+            )
+            break
+        except FileExistsError:
+            state = _pb8_materialized_lock_state(lock_dir / _MATERIALIZED_OP_LOCK_FILENAME)
+            if state != "stale":
+                break
+            rmtree(lock_dir, ignore_errors=True)
+        except OSError:
+            if acquired:
+                rmtree(lock_dir, ignore_errors=True)
+                acquired = False
+            break
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            rmtree(lock_dir, ignore_errors=True)
+
+
 def _cleanup_pb8_caches(retention_days: int) -> dict:
     """Remove expired PB8 HLCV cache directories from the configured PB8 root."""
     runtime = pb8_runtime_status()
@@ -729,23 +825,40 @@ def _cleanup_pb8_caches(retention_days: int) -> dict:
     removed = 0
     freed = 0
     errors = 0
+    skipped_locked = 0
     for root in targets:
         if not root.is_dir() or root.is_symlink():
             continue
-        for entry in root.iterdir():
-            if not entry.is_dir() or entry.is_symlink():
+        is_materialized = root.name == "materialized"
+        guard = _pb8_materialized_cleanup_guard(root) if is_materialized else nullcontext(True)
+        with guard as cleanup_allowed:
+            if not cleanup_allowed:
+                skipped_locked += 1
                 continue
-            try:
-                if entry.stat().st_mtime >= cutoff:
+            for entry in root.iterdir():
+                if not entry.is_dir() or entry.is_symlink() or entry.name == _MATERIALIZED_OP_LOCK_DIRNAME:
                     continue
-                size = sum(item.stat().st_size for item in entry.rglob("*") if item.is_file() and not item.is_symlink())
-                rmtree(entry)
-                removed += 1
-                freed += size
-            except OSError as exc:
-                errors += 1
-                _log(SERVICE, f"Failed to clean PB8 cache {entry}: {exc}", level="WARNING")
-    return {"removed": removed, "freed_mb": round(freed / (1024 * 1024)), "errors": errors}
+                try:
+                    if entry.stat().st_mtime >= cutoff:
+                        continue
+                    if is_materialized:
+                        lock_state = _pb8_materialized_lock_state(entry / _MATERIALIZED_LOCK_FILENAME)
+                        if lock_state in {"active", "unknown"}:
+                            skipped_locked += 1
+                            continue
+                    size = sum(item.stat().st_size for item in entry.rglob("*") if item.is_file() and not item.is_symlink())
+                    rmtree(entry)
+                    removed += 1
+                    freed += size
+                except OSError as exc:
+                    errors += 1
+                    _log(SERVICE, f"Failed to clean PB8 cache {entry}: {exc}", level="WARNING")
+    return {
+        "removed": removed,
+        "freed_mb": round(freed / (1024 * 1024)),
+        "errors": errors,
+        "skipped_locked": skipped_locked,
+    }
 
 
 def _scalar_metrics(analysis: dict) -> dict:
@@ -813,21 +926,35 @@ def _result_config(result_dir: Path) -> dict:
     return {}
 
 
-def _resolve_result_dir(path: str) -> Path:
-    """Resolve a browser-provided PB8 result path below the managed result root."""
-    root = _results_root().resolve()
+def _resolve_result_dir(path: str, *, allow_archives: bool = True) -> Path:
+    """Resolve a PB8 result below its local root or a read-only archive root."""
+    local_root = _results_root().resolve()
+    archive_root = (_data_dir() / "archives").resolve()
     result_dir = Path(str(path or "")).resolve()
-    try:
-        result_dir.relative_to(root)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid result path") from exc
+    selected_root: Path | None = None
+    for root in [local_root, *([archive_root] if allow_archives else [])]:
+        try:
+            result_dir.relative_to(root)
+            selected_root = root
+            break
+        except ValueError:
+            continue
+    if selected_root is None:
+        raise HTTPException(status_code=400, detail="Invalid result path")
     if not result_dir.is_dir() or result_dir.is_symlink():
         raise HTTPException(status_code=404, detail="Result not found")
-    if result_dir == root:
+    if result_dir == selected_root:
         raise HTTPException(status_code=400, detail="Result root cannot be selected")
     analysis_path = result_dir / "analysis.json"
     if not analysis_path.is_file() or analysis_path.is_symlink():
         raise HTTPException(status_code=400, detail="Path is not a PB8 result directory")
+    if selected_root == archive_root:
+        try:
+            config = _read_json_object_nofollow(result_dir / "config.json", archive_root, required=True)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail="Invalid archived PB8 result") from exc
+        if config_version_info(config)["backtest_version"] != "v8":
+            raise HTTPException(status_code=400, detail="Archived result does not belong to PB8")
     return result_dir
 
 
@@ -1036,7 +1163,7 @@ class BacktestV8Worker:
     async def _loop(self) -> None:
         try:
             while self._running:
-                settings = load_ini_section("backtest_v8")
+                settings = load_ini_section(_QUEUE_SETTINGS_SECTION)
                 if str(settings.get("hlcvs_cleanup_enabled", "False")).lower() == "true":
                     interval = _bounded_setting(settings, "hlcvs_cleanup_interval_h", 24, 1, 168) * 3600
                     if time.time() - self._last_cleanup_at >= interval:
@@ -1055,15 +1182,26 @@ class BacktestV8Worker:
                 for item in items:
                     if item["status"] != "queued" or running >= cpu_limit:
                         continue
+                    if not claim_backtest_slot("v8", item["filename"], cpu_limit):
+                        break
                     try:
-                        await asyncio.to_thread(self.launch, item["filename"])
+                        record = await asyncio.to_thread(self.launch, item["filename"])
+                        publish_backtest_process(
+                            "v8",
+                            item["filename"],
+                            record["pid"],
+                            record["create_time"],
+                            record["command_markers"],
+                        )
                         running += 1
                     except HTTPException as exc:
+                        release_backtest_slot("v8", item["filename"])
                         if exc.status_code == 409:
                             _log(SERVICE, f"V8 backtest {item['filename']} remains queued: {exc.detail}", level="INFO")
                             continue
                         _log(SERVICE, f"Failed to launch queued V8 backtest {item['filename']}: {exc.detail}", level="ERROR")
                     except Exception as exc:
+                        release_backtest_slot("v8", item["filename"])
                         _log(SERVICE, f"Failed to launch queued V8 backtest {item['filename']}: {exc}", level="ERROR")
                 await asyncio.sleep(5)
         except asyncio.CancelledError:
@@ -1076,13 +1214,13 @@ class BacktestV8Worker:
                 meta={"traceback": traceback.format_exc()},
             )
 
-    def launch(self, filename: str) -> None:
+    def launch(self, filename: str) -> dict:
         """Validate the queued snapshot and launch the configured PB8 CLI."""
         _validate_name(filename)
         with _queue_lock():
-            self._launch_locked(filename)
+            return self._launch_locked(filename)
 
-    def _launch_locked(self, filename: str, *, restart: bool = False) -> None:
+    def _launch_locked(self, filename: str, *, restart: bool = False) -> dict:
         queue_file = _queue_file(filename)
         if not queue_file.exists():
             raise HTTPException(status_code=404, detail="Queue item not found")
@@ -1106,7 +1244,7 @@ class BacktestV8Worker:
                 launch_config = prepare_pb8_config(copy.deepcopy(base_snapshot), base_config_path=str(snapshot))
             else:
                 launch_config = load_pb8_config(snapshot)
-            settings = load_ini_section("backtest_v8")
+            settings = load_ini_section(_QUEUE_SETTINGS_SECTION)
             explicit_market_data = data.get("use_pbgui_market_data")
             if isinstance(explicit_market_data, bool):
                 use_pbgui_market_data = explicit_market_data
@@ -1196,6 +1334,11 @@ class BacktestV8Worker:
                 _log(SERVICE, f"Failed to publish V8 process ownership for {filename}: {exc}", level="ERROR")
                 raise HTTPException(status_code=500, detail=f"Failed to publish PB8 process ownership: {exc}") from exc
             _log(SERVICE, f"Launched V8 backtest {data.get('name')} ({filename})", level="INFO")
+            return {
+                "pid": process.pid,
+                "create_time": create_time,
+                "command_markers": [runner, str(snapshot.resolve())],
+            }
         except HTTPException:
             raise
         except PB8ConfigurationError as exc:
@@ -1276,9 +1419,67 @@ def runtime_status(session: SessionToken = Depends(require_auth)) -> dict:
     return pb8_runtime_status()
 
 
+@router.post("/optimize-draft")
+def create_optimize_draft(body: dict, session: SessionToken = Depends(require_auth)) -> dict:
+    """Store a PB8 config for a short-lived Optimize or Backtest handoff."""
+    config = body.get("config") if isinstance(body, dict) else None
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=422, detail="config must be a dict")
+    with _DRAFT_LOCK:
+        _clean_drafts(reserve_slot=True)
+        draft_id = secrets.token_urlsafe(16)
+        _opt_draft_store[draft_id] = (time.time(), copy.deepcopy(config))
+    return {"draft_id": draft_id}
+
+
+@router.get("/optimize-draft/{draft_id}")
+def get_optimize_draft(draft_id: str, session: SessionToken = Depends(require_auth)) -> dict:
+    """Retrieve a short-lived PB8 Optimize or Backtest handoff."""
+    with _DRAFT_LOCK:
+        _clean_drafts()
+        entry = _opt_draft_store.get(draft_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Draft not found or expired")
+        config = copy.deepcopy(entry[1])
+    return {"config": config}
+
+
+@router.post("/queue-draft")
+def create_queue_draft(body: dict, session: SessionToken = Depends(require_auth)) -> dict:
+    """Store PB8 configs for the shared Backtest queue parameter handoff."""
+    items = body.get("items") if isinstance(body, dict) else None
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=422, detail="items must be a non-empty list")
+    normalized: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=422, detail="each item must be an object")
+        config = item.get("config")
+        if not isinstance(config, dict):
+            raise HTTPException(status_code=422, detail="each item.config must be a dict")
+        normalized.append({"name": str(item.get("name") or "rebacktest"), "config": copy.deepcopy(config)})
+    with _DRAFT_LOCK:
+        _clean_drafts(reserve_slot=True)
+        draft_id = secrets.token_urlsafe(16)
+        _queue_draft_store[draft_id] = (time.time(), normalized)
+    return {"draft_id": draft_id}
+
+
+@router.get("/queue-draft/{draft_id}")
+def get_queue_draft(draft_id: str, session: SessionToken = Depends(require_auth)) -> dict:
+    """Retrieve a short-lived PB8 Backtest queue handoff."""
+    with _DRAFT_LOCK:
+        _clean_drafts()
+        entry = _queue_draft_store.get(draft_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Draft not found or expired")
+        items = copy.deepcopy(entry[1])
+    return {"items": items}
+
+
 @router.get("/settings")
 def get_settings(session: SessionToken = Depends(require_auth)) -> dict:
-    settings = load_ini_section("backtest_v8")
+    settings = load_ini_section(_QUEUE_SETTINGS_SECTION)
     cpu_max = multiprocessing.cpu_count()
     return {
         "autostart": str(settings.get("autostart", "False")).lower() == "true",
@@ -1319,7 +1520,7 @@ def update_settings(body: dict, session: SessionToken = Depends(require_auth)) -
         if type(body["hlcvs_cleanup_interval_h"]) is not int:
             raise HTTPException(status_code=422, detail="hlcvs_cleanup_interval_h must be an integer")
         updates["hlcvs_cleanup_interval_h"] = str(max(1, min(body["hlcvs_cleanup_interval_h"], 168)))
-    save_ini_section("backtest_v8", updates)
+    save_ini_section(_QUEUE_SETTINGS_SECTION, updates)
     return {"ok": True}
 
 
@@ -1452,38 +1653,42 @@ def get_pbgui_data_path(session: SessionToken = Depends(require_auth)) -> dict:
 
 @router.post("/ohlcv-preflight")
 async def get_ohlcv_preflight(body: dict, session: SessionToken = Depends(require_auth)) -> dict:
-    """Run the existing PBGui market-data readiness check for a V8 config."""
-    from api.pb7_ohlcv_tools import build_ohlcv_preflight
-
+    """Run PB8's read-only market-data readiness check for a V8 config."""
     config = body.get("config") if isinstance(body, dict) else None
     if not isinstance(config, dict):
         raise HTTPException(status_code=400, detail="config must be an object")
     try:
-        return await build_ohlcv_preflight(config)
+        return await build_pb8_ohlcv_preflight(config)
     except HTTPException:
         raise
     except Exception as exc:
-        _log(SERVICE, f"V8 OHLCV readiness failed: {exc}", level="WARNING", meta={"traceback": traceback.format_exc()})
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        detail = str(exc).strip() or exc.__class__.__name__
+        _log(SERVICE, f"V8 OHLCV readiness failed: {detail}", level="WARNING", meta={"traceback": traceback.format_exc()})
+        status_code = 503 if isinstance(exc, PB8OhlcvUnavailableError) else 422
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.post("/ohlcv-preload")
 def start_ohlcv_preload(body: dict, session: SessionToken = Depends(require_auth)) -> dict:
-    """Start the existing detached OHLCV preload for a V8 editor config."""
-    from api.pb7_ohlcv_tools import start_ohlcv_preload_job
-
+    """Start PB8's native detached OHLCV preparation for a V8 config."""
     config = body.get("config") if isinstance(body, dict) else None
     if not isinstance(config, dict):
         raise HTTPException(status_code=400, detail="config must be an object")
-    return start_ohlcv_preload_job(config)
+    try:
+        return start_pb8_ohlcv_preload_job(config)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        detail = str(exc).strip() or exc.__class__.__name__
+        _log(SERVICE, f"V8 OHLCV preload failed: {detail}", level="WARNING", meta={"traceback": traceback.format_exc()})
+        status_code = 503 if isinstance(exc, PB8OhlcvUnavailableError) else 422
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.get("/ohlcv-preload/{job_id}")
 def get_ohlcv_preload(job_id: str, session: SessionToken = Depends(require_auth)) -> dict:
-    """Return one shared OHLCV preload job."""
-    from api.pb7_ohlcv_tools import get_ohlcv_preload_job
-
-    payload = get_ohlcv_preload_job(job_id)
+    """Return one PB8 OHLCV preload job."""
+    payload = get_pb8_ohlcv_preload_job(job_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="OHLCV preload job not found")
     return payload
@@ -1491,10 +1696,8 @@ def get_ohlcv_preload(job_id: str, session: SessionToken = Depends(require_auth)
 
 @router.delete("/ohlcv-preload/{job_id}")
 def stop_ohlcv_preload(job_id: str, session: SessionToken = Depends(require_auth)) -> dict:
-    """Stop one shared OHLCV preload job."""
-    from api.pb7_ohlcv_tools import stop_ohlcv_preload_job
-
-    payload = stop_ohlcv_preload_job(job_id)
+    """Stop one PB8 OHLCV preload job."""
+    payload = stop_pb8_ohlcv_preload_job(job_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="OHLCV preload job not found")
     return payload
@@ -1681,18 +1884,22 @@ async def ws_backtest(websocket: WebSocket) -> None:
         return
     try:
         while True:
-            settings = load_ini_section("backtest_v8")
-            await websocket.send_json(
-                {
-                    "type": "queue_update",
-                    "items": _load_queue(),
-                    "settings": {
-                        "autostart": str(settings.get("autostart", "False")).lower() == "true",
-                        "cpu": _cpu_limit(settings),
-                        "use_pbgui_market_data": str(settings.get("use_pbgui_market_data", "False")).lower() == "true",
-                    },
-                }
+            items, settings = await asyncio.to_thread(
+                lambda: (_load_queue(), load_ini_section(_QUEUE_SETTINGS_SECTION))
             )
+            payload = {
+                "type": "queue_update",
+                "items": items,
+                "settings": {
+                    "autostart": str(settings.get("autostart", "False")).lower() == "true",
+                    "cpu": _cpu_limit(settings),
+                    "use_pbgui_market_data": str(settings.get("use_pbgui_market_data", "False")).lower() == "true",
+                    "hlcvs_cleanup_enabled": str(settings.get("hlcvs_cleanup_enabled", "False")).lower() == "true",
+                    "hlcvs_cleanup_days": _bounded_setting(settings, "hlcvs_cleanup_days", 7, 1, 365),
+                    "hlcvs_cleanup_interval_h": _bounded_setting(settings, "hlcvs_cleanup_interval_h", 24, 1, 168),
+                },
+            }
+            await websocket.send_json(payload)
             try:
                 await asyncio.wait_for(websocket.receive_text(), timeout=3)
             except asyncio.TimeoutError:
@@ -1931,6 +2138,6 @@ def get_result_file(filename: str, path: str, session: SessionToken = Depends(re
 @router.delete("/results")
 def delete_result(path: str, session: SessionToken = Depends(require_auth)) -> dict:
     """Delete one explicitly selected PB8 result directory."""
-    result_dir = _resolve_result_dir(path)
+    result_dir = _resolve_result_dir(path, allow_archives=False)
     rmtree(result_dir)
     return {"ok": True}

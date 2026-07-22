@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from pathlib import Path
 
 import pandas as pd
 
 from api import pareto_explorer
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_load_loader_falls_back_to_all_results_when_pareto_jsons_missing(tmp_path, monkeypatch) -> None:
@@ -79,6 +83,37 @@ def test_resolve_result_dir_accepts_results_inside_optimize_roots(tmp_path, monk
     monkeypatch.setattr(pareto_explorer, "_optimize_result_roots", lambda: [allowed_root.resolve()])
 
     assert pareto_explorer._resolve_result_dir(str(result_dir)) == result_dir.resolve()
+
+
+def test_result_meta_reports_managed_optimize_owner(tmp_path, monkeypatch) -> None:
+    """Result metadata must identify whether PB7 or PB8 owns the selected path."""
+    v7_root = tmp_path / "pb7" / "optimize_results"
+    v8_root = tmp_path / "pb8" / "optimize_results"
+    result_dir = v8_root / "result_001"
+    result_dir.mkdir(parents=True)
+    (result_dir / "all_results.bin").write_bytes(b"placeholder")
+    monkeypatch.setattr(
+        pareto_explorer,
+        "_optimize_result_roots_by_version",
+        lambda: [("v7", v7_root.resolve()), ("v8", v8_root.resolve())],
+    )
+
+    assert pareto_explorer._result_meta(result_dir)["optimize_version"] == "v8"
+
+
+def test_pareto_frontend_routes_by_result_version_without_bearer_tokens() -> None:
+    """The shared Explorer must use owning APIs and same-origin cookie authentication."""
+    source = (ROOT / "frontend" / "v7_pareto_explorer.html").read_text(encoding="utf-8")
+
+    assert 'window.OPTIMIZE_VERSION = "%%OPTIMIZE_VERSION%%"' in source
+    assert "'/api/optimize-' + optimizeVersion()" in source
+    assert "'/api/backtest-' + optimizeVersion()" in source
+    assert "optimizeApiBase() + '/results/pareto-dash/'" in source
+    assert "encodeURIComponent(optimizeVersion())" in source
+    assert "current: optimizeVersion() === 'v8'" in source
+    assert "activeOptimizeVersion" not in source
+    assert "Authorization" not in source
+    assert "%%TOKEN%%" not in source
 
 
 def test_select_correlation_configs_skips_unavailable_top_performer_metrics() -> None:

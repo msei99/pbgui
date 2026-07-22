@@ -38,10 +38,18 @@ Running backtests are independent jobs. Restarting PBGui or updating PB8 does no
 
 The queue row's log action opens `data/logs/backtests_v8/<queue-id>.log`. The top-right notification bell opens `PBGui.log`, which persists the short GUI notifications and errors that otherwise disappear after a few seconds. Technical PB8 backend diagnostics remain available separately in `BacktestV8.log`.
 
-Open **Settings** from the Queue sidebar actions to enable **Start queued jobs automatically**, choose the number of parallel jobs, and select **Use PBGui Market Data**. The market-data option is applied to a fresh copy of the immutable queue snapshot immediately before every start or restart, so changing it never mutates the saved config.
+Open **Settings** from the Queue sidebar actions to enable **Start queued jobs automatically**, choose the number of parallel jobs, and select **Use PBGui Market Data**. PB7 and PB8 read and write this one shared configuration. The CPU value limits automatic jobs across both versions together. The market-data option is applied to a fresh copy of the immutable queue snapshot immediately before every start or restart, so changing it never mutates the saved config.
+
+The Settings dialog opens immediately from the current state. It refreshes the host's authoritative values in the background and updates the visible controls only while they remain untouched.
+
+PB8 stores reusable datasets under `pb8/caches/hlcvs_data` and temporary materialized runs under `pb8/caches/ohlcvs/materialized`. Cleanup coordinates with PB8's root operation lock and preserves active local runs, foreign-host locks, and malformed locks whose safety cannot be established. Only old unlocked runs or runs with a confirmed dead local owner are removed. The **Clean Now** result reports how many locked directories were preserved.
 
 ## Results
 
 The **Version** filter defaults to PBv8 and can switch to PBv7 or **Both**. The list shows each result's version, config, exchange, run directory, and compact scalar metrics. Final balance and equity use the terminal values recorded in PB8's `balance_and_equity.csv` or compressed `.csv.gz` artifact when analysis metadata does not provide explicit totals. Select PBv7 and PBv8 rows together and click **Compare** to overlay their equity and balance series; each file is read from its matching result root. **Delete Selected** also supports a mixed selection and sends every result to its owning PBv7 or PBv8 backend.
 
 PB8 may download historical data when a backtest starts. Review the config, exchanges, coin selection, dates, and PB8 migration report before running a large backtest.
+
+## Archive
+
+PBv8 uses the same Archive panel and configured Git archives as PBv7. Results are stored below `pbgui/configs/<config_version>/backtests`, so V7 and V8 files cannot overwrite each other. Mixed archive lists show the owning version and route charts, files, comparisons, deletion, rebacktest, and Retest & Replace through the matching backend. V8 retests use immutable `data/bt_v8_queue` snapshots. **Add to Run** remains PBv7-only because PBv8 Run is not implemented.

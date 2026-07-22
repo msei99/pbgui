@@ -1127,7 +1127,7 @@ input[type="range"]::-moz-range-thumb {
     <section class="page-title">
       <div>
         <h1>Pareto Explorer</h1>
-        <p id="page-subtitle">Inspect PBv7 optimize results, pareto fronts, correlations, scenarios, and preset drafts.</p>
+        <p id="page-subtitle">Inspect Passivbot optimize results, pareto fronts, correlations, scenarios, and preset drafts.</p>
       </div>
       <div class="status-row">
         <span id="result-chip" class="chip">No result selected</span>
@@ -1178,7 +1178,7 @@ input[type="range"]::-moz-range-thumb {
           <h3>Load Control</h3>
           <div class="form-grid" style="margin-top: 12px;">
             <div class="form-field wide">
-              <label for="result-path-input"><span data-tip="Path to a PBv7 optimize result directory or pareto directory to load into the explorer.">Result Path</span></label>
+              <label for="result-path-input"><span data-tip="Path to a managed Passivbot optimize result directory or pareto directory to load into the explorer.">Result Path</span></label>
               <input id="result-path-input" type="text" placeholder="/path/to/optimize/result">
             </div>
             <div class="form-field">
@@ -1246,7 +1246,7 @@ input[type="range"]::-moz-range-thumb {
           <div class="toolbar" style="margin-bottom:12px;">
             <div class="check-row" style="max-width:280px;">
               <input id="preview-use-weighted" type="checkbox" checked>
-              <label for="preview-use-weighted"><span data-tip="Prefer PB7 weighted metric variants where available for preview scoring and charts.">Use weighted (_w) metrics</span></label>
+              <label for="preview-use-weighted"><span data-tip="Prefer weighted metric variants where available for preview scoring and charts.">Use weighted (_w) metrics</span></label>
             </div>
             <div class="check-row" style="max-width:260px;">
               <input id="preview-show-all" type="checkbox">
@@ -1318,7 +1318,7 @@ input[type="range"]::-moz-range-thumb {
               <div class="check-row"><input id="playground-show-all" type="checkbox"><label for="playground-show-all"><span data-tip="Show every config in the visible slice instead of only Pareto configs. Useful for checking whether a candidate still stands out in the broader cloud.">Show all configs</span></label></div>
             </div>
             <div id="playground-use-weighted-wrap" class="form-field full">
-              <div class="check-row"><input id="playground-use-weighted" type="checkbox" checked><label for="playground-use-weighted"><span data-tip="Prefer PB7 weighted metric variants where available for axes, color, and scoring inputs.">Use Weighted Metrics</span></label></div>
+              <div class="check-row"><input id="playground-use-weighted" type="checkbox" checked><label for="playground-use-weighted"><span data-tip="Prefer weighted metric variants where available for axes, color, and scoring inputs.">Use Weighted Metrics</span></label></div>
             </div>
             <div id="playground-use-btc-wrap" class="form-field full">
               <div class="check-row"><input id="playground-use-btc" type="checkbox"><label for="playground-use-btc"><span data-tip="Use BTC-denominated metrics instead of USD-denominated metrics when matching metrics are available.">Use BTC instead of USD</span></label></div>
@@ -1540,7 +1540,7 @@ input[type="range"]::-moz-range-thumb {
         </section>
         <section class="detail-block half panel-card">
           <details class="expander-card">
-            <summary><span data-tip="Complete selected PBv7 config as JSON, with copy/expand controls.">Full Configuration</span></summary>
+            <summary><span data-tip="Complete selected Passivbot config as JSON, with copy/expand controls.">Full Configuration</span></summary>
             <div id="detail-full-config-panel" style="margin-top:12px;"></div>
           </details>
         </section>
@@ -1554,11 +1554,11 @@ input[type="range"]::-moz-range-thumb {
         </section>
         <section id="detail-preset-section" class="detail-block panel-card" style="display:none;">
           <details class="expander-card" id="preset-generator-details">
-            <summary><span data-tip="Build a follow-up Optimize preset from the selected config, reusing existing Optimize save/queue flows.">Create PBv7 Optimize Preset from this Config</span></summary>
+            <summary><span data-tip="Build a follow-up Optimize preset from the selected config, reusing existing Optimize save/queue flows.">Create Optimize Preset from this Config</span></summary>
             <p class="muted-line">Creates a new Optimize preset with bounds tightened around the selected config's parameters. Useful for a follow-up run focused on fine-tuning instead of broad exploration.</p>
             <div class="preset-grid">
               <div class="form-field half">
-                <label for="preset-direction"><span data-tip="High-level scoring preset for the follow-up Optimize run. Balanced keeps the run scoring; the other goals choose PB7 metrics suited to profit, safety, smoothness, hold time, or exposure efficiency.">Optimization goal</span></label>
+                <label for="preset-direction"><span data-tip="High-level scoring preset for the follow-up Optimize run. Balanced keeps the run scoring; the other goals choose suitable metrics for profit, safety, smoothness, hold time, or exposure efficiency.">Optimization goal</span></label>
                 <select id="preset-direction">
                   <option value="Balanced (keep run scoring)">Balanced (keep run scoring)</option>
                   <option value="More profit (risk can be higher)">More profit (risk can be higher)</option>
@@ -1569,7 +1569,7 @@ input[type="range"]::-moz-range-thumb {
                 </select>
               </div>
               <div class="form-field half">
-                <label for="preset-name"><span data-tip="Name of the new PBv7 Optimize preset. It will be saved as an Optimize config and used as the draft name when opening Optimize.">Preset name</span></label>
+                <label for="preset-name"><span data-tip="Name of the new Optimize preset. It will be saved as an Optimize config and used as the draft name when opening Optimize.">Preset name</span></label>
                 <input id="preset-name" type="text" maxlength="64" value="">
               </div>
               <div class="form-field full">
@@ -1609,7 +1609,7 @@ input[type="range"]::-moz-range-thumb {
               </div>
               <div class="form-field full">
                 <div class="button-row">
-                  <button class="btn primary" id="btn-create-preset" type="button" data-tip="Save the generated Optimize config and open it in PBv7 Optimize.">💾 Create Optimize Preset</button>
+                  <button class="btn primary" id="btn-create-preset" type="button" data-tip="Save the generated Optimize config and open it in the owning Optimize version.">💾 Create Optimize Preset</button>
                   <button class="btn" id="btn-create-queue-preset" type="button" data-tip="Save the generated Optimize config and add it to the Optimize queue without opening Optimize.">📥 Create & Queue</button>
                 </div>
                 <div class="muted-line" id="preset-status" style="margin-top:8px;"></div>
@@ -1639,10 +1639,10 @@ input[type="range"]::-moz-range-thumb {
 
 <script src="/app/js/json_panel.js?v=1"></script>
 <script>
-window.TOKEN = "%%TOKEN%%";
 window.API_BASE = "%%API_BASE%%";
 window.WS_BASE = "%%WS_BASE%%";
 window.INIT_RESULT_PATH = "%%RESULT_PATH%%";
+window.OPTIMIZE_VERSION = "%%OPTIMIZE_VERSION%%";
 window.PBGUI_VERSION = "%%VERSION%%";
 window.PBGUI_SERIAL = "%%SERIAL%%";
 
@@ -1743,8 +1743,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 
   function apiFetch(path, options) {
     options = options || {};
-    var headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN }, options.headers || {});
-    return fetch(API_BASE + path, Object.assign({}, options, { headers: headers })).then(function(res) {
+    return fetch(API_BASE + path, options).then(function(res) {
       if (!res.ok) {
         return res.text().then(function(text) {
           throw new Error(text || ('HTTP ' + res.status));
@@ -1752,6 +1751,20 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       }
       return res.json();
     });
+  }
+
+  function optimizeVersion() {
+    var sessionVersion = state.session && state.session.optimize_version;
+    var resultVersion = state.session && state.session.result && state.session.result.optimize_version;
+    return String(resultVersion || sessionVersion || window.OPTIMIZE_VERSION || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7';
+  }
+
+  function optimizeApiBase() {
+    return window.location.origin + '/api/optimize-' + optimizeVersion();
+  }
+
+  function backtestApiBase() {
+    return window.location.origin + '/api/backtest-' + optimizeVersion();
   }
 
   function readRouteState() {
@@ -1777,10 +1790,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 
   function closeOverlay() {
     if (state.plotSessionId && state.plotSessionKind === 'pareto-dash') {
-      fetch(window.location.origin + '/api/optimize-v7/results/pareto-dash/' + encodeURIComponent(state.plotSessionId), {
-        method: 'DELETE',
-        headers: { 'Authorization': 'Bearer ' + TOKEN }
-      }).catch(function() {});
+      fetch(optimizeApiBase() + '/results/pareto-dash/' + encodeURIComponent(state.plotSessionId), { method: 'DELETE' }).catch(function() {});
     }
     state.plotSessionId = '';
     state.plotSessionKind = '';
@@ -1790,7 +1800,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   }
 
   function buildBacktestMainPageUrl(extraParams) {
-    var base = window.location.origin + '/api/backtest-v7/main_page';
+    var base = backtestApiBase() + '/main_page';
     var params = new URLSearchParams();
     Object.keys(extraParams || {}).forEach(function(key) {
       var value = extraParams[key];
@@ -1800,7 +1810,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   }
 
   function buildOptimizeMainPageUrl(extraParams) {
-    var base = window.location.origin + '/api/optimize-v7/main_page';
+    var base = optimizeApiBase() + '/main_page';
     var params = new URLSearchParams();
     Object.keys(extraParams || {}).forEach(function(key) {
       var value = extraParams[key];
@@ -1828,12 +1838,9 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   }
 
   function openBacktestDraft(config, draftName) {
-    return fetch(window.location.origin + '/api/backtest-v7/optimize-draft', {
+    return fetch(backtestApiBase() + '/optimize-draft', {
       method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + TOKEN,
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: extractConfigSections(config) })
     }).then(function(res) {
       if (!res.ok) {
@@ -1851,12 +1858,9 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   }
 
   function openOptimizeSeedDraft(config, draftName) {
-    return fetch(window.location.origin + '/api/backtest-v7/optimize-draft', {
+    return fetch(backtestApiBase() + '/optimize-draft', {
       method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + TOKEN,
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: extractConfigSections(config) })
     }).then(function(res) {
       if (!res.ok) {
@@ -1875,11 +1879,8 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 
   function optimizeApiFetch(path, options) {
     options = options || {};
-    var headers = Object.assign({
-      'Authorization': 'Bearer ' + TOKEN,
-      'Content-Type': 'application/json'
-    }, options.headers || {});
-    return fetch(window.location.origin + '/api/optimize-v7' + path, Object.assign({}, options, { headers: headers })).then(function(res) {
+    var headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
+    return fetch(optimizeApiBase() + path, Object.assign({}, options, { headers: headers })).then(function(res) {
       if (!res.ok) {
         return res.text().then(function(text) {
           throw new Error(text || ('HTTP ' + res.status));
@@ -3271,7 +3272,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
             return savedConfig;
           });
         }
-        el('preset-status').textContent = 'Opening PBv7 Optimize...';
+        el('preset-status').textContent = 'Opening PB' + optimizeVersion() + ' Optimize...';
         return openOptimizeSeedDraft(savedConfig, name);
       });
     }).catch(function(err) {
@@ -4110,7 +4111,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     if (state.stage === 'deep_intelligence') {
       anchor = 'deep-intelligence-' + String(state.deepTab || 'parameters').replace(/_/g, '-');
     }
-    window.PBGuiSharedHelp.open('pareto explorer', { token: TOKEN, anchor: anchor });
+    window.PBGuiSharedHelp.open('pareto explorer', { anchor: anchor });
   }
 
   function runSelectedConfigBacktest() {
@@ -4352,7 +4353,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     el('btn-load-all-results').addEventListener('click', loadAllResultsFromSidebar);
     el('btn-load-pareto-only').addEventListener('click', loadParetoOnlyFromSidebar);
     el('btn-back-optimize').addEventListener('click', function() {
-      var target = window.location.origin + '/api/optimize-v7/main_page';
+      var target = optimizeApiBase() + '/main_page';
       var params = new URLSearchParams();
       params.set('panel', 'results');
       window.location.href = target + '?' + params.toString() + '#results';
@@ -4538,7 +4539,8 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   }
 
   function bootstrapSession() {
-    var query = '?result_path=' + encodeURIComponent(state.resultPath || '');
+    var query = '?result_path=' + encodeURIComponent(state.resultPath || '')
+      + '&optimize_version=' + encodeURIComponent(optimizeVersion());
     return apiFetch('/session' + query).then(function(data) {
       renderSession(data);
       window.selectStage(state.stage);
@@ -4568,9 +4570,8 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   window.PBGUI_HELP_OPENER = openGuide;
 
   window.PBGUI_NAV_CONFIG = {
-    subtitle: 'PBv7 PARETO EXPLORER',
-    current: 'v7_pareto_explorer',
-    token: TOKEN,
+    subtitle: 'PB' + String(window.OPTIMIZE_VERSION || 'v7') + ' PARETO EXPLORER',
+    current: optimizeVersion() === 'v8' ? 'v8_pareto_explorer' : 'v7_pareto_explorer',
     apiBase: API_BASE,
     version: PBGUI_VERSION,
     serial: PBGUI_SERIAL

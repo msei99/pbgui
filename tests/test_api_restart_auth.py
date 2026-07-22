@@ -34,6 +34,17 @@ def test_shared_nav_does_not_send_an_undefined_bearer_token() -> None:
     assert "JSON.stringify({ token: c2.token })" not in restart_block
 
 
+def test_shared_nav_releases_restart_watchers_on_pagehide() -> None:
+    """Repeated page navigation must not retain SSE streams or polling timers."""
+    source = Path("frontend/pbgui_nav.js").read_text(encoding="utf-8")
+
+    assert "window.addEventListener('pagehide', stopRestartStatusWatch);" in source
+    assert "_restartEventSource.close();" in source
+    assert "clearTimeout(_restartRetryTimer);" in source
+    assert "clearInterval(_restartPollTimer);" in source
+    assert "if (event && event.persisted) startRestartStatusWatch();" in source
+
+
 def test_server_status_stream_closes_before_api_restart() -> None:
     """The persistent nav SSE must not consume Uvicorn's graceful-shutdown timeout."""
     async def scenario() -> None:

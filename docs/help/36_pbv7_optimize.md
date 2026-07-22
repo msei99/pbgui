@@ -12,6 +12,8 @@ The page is organised into four sidebar panels:
 | **Results** | Browse completed optimize result sets |
 | **Paretos** | Inspect the Pareto files belonging to one result set |
 
+The same page is also the PBv8 Optimize editor. The version adapter keeps PB7 behavior unchanged while PB8 loads its strategy schema, optimizer metadata, queue, results, native OHLCV tooling, and runtime controls from the installed PB8 checkout. PB8 supports `trailing_martingale`, `ema_anchor`, and `trailing_grid_v7`; switching between them preserves every customized inactive strategy block.
+
 ---
 
 ## Configs panel
@@ -37,6 +39,10 @@ Archive imports are saved as local Optimize configs before the editor opens. If 
 When you open an existing optimize config and change `config_name` before saving, PBGui now saves that editor state as a new config file under the new name. The originally opened config stays unchanged; this is a save-as-new operation, not a rename of the old file.
 
 Use the search field to filter by config name. Config rows support the same click-and-drag multi-selection pattern as Backtest, and the actions on the right are compact icon buttons.
+
+Each PBv7 config row also offers **V8**. It runs PB8's official Optimize config migration, stores the migration report with the new PB8 bundle, and opens the result in the shared PBv8 Optimize editor. Migration stops instead of guessing when PB8 reports unresolved fields.
+
+PBv7 Pareto rows provide the same **V8** action for individual candidate configs. Only Pareto JSON files inside the managed PB7 result root are accepted.
 
 ### Structured editor
 
@@ -69,6 +75,8 @@ Main editor areas:
 | **Raw Config JSON** | Full config base object used during save so untouched sections stay preserved, with automatic two-way sync and live validation |
 
 The editor now keeps only three visible main section titles: **Market & Universe**, **Optimization**, and **Run Settings**. The goal is to reduce label noise while still keeping the flow obvious: first define the data scope and coin universe, then the optimizer search space, then the run-time settings. This also matches the technical dependencies in the page: Pymoo `auto` resolves the effective algorithm from the current scoring objective count, and Pymoo mutation `auto` derives from the active bound count.
+
+On PB8, `polish_percentage` is displayed as a regular percentage but saved as PB8's fractional `--polish-pct` value, so `20` in the editor becomes `0.20` at launch. PB8 also preserves automatic pymoo population sizing: NSGA-II uses its native `250` default and NSGA-III derives reference directions with PB8's `500` budget. Unknown future `fixed_runtime_overrides` and inactive strategy blocks stay in the raw config when known structured controls are edited.
 
 The `n_cpus` input in **Run Settings** is capped at the CPU count of the host running PBGui/Optimize, so the structured editor cannot request more worker processes than that machine has.
 
@@ -151,6 +159,8 @@ Dragging across rows to add or remove a selection now tracks the rows actually u
 PBGui also recomputes the live queue selection from the row state captured at mouse-down on every drag update. If you briefly drag one row too far and then shrink the selection or deselection range again, rows outside the final range are restored instead of staying accidentally lost.
 Live queue websocket updates no longer rerender the table in the middle of that drag selection. PBGui now waits until the mouse interaction finishes before applying the latest queue refresh, so selecting rows feels stable again like the Results table.
 
+For PB8, permanent launch errors move only the affected row to an actionable error state, so a broken first row cannot block later autostart entries. Update/runtime-lock contention remains queued for retry. Startup reconciles stale PID, snapshot, launch and runner artifacts without signalling unverified processes, and **Repair** rebuilds the immutable queue snapshot from the selected managed config. The PB8 queue controller is visible in **Services Monitor**; stopping it pauses scheduling but does not terminate detached optimizers.
+
 ### Log viewer
 
 Each queue row has a **Log** action.
@@ -161,7 +171,7 @@ Newer queue items also keep an embedded config snapshot. If the original config 
 If an older queue row predates snapshots and its original config path is gone while multiple matching configs still exist, PBGui now opens a selection modal with direct **Open** buttons for those candidates instead of only flashing a short error toast.
 PBGui now also rejects **Requeue** for queue rows whose config is still unlaunchable. Those rows keep their current `error` state and existing optimize log until the config has actually been fixed, instead of being reset to a misleading `queued` state with no runnable job behind it.
 
-The queue itself no longer needs a manual refresh button in the sidebar. It keeps updating from the live websocket feed, and the **Settings** dialog now owns the autostart controls instead of a permanent sidebar checkbox. When autostart is enabled, PBGui rewrites each queued config's `optimize.n_cpus` to the configured queue CPU value immediately before launching that item. If `Use PBGui Market Data` is enabled there as well, PBGui also rewrites `backtest.ohlcv_source_dir` right before launch, regardless of the value stored in the config editor.
+The queue itself no longer needs a manual refresh button in the sidebar. It keeps updating from the live websocket feed, and the **Settings** dialog now owns the autostart controls instead of a permanent sidebar checkbox. PB7 and PB8 use this one shared settings configuration and one global automatic optimizer slot, so saving the dialog on either page controls both queues. When autostart is enabled, PBGui sets `optimize.n_cpus` on the launch copy to the configured queue CPU value immediately before launching that item. If `Use PBGui Market Data` is enabled there as well, PBGui also sets `backtest.ohlcv_source_dir` on the launch copy, regardless of the value stored in the config editor.
 The log dashboard summary now uses the **CPU** field for the configured optimizer cores. Hovering that CPU value opens an htop-like per-core view with memory, swap, and load-average details, and that hover keeps updating live while it stays open.
 If an optimize launcher PID goes stale while the actual `optimize.py` job is still alive, PBGui now re-attaches the queue row to the live process so the item stays visible as running and **Stop** still terminates the real job.
 If multiple queue rows point at the same config, PBGui now binds the live process only to the row whose own optimize log is actually attached to that process. Other rows no longer inherit that same `running` state just because they share the config file.
@@ -207,6 +217,8 @@ Use **Continue Optimize** when you want to start a fresh optimize run seeded fro
 
 Use **Open Config** when you want to load the first Pareto config from that result into the editor as a draft without adding any seed metadata.
 
+PB8 result actions are enabled only when their required artifacts exist. Exact **Resume Checkpoint** requires a compatible readable checkpoint, non-empty `all_results.bin`, `write_all_results`, and a recoverable config; creation of the managed config and queue item is transactional. PBGui blocks deletion while an optimizer, continuation queue item, or Pareto Dash session still owns the result. PB8 suite results expose named scenario metrics, `mean`, `min`, `max`, `std`, and `median`, and the 3D view normalizes those nested values without modifying native result files.
+
 ---
 
 ## Paretos panel
@@ -229,7 +241,7 @@ Toolbar controls:
 |--------|-------------|
 | **Mode chip** | Shows whether the selected result is a regular result, a suite result, or a legacy pareto format |
 | **Scenario** | For suite results, switches the summary between **Aggregated** and one concrete scenario label |
-| **Statistic** | For aggregated suite view and regular single-result paretos, switches the summary stat between `mean`, `min`, `max`, and `std` |
+| **Statistic** | For aggregated suite view and regular single-result paretos, switches the summary stat between `mean`, `min`, `max`, `std`, and `median` |
 
 Table columns:
 

@@ -137,17 +137,19 @@ When you select multiple completed queue rows and click **📈 Compare**, PBGui 
 
 ### Settings modal
 
-The queue settings dialog now also includes `Use PBGui Market Data`. When that setting is enabled, PBGui rewrites `backtest.ohlcv_source_dir` to the current PBGui market-data root immediately before each queued or manual backtest launch, regardless of the path stored in the config editor.
+PB7 and PB8 use one shared queue settings configuration. Saving it on either Backtest page updates both workers. The CPU value is one global automatic PB7/PB8 process limit, not a separate allowance per version. The dialog renders immediately from its current state and refreshes authoritative host values in the background without overwriting edits.
+
+The queue settings dialog also includes `Use PBGui Market Data`. When that setting is enabled, PBGui rewrites `backtest.ohlcv_source_dir` to the current PBGui market-data root immediately before each queued or manual backtest launch, regardless of the path stored in the config editor.
 
 | Setting | Description |
 |---------|-------------|
-| **CPU** | Number of parallel backtest processes (max = CPU core count) |
-| **Autostart** | When enabled the worker automatically picks up `queued` jobs |
+| **CPU** | Global number of automatic PB7/PB8 backtest processes (max = CPU core count) |
+| **Autostart** | When enabled both version workers automatically pick up `queued` jobs within the shared CPU limit |
 | **Use PBGui Market Data** | Overrides `backtest.ohlcv_source_dir` right before launch so queued jobs always use the PBGui-managed OHLCV dataset |
-| **HLCVS Cache Cleanup — Enabled** | Periodically delete old directories under `pb7/caches/hlcvs_data` and `pb7/caches/ohlcvs/materialized` |
+| **HLCVS Cache Cleanup — Enabled** | Periodically clean the version-specific PB7 and PB8 cache roots |
 | **Retention (days)** | Delete directories older than this many days (default: 7) |
 | **Check interval (h)** | How often the cleanup runs in hours (default: 24) |
-| **🧹 Clean Now** | Run the cleanup immediately using the current retention value across both cache roots; reports how many directories were removed and how much disk space was freed |
+| **🧹 Clean Now** | Run cleanup immediately for the currently open PB7 or PB8 page runtime |
 
 ---
 

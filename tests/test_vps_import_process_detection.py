@@ -3012,8 +3012,8 @@ def test_v7_host_dropdown_blocks_inactive_credential_capability(tmp_path: Path, 
     assert "has no active CMC credential pool" in message
 
 
-def test_v7_get_hosts_keeps_host_list_and_adds_details(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The v7 hosts endpoint keeps hosts[] and adds dropdown capability details."""
+def test_v7_get_hosts_returns_names_without_capability_rebuild(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The v7 editor host list does not rebuild unrelated credential diagnostics."""
     host = "test-vps"
     (tmp_path / "pbgui.ini").write_text("[main]\npbname=master\n", encoding="utf-8")
     monitor = SimpleNamespace(
@@ -3023,13 +3023,16 @@ def test_v7_get_hosts_keeps_host_list_and_adds_details(tmp_path: Path, monkeypat
     )
     monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
     monkeypatch.setattr(v7_instances, "_monitor", monitor)
+    monkeypatch.setattr(
+        v7_instances,
+        "_host_dropdown_detail",
+        lambda _host: pytest.fail("host dropdown must not rebuild credential details"),
+    )
 
     response = v7_instances.get_hosts(session=SimpleNamespace())
 
     assert response["hosts"] == ["disabled", "master", host]
-    details = {item["name"]: item for item in response["host_details"]}
-    assert details[host]["credential_active"] is True
-    assert details[host]["dynamic_ignore_allowed"] is True
+    assert "host_details" not in response
 
 
 def test_v7_dynamic_ignore_does_not_treat_coindata_service_as_cmc_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

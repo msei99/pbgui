@@ -1062,7 +1062,6 @@ var allSymbols = [];     // available symbols for current exchange
 var allTags = [];        // available tags for current exchange
 var allUsers = [];       // [{name, exchange}]
 var allHosts = [];       // [string]
-var hostDetailsByName = {}; // {host: {credential_active, credential_reason, generations, active count}}
 var dirty = false;
 var draftOverrideConfigs = {};
 var _extraLiveKeys = []; // unknown live.* keys not in the GUI form
@@ -1074,7 +1073,6 @@ var _symbolsAndTagsLoadSeq = 0;
 var _symbolsAndTagsLoadPromise = Promise.resolve();
 var _hostCapabilityGeneration = 0;
 var _hostCapabilityController = null;
-var _hostCapabilityTimer = null;
 
 /* live.* keys handled by the GUI form or intentionally hidden/deprecated. */
 var KNOWN_LIVE_PARAMS = new Set([
@@ -1578,26 +1576,8 @@ async function goBalanceCalc() {
 /* ─── Load Data ────────────────────────────────────────────── */
 async function init() {
   try {
-    // Capability diagnostics are optional during editor startup; config loading is not.
     var usersResp = await apiFetch('/users').then(function(r) { return r.json(); });
-    var hostsResp;
-    try {
-      hostsResp = await requestHostCapabilities();
-    } catch (capabilityError) {
-      if (capabilityError.name === 'AbortError') throw capabilityError;
-      hostsResp = { hosts: ['disabled'], host_details: [], generated_at: Date.now() / 1000 };
-      toast('Host capability status is unknown: ' + capabilityError.message, 'warn');
-    }
     allUsers = usersResp.users || [];
-    allHosts = hostsResp.hosts || [];
-    hostDetailsByName = {};
-    (hostsResp.host_details || []).forEach(function(item) {
-      var name = String((item || {}).name || '').trim();
-      if (name) hostDetailsByName[name] = Object.assign({}, item || {}, {
-        credential_stale: false,
-        credential_refreshed_at: hostsResp.generated_at || Date.now() / 1000
-      });
-    });
 
     // Populate user dropdown
     var userSel = document.getElementById('f-user');
@@ -1608,9 +1588,6 @@ async function init() {
       opt.textContent = u.name;
       userSel.appendChild(opt);
     });
-
-    // Populate host dropdown
-    populateHosts();
 
     // Populate import user dropdown
     var impUser = document.getElementById('import-user');
@@ -1636,6 +1613,10 @@ async function init() {
       paramStatus = draftResp.param_status || {};
       draftOverrideConfigs = draftResp.override_configs || {};
       _fromBacktestConfig = (cfg.pbgui || {}).from_backtest_config || '';
+      var configuredHost = String(((cfg.pbgui || {}).enabled_on) || '').trim();
+      allHosts = ['disabled'];
+      if (configuredHost && configuredHost !== 'disabled') allHosts.push(configuredHost);
+      populateHosts();
       coinOvInit('coin-overrides-container', { apiBase: API_BASE });
       coinOvSetConfigName(IS_NEW === 'true' ? '' : INSTANCE_NAME);
       populateForm();
@@ -1653,6 +1634,10 @@ async function init() {
       }
         cfg = await fetchTemplateConfig(allUsers.length > 0 ? allUsers[0].name : '');
         paramStatus = {};
+      var configuredHost = String(((cfg.pbgui || {}).enabled_on) || '').trim();
+      allHosts = ['disabled'];
+      if (configuredHost && configuredHost !== 'disabled') allHosts.push(configuredHost);
+      populateHosts();
       coinOvInit('coin-overrides-container', { apiBase: API_BASE });
       coinOvSetConfigName('');
       populateForm();
@@ -1661,6 +1646,10 @@ async function init() {
       var cfgResp = await apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/config').then(function(r) { return r.json(); });
       cfg = cfgResp.config || {};
       paramStatus = cfgResp.param_status || {};
+      var configuredHost = String(((cfg.pbgui || {}).enabled_on) || '').trim();
+      allHosts = ['disabled'];
+      if (configuredHost && configuredHost !== 'disabled') allHosts.push(configuredHost);
+      populateHosts();
       coinOvInit('coin-overrides-container', { apiBase: API_BASE });
       coinOvSetConfigName(INSTANCE_NAME);
       populateForm();
@@ -1674,9 +1663,6 @@ async function init() {
     document.getElementById('f-enabled-on').addEventListener('focus', function() {
       refreshHostCapabilities();
     });
-    _hostCapabilityTimer = window.setInterval(function() {
-      if (!document.hidden) refreshHostCapabilities();
-    }, 60000);
 
   } catch (e) {
     toast('Failed to initialize: ' + e.message, 'err');
@@ -1708,14 +1694,6 @@ async function refreshHostCapabilities() {
     var payload = await requestHostCapabilities();
     if (!payload) return;
     allHosts = payload.hosts || allHosts;
-    hostDetailsByName = {};
-    (payload.host_details || []).forEach(function(item) {
-      var name = String((item || {}).name || '').trim();
-      if (name) hostDetailsByName[name] = Object.assign({}, item || {}, {
-        credential_stale: false,
-        credential_refreshed_at: payload.generated_at || Date.now() / 1000
-      });
-    });
     populateHosts();
     var select = document.getElementById('f-enabled-on');
     if (selected && Array.prototype.some.call(select.options, function(option) { return option.value === selected && !option.disabled; })) {
@@ -1723,12 +1701,7 @@ async function refreshHostCapabilities() {
     }
   } catch (error) {
     if (error.name === 'AbortError') return;
-    Object.keys(hostDetailsByName).forEach(function(name) {
-      if (name === 'disabled') return;
-      hostDetailsByName[name].credential_stale = true;
-      hostDetailsByName[name].credential_stale_reason = error.message || 'Capability refresh failed';
-    });
-    populateHosts();
+    console.warn('Host list refresh failed:', error);
   }
 }
 
@@ -1742,56 +1715,22 @@ function populateHosts() {
   sel.appendChild(disOpt);
   allHosts.forEach(function(h) {
     if (h === 'disabled') return;
-    var detail = hostDetailsByName[h] || {};
     var opt = document.createElement('option');
     opt.value = h;
-    opt.textContent = h + ' (' + hostCmcStatusLabel(h) + ')';
-    opt.dataset.dynamicIgnoreAllowed = detail.dynamic_ignore_allowed === true ? '1' : '0';
-    opt.dataset.cmcStatus = detail.credential_active === true ? 'ok' : (detail.credential_active === false ? 'missing' : 'unknown');
+    opt.textContent = h;
     sel.appendChild(opt);
   });
   updateEnabledOnAvailability();
 }
 
-function hostDynamicIgnoreAllowed(hostname) {
-  var host = String(hostname || '').trim();
-  if (!host || host === 'disabled') return true;
-  var detail = hostDetailsByName[host] || {};
-  return detail.credential_stale !== true && detail.credential_active === true && detail.dynamic_ignore_allowed === true;
-}
-
-function hostCmcStatusLabel(hostname) {
-  var detail = hostDetailsByName[String(hostname || '').trim()] || {};
-  var values = [];
-  if (detail.credential_protocol_version != null) values.push('protocol ' + detail.credential_protocol_version);
-  if (detail.cmc_catalog_generation != null) values.push('catalog generation ' + detail.cmc_catalog_generation);
-  if (detail.cmc_materialized_generation != null) values.push('materialized generation ' + detail.cmc_materialized_generation);
-  if (detail.cmc_active_key_count != null) values.push('active keys ' + detail.cmc_active_key_count);
-  var suffix = values.length ? ' (' + values.join(', ') + ')' : '';
-  var reason = String(detail.credential_reason || '').trim();
-  if (detail.credential_stale) return 'CMC pool status stale: ' + (detail.credential_stale_reason || reason || 'capability refresh failed') + suffix;
-  if (detail.credential_active === false) return 'CMC pool inactive: ' + (reason || 'no active materialized credentials') + suffix;
-  if (detail.credential_active !== true) return 'CMC pool status unknown: ' + (reason || 'capability has not been reported') + suffix;
-  return 'CMC pool active' + suffix;
-}
-
 function updateEnabledOnAvailability() {
   var sel = document.getElementById('f-enabled-on');
   if (!sel) return;
-  var dynamicIgnore = getChk('f-dynamic-ignore');
   Array.prototype.forEach.call(sel.options, function(opt) {
-    if (!opt || opt.value === 'disabled') {
-      opt.disabled = false;
-      return;
-    }
-    var blocked = dynamicIgnore && !hostDynamicIgnoreAllowed(opt.value);
-    opt.disabled = blocked;
-    opt.textContent = opt.value + ' (' + hostCmcStatusLabel(opt.value) + ')';
+    if (!opt) return;
+    opt.disabled = false;
+    opt.textContent = opt.value;
   });
-  if (dynamicIgnore && sel.value !== 'disabled' && !hostDynamicIgnoreAllowed(sel.value)) {
-    toast(sel.value + ' cannot run dynamic_ignore: ' + hostCmcStatusLabel(sel.value), 'warn');
-    sel.value = 'disabled';
-  }
 }
 
 async function fetchTemplateConfig(user) {
@@ -2425,7 +2364,6 @@ async function saveConfig() {
     if (!ensureRawJsonValidForSave()) return;
     if (!ensureStructuredJsonFieldsValidForSave()) return;
     if (!validateExecutionSyncFieldsForSave()) return;
-    if (!validateDynamicIgnoreTargetForSave()) return;
     var config = collectConfig();
     var name = IS_NEW === 'true' ? config.live.user : INSTANCE_NAME;
 
@@ -2546,7 +2484,6 @@ async function doCopyToUser() {
     if (!ensureRawJsonValidForSave()) return;
     if (!ensureStructuredJsonFieldsValidForSave()) return;
     if (!validateExecutionSyncFieldsForSave()) return;
-    if (!validateDynamicIgnoreTargetForSave()) return;
 
     var config = collectConfig();
     var copyConfig = JSON.parse(JSON.stringify(config));
@@ -2769,18 +2706,6 @@ function updateDynamicIgnorePreview() {
   if (show) fetchDynamicIgnorePreview();
 }
 
-function validateDynamicIgnoreTargetForSave() {
-  if (!getChk('f-dynamic-ignore')) return true;
-  var enabledOn = getVal('f-enabled-on') || 'disabled';
-  if (hostDynamicIgnoreAllowed(enabledOn)) return true;
-  window.PBGuiDialogs.alert({
-    title: 'Save blocked',
-    message: enabledOn + ' cannot run dynamic_ignore: ' + hostCmcStatusLabel(enabledOn) + '. Activate and materialize the Cluster CMC pool on that host first.',
-    confirmText: 'OK'
-  });
-  return false;
-}
-
 async function fetchDynamicIgnorePreview() {
   var user = getVal('f-user');
   var exchange = '';
@@ -2806,12 +2731,6 @@ async function fetchDynamicIgnorePreview() {
 }
 
 document.getElementById('f-dynamic-ignore').addEventListener('change', updateDynamicIgnorePreview);
-document.getElementById('f-enabled-on').addEventListener('change', function() {
-  if (getChk('f-dynamic-ignore') && !hostDynamicIgnoreAllowed(this.value)) {
-    toast(this.value + ' cannot run dynamic_ignore: ' + hostCmcStatusLabel(this.value), 'warn');
-    this.value = 'disabled';
-  }
-});
 ['f-max-cancel', 'f-max-create'].forEach(function(id) {
   document.getElementById(id).addEventListener('input', function() {
     syncExecutionSyncFieldBounds(id);

@@ -389,23 +389,20 @@ def test_monitor_collectors_do_not_probe_legacy_cmc_ini_or_credits() -> None:
         assert 'cfg.get("coinmarketcap", "credits_left"' not in source
 
 
-def test_v7_frontend_explains_pool_state_and_generations_without_secret() -> None:
-    """V7 editor wording exposes capability diagnostics but never a credential value."""
+def test_v7_frontend_keeps_host_selection_simple_and_secret_free() -> None:
+    """V7 editor shows host names without credential diagnostics or values."""
 
     source = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
 
-    assert "CMC pool inactive:" in source
-    assert "CMC pool status unknown:" in source
-    assert "catalog generation " in source
-    assert "materialized generation " in source
-    assert "active keys " in source
-    assert "CMC pool status stale:" in source
     assert "_hostCapabilityGeneration" in source
     assert "_hostCapabilityController" in source
     assert "request_id=" in source
-    assert "detail.credential_stale !== true" in source
-    assert "Host capability status is unknown:" in source
-    assert "hostsResp = { hosts: ['disabled']" in source
+    assert "host_details" not in source
+    assert "hostCmcStatusLabel" not in source
+    assert "hostDynamicIgnoreAllowed" not in source
+    assert "opt.textContent = h;" in source
+    assert source.count("refreshHostCapabilities();") == 1
+    assert "document.getElementById('f-enabled-on').addEventListener('focus'" in source
     assert LEGACY_FIELD not in source
 
 

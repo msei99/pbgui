@@ -123,6 +123,54 @@ def test_overview_provisional_detail_and_sidebar_share_agent_contract() -> None:
     assert "updatesNum = Number.isFinite(updatesCount) ? updatesCount : 'N/A'" in source
 
 
+def test_pb8_versions_render_in_overview_and_host_details() -> None:
+    """PB8 telemetry already emitted by the backend must be visible on both surfaces."""
+    source = HTML_PATH.read_text(encoding="utf-8")
+    for key, label in (("pb8", "PB8"), ("pb8_branch", "PB8 Branch"), ("pb8_github", "PB8 GitHub")):
+        assert f"key: '{key}', label: '{label}'" in source
+    overview = _extract_function(source, "renderOverviewTable")
+    assert "renderOverviewVersionCell(row.pb8, row.pb8_github)" in overview
+    assert "esc(row.pb8_branch || '-')" in overview
+    assert "renderOverviewGithubCell(row.pb8_github)" in overview
+
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in (
+            "esc",
+            "getOverviewVersionCore",
+            "getOverviewVersionTone",
+            "getOverviewGithubTarget",
+            "getVersionStatusSub",
+            "getSystemHeaderModel",
+            "renderSystemHeader",
+        )
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const store = {{hostname: 'manibot01'}};
+        function formatLatency() {{ return null; }}
+        function computeUptime() {{ return null; }}
+        {functions}
+        const status = {{name: 'manibot01', online: true, ssh_online: true}};
+        const summary = {{
+          name: 'manibot01', pb8: 'v8.1.2 /3.12', pb8_branch: 'master (abcdef0)',
+          pb8_github: '❌ v8.1.3 (1234567)', package_status: {{state: 'ok', available: true, upgrades: 0}}
+        }};
+        const model = getSystemHeaderModel(status, summary, false, null);
+        assert.equal(model.pb8Ver, 'v8.1.2 /3.12');
+        assert.equal(model.pb8Tone, 'error');
+        assert.equal(model.pb8Sub, 'master (abcdef0) -> v8.1.3 (1234567)');
+        const html = renderSystemHeader(status, summary, false, null);
+        assert.match(html, /data-role='pb8-label'>PB8 ⚠/);
+        assert.ok(html.includes("data-role='pb8-ver'>v8.1.2 /3.12"));
+        assert.ok(html.includes("data-role='pb8-branch'>master (abcdef0) -&gt; v8.1.3 (1234567)"));
+        """
+    )
+    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+
 def test_vps_manager_page_is_cookie_only() -> None:
     """The browser page must not contain or configure a bearer/session token."""
 

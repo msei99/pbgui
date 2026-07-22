@@ -12,6 +12,8 @@ Die Seite ist in vier Sidebar-Bereiche aufgeteilt:
 | **Results** | Abgeschlossene Optimize-Ergebnisse durchsuchen |
 | **Paretos** | Die Pareto-Dateien eines ausgewählten Ergebnis-Sets prüfen |
 
+Dieselbe Seite dient zugleich als PBv8-Optimize-Editor. Der Versionsadapter laesst das PB7-Verhalten unveraendert, waehrend PB8 sein Strategy-Schema, Optimizer-Metadaten, Queue, Results, native OHLCV-Werkzeuge und Runtime-Controls aus dem installierten PB8-Checkout bezieht. PB8 unterstuetzt `trailing_martingale`, `ema_anchor` und `trailing_grid_v7`; beim Umschalten bleiben alle angepassten inaktiven Strategy-Bloecke erhalten.
+
 ---
 
 ## Configs-Bereich
@@ -37,6 +39,10 @@ Archiv-Importe werden als lokale Optimize-Configs gespeichert, bevor der Editor 
 Wenn du eine bestehende Optimize-Config öffnest und vor dem Speichern `config_name` änderst, speichert PBGui diesen Editorzustand jetzt als neue Config-Datei unter dem neuen Namen. Die ursprünglich geöffnete Config bleibt unverändert; das ist also ein Save-as-new und kein Rename der alten Datei.
 
 Mit dem Suchfeld lässt sich nach Config-Namen filtern. Die Config-Zeilen unterstützen jetzt dieselbe Click-and-Drag-Mehrfachauswahl wie Backtest, und rechts werden kompakte Icon-Aktionen statt Textbuttons verwendet.
+
+Jede PBv7-Config-Zeile bietet ausserdem **V8**. Die Aktion verwendet PB8s offizielle Optimize-Config-Migration, speichert den Migrationsreport beim neuen PB8-Bundle und oeffnet das Ergebnis im gemeinsamen PBv8-Optimize-Editor. Wenn PB8 ungeloeste Felder meldet, stoppt die Migration, statt Werte zu erraten.
+
+PBv7-Pareto-Zeilen bieten dieselbe **V8**-Aktion fuer einzelne Kandidaten-Configs. Akzeptiert werden nur Pareto-JSON-Dateien innerhalb des verwalteten PB7-Resultroots.
 
 ### Strukturierter Editor
 
@@ -69,6 +75,8 @@ Hauptbereiche im Editor:
 | **Raw Config JSON** | Vollständiges Basis-JSON der Config; dient beim Speichern als Grundlage, damit unberührte Abschnitte erhalten bleiben, inklusive automatischer Zwei-Wege-Synchronisierung und Live-Validierung |
 
 Der Editor zeigt jetzt bewusst nur noch drei sichtbare Hauptüberschriften: **Market & Universe**, **Optimization** und **Run Settings**. Ziel ist weniger Label-Rauschen bei weiterhin klarer Reihenfolge: erst Datenbasis und Coin-Universum, dann der Suchraum des Optimizers, danach die Laufzeit-Einstellungen. Das entspricht zugleich den technischen Abhängigkeiten der Seite: Pymoo `auto` bestimmt den effektiven Algorithmus aus der aktuellen Anzahl der Scoring-Ziele, und Pymoo Mutation `auto` leitet sich aus der Anzahl aktiver Bounds ab.
+
+Unter PB8 wird `polish_percentage` als normaler Prozentwert angezeigt, aber als PB8s Bruchwert fuer `--polish-pct` gespeichert; `20` im Editor wird beim Start also zu `0.20`. PB8 behaelt ausserdem die automatische pymoo-Populationsgroesse bei: NSGA-II nutzt seinen nativen Default `250`, NSGA-III leitet Reference Directions mit PB8s Budget `500` ab. Unbekannte zukuenftige `fixed_runtime_overrides` und inaktive Strategy-Bloecke bleiben beim Bearbeiten bekannter strukturierter Controls im Raw-JSON erhalten.
 
 Die Eingabe `n_cpus` in **Run Settings** ist jetzt auf die CPU-Anzahl des Hosts begrenzt, auf dem PBGui/Optimize läuft. Der strukturierte Editor kann damit keine höhere Worker-Zahl mehr anfordern, als die Maschine tatsächlich hat.
 
@@ -151,6 +159,8 @@ Das Ziehen über Zeilen zum Auswählen oder Deselektieren orientiert sich jetzt 
 PBGui berechnet die sichtbare Queue-Auswahl bei jedem Drag-Update außerdem neu aus dem beim Mouse-Down erfassten Ausgangszustand. Wenn du beim Selektieren oder Deselektieren kurz eine Zeile zu weit ziehst und den Bereich danach wieder verkleinerst, werden Zeilen außerhalb des finalen Bereichs korrekt wiederhergestellt, statt versehentlich verloren zu bleiben.
 Live-Websocket-Updates der Queue rendern die Tabelle dabei jetzt auch nicht mehr mitten in dieser Mausaktion neu. PBGui wartet mit dem Nachziehen des neuesten Queue-Refreshs bis zum Ende der Auswahl, sodass sich das Selektieren wieder stabil anfühlt wie in der Results-Tabelle.
 
+Bei PB8 setzt ein permanenter Startfehler nur die betroffene Zeile auf einen handlungsfaehigen Fehlerstatus, sodass eine defekte erste Zeile spaetere Autostart-Eintraege nicht blockiert. Update-/Runtime-Lock-Konflikte bleiben fuer einen erneuten Versuch gequeued. Beim Start gleicht PBGui stale PID-, Snapshot-, Launch- und Runner-Artefakte ab, ohne unverifizierte Prozesse zu signalisieren; **Repair** baut den unveraenderlichen Queue-Snapshot aus der ausgewaehlten verwalteten Config neu. Der PB8-Queue-Controller ist im **Services Monitor** sichtbar; sein Stop pausiert nur die Planung und beendet keine detached Optimizer.
+
 ### Log-Viewer
 
 Jede Queue-Zeile hat eine **Log**-Aktion.
@@ -161,7 +171,7 @@ Neuere Queue-Einträge behalten zusätzlich einen eingebetteten Config-Snapshot.
 Wenn ein älterer Queue-Eintrag noch aus der Zeit vor diesen Snapshots stammt und sein ursprünglicher Config-Pfad fehlt, während mehrere passende Configs existieren, öffnet PBGui jetzt direkt ein Auswahl-Modal mit **Open**-Buttons für diese Kandidaten statt nur kurz einen Toast-Fehler anzuzeigen.
 PBGui lehnt **Requeue** jetzt außerdem für Queue-Zeilen ab, deren Config weiterhin nicht startbar ist. Solche Zeilen behalten ihren aktuellen `error`-Status und das vorhandene Optimize-Log, bis die Config wirklich korrigiert wurde, statt in einen irreführenden `queued`-Status ohne startbaren Job zurückgesetzt zu werden.
 
-Die Queue braucht damit keinen manuellen Refresh-Knopf mehr in der Sidebar. Sie aktualisiert sich laufend über den Websocket-Feed, und der **Settings**-Dialog übernimmt jetzt die Autostart-Steuerung statt einer permanent sichtbaren Sidebar-Checkbox. Wenn Autostart aktiv ist, schreibt PBGui vor jedem automatischen Start `optimize.n_cpus` der gequeueeten Config auf den im Dialog gesetzten Queue-CPU-Wert um. Wenn dort zusätzlich `Use PBGui Market Data` aktiviert ist, setzt PBGui vor dem Start außerdem `backtest.ohlcv_source_dir` auf das aktuelle PBGui-Market-Data-Root, unabhängig vom im Config-Editor gespeicherten Pfad.
+Die Queue braucht damit keinen manuellen Refresh-Knopf mehr in der Sidebar. Sie aktualisiert sich laufend über den Websocket-Feed, und der **Settings**-Dialog übernimmt jetzt die Autostart-Steuerung statt einer permanent sichtbaren Sidebar-Checkbox. PB7 und PB8 verwenden diese eine gemeinsame Settings-Konfiguration und einen globalen automatischen Optimizer-Slot; Speichern auf einer der beiden Seiten steuert daher beide Queues. Wenn Autostart aktiv ist, setzt PBGui vor jedem automatischen Start `optimize.n_cpus` in der Launch-Kopie auf den im Dialog gesetzten Queue-CPU-Wert. Wenn dort zusätzlich `Use PBGui Market Data` aktiviert ist, setzt PBGui in der Launch-Kopie außerdem `backtest.ohlcv_source_dir` auf das aktuelle PBGui-Market-Data-Root, unabhängig vom im Config-Editor gespeicherten Pfad.
 Die Log-Dashboard-Zusammenfassung nutzt das Feld **CPU** jetzt für die konfigurierten Optimizer-Kerne. Wenn du über diesen CPU-Wert hoverst, öffnet sich eine htop-ähnliche Per-Core-Ansicht mit Speicher-, Swap- und Load-Average-Details, die sich während des offenen Hovers live weiter aktualisiert.
 Wenn der ursprüngliche Launcher-PID eines Optimizers veraltet ist, der eigentliche `optimize.py`-Prozess aber noch läuft, hängt PBGui die Queue-Zeile jetzt wieder an den Live-Prozess an. Dadurch bleibt der Eintrag als laufend sichtbar und **Stop** beendet weiterhin den echten Job.
 Wenn mehrere Queue-Zeilen dieselbe Config referenzieren, bindet PBGui den Live-Prozess jetzt nur noch an die Zeile, deren eigenes Optimize-Log wirklich zu diesem Prozess gehört. Andere Zeilen übernehmen diesen `running`-Status nicht mehr nur wegen der gemeinsamen Config-Datei.
@@ -207,6 +217,8 @@ Mit **Continue Optimize** lässt sich ein neuer Optimize-Lauf starten, der mit d
 
 Mit **Open Config** lässt sich die erste Pareto-Config dieses Ergebnisses als Draft im Editor öffnen, ohne zusätzliche Seed-Metadaten zu setzen.
 
+PB8-Result-Aktionen sind nur aktiv, wenn ihre benoetigten Artefakte existieren. Ein exaktes **Resume Checkpoint** verlangt einen kompatiblen lesbaren Checkpoint, eine nicht leere `all_results.bin`, `write_all_results` und eine wiederherstellbare Config; das Erzeugen von verwalteter Config und Queue-Eintrag erfolgt transaktional. PBGui blockiert das Loeschen, solange ein Optimizer, ein Continue-Queue-Eintrag oder eine Pareto-Dash-Session das Result besitzt. PB8-Suite-Results zeigen benannte Szenario-Metriken sowie `mean`, `min`, `max`, `std` und `median`; die 3D-Ansicht normalisiert diese verschachtelten Werte, ohne native Result-Dateien zu veraendern.
+
 ---
 
 ## Paretos-Bereich
@@ -229,7 +241,7 @@ Toolbar-Steuerungen:
 |--------|-------------|
 | **Mode-Chip** | Zeigt, ob das ausgewählte Ergebnis ein normales Result, ein Suite-Result oder ein Legacy-Pareto-Format ist |
 | **Scenario** | Schaltet bei Suite-Results die Summary zwischen **Aggregated** und einem konkreten Szenario um |
-| **Statistic** | Schaltet für aggregierte Suite-Ansicht und normale Single-Result-Paretos zwischen `mean`, `min`, `max` und `std` um |
+| **Statistic** | Schaltet für aggregierte Suite-Ansicht und normale Single-Result-Paretos zwischen `mean`, `min`, `max`, `std` und `median` um |
 
 Tabellenspalten:
 

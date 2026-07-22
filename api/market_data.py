@@ -1,5 +1,6 @@
 """FastAPI endpoints for market data status monitoring and standalone page shell."""
 
+import asyncio
 from datetime import date as _date, datetime as _datetime
 import shutil
 import shlex
@@ -688,13 +689,14 @@ async def update_market_data_status_snapshot(request: Request) -> dict[str, Any]
     if client_host not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(status_code=403, detail="Internal endpoint")
     try:
-        body = await request.json()
+        raw_body = await request.body()
+        body = await asyncio.to_thread(json.loads, raw_body)
     except Exception:
         body = {}
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Invalid market data status payload")
     global _market_data_status_snapshot
-    _market_data_status_snapshot = dict(body)
+    _market_data_status_snapshot = {**_market_data_status_snapshot, **body}
     return {"ok": True}
 
 

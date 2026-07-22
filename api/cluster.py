@@ -4130,6 +4130,68 @@ async def _push_missing_operations_to_remote(
     return result
 
 
+async def sync_and_materialize_v7_instance(instance_name: str, expected_version: int | str | None = None) -> dict[str, Any]:
+    """Push one newly recorded V7 config state directly to its assigned node."""
+
+    try:
+        _validate_instance_name(instance_name)
+    except ClusterStateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    snapshot = _load_cluster_snapshot()
+    desired_state = snapshot.get("desired_state") if isinstance(snapshot.get("desired_state"), dict) else {}
+    instances = desired_state.get("instances") if isinstance(desired_state.get("instances"), dict) else {}
+    instance = instances.get(instance_name) if isinstance(instances.get(instance_name), dict) else None
+    if not instance:
+        raise HTTPException(status_code=409, detail=f"Cluster desired state has no V7 instance '{instance_name}'")
+
+    version = str(instance.get("version") or "")
+    if expected_version is not None and version != str(expected_version):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cluster desired state for '{instance_name}' is version {version or 'unknown'}, expected {expected_version}",
+        )
+
+    assigned_node_id = str(instance.get("assigned_host") or "")
+    if not assigned_node_id:
+        raise HTTPException(status_code=409, detail=f"V7 instance '{instance_name}' has no assigned Cluster node")
+
+    identity = snapshot["identity"]
+    local_node_id = str(identity.get("node_id") or "")
+    if assigned_node_id == local_node_id:
+        materialization = _materialize_v7_configs(_cluster_root(), write=True)
+        return {
+            "ok": True,
+            "instance": instance_name,
+            "version": version,
+            "node_id": local_node_id,
+            "hostname": _get_master_pbname(),
+            "local": True,
+            "push": {"ok": True, "counts": {"pushed": 0}},
+            "materialization": materialization,
+        }
+
+    node = _node_for_id(_node_list(snapshot["cluster_nodes"]), assigned_node_id)
+    if not node:
+        raise HTTPException(status_code=409, detail=f"Assigned Cluster node for '{instance_name}' is unavailable")
+
+    push = await _push_missing_operations_to_remote(node, identity, rebuild=True)
+    materialization = await _run_remote_materialize_command(node, identity, "materialize-v7", timeout=120)
+    counts = materialization.get("counts") if isinstance(materialization.get("counts"), dict) else {}
+    if not materialization.get("ok") or int(counts.get("error") or 0) > 0:
+        raise HTTPException(status_code=409, detail=f"Remote V7 materialization failed for '{instance_name}'")
+    return {
+        "ok": True,
+        "instance": instance_name,
+        "version": version,
+        "node_id": assigned_node_id,
+        "hostname": str(node.get("pbname") or node.get("hostname") or ""),
+        "local": False,
+        "push": push,
+        "materialization": materialization,
+    }
+
+
 async def _run_remote_push_job(job_id: str, node: dict[str, Any], identity: dict[str, Any]) -> None:
     """Run one remote operation push in the background and update local progress."""
 

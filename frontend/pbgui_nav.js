@@ -20,6 +20,10 @@
 (function () {
   'use strict';
 
+  var _restartEventSource = null;
+  var _restartRetryTimer = null;
+  var _restartPollTimer = null;
+
   /* ── config (read at runtime so global vars are already set) ── */
   function cfg() {
     var c = window.PBGUI_NAV_CONFIG || {};
@@ -72,7 +76,9 @@
       { page: 'v7_pareto_explorer',   icon: '&#127919;', label: 'Pareto Explorer'   }
     ]},
     { id: 'pbv8', label: 'PBv8', items: [
-      { page: 'v8_backtest',          icon: '&#9194;',   label: 'Backtest'          }
+      { page: 'v8_backtest',          icon: '&#9194;',   label: 'Backtest'          },
+      { page: 'v8_optimize',          icon: '&#9881;',   label: 'Optimize'          },
+      { page: 'v8_pareto_explorer',   icon: '&#9733;',   label: 'Pareto Explorer'   }
     ]}
   ];
 
@@ -992,7 +998,9 @@
     'v7_pareto_explorer': '/api/pareto-explorer/main_page',
     'v7_strategy_explorer': '/api/strategy-explorer/main_page',
     'info_balance_calc':  '/api/balance-calc/main_page',
-    'v8_backtest':        '/api/backtest-v8/main_page'
+    'v8_backtest':        '/api/backtest-v8/main_page',
+    'v8_optimize':        '/api/optimize-v8/main_page',
+    'v8_pareto_explorer': '/api/pareto-explorer/main_page?optimize_version=v8'
   };
 
   /* Every registered page must resolve to an existing EN/DE shared-help topic. */
@@ -1015,7 +1023,9 @@
     'v7_pareto_explorer':          '37_pareto_explorer',
     'v7_strategy_explorer':        '00_strategy_explorer_help',
     'info_balance_calc':           '38_balance_calc',
-    'v8_backtest':                 '42_pbv8_backtest'
+    'v8_backtest':                 '42_pbv8_backtest',
+    'v8_optimize':                 '43_pbv8_optimize',
+    'v8_pareto_explorer':          '43_pbv8_optimize'
   };
 
   function syncHelpOverlayState() {
@@ -1335,12 +1345,17 @@
       });
     }
 
-    /* Restart button: fetch once immediately, then keep live via SSE */
-    fetchRestartStatus(TOKEN, apiOrigin);
-    setInterval(function () { fetchRestartStatus(TOKEN, apiOrigin); }, 30000);
-
-    /* SSE: watch for needs_restart */
-    setupRestartSSE(TOKEN, apiOrigin);
+    function startRestartStatusWatch() {
+      stopRestartStatusWatch();
+      fetchRestartStatus(TOKEN, apiOrigin);
+      _restartPollTimer = setInterval(function () { fetchRestartStatus(TOKEN, apiOrigin); }, 30000);
+      setupRestartSSE(TOKEN, apiOrigin);
+    }
+    startRestartStatusWatch();
+    window.addEventListener('pagehide', stopRestartStatusWatch);
+    window.addEventListener('pageshow', function (event) {
+      if (event && event.persisted) startRestartStatusWatch();
+    });
   }
 
   function showRestartOverlay(origin, token) {
@@ -1429,8 +1444,10 @@
 
   function setupRestartSSE(token, apiOrigin) {
     if (!apiOrigin) return;
+    if (_restartEventSource) _restartEventSource.close();
     var url = apiOrigin + '/api/server-status/stream';
     var es = new EventSource(url, { withCredentials: true });
+    _restartEventSource = es;
     es.onmessage = function (e) {
       try {
         var data = JSON.parse(e.data);
@@ -1438,11 +1455,31 @@
       } catch (_) {}
     };
     es.onerror = function () {
+      if (_restartEventSource !== es) return;
       es.close();
+      _restartEventSource = null;
       fetchRestartStatus(token, apiOrigin);
-      /* retry after 15s */
-      setTimeout(function() { setupRestartSSE(token, apiOrigin); }, 15000);
+      if (_restartRetryTimer) clearTimeout(_restartRetryTimer);
+      _restartRetryTimer = setTimeout(function() {
+        _restartRetryTimer = null;
+        setupRestartSSE(token, apiOrigin);
+      }, 15000);
     };
+  }
+
+  function stopRestartStatusWatch() {
+    if (_restartEventSource) {
+      _restartEventSource.close();
+      _restartEventSource = null;
+    }
+    if (_restartRetryTimer) {
+      clearTimeout(_restartRetryTimer);
+      _restartRetryTimer = null;
+    }
+    if (_restartPollTimer) {
+      clearInterval(_restartPollTimer);
+      _restartPollTimer = null;
+    }
   }
 
   /* ── html escape helper ── */

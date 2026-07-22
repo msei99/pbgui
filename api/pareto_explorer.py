@@ -25,7 +25,7 @@ import pandas as pd
 from api.auth import SessionToken, require_auth
 from ParetoDataLoader import ParetoDataLoader
 from pareto_preset_generator import OPTIMIZE_PRESET_DIRECTIONS, build_optimize_preset
-from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION, load_ini, pb7dir, save_ini_section
+from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION, load_ini, pb7dir, pb8_runtime_status, save_ini_section
 
 router = APIRouter()
 
@@ -204,11 +204,35 @@ def _get_load_job(job_id: str) -> dict | None:
         return dict(job) if job is not None else None
 
 
-def _optimize_result_roots() -> list[Path]:
+def _optimize_result_roots_by_version() -> list[tuple[str, Path]]:
+    roots: list[tuple[str, Path]] = []
     try:
-        return [(Path(pb7dir()) / "optimize_results").expanduser().resolve()]
+        roots.append(("v7", (Path(pb7dir()) / "optimize_results").expanduser().resolve()))
     except Exception:
-        return []
+        pass
+    try:
+        pb8_dir = str(pb8_runtime_status().get("pb8dir") or "").strip()
+        if pb8_dir:
+            roots.append(("v8", (Path(pb8_dir) / "optimize_results").expanduser().resolve()))
+    except Exception:
+        pass
+    return roots
+
+
+def _optimize_result_roots() -> list[Path]:
+    return [root for _version, root in _optimize_result_roots_by_version()]
+
+
+def _result_optimize_version(result_dir: Path) -> str:
+    resolved = result_dir.resolve()
+    for version, root in _optimize_result_roots_by_version():
+        if resolved.is_relative_to(root):
+            return version
+    roots = _optimize_result_roots()
+    for index, root in enumerate(roots):
+        if resolved.is_relative_to(root):
+            return "v8" if index == 1 else "v7"
+    return "v7"
 
 
 def _resolve_result_dir(path: str) -> Path | None:
@@ -359,6 +383,7 @@ def _result_meta(result_dir: Path) -> dict:
     return {
         "path": str(result_dir),
         "name": result_dir.name,
+        "optimize_version": _result_optimize_version(result_dir),
         "has_all_results": all_results.exists(),
         "has_pareto_dir": pareto_dir.is_dir(),
         "pareto_count": pareto_count,
@@ -536,6 +561,7 @@ def _load_loader(
             return cached_loader
 
     loader = ParetoDataLoader(str(result_dir))
+    loader.optimize_version = _result_optimize_version(result_dir)
     if all_results_loaded:
         ok = loader.load(load_strategy=list(load_strategy), max_configs=max_configs, progress_callback=progress_callback)
     else:
@@ -3221,7 +3247,8 @@ def _build_server_refresh_bundle(loader: ParetoDataLoader, *, all_results_loaded
 def main_page(
     request: Request,
     result_path: str = Query(default="", description="Optimize result directory to open"),
-    session: SessionToken = Depends(require_auth),
+    optimize_version: str = Query(default="v7", description="Explorer generation when no result is selected"),
+    _session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
     html_path = Path(__file__).resolve().parent.parent / "frontend" / "v7_pareto_explorer.html"
     if not html_path.exists():
@@ -3236,10 +3263,14 @@ def main_page(
     api_base = origin + "/api/pareto-explorer"
     ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
 
-    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
     html = html.replace('"%%RESULT_PATH%%"', json.dumps(str(result_path or "")))
+    result_dir = _resolve_result_dir(result_path)
+    optimize_version = _result_optimize_version(result_dir) if result_dir else (
+        "v8" if str(optimize_version).strip().lower() == "v8" else "v7"
+    )
+    html = html.replace('"%%OPTIMIZE_VERSION%%"', json.dumps(optimize_version))
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
     html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
@@ -3255,10 +3286,14 @@ def main_page(
 @router.get("/session")
 def get_session(
     result_path: str = Query(default="", description="Optimize result directory to open"),
+    optimize_version: str = Query(default="v7", description="Explorer generation when no result is selected"),
     session: SessionToken = Depends(require_auth),
 ):
     result_dir = _resolve_result_dir(result_path)
     result_meta = _result_meta(result_dir) if result_dir else None
+    optimize_version = str((result_meta or {}).get("optimize_version") or (
+        "v8" if str(optimize_version).strip().lower() == "v8" else "v7"
+    ))
     load_strategy, max_configs = _load_pareto_defaults()
 
     load_payload = None
@@ -3285,7 +3320,7 @@ def get_session(
         "ok": True,
         "page": {
             "title": "Pareto Explorer",
-            "subtitle": "PBv7 Pareto Explorer",
+            "subtitle": f"PB{optimize_version} Pareto Explorer",
             "stages": [
                 {"key": "command_center", "label": "Command Center"},
                 {"key": "pareto_playground", "label": "Pareto Playground"},
@@ -3300,6 +3335,7 @@ def get_session(
         },
         "result": result_meta,
         "result_path": str(result_path or ""),
+        "optimize_version": optimize_version,
         "result_valid": bool(result_meta),
         "load": load_payload,
         "actions": {
@@ -3454,6 +3490,8 @@ def build_optimize_preset_preview(body: dict, session: SessionToken = Depends(re
             "bot_params": dict(getattr(config, "bot_params", {}) or {}),
             "suite_metrics": dict(getattr(config, "suite_metrics", {}) or {}),
             "optimize_settings": dict(getattr(config, "optimize_settings", {}) or {}),
+            "scoring_goals": dict(getattr(loader, "scoring_goals", {}) or {}),
+            "optimize_version": str(getattr(loader, "optimize_version", "v7") or "v7"),
             "config_index": config.config_index,
         },
         full_config_data=full_config,

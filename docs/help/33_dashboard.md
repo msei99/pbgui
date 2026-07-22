@@ -145,7 +145,7 @@ Per-row actions:
 
 All-position actions at the bottom of the dialog:
 - **Preview Panic**, **Preview Graceful stop**, **Preview TP only** show the config that would be saved without writing or syncing anything.
-- **Panic**, **Graceful stop**, **Take Profit Only** save the corresponding global PB7 forced mode for long and short positions, then sync the config to the bot host.
+- **Panic**, **Graceful stop**, **Take Profit Only** save the corresponding global PB7 forced mode for long and short positions, then immediately push and materialize the config on the assigned Cluster bot host. The action reports success only after that host has accepted the new config version; unreachable or stale targets return an error instead of a false synced message.
 
 Panic, Graceful Stop and Take Profit Only are Passivbot config/sync actions. They do not submit direct exchange orders. Use **Market close amount** when you explicitly want PBGui to send a direct reduce-only market order.
 

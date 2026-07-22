@@ -120,6 +120,30 @@ def _base_context() -> tuple[dict, dict]:
     return context, full_config
 
 
+def test_pb8_disabled_side_bounds_remain_unchanged() -> None:
+    """PB8 dotted side parameters must not be adjusted when that side is disabled."""
+    bounds = {
+        "short.risk.n_positions": [0, 10, 1],
+        "short.strategy.ema.entry_spacing": [0.0, 1.0, 0.01],
+    }
+    result = generator._build_new_bounds(
+        bounds=bounds,
+        bot_params={
+            "short.risk.n_positions": 0,
+            "short.risk.total_wallet_exposure_limit": 0.0,
+            "short.strategy.ema.entry_spacing": 0.5,
+        },
+        direction="Balanced (keep run scoring)",
+        risk_adjust=25,
+        window_pct=20.0,
+        near_map={},
+        expand_near_bounds=False,
+        near_bounds_expand_pct=0.0,
+    )
+
+    assert result == bounds
+
+
 def test_backtest_result_optimize_preset_uses_shared_generator(tmp_path, monkeypatch):
     """Backtest-result preset previews should use the same preset generator as Pareto Explorer."""
     _patch_metric_helpers(monkeypatch)
@@ -207,6 +231,112 @@ def _write_loader_result(tmp_path: Path, configs: list[dict], saved_pareto: dict
         (pareto_dir / f"{digest}.json").write_text(json.dumps(saved_pareto), encoding="utf-8")
 
     return result_dir
+
+
+def test_loader_reconstructs_pb8_compressed_results_and_snapshot_boundary(tmp_path: Path) -> None:
+    """PB8 incremental rows must replay sequentially and reset at each 100-entry snapshot."""
+    result_dir = tmp_path / "result_pb8"
+    result_dir.mkdir()
+    first = {
+        "config_version": "v8.0.0",
+        "bot": {"long": {"strategy": {"ema_anchor": {"entry": {"ema_dist": -0.1}}}, "risk": {"n_positions": 1}}},
+        "backtest": {"suite_enabled": True, "scenarios": [{"name": "base"}]},
+        "optimize": {
+            "compress_results_file": True,
+            "scoring": [{"metric": "adg", "goal": "max"}],
+            "bounds": {"long": {"strategy": {"ema_anchor": {"entry": {"ema_dist": [-0.2, 0.0]}}}}},
+        },
+        "metrics": {"constraint_violation": 0.0, "objectives": {"adg": 0.0}},
+        "suite_metrics": {
+            "scenario_labels": ["base"],
+            "metrics": {"adg": {"aggregated": 0.0, "stats": {"mean": 0.0, "std": 0.0}, "scenarios": {"base": 0.0}}},
+        },
+        "candidate": 0,
+    }
+    records = [first]
+    for index in range(1, 100):
+        records.append({
+            "bot": {"long": {"risk": {"n_positions": index}}},
+            "metrics": {"objectives": {"adg": index / 100.0}},
+            "suite_metrics": {"metrics": {"adg": {"aggregated": index / 100.0}}},
+            "candidate": index,
+        })
+    final_snapshot = copy.deepcopy(first)
+    final_snapshot["bot"]["long"]["risk"]["n_positions"] = 100
+    final_snapshot["metrics"]["objectives"]["adg"] = 1.0
+    final_snapshot["suite_metrics"]["metrics"]["adg"]["aggregated"] = 1.0
+    final_snapshot["candidate"] = 100
+    records.append(final_snapshot)
+    with (result_dir / "all_results.bin").open("wb") as output:
+        for record in records:
+            output.write(msgpack.packb(record, use_bin_type=True))
+
+    loader = ParetoDataLoader(str(result_dir))
+
+    assert loader.load(load_strategy=["performance"], max_configs=2)
+    assert loader.optimize_version == "v8"
+    assert loader._diff_compressed_results is True
+    assert [config.config_index for config in loader.configs] == [100, 99]
+    assert loader.optimize_bounds == {"long.strategy.ema_anchor.entry.ema_dist": (-0.2, 0.0)}
+    assert loader.backtest_scenarios == [{"name": "base"}]
+    selected = loader.get_config_by_index(100)
+    loader.ensure_bot_params(selected)
+    assert selected.bot_params["long.risk.n_positions"] == 100
+    assert selected.bot_params["long.strategy.ema_anchor.entry.ema_dist"] == -0.1
+    assert loader.get_full_config(100)["candidate"] == 100
+    assert not (result_dir / "all_results.bin.scan_cache.meta.json").exists()
+
+
+def test_pb7_flat_bound_normalization_remains_unchanged() -> None:
+    """Adding nested PB8 bounds must not rename or reshape flat PB7 bounds."""
+    bounds = {
+        "long_entry_grid_spacing_pct": [0.001, 0.1, 0.001],
+        "short_n_positions": {"lower": 1, "upper": 5},
+    }
+
+    assert ParetoDataLoader._normalize_optimize_bounds(bounds) == {
+        "long_entry_grid_spacing_pct": (0.001, 0.1),
+        "short_n_positions": (1.0, 5.0),
+    }
+
+
+def test_pb8_preset_restores_nested_bounds_and_uses_runtime_goals(monkeypatch) -> None:
+    """PB8 presets must preserve canonical nesting and avoid stale checkpoint state."""
+    _patch_metric_helpers(monkeypatch)
+    full_config = {
+        "config_version": "v8.0.0",
+        "bot": {"long": {"strategy": {"ema_anchor": {"entry": {"ema_dist": -0.1}}}}},
+        "optimize": {
+            "bounds": {"long": {"strategy": {"ema_anchor": {"entry": {"ema_dist": [-0.2, 0.0]}}}}},
+            "scoring": [{"metric": "custom_risk", "goal": "max"}],
+            "limits": [],
+        },
+        "pbgui": {
+            "optimize_runtime": {"mode": "checkpoint_resume", "checkpoint_path": "/tmp/stale"},
+            "additional_parameters": {"keep": True},
+        },
+    }
+    context = {
+        "config_index": 5,
+        "optimize_version": "v8",
+        "scoring_goals": {"drawdown_worst_strategy_eq": "min"},
+        "bounds": {},
+        "bot_params": {"long.strategy.ema_anchor.entry.ema_dist": -0.1},
+        "suite_metrics": {"custom_risk": 0.2, "drawdown_worst_strategy_eq": 0.3},
+        "optimize_settings": {},
+    }
+
+    payload = generator.build_optimize_preset(
+        config_context=context,
+        full_config_data=full_config,
+        params={"direction": "Safer (lower drawdowns)", "bounds_window_pct": 10, "risk_adjust": 0},
+    )
+
+    preset = payload["preset_config"]
+    assert preset["optimize"]["scoring"][0] == {"metric": "drawdown_worst_strategy_eq", "goal": "min"}
+    assert preset["optimize"]["bounds"]["long"]["strategy"]["ema_anchor"]["entry"]["ema_dist"] == [-0.11, -0.09]
+    assert "optimize_runtime" not in preset["pbgui"]
+    assert preset["pbgui"]["additional_parameters"] == {"keep": True}
 
 
 def test_build_optimize_preset_uses_direction_and_existing_bounds(monkeypatch) -> None:

@@ -533,18 +533,138 @@ Browserassets erhalten die projektuebliche Cache-Busting-Version.
 - Grundlegende PB8-Resultate werden angezeigt.
 - PB7 bleibt unveraendert nutzbar.
 
+# PBv8 Optimize und versionsgetrennte Archive
+
+Dieser Abschnitt ist der verbindliche Implementierungsplan fuer die naechste
+Lieferung. Die Umsetzung wird erst als abgeschlossen betrachtet, wenn der
+PBv8-Optimizer funktional die PBv7-Implementierung abdeckt und alle unten
+genannten Exit-Kriterien erfuellt sind.
+
+## Festgelegte Produktentscheidungen
+
+- `frontend/v7_optimize.html` bleibt die einzige Optimize-Seite. PBv7 und PBv8
+  verwenden denselben Editor, dieselben Panels und dieselbe visuelle Sprache
+  ueber einen kleinen versionsspezifischen Adapter. Es wird keine separate
+  PBv8-Optimize-Oberflaeche kopiert oder neu entworfen.
+- Alle von der installierten PB8-Runtime angebotenen Strategien werden
+  dynamisch unterstuetzt, aktuell `trailing_martingale`, `ema_anchor` und
+  `trailing_grid_v7`.
+- PB8-spezifische Funktionen werden vollstaendig angebunden: echter
+  Checkpoint-Resume, RNG Seed, Fine-Tune-Parameter, Polish Percentage und
+  Polish Bounds Mode. Seltene Expert-Parameter duerfen unter Additional
+  Parameters liegen, muessen aber erhalten, validiert und nutzbar bleiben.
+- Die offizielle V7-zu-V8-Migration wird auch fuer Optimize-Configs und
+  Pareto-Configs verwendet, weil PB8 sie ueber `tool migrate-config-v7`
+  anbietet. Der Migrationsreport wird wie beim PB8-Backtest gespeichert und
+  ungeloeste Migrationen werden nicht stillschweigend akzeptiert.
+- Mehrere Exchanges behalten die PB8-Semantik eines kombinierten Datensatzes.
+  Separate Exchange-Auswertungen werden explizit als Suite-Szenarien
+  konfiguriert und nicht automatisch erzeugt.
+- PB8 Backtest und PB8 Optimize erhalten vollstaendige Archive-Funktionen.
+  Archive bleiben physisch und logisch von PB7 getrennt; archivierte Configs
+  werden unter ihrer vorhandenen `config_version` gespeichert und geladen.
+- Autostart darf global hoechstens einen Optimize-Job aus PB7 oder PB8 laufen
+  lassen. Manuell gestartete PB7- und PB8-Jobs duerfen parallel laufen.
+- Innerhalb von PB8 startet Autostart ebenfalls nur einen Job. Jeder Job
+  verwaltet seine Parallelitaet ueber `optimize.n_cpus`.
+
+## Runtime- und Config-Vertrag
+
+- PB8-Module werden weiterhin nur ueber den isolierten
+  `pb8_config_helper.py`-Prozess geladen, damit keine PB7/PB8-Modulnamen im API-
+  Prozess kollidieren.
+- Der Helper liefert ein zusammenhaengendes Optimize-Metadatenmodell aus der
+  installierten PB8-Runtime: Template, Strategien, aktive verschachtelte
+  Bounds, Backend- und Pymoo-Optionen, Scoring-Metriken und Default-Ziele,
+  Limits, Operatoren, Statistiken, Runtime Overrides und Bot-Parameterpfade.
+- PB8-Defaults werden nicht aus PB7 kopiert und nicht statisch im Browser
+  nachgebaut.
+- Verschachtelte PB8-Pfade unter `bot`, `optimize.bounds`, `scoring`, `limits`,
+  `fixed_params`, `fixed_runtime_overrides` und `enable_overrides` werden ohne
+  Informationsverlust zwischen Visual Editor, Raw JSON und gespeicherter Config
+  synchronisiert.
+- Configs werden als recoverable Bundles unter `data/opt_v8/<name>/` gespeichert.
+  Queue-Eintraege besitzen unveraenderliche Snapshots unter einem getrennten
+  PB8-Queue-Root.
+
+## Queue, Worker und Prozesslebenszyklus
+
+- Die PB8-Queue deckt Add, Reorder, Start, Stop, Requeue Fresh, Delete, Clear
+  Finished, Log, Status, Repair und API-Neustart-Recovery ab.
+- `Requeue Fresh`, `Continue from Pareto` (`--start`) und `Resume Checkpoint`
+  (`--resume`) sind getrennte Aktionen mit eindeutigen Statusmeldungen.
+- Resume akzeptiert nur verwaltete lokale PB8-Resultverzeichnisse. Fremde
+  `checkpoint.pkl`-Dateien werden wegen des Pickle-Ausfuehrungsrisikos nie
+  angenommen.
+- Der Runner verwendet PID plus Prozess-Startzeit, Ready-Handshake, private
+  atomare State-Dateien, verifizierte Prozessgruppen und den gemeinsamen
+  PB8-Update-/Launch-Lock nach dem PB8-Backtest-Muster.
+- Laufende Optimize-Prozesse ueberstehen API-Neustarts und werden beim normalen
+  API-Shutdown nicht beendet.
+- Die globale Autostart-Arbitrierung prueft PB7 und PB8. Nur automatische Starts
+  blockieren einander; explizite manuelle Starts bleiben erlaubt.
+
+## Gemeinsamer Editor und Funktionsparitaet
+
+- Die gemeinsamen Panels bleiben Configs, Queue, Results und Paretos.
+- Config Create, Duplicate, Rename, Save, Delete, Raw JSON, Suite Editor,
+  OHLCV-Preflight/Preload, Starting Configs, Runtime Overrides, Scoring, Limits,
+  Bounds, Backends und alle bestehenden PB7-Editorfunktionen werden fuer PB8
+  angebunden.
+- Der Adapter kapselt API-/WebSocket-Pfade, Navigation, Log-Namespace,
+  verschachtelte Config-Pfade, Result-/Pareto-Routen und versionsspezifische
+  Aktionen. Fachlogik wird nicht durch eine zweite HTML-Datei dupliziert.
+- Neue PB8-Felder werden sichtbar und passend gruppiert, wenn sie fuer den
+  normalen GUI-Workflow sinnvoll sind. Seltene Expertenfelder liegen in
+  Additional Parameters und bleiben round-trip-sicher.
+
+## Results, Paretos und Handoffs
+
+- PB8-Results werden ausschliesslich unter dem PB8-Optimize-Resultroot gelesen.
+- Resultliste, Config-Ansicht, Delete, Fortschritt, Pareto-Dateien, Seed-Bundles,
+  Preset Builder und Pareto Explorer erhalten PB7-Funktionsparitaet.
+- Der bestehende PBGui Pareto Explorer wird intern versionsfaehig gemacht und
+  ueber getrennte PB7-/PB8-Routen und erlaubte Roots abgesichert. Es wird kein
+  zweiter Explorer im Frontend erfunden.
+- Der Parser versteht PB8s verschachtelte Bounds, Bot-Pfade, Suite-Metriken,
+  Scoring-Ziele und inkrementelle `all_results.bin`-Eintraege.
+- Pareto-Config zu PB8 Backtest, Pareto-Auswahl zu PB8 Optimize Seeds,
+  Optimize-Result zu Preset und offizielle V7-zu-V8-Handoffs bleiben
+  versionssicher.
+
+## Archive
+
+- PB8 Backtest und PB8 Optimize erhalten dieselben produktiven Archivaktionen
+  wie PB7, aber getrennte Roots und versionierte Config-Eintraege.
+- Archive-Listen, Import/Export, Resultansicht, Restore, Delete und alle
+  vorhandenen Handoffs respektieren `config_version` und duerfen PB7- und
+  PB8-Dateien nicht mit dem falschen Parser laden.
+- Gemeinsame Archivansichten duerfen beide Versionen anzeigen, muessen jede
+  Aktion jedoch an den besitzenden Backend- und Config-Vertrag routen.
+
+## Tests und Exit-Kriterien
+
+- PB7 Optimize bleibt unveraendert funktionsfaehig und visuell identisch.
+- PB8 bietet alle PB7-Config-, Queue-, Results-, Pareto-, Preset-, Explorer-,
+  Handoff- und Archivfunktionen.
+- Alle drei PB8-Strategien und alle Runtime-gemeldeten Optimize-Parameter sind
+  round-trip-sicher konfigurierbar.
+- Fresh Requeue, Pareto Seed und Checkpoint Resume sind getrennt getestet.
+- Autostart startet niemals gleichzeitig einen PB7- und PB8-Optimize-Job;
+  parallele manuelle Starts sind getestet und erlaubt.
+- Laufende PB8-Jobs ueberstehen API-Neustart und PB8-Update.
+- PB7/PB8 Configs, Queue-Snapshots, Logs, Results und Archive kollidieren nicht.
+- EN/DE-Guides, Navigation, API-Lifecycle, Restart-Serial und Release Notes sind
+  aktualisiert.
+- Die vollstaendige Offline-Test-Suite ist gruen, bevor die Lieferung als fertig
+  gemeldet wird.
+
 # Spaetere PBv8-Menuepunkte
 
-Nach den ersten beiden Schritten werden separat geplant:
+Nach Optimize und Pareto Explorer bleiben separat:
 
 1. `PBv8 > Run`
-2. `PBv8 > Optimize`
-3. `PBv8 > Strategy Explorer`
-4. `PBv8 > Pareto Explorer`
-
-Optimize muss vor Pareto Explorer umgesetzt werden, weil der Pareto Explorer
-die Optimize-Ergebnisse liest. Strategy Explorer kann nach Backtest umgesetzt
-werden.
+2. `PBv8 > Strategy Explorer`
 
 ## Balance Calculator
 
@@ -578,6 +698,17 @@ Config-Pfade.
 4. Minimale PBv8-Backtest-Seite bauen.
 5. `Convert to V8` in PBv7 ergaenzen.
 6. Navigation, Guides und Tests abschliessen.
+
+## Lieferung D: PBv8 Optimize, Pareto und Archive
+
+Status 2026-07-21: umgesetzt und nach dem abschliessenden Security-, Lifecycle- und Funktionsaudit mit der vollstaendigen Offline-Suite verifiziert (`4484 passed, 39 skipped`). Die installierte PB8-Runtime meldet drei Strategien, zwei Optimizer-Backends und 113 Optimize-Parameter; ein echter Chromium-DOM-Test rendert 84 Bounds fuer `trailing_martingale`, 58 fuer `ema_anchor` und 86 fuer `trailing_grid_v7` und schaltet Bot-Defaults und Bounds verlustfrei pro Strategie um. Die PB8-API deckt die gemeinsame Optimize-Oberflaeche einschliesslich nativer PB8-OHLCV-Pruefung, sicherem Pareto-Dash-Proxy, Queue-Recovery, suite-faehigen Pareto-/3D-Daten, transaktionalem Checkpoint-Resume und artifact-gesteuerten Result-Aktionen ab. PB7 und PB8 verwenden eine gemeinsam persistierte Optimize-Queue-Konfiguration fuer Autostart-CPU, CPU-Override und PBGui-Market-Data; beide Optimize-Autostart-Worker teilen genau einen globalen Prozess-Slot. Die Backtest-Queues verwenden ebenfalls eine gemeinsame Settings-Konfiguration und behandeln die CPU-Zahl als globales automatisches PB7/PB8-Prozesslimit. Der gemeinsame Backtest-Settings-Dialog erscheint sofort und aktualisiert verbindliche Host-Werte im Hintergrund, ohne Benutzereingaben zu ueberschreiben. PB8s Materialized-Cleanup koordiniert sich mit Root- und Run-Locks und bewahrt aktive, fremde oder nicht sicher lesbare Locks. Die Overrides werden nur auf Launch-Kopien angewendet. VPS Manager zeigt PB8-Version, Branch und Upstream-Status in Overview und Details.
+
+1. PB8-Optimize-Metadaten und Config-Bundles implementieren.
+2. Queue, Runner, Recovery und globale PB7/PB8-Autostart-Arbitrierung bauen.
+3. Den bestehenden PB7-Optimize-Editor ueber einen V8-Adapter gemeinsam nutzen.
+4. Results, Paretos, Presets, Explorer und Backtest-Handoffs versionsfaehig machen.
+5. PB8 Backtest- und Optimize-Archive mit `config_version` vollstaendig anbinden.
+6. Navigation, Guides, Regressionstests und komplette Offline-Suite abschliessen.
 
 # Referenzen
 

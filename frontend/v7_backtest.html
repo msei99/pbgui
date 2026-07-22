@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
 <script src="/app/js/backtest_shell.js?v=4"></script>
-<script src="/app/js/backtest_editor_adapter.js?v=4"></script>
+<script src="/app/js/backtest_editor_adapter.js?v=5"></script>
 <script src="/app/js/backtest_advanced_fields.js?v=1"></script>
 <style>
 /* ── Design Tokens ─────────────────────────────── */
@@ -1041,7 +1041,9 @@ var archiveResultsMode = 'backtests';
 var selectedArchiveMigrationStatus = null;
 var legacyResults = [];        // results in legacy pb7/backtests paths
 var compareSet  = [];          // paths of results to compare
-var settings    = { autostart: false, cpu: 1, cpu_max: 1, hsl_signal_modes: [], use_pbgui_market_data: false, hlcvs_cleanup_enabled: false, hlcvs_cleanup_days: 7, hlcvs_cleanup_interval_h: 24 };
+var settings    = { autostart: false, cpu: 1, cpu_max: null, hsl_signal_modes: [], use_pbgui_market_data: false, hlcvs_cleanup_enabled: false, hlcvs_cleanup_days: 7, hlcvs_cleanup_interval_h: 24 };
+var settingsLoadPromise = null;
+var settingsModalDirty = false;
 var currentPanel = 'configs';
 var _pendingResultFilter = '';  /* config name to pre-filter when next loadResults runs */
 var sortCol     = 'modified';  // current sort column
@@ -1071,7 +1073,7 @@ var BACKTEST_SORT_DEFAULTS = {
 var BACKTEST_SORT_COLUMNS = {
   configs: ['name', 'exchanges', 'coins', 'twe_long', 'start_date', 'end_date', 'results', 'modified'],
   results: ['backtest_version', 'config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
-  archive: ['config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
+  archive: ['backtest_version', 'config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
   legacy: ['config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance']
 };
 var _archivesRefreshTimer = null;
@@ -1121,7 +1123,8 @@ var wsReconnectDelay = 1000;
    API HELPERS
    ════════════════════════════════════════════════ */
 function apiFetch(path, opts) {
-  return apiFetchFrom(API_BASE, path, opts);
+  var base = /^\/archives(?:\/|$)/.test(String(path || '')) ? archiveApiBase() : API_BASE;
+  return apiFetchFrom(base, path, opts);
 }
 
 function apiFetchFrom(base, path, opts) {
@@ -1148,12 +1151,27 @@ function backtestApiBase(version) {
   return String(API_BASE || '').replace(/\/backtest-v[78]$/, '/backtest-' + version);
 }
 
+function archiveApiBase() {
+  return backtestEditorAdapter.archiveApiBase(API_BASE);
+}
+
 function resultApiBase(result) {
   return backtestApiBase((result && result.backtest_version) || backtestEditorAdapter.version);
 }
 
 function resultApiFetch(result, path, opts) {
   return apiFetchFrom(resultApiBase(result), path, opts);
+}
+
+function archiveResultByPath(path) {
+  return archiveResults.find(function(result) { return result.path === path; }) || {
+    path: path,
+    backtest_version: 'v7'
+  };
+}
+
+function archiveResultApiFetch(path, endpoint, opts) {
+  return resultApiFetch(archiveResultByPath(path), endpoint, opts);
 }
 
 function apiHttpError(message, status) {
@@ -1170,7 +1188,8 @@ function bearerHeaders(extra) {
 
 function apiFetchNdjson(path, opts, onEvent) {
   opts = opts || {};
-  var url = API_BASE + path;
+  var base = /^\/archives(?:\/|$)/.test(String(path || '')) ? archiveApiBase() : API_BASE;
+  var url = base + path;
   opts.headers = bearerHeaders(opts.headers);
   return fetch(url, opts).then(function(r) {
     if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || r.statusText); });
@@ -1444,17 +1463,25 @@ function selectPanel(id, opts) {
    SETTINGS
    ════════════════════════════════════════════════ */
 function loadSettings() {
-  apiFetch('/settings').then(function(d) {
+  if (settingsLoadPromise) return settingsLoadPromise;
+  settingsLoadPromise = apiFetch('/settings').then(function(d) {
     settings = d;
-  }).catch(function() {});
+    return settings;
+  }).finally(function() {
+    settingsLoadPromise = null;
+  });
+  return settingsLoadPromise;
 }
 
 function pbguiMarketDataDefaultCheckedAttr() {
   return (settings.use_pbgui_market_data === true || String(settings.use_pbgui_market_data).toLowerCase() === 'true') ? ' checked' : '';
 }
 
-function openSettingsModal() {
-  var cpuMax = settings.cpu_max || 16;
+function renderSettingsModal() {
+  var cpuMax = Number(settings.cpu_max);
+  if (!Number.isFinite(cpuMax) || cpuMax < 1) {
+    cpuMax = Number(window.navigator && window.navigator.hardwareConcurrency) || Number(settings.cpu) || 1;
+  }
   var cpu = settings.cpu || 1;
   var autostart = settings.autostart || false;
   var usePbguiMarketData = settings.use_pbgui_market_data || false;
@@ -1470,14 +1497,14 @@ function openSettingsModal() {
         '\x3Cbutton onclick="settingsAdjustCpu(-1)">−\x3C/button>' +
         '\x3Cinput type="text" id="set-cpu-val" value="' + cpu + '" readonly>' +
         '\x3Cbutton onclick="settingsAdjustCpu(1)">+\x3C/button>' +
-        '\x3Cspan style="color:var(--text-dim);font-size:var(--fs-xs);margin-left:var(--sp-sm)">max ' + cpuMax + '\x3C/span>' +
+        '\x3Cspan id="set-cpu-max" style="color:var(--text-dim);font-size:var(--fs-xs);margin-left:var(--sp-sm)">max ' + cpuMax + '\x3C/span>' +
       '\x3C/div>' +
       '\x3Clabel class="sb-toggle">' +
-        '\x3Cinput type="checkbox" id="set-autostart"' + (autostart ? ' checked' : '') + '>' +
+        '\x3Cinput type="checkbox" id="set-autostart"' + (autostart ? ' checked' : '') + ' onchange="settingsModalDirty=true">' +
         '\x3Cspan>Autostart\x3C/span>' +
       '\x3C/label>' +
       '\x3Clabel class="sb-toggle">' +
-        '\x3Cinput type="checkbox" id="set-pbgui-market-data"' + (usePbguiMarketData ? ' checked' : '') + '>' +
+        '\x3Cinput type="checkbox" id="set-pbgui-market-data"' + (usePbguiMarketData ? ' checked' : '') + ' onchange="settingsModalDirty=true">' +
         '\x3Cspan>Use PBGui Market Data\x3C/span>' +
       '\x3C/label>' +
       '\x3Chr class="sb-sep">' +
@@ -1486,16 +1513,16 @@ function openSettingsModal() {
         '\x3Cinput type="checkbox" id="set-cleanup-enabled"' + (cleanupEnabled ? ' checked' : '') + ' onchange="settingsToggleCleanup()">' +
         '\x3Cspan>Enabled\x3C/span>' +
       '\x3C/label>' +
-      '\x3Cdiv style="color:var(--text-dim);font-size:var(--fs-xs)">Cleans old directories in `pb7/caches/hlcvs_data` and `pb7/caches/ohlcvs/materialized`.\x3C/div>' +
+      '\x3Cdiv style="color:var(--text-dim);font-size:var(--fs-xs)">Automatically cleans old HLCVS/OHLCV cache directories for both PB7 and PB8. Clean Now applies to the current page runtime.\x3C/div>' +
       '\x3Cdiv id="cleanup-opts" style="' + (cleanupEnabled ? '' : 'opacity:0.4;pointer-events:none;') + '">' +
         '\x3Cdiv style="display:flex;gap:var(--sp-md);align-items:center">' +
           '\x3Cdiv style="flex:1">' +
             '\x3Cdiv class="sb-label">Retention (days)\x3C/div>' +
-            '\x3Cinput type="number" id="set-cleanup-days" class="sb-input" min="1" max="365" value="' + cleanupDays + '" style="width:80px">' +
+            '\x3Cinput type="number" id="set-cleanup-days" class="sb-input" min="1" max="365" value="' + cleanupDays + '" style="width:80px" onchange="settingsModalDirty=true">' +
           '\x3C/div>' +
           '\x3Cdiv style="flex:1">' +
             '\x3Cdiv class="sb-label">Check interval (h)\x3C/div>' +
-            '\x3Cinput type="number" id="set-cleanup-interval" class="sb-input" min="1" max="168" value="' + cleanupInterval + '" style="width:80px">' +
+            '\x3Cinput type="number" id="set-cleanup-interval" class="sb-input" min="1" max="168" value="' + cleanupInterval + '" style="width:80px" onchange="settingsModalDirty=true">' +
           '\x3C/div>' +
         '\x3C/div>' +
       '\x3C/div>' +
@@ -1510,16 +1537,45 @@ function openSettingsModal() {
   ]);
 }
 
+function syncOpenSettingsModal() {
+  if (settingsModalDirty) return;
+  var cpuInput = document.getElementById('set-cpu-val');
+  if (!cpuInput) return;
+  var cpuMax = Number(settings.cpu_max);
+  if (!Number.isFinite(cpuMax) || cpuMax < 1) return;
+  cpuInput.value = Math.max(1, Math.min(Number(settings.cpu) || 1, cpuMax));
+  document.getElementById('set-cpu-max').textContent = 'max ' + cpuMax;
+  document.getElementById('set-autostart').checked = !!settings.autostart;
+  document.getElementById('set-pbgui-market-data').checked = !!settings.use_pbgui_market_data;
+  document.getElementById('set-cleanup-enabled').checked = !!settings.hlcvs_cleanup_enabled;
+  document.getElementById('set-cleanup-days').value = settings.hlcvs_cleanup_days || 7;
+  document.getElementById('set-cleanup-interval').value = settings.hlcvs_cleanup_interval_h || 24;
+  var cleanupOpts = document.getElementById('cleanup-opts');
+  cleanupOpts.style.opacity = settings.hlcvs_cleanup_enabled ? '' : '0.4';
+  cleanupOpts.style.pointerEvents = settings.hlcvs_cleanup_enabled ? '' : 'none';
+}
+
+function openSettingsModal() {
+  settingsModalDirty = false;
+  renderSettingsModal();
+  return loadSettings().then(syncOpenSettingsModal).catch(function(error) {
+    toast('Failed to refresh settings: ' + error.message, 'err');
+  });
+}
+
 function settingsAdjustCpu(delta) {
+  settingsModalDirty = true;
   var el = document.getElementById('set-cpu-val');
   var v = parseInt(el.value, 10) + delta;
-  var mx = settings.cpu_max || 16;
+  var mx = Number(settings.cpu_max);
+  if (!Number.isFinite(mx) || mx < 1) return;
   if (v < 1) v = 1;
   if (v > mx) v = mx;
   el.value = v;
 }
 
 function settingsToggleCleanup() {
+  settingsModalDirty = true;
   var enabled = document.getElementById('set-cleanup-enabled').checked;
   var opts = document.getElementById('cleanup-opts');
   opts.style.opacity = enabled ? '' : '0.4';
@@ -1574,7 +1630,8 @@ function cleanHlcvsNow() {
       : [];
     var targetsText = targetLabels.length ? ' across ' + targetLabels.join(' + ') : '';
     var errorsText = Number(d.errors || 0) > 0 ? ' (' + Number(d.errors || 0) + ' errors)' : '';
-    toast('Cleaned ' + (d.removed || 0) + ' dirs' + targetsText + ' (' + (d.freed_mb || 0) + ' MB freed)' + errorsText, 'ok');
+    var lockedText = Number(d.skipped_locked || 0) > 0 ? ' (' + Number(d.skipped_locked || 0) + ' active/unsafe locks preserved)' : '';
+    toast('Cleaned ' + (d.removed || 0) + ' dirs' + targetsText + ' (' + (d.freed_mb || 0) + ' MB freed)' + lockedText + errorsText, 'ok');
     if (btn) { btn.disabled = false; btn.textContent = '\ud83e\uddf9 Clean Now'; }
   }).catch(function(e) {
     toast('Cleanup failed: ' + e.message, 'err');
@@ -1937,7 +1994,9 @@ async function openInitialBacktestDraftFromUrl() {
       ? await fetchRunBacktestDraft(runDraftId)
       : await apiFetch('/optimize-draft/' + encodeURIComponent(optimizeDraftId));
     var cfg = (draft && draft.config) || {};
-    var prepared = await prepareImportedBacktestConfig(cfg);
+    var prepared = optimizeDraftId && backtestEditorAdapter.isV8
+      ? { config: cfg, param_status: draft.param_status || {} }
+      : await prepareImportedBacktestConfig(cfg);
     var name = getInitialBacktestDraftName(cfg, url.searchParams);
     var raw = JSON.stringify((prepared && prepared.config) || {}, null, 2);
     editingConfig = '__new__';
@@ -5360,7 +5419,7 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
         '\x3Cbutton class="icon-btn" data-action="view" data-idx="' + i + '" onclick="toggleResultAction(this)" title="Balance &amp; Equity, PnL, Drawdown, WE charts">👁\x3C/button>' +
         '\x3Cbutton class="icon-btn" data-action="analysis" data-idx="' + i + '" onclick="toggleResultAction(this)" title="Analysis JSON">🔬\x3C/button>' +
         '\x3Cbutton class="icon-btn" data-action="config" data-idx="' + i + '" onclick="toggleResultAction(this)" title="Config JSON">📄\x3C/button>' +
-        '\x3Cbutton class="icon-btn" data-action="plot" data-idx="' + i + '" onclick="toggleResultAction(this)" title="' + backtestEditorAdapter.version.toUpperCase() + ' plot images">🖼\x3C/button>' +
+        '\x3Cbutton class="icon-btn" data-action="plot" data-idx="' + i + '" onclick="toggleResultAction(this)" title="' + String(r.backtest_version || backtestEditorAdapter.version).toUpperCase() + ' plot images">🖼\x3C/button>' +
         '\x3Cbutton class="icon-btn" data-action="fills" data-idx="' + i + '" onclick="toggleResultAction(this)" title="Fills plots">📋\x3C/button>' +
         convertAction +
       '\x3C/td>' +
@@ -7426,20 +7485,21 @@ function compareSelectedArchive() {
   compareEl.style.display = '';
   compareEl.innerHTML = '\x3Cdiv style="text-align:center;padding:var(--sp-lg);color:var(--text-dim)">Loading equity data for comparison\u2026\x3C/div>';
   var promises = sel.map(function(path) {
-    if (_beCache[path]) return Promise.resolve({ path: path, be: _beCache[path] });
-    return fetchCSV(path, 'equity').then(function(csv) {
-      var r = archiveResults.find(function(rr) { return rr.path === path; }) || {};
+    var r = archiveResultByPath(path);
+    var cacheKey = (r.backtest_version || 'v7') + ':' + path;
+    if (_beCache[cacheKey]) return Promise.resolve({ path: path, version: r.backtest_version || 'v7', be: _beCache[cacheKey] });
+    return fetchCSV(path, 'equity', r).then(function(csv) {
       var be = normalizeBE(csv, r);
-      _beCache[path] = be;
-      return { path: path, be: be };
-    }).catch(function() { return { path: path, be: { time: [], equity: [], balance: [] } }; });
+      _beCache[cacheKey] = be;
+      return { path: path, version: r.backtest_version || 'v7', be: be };
+    }).catch(function() { return { path: path, version: r.backtest_version || 'v7', be: { time: [], equity: [], balance: [] } }; });
   });
   Promise.all(promises).then(function(allData) {
     var traces = [];
     var colors = ['#4da6ff', '#21c354', '#ff8c00', '#ff4b4b', '#b366ff', '#ffcc00', '#00cccc', '#ff66b2'];
     allData.forEach(function(item, i) {
       if (!item.be.time.length) return;
-      var label = item.path.split('/').slice(-3).join('/');
+      var label = 'PB' + String(item.version || 'v7').toUpperCase() + ' ' + item.path.split('/').slice(-3).join('/');
       traces.push({ x: item.be.time, y: item.be.equity, name: 'eq ' + label, line: { width: 0.75, color: colors[i % colors.length] } });
       traces.push({ x: item.be.time, y: item.be.balance, name: 'bal ' + label, line: { width: 2.5, color: colors[i % colors.length], dash: 'dot' } });
     });
@@ -7595,7 +7655,7 @@ function rebacktestSelectedArchive() {
   var today = new Date().toISOString().slice(0, 10);
   var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'kucoin', 'combined'];
   Promise.all([
-    apiFetch('/results/config?path=' + encodeURIComponent(sel[0])),
+    archiveResultApiFetch(sel[0], '/results/config?path=' + encodeURIComponent(sel[0])),
     apiFetch('/pbgui_data_path')
   ]).then(function(payload) {
     var cfg = payload[0] || {};
@@ -7707,7 +7767,7 @@ function retestReplaceSelectedArchive() {
   var sel = getSelectedArchiveResults();
   if (!sel.length) { toast('Nothing selected', 'err'); return; }
   var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'kucoin', 'combined'];
-  apiFetch('/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
+  archiveResultApiFetch(sel[0], '/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
     var defExchanges = (cfg.backtest && cfg.backtest.exchanges) || ['bybit'];
     var defBalance = (cfg.backtest && cfg.backtest.starting_balance) || 1000;
     var defDays = archiveRetestDefaultDays(cfg);
@@ -8007,6 +8067,10 @@ function addToRun() {
 function addToRunFromArchive() {
   var sel = getSelectedArchiveResults();
   if (sel.length !== 1) { toast('Select exactly 1 result', 'err'); return; }
+  if ((archiveResultByPath(sel[0]).backtest_version || 'v7') !== 'v7') {
+    toast('Add to Run is available only for PB7 archive results.', 'err');
+    return;
+  }
   var v7Base = API_BASE.replace('/backtest-v7', '/v7');
 
   function navigateWithConfig(cfg, finalUser) {
@@ -8024,7 +8088,7 @@ function addToRunFromArchive() {
   }
 
   Promise.all([
-    apiFetch('/results/config?path=' + encodeURIComponent(sel[0])),
+    archiveResultApiFetch(sel[0], '/results/config?path=' + encodeURIComponent(sel[0])),
     fetch(v7Base + '/instances', { headers: { 'Authorization': 'Bearer ' + TOKEN } }).then(function(r) { return r.json(); }),
     fetch(v7Base + '/users',     { headers: { 'Authorization': 'Bearer ' + TOKEN } }).then(function(r) { return r.json(); })
   ]).then(function(res) {
@@ -8151,9 +8215,12 @@ function strategyExplorerFromResult() {
   var sel = getSelectedResults();
   if (sel.length !== 1) { toast('Select exactly 1 result', 'err'); return; }
   var path = sel[0];
+  var selectedResult = results.find(function(result) { return result.path === path; }) || {
+    backtest_version: backtestEditorAdapter.version
+  };
   var explorerBase = strategyExplorerApiBase();
   toast('Opening Strategy Explorer…', 'ok');
-  apiFetch('/results/config?path=' + encodeURIComponent(path)).then(function(cfg) {
+  resultApiFetch(selectedResult, '/results/config?path=' + encodeURIComponent(path)).then(function(cfg) {
     return fetch(explorerBase + '/draft', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
@@ -8198,7 +8265,7 @@ function goBalanceCalculatorFromArchive() {
   }
 
   toast('Loading\u2026', 'ok');
-  apiFetch('/results/config?path=' + encodeURIComponent(path)).then(function(cfg) {
+  archiveResultApiFetch(path, '/results/config?path=' + encodeURIComponent(path)).then(function(cfg) {
     openBalanceCalculatorWithConfig(cfg, defaultExchange || getConfigDefaultExchange(cfg));
   }).catch(function(e) { toast('Failed to load config: ' + e.message, 'err'); });
 }
@@ -8399,11 +8466,15 @@ async function addResultToArchive() {
     if (!archName) { toast('No own archive configured. Go to Archive \u2192 Settings.', 'err'); return; }
     for (var i = 0; i < sel.length; i++) {
       var label = archiveResultLabel(sel[i]);
+      var selectedResult = results.find(function(item) { return item.path === sel[i]; }) || {};
       setArchiveProgress('🗄 Adding ' + (i + 1) + '/' + sel.length + ': ' + label);
       await apiFetch('/archives/' + encodeURIComponent(archName) + '/add-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source_path: sel[i] })
+        body: JSON.stringify({
+          source_path: sel[i],
+          backtest_version: selectedResult.backtest_version || backtestEditorAdapter.version
+        })
       });
       toast('Added ' + (i + 1) + '/' + sel.length + ' to archive: ' + label, 'ok');
     }
@@ -8707,7 +8778,8 @@ function renderArchiveResults(name) {
     if (cfgFilter && r.config_name !== cfgFilter) return false;
     if (coinFilter && (!Array.isArray(r.coins) || r.coins.indexOf(coinFilter) < 0)) return false;
     if (!textFilter) return true;
-    var hay = ((r.config_name || '') + ' ' + (r.result_name || '') + ' ' + (r.display_name || '') + ' ' + (r.coins_text || '')).toLowerCase();
+    var hay = ((r.backtest_version || '') + ' ' + (r.config_version || r.pb7_config_version || '') + ' ' +
+      (r.config_name || '') + ' ' + (r.result_name || '') + ' ' + (r.display_name || '') + ' ' + (r.coins_text || '')).toLowerCase();
     return hay.indexOf(textFilter) >= 0;
   });
   updateResultsCountLabel('archive-results-count-label', filtered.length, archiveResults.length);
@@ -8728,7 +8800,7 @@ function renderArchiveResults(name) {
     return 0;
   });
 
-  _renderResultsTableInto(tableEl, sorted, chartsEl, _rthA);
+  _renderResultsTableInto(tableEl, sorted, chartsEl, _rthA, { showVersion: true });
   setSelectedArchiveResults(selectedPaths);
 }
 
@@ -8836,7 +8908,8 @@ function renderArchiveOptimizeConfigs() {
   var textFilter = ((document.getElementById('arc-results-filter') || {}).value || '').toLowerCase();
   var filtered = archiveOptimizeConfigs.filter(function(item) {
     if (!textFilter) return true;
-    var hay = ((item.name || '') + ' ' + (item.pb7_config_version || '') + ' ' + (item.relative_path || '')).toLowerCase();
+    var hay = ((item.name || '') + ' ' + (item.optimize_version || '') + ' ' +
+      (item.config_version || item.pb7_config_version || '') + ' ' + (item.relative_path || '')).toLowerCase();
     return hay.indexOf(textFilter) >= 0;
   });
   if (!filtered.length) {
@@ -8844,12 +8917,13 @@ function renderArchiveOptimizeConfigs() {
     return;
   }
   var html = '\x3Ctable class="tbl">\x3Cthead>\x3Ctr>' +
-    '\x3Cth>Name\x3C/th>\x3Cth>PB7 Version\x3C/th>\x3Cth>PBGui Version\x3C/th>\x3Cth>Modified\x3C/th>\x3Cth>Path\x3C/th>' +
+    '\x3Cth>Name\x3C/th>\x3Cth>Owner\x3C/th>\x3Cth>Config Version\x3C/th>\x3Cth>PBGui Version\x3C/th>\x3Cth>Modified\x3C/th>\x3Cth>Path\x3C/th>' +
     '\x3C/tr>\x3C/thead>\x3Ctbody>';
   filtered.forEach(function(item) {
-    html += '\x3Ctr data-path="' + esc(item.path) + '" data-name="' + esc(item.name || '') + '" title="Double-click to view config JSON">' +
+    html += '\x3Ctr data-path="' + esc(item.path) + '" data-name="' + esc(item.name || '') + '" data-version="' + esc(item.optimize_version || 'v7') + '" title="Double-click to view config JSON">' +
       '\x3Ctd>' + esc(item.name || '') + '\x3C/td>' +
-      '\x3Ctd>' + esc(item.pb7_config_version || '') + '\x3C/td>' +
+      '\x3Ctd>' + esc(String(item.optimize_version || 'v7').toUpperCase()) + '\x3C/td>' +
+      '\x3Ctd>' + esc(item.config_version || item.pb7_config_version || '') + '\x3C/td>' +
       '\x3Ctd>' + esc(item.pbgui_version || '') + '\x3C/td>' +
       '\x3Ctd>' + fmtDate(item.modified) + '\x3C/td>' +
       '\x3Ctd class="muted-line" style="max-width:360px;word-break:break-all">' + esc(item.relative_path || item.path || '') + '\x3C/td>' +
@@ -8863,13 +8937,14 @@ function renderArchiveOptimizeConfigs() {
       e.stopPropagation();
       document.querySelectorAll('#archive-results-table .tbl tbody tr.selected').forEach(function(tr) { tr.classList.remove('selected'); });
       row.classList.add('selected');
-      viewArchiveOptimizeConfig(row.dataset.path, row.dataset.name);
+      viewArchiveOptimizeConfig(row.dataset.path, row.dataset.name, row.dataset.version);
     };
   });
 }
 
-function viewArchiveOptimizeConfig(path, name) {
-  apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/optimize-configs/config?path=' + encodeURIComponent(path))
+function viewArchiveOptimizeConfig(path, name, version) {
+  apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/optimize-configs/config?path=' + encodeURIComponent(path) +
+    '&version=' + encodeURIComponent(version || 'v7'))
     .then(function(cfg) {
       showModal('Optimize Config - ' + (name || ''), window.PBGuiJsonPanel.createPanelHtml({
         wrapId: 'archive-opt-json-wrap',
@@ -8890,42 +8965,46 @@ function getSelectedArchiveOptimizeConfig() {
     toast(rows.length ? 'Select exactly one Optimize config.' : 'Select an Optimize config first.', 'err');
     return null;
   }
-  return { path: rows[0].dataset.path || '', name: rows[0].dataset.name || '' };
+  return {
+    path: rows[0].dataset.path || '',
+    name: rows[0].dataset.name || '',
+    version: rows[0].dataset.version || 'v7'
+  };
 }
 
 function viewSelectedArchiveOptimizeConfig() {
   var item = getSelectedArchiveOptimizeConfig();
   if (!item) return;
-  viewArchiveOptimizeConfig(item.path, item.name);
+  viewArchiveOptimizeConfig(item.path, item.name, item.version);
 }
 
 function optimizeSelectedArchiveConfig() {
   var item = getSelectedArchiveOptimizeConfig();
   if (!item) return;
-  optimizeFromArchiveOptimizeConfig(item.path, item.name);
+  optimizeFromArchiveOptimizeConfig(item.path, item.name, item.version);
 }
 
 function importSelectedArchiveOptimizeConfig() {
   var item = getSelectedArchiveOptimizeConfig();
   if (!item) return;
-  importArchiveOptimizeConfig(item.path, item.name);
+  importArchiveOptimizeConfig(item.path, item.name, item.version);
 }
 
 function deleteSelectedArchiveOptimizeConfig() {
   var item = getSelectedArchiveOptimizeConfig();
   if (!item) return;
-  deleteArchiveOptimizeConfig(item.path, item.name);
+  deleteArchiveOptimizeConfig(item.path, item.name, item.version);
 }
 
 function archiveOptimizeDefaultName(path, name) {
   return name || (path || '').split('/').pop().replace(/\.json$/, '');
 }
 
-function requestArchiveOptimizeImport(path, importName, collision) {
-  return fetch(API_BASE + '/archives/' + encodeURIComponent(selectedArchiveName) + '/optimize-configs/import', {
+function requestArchiveOptimizeImport(path, importName, collision, version) {
+  return fetch(archiveApiBase() + '/archives/' + encodeURIComponent(selectedArchiveName) + '/optimize-configs/import', {
     method: 'POST',
     headers: bearerHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ path: path, name: importName.trim(), collision: collision })
+    body: JSON.stringify({ path: path, name: importName.trim(), collision: collision, optimize_version: version || 'v7' })
   }).then(function(response) {
     return response.json().catch(function() { return {}; }).then(function(payload) {
       if (!response.ok) {
@@ -8956,31 +9035,32 @@ function chooseArchiveOptimizeCollision(error, importName) {
   });
 }
 
-function importArchiveOptimizeWithCollision(path, importName) {
-  return requestArchiveOptimizeImport(path, importName, 'error').catch(function(error) {
+function importArchiveOptimizeWithCollision(path, importName, version) {
+  return requestArchiveOptimizeImport(path, importName, 'error', version).catch(function(error) {
     return chooseArchiveOptimizeCollision(error, importName).then(function(collision) {
       if (!collision) return null;
-      return requestArchiveOptimizeImport(path, importName, collision);
+      return requestArchiveOptimizeImport(path, importName, collision, version);
     });
   });
 }
 
-function openOptimizeEditorForConfig(configName) {
-  window.location.href = '/api/optimize-v7/main_page?open_config=' + encodeURIComponent(configName);
+function openOptimizeEditorForConfig(configName, version) {
+  var optimizeVersion = String(version || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7';
+  window.location.href = '/api/optimize-' + optimizeVersion + '/main_page?open_config=' + encodeURIComponent(configName);
 }
 
-function optimizeFromArchiveOptimizeConfig(path, name) {
+function optimizeFromArchiveOptimizeConfig(path, name, version) {
   var importName = archiveOptimizeDefaultName(path, name).trim();
-  importArchiveOptimizeWithCollision(path, importName).then(function(data) {
+  importArchiveOptimizeWithCollision(path, importName, version).then(function(data) {
     if (!data) return;
     toast('Opening Optimize config', 'ok');
-    openOptimizeEditorForConfig(data.name || importName);
+    openOptimizeEditorForConfig(data.name || importName, data.optimize_version || version);
   }).catch(function(e) {
     toast('Open failed: ' + e.message, 'err');
   });
 }
 
-function importArchiveOptimizeConfig(path, name) {
+function importArchiveOptimizeConfig(path, name, version) {
   var defaultName = archiveOptimizeDefaultName(path, name);
   var body = '<div class="sb-label">Import as</div>' +
     '<input type="text" id="archive-opt-import-name" class="sb-input" value="' + esc(defaultName) + '">' +
@@ -8989,7 +9069,7 @@ function importArchiveOptimizeConfig(path, name) {
     { text: 'Cancel', cls: '' },
     { text: 'Import', cls: 'modal-btn-primary', action: function() {
       var importName = (document.getElementById('archive-opt-import-name') || {}).value || defaultName;
-      importArchiveOptimizeWithCollision(path, importName).then(function(data) {
+      importArchiveOptimizeWithCollision(path, importName, version).then(function(data) {
         if (!data) return;
         toast('Optimize config imported as ' + (data.name || importName), 'ok');
         closeModal();
@@ -9000,7 +9080,7 @@ function importArchiveOptimizeConfig(path, name) {
   ]);
 }
 
-function deleteArchiveOptimizeConfig(path, name) {
+function deleteArchiveOptimizeConfig(path, name, version) {
   if (!selectedArchiveIsOwn()) {
     toast('Optimize config deletion is only available for your own archive', 'err');
     return;
@@ -9008,7 +9088,8 @@ function deleteArchiveOptimizeConfig(path, name) {
   showModal('Delete Optimize Config', '<p>Delete archived Optimize config <b>' + esc(name || path) + '</b> from <b>' + esc(selectedArchiveName) + '</b>? This only changes the local archive clone until you run Git Push.</p>', [
     { text: 'Cancel', cls: '' },
     { text: 'Delete', cls: 'modal-btn-danger', action: function() {
-      apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/optimize-configs/config?path=' + encodeURIComponent(path), { method: 'DELETE' })
+      apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/optimize-configs/config?path=' + encodeURIComponent(path) +
+        '&version=' + encodeURIComponent(version || 'v7'), { method: 'DELETE' })
         .then(function() { toast('Optimize config deleted', 'ok'); closeModal(); viewArchive(selectedArchiveName); })
         .catch(function(e) { toast('Delete failed: ' + e.message, 'err'); });
     }}
@@ -9607,7 +9688,7 @@ backtestEditorAdapter.configureUi();
 // Restore panel/archive state from URL hash or localStorage.
 var initialViewState = loadStoredBacktestViewState();
 applyBacktestSortState(initialViewState.sorts);
-loadSettings();
+loadSettings().catch(function(error) { console.error('Failed to load Backtest settings:', error); });
 initBacktestOhlcvPreflightController();
 loadConfigs();
 connectWS();

@@ -51,8 +51,9 @@ from api.pb7_ohlcv_tools import (
     stop_ohlcv_preload_job,
 )
 from logging_helpers import human_log as _log
+from optimize_autostart import claim_autostart, publish_autostart_process, release_autostart
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config
-from pbgui_purefunc import PBGDIR, load_ini_section, pb7_suite_preflight_errors, pb7dir, pb7venv, save_ini
+from pbgui_purefunc import PBGDIR, load_ini_section, pb7_suite_preflight_errors, pb7dir, pb7venv, save_ini_section
 
 SERVICE = "OptimizeQueueAPI"
 
@@ -556,10 +557,6 @@ def _read_ini_section(section: str = "optimize_v7") -> dict:
     items.setdefault("cpu", "1")
     items.setdefault("cpu_override", "True")
     return items
-
-
-def _write_ini(key: str, value: str, section: str = "optimize_v7") -> None:
-    save_ini(section, key, value)
 
 
 def _normalize_autostart_cpu(value) -> int:
@@ -2244,8 +2241,28 @@ class OptimizeWorker:
                 if queued:
                     launch_filename = str(queued[0].get("filename") or "")
                     launch_item = _queue_launch_item_from_data(launch_filename, _read_queue_item_data(launch_filename))
-                    self._launch_optimize(launch_item, cpu_override=(autostart_cpu if cpu_override_enabled else None))
-                    _log(SERVICE, f"Launched optimize: {launch_item['name']} ({launch_item['filename']})", level="INFO")
+                    if not claim_autostart("v7", launch_filename):
+                        await asyncio.sleep(10)
+                        continue
+                    try:
+                        record = self._launch_optimize(
+                            launch_item,
+                            cpu_override=(autostart_cpu if cpu_override_enabled else None),
+                        )
+                        if not isinstance(record, dict):
+                            raise RuntimeError("PB7 optimize launch did not publish process ownership")
+                        create_time = psutil.Process(record["pid"]).create_time()
+                        publish_autostart_process(
+                            "v7",
+                            launch_filename,
+                            record["pid"],
+                            create_time,
+                            [str(PurePath(f"{pb7dir()}/src/optimize.py")), str(record["config_path"])],
+                        )
+                        _log(SERVICE, f"Launched optimize: {launch_item['name']} ({launch_item['filename']})", level="INFO")
+                    except Exception as exc:
+                        release_autostart("v7", launch_filename)
+                        _log(SERVICE, f"Automatic PB7 optimize launch failed: {exc}", level="ERROR")
                     await asyncio.sleep(1)
                     await self.store.refresh_from_disk()
 
@@ -2373,6 +2390,10 @@ class OptimizeWorker:
                 env=env,
             )
         (_opt_queue_dir() / f"{filename}.pid").write_text(str(proc.pid), encoding="utf-8")
+        return {
+            "pid": proc.pid,
+            "config_path": str(config_path),
+        }
 
 
 _worker = OptimizeWorker(_store)
@@ -2465,7 +2486,7 @@ def main_page(
     api_base = origin + "/api/optimize-v7"
     ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
 
-    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
+    html = html.replace('"%%TOKEN%%"', json.dumps(""))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
     html = html.replace("%%LIMITS_META%%", json.dumps(get_optimize_limits_meta_payload()))
@@ -2475,6 +2496,10 @@ def main_page(
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
     html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
     html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
+    html = html.replace("%%OPTIMIZE_VERSION%%", "v7")
+    html = html.replace("%%BACKTEST_VERSION%%", "v7")
+    html = html.replace("%%OPTIMIZE_NAV_TITLE%%", "PBv7 OPTIMIZE")
+    html = html.replace("%%OPTIMIZE_NAV_CURRENT%%", "v7_optimize")
 
     nav_js = Path(__file__).resolve().parent.parent / "frontend" / "pbgui_nav.js"
     nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION
@@ -2579,14 +2604,21 @@ def get_bot_params(session: SessionToken = Depends(require_auth)):
 
 @router.post("/settings")
 def update_settings(body: dict, session: SessionToken = Depends(require_auth)):
-    if "autostart" in body:
-        _write_ini("autostart", str(bool(body["autostart"])))
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="settings must be an object")
+    updates = {}
+    for key in ("autostart", "cpu_override", "use_pbgui_market_data"):
+        if key not in body:
+            continue
+        if type(body[key]) is not bool:
+            raise HTTPException(status_code=422, detail=f"{key} must be a boolean")
+        updates[key] = str(body[key])
     if "cpu" in body:
-        _write_ini("cpu", str(_normalize_autostart_cpu(body["cpu"])))
-    if "cpu_override" in body:
-        _write_ini("cpu_override", str(bool(body["cpu_override"])))
-    if "use_pbgui_market_data" in body:
-        _write_ini("use_pbgui_market_data", str(bool(body["use_pbgui_market_data"])))
+        if type(body["cpu"]) is not int:
+            raise HTTPException(status_code=422, detail="cpu must be an integer")
+        updates["cpu"] = str(_normalize_autostart_cpu(body["cpu"]))
+    if updates:
+        save_ini_section("optimize_v7", updates)
     _store.notify()
     return {"ok": True}
 
