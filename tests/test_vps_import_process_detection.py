@@ -2337,7 +2337,7 @@ def test_vps_manager_quick_master_detail_never_runs_deep_monitor_collectors(monk
 
 
 def test_vps_manager_refresh_throttles_release_refresh_without_package_probe() -> None:
-    """Repeated state pushes refresh inventory and throttle only release metadata."""
+    """Repeated state pushes avoid direct probes while checking completed update runs."""
     calls: list[str] = []
     service = object.__new__(VPSManagerService)
     service._refresh_lock = threading.Lock()
@@ -2356,8 +2356,40 @@ def test_vps_manager_refresh_throttles_release_refresh_without_package_probe() -
     assert not hasattr(service, "_refresh_local_package_status")
     source = Path("vps_manager_service.py").read_text(encoding="utf-8")
     refresh_body = source.split("    def refresh(self, *, force: bool = False)", 1)[1].split("\n    def ", 1)[0]
-    assert "package" not in refresh_body
+    assert "self._refresh_completed_linux_updates()" in refresh_body
     assert "subprocess" not in refresh_body
+
+
+def test_completed_linux_update_forces_one_fresh_package_cache_read() -> None:
+    """Each successful Linux update run invalidates the master package snapshot exactly once."""
+    service = object.__new__(VPSManagerService)
+    vps = SimpleNamespace(
+        hostname="manibot51",
+        command=service_mod.COMMAND_VPS_UPDATE,
+        update_status="successful",
+        command_run_id="run-1",
+        last_update="2026-07-23 08:00:00",
+    )
+    service.vpsmanager = SimpleNamespace(vpss=[vps])
+    service._linux_update_package_refresh = {}
+    refreshed: list[str] = []
+    service._refresh_vps_package_status = lambda hostname: refreshed.append(hostname) or True
+
+    service._refresh_completed_linux_updates()
+    service._refresh_completed_linux_updates()
+    vps.command_run_id = "run-2"
+    service._refresh_completed_linux_updates()
+
+    assert refreshed == ["manibot51", "manibot51"]
+
+
+def test_linux_update_playbooks_refresh_package_cache_before_finishing() -> None:
+    """Remote and local Linux updates materialize an authoritative package result."""
+    remote_playbook = Path("vps-update.yml").read_text(encoding="utf-8")
+    local_playbook = Path("master-update-linux.yml").read_text(encoding="utf-8")
+
+    assert "setup/refresh_package_status.py --pbgdir {{ install_dir }}/pbgui" in remote_playbook
+    assert '"{{ pbgdir }}/setup/refresh_package_status.py"' in local_playbook
 
 
 def test_vps_manager_cluster_status_reads_materialized_nodes_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

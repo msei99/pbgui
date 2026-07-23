@@ -3,6 +3,7 @@
 import asyncio
 from collections import deque
 from dataclasses import dataclass, field
+import hashlib
 import hmac
 import json
 import math
@@ -14,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Request, WebSocket
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel
 from starlette.websockets import WebSocketState
@@ -597,11 +598,23 @@ def revoke_token(token: str) -> bool:
     return False
 
 
+def _session_cookie_name(host: str) -> str:
+    """Scope browser sessions to the visible host and port."""
+    normalized_host = str(host or "default").strip().lower()
+    suffix = hashlib.sha256(normalized_host.encode("utf-8")).hexdigest()[:12]
+    return f"{SESSION_COOKIE_NAME}_{suffix}"
+
+
+def _request_session_cookie_name(request: Request | WebSocket) -> str:
+    """Return the browser-session cookie name for one HTTP or WebSocket request."""
+    return _session_cookie_name(request.headers.get("host", ""))
+
+
 def set_session_cookie(response: Response, request: Request, session: SessionToken) -> None:
     """Set the browser session cookie without exposing the token to JavaScript URLs."""
     max_age = max(0, int(session.expires_at - time.time()))
     response.set_cookie(
-        SESSION_COOKIE_NAME,
+        _request_session_cookie_name(request),
         session.token,
         max_age=max_age,
         httponly=True,
@@ -645,7 +658,11 @@ async def _websocket_auth_watchdog(websocket: WebSocket, token: str) -> None:
 
 async def authenticate_websocket(websocket: WebSocket) -> Optional[SessionToken]:
     """Authenticate and track a browser WebSocket through its HttpOnly cookie."""
-    token = str(websocket.cookies.get(SESSION_COOKIE_NAME) or "").strip()
+    token = str(
+        websocket.cookies.get(_request_session_cookie_name(websocket))
+        or websocket.cookies.get(SESSION_COOKIE_NAME)
+        or ""
+    ).strip()
     session = validate_token(token)
     if session is None:
         await websocket.close(code=4001)
@@ -755,12 +772,16 @@ def refresh_token(token: str, extends_seconds: int = 86400) -> Optional[SessionT
 # ── FastAPI Dependencies ──
 
 def get_token_from_request(
+    request: Request,
     authorization: Optional[str] = Header(None, description="Bearer token"),
-    session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
 ) -> str:
     """Extract a token from a Bearer header or the HttpOnly browser cookie."""
     if authorization and authorization.startswith("Bearer "):
         return authorization.replace("Bearer ", "").strip()
+    session_cookie = (
+        request.cookies.get(_request_session_cookie_name(request))
+        or request.cookies.get(SESSION_COOKIE_NAME)
+    )
     if session_cookie:
         return session_cookie.strip()
     raise HTTPException(
@@ -792,8 +813,8 @@ def require_auth(token_str: str = Depends(get_token_from_request)) -> SessionTok
 
 
 def optional_auth(
+    request: Request,
     authorization: Optional[str] = Header(None),
-    session_cookie: Optional[str] = Cookie(None, alias=SESSION_COOKIE_NAME),
 ) -> Optional[SessionToken]:
     """FastAPI dependency for optional authentication.
     
@@ -802,9 +823,15 @@ def optional_auth(
     """
     # Try to extract token
     token_str = None
+    session_cookie = None
     if authorization and authorization.startswith("Bearer "):
         token_str = authorization.replace("Bearer ", "").strip()
-    elif session_cookie:
+    else:
+        session_cookie = (
+            request.cookies.get(_request_session_cookie_name(request))
+            or request.cookies.get(SESSION_COOKIE_NAME)
+        )
+    if not token_str and session_cookie:
         token_str = session_cookie.strip()
     if not token_str:
         return None
@@ -877,9 +904,15 @@ def login(payload: LoginRequest, request: Request, response: Response) -> dict:
 
 
 @router.post("/logout")
-async def logout(response: Response, session: SessionToken = Depends(require_auth)) -> dict:
+async def logout(request: Request, response: Response, session: SessionToken = Depends(require_auth)) -> dict:
     """Revoke the current API token."""
     revoke_token(session.token)
+    response.delete_cookie(
+        _request_session_cookie_name(request),
+        path="/",
+        httponly=True,
+        samesite="strict",
+    )
     response.delete_cookie(SESSION_COOKIE_NAME, path="/", httponly=True, samesite="strict")
     await close_websocket_sessions(session.token)
     return {"ok": True}

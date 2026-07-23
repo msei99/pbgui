@@ -172,7 +172,7 @@ def test_token_refresh_renews_the_httponly_cookie(monkeypatch) -> None:
 
     cookie = response.headers["set-cookie"]
     assert result["expires_at"] == updated.expires_at
-    assert "pbgui_session=session-token" in cookie
+    assert f"{auth._request_session_cookie_name(request)}=session-token" in cookie
     assert "HttpOnly" in cookie
     assert "SameSite=strict" in cookie
     assert "Secure" in cookie

@@ -91,6 +91,16 @@ def _run_node_assertions(function_names: list[str], *, bootstrap: str, assertion
 class TestVpsManagerFrontendLogic:
     """Lock down VPS Manager form behavior against live metadata refreshes."""
 
+    def test_pb8_install_actions_use_filled_blue_emphasis(self) -> None:
+        """Uninstalled PB8 actions stand out while installed and update states retain their colors."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        sidebar_source = _extract_function(source, "renderSidebarActions")
+
+        assert ".sb-btn.install {" in source
+        assert "background: #3182ce;" in source
+        assert "st.pb8_installed ? 'sb-btn ok' : 'sb-btn install'" in sidebar_source
+        assert sidebar_source.count("st.pb8_installed ? 'sb-btn ok' : 'sb-btn install'") == 2
+
     def test_firewall_validation_accepts_ipv4_cidr_networks(self) -> None:
         """Allow the IPv4 CIDR sources that remote UFW discovery stores locally."""
         _run_node_assertions(

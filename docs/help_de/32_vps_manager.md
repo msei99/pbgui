@@ -89,6 +89,7 @@ Der **Master**-Inhaltsbereich enthält zusätzlich:
 Im Cluster-Modus synchronisieren **Update PBGui** und PBGui-Branch-Wechsel die lokale PBCluster-systemd-User-Unit und starten PBCluster neu. PBCluster ist außerdem in lokaler Service-Überwachung und Service-Control sichtbar. Ein manueller `git pull` startet PBCluster nicht neu; nutze danach `systemctl --user restart pbgui-pbcluster.service`.
 
 Die PB8-Installation ist nur auf Mastern erlaubt. Sie verwendet `<install_dir>/pb8` und `<install_dir>/venv_pb8`, validiert PB8-CLI, Rust-Erweiterung und V8-Config-Schema und speichert danach `pb8dir` und `pb8venv` in `pbgui.ini`. PBRun, PB7 und laufende PB8-Jobs werden dabei nicht gestoppt. Ein ausgewählter verwalteter Remote-Master zeigt dieselbe Aktion; normale VPS-/Slave-Hosts und Bulk-Deployments nicht.
+Wenn PB8 nicht installiert ist, wird **Install PB8** als gefüllte blaue Aktion hervorgehoben und bleibt dadurch klar von routinemäßigen Update-Schaltflächen unterscheidbar.
 
 ---
 
@@ -137,7 +138,7 @@ Die Sidebar trennt die Log-Workflows jetzt bewusst von der normalen Host-Ansicht
 - strukturierte Ansible-Ergebnis-Payloads mit JSON-Inhalt werden jetzt als mehrzeilige Blöcke hübsch formatiert, damit verschachtelte Metadaten wie `stat` direkt im gemeinsamen Viewer lesbar sind
 
 Die Status-Kacheln oberhalb des Setup-Rasters sind jetzt direkte Operator-Hinweise:
-- Der Linux-Paketstatus ist unabhängig vom VPS-Session-Passwort. Er wird ausschließlich aus dem Monitor-Agent-Cache gelesen und löst nie einen direkten lokalen oder entfernten Paket-Probe aus.
+- Der Linux-Paketstatus ist unabhängig vom VPS-Session-Passwort. Normale Anzeige-Updates lesen ausschließlich den Monitor-Agent-Cache. Ein erfolgreiches **Update Linux** führt einmalig einen abschließenden Paket-Probe aus, aktualisiert diesen Cache atomar und lässt den Master ihn sofort einlesen.
 - **Credential Capability** und **Credential Protocol** melden secret-freie CMC-Pool-Readiness, aktive Key-Anzahl sowie Katalog-/Materialisierungs-Generationen, wenn verfügbar.
 - **Monitor Agent Cache** zeigt immer **Source: agent cache** und einen eindeutigen Zustand **OK**, **Stale**, **Missing** oder **Error**. Ein nicht-OK Cache bedeutet nicht, dass SSH offline ist; SSH-Verbindung und Telemetrie-/Cache-Zustand werden getrennt angezeigt.
 - Das Panel listet `live_metrics.ndjson`, `instance_snapshot.json`, `host_meta.json`, `service_status.json`, `package_status.json` und `collector_status.json` mit dem effektiven Alter jeder Datei. Live-Daten werden nach 15 Sekunden stale, der Collector-Status nach 30 Sekunden. Collector-Loops und deren letzte Fehler werden separat angezeigt.

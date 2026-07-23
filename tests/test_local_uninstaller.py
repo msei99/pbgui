@@ -339,7 +339,7 @@ def test_login_sets_secure_httponly_session_cookie(monkeypatch) -> None:
 
     cookie = response.headers.get("set-cookie", "")
     assert result["auth"]["token"] == "cookie-token"
-    assert f"{auth.SESSION_COOKIE_NAME}=cookie-token" in cookie
+    assert f"{auth._request_session_cookie_name(request)}=cookie-token" in cookie
     assert "HttpOnly" in cookie
     assert "Secure" in cookie
     assert "SameSite=strict" in cookie
@@ -606,7 +606,7 @@ def test_explicit_disable_rotates_sessions_and_persists_mode(monkeypatch) -> Non
     revoke_all.assert_awaited_once()
     assert result["auth"]["token"] == "new-token"
     assert result["message"] == "Authentication disabled"
-    assert f"{auth.SESSION_COOKIE_NAME}=new-token" in response.headers["set-cookie"]
+    assert f"{auth._session_cookie_name('pbgui.test')}=new-token" in response.headers["set-cookie"]
 
 
 def test_password_can_reenable_authentication_without_current_password(monkeypatch) -> None:
@@ -785,8 +785,47 @@ def test_welcome_login_security_ack_uses_authenticated_endpoint() -> None:
 def test_http_auth_rejects_query_tokens_and_accepts_cookie_or_bearer() -> None:
     """Session authentication has no query parameter while API Bearer auth remains."""
     assert "token" not in inspect.signature(auth.get_token_from_request).parameters
-    assert auth.get_token_from_request(authorization="Bearer api-token", session_cookie=None) == "api-token"
-    assert auth.get_token_from_request(authorization=None, session_cookie="cookie-token") == "cookie-token"
+    bearer_request = _login_request("127.0.0.1")
+    cookie_name = auth._session_cookie_name("pbgui.test")
+    cookie_request = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "server": ("pbgui.test", 443),
+            "path": "/api/test",
+            "query_string": b"",
+            "headers": [(b"host", b"pbgui.test"), (b"cookie", f"{cookie_name}=cookie-token".encode())],
+        }
+    )
+
+    assert auth.get_token_from_request(bearer_request, authorization="Bearer api-token") == "api-token"
+    assert auth.get_token_from_request(cookie_request, authorization=None) == "cookie-token"
+
+
+def test_http_session_cookies_are_isolated_by_visible_port() -> None:
+    """Two PBGui instances on localhost ports cannot overwrite each other's session."""
+    request_8000 = Request(
+        {
+            "type": "http",
+            "scheme": "http",
+            "server": ("localhost", 8000),
+            "path": "/api/auth/login",
+            "query_string": b"",
+            "headers": [(b"host", b"localhost:8000")],
+        }
+    )
+    request_8020 = Request(
+        {
+            "type": "http",
+            "scheme": "http",
+            "server": ("localhost", 8020),
+            "path": "/api/auth/login",
+            "query_string": b"",
+            "headers": [(b"host", b"localhost:8020")],
+        }
+    )
+
+    assert auth._request_session_cookie_name(request_8000) != auth._request_session_cookie_name(request_8020)
 
 
 def test_unauthenticated_page_redirect_preserves_api_401_responses() -> None:
@@ -839,7 +878,7 @@ def test_logout_immediately_closes_token_websockets(monkeypatch) -> None:
         """Authenticate one socket, then exercise the asynchronous logout path."""
         assert await auth.authenticate_websocket(websocket) == session
         response = Response()
-        assert await auth.logout(response, session) == {"ok": True}
+        assert await auth.logout(_login_request("127.0.0.1"), response, session) == {"ok": True}
         await asyncio.sleep(0)
         return response
 
@@ -848,7 +887,13 @@ def test_logout_immediately_closes_token_websockets(monkeypatch) -> None:
     websocket.accept.assert_awaited_once()
     websocket.close.assert_awaited_once_with(code=4001, reason="Session logged out")
     assert session.token not in auth._websocket_sessions
-    assert f"{auth.SESSION_COOKIE_NAME}=\"\"" in response.headers.get("set-cookie", "")
+    cookie_headers = [
+        value.decode("latin-1")
+        for name, value in response.raw_headers
+        if name.lower() == b"set-cookie"
+    ]
+    assert any(f"{auth._session_cookie_name('pbgui.test')}=\"\"" in value for value in cookie_headers)
+    assert any(f"{auth.SESSION_COOKIE_NAME}=\"\"" in value for value in cookie_headers)
 
 
 def test_expired_session_closes_active_websocket(monkeypatch) -> None:

@@ -1465,6 +1465,7 @@ class VPSManagerService:
         self._master_server_cpu_history: list[tuple[float, float, float]] = []
         self._vps_ssh_ok_cache: dict[str, bool] = {}
         self._vps_systemd_migration_status_cache: dict[str, dict[str, Any]] = {}
+        self._linux_update_package_refresh: dict[str, dict[str, Any]] = {}
         self._session_secrets: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
         self._deploy_threads: dict[str, threading.Thread] = {}
         self._deploy_sessions: dict[str, dict[str, Any]] = {}
@@ -1997,6 +1998,7 @@ class VPSManagerService:
             return
         try:
             self._sync_vps_inventory()
+            self._refresh_completed_linux_updates()
             now = _now_ts()
             release_stale = (
                 now - min(int(self._pbgui_release_ts or 0), int(self._pb7_release_ts or 0))
@@ -2731,6 +2733,63 @@ class VPSManagerService:
             asyncio.run_coroutine_threadsafe(monitor.refresh_enabled_host(host), loop).result(timeout=30)
         except Exception as exc:
             _log(SERVICE, f"monitor reconnect failed for {host}: {exc}", level="WARNING")
+
+    def _refresh_vps_package_status(self, hostname: str) -> bool:
+        """Consume one post-update package cache through the running monitor."""
+        monitor = get_monitor()
+        if monitor is None or not hasattr(monitor, "refresh_package_status"):
+            return False
+        host = str(hostname or "").strip()
+        if not host:
+            return False
+        try:
+            loop = getattr(monitor, "loop", None)
+            if loop is None or loop.is_closed():
+                return False
+            future = asyncio.run_coroutine_threadsafe(monitor.refresh_package_status(host), loop)
+            return bool(future.result(timeout=30))
+        except Exception as exc:
+            _log(SERVICE, f"post-update package refresh failed for {host}: {exc}", level="WARNING")
+            return False
+
+    def _refresh_completed_linux_updates(self) -> None:
+        """Refresh each host once when its latest Linux update finishes."""
+        manager = getattr(self, "vpsmanager", None)
+        if manager is None:
+            return
+        state = getattr(self, "_linux_update_package_refresh", None)
+        if state is None:
+            state = {}
+            self._linux_update_package_refresh = state
+        now = time.time()
+        active_hosts: set[str] = set()
+        for vps in getattr(manager, "vpss", []) or []:
+            hostname = str(getattr(vps, "hostname", "") or "").strip()
+            if not hostname:
+                continue
+            active_hosts.add(hostname)
+            if str(getattr(vps, "command", "") or "") != COMMAND_VPS_UPDATE:
+                continue
+            if str(getattr(vps, "update_status", "") or "") != "successful":
+                continue
+            run_id = str(getattr(vps, "command_run_id", "") or getattr(vps, "last_update", "") or "").strip()
+            if not run_id:
+                continue
+            current = state.get(hostname) or {}
+            if current.get("run_id") == run_id and current.get("refreshed"):
+                continue
+            if current.get("run_id") == run_id and now < float(current.get("next_attempt") or 0.0):
+                continue
+            refreshed = self._refresh_vps_package_status(hostname)
+            state[hostname] = {
+                "run_id": run_id,
+                "refreshed": refreshed,
+                "next_attempt": now + (0.0 if refreshed else 10.0),
+            }
+            if refreshed:
+                _log(SERVICE, f"refreshed package status after Linux update on {hostname}", level="INFO")
+        for hostname in set(state) - active_hosts:
+            state.pop(hostname, None)
 
     def probe_vps_host_key(self, hostname: str) -> dict[str, Any]:
         """Read the current SSH host key for GUI review without trusting it."""

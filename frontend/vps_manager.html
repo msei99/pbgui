@@ -2241,6 +2241,19 @@
       border-color: rgba(99, 179, 237, 0.5);
     }
 
+    .sb-btn.install {
+      background: #3182ce;
+      border-color: #63b3ed;
+      color: #fff;
+      box-shadow: 0 0 0 1px rgba(99, 179, 237, 0.22);
+    }
+
+    .sb-btn.install:hover {
+      background: #4299e1;
+      border-color: #90cdf4;
+      color: #fff;
+    }
+
     .sb-btn.warning {
       background: #d69e2e;
       border-color: #d69e2e;
@@ -10178,7 +10191,7 @@
         const st = (detail && detail.status) || {};
         const masterPbguiBtnClass = st.pbgui_update_available ? 'sb-btn warning' : 'sb-btn ok';
         const masterPb7BtnClass = st.pb7_update_available ? 'sb-btn warning' : 'sb-btn ok';
-        const masterPb8BtnClass = st.pb8_update_available ? 'sb-btn warning' : (st.pb8_installed ? 'sb-btn ok' : 'sb-btn info');
+        const masterPb8BtnClass = st.pb8_update_available ? 'sb-btn warning' : (st.pb8_installed ? 'sb-btn ok' : 'sb-btn install');
         const masterPb8ButtonText = st.pb8_installed ? 'Update PB8' : 'Install PB8';
         const masterBothBtnClass = (st.pbgui_update_available || st.pb7_update_available) ? 'sb-btn warning' : 'sb-btn ok';
         const pendingSrc = st.pending_updates != null ? st.pending_updates : ((st.summary_row || {}).updates);
@@ -10227,7 +10240,7 @@
         const isRemoteMaster = String(((st.summary_row || {}).role) || '').toLowerCase() === 'master';
         const pbguiBtnClass = st.pbgui_update_available ? 'sb-btn warning' : 'sb-btn ok';
         const pb7BtnClass = st.pb7_update_available ? 'sb-btn warning' : 'sb-btn ok';
-        const pb8BtnClass = st.pb8_update_available ? 'sb-btn warning' : (st.pb8_installed ? 'sb-btn ok' : 'sb-btn info');
+        const pb8BtnClass = st.pb8_update_available ? 'sb-btn warning' : (st.pb8_installed ? 'sb-btn ok' : 'sb-btn install');
         const pb8ButtonText = st.pb8_installed ? 'Update PB8' : 'Install PB8';
         const bothBtnClass = (st.pbgui_update_available || st.pb7_update_available) ? 'sb-btn warning' : 'sb-btn ok';
         const pendingSrc = st.pending_updates != null ? st.pending_updates : ((st.summary_row || {}).updates);

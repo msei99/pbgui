@@ -89,6 +89,7 @@ The **Master** content area also contains:
 In cluster mode, **Update PBGui** and PBGui branch switches sync the local PBCluster systemd user unit and restart PBCluster. PBCluster is also visible in local service monitoring and service-control views. A manual `git pull` does not restart PBCluster; use `systemctl --user restart pbgui-pbcluster.service` afterward.
 
 PB8 installation is master-only. It uses `<install_dir>/pb8` and `<install_dir>/venv_pb8`, validates the PB8 CLI, Rust extension, and V8 config schema, and then saves `pb8dir` and `pb8venv` in `pbgui.ini`. It does not stop PBRun, PB7, or running PB8 jobs. A selected managed remote master exposes the same action; normal VPS/slave hosts and bulk deployments do not.
+When PB8 is not installed, **Install PB8** is shown as a filled blue action so it remains distinct from routine update buttons.
 
 ---
 
@@ -137,7 +138,7 @@ The sidebar keeps the detailed log workflows separate from the normal host overv
 - structured ansible result payloads with JSON bodies are now pretty-printed into multiline blocks, which makes nested metadata like `stat` results readable directly in the shared viewer
 
 The status cards above the setup grid are live operator hints:
-- Linux package status is independent of the VPS session password. It is read only from the monitor-agent cache and never triggers a direct local or remote package probe.
+- Linux package status is independent of the VPS session password. Normal display refreshes read only from the monitor-agent cache. A successful **Update Linux** performs one final package probe, atomically updates that cache, and makes the master consume it immediately.
 - **Credential Capability** and **Credential Protocol** report secret-free CMC pool readiness, active-key count, and catalog/materialized generations when available.
 - **Monitor Agent Cache** always shows **Source: agent cache** and an explicit **OK**, **Stale**, **Missing**, or **Error** state. A non-OK cache does not mean SSH is offline; SSH connection and telemetry/cache health are displayed separately.
 - The panel lists `live_metrics.ndjson`, `instance_snapshot.json`, `host_meta.json`, `service_status.json`, `package_status.json`, and `collector_status.json` with each file's effective age. Live data becomes stale after 15 seconds and collector status after 30 seconds. Collector loops and their last errors are listed separately.

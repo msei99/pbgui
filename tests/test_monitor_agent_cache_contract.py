@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -96,6 +99,55 @@ def _valid_payloads(now: float) -> dict[str, dict[str, Any]]:
             },
         },
     }
+
+
+def test_post_update_package_helper_writes_fresh_atomic_cache(tmp_path: Path) -> None:
+    """Linux update completion can refresh package status without the long-running agent loop."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    apt_get = bin_dir / "apt-get"
+    apt_get.write_text("#!/bin/sh\nprintf '0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\\n'\n", encoding="utf-8")
+    apt_get.chmod(0o700)
+    pbgui_dir = tmp_path / "pbgui"
+    pbgui_dir.mkdir()
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+
+    result = subprocess.run(
+        [sys.executable, "setup/refresh_package_status.py", "--pbgdir", str(pbgui_dir)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads((pbgui_dir / "data" / "monitor_agent" / "package_status.json").read_text(encoding="utf-8"))
+    assert payload["upgrades"] == "0"
+    assert payload["source"] == "monitor-agent"
+    assert payload["schema_version"] == 1
+    assert payload["generated_at"] > 0
+
+
+def test_monitor_consumes_post_update_package_cache_immediately() -> None:
+    """The master can bypass its hourly read throttle for an explicit update completion."""
+    monitor = object.__new__(VPSMonitor)
+    monitor.pool = SimpleNamespace(get_connection=lambda hostname: object() if hostname == "vps-1" else None)
+    monitor.store = SimpleNamespace(host_meta={"vps-1": {"package_status": {"generated_at": 100.0, "upgrades": "5"}}})
+    monitor._last_package_status_collect = {"vps-1": 100.0}
+
+    async def collect(hostname: str, *, include_package_status: bool = False) -> None:
+        """Replace the SSH collector with a freshly materialized package payload."""
+        assert hostname == "vps-1"
+        assert include_package_status is True
+        monitor.store.host_meta[hostname]["package_status"] = {"generated_at": 200.0, "upgrades": "0"}
+
+    monitor.collect_host_meta_now = collect
+
+    assert asyncio.run(monitor.refresh_package_status("vps-1")) is True
+    assert monitor._last_package_status_collect == {}
+    assert monitor.store.host_meta["vps-1"]["package_status"]["upgrades"] == "0"
 
 
 @pytest.mark.parametrize("filename", tuple(monitor_mod.MONITOR_AGENT_FILE_TTLS))

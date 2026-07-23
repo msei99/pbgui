@@ -5113,6 +5113,18 @@ class VPSMonitor:
         if task is not None:
             await asyncio.shield(task)
 
+    async def refresh_package_status(self, hostname: str) -> bool:
+        """Immediately consume a package cache refreshed by a completed update."""
+        host = str(hostname or "").strip()
+        if not host or not self.pool.get_connection(host):
+            return False
+        current = (self.store.host_meta.get(host) or {}).get("package_status") or {}
+        previous_generated_at = float(current.get("generated_at") or 0.0)
+        self._last_package_status_collect.pop(host, None)
+        await self.collect_host_meta_now(host, include_package_status=True)
+        refreshed = (self.store.host_meta.get(host) or {}).get("package_status") or {}
+        return float(refreshed.get("generated_at") or 0.0) > previous_generated_at
+
     async def _collect_host_meta_all(self):
         """Collect host metadata from all connected VPS via the shared SSH pool."""
         now = time.time()

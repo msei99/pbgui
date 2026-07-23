@@ -62,6 +62,15 @@
         autoremove: true
       become: "{{ needs_become | bool }}"
 
+    - name: refresh monitor package status after Linux update
+      command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "{{ pbgdir }}/setup/refresh_package_status.py"
+          - --pbgdir
+          - "{{ pbgdir }}"
+      changed_when: false
+
     - name: check if reboot is required
       stat:
         path: /var/run/reboot-required
