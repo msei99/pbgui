@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 import api.v7_instances as v7_instances
 import api.vps_manager as vps_manager_api
@@ -2756,6 +2757,23 @@ def test_master_update_playbooks_repair_required_systemd_units(playbook_path: st
     assert "--no-start" in playbook
     assert "api,pbcluster,pbcoindata,monitor-agent" in playbook
     assert "failed_when: false" not in systemd_setup_block
+
+
+def test_combined_master_update_defers_api_restart_until_after_pb7_handlers() -> None:
+    """The API restart cannot terminate ansible-runner while PB7 rebuild handlers are active."""
+
+    playbook = Path("master-update-pb.yml").read_text(encoding="utf-8")
+    handlers = yaml.safe_load(playbook)[0]["handlers"]
+    api_name = "Restart PBApiServer after PB7 handlers complete"
+    api_index = next(index for index, handler in enumerate(handlers) if handler.get("name") == api_name)
+    api_handler = handlers[api_index]
+    pb7_indices = [index for index, handler in enumerate(handlers) if handler.get("listen") == "restart pb7"]
+
+    assert pb7_indices
+    assert all(index < api_index for index in pb7_indices)
+    assert api_handler["listen"] == "restart pbgui"
+    assert "systemd-run --user" in api_handler["shell"]
+    assert "sleep 5" in api_handler["shell"]
 
 
 def test_master_branch_switch_playbook_retains_required_unit_probe() -> None:

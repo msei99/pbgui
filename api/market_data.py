@@ -1,9 +1,11 @@
 """FastAPI endpoints for market data status monitoring and standalone page shell."""
 
 import asyncio
-from datetime import date as _date, datetime as _datetime
+from datetime import date as _date, datetime as _datetime, timedelta as _timedelta, timezone as _timezone
 import shutil
 import shlex
+import traceback
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
@@ -60,13 +62,18 @@ from pbgui_purefunc import coin_from_symbol_code
 from pbgui_purefunc import load_ini, update_ini
 from ini_settings import apply_metadata
 from tradfi_sync import auto_map_tradfi, fetch_tiingo_meta, fetch_xyz_spec
+from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
+from secure_files import atomic_write_private_text, ensure_private_directory
 
 from .auth import require_auth, SessionToken
 from .heatmap import _get_missing_lag_minutes
 
 router = APIRouter(prefix="/market-data", tags=["market-data"])
 _market_data_status_snapshot: dict[str, Any] = {}
+_copy_data_schedules: dict[str, dict[str, Any]] = {}
+_copy_data_scheduler_task: asyncio.Task | None = None
+_copy_data_scheduler_stop: asyncio.Event | None = None
 SERVICE = "MarketDataAPI"
 
 PBGDIR = Path(__file__).resolve().parent.parent
@@ -898,6 +905,8 @@ COPY_DATA_EXCHANGES: dict[str, dict[str, str]] = {
 COPY_DATA_MODE = "update"
 COPY_DATA_TARGET_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-@")
 COPY_DATA_REMOTE_PATH_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-")
+COPY_DATA_SCHEDULE_MIN_HOURS = 1
+COPY_DATA_SCHEDULE_MAX_HOURS = 168
 
 
 def _load_bitget_distributed_hosts() -> list[dict[str, str]]:
@@ -1036,7 +1045,8 @@ def _normalize_copy_data_target(target: Any) -> str:
         raise ValueError("Remote target must be a host or user@host without spaces, slashes, or a path.")
     if any(ch not in COPY_DATA_TARGET_CHARS for ch in text):
         raise ValueError("Remote target contains unsupported characters.")
-    if text in (".", ".."):
+    host = text.rsplit("@", 1)[-1]
+    if text in (".", "..") or host.startswith("-"):
         raise ValueError("Remote target is invalid.")
     return text
 
@@ -1066,9 +1076,27 @@ def _parse_copy_data_ssh_command(ssh_command: Any) -> list[str]:
         raise ValueError(f"Invalid SSH command: {exc}") from exc
     if not parts:
         parts = ["ssh"]
-    if Path(parts[0]).name != "ssh":
-        raise ValueError("SSH command must start with ssh.")
-    return parts
+    if parts[0] != "ssh":
+        raise ValueError("SSH command must start with the system ssh executable.")
+    normalized = ["ssh"]
+    index = 1
+    while index < len(parts):
+        option = parts[index]
+        if option not in {"-p", "-J"} or index + 1 >= len(parts):
+            raise ValueError("SSH command only supports the -p port and -J jump-host options.")
+        value = parts[index + 1]
+        if option == "-p":
+            try:
+                port = int(value)
+            except ValueError as exc:
+                raise ValueError("SSH port must be a number from 1 to 65535.") from exc
+            if port < 1 or port > 65535 or str(port) != value:
+                raise ValueError("SSH port must be a number from 1 to 65535.")
+            normalized.extend(["-p", str(port)])
+        else:
+            normalized.extend(["-J", _normalize_copy_data_target(value)])
+        index += 2
+    return normalized
 
 
 def _build_copy_data_queue_payload(request: dict[str, Any]) -> dict[str, Any]:
@@ -1086,7 +1114,231 @@ def _build_copy_data_queue_payload(request: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _queue_copy_data_job_response(request: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _copy_data_schedules_file() -> Path:
+    """Return the owner-only persistent Copy Data schedule file."""
+
+    return PBGDIR / "data" / "market_data" / "copy_data_schedules.json"
+
+
+def _copy_data_dispatch_lock_file() -> Path:
+    """Return the shared enqueue lock for real Copy Data destinations."""
+
+    return PBGDIR / "data" / "market_data" / "copy_data_dispatch"
+
+
+def _copy_data_schedule_next_run(interval_hours: int) -> str:
+    """Return the next UTC run time for an interval schedule."""
+
+    return (_datetime.now(_timezone.utc) + _timedelta(hours=int(interval_hours))).isoformat()
+
+
+def _normalize_copy_data_schedule(request: dict[str, Any]) -> dict[str, Any]:
+    """Validate a create/update request and preserve schedule run history."""
+
+    if not isinstance(request, dict):
+        raise ValueError("Invalid schedule payload.")
+    payload = _build_copy_data_queue_payload(request)
+    schedule_id = str(request.get("id") or "").strip()
+    if schedule_id:
+        try:
+            schedule_id = uuid.UUID(schedule_id).hex
+        except ValueError as exc:
+            raise ValueError("Invalid schedule ID.") from exc
+    else:
+        schedule_id = uuid.uuid4().hex
+    try:
+        interval_hours = int(request.get("interval_hours") or 0)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Schedule interval must be a whole number of hours.") from exc
+    try:
+        is_whole_interval = float(request.get("interval_hours") or 0) == interval_hours
+    except (TypeError, ValueError, OverflowError):
+        is_whole_interval = False
+    if not is_whole_interval:
+        raise ValueError("Schedule interval must be a whole number of hours.")
+    if not COPY_DATA_SCHEDULE_MIN_HOURS <= interval_hours <= COPY_DATA_SCHEDULE_MAX_HOURS:
+        raise ValueError(
+            f"Schedule interval must be between {COPY_DATA_SCHEDULE_MIN_HOURS} and "
+            f"{COPY_DATA_SCHEDULE_MAX_HOURS} hours."
+        )
+    name = str(request.get("name") or "").strip()[:80]
+    if not name:
+        name = f"OHLCV copy to {payload['target']}"
+    if any(ch in name for ch in ("\x00", "\n", "\r")):
+        raise ValueError("Schedule name contains unsupported control characters.")
+    enabled_value = request.get("enabled", True)
+    if not isinstance(enabled_value, bool):
+        raise ValueError("Schedule enabled state must be true or false.")
+    enabled = enabled_value
+    existing = dict(_copy_data_schedules.get(schedule_id) or {})
+    now = _datetime.now(_timezone.utc).isoformat()
+    return {
+        "id": schedule_id,
+        "name": name,
+        "target": payload["target"],
+        "ssh_command": payload["ssh_command"],
+        "destination_root": payload["destination_root"],
+        "exchanges": payload["exchanges"],
+        "interval_hours": interval_hours,
+        "enabled": enabled,
+        "created_at": existing.get("created_at") or now,
+        "updated_at": now,
+        "next_run": _copy_data_schedule_next_run(interval_hours) if enabled else "",
+        "last_run": existing.get("last_run") or "",
+        "last_job_id": existing.get("last_job_id") or "",
+        "last_error": existing.get("last_error") or "",
+        "dispatch_pending_at": existing.get("dispatch_pending_at") or "",
+        "dispatch_id": existing.get("dispatch_id") or "",
+    }
+
+
+def _load_copy_data_schedules() -> bool:
+    """Load schedules without replacing good in-memory state after a read error."""
+
+    path = _copy_data_schedules_file()
+    with advisory_file_lock(path):
+        if not path.exists():
+            _copy_data_schedules.clear()
+            return True
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, list):
+                raise ValueError("Schedule file root must be a list.")
+            loaded: dict[str, dict[str, Any]] = {}
+            for item in data:
+                if not isinstance(item, dict):
+                    raise ValueError("Schedule entries must be JSON objects.")
+                if not str(item.get("id") or "").strip():
+                    raise ValueError("Persisted schedules must have an ID.")
+                schedule = _normalize_copy_data_schedule(item)
+                schedule["created_at"] = str(item.get("created_at") or schedule["created_at"])
+                schedule["updated_at"] = str(item.get("updated_at") or schedule["updated_at"])
+                schedule["last_run"] = str(item.get("last_run") or "")
+                schedule["last_job_id"] = str(item.get("last_job_id") or "")
+                schedule["last_error"] = str(item.get("last_error") or "")[:500]
+                schedule["dispatch_pending_at"] = str(item.get("dispatch_pending_at") or "")
+                schedule["dispatch_id"] = str(item.get("dispatch_id") or "")
+                if schedule["enabled"]:
+                    next_run = str(item.get("next_run") or "")
+                    try:
+                        _datetime.fromisoformat(next_run)
+                    except ValueError:
+                        next_run = _datetime.now(_timezone.utc).isoformat()
+                    schedule["next_run"] = next_run
+                else:
+                    schedule["next_run"] = ""
+                schedule_id = str(schedule["id"])
+                if schedule_id in loaded:
+                    raise ValueError(f"Duplicate Copy Data schedule ID: {schedule_id}")
+                loaded[schedule_id] = schedule
+        except Exception as exc:
+            _log(SERVICE, f"Failed to load Copy Data schedules: {exc}", level="WARNING")
+            return False
+        _copy_data_schedules.clear()
+        _copy_data_schedules.update(loaded)
+        return True
+
+
+def _save_copy_data_schedules() -> None:
+    """Persist Copy Data schedules atomically with owner-only permissions."""
+
+    path = _copy_data_schedules_file()
+    try:
+        with advisory_file_lock(path):
+            ensure_private_directory(path.parent)
+            payload = json.dumps(list(_copy_data_schedules.values()), indent=4) + "\n"
+            atomic_write_private_text(path, payload)
+    except Exception as exc:
+        _log(
+            SERVICE,
+            f"Failed to save Copy Data schedules: {exc}",
+            level="ERROR",
+            meta={"traceback": traceback.format_exc()},
+        )
+        raise
+
+
+def _copy_data_schedule_has_active_job(
+    schedule_id: str,
+    schedule: dict[str, Any] | None = None,
+) -> bool:
+    """Return whether this schedule or its copy destination already has active work."""
+
+    return _copy_data_payload_has_active_job(schedule or {}, schedule_id=schedule_id)
+
+
+def _copy_data_payload_has_active_job(payload: dict[str, Any], *, schedule_id: str = "") -> bool:
+    """Check active real-copy jobs for a matching schedule or overlapping destination."""
+
+    from task_queue import list_jobs
+
+    schedule_target = str(payload.get("target") or "")
+    schedule_root = str(payload.get("destination_root") or "")
+    schedule_exchanges = set(payload.get("exchanges") or [])
+    for job in list_jobs(states=["pending", "running"], limit=0):
+        if str(job.get("type") or "") != "ohlcv_copy":
+            continue
+        payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        if schedule_id and str(payload.get("schedule_id") or "") == schedule_id:
+            return True
+        if (
+            schedule_target
+            and str(payload.get("target") or "") == schedule_target
+            and str(payload.get("destination_root") or "") == schedule_root
+            and schedule_exchanges.intersection(set(payload.get("exchanges") or []))
+        ):
+            return True
+    return False
+
+
+def _copy_data_schedule_jobs(schedule_id: str, *, states: list[str]) -> list[dict[str, Any]]:
+    """Return task-queue jobs tagged with one Copy Data schedule ID."""
+
+    from task_queue import list_jobs
+
+    matches: list[dict[str, Any]] = []
+    for job in list_jobs(states=states, limit=0):
+        if str(job.get("type") or "") != "ohlcv_copy":
+            continue
+        payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        if str(payload.get("schedule_id") or "") == schedule_id:
+            matches.append(job)
+    return matches
+
+
+def _reconcile_copy_data_dispatch(schedule: dict[str, Any]) -> bool:
+    """Recover schedule state when the API stopped after enqueue but before its final save."""
+
+    pending_at = str(schedule.get("dispatch_pending_at") or "")
+    dispatch_id = str(schedule.get("dispatch_id") or "")
+    if not pending_at or not dispatch_id:
+        return False
+    jobs = [
+        job
+        for job in _copy_data_schedule_jobs(
+            str(schedule.get("id") or ""),
+            states=["pending", "running", "done", "failed"],
+        )
+        if str((job.get("payload") or {}).get("dispatch_id") or "") == dispatch_id
+    ]
+    if not jobs:
+        return False
+    latest = max(jobs, key=lambda job: int(job.get("created_ts") or 0))
+    schedule["last_job_id"] = str(latest.get("id") or "")
+    schedule["last_error"] = str(latest.get("error") or "")[:500] if latest.get("status") == "failed" else ""
+    schedule["dispatch_pending_at"] = ""
+    schedule["dispatch_id"] = ""
+    schedule["updated_at"] = _datetime.now(_timezone.utc).isoformat()
+    return True
+
+
+def _queue_copy_data_job_response(
+    request: dict[str, Any],
+    *,
+    dry_run: bool,
+    schedule_id: str = "",
+    dispatch_id: str = "",
+) -> dict[str, Any]:
     """Queue a Copy Data job and start the worker when needed."""
 
     import subprocess
@@ -1103,18 +1355,38 @@ def _queue_copy_data_job_response(request: dict[str, Any], *, dry_run: bool) -> 
     dry_run = bool(dry_run)
     if dry_run:
         payload["dry_run"] = True
+    if schedule_id:
+        payload["schedule_id"] = str(schedule_id)
+    if dispatch_id:
+        payload["dispatch_id"] = str(dispatch_id)
 
     exchanges = list(payload.get("exchanges") or [])
     labels = [COPY_DATA_EXCHANGES[ex]["label"] for ex in exchanges if ex in COPY_DATA_EXCHANGES]
     job_type = "ohlcv_copy_dry_run" if dry_run else "ohlcv_copy"
     action_label = "dry run" if dry_run else "copy"
     try:
-        job = enqueue_running_job(
-            job_type=job_type,
-            exchange="ohlcv",
-            payload=payload,
-            manual_parallel=True,
-        )
+        if dry_run:
+            job = enqueue_running_job(
+                job_type=job_type,
+                exchange="ohlcv",
+                payload=payload,
+                manual_parallel=True,
+            )
+        else:
+            dispatch_lock = _copy_data_dispatch_lock_file()
+            ensure_private_directory(dispatch_lock.parent)
+            with advisory_file_lock(dispatch_lock):
+                if _copy_data_payload_has_active_job(payload, schedule_id=schedule_id):
+                    return {
+                        "success": False,
+                        "error": "This Copy Data destination already has overlapping active work.",
+                    }
+                job = enqueue_running_job(
+                    job_type=job_type,
+                    exchange="ohlcv",
+                    payload=payload,
+                    manual_parallel=True,
+                )
     except Exception as exc:
         return {"success": False, "error": f"Failed to enqueue OHLCV {action_label} job: {exc}"}
 
@@ -1162,6 +1434,137 @@ def _queue_copy_data_job_response(request: dict[str, Any], *, dry_run: bool) -> 
     }
 
 
+def _dispatch_copy_data_schedule(schedule: dict[str, Any], *, manual: bool) -> dict[str, Any]:
+    """Queue one scheduled copy and persist dispatch state before returning."""
+
+    schedule_id = str(schedule.get("id") or "")
+    if _copy_data_schedule_has_active_job(schedule_id, schedule):
+        raise HTTPException(status_code=409, detail="This Copy Data destination already has overlapping active work.")
+    now = _datetime.now(_timezone.utc).isoformat()
+    dispatch_id = uuid.uuid4().hex
+    schedule["last_run"] = now
+    schedule["updated_at"] = now
+    schedule["dispatch_pending_at"] = now
+    schedule["dispatch_id"] = dispatch_id
+    schedule["next_run"] = (
+        _copy_data_schedule_next_run(int(schedule.get("interval_hours") or COPY_DATA_SCHEDULE_MIN_HOURS))
+        if schedule.get("enabled")
+        else ""
+    )
+    _save_copy_data_schedules()
+    result = _queue_copy_data_job_response(
+        schedule,
+        dry_run=False,
+        schedule_id=schedule_id,
+        dispatch_id=dispatch_id,
+    )
+    if result.get("success"):
+        schedule["last_job_id"] = str(result.get("job_id") or "")
+        schedule["last_error"] = ""
+        _log(
+            SERVICE,
+            f"Queued {'manual' if manual else 'scheduled'} OHLCV copy schedule "
+            f"{schedule.get('name')} job_id={schedule['last_job_id']}",
+            level="INFO",
+        )
+    else:
+        schedule["last_error"] = str(result.get("error") or "Failed to queue Copy Data schedule.")
+        _log(
+            SERVICE,
+            f"Failed to queue OHLCV copy schedule {schedule.get('name')}: {schedule['last_error']}",
+            level="WARNING",
+        )
+    schedule["dispatch_pending_at"] = ""
+    schedule["dispatch_id"] = ""
+    schedule["updated_at"] = _datetime.now(_timezone.utc).isoformat()
+    _save_copy_data_schedules()
+    return result
+
+
+def _run_copy_data_scheduler_tick() -> None:
+    """Queue at most one due Copy Data schedule per scheduler tick."""
+
+    path = _copy_data_schedules_file()
+    with advisory_file_lock(path):
+        if not _load_copy_data_schedules():
+            return
+        now = _datetime.now(_timezone.utc)
+        reconciled = False
+        for schedule in _copy_data_schedules.values():
+            if not schedule.get("dispatch_pending_at"):
+                continue
+            if _reconcile_copy_data_dispatch(schedule):
+                reconciled = True
+                continue
+            if not _copy_data_schedule_has_active_job(str(schedule.get("id") or ""), schedule):
+                _dispatch_copy_data_schedule(schedule, manual=False)
+                return
+        if reconciled:
+            _save_copy_data_schedules()
+        for schedule in sorted(_copy_data_schedules.values(), key=lambda item: str(item.get("next_run") or "")):
+            if not schedule.get("enabled"):
+                continue
+            try:
+                due_at = _datetime.fromisoformat(str(schedule.get("next_run") or ""))
+                if due_at.tzinfo is None:
+                    due_at = due_at.replace(tzinfo=_timezone.utc)
+            except ValueError:
+                due_at = now
+            if due_at > now or _copy_data_schedule_has_active_job(str(schedule.get("id") or ""), schedule):
+                continue
+            _dispatch_copy_data_schedule(schedule, manual=False)
+            break
+
+
+async def _copy_data_scheduler_loop(stop_event: asyncio.Event) -> None:
+    """Run the lightweight Copy Data scheduler until API shutdown."""
+
+    while not stop_event.is_set():
+        try:
+            await asyncio.to_thread(_run_copy_data_scheduler_tick)
+        except Exception as exc:
+            _log(
+                SERVICE,
+                f"Copy Data scheduler failed: {exc}",
+                level="WARNING",
+                meta={"traceback": traceback.format_exc()},
+            )
+        if stop_event.is_set():
+            break
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=10)
+        except TimeoutError:
+            pass
+
+
+def startup() -> None:
+    """Load Copy Data schedules and start their API-owned scheduler."""
+
+    global _copy_data_scheduler_stop, _copy_data_scheduler_task
+    _load_copy_data_schedules()
+    if _copy_data_scheduler_task is None or _copy_data_scheduler_task.done():
+        _copy_data_scheduler_stop = asyncio.Event()
+        _copy_data_scheduler_task = asyncio.create_task(
+            _copy_data_scheduler_loop(_copy_data_scheduler_stop),
+            name="market-data-copy-scheduler",
+        )
+
+
+async def shutdown() -> None:
+    """Signal and await the API-owned Copy Data scheduler and active tick."""
+
+    global _copy_data_scheduler_stop, _copy_data_scheduler_task
+    task = _copy_data_scheduler_task
+    stop_event = _copy_data_scheduler_stop
+    _copy_data_scheduler_task = None
+    _copy_data_scheduler_stop = None
+    if task is None:
+        return
+    if stop_event is not None:
+        stop_event.set()
+    await asyncio.gather(task, return_exceptions=True)
+
+
 def _build_copy_data_test_payload(request: dict[str, Any]) -> dict[str, Any]:
     """Build the sanitized payload for a read-only Copy Data connection test."""
 
@@ -1170,9 +1573,13 @@ def _build_copy_data_test_payload(request: dict[str, Any]) -> dict[str, Any]:
 
     target = _normalize_copy_data_target(request.get("target"))
     destination_root = _normalize_copy_data_destination_root(request.get("destination_root"))
-    ssh_args = _parse_copy_data_ssh_command(request.get("ssh_command"))
-    if len(ssh_args) > 1 and ssh_args[-1] == target:
+    try:
+        raw_ssh_args = shlex.split(str(request.get("ssh_command") or "").strip() or "ssh")
+    except ValueError as exc:
+        raise ValueError(f"Invalid SSH command: {exc}") from exc
+    if len(raw_ssh_args) > 1 and raw_ssh_args[-1] == target:
         raise ValueError("SSH command must not include the target host. Put it only in Remote target.")
+    ssh_args = _parse_copy_data_ssh_command(request.get("ssh_command"))
 
     return {
         "target": target,
@@ -2893,6 +3300,105 @@ def test_copy_data_connection(
         result = _test_copy_data_connection_payload(payload)
     except Exception as exc:
         return {"success": False, "error": f"Connection test failed: {exc}"}
+    return result
+
+
+@router.get("/copy-data/schedules")
+def get_copy_data_schedules(
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """List persisted recurring OHLCV copy schedules."""
+
+    del session
+    path = _copy_data_schedules_file()
+    with advisory_file_lock(path):
+        if not _load_copy_data_schedules():
+            raise HTTPException(status_code=500, detail="Copy Data schedules could not be loaded; no changes were written.")
+        sorted_schedules = sorted(
+            _copy_data_schedules.values(),
+            key=lambda item: str(item.get("name") or "").lower(),
+        )
+        schedules = [
+            {**schedule, "exchanges": list(schedule.get("exchanges") or [])}
+            for schedule in sorted_schedules
+        ]
+    return {"success": True, "schedules": schedules}
+
+
+@router.post("/copy-data/schedules")
+def save_copy_data_schedule(
+    request: dict,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Create or update one recurring OHLCV copy schedule."""
+
+    del session
+    path = _copy_data_schedules_file()
+    with advisory_file_lock(path):
+        if not _load_copy_data_schedules():
+            raise HTTPException(status_code=500, detail="Copy Data schedules could not be loaded; no changes were written.")
+        try:
+            schedule = _normalize_copy_data_schedule(request)
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+        requested_id = str(request.get("id") or "").strip()
+        if requested_id:
+            existing = _copy_data_schedules.get(str(schedule["id"]))
+            if not existing:
+                raise HTTPException(status_code=404, detail="Copy Data schedule not found.")
+            expected_updated_at = str(request.get("expected_updated_at") or "")
+            if not expected_updated_at or expected_updated_at != str(existing.get("updated_at") or ""):
+                raise HTTPException(status_code=409, detail="Copy Data schedule changed; reload it before saving.")
+        _copy_data_schedules[str(schedule["id"])] = schedule
+        _save_copy_data_schedules()
+    _log(
+        SERVICE,
+        f"Saved OHLCV copy schedule {schedule['name']} target={schedule['target']} "
+        f"interval_hours={schedule['interval_hours']} enabled={schedule['enabled']}",
+        level="INFO",
+    )
+    return {"success": True, "schedule": schedule}
+
+
+@router.delete("/copy-data/schedules/{schedule_id}")
+def delete_copy_data_schedule(
+    schedule_id: str,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Delete one recurring OHLCV copy schedule."""
+
+    del session
+    path = _copy_data_schedules_file()
+    with advisory_file_lock(path):
+        if not _load_copy_data_schedules():
+            raise HTTPException(status_code=500, detail="Copy Data schedules could not be loaded; no changes were written.")
+        schedule = _copy_data_schedules.get(schedule_id)
+        if not schedule:
+            raise HTTPException(status_code=404, detail="Copy Data schedule not found.")
+        if _copy_data_schedule_has_active_job(schedule_id):
+            raise HTTPException(status_code=409, detail="Copy Data schedule has an active job.")
+        _copy_data_schedules.pop(schedule_id, None)
+        _save_copy_data_schedules()
+    _log(SERVICE, f"Deleted OHLCV copy schedule {schedule.get('name')}", level="INFO")
+    return {"success": True, "deleted": schedule_id}
+
+
+@router.post("/copy-data/schedules/{schedule_id}/run")
+def run_copy_data_schedule(
+    schedule_id: str,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Queue an immediate run from one persisted Copy Data schedule."""
+
+    del session
+    path = _copy_data_schedules_file()
+    with advisory_file_lock(path):
+        if not _load_copy_data_schedules():
+            raise HTTPException(status_code=500, detail="Copy Data schedules could not be loaded; no changes were written.")
+        schedule = _copy_data_schedules.get(schedule_id)
+        if not schedule:
+            raise HTTPException(status_code=404, detail="Copy Data schedule not found.")
+        result = _dispatch_copy_data_schedule(schedule, manual=True)
     return result
 
 

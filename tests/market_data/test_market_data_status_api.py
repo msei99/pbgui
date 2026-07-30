@@ -5,7 +5,9 @@ from pathlib import Path
 import configparser
 import importlib
 import importlib.util
+import json
 import sys
+import threading
 import time
 from types import SimpleNamespace
 
@@ -388,7 +390,7 @@ def test_copy_data_dry_run_queue_uses_dry_run_job_type(monkeypatch) -> None:
     assert popen_calls[0][2] == "--run-job"
 
 
-def test_copy_data_queue_uses_fresh_one_shot_worker(monkeypatch) -> None:
+def test_copy_data_queue_uses_fresh_one_shot_worker(monkeypatch, tmp_path) -> None:
     """Real Copy Data jobs also use a fresh runner so stale resident workers cannot consume them."""
 
     enqueued: list[dict] = []
@@ -405,6 +407,8 @@ def test_copy_data_queue_uses_fresh_one_shot_worker(monkeypatch) -> None:
     monkeypatch.setattr("task_queue.enqueue_running_job", fake_enqueue_running_job)
     monkeypatch.setattr("market_data.append_exchange_download_log", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(market_data_api, "_copy_data_dispatch_lock_file", lambda: tmp_path / "copy-dispatch")
+    monkeypatch.setattr(market_data_api, "_copy_data_payload_has_active_job", lambda *_args, **_kwargs: False)
 
     result = market_data_api.queue_copy_data_job(
         {
@@ -429,6 +433,265 @@ def test_copy_data_queue_uses_fresh_one_shot_worker(monkeypatch) -> None:
     assert popen_calls
     assert popen_calls[0][1].endswith("task_worker.py")
     assert popen_calls[0][2] == "--run-job"
+
+
+def test_copy_data_schedule_persists_validated_copy_payload(monkeypatch, tmp_path) -> None:
+    """Copy schedules persist their sanitized target and recurring interval atomically."""
+
+    schedule_path = tmp_path / "market_data" / "copy_data_schedules.json"
+    monkeypatch.setattr(market_data_api, "_copy_data_schedules_file", lambda: schedule_path)
+    market_data_api._copy_data_schedules.clear()
+
+    result = market_data_api.save_copy_data_schedule(
+        {
+            "name": "Optimizer refresh",
+            "target": "optimizer",
+            "ssh_command": "ssh -p 2222",
+            "destination_root": "/srv/pbgui/data/ohlcv",
+            "exchanges": ["binance", "okx"],
+            "interval_hours": 6,
+            "enabled": True,
+        },
+        None,
+    )
+
+    assert result["success"] is True
+    assert result["schedule"]["interval_hours"] == 6
+    assert result["schedule"]["next_run"]
+    assert schedule_path.exists()
+    assert schedule_path.stat().st_mode & 0o777 == 0o600
+
+    market_data_api._copy_data_schedules.clear()
+    loaded = market_data_api.get_copy_data_schedules(None)
+
+    assert len(loaded["schedules"]) == 1
+    assert loaded["schedules"][0]["target"] == "optimizer"
+    assert loaded["schedules"][0]["exchanges"] == ["binance", "okx"]
+    market_data_api._copy_data_schedules.clear()
+
+
+def test_copy_data_schedule_store_error_blocks_mutation(monkeypatch, tmp_path) -> None:
+    """A damaged schedule file is preserved and blocks writes instead of becoming an empty store."""
+
+    schedule_path = tmp_path / "market_data" / "copy_data_schedules.json"
+    schedule_path.parent.mkdir(parents=True)
+    damaged = b'{"not": "a schedule list"}\n'
+    schedule_path.write_bytes(damaged)
+    monkeypatch.setattr(market_data_api, "_copy_data_schedules_file", lambda: schedule_path)
+    market_data_api._copy_data_schedules.clear()
+
+    with pytest.raises(market_data_api.HTTPException) as exc_info:
+        market_data_api.save_copy_data_schedule(
+            {
+                "target": "optimizer",
+                "ssh_command": "ssh",
+                "destination_root": "/srv/pbgui/data/ohlcv",
+                "exchanges": ["bybit"],
+                "interval_hours": 6,
+                "enabled": True,
+            },
+            None,
+        )
+
+    assert exc_info.value.status_code == 500
+    assert schedule_path.read_bytes() == damaged
+
+
+def test_copy_data_schedule_store_rejects_duplicate_ids(monkeypatch, tmp_path) -> None:
+    """Duplicate canonical IDs fail the whole load instead of silently dropping a schedule."""
+
+    schedule_path = tmp_path / "market_data" / "copy_data_schedules.json"
+    monkeypatch.setattr(market_data_api, "_copy_data_schedules_file", lambda: schedule_path)
+    market_data_api._copy_data_schedules.clear()
+    schedule = market_data_api.save_copy_data_schedule(
+        {
+            "target": "optimizer",
+            "ssh_command": "ssh",
+            "destination_root": "/srv/pbgui/data/ohlcv",
+            "exchanges": ["bybit"],
+            "interval_hours": 6,
+            "enabled": True,
+        },
+        None,
+    )["schedule"]
+    duplicate_payload = json.dumps([schedule, schedule], indent=4) + "\n"
+    schedule_path.write_text(duplicate_payload, encoding="utf-8")
+
+    with pytest.raises(market_data_api.HTTPException) as exc_info:
+        market_data_api.get_copy_data_schedules(None)
+
+    assert exc_info.value.status_code == 500
+    assert schedule_path.read_text(encoding="utf-8") == duplicate_payload
+    market_data_api._copy_data_schedules.clear()
+
+
+def test_copy_data_manual_queue_rejects_overlapping_destination(monkeypatch, tmp_path) -> None:
+    """Regular Copy Data requests share the scheduled destination overlap guard."""
+
+    enqueued: list[dict] = []
+    monkeypatch.setattr("task_queue.enqueue_running_job", lambda **kwargs: enqueued.append(kwargs))
+    monkeypatch.setattr(market_data_api, "_copy_data_dispatch_lock_file", lambda: tmp_path / "copy-dispatch")
+    monkeypatch.setattr(market_data_api, "_copy_data_payload_has_active_job", lambda *_args, **_kwargs: True)
+
+    result = market_data_api.queue_copy_data_job(
+        {
+            "target": "optimizer",
+            "ssh_command": "ssh",
+            "destination_root": "/srv/pbgui/data/ohlcv",
+            "exchanges": ["bybit"],
+        },
+        None,
+    )
+
+    assert result["success"] is False
+    assert "overlapping active work" in result["error"]
+    assert enqueued == []
+
+
+def test_copy_data_scheduler_queues_due_schedule_once(monkeypatch, tmp_path) -> None:
+    """A due recurring schedule launches one tagged Copy Data worker and advances its next run."""
+
+    schedule_path = tmp_path / "market_data" / "copy_data_schedules.json"
+    monkeypatch.setattr(market_data_api, "_copy_data_schedules_file", lambda: schedule_path)
+    monkeypatch.setattr(market_data_api, "_copy_data_schedule_has_active_job", lambda *_args: False)
+    queued: list[dict] = []
+
+    def fake_queue(
+        request: dict,
+        *,
+        dry_run: bool,
+        schedule_id: str = "",
+        dispatch_id: str = "",
+    ) -> dict:
+        queued.append(
+            {
+                "request": dict(request),
+                "dry_run": dry_run,
+                "schedule_id": schedule_id,
+                "dispatch_id": dispatch_id,
+            }
+        )
+        return {"success": True, "job_id": "scheduled-copy-1"}
+
+    monkeypatch.setattr(market_data_api, "_queue_copy_data_job_response", fake_queue)
+    market_data_api._copy_data_schedules.clear()
+    saved = market_data_api.save_copy_data_schedule(
+        {
+            "name": "Optimizer refresh",
+            "target": "optimizer",
+            "ssh_command": "ssh",
+            "destination_root": "/srv/pbgui/data/ohlcv",
+            "exchanges": ["bybit"],
+            "interval_hours": 1,
+            "enabled": True,
+        },
+        None,
+    )["schedule"]
+    market_data_api._copy_data_schedules[saved["id"]]["next_run"] = "2000-01-01T00:00:00+00:00"
+    market_data_api._save_copy_data_schedules()
+
+    market_data_api._run_copy_data_scheduler_tick()
+
+    assert len(queued) == 1
+    assert queued[0]["schedule_id"] == saved["id"]
+    assert queued[0]["dispatch_id"]
+    assert queued[0]["dry_run"] is False
+    assert market_data_api._copy_data_schedules[saved["id"]]["last_job_id"] == "scheduled-copy-1"
+    assert market_data_api._copy_data_schedules[saved["id"]]["dispatch_pending_at"] == ""
+    assert market_data_api._copy_data_schedules[saved["id"]]["next_run"] > saved["next_run"]
+    market_data_api._copy_data_schedules.clear()
+
+
+@pytest.mark.parametrize("interval_hours", [0, 169, 1.5, "invalid"])
+def test_copy_data_schedule_rejects_invalid_intervals(monkeypatch, tmp_path, interval_hours) -> None:
+    """Recurring copy intervals must be whole hours inside the supported range."""
+
+    schedule_path = tmp_path / "market_data" / "copy_data_schedules.json"
+    monkeypatch.setattr(market_data_api, "_copy_data_schedules_file", lambda: schedule_path)
+    market_data_api._copy_data_schedules.clear()
+
+    result = market_data_api.save_copy_data_schedule(
+        {
+            "target": "optimizer",
+            "ssh_command": "ssh",
+            "destination_root": "/srv/pbgui/data/ohlcv",
+            "exchanges": ["bybit"],
+            "interval_hours": interval_hours,
+            "enabled": True,
+        },
+        None,
+    )
+
+    assert result["success"] is False
+    assert "interval" in result["error"].lower()
+    market_data_api._copy_data_schedules.clear()
+
+
+@pytest.mark.parametrize(
+    "ssh_command",
+    ["/tmp/ssh -p 22", "ssh -o ProxyCommand=malicious", "ssh -F /tmp/config"],
+)
+def test_copy_data_schedule_rejects_unsafe_ssh_commands(monkeypatch, tmp_path, ssh_command) -> None:
+    """Persisted Copy Data commands reject executable paths and shell-capable SSH options."""
+
+    monkeypatch.setattr(
+        market_data_api,
+        "_copy_data_schedules_file",
+        lambda: tmp_path / "market_data" / "copy_data_schedules.json",
+    )
+    market_data_api._copy_data_schedules.clear()
+
+    result = market_data_api.save_copy_data_schedule(
+        {
+            "target": "optimizer",
+            "ssh_command": ssh_command,
+            "destination_root": "/srv/pbgui/data/ohlcv",
+            "exchanges": ["bybit"],
+            "interval_hours": 6,
+            "enabled": True,
+        },
+        None,
+    )
+
+    assert result["success"] is False
+    assert "ssh command" in result["error"].lower()
+
+
+@pytest.mark.parametrize("target", ["-E", "user@-host"])
+def test_copy_data_rejects_option_like_targets(target) -> None:
+    """Remote targets cannot be interpreted as additional SSH options."""
+
+    with pytest.raises(ValueError, match="Remote target is invalid"):
+        market_data_api._normalize_copy_data_target(target)
+
+
+def test_copy_data_scheduler_shutdown_waits_for_active_tick(monkeypatch) -> None:
+    """Scheduler shutdown waits for its active thread-backed tick before returning."""
+
+    started = threading.Event()
+    release = threading.Event()
+    monkeypatch.setattr(market_data_api, "_load_copy_data_schedules", lambda: True)
+
+    def blocking_tick() -> None:
+        started.set()
+        release.wait(timeout=2)
+
+    monkeypatch.setattr(market_data_api, "_run_copy_data_scheduler_tick", blocking_tick)
+
+    async def scenario() -> None:
+        market_data_api.startup()
+        assert await asyncio.to_thread(started.wait, 1)
+        shutdown_task = asyncio.create_task(market_data_api.shutdown())
+        await asyncio.sleep(0.01)
+        assert shutdown_task.done() is False
+        release.set()
+        await asyncio.wait_for(shutdown_task, timeout=1)
+        assert market_data_api._copy_data_scheduler_task is None
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
 
 
 def test_bitget_best_1m_queue_uses_fresh_one_shot_worker(monkeypatch) -> None:

@@ -373,6 +373,9 @@
           - --release
       args:
         chdir: "{{ install_dir }}/pb7/passivbot-rust"
+      environment:
+        VIRTUAL_ENV: "{{ install_dir }}/venv_pb7"
+        PATH: "{{ install_dir }}/venv_pb7/bin:{{ ansible_facts['env']['HOME'] }}/.cargo/bin:{{ ansible_facts['env']['PATH'] }}"
       register: maturin_result
 
     - name: Write rust source stamp after maturin build

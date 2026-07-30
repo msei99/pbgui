@@ -587,7 +587,8 @@ def _normalize_ohlcv_copy_target(target: Any) -> str:
         raise ValueError("Remote target must be a host or user@host without spaces, slashes, or a path")
     if any(ch not in OHLCV_COPY_TARGET_CHARS for ch in text):
         raise ValueError("Remote target contains unsupported characters")
-    if text in (".", ".."):
+    host = text.rsplit("@", 1)[-1]
+    if text in (".", "..") or host.startswith("-"):
         raise ValueError("Remote target is invalid")
     return text
 
@@ -617,9 +618,27 @@ def _parse_ohlcv_copy_ssh_args(ssh_command: Any) -> list[str]:
         raise ValueError(f"Invalid SSH command: {exc}") from exc
     if not parts:
         parts = ["ssh"]
-    if Path(parts[0]).name != "ssh":
-        raise ValueError("SSH command must start with ssh")
-    return parts
+    if parts[0] != "ssh":
+        raise ValueError("SSH command must start with the system ssh executable")
+    normalized = ["ssh"]
+    index = 1
+    while index < len(parts):
+        option = parts[index]
+        if option not in {"-p", "-J"} or index + 1 >= len(parts):
+            raise ValueError("SSH command only supports the -p port and -J jump-host options")
+        value = parts[index + 1]
+        if option == "-p":
+            try:
+                port = int(value)
+            except ValueError as exc:
+                raise ValueError("SSH port must be a number from 1 to 65535") from exc
+            if port < 1 or port > 65535 or str(port) != value:
+                raise ValueError("SSH port must be a number from 1 to 65535")
+            normalized.extend(["-p", str(port)])
+        else:
+            normalized.extend(["-J", _normalize_ohlcv_copy_target(value)])
+        index += 2
+    return normalized
 
 
 def _remote_ohlcv_copy_dir(destination_root: str, storage_name: str) -> str:

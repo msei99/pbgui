@@ -627,6 +627,34 @@ def test_custom_pb7_paths_with_metacharacters_never_enter_shell_source(payload: 
 
 
 @pytest.mark.parametrize(
+    ("playbook_name", "venv_expression"),
+    [
+        ("master-update-pb.yml", "{{ pb7venv }}"),
+        ("vps-update-pb.yml", "{{ install_dir }}/venv_pb7"),
+        ("vps-setup.yml", "{{ install_dir }}/venv_pb7"),
+    ],
+)
+def test_argv_maturin_builds_receive_explicit_virtualenv(
+    playbook_name: str,
+    venv_expression: str,
+) -> None:
+    """Safe argv-based maturin tasks identify their target venv without shell activation."""
+
+    source = (ROOT / playbook_name).read_text(encoding="utf-8")
+    block = source.split("- name: Build passivbot-rust with maturin", 1)[1].split("\n    - name:", 1)[0]
+
+    assert "      command:\n        argv:" in block
+    assert f'        VIRTUAL_ENV: "{venv_expression}"' in block
+    assert f'        PATH: "{venv_expression}/bin:' in block
+    assert "shell: |" not in block
+    assert "/bin/activate" not in block
+    if playbook_name == "master-update-pb.yml":
+        assert "ansible_env.PATH" not in block
+        assert "lookup('env', 'HOME')" in block
+        assert "lookup('env', 'PATH')" in block
+
+
+@pytest.mark.parametrize(
     ("playbook_name", "variables"),
     [
         ("master-update-pb.yml", ("pbgdir", "pb7dir", "pb7venv")),

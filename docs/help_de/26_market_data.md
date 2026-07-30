@@ -157,14 +157,27 @@ Zusätzlich sind die Spaltenköpfe der Inventory-Tabelle jetzt sortierbar. Ein K
 
 Mit **Copy Data** kopierst du lokale OHLCV-Dateien aus diesem PBGui-`data/ohlcv`-Baum per SSH/`rsync` auf einen anderen PBGui-Host.
 
-- **SSH command without target** — der SSH-Befehl, den rsync als Remote-Shell verwendet. Das finale Ziel gehört nicht in dieses Feld. Beispiele: `ssh`, `ssh -p 2222`, `ssh -J user@jump-host`, `ssh -J user@jump-host -p 2222`.
+- **SSH command without target** — der SSH-Befehl, den rsync als Remote-Shell verwendet. Das finale Ziel gehört nicht in dieses Feld. Unterstützt werden `ssh`, `ssh -p 2222`, `ssh -J user@jump-host` und `ssh -J user@jump-host -p 2222`; Shell-fähige Optionen wie `-o ProxyCommand` werden abgewiesen.
 - **Remote target** — das finale SSH-Ziel für rsync, z. B. `user@target-host`, `target-host`, `localhost` bei einem Reverse-Tunnel oder ein SSH-Config-Alias.
 - **Destination data/ohlcv root** — absoluter `data/ohlcv`-Root auf dem Zielhost. Leer lassen, wenn der Ziel-PBGui denselben Pfad wie diese Maschine nutzt.
-- **Copy mode** — `Missing files only` nutzt `--ignore-existing`; `Update changed files` erlaubt rsync, geänderte Dateien zu ersetzen. Beide Modi verwenden kein `--delete`.
+
+Copy-Jobs aktualisieren neue und geänderte Dateien. Sie verwenden niemals `--delete`; Dateien, die nur auf dem Optimizer-System liegen, bleiben daher unverändert.
 
 Nutze zuerst **Test connection** für einen read-only SSH- und Zielpfad-Check. Dabei werden keine Verzeichnisse angelegt und keine Dateien kopiert.
 
 Nutze **Dry run** vor dem echten Kopieren, wenn du den exakten Zielpfad und die geschätzte rsync-Übertragung prüfen willst. Der Dry Run reiht einen Background-Job mit `--dry-run --stats --itemize-changes` ein, überspringt remote `mkdir`, schreibt keine Dateien und protokolliert die rsync-Statistik pro Exchange im eingebetteten Copy Job Monitor.
+
+### Copy Schedules
+
+Mit **Copy Schedules** hältst du ein oder mehrere Optimizer-Systeme automatisch aktuell. Der Zeitplan speichert den aktuellen SSH-Befehl, das Remote-Ziel, den Zielpfad und die Exchange-Auswahl.
+
+- Einen Namen und ein Intervall von 1 bis 168 vollen Stunden eingeben.
+- Den Zeitplan aktivieren und **Save schedule** klicken. Der erste automatische Copy-Lauf startet nach einem vollständigen Intervall.
+- **Run now** startet sofort einen Copy-Job mit den gespeicherten Einstellungen.
+- **Edit** lädt einen Zeitplan zurück in das Copy-Data-Formular. Dort können Ziel, Exchanges, Intervall oder Aktivstatus geändert und erneut gespeichert werden.
+- Zeitpläne bleiben über API-Neustarts erhalten. Ein Zeitplan startet keinen zweiten Copy-Lauf, solange sein vorheriger Job noch pending oder running ist.
+
+Jeder automatische oder manuelle Zeitplan-Lauf erscheint wie ein normaler Copy-Job im eingebetteten Copy Job Monitor. Solange sein eigener Copy-Job aktiv ist, kann der Zeitplan nicht gelöscht werden; der detached Copy-Worker selbst läuft auch über einen API-Neustart sicher weiter.
 
 ## Settings (Latest 1m Auto-Refresh) — Hyperliquid
 

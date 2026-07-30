@@ -852,6 +852,17 @@
       border-color: var(--accent);
     }
 
+    .btn.danger {
+      background: rgba(239, 68, 68, 0.12);
+      border-color: rgba(239, 68, 68, 0.4);
+      color: #fca5a5;
+    }
+
+    .btn.danger:hover {
+      background: rgba(239, 68, 68, 0.22);
+      border-color: #ef4444;
+    }
+
     .btn:disabled {
       opacity: 0.5;
       cursor: not-allowed;
@@ -1358,6 +1369,69 @@
       font-size: var(--fs-xs);
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+    }
+
+    .copy-data-schedules {
+      border-top: 1px solid var(--border);
+      padding-top: var(--sp-md);
+      display: grid;
+      gap: var(--sp-md);
+    }
+
+    .copy-data-schedule-form {
+      display: grid;
+      grid-template-columns: minmax(220px, 2fr) minmax(140px, 1fr) auto;
+      gap: var(--sp-md);
+      align-items: end;
+    }
+
+    .copy-data-schedule-list {
+      display: grid;
+      gap: var(--sp-sm);
+    }
+
+    .copy-data-schedule-row {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.5fr) minmax(240px, 2fr) minmax(190px, 1fr) auto;
+      gap: var(--sp-md);
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(12, 17, 26, 0.5);
+      padding: var(--sp-sm) var(--sp-md);
+    }
+
+    .copy-data-schedule-row.is-disabled {
+      opacity: 0.68;
+    }
+
+    .copy-data-schedule-name {
+      color: #f8fafc;
+      font-weight: 700;
+    }
+
+    .copy-data-schedule-detail {
+      color: var(--text-dim);
+      font-size: var(--fs-xs);
+      overflow-wrap: anywhere;
+    }
+
+    .copy-data-schedule-actions {
+      display: flex;
+      gap: var(--sp-sm);
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+
+    @media (max-width: 900px) {
+      .copy-data-schedule-form,
+      .copy-data-schedule-row {
+        grid-template-columns: 1fr;
+      }
+
+      .copy-data-schedule-actions {
+        justify-content: flex-start;
+      }
     }
 
     [data-tip] {
@@ -3147,6 +3221,37 @@
             </div>
           </div>
           <div id="copy-data-dry-run-summary" class="copy-data-summary" hidden></div>
+          <article class="copy-data-schedules">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">Recurring Copies</div>
+                <h3>Copy Schedules</h3>
+                <p class="note">Save the current target and exchange selection as a recurring copy job. Schedules survive API restarts.</p>
+              </div>
+            </div>
+            <div class="copy-data-schedule-form">
+              <label class="settings-field">
+                <span class="field-label">Schedule name</span>
+                <input id="copy-data-schedule-name" type="text" maxlength="80" placeholder="Optimizer OHLCV refresh" autocomplete="off">
+              </label>
+              <label class="settings-field">
+                <span class="field-label">Repeat every (hours)</span>
+                <input id="copy-data-schedule-interval" type="number" min="1" max="168" step="1" value="24">
+              </label>
+              <label class="settings-toggle">
+                <input id="copy-data-schedule-enabled" type="checkbox" checked>
+                <span>Enabled</span>
+              </label>
+            </div>
+            <div class="copy-data-actions">
+              <button class="btn primary" id="btn-copy-data-schedule-save" type="button">Save schedule</button>
+              <button class="btn secondary" id="btn-copy-data-schedule-cancel" type="button" hidden>Cancel edit</button>
+              <span class="note">The first automatic run starts after one full interval. Use Run now for an immediate copy.</span>
+            </div>
+            <div class="copy-data-schedule-list" id="copy-data-schedule-list">
+              <p class="note">Loading schedules…</p>
+            </div>
+          </article>
           <article class="best1m-job-monitor-shell" id="copy-data-job-monitor-card">
             <div class="panel-head">
               <div>
@@ -3388,6 +3493,13 @@
         confirmReturnFocus: null
       };
       var copyDataDryRunState = {
+        requestId: 0,
+        timer: 0
+      };
+      var copyDataScheduleState = {
+        schedules: [],
+        editingId: '',
+        editingUpdatedAt: '',
         requestId: 0,
         timer: 0
       };
@@ -3961,6 +4073,200 @@
         if (!request.target) return 'Remote target is required.';
         if (requireExchanges && !request.exchanges.length) return 'Select at least one exchange to copy.';
         return '';
+      }
+
+      function stopCopyDataSchedulePoll() {
+        if (copyDataScheduleState.timer) {
+          window.clearTimeout(copyDataScheduleState.timer);
+          copyDataScheduleState.timer = 0;
+        }
+      }
+
+      async function fetchCopyDataScheduleJson(path, options) {
+        var requestOptions = options || {};
+        requestOptions.cache = requestOptions.cache || 'no-store';
+        requestOptions.headers = requestOptions.headers || {};
+        if (requestOptions.body && !requestOptions.headers['Content-Type']) {
+          requestOptions.headers['Content-Type'] = 'application/json';
+        }
+        var response = await fetch(apiUrl(path), requestOptions);
+        var result = null;
+        try {
+          result = await response.json();
+        } catch (error) {
+          void error;
+        }
+        if (!response.ok) {
+          throw new Error((result && (result.detail || result.error)) || ('HTTP ' + response.status));
+        }
+        return result || {};
+      }
+
+      function copyDataScheduleTime(value) {
+        if (!value) return 'Not scheduled';
+        var date = new Date(value);
+        return Number.isNaN(date.getTime()) ? 'Not scheduled' : date.toLocaleString();
+      }
+
+      function renderCopyDataSchedules() {
+        var list = document.getElementById('copy-data-schedule-list');
+        if (!list) return;
+        var schedules = Array.isArray(copyDataScheduleState.schedules) ? copyDataScheduleState.schedules : [];
+        if (!schedules.length) {
+          list.innerHTML = '<p class="note">No Copy Data schedules configured.</p>';
+          return;
+        }
+        list.innerHTML = schedules.map(function (schedule) {
+          var enabled = Boolean(schedule.enabled);
+          var exchanges = Array.isArray(schedule.exchanges) ? schedule.exchanges.join(', ') : '';
+          var timing = enabled
+            ? ('Every ' + esc(schedule.interval_hours) + 'h · next ' + esc(copyDataScheduleTime(schedule.next_run)))
+            : 'Disabled';
+          var last = schedule.last_run
+            ? ('Last queued ' + esc(copyDataScheduleTime(schedule.last_run)) + (schedule.last_job_id ? ' · job ' + esc(schedule.last_job_id) : ''))
+            : 'Not run yet';
+          var error = schedule.last_error ? '<div class="copy-data-schedule-detail">Error: ' + esc(schedule.last_error) + '</div>' : '';
+          return ''
+            + '<div class="copy-data-schedule-row' + (enabled ? '' : ' is-disabled') + '">'
+            +   '<div><div class="copy-data-schedule-name">' + esc(schedule.name || '') + '</div><div class="copy-data-schedule-detail">' + timing + '</div></div>'
+            +   '<div><div>' + esc(schedule.target || '') + ':' + esc(schedule.destination_root || '') + '</div><div class="copy-data-schedule-detail">' + esc(exchanges) + '</div></div>'
+            +   '<div><div class="copy-data-schedule-detail">' + last + '</div>' + error + '</div>'
+            +   '<div class="copy-data-schedule-actions">'
+            +     '<button class="btn secondary" type="button" data-copy-schedule-action="run" data-schedule-id="' + esc(schedule.id || '') + '">Run now</button>'
+            +     '<button class="btn secondary" type="button" data-copy-schedule-action="edit" data-schedule-id="' + esc(schedule.id || '') + '">Edit</button>'
+            +     '<button class="btn danger" type="button" data-copy-schedule-action="delete" data-schedule-id="' + esc(schedule.id || '') + '">Delete</button>'
+            +   '</div>'
+            + '</div>';
+        }).join('');
+      }
+
+      async function loadCopyDataSchedules(showErrors) {
+        stopCopyDataSchedulePoll();
+        copyDataScheduleState.requestId += 1;
+        var requestId = copyDataScheduleState.requestId;
+        try {
+          var result = await fetchCopyDataScheduleJson('/copy-data/schedules');
+          if (requestId !== copyDataScheduleState.requestId) return;
+          if (!result || result.success === false) {
+            throw new Error(result && result.error ? result.error : 'Failed to load Copy Data schedules.');
+          }
+          copyDataScheduleState.schedules = Array.isArray(result.schedules) ? result.schedules : [];
+          renderCopyDataSchedules();
+        } catch (error) {
+          if (requestId !== copyDataScheduleState.requestId) return;
+          if (showErrors !== false) {
+            var message = error && error.message ? error.message : 'Failed to load Copy Data schedules.';
+            setCopyDataFeedback(message, 'error');
+          }
+        } finally {
+          var panel = document.getElementById('copy-data-panel');
+          if (panel && !panel.hidden && requestId === copyDataScheduleState.requestId) {
+            copyDataScheduleState.timer = window.setTimeout(function () {
+              loadCopyDataSchedules(false);
+            }, 15000);
+          }
+        }
+      }
+
+      function resetCopyDataScheduleEditor() {
+        copyDataScheduleState.editingId = '';
+        copyDataScheduleState.editingUpdatedAt = '';
+        document.getElementById('copy-data-schedule-name').value = '';
+        document.getElementById('copy-data-schedule-interval').value = '24';
+        document.getElementById('copy-data-schedule-enabled').checked = true;
+        document.getElementById('btn-copy-data-schedule-save').textContent = 'Save schedule';
+        document.getElementById('btn-copy-data-schedule-cancel').hidden = true;
+      }
+
+      function editCopyDataSchedule(scheduleId) {
+        var schedule = copyDataScheduleState.schedules.find(function (item) { return item.id === scheduleId; });
+        if (!schedule) return;
+        copyDataScheduleState.editingId = scheduleId;
+        copyDataScheduleState.editingUpdatedAt = schedule.updated_at || '';
+        document.getElementById('copy-data-target').value = schedule.target || '';
+        document.getElementById('copy-data-ssh-command').value = schedule.ssh_command || 'ssh';
+        document.getElementById('copy-data-destination-root').value = schedule.destination_root || '';
+        var selected = new Set(Array.isArray(schedule.exchanges) ? schedule.exchanges : []);
+        document.querySelectorAll('[data-copy-data-exchange]').forEach(function (input) {
+          input.checked = selected.has(String(input.getAttribute('data-copy-data-exchange') || ''));
+        });
+        document.getElementById('copy-data-schedule-name').value = schedule.name || '';
+        document.getElementById('copy-data-schedule-interval').value = String(schedule.interval_hours || 24);
+        document.getElementById('copy-data-schedule-enabled').checked = Boolean(schedule.enabled);
+        document.getElementById('btn-copy-data-schedule-save').textContent = 'Update schedule';
+        document.getElementById('btn-copy-data-schedule-cancel').hidden = false;
+      }
+
+      async function saveCopyDataSchedule() {
+        var button = document.getElementById('btn-copy-data-schedule-save');
+        var request = collectCopyDataRequest();
+        var validationError = validateCopyDataRequest(request);
+        var intervalHours = Number(readFieldValue('copy-data-schedule-interval'));
+        if (!validationError && (!Number.isInteger(intervalHours) || intervalHours < 1 || intervalHours > 168)) {
+          validationError = 'Schedule interval must be between 1 and 168 whole hours.';
+        }
+        if (validationError) {
+          setCopyDataFeedback(validationError, 'error');
+          showToast(validationError, 'error');
+          return;
+        }
+        request.id = copyDataScheduleState.editingId;
+        request.expected_updated_at = copyDataScheduleState.editingUpdatedAt;
+        request.name = readFieldValue('copy-data-schedule-name');
+        request.interval_hours = intervalHours;
+        request.enabled = Boolean(document.getElementById('copy-data-schedule-enabled').checked);
+        button.disabled = true;
+        try {
+          var result = await fetchCopyDataScheduleJson('/copy-data/schedules', {
+            method: 'POST',
+            body: JSON.stringify(request)
+          });
+          if (!result || result.success === false) {
+            throw new Error(result && result.error ? result.error : 'Failed to save Copy Data schedule.');
+          }
+          var message = 'Saved Copy Data schedule ' + (result.schedule && result.schedule.name ? result.schedule.name : '') + '.';
+          setCopyDataFeedback(message, 'info');
+          showToast(message, 'success');
+          resetCopyDataScheduleEditor();
+          await loadCopyDataSchedules(false);
+        } catch (error) {
+          var errMessage = error && error.message ? error.message : 'Failed to save Copy Data schedule.';
+          setCopyDataFeedback(errMessage, 'error');
+          showToast(errMessage, 'error');
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      async function runCopyDataSchedule(scheduleId) {
+        try {
+          var result = await fetchCopyDataScheduleJson('/copy-data/schedules/' + encodeURIComponent(scheduleId) + '/run', { method: 'POST' });
+          if (!result || result.success === false) {
+            throw new Error(result && result.error ? result.error : 'Failed to run Copy Data schedule.');
+          }
+          var message = result.message || ('Queued OHLCV copy job ' + result.job_id + '.');
+          setCopyDataFeedback(message, 'info');
+          showToast(message, 'success');
+          mountCopyDataJobMonitor(true);
+          await loadCopyDataSchedules(false);
+        } catch (error) {
+          var errMessage = error && error.message ? error.message : 'Failed to run Copy Data schedule.';
+          setCopyDataFeedback(errMessage, 'error');
+          showToast(errMessage, 'error');
+        }
+      }
+
+      async function deleteCopyDataSchedule(scheduleId) {
+        try {
+          await fetchCopyDataScheduleJson('/copy-data/schedules/' + encodeURIComponent(scheduleId), { method: 'DELETE' });
+          if (copyDataScheduleState.editingId === scheduleId) resetCopyDataScheduleEditor();
+          showToast('Copy Data schedule deleted.', 'success');
+          await loadCopyDataSchedules(false);
+        } catch (error) {
+          var errMessage = error && error.message ? error.message : 'Failed to delete Copy Data schedule.';
+          setCopyDataFeedback(errMessage, 'error');
+          showToast(errMessage, 'error');
+        }
       }
 
       function resetCopyDataDryRunSummary() {
@@ -7627,7 +7933,12 @@
         }
         if (panelId === 'status-panel') updateStatusPanel();
         if (panelId === 'best1m-panel') refreshBest1mPanel(false);
-        if (panelId === 'copy-data-panel') mountCopyDataJobMonitor(false);
+        if (panelId === 'copy-data-panel') {
+          mountCopyDataJobMonitor(false);
+          loadCopyDataSchedules(false);
+        } else {
+          stopCopyDataSchedulePoll();
+        }
         if (panelId === 'inventory-panel') loadInventoryPanel(false);
         syncSidebarShortcutState();
         syncActivityLogViewer(panelId);
@@ -7690,6 +8001,21 @@
         });
         document.getElementById('btn-copy-data-queue').addEventListener('click', function () {
           queueCopyDataJob(false);
+        });
+        document.getElementById('btn-copy-data-schedule-save').addEventListener('click', function () {
+          saveCopyDataSchedule();
+        });
+        document.getElementById('btn-copy-data-schedule-cancel').addEventListener('click', function () {
+          resetCopyDataScheduleEditor();
+        });
+        document.getElementById('copy-data-schedule-list').addEventListener('click', function (event) {
+          var button = event.target && event.target.closest ? event.target.closest('[data-copy-schedule-action]') : null;
+          if (!button) return;
+          var scheduleId = String(button.getAttribute('data-schedule-id') || '');
+          var action = String(button.getAttribute('data-copy-schedule-action') || '');
+          if (action === 'run') runCopyDataSchedule(scheduleId);
+          if (action === 'edit') editCopyDataSchedule(scheduleId);
+          if (action === 'delete') deleteCopyDataSchedule(scheduleId);
         });
         document.getElementById('best1m-coin-filter').addEventListener('input', function (event) {
           best1mState.coinFilter = String(event.target.value || '');

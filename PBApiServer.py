@@ -63,7 +63,7 @@ from api.db_tools import init as db_tools_init, shutdown as db_tools_shutdown
 from api.db_tools import router as db_tools_router
 from api.jobs import router as jobs_router
 from api.logging import router as logging_router
-from api.market_data import router as market_data_router
+from api.market_data import router as market_data_router, shutdown as market_data_shutdown, startup as market_data_startup
 from api.heatmap import router as heatmap_router, shutdown as heatmap_shutdown
 from api.vps import router as vps_router
 from api.vps_manager import (
@@ -591,6 +591,7 @@ async def _lifespan(app: FastAPI):
         coin_data_startup()
         ohlcv_preload_startup()
         vps_manager_startup()
+        market_data_startup()
 
         lifecycle_tasks = [
             asyncio.create_task(_deferred_startup(), name="deferred-startup"),
@@ -612,6 +613,7 @@ async def _lifespan(app: FastAPI):
             ("heatmap", heatmap_shutdown),
             ("pareto-explorer", pareto_explorer_shutdown),
             ("coin-data", coin_data_shutdown),
+            ("market-data", market_data_shutdown),
             ("vps-manager", vps_manager_shutdown),
             ("cluster", cluster_shutdown),
             ("db-tools", db_tools_shutdown),

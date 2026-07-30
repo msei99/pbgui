@@ -157,14 +157,27 @@ The inventory table headers are sortable as well. Clicking a column header toggl
 
 Use **Copy Data** to copy local OHLCV files from this PBGui `data/ohlcv` tree to another PBGui host over SSH with `rsync`.
 
-- **SSH command without target** — the SSH command used as rsync's remote shell. Do not include the final target here. Examples: `ssh`, `ssh -p 2222`, `ssh -J user@jump-host`, `ssh -J user@jump-host -p 2222`.
+- **SSH command without target** — the SSH command used as rsync's remote shell. Do not include the final target here. Supported forms are `ssh`, `ssh -p 2222`, `ssh -J user@jump-host`, and `ssh -J user@jump-host -p 2222`; shell-capable options such as `-o ProxyCommand` are rejected.
 - **Remote target** — the final SSH target used by rsync, for example `user@target-host`, `target-host`, `localhost` for a reverse tunnel, or an SSH config alias.
 - **Destination data/ohlcv root** — absolute `data/ohlcv` root on the target host. Leave empty when the target PBGui uses the same path as this machine.
-- **Copy mode** — `Missing files only` adds `--ignore-existing`; `Update changed files` lets rsync replace changed files. Neither mode uses `--delete`.
+
+Copy jobs update new and changed files. They never use `--delete`, so files that only exist on the optimizer system remain untouched.
 
 Click **Test connection** first to run a read-only SSH and destination-path check. It does not create directories and does not copy files.
 
 Click **Dry run** before the real copy when you want to verify the exact target path and estimated rsync transfer. The dry run queues a background job with `--dry-run --stats --itemize-changes`; it skips remote `mkdir`, writes no files, and records the per-exchange rsync stats in the embedded Copy Job Monitor log.
+
+### Copy Schedules
+
+Use **Copy Schedules** to keep one or more optimizer systems current automatically. The schedule stores the current SSH command, remote target, destination root, and exchange selection.
+
+- Enter a schedule name and an interval from 1 to 168 whole hours.
+- Enable the schedule and click **Save schedule**. Its first automatic copy starts after one complete interval.
+- Use **Run now** for an immediate copy from the saved settings.
+- Use **Edit** to load a schedule back into the Copy Data form, change its target, exchanges, interval, or enabled state, and save it again.
+- Scheduled copies are persistent across API restarts. A schedule never starts a second copy while its previous job is still pending or running.
+
+Each automatic or manual schedule run appears in the same embedded Copy Job Monitor as a regular copy job. Deleting a schedule is blocked while its own copy job is active; the detached copy worker itself continues safely across an API restart.
 
 ## Settings (Latest 1m Auto-Refresh) — Hyperliquid
 

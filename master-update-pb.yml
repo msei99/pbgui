@@ -240,38 +240,6 @@
         PBGUI_REQUIRE_PBCOINDATA: "1"
       listen: "restart pbgui"
 
-    - name: Restart PBApiServer
-      shell: |
-        set -euo pipefail
-        restart_unit="pbgui-api-restart-$(date +%s%N)"
-        systemd-run --user --unit="$restart_unit" --collect /bin/bash -c '
-          sleep 1
-          systemctl --user enable pbgui-api.service
-          if ! systemctl --user restart pbgui-api.service; then
-            systemctl --user show pbgui-api.service --no-pager --property=ActiveState,SubState,Result,ExecMainStatus,NRestarts
-            systemctl --user status pbgui-api.service --no-pager -l
-            exit 1
-          fi
-          baseline="$(systemctl --user show pbgui-api.service --property=NRestarts --value)"
-          case "$baseline" in ""|*[!0-9]*) baseline=0 ;; esac
-          sleep 12
-          active="$(systemctl --user show pbgui-api.service --property=ActiveState --value)"
-          sub="$(systemctl --user show pbgui-api.service --property=SubState --value)"
-          result="$(systemctl --user show pbgui-api.service --property=Result --value)"
-          status="$(systemctl --user show pbgui-api.service --property=ExecMainStatus --value)"
-          after="$(systemctl --user show pbgui-api.service --property=NRestarts --value)"
-          case "$after" in ""|*[!0-9]*) after=0 ;; esac
-          if [ "$active" != active ] || [ "$sub" != running ] || [ "$result" != success ] || [ "${status:-0}" != 0 ] || [ "$after" -gt "$baseline" ]; then
-            systemctl --user show pbgui-api.service --no-pager --property=ActiveState,SubState,Result,ExecMainStatus,NRestarts
-            systemctl --user status pbgui-api.service --no-pager -l
-            exit 1
-          fi
-        '
-      args:
-        executable: /bin/bash
-      changed_when: true
-      listen: "restart pbgui"
-
     - name: Stop PBRun before PB7 rebuild
       command:
         argv:
@@ -316,6 +284,9 @@
           - --release
       args:
         chdir: "{{ pb7dir }}/passivbot-rust"
+      environment:
+        VIRTUAL_ENV: "{{ pb7venv }}"
+        PATH: "{{ pb7venv }}/bin:{{ lookup('env', 'HOME') }}/.cargo/bin:{{ lookup('env', 'PATH') }}"
       listen: "restart pb7"
 
     - name: Write rust source stamp after maturin build
@@ -343,3 +314,35 @@
       args:
         chdir: "{{ pbgdir }}"
       listen: "restart pb7"
+
+    - name: Restart PBApiServer after PB7 handlers complete
+      shell: |
+        set -euo pipefail
+        restart_unit="pbgui-api-restart-$(date +%s%N)"
+        systemd-run --user --unit="$restart_unit" --collect /bin/bash -c '
+          sleep 5
+          systemctl --user enable pbgui-api.service
+          if ! systemctl --user restart pbgui-api.service; then
+            systemctl --user show pbgui-api.service --no-pager --property=ActiveState,SubState,Result,ExecMainStatus,NRestarts
+            systemctl --user status pbgui-api.service --no-pager -l
+            exit 1
+          fi
+          baseline="$(systemctl --user show pbgui-api.service --property=NRestarts --value)"
+          case "$baseline" in ""|*[!0-9]*) baseline=0 ;; esac
+          sleep 12
+          active="$(systemctl --user show pbgui-api.service --property=ActiveState --value)"
+          sub="$(systemctl --user show pbgui-api.service --property=SubState --value)"
+          result="$(systemctl --user show pbgui-api.service --property=Result --value)"
+          status="$(systemctl --user show pbgui-api.service --property=ExecMainStatus --value)"
+          after="$(systemctl --user show pbgui-api.service --property=NRestarts --value)"
+          case "$after" in ""|*[!0-9]*) after=0 ;; esac
+          if [ "$active" != active ] || [ "$sub" != running ] || [ "$result" != success ] || [ "${status:-0}" != 0 ] || [ "$after" -gt "$baseline" ]; then
+            systemctl --user show pbgui-api.service --no-pager --property=ActiveState,SubState,Result,ExecMainStatus,NRestarts
+            systemctl --user status pbgui-api.service --no-pager -l
+            exit 1
+          fi
+        '
+      args:
+        executable: /bin/bash
+      changed_when: true
+      listen: "restart pbgui"

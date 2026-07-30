@@ -793,7 +793,7 @@ def test_lifespan_startup_failure_still_runs_all_shutdown_hooks(monkeypatch, tmp
 
     for name in (
         "auth_shutdown", "live_shutdown", "dashboard_shutdown", "heatmap_shutdown",
-        "pareto_explorer_shutdown", "coin_data_shutdown", "vps_manager_shutdown",
+        "pareto_explorer_shutdown", "coin_data_shutdown", "market_data_shutdown", "vps_manager_shutdown",
         "cluster_shutdown", "db_tools_shutdown", "bt7_shutdown", "opt7_shutdown",
     ):
         monkeypatch.setattr(PBApiServer, name, lambda name=name: fake_shutdown(name))
@@ -813,7 +813,7 @@ def test_lifespan_startup_failure_still_runs_all_shutdown_hooks(monkeypatch, tmp
     assert migration_errors == ["RuntimeError: credential recovery required"]
     for name in (
         "auth_shutdown", "live_shutdown", "dashboard_shutdown", "heatmap_shutdown",
-        "pareto_explorer_shutdown", "coin_data_shutdown", "vps_manager_shutdown",
+        "pareto_explorer_shutdown", "coin_data_shutdown", "market_data_shutdown", "vps_manager_shutdown",
         "cluster_shutdown", "db_tools_shutdown", "bt7_shutdown", "opt7_shutdown",
     ):
         assert name in calls

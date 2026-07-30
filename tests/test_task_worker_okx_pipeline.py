@@ -7,6 +7,8 @@ import sys
 import threading
 import time
 
+import pytest
+
 import task_worker
 
 
@@ -180,6 +182,25 @@ def test_ohlcv_copy_rsync_command_updates_changed_files(tmp_path) -> None:
     assert cmd[cmd.index("-e") + 1] == "ssh -J user@jump-host -p 2222"
     assert f"{source_dir}/" in cmd
     assert "localhost:/home/mani/software/pbgui/data/ohlcv/bybit/" in cmd
+
+
+@pytest.mark.parametrize(
+    "ssh_command",
+    ["/tmp/ssh -p 22", "ssh -o ProxyCommand=malicious", "ssh -F /tmp/config"],
+)
+def test_ohlcv_copy_worker_rejects_unsafe_ssh_commands(ssh_command) -> None:
+    """The detached worker revalidates persisted SSH argv against shell-capable options."""
+
+    with pytest.raises(ValueError, match="SSH command"):
+        task_worker._parse_ohlcv_copy_ssh_args(ssh_command)
+
+
+@pytest.mark.parametrize("target", ["-E", "user@-host"])
+def test_ohlcv_copy_worker_rejects_option_like_targets(target) -> None:
+    """The worker never forwards option-like persisted targets to SSH or rsync."""
+
+    with pytest.raises(ValueError, match="Remote target is invalid"):
+        task_worker._normalize_ohlcv_copy_target(target)
 
 
 def test_ohlcv_copy_rsync_command_ignores_legacy_missing_only_mode(tmp_path) -> None:
