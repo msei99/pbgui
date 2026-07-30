@@ -1,5 +1,6 @@
 ---
-# Install or update PB8 on a selected remote PBGui master only.
+# Install or update PB8 on a selected remote PBGui host.
+# Masters receive the full research profile; VPS runners receive live-only PB8.
 
 - hosts: "{{ hostname }}"
   gather_facts: no
@@ -11,6 +12,7 @@
     pbgui_python: "{{ install_dir }}/venv_pbgui/bin/python"
     pb8dir: "{{ install_dir }}/pb8"
     pb8venv: "{{ install_dir }}/venv_pb8"
+    pb8_required_free_bytes: "{{ pb8_min_free_bytes | default(3221225472) | int }}"
 
   tasks:
     - name: Read remote PBGui role before PB8 changes
@@ -18,16 +20,46 @@
         argv:
           - python3
           - -c
-          - "import configparser,sys; c=configparser.ConfigParser(); c.read(sys.argv[1]); print(c.get('main','role',fallback=''))"
+          - "import configparser,json,sys; from pathlib import Path; c=configparser.ConfigParser(); c.read(sys.argv[1]); role=c.get('main','role',fallback='').strip().lower(); identity=Path(sys.argv[2]); data=json.loads(identity.read_text(encoding='utf-8')) if not role and identity.is_file() else {}; print(role or str(data.get('role') or '').strip().lower())"
           - "{{ pbgdir }}/pbgui.ini"
+          - "{{ pbgdir }}/data/cluster/node_identity.json"
       register: pbgui_role
       changed_when: false
 
-    - name: Require remote master role for PB8
+    - name: Require supported PBGui role for PB8
       assert:
         that:
-          - pbgui_role.stdout | trim | lower == 'master'
-        fail_msg: "PB8 can only be installed or updated on a PBGui master."
+          - pbgui_role.stdout | trim | lower in ['master', 'vps', 'slave']
+        fail_msg: "PB8 can only be installed or updated on a PBGui master or VPS runner."
+
+    - name: Select PB8 installation profile
+      set_fact:
+        pb8_install_profile: "{{ 'full' if (pbgui_role.stdout | trim | lower) == 'master' else 'live' }}"
+
+    - name: Measure PB8 disk state before changes
+      command:
+        argv:
+          - python3
+          - -c
+          - "import json,os,shutil,subprocess,sys; base=sys.argv[1]; paths=sys.argv[2:]; usage=shutil.disk_usage(base); sizes={p:(int((subprocess.run(['du','-sb',p],capture_output=True,text=True,check=False).stdout.split() or ['0'])[0]) if os.path.exists(p) else 0) for p in paths}; print(json.dumps({'free_bytes':usage.free,'total_bytes':usage.total,'sizes':sizes},sort_keys=True))"
+          - "{{ install_dir }}"
+          - "{{ pb8dir }}"
+          - "{{ pb8venv }}"
+      register: pb8_disk_before
+      changed_when: false
+
+    - name: Require free disk space for PB8
+      assert:
+        that:
+          - (pb8_disk_before.stdout | from_json).free_bytes | int >= pb8_required_free_bytes | int
+        fail_msg: >-
+          PB8 {{ pb8_install_profile }} installation/update requires at least
+          {{ ((pb8_required_free_bytes | int) / 1073741824) | round(2) }} GiB free on {{ install_dir }};
+          currently {{ (((pb8_disk_before.stdout | from_json).free_bytes | int) / 1073741824) | round(2) }} GiB is available.
+
+    - name: Report PB8 disk state before changes
+      debug:
+        msg: "PB8 disk before profile={{ pb8_install_profile }} state={{ pb8_disk_before.stdout }}"
 
     - name: Acquire PB8 update writer ownership
       script:
@@ -179,9 +211,18 @@
     - name: Install PB8 full profile
       shell: |
         source "$HOME/.cargo/env"
-        "{{ pb8venv }}/bin/python" -m pip install --upgrade -e "{{ pb8dir }}[full]"
+        "{{ pb8venv }}/bin/python" -m pip install --no-cache-dir --upgrade -e "{{ pb8dir }}[full]"
       args:
         executable: /bin/bash
+      when: pb8_install_profile == 'full'
+
+    - name: Install PB8 live profile
+      shell: |
+        source "$HOME/.cargo/env"
+        "{{ pb8venv }}/bin/python" -m pip install --no-cache-dir --upgrade -e "{{ pb8dir }}"
+      args:
+        executable: /bin/bash
+      when: pb8_install_profile == 'live'
 
     - name: Validate PB8 CLI
       command:
@@ -197,6 +238,21 @@
           - -c
           - "import passivbot_rust; from config.schema import CONFIG_SCHEMA_VERSION; assert str(CONFIG_SCHEMA_VERSION).startswith('v8.'), CONFIG_SCHEMA_VERSION; print(CONFIG_SCHEMA_VERSION)"
       changed_when: false
+
+    - name: Remove PB8 Rust build artifacts on live-only runners
+      file:
+        path: "{{ pb8dir }}/passivbot-rust/target"
+        state: absent
+      when: pb8_install_profile == 'live'
+
+    - name: Validate PB8 live runtime after build cleanup
+      command:
+        argv:
+          - "{{ pb8venv }}/bin/python"
+          - -c
+          - "import passivbot_rust; from config.schema import CONFIG_SCHEMA_VERSION; assert str(CONFIG_SCHEMA_VERSION).startswith('v8.'), CONFIG_SCHEMA_VERSION; print(CONFIG_SCHEMA_VERSION)"
+      changed_when: false
+      when: pb8_install_profile == 'live'
 
     - name: Save PB8 runtime paths after validation
       command:
@@ -215,6 +271,22 @@
       file:
         path: "{{ pbgdir }}/data/locks/pb8-runtime-invalid"
         state: absent
+
+    - name: Measure PB8 disk state after validation
+      command:
+        argv:
+          - python3
+          - -c
+          - "import json,os,shutil,subprocess,sys; base=sys.argv[1]; paths=sys.argv[2:]; usage=shutil.disk_usage(base); sizes={p:(int((subprocess.run(['du','-sb',p],capture_output=True,text=True,check=False).stdout.split() or ['0'])[0]) if os.path.exists(p) else 0) for p in paths}; print(json.dumps({'free_bytes':usage.free,'total_bytes':usage.total,'sizes':sizes},sort_keys=True))"
+          - "{{ install_dir }}"
+          - "{{ pb8dir }}"
+          - "{{ pb8venv }}"
+      register: pb8_disk_after
+      changed_when: false
+
+    - name: Report PB8 disk state after validation
+      debug:
+        msg: "PB8 disk after profile={{ pb8_install_profile }} state={{ pb8_disk_after.stdout }}"
 
   handlers:
     - name: Release PB8 update writer ownership

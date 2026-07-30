@@ -4072,6 +4072,8 @@
           pb8_installed: !!st.pb8_installed,
           pb8_up: !!st.pb8_update_available,
           pb8_allowed: !!st.pb8_action_allowed,
+          pb8_reason: String(st.pb8_action_reason || ''),
+          pb8_profile: String(st.pb8_install_profile || ''),
           pending_updates: st.pending_updates == null ? String(((st.summary_row || {}).updates) || '') : String(st.pending_updates),
           reboot_required: !!((st.summary_row || {}).reboot_required),
           host_key_error: !!st.host_key_error,
@@ -10282,7 +10284,8 @@
           </div>
           <button class='${pbguiBtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pbgui' data-command-text='Update PBGui'>Update PBGui</button>
           <button class='${pb7BtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb7' data-command-text='Update PB7'>Update PB7</button>
-          ${isRemoteMaster && st.pb8_action_allowed ? `<button class='${pb8BtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb8' data-command-text='${pb8ButtonText}'>${pb8ButtonText}</button>` : ''}
+          ${st.pb8_action_allowed ? `<button class='${pb8BtnClass}' type='button' title='${escAttr(st.pb8_install_profile === 'live' ? 'Installs the minimal PB8 live profile.' : 'Installs the PB8 full profile.')}' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb8' data-command-text='${pb8ButtonText}'>${pb8ButtonText}</button>` : ''}
+          ${!st.pb8_action_allowed && st.pb8_action_reason ? `<div class='notice warning'>${esc(st.pb8_action_reason)}</div>` : ''}
           <button class='${bothBtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb' data-command-text='Update PBGui and PB7'>Update PBGui and PB7</button>
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' data-update-reboot-toggle='${escAttr(selectedHost)}' data-vps-ui-field='updateReboot' data-host='${escAttr(selectedHost)}' ${ui.updateReboot ? 'checked' : ''}> Reboot after Linux update</label>

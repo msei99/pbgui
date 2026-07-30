@@ -88,7 +88,7 @@ The **Master** content area also contains:
 
 In cluster mode, **Update PBGui** and PBGui branch switches sync the local PBCluster systemd user unit and restart PBCluster. PBCluster is also visible in local service monitoring and service-control views. A manual `git pull` does not restart PBCluster; use `systemctl --user restart pbgui-pbcluster.service` afterward.
 
-PB8 installation is master-only. It uses `<install_dir>/pb8` and `<install_dir>/venv_pb8`, validates the PB8 CLI, Rust extension, and V8 config schema, and then saves `pb8dir` and `pb8venv` in `pbgui.ini`. It does not stop PBRun, PB7, or running PB8 jobs. A selected managed remote master exposes the same action; normal VPS/slave hosts and bulk deployments do not.
+PB8 uses `<install_dir>/pb8` and `<install_dir>/venv_pb8`, validates the PB8 CLI, Rust extension, and V8 config schema, and then saves `pb8dir` and `pb8venv` in `pbgui.ini`. Local and remote masters receive the full PB8 profile for backtest and optimize. Managed VPS runners receive only the minimal live profile, use pip without a download cache, and remove the temporary Rust build directory after validation. The remote playbook requires at least 3 GiB free on the installation filesystem and reports free space plus PB8 checkout/venv sizes before and after the run. RAM size is not an installation gate. PB8 remains absent from bulk deployments.
 When PB8 is not installed, **Install PB8** is shown as a filled blue action so it remains distinct from routine update buttons.
 
 ---
@@ -113,7 +113,7 @@ Sidebar actions:
 | **Delete VPS** | Remove this VPS from PBGui |
 | **Update PBGui** | Update PBGui on this VPS |
 | **Update PBGui and PB7** | Update all components |
-| **Install PB8 / Update PB8** | Available only when the selected host reports a fresh `master` role; installs or updates the separate PB8 runtime |
+| **Install PB8 / Update PB8** | Available when fresh telemetry reports a supported master or VPS-runner role and at least 3 GiB free disk; masters receive PB8's full profile, runners receive the minimal live profile |
 | **Update Linux** | Run `apt upgrade` (optional reboot checkbox) |
 | **Reboot VPS** | Restart the VPS |
 | **Cleanup VPS** | Remove old packages and logs |

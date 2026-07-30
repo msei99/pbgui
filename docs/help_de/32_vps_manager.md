@@ -88,7 +88,7 @@ Der **Master**-Inhaltsbereich enthält zusätzlich:
 
 Im Cluster-Modus synchronisieren **Update PBGui** und PBGui-Branch-Wechsel die lokale PBCluster-systemd-User-Unit und starten PBCluster neu. PBCluster ist außerdem in lokaler Service-Überwachung und Service-Control sichtbar. Ein manueller `git pull` startet PBCluster nicht neu; nutze danach `systemctl --user restart pbgui-pbcluster.service`.
 
-Die PB8-Installation ist nur auf Mastern erlaubt. Sie verwendet `<install_dir>/pb8` und `<install_dir>/venv_pb8`, validiert PB8-CLI, Rust-Erweiterung und V8-Config-Schema und speichert danach `pb8dir` und `pb8venv` in `pbgui.ini`. PBRun, PB7 und laufende PB8-Jobs werden dabei nicht gestoppt. Ein ausgewählter verwalteter Remote-Master zeigt dieselbe Aktion; normale VPS-/Slave-Hosts und Bulk-Deployments nicht.
+PB8 verwendet `<install_dir>/pb8` und `<install_dir>/venv_pb8`, validiert PB8-CLI, Rust-Erweiterung und V8-Config-Schema und speichert danach `pb8dir` und `pb8venv` in `pbgui.ini`. Lokale und entfernte Master erhalten das vollständige PB8-Profil für Backtest und Optimize. Verwaltete VPS-Runner erhalten nur das minimale Live-Profil, verwenden pip ohne Download-Cache und entfernen nach der Validierung das temporäre Rust-Buildverzeichnis. Das Remote-Playbook verlangt mindestens 3 GiB freien Speicher auf dem Installations-Dateisystem und protokolliert freien Speicher sowie die Größen von Checkout und Venv vor und nach dem Lauf. Die RAM-Größe ist keine Installationssperre. PB8 bleibt aus Bulk-Deployments ausgeschlossen.
 Wenn PB8 nicht installiert ist, wird **Install PB8** als gefüllte blaue Aktion hervorgehoben und bleibt dadurch klar von routinemäßigen Update-Schaltflächen unterscheidbar.
 
 ---
@@ -113,7 +113,7 @@ Sidebar-Aktionen:
 | **Delete VPS** | Diesen VPS aus PBGui entfernen |
 | **Update PBGui** | PBGui auf diesem VPS aktualisieren |
 | **Update PBGui and PB7** | Alle Komponenten aktualisieren |
-| **Install PB8 / Update PB8** | Nur bei frisch gemeldeter `master`-Rolle verfügbar; installiert oder aktualisiert die getrennte PB8-Runtime |
+| **Install PB8 / Update PB8** | Verfügbar, wenn frische Telemetrie eine unterstützte Master- oder VPS-Runner-Rolle und mindestens 3 GiB freien Speicher meldet; Master erhalten das Full-Profil, Runner das minimale Live-Profil |
 | **Update Linux** | `apt upgrade` ausführen (optionale Reboot-Checkbox) |
 | **Reboot VPS** | VPS neu starten |
 | **Cleanup VPS** | Alte Pakete und Logs entfernen |

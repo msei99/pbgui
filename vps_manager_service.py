@@ -51,6 +51,8 @@ SERVICE = "VPSManagerApi"
 PB7_UPSTREAM_REMOTE_NAME = "origin"
 PB7_UPSTREAM_REMOTE_URL = "https://github.com/enarjord/passivbot.git"
 COMMAND_MASTER_UPDATE_PB8 = "master-update-pb8"
+PB8_REMOTE_ROLES = frozenset({"master", "vps", "slave"})
+PB8_MIN_FREE_DISK_BYTES = 3 * 1024 * 1024 * 1024
 SWAP_OPTIONS = ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"]
 INIT_METHODS = ["root", "password", "private_key"]
 SESSION_SECRET_TTL_SECONDS = 15 * 60
@@ -118,6 +120,39 @@ def _pb8_branch_label(branch: Any, github_status: Any) -> str:
     if value == "unknown" and str(github_status or "").startswith("✅"):
         return "master"
     return value
+
+
+def _pb8_remote_action_status(host_state: dict[str, Any] | None, *, telemetry_fresh: bool) -> dict[str, Any]:
+    """Return whether a remote host may install or update PB8."""
+    state = host_state if isinstance(host_state, dict) else {}
+    meta = state.get("meta") if isinstance(state.get("meta"), dict) else {}
+    system = state.get("system") if isinstance(state.get("system"), dict) else {}
+    role = str(meta.get("role") or "").strip().lower()
+    free_bytes = max(_safe_int(system.get("disk_free")), 0)
+    profile = "full" if role == "master" else "live"
+    result = {
+        "allowed": False,
+        "reason": "",
+        "role": role,
+        "profile": profile,
+        "free_disk_bytes": free_bytes,
+        "required_free_disk_bytes": PB8_MIN_FREE_DISK_BYTES,
+    }
+    if not telemetry_fresh:
+        result["reason"] = "Fresh host telemetry is required before installing or updating PB8."
+    elif role not in PB8_REMOTE_ROLES:
+        result["reason"] = "PB8 can only be installed or updated on a PBGui master or VPS runner."
+    elif free_bytes <= 0:
+        result["reason"] = "Free disk space is unavailable from host telemetry."
+    elif free_bytes < PB8_MIN_FREE_DISK_BYTES:
+        result["reason"] = (
+            f"PB8 {profile} installation/update requires at least "
+            f"{PB8_MIN_FREE_DISK_BYTES / 1024 ** 3:.0f} GiB free disk space; "
+            f"currently {free_bytes / 1024 ** 3:.2f} GiB is available."
+        )
+    else:
+        result["allowed"] = True
+    return result
 
 
 def _pb8_runtime_info(repo_dir: str, python_path: str) -> dict[str, Any]:
@@ -3467,6 +3502,7 @@ class VPSManagerService:
         telemetry_fresh = self._host_telemetry_fresh(host_state)
         telemetry_age = self._host_telemetry_age(host_state)
         host_meta = self._host_meta(host_state)
+        pb8_action = _pb8_remote_action_status(host_state, telemetry_fresh=telemetry_fresh)
         connection = (host_state or {}).get("connection") or {}
         ssh_connection_error = str(connection.get("last_error") or "")
         host_key_error = "host key" in ssh_connection_error.lower() and any(
@@ -3513,7 +3549,11 @@ class VPSManagerService:
             "pb7_update_available": pb7_github.startswith("\u274c"),
             "pb8_installed": bool(summary_row.get("pb8_installed")),
             "pb8_update_available": pb8_github.startswith("\u274c"),
-            "pb8_action_allowed": telemetry_fresh and str(host_meta.get("role") or "").strip().lower() == "master",
+            "pb8_action_allowed": bool(pb8_action["allowed"]),
+            "pb8_action_reason": str(pb8_action["reason"]),
+            "pb8_install_profile": str(pb8_action["profile"]),
+            "pb8_free_disk_bytes": int(pb8_action["free_disk_bytes"]),
+            "pb8_required_free_disk_bytes": int(pb8_action["required_free_disk_bytes"]),
             "server_metrics": self._build_remote_server_metrics(vps.hostname, host_state),
             "systemd_migration": self._get_vps_systemd_migration_status(vps, host_state, quick=quick),
             "cluster_node": cluster_node,
@@ -5344,12 +5384,13 @@ class VPSManagerService:
             if command == COMMAND_VPS_UPDATE_PB8:
                 if extra_vars:
                     raise ValueError("PB8 update does not accept custom playbook variables.")
-                if not self._host_telemetry_fresh(host_state):
-                    raise ValueError("Fresh host telemetry is required before installing or updating PB8.")
+                telemetry_fresh = self._host_telemetry_fresh(host_state)
+                pb8_action = _pb8_remote_action_status(host_state, telemetry_fresh=telemetry_fresh)
+                if not pb8_action["allowed"]:
+                    raise ValueError(str(pb8_action["reason"]))
                 host_meta = self._host_meta(host_state)
-                if str(host_meta.get("role") or "").strip().lower() != "master":
-                    raise ValueError("PB8 can only be installed or updated on a PBGui master.")
                 command_text = "Update PB8" if bool(host_meta.get("pb8ready")) else "Install PB8"
+                command_extra_vars["pb8_min_free_bytes"] = PB8_MIN_FREE_DISK_BYTES
             command_extra_vars.update(self._credential_playbook_vars(hostname, host_state))
             if command in {COMMAND_VPS_UPDATE_PBGUI, COMMAND_VPS_UPDATE_PB}:
                 self._sync_vps_config_from_host_meta(vps, host_state)

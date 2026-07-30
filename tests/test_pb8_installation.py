@@ -1,4 +1,4 @@
-"""Regression tests for PB8 master installation and update boundaries."""
+"""Regression tests for PB8 master and VPS-runner installation boundaries."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def test_master_updates_migrate_missing_legacy_master_role(playbook_path: str) -
 
 @pytest.mark.parametrize("playbook_path", ["master-update-pb8.yml", "vps-update-pb8.yml"])
 def test_pb8_playbooks_gate_role_validate_and_leave_processes_running(playbook_path: str) -> None:
-    """PB8 updates validate master role before writes and never signal bot processes."""
+    """PB8 updates validate host role before writes and never signal bot processes."""
     source = Path(playbook_path).read_text(encoding="utf-8")
 
     role_index = source.index("Read ")
@@ -79,7 +79,8 @@ def test_pb8_playbooks_gate_role_validate_and_leave_processes_running(playbook_p
     assert "--expected-major" in source
     assert '"8"' in source
     assert "force: yes" not in source
-    assert "pip install --upgrade -e" in source
+    assert "pip install" in source
+    assert "--upgrade -e" in source
     assert "Validate PB8 CLI" in source
     assert "import passivbot_rust" in source
     assert "Save PB8 runtime paths after validation" in source
@@ -92,6 +93,17 @@ def test_pb8_playbooks_gate_role_validate_and_leave_processes_running(playbook_p
     if playbook_path == "vps-update-pb8.yml":
         assert "master_update_lock.py" in source
         assert "--barrier" in source
+        assert "['master', 'vps', 'slave']" in source
+        assert "pb8_install_profile" in source
+        assert "Install PB8 live profile" in source
+        assert 'pip install --no-cache-dir --upgrade -e "{{ pb8dir }}"' in source
+        assert "Remove PB8 Rust build artifacts on live-only runners" in source
+        assert "Validate PB8 live runtime after build cleanup" in source
+        assert "Measure PB8 disk state before changes" in source
+        assert "Measure PB8 disk state after validation" in source
+        assert "pb8_min_free_bytes | default(3221225472)" in source
+    else:
+        assert "pbgui_role.stdout | trim | lower == 'master'" in source
     assert "stop-processes" not in source
     assert "kill all" not in source
     assert "starter.py" not in source
@@ -145,19 +157,34 @@ def test_local_pb8_command_requires_master_and_rejects_custom_vars(monkeypatch: 
     assert calls == []
 
 
-@pytest.mark.parametrize(("fresh", "role"), [(False, "master"), (True, "vps"), (True, "slave")])
-def test_remote_pb8_command_requires_fresh_master_telemetry(fresh: bool, role: str) -> None:
-    """Selected remote hosts fail closed unless fresh telemetry confirms master role."""
+@pytest.mark.parametrize(
+    ("fresh", "role", "disk_free", "message"),
+    [
+        (False, "master", 8 * 1024**3, "telemetry"),
+        (True, "unknown", 8 * 1024**3, "master or VPS runner"),
+        (True, "vps", 2 * 1024**3, "3 GiB"),
+    ],
+)
+def test_remote_pb8_command_requires_fresh_master_telemetry(
+    fresh: bool,
+    role: str,
+    disk_free: int,
+    message: str,
+) -> None:
+    """Selected remote hosts fail closed on stale, unknown, or low-disk telemetry."""
     service = object.__new__(VPSManagerService)
     vps = SimpleNamespace(hostname="remote-a", user_pw=None)
     service.vpsmanager = SimpleNamespace(update_vps=lambda *args, **kwargs: None)
     service._require_vps = lambda _hostname: vps
     service._apply_session_secrets_to_vps = lambda _token, _vps: None
     service._get_monitor_state = lambda: {}
-    service._get_host_telemetry = lambda _state, _hostname: {"meta": {"role": role}}
+    service._get_host_telemetry = lambda _state, _hostname: {
+        "meta": {"role": role},
+        "system": {"disk_free": disk_free},
+    }
     service._host_telemetry_fresh = lambda _state: fresh
 
-    with pytest.raises(ValueError, match="telemetry|master"):
+    with pytest.raises(ValueError, match=message):
         service.run_vps_command(
             token="token",
             hostname="remote-a",
@@ -167,7 +194,7 @@ def test_remote_pb8_command_requires_fresh_master_telemetry(fresh: bool, role: s
 
 
 def test_remote_pb8_command_starts_only_for_fresh_master() -> None:
-    """Fresh master telemetry permits the dedicated non-bulk PB8 playbook."""
+    """Fresh runner telemetry permits the dedicated live-only PB8 playbook."""
     captured: dict[str, object] = {}
     service = object.__new__(VPSManagerService)
     vps = SimpleNamespace(hostname="remote-master", user_pw=None, command_run_id="run-8")
@@ -184,7 +211,8 @@ def test_remote_pb8_command_starts_only_for_fresh_master() -> None:
     service._apply_session_secrets_to_vps = lambda _token, _vps: None
     service._get_monitor_state = lambda: {}
     service._get_host_telemetry = lambda _state, _hostname: {
-        "meta": {"role": "master", "pb8ready": False}
+        "meta": {"role": "vps", "pb8ready": False},
+        "system": {"disk_free": 4 * 1024**3},
     }
     service._host_telemetry_fresh = lambda _state: True
     service._credential_playbook_vars = lambda _hostname, _state: {}
@@ -199,14 +227,43 @@ def test_remote_pb8_command_starts_only_for_fresh_master() -> None:
 
     assert captured["command"] == "vps-update-pb8"
     assert captured["command_text"] == "Install PB8"
+    assert captured["extra_vars"] == {"pb8_min_free_bytes": service_mod.PB8_MIN_FREE_DISK_BYTES}
     assert result["command"] == "vps-update-pb8"
 
 
 def test_pb8_is_master_only_and_absent_from_bulk_actions() -> None:
-    """The PB8 action is visible only in master detail sidebars, never bulk deploys."""
+    """The PB8 action supports eligible runners but remains absent from bulk deploys."""
     source = Path("frontend/vps_manager.html").read_text(encoding="utf-8")
 
     assert 'runMasterWithLog("master-update-pb8"' in source
     assert "data-command='vps-update-pb8'" in source
-    assert "isRemoteMaster && st.pb8_action_allowed" in source
+    assert "isRemoteMaster && st.pb8_action_allowed" not in source
+    assert "st.pb8_action_allowed ?" in source
+    assert "st.pb8_install_profile === 'live'" in source
+    assert "st.pb8_action_reason" in source
+    assert "pb8_reason: String(st.pb8_action_reason || '')" in source
+    assert "pb8_profile: String(st.pb8_install_profile || '')" in source
     assert "COMMAND_VPS_UPDATE_PB8" not in service_mod.VPS_DEPLOY_ACTIONS
+
+
+def test_pb8_remote_action_status_uses_role_and_free_disk_only() -> None:
+    """Remote PB8 eligibility accepts low-RAM runners when fresh disk telemetry is sufficient."""
+    runner = service_mod._pb8_remote_action_status(
+        {"meta": {"role": "vps"}, "system": {"disk_free": 4 * 1024**3}},
+        telemetry_fresh=True,
+    )
+    master = service_mod._pb8_remote_action_status(
+        {"meta": {"role": "master"}, "system": {"disk_free": 4 * 1024**3}},
+        telemetry_fresh=True,
+    )
+    low_disk = service_mod._pb8_remote_action_status(
+        {"meta": {"role": "slave"}, "system": {"disk_free": 1 * 1024**3}},
+        telemetry_fresh=True,
+    )
+
+    assert runner["allowed"] is True
+    assert runner["profile"] == "live"
+    assert master["allowed"] is True
+    assert master["profile"] == "full"
+    assert low_disk["allowed"] is False
+    assert "currently 1.00 GiB" in low_disk["reason"]
