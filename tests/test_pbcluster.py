@@ -888,6 +888,150 @@ def test_cluster_sync_worker_limits_operation_bundle_size() -> None:
     assert remaining == 9
 
 
+def test_superseded_missing_config_blob_does_not_block_final_upsert(tmp_path: Path) -> None:
+    """Legacy rapid saves can converge when only the final config is recoverable."""
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    instance_dir = tmp_path / "data" / "run_v7" / "bot-a"
+    instance_dir.mkdir(parents=True)
+    old_hash = "sha256:" + "a" * 64
+    old_operation = append_operation(
+        cluster_root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "bot-a",
+            "version": "1",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": old_hash,
+        },
+        created_at=100,
+    )
+    (instance_dir / "config.json").write_text(
+        json.dumps({"pbgui": {"version": 2, "enabled_on": "runner-b"}, "live": {"user": "bot-a"}}),
+        encoding="utf-8",
+    )
+    current_manifest = build_config_manifest(instance_dir)
+    current_hash = compute_config_manifest_hash(current_manifest)
+    current_operation = append_operation(
+        cluster_root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "bot-a",
+            "version": "2",
+            "assigned_host": NODE_C,
+            "desired_state": "running",
+            "config_manifest_hash": current_hash,
+        },
+        created_at=101,
+    )
+
+    config_blobs, _secret_blobs, _sealed_blobs = cluster_sync_worker._collect_local_blobs_for_operations(
+        cluster_root,
+        [old_operation, current_operation],
+    )
+
+    hashes = {item["hash"] for item in config_blobs}
+    assert old_hash not in hashes
+    assert current_hash in hashes
+    with pytest.raises(ClusterSyncWorkerError, match="does not match desired state"):
+        cluster_sync_worker._collect_local_blobs_for_operations(cluster_root, [old_operation])
+
+
+def test_current_manifest_with_missing_child_blob_is_rebuilt(tmp_path: Path) -> None:
+    """An incomplete current manifest is repaired from its matching local config."""
+    cluster_root = default_cluster_root(tmp_path)
+    instance_dir = tmp_path / "data" / "run_v7" / "bot-a"
+    instance_dir.mkdir(parents=True)
+    config_raw = json.dumps(
+        {"pbgui": {"version": 2, "enabled_on": "runner-b"}, "live": {"user": "bot-a"}}
+    ).encode("utf-8")
+    (instance_dir / "config.json").write_bytes(config_raw)
+    manifest = build_config_manifest(instance_dir)
+    manifest_hash = compute_config_manifest_hash(manifest)
+    manifest_raw = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    _write_local_blob(cluster_root / "config_blobs", manifest_hash, manifest_raw, secret=False)
+    child_hash = "sha256:" + hashlib.sha256(config_raw).hexdigest()
+    operation = {
+        "op": "UPSERT_CONFIG",
+        "instance": "bot-a",
+        "version": "2",
+        "assigned_host": NODE_B,
+        "desired_state": "running",
+        "config_manifest_hash": manifest_hash,
+    }
+
+    blobs = cluster_sync_worker._collect_config_manifest_blobs(cluster_root, operation, manifest_hash)
+
+    assert {item["hash"] for item in blobs} == {manifest_hash, child_hash}
+    digest = child_hash.removeprefix("sha256:")
+    assert (cluster_root / "config_blobs" / "sha256" / digest[:2] / f"{digest}.json").read_bytes() == config_raw
+
+
+def test_cluster_sync_worker_converges_rapid_host_moves_with_legacy_missing_blob(tmp_path: Path) -> None:
+    """A peer receives the final rapid move even if a superseded legacy blob is gone."""
+    root_a = default_cluster_root(tmp_path / "node-a")
+    root_b = default_cluster_root(tmp_path / "node-b")
+    ensure_local_identity(root_a, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    ensure_local_identity(root_b, role="master", pbname="master-b", cluster_id=CLUSTER_ID, node_id=NODE_B)
+    master_membership = append_operation(
+        root_a,
+        "ADD_NODE",
+        {"node_id": NODE_ID, "role": "master", "pbname": "master-a", "ssh_host": "master-a"},
+        created_at=100,
+    )
+    peer_membership = append_operation(
+        root_b,
+        "ADD_NODE",
+        {"node_id": NODE_B, "role": "master", "pbname": "master-b", "ssh_host": "master-b"},
+        created_at=101,
+    )
+    write_operation(root_a, peer_membership, allow_legacy_membership=True)
+    write_operation(root_b, master_membership, allow_legacy_membership=True)
+    instance_dir = tmp_path / "node-a" / "data" / "run_v7" / "bot-a"
+    instance_dir.mkdir(parents=True)
+    append_operation(
+        root_a,
+        "UPSERT_CONFIG",
+        {
+            "instance": "bot-a",
+            "version": "1",
+            "assigned_host": NODE_ID,
+            "desired_state": "running",
+            "config_manifest_hash": "sha256:" + "a" * 64,
+        },
+        created_at=102,
+    )
+    (instance_dir / "config.json").write_text(
+        json.dumps({"pbgui": {"version": 2, "enabled_on": "master-b"}, "live": {"user": "bot-a"}}),
+        encoding="utf-8",
+    )
+    final_hash = _write_config_blobs_for_instance(root_a, instance_dir)
+    append_operation(
+        root_a,
+        "UPSERT_CONFIG",
+        {
+            "instance": "bot-a",
+            "version": "2",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": final_hash,
+        },
+        created_at=103,
+    )
+    client = _LocalPeerClient({NODE_ID: root_a, NODE_B: root_b})
+
+    status = ClusterSyncWorker(tmp_path / "node-a", peer_client=client).run_once(reason="test")
+
+    assert status["ok"] is True
+    assert status["peers"][0]["ok"] is True
+    assert status["peers"][0]["pushed_ops"] >= 2
+    remote = json.loads((root_b / "desired_state.json").read_text(encoding="utf-8"))["instances"]["bot-a"]
+    assert remote["version"] == "2"
+    assert remote["assigned_host"] == NODE_B
+    assert remote["config_manifest_hash"] == final_hash
+
+
 def test_blob_coverage_repairs_available_blobs_when_another_is_missing_locally(tmp_path: Path) -> None:
     """One unavailable donor blob does not block other coverage repairs."""
 

@@ -1330,6 +1330,68 @@ def compute_config_manifest_hash(manifest: dict[str, Any]) -> str:
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
 
 
+def persist_config_manifest_blobs(cluster_root: Path, instance_dir: Path) -> str:
+    """Persist one stable V7 config snapshot before its operation is appended."""
+
+    base = Path(instance_dir)
+    manifest: dict[str, Any] | None = None
+    raw_files: dict[str, bytes] = {}
+    for _attempt in range(3):
+        candidate = build_config_manifest(base)
+        candidate_files = candidate.get("files") if isinstance(candidate.get("files"), dict) else {}
+        captured: dict[str, bytes] = {}
+        try:
+            for filename, meta in candidate_files.items():
+                raw = (base / filename).read_bytes()
+                expected = meta if isinstance(meta, dict) else {}
+                if hashlib.sha256(raw).hexdigest() != str(expected.get("sha256") or ""):
+                    break
+                if len(raw) != int(expected.get("size") or -1):
+                    break
+                captured[filename] = raw
+            else:
+                manifest = candidate
+                raw_files = captured
+                break
+        except OSError:
+            continue
+    if manifest is None:
+        raise ClusterStateError(f"instance config changed while snapshotting: {base}")
+
+    manifest_raw = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    manifest_hash = f"sha256:{hashlib.sha256(manifest_raw).hexdigest()}"
+    blobs = [(manifest_hash, manifest_raw)]
+    blobs.extend(
+        (f"sha256:{hashlib.sha256(raw).hexdigest()}", raw)
+        for raw in raw_files.values()
+    )
+    paths = ClusterPaths.from_root(cluster_root)
+    if paths.config_blobs.is_symlink():
+        raise ClusterStateError("config blob directory must not be a symlink")
+    sha_root = paths.config_blobs / "sha256"
+    if sha_root.is_symlink():
+        raise ClusterStateError("config blob hash directory must not be a symlink")
+    with advisory_file_lock(paths.root / ".config_blobs"):
+        for blob_hash, raw in blobs:
+            digest = blob_hash.removeprefix("sha256:")
+            target = paths.config_blobs / "sha256" / digest[:2] / f"{digest}.json"
+            if target.is_symlink() or target.parent.is_symlink():
+                raise ClusterStateError("config blob path must not contain a symlink")
+            if target.exists():
+                if hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+                    raise ClusterStateError(f"existing config blob is corrupt: {blob_hash}")
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_name(f".{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+            try:
+                tmp.write_bytes(raw)
+                os.chmod(tmp, 0o644)
+                os.replace(tmp, target)
+            finally:
+                tmp.unlink(missing_ok=True)
+    return manifest_hash
+
+
 def _touch_sync_request(cluster_root: Path) -> None:
     """Best-effort notification for PBCluster that new oplog data exists."""
 

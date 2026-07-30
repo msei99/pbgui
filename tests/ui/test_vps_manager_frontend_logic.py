@@ -21,6 +21,17 @@ def test_unknown_ssh_host_confirmation_uses_exact_fingerprint() -> None:
     assert "accepted_host_key_fingerprint: String(msg.fingerprint || '')" in source
 
 
+def test_add_vps_offers_pb8_live_only_profile() -> None:
+    """Fresh VPS setup defaults to PB7 and explicitly offers PB8 without PB7."""
+    source = HTML_PATH.read_text(encoding="utf-8")
+
+    assert "runtime_profile: 'pb7'" in source
+    assert "PB8 Live only (no PB7)" in source
+    assert "PB8-only setup does not clone or install PB7" in source
+    assert "pb8Requested: String(store.addForm.runtime_profile || 'pb7') === 'pb8'" in source
+    assert "switchToVpsTaskLog(store.detail.hostname, 'vps-update-pb8'" in source
+
+
 def _extract_function(source: str, name: str) -> str:
     """Extract a named JavaScript function from the inline VPS manager script."""
     marker = f"function {name}("

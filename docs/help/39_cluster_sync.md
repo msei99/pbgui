@@ -62,6 +62,8 @@ Examples:
 
 Each node compares its known operation counters with another node. Missing operations and required blobs are transferred, then the receiving node rebuilds its local desired state.
 
+Each V7 save stores an immutable content-addressed snapshot before publishing its operation. You can therefore save repeatedly or move one instance from host A to host B and immediately to host C; every operation remains transferable, while receivers materialize the newest desired host and config.
+
 This makes sync repeatable and safe to retry.
 
 Credential protocol upgrades are zero-order. Every updated process first keeps

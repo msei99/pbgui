@@ -2043,10 +2043,25 @@ def _collect_local_blobs_for_operations(
         if str(operation.get("op") or "") == "CREDENTIAL_CUTOFF"
         for blob_hash in operation.get("obsolete_secret_blob_hashes") or []
     )
-    for operation in operations:
+    latest_config_index: dict[str, int] = {}
+    for index, operation in enumerate(operations):
+        if str(operation.get("op") or "") == "UPSERT_CONFIG" and str(operation.get("instance") or ""):
+            latest_config_index[str(operation["instance"])] = index
+    for index, operation in enumerate(operations):
         refs = _operation_hash_refs(operation)
         for manifest_hash in refs["config"]:
-            for blob in _collect_config_manifest_blobs(cluster_root, operation, manifest_hash):
+            try:
+                manifest_blobs = _collect_config_manifest_blobs(cluster_root, operation, manifest_hash)
+            except (OSError, ClusterSyncWorkerError):
+                instance = str(operation.get("instance") or "")
+                is_superseded = (
+                    str(operation.get("op") or "") == "UPSERT_CONFIG"
+                    and latest_config_index.get(instance, index) > index
+                )
+                if is_superseded:
+                    continue
+                raise
+            for blob in manifest_blobs:
                 config_by_hash.setdefault(str(blob["hash"]), blob)
         for payload_hash in refs["api_payload"]:
             raw = _read_local_blob(paths.config_blobs, payload_hash)
@@ -2073,7 +2088,11 @@ def _collect_config_manifest_blobs(cluster_root: Path, operation: dict[str, Any]
     paths = ClusterPaths.from_root(cluster_root)
     try:
         manifest_raw = _read_local_blob(paths.config_blobs, manifest_hash)
-    except OSError:
+        blobs = [{"hash": manifest_hash, "raw": manifest_raw}]
+        for blob_hash in _manifest_file_hashes(manifest_raw):
+            blobs.append({"hash": blob_hash, "raw": _read_local_blob(paths.config_blobs, blob_hash)})
+        return blobs
+    except (OSError, ClusterSyncWorkerError):
         manifest_raw = _build_local_config_blobs_from_instance(cluster_root, operation, manifest_hash)
     blobs = [{"hash": manifest_hash, "raw": manifest_raw}]
     for blob_hash in _manifest_file_hashes(manifest_raw):

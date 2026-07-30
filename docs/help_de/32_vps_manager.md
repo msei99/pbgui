@@ -170,11 +170,12 @@ Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöf
    - VPS-Eintrag zuerst speichern
    - **Initialize & Setup VPS** in der Add-Ansicht ausführen oder den Host später öffnen und die Ersteinrichtung auf der **Change VPS**-Seite abschließen
 3. Das Formular **Step 4: Initialize & Setup your VPS** und die **Save VPS Entry**-Vorgaben ausfüllen.
-4. Mit **Save VPS** den Eintrag anlegen oder aktualisieren.
-5. Mit **Initialize & Setup VPS** den Bootstrap-Lauf direkt aus der Add-Ansicht starten.
-6. Nach erfolgreichem Setup registriert PBGui den Host lokal als Cluster-Node-Kandidat. Wenn diese VPS einem bestehenden Cluster beitreten soll, öffne **System -> Cluster Sync -> Nodes**, stelle den neuen Node auf **Reachable via SSH**, führe **Probe** aus, nutze **Join**, füge die VPS danach zu den Sync Peers des lokalen Masters hinzu und führe **Install Key** oder **Repair All SSH** aus.
-7. Wenn die VPS schon vor der automatischen Cluster-Registrierung eingerichtet wurde, öffne zuerst die VPS-Detailseite und klicke **Add to Cluster**. Diese Aktion schreibt nur lokale Cluster-Metadaten; sie verbindet nicht per SSH zur VPS und joint sie nicht.
-8. Nach erfolgreicher Initialisierung für normale gespeicherte Einstellungsänderungen **Change VPS** und **Apply VPS Changes** verwenden.
+4. **PB7** fuer den aktuellen Runner-Stack oder **PB8 Live only (no PB7)** fuer einen sauberen minimalen PB8-Runner waehlen. PB8-only ueberspringt PB7-Checkout und PB7-Virtualenv, laesst PBRun deaktiviert und benoetigt mindestens 3 GiB freien Speicher fuer den PB8-Build.
+5. Mit **Save VPS** den Eintrag anlegen oder aktualisieren.
+6. Mit **Initialize & Setup VPS** den Bootstrap-Lauf direkt aus der Add-Ansicht starten. Bei PB8-only startet der validierte PB8-Live-Installer automatisch, sobald das PBGui-Basissetup erfolgreich war.
+7. Nach erfolgreichem Setup registriert PBGui den Host lokal als Cluster-Node-Kandidat. Wenn diese VPS einem bestehenden Cluster beitreten soll, oeffne **System -> Cluster Sync -> Nodes**, stelle den neuen Node auf **Reachable via SSH**, fuehre **Probe** aus, nutze **Join**, fuege die VPS danach zu den Sync Peers des lokalen Masters hinzu und fuehre **Install Key** oder **Repair All SSH** aus.
+8. Wenn die VPS schon vor der automatischen Cluster-Registrierung eingerichtet wurde, oeffne zuerst die VPS-Detailseite und klicke **Add to Cluster**. Diese Aktion schreibt nur lokale Cluster-Metadaten; sie verbindet nicht per SSH zur VPS und joint sie nicht.
+9. Nach erfolgreicher Initialisierung fuer normale gespeicherte Einstellungsaenderungen **Change VPS** und **Apply VPS Changes** verwenden.
 
 ---
 

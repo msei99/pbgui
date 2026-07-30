@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -81,6 +82,40 @@ def test_record_cluster_config_upsert_uses_stable_node_id_for_remote_host(monkey
     assert nodes[first_node_id]["pbname"] == "vps-a"
     assert nodes[first_node_id]["sync_mode"] == "disabled"
     assert nodes[first_node_id]["sync_enabled"] is False
+
+
+def test_rapid_v7_saves_preserve_each_immutable_config_blob(monkeypatch, tmp_path: Path) -> None:
+    """Saving twice before PBCluster runs retains both host assignments and configs."""
+    (tmp_path / "pbgui.ini").write_text("[main]\npbname=master\n", encoding="utf-8")
+    instance_dir = tmp_path / "data" / "run_v7" / "test_inst"
+    monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(v7_instances, "_monitor", None)
+
+    first_cfg = _write_config(instance_dir, 1, "vps-a")
+    v7_instances._record_cluster_config_upsert("test_inst", instance_dir, first_cfg, parent_version=0)
+    second_cfg = _write_config(instance_dir, 2, "vps-b")
+    v7_instances._record_cluster_config_upsert("test_inst", instance_dir, second_cfg, parent_version=1)
+
+    cluster_root = tmp_path / "data" / "cluster"
+    operations = []
+    for path in sorted((cluster_root / "oplog").glob("*/*.json")):
+        operation = _read_json(path)
+        if operation.get("op") == "UPSERT_CONFIG":
+            operations.append(operation)
+    assert [(item["version"], item["enabled_on"]) for item in operations] == [("1", "vps-a"), ("2", "vps-b")]
+    for operation in operations:
+        digest = operation["config_manifest_hash"].removeprefix("sha256:")
+        manifest_path = cluster_root / "config_blobs" / "sha256" / digest[:2] / f"{digest}.json"
+        manifest_raw = manifest_path.read_bytes()
+        assert hashlib.sha256(manifest_raw).hexdigest() == digest
+        manifest = json.loads(manifest_raw)
+        config_digest = manifest["files"]["config.json"]["sha256"]
+        config_path = cluster_root / "config_blobs" / "sha256" / config_digest[:2] / f"{config_digest}.json"
+        config_raw = config_path.read_bytes()
+        assert hashlib.sha256(config_raw).hexdigest() == config_digest
+        stored = json.loads(config_raw)["pbgui"]
+        assert str(stored["version"]) == operation["version"]
+        assert stored["enabled_on"] == operation["enabled_on"]
 
 
 def test_record_cluster_instance_delete_materializes_tombstone(monkeypatch, tmp_path: Path) -> None:

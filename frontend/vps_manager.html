@@ -3137,6 +3137,7 @@
         user_sudo: '',
         user_sudo_pw: '',
         swap: '0',
+        runtime_profile: 'pb7',
         install_dir: '',
         auto_ip: '',
         firewall_ssh_ips_auto: '',
@@ -7032,6 +7033,8 @@
           if (pending && pending.hostname === store.detail.hostname) {
             const initStatus = String(progress.init_status || '');
             const setupStatus = String(progress.setup_status || '');
+            const updateStatus = String(progress.update_status || '');
+            const activeCommand = String(progress.command || '');
             if (!pending.initSeenSuccess && initStatus === 'successful') {
               pending.initSeenSuccess = true;
               toast('Initialization finished. Starting VPS setup...', 'success');
@@ -7041,6 +7044,32 @@
               switchToVpsTaskLog(store.detail.hostname, 'vps-setup', 'Setup VPS');
             }
             if (pending.setupSeenRunning && setupStatus === 'successful') {
+              if (pending.pb8Requested) {
+                if (!pending.setupSeenSuccess) {
+                  pending.setupSeenSuccess = true;
+                  toast('Setup successful. Starting PB8 Live installation...', 'success');
+                }
+                if (activeCommand === 'vps-update-pb8' && updateStatus && updateStatus !== 'none') {
+                  if (!pending.pb8SeenRunning) {
+                    pending.pb8SeenRunning = true;
+                    switchToVpsTaskLog(store.detail.hostname, 'vps-update-pb8', 'Install PB8 (fresh setup)');
+                  }
+                  if (updateStatus === 'successful') {
+                    store.pendingAutoSetupSwitch = null;
+                    toast('PB8 Live installation successful.', 'success');
+                    store.hostname = store.detail.hostname;
+                    store.view = 'vps';
+                    sendContext();
+                    renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
+                    return;
+                  }
+                  if (['failed', 'error', 'timeout', 'canceled', 'cancelled'].includes(updateStatus)) {
+                    store.pendingAutoSetupSwitch = null;
+                    toast('PB8 Live installation failed. Check the command log.', 'error');
+                  }
+                }
+                return;
+              }
               store.pendingAutoSetupSwitch = null;
               toast('Setup successful.', 'success');
               store.hostname = store.detail.hostname;
@@ -7521,7 +7550,10 @@
           store.pendingAutoSetupSwitch = {
             hostname: hostname,
             initSeenSuccess: false,
-            setupSeenRunning: false
+            setupSeenRunning: false,
+            setupSeenSuccess: false,
+            pb8Requested: String(store.addForm.runtime_profile || 'pb7') === 'pb8',
+            pb8SeenRunning: false
           };
           openVpsTaskLog(hostname, 'vps-init', 'Initialize');
           scheduleVpsDetailFetch(hostname);
@@ -10646,7 +10678,7 @@
       return `
 
         <h2 class='page-section-title'>Add VPS</h2>
-        <div class='notice info'>Run the initial VPS bootstrap once after installation, then return to the VPS detail page for setup and updates.</div>
+        <div class='notice info'>Choose PB7 or PB8 Live only, then run the initial VPS bootstrap once. PB8-only setup does not clone or install PB7.</div>
         <div class='panel'>
           <div class='panel-head'>
             <div>
@@ -10740,9 +10772,17 @@
                 ${renderVisibilityInput('password', form.user_pw, "setAddField('user_pw', this.value)", 'Show or hide VPS user password', 'add.user_pw')}
               </div>
               <div class='field'>
+                <label>Passivbot Runtime</label>
+                <select onchange="setAddField('runtime_profile', this.value)">
+                  <option value='pb7'${String(form.runtime_profile || 'pb7') === 'pb7' ? ' selected' : ''}>PB7</option>
+                  <option value='pb8'${String(form.runtime_profile || 'pb7') === 'pb8' ? ' selected' : ''}>PB8 Live only (no PB7)</option>
+                </select>
+                <div class='field-help'>PB8-only installs the minimal live profile after PBGui setup and leaves PBRun disabled.</div>
+              </div>
+              <div class='field'>
                 <label>Install Path</label>
                 <input type='text' value='${escAttr(form.install_dir || '')}' oninput="setAddField('install_dir', this.value)" placeholder='/home/user/software'>
-                <div class='field-help'>Parent directory for pbgui, pb7, and virtualenvs.</div>
+                <div class='field-help'>Parent directory for PBGui and the selected Passivbot runtime.</div>
               </div>
               <div class='field'>
                 <label>Swap Size</label>

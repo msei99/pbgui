@@ -62,6 +62,8 @@ Beispiele:
 
 Jeder Node vergleicht seine bekannten Operation-Counter mit einem anderen Node. Fehlende Operationen und benötigte Blobs werden übertragen, danach baut der empfangende Node seinen lokalen Desired State neu auf.
 
+Jeder V7-Save speichert einen unveränderlichen, inhaltsadressierten Snapshot, bevor seine Operation veröffentlicht wird. Eine Instanz kann deshalb mehrfach direkt hintereinander gespeichert oder von Host A über Host B sofort nach Host C verschoben werden; jede Operation bleibt übertragbar, während Empfänger nur den neuesten Zielhost und Config-Stand materialisieren.
+
 Dadurch ist Sync wiederholbar und sicher erneut ausführbar.
 
 Credential-Protocol-Upgrades sind Zero-Order. Jeder aktualisierte Prozess haelt

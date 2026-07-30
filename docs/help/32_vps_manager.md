@@ -170,11 +170,12 @@ The reveal state is preserved during live updates, so opening an eye button does
    - save the VPS record first
    - run **Initialize & Setup VPS** from the Add view, or open the host later and finish the initial setup from the **Change VPS** page
 3. Fill the **Step 4: Initialize & Setup your VPS** form and the **Save VPS Entry** defaults.
-4. Click **Save VPS** to create or update the stored record.
-5. Click **Initialize & Setup VPS** to start the bootstrap run directly from the Add view.
-6. After setup succeeds, PBGui registers the host locally as a Cluster node candidate. If you are adding this VPS to an existing Cluster, open **System -> Cluster Sync -> Nodes**, set the new node to **Reachable via SSH**, probe it, run **Join**, then add the VPS to the local master's sync peers and run **Install Key** or **Repair All SSH**.
-7. If the VPS was already set up before automatic Cluster registration existed, open the VPS detail page and click **Add to Cluster** first. That action writes only local Cluster metadata; it does not SSH to the VPS or join it.
-8. After initialization succeeds, use **Change VPS** and **Apply VPS Changes** for normal saved setting changes.
+4. Select **PB7** for the current runner stack, or **PB8 Live only (no PB7)** for a clean minimal PB8 runner. PB8-only setup skips the PB7 checkout and virtualenv, leaves PBRun disabled, and requires at least 3 GiB free for the PB8 build.
+5. Click **Save VPS** to create or update the stored record.
+6. Click **Initialize & Setup VPS** to start the bootstrap run directly from the Add view. For PB8-only hosts, the validated PB8 Live installer starts automatically after the PBGui base setup succeeds.
+7. After setup succeeds, PBGui registers the host locally as a Cluster node candidate. If you are adding this VPS to an existing Cluster, open **System -> Cluster Sync -> Nodes**, set the new node to **Reachable via SSH**, probe it, run **Join**, then add the VPS to the local master's sync peers and run **Install Key** or **Repair All SSH**.
+8. If the VPS was already set up before automatic Cluster registration existed, open the VPS detail page and click **Add to Cluster** first. That action writes only local Cluster metadata; it does not SSH to the VPS or join it.
+9. After initialization succeeds, use **Change VPS** and **Apply VPS Changes** for normal saved setting changes.
 
 ---
 

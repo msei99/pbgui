@@ -88,7 +88,9 @@
 
     - name: Install PB8 Rust toolchain
       shell: |
-        source "$HOME/.cargo/env"
+        if [ -f "$HOME/.cargo/env" ]; then
+          source "$HOME/.cargo/env"
+        fi
         rustup toolchain install 1.90.0
       args:
         executable: /bin/bash
@@ -210,7 +212,9 @@
 
     - name: Install PB8 full profile
       shell: |
-        source "$HOME/.cargo/env"
+        if [ -f "$HOME/.cargo/env" ]; then
+          source "$HOME/.cargo/env"
+        fi
         "{{ pb8venv }}/bin/python" -m pip install --no-cache-dir --upgrade -e "{{ pb8dir }}[full]"
       args:
         executable: /bin/bash
@@ -218,7 +222,9 @@
 
     - name: Install PB8 live profile
       shell: |
-        source "$HOME/.cargo/env"
+        if [ -f "$HOME/.cargo/env" ]; then
+          source "$HOME/.cargo/env"
+        fi
         "{{ pb8venv }}/bin/python" -m pip install --no-cache-dir --upgrade -e "{{ pb8dir }}"
       args:
         executable: /bin/bash

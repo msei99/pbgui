@@ -294,6 +294,7 @@ class VPS:
         self.logfile = None
         self.logsize = 50
         self.remote_pbgui_dir = None
+        self.runtime_profile = "pb7"
         self._inventory_revision = 0
         self._inventory_snapshot = None
 
@@ -400,6 +401,8 @@ class VPS:
             self.private_key_file = config["private_key_file"]
         if "remote_pbgui_dir" in config:
             self.remote_pbgui_dir = config["remote_pbgui_dir"]
+        if str(config.get("runtime_profile") or "").strip().lower() in {"pb7", "pb8"}:
+            self.runtime_profile = str(config["runtime_profile"]).strip().lower()
 
     def is_vps_in_hosts(self):
         hosts = Path("/etc/hosts")
@@ -913,6 +916,7 @@ PY"""
                 "init_methode": self.init_methode,
                 "remove_user": self.remove_user,
                 "remote_pbgui_dir": self.remote_pbgui_dir,
+                "runtime_profile": self.runtime_profile,
             }
             inventory_root = Path(PBGDIR) / "data" / "vpsmanager"
             saved = write_versioned_inventory_json(
@@ -1099,10 +1103,30 @@ class VPSManager:
             "debug": debug,
             "install_dir": _install_dir_from_remote_pbgui_dir(vps.remote_pbgui_dir, vps.user),
             "vps_logging_services": [],
+            "runtime_profile": vps.runtime_profile,
         }
         ansible_extravars.update(_cluster_sync_extra_vars())
         if extra_vars:
             ansible_extravars.update(extra_vars)
+
+        def _on_setup_finished(runner_config=None):
+            vps.setup_finished(runner_config)
+            if str(vps.setup_status or "") != "successful" or vps.runtime_profile != "pb8":
+                return
+            try:
+                self.update_vps(
+                    vps,
+                    debug=debug,
+                    command="vps-update-pb8",
+                    command_text="Install PB8 (fresh setup)",
+                )
+            except Exception as exc:
+                vps.command = "vps-update-pb8"
+                vps.command_text = "Install PB8 (fresh setup)"
+                vps.update_status = "failed"
+                vps.last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                vps.save()
+                _log(SERVICE, f"Could not start PB8 installation after setup on {vps.hostname}: {exc}", level="ERROR")
         try:
             ansible_runner.run_async(
                 playbook=str(PurePath(f"{PBGDIR}/vps-setup.yml")),
@@ -1115,7 +1139,7 @@ class VPSManager:
                 private_data_dir=vps.privat_data_dir,
                 event_handler=vps.setup_event_handler,
                 status_handler=vps.setup_status_handler,
-                finished_callback=vps.setup_finished,
+                finished_callback=_on_setup_finished,
             )
         except Exception:
             shutil.rmtree(vps.privat_data_dir, ignore_errors=True)

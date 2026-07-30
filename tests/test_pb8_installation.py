@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from setup.installer import core
+import vps_manager_core as core_mod
 import vps_manager_service as service_mod
 from vps_manager_service import VPSManagerService
 
@@ -81,6 +82,7 @@ def test_pb8_playbooks_gate_role_validate_and_leave_processes_running(playbook_p
     assert "force: yes" not in source
     assert "pip install" in source
     assert "--upgrade -e" in source
+    assert 'if [ -f "$HOME/.cargo/env" ]; then' in source
     assert "Validate PB8 CLI" in source
     assert "import passivbot_rust" in source
     assert "Save PB8 runtime paths after validation" in source
@@ -267,3 +269,112 @@ def test_pb8_remote_action_status_uses_role_and_free_disk_only() -> None:
     assert master["profile"] == "full"
     assert low_disk["allowed"] is False
     assert "currently 1.00 GiB" in low_disk["reason"]
+
+
+def test_pb8_runner_playbook_sources_optional_cargo_environment() -> None:
+    """Distro rustup installs do not emit a missing ~/.cargo/env warning."""
+    source = Path("vps-update-pb8.yml").read_text(encoding="utf-8")
+
+    assert source.count('if [ -f "$HOME/.cargo/env" ]; then') == 3
+    assert source.count('source "$HOME/.cargo/env"') == 3
+
+
+def test_vps_setup_pb8_profile_skips_every_pb7_runtime_task() -> None:
+    """PB8-only setup neither creates PB7 artifacts nor enables PBRun."""
+    source = Path("vps-setup.yml").read_text(encoding="utf-8")
+    pb7_tasks = (
+        "Validate pinned PB7 commit",
+        "Check for existing PB7 checkout",
+        "Verify pinned PB7 commit before changing an existing runtime",
+        "Stop PBRun before replacing an existing PB7 runtime",
+        "Stop processes from the existing PB7 runtime",
+        "Clone Passivbot without checking out upstream master",
+        "Fetch, verify and checkout pinned Passivbot v7",
+        "create python3.12 venv for pb7",
+        "Build passivbot-rust with maturin",
+        "Write rust source stamp after maturin build",
+    )
+
+    for task_name in pb7_tasks:
+        block = source.split(f"- name: {task_name}", 1)[1].split("\n    - name:", 1)[0]
+        assert "when:" in block
+        assert "install_pb7 | bool" in block
+    assert "remove PB7 runtime paths for PB8-only setup" in source
+    assert "(['pbrun'] if (install_pb7 | bool) else [])" in source
+    assert "option: role\n        value: vps" in source
+
+
+@pytest.mark.parametrize(("runtime_profile", "expect_pb8"), [("pb7", False), ("pb8", True)])
+def test_vps_setup_callback_chains_pb8_only_for_pb8_profile(
+    runtime_profile: str,
+    expect_pb8: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One fresh PB8 setup continues into the dedicated live installer."""
+    runner_calls: list[dict] = []
+    update_calls: list[dict] = []
+    monkeypatch.setattr(core_mod, "PBGDIR", tmp_path)
+    monkeypatch.setattr(core_mod, "VPS_LOG_ROOT", tmp_path / "logs")
+    monkeypatch.setattr(core_mod, "_cluster_sync_extra_vars", lambda: {})
+    monkeypatch.setattr(core_mod, "_ansible_envvars", lambda: {})
+    monkeypatch.setattr(core_mod.ansible_runner, "run_async", lambda **kwargs: runner_calls.append(kwargs))
+
+    manager = object.__new__(core_mod.VPSManager)
+    manager.update_vps = lambda vps, **kwargs: update_calls.append({"vps": vps, **kwargs})
+    vps = core_mod.VPS()
+    vps.hostname = "fresh-runner"
+    vps.user = "bot"
+    vps.user_pw = "session-only"
+    vps.swap = "2G"
+    vps.remote_pbgui_dir = "/home/bot/software/pbgui"
+    vps.runtime_profile = runtime_profile
+
+    manager.setup_vps(vps)
+
+    assert runner_calls[0]["extravars"]["runtime_profile"] == runtime_profile
+    vps.setup_status = "successful"
+    vps.setup_finished = lambda runner_config=None: None
+    runner_calls[0]["finished_callback"]()
+    assert bool(update_calls) is expect_pb8
+    if expect_pb8:
+        assert update_calls[0]["command"] == "vps-update-pb8"
+        assert update_calls[0]["command_text"] == "Install PB8 (fresh setup)"
+
+
+def test_vps_runtime_profile_is_validated_and_exposed() -> None:
+    """Only supported setup profiles cross the form-to-inventory boundary."""
+    service = object.__new__(VPSManagerService)
+    service._store_session_secrets = lambda token, hostname, form: None
+    service._session_secret_value = lambda token, hostname, field: ""
+    service._session_secret_meta = lambda token, hostname: {}
+    vps = SimpleNamespace(
+        hostname="fresh-runner",
+        user="bot",
+        user_pw=None,
+        swap="2G",
+        runtime_profile="pb7",
+        remote_pbgui_dir="/home/bot/software/pbgui",
+        firewall=False,
+        firewall_ssh_port=22,
+        firewall_ssh_ips="",
+        ip="192.0.2.20",
+        init_methode="root",
+        remove_user=False,
+        save=lambda: None,
+    )
+    form = {
+        "runtime_profile": "pb8",
+        "swap": "2G",
+        "install_dir": "/home/bot/software",
+        "firewall": False,
+        "firewall_ssh_port": 22,
+        "firewall_ssh_ips": "",
+    }
+
+    service._apply_vps_setup_form("token", vps, form)
+
+    assert vps.runtime_profile == "pb8"
+    assert service._build_vps_config("token", vps)["runtime_profile"] == "pb8"
+    with pytest.raises(ValueError, match="runtime profile"):
+        service._apply_vps_setup_form("token", vps, {**form, "runtime_profile": "full"})

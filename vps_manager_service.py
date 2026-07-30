@@ -198,6 +198,7 @@ COMMAND_VPS_UPDATE_PB = "vps-update-pb"
 COMMAND_VPS_CLEANUP = "vps-cleanup"
 COMMAND_VPS_APPLY_CONFIG = "vps-apply-config"
 COMMAND_VPS_MIGRATE_SYSTEMD = "vps-migrate-systemd"
+VPS_RUNTIME_PROFILES = frozenset({"pb7", "pb8"})
 CREDENTIAL_CAPABILITY_FIELDS = (
     "credential_protocol_version",
     "credential_active",
@@ -4305,6 +4306,7 @@ class VPSManagerService:
             "firewall_ssh_ips": vps.firewall_ssh_ips or "",
             "init_methode": vps.init_methode or "root",
             "remove_user": bool(vps.remove_user),
+            "runtime_profile": str(getattr(vps, "runtime_profile", "pb7") or "pb7"),
             "secret_status": secret_status,
         }
 
@@ -6687,6 +6689,9 @@ done"""
         swap = str(form.get("swap") or vps.swap or "0")
         if swap not in SWAP_OPTIONS:
             raise ValueError("Invalid swap size.")
+        runtime_profile = str(form.get("runtime_profile") or getattr(vps, "runtime_profile", "pb7") or "pb7").strip().lower()
+        if runtime_profile not in VPS_RUNTIME_PROFILES:
+            raise ValueError("Invalid Passivbot runtime profile.")
         firewall_ips = str(form.get("firewall_ssh_ips") or "").strip()
         if firewall_ips:
             for ip in [part.strip() for part in firewall_ips.split(",") if part.strip()]:
@@ -6694,6 +6699,7 @@ done"""
                     raise ValueError("IP-Addresses to allow contains an invalid IPv4 address or CIDR network.")
         vps.user_pw = user_pw or None
         vps.swap = swap
+        vps.runtime_profile = runtime_profile
         install_dir = _normalize_vps_install_dir(form.get("install_dir"), vps.user)
         if install_dir:
             vps.remote_pbgui_dir = f"{install_dir}/pbgui"

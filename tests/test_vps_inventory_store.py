@@ -145,3 +145,23 @@ def test_stale_vps_objects_merge_independent_field_changes(tmp_path: Path, monke
     assert payload["ip"] == "192.0.2.2"
     assert payload["user"] == "operator"
     assert payload["swap"] == "4G"
+
+
+def test_vps_runtime_profile_persists_with_legacy_pb7_default(tmp_path: Path, monkeypatch) -> None:
+    """PB8-only intent survives callbacks while legacy records remain PB7 setups."""
+    monkeypatch.setattr(core, "PBGDIR", tmp_path)
+    vps = core.VPS()
+    vps.hostname = "node-pb8"
+    vps.runtime_profile = "pb8"
+    vps.save()
+    path = tmp_path / "data" / "vpsmanager" / "hosts" / "node-pb8" / "node-pb8.json"
+
+    loaded = core.VPS()
+    loaded.load(path)
+    legacy_path = tmp_path / "legacy.json"
+    legacy_path.write_text('{"_hostname":"legacy","runtime_profile":"unknown"}', encoding="utf-8")
+    legacy = core.VPS()
+    legacy.load(legacy_path)
+
+    assert loaded.runtime_profile == "pb8"
+    assert legacy.runtime_profile == "pb7"

@@ -37,13 +37,12 @@ from logging_helpers import human_log as _log
 from master.cluster_state import (
     append_node_placeholder,
     append_operation,
-    build_config_manifest,
-    compute_config_manifest_hash,
     default_cluster_root,
     ensure_local_identity,
     generate_node_id,
     load_operations,
     local_cmc_credential_readiness,
+    persist_config_manifest_blobs,
     read_local_identity,
     rebuild_materialized_state,
 )
@@ -309,13 +308,13 @@ def _record_cluster_config_upsert(
             assigned_role,
             recorded_nodes,
         )
-        manifest = build_config_manifest(instance_dir)
+        manifest_hash = persist_config_manifest_blobs(cluster_root, instance_dir)
         payload = {
             "instance": name,
             "version": version,
             "assigned_host": assigned_node_id,
             "desired_state": desired_state,
-            "config_manifest_hash": compute_config_manifest_hash(manifest),
+            "config_manifest_hash": manifest_hash,
             "enabled_on": enabled_on,
         }
         if parent_version is not None:
