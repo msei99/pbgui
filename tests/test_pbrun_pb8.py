@@ -325,6 +325,36 @@ def test_watch_v8_stops_only_exact_pb8_process_with_disappeared_config(
     assert run.run_v8 == []
 
 
+def test_watch_v8_never_starts_internal_staging_configs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Atomic-save staging directories are never treated as PB8 instances."""
+
+    run_root = tmp_path / "data" / "run_v8"
+    stage = run_root / ".pbgui-v8-stage-0123456789abcdef"
+    instance = run_root / "bybit_BTCUSDT"
+    for directory in (stage, instance):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "config.json").write_text("{}", encoding="utf-8")
+    watched: list[str] = []
+    run = pbrun.PBRun.__new__(pbrun.PBRun)
+    run.pbgdir = tmp_path
+    run.v8_path = str(run_root)
+    run.name = "node-a"
+    run.pb8dir = str(tmp_path / "pb8")
+    run.pb8venv = str(tmp_path / "venv_pb8" / "bin" / "python")
+    run.pb8_ready = True
+    run.run_v8 = []
+    monkeypatch.setattr(pbrun.psutil, "process_iter", lambda: iter(()))
+    monkeypatch.setattr(pbrun.RunV8, "watch", lambda self: watched.append(self.user))
+
+    run.watch_v8()
+
+    assert watched == ["bybit_BTCUSDT"]
+    assert [runner.user for runner in run.run_v8] == ["bybit_BTCUSDT"]
+
+
 def test_runv8_stop_escalates_process_group_sigint_term_kill(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

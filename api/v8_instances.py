@@ -477,7 +477,7 @@ def _managed_vps_entries() -> dict[str, Any]:
 
 
 def _managed_runtime_capability(hostname: str) -> dict[str, Any] | None:
-    """Return authoritative PB8 eligibility for a managed VPS inventory host."""
+    """Return inventory-backed PB8 eligibility for a managed VPS host."""
 
     item = _managed_vps_entries().get(hostname)
     if item is None:
@@ -575,7 +575,13 @@ def _host_runtime_capability(hostname: str) -> dict[str, Any]:
             "setup_status": "successful" if ready is True else None,
         }
     managed = _managed_runtime_capability(target)
-    return managed if managed is not None else _remote_runtime_capability(target)
+    remote = _remote_runtime_capability(target)
+    if remote["pb8_capable"] is not None:
+        if managed is not None:
+            remote["runtime_profile"] = managed.get("runtime_profile")
+            remote["setup_status"] = managed.get("setup_status")
+        return remote
+    return managed if managed is not None else remote
 
 
 def _persisted_target(name: str) -> str | None:

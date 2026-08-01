@@ -1778,7 +1778,12 @@ class PBRun():
         active_paths = {
             str(Path(path).resolve())
             for path in v8_instances
-            if Path(path).is_dir() and (Path(path) / "config.json").is_file()
+            if (
+                Path(path).is_dir()
+                and not Path(path).is_symlink()
+                and not Path(path).name.startswith(".pbgui-v8-stage-")
+                and (Path(path) / "config.json").is_file()
+            )
         }
         retained: list[RunV8] = []
         existing_by_path = {str(Path(item.path).resolve()): item for item in self.run_v8}

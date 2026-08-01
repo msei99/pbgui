@@ -544,6 +544,11 @@ def test_runtime_update_playbooks_support_pb8_only_maintenance_and_pb7_install()
     assert "Refuse a non-Git PB7 target" in pb7_update
     assert "Ensure PBRun is enabled for PB8 live supervision" in pb8_update
     assert "--no-disable-excluded" in pb8_update
+    assert "--no-start" in pb8_update
+    assert pb8_update.index("Ensure PBRun is enabled for PB8 live supervision") < pb8_update.index(
+        "Check whether PBRun is already active"
+    ) < pb8_update.index("Start PBRun when inactive")
+    assert "pb8_pbrun_active.rc != 0" in pb8_update
     assert "Detect PB8-only support in installed PBRun" in pb8_update
     assert '"self.pb8_ready = bool"' in pb8_update
     assert "Disable incompatible PBRun on PB8-only hosts" in pb8_update

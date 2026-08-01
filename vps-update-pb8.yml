@@ -308,9 +308,36 @@
           - --enable
           - pbrun
           - --no-disable-excluded
+          - --no-start
       when:
         - pb8_install_profile == 'live'
         - (pb8_pb7_runtime_probe.stdout | trim | lower) == 'true' or pb8_pbrun_compatibility_probe.rc == 0
+
+    - name: Check whether PBRun is already active
+      command:
+        argv:
+          - systemctl
+          - --user
+          - is-active
+          - pbgui-pbrun.service
+      register: pb8_pbrun_active
+      changed_when: false
+      failed_when: false
+      when:
+        - pb8_install_profile == 'live'
+        - (pb8_pb7_runtime_probe.stdout | trim | lower) == 'true' or pb8_pbrun_compatibility_probe.rc == 0
+
+    - name: Start PBRun when inactive
+      command:
+        argv:
+          - systemctl
+          - --user
+          - start
+          - pbgui-pbrun.service
+      when:
+        - pb8_install_profile == 'live'
+        - (pb8_pb7_runtime_probe.stdout | trim | lower) == 'true' or pb8_pbrun_compatibility_probe.rc == 0
+        - pb8_pbrun_active.rc != 0
 
     - name: Disable incompatible PBRun on PB8-only hosts
       command:

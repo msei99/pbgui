@@ -328,6 +328,8 @@ def test_host_list_contains_only_confirmed_pb8_targets_and_unknown_current(
         "pb8-vps": SimpleNamespace(runtime_profile="pb8", setup_status="successful"),
         "combined-vps": SimpleNamespace(runtime_profile="pb7_pb8", setup_status="successful"),
         "pb7-vps": SimpleNamespace(runtime_profile="pb7", setup_status="successful"),
+        "inventory-drift": SimpleNamespace(runtime_profile="pb7", setup_status=None),
+        "runtime-broken": SimpleNamespace(runtime_profile="pb8", setup_status="successful"),
         "failed-vps": SimpleNamespace(runtime_profile="pb8", setup_status="failed"),
     }
     monkeypatch.setattr(v8_instances, "_managed_vps_entries", lambda: entries)
@@ -337,6 +339,8 @@ def test_host_list_contains_only_confirmed_pb8_targets_and_unknown_current(
         store=SimpleNamespace(host_meta={
             "fresh-ready": {"generated_at": now, "pb8ready": True},
             "fresh-not-ready": {"generated_at": now, "pb8ready": False},
+            "inventory-drift": {"generated_at": now, "pb8ready": True},
+            "runtime-broken": {"generated_at": now, "pb8ready": False},
             "legacy-unknown": {"generated_at": now - 1000, "pb8ready": True},
         }),
     )
@@ -350,11 +354,15 @@ def test_host_list_contains_only_confirmed_pb8_targets_and_unknown_current(
     result = v8_instances.get_v8_hosts(name="legacy", request_id="req-1", session=None)
 
     assert result["request_id"] == "req-1"
-    assert result["hosts"] == ["disabled", "combined-vps", "fresh-ready", "master-a", "pb8-vps", "legacy-unknown"]
+    assert result["hosts"] == [
+        "disabled", "combined-vps", "fresh-ready", "inventory-drift", "master-a", "pb8-vps", "legacy-unknown"
+    ]
+    assert result["host_capabilities"]["inventory-drift"]["source"] == "host_meta"
     assert result["host_capabilities"]["legacy-unknown"]["legacy_preserved"] is True
     assert "pb7-vps" not in result["hosts"]
     assert "failed-vps" not in result["hosts"]
     assert "fresh-not-ready" not in result["hosts"]
+    assert "runtime-broken" not in result["hosts"]
 
 
 def test_instance_list_merges_exact_pb8_runtime_observations(monkeypatch: pytest.MonkeyPatch) -> None:
