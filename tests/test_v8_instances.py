@@ -333,6 +333,11 @@ def test_host_list_contains_only_confirmed_pb8_targets_and_unknown_current(
         "failed-vps": SimpleNamespace(runtime_profile="pb8", setup_status="failed"),
     }
     monkeypatch.setattr(v8_instances, "_managed_vps_entries", lambda: entries)
+    monkeypatch.setattr(
+        v8_instances,
+        "_remote_cluster_target_status",
+        lambda _host: {"ready": True, "reason": "joined"},
+    )
     now = time.time()
     v8_instances._monitor = SimpleNamespace(
         enabled_hosts=["fresh-ready", "fresh-not-ready", "legacy-unknown"],
@@ -363,6 +368,49 @@ def test_host_list_contains_only_confirmed_pb8_targets_and_unknown_current(
     assert "failed-vps" not in result["hosts"]
     assert "fresh-not-ready" not in result["hosts"]
     assert "runtime-broken" not in result["hosts"]
+
+
+def test_pb8_target_requires_joined_remote_cluster_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An installed PB8 runtime is not deployable before Cluster Remote Join completes."""
+
+    monkeypatch.setattr(v8_instances, "_managed_vps_entries", lambda: {
+        "new-runner": SimpleNamespace(runtime_profile="pb8", setup_status="successful"),
+    })
+    monkeypatch.setattr(v8_instances, "_monitor", None)
+    monkeypatch.setattr(
+        v8_instances,
+        "_remote_cluster_target_status",
+        lambda _host: {"ready": False, "reason": "Host has not completed Cluster Remote Join"},
+    )
+
+    capability = v8_instances._host_runtime_capability("new-runner")
+
+    assert capability["pb8_capable"] is False
+    assert capability["cluster_ready"] is False
+    assert capability["source"] == "cluster_state"
+    assert capability["reason"] == "Host has not completed Cluster Remote Join"
+
+
+def test_pb8_host_mapping_replaces_tombstoned_node_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Defensive PB8 publication rotates a stale mapping for a removed predecessor."""
+
+    _configure_root(monkeypatch, tmp_path)
+    root = tmp_path / "data" / "cluster"
+    root.mkdir(parents=True)
+    old_node_id = "pbgui-node-00000000-0000-4000-8000-000000000198"
+    new_node_id = "pbgui-node-00000000-0000-4000-8000-000000000197"
+    (root / "host_node_ids.json").write_text(json.dumps({
+        "schema_version": 1,
+        "hosts": {"new-runner": {"node_id": old_node_id, "created_at": 1, "role": "vps"}},
+    }), encoding="utf-8")
+    monkeypatch.setattr(v8_instances, "cluster_node_was_removed", lambda _root, node_id: node_id == old_node_id)
+    monkeypatch.setattr(v8_instances, "generate_node_id", lambda: new_node_id)
+
+    resolved = v8_instances._host_node_mapping("new-runner")
+    saved = json.loads((root / "host_node_ids.json").read_text(encoding="utf-8"))
+
+    assert resolved == new_node_id
+    assert saved["hosts"]["new-runner"]["node_id"] == new_node_id
 
 
 def test_instance_list_merges_exact_pb8_runtime_observations(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -11,6 +11,7 @@ import vps_manager_service
 from api import cluster
 from master.cluster_state import (
     append_operation as _append_operation,
+    cluster_node_was_removed,
     default_cluster_root,
     ensure_local_identity,
     read_local_identity,
@@ -155,6 +156,44 @@ def test_successful_setup_finished_auto_adds_vps_to_cluster(monkeypatch, tmp_pat
 
     assert any(node.get("pbname") == "auto-runner" for node in nodes.values())
     assert monitor_ini["enabled_hosts"] == "auto-runner"
+
+
+def test_reinstalled_hostname_gets_new_node_id_after_old_node_was_removed(monkeypatch, tmp_path: Path) -> None:
+    """Reusing a hostname never reuses the immutable ID of its removed predecessor."""
+
+    service, _monitor_ini = _prepare_service(monkeypatch, tmp_path)
+    root = default_cluster_root(tmp_path)
+    old_node_id = "pbgui-node-00000000-0000-4000-8000-000000000199"
+    append_operation(root, "ADD_NODE", {
+        "node_id": old_node_id,
+        "role": "vps",
+        "pbname": "reinstalled-runner",
+        "hostname": "reinstalled-runner",
+        "sync_mode": "reachable",
+        "ssh_host": "203.0.113.39",
+    }, created_at=106)
+    _append_operation(root, "REMOVE_NODE", {"node_id": old_node_id}, created_at=107)
+    (root / "host_node_ids.json").write_text(json.dumps({
+        "schema_version": 1,
+        "hosts": {"reinstalled-runner": {"node_id": old_node_id, "created_at": 106, "role": "vps"}},
+    }), encoding="utf-8")
+    rebuild_materialized_state(root)
+    vps = _write_successful_vps(service, "reinstalled-runner")
+
+    vps.setup_finished()
+
+    materialized = rebuild_materialized_state(root)
+    replacements = [
+        (node_id, node)
+        for node_id, node in materialized["cluster_nodes"]["nodes"].items()
+        if node.get("pbname") == "reinstalled-runner"
+    ]
+    mapping = json.loads((root / "host_node_ids.json").read_text(encoding="utf-8"))["hosts"]["reinstalled-runner"]
+    assert cluster_node_was_removed(root, old_node_id) is True
+    assert len(replacements) == 1
+    assert replacements[0][0] != old_node_id
+    assert replacements[0][1]["state_replica"] is False
+    assert mapping["node_id"] == replacements[0][0]
 
 
 def test_setup_finished_persists_success_before_optional_registration(monkeypatch, tmp_path: Path) -> None:

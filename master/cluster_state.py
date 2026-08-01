@@ -517,6 +517,15 @@ def _membership_target_was_removed(paths: ClusterPaths, node_id: str) -> bool:
     return False
 
 
+def cluster_node_was_removed(cluster_root: Path, node_id: str) -> bool:
+    """Return whether one immutable node ID was tombstoned in membership history."""
+
+    target = str(node_id or "").strip()
+    if not target:
+        return False
+    return _membership_target_was_removed(ClusterPaths.from_root(cluster_root), target)
+
+
 def write_operation(
     cluster_root: Path,
     operation: dict[str, Any],

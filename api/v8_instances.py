@@ -26,6 +26,7 @@ from master.cluster_state import (
     PB8_OPERATION_CAPABILITY,
     append_node_placeholder,
     append_operation,
+    cluster_node_was_removed,
     default_cluster_root,
     ensure_local_identity,
     generate_node_id,
@@ -576,12 +577,35 @@ def _host_runtime_capability(hostname: str) -> dict[str, Any]:
         }
     managed = _managed_runtime_capability(target)
     remote = _remote_runtime_capability(target)
-    if remote["pb8_capable"] is not None:
-        if managed is not None:
-            remote["runtime_profile"] = managed.get("runtime_profile")
-            remote["setup_status"] = managed.get("setup_status")
-        return remote
-    return managed if managed is not None else remote
+    capability = remote if remote["pb8_capable"] is not None else (managed if managed is not None else remote)
+    if capability["pb8_capable"] is True:
+        cluster_status = _remote_cluster_target_status(target)
+        capability["cluster_ready"] = cluster_status["ready"]
+        if not cluster_status["ready"]:
+            capability["pb8_capable"] = False
+            capability["confirmed"] = True
+            capability["source"] = "cluster_state"
+            capability["reason"] = cluster_status["reason"]
+    return capability
+
+
+def _remote_cluster_target_status(hostname: str) -> dict[str, Any]:
+    """Return whether a remote host has a joined, reachable Cluster identity."""
+
+    existing = _best_node_for_host(hostname)
+    if existing is None:
+        return {"ready": False, "reason": "Host is not registered in Cluster"}
+    node_id = existing[0]
+    node = _cluster_nodes().get(node_id)
+    if not isinstance(node, dict):
+        return {"ready": False, "reason": "Host is not registered in Cluster"}
+    if node.get("enabled") is False:
+        return {"ready": False, "reason": "Cluster node is disabled"}
+    if node.get("state_replica") is False:
+        return {"ready": False, "reason": "Host has not completed Cluster Remote Join"}
+    if str(node.get("sync_mode") or "").strip().lower() != "reachable":
+        return {"ready": False, "reason": "Cluster node is not reachable"}
+    return {"ready": True, "reason": "Cluster node is joined and reachable", "node_id": node_id}
 
 
 def _persisted_target(name: str) -> str | None:
@@ -672,7 +696,7 @@ def _host_node_mapping(hostname: str) -> str:
                 pass
         entry = data["hosts"].get(hostname)
         node_id = str(entry.get("node_id") or "") if isinstance(entry, dict) else ""
-        if node_id:
+        if node_id and not cluster_node_was_removed(root, node_id):
             return node_id
         node_id = generate_node_id()
         data["hosts"][hostname] = {"node_id": node_id, "created_at": int(time.time()), "role": "vps"}

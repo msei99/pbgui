@@ -33,6 +33,7 @@ from cluster_credential_publisher import ClusterCredentialPublisher, CredentialP
 from cluster_credentials import ensure_node_key_material
 from cluster_sync_command import _materialize_credentials, _materialize_v7_configs
 from credential_store import CredentialStore, credential_mutation_lock
+from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
 from master.async_pool import known_hosts_files, remote_shell_path
 from master.cluster_state import (
@@ -40,6 +41,7 @@ from master.cluster_state import (
     append_operation,
     build_config_manifest,
     ClusterStateError,
+    cluster_node_was_removed,
     compute_config_manifest_hash,
     credential_lifecycle_status,
     create_join_authorization,
@@ -1154,6 +1156,8 @@ def _resolve_bootstrap_assignment(
 
     entry = host_node_ids.get(hostname)
     node_id = str(entry.get("node_id") or "") if isinstance(entry, dict) else ""
+    if cluster_node_was_removed(_cluster_root(), node_id):
+        node_id = ""
     return {
         "assigned_host": node_id,
         "assigned_label": hostname,
@@ -1201,6 +1205,8 @@ def _current_node_for_host(
     nodes = nodes if isinstance(nodes, dict) else {}
     mapping = host_node_ids.get(hostname)
     mapped_node_id = str(mapping.get("node_id") or "") if isinstance(mapping, dict) else ""
+    if cluster_node_was_removed(_cluster_root(), mapped_node_id):
+        mapped_node_id = ""
     if mapped_node_id and isinstance(nodes.get(mapped_node_id), dict):
         return mapped_node_id, dict(nodes[mapped_node_id])
     for node_id, node in nodes.items():
@@ -4566,14 +4572,24 @@ def _apply_bootstrap_plan(plan: dict[str, Any]) -> dict[str, Any]:
         try:
             if item_type == "node":
                 _validate_instance_name(name)
-                node_id = str(item.get("node_id") or "") or generate_node_id()
-                entry = host_node_ids.setdefault(name, {})
-                entry.update({
-                    "node_id": node_id,
-                    "role": _cluster_role_from_monitor_role(item.get("node_role")),
-                })
-                entry.setdefault("created_at", int(time.time()))
-                _write_host_node_ids(host_node_ids)
+                requested_node_id = str(item.get("node_id") or "")
+                node_id = requested_node_id
+                if not node_id or cluster_node_was_removed(_cluster_root(), node_id):
+                    node_id = generate_node_id()
+                mapping_path = _cluster_root() / "host_node_ids.json"
+                with advisory_file_lock(mapping_path):
+                    host_node_ids = _read_host_node_ids()
+                    entry = host_node_ids.setdefault(name, {})
+                    previous_node_id = str(entry.get("node_id") or "")
+                    entry.update({
+                        "node_id": node_id,
+                        "role": _cluster_role_from_monitor_role(item.get("node_role")),
+                    })
+                    if previous_node_id != node_id:
+                        entry["created_at"] = int(time.time())
+                    else:
+                        entry.setdefault("created_at", int(time.time()))
+                    _write_host_node_ids(host_node_ids)
                 append_node_placeholder(
                     _cluster_root(),
                     _node_payload_from_vps_config(node_id, {
