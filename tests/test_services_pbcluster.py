@@ -446,6 +446,38 @@ def test_pb8_optimize_controller_is_visible_and_controllable(monkeypatch) -> Non
     assert calls == ["start", "stop"]
 
 
+def test_pb8_backtest_controller_is_visible_and_controllable(monkeypatch) -> None:
+    """Services Monitor exposes the independent PB8 backtest scheduler without owning its jobs."""
+    from api import backtest_v8
+
+    calls = []
+
+    class Worker:
+        """Minimal PB8 backtest controller double."""
+
+        _task = None
+
+        def start(self):
+            calls.append("start")
+
+        async def stop(self):
+            calls.append("stop")
+
+    monkeypatch.setattr(backtest_v8, "_load_queue", lambda: [{"status": "queued"}, {"status": "complete"}])
+    monkeypatch.setattr(backtest_v8, "load_ini_section", lambda _section: {"autostart": "True"})
+    monkeypatch.setattr(backtest_v8, "_worker", Worker())
+
+    item = services._get_backtest_v8_worker_item()
+    assert item["id"] == "backtest-v8-queue"
+    assert item["label"] == "PB8 Backtest Queue"
+    assert item["running"] is False
+    assert "Detached PB8 backtests continue running" in item["note"]
+
+    asyncio.run(services._start_worker("backtest-v8-queue"))
+    asyncio.run(services._stop_worker("backtest-v8-queue"))
+    assert calls == ["start", "stop"]
+
+
 def test_market_data_worker_stop_waits_for_process_exit(monkeypatch) -> None:
     """Stopping Market Data Queue waits until the old worker process exits."""
 

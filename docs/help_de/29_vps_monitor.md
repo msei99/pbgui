@@ -51,7 +51,7 @@ Der Detailbereich zeigt Heartbeat- und effektive Alter, den Status jeder erforde
 ## Tabs und Workflow
 
 - **Dashboard**: Host-, SSH-, Telemetrie- und Monitor-Agent-Gesundheit
-- **Instances**: laufende und bereitgestellte Bot-Instanzen mit Statusdetails
+- **Instances**: laufende und bereitgestellte PB7-/PB8-Bot-Instanzen mit expliziter Runtime-Identitaet; Log- und Kill-Aktionen behalten diese Identitaet bei, damit gleiche Namen nicht die falsche Runtime treffen
 - **Services**: Status und Neustartaktionen für PBCluster, PBRun, PBData, PBCoinData und PBMonitorAgent
 - **Live Logs**: Echtzeit-Streams für Service- und Bot-Logs
 

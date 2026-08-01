@@ -56,6 +56,7 @@ def _valid_payloads(now: float) -> dict[str, dict[str, Any]]:
             **envelope,
             "monitors": [],
             "v7": [],
+            "v8": [],
             "cache": {"_version": 2},
             "bot_logs": {},
         },
@@ -180,6 +181,33 @@ def test_host_meta_accepts_complete_optional_pb8_contract_and_rejects_partial_da
     payload.pop("pb8py")
     with pytest.raises(MonitorAgentPayloadError, match="missing field pb8py"):
         monitor_mod._validate_monitor_agent_payload("host_meta.json", payload, now=1001.0)
+
+
+def test_instance_snapshot_accepts_pre_v8_agent_payload() -> None:
+    """A new master keeps V7 telemetry from schema-v1 agents without V8 support."""
+
+    payload = _valid_payloads(1000.0)["instance_snapshot.json"]
+    payload.pop("v8")
+
+    generated_at, age = monitor_mod._validate_monitor_agent_payload(
+        "instance_snapshot.json", payload, now=1001.0,
+    )
+
+    assert generated_at == 1000.0
+    assert age == 1.0
+    assert payload["v8"] == []
+    assert payload["v7"] == []
+
+
+@pytest.mark.parametrize("value", (None, {}, "invalid", ["invalid"]))
+def test_instance_snapshot_rejects_malformed_present_v8(value: Any) -> None:
+    """The rolling-upgrade default does not weaken validation of reported V8 data."""
+
+    payload = _valid_payloads(1000.0)["instance_snapshot.json"]
+    payload["v8"] = value
+
+    with pytest.raises(MonitorAgentPayloadError, match="v8"):
+        monitor_mod._validate_monitor_agent_payload("instance_snapshot.json", payload, now=1000.0)
 
 
 @pytest.mark.parametrize(
@@ -356,7 +384,7 @@ def test_agent_json_writers_add_contract_envelopes(monkeypatch, tmp_path: Path) 
     monkeypatch.setattr(monitor_agent, "_script_env", lambda *args, **kwargs: {})
     monkeypatch.setattr(monitor_agent, "_local_credential_capability", lambda: {})
     payloads = iter([
-        {"monitors": [], "v7": [], "cache": {"_version": 2}, "bot_logs": {}},
+        {"monitors": [], "v7": [], "v8": [], "cache": {"_version": 2}, "bot_logs": {}},
         _valid_payloads(1000.0)["host_meta.json"] | {"schema_version": 0, "source": "old", "generated_at": 0},
         {"upgrades": "1", "reboot": False},
     ])
@@ -1270,3 +1298,191 @@ def test_store_host_meta_merge_preserves_dimensions() -> None:
         "package_status": package,
         "upgrades": "2",
     }
+
+
+def test_store_keeps_same_v7_v8_name_distinct() -> None:
+    """Runtime-qualified metrics and instance caches do not collide by name."""
+
+    store = VPSStore()
+    store.update_instances("vps-1", [
+        {"u": "same", "p": "7", "c": 0.0, "m": [0] * 10},
+        {"u": "same", "p": "8", "c": 0.0, "m": [0] * 10},
+    ])
+    store.update_instances_live("vps-1", [
+        {"name": "same", "p": "7", "cpu": 1.0, "rss_mb": 10.0, "swap_mb": 0.0},
+        {"name": "same", "p": "8", "cpu": 2.0, "rss_mb": 20.0, "swap_mb": 1.0},
+    ])
+    store.update_v7_instances("vps-1", [{"name": "same"}])
+    store.update_v8_instances("vps-1", [{"name": "same"}])
+
+    state = store.get_full_state({}, [])
+    assert [item["c"] for item in state["instances"]["vps-1"]] == [1.0, 2.0]
+    assert state["v7_instances"]["vps-1"] == [{"name": "same"}]
+    assert state["v8_instances"]["vps-1"] == [{"name": "same"}]
+
+
+def test_master_consumes_v8_instance_snapshot_contract() -> None:
+    """The master stores PB8 candidates and runtime-qualified log identifiers."""
+
+    async def exercise() -> None:
+        monitor = object.__new__(VPSMonitor)
+        monitor.store = VPSStore()
+        monitor._debug_logging = False
+        monitor._bot_count_total = lambda *_args: 0
+        monitor._bot_pnl_total = lambda *_args: (0.0, 0)
+        monitor._cache_host_snapshot = lambda _hostname: None
+        monitor._read_monitor_agent_json = lambda *_args, **_kwargs: None
+
+        async def read_snapshot(*_args, **_kwargs):
+            return {
+                "monitors": [{"u": "same", "p": "7"}, {"u": "same", "p": "8"}],
+                "v7": [{"name": "same", "running": True}],
+                "v8": [{"name": "same", "running": True}],
+                "bot_logs": {
+                    "7:same": {"sidebar": ["pb7/logs/same.log"]},
+                    "8:same": {"sidebar": ["pb8/logs/same.log"]},
+                },
+            }
+
+        monitor._read_monitor_agent_json = read_snapshot
+        await monitor._collect_instances("vps-1")
+
+        assert [item["p"] for item in monitor.store.instances["vps-1"]] == ["7", "8"]
+        assert monitor.store.v8_instances["vps-1"] == [{"name": "same", "running": True}]
+        assert monitor.store.bot_logs["vps-1"]["8:same"] == ["pb8/logs/same.log"]
+
+    asyncio.run(exercise())
+
+
+def test_agent_process_identity_distinguishes_same_v7_v8_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exact argv and cwd checks identify both runtimes without a name collision."""
+
+    monkeypatch.setattr(monitor_agent, "PBGDIR", tmp_path)
+    pb7_main = tmp_path / "pb7" / "src" / "main.py"
+    pb7_main.parent.mkdir(parents=True)
+    pb7_main.touch()
+    pb8_dir = tmp_path / "pb8"
+    pb8_dir.mkdir()
+    pb8_python = tmp_path / "venv_pb8" / "bin" / "python"
+    pb8_python.parent.mkdir(parents=True)
+    pb8_cli = pb8_python.parent / "passivbot"
+    v7_config = tmp_path / "data" / "run_v7" / "same" / "config_run.json"
+    v8_config = tmp_path / "data" / "run_v8" / "same" / "config.json"
+    v7_config.parent.mkdir(parents=True)
+    v8_config.parent.mkdir(parents=True)
+    v7_config.touch()
+    v8_config.touch()
+    proc_dir = tmp_path / "proc-8"
+    proc_dir.mkdir()
+    (proc_dir / "cwd").symlink_to(pb8_dir, target_is_directory=True)
+
+    v7 = monitor_agent._bot_identity_from_process(
+        proc_dir,
+        [str(pb7_main), str(v7_config)],
+        pb7_main=pb7_main.resolve(),
+        pb8_dir=pb8_dir.resolve(),
+        pb8_python=pb8_python.resolve(),
+        pb8_cli=pb8_cli.resolve(),
+    )
+    exact_v8 = [str(pb8_cli.resolve()), "live", str(v8_config.resolve()), "--fail-on-stale-rust"]
+    v8 = monitor_agent._bot_identity_from_process(
+        proc_dir,
+        exact_v8,
+        pb7_main=pb7_main.resolve(),
+        pb8_dir=pb8_dir.resolve(),
+        pb8_python=pb8_python.resolve(),
+        pb8_cli=pb8_cli.resolve(),
+    )
+    decoy = monitor_agent._bot_identity_from_process(
+        proc_dir,
+        [*exact_v8, "--extra"],
+        pb7_main=pb7_main.resolve(),
+        pb8_dir=pb8_dir.resolve(),
+        pb8_python=pb8_python.resolve(),
+        pb8_cli=pb8_cli.resolve(),
+    )
+
+    assert v7 == ("same", "7")
+    assert v8 == ("same", "8")
+    assert decoy is None
+
+
+def test_agent_process_caches_reject_pid_reuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PID reuse resets metrics and cannot retain identity for an unrelated process."""
+
+    real_path = Path
+    proc_root = tmp_path / "proc"
+    proc_dir = proc_root / "123"
+    proc_dir.mkdir(parents=True)
+    pb7_main = tmp_path / "pb7" / "src" / "main.py"
+    pb7_main.parent.mkdir(parents=True)
+    pb7_main.touch()
+    first_config = tmp_path / "data" / "run_v7" / "first" / "config_run.json"
+    second_config = tmp_path / "data" / "run_v7" / "second" / "config_run.json"
+    first_config.parent.mkdir(parents=True)
+    second_config.parent.mkdir(parents=True)
+    first_config.touch()
+    second_config.touch()
+    (proc_dir / "status").write_text("VmRSS:\t1024 kB\nVmSwap:\t0 kB\n", encoding="utf-8")
+
+    def write_process(argv: list[str], *, ticks: int, start_ticks: int) -> None:
+        """Replace the fake proc entry with one process generation."""
+
+        (proc_dir / "cmdline").write_bytes(b"\x00".join(arg.encode() for arg in argv) + b"\x00")
+        stat_parts = ["123", "(bot)", "S", *(["0"] * 19)]
+        stat_parts[13] = str(ticks)
+        stat_parts[14] = "0"
+        stat_parts[21] = str(start_ticks)
+        (proc_dir / "stat").write_text(" ".join(stat_parts), encoding="utf-8")
+
+    monkeypatch.setattr(monitor_agent, "PBGDIR", tmp_path)
+    monkeypatch.setattr(monitor_agent, "_pb7_dir", lambda: tmp_path / "pb7")
+    monkeypatch.setattr(
+        monitor_agent,
+        "_read_ini",
+        lambda: SimpleNamespace(get=lambda _section, _key, fallback="": fallback),
+    )
+    monkeypatch.setattr(
+        monitor_agent,
+        "Path",
+        lambda value: proc_root if str(value) == "/proc" else real_path(value),
+    )
+    monkeypatch.setattr(monitor_agent.time, "time", lambda: 1000.0)
+
+    previous: dict[int, tuple[int, float]] = {}
+    history: dict[int, Any] = {}
+    names: dict[int, tuple[int, str, str]] = {}
+    write_process([str(pb7_main), str(first_config)], ticks=100, start_ticks=10)
+    first = monitor_agent._bot_processes(previous, history, names)
+
+    write_process([str(pb7_main), str(second_config)], ticks=5, start_ticks=20)
+    reused = monitor_agent._bot_processes(previous, history, names)
+
+    assert first[0]["name"] == "first"
+    assert reused[0]["name"] == "second"
+    assert reused[0]["cpu"] == 0.0
+    assert len(history[123]) == 1
+    assert names[123] == (20, "second", "7")
+
+    write_process(["/usr/bin/python", "/tmp/unrelated.py"], ticks=10, start_ticks=30)
+    assert monitor_agent._bot_processes(previous, history, names) == []
+    assert previous == {}
+    assert history == {}
+    assert names == {}
+
+
+def test_embedded_instance_collector_remains_valid_python() -> None:
+    """PB8 collector additions preserve the executable embedded script syntax."""
+
+    prefix = 'python3 -u -c "\n'
+    assert monitor_mod.INSTANCE_COLLECT_SCRIPT.startswith(prefix)
+    assert monitor_mod.INSTANCE_COLLECT_SCRIPT.endswith('\n"')
+    compile(
+        monitor_mod.INSTANCE_COLLECT_SCRIPT[len(prefix):-2],
+        "<instance-collector>",
+        "exec",
+    )

@@ -21,7 +21,7 @@ Migration stops if unsupported or manual-review fields remain. Resolve the repor
 
 The visual controls and JSON synchronization are shared directly with PBv7. For canonical V8 configs the adapter reads and writes exposure and position controls below `bot.<side>.risk`; the Long/Short and Raw JSON editors retain all nested V8 sections such as `risk`, `strategy`, `forager`, `hsl`, and `unstuck`. Imports and saves are prepared by the installed PB8 loader, and invalid JSON blocks saving. PBGui-owned metadata below the top-level `pbgui` object remains unchanged even when the installed PB8 version does not know those fields.
 
-V8 uses the existing PBGui coin metadata, filter, suite, override, date picker, validation, OHLCV-readiness, and selection components. **Balance Calculator** opens the shared calculator under Information with the current PB8 config, while **Calc Balance** runs the same calculation inline. Version-specific external PBv7 actions such as Add to Run and Optimize are not shown on the V8 page.
+V8 uses the existing PBGui coin metadata, filter, suite, override, date picker, validation, OHLCV-readiness, and selection components. **Balance Calculator** opens the shared calculator under Information with the current PB8 config, while **Calc Balance** runs the same calculation inline. Saved configs, local results, and PB8 archive results can open a short-lived PB8 Run draft. **Optimize from Result** opens the selected result as a PB8 Optimize draft. **Refine Optimize Preset** builds nested PB8 bounds from the selected result and routes Save, Queue, and Open Optimize actions exclusively through the PB8 APIs. Strategy Explorer remains outside the PB8 integration.
 
 Frequently used PB8-specific backtest fields have structured controls:
 
@@ -52,4 +52,4 @@ PB8 may download historical data when a backtest starts. Review the config, exch
 
 ## Archive
 
-PBv8 uses the same Archive panel and configured Git archives as PBv7. Results are stored below `pbgui/configs/<config_version>/backtests`, so V7 and V8 files cannot overwrite each other. Mixed archive lists show the owning version and route charts, files, comparisons, deletion, rebacktest, and Retest & Replace through the matching backend. V8 retests use immutable `data/bt_v8_queue` snapshots. **Add to Run** remains PBv7-only because PBv8 Run is not implemented.
+PBv8 uses the same Archive panel and configured Git archives as PBv7. Results are stored below `pbgui/configs/<config_version>/backtests`, so V7 and V8 files cannot overwrite each other. Mixed archive lists show the owning version and route charts, files, comparisons, deletion, rebacktest, and Retest & Replace through the matching backend. **Add to Run** on one PB8 archive result creates an unsaved PB8 Run draft for explicit review and saving. V8 retests use immutable `data/bt_v8_queue` snapshots.

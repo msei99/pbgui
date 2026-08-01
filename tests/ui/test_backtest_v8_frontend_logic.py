@@ -125,7 +125,7 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
 
     assert '/app/css/backtest_shell.css?v=3' in v7_source
     assert '/app/js/backtest_shell.js?v=4' in v7_source
-    assert '/app/js/backtest_editor_adapter.js?v=5' in v7_source
+    assert '/app/js/backtest_editor_adapter.js?v=7' in v7_source
     assert "PBGuiBacktestShell.upgradeLegacy" in v7_source
     assert "PBGuiBacktestEditorAdapter.create(BACKTEST_VERSION)" in v7_source
     assert "sideConfig.risk" in adapter_source
@@ -211,19 +211,33 @@ def test_shared_results_delete_routes_each_version_to_its_own_api() -> None:
     assert "encodeURIComponent(result.path)" in page_source
 
 
-def test_v8_uses_shared_archive_service_without_exposing_add_to_run() -> None:
-    """PB8 keeps the shared Archive panel but archive requests and actions remain owner-safe."""
+def test_v8_archive_results_can_open_the_pb8_run_editor() -> None:
+    """PB8 keeps the shared Archive panel and routes PB8 configs into a PB8 Run draft."""
     page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
     adapter = (ROOT / "frontend" / "js" / "backtest_editor_adapter.js").read_text(encoding="utf-8")
 
     assert "items.push({ panel: 'archive'" in adapter
     assert "'/backtest-v7'" in adapter
-    assert "'addToRunFromArchive'" in adapter
+    assert "window.addToRunFromArchive = function()" in adapter
+    assert "window.archiveResultApiFetch" in adapter
+    assert "return navigate(config || {}, {}, name)" in adapter
     assert "'addResultToArchive'" not in adapter.split("var unsupported =", 1)[1].split("];", 1)[0]
     assert "backtest_version: selectedResult.backtest_version || backtestEditorAdapter.version" in page
     assert "archiveResultApiFetch" in page
     assert "{ showVersion: true }" in page
-    assert "Add to Run is available only for PB7 archive results." in page
+    assert "Add to Run is available only for PB7 archive results." not in page
+
+
+def test_v8_backtest_result_can_open_pb8_optimize() -> None:
+    """The existing PB8 optimize-draft contract must remain reachable from selected results."""
+    adapter = (ROOT / "frontend" / "js" / "backtest_editor_adapter.js").read_text(encoding="utf-8")
+    page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+
+    assert "window.optimizeFromResult = function()" in adapter
+    assert "'/api/optimize-v8/main_page?opt_draft_id='" in adapter
+    unsupported = adapter.split("var unsupported =", 1)[1].split("];", 1)[0]
+    assert "'optimizeFromResult'" not in unsupported
+    assert "/app/js/backtest_editor_adapter.js?v=7" in page
 
 
 def test_v8_supports_every_shared_native_backtest_operation() -> None:

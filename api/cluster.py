@@ -1339,6 +1339,8 @@ def _cluster_materialize_command(remote_pbgui_dir: str | None, local_node_id: st
     if verb not in {
         "materialize-v7-preview",
         "materialize-v7",
+        "materialize-v8-preview",
+        "materialize-v8",
         "materialize-api-keys-preview",
         "materialize-api-keys",
         "materialize-credentials-preview",
@@ -1550,6 +1552,14 @@ def _v7_materialization_current(payload: dict[str, Any]) -> bool:
     return bool(payload.get("ok")) and int(counts.get("error") or 0) == 0 and (int(counts.get("add") or 0) + int(counts.get("update") or 0)) == 0
 
 
+def _v8_materialization_current(payload: dict[str, Any]) -> bool:
+    """Return True when remote PB8 exact reconciliation has no pending actions."""
+    counts = payload.get("counts") if isinstance(payload, dict) else {}
+    counts = counts if isinstance(counts, dict) else {}
+    pending = sum(int(counts.get(key) or 0) for key in ("add", "update", "remove", "delete"))
+    return bool(payload.get("ok")) and int(counts.get("error") or 0) == 0 and pending == 0
+
+
 def _api_key_materialization_current(payload: dict[str, Any]) -> bool:
     """Return True when remote API-key materialization preview has no pending writes."""
 
@@ -1565,11 +1575,14 @@ async def _maybe_start_remote_pbrun_after_materialization(node: dict[str, Any], 
         return {"attempted": False, "started": False, "reason": "not_vps_runner"}
     try:
         v7_preview = await _run_remote_materialize_command(node, identity, "materialize-v7-preview")
+        v8_preview = await _run_remote_materialize_command(node, identity, "materialize-v8-preview")
         api_preview = await _run_remote_materialize_command(node, identity, "materialize-api-keys-preview")
     except HTTPException as exc:
         return {"attempted": False, "started": False, "reason": "preview_failed", "error": str(exc.detail)}
     if not _v7_materialization_current(v7_preview):
         return {"attempted": False, "started": False, "reason": "v7_materialization_pending"}
+    if not _v8_materialization_current(v8_preview):
+        return {"attempted": False, "started": False, "reason": "v8_materialization_pending"}
     if not _api_key_materialization_current(api_preview):
         return {"attempted": False, "started": False, "reason": "api_key_materialization_pending"}
     hostname = str(node.get("pbname") or node.get("hostname") or "")
@@ -1600,6 +1613,15 @@ async def _complete_remote_join_sync(node: dict[str, Any], identity: dict[str, A
     else:
         completion["v7_materialization"] = {"skipped": True, "reason": "current_or_not_applicable"}
 
+    v8_preview = await _run_remote_materialize_command(node, identity, "materialize-v8-preview")
+    completion["v8_preview"] = v8_preview
+    v8_current = _v8_materialization_current(v8_preview)
+    if v8_preview.get("can_apply"):
+        completion["v8_materialization"] = await _run_remote_materialize_command(node, identity, "materialize-v8", timeout=120)
+        v8_current = True
+    else:
+        completion["v8_materialization"] = {"skipped": True, "reason": "current_or_not_applicable"}
+
     api_key_preview = await _run_remote_materialize_command(node, identity, "materialize-api-keys-preview")
     completion["api_key_preview"] = api_key_preview
     api_key_current = _api_key_materialization_current(api_key_preview)
@@ -1613,6 +1635,8 @@ async def _complete_remote_join_sync(node: dict[str, Any], identity: dict[str, A
         completion["pbrun_start"] = {"attempted": False, "started": False, "reason": "not_vps_runner"}
     elif not v7_current:
         completion["pbrun_start"] = {"attempted": False, "started": False, "reason": "v7_materialization_pending"}
+    elif not v8_current:
+        completion["pbrun_start"] = {"attempted": False, "started": False, "reason": "v8_materialization_pending"}
     elif not api_key_current:
         completion["pbrun_start"] = {"attempted": False, "started": False, "reason": "api_key_materialization_pending"}
     else:
@@ -4309,6 +4333,17 @@ async def _build_remote_preview(node: dict[str, Any], identity: dict[str, Any], 
             "error": str(exc.detail),
         }
     try:
+        pb8_materialization = await _run_remote_materialize_command(node, identity, "materialize-v8-preview")
+    except HTTPException as exc:
+        pb8_materialization = {
+            "ok": False,
+            "read_only": True,
+            "can_apply": False,
+            "counts": {},
+            "items": [],
+            "error": str(exc.detail),
+        }
+    try:
         api_key_materialization = await _run_remote_materialize_command(node, identity, "materialize-api-keys-preview")
     except HTTPException as exc:
         api_key_materialization = {
@@ -4346,6 +4381,7 @@ async def _build_remote_preview(node: dict[str, Any], identity: dict[str, Any], 
             remote_vector,
         ),
         "materialization": materialization,
+        "pb8_materialization": pb8_materialization,
         "api_key_materialization": api_key_materialization,
         "credential_materialization": credential_materialization,
     }
@@ -5259,6 +5295,28 @@ async def materialize_remote_v7_configs(node_id: str, session: SessionToken = De
         "materialization": result,
         "pbrun_start": pbrun_start,
         "message": "Remote V7 configs materialized.",
+    }
+
+
+@router.post("/remote-materialize-v8/{node_id}")
+async def materialize_remote_v8_configs(node_id: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Exactly reconcile assigned PB8 config blobs on one synchronized remote node."""
+
+    snapshot = _load_cluster_snapshot()
+    nodes = _node_list(snapshot["cluster_nodes"])
+    node = _node_for_id(nodes, str(node_id or ""))
+    if not node:
+        raise HTTPException(status_code=404, detail="Cluster node not found")
+    await _require_remote_state_current(node, snapshot["identity"], snapshot)
+    result = await _run_remote_materialize_command(node, snapshot["identity"], "materialize-v8", timeout=120)
+    pbrun_start = await _maybe_start_remote_pbrun_after_materialization(node, snapshot["identity"])
+    return {
+        "ok": True,
+        "node_id": str(node.get("node_id") or ""),
+        "hostname": str(node.get("pbname") or node.get("hostname") or ""),
+        "materialization": result,
+        "pbrun_start": pbrun_start,
+        "message": "Remote PB8 configs reconciled.",
     }
 
 

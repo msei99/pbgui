@@ -21,7 +21,7 @@ from typing import Optional
 
 from master.async_pool import AsyncSSHPool, remote_path_join, remote_shell_path
 from logging_helpers import human_log as _log
-from pbgui_purefunc import pb7dir
+from pbgui_purefunc import pb7dir, pb8dir
 
 SERVICE = "VPSMonitor"
 
@@ -82,15 +82,17 @@ def _validate_remote_log_path(value: object) -> str:
     filename = parts[-1] if parts else ""
     valid_root = (
         (len(parts) == 3 and parts[:2] == ("data", "logs"))
-        or (len(parts) == 4 and parts[:2] == ("data", "run_v7")
+        or (len(parts) == 4 and parts[:2] in {("data", "run_v7"), ("data", "run_v8")}
             and filename in {"passivbot_err.log", "passivbot_err.log.old"})
         or (len(parts) == 3 and parts[:2] == ("pb7", "logs"))
+        or (len(parts) == 3 and parts[:2] == ("pb8", "logs"))
         or (len(parts) == 4 and parts[:3] == ("software", "pb7", "logs"))
+        or (len(parts) == 4 and parts[:3] == ("software", "pb8", "logs"))
     )
     valid_filename = bool(_REMOTE_LOG_FILE_RE.fullmatch(filename)) or filename == "passivbot_err.log.old"
     if not valid_root or not valid_filename:
         raise ValueError("Remote log path is not allowed")
-    if parts[:2] == ("data", "run_v7"):
+    if parts[:2] in {("data", "run_v7"), ("data", "run_v8")}:
         _validate_remote_log_instance_name(parts[2])
     return "/".join(parts)
 
@@ -103,13 +105,32 @@ def _resolve_log_path(service_or_path: str) -> str:
 def _is_home_relative_log_path(log_path: str) -> bool:
     """Return True for remote paths rooted from HOME, not remote pbgui dir."""
     normalized = str(log_path or "").lstrip("./")
-    return normalized.startswith("software/") or normalized.startswith("pb7/logs/")
+    return normalized.startswith("software/") or normalized.startswith(("pb7/logs/", "pb8/logs/"))
+
+
+def _normalize_pb_version(pb_version: object) -> str:
+    """Return the supported Passivbot runtime version for a logical identifier."""
+    value = str(pb_version or "7").strip().lower()
+    aliases = {"7": "7", "v7": "7", "pb7": "7", "8": "8", "v8": "8", "pb8": "8"}
+    if value not in aliases:
+        raise ValueError("Unsupported Passivbot version")
+    return aliases[value]
+
+
+def _split_bot_identifier(value: str) -> tuple[str, str]:
+    """Split a local/remote Bot identifier without restricting colons in names."""
+    raw = str(value or "").strip()
+    name, separator, suffix = raw.rpartition(":")
+    if separator and suffix.lower() in {"7", "v7", "pb7", "8", "v8", "pb8"}:
+        return _validate_remote_log_instance_name(name), _normalize_pb_version(suffix)
+    return _validate_remote_log_instance_name(raw), "7"
 
 
 def resolve_bot_log_path(instance_name: str, pb_version: str) -> str:
     """Resolve a bot instance to its remote log file path (passivbot's own log)."""
     name = _validate_remote_log_instance_name(instance_name)
-    return _validate_remote_log_path(f"software/pb7/logs/{name}.log")
+    version = _normalize_pb_version(pb_version)
+    return _validate_remote_log_path(f"software/pb{version}/logs/{name}.log")
 
 
 def _bot_log_path_from_pb7dir(pb7dir_value: str | None, instance_name: str) -> str:
@@ -126,23 +147,55 @@ def _pb7dir_for_host(pool: AsyncSSHPool, hostname: str) -> str:
     return str((entry.data or {}).get("pb7dir") or "") if entry else ""
 
 
+def _runtime_dir_for_host(pool: AsyncSSHPool, hostname: str, pb_version: str) -> str:
+    """Return a configured runtime directory from the existing remote INI cache."""
+    version = _normalize_pb_version(pb_version)
+    entry = pool.get_connection(hostname)
+    if not entry:
+        return ""
+    data = entry.data or {}
+    key = f"pb{version}dir"
+    cached = str(data.get(key) or "").strip()
+    if cached:
+        return cached
+    ini = data.get("ini")
+    if ini is not None:
+        return str(ini.get("main", key, fallback="") or "").strip()
+    return ""
+
+
+def _bot_log_path_for_host(pool: AsyncSSHPool, hostname: str,
+                           instance_name: str, pb_version: str) -> str:
+    """Resolve one native bot log from an allowlisted runtime identifier."""
+    version = _normalize_pb_version(pb_version)
+    name = _validate_remote_log_instance_name(instance_name)
+    runtime_dir = _runtime_dir_for_host(pool, hostname, version)
+    if runtime_dir:
+        return remote_path_join(runtime_dir, "logs", f"{name}.log")
+    return resolve_bot_log_path(name, version)
+
+
 def _remote_log_shell_path(pool: AsyncSSHPool, hostname: str, log_path: str) -> str:
     """Resolve a remote log path to a shell-safe absolute/HOME expression."""
-    if log_path.startswith("software/pb7/logs/") or log_path.startswith("pb7/logs/"):
-        pb7dir_value = _pb7dir_for_host(pool, hostname)
-        if pb7dir_value:
-            return remote_shell_path(remote_path_join(pb7dir_value, "logs", Path(log_path).name))
-        if log_path.startswith("pb7/logs/"):
-            return remote_shell_path(remote_path_join("software", log_path))
+    for version in ("7", "8"):
+        prefixes = (f"software/pb{version}/logs/", f"pb{version}/logs/")
+        if log_path.startswith(prefixes):
+            runtime_dir = _runtime_dir_for_host(pool, hostname, version)
+            if runtime_dir:
+                return remote_shell_path(remote_path_join(runtime_dir, "logs", Path(log_path).name))
+            if log_path.startswith(f"pb{version}/logs/"):
+                return remote_shell_path(remote_path_join("software", log_path))
     return remote_shell_path(log_path)
 
 
-def resolve_local_bot_log_path(instance_name: str) -> Path:
+def resolve_local_bot_log_path(instance_name: str, pb_version: str = "7") -> Path:
     """Resolve a local bot instance to the native passivbot log path."""
-    configured_pb7dir = str(pb7dir() or "").strip()
-    if configured_pb7dir:
-        return Path(configured_pb7dir) / "logs" / f"{instance_name}.log"
-    return Path.home() / "software" / "pb7" / "logs" / f"{instance_name}.log"
+    version = _normalize_pb_version(pb_version)
+    name = _validate_remote_log_instance_name(instance_name)
+    configured_dir = str((pb8dir if version == "8" else pb7dir)() or "").strip()
+    if configured_dir:
+        return Path(configured_dir) / "logs" / f"{name}.log"
+    return Path.home() / "software" / f"pb{version}" / "logs" / f"{name}.log"
 
 
 def local_pb7_logs_dir() -> Path:
@@ -153,9 +206,19 @@ def local_pb7_logs_dir() -> Path:
     return Path.home() / "software" / "pb7" / "logs"
 
 
-def resolve_local_bot_err_log_path(instance_name: str) -> Path:
-    """Resolve a local bot instance to the legacy stderr log path."""
-    return _project_root() / "data" / "run_v7" / instance_name / "passivbot_err.log"
+def local_pb8_logs_dir() -> Path:
+    """Return the configured local PB8 logs directory."""
+    configured_pb8dir = str(pb8dir() or "").strip()
+    if configured_pb8dir:
+        return Path(configured_pb8dir) / "logs"
+    return Path.home() / "software" / "pb8" / "logs"
+
+
+def resolve_local_bot_err_log_path(instance_name: str, pb_version: str = "7") -> Path:
+    """Resolve a local bot instance to its supervisor stderr log path."""
+    version = _normalize_pb_version(pb_version)
+    name = _validate_remote_log_instance_name(instance_name)
+    return _project_root() / "data" / f"run_v{version}" / name / "passivbot_err.log"
 
 
 # ── Local log helpers ─────────────────────────────────────────
@@ -296,23 +359,25 @@ def resolve_local_log_path(filename: str) -> Optional[Path]:
     if action_log is not None:
         return action_log
     if filename.startswith("Bot:"):
-        instance_name = filename[4:]
-        fp = resolve_local_bot_log_path(instance_name)
-        logs_root = local_pb7_logs_dir().resolve()
+        instance_name, version = _split_bot_identifier(filename[4:])
+        fp = resolve_local_bot_log_path(instance_name, version)
+        logs_root = (local_pb8_logs_dir() if version == "8" else local_pb7_logs_dir()).resolve()
         if not fp.resolve().is_relative_to(logs_root):
             return None
         return fp
-    if filename.startswith("pb7/logs/") or filename.startswith("software/pb7/logs/"):
+    if filename.startswith(("pb7/logs/", "software/pb7/logs/", "pb8/logs/", "software/pb8/logs/")):
+        version = "8" if "/pb8/" in f"/{filename}" else "7"
         relative_name = Path(filename).name
-        fp = local_pb7_logs_dir() / relative_name
-        if not fp.resolve().is_relative_to(local_pb7_logs_dir().resolve()):
+        logs_dir = local_pb8_logs_dir() if version == "8" else local_pb7_logs_dir()
+        fp = logs_dir / relative_name
+        if not fp.resolve().is_relative_to(logs_dir.resolve()):
             return None
         return fp
     if filename.startswith("BotErr:"):
-        instance_name = filename[7:]
-        fp = resolve_local_bot_err_log_path(instance_name)
-        run_v7_root = (root / "data" / "run_v7").resolve()
-        if not fp.resolve().is_relative_to(run_v7_root):
+        instance_name, version = _split_bot_identifier(filename[7:])
+        fp = resolve_local_bot_err_log_path(instance_name, version)
+        run_root = (root / "data" / f"run_v{version}").resolve()
+        if not fp.resolve().is_relative_to(run_root):
             return None
         return fp
     else:
@@ -476,13 +541,12 @@ class AsyncLogStreamer:
                           pb_version: str = None) -> Optional[str]:
         """Fetch the most recent *lines* from the bot's own passivbot log.
 
-        Passivbot writes its log to ``~/software/pb7/logs/{name}.log`` and
-        manages rotation internally; the stable filename always points to the
-        current run.
+        Passivbot writes its log below the configured PB7/PB8 ``logs``
+        directory and manages rotation internally.
         """
         lines = normalize_remote_log_lines(lines, default=100)
         log_path = remote_shell_path(
-            _bot_log_path_from_pb7dir(_pb7dir_for_host(self._pool, hostname), instance_name)
+            _bot_log_path_for_host(self._pool, hostname, instance_name, pb_version or "7")
         )
         if lines == 0:
             cmd = f"cat {log_path} 2>/dev/null"
@@ -497,9 +561,9 @@ class AsyncLogStreamer:
                            pb_version: str = None) -> Optional[dict]:
         """Get log file info (size in bytes)."""
         if service_or_path.startswith("Bot:"):
-            parts = service_or_path[4:].strip().split(":")
-            bot_name = parts[0]
-            log_path = _bot_log_path_from_pb7dir(_pb7dir_for_host(self._pool, hostname), bot_name)
+            bot_name, identifier_version = _split_bot_identifier(service_or_path[4:])
+            version = pb_version or identifier_version
+            log_path = _bot_log_path_for_host(self._pool, hostname, bot_name, version)
             full_path = remote_shell_path(log_path)
             result = await self._pool.run(
                 hostname, f"stat -c '%s' {full_path} 2>/dev/null", timeout=10
@@ -740,9 +804,8 @@ class AsyncLogStreamer:
     def list_local_logs() -> list[str]:
         """Return sorted list of log identifiers.
 
-        Includes daemon logs from data/logs/, native instance logs from
-        pb7/logs/*.log, and legacy instance stderr logs from
-        data/run_v7/*/passivbot_err.log.
+        Includes daemon logs, native PB7/PB8 instance logs, and supervisor
+        stderr logs from data/run_v7 and data/run_v8.
         """
         result: list[str] = []
         d = local_logs_dir()
@@ -760,11 +823,19 @@ class AsyncLogStreamer:
                     result.append(f"pb7/logs/{p.name}")
                 else:
                     result.append(f"Bot:{p.stem}")
-        run_v7 = _project_root() / "data" / "run_v7"
-        if run_v7.exists():
+        pb8_logs = local_pb8_logs_dir()
+        if pb8_logs.exists():
             result.extend(sorted(
-                f"BotErr:{p.parent.name}"
-                for p in run_v7.glob("*/passivbot_err.log")
+                f"Bot:{p.stem}:8" for p in pb8_logs.glob("*.log") if p.is_file()
+            ))
+        for version in ("7", "8"):
+            run_root = _project_root() / "data" / f"run_v{version}"
+            if not run_root.exists():
+                continue
+            suffix = "" if version == "7" else ":8"
+            result.extend(sorted(
+                f"BotErr:{p.parent.name}{suffix}"
+                for p in run_root.glob("*/passivbot_err.log")
                 if p.is_file()
             ))
         return list(dict.fromkeys(result))

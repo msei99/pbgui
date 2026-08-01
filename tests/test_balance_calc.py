@@ -1,6 +1,88 @@
 """Regression tests for shared PB7/PB8 balance calculation."""
 
+from pathlib import Path
+
+from fastapi import HTTPException
+import pytest
+
 from api import balance_calc
+
+
+def _write_instance(root: Path, name: str) -> None:
+    """Create one minimal instance config below a temporary run root."""
+    instance_dir = root / name
+    instance_dir.mkdir(parents=True)
+    (instance_dir / "config.json").write_text("{}\n", encoding="utf-8")
+
+
+def test_instances_lists_pb7_and_pb8_without_filesystem_paths(tmp_path, monkeypatch) -> None:
+    """The picker must expose versioned names from both run roots, but no paths."""
+    run_v7 = tmp_path / "run_v7"
+    run_v8 = tmp_path / "run_v8"
+    _write_instance(run_v7, "shared")
+    _write_instance(run_v8, "shared")
+    _write_instance(run_v8, "v8-only")
+    monkeypatch.setattr(balance_calc, "RUN_V7_DIR", run_v7)
+    monkeypatch.setattr(balance_calc, "RUN_V8_DIR", run_v8)
+
+    instances = balance_calc.get_instances(session=object())
+
+    assert instances == [
+        {"name": "shared", "version": "v7"},
+        {"name": "shared", "version": "v8"},
+        {"name": "v8-only", "version": "v8"},
+    ]
+    assert all("config_file" not in instance for instance in instances)
+
+
+@pytest.mark.parametrize("version", ["v7", "v8"])
+def test_load_config_uses_selected_version_and_resolves_exchange(version, tmp_path, monkeypatch) -> None:
+    """A version-labelled selection must load from its matching root and return its exchange."""
+    run_v7 = tmp_path / "run_v7"
+    run_v8 = tmp_path / "run_v8"
+    _write_instance(run_v7, "same-name")
+    _write_instance(run_v8, "same-name")
+    monkeypatch.setattr(balance_calc, "RUN_V7_DIR", run_v7)
+    monkeypatch.setattr(balance_calc, "RUN_V8_DIR", run_v8)
+    monkeypatch.setattr(
+        balance_calc,
+        "load_pb7_config",
+        lambda path, neutralize_added=False: {"source": "v7", "live": {"user": "alice"}},
+    )
+    monkeypatch.setattr(
+        balance_calc,
+        "load_pb8_config",
+        lambda path: {"source": "v8", "live": {"user": "alice"}},
+    )
+
+    class FakeUsers:
+        """Resolve the fixture user without touching real credentials."""
+
+        def find_exchange(self, user):
+            """Return the fixture exchange."""
+            return "Bybit" if user == "alice" else None
+
+    monkeypatch.setattr(balance_calc, "Users", FakeUsers)
+
+    result = balance_calc.load_config({"version": version, "name": "same-name"}, session=object())
+
+    assert result == {"config": {"source": version, "live": {"user": "alice"}}, "exchange": "bybit"}
+
+
+@pytest.mark.parametrize(
+    ("body", "status_code"),
+    [
+        ({"version": "v9", "name": "safe"}, 400),
+        ({"version": "v7", "name": "../escape"}, 400),
+        ({"version": "v8", "name": ".hidden"}, 400),
+    ],
+)
+def test_load_config_rejects_invalid_version_or_name(body, status_code) -> None:
+    """Version and instance identifiers must be validated before filesystem access."""
+    with pytest.raises(HTTPException) as exc_info:
+        balance_calc.load_config(body, session=object())
+
+    assert exc_info.value.status_code == status_code
 
 
 def test_extract_bot_params_preserves_pb7_side_layout() -> None:

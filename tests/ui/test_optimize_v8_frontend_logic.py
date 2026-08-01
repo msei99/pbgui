@@ -331,7 +331,52 @@ def test_saving_a_queue_opened_config_refreshes_that_queue_snapshot() -> None:
     )
     _run_node(script)
     assert "var queueFilename = state.editorQueueFilename;" in save_source
+    assert "if (!(optimizeEditorAdapter.isV8 && isNewName))" in save_source
     assert "await refreshOpenedQueueSnapshot(queueFilename, name);" in save_source
+
+
+def test_v8_save_and_queue_with_new_name_does_not_rebind_opened_job() -> None:
+    """Renaming a queue-opened PB8 config creates a new job and leaves the old job immutable."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    save_source = _page_function(page, "saveEditor")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const requests = [];
+        const state = {{
+          editorQueueFilename: 'job-030',
+          editorSourceName: 'HYPE_trailing_030',
+          selectedConfigs: new Set()
+        }};
+        const optimizeEditorAdapter = {{isV8: true}};
+        function editorVisible() {{ return true; }}
+        function ensureRawJsonValidForSave() {{ return true; }}
+        function ensureStructuredJsonFieldsValidForSave() {{ return true; }}
+        function collectEditorConfig() {{ return {{name: 'HYPE_trailing_035', config: {{optimize: {{n_cpus: 4}}}}}}; }}
+        function setPageEditorStatus() {{}}
+        function closeEditor() {{}}
+        function toast() {{}}
+        async function loadConfigs() {{}}
+        async function loadQueue() {{}}
+        function setPanel() {{}}
+        async function refreshOpenedQueueSnapshot(filename, name) {{
+          requests.push({{path: '/queue/' + filename + '/repair-config', name}});
+        }}
+        async function apiFetch(path, options) {{ requests.push({{path, options}}); return {{ok: true}}; }}
+
+        {save_source}
+
+        (async () => {{
+          await saveEditor(true);
+          assert.deepEqual(requests.map(item => item.path), [
+            '/configs/HYPE_trailing_035',
+            '/queue'
+          ]);
+          assert.deepEqual(JSON.parse(requests[1].options.body), {{name: 'HYPE_trailing_035'}});
+        }})().catch((error) => {{ console.error(error); process.exitCode = 1; }});
+        """
+    )
+    _run_node(script)
 
 
 def test_home_returns_queue_opened_editor_to_queue() -> None:

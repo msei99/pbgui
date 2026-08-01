@@ -7,9 +7,11 @@
 <link rel="stylesheet" href="/app/css/sidebar.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
 <script src="/app/js/pbgui_dialogs.js?v=5"></script>
+<script src="/app/js/run_list_adapter.js?v=2"></script>
 <style>
 /* ─── Reset & Base ─────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
 html, body { height: 100%; overflow: hidden; }
 :root {
   --bg:       #0e1117;
@@ -97,6 +99,7 @@ th {
   top: 0;
   cursor: pointer;
   user-select: none;
+  border-bottom: 2px solid var(--border);
 }
 th:hover { color: var(--text); }
 tr:hover td { background: var(--bg3); }
@@ -111,6 +114,9 @@ tbody tr { cursor: pointer; }
 .st-blocked         { color: var(--red); font-weight: 600; }
 .st-disabled        { color: var(--text-dim); }
 .st-collecting      { color: var(--text-dim); font-style: italic; }
+.st-conflicted,
+.st-tombstoned,
+.st-config_error    { color: var(--red); font-weight: 600; }
 tr.row-inactive td  { opacity: 0.45; }
 
 /* Inline buttons */
@@ -455,6 +461,16 @@ tr.row-inactive td  { opacity: 0.45; }
 .toast-ok   { background: var(--green); color: #000; }
 .toast-err  { background: var(--red); color: #fff; }
 .toast-info { background: var(--blue); color: #fff; }
+
+@media (max-width: 760px) {
+  #page-body { flex-direction: column; height: calc(100vh - 52px); }
+  #sidebar { width: 100% !important; min-width: 0; max-width: none; border-right: 0; border-bottom: 1px solid var(--border); }
+  #sidebar-resize { display: none; }
+  #sidebar-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #sidebar-toolbar .sb-label, #sidebar-toolbar .sb-input, #sidebar-toolbar .sb-sep { grid-column: 1 / -1; }
+  #main-content { padding: var(--sp-sm); }
+  th, td { padding: var(--sp-xs); }
+}
 </style>
 </head>
 <body>
@@ -487,12 +503,15 @@ tr.row-inactive td  { opacity: 0.45; }
           <option value="activate_needed">Needs Sync</option>
           <option value="stop_needed">Stop Needed</option>
           <option value="blocked">Blocked</option>
+          <option value="conflicted">Conflicted</option>
+          <option value="tombstoned">Tombstoned</option>
+          <option value="config_error">Config Error</option>
           <option value="disabled">Disabled</option>
           <option value="collecting">Collecting</option>
         </select>
         <hr class="sb-sep">
         <button class="sb-btn" onclick="loadInstances()">&#x21bb; Refresh</button>
-        <button class="sb-btn" onclick="addInstance()">&#x2795; Add Instance</button>
+        <button class="sb-btn" id="add-instance-btn" onclick="addInstance()">&#x2795; Add Instance</button>
         <button class="sb-btn" onclick="openBackups()">&#x1F4BE; Backups</button>
       </div>
     </div>
@@ -516,36 +535,44 @@ tr.row-inactive td  { opacity: 0.45; }
 
 <script>
 /* ─── Config (var so nav.js can access them) ──────────────── */
-var TOKEN          = "%%TOKEN%%";
 var API_BASE       = "%%API_BASE%%";
 var WS_BASE        = "%%WS_BASE%%";
 var PBGUI_VERSION  = "%%VERSION%%";
 var PBGUI_SERIAL   = "%%SERIAL%%";
+var RUN_VERSION    = "%%RUN_VERSION%%";
+var MASTER_NAME    = "%%MASTER_NAME%%";
+var runListAdapter = window.PBGuiRunListAdapter.create(RUN_VERSION);
 
 /* ─── State ───────────────────────────────────────────────── */
 var instances = [];
 var sort = { col: 'name', asc: true };
 var filterSearch = '';
 var filterStatus = 'All';
+var loadGeneration = 0;
+var socketGeneration = 0;
 
 /* ─── API helpers ─────────────────────────────────────────── */
 function apiFetch(path, opts) {
   opts = opts || {};
   var url = API_BASE + path;
-  opts.headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN }, opts.headers || {});
+  opts.credentials = 'same-origin';
+  opts.headers = Object.assign({}, opts.headers || {});
   return fetch(url, opts);
 }
 
 /* ─── Load instances ──────────────────────────────────────── */
 function loadInstances() {
+  var generation = ++loadGeneration;
   apiFetch('/instances').then(function(res) {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }).then(function(data) {
+    if (generation !== loadGeneration) return;
     instances = data.instances || [];
     render();
     setBanner('ok');
   }).catch(function(e) {
+    if (generation !== loadGeneration) return;
     console.error('Load failed:', e);
     setBanner('lost');
   });
@@ -558,18 +585,23 @@ var wsReconnectDelay = 1000;
 
 function connectWS() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-  var url = WS_BASE + '/api/v7/ws/v7';
-  ws = new WebSocket(url);
+  var generation = ++socketGeneration;
+  var url = WS_BASE + runListAdapter.websocketPath;
+  var socket = new WebSocket(url);
+  ws = socket;
 
-  ws.onopen = function() {
+  socket.onopen = function() {
+    if (generation !== socketGeneration) { socket.close(); return; }
     wsReconnectDelay = 1000;
     setBanner('ok');
   };
 
-  ws.onmessage = function(ev) {
+  socket.onmessage = function(ev) {
+    if (generation !== socketGeneration) return;
     try {
       var msg = JSON.parse(ev.data);
       if (msg.type === 'instances' && Array.isArray(msg.data)) {
+        loadGeneration += 1;
         instances = msg.data;
         render();
         setBanner('ok');
@@ -577,12 +609,15 @@ function connectWS() {
     } catch(e) { console.error('WS parse error:', e); }
   };
 
-  ws.onclose = function() {
+  socket.onclose = function(event) {
+    if (generation !== socketGeneration) return;
     setBanner('lost');
+    if (event && event.code === 4001) return;
     scheduleReconnect();
   };
 
-  ws.onerror = function() {
+  socket.onerror = function() {
+    if (generation !== socketGeneration) return;
     setBanner('lost');
   };
 }
@@ -599,12 +634,14 @@ function scheduleReconnect() {
 /* ─── Render (diff-based: only update changed cells) ──────── */
 var COLS = [
   { key: 'name',            label: 'Name' },
+  { key: 'user',            label: 'User' },
   { key: 'enabled_on',      label: 'Enabled On' },
   { key: 'status',          label: 'Status' },
   { key: 'version',         label: 'Cfg Ver' },
   { key: 'running_version', label: 'Run Ver' },
   { key: 'twe',             label: 'TWE' },
   { key: 'running_on',      label: 'Running On' },
+  { key: 'desired_state',   label: 'Desired' },
   { key: 'note',            label: 'Note' },
   { key: '_actions',        label: '' },
 ];
@@ -617,13 +654,16 @@ var STATUS_LABELS = {
   blocked:         'blocked',
   disabled:        'disabled',
   collecting:      'collecting…',
+  conflicted:      'conflicted',
+  tombstoned:      'tombstoned',
+  config_error:    'config error',
 };
 
 var headerRendered = false;
 var rowMap = {};  /* name -> { tr, cells: string[] } */
 
 function buildCells(r) {
-  var stClass = 'st-' + (r.status || 'disabled');
+  var stClass = 'st-' + String(r.status || 'disabled').replace(/[^a-z_]/g, '');
   var stLabel = STATUS_LABELS[r.status] || r.status || '\u2013';
   var stTitle = r.blocked_reason ? ' title="' + esc(r.blocked_reason) + '"' : '';
   var runOn = (r.running_on || []).join(', ') || '\u2013';
@@ -632,19 +672,21 @@ function buildCells(r) {
   }
   return [
     esc(r.name),
+    esc(r.user || '\u2013'),
     esc(r.enabled_on || '\u2013'),
-    '<span class="' + stClass + '"' + stTitle + '>' + stLabel + '</span>',
+    '<span class="' + stClass + '"' + stTitle + '>' + esc(stLabel) + '</span>',
     (r.version != null ? String(r.version) : '\u2013'),
     (r.running_version != null ? String(r.running_version) : '\u2013'),
     esc(r.twe || '\u2013'),
     esc(runOn),
+    esc(r.desired_state || '\u2013'),
     esc(r.note || ''),
-    '<button class="btn-panic" data-forced-mode="panic" data-forced-name="' + esc(r.name) + '" title="Panic all positions">P</button>' +
+    (runListAdapter.supportsForcedModes ? '<button class="btn-panic" data-forced-mode="panic" data-forced-name="' + esc(r.name) + '" title="Panic all positions">P</button>' +
     '<button class="btn-graceful" data-forced-mode="graceful_stop" data-forced-name="' + esc(r.name) + '" title="Graceful stop all positions">G</button>' +
-    '<button class="btn-tp-only" data-forced-mode="tp_only" data-forced-name="' + esc(r.name) + '" title="Take Profit Only all positions">T</button>' +
+    '<button class="btn-tp-only" data-forced-mode="tp_only" data-forced-name="' + esc(r.name) + '" title="Take Profit Only all positions">T</button>' : '') +
     '<button class="btn-edit" data-edit="' + esc(r.name) + '" title="Edit">\u270E</button>' +
     '<button class="btn-edit" data-balance="' + esc(r.name) + '" title="Open Balance Calculator">$</button>' +
-    '<button class="btn-v8" data-convert-v8="' + esc(r.name) + '" title="Convert this V7 run config to V8">V8</button>' +
+    (runListAdapter.supportsConversion ? '<button class="btn-v8" data-convert-v8="' + esc(r.name) + '" title="Convert this V7 run config to V8">V8</button>' : '') +
     '<button class="btn-del" data-delete="' + esc(r.name) + '" title="Delete">\u2716</button>',
   ];
 }
@@ -775,6 +817,21 @@ function render() {
       delete rowMap[name];
     }
   });
+  var emptyRow = document.getElementById('instances-empty-row');
+  if (!filtered.length) {
+    if (!emptyRow) {
+      emptyRow = document.createElement('tr');
+      emptyRow.id = 'instances-empty-row';
+      var emptyCell = document.createElement('td');
+      emptyCell.colSpan = COLS.length;
+      emptyCell.style.cssText = 'padding:48px 12px;text-align:center;color:var(--text-dim)';
+      emptyRow.appendChild(emptyCell);
+      tbody.appendChild(emptyRow);
+    }
+    emptyRow.firstChild.textContent = instances.length ? 'No instances match the current filters.' : 'No ' + runListAdapter.label + ' live instances yet.';
+  } else if (emptyRow) {
+    emptyRow.remove();
+  }
 }
 
 function esc(s) {
@@ -889,7 +946,27 @@ function executeDelete(name) {
 
 function openBalanceCalculator(name) {
   var inst = instances.find(function(item) { return item.name === name; }) || {};
-  var params = new URLSearchParams({ instance: name });
+  if (runListAdapter.isV8) {
+    apiFetch('/instances/' + encodeURIComponent(name) + '/config').then(function(response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.json();
+    }).then(function(payload) {
+      return fetch(window.location.origin + '/api/balance-calc/draft', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: payload.config || {} })
+      });
+    }).then(function(response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.json();
+    }).then(function(payload) {
+      var params = new URLSearchParams({ draft_id: payload.draft_id || '', exchange: String(inst.exchange || '').toLowerCase() });
+      window.location.href = window.location.origin + '/api/balance-calc/main_page?' + params.toString();
+    }).catch(function(error) { toast('Balance Calculator failed: ' + error.message, 'err'); });
+    return;
+  }
+  var params = new URLSearchParams({ instance: name, instance_version: 'v7' });
   if (inst.exchange) params.set('exchange', String(inst.exchange).toLowerCase());
   window.location.href = window.location.origin + '/api/balance-calc/main_page?' + params.toString();
 }
@@ -1257,7 +1334,8 @@ var toastTimer = null;
 function toast(msg, type) {
   fetch('/api/notify_log', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ msg: msg, level: type || 'info' })
   }).catch(function() {});
   var el = document.getElementById('toast');
@@ -1311,8 +1389,14 @@ document.getElementById('tbody').addEventListener('dblclick', function(e) {
 });
 
 /* ─── Auto-refresh via WebSocket ──────────────────────────── */
+runListAdapter.configureUi();
 loadInstances();  /* initial REST fetch for immediate data */
 connectWS();      /* then switch to real-time WebSocket */
+window.addEventListener('beforeunload', function() {
+  socketGeneration += 1;
+  if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
+  if (ws) ws.close();
+});
 
 /* ─── Sidebar resize ─────────────────────────────────────── */
 window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });
@@ -1321,12 +1405,12 @@ window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize
 <!-- ── Shared nav bar ── -->
 <script>
 window.PBGUI_NAV_CONFIG = {
-  subtitle: 'PBv7 RUN',
-  current:  'v7_run',
-  token:    TOKEN,
+  subtitle: runListAdapter.navSubtitle,
+  current:  runListAdapter.navCurrent,
   apiBase:  API_BASE,
   version:  PBGUI_VERSION,
-  serial:   PBGUI_SERIAL
+  serial:   PBGUI_SERIAL,
+  masterName: MASTER_NAME
 };
 </script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>

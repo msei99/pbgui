@@ -14,6 +14,32 @@ import vps_manager_service as service_mod
 from vps_manager_service import VPSManagerService
 
 
+@pytest.mark.parametrize(
+    ("logical_command", "profile", "expected"),
+    [
+        ("vps-update-runtime", "pb7", "vps-update-pb7"),
+        ("vps-update-runtime", "pb8", "vps-update-pb8"),
+        ("vps-update-runtime", "pb7_pb8", "vps-update-pb7-pb8"),
+        ("vps-update-pbgui-runtime", "pb7", "vps-update-pb"),
+        ("vps-update-pbgui-runtime", "pb8", "vps-update-pbgui-pb8"),
+        ("vps-update-pbgui-runtime", "pb7_pb8", "vps-update-pbgui-pb7-pb8"),
+    ],
+)
+def test_bulk_runtime_update_resolves_each_host_profile(logical_command: str, profile: str, expected: str) -> None:
+    """Mixed bulk selections dispatch the correct playbook per persisted host profile."""
+    assert service_mod._profile_aware_vps_update_command(logical_command, profile) == expected
+
+
+def test_combined_runtime_playbooks_compose_existing_safe_updates() -> None:
+    """Dual-runtime updates reuse the reviewed PB7 and PB8 playbooks in order."""
+    runtime_only = Path("vps-update-pb7-pb8.yml").read_text(encoding="utf-8")
+    with_pbgui = Path("vps-update-pbgui-pb7-pb8.yml").read_text(encoding="utf-8")
+
+    assert runtime_only.index("vps-update-pb7.yml") < runtime_only.index("vps-update-pb8.yml")
+    assert with_pbgui.index("vps-update-pb.yml") < with_pbgui.index("vps-update-pb8.yml")
+    assert core_mod._command_updates_pbgui("vps-update-pbgui-pb7-pb8") is True
+
+
 def test_local_installer_configures_and_uninstalls_separate_pb8_paths(tmp_path: Path) -> None:
     """Fresh local installs persist PB8 paths and local uninstall owns both targets."""
     install_dir = tmp_path / "software"
@@ -105,7 +131,7 @@ def test_pb8_playbooks_gate_role_validate_and_leave_processes_running(playbook_p
         assert "Measure PB8 disk state after validation" in source
         assert "pb8_min_free_bytes | default(3221225472)" in source
     else:
-        assert "pbgui_role.stdout | trim | lower == 'master'" in source
+        assert "pb8_role_probe.stdout | trim | lower == 'master'" in source
     assert "stop-processes" not in source
     assert "kill all" not in source
     assert "starter.py" not in source
@@ -195,6 +221,66 @@ def test_remote_pb8_command_requires_fresh_master_telemetry(
         )
 
 
+def test_remote_pb7_install_is_blocked_below_disk_reserve_with_pb8_present() -> None:
+    """A PB8-only small VPS cannot start a PB7 first installation below 3 GiB free."""
+    state = {
+        "meta": {
+            "role": "vps",
+            "pb8ready": True,
+            "pb7v": "N/A",
+            "pb7c": "",
+            "pb7py": "N/A",
+        },
+        "system": {"disk_free": 2944 * 1024**2},
+    }
+
+    result = service_mod._pb7_remote_action_status(state, telemetry_fresh=True)
+
+    assert result["allowed"] is False
+    assert result["installed"] is False
+    assert result["required_free_disk_bytes"] == service_mod.PB7_MIN_FREE_DISK_BYTES
+    assert "requires at least 3 GiB" in result["reason"]
+    assert "currently 2.88 GiB" in result["reason"]
+
+
+def test_installed_remote_pb7_update_does_not_require_installation_disk_reserve() -> None:
+    """A confirmed PB7 checkout remains updateable below the first-install reserve."""
+    result = service_mod._pb7_remote_action_status(
+        {
+            "meta": {"pb7v": "v7.8.3", "pb7c": "a" * 40, "pb7py": "3.12"},
+            "system": {"disk_free": 1 * 1024**3},
+        },
+        telemetry_fresh=True,
+    )
+
+    assert result["allowed"] is True
+    assert result["installed"] is True
+    assert result["required_free_disk_bytes"] == 0
+
+
+def test_remote_pb7_command_rejects_low_disk_first_install() -> None:
+    """The backend blocks direct PB7 install requests even if the disabled UI is bypassed."""
+    service = object.__new__(VPSManagerService)
+    vps = SimpleNamespace(hostname="small-pb8", user_pw=None)
+    service.vpsmanager = SimpleNamespace(update_vps=lambda *args, **kwargs: None)
+    service._require_vps = lambda _hostname: vps
+    service._apply_session_secrets_to_vps = lambda _token, _vps: None
+    service._get_monitor_state = lambda: {}
+    service._get_host_telemetry = lambda _state, _hostname: {
+        "meta": {"role": "vps", "pb8ready": True},
+        "system": {"disk_free": 2944 * 1024**2},
+    }
+    service._host_telemetry_fresh = lambda _state: True
+
+    with pytest.raises(ValueError, match="PB7 installation requires at least 3 GiB"):
+        service.run_vps_command(
+            token="token",
+            hostname="small-pb8",
+            command="vps-update-pb7",
+            command_text="Install PB7",
+        )
+
+
 def test_remote_pb8_command_starts_only_for_fresh_master() -> None:
     """Fresh runner telemetry permits the dedicated live-only PB8 playbook."""
     captured: dict[str, object] = {}
@@ -233,8 +319,156 @@ def test_remote_pb8_command_starts_only_for_fresh_master() -> None:
     assert result["command"] == "vps-update-pb8"
 
 
-def test_pb8_is_master_only_and_absent_from_bulk_actions() -> None:
-    """The PB8 action supports eligible runners but remains absent from bulk deploys."""
+def test_installed_remote_pb8_update_does_not_require_installation_disk_reserve() -> None:
+    """A validated PB8 runtime remains updateable below the first-install disk threshold."""
+    result = service_mod._pb8_remote_action_status(
+        {
+            "meta": {"role": "vps", "pb8ready": True},
+            "system": {"disk_free": 2 * 1024**3},
+        },
+        telemetry_fresh=True,
+    )
+
+    assert result["allowed"] is True
+    assert result["installed"] is True
+    assert result["required_free_disk_bytes"] == 0
+    assert result["reason"] == ""
+
+
+def test_pb8_only_remote_master_combined_update_uses_combined_master_playbook() -> None:
+    """The PBGui+PB8 action must not run its PB8 half on the local controller host."""
+    captured: dict[str, object] = {}
+    service = object.__new__(VPSManagerService)
+    vps = SimpleNamespace(
+        hostname="remote-master",
+        user="mani",
+        remote_pbgui_dir="/home/mani/software/pbgui",
+        user_pw=None,
+        command_run_id="run-8",
+    )
+    vps._task_log_path = lambda command, _fallback: Path(f"{command}--run-8.log")
+    service.vpsmanager = SimpleNamespace(
+        update_vps=lambda target, **kwargs: captured.update(kwargs)
+    )
+    service._require_vps = lambda _hostname: vps
+    service._apply_session_secrets_to_vps = lambda _token, _vps: None
+    service._get_monitor_state = lambda: {}
+    service._get_host_telemetry = lambda _state, _hostname: {
+        "meta": {"role": "master", "pb8ready": True},
+        "system": {"disk_free": 1 * 1024**3},
+    }
+    service._host_telemetry_fresh = lambda _state: True
+    service._credential_playbook_vars = lambda _hostname, _state: {}
+    service._sync_vps_config_from_host_meta = lambda _vps, _state: None
+    service._raise_if_vps_task_active = lambda _vps, _label: None
+
+    result = service.run_vps_command(
+        token="token",
+        hostname="remote-master",
+        command="vps-update-pbgui-pb8",
+        command_text="Update PBGui and PB8",
+    )
+
+    assert captured["command"] == "master-update-pbgui-pb8"
+    assert captured["command_text"] == "Update PBGui and PB8"
+    assert captured["extra_vars"]["target_hosts"] == "remote-master"
+    assert captured["extra_vars"]["pb8_min_free_bytes"] == 0
+    assert result["command"] == "master-update-pbgui-pb8"
+
+
+def test_remote_monitor_payload_keeps_pb7_and_pb8_processes_separate() -> None:
+    """VPS detail monitoring must preserve runtime identity for metrics and fallbacks."""
+    service = object.__new__(VPSManagerService)
+    service.monitor_config = SimpleNamespace(
+        cpu_warning_v7=80,
+        cpu_error_v7=95,
+        mem_warning_v7=1000,
+        mem_error_v7=2000,
+        swap_warning_v7=100,
+        swap_error_v7=200,
+        error_warning_v7=1,
+        error_error_v7=5,
+        traceback_warning_v7=1,
+        traceback_error_v7=5,
+    )
+    service._build_remote_server_metrics = lambda _hostname, _state: {}
+    service._bot_pnl_total = lambda _hostname, _name: (0.0, 0)
+    service._bot_count_total = lambda _hostname, _name, _kind: 0
+    metrics = [0] * 10
+    host_state = {
+        "meta": {"pb7v": "v7.7.7", "pb8v": "v8.0.0"},
+        "instances": [
+            {"p": "7", "u": "same", "m": metrics},
+            {"p": "8", "u": "same", "m": metrics},
+        ],
+        "v7_instances": [],
+        "v8_instances": [{"name": "v8-fallback", "running": True, "cv": 3, "eo": "host-a"}],
+    }
+
+    payload = service._build_remote_monitor_payload("host-a", host_state)
+
+    assert [(item["name"], item["pb_version"], item["version"]) for item in payload["v7"]] == [
+        ("same", "7", "v7.7.7")
+    ]
+    assert [(item["name"], item["pb_version"], item["version"]) for item in payload["v8"]] == [
+        ("same", "8", "v8.0.0")
+    ]
+    assert payload["v8_running"] == [{
+        "name": "v8-fallback",
+        "version": 3,
+        "enabled_on": "host-a",
+        "blocked": False,
+        "blocked_reason": "",
+        "cluster_gate": "",
+        "pb_version": "8",
+    }]
+
+
+def test_host_telemetry_includes_pb8_instance_snapshot() -> None:
+    """VPS Manager must carry the monitor store's PB8 desired/runtime snapshot into details."""
+    service = object.__new__(VPSManagerService)
+    monitor_state = {
+        "connections": {"connections": {"host-a": {"status": "connected"}}},
+        "system": {"host-a": {"disk_free": 1}},
+        "instances": {"host-a": []},
+        "v7_instances": {"host-a": [{"name": "seven"}]},
+        "v8_instances": {"host-a": [{"name": "eight"}]},
+        "host_meta": {"host-a": {"role": "vps"}},
+        "streams": {"host-a": {"last_update": 1}},
+    }
+
+    result = service._get_host_telemetry(monitor_state, "host-a")
+
+    assert result["v7_instances"] == [{"name": "seven"}]
+    assert result["v8_instances"] == [{"name": "eight"}]
+
+
+@pytest.mark.parametrize(
+    ("command", "initial_profile"),
+    [
+        ("vps-update-pb7", "pb8"),
+        ("vps-update-pb8", "pb7"),
+        ("vps-update-pbgui-pb8", "pb7"),
+    ],
+)
+def test_successful_runtime_install_expands_saved_vps_profile(command, initial_profile, tmp_path) -> None:
+    """Dedicated runtime installs must make later host-capability checks recognize both runtimes."""
+    vps = object.__new__(core_mod.VPS)
+    vps.command = command
+    vps.command_text = command
+    vps.update_status = "successful"
+    vps.runtime_profile = initial_profile
+    vps.privat_data_dir = None
+    vps.path = tmp_path
+    vps.save = lambda: None
+
+    vps.update_finished(private_data_dir=tmp_path / "missing")
+
+    assert vps.runtime_profile == "pb7_pb8"
+
+
+def test_pb8_actions_support_single_and_profile_aware_bulk_updates() -> None:
+    """PB8 actions support eligible runners and profile-aware bulk dispatch."""
     source = Path("frontend/vps_manager.html").read_text(encoding="utf-8")
 
     assert 'runMasterWithLog("master-update-pb8"' in source
@@ -245,7 +479,21 @@ def test_pb8_is_master_only_and_absent_from_bulk_actions() -> None:
     assert "st.pb8_action_reason" in source
     assert "pb8_reason: String(st.pb8_action_reason || '')" in source
     assert "pb8_profile: String(st.pb8_install_profile || '')" in source
-    assert "COMMAND_VPS_UPDATE_PB8" not in service_mod.VPS_DEPLOY_ACTIONS
+    assert "vps-update-pbgui-pb8" in source
+    assert "Update PBGui and PB8" in source
+    assert service_mod.COMMAND_VPS_UPDATE_PB8 in service_mod.VPS_DEPLOY_ACTIONS
+    assert service_mod.COMMAND_VPS_UPDATE_RUNTIME in service_mod.VPS_DEPLOY_ACTIONS
+
+
+def test_pb7_playbook_checks_first_install_disk_before_downloads() -> None:
+    """The remote PB7 playbook fails before rust/git downloads on insufficient disk."""
+    source = Path("vps-update-pb7.yml").read_text(encoding="utf-8")
+
+    gate = source.index("Require free disk space for a new PB7 installation")
+    assert gate < source.index("- name: Update rust")
+    assert gate < source.index("Clone official Passivbot for a new PB7 installation")
+    assert "pb7_min_free_bytes | default(3221225472)" in source
+    assert "when: not pb7_git_before_disk_gate.stat.exists" in source
 
 
 def test_pb8_remote_action_status_uses_role_and_free_disk_only() -> None:
@@ -279,8 +527,38 @@ def test_pb8_runner_playbook_sources_optional_cargo_environment() -> None:
     assert source.count('source "$HOME/.cargo/env"') == 3
 
 
+def test_runtime_update_playbooks_support_pb8_only_maintenance_and_pb7_install() -> None:
+    """Dedicated maintenance paths must cover PB8-only combined updates and later PB7 installation."""
+    remote_combined = Path("vps-update-pbgui-pb8.yml").read_text(encoding="utf-8")
+    master_combined = Path("master-update-pbgui-pb8.yml").read_text(encoding="utf-8")
+    master_pb8 = Path("master-update-pb8.yml").read_text(encoding="utf-8")
+    pb7_update = Path("vps-update-pb7.yml").read_text(encoding="utf-8")
+    pb8_update = Path("vps-update-pb8.yml").read_text(encoding="utf-8")
+
+    assert "import_playbook: vps-update-pbgui.yml" in remote_combined
+    assert "import_playbook: vps-update-pb8.yml" in remote_combined
+    assert "import_playbook: master-update-pbgui.yml" in master_combined
+    assert "import_playbook: master-update-pb8.yml" in master_combined
+    assert 'hosts: "{{ target_hosts | default(\'localhost\') }}"' in master_pb8
+    assert "Clone official Passivbot for a new PB7 installation" in pb7_update
+    assert "Refuse a non-Git PB7 target" in pb7_update
+    assert "Ensure PBRun is enabled for PB8 live supervision" in pb8_update
+    assert "--no-disable-excluded" in pb8_update
+    assert "Detect PB8-only support in installed PBRun" in pb8_update
+    assert '"self.pb8_ready = bool"' in pb8_update
+    assert "Disable incompatible PBRun on PB8-only hosts" in pb8_update
+    assert "Update PBGui before enabling PB8 live instances" in pb8_update
+    assert "pb8_pbrun_compatibility_probe.rc == 0" in pb8_update
+    assert "pb8_pbrun_compatibility_probe.rc != 0" in pb8_update
+    assert "register: pb8_role_probe" in pb8_update
+    assert "pb8_role_probe.stdout | trim | lower" in pb8_update
+    assert "pbgui_role.stdout" not in pb8_update
+    assert "register: pb8_role_probe" in master_pb8
+    assert "pbgui_role.stdout" not in master_pb8
+
+
 def test_vps_setup_pb8_profile_skips_every_pb7_runtime_task() -> None:
-    """PB8-only setup neither creates PB7 artifacts nor enables PBRun."""
+    """PB8-only setup skips PB7 artifacts while enabling the shared PBRun service."""
     source = Path("vps-setup.yml").read_text(encoding="utf-8")
     pb7_tasks = (
         "Validate pinned PB7 commit",
@@ -300,49 +578,33 @@ def test_vps_setup_pb8_profile_skips_every_pb7_runtime_task() -> None:
         assert "when:" in block
         assert "install_pb7 | bool" in block
     assert "remove PB7 runtime paths for PB8-only setup" in source
-    assert "(['pbrun'] if (install_pb7 | bool) else [])" in source
+    assert "(['pbrun'] if ((install_pb7 | bool) or (install_pb8 | bool)) else [])" in source
+    assert "(['pbgui-pbrun.service'] if ((install_pb7 | bool) or (install_pb8 | bool)) else [])" in source
+    assert "in ['pb7', 'pb7_pb8']" in source
     assert "option: role\n        value: vps" in source
 
 
-@pytest.mark.parametrize(("runtime_profile", "expect_pb8"), [("pb7", False), ("pb8", True)])
-def test_vps_setup_callback_chains_pb8_only_for_pb8_profile(
-    runtime_profile: str,
-    expect_pb8: bool,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """One fresh PB8 setup continues into the dedicated live installer."""
-    runner_calls: list[dict] = []
-    update_calls: list[dict] = []
-    monkeypatch.setattr(core_mod, "PBGDIR", tmp_path)
-    monkeypatch.setattr(core_mod, "VPS_LOG_ROOT", tmp_path / "logs")
-    monkeypatch.setattr(core_mod, "_cluster_sync_extra_vars", lambda: {})
-    monkeypatch.setattr(core_mod, "_ansible_envvars", lambda: {})
-    monkeypatch.setattr(core_mod.ansible_runner, "run_async", lambda **kwargs: runner_calls.append(kwargs))
+def test_vps_setup_runs_pb8_inside_the_same_ansible_run() -> None:
+    """PB8 setup is a second play in vps-setup, not a Python follow-up job."""
+    setup_source = Path("vps-setup.yml").read_text(encoding="utf-8")
+    pb8_source = Path("vps-update-pb8.yml").read_text(encoding="utf-8")
+    core_source = Path("vps_manager_core.py").read_text(encoding="utf-8")
+    setup_method = core_source.split("    def setup_vps(self, vps: VPS", 1)[1].split(
+        "    def update_vps(self, vps: VPS", 1
+    )[0]
 
-    manager = object.__new__(core_mod.VPSManager)
-    manager.update_vps = lambda vps, **kwargs: update_calls.append({"vps": vps, **kwargs})
-    vps = core_mod.VPS()
-    vps.hostname = "fresh-runner"
-    vps.user = "bot"
-    vps.user_pw = "session-only"
-    vps.swap = "2G"
-    vps.remote_pbgui_dir = "/home/bot/software/pbgui"
-    vps.runtime_profile = runtime_profile
-
-    manager.setup_vps(vps)
-
-    assert runner_calls[0]["extravars"]["runtime_profile"] == runtime_profile
-    vps.setup_status = "successful"
-    vps.setup_finished = lambda runner_config=None: None
-    runner_calls[0]["finished_callback"]()
-    assert bool(update_calls) is expect_pb8
-    if expect_pb8:
-        assert update_calls[0]["command"] == "vps-update-pb8"
-        assert update_calls[0]["command_text"] == "Install PB8 (fresh setup)"
+    assert "install_pb8:" in setup_source
+    assert "groups: pbgui_pb8_setup" in setup_source
+    assert "when: install_pb8 | bool" in setup_source
+    assert "import_playbook: vps-update-pb8.yml" in setup_source
+    assert "pb8_target_group: pbgui_pb8_setup" in setup_source
+    assert "pb8_target_group if pb8_target_group is defined else hostname" in pb8_source
+    assert "self.update_vps(" not in setup_method
+    assert "finished_callback=vps.setup_finished" in setup_method
 
 
-def test_vps_runtime_profile_is_validated_and_exposed() -> None:
+@pytest.mark.parametrize("runtime_profile", ["pb8", "pb7_pb8"])
+def test_vps_runtime_profile_is_validated_and_exposed(runtime_profile: str) -> None:
     """Only supported setup profiles cross the form-to-inventory boundary."""
     service = object.__new__(VPSManagerService)
     service._store_session_secrets = lambda token, hostname, form: None
@@ -364,7 +626,7 @@ def test_vps_runtime_profile_is_validated_and_exposed() -> None:
         save=lambda: None,
     )
     form = {
-        "runtime_profile": "pb8",
+        "runtime_profile": runtime_profile,
         "swap": "2G",
         "install_dir": "/home/bot/software",
         "firewall": False,
@@ -374,7 +636,7 @@ def test_vps_runtime_profile_is_validated_and_exposed() -> None:
 
     service._apply_vps_setup_form("token", vps, form)
 
-    assert vps.runtime_profile == "pb8"
-    assert service._build_vps_config("token", vps)["runtime_profile"] == "pb8"
+    assert vps.runtime_profile == runtime_profile
+    assert service._build_vps_config("token", vps)["runtime_profile"] == runtime_profile
     with pytest.raises(ValueError, match="runtime profile"):
         service._apply_vps_setup_form("token", vps, {**form, "runtime_profile": "full"})

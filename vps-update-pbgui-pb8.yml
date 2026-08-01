@@ -1,0 +1,4 @@
+---
+# Update PBGui and the PB8 runtime on one remote PB8 host.
+- import_playbook: vps-update-pbgui.yml
+- import_playbook: vps-update-pb8.yml

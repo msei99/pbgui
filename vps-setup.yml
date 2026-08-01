@@ -29,7 +29,8 @@
     firewall_ssh_port: "{{ firewall_ssh_port }}"
     firewall_ssh_ips: "{{ firewall_ssh_ips }}"
     pb7_ref: "{{ lookup('file', playbook_dir + '/pb7_ref.txt') | trim }}"
-    install_pb7: "{{ (runtime_profile | default('pb7') | string | lower) == 'pb7' }}"
+    install_pb7: "{{ (runtime_profile | default('pb7') | string | lower) in ['pb7', 'pb7_pb8'] }}"
+    install_pb8: "{{ (runtime_profile | default('pb7') | string | lower) in ['pb8', 'pb7_pb8'] }}"
 
   tasks:
     - name: display facts
@@ -513,8 +514,8 @@
     - name: Build enabled PBGui service list
       set_fact:
         pbgui_credential_capability_known: "{{ credential_active is defined and credential_active is not none }}"
-        pbgui_enabled_services: "{{ ['pbcluster', 'monitor-agent'] + (['pbrun'] if (install_pb7 | bool) else []) + (['pbcoindata'] if (credential_active | default(false) | default(false, true)) else []) }}"
-        systemd_units: "{{ ['pbgui-pbcluster.service', 'pbgui-monitor-agent.service'] + (['pbgui-pbrun.service'] if (install_pb7 | bool) else []) + (['pbgui-pbcoindata.service'] if (credential_active | default(false) | default(false, true)) else []) }}"
+        pbgui_enabled_services: "{{ ['pbcluster', 'monitor-agent'] + (['pbrun'] if ((install_pb7 | bool) or (install_pb8 | bool)) else []) + (['pbcoindata'] if (credential_active | default(false) | default(false, true)) else []) }}"
+        systemd_units: "{{ ['pbgui-pbcluster.service', 'pbgui-monitor-agent.service'] + (['pbgui-pbrun.service'] if ((install_pb7 | bool) or (install_pb8 | bool)) else []) + (['pbgui-pbcoindata.service'] if (credential_active | default(false) | default(false, true)) else []) }}"
 
     - name: apply VPS logging max bytes
       ini_file:
@@ -536,7 +537,7 @@
     
     - name: install and start PBGui systemd user services
       command:
-        argv: "{{ ['/bin/bash', install_dir + '/pbgui/setup/setup_systemd.sh', '--user', user, '--pbgui-dir', install_dir + '/pbgui', '--python', install_dir + '/venv_pbgui/bin/python', '--enable', pbgui_enabled_services | join(',')] + ([] if (pbgui_credential_capability_known or not (install_pb7 | bool)) else ['--no-disable-excluded']) }}"
+        argv: "{{ ['/bin/bash', install_dir + '/pbgui/setup/setup_systemd.sh', '--user', user, '--pbgui-dir', install_dir + '/pbgui', '--python', install_dir + '/venv_pbgui/bin/python', '--enable', pbgui_enabled_services | join(',')] + ([] if (pbgui_credential_capability_known or not ((install_pb7 | bool) or (install_pb8 | bool))) else ['--no-disable-excluded']) }}"
       become: yes
       register: systemd_setup_result
       changed_when: "'changed=true' in (systemd_setup_result.stdout | default(''))"
@@ -591,3 +592,14 @@
       debug:
         var: systemd_active_result
       tags: debug,never
+
+    - name: Select this host for PB8 installation
+      add_host:
+        name: "{{ inventory_hostname }}"
+        groups: pbgui_pb8_setup
+      when: install_pb8 | bool
+
+- name: Install PB8 for selected setup profiles
+  import_playbook: vps-update-pb8.yml
+  vars:
+    pb8_target_group: pbgui_pb8_setup

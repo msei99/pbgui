@@ -66,3 +66,13 @@ def test_automatic_retention_status_uses_existing_five_second_feed() -> None:
     assert "nodes_cleanup_verified" in HTML
     assert "automatic_cleanup" in HTML
     assert "Safety delay" not in HTML
+
+
+def test_remote_preview_exposes_separate_pb8_reconciliation() -> None:
+    """Cluster Preview shows and confirms PB8 exact reconciliation independently from V7."""
+    assert 'id="preview-materialize-v8-btn"' in HTML
+    assert "PB8 Config Reconciliation Preview" in HTML
+    assert "function syncMaterializeV8Button(payload)" in HTML
+    assert "function confirmAndMaterializeV8()" in HTML
+    assert "fetchJson('/remote-materialize-v8/'" in HTML
+    assert "v8_materialization_pending" in HTML

@@ -2008,8 +2008,10 @@ def test_remote_join_writes_identity_for_known_node(monkeypatch, tmp_path: Path)
                 return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "count": 1, "operations": [{"actor": NODE_A, "seq": 1}]}), stderr="")
             if "rebuild" in command:
                 return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "generation": 1, "nodes": 2, "instances": 0}), stderr="")
-            if "materialize-v7-preview" in command:
-                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "error": 0}, "can_apply": False}), stderr="")
+                if "materialize-v7-preview" in command:
+                    return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "error": 0}, "can_apply": False}), stderr="")
+                if "materialize-v8-preview" in command:
+                    return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "remove": 0, "delete": 0, "error": 0}, "can_apply": False}), stderr="")
             if "materialize-api-keys-preview" in command:
                 return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"write": 0, "error": 0}, "can_apply": False}), stderr="")
             if "start PBRun" in command:
@@ -2035,13 +2037,14 @@ def test_remote_join_writes_identity_for_known_node(monkeypatch, tmp_path: Path)
     assert f"join {CLUSTER_ID} {NODE_B} vps vps-a" in calls[1][1]
     assert payload["completion"]["ok"] is True
     assert payload["completion"]["pbrun_start"]["started"] is True
-    assert len(calls) == 8
+    assert len(calls) == 9
     assert "get-state-vector" in calls[2][1]
     assert "put-ops" in calls[3][1]
     assert "rebuild" in calls[4][1]
     assert "materialize-v7-preview" in calls[5][1]
-    assert "materialize-api-keys-preview" in calls[6][1]
-    assert "start PBRun" in calls[7][1]
+    assert "materialize-v8-preview" in calls[6][1]
+    assert "materialize-api-keys-preview" in calls[7][1]
+    assert "start PBRun" in calls[8][1]
 
 
 def test_remote_join_does_not_stop_pbrun_for_master_node(monkeypatch, tmp_path: Path) -> None:
@@ -2075,6 +2078,8 @@ def test_remote_join_does_not_stop_pbrun_for_master_node(monkeypatch, tmp_path: 
                 return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "generation": 1, "nodes": 2, "instances": 0}), stderr="")
             if "materialize-v7-preview" in command:
                 return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "error": 0}, "can_apply": False}), stderr="")
+            if "materialize-v8-preview" in command:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "remove": 0, "delete": 0, "error": 0}, "can_apply": False}), stderr="")
             if "materialize-api-keys-preview" in command:
                 return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"write": 0, "error": 0}, "can_apply": False}), stderr="")
             return SimpleNamespace(
@@ -2092,7 +2097,7 @@ def test_remote_join_does_not_stop_pbrun_for_master_node(monkeypatch, tmp_path: 
     assert payload["pbrun_stopped"] is False
     assert payload["completion"]["ok"] is True
     assert payload["completion"]["pbrun_start"]["reason"] == "not_vps_runner"
-    assert len(calls) == 6
+    assert len(calls) == 7
     assert "stop PBRun" not in calls[0][1]
     assert not any("start PBRun" in item[1] for item in calls)
     assert f"join {CLUSTER_ID} {NODE_B} master remote-master" in calls[0][1]
@@ -2632,6 +2637,16 @@ def test_remote_preview_compares_state_without_writes(monkeypatch, tmp_path: Pat
                     "counts": {"add": 1, "update": 0, "skip": 0, "error": 0, "files_to_write": 1},
                     "items": [],
                 }
+            elif "materialize-v8-preview" in command:
+                payload = {
+                    "ok": True,
+                    "cluster_id": CLUSTER_ID,
+                    "node_id": NODE_B,
+                    "read_only": True,
+                    "can_apply": False,
+                    "counts": {"add": 0, "update": 0, "remove": 0, "delete": 0, "error": 0},
+                    "items": [],
+                }
             elif "get-state-vector" in command:
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_A: 1, NODE_B: 1}}
             else:
@@ -2670,13 +2685,15 @@ def test_remote_preview_compares_state_without_writes(monkeypatch, tmp_path: Pat
     assert payload["operation_sync"]["push_by_op"] == {"UPSERT_CONFIG": 1}
     assert payload["operation_sync"]["local_ops_missing_on_remote"][0]["target"] == "local_inst"
     assert payload["materialization"]["counts"]["add"] == 1
+    assert payload["pb8_materialization"]["counts"]["add"] == 0
     assert payload["api_key_materialization"]["status"] == "current"
-    assert len(calls) == 5
+    assert len(calls) == 6
     assert "materialize-credentials-preview" in calls[-1]
     assert "get-state-vector" in calls[0]
     assert "get-desired-state" in calls[1]
     assert "materialize-v7-preview" in calls[2]
-    assert "materialize-api-keys-preview" in calls[3]
+    assert "materialize-v8-preview" in calls[3]
+    assert "materialize-api-keys-preview" in calls[4]
 
 
 def test_remote_materialize_v7_requires_synchronized_state(monkeypatch, tmp_path: Path) -> None:
@@ -2746,6 +2763,8 @@ def test_remote_materialize_v7_writes_after_state_match(monkeypatch, tmp_path: P
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "desired_state": local["desired_state"]}
             elif "materialize-v7-preview" in command:
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "error": 0, "current": 1}, "can_apply": False}
+            elif "materialize-v8-preview" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "remove": 0, "delete": 0, "error": 0}, "can_apply": False}
             elif "materialize-api-keys-preview" in command:
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"write": 0, "error": 0, "missing": 1}, "can_apply": False}
             elif "materialize-v7" in command:
@@ -2769,13 +2788,14 @@ def test_remote_materialize_v7_writes_after_state_match(monkeypatch, tmp_path: P
     assert payload["ok"] is True
     assert payload["materialization"]["counts"]["written_files"] == 2
     assert payload["pbrun_start"]["started"] is True
-    assert len(calls) == 6
+    assert len(calls) == 7
     assert "get-state-vector" in calls[0]
     assert "get-desired-state" in calls[1]
     assert "materialize-v7" in calls[2]
     assert "materialize-v7-preview" in calls[3]
-    assert "materialize-api-keys-preview" in calls[4]
-    assert "start PBRun" in calls[5]
+    assert "materialize-v8-preview" in calls[4]
+    assert "materialize-api-keys-preview" in calls[5]
+    assert "start PBRun" in calls[6]
 
 
 def test_remote_materialize_v7_waits_to_start_pbrun_when_api_keys_pending(monkeypatch, tmp_path: Path) -> None:
@@ -2808,6 +2828,8 @@ def test_remote_materialize_v7_waits_to_start_pbrun_when_api_keys_pending(monkey
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "desired_state": local["desired_state"]}
             elif "materialize-v7-preview" in command:
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "error": 0}, "can_apply": False}
+            elif "materialize-v8-preview" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "remove": 0, "delete": 0, "error": 0}, "can_apply": False}
             elif "materialize-api-keys-preview" in command:
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"write": 1, "error": 0}, "can_apply": True}
             elif "materialize-v7" in command:
@@ -2852,6 +2874,8 @@ def test_remote_materialize_api_keys_writes_after_state_match(monkeypatch, tmp_p
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "desired_state": local["desired_state"]}
             elif "materialize-v7-preview" in command:
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "error": 0, "current": 1}, "can_apply": False}
+            elif "materialize-v8-preview" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"add": 0, "update": 0, "remove": 0, "delete": 0, "error": 0}, "can_apply": False}
             elif "materialize-api-keys-preview" in command:
                 payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "counts": {"write": 0, "error": 0, "current": 1}, "can_apply": False}
             elif "materialize-api-keys" in command:
@@ -2875,13 +2899,52 @@ def test_remote_materialize_api_keys_writes_after_state_match(monkeypatch, tmp_p
     assert payload["ok"] is True
     assert payload["materialization"]["status"] == "written"
     assert payload["pbrun_start"]["started"] is True
-    assert len(calls) == 6
+    assert len(calls) == 7
     assert "get-state-vector" in calls[0]
     assert "get-desired-state" in calls[1]
     assert "materialize-api-keys" in calls[2]
     assert "materialize-v7-preview" in calls[3]
-    assert "materialize-api-keys-preview" in calls[4]
-    assert "start PBRun" in calls[5]
+    assert "materialize-v8-preview" in calls[4]
+    assert "materialize-api-keys-preview" in calls[5]
+    assert "start PBRun" in calls[6]
+
+
+def test_remote_materialize_v8_reconciles_after_state_match(monkeypatch) -> None:
+    """The manual PB8 endpoint enforces state equality before exact reconciliation."""
+    node = {"node_id": NODE_B, "pbname": "vps-a", "role": "vps"}
+    snapshot = {
+        "identity": {"node_id": NODE_A},
+        "cluster_nodes": {"nodes": {NODE_B: node}},
+        "desired_state": {},
+    }
+    calls = []
+
+    async def require_current(actual_node, identity, local):
+        calls.append(("current", actual_node["node_id"], identity["node_id"], local is snapshot))
+
+    async def materialize(actual_node, identity, verb, timeout=30):
+        calls.append(("materialize", actual_node["node_id"], verb, timeout))
+        return {"ok": True, "counts": {"written_files": 2, "removed_files": 1}}
+
+    async def maybe_start(actual_node, identity):
+        calls.append(("start", actual_node["node_id"], identity["node_id"]))
+        return {"attempted": True, "started": True}
+
+    monkeypatch.setattr(cluster, "_load_cluster_snapshot", lambda: snapshot)
+    monkeypatch.setattr(cluster, "_require_remote_state_current", require_current)
+    monkeypatch.setattr(cluster, "_run_remote_materialize_command", materialize)
+    monkeypatch.setattr(cluster, "_maybe_start_remote_pbrun_after_materialization", maybe_start)
+
+    result = asyncio.run(cluster.materialize_remote_v8_configs(NODE_B, session=None))
+
+    assert result["ok"] is True
+    assert result["materialization"]["counts"]["removed_files"] == 1
+    assert result["pbrun_start"]["started"] is True
+    assert calls == [
+        ("current", NODE_B, NODE_A, True),
+        ("materialize", NODE_B, "materialize-v8", 120),
+        ("start", NODE_B, NODE_A),
+    ]
 
 
 def test_remote_push_ops_writes_missing_local_ops_and_rebuilds(monkeypatch, tmp_path: Path) -> None:

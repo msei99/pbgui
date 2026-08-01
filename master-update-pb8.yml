@@ -1,7 +1,7 @@
 ---
 # Install or update PB8 on the local PBGui master without stopping running jobs.
 
-- hosts: localhost
+- hosts: "{{ target_hosts | default('localhost') }}"
   gather_facts: "{{ debug }}"
   force_handlers: true
 
@@ -19,13 +19,13 @@
           - -c
           - "import configparser,sys; c=configparser.ConfigParser(); c.read(sys.argv[1]); print(c.get('main','role',fallback=''))"
           - "{{ pbgdir }}/pbgui.ini"
-      register: pbgui_role
+      register: pb8_role_probe
       changed_when: false
 
     - name: Require local master role for PB8
       assert:
         that:
-          - pbgui_role.stdout | trim | lower == 'master'
+          - pb8_role_probe.stdout | trim | lower == 'master'
         fail_msg: "PB8 can only be installed or updated on a PBGui master."
 
     - name: Acquire PB8 update writer ownership

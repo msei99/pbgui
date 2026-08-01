@@ -117,9 +117,9 @@ Im Kontext eines lokalen oder verwalteten Remote-Masters erscheint unter
 - Warnungsfarbe, wenn der installierte Commit nicht dem aktuellen
   `origin/master` entspricht.
 
-Bei einem Host mit Rolle `vps` oder `slave` wird keine PB8-Aktion angezeigt.
-Das Backend und das Playbook pruefen die Master-Rolle ebenfalls. Die Aktion wird
-nicht in die Bulk-Aktionen aufgenommen.
+Bei einem Host mit Rolle `vps` oder `slave` wird die passende PB8-Live-Aktion
+angezeigt. Bulk-Updates loesen das persistierte Runtime-Profil jedes Hosts
+serverseitig in PB7-, PB8- oder kombinierte Update-Playbooks auf.
 
 ## Runtime-Pfade
 
@@ -703,10 +703,14 @@ Config-Pfade.
 
 Status 2026-07-21: umgesetzt und nach dem abschliessenden Security-, Lifecycle- und Funktionsaudit mit der vollstaendigen Offline-Suite verifiziert (`4484 passed, 39 skipped`). Die installierte PB8-Runtime meldet drei Strategien, zwei Optimizer-Backends und 113 Optimize-Parameter; ein echter Chromium-DOM-Test rendert 84 Bounds fuer `trailing_martingale`, 58 fuer `ema_anchor` und 86 fuer `trailing_grid_v7` und schaltet Bot-Defaults und Bounds verlustfrei pro Strategie um. Die PB8-API deckt die gemeinsame Optimize-Oberflaeche einschliesslich nativer PB8-OHLCV-Pruefung, sicherem Pareto-Dash-Proxy, Queue-Recovery, suite-faehigen Pareto-/3D-Daten, transaktionalem Checkpoint-Resume und artifact-gesteuerten Result-Aktionen ab. PB7 und PB8 verwenden eine gemeinsam persistierte Optimize-Queue-Konfiguration fuer Autostart-CPU, CPU-Override und PBGui-Market-Data; beide Optimize-Autostart-Worker teilen genau einen globalen Prozess-Slot. Die Backtest-Queues verwenden ebenfalls eine gemeinsame Settings-Konfiguration und behandeln die CPU-Zahl als globales automatisches PB7/PB8-Prozesslimit. Der gemeinsame Backtest-Settings-Dialog erscheint sofort und aktualisiert verbindliche Host-Werte im Hintergrund, ohne Benutzereingaben zu ueberschreiben. PB8s Materialized-Cleanup koordiniert sich mit Root- und Run-Locks und bewahrt aktive, fremde oder nicht sicher lesbare Locks. Die Overrides werden nur auf Launch-Kopien angewendet. VPS Manager zeigt PB8-Version, Branch und Upstream-Status in Overview und Details.
 
+Paritaetsaudit 2026-08-01: VPS Manager unterscheidet PB7-/PB8-only-Hosts bei Install-/Update-Aktionen, zeigt beide Runtime-Familien im Live-Monitor, aktiviert PBRun fuer PB8-Live-Updates und blockiert nur PB8-Erstinstallationen mit der 3-GiB-Reserve. Services Monitor fuehrt nun auch den PB8-Backtest-Controller. PB8-Backtest-Configs sowie lokale und archivierte Resultate koennen PB8-Run-Drafts oeffnen; lokale Resultate koennen ausserdem direkt zu PB8 Optimize wechseln. Balance Calculator listet PB7- und PB8-Instanzen. Guides fuer VPS Manager, Services, VPS Monitor, Cluster Sync, Balance Calculator und PB8 Backtest wurden abgeglichen. Verifikation: `4719 passed, 39 skipped`.
+
+Paritaetsergaenzung 2026-08-01: Dashboard-Forced-Mode-Configaktionen speichern PB7 und PB8 runtimegerecht, PB8-Backtest-Resultate erzeugen Refine-Optimize-Presets, Cluster Preview zeigt und materialisiert V7 und PB8 getrennt, VPS-Bulk-Updates loesen PB7/PB8-Profile pro Host auf und Market Data besitzt getrennte read-only PB7-/PB8-Cache-Inventare. Bewusst verbleibt nur PB8 Strategy Explorer als separates Vorhaben. PB8-Branch-Auswahl ist absichtlich kein Ziel: Installation und Updates verwenden den verifizierten Upstream-`master`-Commit.
+
 1. PB8-Optimize-Metadaten und Config-Bundles implementieren.
 2. Queue, Runner, Recovery und globale PB7/PB8-Autostart-Arbitrierung bauen.
 3. Den bestehenden PB7-Optimize-Editor ueber einen V8-Adapter gemeinsam nutzen.
-4. Results, Paretos, Presets, Explorer und Backtest-Handoffs versionsfaehig machen.
+4. Results, Paretos, direkte Backtest-Handoffs und Refine Optimize Preset versionsfaehig machen; Strategy Explorer separat nachziehen.
 5. PB8 Backtest- und Optimize-Archive mit `config_version` vollstaendig anbinden.
 6. Navigation, Guides, Regressionstests und komplette Offline-Suite abschliessen.
 

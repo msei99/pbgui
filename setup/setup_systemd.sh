@@ -160,6 +160,7 @@ write_unit() {
   local description="$2"
   local script_name="$3"
   local exec_start_pre="${4:-}"
+  local kill_mode="${5:-mixed}"
   local unit_path="$unit_dir/$unit_name"
   local temp_path
   temp_path="$(mktemp "$unit_dir/.${unit_name}.tmp.XXXXXX")"
@@ -178,6 +179,7 @@ ExecStart=$PYTHON_BIN -u $PBGUI_DIR/$script_name
 Restart=on-failure
 RestartSec=5
 KillSignal=SIGTERM
+KillMode=$kill_mode
 TimeoutStopSec=30
 Environment=PYTHONUNBUFFERED=1
 LimitNOFILE=65536
@@ -226,7 +228,7 @@ EOF
 declare -A unit_changed
 write_unit "pbgui-api.service" "PBGui API Server" "PBApiServer.py" "ExecStartPre=/bin/bash $PBGUI_DIR/setup/stop_legacy_api.sh --pbgui-dir $PBGUI_DIR"
 write_unit "pbgui-pbcluster.service" "PBGui PBCluster Service" "PBCluster.py"
-write_unit "pbgui-pbrun.service" "PBGui PBRun Service" "PBRun.py"
+write_unit "pbgui-pbrun.service" "PBGui PBRun Service" "PBRun.py" "" "process"
 write_unit "pbgui-pbdata.service" "PBGui PBData Service" "PBData.py"
 write_unit "pbgui-pbcoindata.service" "PBGui PBCoinData Service" "PBCoinData.py"
 write_unit "pbgui-monitor-agent.service" "PBGui Monitor Agent" "monitor_agent.py"

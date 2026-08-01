@@ -756,6 +756,7 @@
         </div>
         <button class="btn warn" id="preview-push-ops-btn" type="button" hidden>Push Missing Ops + Rebuild</button>
         <button class="btn primary" id="preview-materialize-btn" type="button" hidden>Materialize V7 Configs</button>
+        <button class="btn primary" id="preview-materialize-v8-btn" type="button" hidden>Reconcile PB8 Configs</button>
         <button class="btn primary" id="preview-materialize-api-btn" type="button" hidden>Materialize API Keys</button>
         <button class="btn" id="preview-close-btn" type="button">Close</button>
       </div>
@@ -2193,6 +2194,8 @@
         var opCounts = operationSync.counts || {};
         var materialization = payload.materialization || {};
         var matCounts = materialization.counts || {};
+        var pb8Materialization = payload.pb8_materialization || {};
+        var pb8MatCounts = pb8Materialization.counts || {};
         var apiMaterialization = payload.api_key_materialization || {};
         var apiMatCounts = apiMaterialization.counts || {};
         var actorRows = (((payload.state_vector || {}).actors) || []).map(function (actor) {
@@ -2210,11 +2213,12 @@
           + '<div class="preview-card"><div class="preview-label">Remote Ahead</div><div class="preview-value">' + esc(vectorCounts.remote_ahead || 0) + '</div></div>'
           + '<div class="preview-card"><div class="preview-label">Ops To Push</div><div class="preview-value">' + esc(opCounts.local_ops_to_push || 0) + '</div></div>'
           + '<div class="preview-card"><div class="preview-label">Ops To Pull</div><div class="preview-value">' + esc(opCounts.remote_ops_to_pull || 0) + '</div></div>'
-          + '<div class="preview-card"><div class="preview-label">Configs To Write</div><div class="preview-value">' + esc((matCounts.add || 0) + (matCounts.update || 0)) + '</div></div>'
+          + '<div class="preview-card"><div class="preview-label">Configs To Reconcile</div><div class="preview-value">' + esc((matCounts.add || 0) + (matCounts.update || 0) + (pb8MatCounts.add || 0) + (pb8MatCounts.update || 0) + (pb8MatCounts.remove || 0) + (pb8MatCounts.delete || 0)) + '</div></div>'
           + '</div>'
           + '<div class="preview-section">'
           + '<div class="field"><div class="field-label">Operation Sync Preview</div><div class="preview-list">Read-only. No operations or blobs are copied here.<br>Push by type: ' + opTypeList(operationSync.push_by_op) + '<br>Hash refs for later push: config ' + esc(opCounts.config_hash_refs || 0) + ', api payload ' + esc(opCounts.api_payload_hash_refs || 0) + ', secrets ' + esc(opCounts.secret_blob_hash_refs || 0) + '<br>Local ops missing on remote:<br>' + operationPreviewList(operationSync.local_ops_missing_on_remote) + '<br>Remote ops missing locally:<br>' + remotePullList(operationSync.remote_ops_missing_locally) + '</div></div>'
           + '<div class="field"><div class="field-label">V7 Config Materialization Preview</div><div class="preview-list">Read-only. No run_v7 files are written here.<br>' + (materialization.error ? 'Preview error: ' + esc(materialization.error) + '<br>' : '') + 'Run root: ' + esc(materialization.run_v7_root || 'n/a') + '<br>Add: ' + esc(matCounts.add || 0) + ', Update: ' + esc(matCounts.update || 0) + ', Current/Skipped: ' + esc(matCounts.skip || 0) + ', Not assigned: ' + esc(matCounts.not_assigned || 0) + ', Conflicted: ' + esc(matCounts.conflicted || 0) + ', Tombstoned: ' + esc(matCounts.tombstoned || 0) + ', Errors: ' + esc(matCounts.error || 0) + '<br>Files to write: ' + esc(matCounts.files_to_write || 0) + '<br>Items:<br>' + materializationPreviewList(materialization.items) + '</div></div>'
+          + '<div class="field"><div class="field-label">PB8 Config Reconciliation Preview</div><div class="preview-list">Read-only. No run_v8 files are changed here.<br>' + (pb8Materialization.error ? 'Preview error: ' + esc(pb8Materialization.error) + '<br>' : '') + 'Run root: ' + esc(pb8Materialization.run_v8_root || 'n/a') + '<br>Add: ' + esc(pb8MatCounts.add || 0) + ', Update: ' + esc(pb8MatCounts.update || 0) + ', Remove: ' + esc(pb8MatCounts.remove || 0) + ', Delete: ' + esc(pb8MatCounts.delete || 0) + ', Current/Skipped: ' + esc(pb8MatCounts.skip || 0) + ', Errors: ' + esc(pb8MatCounts.error || 0) + '<br>Files to write: ' + esc(pb8MatCounts.files_to_write || 0) + ', files to remove: ' + esc(pb8MatCounts.files_to_remove || 0) + '<br>Items:<br>' + materializationPreviewList(pb8Materialization.items) + '</div></div>'
           + '<div class="field"><div class="field-label">API-key Materialization Preview</div><div class="preview-list">Read-only. No api-keys.json file is written here.<br>' + (apiMaterialization.error ? 'Preview error: ' + esc(apiMaterialization.error) + '<br>' : '') + 'Target: ' + esc(apiMaterialization.path || 'n/a') + '<br>Serial: ' + esc(apiMaterialization.serial || 'n/a') + '<br>Status: ' + esc(apiMaterialization.status || apiMaterialization.action || 'n/a') + '<br>Reason: ' + esc(apiMaterialization.reason || '') + '<br>Write: ' + esc(apiMatCounts.write || 0) + ', Current: ' + esc(apiMatCounts.current || 0) + ', Missing: ' + esc(apiMatCounts.missing || 0) + ', Errors: ' + esc(apiMatCounts.error || 0) + '</div></div>'
           + '<div class="field"><div class="field-label">Instances</div><div class="preview-list">Local: ' + esc(instances.local_count || 0) + ', Remote: ' + esc(instances.remote_count || 0) + '<br>Missing on remote: ' + previewList(instances.missing_on_remote) + '<br>Missing locally: ' + previewList(instances.missing_locally) + '<br>Mismatches: ' + mismatchList(instances.mismatches) + '</div></div>'
           + '<div class="field"><div class="field-label">Tombstones</div><div class="preview-list">Local: ' + esc(tombstones.local_count || 0) + ', Remote: ' + esc(tombstones.remote_count || 0) + '<br>Missing on remote: ' + previewList(tombstones.missing_on_remote) + '<br>Missing locally: ' + previewList(tombstones.missing_locally) + '<br>Mismatches: ' + mismatchList(tombstones.mismatches) + '</div></div>'
@@ -2223,6 +2227,7 @@
           + '<table><thead><tr><th>Actor</th><th>Local Seq</th><th>Remote Seq</th><th>Status</th></tr></thead><tbody>' + actorRows + '</tbody></table>';
         syncPushOpsButton(payload);
         syncMaterializeButton(payload);
+        syncMaterializeV8Button(payload);
         syncApiKeyMaterializeButton(payload);
       }
 
@@ -2274,11 +2279,29 @@
           : (materialization.error || (errorCount > 0 ? 'Resolve missing or invalid secret blobs before materializing api-keys.json.' : 'Write api-keys.json from the replicated Cluster Sync secret blob.'));
       }
 
+      function syncMaterializeV8Button(payload) {
+        var btn = document.getElementById('preview-materialize-v8-btn');
+        if (!btn) return;
+        var opCounts = (((payload || {}).operation_sync || {}).counts) || {};
+        var materialization = ((payload || {}).pb8_materialization) || {};
+        var counts = materialization.counts || {};
+        var actionCount = Number(counts.add || 0) + Number(counts.update || 0) + Number(counts.remove || 0) + Number(counts.delete || 0);
+        var errorCount = Number(counts.error || 0);
+        var syncBlocked = Number(opCounts.local_ops_to_push || 0) > 0 || Number(opCounts.remote_ops_to_pull || 0) > 0;
+        btn.hidden = actionCount <= 0 && !materialization.error && errorCount <= 0;
+        btn.disabled = !materialization.ok || !materialization.can_apply || syncBlocked || errorCount > 0;
+        btn.textContent = btn.disabled ? 'Cannot Reconcile PB8' : 'Reconcile PB8 Configs';
+        btn.title = syncBlocked
+          ? 'Remote state must be synchronized before reconciling run_v8 files.'
+          : (materialization.error || (errorCount > 0 ? 'Resolve missing or invalid PB8 config blobs before reconciling.' : 'Exactly reconcile assigned PB8 JSON configs from remote config blobs into remote data/run_v8.'));
+      }
+
       function pbrunStartNote(start) {
         var payload = start || {};
         if (payload.started) return ' PBRun started.';
         if (payload.reason === 'api_key_materialization_pending') return ' PBRun will start after API-key materialization.';
         if (payload.reason === 'v7_materialization_pending') return ' PBRun will start after V7 config materialization.';
+        if (payload.reason === 'v8_materialization_pending') return ' PBRun will start after PB8 config reconciliation.';
         if (payload.attempted && payload.error) return ' PBRun could not be started: ' + payload.error;
         return '';
       }
@@ -2362,6 +2385,52 @@
               error.className = 'modal-error visible';
             }
             if (btn) { btn.disabled = false; btn.textContent = 'Materialize V7 Configs'; }
+          });
+        });
+      }
+
+      function confirmAndMaterializeV8() {
+        if (!pendingPreviewNode || !lastPreviewPayload) return;
+        var opCounts = ((lastPreviewPayload.operation_sync || {}).counts) || {};
+        var materialization = lastPreviewPayload.pb8_materialization || {};
+        var counts = materialization.counts || {};
+        var actionCount = Number(counts.add || 0) + Number(counts.update || 0) + Number(counts.remove || 0) + Number(counts.delete || 0);
+        var fileCount = Number(counts.files_to_write || 0) + Number(counts.files_to_remove || 0) + Number(counts.dirs_to_delete || 0);
+        if (actionCount <= 0 || !materialization.can_apply) return;
+        if (Number(opCounts.local_ops_to_push || 0) > 0 || Number(opCounts.remote_ops_to_pull || 0) > 0) return;
+        if (typeof window.PBGuiConfirm !== 'function') {
+          setMessage('Confirmation dialog unavailable; reload the page and try again.', 'err');
+          return;
+        }
+        window.PBGuiConfirm({
+          title: 'Reconcile Remote PB8 Configs',
+          message: 'Reconcile ' + actionCount + ' assigned PB8 instance(s) on ' + (pendingPreviewNode.pbname || pendingPreviewNode.hostname || pendingPreviewNode.node_id) + '?',
+          detail: 'This is a remote write under data/run_v8 only. It writes verified PB8 JSON blobs and backs up files or tombstoned directories before removal. It does not copy credentials or deploy files. PBRun starts only after V7, PB8, and API-key materialization are all current.',
+          confirmText: 'Reconcile PB8 Configs'
+        }).then(function (accepted) {
+          if (!accepted) return;
+          var btn = document.getElementById('preview-materialize-v8-btn');
+          var node = pendingPreviewNode;
+          if (btn) { btn.disabled = true; btn.textContent = 'Reconciling...'; }
+          setPushProgress(0, fileCount, 'Reconciling remote PB8 configs...');
+          setMessage('Reconciling remote PB8 configs...', 'warn');
+          fetchJson('/remote-materialize-v8/' + encodeURIComponent(node.node_id), { method: 'POST' }).then(function (payload) {
+            var mat = (payload || {}).materialization || {};
+            var matCounts = mat.counts || {};
+            var changedFiles = Number(matCounts.written_files || 0) + Number(matCounts.removed_files || 0);
+            var changedInstances = Number(matCounts.written_instances || 0) + Number(matCounts.deleted_instances || 0);
+            setMessage('Reconciled ' + changedFiles + ' PB8 file(s) across ' + changedInstances + ' instance change(s).' + pbrunStartNote((payload || {}).pbrun_start), 'ok');
+            setPushProgress(fileCount, fileCount, 'Remote PB8 config reconciliation complete. Refreshing preview...');
+            openRemotePreview(node);
+          }).catch(function (err) {
+            setMessage('Remote PB8 reconciliation failed: ' + err.message, 'err');
+            setPushProgress(0, fileCount, 'PB8 reconciliation failed; see error message.');
+            var error = document.getElementById('preview-modal-error');
+            if (error) {
+              error.textContent = err.message || 'Remote PB8 reconciliation failed.';
+              error.className = 'modal-error visible';
+            }
+            if (btn) { btn.disabled = false; btn.textContent = 'Reconcile PB8 Configs'; }
           });
         });
       }
@@ -3885,6 +3954,7 @@
       document.getElementById('preview-close-btn').addEventListener('click', closePreviewModal);
       document.getElementById('preview-push-ops-btn').addEventListener('click', confirmAndPushRemoteOps);
       document.getElementById('preview-materialize-btn').addEventListener('click', confirmAndMaterializeV7);
+      document.getElementById('preview-materialize-v8-btn').addEventListener('click', confirmAndMaterializeV8);
       document.getElementById('preview-materialize-api-btn').addEventListener('click', confirmAndMaterializeApiKeys);
       window.addEventListener('resize', keepPreviewModalInViewport);
       document.addEventListener('visibilitychange', function () {

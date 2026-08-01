@@ -45,7 +45,7 @@ Der Sidebar-Eintrag **Workers** öffnet ein eigenes Admin-Panel innerhalb der Se
 
 Das Panel gruppiert Worker in:
 
-- **Queue Workers**: gemeinsamer Market-Data-Queue-Worker, Backtest-Queue-Worker, Optimize-Queue-Worker
+- **Queue Workers**: gemeinsamer Market-Data-Queue-Worker sowie getrennte PB7-/PB8-Controller fuer Backtest- und Optimize-Queues. Das Stoppen eines PB8-Controllers pausiert nur das automatische Scheduling; detached PB8-Jobs laufen weiter.
 - **Sync / Watchers**: API-Key-Dateisync, V7-Config-Sync
 - **Internal Helpers**: Archive-Sync und HLCVS-Cleanup-Hintergrundtasks
 

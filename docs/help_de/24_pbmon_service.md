@@ -16,6 +16,8 @@ direkt aus dem Live-In-Memory-State.
 | **Instanz-Schwellenwert** | Eine überwachte Passivbot-Instanz konfigurierte Limits überschreitet |
 | **HL API-Key-Ablauf** | Ein Hyperliquid API-Key bald abläuft |
 
+HL-Ablaufwarnungen werden nur gesendet, solange mindestens eine PB7- oder PB8-Live-Config fuer den exakten Exchange-User den Key noch benoetigen kann. PBGui unterdrueckt weitere Warnungen, wenn alle passenden Bots sicher gestoppt oder deaktiviert sind, und warnt nach einer erneuten Aktivierung wieder. Aktive, konfliktbehaftete, unklare oder weiterhin laufende Instanzen werden weiterhin gewarnt.
+
 Aktive Alarme werden in der Navigationsleiste als eigener Alarm-Indikator
 angezeigt. Das Badge zeigt die Zähler `new/ack`.
 

@@ -2,7 +2,7 @@
 # Install or update PB8 on a selected remote PBGui host.
 # Masters receive the full research profile; VPS runners receive live-only PB8.
 
-- hosts: "{{ hostname }}"
+- hosts: "{{ pb8_target_group if pb8_target_group is defined else hostname }}"
   gather_facts: no
   force_handlers: true
 
@@ -23,18 +23,18 @@
           - "import configparser,json,sys; from pathlib import Path; c=configparser.ConfigParser(); c.read(sys.argv[1]); role=c.get('main','role',fallback='').strip().lower(); identity=Path(sys.argv[2]); data=json.loads(identity.read_text(encoding='utf-8')) if not role and identity.is_file() else {}; print(role or str(data.get('role') or '').strip().lower())"
           - "{{ pbgdir }}/pbgui.ini"
           - "{{ pbgdir }}/data/cluster/node_identity.json"
-      register: pbgui_role
+      register: pb8_role_probe
       changed_when: false
 
     - name: Require supported PBGui role for PB8
       assert:
         that:
-          - pbgui_role.stdout | trim | lower in ['master', 'vps', 'slave']
+          - pb8_role_probe.stdout | trim | lower in ['master', 'vps', 'slave']
         fail_msg: "PB8 can only be installed or updated on a PBGui master or VPS runner."
 
     - name: Select PB8 installation profile
       set_fact:
-        pb8_install_profile: "{{ 'full' if (pbgui_role.stdout | trim | lower) == 'master' else 'live' }}"
+        pb8_install_profile: "{{ 'full' if (pb8_role_probe.stdout | trim | lower) == 'master' else 'live' }}"
 
     - name: Measure PB8 disk state before changes
       command:
@@ -272,6 +272,69 @@
         chdir: "{{ pbgdir }}"
       register: save_pb8_paths
       changed_when: "'changed=true' in save_pb8_paths.stdout"
+
+    - name: Detect configured PB7 runtime for shared PBRun supervision
+      command:
+        argv:
+          - python3
+          - -c
+          - "import configparser,sys; c=configparser.ConfigParser(); c.read(sys.argv[1]); print('true' if c.get('main','pb7dir',fallback='').strip() and c.get('main','pb7venv',fallback='').strip() else 'false')"
+          - "{{ pbgdir }}/pbgui.ini"
+      register: pb8_pb7_runtime_probe
+      changed_when: false
+
+    - name: Detect PB8-only support in installed PBRun
+      command:
+        argv:
+          - grep
+          - -q
+          - "self.pb8_ready = bool"
+          - "{{ pbgdir }}/PBRun.py"
+      register: pb8_pbrun_compatibility_probe
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure PBRun is enabled for PB8 live supervision
+      command:
+        argv:
+          - /bin/bash
+          - "{{ pbgdir }}/setup/setup_systemd.sh"
+          - --user
+          - "{{ user }}"
+          - --pbgui-dir
+          - "{{ pbgdir }}"
+          - --python
+          - "{{ pbgui_python }}"
+          - --enable
+          - pbrun
+          - --no-disable-excluded
+      when:
+        - pb8_install_profile == 'live'
+        - (pb8_pb7_runtime_probe.stdout | trim | lower) == 'true' or pb8_pbrun_compatibility_probe.rc == 0
+
+    - name: Disable incompatible PBRun on PB8-only hosts
+      command:
+        argv:
+          - systemctl
+          - --user
+          - disable
+          - --now
+          - pbgui-pbrun.service
+      register: pb8_pbrun_disable
+      changed_when: pb8_pbrun_disable.rc == 0
+      failed_when: false
+      when:
+        - pb8_install_profile == 'live'
+        - (pb8_pb7_runtime_probe.stdout | trim | lower) != 'true'
+        - pb8_pbrun_compatibility_probe.rc != 0
+
+    - name: Report PB8-only PBRun upgrade requirement
+      debug:
+        msg: "PB8 is installed, but this PBGui release does not support PB8-only PBRun supervision. Update PBGui before enabling PB8 live instances."
+      when:
+        - pb8_install_profile == 'live'
+        - (pb8_pb7_runtime_probe.stdout | trim | lower) != 'true'
+        - pb8_pbrun_compatibility_probe.rc != 0
 
     - name: Mark validated PB8 runtime available
       file:

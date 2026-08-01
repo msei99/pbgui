@@ -43,6 +43,7 @@ body {
   display: flex;
   flex-direction: column;
 }
+.run-version-hidden { display: none !important; }
 
 /* ─── Page layout ──────────────────────────────────────────── */
 #page-body {
@@ -70,7 +71,19 @@ body {
 .cols-8 { grid-template-columns: repeat(8, minmax(0, 1fr)); }
 .span-4 { grid-column: span 4; }
 @media (max-width: 1400px) { .cols-8 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-@media (max-width:  700px) { .cols-8 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .span-4 { grid-column: span 2; } }
+@media (max-width: 700px) {
+  #page-body { flex-direction: column; height: calc(100vh - 52px); }
+  #sidebar { width: 100% !important; min-width: 0; max-width: none; border-right: 0; border-bottom: 1px solid var(--border); }
+  #sidebar-resize { display: none; }
+  #sidebar-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #sidebar-toolbar .sb-sep { grid-column: 1 / -1; }
+  #main-content { padding: var(--sp-sm); }
+  .cols-8 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cols-4, .cols-3, .cols-2 { grid-template-columns: 1fr; }
+  .span-4, .form-group[style*="grid-column:span"] { grid-column: 1 / -1 !important; }
+  #log-panel { left: 0 !important; right: 0; width: auto; max-width: none; }
+  .modal-box { width: min(94vw, 620px); min-width: 0; }
+}
 .form-group { display: flex; flex-direction: column; min-width: 0; }
 .form-group label {
   font-size: var(--fs-xs); color: var(--text-dim); margin-bottom: 2px;
@@ -125,6 +138,28 @@ body {
   outline: none; border-color: var(--accent);
 }
 .form-group textarea { height: auto; padding: var(--sp-sm); resize: vertical; }
+.user-combobox { position:relative; }
+.user-combobox input { width:100%; padding-right:34px; }
+.user-combobox-toggle {
+  position:absolute; z-index:2; top:0; right:0; width:32px; height:var(--input-h);
+  padding:0; color:var(--text-dim); background:var(--bg3);
+  border:1px solid var(--border); border-radius:0 4px 4px 0; cursor:pointer;
+}
+.user-combobox-toggle:hover { color:var(--text); border-color:var(--accent); }
+.user-combobox-options {
+  position:absolute; z-index:30; top:calc(100% + 4px); left:0; right:0;
+  max-height:220px; overflow-y:auto; padding:4px;
+  background:var(--bg2); border:1px solid var(--border); border-radius:6px;
+  box-shadow:0 12px 30px rgba(0,0,0,.48);
+}
+.user-combobox-options[hidden] { display:none; }
+.user-combobox-option {
+  display:block; width:100%; padding:7px 9px; color:var(--text);
+  background:transparent; border:0; border-radius:4px; text-align:left; cursor:pointer;
+}
+.user-combobox-option:hover,
+.user-combobox-option.active { background:rgba(77,166,255,.14); color:#fff; }
+.user-combobox-empty { padding:8px 9px; color:var(--text-dim); font-size:var(--fs-xs); }
 
 /* ─── Numeric stepper (+/− buttons) ─────────────────────── */
 .num-stepper { display: flex; align-items: center; }
@@ -156,6 +191,12 @@ body {
 .section-title {
   font-size: var(--fs-md); font-weight: 600; margin: var(--sp-lg) 0 var(--sp-sm);
   padding-bottom: var(--sp-xs); border-bottom: 1px solid var(--border);
+}
+.section-title-with-control { display: flex; align-items: flex-end; gap: var(--sp-md); }
+.section-title-control { margin-left: auto; width: min(280px, 45%); font-weight: 400; }
+@media (max-width: 700px) {
+  .section-title-with-control { align-items: stretch; flex-direction: column; }
+  .section-title-control { margin-left: 0; width: 100%; }
 }
 .expander {
   border: 1px solid var(--border); border-radius: 6px;
@@ -512,7 +553,7 @@ textarea.json-invalid:focus {
       <button class="sb-btn info" onclick="openCopyUserModal()" title="Copy current config to another user">📋 Copy</button>
       <hr class="sb-sep">
       <button class="sb-btn" onclick="goBacktest()" title="Open in Backtest">📊 Backtest</button>
-      <button class="sb-btn" onclick="goStrategyExplorer()" title="Open Strategy Explorer">🔍 Strategy Explorer</button>
+      <button class="sb-btn" data-v7-only onclick="goStrategyExplorer()" title="Open Strategy Explorer">🔍 Strategy Explorer</button>
       <button class="sb-btn" onclick="goBalanceCalc()" title="Open Balance Calculator page">💰 Balance Calculator</button>
       <button class="sb-btn" onclick="calculateBalance()" title="Calculate needed balance from current config (shown inline)">⚡ Calc Balance</button>
       <hr class="sb-sep">
@@ -525,7 +566,7 @@ textarea.json-invalid:focus {
 <!-- ─── Main Content ─────────────────────────────────────── -->
 <div id="main-content">
 
-<!-- Rows 1–3: single 8-col grid -->
+<!-- Rows 1-3: shared PB7/PB8 8-column grid -->
 <div class="form-row cols-8" style="margin-bottom:var(--sp-lg)">
   <!-- Row 1: Configuration & Identity  2+2+1+1+1+1 = 8 -->
   <div class="form-group" style="grid-column:span 2">
@@ -540,11 +581,11 @@ textarea.json-invalid:focus {
     <label><span data-tip="The Version number of the configuration. Required for synchronisation to VPS.">Config version</span></label>
     <input type="number" id="f-version" min="0" step="1">
   </div>
-  <div class="form-group">
+  <div class="form-group" data-v7-only>
     <label><span data-tip="Leverage set on exchange">Leverage</span></label>
     <input type="number" id="f-leverage" min="0" max="100" step="1" value="10">
   </div>
-  <div class="form-group">
+  <div class="form-group" data-v7-only>
     <label><span data-tip="Preferred margin mode when symbol supports both cross and isolated.
 auto/auto_cross: prefer cross
 auto_isolated: prefer isolated
@@ -558,7 +599,7 @@ isolated: require isolated (cross-only skipped)">margin_mode_preference</span></
       <option value="auto_isolated">auto_isolated</option>
     </select>
   </div>
-  <div class="form-group">
+  <div class="form-group" data-v7-only>
     <label><span data-tip="0=warning, 1=info, 2=debug, 3=trace">Logging level</span></label>
     <select id="f-logging-level">
       <option value="0">warning</option>
@@ -568,19 +609,19 @@ isolated: require isolated (cross-only skipped)">margin_mode_preference</span></
     </select>
   </div>
   <!-- Row 2: Timing & Risk  1+1+1+1+4 = 8 -->
-  <div class="form-group">
+  <div class="form-group" data-v7-only>
     <label><span data-tip="Disallows coins younger than given days">minimum_coin_age_days</span></label>
     <input type="number" id="f-min-coin-age" min="0" step="1" value="0">
   </div>
-  <div class="form-group">
+  <div class="form-group" data-v7-only>
     <label><span data-tip="How far into the past to fetch PnL history">pnls_max_lookback_days</span></label>
     <input type="number" id="f-pnls-lookback" min="0" max="365" step="1" value="30">
   </div>
-  <div class="form-group">
+  <div class="form-group" data-v7-only>
     <label><span data-tip="Multiplier for EMA span warmup window. 0.0–1.0">warmup_ratio</span></label>
     <input type="number" id="f-warmup-ratio" min="0" max="1" step="0.1" value="0">
   </div>
-  <div class="form-group">
+  <div class="form-group" data-v7-only>
     <label><span data-tip="Global realized-loss gate for close orders anchored to peak realized balance.
 1.0 = disabled (default). &lt;=0.0 = block all lossy closes.
 Example: 0.05 blocks closes once balance would fall below 95% of peak.">max_realized_loss_pct</span></label>
@@ -591,20 +632,20 @@ Example: 0.05 blocks closes once balance would fall below 95% of peak.">max_real
     <input type="text" id="f-note" placeholder="">
   </div>
   <!-- Row 3: Execution & Flags  1+1+1+1+2+2 = 8 -->
-  <div class="form-group">
+  <div class="form-group" data-v7-only>
     <label><span data-tip="Executor-side market-distance gate for initial entry posting. Initial entry limit orders are only posted when they are close enough to market. Default 0.005 (0.5%).">initial_entry_exec_max_market_dist_pct</span></label>
     <input type="number" id="f-price-dist" min="0" max="1" step="0.001" value="0.005">
   </div>
-  <div class="form-group">
+  <div class="form-group" data-v7-only>
     <label><span data-tip="Wait x seconds after executing to exchange">execution_delay_seconds</span></label>
     <input type="number" id="f-exec-delay" min="1" max="60" step="1" value="2">
   </div>
-  <div class="form-group">
+  <div class="form-group" data-v7-only>
     <label><span data-tip="Fractional distance from market price at which a limit order is promoted to market order (requires market_orders_allowed). Default 0.001.">market_order_near_touch_threshold</span></label>
     <input type="number" id="f-market-order-threshold" min="0" max="0.1" step="0.0001" value="0.001">
   </div>
   <div class="form-group"></div>
-  <div class="form-group" style="grid-column:span 2; justify-content:flex-end">
+  <div class="form-group" data-v7-only style="grid-column:span 2; justify-content:flex-end">
     <div class="chk-row">
       <input type="checkbox" id="f-filter-min-cost">
       <label for="f-filter-min-cost"><span data-tip="Skip coins where balance × WE_limit × entry_initial_qty_pct is below the exchange minimum effective cost.">filter_by_min_effective_cost</span></label>
@@ -614,7 +655,7 @@ Example: 0.05 blocks closes once balance would fall below 95% of peak.">max_real
       <label for="f-market-orders"><span data-tip="Allow market orders when price is very close to market price. If false, only limit orders are placed.">market_orders_allowed</span></label>
     </div>
   </div>
-  <div class="form-group" style="grid-column:span 2; justify-content:flex-end">
+  <div class="form-group" data-v7-only style="grid-column:span 2; justify-content:flex-end">
     <div class="chk-row">
       <input type="checkbox" id="f-hedge-mode">
       <label for="f-hedge-mode"><span data-tip="Requests simultaneous long and short positions on the same coin when the exchange supports it.">hedge_mode</span></label>
@@ -627,7 +668,7 @@ Example: 0.05 blocks closes once balance would fall below 95% of peak.">max_real
 </div>
 
 <!-- Advanced Settings -->
-<div class="expander" id="exp-advanced">
+<div class="expander" id="exp-advanced" data-v7-only>
   <div class="expander-header" onclick="toggleExpander('exp-advanced')">
     <span class="arrow">▶</span> Advanced Settings
   </div>
@@ -661,9 +702,11 @@ p=panic  t=take_profit_only">forced_mode_short</span></label>
       </select>
     </div>
     <div class="form-group">
-      <label><span data-tip="pside: each side tracks its own HSL drawdown independently.
+      <label><span data-tip="coin: each coin tracks its own HSL drawdown independently (PB8).
+pside: each side tracks its own HSL drawdown independently.
 unified: both sides share one account-level combined signal.">hsl_signal_mode</span></label>
       <select id="f-hsl-signal-mode">
+        <option value="coin" data-v8-only>coin</option>
         <option value="unified">unified</option>
         <option value="pside">pside</option>
       </select>
@@ -689,6 +732,20 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
         <option value="good_till_cancelled">good_till_cancelled</option>
         <option value="post_only">post_only</option>
       </select>
+    </div>
+    </div>
+    <div class="form-row cols-8" data-v8-only>
+    <div class="form-group" style="grid-column:span 2;justify-content:flex-end">
+      <div class="chk-row">
+        <input type="checkbox" id="f-hsl-accept-incomplete">
+        <label for="f-hsl-accept-incomplete"><span data-tip="Allow HSL to operate when the available history is incomplete. Keep disabled unless accepting reduced HSL history confidence is intentional.">hsl_accept_incomplete_history</span></label>
+      </div>
+    </div>
+    <div class="form-group" style="grid-column:span 2;justify-content:flex-end">
+      <div class="chk-row">
+        <input type="checkbox" id="f-force-cold-startup">
+        <label for="f-force-cold-startup"><span data-tip="Force PB8 to ignore reusable warm runtime state and perform a cold startup.">force_cold_startup</span></label>
+      </div>
     </div>
     </div>
 
@@ -724,7 +781,39 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
     </div>
     <div class="form-group">
       <label><span data-tip="Optional global live REST concurrency cap. Leave 0 to use exchange/default behaviour; set a positive integer to throttle authenticated and public request fan-out more aggressively.">max_concurrent_api_requests</span></label>
-      <input type="number" id="f-max-api-req" min="0" step="1" value="0">
+      <input type="number" id="f-max-api-req" min="1" step="1" value="" placeholder="auto">
+    </div>
+    </div>
+
+    <div class="subsection-title" data-v8-only>Fees &amp; Order Churn</div>
+    <div class="form-row cols-8" data-v8-only>
+    <div class="form-group">
+      <label><span data-tip="Maximum age in milliseconds for cached fee-currency conversion prices.">fee_conversion_max_age_ms</span></label>
+      <input type="number" id="f-fee-conversion-age" min="0" step="1000" value="86400000">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Fallback trading-fee fraction used when the exchange does not provide a usable value.">fee_pct_fallback</span></label>
+      <input type="number" id="f-fee-pct-fallback" min="0" step="0.00001" value="0.0002">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Absolute upper sanity bound for an exchange-reported fee fraction.">fee_pct_sanity_abs_max</span></label>
+      <input type="number" id="f-fee-pct-sanity" min="0" step="0.0001" value="0.001">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Number of replacement events required before the order-churn stability gate activates.">order_replacement_churn_gate_activation_count</span></label>
+      <input type="number" id="f-churn-activation-count" min="0" step="1" value="10">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Market-distance threshold used by the PB8 order-replacement churn gate.">order_replacement_churn_gate_market_dist_pct</span></label>
+      <input type="number" id="f-churn-market-dist" min="0" step="0.001" value="0.005">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Required stable period in minutes before the churn gate permits replacement again.">order_replacement_churn_gate_stability_minutes</span></label>
+      <input type="number" id="f-churn-stability-minutes" min="0" step="0.1" value="2">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Rolling observation window in minutes for replacement churn.">order_replacement_churn_gate_window_minutes</span></label>
+      <input type="number" id="f-churn-window-minutes" min="0" step="0.1" value="10">
     </div>
     </div>
 
@@ -763,7 +852,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
       <input type="number" id="f-candle-lock" min="1" max="300" step="1" value="10">
     </div>
     <div class="form-group">
-      <label><span data-tip="Choose how market snapshots fetch tickers. auto lets PB7 choose per exchange, bulk uses multi-symbol ticker endpoints, symbols fetches one symbol at a time.">market_snapshot_ticker_strategy</span></label>
+      <label><span data-tip="Choose how market snapshots fetch tickers. auto lets Passivbot choose per exchange, bulk uses multi-symbol ticker endpoints, symbols fetches one symbol at a time.">market_snapshot_ticker_strategy</span></label>
       <select id="f-market-snapshot-strategy">
         <option value="auto">auto</option>
         <option value="bulk">bulk</option>
@@ -775,18 +864,27 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
     <div class="subsection-title">Forager</div>
     <div class="form-row cols-8">
     <div class="form-group">
-      <label><span data-tip="Hysteresis applied to forager scores so PB7 does not swap symbols too eagerly on tiny ranking changes.">forager_score_hysteresis_pct</span></label>
+      <label><span data-tip="Hysteresis applied to forager scores so Passivbot does not swap symbols too eagerly on tiny ranking changes.">forager_score_hysteresis_pct</span></label>
       <input type="number" id="f-forager-hysteresis" min="0" step="0.001" value="0.02">
     </div>
     <div class="form-group">
-      <label><span data-tip="Optional cap for how stale forager candidate candles may be before PB7 refreshes them. Leave blank to let PB7 derive the cap from its normal runtime defaults.">max_forager_candle_staleness_minutes</span></label>
+      <label><span data-tip="Optional cap for how stale forager candidate candles may be before Passivbot refreshes them. Leave blank to use the runtime default.">max_forager_candle_staleness_minutes</span></label>
       <input type="number" id="f-max-forager-stale" min="0" step="1" value="" placeholder="auto">
     </div>
     <div class="form-group">
       <label><span data-tip="Refresh target for forager candles in seconds. Lower values keep rankings fresher but increase fetch pressure.">max_forager_candle_refresh_seconds</span></label>
       <input type="number" id="f-max-forager-refresh" min="1" step="1" value="45">
     </div>
-    <div class="form-group" style="grid-column:span 5"></div>
+    <div class="form-group" data-v8-only style="justify-content:flex-end">
+      <div class="chk-row">
+        <input type="checkbox" id="f-enable-forager-ws">
+        <label for="f-enable-forager-ws"><span data-tip="Use completed WebSocket candles for PB8 forager updates when available.">enable_forager_ws_candles</span></label>
+      </div>
+    </div>
+    <div class="form-group" data-v8-only>
+      <label><span data-tip="Minutes between REST audits of PB8 forager candles received over WebSocket.">forager_ws_candle_rest_audit_minutes</span></label>
+      <input type="number" id="f-forager-ws-audit" min="0" step="1" value="30">
+    </div>
     </div>
 
     <div class="subsection-title">Storage, Freshness &amp; Runtime</div>
@@ -804,7 +902,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
       <input type="number" id="f-inactive-ttl" min="0" step="1" value="0">
     </div>
     <div class="form-group">
-      <label><span data-tip="Maximum acceptable gap, in minutes, for the active-symbol candle tail before PB7 refreshes or treats it as stale.">max_active_candle_tail_gap_minutes</span></label>
+      <label><span data-tip="Maximum acceptable gap, in minutes, for the active-symbol candle tail before Passivbot refreshes or treats it as stale.">max_active_candle_tail_gap_minutes</span></label>
       <input type="number" id="f-max-active-tail-gap" min="1" step="1" value="10">
     </div>
     <div class="form-group">
@@ -816,13 +914,72 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
       <input type="number" id="f-bal-hyst" min="0" max="0.5" step="0.01" value="0.02">
     </div>
     <div class="form-group">
-      <label><span data-tip="Interval (minutes) between memory telemetry log entries (RSS, cache footprint, asyncio task counts). Default 30.">memory_snapshot_interval_min</span></label>
+      <label><span data-tip="Interval (minutes) between memory telemetry log entries (RSS, cache footprint, asyncio task counts). Default 30.">logging.memory_snapshot_interval_minutes</span></label>
       <input type="number" id="f-mem-snapshot" min="1" step="5" value="30">
     </div>
     <div class="form-group">
-      <label><span data-tip="Minimum duration (seconds) a bulk volume-EMA refresh must take before it is promoted to an INFO log entry. Set 0 to log every refresh at INFO.">volume_refresh_info_threshold_s</span></label>
+      <label><span data-tip="Minimum duration (seconds) a bulk volume-EMA refresh must take before it is promoted to an INFO log entry. Set 0 to log every refresh at INFO.">logging.volume_refresh_info_threshold_seconds</span></label>
       <input type="number" id="f-vol-refresh" min="0" step="5" value="30">
     </div>
+    </div>
+
+    <div class="subsection-title" data-v8-only>PB8 Runtime</div>
+    <div class="form-row cols-8" data-v8-only>
+    <div class="form-group" style="grid-column:span 2">
+      <label><span data-tip="Optional path to a PB8 custom-endpoints definition. Leave blank to use built-in endpoints.">custom_endpoints_path</span></label>
+      <input type="text" id="f-custom-endpoints-path" value="" placeholder="default">
+    </div>
+    <div class="form-group" style="grid-column:span 6">
+      <label><span data-tip="PB8 startup phase budget overrides as a JSON object. An empty object uses runtime defaults.">startup_phase_budgets</span></label>
+      <textarea class="json-editor" id="f-startup-phase-budgets" rows="4">{}</textarea>
+      <div id="f-startup-phase-budgets-status" class="field-status field-status-inline" aria-live="polite"></div>
+    </div>
+    </div>
+
+    <div class="subsection-title" data-v8-only>Logging</div>
+    <div class="form-row cols-8" data-v8-only>
+    <div class="form-group">
+      <label><span data-tip="Directory used by PB8 for its own log files.">logging.dir</span></label>
+      <input type="text" id="f-log-dir" value="logs">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Maximum size in MiB of one PB8 log file before rotation.">logging.max_bytes_mb</span></label>
+      <input type="number" id="f-log-max-bytes" min="0" step="1" value="10">
+    </div>
+    <div class="form-group">
+      <label><span data-tip="Number of rotated PB8 log files retained.">logging.backup_count</span></label>
+      <input type="number" id="f-log-backup-count" min="0" step="1" value="5">
+    </div>
+    <div class="form-group" style="justify-content:flex-end">
+      <div class="chk-row"><input type="checkbox" id="f-log-persist"><label for="f-log-persist">logging.persist_to_file</label></div>
+    </div>
+    <div class="form-group" style="justify-content:flex-end">
+      <div class="chk-row"><input type="checkbox" id="f-log-rotation"><label for="f-log-rotation">logging.rotation</label></div>
+    </div>
+    <div class="form-group" style="grid-column:span 3">
+      <label><span data-tip="PB8 live-event debug profiles as a JSON array.">logging.live_event_debug_profiles</span></label>
+      <textarea class="json-editor" id="f-log-debug-profiles" rows="4">[]</textarea>
+      <div id="f-log-debug-profiles-status" class="field-status field-status-inline" aria-live="polite"></div>
+    </div>
+    </div>
+
+    <div class="subsection-title" data-v8-only>Monitoring</div>
+    <div class="form-row cols-8" data-v8-only>
+    <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-enabled"><label for="f-monitor-enabled">monitor.enabled</label></div></div>
+    <div class="form-group"><label>monitor.root_dir</label><input type="text" id="f-monitor-root-dir" value="monitor"></div>
+    <div class="form-group"><label>monitor.snapshot_interval_seconds</label><input type="number" id="f-monitor-snapshot-interval" min="0" step="0.1" value="1"></div>
+    <div class="form-group"><label>monitor.checkpoint_interval_minutes</label><input type="number" id="f-monitor-checkpoint" min="0" step="0.1" value="10"></div>
+    <div class="form-group"><label>monitor.event_rotation_mb</label><input type="number" id="f-monitor-rotation-mb" min="0" step="1" value="128"></div>
+    <div class="form-group"><label>monitor.event_rotation_minutes</label><input type="number" id="f-monitor-rotation-minutes" min="0" step="1" value="60"></div>
+    <div class="form-group"><label>monitor.max_total_bytes</label><input type="number" id="f-monitor-max-bytes" min="0" step="1" value="1073741824"></div>
+    <div class="form-group"><label>monitor.price_tick_min_interval_ms</label><input type="number" id="f-monitor-price-interval" min="0" step="1" value="500"></div>
+    <div class="form-group"><label>monitor.retain_days</label><input type="number" id="f-monitor-retain-days" min="0" step="0.1" value="7"></div>
+    <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-compress"><label for="f-monitor-compress">monitor.compress_rotated_segments</label></div></div>
+    <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-emit-candles"><label for="f-monitor-emit-candles">monitor.emit_completed_candles</label></div></div>
+    <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-raw-fills"><label for="f-monitor-raw-fills">monitor.include_raw_fill_payloads</label></div></div>
+    <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-retain-candles"><label for="f-monitor-retain-candles">monitor.retain_candles</label></div></div>
+    <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-retain-fills"><label for="f-monitor-retain-fills">monitor.retain_fills</label></div></div>
+    <div class="form-group" style="justify-content:flex-end"><div class="chk-row"><input type="checkbox" id="f-monitor-retain-ticks"><label for="f-monitor-retain-ticks">monitor.retain_price_ticks</label></div></div>
     </div>
   </div>
 </div>
@@ -898,7 +1055,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 </div>
 
 <!-- Dynamic Ignore -->
-<div class="form-row cols-4">
+<div class="form-row cols-4" data-v7-only>
   <div class="form-group">
     <div class="chk-row">
       <input type="checkbox" id="f-dynamic-ignore">
@@ -910,7 +1067,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
   <div class="form-group"></div>
 </div>
 
-<div id="dynamic-ignore-preview" style="display:none; margin-bottom:var(--sp-md);">
+<div id="dynamic-ignore-preview" data-v7-only style="display:none; margin-bottom:var(--sp-md);">
   <div style="font-size:var(--fs-sm); color:var(--text-dim); margin-bottom:4px;">Dynamic ignore preview:</div>
   <pre id="di-approved" style="font-size:var(--fs-xs); color:var(--green); margin-bottom:4px; white-space:pre-wrap;"></pre>
   <pre id="di-ignored" style="font-size:var(--fs-xs); color:var(--orange); white-space:pre-wrap;"></pre>
@@ -920,7 +1077,13 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <div id="coin-overrides-container"></div>
 
 <!-- Bot Long / Short -->
-<div class="section-title">Bot Configuration</div>
+<div class="section-title section-title-with-control">
+  <span>Bot Configuration</span>
+  <div class="form-group section-title-control run-version-hidden" data-v8-only>
+    <label><span data-tip="PB8 strategy schema reported by the installed runtime.">strategy_kind</span></label>
+    <select id="f-strategy-kind"></select>
+  </div>
+</div>
 <div class="form-row cols-4">
   <div class="form-group">
     <label>Long TWE</label>
@@ -1007,7 +1170,11 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
     <h3>Paste config</h3>
     <div class="form-group">
       <label>User</label>
-      <select id="import-user"></select>
+      <div class="user-combobox">
+        <input id="import-user" type="text" placeholder="Type to search users..." autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="import-user-options">
+        <button class="user-combobox-toggle" id="import-user-toggle" type="button" aria-label="Show configured users" aria-controls="import-user-options">&#x25BE;</button>
+        <div class="user-combobox-options" id="import-user-options" role="listbox" hidden></div>
+      </div>
     </div>
     <textarea class="json-editor" id="import-json" rows="18" placeholder="Paste full JSON config here"></textarea>
     <div id="import-error" class="field-status field-status-inline" aria-live="polite"></div>
@@ -1041,11 +1208,13 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=11"></script>
+<script src="/app/js/editor_shared.js?v=13"></script>
 <script src="/app/js/pbgui_dialogs.js?v=5"></script>
+<script src="/app/js/run_editor_adapter.js?v=6"></script>
+<script src="/app/js/log_viewer_panel.js?v=28"></script>
+<script src="/app/js/coin_overrides_editor.js?v=23"></script>
 <script>
 /* ─── Injected Vars ────────────────────────────────────────── */
-var TOKEN          = "%%TOKEN%%";
 var API_BASE       = "%%API_BASE%%";
 var WS_BASE        = "%%WS_BASE%%";
 var PBGUI_VERSION  = "%%VERSION%%";
@@ -1053,6 +1222,9 @@ var PBGUI_SERIAL   = "%%SERIAL%%";
 var INSTANCE_NAME  = "%%INSTANCE%%";
 var IS_NEW         = "%%IS_NEW%%";
 var DRAFT_ID       = "%%DRAFT_ID%%";
+var RUN_VERSION    = "%%RUN_VERSION%%";
+var MASTER_NAME    = "%%MASTER_NAME%%";
+var runEditorAdapter = window.PBGuiRunEditorAdapter.create(RUN_VERSION, { apiBase: API_BASE });
 
 /* ─── State ────────────────────────────────────────────────── */
 var cfg = {};            // full config object
@@ -1062,9 +1234,13 @@ var allSymbols = [];     // available symbols for current exchange
 var allTags = [];        // available tags for current exchange
 var allUsers = [];       // [{name, exchange}]
 var allHosts = [];       // [string]
+var hostCapabilitiesByName = {};
+var editorMetadata = {};
+var _managedLiveKeys = new Set();
 var dirty = false;
 var draftOverrideConfigs = {};
 var _extraLiveKeys = []; // unknown live.* keys not in the GUI form
+var _extraLiveFieldIds = {};
 var _rawEditorSyncing = false;
 var _rawEditorLastApplied = '';
 var _structuredEditorSyncing = false;
@@ -1073,9 +1249,11 @@ var _symbolsAndTagsLoadSeq = 0;
 var _symbolsAndTagsLoadPromise = Promise.resolve();
 var _hostCapabilityGeneration = 0;
 var _hostCapabilityController = null;
+var _runStrategyBotCache = { long: {}, short: {} };
+var _activeRunStrategyKind = '';
 
 /* live.* keys handled by the GUI form or intentionally hidden/deprecated. */
-var KNOWN_LIVE_PARAMS = new Set([
+var V7_KNOWN_LIVE_PARAMS = [
   'user', 'leverage', 'margin_mode_preference',
   'minimum_coin_age_days', 'pnls_max_lookback_days', 'warmup_ratio', 'max_realized_loss_pct',
   'initial_entry_exec_max_market_dist_pct', 'execution_delay_seconds', 'market_order_near_touch_threshold',
@@ -1093,13 +1271,16 @@ var KNOWN_LIVE_PARAMS = new Set([
   'market_snapshot_ticker_strategy', 'max_active_candle_tail_gap_minutes',
   'max_forager_candle_staleness_minutes', 'max_forager_candle_refresh_seconds',
   'forager_score_hysteresis_pct',
-]);
+];
+var KNOWN_LIVE_PARAMS = new Set(runEditorAdapter.knownLiveParams || V7_KNOWN_LIVE_PARAMS);
+if (runEditorAdapter.isV8) KNOWN_LIVE_PARAMS.add('strategy_kind');
 
 /* ─── Helpers ──────────────────────────────────────────────── */
 
 function apiFetch(path, opts) {
   opts = opts || {};
-  opts.headers = Object.assign({ 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' }, opts.headers || {});
+  opts.credentials = 'same-origin';
+  opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
   return fetch(API_BASE + path, opts);
 }
 
@@ -1126,7 +1307,8 @@ function stepField(id, direction) {
 function toast(msg, type) {
   fetch('/api/notify_log', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ msg: msg, level: type || 'info' })
   }).catch(function() {});
   var el = document.getElementById('toast');
@@ -1393,6 +1575,16 @@ function bindStructuredJsonFieldValidation() {
     emptyMessage: 'Short config cannot be empty',
     label: 'Short config JSON'
   });
+  bindJsonFieldValidation('f-startup-phase-budgets', {
+    expectObject: true,
+    emptyMessage: 'startup_phase_budgets cannot be empty',
+    label: 'startup_phase_budgets JSON'
+  });
+  bindJsonFieldValidation('f-log-debug-profiles', {
+    expectObject: false,
+    emptyMessage: 'logging.live_event_debug_profiles cannot be empty',
+    label: 'logging.live_event_debug_profiles JSON'
+  });
   bindJsonFieldValidation('import-json', {
     expectObject: true,
     emptyMessage: 'Config cannot be empty',
@@ -1401,13 +1593,13 @@ function bindStructuredJsonFieldValidation() {
     skipInitialValidation: true
   });
   _extraLiveKeys.forEach(function(k) {
-    var textarea = document.getElementById('extra-live-' + k);
+    var textarea = getExtraLiveElement(k);
     if (!textarea || textarea.tagName !== 'TEXTAREA') return;
     bindJsonFieldValidation(textarea.id, {
       expectObject: false,
       emptyMessage: 'JSON value cannot be empty',
       label: k + ' JSON',
-      statusId: 'extra-live-' + k + '-status'
+      statusId: textarea.id + '-status'
     });
   });
 }
@@ -1415,10 +1607,12 @@ function bindStructuredJsonFieldValidation() {
 function ensureStructuredJsonFieldsValidForSave() {
   var fields = [
     document.getElementById('f-long-json'),
-    document.getElementById('f-short-json')
+    document.getElementById('f-short-json'),
+    document.getElementById('f-startup-phase-budgets'),
+    document.getElementById('f-log-debug-profiles')
   ];
   _extraLiveKeys.forEach(function(k) {
-    var textarea = document.getElementById('extra-live-' + k);
+    var textarea = getExtraLiveElement(k);
     if (textarea && textarea.tagName === 'TEXTAREA') fields.push(textarea);
   });
 
@@ -1443,6 +1637,7 @@ function ensureStructuredJsonFieldsValidForSave() {
 }
 
 function validateExecutionSyncFieldsForSave() {
+  if (runEditorAdapter.isV8 && !(_managedLiveKeys.has('max_n_cancellations_per_batch') && _managedLiveKeys.has('max_n_creations_per_batch'))) return true;
   var maxCancel = getInt('f-max-cancel');
   var maxCreate = getInt('f-max-create');
   if (maxCancel > maxCreate) return true;
@@ -1500,14 +1695,25 @@ function goBacktest() {
   if (!validateExecutionSyncFieldsForSave()) return;
   window.PBGuiEditorShared.clearFixedValidationStatus();
   var config = collectConfig();
-  apiFetch('/draft', {
+  var overridesPromise = runEditorAdapter.isV8 && typeof coinOvSnapshotAllFiles === 'function'
+    ? coinOvSnapshotAllFiles()
+    : Promise.resolve({});
+  var request;
+  overridesPromise.then(function(overrideConfigs) {
+    request = runEditorAdapter.backtestDraftRequest(API_BASE, config, overrideConfigs);
+    return fetch(request.url, {
     method: 'POST',
-    body: JSON.stringify({ config: config })
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request.body)
+    });
   }).then(function(res) {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }).then(function(data) {
-    var url = window.location.origin + '/api/backtest-v7/main_page?draft_id=' + encodeURIComponent(data.draft_id)
+    var queryKey = runEditorAdapter.isV8 ? 'opt_draft_id' : 'draft_id';
+    var url = (runEditorAdapter.isV8 ? request.page : window.location.origin + '/api/backtest-v7/main_page')
+      + '?' + queryKey + '=' + encodeURIComponent(data.draft_id)
       + '&draft_name=' + encodeURIComponent(INSTANCE_NAME || config.live.user || 'draft');
     window.location.href = url;
   }).catch(function(e) {
@@ -1530,7 +1736,8 @@ function goStrategyExplorer() {
   var explorerBase = strategyExplorerApiBase();
   fetch(explorerBase + '/draft', {
     method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ config: config })
   }).then(function(res) {
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -1564,7 +1771,6 @@ async function goBalanceCalc() {
   try {
     await window.PBGuiEditorShared.openBalanceCalcPage({
       apiBase: API_BASE,
-      token: TOKEN,
       config: collectConfig(),
       exchange: exchange,
     });
@@ -1576,6 +1782,26 @@ async function goBalanceCalc() {
 /* ─── Load Data ────────────────────────────────────────────── */
 async function init() {
   try {
+    runEditorAdapter.configureUi();
+    if (runEditorAdapter.isV8) {
+      var metadataResponse = await apiFetch('/editor/metadata');
+      if (!metadataResponse.ok) throw new Error('PB8 editor metadata: HTTP ' + metadataResponse.status);
+      editorMetadata = await metadataResponse.json();
+      (runEditorAdapter.configureRuntimeMetadata(editorMetadata) || []).forEach(function(key) {
+        _managedLiveKeys.add(key);
+        KNOWN_LIVE_PARAMS.add(key);
+      });
+      var strategySelect = document.getElementById('f-strategy-kind');
+      (editorMetadata.strategies || []).forEach(function(strategy) {
+        var option = document.createElement('option');
+        option.value = String(strategy);
+        option.textContent = String(strategy);
+        strategySelect.appendChild(option);
+      });
+      strategySelect.addEventListener('change', function() {
+        changeRunStrategyKind(this.value);
+      });
+    }
     var usersResp = await apiFetch('/users').then(function(r) { return r.json(); });
     allUsers = usersResp.users || [];
 
@@ -1588,16 +1814,7 @@ async function init() {
       opt.textContent = u.name;
       userSel.appendChild(opt);
     });
-
-    // Populate import user dropdown
-    var impUser = document.getElementById('import-user');
-    impUser.innerHTML = '';
-    allUsers.forEach(function(u) {
-      var opt = document.createElement('option');
-      opt.value = u.name;
-      opt.textContent = u.name;
-      impUser.appendChild(opt);
-    });
+    setupImportUserCombobox();
 
     // Load config or create new
     var draftResp = null;
@@ -1617,11 +1834,11 @@ async function init() {
       allHosts = ['disabled'];
       if (configuredHost && configuredHost !== 'disabled') allHosts.push(configuredHost);
       populateHosts();
-      coinOvInit('coin-overrides-container', { apiBase: API_BASE });
+      coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8 });
       coinOvSetConfigName(IS_NEW === 'true' ? '' : INSTANCE_NAME);
       populateForm();
       if (typeof coinOvSetOverrideConfigs === 'function') {
-        coinOvSetOverrideConfigs(draftOverrideConfigs);
+        coinOvSetOverrideConfigs(draftOverrideConfigs, { markPending: runEditorAdapter.isV8 });
       } else {
         console.error('coinOvSetOverrideConfigs is not available; backup override files will be loaded on demand');
       }
@@ -1638,7 +1855,7 @@ async function init() {
       allHosts = ['disabled'];
       if (configuredHost && configuredHost !== 'disabled') allHosts.push(configuredHost);
       populateHosts();
-      coinOvInit('coin-overrides-container', { apiBase: API_BASE });
+      coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8 });
       coinOvSetConfigName('');
       populateForm();
       queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });
@@ -1646,13 +1863,15 @@ async function init() {
       var cfgResp = await apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/config').then(function(r) { return r.json(); });
       cfg = cfgResp.config || {};
       paramStatus = cfgResp.param_status || {};
+      draftOverrideConfigs = cfgResp.override_configs || {};
       var configuredHost = String(((cfg.pbgui || {}).enabled_on) || '').trim();
       allHosts = ['disabled'];
       if (configuredHost && configuredHost !== 'disabled') allHosts.push(configuredHost);
       populateHosts();
-      coinOvInit('coin-overrides-container', { apiBase: API_BASE });
+      coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8 });
       coinOvSetConfigName(INSTANCE_NAME);
       populateForm();
+      if (typeof coinOvSetOverrideConfigs === 'function') coinOvSetOverrideConfigs(draftOverrideConfigs);
       queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });
     }
 
@@ -1660,9 +1879,8 @@ async function init() {
     document.getElementById('f-user').addEventListener('change', function() {
       queueSymbolsAndTagsLoad();
     });
-    document.getElementById('f-enabled-on').addEventListener('focus', function() {
-      refreshHostCapabilities();
-    });
+    await refreshHostCapabilities();
+    document.getElementById('f-enabled-on').addEventListener('focus', refreshHostCapabilities);
 
   } catch (e) {
     toast('Failed to initialize: ' + e.message, 'err');
@@ -1677,7 +1895,9 @@ async function requestHostCapabilities() {
   var requestId = (window.crypto && window.crypto.randomUUID)
     ? window.crypto.randomUUID()
     : 'host-capability-' + Date.now() + '-' + generation;
-  var response = await apiFetch('/hosts?request_id=' + encodeURIComponent(requestId), {
+  var hostQuery = '?request_id=' + encodeURIComponent(requestId);
+  if (runEditorAdapter.isV8 && INSTANCE_NAME) hostQuery += '&name=' + encodeURIComponent(INSTANCE_NAME);
+  var response = await apiFetch('/hosts' + hostQuery, {
     signal: _hostCapabilityController.signal,
     cache: 'no-store'
   });
@@ -1693,10 +1913,16 @@ async function refreshHostCapabilities() {
   try {
     var payload = await requestHostCapabilities();
     if (!payload) return;
+    hostCapabilitiesByName = payload.host_capabilities || {};
     allHosts = payload.hosts || allHosts;
+    var selectedCapability = hostCapabilitiesByName[selected] || null;
+    if (selected && selected !== 'disabled' && allHosts.indexOf(selected) < 0
+        && (!selectedCapability || selectedCapability[runEditorAdapter.capabilityKey] == null)) {
+      allHosts.push(selected);
+    }
     populateHosts();
     var select = document.getElementById('f-enabled-on');
-    if (selected && Array.prototype.some.call(select.options, function(option) { return option.value === selected && !option.disabled; })) {
+    if (selected && Array.prototype.some.call(select.options, function(option) { return option.value === selected; })) {
       select.value = selected;
     }
   } catch (error) {
@@ -1728,8 +1954,14 @@ function updateEnabledOnAvailability() {
   if (!sel) return;
   Array.prototype.forEach.call(sel.options, function(opt) {
     if (!opt) return;
-    opt.disabled = false;
     opt.textContent = opt.value;
+    if (opt.value === 'disabled') {
+      opt.disabled = false;
+      return;
+    }
+    var capability = hostCapabilitiesByName[opt.value] || null;
+    opt.disabled = !capability || capability[runEditorAdapter.capabilityKey] !== true;
+    if (opt.disabled) opt.textContent += ' (' + runEditorAdapter.label + ' capability unconfirmed)';
   });
 }
 
@@ -1746,8 +1978,10 @@ async function fetchTemplateConfig(user) {
       return tmpl;
     }
   } catch (e) {
+    if (runEditorAdapter.isV8) throw e;
     console.warn('fetchTemplateConfig failed, using built-in defaults:', e);
   }
+  if (runEditorAdapter.isV8) throw new Error('PB8 template is unavailable');
   return buildDefaultConfig(user);
 }
 
@@ -1926,6 +2160,127 @@ function getTagsForLoad(sourceCfg, opts) {
   return ((cfg.pbgui || {}).tags || []).slice();
 }
 
+function cloneRunConfigValue(value) {
+  return JSON.parse(JSON.stringify(value == null ? {} : value));
+}
+
+function getRunStrategyDefault(side, strategy) {
+  var defaults = editorMetadata.strategy_defaults || {};
+  var sideDefaults = defaults[side] && typeof defaults[side] === 'object' ? defaults[side] : {};
+  return cloneRunConfigValue(sideDefaults[strategy] || {});
+}
+
+function cacheRunStrategyBlocks(side, sideConfig) {
+  var strategyStore = sideConfig && sideConfig.strategy && typeof sideConfig.strategy === 'object'
+    ? sideConfig.strategy
+    : {};
+  _runStrategyBotCache[side] = _runStrategyBotCache[side] || {};
+  Object.keys(strategyStore).forEach(function(strategy) {
+    if (!strategyStore[strategy] || typeof strategyStore[strategy] !== 'object') return;
+    _runStrategyBotCache[side][strategy] = {
+      config: cloneRunConfigValue(strategyStore[strategy]),
+      fromDefault: ((paramStatus[side] || {})[strategy] === 'pb_default')
+    };
+  });
+}
+
+function selectRunStrategyConfig(side, sideConfig, strategy) {
+  var result = cloneRunConfigValue(sideConfig);
+  cacheRunStrategyBlocks(side, result);
+  var cached = (_runStrategyBotCache[side] || {})[strategy];
+  if (!cached) {
+    cached = { config: getRunStrategyDefault(side, strategy), fromDefault: true };
+    _runStrategyBotCache[side][strategy] = cloneRunConfigValue(cached);
+  }
+  result.strategy = {};
+  result.strategy[strategy] = cloneRunConfigValue(cached.config);
+  paramStatus[side] = paramStatus[side] || {};
+  (editorMetadata.strategies || []).forEach(function(strategyName) {
+    delete paramStatus[side][String(strategyName)];
+  });
+  if (cached.fromDefault) paramStatus[side][strategy] = 'pb_default';
+  return result;
+}
+
+function refreshBotParamStatusLabels() {
+  var legend = ' <span style="font-size:var(--fs-xs,11px);font-weight:400;opacity:.8">'
+    + '\u25a0 <span style="color:#f0a500">neutralized</span>'
+    + ' &nbsp;\u25a0 <span style="color:#e05252">review</span></span>';
+  var longLabel = document.getElementById('lbl-long-json');
+  var shortLabel = document.getElementById('lbl-short-json');
+  if (longLabel) longLabel.innerHTML = 'Long config (JSON)'
+    + (paramStatus.long && Object.keys(paramStatus.long).length ? legend : '');
+  if (shortLabel) shortLabel.innerHTML = 'Short config (JSON)'
+    + (paramStatus.short && Object.keys(paramStatus.short).length ? legend : '');
+}
+
+function changeRunStrategyKind(nextStrategy) {
+  if (!runEditorAdapter.isV8) return;
+  var cleanNext = String(nextStrategy || '').trim();
+  var allowed = (editorMetadata.strategies || []).map(function(value) { return String(value); });
+  if (!cleanNext || allowed.indexOf(cleanNext) < 0) return;
+  setVal('f-strategy-kind', cleanNext);
+  var current = _activeRunStrategyKind || String(((cfg.live || {}).strategy_kind) || '').trim();
+  var parsed = {};
+  try {
+    ['long', 'short'].forEach(function(side) {
+      parsed[side] = JSON.parse(document.getElementById('f-' + side + '-json').value || '{}');
+    });
+  } catch (error) {
+    setVal('f-strategy-kind', current);
+    toast('Fix the Long/Short config JSON before changing strategy_kind.', 'err');
+    return;
+  }
+  cfg.live = cfg.live && typeof cfg.live === 'object' ? cfg.live : {};
+  cfg.bot = cfg.bot && typeof cfg.bot === 'object' ? cfg.bot : {};
+  cfg.live.strategy_kind = cleanNext;
+  ['long', 'short'].forEach(function(side) {
+    var sideConfig = selectRunStrategyConfig(side, parsed[side], cleanNext);
+    cfg.bot[side] = cloneRunConfigValue(sideConfig);
+    var textarea = document.getElementById('f-' + side + '-json');
+    textarea.value = JSON.stringify(sideConfig, null, 2);
+    textarea.scrollTop = 0;
+    autoResizeTa(textarea);
+    validateJsonFieldTextarea(textarea);
+    _applyBotJsonHighlight(textarea, paramStatus[side]);
+  });
+  _activeRunStrategyKind = cleanNext;
+  refreshBotParamStatusLabels();
+  scheduleStructuredEditorSync();
+}
+
+function syncRunStrategyKindFromSideConfig(sideConfig) {
+  if (!runEditorAdapter.isV8) return;
+  var strategyStore = sideConfig && sideConfig.strategy && typeof sideConfig.strategy === 'object'
+    ? sideConfig.strategy
+    : {};
+  var supported = (editorMetadata.strategies || []).map(function(value) { return String(value); });
+  var strategyKeys = Object.keys(strategyStore).filter(function(key) {
+    return supported.indexOf(key) >= 0 && strategyStore[key] && typeof strategyStore[key] === 'object';
+  });
+  if (strategyKeys.length !== 1) return;
+  var nextStrategy = strategyKeys[0];
+  if (nextStrategy === _activeRunStrategyKind) {
+    setVal('f-strategy-kind', nextStrategy);
+    return;
+  }
+  changeRunStrategyKind(nextStrategy);
+}
+
+function clearEditedRunStrategyDefaultMark(side, sideConfig) {
+  var strategy = _activeRunStrategyKind;
+  if (!strategy || ((paramStatus[side] || {})[strategy] !== 'pb_default')) return;
+  var strategyStore = sideConfig && sideConfig.strategy && typeof sideConfig.strategy === 'object'
+    ? sideConfig.strategy
+    : {};
+  if (JSON.stringify(strategyStore[strategy] || {}) === JSON.stringify(getRunStrategyDefault(side, strategy))) return;
+  delete paramStatus[side][strategy];
+  if ((_runStrategyBotCache[side] || {})[strategy]) {
+    _runStrategyBotCache[side][strategy].fromDefault = false;
+  }
+  refreshBotParamStatusLabels();
+}
+
 /* ─── Populate Form from Config ────────────────────────────── */
 function populateForm(opts) {
   opts = opts || {};
@@ -1933,40 +2288,37 @@ function populateForm(opts) {
   var live = cfg.live || {};
   var pbgui = cfg.pbgui || {};
   var logging = cfg.logging || {};
+  var monitor = cfg.monitor || {};
   var bot = cfg.bot || {};
 
   // Row 1
   ensureSelectOption('f-user', live.user || '');
   setVal('f-user', live.user || '');
+  ensureSelectOption('f-strategy-kind', live.strategy_kind || '');
+  setVal('f-strategy-kind', live.strategy_kind || '');
   var configuredHost = pbgui.enabled_on || 'disabled';
   if (configuredHost !== 'disabled' && allHosts.indexOf(configuredHost) < 0) {
     allHosts.push(configuredHost);
-    hostDetailsByName[configuredHost] = {
-      credential_active: null,
-      credential_reason: 'Initial capability fetch failed',
-      credential_stale: true,
-      credential_stale_reason: 'Host capability has not been loaded',
-      dynamic_ignore_allowed: false
-    };
     populateHosts();
   }
   ensureSelectOption('f-enabled-on', configuredHost);
   setVal('f-enabled-on', configuredHost);
-  setVal('f-version', pbgui.version || 0);
-  setVal('f-leverage', live.leverage || 10);
+  setVal('f-version', pbgui.version != null ? pbgui.version : 0);
+  setVal('f-leverage', live.leverage != null ? live.leverage : 10);
   setVal('f-margin-mode', live.margin_mode_preference || 'cross');
   setVal('f-logging-level', logging.level != null ? logging.level : 1);
 
   // Row 2
-  setVal('f-min-coin-age', live.minimum_coin_age_days || 0);
-  setVal('f-pnls-lookback', live.pnls_max_lookback_days || 30);
-  setVal('f-warmup-ratio', live.warmup_ratio || 0);
+  setVal('f-min-coin-age', live.minimum_coin_age_days != null ? live.minimum_coin_age_days : 0);
+  setVal('f-pnls-lookback', live.pnls_max_lookback_days != null ? live.pnls_max_lookback_days : 30);
+  setVal('f-warmup-ratio', live.warmup_ratio != null ? live.warmup_ratio : 0);
   setVal('f-max-loss-pct', live.max_realized_loss_pct != null ? live.max_realized_loss_pct : 1.0);
   setVal('f-note', pbgui.note || '');
 
   // Row 3
-  setVal('f-price-dist', live.initial_entry_exec_max_market_dist_pct != null ? live.initial_entry_exec_max_market_dist_pct : 0.005);
-  setVal('f-exec-delay', live.execution_delay_seconds || 2);
+  var entryDistance = runEditorAdapter.readLiveValue(live, 'initial_entry_exec_max_market_dist_pct');
+  setVal('f-price-dist', entryDistance != null ? entryDistance : 0.005);
+  setVal('f-exec-delay', live.execution_delay_seconds != null ? live.execution_delay_seconds : 2);
   setVal('f-market-order-threshold', live.market_order_near_touch_threshold != null ? live.market_order_near_touch_threshold : 0.001);
   setChk('f-filter-min-cost', live.filter_by_min_effective_cost);
   setChk('f-market-orders', live.market_orders_allowed !== false);
@@ -1974,38 +2326,72 @@ function populateForm(opts) {
   setChk('f-auto-gs', live.auto_gs);
 
   // Advanced
-  setVal('f-max-cancel', live.max_n_cancellations_per_batch || 5);
-  setVal('f-max-create', live.max_n_creations_per_batch || 3);
+  setVal('f-max-cancel', live.max_n_cancellations_per_batch != null ? live.max_n_cancellations_per_batch : 5);
+  setVal('f-max-create', live.max_n_creations_per_batch != null ? live.max_n_creations_per_batch : 3);
   setVal('f-forced-long', live.forced_mode_long || '');
   setVal('f-forced-short', live.forced_mode_short || '');
   setVal('f-hsl-signal-mode', live.hsl_signal_mode || 'unified');
   setVal('f-hsl-cooldown-policy', live.hsl_position_during_cooldown_policy || 'panic');
-  setVal('f-max-restarts', live.max_n_restarts_per_day || 10);
-  setVal('f-max-disk-candles', live.max_disk_candles_per_symbol_per_tf || 1000000);
-  setVal('f-max-mem-candles', live.max_memory_candles_per_symbol || 200000);
+  setVal('f-max-restarts', live.max_n_restarts_per_day != null ? live.max_n_restarts_per_day : 10);
+  setVal('f-max-disk-candles', live.max_disk_candles_per_symbol_per_tf != null ? live.max_disk_candles_per_symbol_per_tf : 1000000);
+  setVal('f-max-mem-candles', live.max_memory_candles_per_symbol != null ? live.max_memory_candles_per_symbol : 200000);
   setVal('f-time-in-force', live.time_in_force || 'good_till_cancelled');
   setVal('f-inactive-ttl', live.inactive_coin_candle_ttl_minutes != null ? live.inactive_coin_candle_ttl_minutes : 10);
-  setVal('f-recv-window', live.recv_window_ms || 10000);
+  setVal('f-recv-window', live.recv_window_ms != null ? live.recv_window_ms : 10000);
   setVal('f-order-match-tol', live.order_match_tolerance_pct != null ? live.order_match_tolerance_pct : 0.0002);
   setVal('f-fills-recent-overlap', live.fills_recent_overlap_minutes != null ? live.fills_recent_overlap_minutes : 10);
   setVal('f-fills-confirm-overlap', live.fills_confirmation_overlap_minutes != null ? live.fills_confirmation_overlap_minutes : 60);
   setVal('f-bal-hyst', live.balance_hysteresis_snap_pct != null ? live.balance_hysteresis_snap_pct : 0.02);
-  setVal('f-bal-override', live.balance_override || 0);
-  setVal('f-max-warmup-min', live.max_warmup_minutes || 0);
-  setVal('f-mem-snapshot', logging.memory_snapshot_interval_minutes || 30);
-  setVal('f-vol-refresh', logging.volume_refresh_info_threshold_seconds || 30);
-  setVal('f-warmup-jitter', live.warmup_jitter_seconds || 0);
-  setVal('f-warmup-conc', live.warmup_concurrency || 0);
+  setVal('f-bal-override', live.balance_override != null ? live.balance_override : 0);
+  setVal('f-max-warmup-min', live.max_warmup_minutes != null ? live.max_warmup_minutes : 0);
+  setVal('f-mem-snapshot', logging.memory_snapshot_interval_minutes != null ? logging.memory_snapshot_interval_minutes : 30);
+  setVal('f-vol-refresh', logging.volume_refresh_info_threshold_seconds != null ? logging.volume_refresh_info_threshold_seconds : 30);
+  setVal('f-warmup-jitter', live.warmup_jitter_seconds != null ? live.warmup_jitter_seconds : 0);
+  setVal('f-warmup-conc', live.warmup_concurrency != null ? live.warmup_concurrency : 0);
   setChk('f-defer-broad-candle-warmup', live.defer_broad_candle_warmup !== false);
   setChk('f-archive-fetch', live.enable_archive_candle_fetch);
-  setVal('f-max-ohlcv-fetches', live.max_ohlcv_fetches_per_minute || 24);
-  setVal('f-max-api-req', live.max_concurrent_api_requests || 0);
+  setVal('f-max-ohlcv-fetches', live.max_ohlcv_fetches_per_minute != null ? live.max_ohlcv_fetches_per_minute : 24);
+  setVal('f-max-api-req', live.max_concurrent_api_requests != null ? live.max_concurrent_api_requests : '');
   setVal('f-candle-lock', live.candle_lock_timeout_seconds != null ? live.candle_lock_timeout_seconds : 10);
   setVal('f-market-snapshot-strategy', live.market_snapshot_ticker_strategy || 'auto');
   setVal('f-max-active-tail-gap', live.max_active_candle_tail_gap_minutes != null ? live.max_active_candle_tail_gap_minutes : 10);
   setVal('f-forager-hysteresis', live.forager_score_hysteresis_pct != null ? live.forager_score_hysteresis_pct : 0.02);
   setVal('f-max-forager-stale', live.max_forager_candle_staleness_minutes != null ? live.max_forager_candle_staleness_minutes : '');
   setVal('f-max-forager-refresh', live.max_forager_candle_refresh_seconds != null ? live.max_forager_candle_refresh_seconds : 45);
+  setChk('f-hsl-accept-incomplete', live.hsl_accept_incomplete_history);
+  setChk('f-force-cold-startup', live.force_cold_startup);
+  setVal('f-fee-conversion-age', live.fee_conversion_max_age_ms != null ? live.fee_conversion_max_age_ms : 86400000);
+  setVal('f-fee-pct-fallback', live.fee_pct_fallback != null ? live.fee_pct_fallback : 0.0002);
+  setVal('f-fee-pct-sanity', live.fee_pct_sanity_abs_max != null ? live.fee_pct_sanity_abs_max : 0.001);
+  setVal('f-churn-activation-count', live.order_replacement_churn_gate_activation_count != null ? live.order_replacement_churn_gate_activation_count : 10);
+  setVal('f-churn-market-dist', live.order_replacement_churn_gate_market_dist_pct != null ? live.order_replacement_churn_gate_market_dist_pct : 0.005);
+  setVal('f-churn-stability-minutes', live.order_replacement_churn_gate_stability_minutes != null ? live.order_replacement_churn_gate_stability_minutes : 2);
+  setVal('f-churn-window-minutes', live.order_replacement_churn_gate_window_minutes != null ? live.order_replacement_churn_gate_window_minutes : 10);
+  setChk('f-enable-forager-ws', live.enable_forager_ws_candles);
+  setVal('f-forager-ws-audit', live.forager_ws_candle_rest_audit_minutes != null ? live.forager_ws_candle_rest_audit_minutes : 30);
+  setVal('f-custom-endpoints-path', live.custom_endpoints_path != null ? live.custom_endpoints_path : '');
+  setVal('f-startup-phase-budgets', JSON.stringify(live.startup_phase_budgets || {}, null, 2));
+  setVal('f-log-dir', logging.dir || 'logs');
+  setVal('f-log-max-bytes', logging.max_bytes_mb != null ? logging.max_bytes_mb : 10);
+  setVal('f-log-backup-count', logging.backup_count != null ? logging.backup_count : 5);
+  setChk('f-log-persist', logging.persist_to_file !== false);
+  setChk('f-log-rotation', logging.rotation !== false);
+  setVal('f-log-debug-profiles', JSON.stringify(logging.live_event_debug_profiles || [], null, 2));
+  setChk('f-monitor-enabled', monitor.enabled !== false);
+  setVal('f-monitor-root-dir', monitor.root_dir || 'monitor');
+  setVal('f-monitor-snapshot-interval', monitor.snapshot_interval_seconds != null ? monitor.snapshot_interval_seconds : 1);
+  setVal('f-monitor-checkpoint', monitor.checkpoint_interval_minutes != null ? monitor.checkpoint_interval_minutes : 10);
+  setVal('f-monitor-rotation-mb', monitor.event_rotation_mb != null ? monitor.event_rotation_mb : 128);
+  setVal('f-monitor-rotation-minutes', monitor.event_rotation_minutes != null ? monitor.event_rotation_minutes : 60);
+  setVal('f-monitor-max-bytes', monitor.max_total_bytes != null ? monitor.max_total_bytes : 1073741824);
+  setVal('f-monitor-price-interval', monitor.price_tick_min_interval_ms != null ? monitor.price_tick_min_interval_ms : 500);
+  setVal('f-monitor-retain-days', monitor.retain_days != null ? monitor.retain_days : 7);
+  setChk('f-monitor-compress', monitor.compress_rotated_segments !== false);
+  setChk('f-monitor-emit-candles', monitor.emit_completed_candles !== false);
+  setChk('f-monitor-raw-fills', monitor.include_raw_fill_payloads);
+  setChk('f-monitor-retain-candles', monitor.retain_candles !== false);
+  setChk('f-monitor-retain-fills', monitor.retain_fills !== false);
+  setChk('f-monitor-retain-ticks', monitor.retain_price_ticks !== false);
   syncExecutionSyncFieldBounds();
 
   // Filters
@@ -2014,7 +2400,7 @@ function populateForm(opts) {
   setChk('f-only-cpt', pbgui.only_cpt);
   setChk('f-notices-ignore', pbgui.notices_ignore);
   setChk('f-apply-filters', false);
-  setChk('f-dynamic-ignore', pbgui.dynamic_ignore);
+  setChk('f-dynamic-ignore', runEditorAdapter.isV8 ? false : pbgui.dynamic_ignore);
   updateEnabledOnAvailability();
 
   // Coin overrides
@@ -2023,68 +2409,109 @@ function populateForm(opts) {
   // Bot long/short
   var longCfg = bot.long || {};
   var shortCfg = bot.short || {};
-  setVal('f-long-twe', longCfg.total_wallet_exposure_limit != null ? longCfg.total_wallet_exposure_limit : 1.7);
-  setVal('f-long-npos', longCfg.n_positions != null ? longCfg.n_positions : 10);
-  setVal('f-short-twe', shortCfg.total_wallet_exposure_limit || 0);
-  setVal('f-short-npos', shortCfg.n_positions || 0);
+  if (runEditorAdapter.isV8 && live.strategy_kind) {
+    _runStrategyBotCache = { long: {}, short: {} };
+    _activeRunStrategyKind = String(live.strategy_kind);
+    longCfg = selectRunStrategyConfig('long', longCfg, _activeRunStrategyKind);
+    shortCfg = selectRunStrategyConfig('short', shortCfg, _activeRunStrategyKind);
+    cfg.bot = cfg.bot && typeof cfg.bot === 'object' ? cfg.bot : {};
+    cfg.bot.long = cloneRunConfigValue(longCfg);
+    cfg.bot.short = cloneRunConfigValue(shortCfg);
+  }
+  setVal('f-long-twe', runEditorAdapter.getBotValue(longCfg, 'total_wallet_exposure_limit', 1.7));
+  setVal('f-long-npos', runEditorAdapter.getBotValue(longCfg, 'n_positions', 10));
+  setVal('f-short-twe', runEditorAdapter.getBotValue(shortCfg, 'total_wallet_exposure_limit', 0));
+  setVal('f-short-npos', runEditorAdapter.getBotValue(shortCfg, 'n_positions', 0));
 
   // Show full bot JSON (without TWE/npos since they have dedicated inputs)
   document.getElementById('f-long-json').value = JSON.stringify(longCfg, null, 2);
   document.getElementById('f-short-json').value = JSON.stringify(shortCfg, null, 2);
 
   // Param-status highlight (amber=neutralized, red=pb_default) for newly injected params
-  var _psLegend = ' <span style="font-size:var(--fs-xs,11px);font-weight:400;opacity:.8">'
-    + '\u25a0 <span style="color:#f0a500">neutralized</span>'
-    + ' &nbsp;\u25a0 <span style="color:#e05252">review</span></span>';
-  var _lblLong = document.getElementById('lbl-long-json');
-  var _lblShort = document.getElementById('lbl-short-json');
-  if (_lblLong) _lblLong.innerHTML = 'Long config (JSON)'
-    + (paramStatus.long && Object.keys(paramStatus.long).length ? _psLegend : '');
-  if (_lblShort) _lblShort.innerHTML = 'Short config (JSON)'
-    + (paramStatus.short && Object.keys(paramStatus.short).length ? _psLegend : '');
+  refreshBotParamStatusLabels();
   _applyBotJsonHighlight(document.getElementById('f-long-json'), paramStatus.long);
   _applyBotJsonHighlight(document.getElementById('f-short-json'), paramStatus.short);
 
   // Additional Parameters: detect unknown live.* keys not handled by the form
   var liveCfg = cfg.live || {};
   _extraLiveKeys = Object.keys(liveCfg).filter(function(k) { return !KNOWN_LIVE_PARAMS.has(k); }).sort();
+  _extraLiveFieldIds = {};
   var extraContainer = document.getElementById('extra-params-container');
+  extraContainer.textContent = '';
   if (_extraLiveKeys.length > 0) {
-    var extraHtml = '<div class="expander" id="exp-extra-live">' +
-      '<div class="expander-header" onclick="toggleExpander(\'exp-extra-live\')">' +
-        '<span class="arrow">&#x25B6;</span> Additional Parameters' +
-        '<span style="margin-left:auto;font-size:var(--fs-xs);color:var(--text-dim)">Parameters not yet in the GUI \u2014 edit and they will be preserved on save</span>' +
-      '</div>' +
-      '<div class="expander-body">' +
-        '<div class="form-row cols-3">';
-    _extraLiveKeys.forEach(function(k) {
+    var expander = document.createElement('div');
+    expander.className = 'expander';
+    expander.id = 'exp-extra-live';
+    var header = document.createElement('div');
+    header.className = 'expander-header';
+    header.addEventListener('click', function() { toggleExpander('exp-extra-live'); });
+    var arrow = document.createElement('span');
+    arrow.className = 'arrow';
+    arrow.textContent = '\u25B6';
+    header.appendChild(arrow);
+    header.appendChild(document.createTextNode(' Additional Parameters'));
+    var hint = document.createElement('span');
+    hint.style.cssText = 'margin-left:auto;font-size:var(--fs-xs);color:var(--text-dim)';
+    hint.textContent = 'Parameters not yet in the GUI - edit and they will be preserved on save';
+    header.appendChild(hint);
+    var body = document.createElement('div');
+    body.className = 'expander-body';
+    var row = document.createElement('div');
+    row.className = 'form-row cols-3';
+    _extraLiveKeys.forEach(function(k, index) {
       var v = liveCfg[k];
       var t = typeof v;
-      var fld = '';
+      var group = document.createElement('div');
+      group.className = 'form-group';
+      var label = document.createElement('label');
+      label.textContent = k;
+      group.appendChild(label);
+      var fieldId = 'extra-live-' + index;
+      _extraLiveFieldIds[k] = fieldId;
+      var field;
       if (t === 'boolean') {
-        fld = '<div class="form-group"><label>' + esc(k) + '</label>' +
-          '<div class="chk-row"><input type="checkbox" id="extra-live-' + esc(k) + '" data-extra-live-type="boolean"' + (v ? ' checked' : '') + '></div></div>';
+        var checkRow = document.createElement('div');
+        checkRow.className = 'chk-row';
+        field = document.createElement('input');
+        field.type = 'checkbox';
+        field.checked = v;
+        checkRow.appendChild(field);
+        group.appendChild(checkRow);
       } else if (t === 'number') {
-        fld = '<div class="form-group"><label>' + esc(k) + '</label>' +
-          '<input type="number" id="extra-live-' + esc(k) + '" data-extra-live-type="number" class="form-input" value="' + esc(String(v)) + '"></div>';
+        field = document.createElement('input');
+        field.type = 'number';
+        field.className = 'form-input';
+        field.value = String(v);
+        group.appendChild(field);
       } else if (t === 'object' || Array.isArray(v)) {
-        fld = '<div class="form-group" style="grid-column:span 3"><label>' + esc(k) + '</label>' +
-          '<textarea id="extra-live-' + esc(k) + '" data-extra-live-type="json" style="overflow:hidden;resize:vertical" oninput="autoResizeTa(this)">' + esc(JSON.stringify(v, null, 2)) + '</textarea>' +
-          '<div id="extra-live-' + esc(k) + '-status" class="field-status field-status-inline" aria-live="polite"></div></div>';
+        group.style.gridColumn = 'span 3';
+        field = document.createElement('textarea');
+        field.style.cssText = 'overflow:hidden;resize:vertical';
+        field.value = JSON.stringify(v, null, 2);
+        field.addEventListener('input', function() { autoResizeTa(field); });
+        group.appendChild(field);
+        var status = document.createElement('div');
+        status.id = fieldId + '-status';
+        status.className = 'field-status field-status-inline';
+        status.setAttribute('aria-live', 'polite');
+        group.appendChild(status);
       } else {
-        fld = '<div class="form-group"><label>' + esc(k) + '</label>' +
-          '<input type="text" id="extra-live-' + esc(k) + '" data-extra-live-type="' + (v === null ? 'null' : 'string') + '" class="form-input" value="' + esc(v === null ? '' : String(v)) + '" placeholder="' + (v === null ? 'null' : '') + '"></div>';
+        field = document.createElement('input');
+        field.type = 'text';
+        field.className = 'form-input';
+        field.value = v === null ? '' : String(v);
+        field.placeholder = v === null ? 'null' : '';
+        group.appendChild(field);
       }
-      extraHtml += fld;
+      field.id = fieldId;
+      field.dataset.extraLiveType = t === 'object' || Array.isArray(v) ? 'json' : v === null ? 'null' : t;
+      row.appendChild(group);
+      if (field.tagName === 'TEXTAREA') autoResizeTa(field);
     });
-    extraHtml += '</div></div></div>';
-    extraContainer.innerHTML = extraHtml;
-    _extraLiveKeys.forEach(function(k) {
-      var el = document.getElementById('extra-live-' + k);
-      if (el && el.tagName === 'TEXTAREA') autoResizeTa(el);
-    });
-  } else {
-    extraContainer.innerHTML = '';
+    body.appendChild(row);
+    expander.appendChild(header);
+    expander.appendChild(body);
+    extraContainer.appendChild(expander);
   }
 
   // Raw JSON
@@ -2108,6 +2535,11 @@ function populateForm(opts) {
 function setVal(id, v) {
   var el = document.getElementById(id);
   if (el) el.value = v;
+}
+
+function getExtraLiveElement(key) {
+  var id = _extraLiveFieldIds[key];
+  return id ? document.getElementById(id) : null;
 }
 
 function ensureSelectOption(id, value) {
@@ -2209,7 +2641,7 @@ function shouldIgnoreStructuredSyncTarget(target, phase) {
 
 function bindStructuredEditorSync() {
   window.PBGuiEditorShared.bindStructuredSyncRoot('main-content', {
-    boundKey: 'run-v7-editor',
+    boundKey: 'run-' + runEditorAdapter.version + '-editor',
     shouldIgnoreTarget: shouldIgnoreStructuredSyncTarget,
     scheduleStructured: scheduleStructuredEditorSync
   });
@@ -2229,10 +2661,10 @@ function collectConfig() {
   try { longJson = JSON.parse(document.getElementById('f-long-json').value); } catch (e) { longJson = cfg.bot ? cfg.bot.long || {} : {}; }
   try { shortJson = JSON.parse(document.getElementById('f-short-json').value); } catch (e) { shortJson = cfg.bot ? cfg.bot.short || {} : {}; }
 
-  longJson.total_wallet_exposure_limit = getNum('f-long-twe');
-  longJson.n_positions = getNum('f-long-npos');
-  shortJson.total_wallet_exposure_limit = getNum('f-short-twe');
-  shortJson.n_positions = getNum('f-short-npos');
+  runEditorAdapter.setBotValue(longJson, 'total_wallet_exposure_limit', getNum('f-long-twe'));
+  runEditorAdapter.setBotValue(longJson, 'n_positions', getNum('f-long-npos'));
+  runEditorAdapter.setBotValue(shortJson, 'total_wallet_exposure_limit', getNum('f-short-twe'));
+  runEditorAdapter.setBotValue(shortJson, 'n_positions', getNum('f-short-npos'));
 
   // Coin overrides (managed by coin_overrides_editor.js module)
   var covData = coinOvCollect();
@@ -2249,11 +2681,15 @@ function collectConfig() {
   var approvedCoins = collectApprovedCoinsValue(approvedLong, approvedShort);
 
   var balOverride = getNum('f-bal-override');
+  var startupPhaseBudgets = {};
+  var liveEventDebugProfiles = [];
+  try { startupPhaseBudgets = JSON.parse(getVal('f-startup-phase-budgets')); } catch (e) {}
+  try { liveEventDebugProfiles = JSON.parse(getVal('f-log-debug-profiles')); } catch (e) {}
 
   // Collect extra live params from Additional Parameters expander
   var extraLive = {};
   _extraLiveKeys.forEach(function(k) {
-    var el = document.getElementById('extra-live-' + k);
+    var el = getExtraLiveElement(k);
     if (!el) return;
     var type = el.getAttribute('data-extra-live-type');
     if (type === 'boolean') {
@@ -2274,6 +2710,7 @@ function collectConfig() {
 
   var baseLive = base.live && typeof base.live === 'object' && !Array.isArray(base.live) ? base.live : {};
   var baseLogging = base.logging && typeof base.logging === 'object' && !Array.isArray(base.logging) ? base.logging : {};
+  var baseMonitor = base.monitor && typeof base.monitor === 'object' && !Array.isArray(base.monitor) ? base.monitor : {};
   var basePbgui = base.pbgui && typeof base.pbgui === 'object' && !Array.isArray(base.pbgui) ? base.pbgui : {};
   var baseBot = base.bot && typeof base.bot === 'object' && !Array.isArray(base.bot) ? base.bot : {};
   var baseBacktest = base.backtest && typeof base.backtest === 'object' && !Array.isArray(base.backtest) ? base.backtest : (cfg.backtest || {});
@@ -2317,7 +2754,7 @@ function collectConfig() {
       warmup_jitter_seconds: getNum('f-warmup-jitter'),
       warmup_concurrency: getInt('f-warmup-conc'),
       max_warmup_minutes: getInt('f-max-warmup-min'),
-      max_concurrent_api_requests: getInt('f-max-api-req'),
+      max_concurrent_api_requests: getOptionalNum('f-max-api-req'),
       defer_broad_candle_warmup: getChk('f-defer-broad-candle-warmup'),
       candle_lock_timeout_seconds: getInt('f-candle-lock'),
       enable_archive_candle_fetch: getChk('f-archive-fetch'),
@@ -2333,6 +2770,7 @@ function collectConfig() {
       memory_snapshot_interval_minutes: getInt('f-mem-snapshot'),
       volume_refresh_info_threshold_seconds: getInt('f-vol-refresh'),
     }),
+    monitor: baseMonitor,
     pbgui: Object.assign({}, basePbgui, {
       version: getInt('f-version'),
       enabled_on: getVal('f-enabled-on') || 'disabled',
@@ -2351,6 +2789,72 @@ function collectConfig() {
     backtest: baseBacktest,
     optimize: baseOptimize,
   });
+  if (runEditorAdapter.isV8) {
+    var structuredLive = Object.assign({}, result.live, {
+      custom_endpoints_path: getVal('f-custom-endpoints-path').trim() || null,
+      enable_forager_ws_candles: getChk('f-enable-forager-ws'),
+      fee_conversion_max_age_ms: getInt('f-fee-conversion-age'),
+      fee_pct_fallback: getNum('f-fee-pct-fallback'),
+      fee_pct_sanity_abs_max: getNum('f-fee-pct-sanity'),
+      forager_ws_candle_rest_audit_minutes: getNum('f-forager-ws-audit'),
+      force_cold_startup: getChk('f-force-cold-startup'),
+      hsl_accept_incomplete_history: getChk('f-hsl-accept-incomplete'),
+      order_replacement_churn_gate_activation_count: getInt('f-churn-activation-count'),
+      order_replacement_churn_gate_market_dist_pct: getNum('f-churn-market-dist'),
+      order_replacement_churn_gate_stability_minutes: getNum('f-churn-stability-minutes'),
+      order_replacement_churn_gate_window_minutes: getNum('f-churn-window-minutes'),
+      startup_phase_budgets: startupPhaseBudgets
+    });
+    result.live = Object.assign({}, baseLive, extraLive, {
+      user: getVal('f-user'),
+      strategy_kind: getVal('f-strategy-kind') || baseLive.strategy_kind,
+      approved_coins: approvedCoins,
+      ignored_coins: { long: ignoredLong, short: ignoredShort }
+    });
+    _managedLiveKeys.forEach(function(key) {
+      var value = runEditorAdapter.managedLiveValue(key, structuredLive);
+      if (value !== undefined) result.live[key] = value;
+    });
+    var structuredLogging = Object.assign({}, result.logging, {
+      backup_count: getInt('f-log-backup-count'),
+      dir: getVal('f-log-dir'),
+      live_event_debug_profiles: liveEventDebugProfiles,
+      max_bytes_mb: getNum('f-log-max-bytes'),
+      persist_to_file: getChk('f-log-persist'),
+      rotation: getChk('f-log-rotation')
+    });
+    result.logging = Object.assign({}, baseLogging);
+    runEditorAdapter.managedLoggingKeys.forEach(function(key) {
+      result.logging[key] = structuredLogging[key];
+    });
+    var structuredMonitor = {
+      checkpoint_interval_minutes: getNum('f-monitor-checkpoint'),
+      compress_rotated_segments: getChk('f-monitor-compress'),
+      emit_completed_candles: getChk('f-monitor-emit-candles'),
+      enabled: getChk('f-monitor-enabled'),
+      event_rotation_mb: getNum('f-monitor-rotation-mb'),
+      event_rotation_minutes: getNum('f-monitor-rotation-minutes'),
+      include_raw_fill_payloads: getChk('f-monitor-raw-fills'),
+      max_total_bytes: getInt('f-monitor-max-bytes'),
+      price_tick_min_interval_ms: getInt('f-monitor-price-interval'),
+      retain_candles: getChk('f-monitor-retain-candles'),
+      retain_days: getNum('f-monitor-retain-days'),
+      retain_fills: getChk('f-monitor-retain-fills'),
+      retain_price_ticks: getChk('f-monitor-retain-ticks'),
+      root_dir: getVal('f-monitor-root-dir'),
+      snapshot_interval_seconds: getNum('f-monitor-snapshot-interval')
+    };
+    result.monitor = Object.assign({}, baseMonitor);
+    runEditorAdapter.managedMonitorKeys.forEach(function(key) {
+      result.monitor[key] = structuredMonitor[key];
+    });
+    result.pbgui.runtime = 'pb8';
+    if (Object.prototype.hasOwnProperty.call(basePbgui, 'dynamic_ignore')) {
+      result.pbgui.dynamic_ignore = basePbgui.dynamic_ignore;
+    } else {
+      delete result.pbgui.dynamic_ignore;
+    }
+  }
   return result;
 }
 
@@ -2365,11 +2869,19 @@ async function saveConfig() {
     if (!ensureStructuredJsonFieldsValidForSave()) return;
     if (!validateExecutionSyncFieldsForSave()) return;
     var config = collectConfig();
-    var name = IS_NEW === 'true' ? config.live.user : INSTANCE_NAME;
+    var wasNew = IS_NEW === 'true';
+    var name = wasNew ? runEditorAdapter.newInstanceName(config) : INSTANCE_NAME;
+    if (!name) {
+      toast('User is required.', 'err');
+      return;
+    }
+    var overrideSnapshot = runEditorAdapter.isV8 && typeof coinOvSnapshotPendingFiles === 'function'
+      ? coinOvSnapshotPendingFiles()
+      : {};
 
-    var resp = await apiFetch('/instances/' + encodeURIComponent(name) + '/config', {
+    var resp = await apiFetch('/instances/' + encodeURIComponent(name) + '/config' + runEditorAdapter.saveQuery(wasNew), {
       method: 'PUT',
-      body: JSON.stringify({ config: config }),
+      body: JSON.stringify(runEditorAdapter.saveBody(config, overrideSnapshot, getInt('f-version'))),
     });
     var data = await resp.json();
     if (!resp.ok) {
@@ -2387,7 +2899,7 @@ async function saveConfig() {
     }
 
     // Update state
-    cfg = config;
+    cfg = data.config || config;
     cfg.pbgui.version = data.version;
     setVal('f-version', data.version);
     var rawEl = document.getElementById('cfg-raw-json');
@@ -2402,6 +2914,9 @@ async function saveConfig() {
       IS_NEW = 'false';
       coinOvSetConfigName(name);
     }
+    if (runEditorAdapter.isV8 && typeof coinOvAcknowledgePendingFiles === 'function') {
+      coinOvAcknowledgePendingFiles(overrideSnapshot);
+    }
 
     var syncOk = (data.sync && data.sync.ok) || 0;
     var syncFail = (data.sync && data.sync.failed) || 0;
@@ -2409,7 +2924,7 @@ async function saveConfig() {
     if (syncOk > 0) syncMsg = ' | SSH sync: ' + syncOk + ' host(s) OK';
     else if (syncFail > 0) syncMsg = ' | SSH sync: ' + syncFail + ' failed';
 
-    toast('Saved v' + data.version + syncMsg, 'ok');
+    toast('Saved ' + runEditorAdapter.label + ' v' + data.version + syncMsg, 'ok');
     dirty = false;
   } catch (e) {
     toast('Save error: ' + e.message, 'err');
@@ -2436,8 +2951,9 @@ function openCopyUserModal() {
     });
     btn.disabled = true;
   } else {
+    var sourceUser = getVal('f-user');
     allUsers.forEach(function(u) {
-      if (!u || !u.name || u.name === INSTANCE_NAME) return;
+      if (!u || !u.name || u.name === sourceUser || u.name === INSTANCE_NAME) return;
       var opt = document.createElement('option');
       opt.value = u.name;
       opt.textContent = u.name;
@@ -2448,7 +2964,7 @@ function openCopyUserModal() {
       window.PBGuiEditorShared.setInlineStatusError(errEl, {
         baseClassName: 'field-status field-status-inline',
         summary: 'No target user available',
-        message: 'Add another v7 user before copying this config.'
+        message: 'Add another ' + runEditorAdapter.label + ' user before copying this config.'
       });
     }
   }
@@ -2477,8 +2993,8 @@ async function doCopyToUser() {
     if (!targetUser) {
       throw new Error('Select a target user.');
     }
-    if (targetUser === INSTANCE_NAME) {
-      throw new Error('Target user must be different from the source instance.');
+    if (targetUser === getVal('f-user')) {
+      throw new Error('Target user must be different from the source user.');
     }
     await _symbolsAndTagsLoadPromise;
     if (!ensureRawJsonValidForSave()) return;
@@ -2495,10 +3011,13 @@ async function doCopyToUser() {
       copyConfig.pbgui = {};
     }
     copyConfig.pbgui.enabled_on = 'disabled';
+    var copyOverrideConfigs = runEditorAdapter.isV8 && typeof coinOvSnapshotAllFiles === 'function'
+      ? await coinOvSnapshotAllFiles()
+      : {};
 
     var resp = await apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/copy-config', {
       method: 'PUT',
-      body: JSON.stringify({ target_user: targetUser, config: copyConfig }),
+      body: JSON.stringify({ target_user: targetUser, config: copyConfig, override_configs: copyOverrideConfigs }),
     });
     var data = {};
     try { data = await resp.json(); } catch (e) { data = {}; }
@@ -2547,6 +3066,96 @@ async function doCopyToUser() {
 }
 
 /* ─── Import ───────────────────────────────────────────────── */
+var importUserActiveIndex = -1;
+
+function closeImportUserOptions() {
+  var input = document.getElementById('import-user');
+  var options = document.getElementById('import-user-options');
+  options.hidden = true;
+  input.setAttribute('aria-expanded', 'false');
+  importUserActiveIndex = -1;
+}
+
+function renderImportUserOptions(showAll) {
+  var input = document.getElementById('import-user');
+  var options = document.getElementById('import-user-options');
+  var query = showAll ? '' : String(input.value || '').trim().toLowerCase();
+  var matches = allUsers.filter(function(user) {
+    return String(user.name || '').toLowerCase().indexOf(query) !== -1;
+  });
+  options.replaceChildren();
+  importUserActiveIndex = -1;
+  if (!matches.length) {
+    var empty = document.createElement('div');
+    empty.className = 'user-combobox-empty';
+    empty.textContent = 'No matching users';
+    options.appendChild(empty);
+  } else {
+    matches.forEach(function(user) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'user-combobox-option';
+      button.setAttribute('role', 'option');
+      button.dataset.user = String(user.name || '');
+      button.textContent = String(user.name || '');
+      button.addEventListener('mousedown', function(event) { event.preventDefault(); });
+      button.addEventListener('click', function() {
+        input.value = button.dataset.user;
+        closeImportUserOptions();
+        input.focus();
+      });
+      options.appendChild(button);
+    });
+  }
+  options.hidden = false;
+  input.setAttribute('aria-expanded', 'true');
+}
+
+function moveImportUserSelection(delta) {
+  var options = Array.from(document.querySelectorAll('#import-user-options .user-combobox-option'));
+  if (!options.length) return;
+  importUserActiveIndex = (importUserActiveIndex + delta + options.length) % options.length;
+  options.forEach(function(option, index) {
+    option.classList.toggle('active', index === importUserActiveIndex);
+    option.setAttribute('aria-selected', index === importUserActiveIndex ? 'true' : 'false');
+  });
+  options[importUserActiveIndex].scrollIntoView({block: 'nearest'});
+}
+
+function setupImportUserCombobox() {
+  var input = document.getElementById('import-user');
+  var toggle = document.getElementById('import-user-toggle');
+  input.addEventListener('input', function() { renderImportUserOptions(false); });
+  input.addEventListener('click', function() {
+    if (document.getElementById('import-user-options').hidden) renderImportUserOptions(true);
+  });
+  input.addEventListener('blur', function() { setTimeout(closeImportUserOptions, 0); });
+  input.addEventListener('keydown', function(event) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (document.getElementById('import-user-options').hidden) renderImportUserOptions(true);
+      moveImportUserSelection(event.key === 'ArrowDown' ? 1 : -1);
+    } else if (event.key === 'Enter' && importUserActiveIndex >= 0) {
+      event.preventDefault();
+      var active = document.querySelectorAll('#import-user-options .user-combobox-option')[importUserActiveIndex];
+      if (active) active.click();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      closeImportUserOptions();
+    }
+  });
+  toggle.addEventListener('mousedown', function(event) { event.preventDefault(); });
+  toggle.addEventListener('click', function() {
+    var wasHidden = document.getElementById('import-user-options').hidden;
+    if (wasHidden) {
+      input.focus();
+      renderImportUserOptions(true);
+    } else {
+      closeImportUserOptions();
+    }
+  });
+}
+
 function openImportModal() {
   var jsonEl = document.getElementById('import-json');
   var errEl = document.getElementById('import-error');
@@ -2556,12 +3165,17 @@ function openImportModal() {
   autoResizeTa(jsonEl);
   setJsonFieldValidationState(jsonEl, null);
   window.PBGuiEditorShared.openModal('import-modal');
+  setTimeout(function() {
+    var userEl = document.getElementById('import-user');
+    if (userEl) { userEl.focus(); userEl.select(); }
+  }, 0);
 }
 
 function closeImportModal() {
   var errEl = document.getElementById('import-error');
   window.PBGuiEditorShared.clearInlineStatus(errEl, 'field-status field-status-inline');
   setJsonFieldValidationState(document.getElementById('import-json'), null);
+  closeImportUserOptions();
   window.PBGuiEditorShared.closeModal('import-modal');
 }
 
@@ -2574,18 +3188,33 @@ async function doImport() {
   }
   var parsed = validation.parsed;
   // Keep selected user
-  var selectedUser = document.getElementById('import-user').value;
+  var requestedUser = document.getElementById('import-user').value;
+  var matchedUser = allUsers.find(function(user) {
+    return String(user.name || '').toLowerCase() === String(requestedUser || '').trim().toLowerCase();
+  });
+  if (!matchedUser) {
+    window.PBGuiEditorShared.setInlineStatusError(errEl, {
+      baseClassName: 'field-status field-status-inline',
+      summary: 'Import failed',
+      message: 'Select a configured user from the search suggestions.'
+    });
+    return;
+  }
+  var selectedUser = matchedUser.name;
   if (!parsed.live) parsed.live = {};
   parsed.live.user = selectedUser;
 
   var prepared;
+  var currentEditorVersion = getInt('f-version');
   try {
     prepared = await prepareConfigForRunEditor(parsed);
     if (IS_NEW !== 'true') {
       if (!prepared.config.pbgui || typeof prepared.config.pbgui !== 'object' || Array.isArray(prepared.config.pbgui)) {
         prepared.config.pbgui = {};
       }
-      prepared.config.pbgui.version = await fetchNextInstanceVersion(INSTANCE_NAME);
+      prepared.config.pbgui.version = runEditorAdapter.isV8
+        ? currentEditorVersion
+        : await fetchNextInstanceVersion(INSTANCE_NAME);
     }
   } catch (e) {
     window.PBGuiEditorShared.setInlineStatusError(errEl, {
@@ -2607,7 +3236,7 @@ async function doImport() {
 
 /* ─── Log Panel (unified LogViewerPanel) ───────────────────── */
 var _logPanelOpen = false;
-var _v7LogViewer = null;
+var _runLogViewer = null;
 
 function toggleLogPanel() {
   if (_logPanelOpen) closeLogPanel(); else openLogPanel();
@@ -2623,39 +3252,46 @@ function openLogPanel() {
   // Determine host from enabled_on field
   var enabledOn = getVal('f-enabled-on') || 'disabled';
   var badge = document.getElementById('log-panel-host');
-  var svc = 'Bot:' + INSTANCE_NAME + ':7';
+  var runtimeNumber = runEditorAdapter.isV8 ? '8' : '7';
+  var svc = 'Bot:' + INSTANCE_NAME + ':' + runtimeNumber;
 
   function isLocalBotLogFile(file) {
     var value = String(file || '');
     if (!value) return false;
     if (value === 'PBRun.log') return true;
-    if (value === ('Bot:' + INSTANCE_NAME)) return true;
-    if (value === ('BotErr:' + INSTANCE_NAME)) return true;
-    if (value === ('data/run_v7/' + INSTANCE_NAME + '/passivbot_err.log')) return true;
-    if (value === ('data/run_v7/' + INSTANCE_NAME + '/passivbot_err.log.old')) return true;
-    return value.indexOf('pb7/logs/') === 0 && value.indexOf(INSTANCE_NAME) >= 0;
+    if (value === ('Bot:' + INSTANCE_NAME) || value === svc) return true;
+    if (value === ('BotErr:' + INSTANCE_NAME) || value === ('BotErr:' + INSTANCE_NAME + ':' + runtimeNumber)) return true;
+    if (value === ('data/run_v' + runtimeNumber + '/' + INSTANCE_NAME + '/passivbot_err.log')) return true;
+    if (value === ('data/run_v' + runtimeNumber + '/' + INSTANCE_NAME + '/passivbot_err.log.old')) return true;
+    return value.indexOf((runEditorAdapter.isV8 ? 'pb8/logs/' : 'pb7/logs/')) === 0 && value.indexOf(INSTANCE_NAME) >= 0;
   }
 
   function _initViewer(host) {
-    if (_v7LogViewer) { _v7LogViewer.close(); _v7LogViewer = null; }
+    if (_runLogViewer) { _runLogViewer.close(); _runLogViewer = null; }
     var isLocal = (!host || host === 'local');
-    _v7LogViewer = new LogViewerPanel({
+    _runLogViewer = new LogViewerPanel({
       containerId: 'log-viewer-target',
       wsBase: WS_BASE,
-      token: TOKEN,
       defaultHost: isLocal ? 'local' : host,
       defaultService: isLocal ? 'PBRun' : svc,
-      defaultFile: isLocal ? ('Bot:' + INSTANCE_NAME) : '',
+      defaultFile: isLocal ? svc : '',
       localFileFilter: isLocal ? isLocalBotLogFile : null,
       presets: 'trading',
       showRestart: true,
       height: '100%'
     });
-    _v7LogViewer.open();
+    _runLogViewer.open();
   }
 
   badge.textContent = 'searching...';
   badge.className = 'disabled';
+  if (runEditorAdapter.isV8) {
+    var isCurrentLocal = !!MASTER_NAME && enabledOn === MASTER_NAME;
+    badge.textContent = enabledOn === 'disabled' ? 'local' : enabledOn;
+    badge.className = isCurrentLocal || enabledOn === 'disabled' ? 'disabled' : 'connected';
+    _initViewer(isCurrentLocal || enabledOn === 'disabled' ? 'local' : enabledOn);
+    return;
+  }
   apiFetch('/last-active-host/' + encodeURIComponent(INSTANCE_NAME))
   .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
   .then(function(data) {
@@ -2695,7 +3331,7 @@ function closeLogPanel() {
   _logPanelOpen = false;
   document.getElementById('log-panel').classList.remove('visible');
   document.getElementById('btn-log').classList.remove('active');
-  if (_v7LogViewer) { _v7LogViewer.close(); _v7LogViewer = null; }
+  if (_runLogViewer) { _runLogViewer.close(); _runLogViewer = null; }
 }
 
 /* ─── Dynamic Ignore Preview ───────────────────────────────── */
@@ -2807,20 +3443,30 @@ function syncBotInputToJson(side) {
   var jsonEl = document.getElementById('f-' + side + '-json');
   var obj;
   try { obj = JSON.parse(jsonEl.value); } catch (e) { obj = {}; }
-  obj.total_wallet_exposure_limit = getNum('f-' + side + '-twe');
-  obj.n_positions = getNum('f-' + side + '-npos');
+  runEditorAdapter.setBotValue(obj, 'total_wallet_exposure_limit', getNum('f-' + side + '-twe'));
+  runEditorAdapter.setBotValue(obj, 'n_positions', getNum('f-' + side + '-npos'));
   jsonEl.value = JSON.stringify(obj, null, 2);
   autoResizeTa(jsonEl);
   if (typeof validateJsonFieldTextarea === 'function') validateJsonFieldTextarea(jsonEl);
 }
 
 ['f-long-json', 'f-short-json'].forEach(function(id) {
+  document.getElementById(id).addEventListener('input', function() {
+    if (!runEditorAdapter.isV8) return;
+    var side = id.indexOf('long') >= 0 ? 'long' : 'short';
+    try {
+      var parsed = JSON.parse(this.value);
+      clearEditedRunStrategyDefaultMark(side, parsed);
+      syncRunStrategyKindFromSideConfig(parsed);
+      _applyBotJsonHighlight(this, paramStatus[side] || {});
+    } catch (error) { /* validation displays incomplete JSON while typing */ }
+  });
   document.getElementById(id).addEventListener('blur', function() {
     var side = id.indexOf('long') >= 0 ? 'long' : 'short';
     try {
       var obj = JSON.parse(this.value);
-      if (obj.total_wallet_exposure_limit != null) setVal('f-' + side + '-twe', obj.total_wallet_exposure_limit);
-      if (obj.n_positions != null) setVal('f-' + side + '-npos', obj.n_positions);
+      setVal('f-' + side + '-twe', runEditorAdapter.getBotValue(obj, 'total_wallet_exposure_limit', getVal('f-' + side + '-twe')));
+      setVal('f-' + side + '-npos', runEditorAdapter.getBotValue(obj, 'n_positions', getVal('f-' + side + '-npos')));
     } catch (e) { /* ignore parse errors while editing */ }
   });
 });
@@ -2957,7 +3603,7 @@ var msCoinIds = {
   'ms-ignored-short': true
 };
 var _runMsController = window.PBGuiEditorShared.createMultiselectController({
-  controllerName: 'run-v7-ms',
+  controllerName: 'run-' + runEditorAdapter.version + '-ms',
   counterpartMap: msCounterpart,
   coinIds: msCoinIds,
   formatTagTitle: function(ctx) {
@@ -3133,7 +3779,6 @@ async function calculateBalance() {
   try {
     var data = await window.PBGuiEditorShared.requestBalanceCalculation({
       apiBase: API_BASE,
-      token: TOKEN,
       config: config,
       exchange: exchange,
     });
@@ -3213,16 +3858,14 @@ init();
 <!-- ── Shared nav bar ── -->
 <script>
 window.PBGUI_NAV_CONFIG = {
-  subtitle: 'PBv7 EDIT',
-  current:  'v7_run',
-  token:    TOKEN,
+  subtitle: runEditorAdapter.navSubtitle,
+  current:  runEditorAdapter.navCurrent,
   apiBase:  API_BASE,
   version:  PBGUI_VERSION,
-  serial:   PBGUI_SERIAL
+  serial:   PBGUI_SERIAL,
+  masterName: MASTER_NAME
 };
 </script>
-<script src="/app/js/log_viewer_panel.js?v=28"></script>
-<script src="/app/js/coin_overrides_editor.js?v=18"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */
 (function() {
@@ -3298,7 +3941,8 @@ window.PBGUI_NAV_CONFIG = {
   var _topicCache = {};
 
   /* docsBase strips the router prefix from API_BASE to reach /api */
-  var docsBase = API_BASE.replace(/\/api\/v7$/, '');
+  var docsBase = API_BASE.replace(/\/api\/v[78]$/, '');
+  var helpKeyword = runEditorAdapter.isV8 ? 'pbv8 run' : 'pbv7 run';
 
   function mdToHtml(md) {
     var lines = md.split('\n'), html = '', inPre = false, preBuf = '', inUl = false, inOl = false;
@@ -3331,7 +3975,7 @@ window.PBGUI_NAV_CONFIG = {
 
   function loadHelpIndex(keyword) {
     helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/api/docs/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(docsBase + '/api/docs/index?lang=' + helpLang, { credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
       .then(function (data) {
         helpTopics = data || [];
@@ -3373,7 +4017,7 @@ window.PBGUI_NAV_CONFIG = {
     if (!t) return;
     if (_topicCache[idx] !== undefined) { helpContent.innerHTML = _topicCache[idx]; helpContent.scrollTop = 0; return; }
     helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-    fetch(docsBase + '/api/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(docsBase + '/api/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         _topicCache[idx] = mdToHtml(d.content || '');
@@ -3388,12 +4032,12 @@ window.PBGUI_NAV_CONFIG = {
   helpLangEN.addEventListener('click', function () {
     if (helpLang === 'EN') return;
     helpLang = 'EN'; helpLangEN.classList.add('active'); helpLangDE.classList.remove('active');
-    _topicCache = {}; helpSel = 0; loadHelpIndex('pbv7 run');
+    _topicCache = {}; helpSel = 0; loadHelpIndex(helpKeyword);
   });
   helpLangDE.addEventListener('click', function () {
     if (helpLang === 'DE') return;
     helpLang = 'DE'; helpLangDE.classList.add('active'); helpLangEN.classList.remove('active');
-    _topicCache = {}; helpSel = 0; loadHelpIndex('pbv7 run');
+    _topicCache = {}; helpSel = 0; loadHelpIndex(helpKeyword);
   });
 
   document.getElementById('help-close').addEventListener('click', function () {
@@ -3422,7 +4066,7 @@ window.PBGUI_NAV_CONFIG = {
   window.openHelp = function (keyword) {
     helpOvl.classList.add('visible');
     if (helpTopics.length === 0) {
-      loadHelpIndex(keyword || 'pbv7 run');
+      loadHelpIndex(keyword || helpKeyword);
     } else if (keyword) {
       var kw = keyword.toLowerCase();
       for (var i = 0; i < helpTopics.length; i++) {
@@ -3468,7 +4112,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   window.PBGUI_HELP_OPENER = function () {
     if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
-    window.PBGuiSharedHelp.open('pbv7 run', { token: TOKEN });
+    window.PBGuiSharedHelp.open(runEditorAdapter.isV8 ? 'pbv8 run' : 'pbv7 run');
   };
 });
 </script>

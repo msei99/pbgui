@@ -12,6 +12,7 @@
     user: "{{ user }}"
     install_dir: "{{ install_dir | default(ansible_facts['env']['HOME'] + '/software') }}"
     pb7_ref: "{{ lookup('file', playbook_dir + '/pb7_ref.txt') | trim }}"
+    pb7_install_min_free_bytes: "{{ pb7_min_free_bytes | default(3221225472) | int }}"
 
   tasks:
     - name: display facts
@@ -38,6 +39,21 @@
         executable: /bin/bash
       register: pb7_disk_playbook_start
       changed_when: false
+
+    - name: Inspect PB7 checkout before disk gate
+      stat:
+        path: "{{ install_dir }}/pb7/.git"
+      register: pb7_git_before_disk_gate
+
+    - name: Require free disk space for a new PB7 installation
+      assert:
+        that:
+          - ((pb7_disk_playbook_start.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int * 1048576) >= (pb7_install_min_free_bytes | int)
+        fail_msg: >-
+          PB7 installation requires at least
+          {{ ((pb7_install_min_free_bytes | int) / 1073741824) | round(2) }} GiB free on {{ install_dir }};
+          currently {{ (((pb7_disk_playbook_start.stdout | regex_findall('free_mb=(\\d+)') | first | default('0')) | int) / 1024) | round(2) }} GiB is available.
+      when: not pb7_git_before_disk_gate.stat.exists
 
     - name: remove stable toolchain if exists
       shell: |
@@ -85,6 +101,31 @@
         that:
           - pb7_ref is match('^[0-9a-f]{40}$')
         fail_msg: "pb7_ref.txt must contain one exact lowercase 40-character commit SHA."
+
+    - name: Inspect existing PB7 checkout
+      stat:
+        path: "{{ install_dir }}/pb7/.git"
+      register: pb7_git
+
+    - name: Inspect PB7 target
+      stat:
+        path: "{{ install_dir }}/pb7"
+      register: pb7_target
+
+    - name: Refuse a non-Git PB7 target
+      fail:
+        msg: "PB7 target exists but is not a Git checkout: {{ install_dir }}/pb7"
+      when: not pb7_git.stat.exists and pb7_target.stat.exists
+
+    - name: Clone official Passivbot for a new PB7 installation
+      command:
+        argv:
+          - git
+          - clone
+          - --no-checkout
+          - https://github.com/enarjord/passivbot.git
+          - "{{ install_dir }}/pb7"
+      when: not pb7_git.stat.exists
 
     - name: Fetch and verify pinned Passivbot v7
       command:

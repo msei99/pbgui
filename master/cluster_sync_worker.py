@@ -30,6 +30,7 @@ from cluster_sync_command import (
     MAX_SECRET_BLOB_BYTES,
     _append_credential_migration_acks,
     _materialize_api_keys,
+    _materialize_pb8_configs,
     _materialize_credentials,
     _materialize_v7_configs,
     _validate_sealed_blob_payload,
@@ -52,10 +53,13 @@ from master.cluster_state import (
     default_cluster_root,
     load_operations,
     normalize_node_sync_mode,
+    PB8_OPS,
+    PB8_OPERATION_CAPABILITY,
     read_materialized_state,
     read_local_identity,
     rebuild_materialized_state,
     stage_membership_operations,
+    supports_cluster_operation,
     validate_operation,
     V2_CREDENTIAL_OPS,
     write_operation,
@@ -327,6 +331,19 @@ class ClusterSyncWorker:
             credential_result = credential_preview
             if credential_preview.get("can_apply"):
                 credential_result = _materialize_credentials(self.cluster_root, write=True)
+            pb8_blockers = _pb8_projection_blockers(api_result, credential_result)
+            if pb8_blockers:
+                pb8_result = {
+                    "ok": False,
+                    "status": "blocked",
+                    "reason": "; ".join(pb8_blockers),
+                    "counts": {},
+                }
+            else:
+                pb8_preview = _materialize_pb8_configs(self.cluster_root, write=False)
+                pb8_result = pb8_preview
+                if pb8_preview.get("can_apply"):
+                    pb8_result = _materialize_pb8_configs(self.cluster_root, write=True)
             migration_ack = _append_credential_migration_acks(
                 self.cluster_root,
                 scan_allowed=False,
@@ -431,6 +448,7 @@ class ClusterSyncWorker:
                 "mailbox_pushed": sum(int(item.get("mailbox_pushed") or 0) for item in peer_results),
                 "mailbox_acked": sum(int(item.get("mailbox_acked") or 0) for item in peer_results),
                 "v7_materialization": _compact_materialization(v7_result),
+                "pb8_materialization": _compact_materialization(pb8_result),
                 "api_key_materialization": _compact_materialization(api_result),
                 "credential_materialization": _compact_materialization(credential_result),
                 "credential_migration_ack": migration_ack,
@@ -821,6 +839,14 @@ class ClusterSyncWorker:
         hello, remote_vector = self._peer_handshake(peer, local_node_id)
         if str(hello.get("cluster_id") or "") != cluster_id:
             raise ClusterSyncWorkerError("peer belongs to another cluster")
+        peer_pb8_capable = supports_cluster_operation(
+            "UPSERT_PB8_CONFIG",
+            hello.get("capabilities") if isinstance(hello.get("capabilities"), list) else [],
+        )
+        if _pb8_desired_state_active(local_materialized) and not peer_pb8_capable:
+            raise ClusterSyncWorkerError(
+                f"peer lacks required cluster capability: {PB8_OPERATION_CAPABILITY}"
+            )
         cutoff = (((local_materialized.get("desired_state") or {}).get("credential_migration") or {}).get("cutoff"))
         if isinstance(cutoff, dict) and int(hello.get("protocol_version") or 0) < int(cutoff.get("min_protocol") or 2):
             raise ClusterSyncWorkerError("credential protocol downgrade rejected after cutoff")
@@ -853,6 +879,10 @@ class ClusterSyncWorker:
             load_local_ops() if remote_needs_operations else [],
             remote_vector,
         )
+        push_ops, deferred_pb8_ops = _partition_operations_for_peer_capabilities(
+            push_ops,
+            hello.get("capabilities") if isinstance(hello.get("capabilities"), list) else [],
+        )
         peer_supports_credentials = (
             int(hello.get("protocol_version") or 1) >= 2
             and bool((hello.get("credential_capability") or {}).get("sealed_credentials"))
@@ -878,7 +908,11 @@ class ClusterSyncWorker:
                 pushed_config_blobs, pushed_secret_blobs, pushed_sealed_blobs = self._push_blobs_for_operations(peer, local_node_id, push_ops)
                 pushed_ops = self._push_operations(peer, local_node_id, push_ops)
                 if pushed_ops:
-                    self._remote_rebuild_and_materialize(peer, local_node_id)
+                    self._remote_rebuild_and_materialize(
+                        peer,
+                        local_node_id,
+                        include_pb8=peer_pb8_capable,
+                    )
             else:
                 pushed_config_blobs = int(fast_result.get("config_blobs") or 0)
                 pushed_secret_blobs = int(fast_result.get("secret_blobs") or 0)
@@ -950,6 +984,8 @@ class ClusterSyncWorker:
             "repaired_sealed_blobs": repaired_sealed_blobs,
             "recovered_local_blobs": recovered_local_blobs,
             "deferred_credential_ops": deferred_credential_ops,
+            "deferred_pb8_ops": deferred_pb8_ops,
+            "pb8_capability": peer_pb8_capable,
             "remaining_push_ops": remaining_push_ops,
             "cluster_ssh_key_updated": key_changed,
             "mailbox_supported": mailbox_counts["supported"],
@@ -1555,17 +1591,29 @@ class ClusterSyncWorker:
                 return None
             raise
 
-    def _remote_rebuild_and_materialize(self, peer: dict[str, Any], local_node_id: str) -> None:
+    def _remote_rebuild_and_materialize(
+        self,
+        peer: dict[str, Any],
+        local_node_id: str,
+        *,
+        include_pb8: bool,
+    ) -> None:
         """Rebuild and materialize local files on a peer after a successful push."""
 
         self.peer_client.run(peer, local_node_id, "rebuild")
         self.peer_client.run(peer, local_node_id, "materialize-v7")
         api_preview = self.peer_client.run(peer, local_node_id, "materialize-api-keys-preview")
+        api_result = api_preview
         if api_preview.get("can_apply"):
-            self.peer_client.run(peer, local_node_id, "materialize-api-keys")
+            api_result = self.peer_client.run(peer, local_node_id, "materialize-api-keys")
         credential_preview = self.peer_client.run(peer, local_node_id, "materialize-credentials-preview")
+        credential_result = credential_preview
         if credential_preview.get("can_apply"):
-            self.peer_client.run(peer, local_node_id, "materialize-credentials")
+            credential_result = self.peer_client.run(peer, local_node_id, "materialize-credentials")
+        if include_pb8 and not _pb8_projection_blockers(api_result, credential_result):
+            pb8_preview = self.peer_client.run(peer, local_node_id, "materialize-v8-preview")
+            if pb8_preview.get("can_apply"):
+                self.peer_client.run(peer, local_node_id, "materialize-v8")
 
 
 class ClusterSyncWorkerError(RuntimeError):
@@ -1650,6 +1698,66 @@ def _compact_materialization(payload: dict[str, Any]) -> dict[str, Any]:
         "reason": str(payload.get("reason") or "") if isinstance(payload, dict) else "",
         "counts": counts if isinstance(counts, dict) else {},
     }
+
+
+def _pb8_projection_blockers(
+    api_key_result: dict[str, Any],
+    credential_result: dict[str, Any],
+) -> list[str]:
+    """Return deterministic blockers that must clear before PB8 config writes."""
+
+    blockers: list[str] = []
+    api_counts = api_key_result.get("counts") if isinstance(api_key_result, dict) else {}
+    api_error = (
+        not isinstance(api_key_result, dict)
+        or api_key_result.get("ok") is False
+        or int((api_counts if isinstance(api_counts, dict) else {}).get("error") or 0) > 0
+    )
+    if api_error:
+        blockers.append("pb8_exchange_api_key_projection_error")
+    elif str(api_key_result.get("status") or "") == "missing":
+        blockers.append("pb8_exchange_api_key_metadata_missing")
+    else:
+        projection_paths = api_key_result.get("projection_paths")
+        projection_paths = projection_paths if isinstance(projection_paths, dict) else {}
+        projections = api_key_result.get("projections")
+        projections = projections if isinstance(projections, dict) else {}
+        pb8_projection = str(projections.get("pb8") or "")
+        projection_written = (
+            str(api_key_result.get("status") or "") == "written"
+            and pb8_projection == "write"
+        )
+        if "pb8" not in projection_paths or "pb8" not in projections:
+            blockers.append("pb8_exchange_api_key_projection_target_missing")
+        elif pb8_projection != "current" and not projection_written:
+            blockers.append("pb8_exchange_api_key_projection_not_current")
+    credential_counts = credential_result.get("counts") if isinstance(credential_result, dict) else {}
+    if (
+        not isinstance(credential_result, dict)
+        or credential_result.get("ok") is False
+        or int((credential_counts if isinstance(credential_counts, dict) else {}).get("error") or 0) > 0
+    ):
+        blockers.append("credential_projection_not_current")
+    projection = (
+        credential_result.get("tradfi_projection")
+        if isinstance(credential_result, dict)
+        else None
+    )
+    if isinstance(projection, dict) and str(projection.get("status") or "") not in {
+        "current",
+        "removed",
+        "not_recipient",
+    }:
+        blockers.append("tradfi_api_key_projection_not_current")
+    return blockers
+
+
+def _pb8_desired_state_active(materialized: dict[str, Any]) -> bool:
+    """Return whether PB8 desired state requires PB8-capable peers."""
+
+    desired = materialized.get("desired_state") if isinstance(materialized, dict) else {}
+    desired = desired if isinstance(desired, dict) else {}
+    return bool(desired.get("pb8_instances") or desired.get("pb8_tombstones"))
 
 
 def _compact_cluster_ssh_key(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1948,6 +2056,26 @@ def _select_operations_missing_on_remote(local_operations: list[dict[str, Any]],
     return selected
 
 
+def _partition_operations_for_peer_capabilities(
+    operations: list[dict[str, Any]],
+    capabilities: list[str],
+) -> tuple[list[dict[str, Any]], int]:
+    """Keep capability-safe actor prefixes so a deferred PB8 op cannot create gaps."""
+
+    accepted: list[dict[str, Any]] = []
+    deferred = 0
+    blocked_actors: set[str] = set()
+    for operation in operations:
+        actor = str(operation.get("actor") or "")
+        op = str(operation.get("op") or "")
+        if actor in blocked_actors or not supports_cluster_operation(op, capabilities):
+            blocked_actors.add(actor)
+            deferred += 1
+            continue
+        accepted.append(operation)
+    return accepted, deferred
+
+
 def _operation_hash_refs(operation: dict[str, Any]) -> dict[str, list[str]]:
     """Return blob hashes referenced by one operation."""
 
@@ -2043,10 +2171,12 @@ def _collect_local_blobs_for_operations(
         if str(operation.get("op") or "") == "CREDENTIAL_CUTOFF"
         for blob_hash in operation.get("obsolete_secret_blob_hashes") or []
     )
-    latest_config_index: dict[str, int] = {}
+    latest_config_index: dict[tuple[str, str], int] = {}
     for index, operation in enumerate(operations):
-        if str(operation.get("op") or "") == "UPSERT_CONFIG" and str(operation.get("instance") or ""):
-            latest_config_index[str(operation["instance"])] = index
+        op = str(operation.get("op") or "")
+        if op in {"UPSERT_CONFIG", "UPSERT_PB8_CONFIG"} and str(operation.get("instance") or ""):
+            family = "pb8" if op in PB8_OPS else "v7"
+            latest_config_index[(family, str(operation["instance"]))] = index
     for index, operation in enumerate(operations):
         refs = _operation_hash_refs(operation)
         for manifest_hash in refs["config"]:
@@ -2054,9 +2184,11 @@ def _collect_local_blobs_for_operations(
                 manifest_blobs = _collect_config_manifest_blobs(cluster_root, operation, manifest_hash)
             except (OSError, ClusterSyncWorkerError):
                 instance = str(operation.get("instance") or "")
+                op = str(operation.get("op") or "")
+                family = "pb8" if op in PB8_OPS else "v7"
                 is_superseded = (
-                    str(operation.get("op") or "") == "UPSERT_CONFIG"
-                    and latest_config_index.get(instance, index) > index
+                    op in {"UPSERT_CONFIG", "UPSERT_PB8_CONFIG"}
+                    and latest_config_index.get((family, instance), index) > index
                 )
                 if is_superseded:
                     continue
@@ -2101,12 +2233,14 @@ def _collect_config_manifest_blobs(cluster_root: Path, operation: dict[str, Any]
 
 
 def _build_local_config_blobs_from_instance(cluster_root: Path, operation: dict[str, Any], expected_hash: str) -> bytes:
-    """Create local config blobs from the source run_v7 instance when available."""
+    """Create local config blobs from the operation family's source instance."""
 
     instance = str(operation.get("instance") or "")
     if not instance:
         raise ClusterSyncWorkerError("operation has no instance for config blob rebuild")
-    instance_dir = Path(cluster_root).parent / "run_v7" / instance
+    op = str(operation.get("op") or "")
+    run_family = "run_v8" if op in PB8_OPS else "run_v7"
+    instance_dir = Path(cluster_root).parent / run_family / instance
     manifest = build_config_manifest(instance_dir)
     actual_hash = compute_config_manifest_hash(manifest)
     if actual_hash != expected_hash:

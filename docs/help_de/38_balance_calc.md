@@ -6,7 +6,7 @@ Der gemeinsame Balance Calculator schätzt das erforderliche Wallet-Guthaben fü
 
 Die eigenständige Seite lässt sich öffnen über:
 
-- **Information → Balance Calculator**: eine PBv7-Instanz laden oder eine PBv7-/PBv8-Config einfügen
+- **Information → Balance Calculator**: eine PBv7- oder PBv8-Instanz laden oder eine PBv7-/PBv8-Config einfügen
 - **PBv7 → Run**: bei einer Instanz die Aktion **$** anklicken
 - **PBv7 → Backtest**: eine Config öffnen oder ein Result auswählen und **Balance Calculator** anklicken
 - **PBv8 → Backtest**: eine Config öffnen oder ein PBv8-Result auswählen und **Balance Calculator** anklicken
@@ -20,13 +20,13 @@ Bei PBv8 wird ein exakter `approved_coins`-Wert `all` anhand des lokalen Mapping
 | Bereich | Inhalt |
 |---------|--------|
 | Linke Spalte | Bearbeitbares Konfigurations-JSON |
-| Toolbar | Optionale PBv7-Instanz, Exchange-Auswahl und Calculate-Schaltfläche |
+| Toolbar | Optionale versionsgekennzeichnete PBv7-/PBv8-Instanz, Exchange-Auswahl und Calculate-Schaltfläche |
 | Rechte Spalte | Empfehlung, Guthaben je Seite und Coin-Mindestorderinformationen |
 
 ## Workflow
 
 1. Den Calculator über Information, Run oder Backtest öffnen.
-2. Eine PBv7-Instanz laden, einen Backtest-Absprung verwenden oder eine PBv7-/PBv8-Config einfügen.
+2. Eine versionsgekennzeichnete PBv7-/PBv8-Instanz laden, einen Backtest-Absprung verwenden oder eine PBv7-/PBv8-Config einfügen.
 3. **Exchange** auswählen, falls mehrere Exchanges konfiguriert sind.
 4. Optional das Config-JSON in der linken Textarea bearbeiten.
 5. **Calculate** klicken, um die Guthaben-Anforderungen zu berechnen.

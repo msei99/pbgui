@@ -6,7 +6,7 @@ The shared Balance Calculator estimates the wallet balance required to run a PBv
 
 Open the standalone page from:
 
-- **Information → Balance Calculator**: load a PBv7 instance or paste a PBv7/PBv8 config
+- **Information → Balance Calculator**: load a PBv7 or PBv8 instance, or paste a PBv7/PBv8 config
 - **PBv7 → Run**: click the **$** action on an instance
 - **PBv7 → Backtest**: open a config or select a result and click **Balance Calculator**
 - **PBv8 → Backtest**: open a config or select a PBv8 result and click **Balance Calculator**
@@ -20,13 +20,13 @@ For PBv8, an exact `approved_coins` value of `all` is expanded from the selected
 | Area | Content |
 |------|---------|
 | Left column | Editable config JSON |
-| Toolbar | Optional PBv7 instance, exchange selector, and Calculate button |
+| Toolbar | Optional version-labelled PBv7/PBv8 instance, exchange selector, and Calculate button |
 | Right column | Recommendation, per-side balances, and coin minimum-order information |
 
 ## Workflow
 
 1. Open the calculator from Information, Run, or Backtest.
-2. Load a PBv7 instance, follow a Backtest handoff, or paste a PBv7/PBv8 config.
+2. Load a version-labelled PBv7/PBv8 instance, follow a Backtest handoff, or paste a PBv7/PBv8 config.
 3. Select the **Exchange** if multiple exchanges are configured.
 4. Optionally edit the config JSON directly in the left text area.
 5. Click **Calculate** to compute the balance requirements.

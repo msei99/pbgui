@@ -3,7 +3,7 @@
 
 The script is intended for OpenSSH forced-command use. It accepts one small
 Cluster Sync command through SSH_ORIGINAL_COMMAND, validates the peer node, and
-limits writes to cluster state plus explicit V7 config materialization.
+limits writes to cluster state plus explicit V7/PB8 config materialization.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import shutil
 import sys
 import time
 import uuid
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,8 @@ from file_lock import advisory_file_lock
 from master.cluster_state import (
     ClusterPaths,
     ClusterStateError,
+    PB8_OPERATION_CAPABILITY,
+    SYNC_EXCLUDE_FILES,
     V2_CREDENTIAL_OPS,
     append_operation,
     build_config_manifest,
@@ -83,7 +86,7 @@ from pb7_api_keys import (
     exchange_payload,
     project_active_tradfi_profiles,
 )
-from pbgui_purefunc import PBGDIR, pb7dir
+from pbgui_purefunc import PBGDIR, pb7dir, pb8dir
 from secure_files import atomic_write_private_bytes, ensure_private_directory_tree
 
 PROTOCOL_VERSION = 2
@@ -119,6 +122,7 @@ READ_VERBS = frozenset({
     *MAILBOX_INDEX_VERBS,
     *MAILBOX_GET_VERBS,
     "materialize-v7-preview",
+    "materialize-v8-preview",
     "materialize-api-keys-preview",
     "materialize-credentials-preview",
     "get-checkpoint-state",
@@ -128,7 +132,7 @@ READ_VERBS = frozenset({
     "join-state-vector",
     "join-get-ops",
 })
-WRITE_VERBS = frozenset({"join", "join-hello", "join-checkpoint", "join-register", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "rebuild", "materialize-v7", "materialize-api-keys", "materialize-credentials", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", *MAILBOX_PUT_VERBS, *MAILBOX_ACK_VERBS})
+WRITE_VERBS = frozenset({"join", "join-hello", "join-checkpoint", "join-register", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "rebuild", "materialize-v7", "materialize-v8", "materialize-api-keys", "materialize-credentials", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", *MAILBOX_PUT_VERBS, *MAILBOX_ACK_VERBS})
 STDIN_VERBS = frozenset({"join-checkpoint", "join-register", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", "missing-blobs", *MAILBOX_PUT_VERBS})
 SUPPORTED_VERBS = READ_VERBS | WRITE_VERBS
 
@@ -405,6 +409,8 @@ def run_command(
         return {"ok": True, "message": message}
     if verb == "materialize-v7-preview":
         return _materialize_v7_configs(root, write=False)
+    if verb == "materialize-v8-preview":
+        return _materialize_pb8_configs(root, write=False)
     if verb == "materialize-api-keys-preview":
         return _materialize_api_keys(root, write=False)
     if verb == "materialize-credentials-preview":
@@ -509,9 +515,12 @@ def run_command(
             "generation": int((materialized.get("cluster_nodes") or {}).get("generation") or 0),
             "nodes": len(((materialized.get("cluster_nodes") or {}).get("nodes") or {})),
             "instances": len(((materialized.get("desired_state") or {}).get("instances") or {})),
+            "pb8_instances": len(((materialized.get("desired_state") or {}).get("pb8_instances") or {})),
         }
     if verb == "materialize-v7":
         return _materialize_v7_configs(root, write=True)
+    if verb == "materialize-v8":
+        return _materialize_pb8_configs(root, write=True)
     if verb == "materialize-api-keys":
         return _materialize_api_keys(root, write=True)
     if verb == "materialize-credentials":
@@ -695,7 +704,7 @@ def _hello_payload(cluster_root: Path, identity: dict[str, Any], remote_node: st
                 "secret_encryption": "HPKE-X25519-HKDF-SHA256-AES128GCM",
                 "audiences": ["cluster", "masters"],
             },
-            "capabilities": ["sealed_credentials_v2"],
+            "capabilities": ["sealed_credentials_v2", PB8_OPERATION_CAPABILITY],
         })
     except Exception as exc:
         payload["credential_capability"] = {
@@ -1241,6 +1250,168 @@ def _backup_and_delete_tombstoned_v7_dir(cluster_root: Path, target: Path, insta
     return backup_path
 
 
+def _materialize_pb8_configs(cluster_root: Path, *, write: bool) -> dict[str, Any]:
+    """Preview or exactly reconcile PB8 JSON config blobs into data/run_v8."""
+
+    run_root = Path(cluster_root).parent / "run_v8"
+    transaction = advisory_file_lock(run_root / ".write") if write else nullcontext()
+    with transaction:
+        materialized = _safe_state_call(
+            lambda: rebuild_materialized_state(cluster_root) if write else read_materialized_state(cluster_root)
+        )
+        identity = _safe_state_call(lambda: read_local_identity(cluster_root))
+        desired_state = materialized.get("desired_state") if isinstance(materialized, dict) else {}
+        desired_state = desired_state if isinstance(desired_state, dict) else {}
+        node_id = str(identity["node_id"])
+        materialize_all = str(identity.get("role") or "").strip().lower() == "master"
+        plan = _build_materialize_pb8_plan(
+            Path(cluster_root),
+            run_root,
+            node_id,
+            desired_state,
+            materialize_all=materialize_all,
+        )
+        blockers = _pb8_materialization_blockers(
+            Path(cluster_root),
+            desired_state,
+            node_id,
+            materialize_all=materialize_all,
+        )
+        if blockers:
+            plan.update({
+                "ok": False,
+                "status": "blocked",
+                "reason": "; ".join(blockers),
+                "blockers": blockers,
+                "can_apply": False,
+            })
+        if not write:
+            plan.setdefault("ok", True)
+            plan["read_only"] = True
+            return plan
+        if blockers:
+            raise ClusterSyncCommandError(f"PB8 materialization blocked: {'; '.join(blockers)}")
+        if int((plan.get("counts") or {}).get("error") or 0) > 0:
+            raise ClusterSyncCommandError("PB8 materialization blocked by missing or invalid blobs")
+
+        reconciled: list[dict[str, Any]] = []
+        deleted: list[dict[str, Any]] = []
+        for item in plan.get("items") or []:
+            if (
+                not isinstance(item, dict)
+                or item.get("action") not in {"add", "update", "remove"}
+                or item.get("status") != "ready"
+            ):
+                continue
+            instance = str(item.get("instance") or "")
+            _validate_relative_name(instance, "instance")
+            target_dir = run_root / instance
+            removals = [
+                str(file_item.get("name") or "")
+                for file_item in item.get("files") or []
+                if isinstance(file_item, dict) and file_item.get("action") == "remove"
+            ]
+            backup_path = _backup_and_remove_pb8_files(
+                Path(cluster_root), target_dir, instance, removals
+            )
+            files_written = 0
+            for file_item in item.get("files") or []:
+                if not isinstance(file_item, dict) or file_item.get("action") != "write":
+                    continue
+                filename = str(file_item.get("name") or "")
+                blob_hash = str(file_item.get("hash") or "")
+                _validate_relative_name(filename, "config filename")
+                raw = _read_verified_blob(
+                    ClusterPaths.from_root(cluster_root).config_blobs,
+                    blob_hash,
+                    f"file blob for {instance}/{filename}",
+                )
+                _atomic_write_bytes(target_dir / filename, raw, mode=0o644)
+                files_written += 1
+            reconciled.append({
+                "instance": instance,
+                "files_written": files_written,
+                "files_removed": len(removals),
+                "backup": str(backup_path) if backup_path is not None else "",
+            })
+        for item in plan.get("items") or []:
+            if not isinstance(item, dict) or item.get("action") != "delete" or item.get("status") != "ready":
+                continue
+            instance = str(item.get("instance") or "")
+            _validate_relative_name(instance, "instance")
+            target = run_root / instance
+            if not target.is_dir():
+                continue
+            backup_path = _backup_and_delete_pb8_dir(Path(cluster_root), target, instance)
+            deleted.append({"instance": instance, "backup": str(backup_path)})
+
+        counts = dict(plan.get("counts") or {})
+        counts["written_instances"] = sum(bool(item["files_written"]) for item in reconciled)
+        counts["written_files"] = sum(int(item["files_written"]) for item in reconciled)
+        counts["removed_files"] = sum(int(item["files_removed"]) for item in reconciled)
+        counts["deleted_instances"] = len(deleted)
+        plan.update({
+            "ok": True,
+            "read_only": False,
+            "counts": counts,
+            "reconciled": reconciled,
+            "deleted": deleted,
+            "message": "PB8 JSON configs were exactly reconciled from verified blobs; removed files were backed up. No bots were started or stopped.",
+        })
+        return plan
+
+
+def _backup_and_remove_pb8_files(
+    cluster_root: Path,
+    target_dir: Path,
+    instance: str,
+    filenames: list[str],
+) -> Path | None:
+    """Back up and remove obsolete syncable PB8 JSON files."""
+
+    if not filenames:
+        return None
+    if target_dir.is_symlink():
+        raise ClusterSyncCommandError("PB8 instance directory must not be a symlink")
+    backup_path = _new_pb8_backup_path(cluster_root, instance, "cluster_reconcile")
+    backup_path.mkdir(parents=True)
+    for filename in sorted(set(filenames)):
+        _validate_relative_name(filename, "config filename")
+        source = target_dir / filename
+        if source.is_symlink() or not source.is_file():
+            raise ClusterSyncCommandError(f"PB8 removal target is unavailable: {instance}/{filename}")
+        shutil.copy2(source, backup_path / filename)
+        source.unlink()
+    try:
+        target_dir.rmdir()
+    except OSError:
+        pass
+    return backup_path
+
+
+def _backup_and_delete_pb8_dir(cluster_root: Path, target: Path, instance: str) -> Path:
+    """Back up then remove a PB8 directory covered by a Cluster tombstone."""
+
+    if target.is_symlink():
+        raise ClusterSyncCommandError("PB8 instance directory must not be a symlink")
+    backup_path = _new_pb8_backup_path(cluster_root, instance, "cluster_tombstone")
+    shutil.copytree(target, backup_path)
+    shutil.rmtree(target)
+    return backup_path
+
+
+def _new_pb8_backup_path(cluster_root: Path, instance: str, prefix: str) -> Path:
+    """Return a collision-safe PB8 cluster reconciliation backup path."""
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    backup_root = Path(cluster_root).parent / "backup" / "v8" / instance
+    backup_root.mkdir(parents=True, exist_ok=True)
+    path = backup_root / f"{prefix}_{timestamp}"
+    if path.exists():
+        path = backup_root / f"{prefix}_{timestamp}_{uuid.uuid4().hex[:8]}"
+    return path
+
+
 def _repair_local_v7_config_blobs(
     cluster_root: Path,
     run_root: Path,
@@ -1301,44 +1472,42 @@ def _materialize_api_keys(cluster_root: Path, *, write: bool) -> dict[str, Any]:
     if not plan.get("can_apply"):
         raise ClusterSyncCommandError(str(plan.get("reason") or "api-keys materialization is not ready"))
 
-    target = Path(str(plan.get("path") or ""))
     secret_hash = str(plan.get("secret_blob_hash") or "")
     raw = _read_verified_blob(ClusterPaths.from_root(cluster_root).secret_blobs, secret_hash, "api-keys secret blob")
     source_payload = _read_json_payload(raw, MAX_SECRET_BLOB_BYTES)
-    writer = PB7ApiKeysMergeWriter(
-        target,
-        Path(cluster_root).parent / "credentials" / "pb7_projection.json",
-    )
-    current = writer.read()
-    needs_replacement_backup = bool(
-        target.is_file() and exchange_payload(current) != exchange_payload(source_payload)
-    )
     is_vps_runner = str(identity.get("role") or "").strip().lower() == "vps"
-    backup_file = None
-    if not is_vps_runner and needs_replacement_backup:
-        backup_dir = Path(PBGDIR) / "data" / "api-keys"
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        backup_file = backup_dir / f"api-keys7_cluster-materialize_{timestamp}.json"
-        plan["backup"] = str(backup_file)
-    elif is_vps_runner and needs_replacement_backup:
-        plan["backup_skipped"] = "vps_runner"
-    writer.write_exchange_payload(
-        source_payload,
-        expected_generation=int(current.get("_api_serial") or 0),
-        backup_path=backup_file,
-    )
-    if exchange_payload(writer.read()) != exchange_payload(source_payload):
-        raise ClusterSyncCommandError("exchange API-key merge verification failed")
+    written = 0
+    for projection_name, target, status_path in _api_keys_projection_targets(cluster_root):
+        writer = PB7ApiKeysMergeWriter(target, status_path)
+        current = writer.read()
+        if exchange_payload(current) == exchange_payload(source_payload):
+            continue
+        backup_file = None
+        if projection_name == "pb7" and not is_vps_runner and target.is_file():
+            backup_dir = Path(PBGDIR) / "data" / "api-keys"
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            backup_file = backup_dir / f"api-keys7_cluster-materialize_{timestamp}.json"
+            plan["backup"] = str(backup_file)
+        elif projection_name == "pb7" and is_vps_runner and target.is_file():
+            plan["backup_skipped"] = "vps_runner"
+        writer.write_exchange_payload(
+            source_payload,
+            expected_generation=int(current.get("_api_serial") or 0),
+            backup_path=backup_file,
+        )
+        if exchange_payload(writer.read()) != exchange_payload(source_payload):
+            raise ClusterSyncCommandError(f"{projection_name} exchange API-key projection verification failed")
+        written += 1
 
     counts = dict(plan.get("counts") or {})
-    counts["written"] = 1
+    counts["written"] = written
     plan.update({
         "ok": True,
         "read_only": False,
         "counts": counts,
         "action": "write",
         "status": "written",
-        "message": "Exchange API keys were merged from Cluster Sync. No bots were restarted.",
+        "message": "Exchange API keys were projected for configured runtimes. No bots were restarted.",
     })
     return plan
 
@@ -1347,11 +1516,13 @@ def _build_materialize_api_keys_plan(cluster_root: Path, desired_state: dict[str
     """Build a read-only plan for api-keys.json materialization."""
 
     api_keys = desired_state.get("api_keys") if isinstance(desired_state, dict) else None
-    target = _api_keys_target_path()
+    projection_targets = _api_keys_projection_targets(cluster_root)
+    target = projection_targets[0][1]
     base: dict[str, Any] = {
         "cluster_id": str(desired_state.get("cluster_id") or ""),
         "node_id": node_id,
         "path": str(target),
+        "projection_paths": {name: str(path) for name, path, _status in projection_targets},
         "counts": {"write": 0, "current": 0, "error": 0, "missing": 0, "written": 0},
         "can_apply": False,
     }
@@ -1370,12 +1541,16 @@ def _build_materialize_api_keys_plan(cluster_root: Path, desired_state: dict[str
     try:
         raw = _read_verified_blob(ClusterPaths.from_root(cluster_root).secret_blobs, secret_hash, "api-keys secret blob")
         source_payload = _read_json_payload(raw, MAX_SECRET_BLOB_BYTES)
-        writer = PB7ApiKeysMergeWriter(
-            target,
-            Path(cluster_root).parent / "credentials" / "pb7_projection.json",
-        )
-        current_payload = writer.read()
-        if exchange_payload(current_payload) == exchange_payload(source_payload):
+        projection_status: dict[str, str] = {}
+        all_current = True
+        for projection_name, projection_target, status_path in projection_targets:
+            writer = PB7ApiKeysMergeWriter(projection_target, status_path)
+            current_payload = writer.read()
+            current = exchange_payload(current_payload) == exchange_payload(source_payload)
+            projection_status[projection_name] = "current" if current else "write"
+            all_current = all_current and current
+        base["projections"] = projection_status
+        if all_current:
             base.update({"action": "skip", "status": "current", "reason": "exchange API keys already match desired state"})
             base["counts"]["current"] = 1
         else:
@@ -2296,6 +2471,87 @@ def _api_keys_target_path() -> Path:
     return Path(PBGDIR) / "api-keys.json"
 
 
+def _api_keys_projection_targets(cluster_root: Path) -> list[tuple[str, Path, Path]]:
+    """Return distinct PB7 and configured PB8 exchange-key projection targets."""
+
+    credentials_root = Path(cluster_root).parent / "credentials"
+    targets = [("pb7", _api_keys_target_path(), credentials_root / "pb7_projection.json")]
+    try:
+        pb8_directory = str(pb8dir() or "").strip()
+    except Exception:
+        pb8_directory = ""
+    pb8_root = Path(pb8_directory).resolve(strict=False) if pb8_directory else None
+    install_root = Path(PBGDIR).resolve(strict=False).parent
+    if pb8_root is not None and pb8_root.parent == install_root and (pb8_root / ".git").is_dir():
+        pb8_target = pb8_root / "api-keys.json"
+        if pb8_target != targets[0][1]:
+            targets.append(("pb8", pb8_target, credentials_root / "pb8_projection.json"))
+    return targets
+
+
+def _pb8_materialization_blockers(
+    cluster_root: Path,
+    desired_state: dict[str, Any],
+    node_id: str,
+    *,
+    materialize_all: bool,
+) -> list[str]:
+    """Return secret-free prerequisites for locally desired PB8 configs."""
+
+    instances = desired_state.get("pb8_instances") if isinstance(desired_state, dict) else {}
+    instances = instances if isinstance(instances, dict) else {}
+    local_instance_desired = any(
+        isinstance(item, dict)
+        and item.get("conflicted") is not True
+        and (materialize_all or str(item.get("assigned_host") or "") == node_id)
+        for item in instances.values()
+    )
+    if not local_instance_desired:
+        return []
+
+    blockers: list[str] = []
+    try:
+        pb8_directory = str(pb8dir() or "").strip()
+    except Exception:
+        pb8_directory = ""
+    pb8_root = Path(pb8_directory).resolve(strict=False) if pb8_directory else None
+    install_root = Path(PBGDIR).resolve(strict=False).parent
+    runtime_cloned = bool(
+        pb8_root is not None
+        and pb8_root.parent == install_root
+        and (pb8_root / ".git").is_dir()
+    )
+    if not runtime_cloned:
+        blockers.append("PB8 runtime is not cloned; exchange-key projection is unavailable")
+
+    if not isinstance(desired_state.get("api_keys"), dict):
+        blockers.append("desired api_keys metadata is missing for PB8 exchange-key projection")
+        return blockers
+
+    projection_plan = _build_materialize_api_keys_plan(cluster_root, desired_state, node_id)
+    projection_counts = projection_plan.get("counts") if isinstance(projection_plan, dict) else {}
+    projection_error = (
+        not isinstance(projection_plan, dict)
+        or str(projection_plan.get("status") or "") == "error"
+        or int((projection_counts if isinstance(projection_counts, dict) else {}).get("error") or 0) > 0
+    )
+    if projection_error:
+        blockers.append("PB8 exchange-key projection check failed")
+        return blockers
+
+    projection_paths = projection_plan.get("projection_paths")
+    projection_paths = projection_paths if isinstance(projection_paths, dict) else {}
+    if runtime_cloned and "pb8" not in projection_paths:
+        blockers.append("PB8 exchange-key projection target is omitted")
+        return blockers
+
+    projections = projection_plan.get("projections")
+    projections = projections if isinstance(projections, dict) else {}
+    if runtime_cloned and str(projections.get("pb8") or "") != "current":
+        blockers.append("PB8 exchange-key projection is not current")
+    return blockers
+
+
 def _build_materialize_v7_plan(
     cluster_root: Path,
     run_root: Path,
@@ -2396,6 +2652,175 @@ def _build_materialize_v7_plan(
         "can_apply": counts["error"] == 0 and (counts["add"] + counts["update"] + counts["delete"]) > 0,
         "message": "Preview only. Apply writes V7 JSON configs from config blobs and removes backed-up local tombstone directories without starting/stopping bots.",
     }
+
+
+def _build_materialize_pb8_plan(
+    cluster_root: Path,
+    run_root: Path,
+    node_id: str,
+    desired_state: dict[str, Any],
+    *,
+    materialize_all: bool = False,
+) -> dict[str, Any]:
+    """Build a read-only exact-reconciliation plan for PB8 JSON configs."""
+
+    paths = ClusterPaths.from_root(cluster_root)
+    instances = desired_state.get("pb8_instances") if isinstance(desired_state, dict) else {}
+    tombstones = desired_state.get("pb8_tombstones") if isinstance(desired_state, dict) else {}
+    instances = instances if isinstance(instances, dict) else {}
+    tombstones = tombstones if isinstance(tombstones, dict) else {}
+    counts: dict[str, int] = {
+        "add": 0,
+        "update": 0,
+        "remove": 0,
+        "skip": 0,
+        "delete": 0,
+        "not_assigned": 0,
+        "conflicted": 0,
+        "tombstoned": 0,
+        "error": 0,
+        "files_to_write": 0,
+        "files_to_remove": 0,
+        "dirs_to_delete": 0,
+    }
+    items: list[dict[str, Any]] = []
+    if run_root.is_symlink():
+        raise ClusterSyncCommandError("run_v8 root must not be a symlink")
+
+    for name in sorted(instances):
+        item = instances.get(name) if isinstance(instances.get(name), dict) else {}
+        row: dict[str, Any] = {
+            "instance": str(name),
+            "assigned_host": str(item.get("assigned_host") or ""),
+            "desired_state": str(item.get("desired_state") or ""),
+            "version": str(item.get("version") or ""),
+            "config_manifest_hash": str(item.get("config_manifest_hash") or ""),
+            "files": [],
+        }
+        try:
+            _validate_relative_name(str(name), "instance")
+            target_dir = run_root / str(name)
+            if target_dir.is_symlink():
+                raise ClusterSyncCommandError("PB8 instance directory must not be a symlink")
+            if item.get("conflicted") is True:
+                _mark_materialize_skip(row, counts, "conflicted", "desired state is conflicted")
+            elif not materialize_all and str(item.get("assigned_host") or "") != node_id:
+                removals = _local_pb8_syncable_json_names(target_dir)
+                if removals:
+                    row["files"] = [{"name": filename, "action": "remove"} for filename in removals]
+                    row.update({
+                        "action": "remove",
+                        "status": "ready",
+                        "reason": f"{len(removals)} local PB8 JSON file(s) are assigned to another node",
+                    })
+                    counts["remove"] += 1
+                    counts["not_assigned"] += 1
+                    counts["files_to_remove"] += len(removals)
+                else:
+                    _mark_materialize_skip(row, counts, "not_assigned", "instance is assigned to another node")
+            else:
+                _populate_pb8_materialize_files(paths.config_blobs, target_dir, row)
+                files_to_write = sum(1 for file_item in row["files"] if file_item.get("action") == "write")
+                files_to_remove = sum(1 for file_item in row["files"] if file_item.get("action") == "remove")
+                if files_to_write or files_to_remove:
+                    row["action"] = "add" if not target_dir.is_dir() else "update"
+                    row["status"] = "ready"
+                    row["reason"] = (
+                        f"{files_to_write} file(s) need materialization and "
+                        f"{files_to_remove} obsolete file(s) need backup/removal"
+                    )
+                    counts[row["action"]] += 1
+                    counts["files_to_write"] += files_to_write
+                    counts["files_to_remove"] += files_to_remove
+                else:
+                    _mark_materialize_skip(row, counts, "current", "local PB8 JSON files exactly match desired state")
+        except Exception as exc:
+            row.update({"action": "skip", "status": "error", "reason": str(exc)})
+            counts["error"] += 1
+        items.append(row)
+
+    for name in sorted(set(tombstones) - set(instances)):
+        item = tombstones.get(name) if isinstance(tombstones.get(name), dict) else {}
+        row = {
+            "instance": str(name),
+            "action": "skip",
+            "status": "tombstoned",
+            "reason": "PB8 instance is tombstoned; materialization never recreates tombstones",
+            "version": str(item.get("version") or ""),
+            "files": [],
+        }
+        try:
+            _validate_relative_name(str(name), "instance")
+            target = run_root / str(name)
+            if target.is_symlink():
+                raise ClusterSyncCommandError("PB8 instance directory must not be a symlink")
+            if target.is_dir():
+                row.update({
+                    "action": "delete",
+                    "status": "ready",
+                    "reason": "local PB8 directory is tombstoned and will be backed up before removal",
+                    "path": str(target),
+                })
+                counts["delete"] += 1
+                counts["dirs_to_delete"] += 1
+            else:
+                counts["skip"] += 1
+        except Exception as exc:
+            row.update({"action": "skip", "status": "error", "reason": str(exc)})
+            counts["error"] += 1
+        counts["tombstoned"] += 1
+        items.append(row)
+
+    return {
+        "cluster_id": str(desired_state.get("cluster_id") or ""),
+        "node_id": node_id,
+        "materialize_all": bool(materialize_all),
+        "run_v8_root": str(run_root),
+        "counts": counts,
+        "items": items,
+        "can_apply": counts["error"] == 0 and (
+            counts["add"] + counts["update"] + counts["remove"] + counts["delete"]
+        ) > 0,
+        "message": "Preview only. Apply exactly reconciles syncable PB8 JSON files from verified config blobs and backs up every removal.",
+    }
+
+
+def _populate_pb8_materialize_files(
+    config_blobs_root: Path,
+    target_dir: Path,
+    row: dict[str, Any],
+) -> None:
+    """Populate verified PB8 manifest rows plus obsolete local JSON removals."""
+
+    _populate_materialize_files(config_blobs_root, target_dir, row)
+    expected_names: set[str] = set()
+    for item in row["files"]:
+        filename = str(item.get("name") or "")
+        if Path(filename).suffix != ".json" or filename in SYNC_EXCLUDE_FILES:
+            raise ClusterSyncCommandError(f"PB8 manifest contains non-syncable config filename: {filename}")
+        expected_names.add(filename)
+    for filename in _local_pb8_syncable_json_names(target_dir):
+        if filename not in expected_names:
+            row["files"].append({"name": filename, "action": "remove"})
+    row["files"].sort(key=lambda item: str(item.get("name") or ""))
+
+
+def _local_pb8_syncable_json_names(target_dir: Path) -> list[str]:
+    """Return local PB8 JSON names governed by exact config reconciliation."""
+
+    if not target_dir.exists():
+        return []
+    if target_dir.is_symlink() or not target_dir.is_dir():
+        raise ClusterSyncCommandError("PB8 instance path must be a regular directory")
+    names: list[str] = []
+    for path in sorted(target_dir.iterdir(), key=lambda item: item.name):
+        if path.suffix != ".json" or path.name in SYNC_EXCLUDE_FILES:
+            continue
+        _validate_relative_name(path.name, "config filename")
+        if path.is_symlink() or not path.is_file():
+            raise ClusterSyncCommandError(f"PB8 syncable config path is not a regular file: {path.name}")
+        names.append(path.name)
+    return names
 
 
 def _mark_materialize_skip(row: dict[str, Any], counts: dict[str, int], status: str, reason: str) -> None:

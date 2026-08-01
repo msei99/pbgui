@@ -225,7 +225,7 @@ def test_hello_returns_identity_for_registered_peer(tmp_path: Path) -> None:
     assert payload["remote_node"] == NODE_B
     assert payload["credential_capability"]["sealed_credentials"] is True
     assert payload["crypto_public_bundle"]["node_id"] == NODE_A
-    assert payload["capabilities"] == ["sealed_credentials_v2"]
+    assert payload["capabilities"] == ["sealed_credentials_v2", "pb8_instances_v1"]
     assert payload["retention_cleanup"]["oplog"]["status"] == "not_evaluated"
     assert payload["retention_cleanup"]["blobs"]["status"] == "not_evaluated"
 
@@ -1629,6 +1629,38 @@ def test_materialize_api_keys_blocks_when_secret_blob_is_missing(tmp_path: Path)
     assert preview["counts"]["error"] == 1
     with pytest.raises(ClusterSyncCommandError, match="missing api-keys secret blob"):
         run_command(root, NODE_B, "materialize-api-keys")
+
+
+def test_materialize_api_keys_projects_exchange_keys_to_pb8(monkeypatch, tmp_path: Path) -> None:
+    """Configured PB8 runtimes receive an independently verified owner-only projection."""
+    root = _init_cluster(tmp_path)
+    pbgui = tmp_path / "pbgui"
+    pb7 = tmp_path / "pb7"
+    pb8 = tmp_path / "pb8"
+    for directory in (pbgui, pb7, pb8):
+        directory.mkdir()
+    (pb8 / ".git").mkdir()
+    monkeypatch.setattr("cluster_sync_command.PBGDIR", str(pbgui))
+    monkeypatch.setattr("cluster_sync_command.pb7dir", lambda: str(pb7))
+    monkeypatch.setattr("cluster_sync_command.pb8dir", lambda: str(pb8))
+    raw_secret = b'{"_api_serial":3,"pb8-user":{"exchange":"bybit","secret":"s"}}'
+    secret_hash = "sha256:" + hashlib.sha256(raw_secret).hexdigest()
+    _write_secret_blob(root, secret_hash, raw_secret)
+    append_operation(
+        root,
+        "UPSERT_API_KEYS",
+        {"api_serial": 3, "payload_hash": HASH_A, "secret_blob_hash": secret_hash},
+        created_at=102,
+    )
+
+    result = run_command(root, NODE_B, "materialize-api-keys")
+    after = run_command(root, NODE_B, "materialize-api-keys-preview")
+
+    pb8_target = pb8 / "api-keys.json"
+    assert result["counts"]["written"] == 2
+    assert json.loads(pb8_target.read_text(encoding="utf-8"))["pb8-user"]["exchange"] == "bybit"
+    assert stat.S_IMODE(pb8_target.stat().st_mode) == 0o600
+    assert after["projections"] == {"pb7": "current", "pb8": "current"}
 
 
 def test_main_does_not_read_stdin_for_hello(monkeypatch, tmp_path: Path, capsys) -> None:

@@ -1,7 +1,7 @@
 """Cluster state helpers for multi-master PBGui synchronization.
 
 This module is intentionally local-only. It creates stable cluster/node
-identity files, validates and appends operations, computes V7 config
+identity files, validates and appends operations, computes versioned config
 manifests, and rebuilds materialized cluster state from the oplog.
 Remote transport, UI wiring, and PBRun integration are separate phases.
 """
@@ -52,6 +52,15 @@ V7_OPS = frozenset({
     "DELETE_INSTANCE",
     "TOMBSTONE_INSTANCE",
 })
+PB8_OPS = frozenset({
+    "UPSERT_PB8_CONFIG",
+    "MOVE_PB8_INSTANCE",
+    "START_PB8_INSTANCE",
+    "STOP_PB8_INSTANCE",
+    "DELETE_PB8_INSTANCE",
+    "TOMBSTONE_PB8_INSTANCE",
+})
+PB8_OPERATION_CAPABILITY = "pb8_instances_v1"
 API_KEY_OPS = frozenset({"UPSERT_API_KEYS"})
 V2_CREDENTIAL_OPS = frozenset({
     "UPSERT_SECRET",
@@ -76,7 +85,7 @@ V2_CREDENTIAL_OPS = frozenset({
 })
 CLUSTER_POLICY_OPS = frozenset({"SET_RETENTION_POLICY"})
 SIGNED_STATE_OPS = V2_CREDENTIAL_OPS | CLUSTER_POLICY_OPS
-SUPPORTED_OPS = MEMBERSHIP_OPS | V7_OPS | API_KEY_OPS | SIGNED_STATE_OPS
+SUPPORTED_OPS = MEMBERSHIP_OPS | V7_OPS | PB8_OPS | API_KEY_OPS | SIGNED_STATE_OPS
 SYNC_MODES = frozenset({"disabled", "outbound_only", "reachable"})
 CMC_KEY_STATES = frozenset({
     "pending", "active", "draining", "disabled", "invalid",
@@ -337,7 +346,7 @@ def append_operation(
             checkpoint = {"active": False}
         requires_signature = bool(
             operation_name in MEMBERSHIP_OPS | SIGNED_STATE_OPS
-            or checkpoint.get("active") is True and operation_name in V7_OPS | API_KEY_OPS
+            or checkpoint.get("active") is True and operation_name in V7_OPS | PB8_OPS | API_KEY_OPS
         )
         if requires_signature:
             if active_actor != str(identity["node_id"]):
@@ -355,7 +364,7 @@ def append_operation(
                 created_at=int(created_at if created_at is not None else time.time()),
             )
         if operation_name in SIGNED_STATE_OPS or (
-            checkpoint.get("active") is True and operation_name in V7_OPS | API_KEY_OPS
+            checkpoint.get("active") is True and operation_name in V7_OPS | PB8_OPS | API_KEY_OPS
         ):
             assert keys is not None
             _ensure_local_crypto_membership(
@@ -645,6 +654,15 @@ def validate_operation(
             if trust is None:
                 trust = _trust_from_nodes(membership_nodes or {})
             _validate_v2_operation_signature(operation, trust, network_input=network_input)
+    elif op in PB8_OPS:
+        _validate_pb8_payload(operation)
+        if operation.get("base_checkpoint_id") is not None:
+            trust = membership_trust
+            if trust is None and cluster_root is not None:
+                trust = _load_membership_trust(cluster_root, expected_cluster_id=cluster_id)
+            if trust is None:
+                trust = _trust_from_nodes(membership_nodes or {})
+            _validate_v2_operation_signature(operation, trust, network_input=network_input)
     elif op in API_KEY_OPS:
         _validate_api_key_payload(operation)
         if operation.get("base_checkpoint_id") is not None:
@@ -758,10 +776,13 @@ def rebuild_materialized_state(cluster_root: Path, *, write: bool = True) -> dic
     removed_node_ids: set[str] = set()
     instances: dict[str, dict[str, Any]] = {}
     tombstones: dict[str, dict[str, Any]] = {}
+    pb8_instances: dict[str, dict[str, Any]] = {}
+    pb8_tombstones: dict[str, dict[str, Any]] = {}
     api_key_operations: list[dict[str, Any]] = []
     retention_policy_operations: list[dict[str, Any]] = []
     actor_sequences: dict[str, set[int]] = {}
     parent_changes: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    pb8_parent_changes: dict[tuple[str, str], list[dict[str, Any]]] = {}
     generated_at = 0
     credential_membership_generation = 0
 
@@ -777,12 +798,15 @@ def rebuild_materialized_state(cluster_root: Path, *, write: bool = True) -> dic
                 credential_membership_generation += 1
         elif op in V7_OPS:
             _apply_v7(instances, tombstones, parent_changes, operation)
+        elif op in PB8_OPS:
+            _apply_pb8(pb8_instances, pb8_tombstones, pb8_parent_changes, operation)
         elif op == "UPSERT_API_KEYS":
             api_key_operations.append(operation)
         elif op in CLUSTER_POLICY_OPS:
             retention_policy_operations.append(operation)
 
     _mark_conflicts(instances, parent_changes)
+    _mark_conflicts(pb8_instances, pb8_parent_changes)
     v2_state = _materialize_v2_credentials(operations)
     cutoff = (v2_state.get("credential_migration") or {}).get("cutoff") or {}
     obsolete_api_key_blobs = set(cutoff.get("obsolete_secret_blob_hashes") or [])
@@ -822,6 +846,8 @@ def rebuild_materialized_state(cluster_root: Path, *, write: bool = True) -> dic
         "generated_at": generated_at,
         "instances": {key: instances[key] for key in sorted(instances)},
         "tombstones": {key: tombstones[key] for key in sorted(tombstones)},
+        "pb8_instances": {key: pb8_instances[key] for key in sorted(pb8_instances)},
+        "pb8_tombstones": {key: pb8_tombstones[key] for key in sorted(pb8_tombstones)},
     }
     if api_keys is not None:
         desired_state["api_keys"] = api_keys
@@ -1537,6 +1563,70 @@ def _apply_v7(
     instances[instance] = current
 
 
+def _apply_pb8(
+    instances: dict[str, dict[str, Any]],
+    tombstones: dict[str, dict[str, Any]],
+    parent_changes: dict[tuple[str, str], list[dict[str, Any]]],
+    operation: dict[str, Any],
+) -> None:
+    """Apply an explicitly PB8-namespaced operation to PB8 desired state."""
+
+    op = str(operation["op"])
+    instance = str(operation["instance"])
+    if op in {"DELETE_PB8_INSTANCE", "TOMBSTONE_PB8_INSTANCE"}:
+        tombstones[instance] = {
+            "version": str(operation.get("version") or ""),
+            "deleted_by": str(operation["actor"]),
+            "deleted_at": int(operation["created_at"]),
+            "op_id": str(operation["op_id"]),
+        }
+        instances.pop(instance, None)
+        return
+
+    if instance in tombstones:
+        if op == "UPSERT_PB8_CONFIG" and operation.get("allow_tombstone_recreate") is True:
+            tombstones.pop(instance, None)
+        else:
+            return
+    current = dict(instances.get(instance, {"conflicted": False}))
+    if op == "UPSERT_PB8_CONFIG":
+        current.update({
+            "version": str(operation["version"]),
+            "desired_state": str(operation.get("desired_state") or current.get("desired_state") or "stopped"),
+            "assigned_host": str(operation["assigned_host"]),
+            "config_manifest_hash": str(operation["config_manifest_hash"]),
+            "updated_by": str(operation["actor"]),
+            "updated_at": int(operation["created_at"]),
+            "conflicted": False,
+        })
+        _track_parent_change(parent_changes, operation, current)
+    elif op == "MOVE_PB8_INSTANCE":
+        current.update({
+            "version": str(operation["version"]),
+            "assigned_host": str(operation["to"]),
+            "desired_state": str(operation.get("desired_state") or current.get("desired_state") or "stopped"),
+            "updated_by": str(operation["actor"]),
+            "updated_at": int(operation["created_at"]),
+            "conflicted": False,
+        })
+        if "config_manifest_hash" in operation:
+            current["config_manifest_hash"] = str(operation["config_manifest_hash"])
+        _track_parent_change(parent_changes, operation, current)
+    elif op == "START_PB8_INSTANCE":
+        current.update({
+            "desired_state": "running",
+            "updated_by": str(operation["actor"]),
+            "updated_at": int(operation["created_at"]),
+        })
+    elif op == "STOP_PB8_INSTANCE":
+        current.update({
+            "desired_state": "stopped",
+            "updated_by": str(operation["actor"]),
+            "updated_at": int(operation["created_at"]),
+        })
+    instances[instance] = current
+
+
 def _track_parent_change(
     parent_changes: dict[tuple[str, str], list[dict[str, Any]]],
     operation: dict[str, Any],
@@ -1634,6 +1724,44 @@ def _validate_v7_payload(operation: dict[str, Any]) -> None:
             _validate_node_id(str(operation[field]))
         if "config_manifest_hash" in operation:
             _validate_hash(str(operation["config_manifest_hash"]), "config_manifest_hash")
+
+
+def _validate_pb8_payload(operation: dict[str, Any]) -> None:
+    """Validate fields only for explicitly PB8-namespaced operations."""
+
+    op = str(operation["op"])
+    if "instance" not in operation:
+        raise ClusterStateError("PB8 operation missing instance")
+    _validate_relative_name(str(operation["instance"]), "instance")
+    versioned = {
+        "UPSERT_PB8_CONFIG",
+        "MOVE_PB8_INSTANCE",
+        "DELETE_PB8_INSTANCE",
+        "TOMBSTONE_PB8_INSTANCE",
+    }
+    if op in versioned and "version" not in operation:
+        raise ClusterStateError(f"{op} missing version")
+    if op == "UPSERT_PB8_CONFIG":
+        for field in ("assigned_host", "config_manifest_hash"):
+            if field not in operation:
+                raise ClusterStateError(f"UPSERT_PB8_CONFIG missing {field}")
+        _validate_node_id(str(operation["assigned_host"]))
+        _validate_hash(str(operation["config_manifest_hash"]), "config_manifest_hash")
+    if op == "MOVE_PB8_INSTANCE":
+        for field in ("from", "to"):
+            if field not in operation:
+                raise ClusterStateError(f"MOVE_PB8_INSTANCE missing {field}")
+            _validate_node_id(str(operation[field]))
+        if "config_manifest_hash" in operation:
+            _validate_hash(str(operation["config_manifest_hash"]), "config_manifest_hash")
+
+
+def supports_cluster_operation(operation_name: str, capabilities: Iterable[str] | None) -> bool:
+    """Return whether advertised peer capabilities safely accept one operation."""
+
+    if str(operation_name) not in PB8_OPS:
+        return True
+    return PB8_OPERATION_CAPABILITY in {str(item) for item in capabilities or []}
 
 
 def _validate_api_key_payload(operation: dict[str, Any]) -> None:

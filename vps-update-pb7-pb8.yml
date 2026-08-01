@@ -1,0 +1,4 @@
+---
+# Update both configured Passivbot runtimes without updating PBGui.
+- import_playbook: vps-update-pb7.yml
+- import_playbook: vps-update-pb8.yml

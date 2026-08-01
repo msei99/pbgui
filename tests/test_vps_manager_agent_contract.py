@@ -78,7 +78,7 @@ def _local_payloads(now: float) -> dict[str, dict]:
             "disk_60s_window": 60.0, "swap_60s_peak": 0.0,
             "swap_60s_window": 60.0, "bots": [],
         },
-        "instance_snapshot.json": {**envelope, "monitors": [], "v7": [], "cache": {"_version": 2}, "bot_logs": {}},
+        "instance_snapshot.json": {**envelope, "monitors": [], "v7": [], "v8": [], "cache": {"_version": 2}, "bot_logs": {}},
         "host_meta.json": {
             **envelope, "role": "master", "boot": 1, "reboot": False,
             "pbgv": "v1", "pbgc": "a", "pbgb": "main", "pbgpy": "3.12",

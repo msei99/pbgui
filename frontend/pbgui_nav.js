@@ -76,6 +76,7 @@
       { page: 'v7_pareto_explorer',   icon: '&#127919;', label: 'Pareto Explorer'   }
     ]},
     { id: 'pbv8', label: 'PBv8', items: [
+      { page: 'v8_run',               icon: '&#9654;',   label: 'Run'               },
       { page: 'v8_backtest',          icon: '&#9194;',   label: 'Backtest'          },
       { page: 'v8_optimize',          icon: '&#9881;',   label: 'Optimize'          },
       { page: 'v8_pareto_explorer',   icon: '&#9733;',   label: 'Pareto Explorer'   }
@@ -998,6 +999,7 @@
     'v7_pareto_explorer': '/api/pareto-explorer/main_page',
     'v7_strategy_explorer': '/api/strategy-explorer/main_page',
     'info_balance_calc':  '/api/balance-calc/main_page',
+    'v8_run':             '/api/v8/main_page',
     'v8_backtest':        '/api/backtest-v8/main_page',
     'v8_optimize':        '/api/optimize-v8/main_page',
     'v8_pareto_explorer': '/api/pareto-explorer/main_page?optimize_version=v8'
@@ -1023,6 +1025,7 @@
     'v7_pareto_explorer':          '37_pareto_explorer',
     'v7_strategy_explorer':        '00_strategy_explorer_help',
     'info_balance_calc':           '38_balance_calc',
+    'v8_run':                      '44_pbv8_run',
     'v8_backtest':                 '42_pbv8_backtest',
     'v8_optimize':                 '43_pbv8_optimize',
     'v8_pareto_explorer':          '43_pbv8_optimize'

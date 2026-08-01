@@ -74,6 +74,7 @@ from api.vps_manager import (
 from api.services import router as services_router
 from api.live import router as live_router, shutdown as live_shutdown
 from api.v7_instances import router as v7_router
+from api.v8_instances import router as v8_router
 from api.balance_calc import router as balance_calc_router
 from api.coin_data import (
     router as coin_data_router,
@@ -553,6 +554,7 @@ async def _lifespan(app: FastAPI):
     from master.async_logs import AsyncLogStreamer
     from api.vps import init as vps_init
     from api.v7_instances import init as v7_init
+    from api.v8_instances import init as v8_init
 
     global _startup_serial
     _startup_serial = _read_serial()
@@ -574,6 +576,7 @@ async def _lifespan(app: FastAPI):
         streamer = AsyncLogStreamer(monitor.pool)
         vps_init(monitor, streamer)
         v7_init(monitor)
+        v8_init(monitor)
         db_tools_init(monitor)
         _vps_monitor = monitor
 
@@ -694,6 +697,7 @@ app = FastAPI(
         "- `/ws/dashboard`: `balance_updated`, `income_updated`, `positions_updated`, `nav_request`, or `dashboard_action`.\n"
         "- `/ws/candles`: `candle`, `position`, `orders`, or `ping`. Query params: `user`, `symbol`, `tf`, `side`.\n"
         "- `/api/v7/ws/v7`: `{\"type\": \"instances\", \"data\": [...]}`.\n"
+        "- `/api/v8/ws/v8`: PB8 live instance desired-state updates.\n"
         "- `/api/backtest-v7/ws/bt7`, `/api/backtest-v8/ws/bt7`, `/api/optimize-v7/ws/opt7`, and `/api/optimize-v8/ws/opt8`: `queue_update`; Backtest may also send `archive_update`.\n"
         "- `/api/vps-manager/ws`: `state`, `detail`, `result`, `error`, and command-specific response envelopes.\n"
     ),
@@ -743,6 +747,7 @@ app.include_router(vps_manager_router, prefix="/api/vps-manager", tags=["vps-man
 app.include_router(services_router, prefix="/api/services", tags=["services"])
 app.include_router(live_router, prefix="/api/live", tags=["live"])
 app.include_router(v7_router, prefix="/api/v7", tags=["v7"])
+app.include_router(v8_router, prefix="/api/v8", tags=["v8"])
 app.include_router(balance_calc_router, prefix="/api/balance-calc", tags=["balance-calc"])
 app.include_router(coin_data_router, prefix="/api/coin-data", tags=["coin-data"])
 app.include_router(backtest_v7_router, prefix="/api/backtest-v7", tags=["backtest-v7"])

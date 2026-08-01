@@ -542,7 +542,15 @@ def _resolve_close_amount(position_size: float, amount: float | None, percent: f
     return requested
 
 
-def _apply_symbol_forced_mode(cfg: dict, symbol: str, side: str, mode: str) -> str:
+def _apply_symbol_forced_mode(
+    cfg: dict,
+    symbol: str,
+    side: str,
+    mode: str,
+    *,
+    runtime: str = "v7",
+    override_configs: dict[str, dict[str, Any]] | None = None,
+) -> str:
     """Set a per-symbol long/short forced_mode override."""
     normalized_side = str(side or "long").strip().lower()
     if normalized_side not in {"long", "short"}:
@@ -550,31 +558,66 @@ def _apply_symbol_forced_mode(cfg: dict, symbol: str, side: str, mode: str) -> s
     coin = _dashboard_coin_key(symbol)
     forced_key = "forced_mode_long" if normalized_side == "long" else "forced_mode_short"
     coin_cfg = cfg.setdefault("coin_overrides", {}).setdefault(coin, {})
-    live_cfg = coin_cfg.setdefault("live", {})
+    if runtime == "v8":
+        if override_configs is None:
+            raise HTTPException(status_code=500, detail="PB8 override bundle is unavailable")
+        filename = str(coin_cfg.get("override_config_path") or f"{coin}.json")
+        coin_cfg["override_config_path"] = filename
+        live_cfg = override_configs.setdefault(filename, {}).setdefault("live", {})
+    else:
+        live_cfg = coin_cfg.setdefault("live", {})
     live_cfg[forced_key] = mode
     return coin
 
 
 def _apply_all_forced_mode(cfg: dict, mode: str) -> None:
-    """Set global PB7 forced modes for all long and short positions."""
+    """Set global forced modes for all long and short positions."""
     live = cfg.setdefault("live", {})
     live["forced_mode_long"] = mode
     live["forced_mode_short"] = mode
 
 
-def _apply_panic_symbol(cfg: dict, symbol: str, side: str) -> str:
-    """Set a per-symbol long/short forced_mode override to PB7 panic."""
-    return _apply_symbol_forced_mode(cfg, symbol, side, _PANIC_OVERRIDE_MODE)
+def _apply_panic_symbol(
+    cfg: dict,
+    symbol: str,
+    side: str,
+    *,
+    runtime: str = "v7",
+    override_configs: dict[str, dict[str, Any]] | None = None,
+) -> str:
+    """Set a per-symbol long/short forced_mode override to panic."""
+    return _apply_symbol_forced_mode(
+        cfg,
+        symbol,
+        side,
+        _PANIC_OVERRIDE_MODE,
+        runtime=runtime,
+        override_configs=override_configs,
+    )
 
 
-def _apply_panic_all(cfg: dict) -> None:
-    """Set global PB7 forced modes to panic for all long and short positions."""
-    _apply_all_forced_mode(cfg, _PANIC_GLOBAL_MODE)
+def _apply_panic_all(cfg: dict, *, runtime: str = "v7") -> None:
+    """Set global forced modes to panic for all long and short positions."""
+    _apply_all_forced_mode(cfg, _PANIC_OVERRIDE_MODE if runtime == "v8" else _PANIC_GLOBAL_MODE)
 
 
-def _apply_graceful_stop_symbol(cfg: dict, symbol: str, side: str) -> str:
+def _apply_graceful_stop_symbol(
+    cfg: dict,
+    symbol: str,
+    side: str,
+    *,
+    runtime: str = "v7",
+    override_configs: dict[str, dict[str, Any]] | None = None,
+) -> str:
     """Set a per-symbol long/short forced_mode override to graceful stop."""
-    return _apply_symbol_forced_mode(cfg, symbol, side, _GRACEFUL_STOP_MODE)
+    return _apply_symbol_forced_mode(
+        cfg,
+        symbol,
+        side,
+        _GRACEFUL_STOP_MODE,
+        runtime=runtime,
+        override_configs=override_configs,
+    )
 
 
 def _apply_graceful_stop_all(cfg: dict) -> None:
@@ -582,9 +625,23 @@ def _apply_graceful_stop_all(cfg: dict) -> None:
     _apply_all_forced_mode(cfg, _GRACEFUL_STOP_MODE)
 
 
-def _apply_tp_only_symbol(cfg: dict, symbol: str, side: str) -> str:
+def _apply_tp_only_symbol(
+    cfg: dict,
+    symbol: str,
+    side: str,
+    *,
+    runtime: str = "v7",
+    override_configs: dict[str, dict[str, Any]] | None = None,
+) -> str:
     """Set a per-symbol long/short forced_mode override to take profit only."""
-    return _apply_symbol_forced_mode(cfg, symbol, side, _TP_ONLY_MODE)
+    return _apply_symbol_forced_mode(
+        cfg,
+        symbol,
+        side,
+        _TP_ONLY_MODE,
+        runtime=runtime,
+        override_configs=override_configs,
+    )
 
 
 def _apply_tp_only_all(cfg: dict) -> None:
@@ -627,12 +684,14 @@ def _load_dashboard_instance_config(config_path: Path) -> dict:
     return load_pb7_config(config_path, neutralize_added=False)
 
 
-def _find_instance_config_for_user(user_name: str) -> tuple[str, Path, dict]:
-    """Find exactly one local V7 instance config for a live.user value."""
+def _find_instance_config_for_user(
+    user_name: str,
+) -> tuple[str, str, Path, dict, dict[str, dict[str, Any]]]:
+    """Find exactly one local PB7 or PB8 instance config for a live.user value."""
     user = str(user_name or "").strip()
     if not user:
         raise HTTPException(status_code=400, detail="user required")
-    matches: list[tuple[str, Path, dict]] = []
+    matches: list[tuple[str, str, Path, dict, dict[str, dict[str, Any]]]] = []
     base_dir = _run_v7_dir()
     if not base_dir.is_dir():
         raise HTTPException(status_code=404, detail="No V7 instances directory found")
@@ -643,12 +702,28 @@ def _find_instance_config_for_user(user_name: str) -> tuple[str, Path, dict]:
             _log(SERVICE, f"Skipping unreadable V7 config {config_path}: {exc}", level="WARNING")
             continue
         if str(cfg.get("live", {}).get("user", "")).strip() == user:
-            matches.append((config_path.parent.name, config_path, cfg))
+            matches.append(("v7", config_path.parent.name, config_path, cfg, {}))
+    from api.v8_instances import _override_payloads_by_filename
+    from pb8_config import load_pb8_config
+
+    v8_root = Path(PBGDIR) / "data" / "run_v8"
+    if v8_root.is_dir() and not v8_root.is_symlink():
+        for config_path in sorted(v8_root.glob("*/config.json")):
+            if config_path.is_symlink() or config_path.parent.is_symlink():
+                continue
+            try:
+                cfg = load_pb8_config(config_path)
+                overrides = _override_payloads_by_filename(cfg, {}, config_path.parent)
+            except Exception as exc:
+                _log(SERVICE, f"Skipping unreadable V8 config {config_path}: {exc}", level="WARNING")
+                continue
+            if str(cfg.get("live", {}).get("user", "")).strip() == user:
+                matches.append(("v8", config_path.parent.name, config_path, cfg, overrides))
     if not matches:
-        raise HTTPException(status_code=404, detail=f"No V7 instance found for user '{user}'")
+        raise HTTPException(status_code=404, detail=f"No PB7 or PB8 instance found for user '{user}'")
     if len(matches) > 1:
-        names = ", ".join(name for name, _, _ in matches)
-        raise HTTPException(status_code=409, detail=f"Multiple V7 instances found for user '{user}': {names}")
+        names = ", ".join(f"{runtime.upper()}:{name}" for runtime, name, _, _, _ in matches)
+        raise HTTPException(status_code=409, detail=f"Multiple PB7/PB8 instances found for user '{user}': {names}")
     return matches[0]
 
 
@@ -670,8 +745,36 @@ def _backup_dashboard_instance_config(instance_dir: Path, name: str, cfg: dict) 
         _log(SERVICE, f"Failed to create dashboard panic backup for '{name}': {exc}", level="WARNING")
 
 
-async def _save_dashboard_panic_config(name: str, config_path: Path, cfg: dict) -> dict:
-    """Save a forced-mode mutation and materialize it immediately on the bot host."""
+async def _save_dashboard_panic_config(
+    name: str,
+    config_path: Path,
+    cfg: dict,
+    *,
+    runtime: str = "v7",
+    override_configs: dict[str, dict[str, Any]] | None = None,
+) -> dict:
+    """Persist a forced-mode mutation through its runtime's Cluster publication path."""
+    if runtime == "v8":
+        from api.v8_instances import save_v8_instance_config
+
+        expected_version = int((cfg.get("pbgui") or {}).get("version") or 0)
+        result = await save_v8_instance_config(
+            name,
+            body={
+                "config": cfg,
+                "override_configs": override_configs or {},
+                "expected_version": expected_version,
+            },
+            create_only=False,
+            session=None,
+        )
+        return {
+            "name": name,
+            "version": result["version"],
+            "runtime": "v8",
+            "sync": {"operation": result.get("operation"), "op_id": result.get("op_id")},
+        }
+
     from api.cluster import sync_and_materialize_v7_instance
     from api.v7_instances import _ensure_target_runtime_compatible, _record_cluster_config_upsert
     from pb7_config import save_pb7_config
@@ -684,7 +787,7 @@ async def _save_dashboard_panic_config(name: str, config_path: Path, cfg: dict) 
     _record_cluster_config_upsert(name, config_path.parent, cfg, parent_version=previous_version)
     version = cfg["pbgui"]["version"]
     sync_result = await sync_and_materialize_v7_instance(name, expected_version=version)
-    return {"name": name, "version": version, "sync": sync_result}
+    return {"name": name, "version": version, "runtime": "v7", "sync": sync_result}
 
 
 def _prune_exchange_cache(now: float, keep_key: str | None = None) -> None:
@@ -2500,7 +2603,7 @@ async def manage_position(
     payload: PositionManagePayload,
     session: SessionToken = Depends(require_auth),
 ):
-    """Manage a dashboard position with market close or PB7 forced-mode config sync."""
+    """Manage a dashboard position with market close or runtime-aware forced-mode config sync."""
     action = str(payload.action or "").strip().lower()
     if action == "market_close":
         return await _asyncio.to_thread(_execute_market_close, payload)
@@ -2508,8 +2611,12 @@ async def manage_position(
     if action not in {"panic_symbol", "panic_all", "graceful_stop_symbol", "graceful_stop_all", "tp_only_symbol", "tp_only_all"}:
         raise HTTPException(status_code=400, detail="Unsupported action")
 
-    name, config_path, cfg = await _asyncio.to_thread(_find_instance_config_for_user, payload.user)
+    runtime, name, config_path, cfg, override_configs = await _asyncio.to_thread(
+        _find_instance_config_for_user,
+        payload.user,
+    )
     working_cfg = deepcopy(cfg) if payload.dry_run else cfg
+    working_overrides = deepcopy(override_configs) if payload.dry_run else override_configs
     if action in {"panic_symbol", "graceful_stop_symbol", "tp_only_symbol"}:
         # Require the selected row to still exist before changing a per-symbol mode.
         all_users = _get_users()
@@ -2520,14 +2627,32 @@ async def manage_position(
         if not pos:
             raise HTTPException(status_code=404, detail="Position not found")
         if action == "panic_symbol":
-            coin = _apply_panic_symbol(working_cfg, payload.symbol, payload.side)
+            coin = _apply_panic_symbol(
+                working_cfg,
+                payload.symbol,
+                payload.side,
+                runtime=runtime,
+                override_configs=working_overrides,
+            )
         elif action == "graceful_stop_symbol":
-            coin = _apply_graceful_stop_symbol(working_cfg, payload.symbol, payload.side)
+            coin = _apply_graceful_stop_symbol(
+                working_cfg,
+                payload.symbol,
+                payload.side,
+                runtime=runtime,
+                override_configs=working_overrides,
+            )
         else:
-            coin = _apply_tp_only_symbol(working_cfg, payload.symbol, payload.side)
+            coin = _apply_tp_only_symbol(
+                working_cfg,
+                payload.symbol,
+                payload.side,
+                runtime=runtime,
+                override_configs=working_overrides,
+            )
     else:
         if action == "panic_all":
-            _apply_panic_all(working_cfg)
+            _apply_panic_all(working_cfg, runtime=runtime)
         elif action == "graceful_stop_all":
             _apply_graceful_stop_all(working_cfg)
         else:
@@ -2545,12 +2670,20 @@ async def manage_position(
             "symbol": payload.symbol,
             "side": payload.side,
             "coin": coin,
+            "runtime": runtime,
             "name": name,
             "version": preview_cfg["pbgui"]["version"],
             "config": preview_cfg,
+            "override_configs": working_overrides,
         }
 
-    result = await _save_dashboard_panic_config(name, config_path, working_cfg)
+    result = await _save_dashboard_panic_config(
+        name,
+        config_path,
+        working_cfg,
+        runtime=runtime,
+        override_configs=working_overrides,
+    )
     _log(
         SERVICE,
         f"Dashboard {action} saved for user={payload.user} symbol={payload.symbol} side={payload.side} instance={name}",

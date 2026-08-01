@@ -23,6 +23,7 @@ from hyperliquid_best_1m import (
 from credential_store import CredentialStore
 from market_data import (
     _get_pb7_root_dir,
+    _get_pb8_root_dir,
     get_effective_enabled_coins,
     get_exchange_raw_root_dir,
     get_market_data_coin_options,
@@ -1713,14 +1714,20 @@ INVENTORY_VIEW_META: dict[str, dict[str, Any]] = {
         "read_only": True,
         "empty_message": "No PB7 cache files found for this exchange (expected path: pb7/caches/ohlcv/<exchange>/...).",
     },
+    "pb8_cache": {
+        "label": "PB8 cache",
+        "dataset": "pb8_cache",
+        "read_only": True,
+        "empty_message": "No PB8 cache files found for this exchange (expected path: pb8/caches/ohlcv/<exchange>/...).",
+    },
 }
 
 
 def _inventory_views_for_exchange(exchange: str) -> list[dict[str, str]]:
     ex = _normalize_settings_exchange(exchange)
-    view_keys = ["1m", "pb7_cache"]
+    view_keys = ["1m", "pb7_cache", "pb8_cache"]
     if ex == "hyperliquid":
-        view_keys = ["1m", "1m_api", "l2Book", "pb7_cache"]
+        view_keys = ["1m", "1m_api", "l2Book", "pb7_cache", "pb8_cache"]
     return [
         {"key": key, "label": str(INVENTORY_VIEW_META[key]["label"])}
         for key in view_keys
@@ -1738,6 +1745,8 @@ def _normalize_inventory_view(view: str) -> str:
         return "l2Book"
     if lower in ("pb7 cache", "pb7_cache"):
         return "pb7_cache"
+    if lower in ("pb8 cache", "pb8_cache"):
+        return "pb8_cache"
     return ""
 
 
@@ -1852,6 +1861,29 @@ def _get_pb7_inventory_via_cache(exchange: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _get_pb8_inventory_via_cache(exchange: str) -> list[dict[str, Any]]:
+    """Return PB8 OHLCV cache rows while keeping SQLite keys separate from PB7."""
+    import os
+    from inventory_cache import get_inventory as _get_inventory
+
+    ex = str(exchange or "").strip().lower()
+    root = _get_pb8_root_dir()
+    if root is None:
+        return []
+    base = root / "caches" / "ohlcv" / ex
+    if not base.is_dir():
+        return []
+    try:
+        timeframes = sorted(entry.name for entry in os.scandir(str(base)) if entry.is_dir())
+    except Exception:
+        return []
+    rows: list[dict[str, Any]] = []
+    for timeframe in timeframes:
+        for record in _get_inventory(ex, f"pb8_cache:{timeframe}"):
+            rows.append({**record, "timeframe": timeframe})
+    return rows
+
+
 def _collect_inventory_rows(exchange: str, view: str) -> list[dict[str, Any]]:
     from inventory_cache import get_inventory as _get_inventory
 
@@ -1859,13 +1891,14 @@ def _collect_inventory_rows(exchange: str, view: str) -> list[dict[str, Any]]:
     storage_ex = _inventory_storage_exchange(exchange)
     tradfi_mapping_statuses = _inventory_tradfi_mapping_statuses() if _normalize_settings_exchange(exchange) == "hyperliquid" else {}
 
-    if view_key == "pb7_cache":
+    if view_key in {"pb7_cache", "pb8_cache"}:
         rows: list[dict[str, Any]] = []
-        for record in _get_pb7_inventory_via_cache(_normalize_settings_exchange(exchange)):
+        inventory_reader = _get_pb8_inventory_via_cache if view_key == "pb8_cache" else _get_pb7_inventory_via_cache
+        for record in inventory_reader(_normalize_settings_exchange(exchange)):
             total_bytes = int(record.get("total_bytes", 0) or 0)
             timeframe = str(record.get("timeframe") or "").strip() or "1m"
             coin = str(record.get("coin") or "").strip()
-            dataset = f"pb7_cache:{timeframe}"
+            dataset = f"{view_key}:{timeframe}"
             rows.append(
                 _annotate_inventory_row(exchange, {
                     "row_id": f"{dataset}|{coin}",
@@ -2032,7 +2065,7 @@ def _build_inventory_dataset_payload(
     )
 
     metrics: list[dict[str, str]] = []
-    if view_key == "pb7_cache":
+    if view_key in {"pb7_cache", "pb8_cache"}:
         total_files = sum(int(row.get("n_files", 0) or 0) for row in all_rows)
         total_bytes = sum(int(row.get("total_bytes", 0) or 0) for row in all_rows)
         n_coins = len({str(row.get("coin") or "").strip() for row in all_rows if str(row.get("coin") or "").strip()})
@@ -2072,6 +2105,8 @@ def _build_inventory_dataset_payload(
         "helper_note": (
             "Read-only view of PB7 cache inventory from pb7/caches/ohlcv."
             if view_key == "pb7_cache"
+            else "Read-only view of PB8 cache inventory from pb8/caches/ohlcv."
+            if view_key == "pb8_cache"
             else "Click a row to display the heatmap."
         ),
     }
@@ -3575,8 +3610,8 @@ def delete_inventory_selected(
     try:
         body = request if isinstance(request, dict) else {}
         view_key = _require_inventory_view(exchange, body.get("view") or "1m")
-        if view_key == "pb7_cache":
-            raise ValueError("PB7 cache is read-only.")
+        if INVENTORY_VIEW_META[view_key]["read_only"]:
+            raise ValueError(f"{INVENTORY_VIEW_META[view_key]['label']} is read-only.")
 
         selected_rows = _resolve_inventory_rows_for_coins(exchange, view_key, body.get("coins") or [])
         if not selected_rows:
@@ -3632,8 +3667,8 @@ def preview_inventory_delete_older(
     try:
         body = request if isinstance(request, dict) else {}
         view_key = _require_inventory_view(exchange, body.get("view") or "1m")
-        if view_key == "pb7_cache":
-            raise ValueError("PB7 cache is read-only.")
+        if INVENTORY_VIEW_META[view_key]["read_only"]:
+            raise ValueError(f"{INVENTORY_VIEW_META[view_key]['label']} is read-only.")
         coins = body.get("coins") if isinstance(body.get("coins"), list) else []
         cutoff_day = str(body.get("cutoff_day") or "").strip()
         return _build_inventory_delete_older_preview(exchange, view_key, coins, cutoff_day)
@@ -3650,8 +3685,8 @@ def delete_inventory_older_than(
     try:
         body = request if isinstance(request, dict) else {}
         view_key = _require_inventory_view(exchange, body.get("view") or "1m")
-        if view_key == "pb7_cache":
-            raise ValueError("PB7 cache is read-only.")
+        if INVENTORY_VIEW_META[view_key]["read_only"]:
+            raise ValueError(f"{INVENTORY_VIEW_META[view_key]['label']} is read-only.")
 
         coins = body.get("coins") if isinstance(body.get("coins"), list) else []
         cutoff_day = str(body.get("cutoff_day") or "").strip()
@@ -3722,8 +3757,8 @@ def clear_inventory_dataset(
     try:
         body = request if isinstance(request, dict) else {}
         view_key = _require_inventory_view(exchange, body.get("view") or "1m")
-        if view_key == "pb7_cache":
-            raise ValueError("PB7 cache is read-only.")
+        if INVENTORY_VIEW_META[view_key]["read_only"]:
+            raise ValueError(f"{INVENTORY_VIEW_META[view_key]['label']} is read-only.")
 
         dataset_name = str(INVENTORY_VIEW_META[view_key]["dataset"])
         storage_ex = _inventory_storage_exchange(exchange)

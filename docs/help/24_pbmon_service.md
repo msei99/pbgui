@@ -16,6 +16,8 @@ conditions directly from the live in-memory state.
 | **Instance threshold** | A monitored Passivbot instance exceeds configured limits |
 | **HL API key expiry** | A Hyperliquid API key is about to expire |
 
+HL expiry warnings are sent only while at least one PB7 or PB8 live config for the exact exchange user may still need the key. PBGui suppresses further warnings when every matching bot is safely stopped or disabled, and resumes warning if a bot is enabled again. Active, conflicted, uncertain, or still-running instances continue to warn.
+
 Active alerts are shown in the navigation bar as a dedicated alert indicator.
 The badge displays `new/ack` counts.
 

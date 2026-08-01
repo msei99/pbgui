@@ -19,17 +19,20 @@ def test_unknown_ssh_host_confirmation_uses_exact_fingerprint() -> None:
     assert "hostKey.needs_confirmation" in source
     assert "accepted_host_key_fingerprint = fingerprint" in source
     assert "accepted_host_key_fingerprint: String(msg.fingerprint || '')" in source
+    assert "replace_existing_host_key = changed" in source
+    assert "Review changed key" in source
 
 
 def test_add_vps_offers_pb8_live_only_profile() -> None:
-    """Fresh VPS setup defaults to PB7 and explicitly offers PB8 without PB7."""
+    """Fresh VPS setup offers PB7, PB8-only, and combined runtimes."""
     source = HTML_PATH.read_text(encoding="utf-8")
 
     assert "runtime_profile: 'pb7'" in source
     assert "PB8 Live only (no PB7)" in source
+    assert "PB7 + PB8" in source
     assert "PB8-only setup does not clone or install PB7" in source
-    assert "pb8Requested: String(store.addForm.runtime_profile || 'pb7') === 'pb8'" in source
-    assert "switchToVpsTaskLog(store.detail.hostname, 'vps-update-pb8'" in source
+    assert "pb8Requested: ['pb8', 'pb7_pb8'].includes(String(store.addForm.runtime_profile || 'pb7'))" in source
+    assert "Setup and PB8 Live installation successful." in source
 
 
 def _extract_function(source: str, name: str) -> str:
@@ -111,6 +114,52 @@ class TestVpsManagerFrontendLogic:
         assert "background: #3182ce;" in source
         assert "st.pb8_installed ? 'sb-btn ok' : 'sb-btn install'" in sidebar_source
         assert sidebar_source.count("st.pb8_installed ? 'sb-btn ok' : 'sb-btn install'") == 2
+        assert "st.pb7_installed ? 'sb-btn ok' : 'sb-btn install'" in sidebar_source
+        assert "st.pb7_installed ? 'Update PB7' : 'Install PB7'" in sidebar_source
+
+    def test_pb7_install_is_disabled_when_backend_disk_gate_blocks_it(self) -> None:
+        """A low-disk PB8-only VPS exposes the PB7 reason without allowing a click."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        sidebar_source = _extract_function(source, "renderSidebarActions")
+
+        assert "const pb7ActionAllowed = st.pb7_action_allowed !== false" in sidebar_source
+        assert "pb7ActionAllowed ? '' : 'disabled'" in sidebar_source
+        assert "st.pb7_action_reason" in sidebar_source
+        signature_source = _extract_function(source, "getSidebarActionsSignature")
+        assert "pb7_allowed: st.pb7_action_allowed !== false" in signature_source
+        assert "pb7_reason: String(st.pb7_action_reason || '')" in signature_source
+
+    def test_pb8_only_sidebar_uses_pb8_update_matrix(self) -> None:
+        """PB8-only hosts update PBGui with PB8 and do not show an installation disk warning."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        sidebar_source = _extract_function(source, "renderSidebarActions")
+
+        assert "const pb8Only = !!st.pb8_installed && !st.pb7_installed" in sidebar_source
+        assert "pb8Only ? 'vps-update-pbgui-pb8' : 'vps-update-pb'" in sidebar_source
+        assert "pb8Only ? 'Update PBGui and PB8' : 'Update PBGui and PB7'" in sidebar_source
+        assert "st.pb8_installed ? 'Updates the installed PB8 runtime.'" in sidebar_source
+        assert "PB8-only leaves PBRun disabled" not in source
+
+    def test_bulk_runtime_updates_are_profile_aware(self) -> None:
+        """Overview bulk actions delegate runtime selection to each host profile."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        sidebar_source = _extract_function(source, "renderSidebarActions")
+
+        assert 'deploySelectedVpsAction("vps-update-runtime", "Update Runtime by Profile")' in sidebar_source
+        assert 'deploySelectedVpsAction("vps-update-pbgui-runtime", "Update PBGui and Runtime by Profile")' in sidebar_source
+        assert 'deploySelectedVpsAction("vps-update-pb7", "Update PB7")' not in sidebar_source
+
+    def test_vps_monitor_combines_pb7_and_pb8_runtime_rows(self) -> None:
+        """Detailed and fallback monitor rows retain PB7/PB8 identity in one table."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        render_monitor = _extract_function(source, "renderMonitorPanel")
+        live_update = _extract_function(source, "_liveUpdateServiceRows")
+
+        assert "const runtimeRows = pb7Rows.concat(pb8Rows)" in render_monitor
+        assert "const runtimeFallback = pb7Fallback.concat(pb8Fallback)" in render_monitor
+        assert "No running PB7 or PB8 instances reported." in source
+        assert "data-bot-key" in source
+        assert "var rowKey = pbVersion + ':' + name" in live_update
 
     def test_firewall_validation_accepts_ipv4_cidr_networks(self) -> None:
         """Allow the IPv4 CIDR sources that remote UFW discovery stores locally."""
@@ -214,6 +263,51 @@ class TestVpsManagerFrontendLogic:
             bootstrap=bootstrap,
             assertions=assertions,
         )
+
+    def test_new_vps_setup_context_survives_stale_overview_snapshot(self) -> None:
+        """An older overview snapshot cannot eject a newly initialized host from its task log."""
+        bootstrap = """
+        const store = {
+          view: 'vps-task-log',
+          hostname: 'fresh-runner',
+          detail: null,
+          pendingAutoSetupSwitch: { hostname: 'fresh-runner' },
+          _pendingView: '',
+          _pendingHostname: ''
+        };
+        const history = { replaceState: function () {} };
+        let contextSends = 0;
+        function sendContext() { contextSends += 1; }
+        function isVpsContextView() { return store.view === 'vps-task-log'; }
+        function viewUrl(view) { return '#' + view; }
+        """
+        assertions = """
+        const staleState = { overview: { rows: [] } };
+        assert.equal(reconcileCurrentVpsContext(staleState), false);
+        assert.equal(store.view, 'vps-task-log');
+        assert.equal(store.hostname, 'fresh-runner');
+        assert.equal(contextSends, 0);
+        store.pendingAutoSetupSwitch = null;
+        assert.equal(reconcileCurrentVpsContext(staleState), true);
+        assert.equal(store.view, 'overview');
+        assert.equal(store.hostname, '');
+        assert.equal(contextSends, 1);
+        """
+        _run_node_assertions(
+            ["normalizeOverviewHostname", "hasManagedOverviewHost", "reconcileCurrentVpsContext"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
+    def test_pb8_setup_completion_uses_the_combined_setup_status(self) -> None:
+        """The Add flow no longer waits for a separate PB8 update command."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        handle_message = _extract_function(source, "handleMessage")
+
+        assert "Setup and PB8 Live installation successful." in handle_message
+        assert "Starting PB8 Live installation" not in handle_message
+        assert "activeCommand === 'vps-update-pb8'" not in handle_message
+        assert "switchToVpsTaskLog(store.detail.hostname, 'vps-update-pb8'" not in handle_message
 
     def test_metric_history_reuses_cache_and_rejects_stale_responses(self) -> None:
         """Local history renders cached data immediately and aborts obsolete requests."""

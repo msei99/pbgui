@@ -3141,6 +3141,9 @@
         install_dir: '',
         auto_ip: '',
         firewall_ssh_ips_auto: '',
+        accept_unknown_host: false,
+        accepted_host_key_fingerprint: '',
+        replace_existing_host_key: false,
         firewall: false,
         firewall_ssh_port: 22,
         firewall_ssh_ips: ''
@@ -4049,6 +4052,8 @@
     function reconcileCurrentVpsContext(nextState) {
       if (!isVpsContextView() || !store.hostname) return false;
       if (hasManagedOverviewHost(nextState, store.hostname)) return false;
+      const pending = store.pendingAutoSetupSwitch;
+      if (pending && normalizeOverviewHostname(pending.hostname) === normalizeOverviewHostname(store.hostname)) return false;
       store.hostname = '';
       store.view = 'overview';
       store.detail = null;
@@ -4070,11 +4075,15 @@
           hosts: getManagedRows().map(function (row) { return row.hostname; }),
           pbgui_up: !!st.pbgui_update_available,
           pb7_up: !!st.pb7_update_available,
+          pb7_installed: !!st.pb7_installed,
+          pb7_allowed: st.pb7_action_allowed !== false,
+          pb7_reason: String(st.pb7_action_reason || ''),
           pb8_installed: !!st.pb8_installed,
           pb8_up: !!st.pb8_update_available,
           pb8_allowed: !!st.pb8_action_allowed,
           pb8_reason: String(st.pb8_action_reason || ''),
           pb8_profile: String(st.pb8_install_profile || ''),
+          runtime_profile: String(st.runtime_profile || ''),
           pending_updates: st.pending_updates == null ? String(((st.summary_row || {}).updates) || '') : String(st.pending_updates),
           reboot_required: !!((st.summary_row || {}).reboot_required),
           host_key_error: !!st.host_key_error,
@@ -4088,6 +4097,7 @@
           view: store.view,
           pbgui_up: !!st.pbgui_update_available,
           pb7_up: !!st.pb7_update_available,
+          pb7_installed: !!st.pb7_installed,
           pb8_installed: !!st.pb8_installed,
           pb8_up: !!st.pb8_update_available,
           pb8_allowed: !!st.pb8_action_allowed,
@@ -5017,23 +5027,24 @@
     function _liveUpdateServiceRows(containerId, items) {
       var tbody = document.querySelector('#' + containerId + ' tbody');
       if (!tbody) return;
-      var rows = Array.from(tbody.querySelectorAll('tr[data-bot]'));
+      var rows = Array.from(tbody.querySelectorAll('tr[data-bot-key]'));
       var rowMap = {};
       rows.forEach(function(row) {
-        rowMap[String(row.getAttribute('data-bot') || '')] = row;
+        rowMap[String(row.getAttribute('data-bot-key') || '')] = row;
       });
       var needsFullRerender = rows.length !== items.length;
       var nextNames = {};
       items.forEach(function(item) {
         var name = String(item.name || '');
-        nextNames[name] = true;
-        var row = rowMap[name];
+        var pbVersion = String(item.pb_version || '7');
+        var rowKey = pbVersion + ':' + name;
+        nextNames[rowKey] = true;
+        var row = rowMap[rowKey];
         if (!row) {
           needsFullRerender = true;
           return;
         }
         var host = item.server || store.hostname || '';
-        var pbVersion = String(item.pb_version || '7');
         var cellHtml = _renderServiceRowCells(item, host, pbVersion);
         BOT_COLUMNS.forEach(function(col) {
           var cell = row.querySelector('td[data-col="' + col.field + '"]');
@@ -5049,8 +5060,8 @@
         });
       });
       rows.forEach(function(row) {
-        var name = String(row.getAttribute('data-bot') || '');
-        if (!nextNames[name]) {
+        var rowKey = String(row.getAttribute('data-bot-key') || '');
+        if (!nextNames[rowKey]) {
           needsFullRerender = true;
         }
       });
@@ -5166,7 +5177,7 @@
         syncSystemHeader('master-system-header', status, summary, true, mRtd);
         setHtmlIfChanged('master-status-cards', renderMasterStatusCards(status));
         setHtmlIfChanged('master-agent-cache-live', renderAgentCachePanel(status, true));
-        _liveUpdateServiceRows('master-monitor-live', (detail.monitor || {}).v7 || []);
+        _liveUpdateServiceRows('master-monitor-live', ((detail.monitor || {}).v7 || []).concat((detail.monitor || {}).v8 || []));
         _liveUpdateTelemetry((detail.monitor || {}).server || null);
         return;
       }
@@ -5182,7 +5193,7 @@
         _liveUpdateStatusFlags('vps-status-flags', status);
         setHtmlIfChanged('vps-agent-cache-live', renderAgentCachePanel(status, false));
         setHtmlIfChanged('vps-remote-services-panel', renderVpsRemoteServicesContent(detail.hostname, status));
-        _liveUpdateServiceRows('vps-monitor-live', (detail.monitor || {}).v7 || []);
+        _liveUpdateServiceRows('vps-monitor-live', ((detail.monitor || {}).v7 || []).concat((detail.monitor || {}).v8 || []));
         _liveUpdateTelemetry((detail.monitor || {}).server || null);
       }
     }
@@ -7033,8 +7044,6 @@
           if (pending && pending.hostname === store.detail.hostname) {
             const initStatus = String(progress.init_status || '');
             const setupStatus = String(progress.setup_status || '');
-            const updateStatus = String(progress.update_status || '');
-            const activeCommand = String(progress.command || '');
             if (!pending.initSeenSuccess && initStatus === 'successful') {
               pending.initSeenSuccess = true;
               toast('Initialization finished. Starting VPS setup...', 'success');
@@ -7044,34 +7053,8 @@
               switchToVpsTaskLog(store.detail.hostname, 'vps-setup', 'Setup VPS');
             }
             if (pending.setupSeenRunning && setupStatus === 'successful') {
-              if (pending.pb8Requested) {
-                if (!pending.setupSeenSuccess) {
-                  pending.setupSeenSuccess = true;
-                  toast('Setup successful. Starting PB8 Live installation...', 'success');
-                }
-                if (activeCommand === 'vps-update-pb8' && updateStatus && updateStatus !== 'none') {
-                  if (!pending.pb8SeenRunning) {
-                    pending.pb8SeenRunning = true;
-                    switchToVpsTaskLog(store.detail.hostname, 'vps-update-pb8', 'Install PB8 (fresh setup)');
-                  }
-                  if (updateStatus === 'successful') {
-                    store.pendingAutoSetupSwitch = null;
-                    toast('PB8 Live installation successful.', 'success');
-                    store.hostname = store.detail.hostname;
-                    store.view = 'vps';
-                    sendContext();
-                    renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });
-                    return;
-                  }
-                  if (['failed', 'error', 'timeout', 'canceled', 'cancelled'].includes(updateStatus)) {
-                    store.pendingAutoSetupSwitch = null;
-                    toast('PB8 Live installation failed. Check the command log.', 'error');
-                  }
-                }
-                return;
-              }
               store.pendingAutoSetupSwitch = null;
-              toast('Setup successful.', 'success');
+              toast(pending.pb8Requested ? 'Setup and PB8 Live installation successful.' : 'Setup successful.', 'success');
               store.hostname = store.detail.hostname;
               store.view = 'vps';
               sendContext();
@@ -7318,6 +7301,7 @@
           hostsCurrentIp: String(data.hosts_current_ip || ''),
           sshOk: !!data.ssh_ok,
           sshError: String(data.ssh_error || ''),
+          hostKey: data.host_key || {},
           loading: false
         };
         const hostKey = data.host_key || {};
@@ -7326,17 +7310,12 @@
         const hostKeyPromptToken = hostKeyTarget + '|' + fingerprint;
         if (hostKey.needs_confirmation && fingerprint && store.addHostKeyPromptToken !== hostKeyPromptToken) {
           store.addHostKeyPromptToken = hostKeyPromptToken;
-          openConfirmModal(
-            'Unknown SSH Host Key',
-            'Trust ' + String(hostKey.key_type || 'SSH key') + ' ' + fingerprint + ' for ' + hostKeyTarget + '?',
-            function () {
-              store.addForm.accept_unknown_host = true;
-              store.addForm.accepted_host_key_fingerprint = fingerprint;
-              send({ cmd: 'check_vps_ready', form: Object.assign({}, store.addForm) });
-            }
-          );
+          confirmAddVpsHostKey(hostKey, expectedHostname);
         } else if (hostKey.known) {
           store.addHostKeyPromptToken = '';
+          store.addForm.accept_unknown_host = false;
+          store.addForm.accepted_host_key_fingerprint = '';
+          store.addForm.replace_existing_host_key = false;
         }
         if (store.view === 'add') {
           setHtmlIfChanged('add-preflight-checks', renderAddPreflightChecks());
@@ -7551,9 +7530,7 @@
             hostname: hostname,
             initSeenSuccess: false,
             setupSeenRunning: false,
-            setupSeenSuccess: false,
-            pb8Requested: String(store.addForm.runtime_profile || 'pb7') === 'pb8',
-            pb8SeenRunning: false
+            pb8Requested: ['pb8', 'pb7_pb8'].includes(String(store.addForm.runtime_profile || 'pb7'))
           };
           openVpsTaskLog(hostname, 'vps-init', 'Initialize');
           scheduleVpsDetailFetch(hostname);
@@ -8558,6 +8535,12 @@
         store.addForm.firewall_ssh_ips_auto = '';
       }
       store.addForm[name] = value;
+      if (name === 'ip' || name === 'hostname') {
+        store.addForm.accept_unknown_host = false;
+        store.addForm.accepted_host_key_fingerprint = '';
+        store.addForm.replace_existing_host_key = false;
+        store.addHostKeyPromptToken = '';
+      }
       if (name === 'hostname' && !String(value || '').trim()) {
         if (String(store.addForm.ip || '').trim() === String(store.addForm.auto_ip || '').trim()) {
           store.addForm.ip = '';
@@ -8592,6 +8575,37 @@
     }
 
     let addVpsReadyTimer = 0;
+
+    function confirmAddVpsHostKey(hostKey, expectedHostname) {
+      const payload = hostKey || {};
+      const fingerprint = String(payload.fingerprint || '').trim();
+      if (!fingerprint) return;
+      const host = String(payload.host || expectedHostname || store.addForm.hostname || 'VPS');
+      const changed = String(payload.status || '') === 'mismatch' || !!payload.replacement_required;
+      openConfirmModal(
+        changed ? 'Changed SSH Host Key' : 'Unknown SSH Host Key',
+        (changed ? 'Replace the stored key with ' : 'Trust ')
+          + String(payload.key_type || 'SSH key') + ' ' + fingerprint + ' for ' + host
+          + (changed ? '? Only continue if you verified this fingerprint through a trusted channel.' : '?'),
+        function () {
+          store.addForm.accept_unknown_host = !changed;
+          store.addForm.accepted_host_key_fingerprint = fingerprint;
+          store.addForm.replace_existing_host_key = changed;
+          send({ cmd: 'check_vps_ready', form: Object.assign({}, store.addForm) });
+        }
+      );
+    }
+
+    function reviewAddVpsHostKey() {
+      const ready = store.addVpsReady || {};
+      const hostKey = ready.hostKey || {};
+      store.addHostKeyPromptToken = '';
+      if (String(hostKey.fingerprint || '').trim()) {
+        confirmAddVpsHostKey(hostKey, store.addForm.hostname);
+      } else {
+        scheduleVpsReadyCheck();
+      }
+    }
 
     function scheduleVpsReadyCheck() {
       if (addVpsReadyTimer) clearTimeout(addVpsReadyTimer);
@@ -10224,10 +10238,14 @@
         const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
         const st = (detail && detail.status) || {};
         const masterPbguiBtnClass = st.pbgui_update_available ? 'sb-btn warning' : 'sb-btn ok';
-        const masterPb7BtnClass = st.pb7_update_available ? 'sb-btn warning' : 'sb-btn ok';
+        const masterPb7BtnClass = st.pb7_update_available ? 'sb-btn warning' : (st.pb7_installed ? 'sb-btn ok' : 'sb-btn install');
+        const masterPb7ButtonText = st.pb7_installed ? 'Update PB7' : 'Install PB7';
         const masterPb8BtnClass = st.pb8_update_available ? 'sb-btn warning' : (st.pb8_installed ? 'sb-btn ok' : 'sb-btn install');
         const masterPb8ButtonText = st.pb8_installed ? 'Update PB8' : 'Install PB8';
-        const masterBothBtnClass = (st.pbgui_update_available || st.pb7_update_available) ? 'sb-btn warning' : 'sb-btn ok';
+        const masterPb8Only = !!st.pb8_installed && !st.pb7_installed;
+        const masterCombinedCommand = masterPb8Only ? 'master-update-pbgui-pb8' : 'master-update-pb';
+        const masterCombinedText = masterPb8Only ? 'Update PBGui and PB8' : 'Update PBGui and PB7';
+        const masterBothBtnClass = (st.pbgui_update_available || (masterPb8Only ? st.pb8_update_available : st.pb7_update_available)) ? 'sb-btn warning' : 'sb-btn ok';
         const pendingSrc = st.pending_updates != null ? st.pending_updates : ((st.summary_row || {}).updates);
         const hasLinuxUpdates = String(pendingSrc || '').trim() && String(pendingSrc).trim() !== '0' && String(pendingSrc).trim() !== 'N/A';
         const needsReboot = !!(st.summary_row || {}).reboot_required;
@@ -10252,9 +10270,9 @@
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' ${store.master.debug ? 'checked' : ''} onchange="setMasterBool('debug', this.checked)"> Debug</label>
           </div>
-          <button class='${masterBothBtnClass} primary' type='button' onclick='runMasterWithLog("master-update-pb", "Update PBGui and PB7")'>Update PBGui and PB7</button>
+          <button class='${masterBothBtnClass} primary' type='button' onclick='runMasterWithLog("${masterCombinedCommand}", "${masterCombinedText}")'>${masterCombinedText}</button>
           <button class='${masterPbguiBtnClass}' type='button' onclick='runMasterWithLog("master-update-pbgui", "Update PBGui")'>Update PBGui</button>
-          <button class='${masterPb7BtnClass}' type='button' onclick='runMasterWithLog("master-update-pb7", "Update PB7")'>Update PB7</button>
+          <button class='${masterPb7BtnClass}' type='button' onclick='runMasterWithLog("master-update-pb7", "${masterPb7ButtonText}")'>${masterPb7ButtonText}</button>
           ${st.pb8_action_allowed ? `<button class='${masterPb8BtnClass}' type='button' onclick='runMasterWithLog("master-update-pb8", "${masterPb8ButtonText}")'>${masterPb8ButtonText}</button>` : ''}
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' ${store.master.updateReboot ? 'checked' : ''} ${linuxUpdateSupported ? '' : 'disabled'} onchange="setMasterBool('updateReboot', this.checked)"> Reboot after Linux update</label>
@@ -10273,10 +10291,15 @@
         const st = (detail && detail.status) || {};
         const isRemoteMaster = String(((st.summary_row || {}).role) || '').toLowerCase() === 'master';
         const pbguiBtnClass = st.pbgui_update_available ? 'sb-btn warning' : 'sb-btn ok';
-        const pb7BtnClass = st.pb7_update_available ? 'sb-btn warning' : 'sb-btn ok';
+        const pb7BtnClass = st.pb7_update_available ? 'sb-btn warning' : (st.pb7_installed ? 'sb-btn ok' : 'sb-btn install');
+        const pb7ButtonText = st.pb7_installed ? 'Update PB7' : 'Install PB7';
+        const pb7ActionAllowed = st.pb7_action_allowed !== false;
         const pb8BtnClass = st.pb8_update_available ? 'sb-btn warning' : (st.pb8_installed ? 'sb-btn ok' : 'sb-btn install');
         const pb8ButtonText = st.pb8_installed ? 'Update PB8' : 'Install PB8';
-        const bothBtnClass = (st.pbgui_update_available || st.pb7_update_available) ? 'sb-btn warning' : 'sb-btn ok';
+        const pb8Only = !!st.pb8_installed && !st.pb7_installed;
+        const combinedCommand = pb8Only ? 'vps-update-pbgui-pb8' : 'vps-update-pb';
+        const combinedText = pb8Only ? 'Update PBGui and PB8' : 'Update PBGui and PB7';
+        const bothBtnClass = (st.pbgui_update_available || (pb8Only ? st.pb8_update_available : st.pb7_update_available)) ? 'sb-btn warning' : 'sb-btn ok';
         const pendingSrc = st.pending_updates != null ? st.pending_updates : ((st.summary_row || {}).updates);
         const hasLinuxUpdates = String(pendingSrc || '').trim() && String(pendingSrc).trim() !== '0' && String(pendingSrc).trim() !== 'N/A';
         const linuxUpdateBtnClass = hasLinuxUpdates ? 'sb-btn warning' : 'sb-btn ok';
@@ -10315,10 +10338,11 @@
             <label class='sb-toggle'><input type='checkbox' ${ui.debug ? 'checked' : ''} data-vps-ui-field='debug' data-host='${escAttr(selectedHost)}'> Debug</label>
           </div>
           <button class='${pbguiBtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pbgui' data-command-text='Update PBGui'>Update PBGui</button>
-          <button class='${pb7BtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb7' data-command-text='Update PB7'>Update PB7</button>
-          ${st.pb8_action_allowed ? `<button class='${pb8BtnClass}' type='button' title='${escAttr(st.pb8_install_profile === 'live' ? 'Installs the minimal PB8 live profile.' : 'Installs the PB8 full profile.')}' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb8' data-command-text='${pb8ButtonText}'>${pb8ButtonText}</button>` : ''}
+          <button class='${pb7BtnClass}' type='button' title='${escAttr(st.pb7_action_reason || '')}' ${pb7ActionAllowed ? '' : 'disabled'} data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb7' data-command-text='${pb7ButtonText}'>${pb7ButtonText}</button>
+          ${!pb7ActionAllowed && st.pb7_action_reason ? `<div class='notice warning'>${esc(st.pb7_action_reason)}</div>` : ''}
+          ${st.pb8_action_allowed ? `<button class='${pb8BtnClass}' type='button' title='${escAttr(st.pb8_installed ? 'Updates the installed PB8 runtime.' : (st.pb8_install_profile === 'live' ? 'Installs the minimal PB8 live profile.' : 'Installs the PB8 full profile.'))}' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb8' data-command-text='${pb8ButtonText}'>${pb8ButtonText}</button>` : ''}
           ${!st.pb8_action_allowed && st.pb8_action_reason ? `<div class='notice warning'>${esc(st.pb8_action_reason)}</div>` : ''}
-          <button class='${bothBtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb' data-command-text='Update PBGui and PB7'>Update PBGui and PB7</button>
+          <button class='${bothBtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='${combinedCommand}' data-command-text='${combinedText}'>${combinedText}</button>
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' data-update-reboot-toggle='${escAttr(selectedHost)}' data-vps-ui-field='updateReboot' data-host='${escAttr(selectedHost)}' ${ui.updateReboot ? 'checked' : ''}> Reboot after Linux update</label>
           </div>
@@ -10367,8 +10391,8 @@
           </div>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update", "Update Linux")'>Update Linux</button>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pbgui", "Update PBGui")'>Update PBGui</button>
-          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pb7", "Update PB7")'>Update PB7</button>
-          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pb", "Update PBGui and PB7")'>Update PBGui and PB7</button>
+          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-runtime", "Update Runtime by Profile")'>Update Runtime by Profile</button>
+          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pbgui-runtime", "Update PBGui and Runtime by Profile")'>Update PBGui and Runtime by Profile</button>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>`;
       } else {
         html = '';
@@ -10602,6 +10626,8 @@
       const sshError = String(ready.sshError || '');
       const ip = String(store.addForm.ip || '').trim();
       const hostname = String(store.addForm.hostname || '').trim();
+      const hostKey = ready.hostKey || {};
+      const hostKeyNeedsReview = !!hostKey.needs_confirmation && !!String(hostKey.fingerprint || '').trim();
 
       let hostsLabel = '/etc/hosts check';
       let hostsValue;
@@ -10646,6 +10672,9 @@
       const hostsBtn = showAddHostsBtn
         ? `<div style='position:absolute;right:12px;top:50%;transform:translateY(-50%)'><button class='btn primary' type='button' onclick='addHostsEntryAction()'>${esc(addHostsBtnText)}</button></div>`
         : '';
+      const sshBtn = hostKeyNeedsReview
+        ? `<div style='position:absolute;right:12px;top:50%;transform:translateY(-50%)'><button class='btn ${String(hostKey.status || '') === 'mismatch' ? 'danger' : 'primary'}' type='button' onclick='reviewAddVpsHostKey()'>${String(hostKey.status || '') === 'mismatch' ? 'Review changed key' : 'Review key'}</button></div>`
+        : '';
 
       const fwCheck = validateFirewallIps(store.addForm.firewall_ssh_ips);
       const fwOk = fwCheck.ok;
@@ -10662,7 +10691,7 @@
             <div class='status-sub'>${esc(hostsSub)}</div>
             ${hostsBtn}
           </div>
-          <div class='status-item'><div class='status-label'>${esc(sshLabel)}</div><div class='status-value'>${sshValue}</div><div class='status-sub'>${esc(sshSub)}</div></div>
+          <div class='status-item' style='position:relative'><div class='status-label'>${esc(sshLabel)}</div><div class='status-value'>${sshValue}</div><div class='status-sub'>${esc(sshSub)}</div>${sshBtn}</div>
           <div class='status-item'><div class='status-label'>Allowed SSH IPs</div><div class='status-value'>${fwValue}</div><div class='status-sub'>${esc(fwSub)}</div></div>
         </div>`;
     }
@@ -10678,7 +10707,7 @@
       return `
 
         <h2 class='page-section-title'>Add VPS</h2>
-        <div class='notice info'>Choose PB7 or PB8 Live only, then run the initial VPS bootstrap once. PB8-only setup does not clone or install PB7.</div>
+        <div class='notice info'>Choose PB7, PB8 Live only, or PB7 + PB8, then run the initial VPS bootstrap once. PB8-only setup does not clone or install PB7.</div>
         <div class='panel'>
           <div class='panel-head'>
             <div>
@@ -10776,8 +10805,9 @@
                 <select onchange="setAddField('runtime_profile', this.value)">
                   <option value='pb7'${String(form.runtime_profile || 'pb7') === 'pb7' ? ' selected' : ''}>PB7</option>
                   <option value='pb8'${String(form.runtime_profile || 'pb7') === 'pb8' ? ' selected' : ''}>PB8 Live only (no PB7)</option>
+                  <option value='pb7_pb8'${String(form.runtime_profile || 'pb7') === 'pb7_pb8' ? ' selected' : ''}>PB7 + PB8</option>
                 </select>
-                <div class='field-help'>PB8-only installs the minimal live profile after PBGui setup and leaves PBRun disabled.</div>
+                <div class='field-help'>PB7 + PB8 installs both runtimes. PB8-only skips PB7, while both PB8 profiles enable the shared PBRun controller for live supervision.</div>
               </div>
               <div class='field'>
                 <label>Install Path</label>
@@ -12375,7 +12405,7 @@
                 const host = item.server || store.hostname || '';
                 const pbVersion = String(item.pb_version || '7');
                 const cellHtml = _renderServiceRowCells(item, host, pbVersion);
-                return `<tr data-bot='${escAttr(item.name || '')}'>${BOT_COLUMNS.map(function (col) {
+                return `<tr data-bot='${escAttr(item.name || '')}' data-bot-key='${escAttr(pbVersion + ':' + String(item.name || ''))}'>${BOT_COLUMNS.map(function (col) {
                   const payload = cellHtml[col.field] || { html: '', sig: '' };
                   return `<td data-col='${escAttr(col.field)}' data-render-sig='${escAttr(payload.sig)}'>${payload.html}</td>`;
                 }).join('')}</tr>`;
@@ -12387,16 +12417,17 @@
 
     function renderRunningPb7Fallback(items) {
       if (!Array.isArray(items) || !items.length) {
-        return `<div class='empty-state'>No running PB7 instances reported.</div>`;
+        return `<div class='empty-state'>No running PB7 or PB8 instances reported.</div>`;
       }
       return `
-        <div class='notice warning'>Live monitor details are currently unavailable. Running PB7 instances are listed from process and Cluster Sync telemetry.</div>
+        <div class='notice warning'>Detailed live metrics are unavailable for the instances below; process and Cluster Sync telemetry still confirm them.</div>
         <div class='stack'>
           ${items.map(function (item) {
             const gate = item.cluster_gate || (item.blocked ? 'blocked' : 'running');
             return `
               <div class='branch-summary'>
                 <span class='tag warning'>Running</span>
+                <span class='pill'><strong>Runtime</strong> PB${esc(item.pb_version || '7')}</span>
                 <span class='pill'><strong>Name</strong> ${esc(item.name || '-')}</span>
                 <span class='pill'><strong>Config Version</strong> ${esc(item.version || '-')}</span>
                 <span class='pill'><strong>Enabled On</strong> ${esc(item.enabled_on || '-')}</span>
@@ -12413,17 +12444,21 @@
       const hasServerMetrics = !!server;
       const telemetryFresh = !(server && (server.telemetry_stale || server.telemetry_fresh === false));
       const pb7Rows = Array.isArray(monitor.v7) ? monitor.v7 : [];
-      const pb7Fallback = Array.isArray(monitor.v7_running) ? monitor.v7_running : [];
+      const pb8Rows = Array.isArray(monitor.v8) ? monitor.v8 : [];
+      const pb7Fallback = (Array.isArray(monitor.v7_running) ? monitor.v7_running : []).map(function(item) { return Object.assign({ pb_version: '7' }, item); });
+      const pb8Fallback = (Array.isArray(monitor.v8_running) ? monitor.v8_running : []).map(function(item) { return Object.assign({ pb_version: '8' }, item); });
+      const runtimeRows = pb7Rows.concat(pb8Rows);
+      const runtimeFallback = pb7Fallback.concat(pb8Fallback);
       const summary = status && status.summary_row ? status.summary_row : {};
       const historyHost = String(summary.hostname || summary.name || store.hostname || '').trim();
-      let pb7Content = '';
-      if (pb7Rows.length) {
-        pb7Content = renderServiceRows(pb7Rows);
-        if (pb7Fallback.length) {
-          pb7Content += renderRunningPb7Fallback(pb7Fallback);
+      let runtimeContent = '';
+      if (runtimeRows.length) {
+        runtimeContent = renderServiceRows(runtimeRows);
+        if (runtimeFallback.length) {
+          runtimeContent += renderRunningPb7Fallback(runtimeFallback);
         }
       } else {
-        pb7Content = renderRunningPb7Fallback(pb7Fallback);
+        runtimeContent = renderRunningPb7Fallback(runtimeFallback);
       }
       const cpuTelemetry = formatCpuTelemetry(serverMetrics);
       const staleNotice = hasServerMetrics && !telemetryFresh
@@ -12463,7 +12498,7 @@
           <div class='panel-body'>
             ${metrics}
             <div class='stack'>
-              <div>${pb7Content}</div>
+              <div>${runtimeContent}</div>
             </div>
           </div>
         </div>`;

@@ -15,6 +15,7 @@ Supported datasets:
   - "1m_api" / "candles_1m_api" → data/ohlcv/{exchange}/1m_api/{coin}/*.npz
   - "l2Book"                 → data/ohlcv/{exchange}/l2Book/{coin}/*.lz4
   - "pb7_cache:{tf}"         → pb7/caches/ohlcv/{exchange}/{tf}/{coin}/*.npy
+  - "pb8_cache:{tf}"         → pb8/caches/ohlcv/{exchange}/{tf}/{coin}/*.npy
 
 Public API:
   get_inventory(exchange, dataset, *, lag_minutes, tradfi_type_fn, force_refresh)
@@ -37,6 +38,7 @@ from market_data import (
     _parse_pb7_cache_day_from_name,
     get_exchange_raw_root_dir,
     _get_pb7_root_dir,
+    _get_pb8_root_dir,
     is_l2book_archive_enabled,
     load_l2book_archive_dir,
 )
@@ -482,7 +484,7 @@ def _compute_coin(
         return _compute_1m_api_coin(coin_path)
     elif ds_l in ("l2book",):
         return _compute_l2book_coin(coin_path, archive_path=archive_path)
-    elif ds_l.startswith("pb7_cache:"):
+    elif ds_l.startswith(("pb7_cache:", "pb8_cache:")):
         return _compute_pb7_coin(coin_path)
     else:
         # Generic NPZ fallback
@@ -497,9 +499,10 @@ def _coin_dirs_for_dataset(exchange: str, dataset: str) -> dict[str, Path]:
     """Return {coin_name: coin_path} for all coin dirs of this exchange+dataset."""
     ds_l = str(dataset).strip().lower()
 
-    if ds_l.startswith("pb7_cache:"):
-        tf = ds_l[len("pb7_cache:"):]
-        root = _get_pb7_root_dir()
+    if ds_l.startswith(("pb7_cache:", "pb8_cache:")):
+        prefix = "pb8_cache:" if ds_l.startswith("pb8_cache:") else "pb7_cache:"
+        tf = ds_l[len(prefix):]
+        root = _get_pb8_root_dir() if prefix == "pb8_cache:" else _get_pb7_root_dir()
         if root is None:
             return {}
         base = root / "caches" / "ohlcv" / str(exchange) / tf

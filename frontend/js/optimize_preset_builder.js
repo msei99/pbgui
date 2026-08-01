@@ -70,7 +70,8 @@
 
   function apiJson(url, token, options) {
     options = options || {};
-    var headers = Object.assign({ 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }, options.headers || {});
+    var headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
+    if (String(token || '').trim()) headers.Authorization = 'Bearer ' + String(token).trim();
     return fetch(url, Object.assign({}, options, { headers: headers })).then(function (res) {
       if (!res.ok) {
         return res.text().then(function (text) {
@@ -94,35 +95,45 @@
     return out;
   }
 
-  function saveOptimizePresetConfig(token, name, config) {
+  function optimizeApiBase(version) {
+    return window.location.origin + '/api/optimize-' + (String(version || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7');
+  }
+
+  function backtestApiBase(version) {
+    return window.location.origin + '/api/backtest-' + (String(version || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7');
+  }
+
+  function saveOptimizePresetConfig(token, name, config, version) {
     var encoded = encodeURIComponent(name);
-    return apiJson(window.location.origin + '/api/optimize-v7/configs/' + encoded, token, {
+    var apiBase = optimizeApiBase(version);
+    return apiJson(apiBase + '/configs/' + encoded, token, {
       method: 'PUT',
       body: JSON.stringify(config)
     }).then(function () {
-      return apiJson(window.location.origin + '/api/optimize-v7/configs/' + encoded, token);
+      return apiJson(apiBase + '/configs/' + encoded, token);
     }).then(function (saved) {
       if (!saved || !saved.config) throw new Error('Saved optimize config could not be reloaded.');
       return saved.config;
     });
   }
 
-  function queueOptimizePreset(token, name) {
-    return apiJson(window.location.origin + '/api/optimize-v7/queue', token, {
+  function queueOptimizePreset(token, name, version) {
+    return apiJson(optimizeApiBase(version) + '/queue', token, {
       method: 'POST',
       body: JSON.stringify({ name: name })
     });
   }
 
-  function openOptimizeSeedDraft(token, config, draftName) {
-    return apiJson(window.location.origin + '/api/backtest-v7/optimize-draft', token, {
+  function openOptimizeSeedDraft(token, config, draftName, version) {
+    var runtime = String(version || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7';
+    return apiJson(backtestApiBase(runtime) + '/optimize-draft', token, {
       method: 'POST',
       body: JSON.stringify({ config: extractConfigSections(config) })
     }).then(function (draft) {
       var params = new URLSearchParams();
       params.set('opt_draft_id', draft && draft.draft_id ? draft.draft_id : '');
       if (draftName) params.set('draft_name', draftName);
-      window.location.href = window.location.origin + '/api/optimize-v7/main_page?' + params.toString();
+      window.location.href = optimizeApiBase(runtime) + '/main_page?' + params.toString();
     });
   }
 

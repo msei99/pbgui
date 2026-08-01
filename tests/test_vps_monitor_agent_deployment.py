@@ -256,6 +256,11 @@ def test_setup_systemd_first_run_then_idempotent_second_run(tmp_path: Path) -> N
         assert f"ExecStart={python_bin} -u {pbgui_dir}/{script_name}" in unit_source
     api_source = (unit_dir / "pbgui-api.service").read_text(encoding="utf-8")
     assert f"ExecStartPre=/bin/bash {pbgui_dir}/setup/stop_legacy_api.sh --pbgui-dir {pbgui_dir}" in api_source
+    pbrun_source = (unit_dir / "pbgui-pbrun.service").read_text(encoding="utf-8")
+    assert "KillSignal=SIGTERM" in pbrun_source
+    assert "KillMode=process" in pbrun_source
+    assert "TimeoutStopSec=30" in pbrun_source
+    assert "KillMode=mixed" in (unit_dir / "pbgui-monitor-agent.service").read_text(encoding="utf-8")
     first_inode = unit_path.stat().st_ino
     calls_path.write_text("", encoding="utf-8")
     second = _run_setup(env, pbgui_dir, python_bin)

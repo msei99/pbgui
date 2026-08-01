@@ -137,6 +137,16 @@ def get_monitor() -> Optional[VPSMonitor]:
     return _monitor
 
 
+def _bot_service_parts(service: str) -> tuple[str, str]:
+    """Return a bot name and runtime from the allowlisted service identifier."""
+    raw = str(service or "").strip()
+    name, separator, version = raw.rpartition(":")
+    if separator and version.lower() in {"7", "v7", "pb7", "8", "v8", "pb8"}:
+        normalized = "8" if version.lower() in {"8", "v8", "pb8"} else "7"
+        return name, normalized
+    return raw, "7"
+
+
 async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str | None = None,
                               kind: str = "tracebacks", bucket: str,
                               expected_count: int | None = None, lines: int = 5000) -> list[str]:
@@ -156,9 +166,13 @@ async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str |
     def is_today(line: str) -> bool:
         return str(line or "").startswith(today_prefix)
 
+    version = "8" if str(pb_version or "7").strip().lower() in {"8", "v8", "pb8"} else "7"
     discovered = []
     if _monitor:
-        discovered = list(((_monitor.store.bot_logs.get(hostname) or {}).get(bot_name) or []))
+        host_logs = _monitor.store.bot_logs.get(hostname) or {}
+        discovered = list(host_logs.get(f"{version}:{bot_name}") or [])
+        if not discovered and version == "7":
+            discovered = list(host_logs.get(bot_name) or [])
 
     if kind == "tracebacks":
         paths = [
@@ -167,8 +181,8 @@ async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str |
         ]
         if not paths:
             paths = [
-                f"data/run_v7/{bot_name}/passivbot_err.log.old",
-                f"data/run_v7/{bot_name}/passivbot_err.log",
+                f"data/run_v{version}/{bot_name}/passivbot_err.log.old",
+                f"data/run_v{version}/{bot_name}/passivbot_err.log",
             ]
         output = await _streamer.get_recent_log_files(hostname, paths, line_limit)
         if output is None:
@@ -194,9 +208,9 @@ async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str |
         flush_block()
         return matches[-line_limit:] if line_limit > 0 else matches
 
-    paths = [path for path in discovered if "/pb7/logs/" in f"/{str(path).lstrip('/')}" ]
+    paths = [path for path in discovered if f"/pb{version}/logs/" in f"/{str(path).lstrip('/')}" ]
     if not paths:
-        paths = [f"software/pb7/logs/{bot_name}.log"]
+        paths = [f"software/pb{version}/logs/{bot_name}.log"]
     output = await _streamer.get_recent_log_files(hostname, paths, line_limit, contains=" ERROR ")
     if not output:
         return []
@@ -211,6 +225,7 @@ def get_monitor_state_snapshot() -> dict:
             "system": {},
             "instances": {},
             "v7_instances": {},
+            "v8_instances": {},
             "host_meta": {},
             "streams": {},
             "services": {},
@@ -644,36 +659,51 @@ async def _local_kill_instance(name: str, pb_version: str) -> dict:
     try:
         from pathlib import Path
 
-        from PBRun import PBRun, RunV7
+        from PBRun import PBRun, RunV7, RunV8
+        name = str(name or "").strip()
+        if (not name or len(name) > 255 or name in {".", ".."}
+                or "/" in name or "\\" in name or "\x00" in name
+                or any(ord(char) < 32 or ord(char) == 127 for char in name)):
+            return {"type": "result", "cmd": "kill_instance",
+                    "host": "local", "name": name, "success": False, "pid": None}
+        raw_version = str(pb_version or "7").strip().lower()
+        if raw_version not in {"7", "v7", "pb7", "8", "v8", "pb8"}:
+            return {"type": "result", "cmd": "kill_instance",
+                    "host": "local", "name": name, "success": False, "pid": None}
+        version = "8" if raw_version in {"8", "v8", "pb8"} else "7"
         pbrun = PBRun()
-        run_v7 = RunV7()
-        run_v7.path = str(Path(pbrun.v7_path) / name)
-        run_v7.user = name
-        run_v7.name = pbrun.name
-        run_v7.pb7dir = pbrun.pb7dir
-        run_v7.pb7venv = pbrun.pb7venv
-        run_v7.pbgdir = pbrun.pbgdir
+        runner = RunV8() if version == "8" else RunV7()
+        runner.path = str(Path(pbrun.v8_path if version == "8" else pbrun.v7_path) / name)
+        runner.user = name
+        runner.name = pbrun.name
+        runner.pbgdir = pbrun.pbgdir
+        if version == "8":
+            runner.pb8dir = pbrun.pb8dir
+            runner.pb8venv = pbrun.pb8venv
+        else:
+            runner.pb7dir = pbrun.pb7dir
+            runner.pb7venv = pbrun.pb7venv
 
-        config_path = Path(run_v7.path) / "config.json"
+        config_path = Path(runner.path) / "config.json"
         if not config_path.exists():
             return {"type": "result", "cmd": "kill_instance",
                     "host": "local", "name": name,
                     "success": False, "pid": None}
 
-        if not run_v7.load():
+        if not runner.load():
             return {"type": "result", "cmd": "kill_instance",
                     "host": "local", "name": name,
                     "success": False, "pid": None}
 
-        process = run_v7.pid()
+        process = runner.pid()
         if process is None:
             return {"type": "result", "cmd": "kill_instance",
                     "host": "local", "name": name,
                     "success": False, "pid": None}
 
         pid = process.pid
-        run_v7.stop()
-        _log(SERVICE, f"[local] Killed bot {name} (pid={pid})")
+        runner.stop()
+        _log(SERVICE, f"[local] Stopped PB{version} bot {name} (pid={pid})")
         return {"type": "result", "cmd": "kill_instance",
                 "host": "local", "name": name,
                 "success": True, "pid": pid}
@@ -698,9 +728,7 @@ async def _cmd_get_logs(request: dict) -> dict:
 
     try:
         if service.startswith("Bot:"):
-            parts = service[4:].strip().split(":")
-            bot_name = parts[0]
-            pb_version = parts[1] if len(parts) > 1 else None
+            bot_name, pb_version = _bot_service_parts(service[4:])
             content = await _streamer.get_bot_log(
                 host, bot_name, lines_n, pb_version
             )
@@ -724,7 +752,10 @@ async def _cmd_get_log_info(request: dict) -> dict:
     if not host or not service or not _streamer:
         return {"type": "error", "error": "host and service required"}
     try:
-        info = await _streamer.get_log_info(host, service)
+        pb_version = None
+        if service.startswith("Bot:"):
+            _bot_name, pb_version = _bot_service_parts(service[4:])
+        info = await _streamer.get_log_info(host, service, pb_version)
     except ValueError as exc:
         return {"type": "error", "error": str(exc)}
     return {
@@ -753,11 +784,9 @@ async def _cmd_subscribe_logs(ws: WebSocket,
         # Resolve bot log path if needed
         resolved_service = service
         if service.startswith("Bot:"):
-            parts = service[4:].strip().split(":")
-            bot_name = parts[0]
-            pb_version = parts[1] if len(parts) > 1 else None
+            bot_name, pb_version = _bot_service_parts(service[4:])
             resolved_service = resolve_bot_log_path(
-                bot_name, pb_version or "7"
+                bot_name, pb_version
             )
 
         stream_id = await _streamer.start_stream(host, resolved_service)
@@ -777,9 +806,7 @@ async def _cmd_subscribe_logs(ws: WebSocket,
         if start_at_end:
             content = ""
         else:
-            parts = service[4:].strip().split(":")
-            bot_name = parts[0]
-            pb_version = parts[1] if len(parts) > 1 else None
+            bot_name, pb_version = _bot_service_parts(service[4:])
             content = await _streamer.get_bot_log(host, bot_name, lines_n, pb_version)
     else:
         content = "" if start_at_end else await _streamer.get_recent_logs(host, service, lines_n)

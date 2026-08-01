@@ -1128,6 +1128,37 @@ async def _get_backtest_worker_item() -> dict[str, Any]:
     )
 
 
+def _get_backtest_v8_worker_item() -> dict[str, Any]:
+    """Return status for the independent PB8 backtest queue controller."""
+    import api.backtest_v8 as bt8
+
+    items = bt8._load_queue()
+    counts = Counter(str(item.get("status") or "unknown").strip().lower() for item in items)
+    settings = bt8.load_ini_section(bt8._QUEUE_SETTINGS_SECTION)
+    task = getattr(bt8._worker, "_task", None)
+    running = _task_active(task)
+    health = "running" if running else "failed" if task is not None and task.done() else "stopped"
+    return _worker_item(
+        worker_id="backtest-v8-queue",
+        label="PB8 Backtest Queue",
+        group="queue",
+        worker_type="scheduler task",
+        running=running,
+        summary=f"{counts.get('queued', 0)} queued, {counts.get('running', 0)} active",
+        description="Schedules queued PB8 backtests and launches detached PB8 subprocesses.",
+        note="Stopping the controller pauses automatic queue processing only. Detached PB8 backtests continue running.",
+        stats=[
+            _worker_stat("Health", health),
+            _worker_stat("Queued", counts.get("queued", 0)),
+            _worker_stat("Running", counts.get("running", 0)),
+            _worker_stat("Complete", counts.get("complete", 0)),
+            _worker_stat("Error", counts.get("error", 0)),
+            _worker_stat("Autostart", "On" if str(settings.get("autostart", "False")).lower() == "true" else "Off"),
+        ],
+        log_file="BacktestV8.log",
+    )
+
+
 async def _get_optimize_worker_item() -> dict[str, Any]:
     import api.optimize_v7 as opt7
 
@@ -1247,6 +1278,7 @@ async def _collect_worker_groups() -> list[dict[str, Any]]:
             "items": [
                 _get_task_worker_item(),
                 await _get_backtest_worker_item(),
+                _get_backtest_v8_worker_item(),
                 await _get_optimize_worker_item(),
                 _get_optimize_v8_worker_item(),
             ],
@@ -1305,6 +1337,10 @@ async def _start_worker(worker_id: str) -> None:
         import api.backtest_v7 as bt7
         bt7._worker.start()
         return
+    if worker_id == "backtest-v8-queue":
+        import api.backtest_v8 as bt8
+        bt8._worker.start()
+        return
     if worker_id == "optimize-queue":
         import api.optimize_v7 as opt7
         opt7._worker.start()
@@ -1341,6 +1377,10 @@ async def _stop_worker(worker_id: str) -> None:
     if worker_id == "backtest-queue":
         import api.backtest_v7 as bt7
         await bt7._worker.stop()
+        return
+    if worker_id == "backtest-v8-queue":
+        import api.backtest_v8 as bt8
+        await bt8._worker.stop()
         return
     if worker_id == "optimize-queue":
         import api.optimize_v7 as opt7

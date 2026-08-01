@@ -779,6 +779,27 @@ def _get_pb7_root_dir(pb7_root: str | Path | None = None) -> Path | None:
         return None
 
 
+def _get_pb8_root_dir(pb8_root: str | Path | None = None) -> Path | None:
+    """Resolve the configured PB8 checkout without requiring it to be installed."""
+    if pb8_root:
+        try:
+            path = Path(pb8_root).expanduser().resolve()
+            return path if path.exists() else None
+        except Exception:
+            return None
+    try:
+        snapshot = pbgui_purefunc.load_ini_snapshot()
+        value = snapshot.get("main", "pb8dir") if snapshot.has_option("main", "pb8dir") else ""
+        value = str(value or "").strip()
+        if value:
+            path = Path(value).expanduser().resolve()
+            if path.exists():
+                return path
+    except Exception:
+        pass
+    return None
+
+
 def _parse_pb7_cache_day_from_name(name: str) -> str:
     s = str(name or "")
     stem = Path(s).stem

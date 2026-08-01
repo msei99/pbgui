@@ -71,9 +71,9 @@ Sidebar actions:
 | **Host Logs** | Open the dedicated shared log-viewer screen for local service logs and file targets |
 | **PBGui Branch** | Open the PBGui branch management view |
 | **PB7 Branch** | Open the PB7 branch management view |
-| **Update PBGui and PB7** | Update all components |
+| **Update PBGui and PB7 / Update PBGui and PB8** | Update PBGui together with the runtime installed on a single-runtime host |
 | **Update PBGui** | Update only PBGui |
-| **Update PB7** | Update only PB7 |
+| **Install PB7 / Update PB7** | Install a missing PB7 runtime or update the existing PB7 checkout and virtualenv |
 | **Install PB8 / Update PB8** | Install PB8 from upstream `master`, or update the existing separate PB8 checkout and virtualenv |
 | **Update Linux** | Run Linux package updates (optional reboot checkbox) |
 | **Reboot Master** | Restart the local server |
@@ -83,12 +83,16 @@ The **Master** content area also contains:
 - a live status grid for CoinData / last command state
 - **PBGui Branch Management** for branch or commit switches
 - **PB7 Branch Management** with optional custom remote / fork URL support
-- a **Monitor** section with server metrics plus PB7 activity data from live processes, PB7 logs, and Cluster Sync desired state
+- a **Monitor** section with server metrics plus runtime-labelled PB7 and PB8 activity from live processes and Cluster Sync desired state
 - a **Progress** section with separate status buckets; when a sidebar action starts a master ansible task, the main pane switches to the shared **Command Log Viewer** for the full output, and **Home** returns to the normal master overview
 
 In cluster mode, **Update PBGui** and PBGui branch switches sync the local PBCluster systemd user unit and restart PBCluster. PBCluster is also visible in local service monitoring and service-control views. A manual `git pull` does not restart PBCluster; use `systemctl --user restart pbgui-pbcluster.service` afterward.
 
-PB8 uses `<install_dir>/pb8` and `<install_dir>/venv_pb8`, validates the PB8 CLI, Rust extension, and V8 config schema, and then saves `pb8dir` and `pb8venv` in `pbgui.ini`. Local and remote masters receive the full PB8 profile for backtest and optimize. Managed VPS runners receive only the minimal live profile, use pip without a download cache, and remove the temporary Rust build directory after validation. The remote playbook requires at least 3 GiB free on the installation filesystem and reports free space plus PB8 checkout/venv sizes before and after the run. RAM size is not an installation gate. PB8 remains absent from bulk deployments.
+PB8 uses `<install_dir>/pb8` and `<install_dir>/venv_pb8`, validates the PB8 CLI, Rust extension, and V8 config schema, and then saves `pb8dir` and `pb8venv` in `pbgui.ini`. Local and remote masters receive the full PB8 profile for backtest and optimize. Managed VPS runners receive only the minimal live profile, use pip without a download cache, remove the temporary Rust build directory after validation, and enable the shared PBRun controller for PB8 live supervision. A first remote PB8 installation requires at least 3 GiB free on the installation filesystem. A validated existing PB8 runtime remains updateable below that first-install reserve. The playbook reports free space plus PB8 checkout/venv sizes before and after either operation. RAM size is not an installation gate.
+
+A first remote PB7 installation also requires at least 3 GiB free. The VPS Manager disables **Install PB7** when fresh telemetry reports less space, and the playbook repeats the check before rustup or Git downloads. Existing validated PB7 installations remain updateable below the first-install reserve.
+
+Overview bulk updates are runtime-profile aware. **Update Runtime by Profile** and **Update PBGui and Runtime by Profile** dispatch PB7-only hosts to PB7 playbooks, PB8-only hosts to PB8 playbooks, and combined hosts to ordered PB7+PB8 playbooks. Mixed selections therefore retain one parallel or sequential rollout without applying PB7 tasks to PB8-only hosts.
 When PB8 is not installed, **Install PB8** is shown as a filled blue action so it remains distinct from routine update buttons.
 
 ---
@@ -112,8 +116,9 @@ Sidebar actions:
 | **Initialize** | Run initial VPS setup wizard |
 | **Delete VPS** | Remove this VPS from PBGui |
 | **Update PBGui** | Update PBGui on this VPS |
-| **Update PBGui and PB7** | Update all components |
-| **Install PB8 / Update PB8** | Available when fresh telemetry reports a supported master or VPS-runner role and at least 3 GiB free disk; masters receive PB8's full profile, runners receive the minimal live profile |
+| **Install PB7 / Update PB7** | Install PB7 on a PB8-only host or update an existing PB7 runtime |
+| **Update PBGui and PB7 / Update PBGui and PB8** | Update PBGui together with the runtime present on a single-runtime host |
+| **Install PB8 / Update PB8** | Installation is available when fresh telemetry reports a supported role and at least 3 GiB free disk; an already validated PB8 runtime can be updated without the first-install reserve |
 | **Update Linux** | Run `apt upgrade` (optional reboot checkbox) |
 | **Reboot VPS** | Restart the VPS |
 | **Cleanup VPS** | Remove old packages and logs |
@@ -121,7 +126,7 @@ Sidebar actions:
 The **VPS** content area also contains:
 - a setup/config grid for password, swap, and firewall fields; **Apply VPS Changes** saves changes locally and applies changed swap and firewall settings on the VPS
 - **PBGui Branch Management** and **PB7 Branch Management** with the same switch / update workflow as the Master page
-- a **Remote Monitor** section with server metrics plus PB7 activity data from live processes, PB7 logs, and Cluster Sync desired state
+- a **Remote Monitor** section with server metrics plus runtime-labelled PB7 and PB8 activity from detailed process metrics and Cluster Sync fallbacks
 - a **Progress** section with separate status buckets for init, setup and update runs; use the sidebar action buttons to open the shared **Command Log Viewer** whenever you need the full ansible output
 
 In cluster mode, **Update PBGui** and PBGui branch switches on a VPS sync PBCluster service files and restart PBCluster, PBRun and PBCoinData where those services are configured. VPS systemd migration checks include PBCluster, and the remote service/host log views expose `PBCluster.log`. Pure VPS runners still do not need `pbgui-api.service` or `PBApiServer.py`.
@@ -170,12 +175,14 @@ The reveal state is preserved during live updates, so opening an eye button does
    - save the VPS record first
    - run **Initialize & Setup VPS** from the Add view, or open the host later and finish the initial setup from the **Change VPS** page
 3. Fill the **Step 4: Initialize & Setup your VPS** form and the **Save VPS Entry** defaults.
-4. Select **PB7** for the current runner stack, or **PB8 Live only (no PB7)** for a clean minimal PB8 runner. PB8-only setup skips the PB7 checkout and virtualenv, leaves PBRun disabled, and requires at least 3 GiB free for the PB8 build.
+4. Select **PB7** for the current runner stack, **PB8 Live only (no PB7)** for a clean minimal PB8 runner, or **PB7 + PB8** to install both runtimes. The combined profile installs PB7 with PBRun first and then the PB8 live profile. PB8-only setup skips the PB7 checkout and virtualenv but enables the shared PBRun controller, and every profile containing PB8 requires at least 3 GiB free for the PB8 build.
 5. Click **Save VPS** to create or update the stored record.
-6. Click **Initialize & Setup VPS** to start the bootstrap run directly from the Add view. For PB8-only hosts, the validated PB8 Live installer starts automatically after the PBGui base setup succeeds.
+6. Click **Initialize & Setup VPS** to start the bootstrap run directly from the Add view. The UI remains on the current host's task log while initialization and setup run. For PB8-only and combined hosts, PB8 clone, virtualenv installation, and validation run as a second play in the same setup job and appear in the same setup log.
 7. After setup succeeds, PBGui registers the host locally as a Cluster node candidate. If you are adding this VPS to an existing Cluster, open **System -> Cluster Sync -> Nodes**, set the new node to **Reachable via SSH**, probe it, run **Join**, then add the VPS to the local master's sync peers and run **Install Key** or **Repair All SSH**.
 8. If the VPS was already set up before automatic Cluster registration existed, open the VPS detail page and click **Add to Cluster** first. That action writes only local Cluster metadata; it does not SSH to the VPS or join it.
 9. After initialization succeeds, use **Change VPS** and **Apply VPS Changes** for normal saved setting changes.
+
+If a VPS was reinstalled, its SSH host key changes. The Add-page preflight blocks initialization and shows **Review changed key**. Verify the displayed SHA-256 fingerprint through a trusted channel, then explicitly confirm replacement. PBGui atomically replaces only the conflicting user `known_hosts` entries for that hostname and IP and repeats the connectivity check.
 
 ---
 

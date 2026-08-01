@@ -51,7 +51,7 @@ The detail panel shows heartbeat and effective ages, every required file state, 
 ## Tabs and workflow
 
 - **Dashboard**: host, SSH, telemetry, and monitor-agent health
-- **Instances**: running and deployed bot instances with status details
+- **Instances**: running and deployed PB7/PB8 bot instances with explicit runtime identity; log and kill actions keep that identity so equal names cannot target the wrong runtime
 - **Services**: PBCluster, PBRun, PBData, PBCoinData, and PBMonitorAgent status and restart actions
 - **Live Logs**: real-time service and bot log streams
 

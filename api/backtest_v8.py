@@ -43,10 +43,17 @@ from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log, rotate_managed_log_before_open
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
 from backtest_autostart import claim_backtest_slot, publish_backtest_process, release_backtest_slot
+from ParetoDataLoader import _flatten_bot_params
+from pareto_preset_generator import (
+    OPTIMIZE_PRESET_DIRECTIONS,
+    _flatten_dotted_bounds,
+    build_optimize_preset,
+)
 from pb8_config import (
     PB8ConfigurationError,
     cache_prepared_pb8_config,
     get_pb8_result_metrics,
+    get_pb8_optimize_metadata,
     get_pb8_template_config,
     load_pb8_config,
     migrate_pb7_config,
@@ -275,6 +282,20 @@ def _require_override_files(config: dict, config_dir: Path) -> None:
         path = _safe_path(config_dir / filename, config_dir)
         if not path.is_file() or path.is_symlink():
             raise HTTPException(status_code=422, detail=f"Override config not found: {filename}")
+
+
+def _load_override_payloads(config: dict, config_dir: Path) -> dict[str, dict]:
+    """Load the complete referenced sparse override set from one managed bundle."""
+    payloads = {}
+    for filename in _override_filenames(config):
+        path = _safe_path(config_dir / filename, config_dir)
+        if not path.is_file() or path.is_symlink():
+            raise HTTPException(status_code=422, detail=f"Override config not found: {filename}")
+        payload = _read_json(path)
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail=f"Override config {filename} must be an object")
+        payloads[filename] = payload
+    return payloads
 
 
 def _publish_config_bundle(stage_dir: Path, target_dir: Path) -> None:
@@ -926,6 +947,46 @@ def _result_config(result_dir: Path) -> dict:
     return {}
 
 
+def _sanitize_optimize_preset_name(value: object, *, default: str) -> str:
+    """Return a filesystem-safe PB8 optimize preset name."""
+    name = str(value or "").strip() or default
+    for char in (' ', '/', '\\', ':', '*', '?', '"', '<', '>', '|', '\0'):
+        name = name.replace(char, "_")
+    return name.strip("._")[:64] or default
+
+
+def _pb8_result_near_bounds(config: dict, *, tolerance: float) -> dict[str, object]:
+    """Detect PB8 result bot leaves close to their dotted optimize bounds."""
+    bounds = _flatten_dotted_bounds((config.get("optimize") or {}).get("bounds") or {})
+    bot_params = _flatten_bot_params(config.get("bot") or {})
+    at_lower: dict[str, dict[str, float]] = {}
+    at_upper: dict[str, dict[str, float]] = {}
+    within_range: list[str] = []
+    for name, raw_bound in bounds.items():
+        if not isinstance(raw_bound, (list, tuple)) or len(raw_bound) < 2:
+            continue
+        try:
+            lower = float(raw_bound[0])
+            upper = float(raw_bound[1])
+            value = float(bot_params[name])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not all(math.isfinite(item) for item in (lower, upper, value)):
+            continue
+        if lower > upper:
+            lower, upper = upper, lower
+        span = upper - lower
+        if span < 1e-10:
+            continue
+        if value <= lower + span * tolerance:
+            at_lower[name] = {"value": value, "bound": lower}
+        elif value >= upper - span * tolerance:
+            at_upper[name] = {"value": value, "bound": upper}
+        else:
+            within_range.append(name)
+    return {"at_lower": at_lower, "at_upper": at_upper, "within_range": within_range}
+
+
 def _resolve_result_dir(path: str, *, allow_archives: bool = True) -> Path:
     """Resolve a PB8 result below its local root or a read-only archive root."""
     local_root = _results_root().resolve()
@@ -1425,10 +1486,17 @@ def create_optimize_draft(body: dict, session: SessionToken = Depends(require_au
     config = body.get("config") if isinstance(body, dict) else None
     if not isinstance(config, dict):
         raise HTTPException(status_code=422, detail="config must be a dict")
+    override_configs = body.get("override_configs") or {}
+    if not isinstance(override_configs, dict):
+        raise HTTPException(status_code=422, detail="override_configs must be an object")
+    override_configs = _validate_override_payloads(config, override_configs)
     with _DRAFT_LOCK:
         _clean_drafts(reserve_slot=True)
         draft_id = secrets.token_urlsafe(16)
-        _opt_draft_store[draft_id] = (time.time(), copy.deepcopy(config))
+        _opt_draft_store[draft_id] = (
+            time.time(),
+            {"config": copy.deepcopy(config), "override_configs": override_configs},
+        )
     return {"draft_id": draft_id}
 
 
@@ -1440,8 +1508,10 @@ def get_optimize_draft(draft_id: str, session: SessionToken = Depends(require_au
         entry = _opt_draft_store.get(draft_id)
         if not entry:
             raise HTTPException(status_code=404, detail="Draft not found or expired")
-        config = copy.deepcopy(entry[1])
-    return {"config": config}
+        payload = copy.deepcopy(entry[1])
+    if "config" in payload and "override_configs" in payload:
+        return payload
+    return {"config": payload, "override_configs": {}}
 
 
 @router.post("/queue-draft")
@@ -1749,7 +1819,13 @@ def get_config(name: str, session: SessionToken = Depends(require_auth)) -> dict
         with _config_lock():
             if not path.is_file() or path.is_symlink():
                 raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
-            return {"name": name, "config": load_pb8_config(path), "param_status": {}}
+            config = load_pb8_config(path)
+            return {
+                "name": name,
+                "config": config,
+                "param_status": {},
+                "override_configs": _load_override_payloads(config, path.parent),
+            }
     except PB8ConfigurationError as exc:
         raise _configuration_error(f"Loading PB8 config {name}", exc) from exc
 
@@ -2071,6 +2147,68 @@ def get_result_config(path: str, session: SessionToken = Depends(require_auth)) 
     if not config:
         raise HTTPException(status_code=404, detail="Result config not found")
     return config
+
+
+@router.post("/results/optimize-preset/build")
+def build_result_optimize_preset(body: dict, session: SessionToken = Depends(require_auth)) -> dict:
+    """Build a PB8 optimize preset from one PB8 backtest result."""
+    request_body = body or {}
+    path_text = str(request_body.get("result_path") or request_body.get("path") or "").strip()
+    if not path_text:
+        raise HTTPException(status_code=400, detail="Missing result_path")
+    result_dir = _resolve_result_dir(path_text)
+    config = _result_config(result_dir)
+    if not config:
+        raise HTTPException(status_code=404, detail="Result config not found")
+    analysis = _read_json_object_nofollow(result_dir / "analysis.json", result_dir, required=True)
+    optimize = config.get("optimize") if isinstance(config.get("optimize"), dict) else {}
+    params = dict(request_body.get("preset") or {})
+    direction = str(params.get("direction") or OPTIMIZE_PRESET_DIRECTIONS[0]).strip()
+    if direction not in OPTIMIZE_PRESET_DIRECTIONS:
+        direction = OPTIMIZE_PRESET_DIRECTIONS[0]
+    params["direction"] = direction
+    default_name = _sanitize_optimize_preset_name(
+        f"bt_refine_{result_dir.parent.name}_{result_dir.name}",
+        default="bt_refine_result",
+    )
+    safe_name = _sanitize_optimize_preset_name(params.get("preset_name"), default=default_name)
+    near_bounds = None
+    if bool(params.get("show_near_bounds", False)) or bool(params.get("only_adjust_near_bounds", False)):
+        try:
+            tolerance = float(params.get("near_bounds_tol", 0.10) or 0.10)
+        except (TypeError, ValueError):
+            tolerance = 0.10
+        tolerance = max(0.01, min(0.25, tolerance))
+        params["near_bounds_tol"] = tolerance
+        near_bounds = _pb8_result_near_bounds(config, tolerance=tolerance)
+
+    try:
+        optimize_metadata = get_pb8_optimize_metadata()
+    except PB8ConfigurationError as exc:
+        raise _configuration_error("Loading PB8 optimize metadata", exc, 503) from exc
+    payload = build_optimize_preset(
+        config_context={
+            "bounds": dict(optimize.get("bounds") or {}),
+            "bot_params": _flatten_bot_params(config.get("bot") or {}),
+            "suite_metrics": analysis,
+            "optimize_settings": dict(optimize),
+            "scoring_goals": dict(optimize_metadata.get("scoring_goals") or {}),
+            "optimize_version": "v8",
+            "config_index": 0,
+        },
+        full_config_data=config,
+        params=params,
+        near_bounds=near_bounds,
+    )
+    if not bool(request_body.get("include_config", True)):
+        payload.pop("preset_config", None)
+    return {
+        "ok": True,
+        "result_path": str(result_dir),
+        "preset_name": safe_name,
+        "directions": OPTIMIZE_PRESET_DIRECTIONS,
+        **payload,
+    }
 
 
 @router.get("/results/files")

@@ -42,6 +42,7 @@ def test_optimize_and_queue_drafts_round_trip_isolated_copies() -> None:
     config["bot"]["long"]["risk"]["n_positions"] = 99
     optimize_payload = backtest_v8.get_optimize_draft(optimize_id, session=None)
     assert optimize_payload["config"]["bot"]["long"]["risk"]["n_positions"] == 3
+    assert optimize_payload["override_configs"] == {}
 
     queue_id = backtest_v8.create_queue_draft(
         {"items": [{"name": "candidate", "config": optimize_payload["config"]}]},
@@ -53,6 +54,64 @@ def test_optimize_and_queue_drafts_round_trip_isolated_copies() -> None:
     with pytest.raises(HTTPException) as error:
         backtest_v8.create_queue_draft({"items": []}, session=None)
     assert error.value.status_code == 422
+
+
+def test_build_optimize_preset_from_pb8_backtest_result(tmp_path: Path, monkeypatch) -> None:
+    """PB8 backtest results generate nested PB8 optimize bounds and scoring."""
+    result_dir = tmp_path / "demo" / "result-1"
+    result_dir.mkdir(parents=True)
+    config = {
+        "config_version": "v8.0.0",
+        "backtest": {"base_dir": "demo"},
+        "bot": {
+            "long": {"risk": {"n_positions": 3}},
+            "short": {"risk": {"n_positions": 0}},
+        },
+        "optimize": {
+            "bounds": {"long": {"risk": {"n_positions": [1, 5, 1]}}},
+            "scoring": [{"metric": "adg", "goal": "maximize"}],
+            "limits": [],
+        },
+    }
+    (result_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    (result_dir / "analysis.json").write_text(json.dumps({"adg": 0.02}), encoding="utf-8")
+    monkeypatch.setattr(backtest_v8, "_resolve_result_dir", lambda _path: result_dir)
+    monkeypatch.setattr(
+        backtest_v8,
+        "get_pb8_optimize_metadata",
+        lambda: {"scoring_goals": {"adg": "maximize"}},
+    )
+
+    result = backtest_v8.build_result_optimize_preset(
+        {
+            "result_path": str(result_dir),
+            "preset": {
+                "direction": "Balanced (keep run scoring)",
+                "bounds_window_pct": 10,
+                "show_near_bounds": True,
+            },
+        },
+        session=None,
+    )
+
+    assert result["ok"] is True
+    assert result["preset_config"]["config_version"] == "v8.0.0"
+    assert result["preset_config"]["optimize"]["bounds"]["long"]["risk"]["n_positions"] == [3.0, 4.0, 1.0]
+    assert result["near_bounds_count"] == 0
+
+
+def test_shared_backtest_refine_builder_routes_pb8_actions_to_pb8() -> None:
+    """The shared result builder must save, queue, and open PB8 presets in PB8 APIs."""
+    source = (Path(__file__).parents[1] / "frontend" / "js" / "optimize_preset_builder.js").read_text(encoding="utf-8")
+    page = (Path(__file__).parents[1] / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+
+    assert "'/api/optimize-'" in source
+    assert "'/api/backtest-'" in source
+    assert "if (String(token || '').trim()) headers.Authorization" in source
+    assert "saveOptimizePresetConfig(TOKEN, name, config, BACKTEST_VERSION)" in page
+    assert "queueOptimizePreset(TOKEN, name, BACKTEST_VERSION)" in page
+    assert "openOptimizeSeedDraft(TOKEN, config, name, BACKTEST_VERSION)" in page
+    assert "optimize_preset_builder.js?v=3" in page
 
 
 def test_concurrent_pb8_draft_creation_stays_bounded() -> None:
@@ -77,6 +136,25 @@ def test_concurrent_pb8_draft_creation_stays_bounded() -> None:
     assert errors == []
     assert all(not thread.is_alive() for thread in threads)
     assert len(backtest_v8._opt_draft_store) == backtest_v8._MAX_DRAFTS
+
+
+def test_run_to_backtest_draft_preserves_sparse_override_bundle() -> None:
+    """PB8 Run handoffs retain referenced override files as isolated copies."""
+    backtest_v8._opt_draft_store.clear()
+    config = {
+        "coin_overrides": {"BTC": {"override_config_path": "BTC.json"}},
+        "bot": {"long": {"risk": {"n_positions": 3}}},
+    }
+    override = {"bot": {"long": {"risk": {"n_positions": 1}}}}
+
+    draft_id = backtest_v8.create_optimize_draft(
+        {"config": config, "override_configs": {"BTC.json": override}},
+        session=None,
+    )["draft_id"]
+    override["bot"]["long"]["risk"]["n_positions"] = 99
+    payload = backtest_v8.get_optimize_draft(draft_id, session=None)
+
+    assert payload["override_configs"]["BTC.json"]["bot"]["long"]["risk"]["n_positions"] == 1
 
 
 def test_ohlcv_preload_logs_and_transforms_validation_failure(monkeypatch) -> None:

@@ -2536,7 +2536,7 @@ textarea.json-invalid:focus {
 <div id="toast-stack"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=11"></script>
+<script src="/app/js/editor_shared.js?v=13"></script>
 <script src="/app/js/suite_editor.js?v=8"></script>
 <script src="/app/js/log_viewer_panel.js?v=28"></script>
 <script src="/app/js/pbgui_dialogs.js?v=5"></script>
@@ -9428,7 +9428,7 @@ function clearOptimizeOhlcvSourceDir() {
 
 function openFastApiParetoExplorer(resultPath) {
   if (!optimizeEditorAdapter.supportsParetoExplorer) {
-    toast('Pareto Explorer is not available for PB8 Optimize results yet.', 'warn');
+    toast('Pareto Explorer is not available for this result.', 'warn');
     return;
   }
   var path = String(resultPath || '').trim();
@@ -11268,7 +11268,9 @@ async function saveEditor(andQueue) {
     method: 'PUT',
     body: JSON.stringify(configPayload)
   });
-  await refreshOpenedQueueSnapshot(queueFilename, name);
+  if (!(optimizeEditorAdapter.isV8 && isNewName)) {
+    await refreshOpenedQueueSnapshot(queueFilename, name);
+  }
   if (queueAfterSave) {
     await apiFetch('/queue', {
       method: 'POST',

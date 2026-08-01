@@ -476,6 +476,67 @@ def test_host_key_probe_never_replaces_mismatch(monkeypatch: pytest.MonkeyPatch)
         )
 
 
+def test_host_key_probe_replaces_mismatch_only_after_exact_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Add preflight may replace a changed key only after exact confirmation."""
+    replaced: list[tuple[list[str], int, object]] = []
+
+    class FakeKey:
+        """Minimal SSH host-key double."""
+
+    key = FakeKey()
+    probes = [
+        {
+            "status": "mismatch",
+            "fingerprint": "SHA256:changed",
+            "target_statuses": {"192.0.2.10": "mismatch", "test-vps": "mismatch"},
+            "known": False,
+            "needs_confirmation": True,
+            "_key": key,
+        },
+        {
+            "status": "mismatch",
+            "fingerprint": "SHA256:changed",
+            "target_statuses": {"192.0.2.10": "mismatch", "test-vps": "mismatch"},
+            "known": False,
+            "needs_confirmation": True,
+            "_key": key,
+        },
+        {
+            "status": "known",
+            "fingerprint": "SHA256:changed",
+            "target_statuses": {"192.0.2.10": "known", "test-vps": "known"},
+            "known": True,
+            "needs_confirmation": False,
+            "_key": key,
+        },
+    ]
+    monkeypatch.setattr(service_mod, "_probe_host_key", lambda host, port, aliases: dict(probes.pop(0)))
+    monkeypatch.setattr(
+        service_mod,
+        "_replace_known_host_keys",
+        lambda hosts, port, remote_key: replaced.append((hosts, port, remote_key)),
+    )
+
+    preview = service_mod._probe_and_maybe_trust_host_key(
+        "192.0.2.10",
+        22,
+        ["test-vps"],
+        allow_mismatch_confirmation=True,
+    )
+    result = service_mod._probe_and_maybe_trust_host_key(
+        "192.0.2.10",
+        22,
+        ["test-vps"],
+        expected_fingerprint="SHA256:changed",
+        replace_existing=True,
+        allow_mismatch_confirmation=True,
+    )
+
+    assert preview["replacement_required"] is True
+    assert replaced == [(["192.0.2.10", "test-vps"], 22, key)]
+    assert result["known"] is True
+
+
 def test_replace_known_host_keys_updates_vps_aliases_atomically(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace stale hostname and IP entries without changing unrelated hosts."""
     import paramiko
@@ -3062,27 +3123,205 @@ def test_v7_host_dropdown_blocks_inactive_credential_capability(tmp_path: Path, 
     assert "has no active CMC credential pool" in message
 
 
-def test_v7_get_hosts_returns_names_without_capability_rebuild(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The v7 editor host list does not rebuild unrelated credential diagnostics."""
+def test_v7_get_hosts_returns_only_confirmed_pb7_hosts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The v7 editor host list excludes PB8-only and unknown targets."""
     host = "test-vps"
     (tmp_path / "pbgui.ini").write_text("[main]\npbname=master\n", encoding="utf-8")
     monitor = SimpleNamespace(
         pool=True,
-        enabled_hosts={host},
+        enabled_hosts={host, "pb8-only", "unknown"},
         store=SimpleNamespace(host_meta={host: {"credential_active": True}}),
     )
     monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
     monkeypatch.setattr(v7_instances, "_monitor", monitor)
     monkeypatch.setattr(
         v7_instances,
-        "_host_dropdown_detail",
-        lambda _host: pytest.fail("host dropdown must not rebuild credential details"),
+        "_host_pb7_runtime_capability",
+        lambda name: {
+            "pb7_capable": name in {"master", host},
+            "pb7_capability_confirmed": name != "unknown",
+            "pb7_capability_source": "test",
+            "pb7_capability_reason": "test capability",
+            "pb7_capability_stale": name == "unknown",
+            "runtime_profile": "pb8" if name == "pb8-only" else "pb7",
+            "setup_status": "successful",
+        } if name != "unknown" else {
+            "pb7_capable": None,
+            "pb7_capability_confirmed": False,
+            "pb7_capability_source": "test",
+            "pb7_capability_reason": "unknown",
+            "pb7_capability_stale": True,
+            "runtime_profile": None,
+            "setup_status": None,
+        },
     )
 
     response = v7_instances.get_hosts(session=SimpleNamespace())
 
     assert response["hosts"] == ["disabled", "master", host]
-    assert "host_details" not in response
+    assert response["host_capabilities"]["pb8-only"]["pb7_capable"] is False
+    assert response["host_capabilities"]["unknown"]["pb7_capable"] is None
+
+
+def test_v7_managed_runtime_inventory_excludes_pb8_only_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Authoritative managed VPS setup metadata takes precedence over host-meta fallback."""
+
+    (tmp_path / "pbgui.ini").write_text("[main]\npbname=master\n", encoding="utf-8")
+    inventory = {
+        "pb7-host": SimpleNamespace(runtime_profile="pb7", setup_status="successful"),
+        "pb8-host": SimpleNamespace(runtime_profile="pb8", setup_status="successful"),
+        "setup-incomplete": SimpleNamespace(runtime_profile="pb7", setup_status="failed"),
+    }
+    manager = SimpleNamespace(find_vps_by_hostname=lambda hostname: inventory.get(hostname))
+    monkeypatch.setattr(vps_manager_api, "_service", SimpleNamespace(vpsmanager=manager))
+    monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(
+        v7_instances.pbgui_purefunc,
+        "pb7_runtime_status",
+        lambda: {"ready": True},
+    )
+    monkeypatch.setattr(
+        v7_instances,
+        "_monitor",
+        SimpleNamespace(
+            pool=True,
+            enabled_hosts={"pb7-host", "pb8-host", "setup-incomplete"},
+            store=SimpleNamespace(host_meta={
+                "pb8-host": {
+                    "generated_at": time.time(),
+                    "pb7v": "v7.12.0",
+                    "pb7_config_schema": "v7.12.0",
+                    "pb7py": "3.12",
+                },
+            }),
+        ),
+    )
+
+    response = v7_instances.get_hosts(session=SimpleNamespace())
+
+    assert response["hosts"] == ["disabled", "master", "pb7-host"]
+    assert response["host_capabilities"]["setup-incomplete"]["pb7_capable"] is False
+    assert response["host_capabilities"]["pb8-host"] == {
+        "name": "pb8-host",
+        "pb7_capable": False,
+        "pb7_capability_confirmed": True,
+        "pb7_capability_source": "vps_inventory",
+        "pb7_capability_reason": "VPS runtime profile is pb8",
+        "pb7_capability_stale": False,
+        "runtime_profile": "pb8",
+        "setup_status": "successful",
+    }
+
+
+def test_v7_unmanaged_runtime_requires_fresh_complete_host_meta(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only fresh complete PB7 host metadata confirms an unmanaged remote target."""
+
+    (tmp_path / "pbgui.ini").write_text("[main]\npbname=master\n", encoding="utf-8")
+    monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(v7_instances.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(vps_manager_api, "_service", SimpleNamespace(
+        vpsmanager=SimpleNamespace(find_vps_by_hostname=lambda _hostname: None),
+    ))
+    monkeypatch.setattr(v7_instances, "_monitor", SimpleNamespace(store=SimpleNamespace(host_meta={
+        "fresh": {
+            "generated_at": 999.0,
+            "pb7v": "v7.12.0",
+            "pb7_config_schema": "v7.12.0",
+            "pb7py": "3.12",
+        },
+        "stale": {
+            "generated_at": 900.0,
+            "pb7v": "v7.12.0",
+            "pb7_config_schema": "v7.12.0",
+            "pb7py": "3.12",
+        },
+        "incomplete": {
+            "generated_at": 999.0,
+            "pb7v": "N/A",
+            "pb7_config_schema": "N/A",
+            "pb7py": "N/A",
+        },
+    })))
+
+    assert v7_instances._host_pb7_runtime_capability("fresh")["pb7_capable"] is True
+    stale = v7_instances._host_pb7_runtime_capability("stale")
+    assert stale["pb7_capable"] is None
+    assert stale["pb7_capability_stale"] is True
+    assert v7_instances._host_pb7_runtime_capability("incomplete")["pb7_capable"] is False
+
+
+def test_v7_runtime_compatibility_blocks_incompatible_and_new_unknown_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Server-side save/restore compatibility rejects bypassed target selections."""
+
+    instance_dir = tmp_path / "data" / "run_v7" / "legacy"
+    instance_dir.mkdir(parents=True)
+    (instance_dir / "config.json").write_text(
+        json.dumps({"pbgui": {"enabled_on": "legacy-host"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(v7_instances, "_monitor", None)
+
+    monkeypatch.setattr(v7_instances, "_host_pb7_runtime_capability", lambda _hostname: {
+        "pb7_capable": False,
+        "pb7_capability_reason": "VPS runtime profile is pb8",
+    })
+    with pytest.raises(v7_instances.HTTPException) as incompatible:
+        asyncio.run(v7_instances._ensure_target_runtime_compatible(
+            "legacy",
+            {"pbgui": {"enabled_on": "legacy-host"}},
+        ))
+    assert incompatible.value.status_code == 409
+
+    monkeypatch.setattr(v7_instances, "_host_pb7_runtime_capability", lambda _hostname: {
+        "pb7_capable": None,
+        "pb7_capability_reason": "PB7 runtime metadata is stale",
+    })
+    asyncio.run(v7_instances._ensure_target_runtime_compatible(
+        "legacy",
+        {"pbgui": {"enabled_on": "legacy-host"}},
+    ))
+    with pytest.raises(v7_instances.HTTPException) as unknown:
+        asyncio.run(v7_instances._ensure_target_runtime_compatible(
+            "new-instance",
+            {"pbgui": {"enabled_on": "legacy-host"}},
+        ))
+    assert unknown.value.status_code == 409
+
+
+@pytest.mark.parametrize("target", ["../host", "host/name", "host\\name", "host\x00name", " host"])
+def test_v7_runtime_compatibility_rejects_non_exact_target_paths(target: str) -> None:
+    """Enabled targets must be exact single-component host identifiers."""
+
+    with pytest.raises(v7_instances.HTTPException) as invalid:
+        asyncio.run(v7_instances._ensure_target_runtime_compatible(
+            "instance",
+            {"pbgui": {"enabled_on": target}},
+        ))
+
+    assert invalid.value.status_code == 400
+
+
+def test_v7_frontend_disables_unconfirmed_pb7_hosts() -> None:
+    """The editor consumes capability metadata and disables unknown legacy assignments."""
+
+    source = Path("frontend/v7_edit.html").read_text(encoding="utf-8")
+
+    assert "payload.host_capabilities || {}" in source
+    assert "capability[runEditorAdapter.capabilityKey] !== true" in source
+    assert "capabilityKey: isV8 ? 'pb8_capable' : 'pb7_capable'" in Path(
+        "frontend/js/run_editor_adapter.js"
+    ).read_text(encoding="utf-8")
+    assert "selectedCapability[runEditorAdapter.capabilityKey] == null" in source
 
 
 def test_v7_dynamic_ignore_does_not_treat_coindata_service_as_cmc_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

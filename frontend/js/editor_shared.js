@@ -603,9 +603,11 @@
     if (/\/api\/balance-calc$/.test(base)) return base;
     return base
       .replace(/\/api\/v7$/, '/api/balance-calc')
+      .replace(/\/api\/v8$/, '/api/balance-calc')
       .replace(/\/api\/backtest-v7$/, '/api/balance-calc')
       .replace(/\/api\/backtest-v8$/, '/api/balance-calc')
       .replace(/\/v7$/, '/balance-calc')
+      .replace(/\/v8$/, '/balance-calc')
       .replace(/\/backtest-v7$/, '/balance-calc')
       .replace(/\/backtest-v8$/, '/balance-calc');
   }
@@ -617,8 +619,8 @@
     var apiBase = getBalanceCalcApiBase(opts.apiBase);
     var data = await resolveJsonResult(fetch(apiBase + '/draft', {
       method: 'POST',
+      credentials: 'same-origin',
       headers: {
-        'Authorization': 'Bearer ' + (opts.token || ''),
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ config: opts.config })
@@ -651,8 +653,8 @@
     var apiBase = getBalanceCalcApiBase(opts.apiBase);
     return resolveJsonResult(fetch(apiBase + '/calculate', {
       method: 'POST',
+      credentials: 'same-origin',
       headers: {
-        'Authorization': 'Bearer ' + (opts.token || ''),
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({

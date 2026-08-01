@@ -133,7 +133,14 @@ def _register_vps_cluster_node(hostname: str) -> dict:
 def _command_updates_pbgui(command: str | None) -> bool:
     """Return True for playbooks that update or install PBGui files."""
 
-    return str(command or "") in {"vps-setup", "vps-update-pbgui", "vps-update-pb", "vps-switch-pbgui-branch"}
+    return str(command or "") in {
+        "vps-setup",
+        "vps-update-pbgui",
+        "vps-update-pb",
+        "vps-update-pbgui-pb8",
+        "vps-update-pbgui-pb7-pb8",
+        "vps-switch-pbgui-branch",
+    }
 
 
 def strip_ansi(text: str) -> str:
@@ -401,7 +408,7 @@ class VPS:
             self.private_key_file = config["private_key_file"]
         if "remote_pbgui_dir" in config:
             self.remote_pbgui_dir = config["remote_pbgui_dir"]
-        if str(config.get("runtime_profile") or "").strip().lower() in {"pb7", "pb8"}:
+        if str(config.get("runtime_profile") or "").strip().lower() in {"pb7", "pb8", "pb7_pb8"}:
             self.runtime_profile = str(config["runtime_profile"]).strip().lower()
 
     def is_vps_in_hosts(self):
@@ -841,15 +848,27 @@ PY"""
     def setup_finished(self, runner_config=None):
         del runner_config
         self.last_setup = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        if str(self.setup_status or "") == "successful":
-            _set_vps_monitor_enabled(self.hostname, enabled=True)
-            _register_vps_cluster_node(self.hostname)
         self.save()
+        if str(self.setup_status or "") == "successful":
+            try:
+                _set_vps_monitor_enabled(self.hostname, enabled=True)
+            except Exception as exc:
+                _log(SERVICE, f"Could not enable VPS monitoring for {self.hostname}: {exc}", level="WARNING")
+            try:
+                _register_vps_cluster_node(self.hostname)
+            except Exception as exc:
+                _log(SERVICE, f"Could not register {self.hostname} as Cluster node candidate: {exc}", level="WARNING")
         shutil.rmtree(f"{self.path}/tmp", ignore_errors=True)
 
     def update_finished(self, runner_config=None, private_data_dir=None):
         del runner_config
         self.last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if str(self.update_status or "") == "successful":
+            profile = str(self.runtime_profile or "pb7")
+            if self.command in {"vps-update-pb7", "vps-update-pb"} and profile == "pb8":
+                self.runtime_profile = "pb7_pb8"
+            elif self.command in {"vps-update-pb8", "vps-update-pbgui-pb8"} and profile == "pb7":
+                self.runtime_profile = "pb7_pb8"
         self.save()
         _cleanup_runner_private_data_dir(private_data_dir or self.privat_data_dir or f"{self.path}/tmp")
 
@@ -1109,24 +1128,6 @@ class VPSManager:
         if extra_vars:
             ansible_extravars.update(extra_vars)
 
-        def _on_setup_finished(runner_config=None):
-            vps.setup_finished(runner_config)
-            if str(vps.setup_status or "") != "successful" or vps.runtime_profile != "pb8":
-                return
-            try:
-                self.update_vps(
-                    vps,
-                    debug=debug,
-                    command="vps-update-pb8",
-                    command_text="Install PB8 (fresh setup)",
-                )
-            except Exception as exc:
-                vps.command = "vps-update-pb8"
-                vps.command_text = "Install PB8 (fresh setup)"
-                vps.update_status = "failed"
-                vps.last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                vps.save()
-                _log(SERVICE, f"Could not start PB8 installation after setup on {vps.hostname}: {exc}", level="ERROR")
         try:
             ansible_runner.run_async(
                 playbook=str(PurePath(f"{PBGDIR}/vps-setup.yml")),
@@ -1139,7 +1140,7 @@ class VPSManager:
                 private_data_dir=vps.privat_data_dir,
                 event_handler=vps.setup_event_handler,
                 status_handler=vps.setup_status_handler,
-                finished_callback=_on_setup_finished,
+                finished_callback=vps.setup_finished,
             )
         except Exception:
             shutil.rmtree(vps.privat_data_dir, ignore_errors=True)

@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -121,6 +121,7 @@ class VPSStore:
         self.system: dict[str, SystemMetrics] = {}
         self.instances: dict[str, list[dict]] = {}
         self.v7_instances: dict[str, list[dict]] = {}  # v7 config details per host
+        self.v8_instances: dict[str, list[dict]] = {}  # v8 config details per host
         self.host_meta: dict[str, dict] = {}
         self.services: dict[str, dict] = {}
         self.streams: dict[str, dict] = {}  # stream diagnostics per host
@@ -153,10 +154,13 @@ class VPSStore:
         existing = self.instances.get(hostname, [])
         if not existing:
             return
-        merge_map = {b["name"]: b for b in bots if b.get("name")}
+        merge_map = {
+            (str(b.get("p") or "7"), b["name"]): b
+            for b in bots if b.get("name")
+        }
         for inst in existing:
             name = inst.get("u") or inst.get("name")
-            live = merge_map.get(name)
+            live = merge_map.get((str(inst.get("p") or "7"), name))
             if not live:
                 continue
             inst["c"] = live.get("cpu", inst.get("c", 0))
@@ -173,6 +177,11 @@ class VPSStore:
     def update_v7_instances(self, hostname: str, data: list[dict]):
         """Update v7 instance details (config_version, running_version, enabled_on)."""
         self.v7_instances[hostname] = data
+        self.changed.set()
+
+    def update_v8_instances(self, hostname: str, data: list[dict]):
+        """Update v8 instance details (config version, assignment, and status)."""
+        self.v8_instances[hostname] = data
         self.changed.set()
 
     def update_bot_logs(self, hostname: str, data: dict[str, Any]):
@@ -226,6 +235,7 @@ class VPSStore:
         self.system.pop(hostname, None)
         self.instances.pop(hostname, None)
         self.v7_instances.pop(hostname, None)
+        self.v8_instances.pop(hostname, None)
         self.host_meta.pop(hostname, None)
         self.streams.pop(hostname, None)
         # Don't clear services — they're host-keyed inside the dict
@@ -269,6 +279,7 @@ class VPSStore:
             },
             "instances": self.instances,
             "v7_instances": self.v7_instances,
+            "v8_instances": self.v8_instances,
             "host_meta": self.host_meta,
             "streams": self.streams,
             "services": self.services,

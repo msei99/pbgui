@@ -16,6 +16,7 @@ var _covState = {
   overrides: {},        // { COIN: { bot: { long: {...}, short: {...} }, live: {...} } }
   editCoin: null,       // coin currently being edited (null = none)
   allowedParams: null,  // { bot: { long: {...}, short: {...} }, live: {...} } from API
+  allowedParamsError: '',
   availableCoins: [],   // populated from approved coins
   containerId: '',
   apiBase: '',
@@ -24,7 +25,20 @@ var _covState = {
   deferConfigFileWrites: false,
   pendingConfigFileWrites: {},
   loadGeneration: 0,
+  request: null,
 };
+
+function _covRequest(path, options) {
+  var request = _covState.request || (typeof apiFetch === 'function' ? apiFetch : null);
+  if (!request) return Promise.reject(new Error('Coin override request client is unavailable'));
+  return Promise.resolve(request(path, options)).then(function(response) {
+    if (!response || typeof response.json !== 'function') return response || {};
+    return response.json().then(function(payload) {
+      if (!response.ok) throw new Error((payload && payload.detail) || ('HTTP ' + response.status));
+      return payload || {};
+    });
+  });
+}
 
 function _covNotifyStructuredSync() {
   if (typeof scheduleStructuredEditorSync === 'function') {
@@ -448,15 +462,27 @@ function coinOvInit(containerId, opts) {
   _covState.containerId = containerId;
   _covState.apiBase = (opts && opts.apiBase) || '';
   _covState.deferConfigFileWrites = !!(opts && opts.deferConfigFileWrites);
+  _covState.request = opts && typeof opts.request === 'function' ? opts.request : null;
   _covEnsureValidationStyles();
   _fetchAllowedParams();
 }
 
 function _fetchAllowedParams() {
-  apiFetch('/override-params').then(function(data) {
-    _covState.allowedParams = data.params || {};
-  }).catch(function() {
+  _covState.allowedParams = null;
+  _covState.allowedParamsError = '';
+  return _covRequest('/override-params').then(function(data) {
+    var params = data && data.params;
+    if (!params || typeof params !== 'object' || Array.isArray(params)) {
+      throw new Error('Override parameter metadata is invalid');
+    }
+    _covState.allowedParams = params;
+    if (_covState.editCoin) _covRender();
+    return params;
+  }).catch(function(error) {
     _covState.allowedParams = {};
+    _covState.allowedParamsError = (error && error.message) || 'Override parameters could not be loaded';
+    if (_covState.editCoin) _covRender();
+    return {};
   });
 }
 
@@ -555,11 +581,20 @@ function coinOvSetConfigName(name) {
 }
 
 /** Preload override_config_path file contents, e.g. from an editor draft. */
-function coinOvSetOverrideConfigs(configs) {
+function coinOvSetOverrideConfigs(configs, opts) {
   configs = configs || {};
   for (var coin in configs) {
     if (!configs.hasOwnProperty(coin)) continue;
-    _covState.overrideConfigs[_covNormalizeCoin(coin)] = JSON.parse(JSON.stringify(configs[coin] || {}));
+    var normalizedCoin = _covNormalizeCoin(coin);
+    var payload = JSON.parse(JSON.stringify(configs[coin] || {}));
+    _covState.overrideConfigs[normalizedCoin] = payload;
+    var override = _covState.overrides[normalizedCoin];
+    if (opts && opts.markPending && override && override.override_config_path) {
+      _covState.pendingConfigFileWrites[normalizedCoin] = {
+        filename: override.override_config_path,
+        config: JSON.parse(JSON.stringify(payload))
+      };
+    }
   }
 }
 
@@ -575,7 +610,7 @@ function _covLoadOverrideFile(coin) {
   var filename = data.override_config_path;
   var generation = _covState.loadGeneration;
   var configName = _covState.configName;
-  return apiFetch('/override-config/' + encodeURIComponent(_covState.configName) + '/' + encodeURIComponent(filename))
+  return _covRequest('/override-config/' + encodeURIComponent(_covState.configName) + '/' + encodeURIComponent(filename))
     .then(function(resp) {
       var cfg = resp.config || {};
       cfg = _covFilterOverrideConfig(cfg);
@@ -643,7 +678,7 @@ function coinOvFlushPendingFiles(configName) {
   if (!targetName || !coins.length) return Promise.resolve({ ok: true });
   var writes = coins.map(function(coin) {
     var item = pending[coin];
-    return apiFetch('/override-config/' + encodeURIComponent(targetName) + '/' + encodeURIComponent(item.filename), {
+    return _covRequest('/override-config/' + encodeURIComponent(targetName) + '/' + encodeURIComponent(item.filename), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(item.config)
@@ -677,6 +712,28 @@ function coinOvAcknowledgePendingFiles(snapshot) {
     if (current && JSON.stringify(current) === JSON.stringify(entries[coin])) {
       delete _covState.pendingConfigFileWrites[coin];
     }
+  });
+}
+
+function coinOvSnapshotAllFiles() {
+  var coins = Object.keys(_covState.overrides || {}).filter(function(coin) {
+    return !!((_covState.overrides[coin] || {}).override_config_path);
+  });
+  return Promise.all(coins.map(function(coin) {
+    return _covLoadOverrideFile(coin).then(function(payload) {
+      var override = _covState.overrides[coin] || {};
+      if (!payload || !override.override_config_path) {
+        throw new Error('Override file for ' + coin + ' is unavailable');
+      }
+      return { filename: override.override_config_path, config: payload };
+    });
+  })).then(function(items) {
+    var files = {};
+    items.forEach(function(item) {
+      if (files[item.filename] !== undefined) throw new Error('Multiple coin overrides use ' + item.filename);
+      files[item.filename] = JSON.parse(JSON.stringify(item.config));
+    });
+    return files;
   });
 }
 
@@ -1032,6 +1089,15 @@ function _covEditHtml(coin) {
   h += '\x3Cbutton type="button" class="act-btn" onclick="coinOvCloseEdit()">Done\x3C/button>';
   h += '\x3C/div>';
 
+  if (_covState.allowedParams === null) {
+    h += '\x3Cdiv style="margin-bottom:var(--sp-sm);color:var(--text-dim);font-size:var(--fs-sm)">Loading override parameters...\x3C/div>';
+  } else if (_covState.allowedParamsError) {
+    h += '\x3Cdiv style="margin-bottom:var(--sp-sm);color:var(--red);font-size:var(--fs-sm)">Override parameters unavailable: ' +
+      esc(_covState.allowedParamsError) + '\x3C/div>';
+  } else if (_covAllowedParamCount(allowed) === 0) {
+    h += '\x3Cdiv style="margin-bottom:var(--sp-sm);color:var(--text-dim);font-size:var(--fs-sm)">No inline override parameters were reported by this Passivbot runtime.\x3C/div>';
+  }
+
   /* Bot Long / Bot Short / Live sections — inline parameter overrides */
   var sections = [
     { key: 'bot.long', label: 'Bot Long', color: 'var(--green)', akey: ['bot','long'] },
@@ -1142,6 +1208,15 @@ var _covInputStyle = 'height:24px;font-size:var(--fs-xs);background:var(--bg2);c
 
 function _covParamIsAllowed(metadata) {
   return metadata === true || !!(metadata && typeof metadata === 'object');
+}
+
+function _covAllowedParamCount(value) {
+  if (value === true) return 1;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 0;
+  if (value.type || Object.prototype.hasOwnProperty.call(value, 'default')) return 1;
+  return Object.keys(value).reduce(function(total, key) {
+    return total + _covAllowedParamCount(value[key]);
+  }, 0);
 }
 
 function _covParamType(metadata, value) {
@@ -1339,7 +1414,7 @@ function _covSaveConfigFile(coin) {
     }
     // Save via API if config name is known
     if (_covState.configName) {
-      apiFetch('/override-config/' + encodeURIComponent(_covState.configName) + '/' + encodeURIComponent(filename), {
+      _covRequest('/override-config/' + encodeURIComponent(_covState.configName) + '/' + encodeURIComponent(filename), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(fileContent)

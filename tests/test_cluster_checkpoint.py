@@ -552,7 +552,7 @@ def test_checkpoint_tail_matches_full_replay_across_operation_families(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Membership, V7, V2, and policy tail operations reproduce full replay."""
+    """Membership, V7, PB8, V2, and policy tail operations reproduce full replay."""
 
     root = _cluster(tmp_path)
     monkeypatch.setattr(
@@ -582,6 +582,19 @@ def test_checkpoint_tail_matches_full_replay_across_operation_families(
             "assigned_host": NODE_ID,
             "desired_state": "running",
             "config_manifest_hash": HASH_A,
+        },
+        created_at=NOW + 2,
+    )
+    append_operation(
+        root,
+        "UPSERT_PB8_CONFIG",
+        {
+            "instance": "pb8_BTC",
+            "version": "1",
+            "parent_version": "0",
+            "assigned_host": NODE_ID,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_B,
         },
         created_at=NOW + 2,
     )

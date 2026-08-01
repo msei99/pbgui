@@ -45,7 +45,7 @@ The **Workers** sidebar entry opens a dedicated admin panel inside the Services 
 
 The panel groups workers into:
 
-- **Queue Workers**: shared Market Data queue worker, Backtest queue worker, Optimize queue worker
+- **Queue Workers**: shared Market Data queue worker plus separate PB7/PB8 Backtest and Optimize queue controllers. Stopping a PB8 controller pauses automatic scheduling only; detached PB8 jobs continue running.
 - **Sync / Watchers**: API key file sync watcher, V7 config sync watcher
 - **Internal Helpers**: archive sync and HLCVS cleanup background tasks
 

@@ -139,13 +139,15 @@ The **Manage** button next to the Positions title opens a draggable, resizable d
 
 Per-row actions:
 - **Market close amount** sends a direct reduce-only market order for the selected row amount.
-- **Panic symbol** saves a per-symbol PB7 forced-mode override and syncs the config.
-- **Graceful stop symbol** saves a per-symbol `graceful_stop` forced-mode override and syncs the config.
-- **Take profit only symbol** saves a per-symbol `tp_only` forced-mode override and syncs the config.
+- **Panic symbol** saves a runtime-aware per-symbol forced-mode override and syncs the config.
+- **Graceful stop symbol** saves a runtime-aware per-symbol `graceful_stop` forced-mode override and syncs the config.
+- **Take profit only symbol** saves a runtime-aware per-symbol `tp_only` forced-mode override and syncs the config.
 
 All-position actions at the bottom of the dialog:
 - **Preview Panic**, **Preview Graceful stop**, **Preview TP only** show the config that would be saved without writing or syncing anything.
-- **Panic**, **Graceful stop**, **Take Profit Only** save the corresponding global PB7 forced mode for long and short positions, then immediately push and materialize the config on the assigned Cluster bot host. The action reports success only after that host has accepted the new config version; unreachable or stale targets return an error instead of a false synced message.
+- **Panic**, **Graceful stop**, **Take Profit Only** save the corresponding global PB7 or PB8 forced mode for long and short positions. PB7 is pushed and materialized immediately on its assigned Cluster bot host. PB8 uses its validated bundle save and publishes an exact Cluster operation for normal PB8 reconciliation. PB8 symbol actions update the referenced sparse override JSON instead of incorrectly embedding V7-style override fields in the main config.
+
+The Exchange user must resolve to exactly one local PB7 or PB8 instance. If the same user is assigned to multiple instances or runtimes, PBGui refuses the config action rather than guessing which bot owns the position.
 
 Panic, Graceful Stop and Take Profit Only are Passivbot config/sync actions. They do not submit direct exchange orders. Use **Market close amount** when you explicitly want PBGui to send a direct reduce-only market order.
 

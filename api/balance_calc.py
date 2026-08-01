@@ -23,6 +23,8 @@ from fastapi.responses import HTMLResponse
 
 from api.auth import SessionToken, require_auth
 from logging_helpers import human_log as _log
+from pb7_config import load_pb7_config
+from pb8_config import load_pb8_config
 from User import Users
 
 SERVICE = "BalanceCalc"
@@ -44,9 +46,41 @@ def _clean_drafts() -> None:
 
 PBGDIR = Path(__file__).resolve().parent.parent
 RUN_V7_DIR = PBGDIR / "data" / "run_v7"
+RUN_V8_DIR = PBGDIR / "data" / "run_v8"
 COINDATA_DIR = PBGDIR / "data" / "coindata"
 
 EXCHANGES = ["binance", "bybit", "bitget", "gateio", "hyperliquid", "kucoin", "okx"]
+
+
+def _validate_instance_name(name: object) -> str:
+    """Validate one instance-directory component."""
+    value = str(name or "")
+    if value != value.strip() or not value or value.startswith(".") or value in {".", ".."}:
+        raise HTTPException(status_code=400, detail="Invalid instance name")
+    if any(char in value for char in ("/", "\\", "\x00")) or any(ord(char) < 32 for char in value):
+        raise HTTPException(status_code=400, detail="Invalid instance name")
+    if len(value.encode("utf-8")) > 128:
+        raise HTTPException(status_code=400, detail="Instance name is too long")
+    return value
+
+
+def _instance_config_path(version: object, name: object) -> Path:
+    """Resolve one validated PB7 or PB8 config without following symlinks."""
+    clean_version = str(version or "").strip().lower()
+    roots = {"v7": RUN_V7_DIR, "v8": RUN_V8_DIR}
+    root = roots.get(clean_version)
+    if root is None:
+        raise HTTPException(status_code=400, detail="Version must be v7 or v8")
+    clean_name = _validate_instance_name(name)
+    instance_dir = root / clean_name
+    config_path = instance_dir / "config.json"
+    if root.is_symlink() or instance_dir.is_symlink() or config_path.is_symlink() or not config_path.is_file():
+        raise HTTPException(status_code=404, detail=f"{clean_version.upper()} instance '{clean_name}' not found")
+    try:
+        config_path.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid instance path") from exc
+    return config_path
 
 
 def _read_json(path: Path) -> dict | list | None:
@@ -320,59 +354,45 @@ def load_config(
     request_body: dict,
     session: SessionToken = Depends(require_auth),
 ):
-    """Load a config JSON file and return its contents.
-
-    Body: { "config_file": "/path/to/config.json" }
-    """
-    config_file = request_body.get("config_file", "")
-    if not config_file:
-        return {"error": "No config_file specified"}
-    p = Path(config_file)
+    """Load one named PB7 or PB8 instance config."""
+    version = str(request_body.get("version") or "").strip().lower()
+    name = request_body.get("name")
+    path = _instance_config_path(version, name)
     try:
-        p.resolve().relative_to(RUN_V7_DIR.resolve())
-    except ValueError:
-        return {"error": "Config file must be under data/run_v7/"}
-    config = _read_json(p)
-    if config is None:
-        return {"error": f"Failed to read: {config_file}"}
-    return {"config": config}
+        config = load_pb7_config(path, neutralize_added=False) if version == "v7" else load_pb8_config(path)
+    except Exception as exc:
+        _log(
+            SERVICE,
+            f"Failed to load {version.upper()} instance '{name}': {exc}",
+            level="ERROR",
+            meta={"traceback": traceback.format_exc()},
+        )
+        raise HTTPException(status_code=422, detail=f"Failed to load {version.upper()} instance '{name}'") from exc
+    exchange = ""
+    user = config.get("live", {}).get("user", "") if isinstance(config.get("live"), dict) else ""
+    if user:
+        try:
+            exchange = str(Users().find_exchange(user) or "").lower()
+        except Exception as exc:
+            _log(SERVICE, f"Failed to resolve exchange for user '{user}': {exc}", level="WARNING")
+    return {"config": config, "exchange": exchange}
 
 
 @router.get("/instances")
 def get_instances(session: SessionToken = Depends(require_auth)):
-    """List v7 instance names with their exchange."""
-    # Load users once for exchange lookup
-    try:
-        users = Users()
-    except Exception:
-        users = None
-
+    """List named PB7 and PB8 instances without exposing filesystem paths."""
     instances = []
-    if RUN_V7_DIR.is_dir():
-        for d in sorted(RUN_V7_DIR.iterdir()):
-            if not d.is_dir():
+    for version, root in (("v7", RUN_V7_DIR), ("v8", RUN_V8_DIR)):
+        if not root.is_dir() or root.is_symlink():
+            continue
+        for instance_dir in root.iterdir():
+            if not instance_dir.is_dir() or instance_dir.is_symlink():
                 continue
-            cfg_file = d / "config.json"
-            if not cfg_file.exists():
+            config_path = instance_dir / "config.json"
+            if not config_path.is_file() or config_path.is_symlink():
                 continue
-            name = d.name
-            exchange = ""
-            # Primary: derive exchange from live.user via api-keys
-            cfg = _read_json(cfg_file)
-            if cfg and isinstance(cfg, dict):
-                user = cfg.get("live", {}).get("user", "")
-                if user and users:
-                    ex = users.find_exchange(user)
-                    if ex:
-                        exchange = ex.lower()
-            # Fallback: directory name prefix
-            if not exchange:
-                for ex in EXCHANGES:
-                    if name.lower().startswith(ex + "_"):
-                        exchange = ex
-                        break
-            instances.append({"name": name, "exchange": exchange, "config_file": str(cfg_file)})
-    return instances
+            instances.append({"name": instance_dir.name, "version": version})
+    return sorted(instances, key=lambda item: (item["name"].lower(), item["version"]))
 
 
 @router.post("/calculate")
@@ -439,6 +459,7 @@ def get_draft(draft_id: str, session: SessionToken = Depends(require_auth)):
 def get_main_page(
     request: Request,
     instance: str = Query(default="", description="Pre-select instance name"),
+    instance_version: str = Query(default="", description="Pre-select instance version"),
     draft_id: str = Query(default="", description="Draft config id to pre-load"),
     exchange: str = Query(default="", description="Pre-select exchange"),
     session: SessionToken = Depends(require_auth),
@@ -453,9 +474,9 @@ def get_main_page(
     origin = f"{scheme}://{host}" + (f":{port}" if port else "")
     api_base = origin + "/api/balance-calc"
 
-    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%INSTANCE%%"', json.dumps(instance))
+    html = html.replace('"%%INSTANCE_VERSION%%"', json.dumps(instance_version))
     html = html.replace('"%%DRAFT_ID%%"', json.dumps(draft_id))
     html = html.replace('"%%INIT_EXCHANGE%%"', json.dumps(exchange))
     html = html.replace('"%%EXCHANGES%%"', json.dumps(EXCHANGES))

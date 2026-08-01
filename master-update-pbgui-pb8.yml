@@ -1,0 +1,4 @@
+---
+# Update PBGui and the PB8 runtime on the local or a remote master.
+- import_playbook: master-update-pbgui.yml
+- import_playbook: master-update-pb8.yml

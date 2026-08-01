@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
 <script src="/app/js/backtest_shell.js?v=4"></script>
-<script src="/app/js/backtest_editor_adapter.js?v=5"></script>
+<script src="/app/js/backtest_editor_adapter.js?v=7"></script>
 <script src="/app/js/backtest_advanced_fields.js?v=1"></script>
 <style>
 /* ── Design Tokens ─────────────────────────────── */
@@ -1002,9 +1002,9 @@ textarea.json-invalid:focus {
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=11"></script>
+<script src="/app/js/editor_shared.js?v=13"></script>
 <script src="/app/js/json_panel.js?v=1"></script>
-<script src="/app/js/optimize_preset_builder.js?v=2"></script>
+<script src="/app/js/optimize_preset_builder.js?v=3"></script>
 <script src="/app/js/pbgui_dialogs.js?v=5"></script>
 <script>
 /* ════════════════════════════════════════════════
@@ -1963,6 +1963,8 @@ function clearInitialBacktestUrlParams(url, keys) {
   window.history.replaceState({}, document.title, url.pathname + (nextSearch ? '?' + nextSearch : '') + url.hash);
 }
 
+var initialDraftOverrideConfigs = {};
+
 async function fetchRunBacktestDraft(draftId) {
   var response = await fetch(window.location.origin + '/api/v7/draft/' + encodeURIComponent(draftId), {
     headers: bearerHeaders()
@@ -1994,6 +1996,19 @@ async function openInitialBacktestDraftFromUrl() {
       ? await fetchRunBacktestDraft(runDraftId)
       : await apiFetch('/optimize-draft/' + encodeURIComponent(optimizeDraftId));
     var cfg = (draft && draft.config) || {};
+    initialDraftOverrideConfigs = {};
+    var draftFiles = draft && draft.override_configs && typeof draft.override_configs === 'object'
+      ? draft.override_configs
+      : {};
+    var draftCoinOverrides = cfg.coin_overrides && typeof cfg.coin_overrides === 'object'
+      ? cfg.coin_overrides
+      : {};
+    Object.keys(draftCoinOverrides).forEach(function(coin) {
+      var filename = draftCoinOverrides[coin] && draftCoinOverrides[coin].override_config_path;
+      if (filename && draftFiles[filename] && typeof draftFiles[filename] === 'object') {
+        initialDraftOverrideConfigs[coin] = draftFiles[filename];
+      }
+    });
     var prepared = optimizeDraftId && backtestEditorAdapter.isV8
       ? { config: cfg, param_status: draft.param_status || {} }
       : await prepareImportedBacktestConfig(cfg);
@@ -2864,6 +2879,10 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: true });
   coinOvSetConfigName(name);
   coinOvLoad(cfg);
+  if (Object.keys(initialDraftOverrideConfigs).length) {
+    coinOvSetOverrideConfigs(initialDraftOverrideConfigs, { markPending: backtestEditorAdapter.isV8 });
+    initialDraftOverrideConfigs = {};
+  }
 
   var rawEl = document.getElementById('cfg-raw-json');
   if (rawEl) {
@@ -8068,7 +8087,7 @@ function addToRunFromArchive() {
   var sel = getSelectedArchiveResults();
   if (sel.length !== 1) { toast('Select exactly 1 result', 'err'); return; }
   if ((archiveResultByPath(sel[0]).backtest_version || 'v7') !== 'v7') {
-    toast('Add to Run is available only for PB7 archive results.', 'err');
+    toast('Open PB8 archive results from PB8 Backtest to add them to PB8 Run.', 'err');
     return;
   }
   var v7Base = API_BASE.replace('/backtest-v7', '/v7');
@@ -8429,13 +8448,13 @@ function optimizePresetFromResult() {
       });
     },
     saveConfig: function(name, config) {
-      return window.PBGuiOptimizePresetBuilder.saveOptimizePresetConfig(TOKEN, name, config);
+      return window.PBGuiOptimizePresetBuilder.saveOptimizePresetConfig(TOKEN, name, config, BACKTEST_VERSION);
     },
     queueConfig: function(name) {
-      return window.PBGuiOptimizePresetBuilder.queueOptimizePreset(TOKEN, name);
+      return window.PBGuiOptimizePresetBuilder.queueOptimizePreset(TOKEN, name, BACKTEST_VERSION);
     },
     openOptimize: function(config, name) {
-      return window.PBGuiOptimizePresetBuilder.openOptimizeSeedDraft(TOKEN, config, name);
+      return window.PBGuiOptimizePresetBuilder.openOptimizeSeedDraft(TOKEN, config, name, BACKTEST_VERSION);
     }
   });
 }
@@ -9432,7 +9451,7 @@ function setupArchive() {
         '<label><span data-tip="Which of your cloned archives is your own (will be used for Git Push).">My Archive</span></label>' +
         '<select id="setup-arc-name" class="sb-input">' + archiveOptions + '</select>' +
       '</div>' +
-      '<p class="muted-line" style="margin:0 0 var(--sp-sm)">Archive paths are generated automatically from the PB7 config_version.</p>' +
+      '<p class="muted-line" style="margin:0 0 var(--sp-sm)">Archive paths are generated automatically from each configuration\'s config_version.</p>' +
       '<div class="form-row cols-2" style="gap:var(--sp-sm);margin-bottom:var(--sp-sm)">' +
         '<div class="form-group"><label><span data-tip="Git commit author name.">Username</span></label>' +
           '<input type="text" id="setup-arc-user" class="sb-input" value="' + esc(s.username || '') + '"></div>' +
@@ -9712,7 +9731,7 @@ window.PBGUI_NAV_CONFIG = {
 };
 </script>
 <script src="/app/js/suite_editor.js?v=8"></script>
-<script src="/app/js/coin_overrides_editor.js?v=18"></script>
+<script src="/app/js/coin_overrides_editor.js?v=23"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */
 (function() {

@@ -157,6 +157,38 @@ def test_successful_setup_finished_auto_adds_vps_to_cluster(monkeypatch, tmp_pat
     assert monitor_ini["enabled_hosts"] == "auto-runner"
 
 
+def test_setup_finished_persists_success_before_optional_registration(monkeypatch, tmp_path: Path) -> None:
+    """Optional monitor or Cluster failures cannot erase a successful setup result."""
+    monkeypatch.setattr(vps_manager_core, "PBGDIR", tmp_path)
+    vps = vps_manager_core.VPS()
+    vps.hostname = "new-runner"
+    vps.setup_status = "starting"
+    vps.save()
+    vps.setup_status = "successful"
+    attempted: list[str] = []
+
+    def fail_monitor(hostname: str, *, enabled: bool) -> None:
+        """Simulate an optional monitor-registration failure."""
+        attempted.append(f"monitor:{hostname}:{enabled}")
+        raise RuntimeError("monitor unavailable")
+
+    def fail_cluster(hostname: str) -> dict:
+        """Simulate an optional Cluster-registration failure."""
+        attempted.append(f"cluster:{hostname}")
+        raise RuntimeError("cluster unavailable")
+
+    monkeypatch.setattr(vps_manager_core, "_set_vps_monitor_enabled", fail_monitor)
+    monkeypatch.setattr(vps_manager_core, "_register_vps_cluster_node", fail_cluster)
+
+    vps.setup_finished()
+
+    loaded = vps_manager_core.VPS()
+    loaded.load(tmp_path / "data" / "vpsmanager" / "hosts" / "new-runner" / "new-runner.json")
+    assert loaded.setup_status == "successful"
+    assert loaded.last_setup
+    assert attempted == ["monitor:new-runner:True", "cluster:new-runner"]
+
+
 def test_cluster_nodes_import_preview_nodes_with_ssh_metadata(monkeypatch, tmp_path: Path) -> None:
     """Preview imports non-local Cluster nodes with SSH metadata."""
 

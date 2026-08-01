@@ -1,12 +1,14 @@
 """Tests for async log path resolution helpers."""
 
 import asyncio
+import shlex
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 
 import api.vps as vps_api
+import PBRun as pbrun_module
 from master import async_logs
 from master.async_monitor import VPSMonitor
 from Exchange import Exchange
@@ -15,13 +17,14 @@ from Exchange import Exchange
 class FakePool:
     """Minimal pool stub for PB7 log path resolution tests."""
 
-    def __init__(self, pb7dir: str = ""):
-        """Store a fake host pb7dir value."""
+    def __init__(self, pb7dir: str = "", pb8dir: str = ""):
+        """Store fake host runtime directory values."""
         self._pb7dir = pb7dir
+        self._pb8dir = pb8dir
 
     def get_connection(self, hostname: str):
         """Return a fake connection entry with cached host data."""
-        return SimpleNamespace(data={"pb7dir": self._pb7dir})
+        return SimpleNamespace(data={"pb7dir": self._pb7dir, "pb8dir": self._pb8dir})
 
 
 class FakeMonitorPool:
@@ -39,6 +42,12 @@ class FakeMonitorPool:
         if command == "ps -eo pid=,args=":
             return SimpleNamespace(exit_status=0, stdout=self.process_output)
         return SimpleNamespace(exit_status=0, stdout="")
+
+    def get_remote_pbgui_dir(self, hostname: str) -> str:
+        """Return the canonical test PBGui checkout path."""
+
+        del hostname
+        return "/home/pbgui/software/pbgui"
 
 
 class FakeTask:
@@ -100,6 +109,18 @@ def test_remote_pb7_logs_path_defaults_to_home_software_pb7():
     assert path == '"$HOME"/software/pb7/logs/20260610_215403__bot_config_run.json.log'
 
 
+def test_remote_pb8_logs_path_uses_cached_pb8dir():
+    """Resolve PB8 logical logs only through the cached remote runtime directory."""
+
+    path = async_logs._remote_log_shell_path(
+        FakePool(pb8dir="/srv/passivbot8"),
+        "manibot52",
+        "pb8/logs/live-bot.log",
+    )
+
+    assert path == "/srv/passivbot8/logs/live-bot.log"
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -124,8 +145,12 @@ def test_remote_log_path_rejects_traversal_and_non_log_files(path):
         "data/logs/PBRun.log.1",
         "data/run_v7/bybit_SOLUSDT/passivbot_err.log",
         "data/run_v7/bybit_SOLUSDT/passivbot_err.log.old",
+        "data/run_v8/bybit_SOLUSDT/passivbot_err.log",
+        "data/run_v8/bybit_SOLUSDT/passivbot_err.log.old",
         "pb7/logs/20260610_215403__bot_config_run.json.log",
+        "pb8/logs/bybit_SOLUSDT.log",
         "software/pb7/logs/bybit_SOLUSDT.log",
+        "software/pb8/logs/bybit_SOLUSDT.log",
     ],
 )
 def test_remote_log_path_accepts_supported_log_locations(path):
@@ -137,6 +162,12 @@ def test_remote_bot_log_rejects_traversal_name():
     """Prevent bot names from escaping the configured PB7 log directory."""
     with pytest.raises(ValueError):
         async_logs.resolve_bot_log_path("../../.ssh/id_ed25519", "7")
+
+
+def test_remote_bot_log_resolves_pb8_logical_identifier():
+    """PB8 bot logs use an allowlisted logical path, never a request path."""
+
+    assert async_logs.resolve_bot_log_path("same", "8") == "software/pb8/logs/same.log"
 
 
 @pytest.mark.parametrize("value", ["1; touch /tmp/pwn", "$(id)", -1, 50_001, True])
@@ -315,6 +346,139 @@ def test_kill_instance_uses_only_parsed_numeric_pid():
 
     assert result == {"success": True, "pid": "123"}
     assert pool.commands == ["ps -eo pid=,args=", "kill -- 123"]
+
+
+def test_kill_pb8_instance_uses_one_exact_pidfd_capable_remote_helper():
+    """Remote PB8 stop performs discovery, validation, and SIGINT in one helper."""
+
+    class PB8Pool(FakeMonitorPool):
+        """Return cached PB8 runtime paths and process metadata."""
+
+        def get_connection(self, hostname: str):
+            del hostname
+            return SimpleNamespace(data={"pb8dir": "/srv/pb8", "pb8venv": "/srv/venv_pb8/bin/python"})
+
+        async def run(self, hostname: str, command: str, timeout: int = 15):
+            del hostname, timeout
+            self.commands.append(command)
+            return SimpleNamespace(exit_status=0, stdout="321\n")
+
+    pool = PB8Pool()
+    monitor = SimpleNamespace(pool=pool)
+
+    result = asyncio.run(VPSMonitor.kill_instance(monitor, "host", "same", "8"))
+
+    assert result == {"success": True, "pid": "321"}
+    assert len(pool.commands) == 1
+    arguments = shlex.split(pool.commands[0])
+    assert arguments[:2] == ["python3", "-c"]
+    assert arguments[3:] == [
+        "/home/pbgui/software/pbgui/data/run_v8/same/config.json",
+        "/srv/pb8",
+        "/srv/venv_pb8/bin/python",
+    ]
+    assert "pidfd_open" in arguments[2]
+    assert "pidfd_send_signal" in arguments[2]
+    assert 'argv not in expected_commands' in arguments[2]
+    assert 'cwd != expected_cwd' in arguments[2]
+
+
+def test_kill_pb8_instance_reports_remote_exact_match_rejection():
+    """The single remote helper reports no target when exact validation fails."""
+
+    class PB8Pool(FakeMonitorPool):
+        """Expose cached paths for an otherwise invalid process command."""
+
+        def get_connection(self, hostname: str):
+            del hostname
+            return SimpleNamespace(data={"pb8dir": "/srv/pb8", "pb8venv": "/srv/venv_pb8/bin/python"})
+
+        async def run(self, hostname: str, command: str, timeout: int = 15):
+            del hostname, timeout
+            self.commands.append(command)
+            return SimpleNamespace(exit_status=1, stdout="")
+
+    pool = PB8Pool()
+    monitor = SimpleNamespace(pool=pool)
+
+    result = asyncio.run(VPSMonitor.kill_instance(monitor, "host", "same", "8"))
+
+    assert result == {"success": False, "pid": ""}
+    assert len(pool.commands) == 1
+
+
+def test_kill_pb8_instance_shell_quotes_validated_arguments():
+    """A valid unusual instance name remains one inert remote helper argument."""
+
+    class PB8Pool(FakeMonitorPool):
+        """Expose PB8 paths and reject the helper after command capture."""
+
+        def get_connection(self, hostname: str):
+            del hostname
+            return SimpleNamespace(data={"pb8dir": "/srv/pb 8", "pb8venv": "/srv/venv pb8/bin/python"})
+
+        async def run(self, hostname: str, command: str, timeout: int = 15):
+            del hostname, timeout
+            self.commands.append(command)
+            return SimpleNamespace(exit_status=1, stdout="")
+
+    name = "bot';touch_pwn;#"
+    pool = PB8Pool()
+    monitor = SimpleNamespace(pool=pool)
+
+    result = asyncio.run(VPSMonitor.kill_instance(monitor, "host", name, "8"))
+
+    assert result == {"success": False, "pid": ""}
+    arguments = shlex.split(pool.commands[0])
+    assert arguments[3] == f"/home/pbgui/software/pbgui/data/run_v8/{name}/config.json"
+    assert arguments[4:] == ["/srv/pb 8", "/srv/venv pb8/bin/python"]
+
+
+def test_local_kill_pb8_delegates_to_runv8_stop(tmp_path, monkeypatch):
+    """Local PB8 restart requests use the supervisor's graceful stop method."""
+
+    instance_dir = tmp_path / "data" / "run_v8" / "same"
+    instance_dir.mkdir(parents=True)
+    (instance_dir / "config.json").write_text("{}", encoding="utf-8")
+    events = []
+
+    class FakePBRun:
+        """Provide local runtime paths without starting the supervisor."""
+
+        v7_path = str(tmp_path / "data" / "run_v7")
+        v8_path = str(tmp_path / "data" / "run_v8")
+        name = "node-a"
+        pbgdir = tmp_path
+        pb7dir = str(tmp_path / "pb7")
+        pb7venv = str(tmp_path / "venv_pb7" / "bin" / "python")
+        pb8dir = str(tmp_path / "pb8")
+        pb8venv = str(tmp_path / "venv_pb8" / "bin" / "python")
+
+    class FakeRunV8:
+        """Record the runtime-aware stop delegation."""
+
+        def load(self):
+            return True
+
+        def pid(self):
+            return SimpleNamespace(pid=4321)
+
+        def stop(self):
+            events.append((self.user, self.path, self.pb8dir, self.pb8venv))
+
+    monkeypatch.setattr(pbrun_module, "PBRun", FakePBRun)
+    monkeypatch.setattr(pbrun_module, "RunV8", FakeRunV8)
+
+    result = asyncio.run(vps_api._local_kill_instance("same", "8"))
+
+    assert result["success"] is True
+    assert result["pid"] == 4321
+    assert events == [(
+        "same",
+        str(instance_dir),
+        str(tmp_path / "pb8"),
+        str(tmp_path / "venv_pb8" / "bin" / "python"),
+    )]
 
 
 def test_stop_stream_removes_registry_entry_immediately():

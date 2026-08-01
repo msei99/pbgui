@@ -65,6 +65,8 @@ _draft_configs: dict[str, tuple[float, dict]] = {}  # id → (created_ts, config
 _DRAFT_TTL = 300  # 5 minutes
 
 _CLUSTER_HOST_NODE_IDS_FILE = "host_node_ids.json"
+_REMOTE_HOST_META_MAX_AGE_SECONDS = 30.0
+_PB7_RUNTIME_PROFILES = {"pb7", "pb7_pb8"}
 
 
 
@@ -591,7 +593,8 @@ def _local_pb7_config_schema_version() -> str | None:
     """Return the local PB7 config schema version if the PB7 bridge is importable."""
     try:
         schema = get_template_config().get("config_version")
-    except Exception:
+    except Exception as exc:
+        _log(SERVICE, f"VPS inventory capability unavailable for '{hostname}': {exc.__class__.__name__}", level="WARNING")
         return None
     if isinstance(schema, str) and schema.strip():
         return schema.strip()
@@ -740,6 +743,185 @@ def _host_credential_active(hostname: str) -> bool | None:
     return _host_credential_capability(hostname)["credential_active"]
 
 
+def _managed_vps_runtime_capability(hostname: str) -> dict | None:
+    """Return authoritative PB7 capability for an exact VPS inventory host."""
+
+    try:
+        from api.vps_manager import get_service_instance
+
+        manager = get_service_instance().vpsmanager
+        vps = manager.find_vps_by_hostname(hostname)
+    except Exception:
+        return None
+    if vps is None:
+        return None
+
+    runtime_profile = str(getattr(vps, "runtime_profile", "") or "").strip().lower()
+    setup_status = str(getattr(vps, "setup_status", "") or "").strip().lower()
+    capable = runtime_profile in _PB7_RUNTIME_PROFILES and setup_status == "successful"
+    if runtime_profile not in _PB7_RUNTIME_PROFILES:
+        reason = f"VPS runtime profile is {runtime_profile or 'unknown'}"
+    elif setup_status != "successful":
+        reason = f"VPS setup status is {setup_status or 'unknown'}"
+    else:
+        reason = "VPS inventory confirms a completed PB7 setup"
+    return {
+        "pb7_capable": capable,
+        "pb7_capability_confirmed": True,
+        "pb7_capability_source": "vps_inventory",
+        "pb7_capability_reason": reason,
+        "pb7_capability_stale": False,
+        "runtime_profile": runtime_profile or None,
+        "setup_status": setup_status or None,
+    }
+
+
+def _remote_host_meta_runtime_capability(hostname: str) -> dict:
+    """Return PB7 capability inferred from a fresh remote host-meta snapshot."""
+
+    store = _monitor.store if _monitor else None
+    meta = store.host_meta.get(hostname, {}) if store else {}
+    unknown = {
+        "pb7_capable": None,
+        "pb7_capability_confirmed": False,
+        "pb7_capability_source": "host_meta",
+        "pb7_capability_reason": "Fresh PB7 runtime metadata has not been reported",
+        "pb7_capability_stale": False,
+        "runtime_profile": None,
+        "setup_status": None,
+    }
+    if not isinstance(meta, dict):
+        return unknown
+    try:
+        generated_at = float(meta.get("generated_at") or 0.0)
+    except (TypeError, ValueError):
+        generated_at = 0.0
+    age = time.time() - generated_at if generated_at > 0 else None
+    if age is None or age < -300.0 or age > _REMOTE_HOST_META_MAX_AGE_SECONDS:
+        unknown["pb7_capability_stale"] = generated_at > 0
+        unknown["pb7_capability_reason"] = (
+            "PB7 runtime metadata is stale" if generated_at > 0 else "PB7 runtime metadata has no valid timestamp"
+        )
+        return unknown
+
+    explicit_ready = meta.get("pb7_runtime_ready", meta.get("pb7ready"))
+    if isinstance(explicit_ready, bool):
+        capable = explicit_ready
+    else:
+        raw_fields = tuple(meta.get(field) for field in ("pb7v", "pb7_config_schema", "pb7py"))
+        if any(value is None for value in raw_fields):
+            return unknown
+        fields = tuple(str(value or "").strip() for value in raw_fields)
+        pb7_version, pb7_schema, pb7_python = fields
+        capable = pb7_version.startswith("v7.") and pb7_schema.startswith("v7.") and pb7_python.upper() != "N/A"
+    return {
+        **unknown,
+        "pb7_capable": capable,
+        "pb7_capability_confirmed": True,
+        "pb7_capability_reason": (
+            "Fresh host metadata confirms the PB7 source and interpreter"
+            if capable
+            else "Fresh host metadata reports an incomplete PB7 runtime"
+        ),
+    }
+
+
+def _host_pb7_runtime_capability(hostname: str) -> dict:
+    """Return secret-free tri-state PB7 runtime capability for one exact host."""
+
+    clean_host = str(hostname or "").strip()
+    if clean_host == "disabled":
+        return {
+            "pb7_capable": True,
+            "pb7_capability_confirmed": True,
+            "pb7_capability_source": "disabled",
+            "pb7_capability_reason": "Disabled targets do not require PB7",
+            "pb7_capability_stale": False,
+            "runtime_profile": None,
+            "setup_status": None,
+        }
+    if clean_host == _get_master_hostname():
+        try:
+            status = pbgui_purefunc.pb7_runtime_status()
+        except Exception as exc:
+            _log(SERVICE, f"Local PB7 runtime capability unavailable: {exc.__class__.__name__}", level="WARNING")
+            status = {}
+        ready = status.get("ready")
+        return {
+            "pb7_capable": ready if isinstance(ready, bool) else None,
+            "pb7_capability_confirmed": isinstance(ready, bool),
+            "pb7_capability_source": "local_runtime",
+            "pb7_capability_reason": (
+                "Local PB7 source and interpreter are ready"
+                if ready is True
+                else "Local PB7 source or interpreter is not ready"
+                if ready is False
+                else "Local PB7 runtime status is unavailable"
+            ),
+            "pb7_capability_stale": False,
+            "runtime_profile": "pb7" if ready is True else None,
+            "setup_status": "successful" if ready is True else None,
+        }
+    managed = _managed_vps_runtime_capability(clean_host)
+    if managed is not None:
+        return managed
+    return _remote_host_meta_runtime_capability(clean_host)
+
+
+def _validate_enabled_on_target(hostname: str) -> str:
+    """Validate enabled_on as one exact, non-traversing host component."""
+
+    if not isinstance(hostname, str) or hostname != hostname.strip():
+        raise HTTPException(status_code=400, detail="Invalid enabled_on target")
+    if not hostname or "/" in hostname or "\\" in hostname or "\x00" in hostname or hostname in {".", ".."}:
+        raise HTTPException(status_code=400, detail="Invalid enabled_on target")
+    return hostname
+
+
+def _configured_instance_target(name: str) -> str | None:
+    """Return the exact currently persisted enabled_on target for an instance."""
+
+    _validate_name(name)
+    config_path = Path(PBGDIR) / "data" / "run_v7" / name / "config.json"
+    if not config_path.is_file():
+        return None
+    try:
+        current = json.loads(config_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        _log(SERVICE, f"Could not read current target for '{name}': {exc.__class__.__name__}", level="WARNING")
+        return None
+    pbgui = current.get("pbgui") if isinstance(current, dict) else None
+    target = pbgui.get("enabled_on") if isinstance(pbgui, dict) else None
+    return target if isinstance(target, str) else None
+
+
+async def _target_pb7_runtime_incompatibility_detail(name: str, cfg: dict) -> str | None:
+    """Return an error for targets without a confirmed compatible PB7 runtime."""
+
+    pbgui = cfg.get("pbgui") if isinstance(cfg, dict) else None
+    enabled_on = pbgui.get("enabled_on", "disabled") if isinstance(pbgui, dict) else "disabled"
+    enabled_on = _validate_enabled_on_target(enabled_on)
+    if enabled_on == "disabled":
+        return None
+
+    capability = _host_pb7_runtime_capability(enabled_on)
+    if capability["pb7_capable"] is None and _monitor and hasattr(_monitor, "collect_host_meta_now"):
+        await _monitor.collect_host_meta_now(enabled_on, include_package_status=False)
+        capability = _host_pb7_runtime_capability(enabled_on)
+    if capability["pb7_capable"] is True:
+        return None
+
+    reason = str(capability.get("pb7_capability_reason") or "PB7 runtime capability is unavailable")
+    if capability["pb7_capable"] is False:
+        return f"Cannot target '{enabled_on}' with PB7 instance '{name}': {reason}."
+    if _configured_instance_target(name) == enabled_on:
+        return None
+    return (
+        f"Cannot target '{enabled_on}' with PB7 instance '{name}': PB7 capability is not confirmed ({reason}). "
+        "Wait for fresh host metadata or complete VPS setup before saving or restoring this bot."
+    )
+
+
 def _host_dropdown_detail(hostname: str) -> dict:
     """Return host metadata used by the PBv7 enabled_on dropdown."""
     clean_host = str(hostname or "").strip()
@@ -826,6 +1008,9 @@ async def _ensure_target_schema_compatible(name: str, cfg: dict) -> None:
 
 async def _ensure_target_runtime_compatible(name: str, cfg: dict) -> None:
     """Raise 409 when target runtime prerequisites are not configured."""
+    detail = await _target_pb7_runtime_incompatibility_detail(name, cfg)
+    if detail:
+        raise HTTPException(status_code=409, detail=detail)
     await _ensure_target_schema_compatible(name, cfg)
     detail = await _target_dynamic_ignore_incompatibility_detail(name, cfg)
     if detail:
@@ -1856,91 +2041,37 @@ def get_hosts(
     """List available hosts for the 'enabled_on' dropdown."""
     del session
     master = _get_master_hostname()
-    hosts = ["disabled", master]
+    candidates = [master]
     if _monitor and _monitor.pool:
         for h in sorted(_monitor.enabled_hosts):
-            if h != master and h not in hosts:
-                hosts.append(h)
+            if h != master and h not in candidates:
+                candidates.append(h)
+    host_capabilities = {
+        host: {"name": host, **_host_pb7_runtime_capability(host)}
+        for host in candidates
+    }
+    hosts = ["disabled"] + [
+        host for host in candidates
+        if host_capabilities[host]["pb7_capable"] is True
+    ]
     return {
         "request_id": request_id,
         "generated_at": time.time(),
         "hosts": hosts,
+        "host_capabilities": host_capabilities,
     }
 
 
 def _normalize_exchange_list(values) -> list[str]:
-    if isinstance(values, str):
-        items = values.split(",")
-    elif isinstance(values, list):
-        items = values
-    else:
-        items = []
+    from api.editor_market_data import normalize_exchanges
 
-    exchanges: list[str] = []
-    seen: set[str] = set()
-    for item in items:
-        exchange = str(item or "").strip().lower()
-        if not exchange or exchange == "combined" or exchange in seen:
-            continue
-        seen.add(exchange)
-        exchanges.append(exchange)
-    return exchanges
+    return normalize_exchanges(values)
 
 
 def _classify_coins_for_exchanges(exchanges: list[str], coins: list[str]) -> dict[str, dict]:
-    from PBCoinData import CoinData, build_symbol_mappings, normalize_symbol
+    from api.editor_market_data import classify_coins
 
-    if not exchanges or not coins:
-        return {}
-
-    cd = CoinData()
-    active_coins: set[str] = set()
-    symbol_mappings: dict[str, str] = {}
-
-    for exchange in exchanges:
-        try:
-            approved_active, ignored_active = cd.filter_mapping(
-                exchange=exchange,
-                market_cap_min_m=0,
-                vol_mcap_max=float("inf"),
-                only_cpt=False,
-                notices_ignore=False,
-                tags=[],
-                quote_filter=None,
-                active_only=True,
-                use_cache=True,
-            )
-            active_coins.update(approved_active)
-            active_coins.update(ignored_active)
-
-            mapping = cd.load_mapping(exchange=exchange, use_cache=True)
-            raw_symbols = [
-                str(record.get("symbol") or "").strip().upper()
-                for record in mapping
-                if str(record.get("symbol") or "").strip()
-            ]
-            symbol_mappings.update(build_symbol_mappings(raw_symbols))
-        except Exception as exc:
-            _log(SERVICE, f"Failed to classify coins for exchange {exchange}: {exc}", level="WARNING")
-
-    statuses: dict[str, dict] = {}
-    for raw_coin in coins:
-        value = str(raw_coin or "").strip()
-        if not value:
-            continue
-        if value.lower() == "all":
-            statuses[value] = {"input": value, "normalized": "all", "status": "valid"}
-            continue
-
-        normalized = str(normalize_symbol(value.upper(), symbol_mappings) or value).upper()
-        status = "valid" if normalized in active_coins else "invalid"
-
-        statuses[value] = {
-            "input": value,
-            "normalized": normalized,
-            "status": status,
-        }
-    return statuses
+    return classify_coins(exchanges, coins)
 
 
 @router.get("/symbols")
@@ -1954,22 +2085,9 @@ def get_symbols(
     normalization logic (multiplier prefixes, quote suffixes) stays in one place
     and cannot diverge between code paths.
     """
-    from PBCoinData import CoinData
-    cd = CoinData()
-    approved, ignored = cd.filter_mapping(
-        exchange=exchange,
-        market_cap_min_m=0,
-        vol_mcap_max=float("inf"),
-        only_cpt=False,
-        notices_ignore=False,
-        tags=[],
-        quote_filter=None,
-        active_only=True,
-        use_cache=True,
-    )
-    # Return all active coins (approved + ignored by filter, but present on exchange)
-    symbols = sorted(set(approved) | set(ignored))
-    return {"symbols": symbols}
+    from api.editor_market_data import symbols
+
+    return {"symbols": symbols(exchange)}
 
 
 @router.get("/tags")
@@ -1978,10 +2096,9 @@ def get_tags(
     session: SessionToken = Depends(require_auth),
 ):
     """Return available filter tags for a given exchange."""
-    from PBCoinData import CoinData
-    cd = CoinData()
-    tags = cd.get_mapping_tags(exchange=exchange, use_cache=True)
-    return {"tags": tags}
+    from api.editor_market_data import tags
+
+    return {"tags": tags(exchange)}
 
 
 @router.get("/coins/filter")
@@ -1995,19 +2112,9 @@ def filter_coins(
     session: SessionToken = Depends(require_auth),
 ):
     """Preview dynamic-ignore filter results."""
-    from PBCoinData import CoinData
-    cd = CoinData()
-    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
-    approved, ignored = cd.filter_mapping(
-        exchange=exchange,
-        market_cap_min_m=market_cap,
-        vol_mcap_max=vol_mcap,
-        only_cpt=only_cpt,
-        notices_ignore=notices_ignore,
-        tags=tag_list,
-        quote_filter=None,
-        use_cache=True,
-    )
+    from api.editor_market_data import filter_symbols
+
+    approved, ignored = filter_symbols(exchange, market_cap, vol_mcap, only_cpt, notices_ignore, tags)
     return {"approved": approved, "ignored": ignored}
 
 
@@ -2306,9 +2413,10 @@ def get_main_page(
     api_base = origin + "/api/v7"
     ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
 
-    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
+    html = html.replace('"%%RUN_VERSION%%"', json.dumps("v7"))
+    html = html.replace('"%%MASTER_NAME%%"', json.dumps(_get_master_hostname()))
 
     from pbgui_purefunc import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL
@@ -2343,7 +2451,6 @@ def get_edit_page(
     api_base = origin + "/api/v7"
     ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
 
-    html = html.replace('"%%TOKEN%%"', json.dumps(session.token))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
 
@@ -2351,6 +2458,8 @@ def get_edit_page(
     html = html.replace('"%%INSTANCE%%"', json.dumps(name))
     html = html.replace('"%%IS_NEW%%"', json.dumps(is_new))
     html = html.replace('"%%DRAFT_ID%%"', json.dumps(draft_id))
+    html = html.replace('"%%RUN_VERSION%%"', json.dumps("v7"))
+    html = html.replace('"%%MASTER_NAME%%"', json.dumps(_get_master_hostname()))
 
     from pbgui_purefunc import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL

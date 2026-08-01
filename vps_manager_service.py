@@ -51,7 +51,9 @@ SERVICE = "VPSManagerApi"
 PB7_UPSTREAM_REMOTE_NAME = "origin"
 PB7_UPSTREAM_REMOTE_URL = "https://github.com/enarjord/passivbot.git"
 COMMAND_MASTER_UPDATE_PB8 = "master-update-pb8"
+COMMAND_MASTER_UPDATE_PBGUI_PB8 = "master-update-pbgui-pb8"
 PB8_REMOTE_ROLES = frozenset({"master", "vps", "slave"})
+PB7_MIN_FREE_DISK_BYTES = 3 * 1024 * 1024 * 1024
 PB8_MIN_FREE_DISK_BYTES = 3 * 1024 * 1024 * 1024
 SWAP_OPTIONS = ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"]
 INIT_METHODS = ["root", "password", "private_key"]
@@ -128,6 +130,7 @@ def _pb8_remote_action_status(host_state: dict[str, Any] | None, *, telemetry_fr
     meta = state.get("meta") if isinstance(state.get("meta"), dict) else {}
     system = state.get("system") if isinstance(state.get("system"), dict) else {}
     role = str(meta.get("role") or "").strip().lower()
+    installed = bool(meta.get("pb8ready"))
     free_bytes = max(_safe_int(system.get("disk_free")), 0)
     profile = "full" if role == "master" else "live"
     result = {
@@ -135,19 +138,53 @@ def _pb8_remote_action_status(host_state: dict[str, Any] | None, *, telemetry_fr
         "reason": "",
         "role": role,
         "profile": profile,
+        "installed": installed,
         "free_disk_bytes": free_bytes,
-        "required_free_disk_bytes": PB8_MIN_FREE_DISK_BYTES,
+        "required_free_disk_bytes": 0 if installed else PB8_MIN_FREE_DISK_BYTES,
     }
     if not telemetry_fresh:
         result["reason"] = "Fresh host telemetry is required before installing or updating PB8."
     elif role not in PB8_REMOTE_ROLES:
         result["reason"] = "PB8 can only be installed or updated on a PBGui master or VPS runner."
-    elif free_bytes <= 0:
+    elif not installed and free_bytes <= 0:
         result["reason"] = "Free disk space is unavailable from host telemetry."
-    elif free_bytes < PB8_MIN_FREE_DISK_BYTES:
+    elif not installed and free_bytes < PB8_MIN_FREE_DISK_BYTES:
         result["reason"] = (
-            f"PB8 {profile} installation/update requires at least "
+            f"PB8 {profile} installation requires at least "
             f"{PB8_MIN_FREE_DISK_BYTES / 1024 ** 3:.0f} GiB free disk space; "
+            f"currently {free_bytes / 1024 ** 3:.2f} GiB is available."
+        )
+    else:
+        result["allowed"] = True
+    return result
+
+
+def _pb7_remote_action_status(host_state: dict[str, Any] | None, *, telemetry_fresh: bool) -> dict[str, Any]:
+    """Return whether a remote host may install or update PB7."""
+    state = host_state if isinstance(host_state, dict) else {}
+    meta = state.get("meta") if isinstance(state.get("meta"), dict) else {}
+    system = state.get("system") if isinstance(state.get("system"), dict) else {}
+    installed = bool(
+        str(meta.get("pb7v") or "").startswith("v7.")
+        and str(meta.get("pb7c") or "")
+        and str(meta.get("pb7py") or "") not in {"", "N/A"}
+    )
+    free_bytes = max(_safe_int(system.get("disk_free")), 0)
+    required = 0 if installed else PB7_MIN_FREE_DISK_BYTES
+    result = {
+        "allowed": False,
+        "reason": "",
+        "installed": installed,
+        "free_disk_bytes": free_bytes,
+        "required_free_disk_bytes": required,
+    }
+    if not telemetry_fresh:
+        result["reason"] = "Fresh host telemetry is required before installing or updating PB7."
+    elif not installed and free_bytes <= 0:
+        result["reason"] = "Free disk space is unavailable from host telemetry."
+    elif not installed and free_bytes < PB7_MIN_FREE_DISK_BYTES:
+        result["reason"] = (
+            f"PB7 installation requires at least {PB7_MIN_FREE_DISK_BYTES / 1024 ** 3:.0f} GiB free disk space; "
             f"currently {free_bytes / 1024 ** 3:.2f} GiB is available."
         )
     else:
@@ -195,10 +232,27 @@ COMMAND_VPS_UPDATE_PBGUI = "vps-update-pbgui"
 COMMAND_VPS_UPDATE_PB7 = "vps-update-pb7"
 COMMAND_VPS_UPDATE_PB8 = "vps-update-pb8"
 COMMAND_VPS_UPDATE_PB = "vps-update-pb"
+COMMAND_VPS_UPDATE_PBGUI_PB8 = "vps-update-pbgui-pb8"
+COMMAND_VPS_UPDATE_PB7_PB8 = "vps-update-pb7-pb8"
+COMMAND_VPS_UPDATE_PBGUI_PB7_PB8 = "vps-update-pbgui-pb7-pb8"
+COMMAND_VPS_UPDATE_RUNTIME = "vps-update-runtime"
+COMMAND_VPS_UPDATE_PBGUI_RUNTIME = "vps-update-pbgui-runtime"
 COMMAND_VPS_CLEANUP = "vps-cleanup"
 COMMAND_VPS_APPLY_CONFIG = "vps-apply-config"
 COMMAND_VPS_MIGRATE_SYSTEMD = "vps-migrate-systemd"
-VPS_RUNTIME_PROFILES = frozenset({"pb7", "pb8"})
+VPS_RUNTIME_PROFILES = frozenset({"pb7", "pb8", "pb7_pb8"})
+PB7_UPDATE_COMMANDS = frozenset({
+    COMMAND_VPS_UPDATE_PB7,
+    COMMAND_VPS_UPDATE_PB,
+    COMMAND_VPS_UPDATE_PB7_PB8,
+    COMMAND_VPS_UPDATE_PBGUI_PB7_PB8,
+})
+PB8_UPDATE_COMMANDS = frozenset({
+    COMMAND_VPS_UPDATE_PB8,
+    COMMAND_VPS_UPDATE_PBGUI_PB8,
+    COMMAND_VPS_UPDATE_PB7_PB8,
+    COMMAND_VPS_UPDATE_PBGUI_PB7_PB8,
+})
 CREDENTIAL_CAPABILITY_FIELDS = (
     "credential_protocol_version",
     "credential_active",
@@ -246,7 +300,13 @@ VPS_DEPLOY_ACTION_TEXT = {
     COMMAND_VPS_UPDATE: "Update Linux",
     COMMAND_VPS_UPDATE_PBGUI: "Update PBGui",
     COMMAND_VPS_UPDATE_PB7: "Update PB7",
+    COMMAND_VPS_UPDATE_PB8: "Update PB8",
     COMMAND_VPS_UPDATE_PB: "Update PBGui and PB7",
+    COMMAND_VPS_UPDATE_PBGUI_PB8: "Update PBGui and PB8",
+    COMMAND_VPS_UPDATE_PB7_PB8: "Update PB7 and PB8",
+    COMMAND_VPS_UPDATE_PBGUI_PB7_PB8: "Update PBGui, PB7 and PB8",
+    COMMAND_VPS_UPDATE_RUNTIME: "Update Runtime by Profile",
+    COMMAND_VPS_UPDATE_PBGUI_RUNTIME: "Update PBGui and Runtime by Profile",
     COMMAND_VPS_CLEANUP: "Cleanup VPS",
 }
 VPS_DEPLOY_ACTIONS = tuple(VPS_DEPLOY_ACTION_TEXT.keys())
@@ -507,6 +567,8 @@ def _probe_and_maybe_trust_host_key(
     *,
     accept_unknown_host: bool = False,
     expected_fingerprint: str = "",
+    replace_existing: bool = False,
+    allow_mismatch_confirmation: bool = False,
 ) -> dict[str, Any]:
     """Probe one host key and trust it only after exact fingerprint confirmation."""
     probe = _probe_host_key(host, port, aliases)
@@ -514,7 +576,21 @@ def _probe_and_maybe_trust_host_key(
     fingerprint = str(probe.get("fingerprint") or "")
     statuses = probe.get("target_statuses") or {}
     if probe.get("status") == "mismatch":
-        raise ValueError("SSH host key mismatch. Fix known_hosts intentionally before connecting.")
+        if not replace_existing:
+            if allow_mismatch_confirmation:
+                probe.update({"known": False, "needs_confirmation": True, "replacement_required": True})
+                return probe
+            raise ValueError("SSH host key mismatch. Fix known_hosts intentionally before connecting.")
+        if not _ssh_fingerprints_match(expected_fingerprint, fingerprint):
+            raise ValueError("SSH host key changed while the confirmation dialog was open. Review it again.")
+        targets = list(dict.fromkeys(str(item or "").strip() for item in [host, *aliases] if str(item or "").strip()))
+        _replace_known_host_keys(targets, port, remote_key)
+        verified = _probe_host_key(host, port, aliases)
+        verified.pop("_key", None)
+        if verified.get("status") != "known":
+            raise ValueError("The SSH host key could not be updated because another known_hosts entry still conflicts.")
+        verified.update({"known": True, "needs_confirmation": False, "replacement_required": False})
+        return verified
 
     known = any(status == "known" for status in statuses.values())
     if not known and (
@@ -1258,6 +1334,27 @@ def _vps_deploy_command_text(command: Any) -> str:
 def _vps_deploy_requires_user_password(command: Any) -> bool:
     normalized = _normalize_vps_deploy_command(command)
     return normalized in {COMMAND_VPS_UPDATE, COMMAND_VPS_CLEANUP}
+
+
+def _profile_aware_vps_update_command(command: str, runtime_profile: str) -> str:
+    """Resolve one logical bulk update to the host's configured runtime profile."""
+    normalized = _normalize_vps_deploy_command(command)
+    profile = str(runtime_profile or "pb7").strip().lower()
+    if profile not in VPS_RUNTIME_PROFILES:
+        profile = "pb7"
+    if normalized == COMMAND_VPS_UPDATE_RUNTIME:
+        return {
+            "pb7": COMMAND_VPS_UPDATE_PB7,
+            "pb8": COMMAND_VPS_UPDATE_PB8,
+            "pb7_pb8": COMMAND_VPS_UPDATE_PB7_PB8,
+        }[profile]
+    if normalized == COMMAND_VPS_UPDATE_PBGUI_RUNTIME:
+        return {
+            "pb7": COMMAND_VPS_UPDATE_PB,
+            "pb8": COMMAND_VPS_UPDATE_PBGUI_PB8,
+            "pb7_pb8": COMMAND_VPS_UPDATE_PBGUI_PB7_PB8,
+        }[profile]
+    return normalized
 
 
 def _load_json_list(path: Path) -> list[dict[str, Any]]:
@@ -2506,6 +2603,7 @@ class VPSManagerService:
                 or (live_state.get("system") or {})
                 or (live_state.get("instances") or {})
                 or (live_state.get("v7_instances") or {})
+                or (live_state.get("v8_instances") or {})
                 or (live_state.get("host_meta") or {})
                 or (live_state.get("streams") or {})
             )
@@ -2519,6 +2617,7 @@ class VPSManagerService:
                 "system": {},
                 "instances": {},
                 "v7_instances": {},
+                "v8_instances": {},
                 "host_meta": {},
                 "streams": {},
             }
@@ -2531,6 +2630,7 @@ class VPSManagerService:
             "system": (monitor_state.get("system") or {}).get(hostname) or {},
             "instances": (monitor_state.get("instances") or {}).get(hostname) or [],
             "v7_instances": (monitor_state.get("v7_instances") or {}).get(hostname) or [],
+            "v8_instances": (monitor_state.get("v8_instances") or {}).get(hostname) or [],
             "meta": (monitor_state.get("host_meta") or {}).get(hostname) or {},
             "stream": (monitor_state.get("streams") or {}).get(hostname) or {},
         }
@@ -3268,6 +3368,7 @@ class VPSManagerService:
             "pb7": f"{str(pb7_release.get('version') or 'N/A')}{'' if local_pb7_python in (None, '', 'N/A') else ' /' + str(local_pb7_python)}",
             "pb7_branch": f"{master_pb7_branch} ({_short_commit(master_pb7_commit)})",
             "pb7_github": self._build_master_pb7_github_status(master_pb7_branch, master_pb7_commit),
+            "pb7_installed": bool(live_pb7_commit and local_pb7_python not in (None, "", "N/A")),
             "pb8": f"{str(pb8_info.get('version') or 'N/A')}{'' if pb8_info.get('python_version') in (None, '', 'N/A') else ' /' + str(pb8_info.get('python_version'))}",
             "pb8_branch": f"{master_pb8_branch} ({_short_commit(pb8_info.get('commit'))})",
             "pb8_github": master_pb8_github,
@@ -3314,19 +3415,29 @@ class VPSManagerService:
         else:
             role_icon = "💻"
         boot = _safe_int(meta.get("boot"))
-        running_v7_names = {
-            str((monitor or {}).get("u") or "").strip()
+        running_instances = {
+            (str((monitor or {}).get("p") or "7"), str((monitor or {}).get("u") or "").strip())
             for monitor in (host_state or {}).get("instances") or []
             if str((monitor or {}).get("u") or "").strip()
         }
-        running_v7_names.update(
-            str((instance or {}).get("name") or "").strip()
+        running_instances.update(
+            ("7", str((instance or {}).get("name") or "").strip())
             for instance in (host_state or {}).get("v7_instances") or []
+            if _truthy((instance or {}).get("running")) and str((instance or {}).get("name") or "").strip()
+        )
+        running_instances.update(
+            ("8", str((instance or {}).get("name") or "").strip())
+            for instance in (host_state or {}).get("v8_instances") or []
             if _truthy((instance or {}).get("running")) and str((instance or {}).get("name") or "").strip()
         )
         package_status, monitor_agent = self._get_remote_agent_contract(host_state)
         remote_pb8_github = self._build_pb8_github_status(str(meta.get("pb8c") or ""))
         remote_pb8_branch = _pb8_branch_label(meta.get("pb8b"), remote_pb8_github)
+        pb7_installed = bool(
+            str(meta.get("pb7v") or "").startswith("v7.")
+            and str(meta.get("pb7c") or "")
+            and str(meta.get("pb7py") or "") not in {"", "N/A"}
+        )
         row = {
             "name": hostname,
             "hostname": hostname,
@@ -3348,17 +3459,19 @@ class VPSManagerService:
             "updates": package_status.get("upgrades") if package_status.get("available") else "N/A",
             "package_status": package_status,
             "monitor_agent": monitor_agent,
-            "running_bots": len(running_v7_names),
+            "running_bots": len(running_instances),
             "pbgui": f"{meta.get('pbgv', 'N/A')}{'' if meta.get('pbgpy', 'N/A') in (None, '', 'N/A') else ' /' + str(meta.get('pbgpy'))}",
             "pbgui_branch": f"{meta.get('pbgb', 'unknown')} ({_short_commit(meta.get('pbgc'))})",
             "pbgui_github": self._build_remote_pbgui_github_status(host_state),
             "pb7": f"{meta.get('pb7v', 'N/A')}{'' if meta.get('pb7py', 'N/A') in (None, '', 'N/A') else ' /' + str(meta.get('pb7py'))}",
             "pb7_branch": f"{_pb7_branch_label(meta.get('pb7b'), meta.get('pb7c'))} ({_short_commit(meta.get('pb7c'))})",
             "pb7_github": self._build_remote_pb7_github_status(host_state),
+            "pb7_installed": pb7_installed,
             "pb8": f"{meta.get('pb8v', 'N/A')}{'' if meta.get('pb8py', 'N/A') in (None, '', 'N/A') else ' /' + str(meta.get('pb8py'))}",
             "pb8_branch": f"{remote_pb8_branch} ({_short_commit(meta.get('pb8c'))})",
             "pb8_github": remote_pb8_github,
             "pb8_installed": bool(meta.get("pb8ready")),
+            "runtime_profile": str(getattr(vps, "runtime_profile", "pb7") or "pb7") if vps else "pb7",
             "rtd": min(self._build_remote_rtd(host_state), 9999),
             "task_command": str(getattr(vps, "command", "") or "") if vps else "",
             "task_command_text": str(getattr(vps, "command_text", "") or "") if vps else "",
@@ -3484,6 +3597,7 @@ class VPSManagerService:
             "summary_row": summary_row,
             "pbgui_update_available": pbgui_github.startswith("❌"),
             "pb7_update_available": pb7_github.startswith("❌"),
+            "pb7_installed": bool(summary_row.get("pb7_installed")),
             "pb8_installed": bool(summary_row.get("pb8_installed")),
             "pb8_update_available": pb8_github.startswith("❌"),
             "pb8_action_allowed": load_ini("main", "role").strip().lower() == "master",
@@ -3504,6 +3618,7 @@ class VPSManagerService:
         telemetry_age = self._host_telemetry_age(host_state)
         host_meta = self._host_meta(host_state)
         pb8_action = _pb8_remote_action_status(host_state, telemetry_fresh=telemetry_fresh)
+        pb7_action = _pb7_remote_action_status(host_state, telemetry_fresh=telemetry_fresh)
         connection = (host_state or {}).get("connection") or {}
         ssh_connection_error = str(connection.get("last_error") or "")
         host_key_error = "host key" in ssh_connection_error.lower() and any(
@@ -3548,6 +3663,11 @@ class VPSManagerService:
             "summary_row": summary_row,
             "pbgui_update_available": pbgui_github.startswith("\u274c"),
             "pb7_update_available": pb7_github.startswith("\u274c"),
+            "pb7_installed": bool(summary_row.get("pb7_installed")),
+            "pb7_action_allowed": bool(pb7_action["allowed"]),
+            "pb7_action_reason": str(pb7_action["reason"]),
+            "pb7_free_disk_bytes": int(pb7_action["free_disk_bytes"]),
+            "pb7_required_free_disk_bytes": int(pb7_action["required_free_disk_bytes"]),
             "pb8_installed": bool(summary_row.get("pb8_installed")),
             "pb8_update_available": pb8_github.startswith("\u274c"),
             "pb8_action_allowed": bool(pb8_action["allowed"]),
@@ -3555,6 +3675,7 @@ class VPSManagerService:
             "pb8_install_profile": str(pb8_action["profile"]),
             "pb8_free_disk_bytes": int(pb8_action["free_disk_bytes"]),
             "pb8_required_free_disk_bytes": int(pb8_action["required_free_disk_bytes"]),
+            "runtime_profile": str(getattr(vps, "runtime_profile", "pb7") or "pb7"),
             "server_metrics": self._build_remote_server_metrics(vps.hostname, host_state),
             "systemd_migration": self._get_vps_systemd_migration_status(vps, host_state, quick=quick),
             "cluster_node": cluster_node,
@@ -4574,12 +4695,16 @@ class VPSManagerService:
         debug: bool,
         extra_vars: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        normalized_command = _normalize_vps_deploy_command(command)
-        command_text = _vps_deploy_command_text(normalized_command)
+        requested_command = _normalize_vps_deploy_command(command)
         with self._host_task_start_lock(hostname):
             if self._deploy_shutdown_requested():
                 raise ValueError("VPS deployment controller is shutting down.")
             vps = self._require_vps(hostname)
+            normalized_command = _profile_aware_vps_update_command(
+                requested_command,
+                str(getattr(vps, "runtime_profile", "pb7") or "pb7"),
+            )
+            command_text = _vps_deploy_command_text(normalized_command)
             self._apply_session_secrets_to_vps(token, vps)
             if _vps_deploy_requires_user_password(normalized_command) and not getattr(vps, "user_pw", None):
                 raise ValueError(f"VPS user password missing for {hostname}.")
@@ -4589,6 +4714,17 @@ class VPSManagerService:
             command_extra_vars = dict(extra_vars or {})
             monitor_state = self._get_monitor_state()
             host_state = self._get_host_telemetry(monitor_state, hostname)
+            telemetry_fresh = self._host_telemetry_fresh(host_state)
+            if normalized_command in PB7_UPDATE_COMMANDS:
+                pb7_action = _pb7_remote_action_status(host_state, telemetry_fresh=telemetry_fresh)
+                if not pb7_action["allowed"]:
+                    raise ValueError(str(pb7_action["reason"]))
+                command_extra_vars["pb7_min_free_bytes"] = int(pb7_action["required_free_disk_bytes"])
+            if normalized_command in PB8_UPDATE_COMMANDS:
+                pb8_action = _pb8_remote_action_status(host_state, telemetry_fresh=telemetry_fresh)
+                if not pb8_action["allowed"]:
+                    raise ValueError(str(pb8_action["reason"]))
+                command_extra_vars["pb8_min_free_bytes"] = int(pb8_action["required_free_disk_bytes"])
             command_extra_vars.update(self._credential_playbook_vars(hostname, host_state))
             self.vpsmanager.update_vps(vps, debug=debug, extra_vars=command_extra_vars or None)
             task_log_name = vps._task_log_path(vps.command, COMMAND_VPS_UPDATE).name
@@ -5248,6 +5384,8 @@ class VPSManagerService:
             "server": self._build_remote_server_metrics(hostname, host_state),
             "v7": [],
             "v7_running": [],
+            "v8": [],
+            "v8_running": [],
             "multi": [],
             "single": [],
             "logfiles": [],
@@ -5255,6 +5393,7 @@ class VPSManagerService:
         cfg = self.monitor_config
         meta = self._host_meta(host_state)
         for monitor in (host_state or {}).get("instances") or []:
+            pb_version = "8" if str(monitor.get("p") or "7") == "8" else "7"
             metrics = monitor.get("m") or []
             swap_value = metrics[9] / 1024 / 1024 if len(metrics) == 10 else 0.0
             start_ts = _safe_int(monitor.get("st"))
@@ -5262,9 +5401,9 @@ class VPSManagerService:
             pnl_hist_total, pnls_hist_total = self._bot_pnl_total(hostname, bot_name)
             item = {
                 "server": hostname,
-                "version": meta.get("pb7v", "N/A"),
+                "version": meta.get("pb8v" if pb_version == "8" else "pb7v", "N/A"),
                 "name": bot_name,
-                "pb_version": "7",
+                "pb_version": pb_version,
                 "start_time": datetime.fromtimestamp(start_ts).strftime("%Y-%m-%d %H:%M:%S") if start_ts else "",
                 "memory_mb": round(_safe_float(metrics[0]) / 1024 / 1024, 2) if metrics else 0.0,
                 "swap_mb": round(swap_value, 2),
@@ -5288,8 +5427,8 @@ class VPSManagerService:
                 "errors": _metric_level(item["errors_today"], cfg.error_warning_v7, cfg.error_error_v7),
                 "tracebacks": _metric_level(item["tracebacks_today"], cfg.traceback_warning_v7, cfg.traceback_error_v7),
             }
-            payload["v7"].append(item)
-            if item["name"]:
+            payload["v8" if pb_version == "8" else "v7"].append(item)
+            if item["name"] and pb_version == "7":
                 payload["logfiles"].append(f"run_v7/{item['name']}/passivbot.log")
 
         existing_v7_names = {item["name"] for item in payload["v7"] if item.get("name")}
@@ -5297,7 +5436,34 @@ class VPSManagerService:
         for item in payload["v7_running"]:
             if item.get("name"):
                 payload["logfiles"].append(f"run_v7/{item['name']}/passivbot.log")
+        existing_v8_names = {item["name"] for item in payload["v8"] if item.get("name")}
+        payload["v8_running"] = self._build_running_v8_payload_from_telemetry(host_state, existing_v8_names)
         return payload
+
+    def _build_running_v8_payload_from_telemetry(self, host_state: dict[str, Any],
+                                                 existing_names: set[str] | None = None) -> list[dict[str, Any]]:
+        """Return running PB8 instances not represented by detailed process metrics."""
+        known_names = existing_names or set()
+        items: list[dict[str, Any]] = []
+        for instance in (host_state or {}).get("v8_instances") or []:
+            if not _truthy(instance.get("running")):
+                continue
+            name = str(instance.get("name") or "")
+            if not name or name in known_names:
+                continue
+            items.append(
+                {
+                    "name": name,
+                    "version": _safe_int(instance.get("cv")),
+                    "enabled_on": str(instance.get("eo") or ""),
+                    "blocked": _truthy(instance.get("blocked", False)),
+                    "blocked_reason": str(instance.get("blocked_reason") or ""),
+                    "cluster_gate": str(instance.get("cluster_gate") or ""),
+                    "pb_version": "8",
+                }
+            )
+        items.sort(key=lambda item: item["name"])
+        return items
 
     def _build_running_v7_payload_from_telemetry(self, host_state: dict[str, Any],
                                                  existing_names: set[str] | None = None) -> list[dict[str, Any]]:
@@ -5359,13 +5525,16 @@ class VPSManagerService:
         return list_remote_git_branch_commits(remote_url, branch_name, limit=int(limit))
 
     def run_master_command(self, *, command: str, command_text: str, debug: bool = False, sudo_pw: str | None = None, extra_vars: dict[str, Any] | None = None) -> None:
-        if command == COMMAND_MASTER_UPDATE_PB8:
+        if command in {COMMAND_MASTER_UPDATE_PB8, COMMAND_MASTER_UPDATE_PBGUI_PB8}:
             if load_ini("main", "role").strip().lower() != "master":
                 raise ValueError("PB8 can only be installed or updated on a PBGui master.")
             if extra_vars:
                 raise ValueError("PB8 update does not accept custom playbook variables.")
             pb8_info = _pb8_runtime_info(configured_pb8dir(), configured_pb8venv())
-            command_text = "Update PB8" if pb8_info.get("installed") else "Install PB8"
+            if command == COMMAND_MASTER_UPDATE_PB8:
+                command_text = "Update PB8" if pb8_info.get("installed") else "Install PB8"
+            else:
+                command_text = "Update PBGui and PB8"
         self.vpsmanager.update_master(
             debug=debug,
             sudo_pw=sudo_pw,
@@ -5383,7 +5552,17 @@ class VPSManagerService:
             command_extra_vars = dict(extra_vars or {})
             monitor_state = self._get_monitor_state()
             host_state = self._get_host_telemetry(monitor_state, hostname)
-            if command == COMMAND_VPS_UPDATE_PB8:
+            if command in PB7_UPDATE_COMMANDS:
+                pb7_action = _pb7_remote_action_status(
+                    host_state,
+                    telemetry_fresh=self._host_telemetry_fresh(host_state),
+                )
+                if not pb7_action["allowed"]:
+                    raise ValueError(str(pb7_action["reason"]))
+                if command == COMMAND_VPS_UPDATE_PB7:
+                    command_text = "Update PB7" if pb7_action["installed"] else "Install PB7"
+                command_extra_vars["pb7_min_free_bytes"] = int(pb7_action["required_free_disk_bytes"])
+            if command in {COMMAND_VPS_UPDATE_PB8, COMMAND_VPS_UPDATE_PBGUI_PB8}:
                 if extra_vars:
                     raise ValueError("PB8 update does not accept custom playbook variables.")
                 telemetry_fresh = self._host_telemetry_fresh(host_state)
@@ -5391,10 +5570,13 @@ class VPSManagerService:
                 if not pb8_action["allowed"]:
                     raise ValueError(str(pb8_action["reason"]))
                 host_meta = self._host_meta(host_state)
-                command_text = "Update PB8" if bool(host_meta.get("pb8ready")) else "Install PB8"
-                command_extra_vars["pb8_min_free_bytes"] = PB8_MIN_FREE_DISK_BYTES
+                if command == COMMAND_VPS_UPDATE_PB8:
+                    command_text = "Update PB8" if bool(host_meta.get("pb8ready")) else "Install PB8"
+                else:
+                    command_text = "Update PBGui and PB8"
+                command_extra_vars["pb8_min_free_bytes"] = int(pb8_action["required_free_disk_bytes"])
             command_extra_vars.update(self._credential_playbook_vars(hostname, host_state))
-            if command in {COMMAND_VPS_UPDATE_PBGUI, COMMAND_VPS_UPDATE_PB}:
+            if command in {COMMAND_VPS_UPDATE_PBGUI, COMMAND_VPS_UPDATE_PB, COMMAND_VPS_UPDATE_PBGUI_PB8}:
                 self._sync_vps_config_from_host_meta(vps, host_state)
                 host_meta = self._host_meta(host_state)
                 if str(host_meta.get("role") or "").strip().lower() == "master":
@@ -5402,7 +5584,10 @@ class VPSManagerService:
                         str(getattr(vps, "remote_pbgui_dir", "") or ""),
                         str(getattr(vps, "user", "") or ""),
                     )
-                    command = "master-update-pb" if command == COMMAND_VPS_UPDATE_PB else "master-update-pbgui"
+                    command = {
+                        COMMAND_VPS_UPDATE_PB: "master-update-pb",
+                        COMMAND_VPS_UPDATE_PBGUI_PB8: COMMAND_MASTER_UPDATE_PBGUI_PB8,
+                    }.get(command, "master-update-pbgui")
                     command_extra_vars.update({
                         "target_hosts": hostname,
                         "pbgdir": f"{install_dir}/pbgui",
@@ -6960,6 +7145,8 @@ done"""
                 [hostname],
                 accept_unknown_host=bool(form.get("accept_unknown_host")),
                 expected_fingerprint=str(form.get("accepted_host_key_fingerprint") or ""),
+                replace_existing=bool(form.get("replace_existing_host_key")),
+                allow_mismatch_confirmation=True,
             )
             result["host_key"] = host_key
             if host_key.get("needs_confirmation"):

@@ -13,40 +13,40 @@ Sidebar-Aktionen:
 
 | Schaltfläche | Aktion |
 |--------|--------|
-| `:recycle:` | Alle Instanzen und Remote-Status neu laden |
-| **Add** | Neue leere Instanz erstellen |
-| **Activate ALL** | Aktivierung für alle Instanzen auf einmal anstoßen |
+| **Search / Status** | Gemeinsame Run-Tabelle filtern, ohne Instanzzustände zu ändern |
+| **Refresh** | Alle Instanzen und Remote-Status neu laden |
+| **Add Instance** | Neue leere Instanz erstellen |
+| **Backups** | V7-Config-Backups durchsuchen, filtern, laden oder löschen |
 
 Tabellenspalten:
 
 | Spalte | Beschreibung |
 |--------|-------------|
-| **P** | Globalen Panic Forced Mode für Long und Short setzen, Config speichern und nach Sicherheitsabfrage synchronisieren |
-| **G** | Globalen Graceful Stop Forced Mode für Long und Short setzen, Config speichern und nach Sicherheitsabfrage synchronisieren |
-| **T** | Globalen Take Profit Only Forced Mode für Long und Short setzen, Config speichern und nach Sicherheitsabfrage synchronisieren |
-| **Edit** | Instanz im Bearbeitungsformular öffnen |
-| **V8** | Genau diese V7-Run-Config mit PB8s offiziellem Migrator konvertieren und die neue Config in PBv8 Backtest öffnen |
+| **Name** | Stabiler Instanzname |
 | **User** | Der dieser Instanz zugewiesene API-Key-Benutzer |
 | **Enabled On** | VPS, auf dem der Bot läuft (`disabled` = nicht aktiviert) |
+| **Status** | Bestaetigter Synchronisations-/Runtime-Zustand; `collecting` bedeutet, dass noch keine exakte Beobachtung vorliegt |
+| **Cfg Ver / Run Ver** | Lokal gespeicherte Config-Version und vom laufenden Prozess bestaetigte Version |
 | **TWE** | Total Wallet Exposure — `L=` Long / `S=` Short |
-| **Version** | Lokal gespeicherte Config-Version |
-| **Remote** | Live-Status vom VPS (siehe Status-Icons unten) |
-| **Remote Version** | Derzeit auf dem VPS laufende Config-Version |
+| **Running On** | Hosts, die die exakte verwaltete Prozessidentitaet melden |
+| **Desired** | Cluster-Sollzustand, falls die Runtime einen veroeffentlicht; andernfalls `-` fuer V7 |
 | **Note** | Freitext-Notiz für eigene Zwecke |
-| **Delete** | Instanz löschen (nicht möglich während sie läuft) |
+| **Actions** | P/G/T Forced Modes, Edit, Balance Calculator, V8-Migration und Delete |
 
 Die Zeilenbuttons `P`, `G` und `T` schreiben PB7 `live.forced_mode_long` und `live.forced_mode_short` in `config.json`, erhöhen die Config-Version, erstellen ein Backup der vorherigen Config und synchronisieren die Änderung zum Ziel-Host. Es sind Passivbot-Forced-Mode-Aktionen, keine direkten Exchange-Orders.
 
 **V8** lässt die V7-Run-Config unverändert. PBGui entfernt vor dem Aufruf von PB8 ausschließlich eigene Metadaten und einen veralteten temporären Loader-Pfad. Meldet PB8 nicht unterstützte oder manuell zu prüfende Strategie-Felder, stoppt die Konvertierung und zeigt diese Felder an, statt eine lauffähige V8-Config zu veröffentlichen.
 
-**Remote-Status-Icons:**
+**Statuswerte:**
 
 | Icon | Bedeutung |
 |------|-----------|
-| ✅ Running … | Bot läuft auf dem erwarteten VPS mit der aktuellen Config-Version |
-| 🔄 Running … | Bot läuft, aber Config-Version weicht ab (Aktivierung erforderlich) |
-| 🔄 Activation required | Instanz ist einem VPS zugewiesen, aber noch nicht aktiviert |
-| ❌ | Instanz ist deaktiviert |
+| **synced** | Bot laeuft auf dem erwarteten VPS mit der aktuellen Config-Version |
+| **outdated** | Bot laeuft, aber die Config-Version weicht ab |
+| **sync needed** | Instanz ist zugewiesen, aber die aktuelle Version wurde noch nicht laufend bestaetigt |
+| **stop needed** | Trotz deaktivierter Instanz wird noch ein Prozess gemeldet |
+| **collecting** | Es liegt noch keine exakte Prozessbeobachtung vor |
+| **disabled** | Instanz ist deaktiviert und kein Prozess wird gemeldet |
 
 ---
 
@@ -77,9 +77,11 @@ Wichtige Einstellungen im Bearbeitungsformular:
 | **Logging level** | Passivbot-Selektor für die Log-Verbosity mit `warning`, `info`, `debug` und `trace` |
 | **Long / Short** | Bot-Parameter — Positionen, TWE, Entry/Close-Bereiche |
 | **JSON-Editoren** | Raw JSON, Long JSON, Short JSON, Import JSON und JSON-basierte Additional Parameters werden beim Tippen validiert; ungültiges JSON zeigt die genaue Zeile/Spalte und blockiert Speichern bis der Fehler behoben ist. Ältere in Run geladene Configs, einschließlich gepasteter Importe und Backtest→Run-Drafts, behalten außerdem die `neutralized`- / `review`-Markierungen im Long/Short-JSON |
+
+Das **User**-Feld im Import-Dialog ist durchsuchbar. Einen Teil des konfigurierten Exchange-User-Namens eingeben und den passenden Vorschlag waehlen; unbekannte freie Namen werden abgewiesen.
 | **Filters** | CoinMarketCap-basierter Symbol-Filter für diese Instanz |
 | **Approved / Ignored coins** | Die Approved-Coin-Picker verwenden jetzt direkt Passivbots kanonisches `all`-Verhalten. Der alte Schalter `empty_means_all_approved` wird nicht mehr angezeigt und beim Speichern auch nicht mehr zurückgeschrieben |
-| **Coin Overrides** | Coin-spezifische Parameterüberschreibungen (Bot-Parameter, Live-Modus, separate Config-Dateien) |
+| **Coin Overrides** | Coin-spezifische Parameterüberschreibungen (Bot-Parameter, Live-Modus, separate Config-Dateien). Erlaubte Inline-Parameter werden aus der installierten PB7-Runtime geladen; ein bereits geöffneter Editor aktualisiert sich nach Eintreffen der Metadaten und zeigt bei einem Ladefehler eine klare Meldung statt leerer Bereiche |
 | **Dynamic Ignore** | Vorschau der automatisch ignorierten Symbole basierend auf den Filter-Einstellungen |
 
 ### Dynamic Ignore und der CMC-Pool

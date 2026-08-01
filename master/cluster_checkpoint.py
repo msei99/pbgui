@@ -22,11 +22,13 @@ from master.cluster_state import (
     API_KEY_OPS,
     CLUSTER_POLICY_OPS,
     MEMBERSHIP_OPS,
+    PB8_OPS,
     V2_CREDENTIAL_OPS,
     V7_OPS,
     ClusterPaths,
     MembershipTrust,
     _apply_v7,
+    _apply_pb8,
     _credential_membership_fingerprint,
     _load_membership_trust,
     _mark_conflicts,
@@ -2229,17 +2231,27 @@ def materialize_checkpoint_tail(
     desired = base["desired_state"]
     instances = deepcopy(desired.get("instances") or {})
     tombstones = deepcopy(desired.get("tombstones") or {})
+    pb8_instances = deepcopy(desired.get("pb8_instances") or {})
+    pb8_tombstones = deepcopy(desired.get("pb8_tombstones") or {})
+    had_pb8_state = "pb8_instances" in desired or "pb8_tombstones" in desired
     parent_changes: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    pb8_parent_changes: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for instance, record in instances.items():
         for conflict in record.get("conflicts") or []:
             parent = str(conflict.get("parent_version") or "")
             if parent:
                 parent_changes.setdefault((str(instance), parent), []).append(dict(conflict))
+    for instance, record in pb8_instances.items():
+        for conflict in record.get("conflicts") or []:
+            parent = str(conflict.get("parent_version") or "")
+            if parent:
+                pb8_parent_changes.setdefault((str(instance), parent), []).append(dict(conflict))
     v2_tail: list[dict[str, Any]] = []
     policy_tail: list[dict[str, Any]] = []
     membership_changes = 0
     generated_at = int(desired.get("generated_at") or 0)
     api_keys = deepcopy(desired.get("api_keys")) if isinstance(desired.get("api_keys"), dict) else None
+    pb8_tail_seen = False
 
     for operation in operations:
         actor = str(operation.get("actor") or "")
@@ -2269,6 +2281,9 @@ def materialize_checkpoint_tail(
                 membership_changes += 1
         elif str(operation["op"]) in V7_OPS:
             _apply_v7(instances, tombstones, parent_changes, operation)
+        elif str(operation["op"]) in PB8_OPS:
+            _apply_pb8(pb8_instances, pb8_tombstones, pb8_parent_changes, operation)
+            pb8_tail_seen = True
         elif str(operation["op"]) in API_KEY_OPS:
             api_keys = {
                 "serial": int(operation["api_serial"]),
@@ -2286,6 +2301,7 @@ def materialize_checkpoint_tail(
         generated_at = max(generated_at, int(operation.get("created_at") or 0))
 
     _mark_conflicts(instances, parent_changes)
+    _mark_conflicts(pb8_instances, pb8_parent_changes)
     reducer = active["reducer_state"]
     v2_operations = [
         *(_json_copy(item) for item in reducer.get("v2_basis_operations") or []),
@@ -2299,6 +2315,13 @@ def materialize_checkpoint_tail(
     desired.update(v2_state)
     desired["instances"] = {key: instances[key] for key in sorted(instances)}
     desired["tombstones"] = {key: tombstones[key] for key in sorted(tombstones)}
+    if had_pb8_state or pb8_tail_seen:
+        desired["pb8_instances"] = {
+            key: pb8_instances[key] for key in sorted(pb8_instances)
+        }
+        desired["pb8_tombstones"] = {
+            key: pb8_tombstones[key] for key in sorted(pb8_tombstones)
+        }
     desired["generated_at"] = generated_at
     if api_keys is None:
         desired.pop("api_keys", None)

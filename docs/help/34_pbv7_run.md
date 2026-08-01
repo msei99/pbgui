@@ -13,40 +13,40 @@ Sidebar actions:
 
 | Button | Action |
 |--------|--------|
-| `:recycle:` | Reload all instances and remote status |
-| **Add** | Create a new blank instance |
-| **Activate ALL** | Push activation for every instance at once |
+| **Search / Status** | Filter the shared Run table without changing instance state |
+| **Refresh** | Reload all instances and remote status |
+| **Add Instance** | Create a new blank instance |
+| **Backups** | Browse, filter, load, or delete V7 config backups |
 
 Table columns:
 
 | Column | Description |
 |--------|-------------|
-| **P** | Set global Panic forced mode for long and short positions, save the config, and sync it after a safety confirmation |
-| **G** | Set global Graceful Stop forced mode for long and short positions, save the config, and sync it after a safety confirmation |
-| **T** | Set global Take Profit Only forced mode for long and short positions, save the config, and sync it after a safety confirmation |
-| **Edit** | Open the instance in the edit form |
-| **V8** | Convert this exact V7 run config with PB8's official migrator and open the new config in PBv8 Backtest |
+| **Name** | Stable instance name |
 | **User** | API-key user assigned to this instance |
 | **Enabled On** | VPS where the bot is deployed (`disabled` = not deployed) |
+| **Status** | Confirmed synchronization/runtime state; `collecting` means no exact observation is available yet |
+| **Cfg Ver / Run Ver** | Config version stored locally and the version confirmed by the running process |
 | **TWE** | Total Wallet Exposure — `L=` long / `S=` short |
-| **Version** | Config version stored locally |
-| **Remote** | Live running state pulled from the VPS (see status icons below) |
-| **Remote Version** | Config version currently running on the VPS |
+| **Running On** | Hosts reporting the exact managed process identity |
+| **Desired** | Cluster desired state when the runtime publishes one; otherwise `-` for V7 |
 | **Note** | Free-text note for your own reference |
-| **Delete** | Remove the instance (not allowed while running) |
+| **Actions** | P/G/T forced modes, Edit, Balance Calculator, V8 migration, and Delete |
 
 The `P`, `G`, and `T` row buttons write PB7 `live.forced_mode_long` and `live.forced_mode_short` in `config.json`, bump the instance config version, create a backup of the previous config, and sync the changed config to the target host. They are Passivbot forced-mode actions, not direct exchange orders.
 
 **V8** leaves the V7 run config unchanged. PBGui removes only its own metadata and stale temporary loader path before invoking PB8. If PB8 reports unsupported or manual-review strategy fields, conversion stops and shows those fields instead of publishing a runnable V8 config.
 
-**Remote status icons:**
+**Status values:**
 
 | Icon | Meaning |
 |------|---------|
-| ✅ Running … | Bot is running on the expected VPS with the current config version |
-| 🔄 Running … | Bot is running but config version differs (activation required) |
-| 🔄 Activation required | Instance is assigned to a VPS but not yet activated |
-| ❌ | Instance is disabled |
+| **synced** | Bot is running on the expected VPS with the current config version |
+| **outdated** | Bot is running but the config version differs |
+| **sync needed** | Instance is assigned but the current version is not confirmed running |
+| **stop needed** | A process is still reported although the instance is disabled |
+| **collecting** | No exact process observation is available yet |
+| **disabled** | Instance is disabled and no process is reported |
 
 ---
 
@@ -77,9 +77,11 @@ Key settings in the edit form:
 | **Logging level** | Passivbot logging verbosity selector with `warning`, `info`, `debug`, and `trace` |
 | **Long / Short** | Bot parameters — positions, TWE, entry/close ranges |
 | **JSON editors** | Raw JSON, Long JSON, Short JSON, Import JSON, and JSON-based Additional Parameters are validated while typing; invalid JSON shows the exact line/column and blocks Save until fixed. Older configs loaded into Run, including pasted imports and Backtest→Run drafts, also keep the `neutralized` / `review` markers in Long/Short JSON |
+
+The Import dialog's **User** field is searchable. Type part of a configured exchange-user name and select the matching suggestion; arbitrary unknown names are rejected.
 | **Filters** | CoinMarketCap-based symbol filter for this instance |
 | **Approved / Ignored coins** | The approved coin pickers now use Passivbot's canonical `all` handling directly. The old `empty_means_all_approved` toggle is no longer shown or written back on save |
-| **Coin Overrides** | Per-coin parameter overrides (bot params, live mode, separate config files) |
+| **Coin Overrides** | Per-coin parameter overrides (bot params, live mode, separate config files). Allowed inline parameters load from the installed PB7 runtime; an already open editor refreshes when metadata arrives and shows an explicit error instead of empty sections if loading fails |
 | **Dynamic Ignore** | Preview of symbols automatically ignored based on filter settings |
 
 ### Dynamic Ignore and the CMC pool

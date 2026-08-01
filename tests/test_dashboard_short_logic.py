@@ -641,6 +641,34 @@ def test_apply_panic_all_sets_global_long_and_short_modes():
     assert cfg["live"]["forced_mode_short"] == "p"
 
 
+def test_apply_pb8_panic_symbol_writes_referenced_override_file():
+    """PB8 per-symbol forced modes are stored in sparse override files."""
+    cfg = {"live": {}, "coin_overrides": {"DOGE": {"override_config_path": "DOGE.json"}}}
+    overrides = {"DOGE.json": {"bot": {"long": {"n_positions": 1}}}}
+
+    coin = dashboard._apply_panic_symbol(
+        cfg,
+        "DOGEUSDT",
+        "short",
+        runtime="v8",
+        override_configs=overrides,
+    )
+
+    assert coin == "DOGE"
+    assert overrides["DOGE.json"]["live"]["forced_mode_short"] == "panic"
+    assert "live" not in cfg["coin_overrides"]["DOGE"]
+
+
+def test_apply_pb8_panic_all_uses_canonical_mode_name():
+    """PB8 global panic uses the canonical long-form mode."""
+    cfg = {"live": {}}
+
+    dashboard._apply_panic_all(cfg, runtime="v8")
+
+    assert cfg["live"]["forced_mode_long"] == "panic"
+    assert cfg["live"]["forced_mode_short"] == "panic"
+
+
 def test_apply_graceful_stop_symbol_sets_selected_side_override():
     """Set per-symbol graceful stop on the selected side without global forced modes."""
     cfg = {"live": {}, "coin_overrides": {}}
@@ -694,7 +722,7 @@ def test_manage_position_panic_all_dry_run_does_not_save(monkeypatch, tmp_path):
     def fake_find_instance(user):
         """Return a mutable instance config for the dry-run request."""
         assert user == "alice"
-        return "alice_instance", config_path, cfg
+        return "v7", "alice_instance", config_path, cfg, {}
 
     async def fake_save(*args, **kwargs):
         """Fail the test if dry-run reaches the save/sync path."""
@@ -747,6 +775,7 @@ def test_dashboard_forced_mode_waits_for_immediate_cluster_materialization(monke
     assert result == {
         "name": "panic-bot",
         "version": 8,
+        "runtime": "v7",
         "sync": {"ok": True, "hostname": "manibot51", "version": "8"},
     }
     assert calls == [
@@ -755,6 +784,41 @@ def test_dashboard_forced_mode_waits_for_immediate_cluster_materialization(monke
         ("record", "panic-bot", str(config_path.parent), 8, 7),
         ("sync", "panic-bot", 8),
     ]
+
+
+def test_dashboard_pb8_forced_mode_uses_validated_bundle_save(monkeypatch, tmp_path):
+    """PB8 forced modes use the PB8 optimistic save and Cluster operation path."""
+    from api import v8_instances
+
+    config_path = tmp_path / "run_v8" / "alice" / "config.json"
+    cfg = {"live": {"user": "alice"}, "pbgui": {"version": 12}}
+    overrides = {"DOGE.json": {"live": {"forced_mode_long": "panic"}}}
+    calls = []
+
+    async def save(name, body, create_only, session):
+        calls.append((name, body, create_only, session))
+        return {"version": 13, "operation": "UPSERT_PB8_CONFIG", "op_id": "op-13"}
+
+    monkeypatch.setattr(v8_instances, "save_v8_instance_config", save)
+
+    result = asyncio.run(
+        dashboard._save_dashboard_panic_config(
+            "alice",
+            config_path,
+            cfg,
+            runtime="v8",
+            override_configs=overrides,
+        )
+    )
+
+    assert result == {
+        "name": "alice",
+        "version": 13,
+        "runtime": "v8",
+        "sync": {"operation": "UPSERT_PB8_CONFIG", "op_id": "op-13"},
+    }
+    assert calls[0][1]["expected_version"] == 12
+    assert calls[0][1]["override_configs"] == overrides
 
 
 def test_manage_position_graceful_stop_all_dry_run_does_not_save(monkeypatch, tmp_path):
@@ -766,7 +830,7 @@ def test_manage_position_graceful_stop_all_dry_run_does_not_save(monkeypatch, tm
     def fake_find_instance(user):
         """Return a mutable instance config for the dry-run request."""
         assert user == "alice"
-        return "alice_instance", config_path, cfg
+        return "v7", "alice_instance", config_path, cfg, {}
 
     async def fake_save(*args, **kwargs):
         """Fail the test if dry-run reaches the save/sync path."""

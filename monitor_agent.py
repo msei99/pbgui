@@ -216,21 +216,24 @@ def _local_pbname(cfg: configparser.ConfigParser | None = None) -> str:
 
 
 def _pbrun_required_for_host(pbname: str) -> bool:
-    """Return whether this host has local V7 run configs assigned."""
+    """Return whether this host has local V7 or V8 run configs assigned."""
 
     target = str(pbname or "").strip()
-    run_root = PBGDIR / "data" / "run_v7"
-    if not target or not run_root.is_dir():
+    if not target:
         return False
-    for cfg_path in run_root.glob("*/config.json"):
-        try:
-            payload = json.loads(cfg_path.read_text(encoding="utf-8"))
-        except Exception:
+    for runtime, run_root in (("pb7", PBGDIR / "data" / "run_v7"), ("pb8", PBGDIR / "data" / "run_v8")):
+        if not run_root.is_dir():
             continue
-        pbgui = payload.get("pbgui") if isinstance(payload, dict) else None
-        enabled_on = str((pbgui or {}).get("enabled_on") or "").strip()
-        if enabled_on and enabled_on != "disabled" and enabled_on == target:
-            return True
+        for cfg_path in run_root.glob("*/config.json"):
+            try:
+                payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            pbgui = payload.get("pbgui") if isinstance(payload, dict) else None
+            enabled_on = str((pbgui or {}).get("enabled_on") or "").strip()
+            configured_runtime = str((pbgui or {}).get("runtime") or runtime).strip().lower()
+            if enabled_on == target and configured_runtime == runtime:
+                return True
     return False
 
 
@@ -709,27 +712,44 @@ def _trim_history(samples: deque[tuple[float, Any]], now: float) -> None:
         samples.popleft()
 
 
-def _bot_processes(previous: dict[int, tuple[int, float]], history: dict[int, deque[tuple[float, int]]], names: dict[int, str]) -> list[dict[str, Any]]:
+def _bot_processes(previous: dict[int, tuple[int, float]], history: dict[int, deque[tuple[float, int]]], names: dict[int, tuple[int, str, str]]) -> list[dict[str, Any]]:
     """Collect live bot CPU and memory values from /proc."""
 
     now = time.time()
     bots: list[dict[str, Any]] = []
     alive: set[int] = set()
+    cfg = _read_ini()
+    pb7_main = (_pb7_dir() / "src" / "main.py").resolve()
+    pb8_dir_raw = str(cfg.get("main", "pb8dir", fallback="") or "").strip()
+    pb8_venv_raw = str(cfg.get("main", "pb8venv", fallback="") or "").strip()
+    pb8_dir = Path(pb8_dir_raw).expanduser().resolve() if pb8_dir_raw else None
+    pb8_python = Path(pb8_venv_raw).expanduser().resolve() if pb8_venv_raw else None
+    pb8_cli = pb8_python.parent / "passivbot" if pb8_python else None
     for proc_dir in Path("/proc").iterdir():
         if not proc_dir.name.isdigit():
             continue
         pid = int(proc_dir.name)
         try:
-            raw_cmdline = (proc_dir / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", errors="ignore")
+            argv = [part.decode("utf-8", errors="ignore") for part in (proc_dir / "cmdline").read_bytes().split(b"\x00") if part]
         except Exception:
             continue
-        if "main.py" not in raw_cmdline or "config_run.json" not in raw_cmdline:
+        identity = _bot_identity_from_process(
+            proc_dir, argv, pb7_main=pb7_main, pb8_dir=pb8_dir,
+            pb8_python=pb8_python, pb8_cli=pb8_cli,
+        )
+        if not identity:
             continue
         try:
             stat_parts = (proc_dir / "stat").read_text(encoding="utf-8").split()
             ticks = int(stat_parts[13]) + int(stat_parts[14])
+            start_ticks = int(stat_parts[21])
         except Exception:
             continue
+        process_identity = (start_ticks, *identity)
+        if names.get(pid) != process_identity:
+            previous.pop(pid, None)
+            history.pop(pid, None)
+        names[pid] = process_identity
         alive.add(pid)
         previous_sample = previous.get(pid)
         cpu = 0.0
@@ -750,12 +770,11 @@ def _bot_processes(previous: dict[int, tuple[int, float]], history: dict[int, de
                     cpu_60s = round((ticks - sample_ticks) / (elapsed * CPU_TICKS_PER_SECOND) * 100, 1)
                     cpu_60s_window = round(elapsed, 1)
                 break
-        name = names.get(pid) or _bot_name_from_cmdline(raw_cmdline)
-        if name:
-            names[pid] = name
+        if identity:
+            name, runtime = identity
             rss_mb, swap_mb = _process_memory_mb(proc_dir)
-            bots.append({"name": name, "cpu": cpu, "cpu_60s": cpu_60s, "cpu_60s_window": cpu_60s_window, "rss_mb": rss_mb, "swap_mb": swap_mb})
-    for pid in list(previous):
+            bots.append({"name": name, "p": runtime, "cpu": cpu, "cpu_60s": cpu_60s, "cpu_60s_window": cpu_60s_window, "rss_mb": rss_mb, "swap_mb": swap_mb})
+    for pid in set(previous) | set(history) | set(names):
         if pid not in alive:
             previous.pop(pid, None)
             history.pop(pid, None)
@@ -763,13 +782,44 @@ def _bot_processes(previous: dict[int, tuple[int, float]], history: dict[int, de
     return bots
 
 
-def _bot_name_from_cmdline(cmdline: str) -> str:
-    """Extract the bot name from a passivbot config path."""
+def _bot_identity_from_process(
+    proc_dir: Path,
+    argv: list[str],
+    *,
+    pb7_main: Path,
+    pb8_dir: Path | None,
+    pb8_python: Path | None,
+    pb8_cli: Path | None,
+) -> tuple[str, str] | None:
+    """Return an exact PBRun-managed ``(name, runtime)`` process identity."""
 
-    for part in cmdline.split():
-        if part.endswith("/config_run.json"):
-            return Path(part).parent.name
-    return ""
+    run_v7_root = (PBGDIR / "data" / "run_v7").resolve()
+    v7_configs = [Path(arg).resolve() for arg in argv if arg.endswith("/config_run.json")]
+    main_args = [Path(arg).resolve() for arg in argv if arg.endswith("main.py")]
+    if len(v7_configs) == 1 and pb7_main in main_args:
+        config_path = v7_configs[0]
+        if config_path.name == "config_run.json" and config_path.parent.parent == run_v7_root:
+            return config_path.parent.name, "7"
+
+    if not pb8_dir or not pb8_python or not pb8_cli:
+        return None
+    run_v8_root = (PBGDIR / "data" / "run_v8").resolve()
+    v8_configs = [Path(arg).resolve() for arg in argv if arg.endswith("/config.json")]
+    if len(v8_configs) != 1:
+        return None
+    config_path = v8_configs[0]
+    if config_path.name != "config.json" or config_path.parent.parent != run_v8_root:
+        return None
+    expected = [str(pb8_cli), "live", str(config_path), "--fail-on-stale-rust"]
+    normalized = [str(Path(argv[0]).resolve()), *argv[1:]] if argv else []
+    if normalized not in (expected, [str(pb8_python), *expected]):
+        return None
+    try:
+        if (proc_dir / "cwd").resolve() != pb8_dir:
+            return None
+    except OSError:
+        return None
+    return config_path.parent.name, "8"
 
 
 def _process_memory_mb(proc_dir: Path) -> tuple[float, float]:
@@ -842,7 +892,7 @@ def run() -> None:
     swap_history: deque[tuple[float, float]] = deque()
     bot_previous: dict[int, tuple[int, float]] = {}
     bot_history: dict[int, deque[tuple[float, int]]] = {}
-    bot_names: dict[int, str] = {}
+    bot_names: dict[int, tuple[int, str, str]] = {}
     previous_cpu = _read_cpu_times()
     last_status_write = 0.0
     last_rotate = 0.0
