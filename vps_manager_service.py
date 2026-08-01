@@ -43,7 +43,7 @@ from pb7_guard import PB7_PINNED_COMMIT
 from pb7_release import build_local_pb7_release_info, get_current_pb7_status, load_more_pb7_commits, read_local_pb7_version
 from pbgui_release import build_local_pbgui_release_info, load_more_pbgui_commits
 from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, load_ini_section, pb7dir as configured_pb7dir, pb8dir as configured_pb8dir, pb8venv as configured_pb8venv, save_ini, save_ini_section
-from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir, _register_vps_cluster_node, _strict_ssh_client, _validate_vps_hostname, strip_ansi
+from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir, _strict_ssh_client, _validate_vps_hostname, strip_ansi
 from vps_inventory_store import delete_inventory_path
 
 SERVICE = "VPSManagerApi"
@@ -3701,11 +3701,13 @@ class VPSManagerService:
                 continue
             if str(item.get("pbname") or item.get("hostname") or "").strip() != host:
                 continue
+            joined = item.get("state_replica", True) is not False
             return {
                 "ok": True,
                 "registered": True,
-                "action": "skip",
-                "reason": "VPS node already registered",
+                "joined": joined,
+                "action": "skip" if joined else "join",
+                "reason": "VPS node already joined" if joined else "VPS node is ready to join",
                 "node_id": str(item.get("node_id") or node_id or ""),
             }
         return {"ok": False, "registered": False, "action": "missing", "reason": "VPS host is not known to Cluster bootstrap."}
@@ -6800,15 +6802,26 @@ done"""
         self.vpsmanager.setup_vps(vps, debug=debug, extra_vars=extra_vars)
         return self._build_vps_progress(vps, include_logs=True)
 
-    def add_vps_to_cluster(self, hostname: str) -> dict[str, Any]:
-        """Register one successfully set up VPS as a local Cluster node candidate."""
+    async def add_vps_to_cluster(self, token: str, hostname: str) -> dict[str, Any]:
+        """Register, connect and fully join one successfully set up VPS."""
 
         vps = self._require_vps(hostname)
         if str(getattr(vps, "setup_status", "") or "") != "successful":
             raise ValueError("Run VPS setup successfully before adding this host to Cluster.")
-        result = _register_vps_cluster_node(str(vps.hostname or ""))
-        if result.get("ok") is False:
-            raise ValueError(str(result.get("error") or "Failed to add VPS to Cluster."))
+        from api import cluster
+
+        password = self._session_secret_value(token, str(vps.hostname or ""), "user_pw")
+        ssh_passwords = {str(vps.hostname or ""): password} if password else None
+        try:
+            result = await cluster.onboard_vps_cluster_node(
+                str(vps.hostname or ""),
+                ssh_passwords=ssh_passwords,
+            )
+        except Exception as exc:
+            detail = getattr(exc, "detail", None)
+            if detail:
+                raise ValueError(str(detail)) from exc
+            raise
         return {
             "hostname": str(vps.hostname or ""),
             "cluster": result,

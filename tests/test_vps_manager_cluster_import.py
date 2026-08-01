@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from pathlib import Path
+
+import pytest
 
 import vps_manager_core
 import vps_manager_service
@@ -125,20 +128,47 @@ def _write_successful_vps(service: VPSManagerService, hostname: str) -> vps_mana
     return vps
 
 
-def test_add_vps_to_cluster_records_only_selected_vps(monkeypatch, tmp_path: Path) -> None:
-    """VPS Manager can add one setup-complete VPS as a Cluster candidate."""
+def test_add_vps_to_cluster_completes_remote_join(monkeypatch, tmp_path: Path) -> None:
+    """VPS Manager fully configures and joins one setup-complete VPS."""
 
     service, _monitor_ini = _prepare_service(monkeypatch, tmp_path)
     _write_successful_vps(service, "new-runner")
+    calls: list[str] = []
 
-    result = service.add_vps_to_cluster("new-runner")
+    async def fake_repair(node, identity, nodes, *, ssh_passwords=None):
+        calls.append("repair")
+        assert node["sync_mode"] == "reachable"
+        assert node["ssh_host"] == "203.0.113.40"
+        return {"ok": True, "node_id": node["node_id"]}
+
+    async def fake_probe(node, identity):
+        calls.append("probe")
+        return {"ok": False, "status": "not_initialized", "node_id": node["node_id"]}
+
+    async def fake_join(node, identity):
+        calls.append("join")
+        return {
+            "ok": True,
+            "node_id": node["node_id"],
+            "completion": {"ok": True, "pbrun_start": {"attempted": True, "started": True}},
+        }
+
+    monkeypatch.setattr(cluster, "_repair_node_cluster_ssh", fake_repair)
+    monkeypatch.setattr(cluster, "_probe_cluster_node", fake_probe)
+    monkeypatch.setattr(cluster, "_run_remote_join", fake_join)
+    monkeypatch.setattr(cluster, "_request_pbcluster_sync", lambda root: calls.append("sync"))
+
+    result = asyncio.run(service.add_vps_to_cluster("session", "new-runner"))
     materialized = rebuild_materialized_state(default_cluster_root(tmp_path))
     nodes = materialized["cluster_nodes"]["nodes"]
     new_node = next(node for node in nodes.values() if node.get("pbname") == "new-runner")
 
-    assert result["cluster"]["changed"] is True
+    assert result["cluster"]["ok"] is True
     assert result["cluster_node"]["registered"] is True
-    assert new_node["sync_mode"] == "disabled"
+    assert result["cluster_node"]["action"] == "join"
+    assert result["cluster"]["node_id"] == new_node["node_id"]
+    assert calls == ["repair", "probe", "join", "sync"]
+    assert new_node["sync_mode"] == "reachable"
     assert new_node["ssh_host"] == "203.0.113.40"
     assert new_node["ssh_user"] == "bot"
     assert new_node["ssh_port"] == 2222
@@ -155,7 +185,31 @@ def test_successful_setup_finished_auto_adds_vps_to_cluster(monkeypatch, tmp_pat
     nodes = materialized["cluster_nodes"]["nodes"]
 
     assert any(node.get("pbname") == "auto-runner" for node in nodes.values())
+    assert service._cluster_node_status("auto-runner")["action"] == "join"
     assert monitor_ini["enabled_hosts"] == "auto-runner"
+
+
+def test_add_vps_to_cluster_rejects_conflicting_remote_identity(monkeypatch, tmp_path: Path) -> None:
+    """One-click onboarding never overwrites a foreign remote identity."""
+
+    service, _monitor_ini = _prepare_service(monkeypatch, tmp_path)
+    _write_successful_vps(service, "foreign-runner")
+
+    async def fake_repair(node, identity, nodes, *, ssh_passwords=None):
+        return {"ok": True, "node_id": node["node_id"]}
+
+    async def fake_probe(node, identity):
+        return {
+            "ok": False,
+            "status": "foreign_cluster",
+            "remote_cluster_id": "pbgui-cluster-00000000-0000-4000-8000-000000000099",
+        }
+
+    monkeypatch.setattr(cluster, "_repair_node_cluster_ssh", fake_repair)
+    monkeypatch.setattr(cluster, "_probe_cluster_node", fake_probe)
+
+    with pytest.raises(ValueError, match="Cannot join foreign-runner: foreign_cluster"):
+        asyncio.run(service.add_vps_to_cluster("session", "foreign-runner"))
 
 
 def test_reinstalled_hostname_gets_new_node_id_after_old_node_was_removed(monkeypatch, tmp_path: Path) -> None:

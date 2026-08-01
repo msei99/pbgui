@@ -7547,7 +7547,7 @@
         }
       } else if (cmd === 'add_vps_to_cluster') {
         const hostname = String(((msg.data || {}).hostname) || store.hostname || '');
-        toast('VPS added to Cluster. Run Join from Cluster Nodes when ready.', 'success');
+        toast('VPS joined and synchronized with Cluster.', 'success');
         if (hostname) {
           scheduleVpsDetailFetch(hostname);
           needsForceView = true;
@@ -9525,8 +9525,9 @@
       if (!target) return;
       openConfirmModal(
         'Add to Cluster',
-        'Add VPS ' + target + ' as a local Cluster node candidate? This only writes local Cluster metadata. It does not SSH to the VPS, join the remote node, stop services or change bot configs.',
+        'Add VPS ' + target + ' to this Cluster? PBGui will configure its stored SSH connection, install restricted Cluster keys, verify that no conflicting identity exists, join and synchronize the node, materialize assigned configs and API keys, and safely restart PBRun.',
         function () {
+          toast('Adding ' + target + ' to Cluster...', 'info');
           send({ cmd: 'add_vps_to_cluster', hostname: target });
         }
       );

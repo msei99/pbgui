@@ -370,15 +370,16 @@ class TestVpsManagerFrontendLogic:
         assert "levelTag('error', 'Changed')" in table_source
         assert "levelTag('error', 'Failed')" in table_source
 
-    def test_vps_manager_add_to_cluster_is_local_metadata_only(self) -> None:
-        """VPS Manager exposes Add to Cluster without remote side effects."""
+    def test_vps_manager_add_to_cluster_runs_complete_join(self) -> None:
+        """VPS Manager exposes the complete guarded Cluster onboarding flow."""
 
         source = HTML_PATH.read_text(encoding="utf-8")
 
         assert "function addVpsToCluster(hostname)" in source
         assert "send({ cmd: 'add_vps_to_cluster', hostname: target })" in source
-        assert "This only writes local Cluster metadata" in source
-        assert "It does not SSH to the VPS, join the remote node, stop services or change bot configs." in source
+        assert "install restricted Cluster keys" in source
+        assert "verify that no conflicting identity exists" in source
+        assert "VPS joined and synchronized with Cluster." in source
         assert "${showClusterNodeBtn ? `<button class='${clusterNodeBtnClass}'" in source
 
     def test_add_vps_initialize_requires_green_preflight_checks(self) -> None:

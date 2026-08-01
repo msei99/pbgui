@@ -321,22 +321,15 @@ Der Node-Sync-Modus steuert, welche Nodes PBCluster kontaktieren darf:
 
 Der lokale Master erkennt sein eigenes Remote PBGui Dir aus dem laufenden Checkout und speichert es, wenn möglich, relativ zum Home-Verzeichnis. Fehlende lokale SSH-Host-/User-Metadaten werden außerdem aus lokalem Netzwerk und Login-User ergänzt. Prüfe Remote-Node-Metadaten nach Join oder Import trotzdem, besonders wenn eine private VPN-Adresse statt einer öffentlichen Adresse verwendet werden soll.
 
-VPS-Nodes sind nach Bootstrap oder Import häufig zunächst **Disabled**. Nutze dann zuerst **Edit**, stelle den Node auf **Reachable via SSH**, prüfe SSH Host/User/Port und Remote PBGui Dir, speichere und führe danach **Repair SSH** aus. Klicke anschließend **Probe Active Nodes**. Der **Join & Sync**-Button erscheint erst, wenn PBGui einen aktuellen Probe-Status hat und der erreichbare Node **No Identity** meldet.
+VPS-Nodes sind nach Bootstrap oder Import haeufig zunaechst **Disabled**-Kandidaten. Nutze fuer Hosts aus dem VPS Manager **Add to Cluster** auf der VPS-Detailseite: Die Aktion fuehrt Reachable-Konfiguration, SSH-Repair, Identity-Probe, Join und abschliessende Synchronisation automatisch aus. Die einzelnen Aktionen **Edit**, **Repair SSH**, **Probe Active Nodes** und **Join & Sync** sind nur fuer Diagnose, eigene Topologieaenderungen oder Recovery noetig.
 
 Wenn ein Node **No Identity** zeigt, schreibt **Join & Sync** die Remote-Cluster-Identität und überschreibt keine abweichende bestehende Identität. Danach pusht PBGui fehlende lokale Operationen, baut den Remote-Cluster-State neu, materialisiert zugewiesene V7-Configs und API-Keys und startet PBRun wieder, wenn der Remote-State aktuell ist. Auf VPS-Runnern stoppt Join vorher PBRun, damit laufende Bots während der Übergangsphase nicht bewertet werden; passivbot-Prozesse bleiben unangetastet. Auf Master-Nodes wird PBRun nicht gestoppt oder gestartet.
 
 Nach dem Eintreffen von Protocol-v2-Operationen materialisiert PBCluster zusätzlich zulässige versiegelte Credentials in den owner-only Vault. Die Materialisierung von Exchange-`api-keys.json` und versiegelten Credentials sind getrennte Schritte.
 
-Um einen neu eingerichteten VPS-Runner einem bestehenden Cluster hinzuzufügen, nutze diese Reihenfolge:
+Um einen neu eingerichteten VPS-Runner einem bestehenden Cluster hinzuzufuegen, lege die VPS unter **System -> VPS Manager** an, richte sie ein und klicke danach auf ihrer Detailseite **Add to Cluster**. PBGui nutzt SSH Host, User, Port und Remote PBGui Dir aus dem VPS Manager, installiert die eingeschraenkten Keys, blockiert fremde oder abweichende Identitaeten, joint den Node und schliesst Synchronisation und Materialisierung ab. Fuer diesen normalen Ablauf sind keine Aktionen auf der Cluster-Sync-Seite erforderlich.
 
-1. VPS in **System -> VPS Manager** anlegen und einrichten. Nach erfolgreichem Setup registriert PBGui die VPS automatisch lokal als Cluster-Node-Kandidat. Wenn der Host vor dieser Automatik eingerichtet wurde, öffne die VPS im VPS Manager und klicke **Add to Cluster**.
-2. **System -> Cluster Sync -> Nodes** öffnen und die neue VPS-Zeile suchen.
-3. In der neuen VPS-Zeile **Edit** nutzen, **Sync Mode** auf **Reachable via SSH** stellen, SSH Host/User/Port und Remote PBGui Dir prüfen und speichern.
-4. **Probe Active Nodes** klicken. Der Node sollte erreichbar werden und vor dem Join **No Identity** melden.
-5. In der VPS-Zeile **Join** / **Join & Sync** klicken. Dadurch schreibt PBGui die Remote-Cluster-Identität und synchronisiert/materialisiert den State auf der VPS.
-6. Den lokalen Master-Node editieren, der aktiv mit dieser VPS synchronisieren soll, und die neue VPS in dessen erlaubte Sync Peers aufnehmen. Ohne diesen Schritt kann die VPS bereits gejoint sein, aber die Spalte **Login Key** zeigt beim Master weiter **Skipped**, weil PBCluster von diesem Master aus keinen Login zu diesem Node versucht.
-7. In der neuen VPS-Zeile **Install Key** ausführen oder nach mehreren neuen Nodes bzw. Peer-Listen-Änderungen **Repair All SSH** nutzen.
-8. Danach erneut **Probe Active Nodes** klicken und warten, bis PBCluster einen Sync-Durchlauf gemacht hat. **Login Key** sollte von **Skipped** oder **Checking** auf **Installed** wechseln, sobald der lokale Master sich erfolgreich mit dem dedizierten Cluster-Sync-Key eingeloggt hat.
+Oeffne **System -> Cluster Sync -> Nodes** danach nur zur Statuskontrolle oder fuer eine eigene Peer-Topologie. Ein VPS-Runner muss nicht manuell zur Peer-Allowlist eines Masters hinzugefuegt werden, damit der Master zu dieser erreichbaren VPS pushen kann, solange die Outbound-Peer-Liste des Masters nicht explizit eingeschraenkt ist.
 
 Die Spalte **Login Key** beschreibt den regulären PBCluster-Sync-Login, nicht das Ergebnis von Join. **Skipped** bedeutet, dass der Node aktuell nicht in der lokalen Outbound-Sync-Topologie liegt, zum Beispiel weil die Sync-Peer-Liste des lokalen Masters diese VPS noch nicht enthält. Es bedeutet nicht, dass Join fehlgeschlagen ist.
 

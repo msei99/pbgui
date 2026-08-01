@@ -322,8 +322,8 @@ async def ws_vps_manager(websocket: WebSocket):
                     )
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "add_vps_to_cluster":
-                    data = await asyncio.to_thread(
-                        service.add_vps_to_cluster,
+                    data = await service.add_vps_to_cluster(
+                        token,
                         str(msg.get("hostname") or ""),
                     )
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})

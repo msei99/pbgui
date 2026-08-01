@@ -47,15 +47,9 @@ Bevor das Credential-Cleanup beginnt, muessen alle aktiven State-Replica-Nodes P
 
 ### 5. VPS-Nodes joinen
 
-1. Öffne die VPS in **System -> VPS Manager**. Wenn sie nach dem Setup nicht automatisch registriert wurde, klicke **Add to Cluster**. Das schreibt nur lokale Cluster-Metadaten; es verbindet nicht per SSH zur VPS und joint sie nicht.
-2. Öffne **System -> Cluster Sync -> Nodes**.
-3. Öffne beim VPS-Node **Edit**, stelle **Sync Mode** auf **Reachable via SSH**, prüfe SSH Host/User/Port und **Remote PBGui Dir**, und speichere.
-4. Klicke **Probe Active Nodes** und warte, bis der Node erreichbar ist und **No Identity** meldet.
-5. Nutze **Join**. Join schreibt die Cluster-Identität, synchronisiert Cluster-Daten, materialisiert V7-Configs/API-Keys und startet PBRun danach wieder, wenn alles passt. Bei VPS-Runnern stoppt Join PBRun währenddessen automatisch; laufende passivbot-Prozesse bleiben unangetastet.
-6. Editiere den lokalen Master-Node, der mit dieser VPS synchronisieren soll, und füge die VPS zu dessen Sync Peers hinzu.
-7. Nutze beim VPS-Node **Install Key** oder nach mehreren aktualisierten Nodes bzw. Peer-Listen-Änderungen **Repair All SSH**.
-8. Wenn PBGui während Key-Installation oder Repair ein SSH-Passwort abfragt, gib das Passwort für den genannten Node ein. Es wird nur für diesen Request verwendet und nicht gespeichert.
-9. Klicke erneut **Probe Active Nodes**. **Login Key** sollte nach einem PBCluster-Sync-Durchlauf **Installed** anzeigen. **Skipped** bedeutet, dass der Node noch nicht in der Outbound-Sync-Peer-Liste des lokalen Masters liegt; es bedeutet nicht, dass Join fehlgeschlagen ist.
+1. Oeffne die erfolgreich eingerichtete VPS unter **System -> VPS Manager** und klicke **Add to Cluster**.
+2. PBGui konfiguriert den Node automatisch mit den gespeicherten VPS-SSH-Daten als reachable, repariert die eingeschraenkten Cluster-Keys, prueft die Remote-Seite auf eine kollidierende Identitaet, joint sie, synchronisiert Cluster-Daten, materialisiert Configs/API-Keys und startet PBRun wieder, sobald alles aktuell ist. Laufende passivbot-Prozesse bleiben unangetastet.
+3. Nutze **System -> Cluster Sync -> Nodes** nur fuer Statuskontrolle, eigene Peer-Topologie oder Recovery. Die einzelnen Aktionen **Edit**, **Repair SSH**, **Probe Active Nodes** und **Join & Sync** sind fuer normales VPS-Onboarding nicht erforderlich.
 
 Beim Join müssen vorhandene Credential-Generationen außerdem für die neue Empfängermenge gerewrappt werden. Der Node wird erst nach Materialisierung der exakten Generation und ACK credential-active. CMC wird auf Mastern und VPS-Runnern materialisiert; TradFi nur auf Mastern und bleibt auf VPS-Relays undurchsichtig.
 

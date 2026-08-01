@@ -47,15 +47,9 @@ Before credential cleanup can start, every active state-replica node must report
 
 ### 5. Join VPS nodes
 
-1. Open the VPS in **System -> VPS Manager**. If it was not registered automatically after setup, click **Add to Cluster**. This writes local Cluster metadata only; it does not SSH to the VPS or join it.
-2. Open **System -> Cluster Sync -> Nodes**.
-3. Open **Edit** for the VPS node, set **Sync Mode** to **Reachable via SSH**, verify SSH host/user/port and **Remote PBGui Dir**, then save.
-4. Click **Probe Active Nodes** and wait until the node is reachable and reports **No Identity**.
-5. Use **Join**. Join writes the Cluster identity, syncs Cluster data, materializes V7 configs/API keys and starts PBRun again when everything is current. For VPS runners, Join stops PBRun automatically during this step; running passivbot processes are left alone.
-6. Edit the local master node that should sync with this VPS and add the VPS to that master's sync peers.
-7. Use **Install Key** on the VPS node, or **Repair All SSH** after updating several nodes or changing peer allowlists across the cluster.
-8. If PBGui prompts for an SSH password during key installation or repair, enter the password for the named node. It is used only for that request and is not saved.
-9. Click **Probe Active Nodes** again. **Login Key** should become **Installed** after PBCluster has synced once. **Skipped** means the node is not in the local master's outbound sync peer list yet; it does not mean Join failed.
+1. Open the successfully set up VPS in **System -> VPS Manager** and click **Add to Cluster**.
+2. PBGui automatically configures the node as reachable using the stored VPS SSH metadata, repairs restricted Cluster keys, verifies that the remote has no conflicting identity, joins it, synchronizes Cluster data, materializes configs/API keys and starts PBRun again when everything is current. Running passivbot processes are left alone.
+3. Use **System -> Cluster Sync -> Nodes** only for status checks, custom peer topology or recovery. The separate **Edit**, **Repair SSH**, **Probe Active Nodes** and **Join & Sync** actions are not required for normal VPS onboarding.
 
 Joining a node also requires existing credential generations to be rewrapped for the new recipient set. The node becomes credential-active only after exact-generation materialization and acknowledgement. CMC is materialized on masters and VPS runners; TradFi is materialized only on masters and stays opaque on VPS relays.
 

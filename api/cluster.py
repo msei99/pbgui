@@ -89,6 +89,7 @@ _SELF_JOIN_JOBS: dict[str, dict[str, Any]] = {}
 _REPAIR_ALL_SSH_JOBS: dict[str, dict[str, Any]] = {}
 _BACKGROUND_JOBS: dict[asyncio.Task, tuple[str, str]] = {}
 _CREDENTIAL_REMOTE_OPERATION_LOCK = asyncio.Lock()
+_VPS_ONBOARD_LOCK = asyncio.Lock()
 _REMOTE_PUSH_JOB_TTL_SECONDS = 3600
 _REMOTE_PUSH_ACTIVE_STATES = frozenset({"queued", "running"})
 _SELF_JOIN_ACTIVE_STATES = frozenset({"queued", "running"})
@@ -5686,6 +5687,106 @@ def apply_bootstrap_node(hostname: str, session: SessionToken = Depends(require_
     except Exception as exc:
         _log(SERVICE, f"Failed to apply cluster bootstrap node for {target}: {exc}", level="ERROR")
         raise HTTPException(status_code=500, detail="Failed to apply bootstrap node") from exc
+
+
+async def onboard_vps_cluster_node(hostname: str, *, ssh_passwords: dict[str, str] | None = None) -> dict[str, Any]:
+    """Register, connect and fully join one VPS Manager host to this cluster."""
+
+    target = str(hostname or "").strip()
+    _validate_instance_name(target)
+    async with _VPS_ONBOARD_LOCK:
+        bootstrap = apply_bootstrap_node(target, session=None)
+        snapshot = _load_cluster_snapshot()
+        nodes = _node_list(snapshot["cluster_nodes"])
+        node = next(
+            (
+                item
+                for item in nodes
+                if str(item.get("pbname") or item.get("hostname") or "").strip() == target
+            ),
+            None,
+        )
+        if not node:
+            raise HTTPException(status_code=404, detail="Cluster node was not created")
+
+        if normalize_node_sync_mode(node) != "reachable":
+            settings = _validate_node_sync_settings({
+                "sync_mode": "reachable",
+                "remote_pbgui_dir": node.get("remote_pbgui_dir"),
+                "ssh_host": node.get("ssh_host"),
+                "ssh_user": node.get("ssh_user"),
+                "ssh_port": node.get("ssh_port", 22),
+                "sync_peers": node.get("sync_peers", []),
+            })
+            _validate_sync_peers_for_node(settings, node, nodes)
+            append_operation(
+                _cluster_root(),
+                "UPDATE_NODE",
+                {"node_id": str(node.get("node_id") or ""), **settings},
+            )
+            rebuild_materialized_state(_cluster_root())
+            snapshot = _load_cluster_snapshot()
+            nodes = _node_list(snapshot["cluster_nodes"])
+            node = _node_for_id(nodes, str(node.get("node_id") or ""))
+            if not node:
+                raise HTTPException(status_code=404, detail="Cluster node disappeared while enabling SSH")
+
+        repair = await _repair_node_cluster_ssh(
+            node,
+            snapshot["identity"],
+            nodes,
+            ssh_passwords=ssh_passwords,
+        )
+        snapshot = _load_cluster_snapshot()
+        nodes = _node_list(snapshot["cluster_nodes"])
+        node = _node_for_id(nodes, str(node.get("node_id") or ""))
+        if not node:
+            raise HTTPException(status_code=404, detail="Cluster node disappeared after SSH repair")
+
+        probe = await _probe_cluster_node(node, snapshot["identity"])
+        probe_status = str(probe.get("status") or "")
+        if probe_status == "not_initialized":
+            join = await _run_remote_join(node, snapshot["identity"])
+        elif (
+            probe_status == "ok"
+            and str(probe.get("remote_cluster_id") or "") == str(snapshot["identity"].get("cluster_id") or "")
+            and str(probe.get("remote_node_id") or "") == str(node.get("node_id") or "")
+        ):
+            join = {
+                "ok": True,
+                "already_joined": True,
+                "node_id": str(node.get("node_id") or ""),
+                "hostname": target,
+                "completion": await _complete_remote_join_sync(node, snapshot["identity"]),
+            }
+        else:
+            detail = str(probe.get("error") or probe_status or "Remote Cluster probe failed")
+            raise HTTPException(status_code=409, detail=f"Cannot join {target}: {detail}")
+
+        completion = join.get("completion") if isinstance(join, dict) else None
+        if isinstance(completion, dict) and completion.get("ok") is False:
+            raise HTTPException(
+                status_code=int(completion.get("status_code") or 502),
+                detail=f"Cluster identity joined, but final sync failed: {completion.get('error') or 'unknown error'}",
+            )
+        pbrun_start = completion.get("pbrun_start") if isinstance(completion, dict) else None
+        if (
+            _cluster_role_from_monitor_role(node.get("role")) == "vps"
+            and isinstance(pbrun_start, dict)
+            and pbrun_start.get("started") is not True
+        ):
+            reason = str(pbrun_start.get("error") or pbrun_start.get("reason") or "unknown error")
+            raise HTTPException(status_code=502, detail=f"Cluster joined, but PBRun was not started: {reason}")
+        _request_pbcluster_sync(_cluster_root())
+        return {
+            "ok": True,
+            "hostname": target,
+            "node_id": str(node.get("node_id") or ""),
+            "bootstrap": bootstrap,
+            "repair": repair,
+            "probe": probe,
+            "join": join,
+        }
 
 
 @router.get("/main_page", response_class=HTMLResponse)

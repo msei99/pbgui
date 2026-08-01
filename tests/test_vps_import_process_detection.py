@@ -2470,8 +2470,9 @@ def test_vps_manager_cluster_status_reads_materialized_nodes_only(tmp_path: Path
     assert status == {
         "ok": True,
         "registered": True,
+        "joined": True,
         "action": "skip",
-        "reason": "VPS node already registered",
+        "reason": "VPS node already joined",
         "node_id": "node-1",
     }
 
