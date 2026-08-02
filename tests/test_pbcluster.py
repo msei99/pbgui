@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+import PBCluster as pbcluster_module
+from PBCluster import PBCluster
 from cluster_credentials import ensure_node_key_material
 from cluster_sync_command import run_command
 from master.cluster_state import (
@@ -37,6 +39,56 @@ NODE_ID = "pbgui-node-00000000-0000-4000-8000-000000000010"
 NODE_B = "pbgui-node-00000000-0000-4000-8000-000000000011"
 NODE_C = "pbgui-node-00000000-0000-4000-8000-000000000012"
 HASH_A = "sha256:" + "a" * 64
+
+
+class _HeartbeatStub:
+    """No-op capability heartbeat context for daemon lifecycle tests."""
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        """Accept the production heartbeat constructor arguments."""
+
+    def __enter__(self):
+        """Enter the no-op context."""
+
+        return self
+
+    def __exit__(self, *_args) -> None:
+        """Leave the no-op context."""
+
+
+def test_pbcluster_reloads_when_runtime_serial_changes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A deployed serial change stops and reloads a long-running PBCluster process."""
+
+    serial_path = tmp_path / "api" / "serial.txt"
+    serial_path.parent.mkdir(parents=True)
+    serial_path.write_text("100\n", encoding="utf-8")
+    service = PBCluster(tmp_path)
+    stopped = threading.Event()
+    reloaded: list[bool] = []
+
+    class WorkerStub:
+        """Block until the serial watcher requests a clean stop."""
+
+        def run_forever(self) -> None:
+            """Publish a new serial and wait for the watcher."""
+
+            serial_path.write_text("101\n", encoding="utf-8")
+            assert stopped.wait(timeout=2)
+
+        def stop(self) -> None:
+            """Record the watcher stop request."""
+
+            stopped.set()
+
+    service.worker = WorkerStub()
+    monkeypatch.setattr(pbcluster_module, "ProcessCapabilityHeartbeat", _HeartbeatStub)
+    monkeypatch.setattr(pbcluster_module, "_RUNTIME_SERIAL_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(service, "_reload_process", lambda: reloaded.append(True))
+
+    service.run_foreground()
+
+    assert reloaded == [True]
+    assert not service.pidfile.exists()
 
 
 def append_operation(root: Path, op: str, payload: dict, **kwargs) -> dict:
@@ -1338,3 +1390,56 @@ def test_cluster_sync_worker_repairs_actor_sequence_gap(tmp_path: Path) -> None:
     assert status["ok"] is True
     assert status["state_vector"][NODE_C] == 3
     assert any(command == f"get-ops {NODE_C} 2 3" for _, command in client.calls)
+
+
+def test_cluster_sync_worker_repairs_remote_gap_before_handshake(tmp_path: Path) -> None:
+    """A peer with an unreadable checkpoint tail receives its missing signed operation."""
+
+    root = default_cluster_root(tmp_path)
+    ensure_local_identity(root, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    missing = {
+        "schema_version": 1,
+        "cluster_id": CLUSTER_ID,
+        "op_id": f"{NODE_C}:00000002",
+        "actor": NODE_C,
+        "seq": 2,
+        "op": "DELETE_INSTANCE",
+        "created_at": 202,
+        "instance": "relay-2",
+        "version": "2",
+    }
+
+    class GapPeerClient:
+        """Reject the first handshake and accept it after the missing operation."""
+
+        def __init__(self) -> None:
+            """Initialize the recorded command list."""
+
+            self.calls: list[tuple[str, dict | None]] = []
+
+        def run(self, _peer, _local_node_id, command: str, payload=None):
+            """Model one remote sequence gap and its repair."""
+
+            decoded = json.loads(payload) if payload else None
+            self.calls.append((command, decoded))
+            if command == "handshake" and len(self.calls) == 1:
+                raise ClusterSyncWorkerError(
+                    f"checkpoint tail sequence gap for actor {NODE_C}: expected 2, got 3"
+                )
+            if command == "handshake":
+                return {"ok": True, "state_vector": {NODE_C: 3}}
+            if command == "repair-op-gap":
+                return {"ok": True, "op_id": missing["op_id"]}
+            raise AssertionError(f"unexpected command: {command}")
+
+    client = GapPeerClient()
+    worker = ClusterSyncWorker(tmp_path, peer_client=client)
+
+    _hello, vector = worker._peer_handshake_with_gap_repair(
+        {"node_id": NODE_B, "pbname": "runner-b"},
+        NODE_ID,
+        lambda: [missing],
+    )
+
+    assert vector == {NODE_C: 3}
+    assert client.calls == [("handshake", None), ("repair-op-gap", missing), ("handshake", None)]

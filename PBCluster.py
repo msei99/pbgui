@@ -8,6 +8,7 @@ import platform
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from master.cluster_sync_worker import ClusterSyncWorker
 from pbgui_purefunc import PBGDIR
 
 SERVICE = "PBCluster"
+_RUNTIME_SERIAL_POLL_SECONDS = 1.0
 
 
 def _atomic_write_text(path: Path, value: str) -> None:
@@ -37,6 +39,7 @@ class PBCluster:
         self.pbgdir = Path(pbgdir or PBGDIR)
         self.pidfile = self.pbgdir / "data" / "pid" / "pbcluster.pid"
         self.worker = ClusterSyncWorker(self.pbgdir, interval=interval, boot_window=boot_window)
+        self.runtime_serial = self._read_runtime_serial()
 
     def run(self) -> None:
         """Start PBCluster in the background for legacy starter.py usage."""
@@ -59,20 +62,58 @@ class PBCluster:
         """Run PBCluster until it receives SIGTERM or SIGINT."""
 
         _atomic_write_text(self.pidfile, str(os.getpid()))
+        watcher_stop = threading.Event()
+        reload_requested = threading.Event()
 
         def _handle_stop(_signum, _frame) -> None:
             self.worker.stop()
 
+        def _watch_runtime_serial() -> None:
+            while not watcher_stop.wait(_RUNTIME_SERIAL_POLL_SECONDS):
+                current = self._read_runtime_serial()
+                if current is None:
+                    continue
+                if self.runtime_serial is None:
+                    self.runtime_serial = current
+                    continue
+                if current == self.runtime_serial:
+                    continue
+                reload_requested.set()
+                self.worker.stop()
+                _log(SERVICE, f"Runtime serial changed from {self.runtime_serial} to {current}; reloading PBCluster")
+                return
+
         signal.signal(signal.SIGTERM, _handle_stop)
         signal.signal(signal.SIGINT, _handle_stop)
+        watcher = threading.Thread(target=_watch_runtime_serial, name="pbcluster-runtime-serial", daemon=False)
+        watcher.start()
         with ProcessCapabilityHeartbeat(self.pbgdir, SERVICE):
             try:
                 self.worker.run_forever()
             finally:
+                watcher_stop.set()
+                watcher.join(timeout=max(2.0, _RUNTIME_SERIAL_POLL_SECONDS * 2))
                 try:
                     self.pidfile.unlink(missing_ok=True)
                 except OSError:
                     pass
+        if reload_requested.is_set():
+            self._reload_process()
+
+    def _read_runtime_serial(self) -> str | None:
+        """Read the deployment serial without treating a transient missing file as a change."""
+
+        try:
+            value = (self.pbgdir / "api" / "serial.txt").read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        return value or None
+
+    def _reload_process(self) -> None:
+        """Replace this daemon with the current on-disk PBCluster runtime."""
+
+        script = str(self.pbgdir / "PBCluster.py")
+        os.execv(sys.executable, [sys.executable, "-u", script, *sys.argv[1:]])
 
     def run_once(self) -> dict:
         """Run one local sync pass for diagnostics or tests."""

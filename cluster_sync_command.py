@@ -14,6 +14,7 @@ import binascii
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -47,6 +48,7 @@ from file_lock import advisory_file_lock
 from master.cluster_state import (
     ClusterPaths,
     ClusterStateError,
+    MEMBERSHIP_OPS,
     PB8_OPERATION_CAPABILITY,
     SYNC_EXCLUDE_FILES,
     V2_CREDENTIAL_OPS,
@@ -67,6 +69,7 @@ from master.cluster_state import (
 from master.cluster_ssh_keys import ensure_cluster_ssh_key
 from master.cluster_checkpoint import (
     ClusterCheckpointError,
+    _deserialize_membership_trust,
     activate_checkpoint,
     active_checkpoint_baseline,
     active_checkpoint_bundle,
@@ -76,6 +79,7 @@ from master.cluster_checkpoint import (
     install_rebootstrap_checkpoint,
     retention_cleanup_status,
     retention_preview,
+    read_active_checkpoint,
     verify_checkpoint_commit_proof,
     verify_checkpoint_proposal,
     write_checkpoint_object,
@@ -132,8 +136,8 @@ READ_VERBS = frozenset({
     "join-state-vector",
     "join-get-ops",
 })
-WRITE_VERBS = frozenset({"join", "join-hello", "join-checkpoint", "join-register", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "rebuild", "materialize-v7", "materialize-v8", "materialize-api-keys", "materialize-credentials", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", *MAILBOX_PUT_VERBS, *MAILBOX_ACK_VERBS})
-STDIN_VERBS = frozenset({"join-checkpoint", "join-register", "put-op", "put-ops", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", "missing-blobs", *MAILBOX_PUT_VERBS})
+WRITE_VERBS = frozenset({"join", "join-hello", "join-checkpoint", "join-register", "put-op", "put-ops", "repair-op-gap", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "rebuild", "materialize-v7", "materialize-v8", "materialize-api-keys", "materialize-credentials", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", *MAILBOX_PUT_VERBS, *MAILBOX_ACK_VERBS})
+STDIN_VERBS = frozenset({"join-checkpoint", "join-register", "put-op", "put-ops", "repair-op-gap", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", "missing-blobs", *MAILBOX_PUT_VERBS})
 SUPPORTED_VERBS = READ_VERBS | WRITE_VERBS
 
 
@@ -547,6 +551,10 @@ def run_command(
             )
         )
         return {"ok": True, "op_id": str(operation["op_id"]), "actor": str(operation["actor"]), "seq": int(operation["seq"])}
+    if verb == "repair-op-gap":
+        _require_arity(tokens, 1)
+        operation = _read_json_payload(stdin_data, MAX_OPERATION_BYTES)
+        return _repair_operation_gap(root, paths, cluster_id, operation)
     if verb == "put-ops":
         _require_arity(tokens, 1)
         operations = _read_operation_batch_payload(stdin_data)
@@ -927,6 +935,129 @@ def _staged_membership_nodes(
             authenticated_remote_node=remote_node,
         )
     )
+
+
+def _gap_repair_membership_trust(cluster_root: Path, cluster_id: str):
+    """Replay authenticated membership only through each actor's contiguous tail prefix."""
+
+    checkpoint = read_active_checkpoint(cluster_root)
+    if not isinstance(checkpoint, dict) or str(checkpoint.get("cluster_id") or "") != cluster_id:
+        raise ClusterSyncCommandError("operation gap repair requires the active cluster checkpoint")
+    trust = _deserialize_membership_trust(checkpoint["membership_trust"])
+    baseline = checkpoint.get("baseline_vector") if isinstance(checkpoint.get("baseline_vector"), dict) else {}
+    membership_operations: list[dict[str, Any]] = []
+    paths = ClusterPaths.from_root(cluster_root)
+    if paths.oplog.exists():
+        for actor_dir in sorted(path for path in paths.oplog.iterdir() if path.is_dir()):
+            actor = str(actor_dir.name)
+            expected = int(baseline.get(actor, 0)) + 1
+            for path in sorted(actor_dir.glob("*.json")):
+                try:
+                    seq = int(path.stem)
+                except ValueError as exc:
+                    raise ClusterSyncCommandError("operation gap repair found an invalid filename") from exc
+                if seq <= int(baseline.get(actor, 0)):
+                    continue
+                if seq != expected:
+                    break
+                try:
+                    operation = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise ClusterSyncCommandError("operation gap repair found an unreadable operation") from exc
+                if (
+                    not isinstance(operation, dict)
+                    or str(operation.get("actor") or "") != actor
+                    or int(operation.get("seq") or 0) != seq
+                ):
+                    raise ClusterSyncCommandError("operation gap repair found a path mismatch")
+                if str(operation.get("op") or "") in MEMBERSHIP_OPS:
+                    membership_operations.append(operation)
+                expected += 1
+    membership_operations.sort(
+        key=lambda item: (
+            int(item.get("created_at") or 0),
+            str(item.get("actor") or ""),
+            int(item.get("seq") or 0),
+            str(item.get("op_id") or ""),
+        )
+    )
+    for operation in membership_operations:
+        _safe_state_call(
+            lambda op=operation: validate_operation(
+                op,
+                expected_cluster_id=cluster_id,
+                membership_trust=trust,
+                network_input=True,
+                allow_legacy_key_claim=True,
+            )
+        )
+    return trust
+
+
+def _repair_operation_gap(
+    cluster_root: Path,
+    paths: ClusterPaths,
+    cluster_id: str,
+    operation: dict[str, Any],
+) -> dict[str, Any]:
+    """Fill exactly one first missing checkpoint-tail operation without replacing history."""
+
+    actor = str(operation.get("actor") or "")
+    try:
+        seq = int(operation.get("seq") or 0)
+    except (TypeError, ValueError) as exc:
+        raise ClusterSyncCommandError("operation gap repair requires a valid sequence") from exc
+    if (
+        seq < 1
+        or re.fullmatch(r"pbgui-node-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", actor) is None
+        or str(operation.get("op_id") or "") != f"{actor}:{seq:08d}"
+    ):
+        raise ClusterSyncCommandError("operation gap repair op_id does not match actor and sequence")
+    baseline = active_checkpoint_baseline(cluster_root)
+    actor_dir = paths.oplog / actor
+    expected = int(baseline.get(actor, 0)) + 1
+    later_exists = False
+    if actor_dir.exists():
+        for path in sorted(actor_dir.glob("*.json")):
+            try:
+                existing_seq = int(path.stem)
+            except ValueError as exc:
+                raise ClusterSyncCommandError("operation gap repair found an invalid filename") from exc
+            if existing_seq < expected:
+                continue
+            if existing_seq == expected:
+                expected += 1
+                continue
+            later_exists = True
+            break
+    if seq != expected or not later_exists or (actor_dir / f"{seq:08d}.json").exists():
+        raise ClusterSyncCommandError("operation is not the first missing checkpoint-tail sequence")
+    trust = _gap_repair_membership_trust(cluster_root, cluster_id)
+    _safe_state_call(
+        lambda: validate_operation(
+            operation,
+            expected_cluster_id=cluster_id,
+            cluster_root=cluster_root,
+            membership_trust=trust,
+            network_input=True,
+        )
+    )
+    path = _safe_state_call(
+        lambda: write_operation(
+            cluster_root,
+            operation,
+            network_input=True,
+            membership_trust=trust,
+        )
+    )
+    return {
+        "ok": True,
+        "status": "gap_repaired",
+        "op_id": str(operation["op_id"]),
+        "actor": actor,
+        "seq": seq,
+        "path": _relative_cluster_path(paths.root, path),
+    }
 
 
 def _require_arity(tokens: list[str], expected: int) -> None:

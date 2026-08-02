@@ -12,6 +12,7 @@ import os
 import base64
 import binascii
 import hashlib
+import re
 import shlex
 import subprocess
 import threading
@@ -91,10 +92,11 @@ from pbgui_purefunc import PBGDIR
 
 SERVICE = "PBCluster"
 STATUS_SCHEMA_VERSION = 1
-DEFAULT_SSH_TIMEOUT = 30
+DEFAULT_SSH_TIMEOUT = 90
 CONFIG_BLOB_BATCH_TARGET_BYTES = 12 * 1024 * 1024
 APPLY_BUNDLE_TARGET_BYTES = 12 * 1024 * 1024
 APPLY_BUNDLE_MAX_OPERATIONS = 16
+MAX_PRE_HANDSHAKE_GAP_REPAIRS = 16
 DEFAULT_PEER_WORKERS = 4
 RETENTION_EVALUATION_SECONDS = 60 * 60
 PASSIVE_REPLICA_PERIODIC_INTERVAL = 15 * 60
@@ -836,7 +838,11 @@ class ClusterSyncWorker:
 
         peer_id = str(peer.get("node_id") or "")
         base_result = _peer_result(peer_id, peer, ok=True, status="synced")
-        hello, remote_vector = self._peer_handshake(peer, local_node_id)
+        hello, remote_vector = self._peer_handshake_with_gap_repair(
+            peer,
+            local_node_id,
+            load_local_ops,
+        )
         if str(hello.get("cluster_id") or "") != cluster_id:
             raise ClusterSyncWorkerError("peer belongs to another cluster")
         peer_pb8_capable = supports_cluster_operation(
@@ -1189,6 +1195,55 @@ class ClusterSyncWorker:
         hello = self.peer_client.run(peer, local_node_id, "hello")
         remote_vector_payload = self.peer_client.run(peer, local_node_id, "get-state-vector")
         return hello, _as_state_vector(remote_vector_payload.get("state_vector") or {})
+
+    def _peer_handshake_with_gap_repair(
+        self,
+        peer: dict[str, Any],
+        local_node_id: str,
+        load_local_ops: Callable[[], list[dict[str, Any]]],
+    ) -> tuple[dict[str, Any], dict[str, int]]:
+        """Repair a remote checkpoint-tail sequence gap before retrying handshake."""
+
+        for _attempt in range(MAX_PRE_HANDSHAKE_GAP_REPAIRS + 1):
+            try:
+                return self._peer_handshake(peer, local_node_id)
+            except Exception as exc:
+                match = re.search(
+                    r"checkpoint tail sequence gap for actor "
+                    r"(pbgui-node-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}): "
+                    r"expected ([1-9][0-9]*), got ([1-9][0-9]*)",
+                    str(exc),
+                )
+                if not match:
+                    raise
+                actor, expected_text, got_text = match.groups()
+                expected = int(expected_text)
+                if expected >= int(got_text):
+                    raise
+                operation = next(
+                    (
+                        item
+                        for item in load_local_ops()
+                        if str(item.get("actor") or "") == actor
+                        and int(item.get("seq") or 0) == expected
+                        and str(item.get("op_id") or "") == f"{actor}:{expected:08d}"
+                    ),
+                    None,
+                )
+                if operation is None or _attempt >= MAX_PRE_HANDSHAKE_GAP_REPAIRS:
+                    raise
+                self.peer_client.run(
+                    peer,
+                    local_node_id,
+                    "repair-op-gap",
+                    payload=json.dumps(operation, sort_keys=True, separators=(",", ":")),
+                )
+                _log(
+                    SERVICE,
+                    f"Repaired remote checkpoint-tail gap on {peer.get('pbname') or peer.get('node_id')}: "
+                    f"{actor}:{expected:08d}",
+                )
+        raise ClusterSyncWorkerError("remote checkpoint-tail gap repair limit exceeded")
 
     def _record_peer_cluster_ssh_metadata(self, peer: dict[str, Any], hello: dict[str, Any]) -> bool:
         """Record peer Cluster SSH public key metadata when hello exposes it."""

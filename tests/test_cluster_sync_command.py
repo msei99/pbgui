@@ -23,6 +23,8 @@ from cluster_credentials import (
 from cluster_sync_command import ClusterSyncCommandError, main, run_command
 from credential_store import CredentialStore
 from master.cluster_state import (
+    ClusterPaths,
+    MembershipTrust,
     append_operation,
     credential_lifecycle_status,
     create_join_authorization,
@@ -83,6 +85,53 @@ def test_retention_preview_includes_actual_automatic_cleanup(
     assert result["ok"] is True
     assert result["status"] == "dry_run"
     assert result["automatic_cleanup"] == automatic
+
+
+def test_repair_operation_gap_fills_only_first_missing_sequence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Gap repair writes an exact missing operation without replacing later history."""
+
+    root = _init_cluster(tmp_path)
+    first = {
+        "schema_version": 1,
+        "cluster_id": CLUSTER_ID,
+        "op_id": f"{NODE_C}:00000001",
+        "actor": NODE_C,
+        "seq": 1,
+        "op": "DELETE_INSTANCE",
+        "created_at": 201,
+        "instance": "relay-1",
+        "version": "1",
+    }
+    missing = {**first, "op_id": f"{NODE_C}:00000002", "seq": 2, "created_at": 202, "instance": "relay-2", "version": "2"}
+    later = {**first, "op_id": f"{NODE_C}:00000003", "seq": 3, "created_at": 203, "instance": "relay-3", "version": "3"}
+    write_operation(root, first)
+    write_operation(root, later)
+    monkeypatch.setattr(cluster_sync_command, "active_checkpoint_baseline", lambda _root: {})
+    monkeypatch.setattr(
+        cluster_sync_command,
+        "_gap_repair_membership_trust",
+        lambda _root, _cluster_id: MembershipTrust.empty(),
+    )
+
+    result = cluster_sync_command._repair_operation_gap(
+        root,
+        ClusterPaths.from_root(root),
+        CLUSTER_ID,
+        missing,
+    )
+
+    assert result["status"] == "gap_repaired"
+    assert json.loads((root / "oplog" / NODE_C / "00000002.json").read_text(encoding="utf-8")) == missing
+    with pytest.raises(ClusterSyncCommandError, match="not the first missing"):
+        cluster_sync_command._repair_operation_gap(
+            root,
+            ClusterPaths.from_root(root),
+            CLUSTER_ID,
+            {**later, "op_id": f"{NODE_C}:00000004", "seq": 4},
+        )
 
 
 def test_current_clean_credential_scan_ack_skips_repeated_managed_scan(
