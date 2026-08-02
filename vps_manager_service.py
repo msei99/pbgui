@@ -124,6 +124,11 @@ def _pb8_branch_label(branch: Any, github_status: Any) -> str:
     return value
 
 
+def _public_runtime_role(role: Any) -> str:
+    """Map internal Cluster runner roles to the public master/slave model."""
+    return "master" if str(role or "").strip().lower() == "master" else "slave"
+
+
 def _pb8_remote_action_status(host_state: dict[str, Any] | None, *, telemetry_fresh: bool) -> dict[str, Any]:
     """Return whether a remote host may install or update PB8."""
     state = host_state if isinstance(host_state, dict) else {}
@@ -3437,7 +3442,7 @@ class VPSManagerService:
         else:
             ssh_host_key_status = "unknown"
         meta = self._host_meta(host_state)
-        role = str(meta.get("role") or "slave")
+        role = _public_runtime_role(meta.get("role"))
         if role == "master":
             role_icon = "🧠"
         else:

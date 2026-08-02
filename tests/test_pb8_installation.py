@@ -40,6 +40,15 @@ def test_combined_runtime_playbooks_compose_existing_safe_updates() -> None:
     assert core_mod._command_updates_pbgui("vps-update-pbgui-pb7-pb8") is True
 
 
+@pytest.mark.parametrize(
+    ("role", "expected"),
+    [("master", "master"), ("slave", "slave"), ("vps", "slave"), ("", "slave")],
+)
+def test_public_runtime_role_only_exposes_master_or_slave(role: str, expected: str) -> None:
+    """The internal Cluster runner role must not become a third PBGui runtime role."""
+    assert service_mod._public_runtime_role(role) == expected
+
+
 def test_local_installer_configures_and_uninstalls_separate_pb8_paths(tmp_path: Path) -> None:
     """Fresh local installs persist PB8 paths and local uninstall owns both targets."""
     install_dir = tmp_path / "software"
@@ -588,7 +597,7 @@ def test_vps_setup_pb8_profile_skips_every_pb7_runtime_task() -> None:
     assert "(['pbrun'] if ((install_pb7 | bool) or (install_pb8 | bool)) else [])" in source
     assert "(['pbgui-pbrun.service'] if ((install_pb7 | bool) or (install_pb8 | bool)) else [])" in source
     assert "in ['pb7', 'pb7_pb8']" in source
-    assert "option: role\n        value: vps" in source
+    assert "option: role\n        value: slave" in source
 
 
 def test_vps_setup_runs_pb8_inside_the_same_ansible_run() -> None:

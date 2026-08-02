@@ -478,12 +478,12 @@
         - { regexp: '<hostname>', replace: "{{ hostname }}" }
         - { regexp: '<install_dir>', replace: "{{ install_dir }}" }
 
-    - name: store VPS role in pbgui.ini
+    - name: store slave role in pbgui.ini
       ini_file:
         path: "{{ install_dir }}/pbgui/pbgui.ini"
         section: main
         option: role
-        value: vps
+        value: slave
         no_extra_spaces: true
 
     - name: remove PB7 runtime paths for PB8-only setup

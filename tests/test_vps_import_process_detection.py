@@ -2956,6 +2956,9 @@ def test_pbgui_code_update_playbooks_sync_systemd_units(playbook_path: str) -> N
     assert "pbgui_enabled_services" in playbook
     assert "pbgui_enabled_services | join(',')" in playbook
     assert "pbgui_role" in playbook
+    assert "Normalize PBGui runtime role to master or slave" in playbook
+    assert "else 'slave'" in playbook
+    assert "pbgui_role_normalization.changed" in playbook
     assert "Restart remote master PBApiServer" in playbook
     assert "systemd-run --user" in playbook
     assert "setup/setup_systemd.sh" in playbook

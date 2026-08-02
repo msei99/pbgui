@@ -115,9 +115,18 @@
         PIP_DISABLE_PIP_VERSION_CHECK: "1"
       register: pbgui_requirements
 
+    - name: Normalize PBGui runtime role to master or slave
+      ini_file:
+        path: "{{ install_dir }}/pbgui/pbgui.ini"
+        section: main
+        option: role
+        value: "{{ 'master' if (pbgui_role | default('') | string | lower) == 'master' else 'slave' }}"
+        no_extra_spaces: true
+      register: pbgui_role_normalization
+
     - name: Schedule PBGui restart after successful update
       command: /bin/true
-      changed_when: (pbgui_repo.changed | default(false)) or (pbgui_requirements.changed | default(false))
+      changed_when: (pbgui_repo.changed | default(false)) or (pbgui_requirements.changed | default(false)) or (pbgui_role_normalization.changed | default(false))
       notify: restart pbgui
 
     - name: print pbgui_repo
