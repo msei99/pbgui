@@ -771,6 +771,40 @@ def test_cluster_sync_worker_skips_vps_peer_without_explicit_topology(tmp_path: 
     assert status["peers"][0]["status"] == "topology_skipped"
 
 
+def test_coordinator_adds_fully_joined_replica_to_explicit_topology(tmp_path: Path) -> None:
+    """The coordinator automatically picks up a joined replica omitted during onboarding."""
+
+    cluster_root = default_cluster_root(tmp_path)
+    ensure_local_identity(cluster_root, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    append_operation(
+        cluster_root,
+        "ADD_NODE",
+        {"node_id": NODE_ID, "role": "master", "pbname": "master-a", "sync_peers": []},
+        created_at=100,
+    )
+    append_operation(
+        cluster_root,
+        "ADD_NODE",
+        {
+            "node_id": NODE_B,
+            "role": "vps",
+            "pbname": "runner-b",
+            "sync_mode": "reachable",
+            "ssh_host": "runner-b",
+            "cluster_ssh_fingerprint": "SHA256:joined",
+        },
+        created_at=101,
+    )
+    materialized = rebuild_materialized_state(cluster_root)
+    identity = read_local_identity(cluster_root)
+
+    reconciled = cluster_sync_worker._reconcile_coordinator_sync_peers(cluster_root, identity, materialized)
+    repeated = cluster_sync_worker._reconcile_coordinator_sync_peers(cluster_root, identity, reconciled)
+
+    assert reconciled["cluster_nodes"]["nodes"][NODE_ID]["sync_peers"] == [NODE_B]
+    assert repeated["state_vector"] == reconciled["state_vector"]
+
+
 def test_secondary_master_delegates_peer_fanout_to_coordinator() -> None:
     """Only the deterministic coordinator contacts VPS peers and other secondaries."""
 

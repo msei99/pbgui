@@ -134,6 +134,43 @@ def test_repair_operation_gap_fills_only_first_missing_sequence(
         )
 
 
+def test_repair_operation_gap_uses_checkpoint_caller_verification(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Gap repair avoids the normal caller check that replays a damaged tail."""
+
+    root = _init_cluster(tmp_path)
+    operation = {
+        "cluster_id": CLUSTER_ID,
+        "op_id": f"{NODE_C}:00000002",
+        "actor": NODE_C,
+        "seq": 2,
+        "op": "DELETE_INSTANCE",
+    }
+    verified: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        cluster_sync_command,
+        "_verify_remote_node",
+        lambda *_args, **_kwargs: pytest.fail("normal verification must not replay the damaged tail"),
+    )
+    monkeypatch.setattr(
+        cluster_sync_command,
+        "_verify_remote_node_for_gap_repair",
+        lambda _root, remote_node, cluster_id: verified.append((remote_node, cluster_id)),
+    )
+    monkeypatch.setattr(
+        cluster_sync_command,
+        "_repair_operation_gap",
+        lambda _root, _paths, _cluster_id, payload: {"ok": True, "op_id": payload["op_id"]},
+    )
+
+    result = run_command(root, NODE_B, "repair-op-gap", json.dumps(operation).encode("utf-8"))
+
+    assert result == {"ok": True, "op_id": operation["op_id"]}
+    assert verified == [(NODE_B, CLUSTER_ID)]
+
+
 def test_current_clean_credential_scan_ack_skips_repeated_managed_scan(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

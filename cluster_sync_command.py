@@ -323,8 +323,15 @@ def run_command(
 
     identity = read_local_identity(root)
     cluster_id = str(identity["cluster_id"])
-    _verify_remote_node(root, remote_node, allow_join=False)
     paths = ClusterPaths.from_root(root)
+
+    if verb == "repair-op-gap":
+        _require_arity(tokens, 1)
+        _verify_remote_node_for_gap_repair(root, remote_node, cluster_id)
+        operation = _read_json_payload(stdin_data, MAX_OPERATION_BYTES)
+        return _repair_operation_gap(root, paths, cluster_id, operation)
+
+    _verify_remote_node(root, remote_node, allow_join=False)
 
     if verb == "handshake":
         payload = _hello_payload(root, identity, remote_node)
@@ -551,10 +558,6 @@ def run_command(
             )
         )
         return {"ok": True, "op_id": str(operation["op_id"]), "actor": str(operation["actor"]), "seq": int(operation["seq"])}
-    if verb == "repair-op-gap":
-        _require_arity(tokens, 1)
-        operation = _read_json_payload(stdin_data, MAX_OPERATION_BYTES)
-        return _repair_operation_gap(root, paths, cluster_id, operation)
     if verb == "put-ops":
         _require_arity(tokens, 1)
         operations = _read_operation_batch_payload(stdin_data)
@@ -1294,6 +1297,19 @@ def _verify_remote_node(cluster_root: Path, remote_node: str, *, allow_join: boo
     cutoff = ((materialized.get("desired_state") or {}).get("credential_migration") or {}).get("cutoff")
     if isinstance(cutoff, dict) and int(node.get("credential_protocol_version") or 0) < int(cutoff.get("min_protocol") or 2):
         raise ClusterSyncCommandError("credential protocol downgrade rejected after cutoff")
+
+
+def _verify_remote_node_for_gap_repair(cluster_root: Path, remote_node: str, cluster_id: str) -> None:
+    """Authorize a gap repair caller without replaying the damaged operation tail."""
+
+    trust = _gap_repair_membership_trust(cluster_root, cluster_id)
+    node = trust.nodes.get(remote_node)
+    if not isinstance(node, dict):
+        raise ClusterSyncCommandError("remote node is not registered")
+    if node.get("enabled", True) is False:
+        raise ClusterSyncCommandError("remote node is disabled")
+    if node.get("state_replica", True) is False:
+        raise ClusterSyncCommandError("remote node is not a state replica")
 
 
 def _materialize_v7_configs(cluster_root: Path, *, write: bool) -> dict[str, Any]:

@@ -44,6 +44,7 @@ from credential_migration import (
     run_credential_migration,
 )
 from credential_rolling_bootstrap import bootstrap_local_legacy_credentials
+from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
 from master.cluster_state import (
     append_operation,
@@ -694,6 +695,7 @@ class ClusterSyncWorker:
     def _sync_peers(self, identity: dict[str, Any], materialized: dict[str, Any]) -> list[dict[str, Any]]:
         """Synchronize with all currently known reachable peers."""
 
+        materialized = _reconcile_coordinator_sync_peers(self.cluster_root, identity, materialized)
         cluster_nodes = materialized.get("cluster_nodes") if isinstance(materialized, dict) else {}
         nodes = cluster_nodes.get("nodes") if isinstance(cluster_nodes, dict) else {}
         nodes = nodes if isinstance(nodes, dict) else {}
@@ -1836,6 +1838,76 @@ def _peer_sync_mode(peer: dict[str, Any]) -> str:
     if peer.get("state_replica", True) is False:
         return "disabled"
     return normalize_node_sync_mode(peer)
+
+
+def _reconcile_coordinator_sync_peers(
+    cluster_root: Path,
+    identity: dict[str, Any],
+    materialized: dict[str, Any],
+) -> dict[str, Any]:
+    """Add fully joined replicas missing from the coordinator's explicit topology."""
+
+    cluster_nodes = materialized.get("cluster_nodes") if isinstance(materialized, dict) else {}
+    nodes = cluster_nodes.get("nodes") if isinstance(cluster_nodes, dict) else {}
+    nodes = nodes if isinstance(nodes, dict) else {}
+    local_node_id = str(identity.get("node_id") or "")
+    local_node = nodes.get(local_node_id) if isinstance(nodes.get(local_node_id), dict) else {}
+    if str(local_node.get("role") or "").strip() != "master":
+        return materialized
+    coordinator_id = min(
+        (
+            str(node_id)
+            for node_id, node in nodes.items()
+            if isinstance(node, dict)
+            and node.get("enabled", True) is not False
+            and node.get("state_replica", True) is not False
+            and str(node.get("role") or "").strip() == "master"
+        ),
+        default="",
+    )
+    explicit = local_node.get("sync_peers")
+    if coordinator_id != local_node_id or not isinstance(explicit, list):
+        return materialized
+    known = {str(item) for item in explicit if str(item)}
+    if not any(
+        str(node_id) != local_node_id
+        and isinstance(node, dict)
+        and _peer_sync_mode(node) == "reachable"
+        and bool(str(node.get("ssh_host") or "").strip())
+        and bool(str(node.get("cluster_ssh_fingerprint") or "").strip())
+        and str(node_id) not in known
+        for node_id, node in nodes.items()
+    ):
+        return materialized
+
+    with advisory_file_lock(Path(cluster_root) / ".append_sequence"):
+        current = rebuild_materialized_state(cluster_root, write=False)
+        current_nodes = ((current.get("cluster_nodes") or {}).get("nodes") or {})
+        current_local = current_nodes.get(local_node_id) if isinstance(current_nodes.get(local_node_id), dict) else {}
+        current_explicit = current_local.get("sync_peers")
+        if not isinstance(current_explicit, list):
+            return current
+        peers = list(dict.fromkeys(str(item) for item in current_explicit if str(item)))
+        known = set(peers)
+        missing = sorted(
+            str(node_id)
+            for node_id, node in current_nodes.items()
+            if str(node_id) != local_node_id
+            and isinstance(node, dict)
+            and _peer_sync_mode(node) == "reachable"
+            and bool(str(node.get("ssh_host") or "").strip())
+            and bool(str(node.get("cluster_ssh_fingerprint") or "").strip())
+            and str(node_id) not in known
+        )
+        if not missing:
+            return current
+        append_operation(
+            cluster_root,
+            "UPDATE_NODE",
+            {"node_id": local_node_id, "sync_peers": [*peers, *missing]},
+        )
+        _log(SERVICE, f"Added {len(missing)} fully joined replica(s) to coordinator sync topology")
+        return rebuild_materialized_state(cluster_root)
 
 
 def _is_stale_mailbox_error(exc: BaseException) -> bool:
