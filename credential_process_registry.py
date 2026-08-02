@@ -28,6 +28,7 @@ RELEVANT_PROCESS_SCRIPTS = {
     "PBApiServer.py": "PBApiServer",
     "PBCluster.py": "PBCluster",
     "PBCoinData.py": "PBCoinData",
+    "PBData.py": "PBData",
     "PBRun.py": "PBRun",
     "task_worker.py": "Market Data worker",
     "tradfi_sync.py": "TradFi Sync",

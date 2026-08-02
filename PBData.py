@@ -4240,6 +4240,8 @@ class PBData():
 
 def main():
     """Entry point kept synchronous; spins up an async loop internally."""
+    from credential_process_registry import ProcessCapabilityHeartbeat
+
     dest = Path(f'{PBGDIR}/data/logs')
     dest.mkdir(parents=True, exist_ok=True)
     pbdata = PBData()
@@ -4248,6 +4250,8 @@ def main():
         sys.exit(1)
     _human_log(SERVICE, 'Start: PBData', level='INFO')
     pbdata.save_pid()
+    capability = ProcessCapabilityHeartbeat(Path(PBGDIR), SERVICE)
+    capability.__enter__()
 
     async def run_loop():
         await pbdata.start_config_reload()
@@ -4341,6 +4345,7 @@ def main():
             _human_log(SERVICE, msg, level='INFO')
         except Exception:
             pass
+        capability.close()
         try:
             os._exit(0)
         except Exception:
@@ -4360,12 +4365,15 @@ def main():
         await run_loop()
 
     try:
-        asyncio.run(_runner_with_signals())
-    except Exception:
         try:
-            asyncio.run(run_loop())
+            asyncio.run(_runner_with_signals())
         except Exception:
-            pass
+            try:
+                asyncio.run(run_loop())
+            except Exception:
+                pass
+    finally:
+        capability.close()
 
 if __name__ == '__main__':
     main()

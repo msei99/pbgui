@@ -805,8 +805,8 @@ def test_coordinator_adds_fully_joined_replica_to_explicit_topology(tmp_path: Pa
     assert repeated["state_vector"] == reconciled["state_vector"]
 
 
-def test_secondary_master_delegates_peer_fanout_to_coordinator() -> None:
-    """Only the deterministic coordinator contacts VPS peers and other secondaries."""
+def test_secondary_master_honors_explicit_master_peers_and_syncs_vps_directly() -> None:
+    """Explicit master links and direct VPS fanout override default coordinator delegation."""
 
     coordinator = {"node_id": NODE_ID, "role": "master", "enabled": True}
     secondary = {
@@ -830,9 +830,30 @@ def test_secondary_master_delegates_peer_fanout_to_coordinator() -> None:
     )
 
     assert coordinator_allowed is True
-    assert runner_allowed is False
-    assert secondary_allowed is False
-    assert runner_reason == "secondary master fanout is delegated to coordinator"
+    assert runner_allowed is True
+    assert secondary_allowed is True
+    assert runner_reason == "master syncs directly with VPS peer"
+
+
+def test_secondary_master_skips_unlisted_coordinator_but_syncs_vps() -> None:
+    """A configured secondary never contacts an unlisted coordinator and still contacts VPS nodes."""
+
+    coordinator = {"node_id": NODE_ID, "role": "master", "enabled": True}
+    secondary = {"node_id": NODE_B, "role": "master", "enabled": True, "sync_peers": [NODE_C]}
+    other_secondary = {"node_id": NODE_C, "role": "master", "enabled": True}
+    runner = {"node_id": "runner", "role": "vps", "enabled": True}
+    nodes = {NODE_ID: coordinator, NODE_B: secondary, NODE_C: other_secondary, "runner": runner}
+
+    coordinator_allowed, coordinator_reason = cluster_sync_worker._peer_topology_allows(
+        NODE_B, secondary, NODE_ID, coordinator, nodes,
+    )
+    runner_allowed, _runner_reason = cluster_sync_worker._peer_topology_allows(
+        NODE_B, secondary, "runner", runner, nodes,
+    )
+
+    assert coordinator_allowed is False
+    assert coordinator_reason == "peer is not in sync_peers"
+    assert runner_allowed is True
 
 
 def test_mailbox_sync_ignores_message_removed_after_index(tmp_path: Path) -> None:

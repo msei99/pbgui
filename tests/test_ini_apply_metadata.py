@@ -237,6 +237,11 @@ def test_runtime_restart_reason_lifecycle_and_status(monkeypatch) -> None:
     monkeypatch.setattr(PBApiServer, "_startup_serial", 7)
     monkeypatch.setattr(PBApiServer, "_read_serial", lambda: 7)
     monkeypatch.setattr(PBApiServer, "_restart_block_state", lambda: asyncio.sleep(0, result=(False, "")))
+    monkeypatch.setattr(
+        PBApiServer,
+        "_runtime_service_restart_state",
+        lambda: {"current_serial": "7", "stale_services": [], "inspection_error": ""},
+    )
     assert PBApiServer._refresh_restart_state() is False
 
     PBApiServer.mark_runtime_restart_required("API host or port settings changed")

@@ -222,6 +222,37 @@ def test_root_api_restart_uses_transient_systemd_unit(monkeypatch) -> None:
     assert "systemctl --user restart pbgui-api.service" in calls[0][-1]
 
 
+def test_root_restart_orders_stale_daemons_before_api(monkeypatch) -> None:
+    """The transient restart unit handles stale daemons sequentially and API last."""
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 0, stdout="queued", stderr="")
+
+    monkeypatch.setattr(PBApiServer.subprocess, "run", fake_run)
+    ok, output = PBApiServer._queue_current_api_systemd_restart([
+        "pbgui-pbrun.service",
+        "pbgui-pbdata.service",
+    ])
+
+    assert ok is True
+    assert output == "queued"
+    script = calls[0][-1]
+    assert script.index("restart pbgui-pbrun.service") < script.index("restart pbgui-pbdata.service")
+    assert script.index("restart pbgui-pbdata.service") < script.index("restart pbgui-api.service")
+
+
+def test_root_restart_rejects_unknown_systemd_unit() -> None:
+    """Only fixed PBGui systemd units may enter the privileged restart command."""
+
+    ok, output = PBApiServer._queue_current_api_systemd_restart(["attacker.service"])
+
+    assert ok is False
+    assert "unsupported PBGui systemd unit" in output
+
+
 def test_pbcoindata_start_is_not_blocked_without_cmc_key(monkeypatch) -> None:
     """PBCoinData may run without CMC so exchange mappings can still update."""
 

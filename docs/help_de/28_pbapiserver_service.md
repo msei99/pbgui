@@ -33,9 +33,9 @@ Host und Port können auf der **PBAPIServer-Detailseite** geändert werden (`Sys
 
 - **Start**: Über den Start-Button auf der Services-Übersicht oder der Detailseite. PBAPIServer startet als Hintergrundprozess.
 - **Stop**: Nicht über die GUI möglich (der Server kann sich nicht selbst stoppen, während er die Seite ausliefert). Bei Bedarf über Terminal stoppen.
-- **Restart**: Über den Restart-Button. Der Server fährt sauber herunter und startet nach einer kurzen Verzögerung (3 Sekunden) neu, um sicherzustellen, dass der Port freigegeben wird.
+- **Restart**: Über den Restart-Button. PBGui startet aktive verwaltete Dienste mit älterer Code-Serial neu, danach zuletzt den API-Server, und lädt anschließend die Seite neu.
 
-Die Navigationsleiste zeigt einen orangefarbenen **Restart**-Button, wenn sich API-Code geändert hat (erkannt über `api/serial.txt`). Ein Klick löst einen sauberen Neustart und Seiten-Reload aus.
+Die Navigationsleiste zeigt einen orangefarbenen **Restart**-Button, wenn der API-Prozess oder ein aktiver PBCluster-, PBRun-, PBData-, PBCoinData- oder PBMonitorAgent-Prozess noch einen älteren Wert aus `api/serial.txt` verwendet. Der Bestätigungsdialog listet die betroffenen Dienste auf. Detached Bots, Backtests, Optimierungen und Market-Data-Jobs werden nicht neu gestartet.
 
 ## WebSocket-Endpunkte
 
@@ -86,6 +86,6 @@ PBAPIServer betreibt mehrere interne Hintergrund-Tasks:
 |---|---|
 | Server startet nicht | Prüfen ob Port bereits belegt ist (`lsof -i :8000`); `data/pid/api_server.pid` auf veraltete PID prüfen |
 | „Address already in use" | Vorheriger Server wurde nicht sauber beendet — einige Sekunden warten oder alten Prozess beenden |
-| Orangener Restart-Button verschwindet nicht | Klicken zum Neustarten; `api/serial.txt` wurde nach einer Code-Änderung inkrementiert |
+| Orangener Restart-Button verschwindet nicht | Öffnen, um den verwalteten Dienst mit älterem `api/serial.txt`-Wert zu sehen; diesen Dienst prüfen, falls der koordinierte Neustart ihn nicht aktualisiert |
 | WebSocket-Verbindungsabbrüche | `PBApiServer.log` auf `[ERROR]`-Zeilen prüfen; Token-Gültigkeit verifizieren |
 | Dashboard lädt nicht | Prüfen ob PBAPIServer läuft; Browser-Konsole auf Verbindungsfehler prüfen |

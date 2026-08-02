@@ -21,7 +21,7 @@ Die Seite läuft als eigenständige FastAPI-Seite mit vollständiger Topnav zur 
 | **🗄 Backups** | Öffnet den Backup-Browser mit Diff-Viewer |
 | **📋 Logs** | Öffnet den Live-Log-Viewer (streamt `ApiKeys.log` und weitere Logs) |
 | **Refresh** | Lädt die User-Liste neu von der Festplatte |
-| **🟠 Restart** | Sichtbar, wenn der API-Server ausstehende Code-Änderungen hat; Klick startet neu |
+| **🟠 Restart** | Sichtbar, wenn die API oder ein anderer verwalteter PBGui-Dienst veralteten Code ausführt; Klick zeigt und startet die betroffenen Dienste neu |
 
 ---
 

@@ -119,6 +119,13 @@ _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 _SERIAL_FILE = Path(__file__).parent / "api" / "serial.txt"
 _API_SYSTEMD_UNIT = "pbgui-api.service"
+_RUNTIME_SYSTEMD_SERVICES = (
+    {"service": "PBCluster", "label": "PBCluster", "unit": "pbgui-pbcluster.service"},
+    {"service": "PBRun", "label": "PBRun", "unit": "pbgui-pbrun.service"},
+    {"service": "PBData", "label": "PBData", "unit": "pbgui-pbdata.service"},
+    {"service": "PBCoinData", "label": "PBCoinData", "unit": "pbgui-pbcoindata.service"},
+    {"service": "PBMonitorAgent", "label": "PBMonitorAgent", "unit": "pbgui-monitor-agent.service"},
+)
 _startup_serial: int = 0
 _needs_restart: bool = False
 _runtime_restart_reasons: list[str] = []
@@ -140,6 +147,76 @@ def _refresh_restart_state() -> bool:
     global _needs_restart
     _needs_restart = _read_serial() != _startup_serial or bool(_runtime_restart_reasons)
     return _needs_restart
+
+
+def _runtime_service_restart_state() -> dict:
+    """Return active managed daemons whose startup serial is no longer current."""
+
+    from credential_process_registry import process_barrier_readiness, running_relevant_processes
+
+    current_serial = str(_read_serial())
+    try:
+        processes = running_relevant_processes(Path(PBGDIR))
+        readiness = process_barrier_readiness(Path(PBGDIR), processes=processes)
+    except Exception as exc:
+        _log(SERVICE, f"[restart] failed to inspect daemon code serials: {exc}", level="ERROR")
+        return {"current_serial": current_serial, "stale_services": [], "inspection_error": type(exc).__name__}
+    active_services = {str(item.get("service") or "") for item in processes}
+    ready_services = {
+        str(item.get("service") or ""): item
+        for item in readiness.get("services") or []
+        if isinstance(item, dict)
+    }
+    stale_services = []
+    for configured in _RUNTIME_SYSTEMD_SERVICES:
+        service = str(configured["service"])
+        if service not in active_services:
+            continue
+        record = ready_services.get(service) or {}
+        running_serial = str(record.get("code_serial") or "")
+        if running_serial == current_serial:
+            continue
+        stale_services.append({
+            **configured,
+            "running_serial": running_serial,
+            "current_serial": current_serial,
+            "reason": "code serial not reported" if not running_serial else "outdated code serial",
+        })
+    return {
+        "current_serial": current_serial,
+        "stale_services": stale_services,
+        "inspection_error": "",
+    }
+
+
+def _restart_status_payload() -> dict:
+    """Build the shared API and managed-daemon restart status payload."""
+
+    current_serial = _read_serial()
+    api_restart_required = _refresh_restart_state()
+    runtime_state = _runtime_service_restart_state()
+    restart_services = []
+    if api_restart_required:
+        restart_services.append({
+            "service": SERVICE,
+            "label": "PBGui API Server",
+            "unit": _API_SYSTEMD_UNIT,
+            "running_serial": str(_startup_serial),
+            "current_serial": str(current_serial),
+            "reason": "runtime settings changed" if _runtime_restart_reasons else "outdated code serial",
+        })
+    restart_services.extend(runtime_state.get("stale_services") or [])
+    return {
+        "needs_restart": bool(restart_services),
+        "serial_restart_required": current_serial != _startup_serial,
+        "runtime_restart_reasons": list(_runtime_restart_reasons),
+        "startup_serial": _startup_serial,
+        "current_serial": current_serial,
+        "api_restart_required": api_restart_required,
+        "service_restart_required": bool(runtime_state.get("stale_services")),
+        "restart_services": restart_services,
+        "restart_inspection_error": str(runtime_state.get("inspection_error") or ""),
+    }
 
 
 def mark_runtime_restart_required(reason: str) -> None:
@@ -230,10 +307,22 @@ def _systemd_user_env() -> dict[str, str]:
     return env
 
 
-def _queue_current_api_systemd_restart() -> tuple[bool, str]:
-    """Queue an API restart from a transient unit outside the API service cgroup."""
+def _queue_current_api_systemd_restart(service_units=()) -> tuple[bool, str]:
+    """Queue stale daemon restarts followed by API from an external transient unit."""
+
+    allowed_units = {str(item["unit"]) for item in _RUNTIME_SYSTEMD_SERVICES}
+    ordered_units = []
+    for raw_unit in service_units:
+        unit = str(raw_unit or "")
+        if unit not in allowed_units:
+            return False, f"unsupported PBGui systemd unit: {unit}"
+        if unit not in ordered_units:
+            ordered_units.append(unit)
     restart_unit = f"pbgui-api-restart-{os.getpid()}-{time_ns()}"
-    restart_cmd = f"sleep 0.5\nsystemctl --user restart {shlex.quote(_API_SYSTEMD_UNIT)}"
+    restart_lines = ["set -e", "sleep 0.5"]
+    restart_lines.extend(f"systemctl --user restart {shlex.quote(unit)}" for unit in ordered_units)
+    restart_lines.append(f"systemctl --user restart {shlex.quote(_API_SYSTEMD_UNIT)}")
+    restart_cmd = "\n".join(restart_lines)
     try:
         proc = subprocess.run(
             ["systemd-run", "--user", f"--unit={restart_unit}", "--collect", "/bin/bash", "-lc", restart_cmd],
@@ -262,8 +351,8 @@ def _configured_cors() -> tuple[list[str], bool]:
     return origins, True
 
 
-def _restart_current_api_systemd_unit() -> bool:
-    """Restart pbgui-api.service when systemd owns the current API process."""
+def _restart_current_api_systemd_unit(service_units=()) -> bool:
+    """Restart stale PBGui daemons and API when systemd owns this process."""
     env = _systemd_user_env()
     try:
         status = subprocess.run(
@@ -292,7 +381,7 @@ def _restart_current_api_systemd_unit() -> bool:
     if props.get("ActiveState") != "active" or main_pid != os.getpid():
         return False
 
-    ok, output = _queue_current_api_systemd_restart()
+    ok, output = _queue_current_api_systemd_restart(service_units)
     if not ok:
         _log(SERVICE, f"[restart] systemd restart scheduling failed: {output}", level="ERROR")
         return False
@@ -1313,7 +1402,7 @@ def health():
 
 @app.get("/api/server-status/stream")
 async def server_status_stream(session: SessionToken = Depends(require_auth)):
-    """SSE stream: pushes {needs_restart: bool} immediately, then on every serial change."""
+    """Stream API and managed-daemon restart state changes."""
     queue: asyncio.Queue = asyncio.Queue()
     subscriber = (queue, asyncio.get_running_loop())
     _sse_subscribers.append(subscriber)
@@ -1321,8 +1410,10 @@ async def server_status_stream(session: SessionToken = Depends(require_auth)):
     async def event_gen():
         try:
             # Send initial state immediately
-            last_sent = _refresh_restart_state()
-            yield f"data: {json.dumps({'needs_restart': last_sent, 'runtime_restart_reasons': list(_runtime_restart_reasons), 'auth': auth_runtime_status()})}\n\n"
+            payload = _restart_status_payload()
+            payload["auth"] = auth_runtime_status()
+            last_sent = json.dumps(payload, sort_keys=True)
+            yield f"data: {json.dumps(payload)}\n\n"
             while True:
                 force_send = False
                 try:
@@ -1334,10 +1425,12 @@ async def server_status_stream(session: SessionToken = Depends(require_auth)):
                 except asyncio.TimeoutError:
                     pass
 
-                current_state = _refresh_restart_state()
+                payload = _restart_status_payload()
+                payload["auth"] = auth_runtime_status()
+                current_state = json.dumps(payload, sort_keys=True)
                 if force_send or current_state != last_sent:
                     last_sent = current_state
-                    yield f"data: {json.dumps({'needs_restart': current_state, 'runtime_restart_reasons': list(_runtime_restart_reasons), 'auth': auth_runtime_status()})}\n\n"
+                    yield f"data: {json.dumps(payload)}\n\n"
                 else:
                     # keepalive comment so proxies don't close the connection
                     yield ": keepalive\n\n"
@@ -1360,14 +1453,9 @@ async def server_status_stream(session: SessionToken = Depends(require_auth)):
 @app.get("/api/server-status")
 async def server_status(session: SessionToken = Depends(require_auth)):
     """Return current restart-detector state for nav fallback checks."""
-    current_serial = _read_serial()
     restart_blocked, restart_block_reason = await _restart_block_state()
     return {
-        "needs_restart": _refresh_restart_state(),
-        "serial_restart_required": current_serial != _startup_serial,
-        "runtime_restart_reasons": list(_runtime_restart_reasons),
-        "startup_serial": _startup_serial,
-        "current_serial": current_serial,
+        **_restart_status_payload(),
         "restart_blocked": restart_blocked,
         "restart_block_reason": restart_block_reason,
         "master_name": _local_master_name(),
@@ -1392,23 +1480,37 @@ async def token_refresh(request: Request, response: Response, session: SessionTo
 
 @app.post("/api/server-restart")
 async def server_restart(session: SessionToken = Depends(require_auth)):
-    """Restart the API server process. Auth required."""
+    """Restart stale managed PBGui daemons, then restart the API coordinator."""
     global _api_restart_lease
     try:
         restart_lease = acquire_master_update_lock(Path(PBGDIR))
     except MasterUpdateBusyError as exc:
-        raise HTTPException(status_code=409, detail=f"Cannot restart API server: {exc}") from exc
+        raise HTTPException(status_code=409, detail=f"Cannot restart PBGui services: {exc}") from exc
     try:
         restart_blocked, restart_block_reason = await _restart_block_state()
         if restart_blocked:
             detail = restart_block_reason or "An API-owned mutable operation is still running."
-            raise HTTPException(status_code=409, detail=f"Cannot restart API server: {detail}")
+            raise HTTPException(status_code=409, detail=f"Cannot restart PBGui services: {detail}")
     except Exception:
         restart_lease.release()
         raise
     _api_restart_lease = restart_lease
+    restart_state = _restart_status_payload()
+    stale_units = [
+        str(item.get("unit") or "")
+        for item in restart_state.get("restart_services") or []
+        if str(item.get("unit") or "") != _API_SYSTEMD_UNIT
+    ]
+    restart_labels = [
+        str(item.get("label") or item.get("service") or "")
+        for item in restart_state.get("restart_services") or []
+    ]
 
-    _log(SERVICE, "[restart] restart requested by user", level="WARNING")
+    _log(
+        SERVICE,
+        f"[restart] managed service restart requested by user: {', '.join(restart_labels) or 'API only'}",
+        level="WARNING",
+    )
 
     async def _do_restart():
         global _api_restart_lease
@@ -1416,9 +1518,11 @@ async def server_restart(session: SessionToken = Depends(require_auth)):
             await asyncio.sleep(0.3)  # let response reach the client first
             _close_server_status_streams()
             await asyncio.sleep(0)
-            if _restart_current_api_systemd_unit():
+            if _restart_current_api_systemd_unit(stale_units):
                 await asyncio.sleep(5)
-                raise RuntimeError("The scheduled systemd API restart did not stop the current process")
+                raise RuntimeError("The scheduled systemd PBGui service restart did not stop the current process")
+            if stale_units:
+                raise RuntimeError("Managed daemon restarts require the systemd user service installation")
             pbgdir = Path(__file__).resolve().parent
             venv_python = None
             for candidate in [
@@ -1455,7 +1559,11 @@ async def server_restart(session: SessionToken = Depends(require_auth)):
             restart_lease.release()
 
     asyncio.create_task(_do_restart())
-    return {"ok": True, "message": "Restarting…"}
+    return {
+        "ok": True,
+        "message": "Restarting PBGui services...",
+        "restart_services": restart_labels,
+    }
 
 
 class PBApiServer:

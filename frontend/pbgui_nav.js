@@ -23,6 +23,7 @@
   var _restartEventSource = null;
   var _restartRetryTimer = null;
   var _restartPollTimer = null;
+  var _restartStatus = {};
 
   /* ── config (read at runtime so global vars are already set) ── */
   function cfg() {
@@ -1297,7 +1298,7 @@
         if (blocked) {
           showNavConfirm({
             title: 'Restart blocked',
-            message: 'The PBGui API server cannot restart while VPS tasks are still running.',
+            message: 'PBGui services cannot restart while protected work is still running.',
             detail: blockReason || 'Wait until the active VPS task finishes or is marked interrupted.',
             confirmText: 'OK',
             cancelText: '',
@@ -1305,10 +1306,17 @@
           });
           return;
         }
+        var restartServices = Array.isArray(_restartStatus.restart_services) ? _restartStatus.restart_services : [];
+        var restartLabels = restartServices.map(function (item) {
+          return String((item || {}).label || (item || {}).service || '').trim();
+        }).filter(Boolean);
+        var restartDetail = restartLabels.length
+          ? 'Outdated services: ' + restartLabels.join(', ') + '. The API server restarts last and the page reconnects automatically.'
+          : 'The API server restarts and the page reconnects automatically.';
         showNavConfirm({
-          title: 'Restart API server',
-          message: 'Restart the PBGui API server now?',
-          detail: 'The page will reload automatically.',
+          title: 'Restart PBGui services',
+          message: 'Restart all PBGui services running outdated code?',
+          detail: restartDetail,
           confirmText: 'Restart'
         }).then(function (confirmed) {
           if (!confirmed) return;
@@ -1337,7 +1345,7 @@
             fetchRestartStatus(c2.token, origin2);
             showNavConfirm({
               title: 'Restart failed',
-              message: 'The PBGui API server restart request was rejected.',
+              message: 'The PBGui service restart request was rejected.',
               detail: err && err.message ? err.message : 'Restart failed.',
               confirmText: 'OK',
               cancelText: '',
@@ -1370,22 +1378,29 @@
     ov.id = 'pbgui-restart-overlay';
     ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(9,14,26,.92);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1rem;font-family:sans-serif;';
     ov.innerHTML =
-      '<div style="color:#e2e8f0;font-size:1.1rem;font-weight:600;">Restarting API Server\u2026</div>' +
-      '<div id="pbgui-restart-status" style="color:#64748b;font-size:0.85rem;">Waiting for server\u2026</div>';
+      '<div style="color:#e2e8f0;font-size:1.1rem;font-weight:600;">Restarting PBGui Services\u2026</div>' +
+      '<div id="pbgui-restart-status" style="color:#64748b;font-size:0.85rem;">Waiting for services\u2026</div>';
     document.body.appendChild(ov);
 
     var attempts = 0;
-    var maxAttempts = 30;
+    var maxAttempts = 60;
     var statusEl = document.getElementById('pbgui-restart-status');
     var apiBase = (origin || window.location.origin);
 
     function probe() {
       attempts++;
       if (statusEl) statusEl.textContent = 'Reconnecting\u2026 (' + attempts + '/' + maxAttempts + ')';
-      fetch(apiBase + '/health', { cache: 'no-store' })
+      fetch(apiBase + '/api/server-status', authOptions(token, { cache: 'no-store', credentials: 'same-origin' }))
         .then(function (r) {
-          if (r.ok) { window.location.reload(); }
-          else { if (attempts < maxAttempts) setTimeout(probe, 2000); else _overlayFail(); }
+          if (!r.ok) throw new Error('status unavailable');
+          return r.json();
+        })
+        .then(function (data) {
+          if (!data || data.needs_restart) {
+            if (attempts < maxAttempts) setTimeout(probe, 2000); else _overlayFail();
+            return;
+          }
+          window.location.reload();
         })
         .catch(function () {
           if (attempts < maxAttempts) setTimeout(probe, 2000); else _overlayFail();
@@ -1393,7 +1408,7 @@
     }
 
     function _overlayFail() {
-      if (statusEl) statusEl.textContent = 'Server did not respond \u2014 please refresh manually.';
+      if (statusEl) statusEl.textContent = 'Services did not become current \u2014 please refresh and inspect service status.';
     }
 
     /* First probe after PBGUI_RESTART_DELAY (3s) + a small buffer */
@@ -1401,20 +1416,32 @@
   }
 
   function updateRestartButtonState(state) {
+    _restartStatus = state || {};
     if (state && state.master_name !== undefined) updateMasterName(state.master_name);
     updateAuthModeState(state && state.auth ? state.auth : {});
     var btn = document.getElementById('pbgui-restart-btn');
     if (!btn) return;
     var visible = !!(state && state.needs_restart);
-    var blocked = !!(state && state.restart_blocked);
-    var reason = state && state.restart_block_reason ? String(state.restart_block_reason) : '';
+    var blocked = state && state.restart_blocked !== undefined
+      ? !!state.restart_blocked
+      : btn.getAttribute('data-restart-blocked') === '1';
+    var reason = state && state.restart_block_reason !== undefined
+      ? String(state.restart_block_reason || '')
+      : (btn.getAttribute('data-restart-block-reason') || '');
+    var services = state && Array.isArray(state.restart_services) ? state.restart_services : [];
+    var serviceLabels = services.map(function (item) {
+      return String((item || {}).label || (item || {}).service || '').trim();
+    }).filter(Boolean);
     btn.style.display = visible ? 'flex' : 'none';
     btn.setAttribute('data-restart-blocked', blocked ? '1' : '0');
     btn.setAttribute('data-restart-block-reason', reason);
     btn.disabled = false;
     btn.setAttribute('aria-disabled', blocked ? 'true' : 'false');
     btn.classList.toggle('disabled', blocked);
-    btn.title = blocked ? ('Restart blocked: ' + (reason || 'Active VPS tasks are still running.')) : 'Restart API server';
+    btn.innerHTML = '<span class="nav-restart-dot"></span>Restart' + (serviceLabels.length ? ' (' + serviceLabels.length + ')' : '');
+    btn.title = blocked
+      ? ('Restart blocked: ' + (reason || 'Protected PBGui work is still running.'))
+      : ('Restart outdated PBGui services' + (serviceLabels.length ? ': ' + serviceLabels.join(', ') : ''));
   }
 
   function updateAuthModeState(auth) {

@@ -33,9 +33,9 @@ You can change host and port on the **PBAPIServer Details** page (`System → Se
 
 - **Start**: Use the Start button on the Services overview or details page. PBAPIServer spawns as a background process.
 - **Stop**: Not supported from GUI (the server cannot stop itself while serving the page). Stop via terminal if needed.
-- **Restart**: Use the Restart button. The server gracefully shuts down and respawns after a short delay (3 seconds) to ensure the port is released.
+- **Restart**: Use the Restart button. PBGui restarts active managed services that still run an older code serial, then restarts the API server last and reloads the page.
 
-The nav bar shows an orange **Restart** button when the API code has changed (detected via `api/serial.txt`). Clicking it triggers a graceful restart and page reload.
+The nav bar shows an orange **Restart** button when the API or an active PBCluster, PBRun, PBData, PBCoinData, or PBMonitorAgent process still runs an older `api/serial.txt` value. The confirmation lists affected services. Detached bots, backtests, optimizations, and Market Data jobs are not restarted.
 
 ## WebSocket endpoints
 
@@ -86,6 +86,6 @@ PBAPIServer runs several internal background tasks:
 |---|---|
 | Server won't start | Check if port is already in use (`lsof -i :8000`); check `data/pid/api_server.pid` for stale PID |
 | "Address already in use" | Previous server didn't shut down cleanly — wait a few seconds or kill the old process |
-| Orange Restart button won't go away | Click it to restart; `api/serial.txt` was incremented after a code change |
+| Orange Restart button won't go away | Open it to see which managed service still reports an older `api/serial.txt` value; inspect that service if the coordinated restart cannot make it current |
 | WebSocket disconnects | Check `PBApiServer.log` for `[ERROR]` lines; verify token is still valid |
 | Dashboard not loading | Confirm PBAPIServer is running; check browser console for connection errors |

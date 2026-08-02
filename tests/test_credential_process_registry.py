@@ -13,6 +13,12 @@ import pytest
 import credential_process_registry as registry
 
 
+def test_pbdata_is_a_managed_runtime_serial_reporter() -> None:
+    """PBData participates in stale daemon detection alongside other long-running services."""
+
+    assert registry.RELEVANT_PROCESS_SCRIPTS["PBData.py"] == "PBData"
+
+
 SERVICES = (
     "PBApiServer",
     "PBCluster",

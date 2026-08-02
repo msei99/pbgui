@@ -1927,6 +1927,13 @@ def _peer_topology_allows(
     """Return whether this node should actively contact *peer* by default."""
 
     local_role = str((local_node or {}).get("role") or "").strip()
+    if local_role == "master" and str((peer or {}).get("role") or "").strip() == "vps":
+        return True, "master syncs directly with VPS peer"
+    explicit = local_node.get("sync_peers") if isinstance(local_node, dict) else None
+    if isinstance(explicit, list):
+        if str(peer_id) in {str(item) for item in explicit}:
+            return True, "explicit sync peer"
+        return False, "peer is not in sync_peers"
     if local_role == "master":
         coordinator_id = min(
             (
@@ -1944,11 +1951,6 @@ def _peer_topology_allows(
                 return True, "secondary master syncs through coordinator"
             return False, "secondary master fanout is delegated to coordinator"
 
-    explicit = local_node.get("sync_peers") if isinstance(local_node, dict) else None
-    if isinstance(explicit, list):
-        if str(peer_id) in {str(item) for item in explicit}:
-            return True, "explicit sync peer"
-        return False, "peer is not in sync_peers"
     if local_role == "vps":
         return False, "VPS nodes do not initiate peer SSH without explicit sync_peers"
     return True, ""
