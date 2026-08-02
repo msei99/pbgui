@@ -8284,6 +8284,7 @@
       const units = Array.isArray(detected.systemd_units) ? detected.systemd_units : [];
       const cronLines = Array.isArray(detected.legacy_cron_lines) ? detected.legacy_cron_lines : [];
       const processes = Array.isArray(detected.legacy_processes) ? detected.legacy_processes : [];
+      const hostKeyAction = hostKey.mismatch ? 'Replace stored key and probe again' : 'Trust fingerprint and probe again';
       const checkRows = checks.length
         ? checks.map(function (item) {
             return `<div class='status-item'><div class='status-label'>${esc(item.label || '')}</div><div class='status-value'>${boolDot(!!item.ok)}</div><div class='status-sub'>${esc(item.detail || '')}</div></div>`;
@@ -8317,7 +8318,7 @@
           <div class='status-item'><div class='status-label'>Active CMC Keys</div><div class='status-value'>${esc(capabilityValue(detected.cmc_active_key_count))}</div><div class='status-sub'>Secret-free pool count</div></div>
         </div>`;
       const hostKeyHtml = hostKey.fingerprint
-        ? `<div class='notice ${payload.needs_host_key_confirmation ? 'warning' : (hostKey.mismatch ? 'error' : 'info')}'>SSH host key for <strong>${esc(hostKey.host || payload.hostname || '')}</strong>${hostKey.ip ? ' (' + esc(hostKey.ip) + ')' : ''}: <span class='code'>${esc(hostKey.key_type || '')} ${esc(hostKey.fingerprint || '')}</span>${payload.needs_host_key_confirmation ? '<div style="margin-top:8px"><button class="btn primary" type="button" onclick="trustExistingVpsImportHostKey()">Trust fingerprint and probe again</button></div>' : ''}</div>`
+        ? `<div class='notice ${payload.needs_host_key_confirmation ? 'warning' : (hostKey.mismatch ? 'error' : 'info')}'>SSH host key for <strong>${esc(hostKey.host || payload.hostname || '')}</strong>${hostKey.ip ? ' (' + esc(hostKey.ip) + ')' : ''}: <span class='code'>${esc(hostKey.key_type || '')} ${esc(hostKey.fingerprint || '')}</span>${hostKey.mismatch ? '<div class="field-help" style="margin-top:8px">The stored key differs. Verify this fingerprint through a trusted channel before replacing it.</div>' : ''}${payload.needs_host_key_confirmation ? '<div style="margin-top:8px"><button class="btn primary" type="button" onclick="trustExistingVpsImportHostKey()">' + esc(hostKeyAction) + '</button></div>' : ''}</div>`
         : '';
       return `
         <div style='display:grid;gap:14px'>

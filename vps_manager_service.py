@@ -6400,9 +6400,25 @@ fi"""
             return result
 
         if result["host_key"].get("mismatch"):
-            add_check("SSH host key", False, "Known host key mismatch.")
-            add_blocker("SSH host key mismatch. Fix known_hosts intentionally before importing.")
-            return result
+            fingerprint = str(result["host_key"].get("fingerprint") or "")
+            if not accept_unknown_host:
+                result["needs_host_key_confirmation"] = True
+                add_check("SSH host key", False, "Known host key changed; fingerprint confirmation required.")
+                add_warning("Verify the changed SSH host key fingerprint through a trusted channel before replacing the stored key.")
+                return result
+            if not _ssh_fingerprints_match(accepted_fingerprint, fingerprint):
+                result["needs_host_key_confirmation"] = True
+                add_check("SSH host key", False, "Accepted fingerprint does not match the changed key.")
+                add_blocker("Accepted SSH host key fingerprint does not match the presented key.")
+                return result
+            targets = list(dict.fromkeys([hostname, ssh_target]))
+            _replace_known_host_keys(targets, 22, remote_key)
+            if any(_known_host_key_status(target, 22, remote_key) != "known" for target in targets):
+                add_check("SSH host key", False, "Stored SSH host key replacement could not be verified.")
+                add_blocker("The SSH host key could not be updated because another known_hosts entry still conflicts.")
+                return result
+            result["host_key"].update({"status": "known", "known": True, "mismatch": False})
+            add_check("SSH host key", True, f"Replaced stored key with {remote_key.get_name()} {fingerprint}.")
         if result["host_key"].get("status") != "known":
             if not accept_unknown_host:
                 result["needs_host_key_confirmation"] = True
@@ -6421,7 +6437,7 @@ fi"""
             result["host_key"]["status"] = "known"
             result["host_key"]["known"] = True
             add_check("SSH host key", True, f"Trusted {remote_key.get_name()} {fingerprint}.")
-        else:
+        elif not any(item.get("label") == "SSH host key" for item in result["checks"]):
             if ssh_target != hostname:
                 _remember_known_host_key(ssh_target, 22, remote_key)
             add_check("SSH host key", True, "Known host key matches.")

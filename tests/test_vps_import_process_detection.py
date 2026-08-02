@@ -298,6 +298,119 @@ def test_existing_vps_probe_allows_missing_local_hosts_entry(monkeypatch: pytest
     assert any("saving the import will add it" in warning for warning in result["warnings"])
 
 
+def test_existing_vps_probe_offers_changed_host_key_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A changed import host key is reviewable instead of producing an unrecoverable blocker."""
+
+    service = object.__new__(VPSManagerService)
+    service.vpsmanager = SimpleNamespace(list=lambda: [])
+
+    class FakeKey:
+        """Minimal SSH host key double."""
+
+        def get_name(self) -> str:
+            """Return a deterministic key type."""
+            return "ssh-ed25519"
+
+    monkeypatch.setattr(service_mod, "_hosts_entry_status", lambda hostname, ip: {"ok": True, "has_hostname": True, "current_ip": ip})
+    monkeypatch.setattr(service_mod, "_fetch_remote_host_key", lambda host, port=22, timeout=10: FakeKey())
+    monkeypatch.setattr(service_mod, "_ssh_fingerprint_sha256", lambda key: "SHA256:changed")
+    monkeypatch.setattr(service_mod, "_known_host_key_status", lambda host, port, key: "mismatch")
+
+    result = service.probe_existing_vps_import({
+        "hostname": "manibot50",
+        "ip": "85.215.157.244",
+        "user": "mani",
+        "user_pw": "",
+        "install_dir": "/home/mani/software",
+    })
+
+    assert result["needs_host_key_confirmation"] is True
+    assert result["host_key"]["mismatch"] is True
+    assert result["blockers"] == []
+    assert any("trusted channel" in warning for warning in result["warnings"])
+
+
+def test_existing_vps_probe_replaces_exactly_confirmed_changed_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exact changed-key confirmation atomically replaces hostname and IP aliases."""
+
+    service = object.__new__(VPSManagerService)
+    service.vpsmanager = SimpleNamespace(list=lambda: [])
+    replaced: list[tuple[list[str], int, object]] = []
+
+    class FakeKey:
+        """Minimal SSH host key double."""
+
+        def get_name(self) -> str:
+            """Return a deterministic key type."""
+            return "ssh-ed25519"
+
+    key = FakeKey()
+    monkeypatch.setattr(service_mod, "_hosts_entry_status", lambda hostname, ip: {"ok": False, "has_hostname": False, "current_ip": ""})
+    monkeypatch.setattr(service_mod, "_fetch_remote_host_key", lambda host, port=22, timeout=10: key)
+    monkeypatch.setattr(service_mod, "_ssh_fingerprint_sha256", lambda remote_key: "SHA256:changed")
+    monkeypatch.setattr(
+        service_mod,
+        "_known_host_key_status",
+        lambda host, port, remote_key: "known" if replaced else "mismatch",
+    )
+    monkeypatch.setattr(
+        service_mod,
+        "_replace_known_host_keys",
+        lambda hosts, port, remote_key: replaced.append((hosts, port, remote_key)),
+    )
+
+    result = service.probe_existing_vps_import({
+        "hostname": "manibot50",
+        "ip": "85.215.157.244",
+        "user": "mani",
+        "user_pw": "",
+        "install_dir": "/home/mani/software",
+        "accept_unknown_host": True,
+        "accepted_host_key_fingerprint": "SHA256:changed",
+    })
+
+    assert replaced == [(["manibot50", "85.215.157.244"], 22, key)]
+    assert result["host_key"]["status"] == "known"
+    assert result["host_key"]["mismatch"] is False
+    assert any(item["label"] == "SSH host key" and item["ok"] for item in result["checks"])
+    assert any("password is required" in blocker.lower() for blocker in result["blockers"])
+
+
+def test_existing_vps_probe_rejects_wrong_changed_key_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A changed host key is never replaced when the submitted fingerprint differs."""
+
+    service = object.__new__(VPSManagerService)
+    service.vpsmanager = SimpleNamespace(list=lambda: [])
+    replaced: list[object] = []
+
+    class FakeKey:
+        """Minimal SSH host key double."""
+
+        def get_name(self) -> str:
+            """Return a deterministic key type."""
+            return "ssh-ed25519"
+
+    monkeypatch.setattr(service_mod, "_hosts_entry_status", lambda hostname, ip: {"ok": True, "has_hostname": True, "current_ip": ip})
+    monkeypatch.setattr(service_mod, "_fetch_remote_host_key", lambda host, port=22, timeout=10: FakeKey())
+    monkeypatch.setattr(service_mod, "_ssh_fingerprint_sha256", lambda key: "SHA256:changed")
+    monkeypatch.setattr(service_mod, "_known_host_key_status", lambda host, port, key: "mismatch")
+    monkeypatch.setattr(service_mod, "_replace_known_host_keys", lambda *args: replaced.append(args))
+
+    result = service.probe_existing_vps_import({
+        "hostname": "manibot50",
+        "ip": "85.215.157.244",
+        "user": "mani",
+        "user_pw": "",
+        "install_dir": "/home/mani/software",
+        "accept_unknown_host": True,
+        "accepted_host_key_fingerprint": "SHA256:wrong",
+    })
+
+    assert replaced == []
+    assert result["needs_host_key_confirmation"] is True
+    assert any("does not match" in blocker for blocker in result["blockers"])
+
+
 def test_install_import_monitoring_key_rejects_unknown_host_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """Monitoring key install requires prior fingerprint confirmation."""
 

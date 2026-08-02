@@ -359,6 +359,18 @@ class TestVpsManagerFrontendLogic:
         assert "class='status-sub code ssh-host-key-fingerprint'" in source
         assert "overflow-wrap: anywhere" in source
 
+    def test_existing_vps_import_can_replace_confirmed_changed_host_key(self) -> None:
+        """The import preview exposes changed-key replacement with exact fingerprint replay."""
+
+        source = HTML_PATH.read_text(encoding="utf-8")
+        preview_source = _extract_function(source, "renderExistingVpsImportPreview")
+        trust_source = _extract_function(source, "trustExistingVpsImportHostKey")
+
+        assert "Replace stored key and probe again" in preview_source
+        assert "Verify this fingerprint through a trusted channel" in preview_source
+        assert "flow.form.accept_unknown_host = true" in trust_source
+        assert "flow.form.accepted_host_key_fingerprint = fingerprint" in trust_source
+
     def test_overview_shows_ssh_host_key_status(self) -> None:
         """Show trusted, unknown, changed, and failed SSH keys in Overview."""
         source = HTML_PATH.read_text(encoding="utf-8")
