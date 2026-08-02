@@ -484,6 +484,14 @@ class LogViewerPanel {
     '<div id="' + p + 'terminal" class="lvp-terminal"></div>' +
   '</div>' +
 '</div>';
+        var hostSelect = this._q('host-sel');
+        if (hostSelect && this._host !== 'local') {
+            var hostOption = document.createElement('option');
+            hostOption.value = this._host;
+            hostOption.textContent = this._host;
+            hostSelect.appendChild(hostOption);
+            hostSelect.value = this._host;
+        }
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -824,11 +832,12 @@ class LogViewerPanel {
         var sel = this._q('host-sel');
         if (!sel) return;
         var hosts = ['local'];
+        if (this._host !== 'local') hosts.push(this._host);
         if (this._vpState && this._vpState.connections) {
             var conns = this._vpState.connections.connections || this._vpState.connections || {};
             for (var h in conns) {
                 if (conns.hasOwnProperty(h) && conns[h] &&
-                    String(conns[h].status).toUpperCase() === 'CONNECTED')
+                    String(conns[h].status).toUpperCase() === 'CONNECTED' && hosts.indexOf(h) < 0)
                     hosts.push(h);
             }
         }

@@ -187,7 +187,7 @@ def test_runv8_launches_exact_cli_with_isolated_virtualenv(
     def fake_popen(command, **kwargs):
         events.append("popen")
         captured.update(command=command, **kwargs)
-        return SimpleNamespace(stderr=iter(()))
+        return SimpleNamespace(stdout=iter(()))
 
     monkeypatch.setattr(runner, "is_running", lambda: next(running))
     monkeypatch.setattr(
@@ -213,6 +213,8 @@ def test_runv8_launches_exact_cli_with_isolated_virtualenv(
     assert captured["env"]["VIRTUAL_ENV"] == str((tmp_path / "venv_pb8").resolve())
     assert captured["env"]["PATH"] == str(tmp_path / "venv_pb8" / "bin") + os.pathsep + os.defpath
     assert captured["start_new_session"] is True
+    assert captured["stdout"] is pbrun.subprocess.PIPE
+    assert captured["stderr"] is pbrun.subprocess.STDOUT
     assert events == ["acquire", "ready", "popen", "release"]
 
 

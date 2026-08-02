@@ -417,7 +417,7 @@
   function _ensureLogViewer(cb) {
     if (typeof window.LogViewerPanel === 'function') { cb(); return; }
     var s = document.createElement('script');
-    s.src = '/app/js/log_viewer_panel.js?v=28';
+    s.src = '/app/js/log_viewer_panel.js?v=29';
     s.onload = cb;
     s.onerror = function() { console.warn('Failed to load log_viewer_panel.js'); };
     document.head.appendChild(s);

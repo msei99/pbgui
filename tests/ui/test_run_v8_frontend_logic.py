@@ -107,6 +107,18 @@ def test_pb8_template_hsl_coin_mode_has_a_select_option() -> None:
     assert "hsl_signal_mode: getVal('f-hsl-signal-mode')" in page
 
 
+def test_log_panel_waits_for_remote_assignment_before_opening() -> None:
+    """PB8 log opening must wait until enabled_on is populated from the config."""
+
+    page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+    open_log_panel = _page_function(page, "openLogPanel")
+
+    assert "async function openLogPanel()" in page
+    assert "await _editorInitPromise" in open_log_panel
+    assert "if (_logPanelOpen) return" in open_log_panel
+    assert "_editorInitPromise = init();" in page
+
+
 def test_import_user_field_is_searchable_and_rejects_unknown_users() -> None:
     """PB7/PB8 config import uses searchable suggestions without accepting arbitrary users."""
     page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")

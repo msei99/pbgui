@@ -154,5 +154,20 @@ def test_every_log_viewer_asset_reference_uses_current_cache_version() -> None:
         references.extend((path, match.group(0)) for match in re.finditer(r"log_viewer_panel\.js\?v=\d+", source))
 
     assert references
-    assert all(reference.endswith("?v=28") for _path, reference in references), references
-    assert "log_viewer_panel.js?v=28" in NAV.read_text(encoding="utf-8")
+    assert all(reference.endswith("?v=29") for _path, reference in references), references
+    assert "log_viewer_panel.js?v=29" in NAV.read_text(encoding="utf-8")
+
+
+def test_remote_default_host_is_rendered_before_vps_state_arrives() -> None:
+    """A requested remote host must never be presented as Local while state loads."""
+
+    source = LOG_VIEWER.read_text(encoding="utf-8")
+    build_start = source.index("    _build() {")
+    build_method = source[build_start:source.index("    _bindEvents() {", build_start)]
+    dropdown_start = source.index("    _updateHostDropdown() {")
+    dropdown_method = source[dropdown_start:source.index("    _arrayEq(", dropdown_start)]
+
+    assert "if (hostSelect && this._host !== 'local')" in build_method
+    assert "hostOption.textContent = this._host" in build_method
+    assert "hostSelect.value = this._host" in build_method
+    assert "if (this._host !== 'local') hosts.push(this._host)" in dropdown_method

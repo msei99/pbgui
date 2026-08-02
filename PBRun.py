@@ -1280,8 +1280,8 @@ class RunV8:
                 return False
             proc = subprocess.Popen(
                 self.command,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 cwd=str(Path(self.pb8dir).resolve()),
                 text=True,
                 env=env,
@@ -1298,7 +1298,7 @@ class RunV8:
         finally:
             if runtime_lease is not None:
                 runtime_lease.release()
-        threading.Thread(target=_ts_wrap_stderr, args=(proc.stderr, err_log), daemon=True).start()
+        threading.Thread(target=_ts_wrap_stderr, args=(proc.stdout, err_log), daemon=True).start()
         self._last_started_at = time()
         self._running_version = self.version
         _log(

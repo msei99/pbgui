@@ -127,6 +127,8 @@ def test_pb8_playbooks_gate_role_validate_and_leave_processes_running(playbook_p
         assert 'pip install --no-cache-dir --upgrade -e "{{ pb8dir }}"' in source
         assert "Remove PB8 Rust build artifacts on live-only runners" in source
         assert "Validate PB8 live runtime after build cleanup" in source
+        assert "stamp_compiled_extensions(source_fingerprint())" in source
+        assert "check_and_maybe_compile(fail_on_stale=True)" in source
         assert "Measure PB8 disk state before changes" in source
         assert "Measure PB8 disk state after validation" in source
         assert "pb8_min_free_bytes | default(3221225472)" in source

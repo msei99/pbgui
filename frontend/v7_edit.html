@@ -1211,7 +1211,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <script src="/app/js/editor_shared.js?v=13"></script>
 <script src="/app/js/pbgui_dialogs.js?v=5"></script>
 <script src="/app/js/run_editor_adapter.js?v=6"></script>
-<script src="/app/js/log_viewer_panel.js?v=28"></script>
+<script src="/app/js/log_viewer_panel.js?v=29"></script>
 <script src="/app/js/coin_overrides_editor.js?v=23"></script>
 <script>
 /* ─── Injected Vars ────────────────────────────────────────── */
@@ -1249,6 +1249,7 @@ var _symbolsAndTagsLoadSeq = 0;
 var _symbolsAndTagsLoadPromise = Promise.resolve();
 var _hostCapabilityGeneration = 0;
 var _hostCapabilityController = null;
+var _editorInitPromise = null;
 var _runStrategyBotCache = { long: {}, short: {} };
 var _activeRunStrategyKind = '';
 
@@ -3242,7 +3243,9 @@ function toggleLogPanel() {
   if (_logPanelOpen) closeLogPanel(); else openLogPanel();
 }
 
-function openLogPanel() {
+async function openLogPanel() {
+  if (_editorInitPromise) await _editorInitPromise;
+  if (_logPanelOpen) return;
   _logPanelOpen = true;
   var panel = document.getElementById('log-panel');
   var sb = document.getElementById('sidebar');
@@ -3852,7 +3855,7 @@ async function calculateBalance() {
 
 /* ─── Init ─────────────────────────────────────────────────── */
 bindStructuredEditorSync();
-init();
+_editorInitPromise = init();
 </script>
 
 <!-- ── Shared nav bar ── -->
