@@ -184,7 +184,7 @@ Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöf
 
 Nach einer VPS-Neuinstallation aendert sich der SSH-Host-Key. Der Preflight auf der Add-Seite blockiert die Initialisierung und zeigt **Review changed key**. Den angezeigten SHA-256-Fingerprint ueber einen vertrauenswuerdigen Kanal pruefen und den Austausch danach explizit bestaetigen. PBGui ersetzt atomar nur die kollidierenden Benutzer-`known_hosts`-Eintraege fuer diesen Hostnamen und diese IP und wiederholt anschliessend den Verbindungstest.
 
-**Import Existing VPS** verwendet denselben Schutz. Ein geaenderter Key wird mit **Replace stored key and probe again** angezeigt, statt den Import dauerhaft zu blockieren. Nach Pruefung und Bestaetigung des exakt angezeigten Fingerprints liest PBGui den Key erneut, ersetzt atomar nur diesen Hostnamen und diese IP und wiederholt den Import-Probe. Ein Fingerprint, der sich waehrend des geoeffneten Dialogs geaendert hat, wird abgelehnt.
+**Import Existing VPS** verwendet denselben Schutz. Ein geaenderter Key wird mit **Replace stored key and probe again** angezeigt, statt den Import dauerhaft zu blockieren. Nach Pruefung und Bestaetigung des exakt angezeigten Fingerprints liest PBGui den Key erneut, ersetzt atomar nur diesen Hostnamen und diese IP und wiederholt den Import-Probe. Ein Fingerprint, der sich waehrend des geoeffneten Dialogs geaendert hat, wird abgelehnt. Beim Speichern verbindet PBGui den VPS Monitor auf demselben Master neu und fordert sofort einen PBCluster-Retry an, sodass der bestaetigte Key weder im VPS Manager noch in Cluster Sync ein zweites Mal geprueft werden muss.
 
 ---
 

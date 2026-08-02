@@ -704,6 +704,49 @@ def test_known_host_alias_status_reports_changed_unknown_and_trusted() -> None:
     assert service_mod._known_host_alias_status("preferred-vps", "192.0.2.40", 22, host_keys) == "known"
 
 
+def test_current_known_host_key_overrides_historical_monitor_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stale monitor error cannot keep a freshly confirmed import marked as changed."""
+
+    monkeypatch.setattr(service_mod, "_known_host_alias_status", lambda *args: "known")
+
+    status = service_mod._effective_host_key_status(
+        "manibot50",
+        "85.215.157.244",
+        22,
+        "Host key mismatch for manibot50",
+    )
+
+    assert status == "known"
+
+
+def test_untrusted_current_host_key_keeps_monitor_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Historical errors remain visible while current known_hosts evidence is not trusted."""
+
+    monkeypatch.setattr(service_mod, "_known_host_alias_status", lambda *args: "mismatch")
+
+    status = service_mod._effective_host_key_status(
+        "manibot50",
+        "85.215.157.244",
+        22,
+        "Host key mismatch for manibot50",
+    )
+
+    assert status == "error"
+
+
+def test_request_local_pbcluster_sync_touches_existing_cluster_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Accepted import keys trigger an immediate local PBCluster retry."""
+
+    cluster_root = tmp_path / "data" / "cluster"
+    cluster_root.mkdir(parents=True)
+    monkeypatch.setattr(service_mod, "PBGDIR", tmp_path)
+
+    requested = service_mod._request_local_pbcluster_sync()
+
+    assert requested is True
+    assert (cluster_root / "sync_request").is_file()
+
+
 def test_trust_vps_host_key_replaces_confirmed_mismatch_and_reconnects(monkeypatch: pytest.MonkeyPatch) -> None:
     """GUI confirmation replaces an exact changed key and reconnects monitoring."""
     service = object.__new__(VPSManagerService)
@@ -864,6 +907,8 @@ def test_save_existing_vps_import_writes_missing_hosts_entry(monkeypatch: pytest
     """Saving an import writes /etc/hosts with local sudo when the probe requires it."""
     writes: list[tuple[str, str, str]] = []
     saved: list[str] = []
+    monitor_refreshes: list[str] = []
+    cluster_sync_requests: list[bool] = []
     service = object.__new__(VPSManagerService)
     service.vpsmanager = SimpleNamespace(list=lambda: [], vpss=[])
     service.probe_existing_vps_import = lambda form: {
@@ -890,7 +935,13 @@ def test_save_existing_vps_import_writes_missing_hosts_entry(monkeypatch: pytest
     service.write_hosts_entry = lambda ip, hostname, sudo_pw: writes.append((ip, hostname, sudo_pw)) or {"ok": True}
     service._store_session_secrets = lambda token, hostname, values: None
     service._set_vps_monitor_enabled = lambda hostname, enabled: None
+    service._refresh_vps_monitor_connection = lambda hostname: monitor_refreshes.append(hostname)
     service._build_vps_config = lambda token, vps: {"hostname": vps.hostname, "ip": vps.ip}
+    monkeypatch.setattr(
+        service_mod,
+        "_request_local_pbcluster_sync",
+        lambda: cluster_sync_requests.append(True) or True,
+    )
 
     def fake_save(self) -> None:
         """Capture saved VPS hostnames."""
@@ -910,6 +961,9 @@ def test_save_existing_vps_import_writes_missing_hosts_entry(monkeypatch: pytest
 
     assert writes == [("23.94.74.212", "manibot90", "local-sudo-password")]
     assert saved == ["manibot90"]
+    assert monitor_refreshes == ["manibot90"]
+    assert cluster_sync_requests == [True]
+    assert result["cluster_sync_requested"] is True
     assert result["hostname"] == "manibot90"
 
 

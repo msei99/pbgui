@@ -184,7 +184,7 @@ The reveal state is preserved during live updates, so opening an eye button does
 
 If a VPS was reinstalled, its SSH host key changes. The Add-page preflight blocks initialization and shows **Review changed key**. Verify the displayed SHA-256 fingerprint through a trusted channel, then explicitly confirm replacement. PBGui atomically replaces only the conflicting user `known_hosts` entries for that hostname and IP and repeats the connectivity check.
 
-**Import Existing VPS** applies the same protection. A changed key is shown with **Replace stored key and probe again** instead of leaving the import permanently blocked. After you verify and accept the exact displayed fingerprint, PBGui fetches it again, atomically replaces only that hostname and IP, and repeats the import probe. A fingerprint that changed while the dialog was open is rejected.
+**Import Existing VPS** applies the same protection. A changed key is shown with **Replace stored key and probe again** instead of leaving the import permanently blocked. After you verify and accept the exact displayed fingerprint, PBGui fetches it again, atomically replaces only that hostname and IP, and repeats the import probe. A fingerprint that changed while the dialog was open is rejected. Saving the import reconnects VPS Monitor and requests an immediate PBCluster retry on the same master, so the confirmed key does not require a second review in VPS Manager or Cluster Sync.
 
 ---
 

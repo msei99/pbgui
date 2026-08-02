@@ -445,6 +445,38 @@ def _known_host_alias_status(hostname: str, ip: str, port: int, host_keys: Any |
     return "known" if hostname_keys[preferred_type] == ip_keys[preferred_type] else "mismatch"
 
 
+def _effective_host_key_status(
+    hostname: str,
+    ip: str,
+    port: int,
+    connection_error: str,
+    host_keys: Any | None = None,
+) -> str:
+    """Prefer current known_hosts evidence over a historical connection error."""
+
+    known_status = _known_host_alias_status(hostname, ip, port, host_keys)
+    if known_status == "known":
+        return "known"
+    error = str(connection_error or "").lower()
+    if "host key" in error and any(marker in error for marker in ("not trusted", "mismatch", "does not match", "verification")):
+        return "error"
+    return known_status
+
+
+def _request_local_pbcluster_sync() -> bool:
+    """Request one immediate local PBCluster retry without changing remote state."""
+
+    cluster_root = Path(PBGDIR) / "data" / "cluster"
+    if not cluster_root.exists():
+        return False
+    try:
+        (cluster_root / "sync_request").touch()
+        return True
+    except OSError as exc:
+        _log(SERVICE, f"could not request PBCluster sync after VPS import: {exc}", level="WARNING")
+        return False
+
+
 def _fetch_remote_host_key(host: str, port: int = 22, timeout: int = 10) -> Any:
     import paramiko
 
@@ -3394,16 +3426,12 @@ class VPSManagerService:
         telemetry_cached = bool(stream.get("cached")) and not telemetry_fresh
         online = ssh_online and telemetry_fresh
         connection_error = str((((host_state or {}).get("connection") or {}).get("last_error")) or "")
-        if "host key" in connection_error.lower() and any(
-            marker in connection_error.lower()
-            for marker in ("not trusted", "mismatch", "does not match", "verification")
-        ):
-            ssh_host_key_status = "error"
-        elif vps:
-            ssh_host_key_status = _known_host_alias_status(
+        if vps:
+            ssh_host_key_status = _effective_host_key_status(
                 hostname,
                 str(getattr(vps, "ip", "") or ""),
                 _safe_int(getattr(vps, "firewall_ssh_port", 22), 22) or 22,
+                connection_error,
                 known_host_keys,
             )
         else:
@@ -6769,11 +6797,13 @@ done"""
         if monitor_enabled:
             self._set_vps_monitor_enabled(hostname, enabled=True)
             self._refresh_vps_monitor_connection(hostname)
+        cluster_sync_requested = _request_local_pbcluster_sync()
         return {
             "hostname": hostname,
             "config": self._build_vps_config(token, vps),
             "probe": probe,
             "monitor_enabled": monitor_enabled,
+            "cluster_sync_requested": cluster_sync_requested,
             "message": "Imported VPS saved." if monitor_enabled else "Imported VPS saved. Live monitoring needs SSH key authentication.",
         }
 
