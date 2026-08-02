@@ -97,6 +97,8 @@ _REMOTE_PUSH_ACTIVE_STATES = frozenset({"queued", "running"})
 _SELF_JOIN_ACTIVE_STATES = frozenset({"queued", "running"})
 _REPAIR_ALL_SSH_ACTIVE_STATES = frozenset({"queued", "running"})
 _CONFIG_BLOB_BATCH_TARGET_BYTES = 12 * 1024 * 1024
+_OPERATION_BATCH_SIZE = 20
+_OPERATION_BATCH_TIMEOUT_SECONDS = 90
 _EDITABLE_NODE_SYNC_MODES = frozenset({"disabled", "outbound_only", "reachable"})
 
 
@@ -4167,20 +4169,43 @@ async def _push_missing_operations_to_remote(
     if limit is not None and limit > 0:
         operations = operations[:limit]
     remaining_after_batch = max(0, total_missing - len(operations))
+    remote_dir = str(node.get("remote_pbgui_dir") or "")
+
+    async def rebuild_remote() -> dict[str, Any]:
+        """Rebuild remote materialized state with explicit timeout reporting."""
+
+        rebuild_command = _cluster_remote_command(remote_dir, local_node_id, "rebuild")
+        try:
+            rebuild_result = await pool.run(hostname, rebuild_command, timeout=120)
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            raise HTTPException(status_code=504, detail="Remote Cluster rebuild timed out after 120 seconds") from exc
+        except Exception as exc:
+            detail = str(exc).strip() or type(exc).__name__
+            raise HTTPException(status_code=502, detail=f"Remote Cluster rebuild failed: {detail}") from exc
+        if rebuild_result is None:
+            raise HTTPException(status_code=502, detail="Remote host became unreachable before rebuild")
+        if int(getattr(rebuild_result, "exit_status", 1) or 0) != 0:
+            error = _probe_error_text(rebuild_result)
+            _log(SERVICE, f"Remote cluster rebuild failed on {hostname}: {error}", level="WARNING")
+            raise HTTPException(status_code=409, detail=error)
+        return _parse_remote_json_result(rebuild_result, "Remote rebuild")
+
     if not operations:
+        rebuild_payload = await rebuild_remote() if rebuild else None
         result = {
             "ok": True,
             "node_id": node_id,
             "hostname": hostname,
             "pushed": [],
-            "counts": {"pushed": 0, "rebuilt": 0, "local_ops_remaining": 0, "total_missing_before": 0},
-            "message": "Remote already has all local operations.",
+            "counts": {"pushed": 0, "rebuilt": 1 if rebuild else 0, "local_ops_remaining": 0, "total_missing_before": 0},
+            "message": "Remote already has all local operations; materialized state was rebuilt." if rebuild else "Remote already has all local operations.",
         }
+        if rebuild_payload is not None:
+            result["rebuild"] = rebuild_payload
         report_progress({"phase": "done", "done": 0, "total": 0, "remaining": 0})
         return result
 
     pushed: list[dict[str, Any]] = []
-    remote_dir = str(node.get("remote_pbgui_dir") or "")
     local_materialized = rebuild_materialized_state(root, write=False)
     local_desired = local_materialized.get("desired_state") or {}
     config_blobs, config_blob_skips = _collect_current_config_blobs(local_desired)
@@ -4204,39 +4229,61 @@ async def _push_missing_operations_to_remote(
         report_progress,
     )
 
-    bulk_payload = json.dumps({"operations": operations}, sort_keys=True, separators=(",", ":"))
     bulk_unsupported = False
-    try:
-        bulk_result = await _run_cluster_payload_command(pool, hostname, remote_dir, local_node_id, "put-ops", bulk_payload, timeout=60)
-    except Exception as exc:
-        _log(SERVICE, f"Remote cluster put-ops failed for {hostname}: {exc}", level="ERROR")
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    if bulk_result is None:
-        raise HTTPException(status_code=502, detail="Remote host is unreachable")
-    if int(getattr(bulk_result, "exit_status", 1) or 0) == 0:
-        payload_result = _parse_remote_json_result(bulk_result, "Remote put-ops")
-        returned = payload_result.get("operations") if isinstance(payload_result, dict) else []
-        returned = returned if isinstance(returned, list) else []
-        for index, operation in enumerate(operations):
-            item_result = returned[index] if index < len(returned) and isinstance(returned[index], dict) else None
-            pushed.append(_pushed_operation_summary(operation, item_result))
-        report_progress({
-            "phase": "pushing",
-            "done": len(pushed),
-            "total": total_missing,
-            "remaining": max(0, total_missing - len(pushed)),
-            "bulk": True,
-        })
-    else:
+    operation_batches = [
+        operations[index:index + _OPERATION_BATCH_SIZE]
+        for index in range(0, len(operations), _OPERATION_BATCH_SIZE)
+    ]
+    for batch_index, operation_batch in enumerate(operation_batches, start=1):
+        bulk_payload = json.dumps({"operations": operation_batch}, sort_keys=True, separators=(",", ":"))
+        try:
+            bulk_result = await _run_cluster_payload_command(
+                pool,
+                hostname,
+                remote_dir,
+                local_node_id,
+                "put-ops",
+                bulk_payload,
+                timeout=_OPERATION_BATCH_TIMEOUT_SECONDS,
+            )
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            detail = (
+                f"Remote operation batch {batch_index}/{len(operation_batches)} timed out after "
+                f"{_OPERATION_BATCH_TIMEOUT_SECONDS} seconds; retry will resume from the remote state vector"
+            )
+            _log(SERVICE, f"Remote cluster put-ops timed out for {hostname}: {detail}", level="ERROR")
+            raise HTTPException(status_code=504, detail=detail) from exc
+        except Exception as exc:
+            error = str(exc).strip() or type(exc).__name__
+            _log(SERVICE, f"Remote cluster put-ops failed for {hostname}: {error}", level="ERROR")
+            raise HTTPException(status_code=502, detail=f"Remote operation batch failed: {error}") from exc
+        if bulk_result is None:
+            raise HTTPException(status_code=502, detail="Remote host is unreachable")
+        if int(getattr(bulk_result, "exit_status", 1) or 0) == 0:
+            payload_result = _parse_remote_json_result(bulk_result, "Remote put-ops")
+            returned = payload_result.get("operations") if isinstance(payload_result, dict) else []
+            returned = returned if isinstance(returned, list) else []
+            for index, operation in enumerate(operation_batch):
+                item_result = returned[index] if index < len(returned) and isinstance(returned[index], dict) else None
+                pushed.append(_pushed_operation_summary(operation, item_result))
+            report_progress({
+                "phase": "pushing",
+                "done": len(pushed),
+                "total": total_missing,
+                "remaining": max(0, total_missing - len(pushed)),
+                "bulk": True,
+            })
+            continue
         error = _probe_error_text(bulk_result)
         bulk_unsupported = "unsupported command: put-ops" in error.lower()
         if not bulk_unsupported:
             _log(SERVICE, f"Remote cluster put-ops rejected by {hostname}: {error}", level="WARNING")
             raise HTTPException(status_code=409, detail=error)
         _log(SERVICE, f"Remote cluster put-ops unavailable on {hostname}; falling back to put-op", level="WARNING")
+        break
 
     if bulk_unsupported:
-        for operation in operations:
+        for operation in operations[len(pushed):]:
             payload = json.dumps(operation, sort_keys=True, separators=(",", ":"))
             try:
                 result = await _run_cluster_payload_command(pool, hostname, remote_dir, local_node_id, "put-op", payload, timeout=30)
@@ -4298,15 +4345,7 @@ async def _push_missing_operations_to_remote(
         "total": total_missing,
         "remaining": remaining_after_batch,
     })
-    rebuild_command = _cluster_remote_command(remote_dir, local_node_id, "rebuild")
-    rebuild_result = await pool.run(hostname, rebuild_command, timeout=30)
-    if rebuild_result is None:
-        raise HTTPException(status_code=502, detail="Remote host became unreachable before rebuild")
-    if int(getattr(rebuild_result, "exit_status", 1) or 0) != 0:
-        error = _probe_error_text(rebuild_result)
-        _log(SERVICE, f"Remote cluster rebuild failed on {hostname}: {error}", level="WARNING")
-        raise HTTPException(status_code=409, detail=error)
-    rebuild_payload = _parse_remote_json_result(rebuild_result, "Remote rebuild")
+    rebuild_payload = await rebuild_remote()
     result = {
         "ok": True,
         "node_id": node_id,
@@ -4772,18 +4811,19 @@ def _apply_bootstrap_plan(plan: dict[str, Any]) -> dict[str, Any]:
                     else:
                         entry.setdefault("created_at", int(time.time()))
                     _write_host_node_ids(host_node_ids)
-                append_node_placeholder(
-                    _cluster_root(),
-                    _node_payload_from_vps_config(node_id, {
-                        "hostname": name,
-                        "role": item.get("node_role") or "vps",
-                        "sync_mode": item.get("sync_mode") or "disabled",
-                        "ssh_host": item.get("ssh_host") or "",
-                        "ssh_user": item.get("ssh_user") or "",
-                        "ssh_port": item.get("ssh_port") or 22,
-                        "remote_pbgui_dir": item.get("remote_pbgui_dir") or "",
-                    }),
-                )
+                node_payload = _node_payload_from_vps_config(node_id, {
+                    "hostname": name,
+                    "role": item.get("node_role") or "vps",
+                    "sync_mode": item.get("sync_mode") or "disabled",
+                    "ssh_host": item.get("ssh_host") or "",
+                    "ssh_user": item.get("ssh_user") or "",
+                    "ssh_port": item.get("ssh_port") or 22,
+                    "remote_pbgui_dir": item.get("remote_pbgui_dir") or "",
+                })
+                if action == "add" or node_id != requested_node_id:
+                    append_node_placeholder(_cluster_root(), node_payload)
+                else:
+                    append_operation(_cluster_root(), "UPDATE_NODE", node_payload)
                 applied.append({"type": item_type, "name": name, "action": action})
             else:
                 _validate_instance_name(name)
@@ -5950,6 +5990,16 @@ async def onboard_vps_cluster_node(
             and str(probe.get("remote_cluster_id") or "") == str(snapshot["identity"].get("cluster_id") or "")
             and str(probe.get("remote_node_id") or "") == str(node.get("node_id") or "")
         ):
+            if node.get("state_replica", True) is False:
+                append_operation(
+                    _cluster_root(),
+                    "UPDATE_NODE",
+                    {"node_id": str(node.get("node_id") or ""), "state_replica": True},
+                )
+                snapshot = _load_cluster_snapshot()
+                node = _node_for_id(_node_list(snapshot["cluster_nodes"]), str(node.get("node_id") or ""))
+                if not node:
+                    raise HTTPException(status_code=404, detail="Cluster node disappeared while restoring replica membership")
             completion_node = _node_with_probe_capability(node, probe)
             join = {
                 "ok": True,

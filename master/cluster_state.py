@@ -1482,6 +1482,8 @@ def _apply_membership(nodes: dict[str, dict[str, Any]], removed_node_ids: set[st
             "signature_algorithm", "membership_authorization",
         }:
             continue
+        if key == "signing_key_id" and not operation.get("signing_public_key"):
+            continue
         current[key] = value
     current.setdefault("enabled", True)
     normalize_node_sync_fields(current)

@@ -2528,6 +2528,36 @@ def test_vps_manager_cluster_status_resumes_joined_v2_node_until_ack(tmp_path: P
     assert complete["onboarding_complete"] is True
 
 
+def test_vps_manager_cluster_status_resumes_registered_v2_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A crypto-registered node remains resumable after an erroneous local demotion."""
+
+    cluster_root = tmp_path / "data" / "cluster"
+    cluster_root.mkdir(parents=True)
+    node_id = "pbgui-node-00000000-0000-4000-8000-000000000050"
+    (cluster_root / "cluster_nodes.json").write_text(json.dumps({
+        "credential_membership_generation": 2,
+        "nodes": {node_id: {
+            "node_id": node_id,
+            "pbname": "manibot50",
+            "state_replica": False,
+            "credential_protocol_version": 2,
+            "signing_key_id": "ed25519:remote",
+            "encryption_key_id": "x25519:remote",
+        }},
+    }), encoding="utf-8")
+    (cluster_root / "desired_state.json").write_text(json.dumps({
+        "credential_materialization_acks": {},
+    }), encoding="utf-8")
+    monkeypatch.setattr(service_mod, "PBGDIR", tmp_path)
+    service = object.__new__(VPSManagerService)
+
+    status = service._cluster_node_status("manibot50")
+
+    assert status["joined"] is False
+    assert status["action"] == "resume"
+    assert status["onboarding_complete"] is False
+
+
 def test_cluster_onboarding_survives_request_cancellation() -> None:
     """Navigating away does not cancel an API-owned Cluster onboarding task."""
 

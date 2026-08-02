@@ -987,6 +987,45 @@ def test_membership_rejects_forged_actor_and_unapproved_master_self_add(tmp_path
         write_operation(root, rogue_master, network_input=True)
 
 
+def test_admin_metadata_update_preserves_target_signing_key(tmp_path: Path) -> None:
+    """A master's envelope key never replaces the target node's authenticated key."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master"}, created_at=100)
+    remote_keys = ensure_node_key_material(tmp_path / "remote-vps-keys")
+    remote_bundle = remote_keys.public_bundle(NODE_B, "vps")
+    authorization = create_join_authorization(root, NODE_B, "vps", created_at=101)
+    remote_add = sign_operation(
+        _operation(
+            NODE_B,
+            1,
+            "ADD_NODE",
+            {
+                **remote_bundle,
+                "node_id": NODE_B,
+                "role": "vps",
+                "state_replica": True,
+                "membership_authorization": authorization,
+            },
+        ) | {"created_at": 102},
+        remote_keys.signing_private_key,
+        signer_id=NODE_B,
+    )
+    write_operation(root, remote_add, network_input=True)
+
+    update = append_operation(
+        root,
+        "UPDATE_NODE",
+        {"node_id": NODE_B, "pbname": "vps-a"},
+        created_at=103,
+    )
+    node = rebuild_materialized_state(root, write=False)["cluster_nodes"]["nodes"][NODE_B]
+
+    assert update["signing_key_id"] != remote_bundle["signing_key_id"]
+    assert node["signing_key_id"] == remote_bundle["signing_key_id"]
+    assert node["signing_public_key"] == remote_bundle["signing_public_key"]
+
+
 def test_vps_cannot_claim_master_role_for_credential_admin_operations(tmp_path: Path) -> None:
     """Credential authorization uses authenticated role history, never payload claims."""
 

@@ -3519,6 +3519,7 @@ def test_remote_push_ops_uses_checkpoint_baseline_for_remote_ahead_guard(monkeyp
     payload = asyncio.run(cluster._push_missing_operations_to_remote(
         _reachable_vps_payload(),
         read_local_identity(root),
+        rebuild=False,
         pool=object(),
     ))
 
@@ -3528,7 +3529,7 @@ def test_remote_push_ops_uses_checkpoint_baseline_for_remote_ahead_guard(monkeyp
 
 
 def test_remote_push_ops_noops_when_remote_is_current(monkeypatch, tmp_path: Path) -> None:
-    """Remote push avoids put-op and rebuild when the remote already has all local operations."""
+    """A retry rebuilds remote materialized state when all operation files are present."""
 
     root = _init_cluster(tmp_path)
     append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
@@ -3550,7 +3551,12 @@ def test_remote_push_ops_noops_when_remote_is_current(monkeypatch, tmp_path: Pat
     class FakePool:
         async def run(self, hostname: str, command: str, timeout: int = 30):
             calls.append(command)
-            payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_A: 2}}
+            if "get-state-vector" in command:
+                payload = {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {NODE_A: 2}}
+            elif "rebuild" in command:
+                payload = {"ok": True, "generation": 2, "nodes": 1, "instances": 1}
+            else:
+                raise AssertionError(f"unexpected command: {command}")
             return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
 
     monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=FakePool()))
@@ -3558,10 +3564,119 @@ def test_remote_push_ops_noops_when_remote_is_current(monkeypatch, tmp_path: Pat
     payload = asyncio.run(cluster.push_remote_operations(NODE_B, session=None))
 
     assert payload["ok"] is True
-    assert payload["counts"] == {"pushed": 0, "rebuilt": 0, "local_ops_remaining": 0, "total_missing_before": 0}
+    assert payload["counts"] == {"pushed": 0, "rebuilt": 1, "local_ops_remaining": 0, "total_missing_before": 0}
     assert payload["pushed"] == []
-    assert len(calls) == 1
+    assert payload["message"] == "Remote already has all local operations; materialized state was rebuilt."
+    assert len(calls) == 2
     assert "get-state-vector" in calls[0]
+    assert "rebuild" in calls[1]
+
+
+def test_remote_push_ops_splits_large_operation_batches(monkeypatch, tmp_path: Path) -> None:
+    """Large remote pushes report progress after bounded operation batches."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    operations = [
+        {
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_A}:{seq:08d}",
+            "actor": NODE_A,
+            "seq": seq,
+            "op": "UPDATE_NODE",
+            "created_at": 100 + seq,
+            "node_id": NODE_A,
+        }
+        for seq in range(1, 46)
+    ]
+    monkeypatch.setattr(cluster, "load_operations", lambda *args, **kwargs: operations)
+    monkeypatch.setattr(
+        cluster,
+        "rebuild_materialized_state",
+        lambda *args, **kwargs: {"state_vector": {NODE_A: 45}, "desired_state": {}},
+    )
+
+    async def remote_read(*args, **kwargs):
+        return {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {}}
+
+    batch_sizes: list[int] = []
+
+    async def payload_command(pool, hostname, remote_dir, local_node_id, command_text, payload, *, timeout=30):
+        assert command_text == "put-ops"
+        assert timeout == cluster._OPERATION_BATCH_TIMEOUT_SECONDS
+        batch = json.loads(payload)["operations"]
+        batch_sizes.append(len(batch))
+        return SimpleNamespace(
+            exit_status=0,
+            stdout=json.dumps({"ok": True, "count": len(batch), "operations": []}),
+            stderr="",
+        )
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            assert "rebuild" in command
+            return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "generation": 45}), stderr="")
+
+    progress: list[dict] = []
+    monkeypatch.setattr(cluster, "_run_remote_read_command", remote_read)
+    monkeypatch.setattr(cluster, "_run_cluster_payload_command", payload_command)
+
+    payload = asyncio.run(cluster._push_missing_operations_to_remote(
+        _reachable_vps_payload(),
+        read_local_identity(root),
+        pool=FakePool(),
+        progress_callback=progress.append,
+    ))
+
+    assert payload["counts"]["pushed"] == 45
+    assert batch_sizes == [20, 20, 5]
+    assert [item["done"] for item in progress if item.get("phase") == "pushing"] == [0, 20, 40, 45]
+
+
+def test_remote_push_ops_reports_operation_batch_timeout(monkeypatch, tmp_path: Path) -> None:
+    """An operation batch timeout returns an actionable non-empty 504 detail."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    operation = {
+        "schema_version": 1,
+        "cluster_id": CLUSTER_ID,
+        "op_id": f"{NODE_A}:00000001",
+        "actor": NODE_A,
+        "seq": 1,
+        "op": "UPDATE_NODE",
+        "created_at": 101,
+        "node_id": NODE_A,
+    }
+    monkeypatch.setattr(cluster, "load_operations", lambda *args, **kwargs: [operation])
+    monkeypatch.setattr(
+        cluster,
+        "rebuild_materialized_state",
+        lambda *args, **kwargs: {"state_vector": {NODE_A: 1}, "desired_state": {}},
+    )
+
+    async def remote_read(*args, **kwargs):
+        return {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {}}
+
+    async def timeout_payload(*args, **kwargs):
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(cluster, "_run_remote_read_command", remote_read)
+    monkeypatch.setattr(cluster, "_run_cluster_payload_command", timeout_payload)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(cluster._push_missing_operations_to_remote(
+            _reachable_vps_payload(),
+            read_local_identity(root),
+            pool=object(),
+        ))
+
+    assert exc.value.status_code == 504
+    assert exc.value.detail == (
+        "Remote operation batch 1/1 timed out after 90 seconds; "
+        "retry will resume from the remote state vector"
+    )
 
 
 def test_remote_push_ops_can_defer_rebuild_for_progress_batches(monkeypatch, tmp_path: Path) -> None:
@@ -3903,6 +4018,47 @@ def test_bootstrap_preview_skips_registered_vps_node(monkeypatch, tmp_path: Path
     assert preview["can_apply"] is False
     assert preview["items"][0]["action"] == "skip"
     assert preview["items"][0]["reason"] == "VPS node already registered"
+
+
+def test_bootstrap_metadata_update_preserves_joined_replica(monkeypatch, tmp_path: Path) -> None:
+    """Refreshing VPS inventory metadata never demotes an active Cluster replica."""
+
+    root = _init_cluster(tmp_path)
+    _write_vps_config(tmp_path, "vps-a", ip="203.0.113.10", user="bot", ssh_port=2222)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=100)
+    append_operation(
+        root,
+        "ADD_NODE",
+        {
+            "node_id": NODE_B,
+            "role": "vps",
+            "pbname": "vps-a",
+            "hostname": "vps-a",
+            "state_replica": True,
+            "sync_mode": "reachable",
+            "sync_enabled": True,
+            "ssh_host": "203.0.113.10",
+            "ssh_user": "bot",
+            "ssh_port": 2222,
+            "remote_pbgui_dir": "software/pbgui",
+        },
+        created_at=101,
+    )
+    (root / "host_node_ids.json").write_text(
+        json.dumps({"schema_version": 1, "hosts": {"vps-a": {"node_id": NODE_B, "role": "vps"}}}),
+        encoding="utf-8",
+    )
+
+    result = cluster.apply_bootstrap_node("vps-a", session=None)
+    operations = load_operations(root, expected_cluster_id=CLUSTER_ID)
+    node = cluster.rebuild_materialized_state(root, write=False)["cluster_nodes"]["nodes"][NODE_B]
+
+    assert result["changed"] is True
+    assert operations[-1]["op"] == "UPDATE_NODE"
+    assert "state_replica" not in operations[-1]
+    assert node["state_replica"] is True
+    assert node["remote_pbgui_dir"] == "/home/bot/software/pbgui"
 
 
 def test_v7_enabled_host_prefers_existing_reachable_node(monkeypatch, tmp_path: Path) -> None:

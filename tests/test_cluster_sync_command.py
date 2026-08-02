@@ -1080,6 +1080,112 @@ def test_materialize_cluster_audience_cmc_on_master_and_vps(
     assert preview["can_apply"] is False
 
 
+def test_materialize_uses_recipient_update_actor_for_rewrapped_envelope(tmp_path: Path) -> None:
+    """A master may rewrap a credential originally published by another master."""
+
+    key_a_root = tmp_path / "keys-a"
+    key_b_root = tmp_path / "keys-b"
+    key_c_root = tmp_path / "keys-c"
+    members = [
+        (NODE_A, "master", key_a_root),
+        (NODE_B, "vps", key_b_root),
+        (NODE_C, "master", key_c_root),
+    ]
+    root = _credential_cluster(tmp_path, local_node=NODE_B, local_role="vps", members=members)
+    secret_id = "cmc_" + "4" * 32
+    context = SecretContext(CLUSTER_ID, secret_id, "cmc_api_key", 1, "cluster")
+    recipients = [
+        SecretRecipient(node_id, role, ensure_node_key_material(key_root).encryption_public_key)
+        for node_id, role, key_root in members
+    ]
+    recipient_key_ids = {
+        node_id: ensure_node_key_material(key_root).public_bundle(node_id, role)["encryption_key_id"]
+        for node_id, role, key_root in members
+    }
+    source_keys = ensure_node_key_material(key_c_root)
+    initial = seal_secret(
+        b"cmc-rewrapped-value",
+        context,
+        recipients,
+        source_keys.signing_private_key,
+        signer_id=NODE_C,
+    )
+    initial_raw = serialize_sealed_secret(initial)
+    initial_hash = "sha256:" + hashlib.sha256(initial_raw).hexdigest()
+    initial_operation = sign_operation(
+        {
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_C}:00000002",
+            "actor": NODE_C,
+            "seq": 2,
+            "op": "UPSERT_SECRET",
+            "created_at": 110,
+            "secret_id": secret_id,
+            "secret_kind": "cmc_api_key",
+            "audience": "cluster",
+            "generation": 1,
+            "parent_generation": 0,
+            "recipient_generation": 1,
+            "parent_recipient_generation": 0,
+            "membership_generation": 3,
+            "recipient_ids": sorted(recipient_key_ids),
+            "recipient_key_ids": recipient_key_ids,
+            "sealed_blob_hash": initial_hash,
+            "actor_role_epoch": 1,
+            "actor_membership_op_id": f"{NODE_C}:00000001",
+        },
+        source_keys.signing_private_key,
+        signer_id=NODE_C,
+    )
+    rewrap_keys = ensure_node_key_material(key_a_root)
+    rewrapped = seal_secret(
+        b"cmc-rewrapped-value",
+        context,
+        recipients,
+        rewrap_keys.signing_private_key,
+        signer_id=NODE_A,
+    )
+    rewrapped_raw = serialize_sealed_secret(rewrapped)
+    rewrapped_hash = "sha256:" + hashlib.sha256(rewrapped_raw).hexdigest()
+    recipient_operation = sign_operation(
+        {
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_A}:00000002",
+            "actor": NODE_A,
+            "seq": 2,
+            "op": "UPDATE_SECRET_RECIPIENTS",
+            "created_at": 111,
+            "secret_id": secret_id,
+            "provider_generation": 1,
+            "recipient_generation": 2,
+            "parent_recipient_generation": 1,
+            "membership_generation": 3,
+            "recipient_ids": sorted(recipient_key_ids),
+            "recipient_key_ids": recipient_key_ids,
+            "sealed_blob_hash": rewrapped_hash,
+            "actor_role_epoch": 1,
+            "actor_membership_op_id": f"{NODE_A}:00000001",
+        },
+        rewrap_keys.signing_private_key,
+        signer_id=NODE_A,
+    )
+    run_command(root, NODE_A, f"put-sealed-blob {initial_hash}", initial_raw)
+    run_command(root, NODE_A, f"put-sealed-blob {rewrapped_hash}", rewrapped_raw)
+    write_operation(root, initial_operation, network_input=True)
+    write_operation(root, recipient_operation, network_input=True)
+
+    result = run_command(root, NODE_A, "materialize-credentials")
+    secret = rebuild_materialized_state(root, write=False)["desired_state"]["secrets"][secret_id]
+
+    assert result["ok"] is True
+    assert result["items"][0]["status"] == "written"
+    assert secret["updated_by"] == NODE_C
+    assert secret["recipient_updated_by"] == NODE_A
+    assert CredentialStore(root.parent / "credentials").load_cmc_key(secret_id) == "cmc-rewrapped-value"
+
+
 def test_tradfi_materializes_on_master_and_vps_reports_not_recipient(
     monkeypatch,
     tmp_path: Path,

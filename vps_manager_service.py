@@ -3716,23 +3716,29 @@ class VPSManagerService:
                 credential_v2 = int(item.get("credential_protocol_version") or 0) >= 2
             except (TypeError, ValueError):
                 credential_v2 = False
+            credential_registered = bool(
+                credential_v2
+                and item.get("signing_key_id")
+                and item.get("encryption_key_id")
+            )
             lifecycle_node = credential_nodes.get(resolved_node_id)
             lifecycle_node = lifecycle_node if isinstance(lifecycle_node, dict) else {}
             materialization_ack = lifecycle_node.get("materialization_ack")
             materialization_ack = materialization_ack if isinstance(materialization_ack, dict) else {}
             acknowledged = not credential_v2 or materialization_ack.get("current") is True
             onboarding_complete = joined and acknowledged
+            resumable = joined or credential_registered
             return {
                 "ok": True,
                 "registered": True,
                 "joined": joined,
                 "onboarding_complete": onboarding_complete,
-                "action": "skip" if onboarding_complete else ("resume" if joined else "join"),
+                "action": "skip" if onboarding_complete else ("resume" if resumable else "join"),
                 "reason": (
                     "VPS node onboarding completed"
                     if onboarding_complete
                     else "VPS node joined; resume synchronization and materialization"
-                    if joined
+                    if resumable
                     else "VPS node is ready to join"
                 ),
                 "node_id": resolved_node_id,

@@ -236,6 +236,7 @@ def test_add_vps_to_cluster_uses_authenticated_v2_capability_when_resuming(monke
 
     async def fake_complete(node, identity, *, progress_callback=None):
         assert node["credential_protocol_version"] == 2
+        assert node["state_replica"] is True
         return {"ok": True, "pbrun_start": {"attempted": True, "started": True}}
 
     monkeypatch.setattr(cluster, "_repair_node_cluster_ssh", fake_repair)
@@ -244,9 +245,11 @@ def test_add_vps_to_cluster_uses_authenticated_v2_capability_when_resuming(monke
     monkeypatch.setattr(cluster, "_request_pbcluster_sync", lambda root: None)
 
     result = asyncio.run(service.add_vps_to_cluster("session", "resumed-runner"))
+    materialized = rebuild_materialized_state(default_cluster_root(tmp_path), write=False)
 
     assert result["cluster"]["node_id"] == node_id
     assert result["cluster"]["join"]["already_joined"] is True
+    assert materialized["cluster_nodes"]["nodes"][node_id]["state_replica"] is True
 
 
 def test_reinstalled_hostname_gets_new_node_id_after_old_node_was_removed(monkeypatch, tmp_path: Path) -> None:

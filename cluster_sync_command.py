@@ -1700,7 +1700,10 @@ def _materialize_credentials(cluster_root: Path, *, write: bool) -> dict[str, An
                 expected_context=context,
                 membership_nodes=membership_nodes,
             )
-            if str(envelope.get("signer_id") or "") != str(secret.get("updated_by") or ""):
+            expected_signer_id = str(
+                secret.get("recipient_updated_by") or secret.get("updated_by") or ""
+            )
+            if str(envelope.get("signer_id") or "") != expected_signer_id:
                 raise ClusterSyncCommandError("sealed credential signer does not match desired-state actor")
             recipient_ids = {str(entry.get("node_id") or "") for entry in envelope["recipients"]}
             if expected_recipient_ids and sorted(recipient_ids) != expected_recipient_ids:
