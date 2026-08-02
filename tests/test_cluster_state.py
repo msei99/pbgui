@@ -1026,6 +1026,32 @@ def test_admin_metadata_update_preserves_target_signing_key(tmp_path: Path) -> N
     assert node["signing_public_key"] == remote_bundle["signing_public_key"]
 
 
+def test_latest_materialization_ack_replaces_higher_stale_membership_generation(tmp_path: Path) -> None:
+    """A later node ACK supersedes an older report with a stale higher generation."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master"}, created_at=100)
+    append_operation(root, "CREDENTIAL_MATERIALIZATION_ACK", {
+        "node_id": NODE_A,
+        "membership_generation": 61,
+        "credential_generations": {},
+        "recipient_generations": {},
+    }, created_at=101)
+    latest = append_operation(root, "CREDENTIAL_MATERIALIZATION_ACK", {
+        "node_id": NODE_A,
+        "membership_generation": 60,
+        "credential_generations": {"cmc_" + "1" * 32: 1},
+        "recipient_generations": {"cmc_" + "1" * 32: 4},
+    }, created_at=102)
+
+    ack = rebuild_materialized_state(root, write=False)["desired_state"]["credential_materialization_acks"][NODE_A]
+
+    assert ack["membership_generation"] == 60
+    assert ack["credential_generations"] == {"cmc_" + "1" * 32: 1}
+    assert ack["recipient_generations"] == {"cmc_" + "1" * 32: 4}
+    assert ack["op_id"] == latest["op_id"]
+
+
 def test_vps_cannot_claim_master_role_for_credential_admin_operations(tmp_path: Path) -> None:
     """Credential authorization uses authenticated role history, never payload claims."""
 

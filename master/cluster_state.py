@@ -3066,10 +3066,12 @@ def _materialize_v2_credentials(operations: list[dict[str, Any]]) -> dict[str, A
 
     credential_migration: dict[str, Any] = {"freeze_acks": {}, "inventory_acks": {}}
     current_materialization_acks: dict[str, dict[str, Any]] = {}
+    current_materialization_ack_orders: dict[str, tuple[int, str]] = {}
     for ack in materialization_acks:
         if "recipient_generations" not in ack:
             continue
         node_id = str(ack.get("node_id") or ack["actor"])
+        candidate_order = (int(ack["seq"]), str(ack["op_id"]))
         candidate = {
             "membership_generation": int(ack.get("membership_generation") or 0),
             "credential_generations": dict(ack.get("credential_generations") or {}),
@@ -3078,17 +3080,9 @@ def _materialize_v2_credentials(operations: list[dict[str, Any]]) -> dict[str, A
             "acked_at": int(ack["created_at"]),
             "op_id": str(ack["op_id"]),
         }
-        current = current_materialization_acks.get(node_id)
-        if current is None or (
-            candidate["membership_generation"],
-            candidate["acked_at"],
-            candidate["op_id"],
-        ) > (
-            current["membership_generation"],
-            current["acked_at"],
-            current["op_id"],
-        ):
+        if candidate_order > current_materialization_ack_orders.get(node_id, (-1, "")):
             current_materialization_acks[node_id] = candidate
+            current_materialization_ack_orders[node_id] = candidate_order
     if freeze_ops:
         freeze = sorted(
             freeze_ops,
