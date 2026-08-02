@@ -54,3 +54,5 @@ def test_cluster_credentials_ui_has_guarded_explicit_actions() -> None:
     assert "@media (max-width: 560px)" in source
     assert ".credential-grid { grid-template-columns:1fr; }" in source
     assert "ciphertext" in source  # The panel explicitly states that ciphertext is never shown.
+    assert "peerStatus === 'disabled'" in source
+    assert "The node was enabled after this PBCluster status was recorded" in source

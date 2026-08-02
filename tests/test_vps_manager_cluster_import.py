@@ -145,7 +145,7 @@ def test_add_vps_to_cluster_completes_remote_join(monkeypatch, tmp_path: Path) -
         calls.append("probe")
         return {"ok": False, "status": "not_initialized", "node_id": node["node_id"]}
 
-    async def fake_join(node, identity):
+    async def fake_join(node, identity, *, progress_callback=None):
         calls.append("join")
         return {
             "ok": True,
@@ -210,6 +210,43 @@ def test_add_vps_to_cluster_rejects_conflicting_remote_identity(monkeypatch, tmp
 
     with pytest.raises(ValueError, match="Cannot join foreign-runner: foreign_cluster"):
         asyncio.run(service.add_vps_to_cluster("session", "foreign-runner"))
+
+
+def test_add_vps_to_cluster_uses_authenticated_v2_capability_when_resuming(monkeypatch, tmp_path: Path) -> None:
+    """A resumed join does not treat a fresh v2 node as a protocol downgrade."""
+
+    service, _monitor_ini = _prepare_service(monkeypatch, tmp_path)
+    _write_successful_vps(service, "resumed-runner")
+    node_id = ""
+
+    async def fake_repair(node, identity, nodes, *, ssh_passwords=None):
+        nonlocal node_id
+        node_id = str(node["node_id"])
+        return {"ok": True, "node_id": node_id}
+
+    async def fake_probe(node, identity):
+        return {
+            "ok": True,
+            "status": "ok",
+            "node_id": node["node_id"],
+            "remote_cluster_id": identity["cluster_id"],
+            "remote_node_id": node["node_id"],
+            "credential_protocol_version": 2,
+        }
+
+    async def fake_complete(node, identity, *, progress_callback=None):
+        assert node["credential_protocol_version"] == 2
+        return {"ok": True, "pbrun_start": {"attempted": True, "started": True}}
+
+    monkeypatch.setattr(cluster, "_repair_node_cluster_ssh", fake_repair)
+    monkeypatch.setattr(cluster, "_probe_cluster_node", fake_probe)
+    monkeypatch.setattr(cluster, "_complete_remote_join_sync", fake_complete)
+    monkeypatch.setattr(cluster, "_request_pbcluster_sync", lambda root: None)
+
+    result = asyncio.run(service.add_vps_to_cluster("session", "resumed-runner"))
+
+    assert result["cluster"]["node_id"] == node_id
+    assert result["cluster"]["join"]["already_joined"] is True
 
 
 def test_reinstalled_hostname_gets_new_node_id_after_old_node_was_removed(monkeypatch, tmp_path: Path) -> None:

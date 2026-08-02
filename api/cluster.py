@@ -52,7 +52,9 @@ from master.cluster_state import (
     normalize_node_sync_mode,
     read_local_identity,
     rebuild_materialized_state,
+    stage_membership_operations,
     validate_operation,
+    V2_CREDENTIAL_OPS,
     write_operation,
 )
 from master.cluster_ssh_keys import (
@@ -994,6 +996,16 @@ def _credential_publisher() -> ClusterCredentialPublisher:
     )
 
 
+def _rewrap_credentials_for_current_membership() -> dict[str, Any]:
+    """Rewrap published credentials for exact membership under the mutation lock."""
+
+    store = CredentialStore(Path(PBGDIR) / "data" / "credentials")
+    with credential_mutation_lock(store.root):
+        rewrap = ClusterCredentialPublisher(_cluster_root(), store).rewrap()
+        materialization = _materialize_credentials(_cluster_root(), write=True)
+    return {"rewrap": rewrap, "local_materialization": materialization}
+
+
 def _instance_list(desired_state: dict[str, Any]) -> list[dict[str, Any]]:
     """Return materialized instances as a stable list."""
 
@@ -1489,6 +1501,19 @@ def _probe_error_text(result: Any) -> str:
     return "remote hello failed"
 
 
+def _node_with_probe_capability(node: dict[str, Any], probe: dict[str, Any]) -> dict[str, Any]:
+    """Return an in-memory node view with authenticated remote capability metadata."""
+
+    updated = dict(node)
+    try:
+        protocol_version = int(probe.get("credential_protocol_version") or 0)
+    except (TypeError, ValueError):
+        protocol_version = 0
+    if protocol_version > 0:
+        updated["credential_protocol_version"] = protocol_version
+    return updated
+
+
 def _remote_pbrun_service_command(remote_pbgui_dir: str | None, action: str) -> str:
     """Build a remote command that controls PBRun without touching bot processes directly."""
 
@@ -1604,13 +1629,67 @@ async def _maybe_start_remote_pbrun_after_materialization(node: dict[str, Any], 
     return {"attempted": True, "started": True, "result": result}
 
 
-async def _complete_remote_join_sync(node: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
+async def _complete_remote_join_sync(
+    node: dict[str, Any],
+    identity: dict[str, Any],
+    *,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     """Push state, materialize files and restart PBRun after a successful join."""
 
+    def report(phase: str, label: str, percent: int) -> None:
+        if progress_callback:
+            progress_callback({"phase": phase, "label": label, "percent": percent})
+
     completion: dict[str, Any] = {"ok": True}
-    push_result = await _push_missing_operations_to_remote(node, identity, rebuild=True)
+    node_id, hostname, local_node_id = _require_remote_node_ready(node, identity)
+    monitor = get_monitor()
+    pool = getattr(monitor, "pool", None) if monitor else None
+    if not pool:
+        raise HTTPException(status_code=503, detail="VPS monitor SSH pool is unavailable")
+    try:
+        credential_v2 = int(node.get("credential_protocol_version") or 0) >= 2
+    except (TypeError, ValueError):
+        credential_v2 = False
+    report("pulling", "Pulling and validating remote membership delta...", 52)
+    pull_result = await _pull_missing_operations_from_host(
+        pool,
+        hostname,
+        str(node.get("remote_pbgui_dir") or ""),
+        local_node_id,
+        str(identity.get("cluster_id") or ""),
+    )
+    rebuild_materialized_state(_cluster_root())
+    completion["pull"] = pull_result
+    if credential_v2:
+        report("rewrapping_credentials", "Updating credential recipients for Cluster membership...", 58)
+        try:
+            completion["credential_rewrap"] = await asyncio.to_thread(
+                _rewrap_credentials_for_current_membership,
+            )
+        except CredentialPublicationError as exc:
+            _log(SERVICE, f"Cluster onboarding credential rewrap blocked for {hostname}: {exc}", level="WARNING")
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            _log(SERVICE, f"Cluster onboarding credential rewrap failed for {hostname}: {exc}", level="ERROR")
+            raise HTTPException(status_code=500, detail="Cluster credential rewrap failed") from exc
+    report("pushing", "Pushing missing local Cluster operations...", 64)
+    push_result = await _push_missing_operations_to_remote(
+        node,
+        identity,
+        rebuild=True,
+        pool=pool,
+        progress_callback=(
+            lambda update: report(
+                "pushing",
+                "Pushing missing local Cluster operations...",
+                min(74, 64 + int(10 * int(update.get("done") or 0) / max(1, int(update.get("total") or 1)))),
+            )
+        ),
+    )
     completion["push"] = push_result
 
+    report("materializing_v7", "Checking PB7 configuration materialization...", 76)
     v7_preview = await _run_remote_materialize_command(node, identity, "materialize-v7-preview")
     completion["v7_preview"] = v7_preview
     v7_current = _v7_materialization_current(v7_preview)
@@ -1620,6 +1699,7 @@ async def _complete_remote_join_sync(node: dict[str, Any], identity: dict[str, A
     else:
         completion["v7_materialization"] = {"skipped": True, "reason": "current_or_not_applicable"}
 
+    report("materializing_v8", "Checking PB8 configuration materialization...", 83)
     v8_preview = await _run_remote_materialize_command(node, identity, "materialize-v8-preview")
     completion["v8_preview"] = v8_preview
     v8_current = _v8_materialization_current(v8_preview)
@@ -1629,6 +1709,7 @@ async def _complete_remote_join_sync(node: dict[str, Any], identity: dict[str, A
     else:
         completion["v8_materialization"] = {"skipped": True, "reason": "current_or_not_applicable"}
 
+    report("materializing_api_keys", "Checking API-key materialization...", 89)
     api_key_preview = await _run_remote_materialize_command(node, identity, "materialize-api-keys-preview")
     completion["api_key_preview"] = api_key_preview
     api_key_current = _api_key_materialization_current(api_key_preview)
@@ -1637,6 +1718,41 @@ async def _complete_remote_join_sync(node: dict[str, Any], identity: dict[str, A
         api_key_current = True
     else:
         completion["api_key_materialization"] = {"skipped": True, "reason": "current_or_not_applicable"}
+
+    if credential_v2:
+        report("materializing_credentials", "Materializing sealed Cluster credentials...", 92)
+        completion["credential_preview"] = await _run_remote_materialize_command(
+            node,
+            identity,
+            "materialize-credentials-preview",
+            timeout=60,
+        )
+        completion["credential_materialization"] = await _run_remote_materialize_command(
+            node,
+            identity,
+            "materialize-credentials",
+            timeout=120,
+        )
+        report("pulling_credentials", "Pulling the current credential acknowledgement...", 95)
+        completion["credential_pull"] = await _pull_missing_operations_from_host(
+            pool,
+            hostname,
+            str(node.get("remote_pbgui_dir") or ""),
+            local_node_id,
+            str(identity.get("cluster_id") or ""),
+        )
+        local_materialized = rebuild_materialized_state(_cluster_root())
+        lifecycle = credential_lifecycle_status(local_materialized)
+        lifecycle_node = (lifecycle.get("nodes") or {}).get(node_id)
+        lifecycle_node = lifecycle_node if isinstance(lifecycle_node, dict) else {}
+        materialization_ack = lifecycle_node.get("materialization_ack")
+        if not isinstance(materialization_ack, dict) or materialization_ack.get("current") is not True:
+            raise HTTPException(
+                status_code=409,
+                detail="Remote credential materialization acknowledgement is not current",
+            )
+    else:
+        completion["credential_materialization"] = {"skipped": True, "reason": "credential_protocol_v2_unavailable"}
 
     if _cluster_role_from_monitor_role(node.get("role")) != "vps":
         completion["pbrun_start"] = {"attempted": False, "started": False, "reason": "not_vps_runner"}
@@ -1647,6 +1763,7 @@ async def _complete_remote_join_sync(node: dict[str, Any], identity: dict[str, A
     elif not api_key_current:
         completion["pbrun_start"] = {"attempted": False, "started": False, "reason": "api_key_materialization_pending"}
     else:
+        report("starting_pbrun", "Starting PBRun after successful materialization...", 98)
         hostname = str(node.get("pbname") or node.get("hostname") or "")
         monitor = get_monitor()
         pool = getattr(monitor, "pool", None) if monitor else None
@@ -2455,97 +2572,113 @@ async def _pull_missing_operations_from_host(
             timeout=30,
             failure_label="Remote legacy state-vector pull",
         )
+    remote_cluster_id = str(vector_payload.get("cluster_id") or "")
+    if remote_cluster_id != str(cluster_id or ""):
+        raise HTTPException(status_code=409, detail="Remote state vector belongs to a different cluster_id")
     remote_vector = _as_state_vector(vector_payload.get("state_vector") or {})
     checkpoint_result: dict[str, Any] = {"status": "not_required"}
     join_registered = False
     if vector_payload.get("active") is True:
         if not isinstance(join_authorization, dict) or not isinstance(join_hello, dict):
-            raise HTTPException(status_code=409, detail="Remote history requires a checkpoint-aware join authorization")
-        checkpoint_payload = await _run_cluster_json_command_on_host(
-            pool,
-            hostname,
-            remote_pbgui_dir,
-            local_node_id,
-            f"join-checkpoint-state {shlex.quote(join_token)}",
-            timeout=60,
-            failure_label="Remote join checkpoint pull",
-        )
-        bundle = checkpoint_payload.get("bundle") if isinstance(checkpoint_payload, dict) else None
-        checkpoint = bundle.get("checkpoint") if isinstance(bundle, dict) else None
-        proof = bundle.get("commit_proof") if isinstance(bundle, dict) else None
-        if not isinstance(checkpoint, dict) or not isinstance(proof, dict):
-            raise HTTPException(status_code=409, detail="Remote checkpoint bundle is incomplete")
-        coordinator_id = str(proof.get("coordinator_id") or "")
-        if coordinator_id != str(join_hello.get("node_id") or ""):
-            raise HTTPException(status_code=409, detail="Checkpoint-aware self-join must connect to the elected coordinator")
-        anchor_public_key = str(((join_hello.get("crypto_public_bundle") or {}).get("signing_public_key") or ""))
-        if not anchor_public_key:
-            raise HTTPException(status_code=409, detail="Checkpoint coordinator did not provide a signing key")
-        verify_checkpoint_commit_proof(checkpoint, proof)
-
-        async def fetch_join_blob(kind: str, blob_hash: str, *, secret: bool) -> bytes:
-            payload = await _run_cluster_json_command_on_host(
+            local_checkpoint = checkpoint_status(root)
+            remote_checkpoint_id = str(vector_payload.get("checkpoint_id") or "")
+            if (
+                local_checkpoint.get("active") is not True
+                or not remote_checkpoint_id
+                or remote_checkpoint_id != str(local_checkpoint.get("checkpoint_id") or "")
+            ):
+                raise HTTPException(status_code=409, detail="Remote history requires a checkpoint-aware join authorization")
+            checkpoint_result = {
+                "status": "existing_checkpoint_peer",
+                "checkpoint_id": remote_checkpoint_id,
+            }
+        else:
+            checkpoint_payload = await _run_cluster_json_command_on_host(
                 pool,
                 hostname,
                 remote_pbgui_dir,
                 local_node_id,
-                f"join-get-blob {shlex.quote(join_token)} {shlex.quote(kind)} {shlex.quote(blob_hash)}",
-                timeout=30,
-                failure_label="Remote join blob pull",
+                f"join-checkpoint-state {shlex.quote(join_token)}",
+                timeout=60,
+                failure_label="Remote join checkpoint pull",
             )
-            raw = base64.b64decode(str(payload.get("content_b64") or ""))
-            _write_cluster_blob(root / f"{kind}_blobs", blob_hash, raw, secret=secret)
-            return raw
+            bundle = checkpoint_payload.get("bundle") if isinstance(checkpoint_payload, dict) else None
+            checkpoint = bundle.get("checkpoint") if isinstance(bundle, dict) else None
+            proof = bundle.get("commit_proof") if isinstance(bundle, dict) else None
+            if not isinstance(checkpoint, dict) or not isinstance(proof, dict):
+                raise HTTPException(status_code=409, detail="Remote checkpoint bundle is incomplete")
+            coordinator_id = str(proof.get("coordinator_id") or "")
+            if coordinator_id != str(join_hello.get("node_id") or ""):
+                raise HTTPException(status_code=409, detail="Checkpoint-aware self-join must connect to the elected coordinator")
+            anchor_public_key = str(((join_hello.get("crypto_public_bundle") or {}).get("signing_public_key") or ""))
+            if not anchor_public_key:
+                raise HTTPException(status_code=409, detail="Checkpoint coordinator did not provide a signing key")
+            verify_checkpoint_commit_proof(checkpoint, proof)
 
-        refs = checkpoint.get("blob_refs") or {}
-        for manifest_hash in refs.get("config") or []:
-            manifest_raw = await fetch_join_blob("config", str(manifest_hash), secret=False)
-            for child_hash in _manifest_file_hashes(manifest_raw):
-                await fetch_join_blob("config", child_hash, secret=False)
-        for blob_hash in refs.get("secret") or []:
-            await fetch_join_blob("secret", str(blob_hash), secret=True)
-        for blob_hash in refs.get("sealed") or []:
-            await fetch_join_blob("sealed", str(blob_hash), secret=True)
-        installed = install_rebootstrap_checkpoint(
-            root,
-            checkpoint,
-            proof,
-            join_authorization=join_authorization,
-            join_anchor_public_key=anchor_public_key,
-        )
-        local_membership = append_operation(
-            root,
-            "ADD_NODE",
-            {
-                "node_id": local_node_id,
-                "role": str(join_authorization.get("role") or "master"),
-                "pbname": str(read_local_identity(root).get("created_from_pbname") or ""),
-                "membership_authorization": join_authorization,
-            },
-        )
-        register_result = await _run_cluster_payload_command(
-            pool,
-            hostname,
-            remote_pbgui_dir,
-            local_node_id,
-            f"join-register {shlex.quote(join_token)}",
-            json.dumps(local_membership, sort_keys=True, separators=(",", ":")),
-            timeout=30,
-        )
-        if register_result is None or int(getattr(register_result, "exit_status", 1) or 0) != 0:
-            raise HTTPException(status_code=409, detail=_probe_error_text(register_result))
-        checkpoint_result = {
-            "status": "installed",
-            "checkpoint_id": str(checkpoint["checkpoint_id"]),
-            "membership_op_id": str(local_membership["op_id"]),
-            "quarantine_path": str(installed.get("quarantine_path") or ""),
-        }
-        join_registered = True
+            async def fetch_join_blob(kind: str, blob_hash: str, *, secret: bool) -> bytes:
+                payload = await _run_cluster_json_command_on_host(
+                    pool,
+                    hostname,
+                    remote_pbgui_dir,
+                    local_node_id,
+                    f"join-get-blob {shlex.quote(join_token)} {shlex.quote(kind)} {shlex.quote(blob_hash)}",
+                    timeout=30,
+                    failure_label="Remote join blob pull",
+                )
+                raw = base64.b64decode(str(payload.get("content_b64") or ""))
+                _write_cluster_blob(root / f"{kind}_blobs", blob_hash, raw, secret=secret)
+                return raw
+
+            refs = checkpoint.get("blob_refs") or {}
+            for manifest_hash in refs.get("config") or []:
+                manifest_raw = await fetch_join_blob("config", str(manifest_hash), secret=False)
+                for child_hash in _manifest_file_hashes(manifest_raw):
+                    await fetch_join_blob("config", child_hash, secret=False)
+            for blob_hash in refs.get("secret") or []:
+                await fetch_join_blob("secret", str(blob_hash), secret=True)
+            for blob_hash in refs.get("sealed") or []:
+                await fetch_join_blob("sealed", str(blob_hash), secret=True)
+            installed = install_rebootstrap_checkpoint(
+                root,
+                checkpoint,
+                proof,
+                join_authorization=join_authorization,
+                join_anchor_public_key=anchor_public_key,
+            )
+            local_membership = append_operation(
+                root,
+                "ADD_NODE",
+                {
+                    "node_id": local_node_id,
+                    "role": str(join_authorization.get("role") or "master"),
+                    "pbname": str(read_local_identity(root).get("created_from_pbname") or ""),
+                    "membership_authorization": join_authorization,
+                },
+            )
+            register_result = await _run_cluster_payload_command(
+                pool,
+                hostname,
+                remote_pbgui_dir,
+                local_node_id,
+                f"join-register {shlex.quote(join_token)}",
+                json.dumps(local_membership, sort_keys=True, separators=(",", ":")),
+                timeout=30,
+            )
+            if register_result is None or int(getattr(register_result, "exit_status", 1) or 0) != 0:
+                raise HTTPException(status_code=409, detail=_probe_error_text(register_result))
+            checkpoint_result = {
+                "status": "installed",
+                "checkpoint_id": str(checkpoint["checkpoint_id"]),
+                "membership_op_id": str(local_membership["op_id"]),
+                "quarantine_path": str(installed.get("quarantine_path") or ""),
+            }
+            join_registered = True
     local_vector = _as_state_vector(
         (rebuild_materialized_state(root, write=False).get("state_vector") or {})
     )
     total_missing_ops = sum(max(0, int(remote_vector.get(actor) or 0) - int(local_vector.get(actor) or 0)) for actor in remote_vector)
     pulled = 0
+    deferred_v2: list[dict[str, Any]] = []
     blob_counts = {"config": 0, "secret": 0, "sealed": 0, "missing_config": 0}
     report_progress({"phase": "pulling_ops", "done": 0, "total": total_missing_ops, "remaining": total_missing_ops})
     for actor in sorted(remote_vector):
@@ -2575,6 +2708,12 @@ async def _pull_missing_operations_from_host(
                 raise HTTPException(status_code=409, detail=f"Remote is missing operation(s) for {actor}: {missing}")
             operations = payload.get("operations") if isinstance(payload, dict) else []
             operations = operations if isinstance(operations, list) else []
+            staged_trust = stage_membership_operations(
+                root,
+                operations,
+                expected_cluster_id=cluster_id,
+                authenticated_remote_node=str(vector_payload.get("node_id") or ""),
+            )
             report_progress({"phase": "pulling_blobs", "done": pulled, "total": total_missing_ops, "remaining": max(0, total_missing_ops - pulled)})
             pulled_blobs = await _pull_blobs_for_operations_from_host(pool, hostname, remote_pbgui_dir, local_node_id, operations)
             blob_counts["config"] += int(pulled_blobs.get("config") or 0)
@@ -2582,19 +2721,35 @@ async def _pull_missing_operations_from_host(
             blob_counts["sealed"] += int(pulled_blobs.get("sealed") or 0)
             blob_counts["missing_config"] += int(pulled_blobs.get("missing_config") or 0)
             for operation in operations:
+                if str(operation.get("op") or "") in V2_CREDENTIAL_OPS:
+                    deferred_v2.append(operation)
+                    continue
                 validate_operation(
                     operation,
                     expected_cluster_id=cluster_id,
                     cluster_root=root,
+                    membership_trust=staged_trust,
                     network_input=True,
                 )
                 op_path = root / "oplog" / str(operation["actor"]) / f"{int(operation['seq']):08d}.json"
                 existed = op_path.exists()
-                write_operation(root, operation, network_input=True)
+                write_operation(root, operation, network_input=True, membership_trust=staged_trust)
                 if not existed:
                     pulled += 1
             start = end + 1
             report_progress({"phase": "pulling_ops", "done": pulled, "total": total_missing_ops, "remaining": max(0, total_missing_ops - pulled)})
+    for operation in deferred_v2:
+        validate_operation(
+            operation,
+            expected_cluster_id=cluster_id,
+            cluster_root=root,
+            network_input=True,
+        )
+        op_path = root / "oplog" / str(operation["actor"]) / f"{int(operation['seq']):08d}.json"
+        existed = op_path.exists()
+        write_operation(root, operation, network_input=True)
+        if not existed:
+            pulled += 1
     if join_token and join_commands_supported and not join_registered:
         local_membership = append_operation(
             root,
@@ -2918,7 +3073,12 @@ async def _self_join_existing_cluster(
             await password_runner.close()
 
 
-async def _run_remote_join(node: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
+async def _run_remote_join(
+    node: dict[str, Any],
+    identity: dict[str, Any],
+    *,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     """Initialize remote cluster identity for one known node."""
 
     node_id = str(node.get("node_id") or "")
@@ -2943,8 +3103,12 @@ async def _run_remote_join(node: dict[str, Any], identity: dict[str, Any]) -> di
     role = _cluster_role_from_monitor_role(node.get("role"))
     pbrun_stop_result: dict[str, Any] | None = None
     if role == "vps":
+        if progress_callback:
+            progress_callback({"phase": "stopping_pbrun", "label": "Stopping PBRun for the identity transition...", "percent": 44})
         pbrun_stop_result = await _stop_remote_pbrun_for_join(pool, hostname, node)
 
+    if progress_callback:
+        progress_callback({"phase": "joining", "label": "Writing the verified remote Cluster identity...", "percent": 48})
     checkpoint_bundle = active_checkpoint_bundle(_cluster_root())
     try:
         if checkpoint_bundle is None:
@@ -3008,13 +3172,20 @@ async def _run_remote_join(node: dict[str, Any], identity: dict[str, Any]) -> di
     if remote_node_id != node_id:
         raise HTTPException(status_code=409, detail="Remote joined a different node_id")
     try:
+        post_join_probe = await _probe_cluster_node(node, identity)
+        completion_node = _node_with_probe_capability(node, post_join_probe)
         checkpoint_blobs = (
-            await _push_active_checkpoint_blobs_to_remote(node, identity, checkpoint_bundle["checkpoint"])
+            await _push_active_checkpoint_blobs_to_remote(completion_node, identity, checkpoint_bundle["checkpoint"])
             if checkpoint_bundle is not None
             else {"config": 0, "secret": 0, "sealed": 0}
         )
-        completion = await _complete_remote_join_sync(node, identity)
+        completion = await _complete_remote_join_sync(
+            completion_node,
+            identity,
+            progress_callback=progress_callback,
+        )
         completion["checkpoint_blobs"] = checkpoint_blobs
+        completion["post_join_probe"] = post_join_probe
     except HTTPException as exc:
         completion = {"ok": False, "status_code": exc.status_code, "error": str(exc.detail)}
     except Exception as exc:
@@ -3704,10 +3875,15 @@ def _chunk_config_blobs(blobs: list[dict[str, Any]]) -> list[list[dict[str, Any]
     return chunks
 
 
-def _build_operation_sync_preview(local_operations: list[dict[str, Any]], remote_vector: dict[str, int]) -> dict[str, Any]:
+def _build_operation_sync_preview(
+    local_operations: list[dict[str, Any]],
+    remote_vector: dict[str, int],
+    *,
+    local_vector: dict[str, int] | None = None,
+) -> dict[str, Any]:
     """Build a read-only preview of operations missing across the boundary."""
 
-    local_vector: dict[str, int] = {}
+    effective_local_vector = _as_state_vector(local_vector or {})
     local_missing_remote: list[dict[str, Any]] = []
     push_by_op: dict[str, int] = {}
     hashes = {"config": set(), "api_payload": set(), "secret": set(), "sealed": set()}
@@ -3716,7 +3892,7 @@ def _build_operation_sync_preview(local_operations: list[dict[str, Any]], remote
         seq = int(operation.get("seq") or 0)
         if not actor or seq < 1:
             continue
-        local_vector[actor] = max(local_vector.get(actor, 0), seq)
+        effective_local_vector[actor] = max(effective_local_vector.get(actor, 0), seq)
         if seq <= int(remote_vector.get(actor, 0)):
             continue
         op_name = str(operation.get("op") or "")
@@ -3735,9 +3911,9 @@ def _build_operation_sync_preview(local_operations: list[dict[str, Any]], remote
         })
 
     remote_missing_local: list[dict[str, Any]] = []
-    for actor in sorted(set(remote_vector) | set(local_vector)):
+    for actor in sorted(set(remote_vector) | set(effective_local_vector)):
         remote_seq = int(remote_vector.get(actor, 0))
-        local_seq = int(local_vector.get(actor, 0))
+        local_seq = int(effective_local_vector.get(actor, 0))
         if remote_seq <= local_seq:
             continue
         remote_missing_local.append({
@@ -3977,7 +4153,11 @@ async def _push_missing_operations_to_remote(
                 and operation.get("secret_blob_hash") in obsolete_hashes
             )
         ]
-    preview = _build_operation_sync_preview(local_operations, remote_vector)
+    preview = _build_operation_sync_preview(
+        local_operations,
+        remote_vector,
+        local_vector=_as_state_vector(materialized.get("state_vector") or {}),
+    )
     counts = preview.get("counts") if isinstance(preview, dict) else {}
     if int((counts or {}).get("remote_ops_to_pull") or 0) > 0:
         raise HTTPException(status_code=409, detail="Remote has operations missing locally; pull or resolve before pushing local ops")
@@ -4386,6 +4566,7 @@ async def _build_remote_preview(node: dict[str, Any], identity: dict[str, Any], 
         "operation_sync": _build_operation_sync_preview(
             load_operations(_cluster_root(), expected_cluster_id=str(identity.get("cluster_id") or "")),
             remote_vector,
+            local_vector=local_vector,
         ),
         "materialization": materialization,
         "pb8_materialization": pb8_materialization,
@@ -5689,12 +5870,19 @@ def apply_bootstrap_node(hostname: str, session: SessionToken = Depends(require_
         raise HTTPException(status_code=500, detail="Failed to apply bootstrap node") from exc
 
 
-async def onboard_vps_cluster_node(hostname: str, *, ssh_passwords: dict[str, str] | None = None) -> dict[str, Any]:
+async def onboard_vps_cluster_node(
+    hostname: str,
+    *,
+    ssh_passwords: dict[str, str] | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     """Register, connect and fully join one VPS Manager host to this cluster."""
 
     target = str(hostname or "").strip()
     _validate_instance_name(target)
     async with _VPS_ONBOARD_LOCK:
+        if progress_callback:
+            progress_callback({"phase": "registering", "label": "Registering the local Cluster node candidate...", "percent": 5})
         bootstrap = apply_bootstrap_node(target, session=None)
         snapshot = _load_cluster_snapshot()
         nodes = _node_list(snapshot["cluster_nodes"])
@@ -5710,6 +5898,8 @@ async def onboard_vps_cluster_node(hostname: str, *, ssh_passwords: dict[str, st
             raise HTTPException(status_code=404, detail="Cluster node was not created")
 
         if normalize_node_sync_mode(node) != "reachable":
+            if progress_callback:
+                progress_callback({"phase": "configuring_ssh", "label": "Applying stored VPS SSH settings...", "percent": 12})
             settings = _validate_node_sync_settings({
                 "sync_mode": "reachable",
                 "remote_pbgui_dir": node.get("remote_pbgui_dir"),
@@ -5731,6 +5921,8 @@ async def onboard_vps_cluster_node(hostname: str, *, ssh_passwords: dict[str, st
             if not node:
                 raise HTTPException(status_code=404, detail="Cluster node disappeared while enabling SSH")
 
+        if progress_callback:
+            progress_callback({"phase": "repairing_ssh", "label": "Installing and verifying restricted Cluster SSH keys...", "percent": 22})
         repair = await _repair_node_cluster_ssh(
             node,
             snapshot["identity"],
@@ -5743,21 +5935,32 @@ async def onboard_vps_cluster_node(hostname: str, *, ssh_passwords: dict[str, st
         if not node:
             raise HTTPException(status_code=404, detail="Cluster node disappeared after SSH repair")
 
+        if progress_callback:
+            progress_callback({"phase": "probing", "label": "Probing the remote Cluster identity and capabilities...", "percent": 36})
         probe = await _probe_cluster_node(node, snapshot["identity"])
         probe_status = str(probe.get("status") or "")
         if probe_status == "not_initialized":
-            join = await _run_remote_join(node, snapshot["identity"])
+            join = await _run_remote_join(
+                node,
+                snapshot["identity"],
+                progress_callback=progress_callback,
+            )
         elif (
             probe_status == "ok"
             and str(probe.get("remote_cluster_id") or "") == str(snapshot["identity"].get("cluster_id") or "")
             and str(probe.get("remote_node_id") or "") == str(node.get("node_id") or "")
         ):
+            completion_node = _node_with_probe_capability(node, probe)
             join = {
                 "ok": True,
                 "already_joined": True,
                 "node_id": str(node.get("node_id") or ""),
                 "hostname": target,
-                "completion": await _complete_remote_join_sync(node, snapshot["identity"]),
+                "completion": await _complete_remote_join_sync(
+                    completion_node,
+                    snapshot["identity"],
+                    progress_callback=progress_callback,
+                ),
             }
         else:
             detail = str(probe.get("error") or probe_status or "Remote Cluster probe failed")
@@ -5778,6 +5981,8 @@ async def onboard_vps_cluster_node(hostname: str, *, ssh_passwords: dict[str, st
             reason = str(pbrun_start.get("error") or pbrun_start.get("reason") or "unknown error")
             raise HTTPException(status_code=502, detail=f"Cluster joined, but PBRun was not started: {reason}")
         _request_pbcluster_sync(_cluster_root())
+        if progress_callback:
+            progress_callback({"phase": "complete", "label": "VPS joined and synchronized with Cluster.", "percent": 100})
         return {
             "ok": True,
             "hostname": target,

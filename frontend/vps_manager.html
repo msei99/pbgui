@@ -3048,6 +3048,7 @@
       addPublicIp: { ip: '', loading: false, requested: false, applied: false },
       importExistingVps: defaultExistingVpsImportState(),
       clusterNodesImport: defaultClusterNodesImportState(),
+      clusterOnboard: { jobId: '', hostname: '', status: '', progress: null, progressTimer: 0, resumeChecked: {} },
       pendingAutoSetupSwitch: null,
       master: defaultMasterUi(),
       ufw: defaultUfwState(),
@@ -5990,6 +5991,7 @@
     }
 
     function openAlertModal(title, body, kind) {
+      if (isClusterOnboardModalVisible() && isClusterOnboardRunning()) return;
       resetAlertModalWindow();
       document.getElementById('alertModalTitle').textContent = title || 'Notice';
       const box = document.getElementById('alertModalBody');
@@ -6000,6 +6002,7 @@
     }
 
     function closeAlertModal() {
+      if (isClusterOnboardModalVisible() && isClusterOnboardRunning()) return;
       const flow = store.pendingOverviewDeploy;
       if (flow && flow.validating) {
         setPasswordPromptStatus('Wait until password validation finishes for ' + String(flow.prompt_host || 'the current host') + '.', 'warning');
@@ -6084,6 +6087,7 @@
     function resetAlertModalWindow() {
       const modalBox = document.getElementById('alertModalBox');
       const modalBody = document.getElementById('alertModalBody');
+      const closeButton = document.querySelector('#alertModalHead .close-btn');
       if (!modalBox || !modalBody) return;
       modalBox.classList.remove('log-matches-modal');
       modalBox.style.left = '';
@@ -6091,6 +6095,7 @@
       modalBox.style.width = '';
       modalBox.style.height = '';
       modalBody.className = 'notice';
+      if (closeButton) closeButton.style.display = '';
     }
 
     function prepareAlertModalWindow(widthPx, heightPx) {
@@ -7065,6 +7070,7 @@
               store.pendingAutoSetupSwitch = null;
             }
           }
+          resumeClusterOnboardProgress(store.detail.hostname);
         } else if (store.detail && store.detail.kind === 'master') {
           store.detailCache.master = store.detail;
         }
@@ -9520,6 +9526,155 @@
       send({ cmd: 'setup_vps', hostname: hostname, form: buildSecretAwareForm(hostname, ui.form), debug: !!ui.debug });
     }
 
+    function stopClusterOnboardProgressPolling() {
+      const flow = store.clusterOnboard || {};
+      if (flow.progressTimer) window.clearTimeout(flow.progressTimer);
+      flow.progressTimer = 0;
+      store.clusterOnboard = flow;
+    }
+
+    function isClusterOnboardRunning() {
+      const status = String(((store.clusterOnboard || {}).status) || '');
+      return status === 'queued' || status === 'running';
+    }
+
+    function isClusterOnboardModalVisible() {
+      const overlay = document.getElementById('alertModalOverlay');
+      const title = document.getElementById('alertModalTitle');
+      return !!(overlay && overlay.classList.contains('visible') && title && title.textContent === 'Add to Cluster');
+    }
+
+    function renderClusterOnboardProgressModal() {
+      const flow = store.clusterOnboard || {};
+      const progress = flow.progress || {};
+      const status = String(progress.status || flow.status || 'queued');
+      const running = status === 'queued' || status === 'running';
+      const failed = status === 'error';
+      const percent = Math.max(0, Math.min(100, Math.round(Number(progress.percent || 0))));
+      const label = String(progress.label || (running ? 'Starting Cluster onboarding...' : failed ? 'Cluster onboarding failed.' : 'VPS joined and synchronized with Cluster.'));
+      const events = Array.isArray(progress.events) ? progress.events : [];
+      const eventRows = events.length ? events.map(function (event) {
+        const eventStatus = String((event || {}).status || 'running');
+        const rowClass = clusterImportProgressClass(eventStatus);
+        return `<div class='cluster-import-progress-row ${escAttr(rowClass)}'>
+          <div class='cluster-import-progress-host'>${esc(String((event || {}).phase || '-').replaceAll('_', ' '))}</div>
+          <div class='cluster-import-progress-status'>${esc(rowClass)}</div>
+          <div>${esc(String((event || {}).label || 'Progress update'))}</div>
+        </div>`;
+      }).join('') : `<div class='cluster-import-progress-row running'><div class='cluster-import-progress-host'>queued</div><div class='cluster-import-progress-status'>running</div><div>${esc(label)}</div></div>`;
+
+      prepareAlertModalWindow(Math.min(900, Math.max(680, Math.round(window.innerWidth * 0.72))), Math.min(760, Math.max(560, Math.round(window.innerHeight * 0.72))));
+      document.getElementById('alertModalTitle').textContent = 'Add to Cluster';
+      const body = document.getElementById('alertModalBody');
+      body.className = 'notice modal-scroll-body cluster-import-progress-body';
+      body.innerHTML = `<div class='read-settings-progress cluster-import-progress ${failed ? 'error' : ''}'>
+        <div class='read-settings-progress-head'>
+          <div>
+            <div class='read-settings-progress-title'>${failed ? 'Cluster onboarding failed' : running ? 'Adding ' + esc(flow.hostname || 'VPS') + ' to Cluster' : 'Cluster onboarding completed'}</div>
+            <div class='muted'>${esc(label)}</div>
+          </div>
+          <div class='read-settings-progress-percent'>${esc(String(percent))}%</div>
+        </div>
+        <div class='deploy-progress-bar'><div class='deploy-progress-fill' style='width:${escAttr(String(percent))}%;background:${failed ? 'var(--danger)' : status === 'successful' ? 'var(--ok)' : 'var(--accent)'}'></div></div>
+        ${failed && progress.error ? `<div class='notice error'>${esc(String(progress.error))}</div>` : ''}
+        <div class='cluster-import-progress-log' id='cluster-onboard-progress-log'>${eventRows}</div>
+      </div>`;
+      const closeButton = document.querySelector('#alertModalHead .close-btn');
+      if (closeButton) closeButton.style.display = running ? 'none' : '';
+      document.getElementById('alertModalBtnRow').innerHTML = running
+        ? `<button class='btn ghost' type='button' disabled>Onboarding in progress...</button>`
+        : `${failed ? `<button class='btn primary' type='button' id='cluster-onboard-retry'>Retry</button>` : ''}<button class='btn ghost' type='button' onclick='closeAlertModal()'>Close</button>`;
+      const retryButton = document.getElementById('cluster-onboard-retry');
+      if (retryButton) retryButton.onclick = function () { startClusterOnboard(String(flow.hostname || '')); };
+      document.getElementById('alertModalOverlay').classList.add('visible');
+      window.requestAnimationFrame(function () {
+        const log = document.getElementById('cluster-onboard-progress-log');
+        if (log) log.scrollTop = log.scrollHeight;
+      });
+    }
+
+    function pollClusterOnboardProgress(jobId) {
+      const cleanJobId = String(jobId || '').trim();
+      if (!cleanJobId) return;
+      vpsManagerGet('/cluster-onboard/jobs/' + encodeURIComponent(cleanJobId), {})
+        .then(function (progress) {
+          const flow = store.clusterOnboard || {};
+          if (String(flow.jobId || '') !== cleanJobId) return;
+          const status = String((progress || {}).status || 'running');
+          flow.status = status;
+          flow.progress = progress || null;
+          flow.progressTimer = 0;
+          store.clusterOnboard = flow;
+          if (isClusterOnboardModalVisible()) renderClusterOnboardProgressModal();
+          if (status === 'queued' || status === 'running') {
+            flow.progressTimer = window.setTimeout(function () { pollClusterOnboardProgress(cleanJobId); }, 500);
+            return;
+          }
+          if (status === 'successful') {
+            toast('VPS joined and synchronized with Cluster.', 'success');
+            if (flow.hostname) scheduleVpsDetailFetch(flow.hostname);
+          }
+        })
+        .catch(function () {
+          const flow = store.clusterOnboard || {};
+          if (String(flow.jobId || '') !== cleanJobId || !isClusterOnboardRunning()) return;
+          flow.progressTimer = window.setTimeout(function () { pollClusterOnboardProgress(cleanJobId); }, 1000);
+          store.clusterOnboard = flow;
+        });
+    }
+
+    function startClusterOnboard(hostname) {
+      const target = String(hostname || '').trim();
+      if (!target) return;
+      stopClusterOnboardProgressPolling();
+      store.clusterOnboard = {
+        jobId: '', hostname: target, status: 'queued',
+        progress: { status: 'queued', phase: 'queued', label: 'Queued Cluster onboarding...', percent: 0, events: [] },
+        progressTimer: 0, resumeChecked: (store.clusterOnboard || {}).resumeChecked || {}
+      };
+      renderClusterOnboardProgressModal();
+      vpsManagerPost('/cluster-onboard/' + encodeURIComponent(target) + '/start', {})
+        .then(function (job) {
+          const flow = store.clusterOnboard || {};
+          flow.jobId = String((job || {}).job_id || '');
+          flow.status = String((job || {}).status || 'queued');
+          flow.progress = job || flow.progress;
+          store.clusterOnboard = flow;
+          renderClusterOnboardProgressModal();
+          if (flow.jobId) pollClusterOnboardProgress(flow.jobId);
+        })
+        .catch(function (err) {
+          const flow = store.clusterOnboard || {};
+          flow.status = 'error';
+          flow.progress = { status: 'error', phase: 'error', label: String(err && err.message ? err.message : err || 'Failed to start Cluster onboarding.'), error: String(err && err.message ? err.message : err || ''), percent: 0, events: [] };
+          store.clusterOnboard = flow;
+          renderClusterOnboardProgressModal();
+        });
+    }
+
+    function resumeClusterOnboardProgress(hostname) {
+      const target = String(hostname || '').trim();
+      if (!target) return;
+      const current = store.clusterOnboard || {};
+      current.resumeChecked = current.resumeChecked || {};
+      if (current.resumeChecked[target] || (current.hostname === target && isClusterOnboardRunning())) return;
+      current.resumeChecked[target] = true;
+      store.clusterOnboard = current;
+      vpsManagerGet('/cluster-onboard/' + encodeURIComponent(target) + '/active', {})
+        .then(function (job) {
+          if (!(job || {}).active) return;
+          const flow = store.clusterOnboard || {};
+          flow.jobId = String(job.job_id || '');
+          flow.hostname = target;
+          flow.status = String(job.status || 'running');
+          flow.progress = job;
+          store.clusterOnboard = flow;
+          renderClusterOnboardProgressModal();
+          pollClusterOnboardProgress(flow.jobId);
+        })
+        .catch(function () {});
+    }
+
     function addVpsToCluster(hostname) {
       const target = String(hostname || '').trim();
       if (!target) return;
@@ -9527,8 +9682,7 @@
         'Add to Cluster',
         'Add VPS ' + target + ' to this Cluster? PBGui will configure its stored SSH connection, install restricted Cluster keys, verify that no conflicting identity exists, join and synchronize the node, materialize assigned configs and API keys, and safely restart PBRun.',
         function () {
-          toast('Adding ' + target + ' to Cluster...', 'info');
-          send({ cmd: 'add_vps_to_cluster', hostname: target });
+          startClusterOnboard(target);
         }
       );
     }
@@ -10312,7 +10466,7 @@
         const clusterNode = (st.cluster_node || {});
         const clusterNodeAction = String(clusterNode.action || '');
         const showClusterNodeBtn = !!st.setup_ok && clusterNodeAction !== 'skip';
-        const clusterNodeBtnText = clusterNodeAction === 'update' ? 'Update Cluster Node' : 'Add to Cluster';
+        const clusterNodeBtnText = clusterNodeAction === 'update' ? 'Update Cluster Node' : (clusterNodeAction === 'resume' ? 'Resume Cluster Onboarding' : 'Add to Cluster');
         const clusterNodeBtnClass = clusterNodeAction === 'error' ? 'sb-btn warning' : 'sb-btn info';
         html = `
           <button class='sb-btn' type='button' onclick='selectView("overview")'>Overview</button>

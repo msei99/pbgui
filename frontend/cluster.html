@@ -3000,6 +3000,9 @@
         if (peerStatus === 'backoff') {
           return { status: 'pending', label: 'Backoff', title: reason || 'PBCluster is waiting before retrying this host.' };
         }
+        if (peerStatus === 'disabled') {
+          return { status: 'pending', label: 'Checking', title: 'The node was enabled after this PBCluster status was recorded; waiting for the next sync pass.' };
+        }
         return { status: peer.ok ? 'installed' : 'error', label: peer.ok ? 'Installed' : 'Error', title: reason || peerStatus || 'PBCluster sync status is not OK.' };
       }
 

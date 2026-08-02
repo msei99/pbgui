@@ -2551,6 +2551,11 @@ def _accept_membership_operation(
             raise ClusterStateError("ADD_NODE must be signed by the node being added")
         if target in trust.nodes and trust.nodes[target].get("state_replica", True) is not False:
             raise ClusterStateError("ADD_NODE target already exists")
+        provisional_registration = (
+            isinstance(trust.nodes.get(target), dict)
+            and trust.nodes[target].get("state_replica", True) is False
+            and not trust.signing_keys.get(target)
+        )
         if not operation.get("signing_public_key"):
             raise ClusterStateError("ADD_NODE requires the node signing key")
         authorization = operation.get("membership_authorization")
@@ -2568,7 +2573,14 @@ def _accept_membership_operation(
             raise ClusterStateError(str(exc)) from exc
         _apply_membership(trust.nodes, trust.removed_node_ids, operation)
         _record_membership_key(trust, target, operation, start_seq=int(operation["seq"]))
-        _record_membership_role(trust, target, operation)
+        if provisional_registration:
+            trust.role_history[target] = [{
+                "role_epoch": 1,
+                "role": str(operation.get("role") or ""),
+                "membership_op_id": op_id,
+            }]
+        else:
+            _record_membership_role(trust, target, operation)
         trust.validated_op_ids.add(op_id)
         return
 

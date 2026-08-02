@@ -376,7 +376,16 @@ class TestVpsManagerFrontendLogic:
         source = HTML_PATH.read_text(encoding="utf-8")
 
         assert "function addVpsToCluster(hostname)" in source
-        assert "send({ cmd: 'add_vps_to_cluster', hostname: target })" in source
+        assert "startClusterOnboard(target)" in source
+        assert "function renderClusterOnboardProgressModal()" in source
+        assert "function pollClusterOnboardProgress(jobId)" in source
+        assert "'/cluster-onboard/' + encodeURIComponent(target) + '/start'" in source
+        assert "if (isClusterOnboardModalVisible() && isClusterOnboardRunning()) return;" in source
+        assert source.count("if (isClusterOnboardModalVisible() && isClusterOnboardRunning()) return;") >= 2
+        assert "closeButton.style.display = running ? 'none' : ''" in source
+        assert "clusterNodeAction === 'resume' ? 'Resume Cluster Onboarding'" in source
+        assert "id='cluster-onboard-retry'>Retry</button>" in source
+        assert "retryButton.onclick = function () { startClusterOnboard(String(flow.hostname || '')); };" in source
         assert "install restricted Cluster keys" in source
         assert "verify that no conflicting identity exists" in source
         assert "VPS joined and synchronized with Cluster." in source

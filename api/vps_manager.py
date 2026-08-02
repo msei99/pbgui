@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import traceback
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -21,6 +23,10 @@ SERVICE = "VPSManagerApi"
 router = APIRouter()
 
 _service: VPSManagerService | None = None
+_CLUSTER_ONBOARD_TASKS: dict[str, asyncio.Task[dict[str, object]]] = {}
+_CLUSTER_ONBOARD_JOBS: dict[str, dict[str, object]] = {}
+_CLUSTER_ONBOARD_ACTIVE: dict[str, str] = {}
+_CLUSTER_ONBOARD_JOB_TTL_SECONDS = 3600
 
 
 class ExistingVpsImportRequest(BaseModel):
@@ -76,8 +82,173 @@ def startup() -> None:
 
 async def shutdown() -> None:
     """Join API-owned deploy controllers while leaving Ansible processes alive."""
+    tasks = list(_CLUSTER_ONBOARD_TASKS.values())
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _CLUSTER_ONBOARD_TASKS.clear()
     if _service is not None:
         await asyncio.to_thread(_service.shutdown)
+
+
+def _public_cluster_onboard_job(job: dict[str, object]) -> dict[str, object]:
+    """Return one secret-free Cluster onboarding progress record."""
+
+    return {
+        key: value
+        for key, value in job.items()
+        if key in {"job_id", "hostname", "status", "phase", "label", "percent", "events", "result", "error", "created_at", "updated_at"}
+    }
+
+
+def _prune_cluster_onboard_jobs() -> None:
+    """Bound retained terminal onboarding jobs by age and count."""
+
+    cutoff = int(time.time()) - _CLUSTER_ONBOARD_JOB_TTL_SECONDS
+    removable = [
+        job_id
+        for job_id, job in _CLUSTER_ONBOARD_JOBS.items()
+        if str(job.get("status") or "") not in {"queued", "running"}
+        and int(job.get("updated_at") or 0) < cutoff
+    ]
+    for job_id in removable:
+        _CLUSTER_ONBOARD_JOBS.pop(job_id, None)
+    terminal = sorted(
+        (
+            (int(job.get("updated_at") or 0), job_id)
+            for job_id, job in _CLUSTER_ONBOARD_JOBS.items()
+            if str(job.get("status") or "") not in {"queued", "running"}
+        )
+    )
+    for _updated_at, job_id in terminal[:-50]:
+        _CLUSTER_ONBOARD_JOBS.pop(job_id, None)
+
+
+def _update_cluster_onboard_job(job_id: str, update: dict[str, object]) -> dict[str, object]:
+    """Apply one bounded progress update to an onboarding job."""
+
+    job = _CLUSTER_ONBOARD_JOBS.get(job_id)
+    if not job:
+        return {}
+    phase = str(update.get("phase") or job.get("phase") or "running")
+    label = str(update.get("label") or job.get("label") or "Adding VPS to Cluster...")
+    previous_phase = str(job.get("phase") or "")
+    job.update(update)
+    job["phase"] = phase
+    job["label"] = label
+    job["percent"] = max(0, min(100, int(job.get("percent") or 0)))
+    job["updated_at"] = int(time.time())
+    if phase != previous_phase or str(update.get("status") or "") in {"successful", "error"}:
+        events = list(job.get("events") or [])
+        events.append({"phase": phase, "label": label, "status": str(update.get("status") or "running")})
+        job["events"] = events[-30:]
+    return _public_cluster_onboard_job(job)
+
+
+async def _run_cluster_onboard_job(
+    job_id: str,
+    service: VPSManagerService,
+    token: str,
+    hostname: str,
+) -> dict[str, object]:
+    """Run one tracked Cluster onboarding operation."""
+
+    _update_cluster_onboard_job(job_id, {
+        "status": "running",
+        "phase": "starting",
+        "label": "Starting Cluster onboarding...",
+        "percent": 1,
+    })
+
+    def progress(update: dict[str, object]) -> None:
+        _update_cluster_onboard_job(job_id, {"status": "running", **update})
+
+    try:
+        result = await service.add_vps_to_cluster(token, hostname, progress_callback=progress)
+    except asyncio.CancelledError:
+        _update_cluster_onboard_job(job_id, {
+            "status": "error",
+            "phase": "interrupted",
+            "label": "Cluster onboarding was interrupted by API shutdown.",
+            "error": "API shutdown interrupted Cluster onboarding; retry Add to Cluster.",
+        })
+        raise
+    except Exception as exc:
+        _update_cluster_onboard_job(job_id, {
+            "status": "error",
+            "phase": "error",
+            "label": str(exc),
+            "error": str(exc),
+        })
+        raise
+    _update_cluster_onboard_job(job_id, {
+        "status": "successful",
+        "phase": "complete",
+        "label": "VPS joined and synchronized with Cluster.",
+        "percent": 100,
+        "result": result,
+        "error": "",
+    })
+    return result
+
+
+def _cluster_onboard_done(hostname: str, job_id: str, task: asyncio.Task[dict[str, object]]) -> None:
+    """Release one completed onboarding task and record detached failures."""
+
+    if _CLUSTER_ONBOARD_TASKS.get(hostname) is task:
+        _CLUSTER_ONBOARD_TASKS.pop(hostname, None)
+    if _CLUSTER_ONBOARD_ACTIVE.get(hostname) == job_id:
+        _CLUSTER_ONBOARD_ACTIVE.pop(hostname, None)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _log(SERVICE, f"Cluster onboarding failed for {hostname}: {exc}", level="WARNING")
+
+
+def _start_cluster_onboard(service: VPSManagerService, token: str, hostname: str) -> tuple[dict[str, object], asyncio.Task[dict[str, object]]]:
+    """Create or return one active host onboarding job."""
+
+    target = str(hostname or "").strip()
+    if not target or target in {".", ".."} or any(ch in target for ch in ("/", "\\", "\x00")) or any(ord(ch) < 32 for ch in target):
+        raise HTTPException(status_code=400, detail="Invalid VPS hostname")
+    _prune_cluster_onboard_jobs()
+    task = _CLUSTER_ONBOARD_TASKS.get(target)
+    active_job_id = _CLUSTER_ONBOARD_ACTIVE.get(target, "")
+    if task is not None and not task.done() and active_job_id in _CLUSTER_ONBOARD_JOBS:
+        return _public_cluster_onboard_job(_CLUSTER_ONBOARD_JOBS[active_job_id]), task
+
+    now = int(time.time())
+    job_id = uuid.uuid4().hex
+    job: dict[str, object] = {
+        "job_id": job_id,
+        "hostname": target,
+        "status": "queued",
+        "phase": "queued",
+        "label": "Queued Cluster onboarding...",
+        "percent": 0,
+        "events": [],
+        "result": None,
+        "error": "",
+        "created_at": now,
+        "updated_at": now,
+    }
+    _CLUSTER_ONBOARD_JOBS[job_id] = job
+    _CLUSTER_ONBOARD_ACTIVE[target] = job_id
+    task = asyncio.create_task(_run_cluster_onboard_job(job_id, service, token, target))
+    _CLUSTER_ONBOARD_TASKS[target] = task
+    task.add_done_callback(
+        lambda finished, host=target, tracked_job_id=job_id: _cluster_onboard_done(host, tracked_job_id, finished)
+    )
+    return _public_cluster_onboard_job(job), task
+
+
+async def _await_cluster_onboard(service: VPSManagerService, token: str, hostname: str) -> dict[str, object]:
+    """Await one host onboarding task independently of its requesting WebSocket."""
+
+    _job, task = _start_cluster_onboard(service, token, hostname)
+    return await asyncio.shield(task)
 
 
 @router.get("/main_page", response_class=HTMLResponse)
@@ -243,6 +414,48 @@ def get_cluster_nodes_import_progress(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@router.post("/cluster-onboard/{hostname}/start")
+async def start_cluster_onboard(
+    hostname: str,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Start or resume one tracked VPS Cluster onboarding job."""
+
+    job, _task = _start_cluster_onboard(_get_service(), session.token, hostname)
+    return JSONResponse(content=job)
+
+
+@router.get("/cluster-onboard/jobs/{job_id}")
+def get_cluster_onboard_job(
+    job_id: str,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Return one tracked VPS Cluster onboarding job."""
+
+    del session
+    _prune_cluster_onboard_jobs()
+    job = _CLUSTER_ONBOARD_JOBS.get(str(job_id or "").strip())
+    if not job:
+        raise HTTPException(status_code=404, detail="Cluster onboarding job not found")
+    return JSONResponse(content=_public_cluster_onboard_job(job))
+
+
+@router.get("/cluster-onboard/{hostname}/active")
+def get_active_cluster_onboard_job(
+    hostname: str,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Return the active onboarding job for one VPS hostname, if any."""
+
+    del session
+    target = str(hostname or "").strip()
+    job_id = _CLUSTER_ONBOARD_ACTIVE.get(target, "")
+    job = _CLUSTER_ONBOARD_JOBS.get(job_id)
+    if not job or str(job.get("status") or "") not in {"queued", "running"}:
+        return JSONResponse(content={"active": False, "hostname": target})
+    return JSONResponse(content={"active": True, **_public_cluster_onboard_job(job)})
+
+
 @router.websocket("/ws")
 async def ws_vps_manager(websocket: WebSocket):
     session = await authenticate_websocket(websocket)
@@ -322,7 +535,8 @@ async def ws_vps_manager(websocket: WebSocket):
                     )
                     await websocket.send_json({"type": "result", "cmd": cmd, "success": True, "data": data})
                 elif cmd == "add_vps_to_cluster":
-                    data = await service.add_vps_to_cluster(
+                    data = await _await_cluster_onboard(
+                        service,
                         token,
                         str(msg.get("hostname") or ""),
                     )

@@ -36,7 +36,7 @@ from master.async_monitor import (
     MonitorAgentPayloadError,
     _validate_monitor_agent_payload,
 )
-from master.cluster_state import ClusterStateError, default_cluster_root, local_cmc_credential_readiness, normalize_node_sync_mode, read_local_identity, rebuild_materialized_state
+from master.cluster_state import ClusterStateError, credential_lifecycle_status, default_cluster_root, local_cmc_credential_readiness, normalize_node_sync_mode, read_local_identity, rebuild_materialized_state
 from MonitorConfig import MonitorConfig
 from PBCoinData import CoinData
 from pb7_guard import PB7_PINNED_COMMIT
@@ -3689,26 +3689,53 @@ class VPSManagerService:
         if not host:
             return {"ok": False, "registered": False, "action": "error", "reason": "Hostname is required."}
         try:
-            path = default_cluster_root(Path(PBGDIR)) / "cluster_nodes.json"
+            cluster_root = default_cluster_root(Path(PBGDIR))
+            path = cluster_root / "cluster_nodes.json"
             if not path.is_file():
                 return {"ok": False, "registered": False, "action": "missing", "reason": "Cluster state is not initialized."}
             cluster_nodes = json.loads(path.read_text(encoding="utf-8"))
+            desired_path = cluster_root / "desired_state.json"
+            desired_state = json.loads(desired_path.read_text(encoding="utf-8")) if desired_path.is_file() else {}
         except Exception as exc:
             return {"ok": False, "registered": False, "action": "error", "reason": str(getattr(exc, "detail", None) or exc)}
         nodes = cluster_nodes.get("nodes") if isinstance(cluster_nodes, dict) else {}
+        credential_status = credential_lifecycle_status({
+            "cluster_nodes": cluster_nodes,
+            "desired_state": desired_state,
+        })
+        credential_nodes = credential_status.get("nodes") if isinstance(credential_status, dict) else {}
+        credential_nodes = credential_nodes if isinstance(credential_nodes, dict) else {}
         for node_id, item in nodes.items() if isinstance(nodes, dict) else []:
             if not isinstance(item, dict):
                 continue
             if str(item.get("pbname") or item.get("hostname") or "").strip() != host:
                 continue
             joined = item.get("state_replica", True) is not False
+            resolved_node_id = str(item.get("node_id") or node_id or "")
+            try:
+                credential_v2 = int(item.get("credential_protocol_version") or 0) >= 2
+            except (TypeError, ValueError):
+                credential_v2 = False
+            lifecycle_node = credential_nodes.get(resolved_node_id)
+            lifecycle_node = lifecycle_node if isinstance(lifecycle_node, dict) else {}
+            materialization_ack = lifecycle_node.get("materialization_ack")
+            materialization_ack = materialization_ack if isinstance(materialization_ack, dict) else {}
+            acknowledged = not credential_v2 or materialization_ack.get("current") is True
+            onboarding_complete = joined and acknowledged
             return {
                 "ok": True,
                 "registered": True,
                 "joined": joined,
-                "action": "skip" if joined else "join",
-                "reason": "VPS node already joined" if joined else "VPS node is ready to join",
-                "node_id": str(item.get("node_id") or node_id or ""),
+                "onboarding_complete": onboarding_complete,
+                "action": "skip" if onboarding_complete else ("resume" if joined else "join"),
+                "reason": (
+                    "VPS node onboarding completed"
+                    if onboarding_complete
+                    else "VPS node joined; resume synchronization and materialization"
+                    if joined
+                    else "VPS node is ready to join"
+                ),
+                "node_id": resolved_node_id,
             }
         return {"ok": False, "registered": False, "action": "missing", "reason": "VPS host is not known to Cluster bootstrap."}
 
@@ -6802,7 +6829,13 @@ done"""
         self.vpsmanager.setup_vps(vps, debug=debug, extra_vars=extra_vars)
         return self._build_vps_progress(vps, include_logs=True)
 
-    async def add_vps_to_cluster(self, token: str, hostname: str) -> dict[str, Any]:
+    async def add_vps_to_cluster(
+        self,
+        token: str,
+        hostname: str,
+        *,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         """Register, connect and fully join one successfully set up VPS."""
 
         vps = self._require_vps(hostname)
@@ -6816,6 +6849,7 @@ done"""
             result = await cluster.onboard_vps_cluster_node(
                 str(vps.hostname or ""),
                 ssh_passwords=ssh_passwords,
+                progress_callback=progress_callback,
             )
         except Exception as exc:
             detail = getattr(exc, "detail", None)

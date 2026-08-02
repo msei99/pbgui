@@ -2002,6 +2002,17 @@ def test_remote_join_writes_identity_for_known_node(monkeypatch, tmp_path: Path)
                     stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "vps"}),
                     stderr="",
                 )
+            if " hello" in command:
+                return SimpleNamespace(
+                    exit_status=0,
+                    stdout=json.dumps({
+                        "ok": True,
+                        "cluster_id": CLUSTER_ID,
+                        "node_id": NODE_B,
+                        "credential_capability": {"version": 2},
+                    }),
+                    stderr="",
+                )
             if "get-state-vector" in command:
                 return SimpleNamespace(exit_status=0, stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": {}}), stderr="")
             if "put-ops" in command:
@@ -2037,14 +2048,307 @@ def test_remote_join_writes_identity_for_known_node(monkeypatch, tmp_path: Path)
     assert f"join {CLUSTER_ID} {NODE_B} vps vps-a" in calls[1][1]
     assert payload["completion"]["ok"] is True
     assert payload["completion"]["pbrun_start"]["started"] is True
-    assert len(calls) == 9
-    assert "get-state-vector" in calls[2][1]
-    assert "put-ops" in calls[3][1]
-    assert "rebuild" in calls[4][1]
-    assert "materialize-v7-preview" in calls[5][1]
-    assert "materialize-v8-preview" in calls[6][1]
-    assert "materialize-api-keys-preview" in calls[7][1]
-    assert "start PBRun" in calls[8][1]
+    assert payload["completion"]["pull"]["pulled_ops"] == 0
+    assert len(calls) == 11
+    assert " hello" in calls[2][1]
+    assert "get-state-vector" in calls[3][1]
+    assert "get-state-vector" in calls[4][1]
+    assert "put-ops" in calls[5][1]
+    assert "rebuild" in calls[6][1]
+    assert "materialize-v7-preview" in calls[7][1]
+    assert "materialize-v8-preview" in calls[8][1]
+    assert "materialize-api-keys-preview" in calls[9][1]
+    assert "start PBRun" in calls[10][1]
+
+
+def test_existing_checkpoint_peer_pull_does_not_require_new_join_authorization(monkeypatch, tmp_path: Path) -> None:
+    """A joined peer on the local active checkpoint can send its validated delta directly."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=100)
+    append_operation(root, "ADD_NODE", _reachable_vps_payload(), created_at=101)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    checkpoint_id = "sha256:" + "a" * 64
+    local_vector = cluster.rebuild_materialized_state(root, write=False)["state_vector"]
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            assert hostname == "vps-a"
+            assert "get-state-vector" in command
+            return SimpleNamespace(
+                exit_status=0,
+                stdout=json.dumps({
+                    "ok": True,
+                    "active": True,
+                    "cluster_id": CLUSTER_ID,
+                    "node_id": NODE_B,
+                    "checkpoint_id": checkpoint_id,
+                    "state_vector": local_vector,
+                }),
+                stderr="",
+            )
+
+    monkeypatch.setattr(
+        cluster,
+        "checkpoint_status",
+        lambda _root: {"active": True, "checkpoint_id": checkpoint_id, "checkpoint_epoch": 1},
+    )
+
+    async def no_current_blobs(*args, **kwargs):
+        return {"config": 0, "secret": 0, "sealed": 0}
+
+    monkeypatch.setattr(cluster, "_pull_current_desired_blobs_from_host", no_current_blobs)
+
+    result = asyncio.run(cluster._pull_missing_operations_from_host(
+        FakePool(),
+        "vps-a",
+        "software/pbgui",
+        NODE_A,
+        CLUSTER_ID,
+    ))
+
+    assert result["pulled_ops"] == 0
+    assert result["checkpoint"] == {"status": "existing_checkpoint_peer", "checkpoint_id": checkpoint_id}
+
+
+def test_peer_pull_stages_membership_before_credential_ack(monkeypatch, tmp_path: Path) -> None:
+    """A new node's membership authenticates its following Credential-v2 ACK in one batch."""
+
+    root = _init_cluster(tmp_path)
+    append_operation(root, "ADD_NODE", {"node_id": NODE_A, "role": "master", "pbname": "master"}, created_at=100)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    append_operation(
+        root,
+        "UPDATE_NODE",
+        {
+            "node_id": NODE_B,
+            "role": "vps",
+            "pbname": "vps-a",
+            "state_replica": False,
+            "sync_enabled": False,
+        },
+        created_at=100,
+    )
+    authorization = cluster.create_join_authorization(root, NODE_B, "vps")
+    remote_keys = ensure_node_key_material(tmp_path / "remote-keys")
+    public_bundle = remote_keys.public_bundle(NODE_B, "vps")
+    membership = sign_operation(
+        {
+            **public_bundle,
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_B}:00000001",
+            "actor": NODE_B,
+            "seq": 1,
+            "op": "ADD_NODE",
+            "created_at": 101,
+            "node_id": NODE_B,
+            "role": "vps",
+            "pbname": "vps-a",
+            "state_replica": True,
+            "membership_authorization": authorization,
+        },
+        remote_keys.signing_private_key,
+        signer_id=NODE_B,
+    )
+    ack = sign_operation(
+        {
+            "schema_version": 1,
+            "cluster_id": CLUSTER_ID,
+            "op_id": f"{NODE_B}:00000002",
+            "actor": NODE_B,
+            "seq": 2,
+            "op": "CREDENTIAL_MATERIALIZATION_ACK",
+            "created_at": 102,
+            "node_id": NODE_B,
+            "credential_generations": {},
+            "recipient_generations": {},
+            "membership_generation": 1,
+            "actor_role_epoch": 1,
+            "actor_membership_op_id": str(membership["op_id"]),
+        },
+        remote_keys.signing_private_key,
+        signer_id=NODE_B,
+    )
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            if "get-state-vector" in command:
+                payload = {
+                    "ok": True,
+                    "active": False,
+                    "cluster_id": CLUSTER_ID,
+                    "node_id": NODE_B,
+                    "state_vector": {NODE_B: 2},
+                }
+            elif "get-ops" in command:
+                payload = {"ok": True, "operations": [membership, ack], "missing": []}
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=json.dumps(payload), stderr="")
+
+    async def no_current_blobs(*args, **kwargs):
+        return {"config": 0, "secret": 0, "sealed": 0}
+
+    monkeypatch.setattr(cluster, "_pull_current_desired_blobs_from_host", no_current_blobs)
+
+    result = asyncio.run(cluster._pull_missing_operations_from_host(
+        FakePool(),
+        "vps-a",
+        "software/pbgui",
+        NODE_A,
+        CLUSTER_ID,
+    ))
+
+    assert result["pulled_ops"] == 2
+    assert (root / "oplog" / NODE_B / "00000001.json").is_file()
+    assert (root / "oplog" / NODE_B / "00000002.json").is_file()
+    assert cluster.rebuild_materialized_state(root, write=False)["cluster_nodes"]["nodes"][NODE_B]["state_replica"] is True
+
+
+@pytest.mark.parametrize(
+    ("remote_cluster_id", "remote_checkpoint_id", "error"),
+    [
+        (OTHER_CLUSTER_ID, "sha256:" + "a" * 64, "different cluster_id"),
+        (CLUSTER_ID, "sha256:" + "b" * 64, "checkpoint-aware join authorization"),
+    ],
+)
+def test_existing_checkpoint_peer_pull_keeps_cluster_and_checkpoint_boundary(
+    monkeypatch,
+    tmp_path: Path,
+    remote_cluster_id: str,
+    remote_checkpoint_id: str,
+    error: str,
+) -> None:
+    """Peer resume rejects a foreign cluster or non-matching active checkpoint."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    local_checkpoint_id = "sha256:" + "a" * 64
+
+    class FakePool:
+        async def run(self, hostname: str, command: str, timeout: int = 30):
+            return SimpleNamespace(
+                exit_status=0,
+                stdout=json.dumps({
+                    "ok": True,
+                    "active": True,
+                    "cluster_id": remote_cluster_id,
+                    "node_id": NODE_B,
+                    "checkpoint_id": remote_checkpoint_id,
+                    "state_vector": {},
+                }),
+                stderr="",
+            )
+
+    monkeypatch.setattr(
+        cluster,
+        "checkpoint_status",
+        lambda _root: {"active": True, "checkpoint_id": local_checkpoint_id, "checkpoint_epoch": 1},
+    )
+
+    with pytest.raises(HTTPException, match=error):
+        asyncio.run(cluster._pull_missing_operations_from_host(
+            FakePool(),
+            "vps-a",
+            "software/pbgui",
+            NODE_A,
+            CLUSTER_ID,
+        ))
+
+
+def test_complete_remote_join_runs_pull_push_materialization_and_pbrun(monkeypatch, tmp_path: Path) -> None:
+    """An interrupted join resumes every remaining phase through PBRun start."""
+
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    node = {
+        **_reachable_vps_payload(),
+        "credential_protocol_version": 2,
+    }
+    identity = {"node_id": NODE_A, "cluster_id": CLUSTER_ID, "role": "master"}
+    pool = object()
+    calls: list[str] = []
+    progress: list[str] = []
+
+    async def pull(*args, **kwargs):
+        calls.append("pull")
+        return {"pulled_ops": 2, "checkpoint": {"status": "existing_checkpoint_peer"}}
+
+    def rebuild(*args, **kwargs):
+        calls.append("rebuild_local")
+        return {"cluster_nodes": {"nodes": {}}, "desired_state": {}}
+
+    async def push(*args, **kwargs):
+        calls.append("push")
+        callback = kwargs.get("progress_callback")
+        if callback:
+            callback({"done": 3, "total": 3})
+        return {"ok": True, "counts": {"pushed": 3, "rebuilt": 1}}
+
+    def rewrap_credentials():
+        calls.append("rewrap_credentials")
+        return {"rewrap": {"status": "rewrapped", "rewrapped": 1}}
+
+    async def materialize(_node, _identity, verb, timeout=30):
+        calls.append(verb)
+        if verb == "materialize-v7-preview":
+            return {"ok": True, "can_apply": False, "counts": {"add": 0, "update": 0, "error": 0}}
+        if verb == "materialize-v8-preview":
+            return {"ok": True, "can_apply": False, "counts": {"add": 0, "update": 0, "remove": 0, "delete": 0, "error": 0}}
+        return {"ok": True, "can_apply": False, "counts": {"write": 0, "error": 0}}
+
+    async def start_pbrun(_pool, hostname, _node, action):
+        calls.append("pbrun_start")
+        assert hostname == "vps-a"
+        assert action == "start"
+        return {"ok": True}
+
+    monkeypatch.setattr(cluster, "get_monitor", lambda: SimpleNamespace(pool=pool))
+    monkeypatch.setattr(cluster, "_pull_missing_operations_from_host", pull)
+    monkeypatch.setattr(cluster, "rebuild_materialized_state", rebuild)
+    monkeypatch.setattr(cluster, "_rewrap_credentials_for_current_membership", rewrap_credentials)
+    monkeypatch.setattr(cluster, "_push_missing_operations_to_remote", push)
+    monkeypatch.setattr(cluster, "_run_remote_materialize_command", materialize)
+    monkeypatch.setattr(cluster, "_run_remote_pbrun_service", start_pbrun)
+    monkeypatch.setattr(cluster, "credential_lifecycle_status", lambda _materialized: {
+        "nodes": {NODE_B: {"materialization_ack": {"current": True}}},
+    })
+
+    result = asyncio.run(cluster._complete_remote_join_sync(
+        node,
+        identity,
+        progress_callback=lambda update: progress.append(str(update.get("phase") or "")),
+    ))
+
+    assert result["ok"] is True
+    assert result["pull"]["pulled_ops"] == 2
+    assert result["pbrun_start"]["started"] is True
+    assert calls == [
+        "pull",
+        "rebuild_local",
+        "rewrap_credentials",
+        "push",
+        "materialize-v7-preview",
+        "materialize-v8-preview",
+        "materialize-api-keys-preview",
+        "materialize-credentials-preview",
+        "materialize-credentials",
+        "pull",
+        "rebuild_local",
+        "pbrun_start",
+    ]
+    assert progress == [
+        "pulling",
+        "rewrapping_credentials",
+        "pushing",
+        "pushing",
+        "materializing_v7",
+        "materializing_v8",
+        "materializing_api_keys",
+        "materializing_credentials",
+        "pulling_credentials",
+        "starting_pbrun",
+    ]
 
 
 def test_remote_join_does_not_stop_pbrun_for_master_node(monkeypatch, tmp_path: Path) -> None:
@@ -2068,6 +2372,17 @@ def test_remote_join_does_not_stop_pbrun_for_master_node(monkeypatch, tmp_path: 
                 return SimpleNamespace(
                     exit_status=0,
                     stdout=json.dumps({"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "role": "master"}),
+                    stderr="",
+                )
+            if " hello" in command:
+                return SimpleNamespace(
+                    exit_status=0,
+                    stdout=json.dumps({
+                        "ok": True,
+                        "cluster_id": CLUSTER_ID,
+                        "node_id": NODE_B,
+                        "credential_capability": {"version": 2},
+                    }),
                     stderr="",
                 )
             if "get-state-vector" in command:
@@ -2097,7 +2412,8 @@ def test_remote_join_does_not_stop_pbrun_for_master_node(monkeypatch, tmp_path: 
     assert payload["pbrun_stopped"] is False
     assert payload["completion"]["ok"] is True
     assert payload["completion"]["pbrun_start"]["reason"] == "not_vps_runner"
-    assert len(calls) == 7
+    assert payload["completion"]["pull"]["pulled_ops"] == 0
+    assert len(calls) == 9
     assert "stop PBRun" not in calls[0][1]
     assert not any("start PBRun" in item[1] for item in calls)
     assert f"join {CLUSTER_ID} {NODE_B} master remote-master" in calls[0][1]
@@ -3170,6 +3486,45 @@ def test_remote_push_ops_rejects_when_remote_has_unknown_ops(monkeypatch, tmp_pa
     assert "Remote has operations missing locally" in exc.value.detail
     assert len(calls) == 1
     assert "get-state-vector" in calls[0]
+
+
+def test_remote_push_ops_uses_checkpoint_baseline_for_remote_ahead_guard(monkeypatch, tmp_path: Path) -> None:
+    """Checkpoint-baseline actors are not mistaken for unknown remote operations."""
+
+    root = _init_cluster(tmp_path)
+    monkeypatch.setattr(cluster, "PBGDIR", str(tmp_path))
+    local_operation = {
+        "schema_version": 1,
+        "cluster_id": CLUSTER_ID,
+        "op_id": f"{NODE_A}:00000002",
+        "actor": NODE_A,
+        "seq": 2,
+        "op": "UPDATE_NODE",
+        "created_at": 102,
+        "node_id": NODE_A,
+    }
+    local_vector = {NODE_A: 2, NODE_B: 5}
+    monkeypatch.setattr(cluster, "load_operations", lambda *args, **kwargs: [local_operation])
+    monkeypatch.setattr(
+        cluster,
+        "rebuild_materialized_state",
+        lambda *args, **kwargs: {"state_vector": local_vector, "desired_state": {}},
+    )
+
+    async def remote_read(*args, **kwargs):
+        return {"ok": True, "cluster_id": CLUSTER_ID, "node_id": NODE_B, "state_vector": local_vector}
+
+    monkeypatch.setattr(cluster, "_run_remote_read_command", remote_read)
+
+    payload = asyncio.run(cluster._push_missing_operations_to_remote(
+        _reachable_vps_payload(),
+        read_local_identity(root),
+        pool=object(),
+    ))
+
+    assert payload["ok"] is True
+    assert payload["counts"]["pushed"] == 0
+    assert payload["message"] == "Remote already has all local operations."
 
 
 def test_remote_push_ops_noops_when_remote_is_current(monkeypatch, tmp_path: Path) -> None:

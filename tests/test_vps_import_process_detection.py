@@ -2471,10 +2471,100 @@ def test_vps_manager_cluster_status_reads_materialized_nodes_only(tmp_path: Path
         "ok": True,
         "registered": True,
         "joined": True,
+        "onboarding_complete": True,
         "action": "skip",
-        "reason": "VPS node already joined",
+        "reason": "VPS node onboarding completed",
         "node_id": "node-1",
     }
+
+
+def test_vps_manager_cluster_status_resumes_joined_v2_node_until_ack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A joined Credential-v2 node remains resumable until its ACK is current."""
+
+    cluster_root = tmp_path / "data" / "cluster"
+    cluster_root.mkdir(parents=True)
+    node_id = "pbgui-node-00000000-0000-4000-8000-000000000050"
+    (cluster_root / "cluster_nodes.json").write_text(json.dumps({
+        "credential_membership_generation": 2,
+        "nodes": {node_id: {
+            "node_id": node_id,
+            "pbname": "manibot50",
+            "state_replica": True,
+            "credential_protocol_version": 2,
+        }},
+    }), encoding="utf-8")
+    (cluster_root / "desired_state.json").write_text(json.dumps({
+        "credential_materialization_acks": {},
+    }), encoding="utf-8")
+    monkeypatch.setattr(service_mod, "PBGDIR", tmp_path)
+    service = object.__new__(VPSManagerService)
+
+    pending = service._cluster_node_status("manibot50")
+    assert pending["action"] == "resume"
+    assert pending["onboarding_complete"] is False
+
+    (cluster_root / "desired_state.json").write_text(json.dumps({
+        "credential_materialization_acks": {node_id: {
+            "op_id": f"{node_id}:00000002",
+            "membership_generation": 1,
+            "credential_generations": {},
+            "recipient_generations": {},
+        }},
+    }), encoding="utf-8")
+    stale = service._cluster_node_status("manibot50")
+    assert stale["action"] == "resume"
+    assert stale["onboarding_complete"] is False
+
+    (cluster_root / "desired_state.json").write_text(json.dumps({
+        "credential_materialization_acks": {node_id: {
+            "op_id": f"{node_id}:00000003",
+            "membership_generation": 2,
+            "credential_generations": {},
+            "recipient_generations": {},
+        }},
+    }), encoding="utf-8")
+    complete = service._cluster_node_status("manibot50")
+    assert complete["action"] == "skip"
+    assert complete["onboarding_complete"] is True
+
+
+def test_cluster_onboarding_survives_request_cancellation() -> None:
+    """Navigating away does not cancel an API-owned Cluster onboarding task."""
+
+    async def scenario() -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class Service:
+            async def add_vps_to_cluster(self, token: str, hostname: str, *, progress_callback=None) -> dict[str, object]:
+                started.set()
+                if progress_callback:
+                    progress_callback({"phase": "probing", "label": "Probing remote node...", "percent": 36})
+                await release.wait()
+                return {"hostname": hostname, "ok": True}
+
+        vps_manager_api._CLUSTER_ONBOARD_TASKS.clear()
+        vps_manager_api._CLUSTER_ONBOARD_JOBS.clear()
+        vps_manager_api._CLUSTER_ONBOARD_ACTIVE.clear()
+        waiter = asyncio.create_task(
+            vps_manager_api._await_cluster_onboard(Service(), "session", "manibot50")
+        )
+        await started.wait()
+        background = vps_manager_api._CLUSTER_ONBOARD_TASKS["manibot50"]
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert background.cancelled() is False
+
+        release.set()
+        assert await background == {"hostname": "manibot50", "ok": True}
+        await asyncio.sleep(0)
+        assert "manibot50" not in vps_manager_api._CLUSTER_ONBOARD_TASKS
+        job = next(iter(vps_manager_api._CLUSTER_ONBOARD_JOBS.values()))
+        assert job["status"] == "successful"
+        assert any(event["phase"] == "probing" for event in job["events"])
+
+    asyncio.run(scenario())
 
 
 def test_vps_manager_full_detail_does_not_force_host_meta_refresh() -> None:
