@@ -74,6 +74,31 @@ body {
   padding: var(--sp-lg);
   min-width: 0;
 }
+.pb8-update-warning {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-md);
+  margin-bottom: var(--sp-md);
+  padding: var(--sp-md);
+  border: 1px solid rgba(255, 140, 0, 0.45);
+  border-radius: 6px;
+  background: rgba(255, 140, 0, 0.10);
+  color: #ffd08a;
+}
+.pb8-update-warning strong { color: var(--orange); }
+.pb8-update-warning a {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid rgba(255, 140, 0, 0.55);
+  border-radius: 4px;
+  padding: var(--sp-xs) var(--sp-sm);
+  background: rgba(255, 140, 0, 0.14);
+}
+.pb8-update-warning a:hover { background: rgba(255, 140, 0, 0.24); }
 
 /* ─── Table ────────────────────────────────────────────────── */
 .tbl-wrap {
@@ -520,6 +545,10 @@ tr.row-inactive td  { opacity: 0.45; }
 
   <!-- Main content -->
   <div id="main-content">
+    <div id="pb8-update-warning" class="pb8-update-warning" role="status" hidden>
+      <div><strong>PBRun cannot start PB8.</strong> <span id="pb8-update-warning-hosts"></span></div>
+      <a href="/api/vps-manager/main_page">Open VPS Manager -&gt; Update PB8</a>
+    </div>
     <div class="tbl-wrap">
       <table>
         <thead id="thead"></thead>
@@ -733,7 +762,28 @@ function renderHeader() {
   renderHeader();  /* set initial arrows */
 }
 
+function renderPb8UpdateWarning(rows) {
+  var warning = document.getElementById('pb8-update-warning');
+  var hostText = document.getElementById('pb8-update-warning-hosts');
+  if (!warning || !hostText) return;
+  var hosts = [];
+  if (runListAdapter.isV8) {
+    (rows || []).forEach(function(row) {
+      (row.pb8_update_required_on || []).forEach(function(host) {
+        host = String(host || '').trim();
+        if (host && hosts.indexOf(host) === -1) hosts.push(host);
+      });
+    });
+  }
+  hosts.sort();
+  warning.hidden = hosts.length === 0;
+  hostText.textContent = hosts.length
+    ? 'The validated PB8 runtime is not ready on ' + hosts.join(', ') + '.'
+    : '';
+}
+
 function render() {
+  renderPb8UpdateWarning(instances);
   var filtered = instances.slice();
 
   // Search filter

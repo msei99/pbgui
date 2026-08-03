@@ -3603,7 +3603,7 @@ def test_v7_runtime_compatibility_rejects_non_exact_target_paths(target: str) ->
 
 
 def test_v7_frontend_disables_unconfirmed_pb7_hosts() -> None:
-    """The editor consumes capability metadata and disables unknown legacy assignments."""
+    """The editor disables unconfirmed choices but preserves its configured assignment."""
 
     source = Path("frontend/v7_edit.html").read_text(encoding="utf-8")
 
@@ -3612,7 +3612,8 @@ def test_v7_frontend_disables_unconfirmed_pb7_hosts() -> None:
     assert "capabilityKey: isV8 ? 'pb8_capable' : 'pb7_capable'" in Path(
         "frontend/js/run_editor_adapter.js"
     ).read_text(encoding="utf-8")
-    assert "selectedCapability[runEditorAdapter.capabilityKey] == null" in source
+    assert "allHosts.indexOf(selected) < 0" in source
+    assert "select.value = selected" in source
 
 
 def test_v7_dynamic_ignore_does_not_treat_coindata_service_as_cmc_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

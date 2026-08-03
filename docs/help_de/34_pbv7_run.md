@@ -33,7 +33,7 @@ Tabellenspalten:
 | **Note** | Freitext-Notiz für eigene Zwecke |
 | **Actions** | P/G/T Forced Modes, Edit, Balance Calculator, V8-Migration und Delete |
 
-Die Zeilenbuttons `P`, `G` und `T` schreiben PB7 `live.forced_mode_long` und `live.forced_mode_short` in `config.json`, erhöhen die Config-Version, erstellen ein Backup der vorherigen Config und synchronisieren die Änderung zum Ziel-Host. Es sind Passivbot-Forced-Mode-Aktionen, keine direkten Exchange-Orders.
+Die Zeilenbuttons `P`, `G` und `T` schreiben PB7 `live.forced_mode_long` und `live.forced_mode_short` in `config.json`, erhöhen die Config-Version, erstellen ein Backup der vorherigen Config und synchronisieren die Änderung zum Ziel-Host. Es sind Passivbot-Forced-Mode-Aktionen, keine direkten Exchange-Orders. Der Editor zeigt kanonische Werte wie `graceful_stop` über die passende PB7-Dropdown-Option an, auch wenn die gespeicherte Config die Langform statt des Kurz-Alias verwendet.
 
 **V8** lässt die V7-Run-Config unverändert. PBGui entfernt vor dem Aufruf von PB8 ausschließlich eigene Metadaten und einen veralteten temporären Loader-Pfad. Meldet PB8 nicht unterstützte oder manuell zu prüfende Strategie-Felder, stoppt die Konvertierung und zeigt diese Felder an, statt eine lauffähige V8-Config zu veröffentlichen.
 
@@ -72,7 +72,7 @@ Wichtige Einstellungen im Bearbeitungsformular:
 | Bereich | Beschreibung |
 |---------|------|
 | **User** | API-Key-Benutzer (Exchange-Konto) auswählen |
-| **Enabled On** | Ziel-VPS für den Einsatz. Der Selektor zeigt nur Hostnamen; technische Credential-Diagnosen werden erst bei der Validierung einer betroffenen Aktion gemeldet |
+| **Enabled On** | Ziel-VPS für den Einsatz. Der Selektor zeigt nur Hostnamen; ein bereits konfiguriertes Ziel bleibt sichtbar, wenn seine aktuelle Capability nicht bestätigt werden kann, während die Validierung unsichere Zielwechsel weiterhin blockiert |
 | **Note** | Optionales Label, das in der Liste angezeigt wird |
 | **Logging level** | Passivbot-Selektor für die Log-Verbosity mit `warning`, `info`, `debug` und `trace` |
 | **Long / Short** | Bot-Parameter — Positionen, TWE, Entry/Close-Bereiche |

@@ -175,6 +175,47 @@ def update_source_index_for_day(
         _write_index(path, base_day, day_count, data)
 
 
+def replace_source_index_for_day(
+    *,
+    exchange: str,
+    coin: str,
+    day: str,
+    minute_indices: Iterable[int],
+    code: int,
+) -> None:
+    """Replace one day's source coverage instead of merging with stale bits."""
+    if int(code) < 0 or int(code) > 3:
+        return
+    path = get_source_index_path(exchange, coin)
+    target_day = _day_to_int(day)
+
+    with _index_write_lock(path):
+        existing = _read_index(path)
+        if existing is None:
+            base_day = target_day
+            day_count = 1
+            data = bytearray(b"\x00" * DAY_BYTES)
+            day_index = 0
+        else:
+            base_day, day_count, data = existing
+            base_day, day_count, data, day_index = _ensure_range(base_day, day_count, data, target_day)
+
+        day_offset = day_index * DAY_BYTES
+        data[day_offset:day_offset + DAY_BYTES] = b"\x00" * DAY_BYTES
+        for minute in minute_indices:
+            try:
+                m = int(minute)
+            except Exception:
+                continue
+            if m < 0 or m >= DAY_MINUTES:
+                continue
+            byte_index = day_offset + (m // 4)
+            shift = (m % 4) * 2
+            data[byte_index] = (data[byte_index] & ~(0x03 << shift)) | ((int(code) & 0x03) << shift)
+
+        _write_index(path, base_day, day_count, data)
+
+
 def get_source_minutes_for_range(
     *,
     exchange: str,

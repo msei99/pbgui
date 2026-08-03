@@ -975,7 +975,7 @@ def _enrich_v8_runtime(instances: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 continue
             info = observations.setdefault(name, {
                 "running_on": [], "running_version": 0, "config_version_remote": 0,
-                "blocked_on": [], "blocked_reason": "", "has_data": False,
+                "blocked_on": [], "blocked_reason": "", "pb8_update_required_on": [], "has_data": False,
             })
             info["has_data"] = True
             if item.get("running") is True:
@@ -985,6 +985,8 @@ def _enrich_v8_runtime(instances: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 info["blocked_on"].append(str(host))
                 if not info["blocked_reason"]:
                     info["blocked_reason"] = str(item.get("blocked_reason") or "")
+                if str(item.get("cluster_gate") or "") == "runtime_not_ready":
+                    info["pb8_update_required_on"].append(str(host))
             info["config_version_remote"] = max(
                 info["config_version_remote"], _coerce_version(item.get("cv")),
             )
@@ -1004,7 +1006,7 @@ def _enrich_v8_runtime(instances: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 continue
             info = observations.setdefault(instance["name"], {
                 "running_on": [], "running_version": 0, "config_version_remote": 0,
-                "blocked_on": [], "blocked_reason": "", "has_data": False,
+                "blocked_on": [], "blocked_reason": "", "pb8_update_required_on": [], "has_data": False,
             })
             info["has_data"] = True
             info["config_version_remote"] = _coerce_version(instance.get("version"))
@@ -1031,6 +1033,7 @@ def _enrich_v8_runtime(instances: list[dict[str, Any]]) -> list[dict[str, Any]]:
         instance["config_version_remote"] = _coerce_version(info.get("config_version_remote"))
         instance["blocked_on"] = list(dict.fromkeys(info.get("blocked_on", [])))
         instance["blocked_reason"] = str(info.get("blocked_reason") or "")
+        instance["pb8_update_required_on"] = list(dict.fromkeys(info.get("pb8_update_required_on", [])))
         instance["exchange"] = str(exchanges.get(instance.get("user"), "") or "")
 
         if instance["status"] in {"conflicted", "tombstoned", "config_error"}:

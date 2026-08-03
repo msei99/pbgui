@@ -27,7 +27,11 @@ class _JsonResponse:
 def test_non_hyperliquid_other_code_is_reported_as_api(monkeypatch, tmp_path) -> None:
     """Legacy OKX archive source code 3 displays as official API data."""
 
-    monkeypatch.setattr(sources, "get_source_index_path", lambda exchange, coin: tmp_path / str(exchange) / str(coin) / "sources.idx")
+    monkeypatch.setattr(
+        sources,
+        "get_source_index_path",
+        lambda exchange, coin: tmp_path / str(exchange) / str(coin) / "sources.idx",
+    )
 
     sources.update_source_index_for_day(
         exchange="okx",
@@ -64,6 +68,44 @@ def test_hyperliquid_other_code_stays_other_exchange(monkeypatch, tmp_path) -> N
     assert minutes["20240101"]["00"] == {0: "other_exchange"}
     assert counts["20240101"]["api"] == 0
     assert counts["20240101"]["other_exchange"] == 1
+
+
+def test_replace_source_index_clears_stale_minutes(monkeypatch, tmp_path) -> None:
+    """Replacing a day must remove source bits for candles no longer on disk."""
+    monkeypatch.setattr(sources, "get_source_index_path", lambda exchange, coin: tmp_path / str(exchange) / str(coin) / "sources.idx")
+
+    sources.update_source_index_for_day(
+        exchange="bybit",
+        coin="BTC_USDT:USDT",
+        day="2024-01-01",
+        minute_indices=range(1440),
+        code=sources.SOURCE_CODE_API,
+    )
+    sources.update_source_index_for_day(
+        exchange="bybit",
+        coin="BTC_USDT:USDT",
+        day="2024-01-02",
+        minute_indices=range(1440),
+        code=sources.SOURCE_CODE_API,
+    )
+    sources.replace_source_index_for_day(
+        exchange="bybit",
+        coin="BTC_USDT:USDT",
+        day="2024-01-01",
+        minute_indices=range(1000),
+        code=sources.SOURCE_CODE_API,
+    )
+
+    counts = sources.get_daily_source_counts_for_range(
+        exchange="bybit",
+        coin="BTC_USDT:USDT",
+        start_day="20240101",
+        end_day="20240102",
+    )
+    assert counts["20240101"]["api"] == 1000
+    assert counts["20240101"]["missing"] == 440
+    assert counts["20240102"]["api"] == 1440
+    assert counts["20240102"]["missing"] == 0
 
 
 def test_tiingo_refresh_preserves_valid_cache_when_requests_fail(monkeypatch, tmp_path) -> None:

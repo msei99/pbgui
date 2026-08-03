@@ -44,7 +44,11 @@ from market_data import (
     append_exchange_download_log,
     get_exchange_raw_root_dir,
 )
-from market_data_sources import SOURCE_CODE_API, update_source_index_for_day
+from market_data_sources import (
+    SOURCE_CODE_API,
+    replace_source_index_for_day,
+    update_source_index_for_day,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -63,8 +67,8 @@ MAX_CONCURRENT = 20
 MAX_RETRIES = 5
 RETRY_WAIT_BASE_S = 5.0
 
-# A day is considered "complete" if it has at least this many candles
-MIN_DAY_CANDLES = 1380  # 95% of 1440
+# Closed 24x7 market days must contain every minute.
+MIN_DAY_CANDLES = 1440
 
 # Default lookback for latest refresh
 DEFAULT_LATEST_LOOKBACK_DAYS = 3
@@ -461,7 +465,10 @@ def _write_candles_for_day(
         _write_day_npz(path, existing)
         try:
             written = list(existing.keys()) if overwrite else [i for i in candles if i not in before_keys]
-            update_source_index_for_day(
+            source_index_writer = (
+                replace_source_index_for_day if overwrite else update_source_index_for_day
+            )
+            source_index_writer(
                 exchange=STORAGE_EXCHANGE,
                 coin=_coin_dir(coin),
                 day=day,
@@ -471,6 +478,25 @@ def _write_candles_for_day(
         except Exception:
             pass
     return max(0, added)
+
+
+def _validate_closed_day(
+    candles: dict[int, dict[str, Any]],
+    *,
+    allow_inception_prefix: bool,
+) -> str | None:
+    """Return an error when a fetched closed day has missing 1m candles."""
+    indices = sorted(int(idx) for idx in candles if 0 <= int(idx) < 1440)
+    if not indices:
+        return "no candles"
+    expected_start = indices[0] if allow_inception_prefix else 0
+    if indices[0] != expected_start:
+        return f"starts at minute {indices[0]}, expected {expected_start}"
+    if indices[-1] != 1439:
+        return f"ends at minute {indices[-1]}, expected 1439"
+    if len(indices) != (indices[-1] - indices[0] + 1):
+        return f"contains {len(indices)} candles with internal gaps"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -699,12 +725,14 @@ def update_latest_bybit_1m_for_coin(
     minutes_written = 0
     pages = 0
     candles_by_day: dict[str, dict[int, dict[str, Any]]] = {}
+    fetch_error: str | None = None
 
     try:
         while cursor < end_ms:
             try:
                 page = ex.fetch_ohlcv(sym, timeframe="1m", since=cursor, limit=CCXT_LIMIT)
             except Exception as e:
+                fetch_error = f"{type(e).__name__}: {e}"
                 append_exchange_download_log(
                     STORAGE_EXCHANGE,
                     f"[bybit_latest_1m] fetch_error coin={coin_u} err={e}",
@@ -738,6 +766,67 @@ def update_latest_bybit_1m_for_coin(
             if added == 0:
                 break
 
+        if fetch_error is not None:
+            append_exchange_download_log(
+                STORAGE_EXCHANGE,
+                f"[bybit_latest_1m] discard_partial coin={coin_u} pages={pages} err={fetch_error}",
+                level="WARNING",
+            )
+            return {
+                "coin": coin_u,
+                "lookback_days": lb,
+                "pages": pages,
+                "days_fetched": len(candles_by_day),
+                "minutes_written": 0,
+                "result": "error",
+                "error": fetch_error,
+            }
+
+        existing_days = _list_existing_days(coin_u)
+        earliest_existing = existing_days[0] if existing_days else None
+        fetched_days = [datetime.strptime(day_s, "%Y-%m-%d").date() for day_s in candles_by_day]
+        earliest_fetched = min(fetched_days) if fetched_days else None
+        inception_day = earliest_existing or earliest_fetched
+        validation_errors: list[str] = []
+        closed_days_checked = 0
+        current_day = d_start
+        while current_day < d_end:
+            day_s = current_day.strftime("%Y-%m-%d")
+            candles = candles_by_day.get(day_s)
+            local_exists = _bybit_day_path(coin_u, day_s).exists()
+            if candles is None:
+                if local_exists or (inception_day is not None and current_day > inception_day):
+                    validation_errors.append(f"{day_s}: no candles fetched")
+                current_day += timedelta(days=1)
+                continue
+            closed_days_checked += 1
+            allow_inception_prefix = inception_day is not None and current_day <= inception_day
+            validation_error = _validate_closed_day(
+                candles,
+                allow_inception_prefix=allow_inception_prefix,
+            )
+            if validation_error:
+                validation_errors.append(f"{day_s}: {validation_error}")
+            current_day += timedelta(days=1)
+
+        if validation_errors:
+            error = "; ".join(validation_errors)
+            append_exchange_download_log(
+                STORAGE_EXCHANGE,
+                f"[bybit_latest_1m] incomplete_closed_day coin={coin_u} {error}; partial fetch discarded",
+                level="WARNING",
+            )
+            return {
+                "coin": coin_u,
+                "lookback_days": lb,
+                "pages": pages,
+                "days_fetched": len(candles_by_day),
+                "closed_days_checked": closed_days_checked,
+                "minutes_written": 0,
+                "result": "error",
+                "error": error,
+            }
+
         for day_s, candles in candles_by_day.items():
             d_ = datetime.strptime(day_s, "%Y-%m-%d").date()
             do_overwrite = overwrite and (d_end - d_).days <= lb
@@ -761,13 +850,14 @@ def update_latest_bybit_1m_for_coin(
     append_exchange_download_log(
         STORAGE_EXCHANGE,
         f"[bybit_latest_1m] done coin={coin_u} pages={pages} days={len(candles_by_day)}"
-        f" min_written={minutes_written}",
+        f" closed_days_checked={closed_days_checked} min_written={minutes_written}",
     )
     return {
         "coin": coin_u,
         "lookback_days": lb,
         "pages": pages,
         "days_fetched": len(candles_by_day),
+        "closed_days_checked": closed_days_checked,
         "minutes_written": minutes_written,
         "result": "ok",
     }

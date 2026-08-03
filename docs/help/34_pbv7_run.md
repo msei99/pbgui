@@ -33,7 +33,7 @@ Table columns:
 | **Note** | Free-text note for your own reference |
 | **Actions** | P/G/T forced modes, Edit, Balance Calculator, V8 migration, and Delete |
 
-The `P`, `G`, and `T` row buttons write PB7 `live.forced_mode_long` and `live.forced_mode_short` in `config.json`, bump the instance config version, create a backup of the previous config, and sync the changed config to the target host. They are Passivbot forced-mode actions, not direct exchange orders.
+The `P`, `G`, and `T` row buttons write PB7 `live.forced_mode_long` and `live.forced_mode_short` in `config.json`, bump the instance config version, create a backup of the previous config, and sync the changed config to the target host. They are Passivbot forced-mode actions, not direct exchange orders. The editor displays canonical values such as `graceful_stop` through their matching PB7 dropdown option even when the saved config uses the long form instead of the short alias.
 
 **V8** leaves the V7 run config unchanged. PBGui removes only its own metadata and stale temporary loader path before invoking PB8. If PB8 reports unsupported or manual-review strategy fields, conversion stops and shows those fields instead of publishing a runnable V8 config.
 
@@ -72,7 +72,7 @@ Key settings in the edit form:
 | Section | Description |
 |---------|-------------|
 | **User** | Select the API-key user (exchange account) |
-| **Enabled On** | Target VPS for deployment. The selector shows host names only; technical credential diagnostics are reported only when an affected action is validated |
+| **Enabled On** | Target VPS for deployment. The selector shows host names only; an already configured target remains visible when its current capability cannot be confirmed, while validation still blocks unsafe target changes |
 | **Note** | Optional label shown in the list |
 | **Logging level** | Passivbot logging verbosity selector with `warning`, `info`, `debug`, and `trace` |
 | **Long / Short** | Bot parameters — positions, TWE, entry/close ranges |

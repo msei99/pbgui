@@ -135,6 +135,51 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
     assert "source.remove()" in shell_source
 
 
+def test_delayed_config_load_does_not_replace_results_sidebar() -> None:
+    """A stale config response must not reopen the editor after navigation."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    functions = "\n\n".join(_extract_function(source, name) for name in ("editConfig", "newConfig"))
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let currentPanel = 'configs';
+        let editingConfig = null;
+        let pendingResolve;
+        let opened = [];
+        function apiFetch() {{
+          return new Promise(resolve => {{ pendingResolve = resolve; }});
+        }}
+        function showConfigEditor(name, config) {{ opened.push({{name, config}}); }}
+        function toast() {{}}
+        {functions}
+        (async () => {{
+          editConfig('alpha');
+          currentPanel = 'results';
+          pendingResolve({{name: 'alpha', config: {{source: 'saved'}}}});
+          await new Promise(resolve => setImmediate(resolve));
+          assert.deepEqual(opened, []);
+          assert.equal(editingConfig, null);
+
+          currentPanel = 'configs';
+          editConfig('beta');
+          pendingResolve({{name: 'beta', config: {{source: 'saved'}}}});
+          await new Promise(resolve => setImmediate(resolve));
+          assert.equal(opened.length, 1);
+          assert.equal(opened[0].name, 'beta');
+
+          const create = newConfig();
+          currentPanel = 'results';
+          pendingResolve({{config: {{source: 'template'}}}});
+          await create;
+          assert.equal(opened.length, 1);
+          assert.equal(editingConfig, 'beta');
+        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_backtest_settings_modal_opens_immediately_then_refreshes_authoritative_values() -> None:
     """The settings dialog must render before its deduplicated backend refresh finishes."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")

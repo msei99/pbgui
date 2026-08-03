@@ -1361,8 +1361,12 @@ class PBData():
                             timeout_s=float(self._bybit_latest_1m_api_timeout_seconds),
                         )
                         coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
-                        coin_status["result"] = "ok"
+                        coin_status["result"] = str(res.get("result") or "ok")
                         coin_status["lookback_days"] = int(lookback_days)
+                        coin_status["closed_days_checked"] = int(res.get("closed_days_checked") or 0)
+                        coin_status["minutes_written"] = int(res.get("minutes_written") or 0)
+                        if coin_status["result"] != "ok":
+                            coin_status["error"] = str(res.get("error") or "Bybit refresh failed")
                         try:
                             _refresh_inventory_coin("bybit", "1m", coin)
                         except Exception:

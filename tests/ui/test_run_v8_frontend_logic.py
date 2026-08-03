@@ -107,6 +107,102 @@ def test_pb8_template_hsl_coin_mode_has_a_select_option() -> None:
     assert "hsl_signal_mode: getVal('f-hsl-signal-mode')" in page
 
 
+def test_pb8_update_warning_only_uses_runtime_not_ready_hosts() -> None:
+    """Only backend-confirmed PB8 runtime blockers should show the update prompt."""
+
+    page = (ROOT / "frontend" / "v7_run.html").read_text(encoding="utf-8")
+    render_warning = _page_function(page, "renderPb8UpdateWarning")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const nodes = {{
+          'pb8-update-warning': {{hidden: true}},
+          'pb8-update-warning-hosts': {{textContent: ''}}
+        }};
+        const document = {{getElementById: (id) => nodes[id] || null}};
+        let runListAdapter = {{isV8: true}};
+        {render_warning}
+
+        renderPb8UpdateWarning([{{status: 'blocked', blocked_on: ['cluster-host']}}]);
+        assert.equal(nodes['pb8-update-warning'].hidden, true);
+        assert.equal(nodes['pb8-update-warning-hosts'].textContent, '');
+
+        renderPb8UpdateWarning([{{pb8_update_required_on: ['vps-b', 'vps-a', 'vps-a']}}]);
+        assert.equal(nodes['pb8-update-warning'].hidden, false);
+        assert.equal(nodes['pb8-update-warning-hosts'].textContent, 'The validated PB8 runtime is not ready on vps-a, vps-b.');
+
+        runListAdapter = {{isV8: false}};
+        renderPb8UpdateWarning([{{pb8_update_required_on: ['vps-a']}}]);
+        assert.equal(nodes['pb8-update-warning'].hidden, true);
+        """
+    )
+    _run_node(script)
+
+
+def test_run_editor_preserves_configured_target_when_capability_is_unconfirmed() -> None:
+    """A stale capability response must not make a configured target look disabled."""
+
+    page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+    refresh_hosts = "async " + _page_function(page, "refreshHostCapabilities")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let allHosts = ['disabled', 'manibot01'];
+        let hostCapabilitiesByName = {{}};
+        const select = {{options: [], value: 'manibot62'}};
+        const document = {{getElementById: () => select}};
+        const runEditorAdapter = {{capabilityKey: 'pb7_capable', label: 'PB7'}};
+        function getVal() {{ return select.value; }}
+        async function requestHostCapabilities() {{
+          return {{
+            hosts: ['disabled', 'manibot01'],
+            host_capabilities: {{manibot62: {{pb7_capable: false}}}}
+          }};
+        }}
+        function populateHosts() {{
+          select.options = allHosts.map(value => ({{value}}));
+        }}
+        {refresh_hosts}
+
+        (async () => {{
+          await refreshHostCapabilities();
+          assert.deepEqual(allHosts, ['disabled', 'manibot01', 'manibot62']);
+          assert.equal(select.value, 'manibot62');
+        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    _run_node(script)
+
+
+def test_v7_forced_mode_aliases_select_the_visible_editor_options() -> None:
+    """Canonical PB7 forced modes must map to the editor's short option values."""
+
+    page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+    normalize_mode = _page_function(page, "forcedModeSelectValue")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let runEditorAdapter = {{isV8: false}};
+        {normalize_mode}
+
+        assert.equal(forcedModeSelectValue('graceful_stop'), 'gs');
+        assert.equal(forcedModeSelectValue('tp_only'), 't');
+        assert.equal(forcedModeSelectValue('panic'), 'p');
+        assert.equal(forcedModeSelectValue('manual'), 'm');
+        assert.equal(forcedModeSelectValue('normal'), 'n');
+        assert.equal(forcedModeSelectValue('gs'), 'gs');
+        assert.equal(forcedModeSelectValue(''), '');
+        runEditorAdapter = {{isV8: true}};
+        assert.equal(forcedModeSelectValue('graceful_stop'), 'graceful_stop');
+        """
+    )
+    _run_node(script)
+
+    populate = _page_function(page, "populateForm")
+    assert "forcedModeSelectValue(live.forced_mode_long)" in populate
+    assert "forcedModeSelectValue(live.forced_mode_short)" in populate
+
+
 def test_log_panel_waits_for_remote_assignment_before_opening() -> None:
     """PB8 log opening must wait until enabled_on is populated from the config."""
 
@@ -334,6 +430,7 @@ def test_populate_form_restores_every_runtime_field_into_its_control() -> None:
             "cacheRunStrategyBlocks",
             "selectRunStrategyConfig",
             "refreshBotParamStatusLabels",
+            "forcedModeSelectValue",
             "populateForm",
         )
     )

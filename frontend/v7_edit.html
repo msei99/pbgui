@@ -1916,9 +1916,7 @@ async function refreshHostCapabilities() {
     if (!payload) return;
     hostCapabilitiesByName = payload.host_capabilities || {};
     allHosts = payload.hosts || allHosts;
-    var selectedCapability = hostCapabilitiesByName[selected] || null;
-    if (selected && selected !== 'disabled' && allHosts.indexOf(selected) < 0
-        && (!selectedCapability || selectedCapability[runEditorAdapter.capabilityKey] == null)) {
+    if (selected && selected !== 'disabled' && allHosts.indexOf(selected) < 0) {
       allHosts.push(selected);
     }
     populateHosts();
@@ -2283,6 +2281,21 @@ function clearEditedRunStrategyDefaultMark(side, sideConfig) {
 }
 
 /* ─── Populate Form from Config ────────────────────────────── */
+function forcedModeSelectValue(value) {
+  var normalized = String(value || '').trim().toLowerCase();
+  if (runEditorAdapter.isV8) return normalized;
+  return {
+    normal: 'n',
+    manual: 'm',
+    graceful_stop: 'gs',
+    'graceful-stop': 'gs',
+    panic: 'p',
+    tp_only: 't',
+    'tp-only': 't',
+    take_profit_only: 't'
+  }[normalized] || normalized;
+}
+
 function populateForm(opts) {
   opts = opts || {};
   var skipRawUpdate = !!opts.skipRawUpdate;
@@ -2329,8 +2342,8 @@ function populateForm(opts) {
   // Advanced
   setVal('f-max-cancel', live.max_n_cancellations_per_batch != null ? live.max_n_cancellations_per_batch : 5);
   setVal('f-max-create', live.max_n_creations_per_batch != null ? live.max_n_creations_per_batch : 3);
-  setVal('f-forced-long', live.forced_mode_long || '');
-  setVal('f-forced-short', live.forced_mode_short || '');
+  setVal('f-forced-long', forcedModeSelectValue(live.forced_mode_long));
+  setVal('f-forced-short', forcedModeSelectValue(live.forced_mode_short));
   setVal('f-hsl-signal-mode', live.hsl_signal_mode || 'unified');
   setVal('f-hsl-cooldown-policy', live.hsl_position_during_cooldown_policy || 'panic');
   setVal('f-max-restarts', live.max_n_restarts_per_day != null ? live.max_n_restarts_per_day : 10);

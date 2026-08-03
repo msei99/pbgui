@@ -209,6 +209,8 @@ Steuert den automatischen 1m-Candle-Refresh-Loop für Binance USDM Perpetuals.
 
 Diese Exchanges verwenden dieselben Controls für aktivierte Coins, Zyklusintervall, Pause, API-Timeout und Min-/Max-Lookback. Standard sind ein 3.600-Sekunden-Zyklus und 2–7 Tage Lookback. Änderungen gelten ohne Neustart im nächsten PBData-Zyklus.
 
+Bei Bybit wird jeder abgeschlossene 24x7-Markttag in diesem Fenster vor dem Schreiben aktualisierter Dateien auf alle 1.440 lückenlosen Minuten geprüft. Eine abgebrochene Pagination oder ein unvollständiger abgeschlossener Tag wird verworfen, ohne vorhandene Daten zu ersetzen; der nächste stündliche Zyklus versucht es erneut. Bei einem Overwrite wird außerdem die Source-Abdeckung dieses Tages ersetzt, damit die Heatmap keine veraltete Minutenabdeckung behält.
+
 Bitget listet nur aktive lineare USDT-Swaps. Latest Refresh und historischer Best-1m-Backfill verwenden die öffentlichen `USDT-FUTURES`-REST-Candle-Endpunkte. Worker-Threads innerhalb eines lokalen Downloads teilen einen 18-req/s-Limiter und bremsen bei Rate-Limits gemeinsam; starte nicht mehrere Bitget-Downloads parallel, weil das Exchange-Limit für die öffentliche IP gilt. Bitget besitzt keinen Archiv-Fallback. Ein lokaler, nicht verteilter Backfill fragt unvollständige historische Tage erneut per REST an und meldet Minuten, die Bitget nicht liefern kann.
 
 ## Market Data Status

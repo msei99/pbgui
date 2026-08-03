@@ -209,6 +209,8 @@ Controls the automatic 1m candle refresh loop for Binance USDM perpetuals.
 
 These exchanges use the same enabled-coins, cycle interval, pause, API timeout, and min/max lookback controls. Defaults are a 3,600-second cycle with a 2–7 day lookback. Changes apply on the next PBData cycle without a restart.
 
+For Bybit, every completed 24x7 market day in that window is verified for all 1,440 contiguous minutes before refreshed files are written. A failed pagination or incomplete closed day is discarded without replacing existing data, and the next hourly cycle retries it. Overwrites also replace the source coverage for that day so the heatmap cannot retain stale minute availability.
+
 Bitget lists active USDT linear swaps only. Its latest refresh and historical Best 1m backfill use the public `USDT-FUTURES` REST candle endpoints. Worker threads within one local download share an 18 req/s limiter and back off together on rate limits; avoid starting multiple Bitget downloads concurrently because the exchange limit applies to the public IP. There is no Bitget archive fallback. A local non-distributed backfill re-requests incomplete historical days and reports minutes Bitget cannot supply.
 
 ## Market Data Status

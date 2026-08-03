@@ -1734,6 +1734,7 @@ function sortFn(a, b) {
 
 function editConfig(name) {
   apiFetch('/configs/' + encodeURIComponent(name)).then(function(data) {
+    if (currentPanel !== 'configs') return;
     editingConfig = data && data.name ? data.name : name;
     showConfigEditor(editingConfig, (data && data.config) || {}, null, (data && data.param_status) || {});
   }).catch(function(e) { toast('Load failed: ' + e.message, 'err'); });
@@ -1935,7 +1936,6 @@ function openLogPanel() {
 }
 
 async function newConfig() {
-  editingConfig = '__new__';
   var tmpl = {};
   var tmplParamStatus = {};
   try {
@@ -1945,6 +1945,8 @@ async function newConfig() {
   } catch(e) {
     console.warn('newConfig: failed to fetch template, using empty defaults', e);
   }
+  if (currentPanel !== 'configs') return;
+  editingConfig = '__new__';
   showConfigEditor('', tmpl, null, tmplParamStatus);
 }
 

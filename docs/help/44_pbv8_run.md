@@ -10,7 +10,7 @@ The main **Status** column combines published desired state with exact PB8 proce
 
 - **synced** means the exact assigned PB8 process is running with the current config version.
 - **outdated**, **sync needed**, and **stop needed** identify a confirmed runtime/config mismatch requiring reconciliation.
-- **blocked** reports an actionable Cluster gate or PB8 runtime failure. If the reason says the Rust extension has no source fingerprint stamp or is stale, run **VPS Manager -> Update PB8** for that host; PBRun will retry after the validated update completes.
+- **blocked** reports an actionable Cluster gate or PB8 runtime failure. Only when PBRun reports that the validated PB8 runtime is not ready, the Run list shows an **Open VPS Manager -> Update PB8** warning for the affected host. Cluster gates and ordinary process-exit failures do not show this update prompt. PBRun retries after the validated update completes.
 - **collecting** means no exact process observation is available yet; PBGui does not guess that the bot is stopped.
 - **disabled** means the desired target is disabled and no running process was reported.
 - **conflicted** means concurrent cluster operations require resolution.
