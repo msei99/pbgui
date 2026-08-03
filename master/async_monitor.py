@@ -1946,6 +1946,8 @@ def _load_cluster_context():
     desired = desired if isinstance(desired, dict) else {}
     instances = desired.get('instances') if isinstance(desired.get('instances'), dict) else {}
     tombstones = desired.get('tombstones') if isinstance(desired.get('tombstones'), dict) else {}
+    pb8_instances = desired.get('pb8_instances') if isinstance(desired.get('pb8_instances'), dict) else {}
+    pb8_tombstones = desired.get('pb8_tombstones') if isinstance(desired.get('pb8_tombstones'), dict) else {}
     configured = bool(node_id and cluster_id)
     return {
         'configured': configured,
@@ -1955,6 +1957,8 @@ def _load_cluster_context():
         'desired_cluster_id': str(desired.get('cluster_id') or ''),
         'instances': instances,
         'tombstones': tombstones,
+        'pb8_instances': pb8_instances,
+        'pb8_tombstones': pb8_tombstones,
     }
 
 def _config_meta(config_dir):
@@ -1993,17 +1997,17 @@ def _config_manifest_hash(config_dir):
     manifest = json.dumps({'schema_version': 1, 'files': files}, sort_keys=True, separators=(',', ':')).encode('utf-8')
     return 'sha256:' + hashlib.sha256(manifest).hexdigest()
 
-def _cluster_gate_status(name, config_dir, version, cluster):
+def _cluster_gate_status(name, config_dir, version, cluster, instances_key='instances', tombstones_key='tombstones'):
     if not cluster.get('configured'):
         return {'blocked': False, 'cluster_gate': 'not_configured', 'blocked_reason': ''}
     if not cluster.get('desired_loaded'):
         return {'blocked': True, 'cluster_gate': 'missing_desired_state', 'blocked_reason': 'Cluster desired_state.json is missing'}
     if str(cluster.get('desired_cluster_id') or '') != str(cluster.get('cluster_id') or ''):
         return {'blocked': True, 'cluster_gate': 'foreign_desired_state', 'blocked_reason': 'Cluster desired_state.json belongs to another cluster'}
-    tombstones = cluster.get('tombstones') if isinstance(cluster.get('tombstones'), dict) else {}
+    tombstones = cluster.get(tombstones_key) if isinstance(cluster.get(tombstones_key), dict) else {}
     if name in tombstones:
         return {'blocked': True, 'cluster_gate': 'tombstoned', 'blocked_reason': 'Cluster desired state tombstoned this instance'}
-    instances = cluster.get('instances') if isinstance(cluster.get('instances'), dict) else {}
+    instances = cluster.get(instances_key) if isinstance(cluster.get(instances_key), dict) else {}
     item = instances.get(name)
     if not isinstance(item, dict):
         return {'blocked': True, 'cluster_gate': 'missing_instance', 'blocked_reason': 'Instance is missing from Cluster desired state'}
@@ -2025,6 +2029,65 @@ def _cluster_gate_status(name, config_dir, version, cluster):
     if str(version or '') != expected_version:
         return {'blocked': True, 'cluster_gate': 'version_mismatch', 'blocked_reason': 'Local config version does not match Cluster desired state'}
     return {'blocked': False, 'cluster_gate': 'allowed', 'blocked_reason': ''}
+
+def _pb8_rust_stamp_error():
+    src_candidates = []
+    src_root = os.path.join(PB8DIR, 'src')
+    try:
+        src_candidates = [
+            os.path.join(src_root, name)
+            for name in os.listdir(src_root)
+            if name.startswith('passivbot_rust') and name.endswith(('.so', '.pyd', '.dll', '.dylib'))
+            and os.path.isfile(os.path.join(src_root, name))
+        ]
+    except Exception:
+        src_candidates = []
+    installed_candidates = []
+    venv_root = os.path.dirname(os.path.dirname(PB8VENV))
+    site_roots = [os.path.join(venv_root, 'Lib', 'site-packages')]
+    lib_root = os.path.join(venv_root, 'lib')
+    try:
+        site_roots.extend(
+            os.path.join(lib_root, name, 'site-packages')
+            for name in os.listdir(lib_root)
+            if name.startswith('python')
+        )
+    except Exception:
+        pass
+    for site_root in site_roots:
+        for candidate_root in (site_root, os.path.join(site_root, 'passivbot_rust')):
+            try:
+                installed_candidates.extend(
+                    os.path.join(candidate_root, name)
+                    for name in os.listdir(candidate_root)
+                    if name.startswith('passivbot_rust') and name.endswith(('.so', '.pyd', '.dll', '.dylib'))
+                    and os.path.isfile(os.path.join(candidate_root, name))
+                )
+            except Exception:
+                continue
+    candidates = installed_candidates or src_candidates
+    if not candidates:
+        return 'PB8 Rust extension is missing; rerun Update PB8 on this host'
+    try:
+        preferred = max(candidates, key=os.path.getmtime)
+    except Exception:
+        return 'PB8 Rust extension cannot be inspected; rerun Update PB8 on this host'
+    if not os.path.isfile(preferred + '.rust-src-sha256'):
+        return 'PB8 Rust extension has no source fingerprint stamp; rerun Update PB8 on this host'
+    return ''
+
+def _pb8_last_error(config_dir):
+    path = os.path.join(config_dir, 'passivbot_err.log')
+    try:
+        if not os.path.isfile(path) or time.time() - os.path.getmtime(path) > 600:
+            return ''
+        with open(path, 'rb') as handle:
+            handle.seek(max(os.path.getsize(path) - 8192, 0))
+            lines = handle.read().decode('utf-8', errors='replace').splitlines()
+        lines = [line.strip() for line in lines if line.strip()]
+        return lines[-1][:300] if lines else ''
+    except Exception:
+        return ''
 
 def _count_hourly_occurrences(lines, needle):
     buckets = {}
@@ -2678,6 +2741,9 @@ for name, process_info in sorted(running_v8.items()):
     cache_key = '8:' + name
     meta = _config_meta(cfg_dir)
     version = meta.get('version', 0)
+    gate = _cluster_gate_status(
+        name, cfg_dir, version, cluster_context, 'pb8_instances', 'pb8_tombstones'
+    )
     v8.append({
         'name': name,
         'running': True,
@@ -2685,9 +2751,9 @@ for name, process_info in sorted(running_v8.items()):
         'eo': meta.get('enabled_on', 'disabled'),
         'rv': version,
         'di': False,
-        'blocked': False,
-        'blocked_reason': '',
-        'cluster_gate': 'not_checked',
+        'blocked': bool(gate.get('blocked', False)),
+        'blocked_reason': str(gate.get('blocked_reason', '') or ''),
+        'cluster_gate': str(gate.get('cluster_gate', '') or ''),
     })
 
     native_log = os.path.join(PB8DIR, 'logs', f'{name}.log')
@@ -2825,11 +2891,34 @@ try:
                 candidate_v8_names.add(item)
 except Exception as exc:
     _log(SERVICE, f'[monitor-candidates] Failed to scan run_v8 candidates: {exc}', level='WARNING')
+if cluster_context.get('configured'):
+    node_id = str(cluster_context.get('node_id') or '')
+    for name, item in (cluster_context.get('pb8_instances') or {}).items():
+        if isinstance(item, dict) and str(item.get('assigned_host') or '') == node_id:
+            candidate_v8_names.add(str(name))
 
+pb8_runtime_error = _pb8_rust_stamp_error()
 for name in sorted(candidate_v8_names):
     if name in running_v8:
         continue
-    meta = _config_meta(os.path.join(run_v8_root, name))
+    cfg_dir = os.path.join(run_v8_root, name)
+    meta = _config_meta(cfg_dir)
+    gate = _cluster_gate_status(
+        name, cfg_dir, meta.get('version', 0), cluster_context, 'pb8_instances', 'pb8_tombstones'
+    )
+    blocked = bool(gate.get('blocked', False))
+    blocked_reason = str(gate.get('blocked_reason', '') or '')
+    cluster_gate = str(gate.get('cluster_gate', '') or '')
+    if not blocked and pb8_runtime_error:
+        blocked = True
+        blocked_reason = pb8_runtime_error
+        cluster_gate = 'runtime_not_ready'
+    if not blocked:
+        last_error = _pb8_last_error(cfg_dir)
+        if last_error:
+            blocked = True
+            blocked_reason = 'PB8 exits on start: ' + last_error
+            cluster_gate = 'runtime_exit'
     v8.append({
         'name': name,
         'running': False,
@@ -2837,9 +2926,9 @@ for name in sorted(candidate_v8_names):
         'eo': meta.get('enabled_on', 'disabled'),
         'rv': 0,
         'di': False,
-        'blocked': False,
-        'blocked_reason': '',
-        'cluster_gate': 'not_checked',
+        'blocked': blocked,
+        'blocked_reason': blocked_reason,
+        'cluster_gate': cluster_gate,
     })
 
 print(json.dumps({'monitors': monitors, 'v7': v7, 'v8': v8, 'cache': new_cache,

@@ -46,6 +46,22 @@ CLUSTER_QUIET_BLOCK_STATES = CLUSTER_PRE_LOAD_BLOCK_STATES
 PB8_STABLE_SECONDS = 60
 PB8_BACKOFF_INITIAL_SECONDS = 5
 PB8_BACKOFF_MAX_SECONDS = 300
+PB8_RUST_PROBE_CODE = """
+import json
+import sys
+sys.path.insert(0, "src")
+import rust_utils
+rust_utils.prune_shadowing_local_extensions()
+path = rust_utils.preferred_compiled_path()
+source_mtime = rust_utils.latest_source_mtime()
+fingerprint = rust_utils.source_fingerprint()
+stamp = rust_utils.read_source_stamp(path) if path is not None else None
+print(json.dumps({
+    "path": str(path) if path is not None else "",
+    "stamped": bool(stamp),
+    "needs_rebuild": rust_utils.extension_needs_rebuild(path, source_mtime, fingerprint),
+}))
+"""
 
 
 def _arg_matches_path(arg: str, expected_path: Path) -> bool:
@@ -1069,7 +1085,9 @@ class RunV8:
         except Exception:
             status_payload = {}
         if not status_payload.get("ready"):
-            self._log_block("runtime_not_ready", "PB8 runtime is not ready")
+            errors = status_payload.get("errors") if isinstance(status_payload.get("errors"), list) else []
+            reason = str(errors[0]) if errors else "PB8 runtime is not ready"
+            self._log_block("runtime_not_ready", reason)
             return False
         status_dir = str(status_payload.get("pb8dir") or "").strip()
         status_venv = str(status_payload.get("pb8venv") or "").strip()
@@ -1078,6 +1096,32 @@ class RunV8:
             return False
         if status_venv and Path(status_venv).resolve() != Path(self.pb8venv).resolve():
             self._log_block("runtime_changed", "PB8 runtime configuration changed")
+            return False
+        try:
+            result = subprocess.run(
+                [str(Path(self.pb8venv).expanduser().absolute()), "-c", PB8_RUST_PROBE_CODE],
+                cwd=str(Path(self.pb8dir).resolve()),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()[-300:]
+                raise RuntimeError(detail or "PB8 Rust probe failed")
+            lines = [line for line in result.stdout.splitlines() if line.strip()]
+            rust_status = json.loads(lines[-1]) if lines else {}
+            if not isinstance(rust_status, dict):
+                raise RuntimeError("PB8 Rust probe returned an invalid result")
+        except (OSError, subprocess.SubprocessError, RuntimeError, json.JSONDecodeError) as exc:
+            self._log_block("rust_probe_failed", f"PB8 Rust extension check failed: {exc}")
+            return False
+        if rust_status.get("needs_rebuild"):
+            if not rust_status.get("stamped"):
+                reason = "PB8 Rust extension has no source fingerprint stamp; rerun Update PB8 on this host"
+            else:
+                reason = "PB8 Rust extension is stale; rerun Update PB8 on this host"
+            self._log_block("rust_stale", reason)
             return False
         return True
 

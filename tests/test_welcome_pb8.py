@@ -17,7 +17,7 @@ import api.auth as auth
 import pbgui_purefunc
 
 
-def _ready_pb8(tmp_path: Path) -> tuple[Path, Path]:
+def _ready_pb8(tmp_path: Path, *, stamped: bool = True) -> tuple[Path, Path]:
     """Create a static PB8 artifact layout without executing external code."""
     pb8_dir = tmp_path / "pb8"
     src_dir = pb8_dir / "src"
@@ -33,7 +33,10 @@ def _ready_pb8(tmp_path: Path) -> tuple[Path, Path]:
     cli_file.chmod(0o700)
     rust_dir = python_file.parent.parent / "lib" / "python3.12" / "site-packages" / "passivbot_rust"
     rust_dir.mkdir(parents=True)
-    (rust_dir / "passivbot_rust.abi3.so").write_bytes(b"")
+    rust_file = rust_dir / "passivbot_rust.abi3.so"
+    rust_file.write_bytes(b"")
+    if stamped:
+        rust_file.with_name(f"{rust_file.name}.rust-src-sha256").write_text("fingerprint\n", encoding="utf-8")
     return pb8_dir, python_file
 
 
@@ -52,9 +55,39 @@ def test_pb8_runtime_status_reports_installer_artifacts_ready(tmp_path: Path, mo
     assert status["python_ready"] is True
     assert status["cli_ready"] is True
     assert status["rust_ready"] is True
+    assert status["rust_stamped"] is True
     assert status["rust_file"].endswith("site-packages/passivbot_rust/passivbot_rust.abi3.so")
     assert status["ready"] is True
     assert status["errors"] == []
+
+
+def test_pb8_runtime_status_rejects_unstamped_rust_extension(tmp_path: Path, monkeypatch) -> None:
+    """An extension PB8 would reject under fail-on-stale is not runtime-ready."""
+    pb8_dir, python_file = _ready_pb8(tmp_path, stamped=False)
+    monkeypatch.setattr(pbgui_purefunc, "pb8dir", lambda: str(pb8_dir))
+    monkeypatch.setattr(pbgui_purefunc, "pb8venv", lambda: str(python_file))
+
+    status = pbgui_purefunc.pb8_runtime_status()
+
+    assert status["rust_exists"] is True
+    assert status["rust_stamped"] is False
+    assert status["rust_ready"] is False
+    assert status["ready"] is False
+    assert any("no source fingerprint stamp" in error for error in status["errors"])
+
+
+def test_pb8_runtime_status_prefers_installed_stamped_extension(tmp_path: Path, monkeypatch) -> None:
+    """A full-profile installed build wins over a shadow extension PB8 prunes at startup."""
+    pb8_dir, python_file = _ready_pb8(tmp_path)
+    shadow = pb8_dir / "src" / "passivbot_rust.cpython-312-x86_64-linux-gnu.so"
+    shadow.write_bytes(b"")
+    monkeypatch.setattr(pbgui_purefunc, "pb8dir", lambda: str(pb8_dir))
+    monkeypatch.setattr(pbgui_purefunc, "pb8venv", lambda: str(python_file))
+
+    status = pbgui_purefunc.pb8_runtime_status()
+
+    assert status["ready"] is True
+    assert "site-packages" in status["rust_file"]
 
 
 def test_pb8_runtime_status_rejects_wrong_schema_without_importing(tmp_path: Path, monkeypatch) -> None:

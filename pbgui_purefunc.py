@@ -459,7 +459,8 @@ def pb8_runtime_status() -> dict:
     interpreter_executable = python_exists and os.access(python_file, os.X_OK)
     cli_exists = cli_file is not None and cli_file.is_file()
     cli_executable = cli_exists and os.access(cli_file, os.X_OK)
-    rust_files = list(src_dir.glob("passivbot_rust*.so")) if src_dir and src_dir.is_dir() else []
+    src_rust_files = list(src_dir.glob("passivbot_rust*.so")) if src_dir and src_dir.is_dir() else []
+    installed_rust_files: list[Path] = []
     runtime_invalid_marker = Path(PBGDIR) / "data" / "locks" / "pb8-runtime-invalid"
     runtime_marked_invalid = runtime_invalid_marker.exists() or runtime_invalid_marker.is_symlink()
     if runtime_marked_invalid:
@@ -474,9 +475,18 @@ def pb8_runtime_status() -> dict:
             if not site_packages.is_dir():
                 continue
             for suffix in ("so", "pyd", "dll", "dylib"):
-                rust_files.extend(site_packages.glob(f"passivbot_rust*.{suffix}"))
-                rust_files.extend(site_packages.glob(f"passivbot_rust/passivbot_rust*.{suffix}"))
-    rust_files = sorted(set(rust_files), key=str)
+                installed_rust_files.extend(site_packages.glob(f"passivbot_rust*.{suffix}"))
+                installed_rust_files.extend(site_packages.glob(f"passivbot_rust/passivbot_rust*.{suffix}"))
+    src_rust_files = sorted(set(src_rust_files), key=str)
+    installed_rust_files = sorted(set(installed_rust_files), key=str)
+    rust_files = sorted(set(src_rust_files + installed_rust_files), key=str)
+    preferred_rust_files = installed_rust_files or src_rust_files
+    try:
+        preferred_rust = max(preferred_rust_files, key=lambda path: path.stat().st_mtime) if preferred_rust_files else None
+    except OSError:
+        preferred_rust = None
+    rust_stamp_file = preferred_rust.with_name(f"{preferred_rust.name}.rust-src-sha256") if preferred_rust else None
+    rust_stamped = bool(rust_stamp_file and rust_stamp_file.is_file())
 
     if not current_pb8dir:
         errors.append("Passivbot V8 path is not configured.")
@@ -501,6 +511,11 @@ def pb8_runtime_status() -> dict:
             errors.append(
                 f"Passivbot V8 Rust extension is missing from the configured runtime: "
                 f"{current_pb8venv or src_dir}"
+            )
+        elif not rust_stamped:
+            errors.append(
+                "Passivbot V8 Rust extension has no source fingerprint stamp; "
+                "rerun the PB8 update on this host."
             )
 
     version_major_ok = version.lstrip("v").startswith("8.")
@@ -527,7 +542,7 @@ def pb8_runtime_status() -> dict:
     config_ready = schema_file_exists and schema_major_ok
     python_ready = python_exists and interpreter_name_ok and interpreter_executable
     cli_ready = cli_exists and cli_executable
-    rust_ready = bool(rust_files)
+    rust_ready = bool(preferred_rust) and rust_stamped
     ready = source_ready and config_ready and python_ready and cli_ready and rust_ready and not runtime_marked_invalid
     if source_ready and not ready:
         warnings.append("PB8 source is available, but one or more runtime artifacts are not ready.")
@@ -542,7 +557,9 @@ def pb8_runtime_status() -> dict:
         "config_schema_file": str(schema_file) if schema_file else "",
         "config_schema": config_schema,
         "cli_file": str(cli_file) if cli_file else "",
-        "rust_file": str(rust_files[0]) if rust_files else "",
+        "rust_file": str(preferred_rust) if preferred_rust else "",
+        "rust_stamp_file": str(rust_stamp_file) if rust_stamp_file else "",
+        "rust_stamped": rust_stamped,
         "pb8dir_exists": pb8dir_exists,
         "version_file_exists": version_file_exists,
         "version_major_ok": version_major_ok,
@@ -553,7 +570,7 @@ def pb8_runtime_status() -> dict:
         "interpreter_executable": interpreter_executable,
         "cli_exists": cli_exists,
         "cli_executable": cli_executable,
-        "rust_exists": rust_ready,
+        "rust_exists": bool(rust_files),
         "source_ready": source_ready,
         "config_ready": config_ready,
         "python_ready": python_ready,
@@ -592,7 +609,7 @@ def import_passivbot_rust():
     return pbr
 
 PBGDIR = Path(__file__).resolve().parent
-PBGUI_VERSION = "v1.95.13"
+PBGUI_VERSION = "v1.95.14"
 _serial_path = PBGDIR / 'api' / 'serial.txt'
 PBGUI_SERIAL = _serial_path.read_text().strip() if _serial_path.exists() else ''
 

@@ -256,6 +256,61 @@ def test_runv8_launch_defers_while_pb8_update_owns_runtime_lock(
     assert runner.start() is False
 
 
+def test_runv8_runtime_ready_rejects_rust_probe_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PBRun blocks before launch when PB8 reports an unstamped Rust extension."""
+
+    instance = _write_pb8_instance(tmp_path)
+    runner = _runner(tmp_path, instance)
+    reasons: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        pbrun.pbgui_purefunc,
+        "pb8_runtime_status",
+        lambda: {"ready": True, "pb8dir": runner.pb8dir, "pb8venv": runner.pb8venv},
+    )
+    monkeypatch.setattr(
+        pbrun.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"path": "src/passivbot_rust.so", "stamped": False, "needs_rebuild": True}) + "\n",
+            stderr="",
+        ),
+    )
+    monkeypatch.setattr(runner, "_log_block", lambda key, reason: reasons.append((key, reason)))
+
+    assert runner._runtime_ready() is False
+    assert reasons == [("rust_stale", "PB8 Rust extension has no source fingerprint stamp; rerun Update PB8 on this host")]
+
+
+def test_runv8_runtime_ready_accepts_verified_rust_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PBRun permits launch when PB8's own Rust check reports the stamped build current."""
+
+    instance = _write_pb8_instance(tmp_path)
+    runner = _runner(tmp_path, instance)
+    monkeypatch.setattr(
+        pbrun.pbgui_purefunc,
+        "pb8_runtime_status",
+        lambda: {"ready": True, "pb8dir": runner.pb8dir, "pb8venv": runner.pb8venv},
+    )
+    monkeypatch.setattr(
+        pbrun.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"path": "src/passivbot_rust.so", "stamped": True, "needs_rebuild": False}) + "\n",
+            stderr="",
+        ),
+    )
+
+    assert runner._runtime_ready() is True
+
+
 def test_runv8_process_identity_rejects_suffix_and_cwd_decoys(tmp_path: Path) -> None:
     """Only the complete command and configured PB8 cwd identify a managed process."""
 
@@ -504,7 +559,7 @@ def test_runv8_launch_failure_enters_backoff(tmp_path: Path, monkeypatch: pytest
     instance = _write_pb8_instance(tmp_path)
     runner = _runner(tmp_path, instance)
     monkeypatch.setattr(runner, "is_running", lambda: False)
-    monkeypatch.setattr(pbrun.pbgui_purefunc, "pb8_runtime_status", lambda: {"ready": True})
+    monkeypatch.setattr(runner, "_runtime_ready", lambda: True)
     monkeypatch.setattr(pbrun.subprocess, "Popen", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("blocked")))
     monkeypatch.setattr(pbrun, "_log", lambda *_args, **_kwargs: None)
 

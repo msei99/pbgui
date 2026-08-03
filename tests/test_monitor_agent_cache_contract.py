@@ -21,6 +21,7 @@ import master.async_monitor as monitor_mod
 from master.async_monitor import MonitorAgentPayloadError, VPSMonitor
 from master.async_pool import AsyncSSHPool, ConnectionAttemptResult
 from master.async_store import VPSStore
+from master.cluster_state import build_config_manifest, compute_config_manifest_hash
 
 
 def _envelope(now: float) -> dict[str, Any]:
@@ -1486,3 +1487,78 @@ def test_embedded_instance_collector_remains_valid_python() -> None:
         "<instance-collector>",
         "exec",
     )
+    assert "'pb8_instances': pb8_instances" in monitor_mod.INSTANCE_COLLECT_SCRIPT
+    assert "'pb8_tombstones': pb8_tombstones" in monitor_mod.INSTANCE_COLLECT_SCRIPT
+    assert "def _pb8_rust_stamp_error():" in monitor_mod.INSTANCE_COLLECT_SCRIPT
+    assert "def _pb8_last_error(config_dir):" in monitor_mod.INSTANCE_COLLECT_SCRIPT
+    assert "cluster_gate = 'runtime_not_ready'" in monitor_mod.INSTANCE_COLLECT_SCRIPT
+    assert "blocked_reason = 'PB8 exits on start: ' + last_error" in monitor_mod.INSTANCE_COLLECT_SCRIPT
+
+
+def test_embedded_instance_collector_reports_unstamped_pb8_runtime(tmp_path: Path) -> None:
+    """A materialized PB8 instance exposes the Rust stamp blocker instead of sync needed."""
+
+    pb8_dir = tmp_path / "pb8"
+    rust_file = pb8_dir / "src" / "passivbot_rust.cpython-312-x86_64-linux-gnu.so"
+    rust_file.parent.mkdir(parents=True)
+    rust_file.write_bytes(b"compiled")
+    pb8_python = tmp_path / "venv_pb8" / "bin" / "python"
+    pb8_python.parent.mkdir(parents=True)
+    pbgui_dir = tmp_path / "pbgui"
+    pbgui_dir.mkdir()
+    (pbgui_dir / "pbgui.ini").write_text(
+        "[main]\n"
+        f"pb8dir = {pb8_dir}\n"
+        f"pb8venv = {pb8_python}\n",
+        encoding="utf-8",
+    )
+    instance_dir = pbgui_dir / "data" / "run_v8" / "bybit_06"
+    instance_dir.mkdir(parents=True)
+    config = {
+        "pbgui": {"runtime": "pb8", "version": 1, "enabled_on": "runner-a"},
+        "live": {"user": "bybit_06"},
+    }
+    (instance_dir / "config.json").write_text(json.dumps(config, indent=4) + "\n", encoding="utf-8")
+    cluster_root = pbgui_dir / "data" / "cluster"
+    cluster_root.mkdir()
+    node_id = "pbgui-node-00000000-0000-4000-8000-000000000008"
+    cluster_id = "pbgui-cluster-00000000-0000-4000-8000-000000000008"
+    (cluster_root / "node_id").write_text(node_id, encoding="utf-8")
+    (cluster_root / "cluster_id").write_text(cluster_id, encoding="utf-8")
+    manifest_hash = compute_config_manifest_hash(build_config_manifest(instance_dir))
+    (cluster_root / "desired_state.json").write_text(json.dumps({
+        "cluster_id": cluster_id,
+        "pb8_instances": {
+            "bybit_06": {
+                "version": "1",
+                "desired_state": "running",
+                "assigned_host": node_id,
+                "config_manifest_hash": manifest_hash,
+            },
+        },
+        "pb8_tombstones": {},
+    }), encoding="utf-8")
+    prefix = 'python3 -u -c "\n'
+    source = monitor_mod.INSTANCE_COLLECT_SCRIPT[len(prefix):-2]
+    env = {
+        **os.environ,
+        "PBGUI_PBGDIR": str(pbgui_dir),
+        "PBGUI_PB7DIR": str(tmp_path / "pb7"),
+        "PBGUI_CACHE": "{}",
+        "PBGUI_CACHE_VERSION": "0",
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-u", "-c", source],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+        check=True,
+    )
+    payload = json.loads(result.stdout.splitlines()[-1])
+    row = next(item for item in payload["v8"] if item["name"] == "bybit_06")
+
+    assert row["blocked"] is True
+    assert row["cluster_gate"] == "runtime_not_ready"
+    assert "no source fingerprint stamp" in row["blocked_reason"]

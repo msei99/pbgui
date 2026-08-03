@@ -436,6 +436,38 @@ def test_instance_list_merges_exact_pb8_runtime_observations(monkeypatch: pytest
     assert enriched[1]["status"] == "collecting"
 
 
+def test_instance_list_surfaces_remote_pb8_runtime_blocker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An observed PB8 launch failure is shown as blocked rather than generic sync needed."""
+
+    monkeypatch.setattr(v8_instances.pbgui_purefunc, "pb8_runtime_status", lambda: {"ready": False})
+    monkeypatch.setattr(v8_instances, "_available_users", lambda: [])
+    monkeypatch.setattr(v8_instances, "_user_exchange_cache", (0.0, {}))
+    monkeypatch.setattr(v8_instances, "_monitor", SimpleNamespace(store=SimpleNamespace(v8_instances={
+        "vps-a": [{
+            "name": "blocked",
+            "running": False,
+            "rv": 0,
+            "cv": 1,
+            "blocked": True,
+            "blocked_reason": "PB8 Rust extension has no source fingerprint stamp; rerun Update PB8 on this host",
+        }],
+    })))
+    rows = [{
+        "name": "blocked",
+        "user": "alice",
+        "enabled_on": "vps-a",
+        "version": 1,
+        "status": "desired_running",
+        "desired_status": "desired_running",
+    }]
+
+    enriched = v8_instances._enrich_v8_runtime(rows)
+
+    assert enriched[0]["status"] == "blocked"
+    assert enriched[0]["blocked_on"] == ["vps-a"]
+    assert "rerun Update PB8" in enriched[0]["blocked_reason"]
+
+
 def test_editor_metadata_covers_live_logging_monitor_and_empty_objects(monkeypatch: pytest.MonkeyPatch) -> None:
     """Runtime metadata exposes every editable PB8 runtime section, including empty JSON objects."""
 
