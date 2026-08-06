@@ -101,6 +101,38 @@ def test_result_meta_reports_managed_optimize_owner(tmp_path, monkeypatch) -> No
     assert pareto_explorer._result_meta(result_dir)["optimize_version"] == "v8"
 
 
+def test_full_loader_cache_key_changes_with_source_identity(tmp_path: Path) -> None:
+    """An updated all_results source must not reuse a stale in-memory loader."""
+    result_dir = tmp_path / "result"
+    result_dir.mkdir()
+    source = result_dir / "all_results.bin"
+    source.write_bytes(b"first")
+    first = pareto_explorer._loader_cache_key(
+        result_dir=result_dir,
+        all_results_loaded=True,
+        load_strategy=["performance"],
+        max_configs=100,
+    )
+
+    source.write_bytes(b"second-version")
+    second = pareto_explorer._loader_cache_key(
+        result_dir=result_dir,
+        all_results_loaded=True,
+        load_strategy=["performance"],
+        max_configs=100,
+    )
+
+    assert first != second
+
+
+def test_repeated_full_load_click_revalidates_the_server_source() -> None:
+    """The browser must not suppress a same-settings scan before server cache validation."""
+    source = (ROOT / "frontend" / "v7_pareto_explorer.html").read_text(encoding="utf-8")
+
+    assert "var sameFullLoad" not in source
+    assert "loadParetoData().catch(function() {});" in source
+
+
 def test_pareto_frontend_routes_by_result_version_without_bearer_tokens() -> None:
     """The shared Explorer must use owning APIs and same-origin cookie authentication."""
     source = (ROOT / "frontend" / "v7_pareto_explorer.html").read_text(encoding="utf-8")
@@ -327,3 +359,36 @@ def test_full_load_jobs_are_deduplicated_and_joined(monkeypatch) -> None:
     release.set()
     asyncio.run(pareto_explorer.shutdown())
     assert pareto_explorer._LOAD_WORKERS == {}
+
+
+def test_full_load_progress_cooperatively_yields_the_api_thread(tmp_path, monkeypatch) -> None:
+    """Large msgpack scans must release the GIL so API status and restart remain responsive."""
+    job = pareto_explorer._create_load_job(
+        result_path=str(tmp_path),
+        load_strategy=["performance"],
+        max_configs=100,
+    )
+    job_id = str(job["job_id"])
+    pareto_explorer._update_load_job(job_id, refresh_options={})
+    pareto_explorer._LOAD_CANCEL_EVENTS[job_id] = threading.Event()
+    sleeps: list[float] = []
+
+    class FakeLoader:
+        """Minimal completed loader returned after invoking scan progress."""
+
+        configs: list = []
+
+    def fake_load_loader(*_args, progress_callback=None, **_kwargs):
+        progress_callback(100, 200, "Scanning")
+        return FakeLoader()
+
+    monkeypatch.setattr(pareto_explorer, "_resolve_result_dir", lambda _path: tmp_path)
+    monkeypatch.setattr(pareto_explorer, "_load_loader", fake_load_loader)
+    monkeypatch.setattr(pareto_explorer, "_serialize_load_result_from_loader", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(pareto_explorer, "_build_server_refresh_bundle", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(pareto_explorer.time, "sleep", sleeps.append)
+
+    pareto_explorer._run_full_load_job(job_id)
+
+    assert sleeps == [pareto_explorer._LOAD_COOPERATIVE_YIELD_SECONDS]
+    assert pareto_explorer._get_load_job(job_id)["status"] == "complete"

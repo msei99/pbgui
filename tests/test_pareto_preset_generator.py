@@ -233,7 +233,7 @@ def _write_loader_result(tmp_path: Path, configs: list[dict], saved_pareto: dict
     return result_dir
 
 
-def test_loader_reconstructs_pb8_compressed_results_and_snapshot_boundary(tmp_path: Path) -> None:
+def test_loader_reconstructs_pb8_compressed_results_and_snapshot_boundary(tmp_path: Path, monkeypatch) -> None:
     """PB8 incremental rows must replay sequentially and reset at each 100-entry snapshot."""
     result_dir = tmp_path / "result_pb8"
     result_dir.mkdir()
@@ -267,6 +267,13 @@ def test_loader_reconstructs_pb8_compressed_results_and_snapshot_boundary(tmp_pa
     final_snapshot["suite_metrics"]["metrics"]["adg"]["aggregated"] = 1.0
     final_snapshot["candidate"] = 100
     records.append(final_snapshot)
+    for index in range(101, 151):
+        records.append({
+            "bot": {"long": {"risk": {"n_positions": index}}},
+            "metrics": {"objectives": {"adg": index / 100.0}},
+            "suite_metrics": {"metrics": {"adg": {"aggregated": index / 100.0}}},
+            "candidate": index,
+        })
     with (result_dir / "all_results.bin").open("wb") as output:
         for record in records:
             output.write(msgpack.packb(record, use_bin_type=True))
@@ -276,14 +283,58 @@ def test_loader_reconstructs_pb8_compressed_results_and_snapshot_boundary(tmp_pa
     assert loader.load(load_strategy=["performance"], max_configs=2)
     assert loader.optimize_version == "v8"
     assert loader._diff_compressed_results is True
-    assert [config.config_index for config in loader.configs] == [100, 99]
+    assert [config.config_index for config in loader.configs] == [150, 149]
     assert loader.optimize_bounds == {"long.strategy.ema_anchor.entry.ema_dist": (-0.2, 0.0)}
     assert loader.backtest_scenarios == [{"name": "base"}]
-    selected = loader.get_config_by_index(100)
+    selected = loader.get_config_by_index(150)
     loader.ensure_bot_params(selected)
-    assert selected.bot_params["long.risk.n_positions"] == 100
+    assert selected.bot_params["long.risk.n_positions"] == 150
     assert selected.bot_params["long.strategy.ema_anchor.entry.ema_dist"] == -0.1
-    assert loader.get_full_config(100)["candidate"] == 100
+    assert loader.get_full_config(150)["candidate"] == 150
+    cache_meta_path = result_dir / "all_results.bin.scan_cache.meta.json"
+    assert cache_meta_path.exists()
+    assert (result_dir / "all_results.bin.scan_cache.npz").exists()
+    assert json.loads(cache_meta_path.read_text(encoding="utf-8"))["diff_compressed"] is True
+
+    def fail_full_scan(*_args, **_kwargs):
+        raise AssertionError("valid PB8 checkpoint cache must avoid a second full scan")
+
+    monkeypatch.setattr(ParetoDataLoader, "_iter_binary_file", fail_full_scan)
+    cached_loader = ParetoDataLoader(str(result_dir))
+
+    assert cached_loader.load(load_strategy=["performance"], max_configs=2)
+    assert cached_loader.load_stats["scan_cache"] == "hit"
+    assert cached_loader.load_stats["checkpoint_blocks"] == 1
+    assert [config.config_index for config in cached_loader.configs] == [150, 149]
+    assert cached_loader.get_full_config(149)["candidate"] == 149
+
+    coverage_loader = ParetoDataLoader(str(result_dir))
+    assert coverage_loader.load(load_strategy=["coverage"], max_configs=3)
+    assert coverage_loader.load_stats["scan_cache"] == "hit"
+    assert coverage_loader.load_stats["checkpoint_blocks"] == 2
+    assert [config.config_index for config in coverage_loader.configs] == [0, 75, 150]
+
+
+def test_full_load_rejects_source_changes_during_selected_reconstruction(tmp_path: Path, monkeypatch) -> None:
+    """A growing result must not expose metrics and configs from different snapshots."""
+    configs = [_loader_config(float(index), {"score": float(index)}) for index in range(4)]
+    result_dir = _write_loader_result(tmp_path, configs)
+    loader = ParetoDataLoader(str(result_dir))
+    original_decode = loader._decode_msgpack_object
+    source_changed = False
+
+    def decode_and_grow_source(payload: bytes):
+        nonlocal source_changed
+        if not source_changed:
+            source_changed = True
+            with (result_dir / "all_results.bin").open("ab") as output:
+                output.write(msgpack.packb(_loader_config(5.0, {"score": 5.0}), use_bin_type=True))
+        return original_decode(payload)
+
+    monkeypatch.setattr(loader, "_decode_msgpack_object", decode_and_grow_source)
+
+    assert loader.load(load_strategy=["performance"], max_configs=2) is False
+    assert "changed during the full scan" in str(loader.last_error)
     assert not (result_dir / "all_results.bin.scan_cache.meta.json").exists()
 
 
@@ -420,6 +471,21 @@ def test_full_load_does_not_pin_saved_pareto_configs(tmp_path: Path) -> None:
     assert loader.load_stats["pareto_configs"] == 2
 
 
+def test_coverage_load_strategy_samples_the_full_optimize_timeline(tmp_path: Path) -> None:
+    """Coverage selection must retain evenly spaced configs instead of another top-metric list."""
+    configs = [
+        _loader_config(float(index), {"x": float(index), "y": float(9 - index)})
+        for index in range(10)
+    ]
+    result_dir = _write_loader_result(tmp_path, configs)
+    loader = ParetoDataLoader(str(result_dir))
+
+    assert loader.load(load_strategy=["coverage"], max_configs=4)
+    assert [config.config_index for config in loader.configs] == [0, 3, 6, 9]
+    assert loader.load_stats["selected_configs"] == 4
+    assert loader.load_stats["total_parsed"] == 10
+
+
 def test_full_load_recomputes_front_when_saved_pareto_hash_matches(tmp_path: Path) -> None:
     """A saved pareto hash must not short-circuit full-mode Pareto recomputation."""
 
@@ -530,6 +596,36 @@ def test_loader_summary_best_metric_honors_min_goal() -> None:
     summary = pareto_explorer._loader_summary(FakeLoader())
 
     assert summary["best_metric_value"] == 0.1
+
+
+def test_single_scenario_insight_does_not_claim_robustness_consistency() -> None:
+    """A saturated one-scenario score must not be presented as proven robustness."""
+
+    class FakeConfig:
+        """Minimal config used by the insight builder."""
+
+    class FakeLoader:
+        """Minimal one-scenario loader with saturated robustness."""
+
+        scenario_labels = ["base"]
+
+        def get_parameters_at_bounds(self, tolerance: float) -> dict:
+            return {"at_lower": {}, "at_upper": {}}
+
+        def get_pareto_configs(self) -> list:
+            return [FakeConfig()]
+
+        def compute_overall_robustness(self, _config: FakeConfig) -> float:
+            return 1.0
+
+        def compute_trading_style(self, _config: FakeConfig) -> str:
+            return "Balanced"
+
+    insights = pareto_explorer._build_insights(FakeLoader())
+    texts = [str(item.get("text") or "") for item in insights]
+
+    assert any("no multi-scenario spread" in text for text in texts)
+    assert not any("Excellent" in text for text in texts)
 
 
 def test_champions_rank_min_goal_primary_metric() -> None:

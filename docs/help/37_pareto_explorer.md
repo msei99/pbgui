@@ -6,14 +6,14 @@ Pareto Explorer helps you analyze PBv7 and PBv8 optimize results, compare tradeo
 
 - PBGui: **PBv7/PBv8 -> Optimize -> Results**, or the matching **Pareto Explorer** navigation entry.
 - Open a result with **Pareto Explorer** from the Optimize results table or result sidebar.
-- The page can start in fast pareto-only mode and later load the full `all_results.bin` dataset from the sidebar.
+- The page can start in fast pareto-only mode and later scan the full `all_results.bin` stream from the sidebar.
 
 ## Core Idea
 
 Every score, chart, and Pareto star is relative to the currently loaded and visible config set.
 
 - Fast mode compares mainly the Passivbot pareto JSON candidates.
-- Full mode compares against the wider `all_results.bin` candidate set.
+- Full mode scans all `all_results.bin` records, then compares the candidate subset retained by **Max Configs** and **Candidate Selection**.
 - Display Range changes the visible slice, so rankings and visible Pareto stars can change.
 - Treat rank and score as shortlisting signals, not as final live-trading decisions.
 
@@ -25,6 +25,7 @@ Overview is the decision dashboard. Use it first after loading a result.
 - **Insights** highlights obvious signals such as parameter-bound pressure or style diversity.
 - **Pareto Front Preview** shows the shape of the current tradeoff frontier.
 - **Robustness vs Performance** shows whether return is supported by consistency.
+- With only one scenario, robustness may saturate at `1.00`; PBGui labels that case as lacking multi-scenario evidence rather than claiming proven consistency.
 - The selected config details appear below the charts when a config is selected.
 
 Recommended flow:
@@ -35,7 +36,7 @@ Recommended flow:
 4. Use **Run Backtest** before trusting a candidate.
 5. Use **Create Optimize Preset from this Config** only after the config looks worth refining. PBGui preserves the result's PB7/PB8 generation.
 
-PB8 full mode reconstructs incremental compressed `all_results.bin` entries before analysis. Nested PB8 bot parameters and bounds are shown as dotted paths and converted back to canonical nested config objects for presets and Backtest handoffs.
+PB8 full mode reconstructs incremental compressed `all_results.bin` entries before analysis. The first scan builds a source-validated checkpoint cache next to the result file. Later loads, including loads after an API restart, reuse that cache while the source file size and modification time remain unchanged. Nested PB8 bot parameters and bounds are shown as dotted paths and converted back to canonical nested config objects for presets and Backtest handoffs.
 
 ## Explorer
 
@@ -85,7 +86,7 @@ Optimization Evolution shows whether the optimize run was still finding meaningf
 - The blue **Best So Far** line shows the best value found up to each point.
 - Clicking a point in Full Mode selects that config for inspection below the chart.
 
-In Fast Mode this tab shows a hint instead of a chart. Use the sidebar **Load all_results** button when you need the real timeline.
+In Fast Mode this tab shows a hint instead of a chart. Use the sidebar **Scan all_results** button when you need the selected full-stream timeline.
 
 Use the summary to decide whether another run is likely to help:
 
@@ -108,13 +109,13 @@ Use it to compare candidate shapes quickly. A balanced radar is usually easier t
 Settings controls what data is loaded.
 
 - **Result Path** is the optimize result directory or pareto directory.
-- **Max Configs** limits the fast loaded subset.
-- **Load Strategy** controls how candidates are selected when loading a subset.
+- **Max Configs** limits how many candidates are retained for interactive analysis; it does not limit how many source records are scanned.
+- **Candidate Selection** controls the retained mix. Metric criteria keep top-ranked configs, while **coverage (optimize timeline)** samples the run evenly to expose a broader search-history range.
 - **Persist defaults** saves the current loading preferences.
-- Use the sidebar **Load all_results** button for full mode.
+- Use the sidebar **Scan all_results** button for full mode. The Candidate Set card reports visible, selected, and scanned counts separately.
 - Use **Show Passivbot Paretos** to switch back to fast pareto-only mode.
 
-If the UI feels slow, reduce Max Configs or work in pareto-only mode until you know which part of the result is worth deeper inspection.
+The first scan of a large result can take time. A successful scan creates a persistent cache, so the next load is much faster even after an API restart. The cache is rebuilt automatically when `all_results.bin` changes. If the interactive UI feels slow after loading, reduce Max Configs or work in pareto-only mode until you know which part of the result is worth deeper inspection.
 
 ## Optimize Preset Refinement
 
@@ -133,7 +134,7 @@ Use a small bounds window first. A tight window is useful for refinement, but to
 ## Best Practices
 
 1. Start in Overview, not Deep Intelligence. First identify candidates worth studying.
-2. Load `all_results.bin` before making final decisions if it is available.
+2. Scan `all_results.bin` before making final decisions if it is available, and include **coverage** when you need alternatives beyond the metric leaders.
 3. Use Display Range intentionally. A config that is strong in the top 500 may look ordinary in the top 5000.
 4. Prefer balanced candidates with acceptable risk over the absolute highest profit point.
 5. Always validate selected configs in Backtest before using them as a live candidate.

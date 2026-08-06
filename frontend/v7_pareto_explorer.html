@@ -1116,7 +1116,7 @@ input[type="range"]::-moz-range-thumb {
       <div class="ctx-actions" style="display:block">
         <button class="sb-btn" id="btn-back-optimize">← Back to Optimize</button>
         <button class="sb-btn" id="btn-run-backtest">🚀 Run Backtest</button>
-        <button class="sb-btn" id="btn-load-all-results">📂 Load all_results</button>
+        <button class="sb-btn" id="btn-load-all-results">📂 Scan all_results</button>
         <button class="sb-btn" id="btn-load-pareto-only" style="display:none;">↩ Show Passivbot Paretos</button>
       </div>
     </div>
@@ -1150,7 +1150,7 @@ input[type="range"]::-moz-range-thumb {
         <input id="display-range-start-input" class="range-number" type="number" min="0" step="10" value="0">
         <input id="display-range-end-input" class="range-number" type="number" min="0" step="10" value="0">
       </div>
-      <div id="display-range-summary" class="range-summary">Load all_results to enable visible-range filtering.</div>
+      <div id="display-range-summary" class="range-summary">Scan all_results to select candidates and enable visible-range filtering.</div>
     </section>
 
     <section class="metric-grid" id="summary-metrics">
@@ -1163,10 +1163,10 @@ input[type="range"]::-moz-range-thumb {
         <div class="value" id="metric-paretos">-</div>
       </div>
       <div class="metric-card">
-        <div class="label">All Results</div>
+        <div class="label"><span data-tip="Full mode scans every all_results record, then retains up to Max Configs candidates for interactive analysis.">Candidate Set</span></div>
         <div class="value" id="metric-all-results-wrap"><span id="metric-all-results">-</span><span id="metric-full-load-chip" class="status-chip warn" style="display:none; margin-left:10px; vertical-align:middle;">Idle</span></div>
         <div class="metric-inline-status" id="metric-full-load-panel" style="display:none;">
-          <div id="metric-full-load-text" class="load-status-text">Use `Load all_results` to load the full result set.</div>
+          <div id="metric-full-load-text" class="load-status-text">Use `Scan all_results` to build the candidate set.</div>
           <div class="load-status-progress"><div id="metric-full-load-bar"></div></div>
         </div>
       </div>
@@ -1182,15 +1182,16 @@ input[type="range"]::-moz-range-thumb {
               <input id="result-path-input" type="text" placeholder="/path/to/optimize/result">
             </div>
             <div class="form-field">
-              <label for="max-configs-input"><span data-tip="Upper limit for configs loaded into the fast Pareto Explorer session. Use Load all_results for a full-result background load.">Max Configs</span></label>
+              <label for="max-configs-input"><span data-tip="Upper limit retained for interactive analysis after all_results has been scanned. It is not the number of records scanned.">Max Configs</span></label>
               <input id="max-configs-input" type="number" min="100" max="10000" step="100">
             </div>
             <div class="form-field wide">
-              <label for="load-strategy-select"><span data-tip="Ranking strategies used while selecting configs from the result set. Multiple strategies can be combined to keep a broader candidate mix.">Load Strategy</span></label>
-              <select id="load-strategy-select" multiple size="6">
+              <label for="load-strategy-select"><span data-tip="Top criteria retain high-ranked configs. Coverage samples the optimize timeline evenly to expose a broader search-space mix. Multiple criteria can be combined.">Candidate Selection</span></label>
+              <select id="load-strategy-select" multiple size="7">
                 <option value="performance">performance</option>
                 <option value="robustness">robustness</option>
                 <option value="sharpe">sharpe</option>
+                <option value="coverage">coverage (optimize timeline)</option>
                 <option value="drawdown">drawdown</option>
                 <option value="calmar">calmar</option>
                 <option value="sortino">sortino</option>
@@ -1214,7 +1215,7 @@ input[type="range"]::-moz-range-thumb {
                   <strong>Full Load Status</strong>
                   <span id="full-load-status-chip" class="status-chip warn">Idle</span>
                 </div>
-                <div id="full-load-status-text" class="load-status-text">Use `Load all_results` to load the full result set instead of only pareto JSONs.</div>
+                <div id="full-load-status-text" class="load-status-text">Use `Scan all_results` to select candidates from the full result stream instead of only pareto JSONs.</div>
                 <div class="load-status-progress"><div id="full-load-status-bar"></div></div>
               </div>
             </div>
@@ -1654,7 +1655,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     deepTab: 'parameters',
     resultPath: String(window.INIT_RESULT_PATH || ''),
     session: null,
-    loadStrategy: ['performance', 'robustness', 'sharpe'],
+    loadStrategy: ['performance', 'robustness', 'sharpe', 'coverage'],
     maxConfigs: 2000,
     allResultsLoaded: false,
     fullLoadPending: false,
@@ -2348,7 +2349,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     endInput.min = '0';
     endInput.max = String(total);
     endInput.value = String(range.end);
-    totalChip.textContent = 'Loaded: ' + String(total);
+    totalChip.textContent = 'Selected: ' + String(total);
     summary.textContent = 'Showing ' + String(Math.max(0, range.end - range.start)) + ' configs (Rank ' + String(range.start + 1) + '-' + String(range.end) + ')';
     updateRangeFill(slider);
     if (state.displayRangeLoading) {
@@ -2503,7 +2504,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       var job = data && data.job ? data.job : null;
       if (!job) throw new Error('Load status returned no job payload.');
       if (data && data.status === 'loading') {
-        setFullLoadStatus('loading', job.message || 'Loading full result set...', job.progress || 0);
+        setFullLoadStatus('loading', job.message || 'Scanning full result stream...', job.progress || 0);
         return waitForNextFullLoadPoll(350).then(function() {
           return pollFullLoadStatus();
         });
@@ -2816,33 +2817,17 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }
     var requestedMaxConfigs = parseInt(el('max-configs-input').value || String(state.maxConfigs || 2000), 10) || 2000;
     var requestedLoadStrategy = selectedLoadStrategies();
-    var loadedMaxConfigs = state.loadPayload && state.loadPayload.max_configs != null ? state.loadPayload.max_configs : null;
-    var loadedStrategy = state.loadPayload && Array.isArray(state.loadPayload.load_strategy) ? state.loadPayload.load_strategy.slice() : [];
-    var sameStrategy = requestedLoadStrategy.length === loadedStrategy.length && requestedLoadStrategy.every(function(item, index) {
-      return item === loadedStrategy[index];
-    });
-    var sameFullLoad = !!(state.allResultsLoaded
-      && !state.fullLoadPending
-      && state.loadPayload
-      && state.loadPayload.mode === 'full'
-      && state.resultPath === String((state.loadPayload.result || {}).path || state.resultPath)
-      && requestedMaxConfigs === loadedMaxConfigs
-      && sameStrategy);
-    if (sameFullLoad) {
-      pushMessage('info', 'all_results.bin is already loaded.');
-      return;
-    }
     state.fullLoadPending = true;
     state.fullLoadJobId = '';
     state.allResultsLoaded = true;
     state.loadStrategy = requestedLoadStrategy;
     state.maxConfigs = requestedMaxConfigs;
     el('btn-load-all-results').disabled = true;
-    el('btn-load-all-results').textContent = 'Loading all_results...';
+    el('btn-load-all-results').textContent = 'Scanning all_results...';
     el('mode-chip').textContent = 'Loading full result...';
     el('mode-chip').className = 'status-chip warn';
     setFullLoadStatus('loading', 'Starting full result load from all_results.bin...', 0);
-    pushMessage('info', 'Loading all_results.bin. This can take a moment for larger result sets.');
+    pushMessage('info', 'Scanning all_results.bin and selecting candidates. The first scan can take time for larger result sets.');
     loadParetoData().catch(function() {});
   }
 
@@ -2864,7 +2849,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     state.viewRange = null;
     state.pendingViewRange = null;
     el('btn-load-all-results').disabled = false;
-    el('btn-load-all-results').textContent = '📂 Load all_results';
+    el('btn-load-all-results').textContent = '📂 Scan all_results';
     el('mode-chip').textContent = 'Switching to fast mode...';
     el('mode-chip').className = 'status-chip warn';
     setFullLoadStatus('idle', 'Switching back to Passivbot pareto-only mode. The full all_results cache stays warm for quick return.', 0);
@@ -3669,7 +3654,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       el('selected-config-detail').style.display = 'none';
       el('selected-config-section').style.display = 'none';
       chartNode.className = 'placeholder-chart deep-plotly-chart';
-      chartNode.textContent = (payload.chart && payload.chart.layout && payload.chart.layout.title) || 'Load all_results.bin to inspect when Pareto configs were found.';
+      chartNode.textContent = (payload.chart && payload.chart.layout && payload.chart.layout.title) || 'Scan all_results.bin to inspect when selected configs were found.';
       return;
     }
 
@@ -3893,6 +3878,14 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
         : load && load.summary
           ? load.summary.visible_configs
           : null;
+    var selectedResults = load && load.summary && load.summary.selected_configs != null
+      ? load.summary.selected_configs
+      : totalResults;
+    var scannedResults = load && load.summary && load.summary.scanned_configs != null
+      ? load.summary.scanned_configs
+      : load && load.load_stats && load.load_stats.total_parsed != null
+        ? load.load_stats.total_parsed
+        : selectedResults;
     var visibleResults = load && load.summary && load.summary.visible_configs != null
       ? load.summary.visible_configs
       : load && load.view_range && load.view_range.end != null && load.view_range.start != null
@@ -3904,12 +3897,24 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
         ? load.load_stats.pareto_configs
         : null;
     var visibleEnd = load && load.view_range && load.view_range.end != null ? load.view_range.end : null;
+    var scanCache = load && load.load_stats ? String(load.load_stats.scan_cache || '') : '';
+    var cacheSummary = scanCache === 'hit'
+      ? ' Persistent scan cache hit.'
+      : scanCache === 'built'
+        ? ' Persistent scan cache built.'
+        : '';
 
     el('metric-result').textContent = result ? result.name : '-';
     el('metric-paretos').textContent = totalParetos != null ? String(totalParetos) : (result ? String(result.pareto_count) : '-');
-    el('metric-all-results').textContent = visibleResults != null && totalResults != null && visibleResults !== totalResults
-      ? (String(visibleResults) + ' / ' + String(totalResults))
-      : (totalResults != null ? String(totalResults) : (result ? (result.has_all_results ? 'yes' : 'no') : '-'));
+    if (load && load.mode === 'full' && selectedResults != null && scannedResults != null) {
+      el('metric-all-results').textContent = visibleResults != null && visibleResults !== selectedResults
+        ? (String(visibleResults) + ' visible / ' + String(selectedResults) + ' selected / ' + String(scannedResults) + ' scanned')
+        : (String(selectedResults) + ' selected / ' + String(scannedResults) + ' scanned');
+    } else {
+      el('metric-all-results').textContent = visibleResults != null && totalResults != null && visibleResults !== totalResults
+        ? (String(visibleResults) + ' / ' + String(totalResults))
+        : (totalResults != null ? String(totalResults) : (result ? (result.has_all_results ? 'yes' : 'no') : '-'));
+    }
 
     el('result-chip').textContent = result ? result.name : 'No result selected';
     el('mode-chip').textContent = valid
@@ -3922,15 +3927,15 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     if (!valid) {
       setFullLoadStatus('error', 'No valid result path is currently loaded.', 0);
     } else if (state.fullLoadPending) {
-      setFullLoadStatus('loading', 'Loading full result set...', Math.max(0, state.fullLoadProgressTarget || 0));
+      setFullLoadStatus('loading', 'Scanning full result stream...', Math.max(0, state.fullLoadProgressTarget || 0));
     } else if (load && load.mode === 'full') {
       setFullLoadStatus(
         'loaded',
-        'Full result loaded: ' + String(totalResults == null ? '-' : totalResults) + ' configs, ' + String(totalParetos == null ? '-' : totalParetos) + ' paretos' + (visibleEnd != null && totalResults != null ? ' (' + String(visibleEnd) + '/' + String(totalResults) + ' visible in the current bootstrapped window).' : '.'),
+        'Full scan ready: ' + String(selectedResults == null ? '-' : selectedResults) + ' selected from ' + String(scannedResults == null ? '-' : scannedResults) + ' scanned configs, ' + String(totalParetos == null ? '-' : totalParetos) + ' paretos' + (visibleEnd != null && selectedResults != null ? ' (' + String(visibleEnd) + '/' + String(selectedResults) + ' visible in the current window).' : '.') + cacheSummary,
         100
       );
     } else {
-      setFullLoadStatus('idle', 'Currently using fast pareto-only mode. Use `Load all_results` to load the complete result set.', 0);
+      setFullLoadStatus('idle', 'Currently using fast pareto-only mode. Use `Scan all_results` to build a larger candidate set.', 0);
     }
 
     syncFormState();
@@ -4431,7 +4436,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }
     state.fullLoadPending = false;
     el('btn-load-all-results').disabled = false;
-    el('btn-load-all-results').textContent = '📂 Load all_results';
+    el('btn-load-all-results').textContent = '📂 Scan all_results';
     renderSession(Object.assign({}, sessionLike));
     if (state.allResultsLoaded) updateFullLoadPhase('complete', 'Server-side refresh pipeline completed.');
     stopFullLoadProgressAnimation();
@@ -4443,7 +4448,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       return Promise.resolve(data);
     }
     state.fullLoadJobId = data.job.job_id;
-    setFullLoadStatus('loading', (data.job && data.job.message) || 'Loading full result set...', (data.job && data.job.progress) || 0);
+    setFullLoadStatus('loading', (data.job && data.job.message) || 'Scanning full result stream...', (data.job && data.job.progress) || 0);
     return pollFullLoadStatus().then(function(statusData) {
       var payload = statusData && statusData.payload ? statusData.payload : null;
       if (!payload) throw new Error('Full load completed without payload.');
@@ -4510,7 +4515,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }).then(function(data) {
       if (state.allResultsLoaded && data && data.status === 'loading' && data.job && data.job.job_id) {
         state.fullLoadJobId = data.job.job_id;
-        setFullLoadStatus('loading', (data.job && data.job.message) || 'Loading full result set...', (data.job && data.job.progress) || 0);
+        setFullLoadStatus('loading', (data.job && data.job.message) || 'Scanning full result stream...', (data.job && data.job.progress) || 0);
         return pollFullLoadStatus().then(function(statusData) {
           if (seq !== state.loadRequestSeq) return null;
           var payload = statusData && statusData.payload ? statusData.payload : null;
@@ -4531,7 +4536,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       state.fullLoadJobId = '';
       clearFullLoadPoll();
       el('btn-load-all-results').disabled = false;
-      el('btn-load-all-results').textContent = '📂 Load all_results';
+      el('btn-load-all-results').textContent = '📂 Scan all_results';
       stopFullLoadProgressAnimation();
       pushMessage('error', 'Load failed: ' + err.message);
       throw err;

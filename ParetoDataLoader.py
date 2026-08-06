@@ -18,6 +18,7 @@ import re
 import time
 import hashlib
 import traceback
+from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
 
 SERVICE = "ParetoDataLoader"
@@ -32,7 +33,8 @@ _MSGSPEC_MSGPACK_DECODER = msgspec.msgpack.Decoder() if _HAS_MSGSPEC else None
 
 _DISABLE_SCAN_CACHE = os.environ.get("PBG_DISABLE_SCAN_CACHE") == "1"
 _FULL_SCAN_CACHE = os.environ.get("PBG_FULL_SCAN_CACHE") == "1"
-_SCAN_CACHE_VERSION = 6
+_SCAN_CACHE_VERSION = 8
+_DIFF_SNAPSHOT_INTERVAL = 100
 
 
 @dataclass
@@ -280,6 +282,16 @@ class ParetoDataLoader:
         base = self.all_results_path + ".scan_cache"
         return base + ".meta.json", base + ".npz"
 
+    def _all_results_signature(self) -> Dict[str, int]:
+        """Return the filesystem identity used to validate scan snapshots."""
+        source_stat = os.stat(self.all_results_path)
+        return {
+            "device": int(source_stat.st_dev),
+            "inode": int(source_stat.st_ino),
+            "size": int(source_stat.st_size),
+            "mtime_ns": int(source_stat.st_mtime_ns),
+        }
+
     @staticmethod
     def _normalize_optimize_bounds(bounds: Dict) -> Dict[str, Tuple[float, float]]:
         """Normalize flat PB7 or nested PB8 bounds to dotted (lower, upper) pairs.
@@ -336,19 +348,19 @@ class ParetoDataLoader:
         """Check if scan cache exists and matches current all_results.bin (mtime+size)."""
         meta_path, npz_path = self._scan_cache_paths()
         try:
-            if not os.path.exists(meta_path) or not os.path.exists(npz_path):
-                return False
-            if not os.path.exists(self.all_results_path):
-                return False
-            st_bin = os.stat(self.all_results_path)
-            with open(meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-            src = meta.get("source") or {}
-            return (
-                int(meta.get("version") or -1) == _SCAN_CACHE_VERSION
-                and int(src.get("size") or -1) == int(st_bin.st_size)
-                and float(src.get("mtime") or -1) == float(st_bin.st_mtime)
-            )
+            with advisory_file_lock(Path(meta_path)):
+                if not os.path.exists(meta_path) or not os.path.exists(npz_path):
+                    return False
+                if not os.path.exists(self.all_results_path):
+                    return False
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                src = meta.get("source") or {}
+                return (
+                    int(meta.get("version") or -1) == _SCAN_CACHE_VERSION
+                    and src == self._all_results_signature()
+                    and bool(meta.get("diff_compressed")) == bool(self._diff_compressed_results)
+                )
         except Exception:
             return False
 
@@ -356,32 +368,42 @@ class ParetoDataLoader:
         """Load scan cache (meta + numpy arrays). Returns dict or None on failure."""
         meta_path, npz_path = self._scan_cache_paths()
         try:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-            arrays = np.load(npz_path, allow_pickle=False)
-            return {"meta": meta, "arrays": arrays}
+            with advisory_file_lock(Path(meta_path)):
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                with np.load(npz_path, allow_pickle=False) as archive:
+                    arrays = {name: archive[name] for name in archive.files}
+                return {"meta": meta, "arrays": arrays}
         except Exception:
             return None
 
-    def _write_scan_cache(self, meta: Dict[str, Any], arrays: Dict[str, np.ndarray]) -> None:
+    def _write_scan_cache(self, meta: Dict[str, Any], arrays: Dict[str, np.ndarray]) -> bool:
         """Write scan cache to disk (best-effort)."""
         meta_path, npz_path = self._scan_cache_paths()
+        nonce = f"{os.getpid()}.{time.time_ns()}"
+        tmp_meta = str(Path(meta_path).with_name(f".{Path(meta_path).name}.{nonce}.tmp"))
+        tmp_npz = str(Path(npz_path).with_name(f".{Path(npz_path).name}.{nonce}.tmp.npz"))
         try:
             os.makedirs(os.path.dirname(meta_path) or ".", exist_ok=True)
-            tmp_meta = meta_path + ".tmp"
-            # NOTE: np.savez appends ".npz" if the path doesn't end with it.
-            # Ensure the temp file ends with ".npz" so os.replace() targets the correct filename.
-            tmp_npz = npz_path + ".tmp.npz"
-
-            with open(tmp_meta, "w", encoding="utf-8") as f:
-                json.dump(meta, f)
-
-            np.savez(tmp_npz, **arrays)
-
-            os.replace(tmp_meta, meta_path)
-            os.replace(tmp_npz, npz_path)
-        except Exception:
+            with advisory_file_lock(Path(meta_path)):
+                cutoff = time.time() - 3600.0
+                cache_dir = Path(meta_path).parent
+                for pattern in (f".{Path(meta_path).name}.*.tmp", f".{Path(npz_path).name}.*.tmp.npz"):
+                    for stale_tmp in cache_dir.glob(pattern):
+                        try:
+                            if stale_tmp.stat().st_mtime < cutoff:
+                                stale_tmp.unlink()
+                        except OSError:
+                            continue
+                with open(tmp_meta, "w", encoding="utf-8") as f:
+                    json.dump(meta, f)
+                np.savez(tmp_npz, **arrays)
+                os.replace(tmp_npz, npz_path)
+                os.replace(tmp_meta, meta_path)
+            return True
+        except Exception as exc:
             # Cache is an optimization; never fail loading due to cache write.
+            _log(SERVICE, f'Failed to write Pareto scan cache: {exc}', level='WARNING')
             try:
                 if os.path.exists(tmp_meta):
                     os.remove(tmp_meta)
@@ -389,6 +411,48 @@ class ParetoDataLoader:
                     os.remove(tmp_npz)
             except Exception:
                 pass
+            return False
+
+    def _load_diff_selected_from_checkpoints(
+        self,
+        selected_order: List[int],
+        offsets: Any,
+        *,
+        progress_callback=None,
+    ) -> Tuple[Dict[int, Dict], int]:
+        """Reconstruct selected PB8 rows from the nearest 100-row full snapshots."""
+        total_rows = int(len(offsets))
+        selected = sorted({int(idx) for idx in selected_order if 0 <= int(idx) < total_rows})
+        if not selected:
+            return {}, 0
+
+        targets_by_checkpoint: Dict[int, set[int]] = {}
+        for idx in selected:
+            checkpoint = idx - (idx % _DIFF_SNAPSHOT_INTERVAL)
+            targets_by_checkpoint.setdefault(checkpoint, set()).add(idx)
+
+        reconstructed: Dict[int, Dict] = {}
+        completed = 0
+        with open(self.all_results_path, 'rb') as f:
+            for checkpoint, targets in sorted(targets_by_checkpoint.items()):
+                f.seek(int(offsets[checkpoint]))
+                unpacker = msgpack.Unpacker(f, raw=True, strict_map_key=False, read_size=256 * 1024)
+                current: Dict = {}
+                last_target = max(targets)
+                for idx, obj in enumerate(unpacker, checkpoint):
+                    if idx > last_target:
+                        break
+                    current = obj if idx == checkpoint else _apply_incremental_result_diff(current, obj)
+                    if idx in targets:
+                        reconstructed[idx] = current
+                completed += len(targets)
+                if progress_callback:
+                    progress_callback(
+                        completed,
+                        len(selected),
+                        f"Reconstructed {completed}/{len(selected)} selected PB8 configs from checkpoints",
+                    )
+        return reconstructed, len(targets_by_checkpoint)
 
     def _merge_selected_with_pareto_indices(
         self,
@@ -486,6 +550,11 @@ class ParetoDataLoader:
         if not os.path.exists(self.all_results_path):
             self.last_error = f"File not found: {self.all_results_path}"
             return False
+        try:
+            load_source_signature = self._all_results_signature()
+        except Exception:
+            self.last_error = f"File unavailable: {self.all_results_path}"
+            return False
         
         t_total0 = time.perf_counter()
 
@@ -543,13 +612,20 @@ class ParetoDataLoader:
         except Exception:
             pass
 
+        try:
+            if self._all_results_signature() != load_source_signature:
+                self.last_error = "all_results.bin changed before the full scan started; retry after the optimize writer is idle"
+                return False
+        except Exception:
+            self.last_error = "all_results.bin became unavailable before the full scan started"
+            return False
+
         # -------- Persistent scan cache fast-path --------
         # If the cache is valid, avoid decoding the entire all_results.bin.
         # We'll select indices from cached arrays and only unpack selected configs by offsets.
         t_cache_load0 = time.perf_counter()
         scan_cache = self._load_scan_cache() if (
             not _DISABLE_SCAN_CACHE
-            and not self._diff_compressed_results
             and self._is_scan_cache_valid()
         ) else None
         t_cache_load = time.perf_counter() - t_cache_load0
@@ -587,7 +663,7 @@ class ParetoDataLoader:
                 if 'recovery' in strategy:
                     required_fields.add("recovery")
 
-                available_fields = set(getattr(arrays, "files", []) or [])
+                available_fields = set(arrays.keys()) if isinstance(arrays, dict) else set(getattr(arrays, "files", []) or [])
                 missing = required_fields - available_fields
                 if missing:
                     scan_cache = None
@@ -627,6 +703,13 @@ class ParetoDataLoader:
                     for criterion in strategy:
                         if criterion == 'performance':
                             order = perf_order[: min(configs_per_criterion, total_parsed)]
+                        elif criterion == 'coverage':
+                            order = np.linspace(
+                                0,
+                                total_parsed - 1,
+                                num=min(configs_per_criterion, total_parsed),
+                                dtype=np.int64,
+                            )
                         elif criterion == 'robustness':
                             if overall_rob_v is None:
                                 scan_cache = None
@@ -683,9 +766,9 @@ class ParetoDataLoader:
                         max_configs,
                     )
 
-                    # Parse selected configs by offsets
+                    # Parse selected configs by offsets or PB8 full-snapshot checkpoints.
                     if progress_callback:
-                        progress_callback(0, max(1, len(selected_order)), "Parsing selected configs (offset cache)...")
+                        progress_callback(0, max(1, len(selected_order)), "Parsing selected configs (scan cache)...")
 
                     t_parse_selected0 = time.perf_counter()
                     pairs = [(int(offsets[i]), int(i)) for i in selected_order if 0 <= int(i) < total_parsed]
@@ -693,63 +776,83 @@ class ParetoDataLoader:
 
                     idx_to_metrics: Dict[int, ConfigMetrics] = {}
                     idx_to_raw: Dict[int, Dict] = {}
+                    checkpoint_blocks = 0
 
-                    with open(self.all_results_path, 'rb') as f:
-                        file_size = os.path.getsize(self.all_results_path)
-                        for n_done, (off, i) in enumerate(pairs, 1):
-                            try:
-                                # Prefer decoding from a bounded bytes slice so msgspec can be used.
-                                end = int(offsets[i + 1]) if (int(i) + 1) < total_parsed else int(file_size)
-                                if end <= int(off):
-                                    raise ValueError("invalid offset range")
-                                f.seek(int(off))
-                                payload = f.read(int(end - int(off)))
-
-                                config_data = self._decode_msgpack_object(payload)
-
-                                # Reuse precomputed robustness from scan cache (if present).
-                                pre_rob = None
-                                if overall_rob_v is not None:
-                                    try:
-                                        pre_rob = float(overall_rob_v[i])
-                                    except Exception:
-                                        pre_rob = None
-
-                                if isinstance(config_data, dict) and any(isinstance(k, bytes) for k in config_data.keys()):
-                                    metrics = self._parse_config_light_raw(i, config_data, precomputed_overall_robustness=pre_rob)
-                                else:
-                                    metrics = self._parse_config_light(
-                                        i,
-                                        config_data,
-                                        precomputed_overall_robustness=pre_rob,
-                                        compute_overall_robustness=False,
-                                    )
-
-                                idx_to_metrics[i] = metrics
-                                idx_to_raw[i] = config_data
-                            except Exception:
-                                # Fall back to legacy per-object unpack
+                    if self._diff_compressed_results:
+                        idx_to_raw, checkpoint_blocks = self._load_diff_selected_from_checkpoints(
+                            selected_order,
+                            offsets,
+                            progress_callback=progress_callback,
+                        )
+                        for i, config_data in idx_to_raw.items():
+                            pre_rob = None
+                            if overall_rob_v is not None:
                                 try:
+                                    pre_rob = float(overall_rob_v[i])
+                                except Exception:
+                                    pre_rob = None
+                            idx_to_metrics[i] = self._parse_config_light_raw(
+                                i,
+                                config_data,
+                                precomputed_overall_robustness=pre_rob,
+                            )
+                    else:
+                        with open(self.all_results_path, 'rb') as f:
+                            file_size = os.path.getsize(self.all_results_path)
+                            for n_done, (off, i) in enumerate(pairs, 1):
+                                try:
+                                    # Prefer decoding from a bounded bytes slice so msgspec can be used.
+                                    end = int(offsets[i + 1]) if (int(i) + 1) < total_parsed else int(file_size)
+                                    if end <= int(off):
+                                        raise ValueError("invalid offset range")
                                     f.seek(int(off))
-                                    unpacker = msgpack.Unpacker(f, raw=True, strict_map_key=False)
-                                    config_data = next(iter(unpacker))
+                                    payload = f.read(int(end - int(off)))
+                                    config_data = self._decode_msgpack_object(payload)
                                     pre_rob = None
                                     if overall_rob_v is not None:
                                         try:
                                             pre_rob = float(overall_rob_v[i])
                                         except Exception:
                                             pre_rob = None
-                                    metrics = self._parse_config_light_raw(i, config_data, precomputed_overall_robustness=pre_rob)
+
+                                    if isinstance(config_data, dict) and any(isinstance(k, bytes) for k in config_data.keys()):
+                                        metrics = self._parse_config_light_raw(i, config_data, precomputed_overall_robustness=pre_rob)
+                                    else:
+                                        metrics = self._parse_config_light(
+                                            i,
+                                            config_data,
+                                            precomputed_overall_robustness=pre_rob,
+                                            compute_overall_robustness=False,
+                                        )
                                     idx_to_metrics[i] = metrics
                                     idx_to_raw[i] = config_data
                                 except Exception:
-                                    continue
-                            if progress_callback and (n_done % 50 == 0 or n_done == len(pairs)):
-                                progress_callback(n_done, len(pairs), f"Parsed {n_done}/{len(pairs)} selected configs")
+                                    # Fall back to legacy per-object unpack.
+                                    try:
+                                        f.seek(int(off))
+                                        unpacker = msgpack.Unpacker(f, raw=True, strict_map_key=False)
+                                        config_data = next(iter(unpacker))
+                                        pre_rob = None
+                                        if overall_rob_v is not None:
+                                            try:
+                                                pre_rob = float(overall_rob_v[i])
+                                            except Exception:
+                                                pre_rob = None
+                                        metrics = self._parse_config_light_raw(i, config_data, precomputed_overall_robustness=pre_rob)
+                                        idx_to_metrics[i] = metrics
+                                        idx_to_raw[i] = config_data
+                                    except Exception:
+                                        continue
+                                if progress_callback and (n_done % 50 == 0 or n_done == len(pairs)):
+                                    progress_callback(n_done, len(pairs), f"Parsed {n_done}/{len(pairs)} selected configs")
 
                     self.configs = [idx_to_metrics[i] for i in selected_order if i in idx_to_metrics]
                     self.raw_configs_cache = idx_to_raw
                     t_parse_selected = time.perf_counter() - t_parse_selected0
+
+                    source = meta.get("source") or {}
+                    if source != self._all_results_signature():
+                        raise RuntimeError("all_results.bin changed while reading the scan cache")
 
                     # Compute Pareto front
                     t_pareto0 = time.perf_counter()
@@ -765,6 +868,8 @@ class ParetoDataLoader:
                         'scoring_metrics': self.scoring_metrics,
                         'load_strategy': load_strategy,
                         'max_configs': max_configs,
+                        'scan_cache': 'hit',
+                        'checkpoint_blocks': checkpoint_blocks,
                         'timings': {
                             'total': t_total,
                             'load_pareto_hashes': t_load_pareto_hashes,
@@ -779,6 +884,8 @@ class ParetoDataLoader:
             except Exception:
                 # Fall back to full scan
                 scan_cache = None
+
+        scan_source_signature = load_source_signature
 
         # Parse configs streaming from msgpack (avoid materializing entire file as a list)
         if progress_callback:
@@ -865,7 +972,9 @@ class ParetoDataLoader:
         needs_recovery = 'recovery' in strategy
 
         # Heaps store (priority_tuple, idx, key_tuple)
-        heaps: Dict[str, List[Tuple[Tuple[float, ...], int, Tuple[float, ...]]]] = {c: [] for c in strategy}
+        heaps: Dict[str, List[Tuple[Tuple[float, ...], int, Tuple[float, ...]]]] = {
+            criterion: [] for criterion in strategy if criterion != 'coverage'
+        }
         perf_fill_heap: List[Tuple[Tuple[float, ...], int, Tuple[float, ...]]] = []
 
         def _push_candidate(heap: List, k: int, idx: int, key: Tuple[float, ...]):
@@ -1059,6 +1168,8 @@ class ParetoDataLoader:
                     if criterion == 'performance':
                         key = key_perf
                         _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
+                    elif criterion == 'coverage':
+                        continue
                     elif criterion == 'robustness':
                         key = (-overall_robustness, constraint_violation, int(idx))
                         _push_candidate(heaps[criterion], configs_per_criterion, idx, key)
@@ -1103,9 +1214,17 @@ class ParetoDataLoader:
         selected_set: set = set()
 
         for criterion in strategy:
-            heap_items = heaps.get(criterion) or []
-            # Sort by original key (ascending = best first)
-            for _, cand_idx, _ in sorted(heap_items, key=lambda x: x[2]):
+            if criterion == 'coverage':
+                candidates = np.linspace(
+                    0,
+                    total_parsed - 1,
+                    num=min(configs_per_criterion, total_parsed),
+                    dtype=np.int64,
+                ).tolist()
+            else:
+                heap_items = heaps.get(criterion) or []
+                candidates = [int(cand_idx) for _, cand_idx, _ in sorted(heap_items, key=lambda x: x[2])]
+            for cand_idx in candidates:
                 if cand_idx in selected_set:
                     continue
                 selected_set.add(cand_idx)
@@ -1128,14 +1247,14 @@ class ParetoDataLoader:
         t_parse_selected0 = time.perf_counter()
         parsed_selected: Dict[int, ConfigMetrics] = {}
         raw_selected: Dict[int, Dict] = {}
+        checkpoint_blocks = 0
         if self._diff_compressed_results:
-            selected_set = set(selected_order)
-            selected_items = (
-                (idx, config_data)
-                for idx, config_data in enumerate(self._iter_binary_file(raw_mode=True))
-                if idx in selected_set
+            raw_selected, checkpoint_blocks = self._load_diff_selected_from_checkpoints(
+                selected_order,
+                offsets_all,
+                progress_callback=progress_callback,
             )
-            for n_done, (idx, config_data) in enumerate(selected_items, 1):
+            for idx, config_data in raw_selected.items():
                 pre_rob = None
                 if overall_rob_all is not None:
                     try:
@@ -1144,9 +1263,6 @@ class ParetoDataLoader:
                         pre_rob = None
                 metrics = self._parse_config_light_raw(idx, config_data, precomputed_overall_robustness=pre_rob)
                 parsed_selected[idx] = metrics
-                raw_selected[idx] = config_data
-                if progress_callback and (n_done % 50 == 0 or n_done == len(selected_order)):
-                    progress_callback(n_done, len(selected_order), f"Parsed {n_done}/{len(selected_order)} selected configs")
         else:
             pairs = [(int(offsets_all[i]), int(i)) for i in selected_order if 0 <= int(i) < len(offsets_all)]
             pairs.sort(key=lambda x: x[0])
@@ -1207,18 +1323,27 @@ class ParetoDataLoader:
         self.configs = [parsed_selected[i] for i in selected_order if i in parsed_selected]
         t_parse_selected = time.perf_counter() - t_parse_selected0
 
+        try:
+            if scan_source_signature is None or self._all_results_signature() != scan_source_signature:
+                self.last_error = "all_results.bin changed during the full scan; retry after the optimize writer is idle"
+                return False
+        except Exception:
+            self.last_error = "all_results.bin became unavailable during the full scan"
+            return False
+
         total_parsed = total_parsed
         t_parse = t_scan + t_parse_selected
 
-        # Write persistent scan cache (best-effort)
-        if not _DISABLE_SCAN_CACHE and not self._diff_compressed_results:
+        # Write persistent scan cache (best-effort).
+        scan_cache_status = 'disabled' if _DISABLE_SCAN_CACHE else 'miss'
+        if not _DISABLE_SCAN_CACHE:
             try:
-                st_bin = os.stat(self.all_results_path)
                 cache_meta = {
                     "version": _SCAN_CACHE_VERSION,
-                    "source": {"size": int(st_bin.st_size), "mtime": float(st_bin.st_mtime)},
+                    "source": scan_source_signature,
                     "optimize_version": self.optimize_version,
-                    "diff_compressed": False,
+                    "diff_compressed": bool(self._diff_compressed_results),
+                    "diff_snapshot_interval": _DIFF_SNAPSHOT_INTERVAL if self._diff_compressed_results else None,
                     "scoring_metrics": self.scoring_metrics,
                     "scoring_goals": self.scoring_goals,
                     "scenario_labels": self.scenario_labels,
@@ -1261,7 +1386,8 @@ class ParetoDataLoader:
                     cache_arrays["recovery"] = np.asarray(recovery_all, dtype=np.float32)
                 if overall_rob_all is not None:
                     cache_arrays["overall_robustness"] = np.asarray(overall_rob_all, dtype=np.float32)
-                self._write_scan_cache(cache_meta, cache_arrays)
+                if self._write_scan_cache(cache_meta, cache_arrays):
+                    scan_cache_status = 'built'
             except Exception:
                 pass
 
@@ -1281,6 +1407,8 @@ class ParetoDataLoader:
             'scoring_metrics': self.scoring_metrics,
             'load_strategy': load_strategy,
             'max_configs': max_configs,
+            'scan_cache': scan_cache_status,
+            'checkpoint_blocks': checkpoint_blocks,
             'timings': {
                 'total': t_total,
                 'load_pareto_hashes': t_load_pareto_hashes,
@@ -1320,7 +1448,20 @@ class ParetoDataLoader:
         selected_indices = set()  # Track indices to avoid duplicates
         
         for criterion in strategy:
-            if criterion == 'performance':
+            if criterion == 'coverage':
+                positions = np.linspace(
+                    0,
+                    len(all_configs) - 1,
+                    num=min(configs_per_criterion, len(all_configs)),
+                    dtype=np.int64,
+                )
+                for position in positions.tolist():
+                    config = all_configs[int(position)]
+                    if config.config_index not in selected_indices:
+                        selected_configs.append(config)
+                        selected_indices.add(config.config_index)
+
+            elif criterion == 'performance':
                 # Sort by constraint_violation, then primary metric (Passivbot official)
                 top = heapq.nsmallest(
                     configs_per_criterion,

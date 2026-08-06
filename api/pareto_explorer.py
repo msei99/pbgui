@@ -29,9 +29,10 @@ from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION, load_ini, pb7dir, pb8_ru
 
 router = APIRouter()
 
-_DEFAULT_LOAD_STRATEGY = ["performance", "robustness", "sharpe"]
+_DEFAULT_LOAD_STRATEGY = ["performance", "robustness", "sharpe", "coverage"]
 _DEFAULT_MAX_CONFIGS = 2000
 _LOAD_JOB_TTL_SECONDS = 900
+_LOAD_COOPERATIVE_YIELD_SECONDS = 0.001
 _LOAD_JOBS: dict[str, dict] = {}
 _LOAD_JOBS_LOCK = threading.Lock()
 _LOAD_WORKERS: dict[str, threading.Thread] = {}
@@ -65,9 +66,25 @@ def _prune_loader_cache() -> None:
 
 
 def _loader_cache_key(*, result_dir: Path, all_results_loaded: bool, load_strategy: list[str], max_configs: int) -> str:
+    source_names = ["all_results.bin"] if all_results_loaded else ["pareto", "all_results.bin"]
+    source_signature = []
+    for source_name in source_names:
+        source_path = result_dir / source_name
+        try:
+            source_stat = source_path.stat()
+            source_signature.append([
+                source_name,
+                int(source_stat.st_dev),
+                int(source_stat.st_ino),
+                int(source_stat.st_size),
+                int(source_stat.st_mtime_ns),
+            ])
+        except OSError:
+            source_signature.append([source_name])
     return json.dumps([
         str(result_dir),
         "full" if all_results_loaded else "fast",
+        source_signature,
         list(load_strategy),
         int(max_configs),
     ], ensure_ascii=False, separators=(",", ":"))
@@ -106,6 +123,19 @@ def _with_preserved_pareto_flags(loader: ParetoDataLoader, builder):
 def _cache_loader(key: str, loader: ParetoDataLoader) -> None:
     with _LOADER_CACHE_LOCK:
         _prune_loader_cache()
+        try:
+            new_parts = json.loads(key)
+            option_identity = [new_parts[0], new_parts[1], new_parts[3], new_parts[4]]
+            stale_keys = []
+            for existing_key in _LOADER_CACHE:
+                existing_parts = json.loads(existing_key)
+                existing_identity = [existing_parts[0], existing_parts[1], existing_parts[3], existing_parts[4]]
+                if existing_key != key and existing_identity == option_identity:
+                    stale_keys.append(existing_key)
+            for stale_key in stale_keys:
+                _LOADER_CACHE.pop(stale_key, None)
+        except (IndexError, TypeError, ValueError, json.JSONDecodeError):
+            pass
         _LOADER_CACHE[key] = {
             "loader": loader,
             "updated_at": time.time(),
@@ -465,6 +495,7 @@ def _json_safe(value: object) -> object:
 
 def _loader_summary(loader: ParetoDataLoader, *, visible_configs: list | None = None) -> dict:
     configs = list(visible_configs if visible_configs is not None else loader.configs)
+    load_stats = dict(getattr(loader, "load_stats", {}) or {})
     pareto_configs = [cfg for cfg in configs if getattr(cfg, "is_pareto", False)]
     best_metric_name = loader.scoring_metrics[0] if loader.scoring_metrics else None
     best_metric_value = None
@@ -482,6 +513,8 @@ def _loader_summary(loader: ParetoDataLoader, *, visible_configs: list | None = 
 
     return {
         "visible_configs": len(configs),
+        "selected_configs": int(load_stats.get("selected_configs") or len(loader.configs or [])),
+        "scanned_configs": int(load_stats.get("total_parsed") or len(loader.configs or [])),
         "pareto_configs": len(pareto_configs),
         "scenario_count": len(loader.scenario_labels),
         "best_metric_name": best_metric_name,
@@ -642,15 +675,20 @@ def _build_insights(loader: ParetoDataLoader) -> list[dict]:
         if robustness_scores:
             avg_robust = sum(robustness_scores) / len(robustness_scores)
             has_scenarios = len(loader.scenario_labels) > 1
-            if avg_robust > 0.85:
+            if not has_scenarios:
+                insights.append({
+                    "level": "info",
+                    "text": "Robustness has no multi-scenario spread here; saturated values such as 1.00 are not a diversity signal.",
+                })
+            elif avg_robust > 0.85:
                 insights.append({
                     "level": "success",
-                    "text": f"Excellent {'robustness across scenarios' if has_scenarios else 'consistency in metrics'} (avg: {avg_robust:.2f})!",
+                    "text": f"Excellent robustness across scenarios (avg: {avg_robust:.2f})!",
                 })
             elif avg_robust < 0.70:
                 insights.append({
                     "level": "warning",
-                    "text": f"Configs show high variability {'across scenarios' if has_scenarios else 'in metrics'} (avg robustness: {avg_robust:.2f})",
+                    "text": f"Configs show high variability across scenarios (avg robustness: {avg_robust:.2f})",
                 })
 
     styles = Counter(loader.compute_trading_style(config) for config in pareto_configs)
@@ -2655,6 +2693,8 @@ def _run_full_load_job(job_id: str) -> None:
         def _progress_callback(current: object, total: object, message: object) -> None:
             if cancel_event.is_set():
                 raise InterruptedError("Full load interrupted by API shutdown")
+            # Msgpack reconstruction is GIL-heavy for multi-gigabyte result files.
+            time.sleep(_LOAD_COOPERATIVE_YIELD_SECONDS)
             try:
                 current_num = float(current or 0)
             except Exception:
@@ -2702,11 +2742,15 @@ def _run_full_load_job(job_id: str) -> None:
             all_results_loaded=True,
             options=dict(job.get("refresh_options") or {}),
         )
+        load_stats = dict(getattr(loader, "load_stats", {}) or {})
+        scanned_configs = int(load_stats.get("total_parsed") or len(loader.configs))
+        cache_status = str(load_stats.get("scan_cache") or "")
+        cache_note = " Persistent scan cache hit." if cache_status == "hit" else " Persistent scan cache built." if cache_status == "built" else ""
         _update_load_job(
             job_id,
             status="complete",
             stage="loaded",
-            message=f"Full result loaded: {len(loader.configs)} configs ready.",
+            message=f"Full scan ready: {len(loader.configs)} selected from {scanned_configs} configs.{cache_note}",
             current=1,
             total=1,
             progress=100,

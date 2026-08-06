@@ -6,14 +6,14 @@ Der Pareto Explorer hilft dir, PBv7- und PBv8-Optimierungsergebnisse zu analysie
 
 - PBGui: **PBv7/PBv8 -> Optimize -> Results** oder ueber den passenden Navigationseintrag **Pareto Explorer**.
 - Öffne ein Ergebnis mit **Pareto Explorer** aus der Optimize-Ergebnisliste oder der Ergebnis-Sidebar.
-- Die Seite kann im schnellen Pareto-only-Modus starten und später über die Sidebar den kompletten `all_results.bin`-Datensatz laden.
+- Die Seite kann im schnellen Pareto-only-Modus starten und spaeter ueber die Sidebar den kompletten `all_results.bin`-Stream scannen.
 
 ## Grundidee
 
 Jeder Score, jedes Chart und jeder Pareto-Stern ist relativ zur aktuell geladenen und sichtbaren Config-Menge.
 
 - Fast Mode vergleicht hauptsächlich die Passivbot-Pareto-JSON-Kandidaten.
-- Full Mode vergleicht gegen den größeren `all_results.bin`-Kandidatenraum.
+- Full Mode scannt alle `all_results.bin`-Records und vergleicht danach das Kandidaten-Subset, das durch **Max Configs** und **Candidate Selection** behalten wird.
 - Display Range ändert den sichtbaren Slice, deshalb können sich Rankings und sichtbare Pareto-Sterne ändern.
 - Nutze Rang und Score als Shortlisting-Signale, nicht als endgültige Live-Trading-Entscheidung.
 
@@ -25,6 +25,7 @@ Overview ist das Entscheidungs-Dashboard. Nutze es zuerst nach dem Laden eines E
 - **Insights** hebt offensichtliche Signale hervor, z. B. Parameter an Bounds oder Stil-Diversität.
 - **Pareto Front Preview** zeigt die Form der aktuellen Trade-off-Frontier.
 - **Robustness vs Performance** zeigt, ob Return durch Konsistenz gestützt wird.
+- Bei nur einem Szenario kann Robustness auf `1.00` saettigen; PBGui kennzeichnet das als fehlende Multi-Szenario-Evidenz statt als bewiesene Konsistenz.
 - Die Details der ausgewählten Config erscheinen unter den Charts, sobald eine Config selektiert ist.
 
 Empfohlener Ablauf:
@@ -35,7 +36,7 @@ Empfohlener Ablauf:
 4. **Run Backtest** nutzen, bevor du einem Kandidaten vertraust.
 5. **Create Optimize Preset from this Config** erst nutzen, wenn die Config wirklich nach Refinement aussieht. PBGui erhaelt dabei die PB7-/PB8-Generation des Ergebnisses.
 
-Im PB8-Full-Mode rekonstruiert PBGui inkrementell komprimierte `all_results.bin`-Eintraege vor der Analyse. Verschachtelte PB8-Bot-Parameter und Bounds erscheinen als punktierte Pfade und werden fuer Presets und Backtest-Handoffs wieder in kanonische verschachtelte Config-Objekte umgewandelt.
+Im PB8-Full-Mode rekonstruiert PBGui inkrementell komprimierte `all_results.bin`-Eintraege vor der Analyse. Der erste Scan baut neben der Ergebnisdatei einen quellvalidierten Checkpoint-Cache. Spaetere Loads verwenden diesen Cache auch nach einem API-Restart weiter, solange Dateigroesse und Aenderungszeit der Quelle unveraendert sind. Verschachtelte PB8-Bot-Parameter und Bounds erscheinen als punktierte Pfade und werden fuer Presets und Backtest-Handoffs wieder in kanonische verschachtelte Config-Objekte umgewandelt.
 
 ## Explorer
 
@@ -85,7 +86,7 @@ Optimization Evolution zeigt, ob der Optimize-Lauf im Zeitverlauf noch sinnvoll 
 - Die blaue **Best So Far**-Linie zeigt den besten Wert, der bis zum jeweiligen Punkt gefunden wurde.
 - Ein Klick auf einen Punkt selektiert diese Config im Full Mode zur Prüfung unter dem Chart.
 
-Im Fast Mode zeigt dieser Tab nur einen Hinweis statt eines Charts. Nutze den Sidebar-Button **Load all_results**, wenn du die echte Timeline brauchst.
+Im Fast Mode zeigt dieser Tab nur einen Hinweis statt eines Charts. Nutze den Sidebar-Button **Scan all_results**, wenn du die ausgewaehlte Full-Stream-Timeline brauchst.
 
 Nutze die Zusammenfassung, um einzuschätzen, ob ein weiterer Lauf wahrscheinlich hilft:
 
@@ -108,13 +109,13 @@ Nutze es, um Kandidatenprofile schnell zu vergleichen. Ein ausgewogenes Radar is
 Settings steuert, welche Daten geladen werden.
 
 - **Result Path** ist das Optimize-Ergebnisverzeichnis oder Pareto-Verzeichnis.
-- **Max Configs** limitiert den schnell geladenen Ausschnitt.
-- **Load Strategy** bestimmt, wie Kandidaten beim Laden eines Subsets ausgewählt werden.
+- **Max Configs** limitiert die fuer interaktive Analyse behaltenen Kandidaten; es limitiert nicht die Anzahl gescannter Source-Records.
+- **Candidate Selection** bestimmt den behaltenen Mix. Metrik-Kriterien behalten Top-Configs, waehrend **coverage (optimize timeline)** den Run gleichmaessig sampelt und damit einen breiteren Search-History-Bereich sichtbar macht.
 - **Persist defaults** speichert die aktuellen Lade-Voreinstellungen.
-- Nutze den Sidebar-Button **Load all_results** für Full Mode.
+- Nutze den Sidebar-Button **Scan all_results** fuer Full Mode. Die Candidate-Set-Karte zeigt sichtbare, ausgewaehlte und gescannte Counts getrennt.
 - Nutze **Show Passivbot Paretos**, um zurück in den schnellen Pareto-only-Modus zu wechseln.
 
-Wenn die UI träge wirkt, reduziere Max Configs oder arbeite im Pareto-only-Modus, bis klar ist, welcher Bereich des Ergebnisses eine tiefere Analyse lohnt.
+Der erste Scan eines grossen Results kann dauern. Ein erfolgreicher Scan erzeugt einen persistenten Cache, sodass der naechste Load auch nach einem API-Restart deutlich schneller ist. Wenn sich `all_results.bin` aendert, wird der Cache automatisch neu gebaut. Wenn die interaktive UI danach traege wirkt, reduziere Max Configs oder arbeite im Pareto-only-Modus, bis klar ist, welcher Bereich des Ergebnisses eine tiefere Analyse lohnt.
 
 ## Optimize Preset Refinement
 
@@ -133,7 +134,7 @@ Starte mit einem kleinen Bounds Window. Ein enges Window ist gut für Refinement
 ## Best Practices
 
 1. Starte in Overview, nicht in Deep Intelligence. Finde zuerst Kandidaten, die Analyse wert sind.
-2. Lade `all_results.bin`, bevor du finale Entscheidungen triffst, falls die Datei verfügbar ist.
+2. Scanne `all_results.bin`, bevor du finale Entscheidungen triffst, falls die Datei verfuegbar ist, und nutze **coverage**, wenn du Alternativen ausserhalb der Metrik-Leader sehen willst.
 3. Nutze Display Range bewusst. Eine Config, die in den Top 500 stark ist, kann in den Top 5000 gewöhnlich wirken.
 4. Bevorzuge ausgewogene Kandidaten mit akzeptablem Risiko gegenüber dem absoluten Profit-Maximum.
 5. Validiere selektierte Configs immer im Backtest, bevor du sie als Live-Kandidaten betrachtest.
