@@ -3076,7 +3076,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       el('preset-direction').value = 'Balanced (keep run scoring)';
     }
     updatePresetUiLabels();
-    if (el('preset-generator-details').open) schedulePresetPreview(0);
+    schedulePresetPreview(0);
   }
 
   function updatePresetUiLabels() {
@@ -3229,7 +3229,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   }
 
   function schedulePresetPreview(delay) {
-    if (!state.selectedDetail || !el('preset-generator-details').open) return;
+    if (!state.selectedDetail) return;
     if (state.presetPreviewTimer) window.clearTimeout(state.presetPreviewTimer);
     state.presetPreviewTimer = window.setTimeout(function() {
       state.presetPreviewTimer = null;

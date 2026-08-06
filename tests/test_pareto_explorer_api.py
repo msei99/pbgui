@@ -116,6 +116,21 @@ def test_pareto_frontend_routes_by_result_version_without_bearer_tokens() -> Non
     assert "%%TOKEN%%" not in source
 
 
+def test_pareto_selected_detail_always_schedules_preset_preview() -> None:
+    """A selected config must build its preview independently of details-toggle timing."""
+    source = (ROOT / "frontend" / "v7_pareto_explorer.html").read_text(encoding="utf-8")
+    sync_start = source.index("function syncPresetForm(")
+    sync_end = source.index("\n  function updatePresetUiLabels(", sync_start)
+    schedule_start = source.index("function schedulePresetPreview(")
+    schedule_end = source.index("\n  function saveOptimizePresetConfig(", schedule_start)
+
+    sync_source = source[sync_start:sync_end]
+    schedule_source = source[schedule_start:schedule_end]
+    assert "updatePresetUiLabels();\n    schedulePresetPreview(0);" in sync_source
+    assert "if (!state.selectedDetail) return;" in schedule_source
+    assert "preset-generator-details').open" not in schedule_source
+
+
 def test_select_correlation_configs_skips_unavailable_top_performer_metrics() -> None:
     """Top Performer selection should not invent winners for missing metrics."""
 
