@@ -27,7 +27,13 @@ from hyperliquid_api import (
     normalize_hyperliquid_coin,
     resolve_hyperliquid_coin_name,
 )
-from hyperliquid_l2book_candles import generate_1m_candles_from_l2book_range, iter_hyperliquid_l2book_mid_prices, _maybe_archive_l2book_file, _l2book_hour_path
+from hyperliquid_l2book_candles import (
+    _l2book_hour_path,
+    _maybe_archive_l2book_file,
+    _resolve_l2book_hour_path,
+    generate_1m_candles_from_l2book_range,
+    iter_hyperliquid_l2book_mid_prices,
+)
 from market_data import (
     append_exchange_download_log,
     get_exchange_raw_root_dir,
@@ -43,6 +49,7 @@ from market_data_sources import (
     update_source_index_for_day,
 )
 from Exchange import Exchange
+from PBCoinData import get_symbol_for_coin as _get_symbol_for_coin
 
 # Enable detailed timing logs for performance analysis
 # Set environment variable PBGUI_TIMING_LOGS=1 to enable, or change this constant
@@ -1494,6 +1501,7 @@ def _bybit_perp_symbol(coin: str) -> str:
 
 
 _PERP_SYMBOL_CACHE: dict[tuple[str, str], str | None] = {}
+_SOURCE_GAP_MARKETS_CACHE: dict[str, tuple[tuple[int, int], dict[str, dict[str, Any]]]] = {}
 
 
 def _canonical_perp_base(s: str) -> str:
@@ -1558,6 +1566,81 @@ def _resolve_perp_symbol(exchange_id: str, coin: str) -> str | None:
 
     _PERP_SYMBOL_CACHE[cache_key] = chosen
     return chosen
+
+
+def classify_hyperliquid_pre_donor_gap(
+    *,
+    coin: str,
+    day: str | date,
+    missing_minutes: set[int],
+    coindata_root: Path | None = None,
+) -> dict[str, Any]:
+    """Prove that exact missing minutes predate every current external perp donor."""
+    if not missing_minutes or any(int(minute) < 0 or int(minute) >= 1440 for minute in missing_minutes):
+        return {"eligible": False, "reason": "invalid missing-minute set", "sources": {}}
+    day_obj = day if isinstance(day, date) else datetime.strptime(str(day), "%Y-%m-%d").date()
+    day_start_ms = _day_start_ms(day_obj)
+    root = Path(coindata_root) if coindata_root is not None else Path(__file__).resolve().parent / "data" / "coindata"
+    sources: dict[str, dict[str, Any]] = {}
+    may_cover: list[str] = []
+
+    for exchange_id, mapping_exchange, exchange_key, inception_keys in (
+        ("binanceusdm", "binance", "binance.swap", ("onboardDate",)),
+        ("bybit", "bybit", "bybit.swap", ("launchTime",)),
+    ):
+        markets_path = root / mapping_exchange / "ccxt_markets.json"
+        if not markets_path.is_file() or markets_path.is_symlink():
+            return {"eligible": False, "reason": f"{exchange_id} market metadata unavailable", "sources": sources}
+        try:
+            stat = markets_path.stat()
+            cache_key = str(markets_path.resolve())
+            signature = (int(stat.st_mtime_ns), int(stat.st_size))
+            cached = _SOURCE_GAP_MARKETS_CACHE.get(cache_key)
+            if cached is None or cached[0] != signature:
+                markets = json.loads(markets_path.read_text(encoding="utf-8"))
+                by_id: dict[str, dict[str, Any]] = {}
+                if isinstance(markets, dict):
+                    for candidate in markets.values():
+                        if not isinstance(candidate, dict):
+                            continue
+                        info = candidate.get("info") if isinstance(candidate.get("info"), dict) else {}
+                        candidate_id = str(candidate.get("id") or info.get("symbol") or "").strip().upper()
+                        if candidate_id:
+                            by_id[candidate_id] = candidate
+                _SOURCE_GAP_MARKETS_CACHE[cache_key] = (signature, by_id)
+            else:
+                by_id = cached[1]
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {"eligible": False, "reason": f"{exchange_id} market metadata unreadable", "sources": sources}
+        symbol_code = str(_get_symbol_for_coin(coin, exchange_key) or "").strip().upper()
+        market = by_id.get(symbol_code)
+        if market is None:
+            sources[exchange_id] = {"status": "absent", "symbol": symbol_code}
+            continue
+
+        info = market.get("info") if isinstance(market.get("info"), dict) else {}
+        raw_inception = next((info.get(key) for key in inception_keys if info.get(key)), None) or market.get("created")
+        try:
+            inception_ms = int(raw_inception)
+        except (TypeError, ValueError):
+            return {"eligible": False, "reason": f"{exchange_id} inception unavailable", "sources": sources}
+        if inception_ms <= 0:
+            return {"eligible": False, "reason": f"{exchange_id} inception unavailable", "sources": sources}
+        sources[exchange_id] = {
+            "status": "available",
+            "symbol": symbol_code,
+            "inception_ms": inception_ms,
+        }
+        if any(day_start_ms + int(minute) * 60_000 >= inception_ms for minute in missing_minutes):
+            may_cover.append(exchange_id)
+
+    if may_cover:
+        return {
+            "eligible": False,
+            "reason": f"{', '.join(may_cover)} may cover one or more missing minutes",
+            "sources": sources,
+        }
+    return {"eligible": True, "reason": "all missing minutes predate external donors", "sources": sources}
 
 
 def _day_start_ms(d: date) -> int:
@@ -1646,10 +1729,6 @@ def _l2book_minutes_for_day(
     hours_filter: set[int] | None = None,
 ) -> dict[int, dict[str, Any]]:
     coin_u = normalize_market_data_coin_dir("hyperliquid", coin)
-    base = get_exchange_raw_root_dir("hyperliquid") / "l2Book" / coin_u
-    if not base.exists():
-        return {}
-
     day_start = datetime.strptime(str(day), "%Y%m%d").replace(tzinfo=timezone.utc)
     day_start_ms = int(day_start.timestamp() * 1000)
     minute_ms = 60_000
@@ -1658,8 +1737,8 @@ def _l2book_minutes_for_day(
     for hour in range(24):
         if hours_filter is not None and hour not in hours_filter:
             continue
-        in_path = base / f"{day}-{hour:02d}.lz4"
-        if not in_path.exists():
+        in_path = _resolve_l2book_hour_path(coin=coin_u, day=day, hour=hour)
+        if in_path is None:
             continue
         hour_start_ms = day_start_ms + (hour * 60 * minute_ms)
         hour_end_ms = hour_start_ms + (60 * minute_ms)
@@ -1863,6 +1942,7 @@ def _fill_missing_from_exchange_perp_1m(
     start_date: date,
     end_date: date,
     sleep_s: float = 0.2,
+    stats_out: dict[str, int] | None = None,
 ) -> int:
     """Fill missing minutes from an exchange's USDT perpetual.
     
@@ -1893,6 +1973,8 @@ def _fill_missing_from_exchange_perp_1m(
         to_fill.append(day_s)
     if not to_fill:
         return 0
+    if stats_out is not None:
+        stats_out["days_requested"] = int(stats_out.get("days_requested") or 0) + len(to_fill)
 
     ex = Exchange(exchange_id)
 
@@ -1921,8 +2003,12 @@ def _fill_missing_from_exchange_perp_1m(
                 if len(chunk) < 1000:
                     break
         except Exception as e:
+            if stats_out is not None:
+                stats_out["errors"] = int(stats_out.get("errors") or 0) + 1
             append_exchange_download_log("hyperliquid", f"[hl_best_1m] {coin_u} {exchange_id}_1m ERROR {day_s} {e}")
             continue
+        if stats_out is not None:
+            stats_out["days_completed"] = int(stats_out.get("days_completed") or 0) + 1
 
         day_path = _best_day_path(coin=coin_u, day=day_s)
         existing = _read_day_npz(day_path, day=day_s) if day_path.exists() else {}
@@ -1994,11 +2080,13 @@ def _fill_missing_from_exchange_perp_1m(
                 if idx == g_end and next_o is not None:
                     c_val = float(next_o.get("o", c_val))
                 try:
+                    high_val = max(float(bn["h"]), float(o_val), float(c_val))
+                    low_val = min(float(bn["l"]), float(o_val), float(c_val))
                     existing[idx] = {
                         "t": int(day_start + idx * 60_000),
                         "o": float(o_val),
-                        "h": float(bn["h"]),
-                        "l": float(bn["l"]),
+                        "h": high_val,
+                        "l": low_val,
                         "c": float(c_val),
                         "v": float(bn["v"]),
                     }
@@ -2029,6 +2117,7 @@ def _fill_missing_from_binance_perp_1m(
     start_date: date,
     end_date: date,
     sleep_s: float = 0.2,
+    stats_out: dict[str, int] | None = None,
 ) -> int:
     """Fill missing minutes from Binance USDT perpetual (legacy wrapper)."""
     coin_u = normalize_hyperliquid_coin(coin)
@@ -2043,6 +2132,7 @@ def _fill_missing_from_binance_perp_1m(
         start_date=start_date,
         end_date=end_date,
         sleep_s=sleep_s,
+        stats_out=stats_out,
     )
 
 
@@ -2052,6 +2142,7 @@ def _fill_missing_from_bybit_perp_1m(
     start_date: date,
     end_date: date,
     sleep_s: float = 0.2,
+    stats_out: dict[str, int] | None = None,
 ) -> int:
     """Fill missing minutes from Bybit USDT perpetual."""
     coin_u = normalize_hyperliquid_coin(coin)
@@ -2066,6 +2157,7 @@ def _fill_missing_from_bybit_perp_1m(
         start_date=start_date,
         end_date=end_date,
         sleep_s=sleep_s,
+        stats_out=stats_out,
     )
 
 
@@ -2415,6 +2507,12 @@ class ImproveBest1mResult:
     bybit_minutes_filled: int
     tiingo_minutes_filled: int = 0
     tiingo_month_requests_used: int = 0
+    binance_days_requested: int = 0
+    binance_days_completed: int = 0
+    binance_fetch_errors: int = 0
+    bybit_days_requested: int = 0
+    bybit_days_completed: int = 0
+    bybit_fetch_errors: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -2426,6 +2524,12 @@ class ImproveBest1mResult:
             "bybit_minutes_filled": int(self.bybit_minutes_filled),
             "tiingo_minutes_filled": int(self.tiingo_minutes_filled),
             "tiingo_month_requests_used": int(self.tiingo_month_requests_used),
+            "binance_days_requested": int(self.binance_days_requested),
+            "binance_days_completed": int(self.binance_days_completed),
+            "binance_fetch_errors": int(self.binance_fetch_errors),
+            "bybit_days_requested": int(self.bybit_days_requested),
+            "bybit_days_completed": int(self.bybit_days_completed),
+            "bybit_fetch_errors": int(self.bybit_fetch_errors),
         }
 
 
@@ -2449,7 +2553,7 @@ def build_best_hyperliquid_1m_archive_for_coin(
                 Outputs:
                         - Raw API 1m downloads: data/ohlcv/hyperliquid/1m_api/<COIN>/YYYY-MM-DD.npz
                         - Best/computed archive: data/ohlcv/hyperliquid/1m/<COIN>/YYYY-MM-DD.npz
-                            (with Binance USDT-perp gap fill for missing minutes)
+                            (with Binance/Bybit USDT-perp gap fill for missing minutes)
     """
 
     coin_u = normalize_hyperliquid_coin(coin)
@@ -2488,6 +2592,12 @@ def build_best_hyperliquid_1m_archive_for_coin(
                 except Exception:
                     pass
             _fill_missing_from_binance_perp_1m(
+                coin=coin_u,
+                start_date=d,
+                end_date=d,
+                sleep_s=0.0,
+            )
+            _fill_missing_from_bybit_perp_1m(
                 coin=coin_u,
                 start_date=d,
                 end_date=d,
@@ -2557,7 +2667,7 @@ def build_best_hyperliquid_1m_archive_for_coin(
         notes.append(f"api_1m_copy_error:{type(e).__name__}")
         append_exchange_download_log("hyperliquid", f"[hl_best_1m] {coin_u} api_1m COPY ERROR {e}")
 
-    # Fill remaining gaps with Binance USDT-perp 1m candles.
+    # Fill remaining gaps with Binance, then Bybit USDT-perp 1m candles.
     try:
         fill_start = api_start if rng is not None else api_start
         binance_1m_minutes_filled = _fill_missing_from_binance_perp_1m(
@@ -2570,6 +2680,18 @@ def build_best_hyperliquid_1m_archive_for_coin(
     except Exception as e:
         notes.append(f"binance_1m_error:{type(e).__name__}")
         append_exchange_download_log("hyperliquid", f"[hl_best_1m] {coin_u} binance_1m ERROR {e}")
+
+    try:
+        bybit_1m_minutes_filled = _fill_missing_from_bybit_perp_1m(
+            coin=coin_u,
+            start_date=fill_start,
+            end_date=d_end,
+        )
+        if bybit_1m_minutes_filled:
+            notes.append(f"bybit_1m_minutes_filled:{bybit_1m_minutes_filled}")
+    except Exception as e:
+        notes.append(f"bybit_1m_error:{type(e).__name__}")
+        append_exchange_download_log("hyperliquid", f"[hl_best_1m] {coin_u} bybit_1m ERROR {e}")
 
     # Upsampling disabled: keep output strictly API 1m and l2Book-derived 1m.
 
@@ -2595,6 +2717,7 @@ def improve_best_hyperliquid_1m_archive_for_coin(
     start_date_override: date | str | None = None,
     dry_run: bool = False,
     refetch: bool = False,
+    archive_l2book: bool = True,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     stop_check: Callable[[], bool] | None = None,
 ) -> ImproveBest1mResult:
@@ -2702,6 +2825,8 @@ def improve_best_hyperliquid_1m_archive_for_coin(
     bybit_minutes_filled = 0
     tiingo_minutes_filled = 0
     tiingo_month_requests_used = 0
+    binance_fetch_stats: dict[str, int] = {}
+    bybit_fetch_stats: dict[str, int] = {}
     month_totals: dict[str, int] = {}
     month_seen: dict[str, int] = {}
     month_progress_by_day: dict[str, tuple[str, int, int]] = {}
@@ -2747,7 +2872,7 @@ def improve_best_hyperliquid_1m_archive_for_coin(
             )
             if not _in_l2book_range:
                 # Archive any remaining local l2book files even for skipped days
-                if not dry_run and not is_stock_perp:
+                if archive_l2book and not dry_run and not is_stock_perp:
                     for _h in range(24):
                         _lp = _l2book_hour_path(coin=coin_u, day=day_s, hour=_h)
                         if _lp.exists():
@@ -2871,7 +2996,7 @@ def improve_best_hyperliquid_1m_archive_for_coin(
             t_l2book_write = time.time() - t0
 
             # Archive local l2book files to NAS after processing this day
-            if not dry_run:
+            if archive_l2book and not dry_run:
                 for _h in range(24):
                     _lp = _l2book_hour_path(coin=coin_u, day=day_s, hour=_h)
                     if _lp.exists():
@@ -2946,6 +3071,7 @@ def improve_best_hyperliquid_1m_archive_for_coin(
                     start_date=d,
                     end_date=d,
                     sleep_s=0.0,
+                    stats_out=binance_fetch_stats,
                 )
                 after_binance_codes = get_source_codes_for_day(exchange="hyperliquid", coin=coin_dir, day=day_s)
                 if after_binance_codes:
@@ -2970,6 +3096,7 @@ def improve_best_hyperliquid_1m_archive_for_coin(
                     start_date=d,
                     end_date=d,
                     sleep_s=0.0,
+                    stats_out=bybit_fetch_stats,
                 )
                 after_codes = get_source_codes_for_day(exchange="hyperliquid", coin=coin_dir, day=day_s)
                 if after_codes:
@@ -3055,6 +3182,12 @@ def improve_best_hyperliquid_1m_archive_for_coin(
         bybit_minutes_filled=int(bybit_minutes_filled),
         tiingo_minutes_filled=int(tiingo_minutes_filled),
         tiingo_month_requests_used=int(tiingo_month_requests_used),
+        binance_days_requested=int(binance_fetch_stats.get("days_requested") or 0),
+        binance_days_completed=int(binance_fetch_stats.get("days_completed") or 0),
+        binance_fetch_errors=int(binance_fetch_stats.get("errors") or 0),
+        bybit_days_requested=int(bybit_fetch_stats.get("days_requested") or 0),
+        bybit_days_completed=int(bybit_fetch_stats.get("days_completed") or 0),
+        bybit_fetch_errors=int(bybit_fetch_stats.get("errors") or 0),
     )
 
 

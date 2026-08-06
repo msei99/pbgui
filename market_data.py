@@ -300,6 +300,9 @@ class MarketDataConfig:
         }
 
 
+MARKET_DATA_CONFIG_VERSION = 2
+
+
 def _normalize_market_data_exchange(exchange: str) -> str:
     ex = str(exchange or "").strip().lower()
     if ex in ("binanceusdm", "binance-usdm"):
@@ -323,11 +326,11 @@ def _canonical_enabled_coin(exchange: str, coin: str) -> str:
 def load_market_data_config() -> MarketDataConfig:
     path = get_market_data_config_path()
     if not path.exists():
-        return MarketDataConfig(version=1, enabled_coins={}, auto_enable_new_coins={})
+        return MarketDataConfig(version=MARKET_DATA_CONFIG_VERSION, enabled_coins={}, auto_enable_new_coins={})
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return MarketDataConfig(version=1, enabled_coins={}, auto_enable_new_coins={})
+        return MarketDataConfig(version=MARKET_DATA_CONFIG_VERSION, enabled_coins={}, auto_enable_new_coins={})
 
     version = int(raw.get("version", 1)) if isinstance(raw, dict) else 1
     enabled = raw.get("enabled_coins", {}) if isinstance(raw, dict) else {}
@@ -352,6 +355,15 @@ def load_market_data_config() -> MarketDataConfig:
         )
         cleaned[ex_key] = sorted(merged)
 
+    if version < 2:
+        for ex_key in ("binance", "bitget"):
+            migrated = set(cleaned.get(ex_key, []))
+            if "CAT" in migrated:
+                migrated.remove("CAT")
+                migrated.add("1000CAT")
+                cleaned[ex_key] = sorted(migrated)
+        version = 2
+
     cleaned_auto: dict[str, bool] = {}
     for ex, enabled_flag in auto_enable.items():
         if not isinstance(ex, str):
@@ -361,7 +373,7 @@ def load_market_data_config() -> MarketDataConfig:
             continue
         cleaned_auto[ex_key] = bool(enabled_flag)
 
-    return MarketDataConfig(version=version, enabled_coins=cleaned, auto_enable_new_coins=cleaned_auto)
+    return MarketDataConfig(version=max(version, MARKET_DATA_CONFIG_VERSION), enabled_coins=cleaned, auto_enable_new_coins=cleaned_auto)
 
 
 def save_market_data_config(cfg: MarketDataConfig) -> None:

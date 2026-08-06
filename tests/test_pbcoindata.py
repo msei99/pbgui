@@ -60,6 +60,7 @@ compute_coin_name = PBCoinData_mod.compute_coin_name
 get_normalized_coins = PBCoinData_mod.get_normalized_coins
 get_symbol_for_coin = PBCoinData_mod.get_symbol_for_coin
 build_symbol_mappings = PBCoinData_mod.build_symbol_mappings
+disambiguate_multiplier_market_coins = PBCoinData_mod.disambiguate_multiplier_market_coins
 
 
 # ============================================================================
@@ -387,6 +388,53 @@ class TestComputeCoinName:
         assert compute_coin_name("RED_USDT", "USDT") == "RED"
 
 
+@pytest.mark.parametrize("reverse_order", [False, True])
+def test_multiplier_market_disambiguation_is_contextual_and_order_independent(reverse_order):
+    """A prefixed market keeps its prefix only beside a separate bare-base market."""
+    rows = [
+        {
+            "symbol": "1000CATUSDT",
+            "ccxt_symbol": "1000CAT/USDT:USDT",
+            "base": "1000CAT",
+            "coin": "CAT",
+            "quote": "USDT",
+            "swap": True,
+            "linear": True,
+        },
+        {
+            "symbol": "CATUSDT",
+            "ccxt_symbol": "CAT/USDT:USDT",
+            "base": "CAT",
+            "coin": "CAT",
+            "quote": "USDT",
+            "swap": True,
+            "linear": True,
+        },
+    ]
+    if reverse_order:
+        rows.reverse()
+
+    result = disambiguate_multiplier_market_coins(rows)
+    by_symbol = {row["symbol"]: row for row in result}
+
+    assert by_symbol["1000CATUSDT"]["coin"] == "1000CAT"
+    assert by_symbol["CATUSDT"]["coin"] == "CAT"
+
+
+def test_multiplier_market_disambiguation_keeps_single_market_alias_short():
+    """A lone 1000SHIB contract retains the established SHIB canonical name."""
+    rows = [{
+        "symbol": "1000SHIBUSDT",
+        "base": "1000SHIB",
+        "coin": "SHIB",
+        "quote": "USDT",
+        "swap": True,
+        "linear": True,
+    }]
+
+    assert disambiguate_multiplier_market_coins(rows)[0]["coin"] == "SHIB"
+
+
 # ============================================================================
 # normalize_symbol() Tests
 # ============================================================================
@@ -542,6 +590,35 @@ class TestGetSymbolForCoin:
         PBCoinData_mod._COIN_TO_SYMBOL_CACHE.clear()
         result = get_symbol_for_coin("BTC", "binance.swap", use_cache=False)
         assert result == "BTCUSDT"
+
+    def test_colliding_multiplier_markets_resolve_exactly_from_legacy_mapping(self, tmp_workdir):
+        """Old mapping rows with duplicate CAT names still route both Binance contracts."""
+        mapping_path = tmp_workdir / "data" / "coindata" / "binance" / "mapping.json"
+        mapping_path.parent.mkdir(parents=True)
+        mapping_path.write_text(json.dumps([
+            {
+                "symbol": "1000CATUSDT",
+                "ccxt_symbol": "1000CAT/USDT:USDT",
+                "base": "1000CAT",
+                "coin": "CAT",
+                "quote": "USDT",
+                "swap": True,
+                "linear": True,
+            },
+            {
+                "symbol": "CATUSDT",
+                "ccxt_symbol": "CAT/USDT:USDT",
+                "base": "CAT",
+                "coin": "CAT",
+                "quote": "USDT",
+                "swap": True,
+                "linear": True,
+            },
+        ]), encoding="utf-8")
+        PBCoinData_mod._COIN_TO_SYMBOL_CACHE.clear()
+
+        assert get_symbol_for_coin("1000CAT", "binance.swap", use_cache=False) == "1000CATUSDT"
+        assert get_symbol_for_coin("CAT", "binance.swap", use_cache=False) == "CATUSDT"
 
 
 # ============================================================================
@@ -2312,6 +2389,54 @@ class TestCMCEnrichment:
         shib = mapping[0]
         assert shib["cmc_id"] == 5994, "Should match SHIB in CMC via normalize_symbol"
         assert shib["market_cap"] == 12000000000
+
+    def test_build_mapping_disambiguates_cat_and_skips_tradfi_cmc(self, coindata, tmp_workdir):
+        """CAT contracts stay distinct and only the crypto contract receives CMC data."""
+        markets = {
+            "1000CAT/USDT:USDT": {
+                "id": "1000CATUSDT",
+                "base": "1000CAT",
+                "quote": "USDT",
+                "swap": True,
+                "linear": True,
+                "active": True,
+                "info": {"contractType": "PERPETUAL", "underlyingType": "COIN"},
+            },
+            "CAT/USDT:USDT": {
+                "id": "CATUSDT",
+                "base": "CAT",
+                "quote": "USDT",
+                "swap": True,
+                "linear": True,
+                "active": True,
+                "info": {"contractType": "TRADIFI_PERPETUAL", "underlyingType": "EQUITY"},
+            },
+        }
+        coindata.save_ccxt_markets("binance", markets)
+        coindata.save_exchange_mapping("binance", [
+            {"symbol": "1000CATUSDT", "price_last": 0.001},
+            {"symbol": "CATUSDT", "price_last": 900.0},
+        ])
+        coindata.data = {"data": [{
+            "id": 32724,
+            "symbol": "CAT",
+            "name": "Simon's Cat",
+            "slug": "simons-cat",
+            "cmc_rank": 860,
+            "tags": ["memes"],
+            "quote": {"USD": {"price": 0.001, "market_cap": 10_000_000, "volume_24h": 1_000_000}},
+        }]}
+        coindata.metadata = {"data": {}}
+
+        assert coindata.build_mapping("binance") is True
+        mapping = {row["symbol"]: row for row in coindata.load_exchange_mapping("binance")}
+
+        assert mapping["1000CATUSDT"]["coin"] == "1000CAT"
+        assert mapping["1000CATUSDT"]["cmc_id"] == 32724
+        assert mapping["1000CATUSDT"]["is_tradfi"] is False
+        assert mapping["CATUSDT"]["coin"] == "CAT"
+        assert mapping["CATUSDT"]["cmc_id"] is None
+        assert mapping["CATUSDT"]["is_tradfi"] is True
 
     def test_data_driven_matches_ronin_without_static_symbolmap(self, coindata, tmp_workdir):
         """RONIN resolves to CMC RON via data-driven name/slug matching."""

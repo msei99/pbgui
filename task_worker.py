@@ -14,6 +14,7 @@ import threading
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -27,9 +28,13 @@ from hyperliquid_aws import (
     download_hyperliquid_l2book_aws,
     get_hyperliquid_archive_day_range_aws,
 )
-from hyperliquid_best_1m import improve_best_hyperliquid_1m_archive_for_coin, _is_stock_perp_coin
-from binance_best_1m import improve_best_binance_1m_for_coin
-from bybit_best_1m import improve_best_bybit_1m_for_coin
+from hyperliquid_best_1m import (
+    _is_stock_perp_coin,
+    classify_hyperliquid_pre_donor_gap,
+    improve_best_hyperliquid_1m_archive_for_coin,
+)
+from binance_best_1m import get_current_market_inception_ms, improve_best_binance_1m_for_coin
+from bybit_best_1m import finalize_bybit_1m_day_for_coin, get_day_path as get_bybit_day_path, improve_best_bybit_1m_for_coin
 from bitget_best_1m import (
     DAY_MS as _BITGET_DAY_MS,
     INCEPTION_DEFAULT as _BITGET_INCEPTION_DEFAULT,
@@ -63,7 +68,32 @@ from market_data import (
     load_aws_profile_region,
     normalize_market_data_coin_dir,
 )
-from market_data_sources import get_source_codes_for_day, get_oldest_day_with_source_code, SOURCE_CODE_L2BOOK
+from market_data_sources import get_source_codes_for_day, get_oldest_day_with_source_code, remove_days_from_index, SOURCE_CODE_L2BOOK
+from market_data_integrity import (
+    SUPPORTED_EXCHANGES,
+    catalog_operation_lock,
+    bybit_storage_market_status,
+    catalog_summary,
+    compare_catalogs_readonly,
+    create_gzip_snapshot,
+    daily_missing_minutes,
+    install_reference_snapshot,
+    integrity_job_lock,
+    known_source_gap_minutes,
+    list_integrity_issues,
+    normalize_hyperliquid_fallback_envelopes,
+    record_daily_file,
+    record_proven_source_gap,
+    reference_database_path,
+    reference_operation_lock,
+    remove_catalog_before_day,
+    remove_removed_coin_data,
+    repair_coin_from_storage,
+    scan_exchange,
+    storage_market_status,
+    validation_to_dict,
+)
+from github_archive import publish_release_asset, release_asset_url
 import pbgui_purefunc
 from task_queue import (
     clear_worker_pid,
@@ -71,6 +101,7 @@ from task_queue import (
     get_task_state_dir,
     get_job_log_path,
     is_pid_running,
+    list_jobs,
     move_job_file,
     update_job_file,
     write_worker_pid,
@@ -99,6 +130,16 @@ OHLCV_COPY_EXCHANGES: dict[str, dict[str, str]] = {
     "bitget": {"label": "Bitget", "storage": "bitget"},
     "hyperliquid": {"label": "Hyperliquid", "storage": "hyperliquid"},
 }
+
+
+def _serialized_integrity_mutation(func):
+    """Keep normal builders from overlapping integrity repair or deletion jobs."""
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        with integrity_job_lock():
+            return func(*args, **kwargs)
+
+    return wrapped
 
 
 def _fmt_bytes_short(value: Any) -> str:
@@ -428,6 +469,28 @@ def _run_job(job_path: Path) -> None:
             _run_ohlcv_copy(job_path, payload, dry_run=True)
         elif jtype == "db_sync":
             _run_db_sync(job_path, payload)
+        elif jtype == "ohlcv_integrity_scan":
+            with integrity_job_lock():
+                _run_ohlcv_integrity_scan(job_path, payload)
+        elif jtype == "ohlcv_hyperliquid_normalize_fallback":
+            with integrity_job_lock():
+                _run_ohlcv_hyperliquid_normalize_fallback(job_path, payload)
+        elif jtype == "ohlcv_integrity_repair":
+            with integrity_job_lock():
+                _run_ohlcv_integrity_repair(job_path, payload)
+        elif jtype == "ohlcv_integrity_repair_all":
+            with integrity_job_lock():
+                _run_ohlcv_integrity_repair_all(job_path, payload)
+        elif jtype == "ohlcv_removed_coin_delete":
+            with integrity_job_lock():
+                _run_ohlcv_removed_coin_delete(job_path, payload)
+        elif jtype == "ohlcv_removed_coins_delete":
+            with integrity_job_lock():
+                _run_ohlcv_removed_coins_delete(job_path, payload)
+        elif jtype == "ohlcv_checksum_publish":
+            _run_ohlcv_checksum_publish(job_path, payload)
+        elif jtype == "ohlcv_checksum_reference":
+            _run_ohlcv_checksum_reference(job_path, payload)
         else:
             raise RuntimeError(f"Unknown job type: {jtype}")
 
@@ -437,6 +500,695 @@ def _run_job(job_path: Path) -> None:
         _job_log(f"job error {job_path.name}: {e}")
         mark_error(str(e))
         move_job_file(job_path, "failed")
+
+
+def _run_ohlcv_integrity_scan(job_path: Path, payload: dict[str, Any]) -> None:
+    """Populate the daily checksum catalog from existing OHLCV files."""
+    exchange = str(payload.get("exchange") or "").strip().lower()
+    if exchange not in SUPPORTED_EXCHANGES:
+        raise ValueError("Unsupported integrity scan exchange")
+    job = _load_job(job_path) or {}
+    job_id = str(job.get("id") or job_path.stem)
+    _append_to_job_log(job_id, f"Starting {exchange} OHLCV integrity scan")
+
+    def progress(value: dict[str, Any]) -> None:
+        update_job_file(job_path, mutate=lambda obj: obj.update({"progress": value}))
+
+    result = scan_exchange(
+        exchange,
+        progress_cb=progress,
+        stop_check=lambda: bool(_STOP or _is_cancel_requested(job_path)),
+    )
+    update_job_file(job_path, mutate=lambda obj: obj.update({"result": result}))
+    _append_to_job_log(
+        job_id,
+        f"Completed scan: {result['files_scanned']} files, {result['invalid_days']} invalid days",
+    )
+
+
+def _run_ohlcv_hyperliquid_normalize_fallback(job_path: Path, payload: dict[str, Any]) -> None:
+    """Normalize envelope bounds for existing Hyperliquid fallback candles."""
+    job = _load_job(job_path) or {}
+    job_id = str(job.get("id") or job_path.stem)
+    _append_to_job_log(job_id, "Starting Hyperliquid other-exchange envelope normalization")
+
+    def progress(value: dict[str, Any]) -> None:
+        update_job_file(job_path, mutate=lambda obj: obj.update({"progress": value}))
+
+    result = normalize_hyperliquid_fallback_envelopes(
+        progress_cb=progress,
+        stop_check=lambda: bool(_STOP or _is_cancel_requested(job_path)),
+        dry_run=bool(payload.get("dry_run", False)),
+    )
+    update_job_file(job_path, mutate=lambda obj: obj.update({"result": result}))
+    _append_to_job_log(
+        job_id,
+        f"Completed normalization: files={result['files_changed']}, candles={result['candles_changed']}, still_invalid={result['still_invalid']}",
+    )
+
+
+def _run_ohlcv_integrity_repair(job_path: Path, payload: dict[str, Any]) -> None:
+    """Repair and revalidate one damaged closed OHLCV day."""
+    exchange = str(payload.get("exchange") or "").strip().lower()
+    storage_coin = str(payload.get("coin") or "").strip()
+    day = str(payload.get("day") or "").strip()
+    if exchange not in SUPPORTED_EXCHANGES:
+        raise ValueError("Unsupported integrity repair exchange")
+    job = _load_job(job_path) or {}
+    job_id = str(job.get("id") or job_path.stem)
+    update_job_file(
+        job_path,
+        mutate=lambda obj: obj.update(
+            {
+                "progress": {
+                    "stage": "repairing",
+                    "step": 0,
+                    "total": 1,
+                    "exchange": exchange,
+                    "coin": storage_coin,
+                    "day": day,
+                }
+            }
+        ),
+    )
+    _append_to_job_log(job_id, f"Repairing {exchange} {storage_coin} {day}")
+    if _is_cancel_requested(job_path):
+        raise RuntimeError("cancelled")
+    result = _repair_ohlcv_integrity_day(exchange=exchange, storage_coin=storage_coin, day=day)
+    validation = result["validation"]
+    update_job_file(
+        job_path,
+        mutate=lambda obj: obj.update(
+            {
+                "result": result,
+                "progress": {
+                    "stage": "done",
+                    "step": 1,
+                    "total": 1,
+                    "exchange": exchange,
+                    "coin": storage_coin,
+                    "day": day,
+                    "last_result": result,
+                },
+            }
+        ),
+    )
+    if validation["status"] == "not_applicable":
+        _append_to_job_log(
+            job_id,
+            "Repair completed: removed "
+            f"{int(result.get('removed_pre_inception') or 0)} obsolete local day(s) before "
+            f"verified {exchange} inception {result.get('inception_day') or 'unknown'}",
+        )
+    else:
+        _append_to_job_log(job_id, f"Repair completed: {validation['candles']} candles")
+
+
+def _remove_pre_inception_data(
+    *,
+    exchange: str,
+    storage_coin: str,
+    coin_dir: Path,
+    inception_day: date,
+    extra_days: set[str] | None = None,
+) -> dict[str, int]:
+    """Remove one verified obsolete instrument generation and its indexes."""
+    pre_inception_paths: list[Path] = []
+    if coin_dir.exists():
+        for candidate in coin_dir.glob("*.npz"):
+            try:
+                candidate_day = datetime.strptime(candidate.stem, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if candidate_day >= inception_day:
+                continue
+            if candidate.is_symlink():
+                raise RuntimeError("Refusing to remove a symlinked pre-inception day")
+            if candidate.is_file():
+                pre_inception_paths.append(candidate)
+
+    pre_inception_days = {path.stem for path in pre_inception_paths}
+    pre_inception_days.update(extra_days or set())
+    for day_path in sorted(pre_inception_paths):
+        with advisory_file_lock(day_path):
+            if day_path.is_symlink():
+                raise RuntimeError("Refusing to remove a symlinked pre-inception day")
+            day_path.unlink(missing_ok=True)
+    removed_source_days = remove_days_from_index(
+        exchange=exchange,
+        coin=storage_coin,
+        days_to_remove=pre_inception_days,
+    )
+    removed_rows = remove_catalog_before_day(
+        exchange=exchange,
+        coin=storage_coin,
+        before_day=inception_day,
+    )
+    return {
+        "removed_pre_inception": len(pre_inception_paths),
+        "removed_source_days": removed_source_days,
+        "removed_catalog_rows": removed_rows,
+    }
+
+
+def _repair_ohlcv_integrity_day(*, exchange: str, storage_coin: str, day: str) -> dict[str, Any]:
+    """Repair and catalog one exact damaged day."""
+    if exchange not in SUPPORTED_EXCHANGES:
+        raise ValueError("Unsupported integrity repair exchange")
+    market = (
+        bybit_storage_market_status(storage_coin)
+        if exchange == "bybit"
+        else storage_market_status(exchange, storage_coin)
+    )
+    if market["status"] == "removed":
+        raise RuntimeError(f"{exchange} market is unavailable; repair is not applicable")
+    day_obj = datetime.strptime(day, "%Y-%m-%d").date()
+
+    if exchange != "bybit":
+        coin = repair_coin_from_storage(exchange, storage_coin)
+        if not coin:
+            raise ValueError("Invalid repair coin")
+        day_path = get_market_data_root_dir() / exchange / "1m" / storage_coin / f"{day}.npz"
+        binance_inception_day: date | None = None
+        if exchange == "binanceusdm":
+            inception_ms = get_current_market_inception_ms(coin)
+            if inception_ms is not None:
+                binance_inception_day = datetime.fromtimestamp(inception_ms / 1000, tz=timezone.utc).date()
+            if binance_inception_day is not None and day_obj < binance_inception_day:
+                with catalog_operation_lock():
+                    cleanup = _remove_pre_inception_data(
+                        exchange=exchange,
+                        storage_coin=storage_coin,
+                        coin_dir=day_path.parent,
+                        inception_day=binance_inception_day,
+                        extra_days={day},
+                    )
+                return {
+                    "repair": {"result": "not_applicable", "inception_day": binance_inception_day.isoformat()},
+                    "validation": {
+                        "status": "not_applicable",
+                        "candles": 0,
+                        "missing_minutes": 0,
+                        "sha256": "",
+                        "first_ts": None,
+                        "last_ts": None,
+                        "error": "",
+                    },
+                    "inception_day": binance_inception_day.isoformat(),
+                    **cleanup,
+                }
+        if exchange == "hyperliquid":
+            repair = improve_best_hyperliquid_1m_archive_for_coin(
+                coin=coin,
+                start_date_override=day,
+                end_date=day,
+                dry_run=False,
+                refetch=False,
+                archive_l2book=False,
+            )
+        elif exchange == "binanceusdm":
+            repair = improve_best_binance_1m_for_coin(
+                coin=coin,
+                start_date_override=day,
+                end_date=day,
+                refetch=True,
+            )
+        elif exchange == "okx":
+            repair = improve_best_okx_1m_for_coin(
+                coin=coin,
+                start_date_override=day,
+                end_date=day,
+                refetch=True,
+            )
+        else:
+            repair = improve_best_bitget_1m_for_coin(
+                coin=coin,
+                start_date_override=day,
+                end_date=day,
+                refetch=True,
+            )
+        repair_payload = repair.to_dict()
+        cleanup: dict[str, int] = {}
+        if binance_inception_day is not None and day_obj == binance_inception_day:
+            with catalog_operation_lock():
+                cleanup = _remove_pre_inception_data(
+                    exchange=exchange,
+                    storage_coin=storage_coin,
+                    coin_dir=day_path.parent,
+                    inception_day=binance_inception_day,
+                )
+        local_days = sorted(
+            path.stem
+            for path in day_path.parent.glob("*.npz")
+            if path.is_file() and not path.is_symlink()
+        )
+        validation = record_daily_file(
+            exchange=exchange,
+            coin=storage_coin,
+            day=day,
+            path=day_path,
+            allow_inception_prefix=bool(local_days and local_days[0] == day)
+            or binance_inception_day == day_obj,
+            allowed_source_gap_minutes=known_source_gap_minutes(exchange, storage_coin, day),
+        )
+        normalization: dict[str, Any] | None = None
+        if exchange == "hyperliquid" and not validation.valid:
+            normalization = normalize_hyperliquid_fallback_envelopes(
+                coin=storage_coin,
+                day=day,
+            )
+            if int(normalization.get("candles_changed") or 0) > 0:
+                validation = record_daily_file(
+                    exchange=exchange,
+                    coin=storage_coin,
+                    day=day,
+                    path=day_path,
+                )
+        source_gap: dict[str, Any] | None = None
+        if not validation.valid and exchange == "hyperliquid":
+            missing_minutes = daily_missing_minutes(day_path, day)
+            day_is_historical = day_obj <= datetime.now(timezone.utc).date() - timedelta(days=5)
+            if day_is_historical:
+                source_gap = classify_hyperliquid_pre_donor_gap(
+                    coin=coin,
+                    day=day_obj,
+                    missing_minutes=missing_minutes,
+                )
+                if not source_gap.get("eligible"):
+                    donor_checks_complete = True
+                    for source_name, prefix in (("binanceusdm", "binance"), ("bybit", "bybit")):
+                        source = (source_gap.get("sources") or {}).get(source_name, {})
+                        if source.get("status") == "absent":
+                            continue
+                        requested = int(repair_payload.get(f"{prefix}_days_requested") or 0)
+                        completed = int(repair_payload.get(f"{prefix}_days_completed") or 0)
+                        errors = int(repair_payload.get(f"{prefix}_fetch_errors") or 0)
+                        if requested <= 0 or completed != requested or errors:
+                            donor_checks_complete = False
+                            break
+                    if donor_checks_complete and len(source_gap.get("sources") or {}) == 2:
+                        source_gap = {
+                            **source_gap,
+                            "eligible": True,
+                            "reason": "external donor queries completed without the remaining minutes",
+                        }
+                if source_gap.get("eligible"):
+                    validation = record_proven_source_gap(
+                        exchange=exchange,
+                        coin=storage_coin,
+                        day=day,
+                        path=day_path,
+                    )
+        if not validation.valid:
+            raise RuntimeError(validation.error or f"Repaired {exchange} day failed integrity validation")
+        return {
+            "repair": repair_payload,
+            "validation": validation_to_dict(validation),
+            **({"normalization": normalization} if normalization is not None else {}),
+            **({"source_gap": source_gap} if source_gap and source_gap.get("eligible") else {}),
+            **({"inception_day": binance_inception_day.isoformat(), **cleanup} if binance_inception_day else {}),
+        }
+
+    suffix = "_USDT:USDT"
+    coin = storage_coin[:-len(suffix)] if storage_coin.upper().endswith(suffix) else pbgui_purefunc.coin_from_symbol_code(storage_coin)
+    if not coin:
+        raise ValueError("Invalid repair coin")
+    source_gap_minutes = known_source_gap_minutes(exchange, storage_coin, day)
+    if source_gap_minutes:
+        source_gap_path = get_bybit_day_path(coin, day)
+        validation = record_daily_file(
+            exchange=exchange,
+            coin=storage_coin,
+            day=day,
+            path=source_gap_path,
+            allowed_source_gap_minutes=source_gap_minutes,
+        )
+        if validation.valid:
+            return {
+                "repair": {"result": "known_source_gap", "path": str(source_gap_path)},
+                "validation": validation_to_dict(validation),
+            }
+    with catalog_operation_lock():
+        repair = finalize_bybit_1m_day_for_coin(
+            coin=coin,
+            day=day,
+            verify_inception_independently=True,
+        )
+        if repair.get("result") == "not_applicable":
+            inception_day = datetime.strptime(str(repair.get("inception_day") or ""), "%Y-%m-%d").date()
+            coin_dir = get_bybit_day_path(coin, inception_day.isoformat()).parent
+            cleanup = _remove_pre_inception_data(
+                exchange=exchange,
+                storage_coin=storage_coin,
+                coin_dir=coin_dir,
+                inception_day=inception_day,
+                extra_days={day},
+            )
+            return {
+                "repair": repair,
+                "validation": {
+                    "status": "not_applicable",
+                    "candles": 0,
+                    "missing_minutes": 0,
+                    "sha256": "",
+                    "first_ts": None,
+                    "last_ts": None,
+                    "error": "",
+                },
+                "inception_day": inception_day.isoformat(),
+                **cleanup,
+            }
+        if repair.get("result") != "ok":
+            raise RuntimeError(str(repair.get("error") or "Bybit day repair failed"))
+        validation = record_daily_file(
+            exchange=exchange,
+            coin=storage_coin,
+            day=day,
+            path=Path(str(repair["path"])),
+            allow_inception_prefix=int(repair.get("minutes_written") or 0) < 1440,
+        )
+    if not validation.valid:
+        raise RuntimeError(validation.error or "Repaired day failed integrity validation")
+    return {"repair": repair, "validation": validation_to_dict(validation)}
+
+
+def _run_ohlcv_integrity_repair_all(job_path: Path, payload: dict[str, Any]) -> None:
+    """Sequentially repair every damaged day while retaining individual failures."""
+    exchange = str(payload.get("exchange") or "bybit").strip().lower()
+    if exchange not in SUPPORTED_EXCHANGES:
+        raise ValueError("Unsupported integrity repair exchange")
+    job = _load_job(job_path) or {}
+    job_id = str(job.get("id") or job_path.stem)
+    coin_filter = str(payload.get("coin") or "").strip()
+    issues = list_integrity_issues(exchange=exchange, limit=1_000_000)["rows"]
+    if coin_filter:
+        issues = [issue for issue in issues if str(issue.get("coin") or "") == coin_filter]
+    total = len(issues)
+    repaired = 0
+    source_gaps = 0
+    failed = 0
+    skipped_unavailable = 0
+    removed_pre_inception = 0
+    failures: list[dict[str, str]] = []
+    scope = f" for {coin_filter}" if coin_filter else ""
+    _append_to_job_log(job_id, f"Starting repair all{scope} for {total} damaged {exchange} days")
+
+    for index, issue in enumerate(issues, start=1):
+        if _STOP or _is_cancel_requested(job_path):
+            raise RuntimeError("cancelled")
+        storage_coin = str(issue.get("coin") or "")
+        day = str(issue.get("day") or "")
+        if str(issue.get("market_status") or "") == "removed":
+            skipped_unavailable += 1
+            continue
+        progress = {
+            "stage": "repairing",
+            "step": index - 1,
+            "total": total,
+            "exchange": exchange,
+            "coin": storage_coin,
+            "day": day,
+            "repaired": repaired,
+            "source_gaps": source_gaps,
+            "failed": failed,
+            "skipped_unavailable": skipped_unavailable,
+            "removed_pre_inception": removed_pre_inception,
+        }
+        update_job_file(job_path, mutate=lambda obj, value=progress: obj.update({"progress": value}))
+        try:
+            for attempt in range(2):
+                try:
+                    result = _repair_ohlcv_integrity_day(
+                        exchange=exchange,
+                        storage_coin=storage_coin,
+                        day=day,
+                    )
+                    break
+                except Exception as exc:
+                    transient = any(token in str(exc).lower() for token in ("networkerror", "requesttimeout", "timed out", "timeout"))
+                    if attempt == 0 and transient:
+                        _append_to_job_log(job_id, f"Transient repair failure coin={storage_coin} day={day}; retrying once")
+                        time.sleep(1.0)
+                        continue
+                    raise
+            removed_now = int(result.get("removed_pre_inception") or 0)
+            if removed_now:
+                removed_pre_inception += removed_now
+                _append_to_job_log(
+                    job_id,
+                    f"Removed {removed_now} obsolete local day(s) for {storage_coin} before "
+                    f"verified {exchange} inception {result.get('inception_day') or 'unknown'}",
+                )
+            if result["validation"]["status"] == "source_gap":
+                source_gaps += 1
+            elif result["validation"]["status"] != "not_applicable":
+                repaired += 1
+            if repaired and repaired % 25 == 0:
+                _append_to_job_log(job_id, f"Repair all progress: {index}/{total}, repaired={repaired}, failed={failed}")
+        except Exception as exc:
+            failed += 1
+            if len(failures) < 500:
+                failures.append({"coin": storage_coin, "day": day, "error": str(exc)})
+            _append_to_job_log(job_id, f"Repair failed coin={storage_coin} day={day}: {exc}")
+
+    result = {
+        "exchange": exchange,
+        "coin": coin_filter,
+        "total": total,
+        "repaired": repaired,
+        "source_gaps": source_gaps,
+        "failed": failed,
+        "skipped_unavailable": skipped_unavailable,
+        "removed_pre_inception": removed_pre_inception,
+        "failures": failures,
+        "failures_truncated": failed > len(failures),
+    }
+    update_job_file(
+        job_path,
+        mutate=lambda obj: obj.update(
+            {
+                "result": result,
+                "progress": {
+                    "stage": "done",
+                    "step": total,
+                    "total": total,
+                    "exchange": exchange,
+                    "repaired": repaired,
+                    "source_gaps": source_gaps,
+                    "failed": failed,
+                    "skipped_unavailable": skipped_unavailable,
+                    "removed_pre_inception": removed_pre_inception,
+                },
+            }
+        ),
+    )
+    _append_to_job_log(
+        job_id,
+        f"Repair all completed: repaired={repaired}, source_gaps={source_gaps}, failed={failed}, "
+        f"skipped_unavailable={skipped_unavailable}, removed_pre_inception={removed_pre_inception}",
+    )
+    if failed:
+        raise RuntimeError(f"Repair all completed partially with {failed} failed day(s)")
+
+
+def _run_ohlcv_removed_coin_delete(job_path: Path, payload: dict[str, Any]) -> None:
+    """Delete all PBGui OHLCV data for one market revalidated as removed."""
+    exchange = str(payload.get("exchange") or "").strip().lower()
+    coin = str(payload.get("coin") or "").strip()
+    job = _load_job(job_path) or {}
+    job_id = str(job.get("id") or job_path.stem)
+    update_job_file(
+        job_path,
+        mutate=lambda obj: obj.update(
+            {"progress": {"stage": "removing", "step": 0, "total": 1, "exchange": exchange, "coin": coin}}
+        ),
+    )
+    _append_to_job_log(job_id, f"Removing PBGui OHLCV data for removed market {exchange} {coin}")
+    if _STOP or _is_cancel_requested(job_path):
+        raise RuntimeError("cancelled")
+    result = remove_removed_coin_data(exchange=exchange, coin=coin)
+    update_job_file(
+        job_path,
+        mutate=lambda obj: obj.update(
+            {
+                "result": result,
+                "progress": {
+                    "stage": "done",
+                    "step": 1,
+                    "total": 1,
+                    "exchange": exchange,
+                    "coin": coin,
+                },
+            }
+        ),
+    )
+    _append_to_job_log(
+        job_id,
+        f"Removed {result['files']} files and {result['catalog_rows']} catalog rows for {coin}",
+    )
+
+
+def _run_ohlcv_removed_coins_delete(job_path: Path, payload: dict[str, Any]) -> None:
+    """Delete selected unavailable markets sequentially while retaining partial results."""
+    exchange = str(payload.get("exchange") or "").strip().lower()
+    raw_coins = payload.get("coins")
+    if exchange not in SUPPORTED_EXCHANGES:
+        raise ValueError("Unsupported removed-market batch exchange")
+    if not isinstance(raw_coins, list):
+        raise ValueError("Removed-market batch coins are required")
+    coins = list(dict.fromkeys(str(coin or "").strip() for coin in raw_coins if str(coin or "").strip()))
+    if not coins:
+        raise ValueError("Removed-market batch coins are required")
+    job = _load_job(job_path) or {}
+    job_id = str(job.get("id") or job_path.stem)
+    removed = 0
+    files = 0
+    total_bytes = 0
+    catalog_rows = 0
+    failures: list[dict[str, str]] = []
+    _append_to_job_log(job_id, f"Removing {len(coins)} unavailable {exchange} markets")
+
+    for index, coin in enumerate(coins, start=1):
+        if _STOP or _is_cancel_requested(job_path):
+            raise RuntimeError("cancelled")
+        progress = {
+            "stage": "removing",
+            "step": index - 1,
+            "total": len(coins),
+            "exchange": exchange,
+            "coin": coin,
+            "removed": removed,
+            "failed": len(failures),
+            "files": files,
+            "bytes": total_bytes,
+        }
+        update_job_file(job_path, mutate=lambda obj, value=progress: obj.update({"progress": value}))
+        try:
+            result = remove_removed_coin_data(exchange=exchange, coin=coin)
+            removed += 1
+            files += int(result.get("files") or 0)
+            total_bytes += int(result.get("bytes") or 0)
+            catalog_rows += int(result.get("catalog_rows") or 0)
+            _append_to_job_log(job_id, f"Removed unavailable market {exchange} {coin}")
+        except Exception as exc:
+            failures.append({"coin": coin, "error": str(exc)})
+            _append_to_job_log(job_id, f"Failed to remove unavailable market {exchange} {coin}: {exc}")
+
+    result = {
+        "exchange": exchange,
+        "total": len(coins),
+        "removed": removed,
+        "failed": len(failures),
+        "files": files,
+        "bytes": total_bytes,
+        "catalog_rows": catalog_rows,
+        "failures": failures,
+    }
+    update_job_file(
+        job_path,
+        mutate=lambda obj: obj.update(
+            {
+                "result": result,
+                "progress": {
+                    "stage": "done",
+                    "step": len(coins),
+                    "total": len(coins),
+                    "exchange": exchange,
+                    "removed": removed,
+                    "failed": len(failures),
+                    "files": files,
+                    "bytes": total_bytes,
+                },
+            }
+        ),
+    )
+    _append_to_job_log(
+        job_id,
+        f"Unavailable-market batch completed: removed={removed}, failed={len(failures)}, files={files}",
+    )
+    if failures:
+        raise RuntimeError(f"Unavailable-market batch completed partially with {len(failures)} failed market(s)")
+
+
+def _run_ohlcv_checksum_publish(job_path: Path, payload: dict[str, Any]) -> None:
+    """Publish a consistent checksum snapshot to the selected own archive."""
+    archive_name = str(payload.get("archive") or "").strip()
+    if not archive_name:
+        raise ValueError("Publish archive is required")
+    job = _load_job(job_path) or {}
+    job_id = str(job.get("id") or job_path.stem)
+    publish_root = get_market_data_root_dir() / "_publish"
+    output = publish_root / job_id / "checksums.sqlite.gz"
+    with advisory_file_lock(publish_root / ".operation"):
+        update_job_file(job_path, mutate=lambda obj: obj.update({"progress": {"stage": "snapshot", "step": 0, "total": 2}}))
+        _append_to_job_log(job_id, f"Creating checksum snapshot for archive {archive_name}")
+        try:
+            with catalog_operation_lock():
+                _require_checksum_publish_ready(job_path)
+                snapshot = create_gzip_snapshot(output_path=output)
+            update_job_file(job_path, mutate=lambda obj: obj.update({"progress": {"stage": "uploading", "step": 1, "total": 2}}))
+            published = publish_release_asset(archive_name=archive_name, asset_path=output)
+            result = {"snapshot": {key: snapshot[key] for key in ("bytes", "sha256")}, "published": published}
+            update_job_file(
+                job_path,
+                mutate=lambda obj: obj.update({"result": result, "progress": {"stage": "done", "step": 2, "total": 2}}),
+            )
+            _append_to_job_log(job_id, f"Published checksum snapshot to {published['repository']}")
+        finally:
+            output.unlink(missing_ok=True)
+            try:
+                output.parent.rmdir()
+            except OSError:
+                pass
+
+
+def _require_checksum_publish_ready(job_path: Path) -> None:
+    """Reject snapshots while the catalog is incomplete or being mutated."""
+    incomplete = [
+        exchange
+        for exchange in SUPPORTED_EXCHANGES
+        if not bool(catalog_summary(exchange=exchange).get("initial_scan_complete"))
+    ]
+    if incomplete:
+        raise RuntimeError(f"Initial OHLCV integrity scans are incomplete: {', '.join(incomplete)}")
+    current_id = str((_load_job(job_path) or {}).get("id") or job_path.stem)
+    for job in list_jobs(states=["pending", "running"], limit=0):
+        if str(job.get("id") or "") == current_id:
+            continue
+        if str(job.get("type") or "") in {
+            "ohlcv_integrity_scan",
+            "ohlcv_hyperliquid_normalize_fallback",
+            "ohlcv_integrity_repair",
+            "ohlcv_integrity_repair_all",
+            "ohlcv_removed_coin_delete",
+            "ohlcv_removed_coins_delete",
+        }:
+            raise RuntimeError("OHLCV integrity data is currently being updated")
+
+
+def _run_ohlcv_checksum_reference(job_path: Path, payload: dict[str, Any]) -> None:
+    """Refresh and compare the selected public checksum reference archive."""
+    archive_name = str(payload.get("archive") or "").strip()
+    if not archive_name:
+        raise ValueError("Reference archive is required")
+    job = _load_job(job_path) or {}
+    job_id = str(job.get("id") or job_path.stem)
+    update_job_file(job_path, mutate=lambda obj: obj.update({"progress": {"stage": "downloading", "step": 0, "total": 2}}))
+    _append_to_job_log(job_id, f"Downloading public checksum reference from archive {archive_name}")
+    reference_path = reference_database_path()
+    with reference_operation_lock(reference_path):
+        installed = install_reference_snapshot(url=release_asset_url(archive_name))
+        update_job_file(job_path, mutate=lambda obj: obj.update({"progress": {"stage": "comparing", "step": 1, "total": 2}}))
+        comparison = compare_catalogs_readonly(reference_path=reference_path)
+    result = {"reference": installed, "comparison": comparison}
+    update_job_file(
+        job_path,
+        mutate=lambda obj: obj.update({"result": result, "progress": {"stage": "done", "step": 2, "total": 2}}),
+    )
+    _append_to_job_log(
+        job_id,
+        f"Reference comparison complete: {comparison['counts']['mismatch']} checksum mismatches",
+    )
 
 
 def start_pending_job(job_id: str) -> tuple[bool, str]:
@@ -1345,6 +2097,7 @@ def _run_hl_aws_l2book_auto(job_path: Path, payload: dict[str, Any]) -> None:
                 )
 
 
+@_serialized_integrity_mutation
 def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
     started_ts = time.time()
     job_id = job_path.stem
@@ -1531,6 +2284,7 @@ def _run_hl_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
     _append_to_job_log(job_id, f"job finished  duration={int(time.time()-started_ts)}s")
 
 
+@_serialized_integrity_mutation
 def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
     started_ts = time.time()
     job_id = job_path.stem
@@ -1657,6 +2411,7 @@ def _run_binance_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
     _append_to_job_log(job_id, f"job finished  duration={int(time.time()-started_ts)}s")
 
 
+@_serialized_integrity_mutation
 def _run_bybit_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
     started_ts = time.time()
     job_id = job_path.stem
@@ -2694,6 +3449,7 @@ def _run_bitget_best_1m_distributed(job_path: Path, payload: dict[str, Any]) -> 
     _append_to_job_log(job_id, f"job finished  duration={int(time.time()-started_ts)}s  distributed=1")
 
 
+@_serialized_integrity_mutation
 def _run_bitget_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
     started_ts = time.time()
     job_id = job_path.stem
@@ -2811,6 +3567,7 @@ def _run_bitget_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
     _append_to_job_log(job_id, f"job finished  duration={int(time.time()-started_ts)}s")
 
 
+@_serialized_integrity_mutation
 def _run_okx_best_1m(job_path: Path, payload: dict[str, Any]) -> None:
     started_ts = time.time()
     job_id = job_path.stem

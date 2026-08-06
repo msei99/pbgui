@@ -1,7 +1,7 @@
 # Plan: OHLCV-Vollständigkeit und Checksummen
 
-Status: teilweise umgesetzt  
-Stand: 2026-08-03
+Status: umgesetzt; bekannte Dateien noch nicht repariert
+Stand: 2026-08-04
 
 ## Ziel
 
@@ -18,64 +18,67 @@ Checksum-Datei auf anderen Hosts vergleichen können.
 
 Die 71 beschädigten Dateien wurden noch nicht verändert.
 
-## Noch umzusetzen
+## Umsetzung
 
 ### 1. Prüfsystem und Checksum-Datenbank fertigstellen
 
-- [ ] Eine zentrale SQLite-Datenbank `data/ohlcv/checksums.sqlite` für alle Exchanges verwenden.
-- [ ] Eine Tabelle mit `exchange`, `timeframe`, `coin`, `day`, `candles`, `missing_minutes`, `status`, `sha256` und `validated_at` anlegen.
-- [ ] Pro Coin und Tag genau einen Eintrag speichern.
-- [ ] Vorhandene Tagesdateien einmalig über einen Market-Data-Task-Worker-Job prüfen und den Zustand eintragen.
-- [ ] Der Market-Data-Task-Worker reiht den Scan nach einem Update automatisch genau einmal ein, wenn der Abschlussmarker für die aktuelle Prüfschema-Version fehlt.
-- [ ] Einen abgebrochenen Scan später automatisch erneut versuchen und erst nach vollständigem Abschluss markieren.
-- [ ] Fortschritt und Stop im Market-Data-GUI anzeigen; der Scan blockiert keinen API- oder PBData-Start.
-- [ ] SHA-256 über den sortierten Candle-Inhalt berechnen.
+- [x] Eine zentrale SQLite-Datenbank `data/ohlcv/checksums.sqlite` verwenden; Bybit besitzt Repair-/Finalisierungsintegration und Hyperliquid nutzt seinen vorhandenen Improve-/Fallback-Pfad für Repair.
+- [x] Scans, Findings, Repair und Referenzvergleiche auf Binance USDM, OKX, Bitget und Hyperliquid Crypto erweitern.
+- [x] Hyperliquid XYZ/TradFi bis zur session-aware Prüfung aus dem Crypto-Scan ausschließen.
+- [x] Neue Exchange-Scans wegen rund 1,8 Millionen Tagesdateien manuell und serialisiert starten.
+- [x] Eine Tabelle mit `exchange`, `timeframe`, `coin`, `day`, `candles`, `missing_minutes`, `status`, `sha256` und `validated_at` anlegen.
+- [x] Pro Coin und Tag genau einen Eintrag speichern.
+- [x] Vorhandene Tagesdateien einmalig über einen Market-Data-Task-Worker-Job prüfen und den Zustand eintragen.
+- [x] Der Market-Data-Task-Worker reiht den Scan nach einem Update automatisch genau einmal ein, wenn der Abschlussmarker für die aktuelle Prüfschema-Version fehlt.
+- [x] Einen abgebrochenen Scan später automatisch erneut versuchen und erst nach vollständigem Abschluss markieren.
+- [x] Fortschritt und Stop im Market-Data-GUI anzeigen; der Scan blockiert keinen API- oder PBData-Start.
+- [x] SHA-256 über den sortierten Candle-Inhalt berechnen.
 
 Primärschlüssel: `(exchange, timeframe, coin, day)`
 
 ### 2. Vortag einmal täglich prüfen
 
-- [ ] Der stündliche Refresh aktualisiert nur den laufenden Tag.
-- [ ] PBData prüft beim ersten Lauf nach `00:15 UTC` den Vortag einmal.
-- [ ] Nur unvollständige Vortage stündlich erneut versuchen.
-- [ ] Prüfergebnis und Checksumme in SQLite aktualisieren.
-- [ ] Den letzten erfolgreich geprüften Tag über Neustarts hinweg speichern.
+- [x] Der stündliche Refresh aktualisiert nur den laufenden Tag.
+- [x] PBData prüft beim ersten Lauf nach `00:15 UTC` den Vortag einmal.
+- [x] Nur unvollständige Vortage stündlich erneut versuchen.
+- [x] Prüfergebnis und Checksumme in SQLite aktualisieren.
+- [x] Den letzten erfolgreich geprüften Tag über Neustarts hinweg speichern.
 
 ### 3. Schäden im GUI anzeigen und reparieren
 
-- [ ] Im Market-Data-GUI beschädigte Tage mit Exchange, Coin, Datum und fehlenden Minuten anzeigen.
-- [ ] Eine Aktion `Repair` anbieten, die fehlende Candles über den Market-Data-Task-Worker erneut lädt.
-- [ ] Reparierte Daten erst speichern, wenn der komplette Tag danach gültig ist.
-- [ ] Nach der Reparatur Status und Checksumme erneut berechnen.
+- [x] Im Market-Data-GUI beschädigte Tage mit Exchange, Coin, Datum und fehlenden Minuten anzeigen.
+- [x] Eine Aktion `Repair` anbieten, die fehlende Candles über den Market-Data-Task-Worker erneut lädt.
+- [x] Reparierte Daten erst speichern, wenn der komplette Tag danach gültig ist.
+- [x] Nach der Reparatur Status und Checksumme erneut berechnen.
 
 ### 4. Bekannte Gaps über das GUI reparieren
 
 - [ ] Die 71 bekannten Gaps mit demselben normalen Repair-Ablauf bearbeiten.
-- [ ] Nicht reparierbare Tage im GUI sichtbar lassen.
+- [x] Nicht reparierbare Tage im GUI sichtbar lassen.
 
 ### 5. Referenz über GitHub bereitstellen
 
-- [ ] In Market Data die Option `Publish checksum snapshot` ergänzen; Standard ist aus.
-- [ ] Mit `Publish archive` ein eigenes beschreibbares GitHub-Archive auswählen.
-- [ ] Mit `Reference archive` unabhängig davon ein beliebiges konfiguriertes öffentliches Archive für Vergleiche auswählen.
-- [ ] Publish und Compare getrennt behandeln, damit ein Benutzer nur dein Archive als Referenz verwenden kann.
-- [ ] Archive-Zugangsdaten nicht in Market Data speichern, sondern nur den Archive-Namen referenzieren.
-- [ ] Mit der SQLite-Backup-API einen konsistenten Snapshot für die Veröffentlichung erzeugen.
-- [ ] Das bereits konfigurierte eigene Config-/Optimize-Archive als GitHub-Repository verwenden.
-- [ ] Den Snapshot nicht in den Git-Verlauf committen, sondern einmal täglich als Release-Asset `checksums.sqlite.gz` veröffentlichen.
-- [ ] Einen festen Release-Tag `checksums-latest` verwenden und dessen Asset täglich ersetzen.
-- [ ] Repository-URL und serverseitigen Schreibzugang aus der bestehenden My-Archive-Konfiguration verwenden.
-- [ ] Für tokenlosen Download durch Optimizer muss das Archive-Repository öffentlich sein.
-- [ ] Der Token bleibt serverseitig und erscheint nie in URLs oder Logs.
-- [ ] Der Snapshot enthält keine Benutzer-, Host- oder Zugangsdaten.
+- [x] In Market Data die Option `Publish checksum snapshot` ergänzen; Standard ist aus.
+- [x] Mit `Publish archive` ein eigenes beschreibbares GitHub-Archive auswählen.
+- [x] Mit `Reference archive` unabhängig davon ein beliebiges konfiguriertes öffentliches Archive für Vergleiche auswählen.
+- [x] Publish und Compare getrennt behandeln, damit ein Benutzer nur dein Archive als Referenz verwenden kann.
+- [x] Archive-Zugangsdaten nicht in Market Data speichern, sondern nur den Archive-Namen referenzieren.
+- [x] Mit der SQLite-Backup-API einen konsistenten Snapshot für die Veröffentlichung erzeugen.
+- [x] Das bereits konfigurierte eigene Config-/Optimize-Archive als GitHub-Repository verwenden.
+- [x] Den Snapshot nicht in den Git-Verlauf committen, sondern einmal täglich als Release-Asset `checksums.sqlite.gz` veröffentlichen.
+- [x] Einen festen Release-Tag `checksums-latest` verwenden und dessen Asset täglich ersetzen.
+- [x] Repository-URL und serverseitigen Schreibzugang aus der bestehenden My-Archive-Konfiguration verwenden.
+- [x] Für tokenlosen Download durch Optimizer muss das Archive-Repository öffentlich sein.
+- [x] Der Market-Data-Publisher übergibt den Token nur serverseitig über `GH_TOKEN`; er erscheint nicht in Task-Payloads, URLs oder Logs.
+- [x] Der Snapshot enthält keine Benutzer-, Host- oder Zugangsdaten.
 
 ### 6. Optimizer und andere Benutzer vergleichen
 
-- [ ] Optimizer laden `checksums.sqlite.gz` einmal täglich direkt über die öffentliche GitHub-Release-URL.
-- [ ] Dafür ist weder eine Cluster-Mitgliedschaft noch ein GitHub-Token erforderlich.
-- [ ] Das im Market-Data-Feld `Reference archive` gewählte Archive als Downloadquelle verwenden.
-- [ ] Heruntergeladene Referenz und lokale Checksum-Datenbank getrennt speichern und read-only vergleichen.
-- [ ] Fehlende Coins, andere Candle-Anzahlen und abweichende Checksummen anzeigen.
+- [x] Optimizer laden `checksums.sqlite.gz` einmal täglich direkt über die öffentliche GitHub-Release-URL.
+- [x] Dafür ist weder eine Cluster-Mitgliedschaft noch ein GitHub-Token erforderlich.
+- [x] Das im Market-Data-Feld `Reference archive` gewählte Archive als Downloadquelle verwenden.
+- [x] Heruntergeladene Referenz und lokale Checksum-Datenbank getrennt speichern und read-only vergleichen.
+- [x] Fehlende Coins, andere Candle-Anzahlen und abweichende Checksummen anzeigen.
 
 ## Prüfregeln
 
@@ -93,6 +96,8 @@ Erstnotierungstage dürfen später beginnen, müssen danach aber lückenlos sein
 - kein Merkle-Tree oder Signatursystem,
 - keine Migration auf das PB8-Speicherformat,
 - keine PB8-Tabellen für Symbole, Gaps oder Fetch-Logs.
+- keine pauschale Synthese fehlender Candles, wenn weder die Exchange noch ein definierter Fallback Daten liefert,
+- keine 24x7-Prüfung für Hyperliquid XYZ/TradFi ohne Session-Kalender.
 
 ## Fertig wenn
 

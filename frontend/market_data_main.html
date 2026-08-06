@@ -1854,6 +1854,108 @@
     .settings-subsection-hidden {
       display: none !important;
     }
+    .integrity-settings-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(240px, 1fr));
+      gap: var(--sp-md);
+    }
+    .integrity-table-wrap {
+      max-height: 52vh;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .integrity-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .integrity-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: var(--sp-sm);
+      text-align: left;
+      background: var(--bg2);
+      border-bottom: 2px solid var(--border);
+    }
+    .integrity-table td {
+      padding: var(--sp-sm);
+      border-bottom: 1px solid var(--border);
+    }
+    .integrity-table td:first-child { border-left: 3px solid transparent; }
+    #integrity-removed-coins tr[data-integrity-removed-row] { cursor: pointer; user-select: none; }
+    #integrity-removed-coins tr.selected td { background: rgba(77,166,255,.12); }
+    #integrity-removed-coins tr.selected td:first-child { border-left-color: var(--accent); }
+    .integrity-empty { padding: var(--sp-lg); color: var(--muted); }
+    .integrity-action-group { display: flex; gap: var(--sp-xs); flex-wrap: wrap; }
+    .integrity-gap-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 20000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: var(--sp-lg);
+      background: rgba(3, 8, 15, .82);
+      backdrop-filter: blur(3px);
+    }
+    .integrity-gap-backdrop[hidden] { display: none; }
+    .integrity-gap-dialog {
+      width: min(1080px, 100%);
+      max-height: calc(100vh - 2 * var(--sp-lg));
+      overflow: auto;
+      padding: var(--sp-lg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg2);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, .5);
+    }
+    .integrity-gap-controls { display: flex; align-items: end; gap: var(--sp-md); flex-wrap: wrap; }
+    .integrity-gap-controls label { min-width: 180px; }
+    .integrity-gap-summary { margin: var(--sp-md) 0; }
+    .integrity-gap-legend { display: flex; gap: var(--sp-md); flex-wrap: wrap; margin-bottom: var(--sp-sm); color: var(--muted); }
+    .integrity-gap-legend span { display: inline-flex; align-items: center; gap: var(--sp-xs); }
+    .integrity-gap-swatch { width: 12px; height: 12px; border-radius: 2px; }
+    .integrity-gap-chart { min-width: 650px; display: grid; gap: 3px; }
+    .integrity-gap-hour { display: grid; grid-template-columns: 42px repeat(60, minmax(4px, 1fr)); gap: 1px; align-items: center; }
+    .integrity-gap-hour-label { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .integrity-gap-cell { height: 9px; border-radius: 1px; background: rgba(72, 187, 120, .72); }
+    .integrity-gap-cell.leading { background: rgba(236, 201, 75, .82); }
+    .integrity-gap-cell.internal { background: rgba(245, 101, 101, .9); }
+    .integrity-gap-cell.trailing { background: rgba(237, 137, 54, .88); }
+    .integrity-gap-cell.missing-day { background: rgba(197, 48, 48, .92); }
+    .integrity-gap-chart-wrap { overflow-x: auto; padding-bottom: var(--sp-sm); }
+    .integrity-gap-ranges { margin-top: var(--sp-md); }
+    .integrity-day-context-wrap { overflow-x: auto; margin: var(--sp-md) 0; }
+    .integrity-day-context { min-width: 720px; display: grid; gap: 3px; }
+    .integrity-context-day {
+      display: grid;
+      grid-template-columns: 96px minmax(320px, 1fr) 72px 150px;
+      align-items: center;
+      gap: var(--sp-sm);
+      width: 100%;
+      padding: 4px 7px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      color: var(--text);
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+    .integrity-context-day:hover:not(:disabled) { background: rgba(77, 166, 255, .08); }
+    .integrity-context-day.selected { border-color: var(--accent); background: rgba(77, 166, 255, .12); }
+    .integrity-context-day:disabled { cursor: default; opacity: .58; }
+    .integrity-context-hours { display: grid; grid-template-columns: repeat(24, minmax(5px, 1fr)); gap: 2px; }
+    .integrity-context-hour { height: 12px; border-radius: 2px; background: rgba(72, 187, 120, .72); }
+    .integrity-context-hour.partial { background: rgba(237, 137, 54, .88); }
+    .integrity-context-hour.missing { background: rgba(197, 48, 48, .75); }
+    .integrity-context-meta { color: var(--muted); font-variant-numeric: tabular-nums; }
+    @media (max-width: 760px) {
+      .integrity-settings-grid { grid-template-columns: 1fr; }
+      .integrity-table { min-width: 720px; }
+      .integrity-gap-backdrop { padding: var(--sp-sm); }
+      .integrity-gap-dialog { max-height: calc(100vh - 2 * var(--sp-sm)); padding: var(--sp-md); }
+    }
 
     .settings-grid {
       display: grid;
@@ -2822,6 +2924,7 @@
           <button class="sb-btn" id="btn-panel-settings" data-panel="settings-panel">Settings</button>
           <button class="sb-btn" id="btn-panel-status" data-panel="status-panel">Status Monitor</button>
           <button class="sb-btn" id="btn-panel-inventory" data-panel="inventory-panel">OHLCV Data</button>
+          <button class="sb-btn" id="btn-panel-integrity" data-panel="integrity-panel">OHLCV Integrity</button>
           <div id="inventory-subsection-nav" hidden>
             <button class="sb-btn inventory-subsection-btn" id="btn-inventory-view-1m" type="button">1m</button>
             <button class="sb-btn inventory-subsection-btn" id="btn-inventory-view-1m-api" type="button" hidden>1m_api</button>
@@ -3109,6 +3212,123 @@
         </article>
       </section>
 
+      <section class="content-panel" id="integrity-panel" hidden>
+        <div class="stack">
+          <article class="panel-card">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">Daily Checksums</div>
+                <h2>OHLCV Integrity</h2>
+                <p class="note" id="integrity-description">Validate closed daily files and compare this catalog with a public archive reference.</p>
+              </div>
+              <div class="panel-actions">
+                <button class="btn secondary" id="btn-integrity-normalize-hl" type="button" hidden>Normalize fallback candles</button>
+                <button class="btn primary" id="btn-integrity-scan" type="button">Run full scan</button>
+              </div>
+            </div>
+            <div id="integrity-feedback" class="callout" hidden></div>
+            <div class="summary-grid" id="integrity-summary"></div>
+          </article>
+
+          <article class="panel-card" id="integrity-removed-card">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">Removed Markets</div>
+                <h3>Unavailable Coin Data</h3>
+                <p class="note" id="integrity-removed-note">Local PBGui OHLCV data for markets that are absent or inactive in the current mapping.</p>
+              </div>
+              <div class="panel-actions">
+                <span class="note" id="integrity-removed-count">0 removed markets</span>
+                <button class="btn danger" id="btn-integrity-remove-selected" type="button" disabled>Remove selected</button>
+                <button class="btn danger" id="btn-integrity-remove-all" type="button" disabled>Remove all</button>
+              </div>
+            </div>
+            <div class="integrity-table-wrap">
+              <table class="integrity-table">
+                <thead><tr><th>Exchange</th><th>Coin</th><th>Files</th><th>Size</th><th>From</th><th>To</th><th>Status</th><th>Action</th></tr></thead>
+                <tbody id="integrity-removed-coins"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="panel-card">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">Checksum Sharing</div>
+                <h3>Archive Settings</h3>
+                <p class="note">Publishing uses your writable archive. Reference comparison may use any configured public GitHub archive.</p>
+              </div>
+            </div>
+            <div class="integrity-settings-grid">
+              <label class="settings-toggle">
+                <input id="integrity-publish-enabled" type="checkbox">
+                Publish checksum snapshot daily
+              </label>
+              <label class="settings-field">
+                <span class="field-label">Publish archive</span>
+                <select id="integrity-publish-archive"></select>
+              </label>
+              <label class="settings-field">
+                <span class="field-label">Reference archive</span>
+                <select id="integrity-reference-archive"></select>
+              </label>
+            </div>
+            <div class="panel-actions">
+              <button class="btn primary" id="btn-integrity-save" type="button">Save archive settings</button>
+              <button class="btn secondary" id="btn-integrity-publish" type="button">Publish now</button>
+              <button class="btn secondary" id="btn-integrity-reference" type="button">Refresh reference</button>
+            </div>
+          </article>
+
+          <article class="panel-card">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">Damaged Days</div>
+                <h3 id="integrity-issues-title">Repair Queue</h3>
+                <p class="note" id="integrity-issues-note">Each row groups all damaged days for one coin. Repair coin processes those days sequentially with strict validation. For Bybit, a verified newer inception automatically removes obsolete local pre-inception data.</p>
+              </div>
+              <div class="panel-actions">
+              <span class="note" id="integrity-issue-count">0 repairable days</span>
+                <button class="btn primary" id="btn-integrity-repair-all" type="button" disabled>Repair all</button>
+              </div>
+            </div>
+            <div class="integrity-table-wrap">
+              <table class="integrity-table">
+                <thead><tr><th>Exchange</th><th>Coin</th><th>Damaged Days</th><th>Date Range</th><th>Missing</th><th>Reasons</th><th>Action</th></tr></thead>
+                <tbody id="integrity-issues"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="panel-card">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">Reference Differences</div>
+                <h3>Local vs Public Archive</h3>
+                <p class="note">Shows missing days and checksum or candle-count mismatches from the installed reference.</p>
+              </div>
+              <span class="note" id="integrity-difference-count">0 differences</span>
+            </div>
+            <div class="integrity-table-wrap">
+              <table class="integrity-table">
+                <thead><tr><th>Kind</th><th>Exchange</th><th>Coin</th><th>Day</th></tr></thead>
+                <tbody id="integrity-differences"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="best1m-job-monitor-shell">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">Queue</div>
+                <h3>Integrity Job Monitor</h3>
+              </div>
+            </div>
+            <iframe class="best1m-job-monitor-frame" id="integrity-job-monitor-frame" title="OHLCV Integrity Job Monitor" loading="lazy" scrolling="no"></iframe>
+          </article>
+        </div>
+      </section>
+
       <section class="content-panel" id="best1m-panel" hidden>
         <article class="panel-card best1m-shell best1m-panel-generic" id="best1m-generic-panel" hidden>
           <div id="best1m-feedback" class="callout" hidden></div>
@@ -3358,6 +3578,48 @@
     </main>
   </div>
 
+  <div class="integrity-gap-backdrop" id="integrity-gap-modal" role="dialog" aria-modal="true" aria-labelledby="integrity-gap-title" hidden>
+    <div class="integrity-gap-dialog">
+      <div class="panel-head">
+        <div>
+          <div class="eyebrow">Minute Coverage</div>
+          <h2 id="integrity-gap-title">OHLCV Gap Details</h2>
+          <p class="note" id="integrity-gap-subtitle"></p>
+        </div>
+        <button class="btn secondary" id="btn-integrity-gap-close" type="button">Close</button>
+      </div>
+      <div class="integrity-gap-controls">
+        <label>Damaged day
+          <select id="integrity-gap-day"></select>
+        </label>
+      </div>
+      <div class="callout" id="integrity-gap-feedback" hidden></div>
+      <div class="summary-grid integrity-gap-summary" id="integrity-gap-summary"></div>
+      <div>
+        <div class="eyebrow">Surrounding Days</div>
+        <p class="note">Seven days before and after the selected day. Click an available day for minute details.</p>
+        <div class="integrity-day-context-wrap">
+          <div class="integrity-day-context" id="integrity-day-context"></div>
+        </div>
+      </div>
+      <div class="integrity-gap-legend">
+        <span><i class="integrity-gap-swatch integrity-gap-cell"></i>Present</span>
+        <span><i class="integrity-gap-swatch integrity-gap-cell leading"></i>Leading / possible inception</span>
+        <span><i class="integrity-gap-swatch integrity-gap-cell internal"></i>Internal gap</span>
+        <span><i class="integrity-gap-swatch integrity-gap-cell trailing"></i>Trailing gap</span>
+      </div>
+      <div class="integrity-gap-chart-wrap">
+        <div class="integrity-gap-chart" id="integrity-gap-chart"></div>
+      </div>
+      <div class="integrity-table-wrap integrity-gap-ranges">
+        <table class="integrity-table">
+          <thead><tr><th>Kind</th><th>Start</th><th>End</th><th>Minutes</th><th>Assessment</th></tr></thead>
+          <tbody id="integrity-gap-ranges"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div id="data-tip-tooltip"></div>
   <div id="toast-stack"></div>
 
@@ -3397,6 +3659,7 @@
         { buttonId: 'btn-panel-settings', panelId: 'settings-panel', label: 'Settings' },
         { buttonId: 'btn-panel-status', panelId: 'status-panel', label: 'Status Monitor' },
         { buttonId: 'btn-panel-inventory', panelId: 'inventory-panel', label: 'OHLCV Data' },
+        { buttonId: 'btn-panel-integrity', panelId: 'integrity-panel', label: 'OHLCV Integrity' },
         { buttonId: null, panelId: 'best1m-panel', label: 'Build Best 1m' },
         { buttonId: 'btn-panel-copy-data', panelId: 'copy-data-panel', label: 'Copy Data' },
         { buttonId: 'btn-panel-activity', panelId: 'activity-panel', label: 'Activity Log' }
@@ -3428,6 +3691,30 @@
         activeSubsection: 'normal',
         baselineRequest: '',
         isDirty: false
+      };
+      var integrityState = {
+        settings: null,
+        status: null,
+        exchange: 'bybit',
+        issues: [],
+        removedCoins: [],
+        removedMappingStatus: '',
+        removedMappingReason: '',
+        selectedRemovedCoins: new Set(),
+        removedDragStart: null,
+        removedDragSelecting: false,
+        removedDragMode: null,
+        requestId: 0,
+        saving: false,
+        reloadAfterSave: false,
+        hadActiveJob: false,
+        pollTimer: null
+      };
+      var integrityDetailState = {
+        requestId: 0,
+        exchange: '',
+        coin: '',
+        days: []
       };
       var best1mState = {
         exchange: '',
@@ -3921,6 +4208,660 @@
         if (forceReload === true || frame.dataset.src !== nextSrc) {
           frame.dataset.src = nextSrc;
           frame.src = nextSrc;
+        }
+      }
+
+      function mountIntegrityJobMonitor(forceReload) {
+        var frame = document.getElementById('integrity-job-monitor-frame');
+        if (!frame) return;
+        var meta = getExchangeMeta(uiState.contextExchange);
+        var jobTypes = 'ohlcv_integrity_scan,ohlcv_integrity_repair,ohlcv_integrity_repair_all,ohlcv_removed_coin_delete,ohlcv_removed_coins_delete';
+        if (meta.statusKey === 'hyperliquid') jobTypes += ',ohlcv_hyperliquid_normalize_fallback';
+        if (meta.statusKey === 'bybit') jobTypes += ',ohlcv_checksum_publish,ohlcv_checksum_reference';
+        var url = '/app/jobs_monitor.html?v=' + encodeURIComponent(PBGUI_SERIAL || '0')
+          + '&embed=1'
+          + '&exchange=' + encodeURIComponent(meta.statusKey)
+          + '&job_type=' + encodeURIComponent(jobTypes);
+        if (forceReload) url += '&_ts=' + Date.now();
+        if (forceReload === true || frame.dataset.src !== url) {
+          frame.dataset.src = url;
+          frame.src = url;
+        }
+      }
+
+      function setIntegrityFeedback(message, level) {
+        var box = document.getElementById('integrity-feedback');
+        if (!box) return;
+        box.hidden = !message;
+        box.className = 'callout' + (level ? ' ' + level : '');
+        box.textContent = message || '';
+      }
+
+      function fillArchiveSelect(selectId, archives, selectedName, predicate, emptyLabel) {
+        var select = document.getElementById(selectId);
+        if (!select) return;
+        select.replaceChildren();
+        var empty = document.createElement('option');
+        empty.value = '';
+        empty.textContent = emptyLabel;
+        select.appendChild(empty);
+        (archives || []).filter(predicate).forEach(function (archive) {
+          var option = document.createElement('option');
+          option.value = String(archive.name || '');
+          option.textContent = String(archive.name || '') + ' (' + String(archive.repository || '') + ')';
+          select.appendChild(option);
+        });
+        select.value = String(selectedName || '');
+        if (select.value !== String(selectedName || '')) select.value = '';
+      }
+
+      function appendIntegritySummaryCard(container, label, value, note) {
+        var card = document.createElement('div');
+        card.className = 'summary-card';
+        var labelNode = document.createElement('div');
+        labelNode.className = 'summary-label';
+        labelNode.textContent = label;
+        var valueNode = document.createElement('div');
+        valueNode.className = 'summary-value';
+        valueNode.textContent = String(value);
+        var noteNode = document.createElement('div');
+        noteNode.className = 'note';
+        noteNode.textContent = note;
+        card.append(labelNode, valueNode, noteNode);
+        container.appendChild(card);
+      }
+
+      function renderIntegrityPanel() {
+        var settings = integrityState.settings || {};
+        var status = integrityState.status || {};
+        var meta = getExchangeMeta(integrityState.exchange || uiState.contextExchange);
+        var canRepair = true;
+        document.getElementById('integrity-description').textContent = canRepair
+          ? 'Validate closed ' + meta.label + ' days, repair damaged files, and compare this catalog with a public archive reference.'
+          : 'Read-only validation of closed ' + meta.label + ' days and comparison with a public archive reference.';
+        document.getElementById('integrity-removed-card').hidden = false;
+        document.getElementById('integrity-removed-note').textContent = 'Local PBGui OHLCV data for ' + meta.label + ' markets that are absent or inactive in the current mapping.';
+        document.getElementById('integrity-issues-title').textContent = canRepair ? 'Repair Queue' : 'Integrity Findings';
+        document.getElementById('integrity-issues-note').textContent = canRepair
+          ? 'Each row groups all damaged days for one coin. Repair coin processes those days sequentially with strict validation. For Bybit, a verified newer inception automatically removes obsolete local pre-inception data.'
+          : 'Each row groups read-only integrity findings for one coin.';
+        document.getElementById('btn-integrity-repair-all').hidden = !canRepair;
+        document.getElementById('btn-integrity-normalize-hl').hidden = meta.statusKey !== 'hyperliquid';
+        var archives = Array.isArray(settings.archives) ? settings.archives : [];
+        document.getElementById('integrity-publish-enabled').checked = Boolean(settings.publish_enabled);
+        fillArchiveSelect(
+          'integrity-publish-archive',
+          archives,
+          settings.publish_archive,
+          function (archive) { return Boolean(archive.can_publish); },
+          'No publish archive'
+        );
+        fillArchiveSelect(
+          'integrity-reference-archive',
+          archives,
+          settings.reference_archive,
+          function (archive) { return Boolean(archive.can_reference); },
+          'No reference archive'
+        );
+        document.getElementById('btn-integrity-publish').disabled = !settings.publish_archive;
+        document.getElementById('btn-integrity-reference').disabled = !settings.reference_archive;
+
+        var summary = document.getElementById('integrity-summary');
+        summary.replaceChildren();
+        var catalog = status.catalog || settings.catalog || {};
+        var counts = catalog.counts || {};
+        appendIntegritySummaryCard(
+          summary,
+          'Scan',
+          catalog.initial_scan_complete ? 'Complete' : 'Pending',
+          meta.label + ' daily catalog' + (meta.statusKey === 'hyperliquid' ? ' (crypto only)' : '')
+        );
+        appendIntegritySummaryCard(summary, 'Valid days', Number(counts.valid || 0) + Number(counts.inception_partial || 0), 'Canonical checksums');
+        appendIntegritySummaryCard(summary, 'Source gaps', Number(counts.source_gap || 0), 'Verified unavailable minutes');
+        appendIntegritySummaryCard(summary, 'Damaged days', Number(counts.invalid || 0), canRepair ? 'Repairable rows' : 'Read-only findings');
+        var comparison = status.comparison && status.comparison.counts ? status.comparison.counts : null;
+        var referenceMeta = status.reference || settings.reference || {};
+        appendIntegritySummaryCard(
+          summary,
+          'Reference',
+          comparison ? Number(comparison.mismatch || 0) + Number(comparison.reference_only || 0) : 'Not compared',
+          comparison
+            ? 'mismatches or missing local days'
+            : (referenceMeta.selected_repository && !referenceMeta.matches_selected ? 'Refresh required for selected archive' : 'Choose a public archive')
+        );
+
+        var removedBody = document.getElementById('integrity-removed-coins');
+        removedBody.replaceChildren();
+        var removedRows = Array.isArray(integrityState.removedCoins) ? integrityState.removedCoins : [];
+        var removableCoins = new Set(removedRows.filter(function (row) {
+          return row.removable !== false;
+        }).map(function (row) {
+          return String(row.coin || '');
+        }).filter(Boolean));
+        integrityState.selectedRemovedCoins = new Set(Array.from(integrityState.selectedRemovedCoins || []).filter(function (coin) {
+          return removableCoins.has(coin);
+        }));
+        document.getElementById('integrity-removed-count').textContent = removedRows.length + ' removed markets';
+        if (!removedRows.length) {
+          var noRemovedRow = document.createElement('tr');
+          var noRemovedCell = document.createElement('td');
+          noRemovedCell.colSpan = 8;
+          noRemovedCell.className = 'integrity-empty';
+          noRemovedCell.textContent = integrityState.removedMappingStatus === 'unknown'
+            ? String(integrityState.removedMappingReason || meta.label + ' mapping is unavailable.')
+            : 'No removed markets with local PBGui OHLCV data found.';
+          noRemovedRow.appendChild(noRemovedCell);
+          removedBody.appendChild(noRemovedRow);
+        }
+        removedRows.forEach(function (row) {
+          var tr = document.createElement('tr');
+          if (row.removable !== false) {
+            var removedCoin = String(row.coin || '');
+            tr.setAttribute('data-integrity-removed-row', '1');
+            tr.setAttribute('data-coin', removedCoin);
+            tr.setAttribute('tabindex', '0');
+            tr.setAttribute('aria-selected', integrityState.selectedRemovedCoins.has(removedCoin) ? 'true' : 'false');
+            if (integrityState.selectedRemovedCoins.has(removedCoin)) tr.classList.add('selected');
+          }
+          [row.exchange, row.coin, row.files, fmtBytes(row.bytes), row.from_day, row.to_day, row.market_reason].forEach(function (value) {
+            var td = document.createElement('td');
+            td.textContent = String(value == null ? '' : value);
+            tr.appendChild(td);
+          });
+          var actionCell = document.createElement('td');
+          if (row.removable !== false) {
+            var remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'btn danger';
+            remove.textContent = 'Remove coin data';
+            remove.setAttribute('data-integrity-remove-coin', '1');
+            remove.setAttribute('data-exchange', String(row.exchange || ''));
+            remove.setAttribute('data-coin', String(row.coin || ''));
+            actionCell.appendChild(remove);
+          } else {
+            actionCell.textContent = 'Read-only';
+          }
+          tr.appendChild(actionCell);
+          removedBody.appendChild(tr);
+        });
+        updateRemovedCoinSelectionUi();
+
+        var tbody = document.getElementById('integrity-issues');
+        tbody.replaceChildren();
+        var rows = Array.isArray(integrityState.issues) ? integrityState.issues : [];
+        var groupedRows = [];
+        var groupedByCoin = Object.create(null);
+        rows.forEach(function (row) {
+          var key = String(row.exchange || '') + '\u0000' + String(row.coin || '');
+          var group = groupedByCoin[key];
+          if (!group) {
+            group = {
+              exchange: String(row.exchange || ''),
+              coin: String(row.coin || ''),
+              days: 0,
+              oldest: String(row.day || ''),
+              latest: String(row.day || ''),
+              missing: 0,
+              reasons: Object.create(null)
+            };
+            groupedByCoin[key] = group;
+            groupedRows.push(group);
+          }
+          var day = String(row.day || '');
+          group.days += 1;
+          group.missing += Number(row.missing_minutes || 0);
+          if (day && (!group.oldest || day < group.oldest)) group.oldest = day;
+          if (day && (!group.latest || day > group.latest)) group.latest = day;
+          var reason = String(row.error || 'unknown integrity error');
+          group.reasons[reason] = Number(group.reasons[reason] || 0) + 1;
+        });
+        document.getElementById('integrity-issue-count').textContent = groupedRows.length + ' coins / ' + rows.length + ' damaged days';
+        document.getElementById('btn-integrity-repair-all').disabled = rows.length === 0;
+        if (!rows.length) {
+          var emptyRow = document.createElement('tr');
+          var emptyCell = document.createElement('td');
+          emptyCell.colSpan = 7;
+          emptyCell.className = 'integrity-empty';
+          emptyCell.textContent = catalog.initial_scan_complete ? 'No damaged days found.' : 'The initial scan has not completed yet.';
+          emptyRow.appendChild(emptyCell);
+          tbody.appendChild(emptyRow);
+        }
+        groupedRows.forEach(function (row) {
+          var tr = document.createElement('tr');
+          var dateRange = row.oldest === row.latest ? row.latest : row.oldest + ' to ' + row.latest;
+          var reasons = Object.keys(row.reasons).map(function (reason) {
+            return String(row.reasons[reason]) + 'x ' + reason;
+          }).join('; ');
+          [row.exchange, row.coin, row.days, dateRange, row.missing, reasons].forEach(function (value) {
+            var td = document.createElement('td');
+            td.textContent = String(value == null ? '' : value);
+            tr.appendChild(td);
+          });
+          var actionCell = document.createElement('td');
+          var actionGroup = document.createElement('div');
+          actionGroup.className = 'integrity-action-group';
+          var details = document.createElement('button');
+          details.type = 'button';
+          details.className = 'btn secondary';
+          details.textContent = 'Details';
+          details.setAttribute('data-integrity-gap-details', '1');
+          details.setAttribute('data-exchange', String(row.exchange || ''));
+          details.setAttribute('data-coin', String(row.coin || ''));
+          actionGroup.appendChild(details);
+          if (canRepair) {
+            var action = document.createElement('button');
+            action.type = 'button';
+            action.className = 'btn secondary';
+            action.textContent = 'Repair coin';
+            action.setAttribute('data-integrity-repair-coin', '1');
+            action.setAttribute('data-exchange', String(row.exchange || ''));
+            action.setAttribute('data-coin', String(row.coin || ''));
+            actionGroup.appendChild(action);
+          } else {
+            var readOnly = document.createElement('span');
+            readOnly.textContent = 'Read-only';
+            actionGroup.appendChild(readOnly);
+          }
+          actionCell.appendChild(actionGroup);
+          tr.appendChild(actionCell);
+          tbody.appendChild(tr);
+        });
+
+        var differencesBody = document.getElementById('integrity-differences');
+        differencesBody.replaceChildren();
+        var differences = status.comparison && Array.isArray(status.comparison.differences)
+          ? status.comparison.differences
+          : [];
+        var differenceCounts = status.comparison && status.comparison.counts ? status.comparison.counts : {};
+        var differenceTotal = Number(differenceCounts.local_only || 0)
+          + Number(differenceCounts.reference_only || 0)
+          + Number(differenceCounts.mismatch || 0);
+        document.getElementById('integrity-difference-count').textContent = differenceTotal + ' differences';
+        if (!differences.length) {
+          var noDifferenceRow = document.createElement('tr');
+          var noDifferenceCell = document.createElement('td');
+          noDifferenceCell.colSpan = 4;
+          noDifferenceCell.className = 'integrity-empty';
+          noDifferenceCell.textContent = status.comparison ? 'No differences found.' : 'No reference comparison is available.';
+          noDifferenceRow.appendChild(noDifferenceCell);
+          differencesBody.appendChild(noDifferenceRow);
+        } else {
+          differences.forEach(function (difference) {
+            var differenceRow = document.createElement('tr');
+            [difference.kind, difference.exchange, difference.coin, difference.day].forEach(function (value) {
+              var differenceCell = document.createElement('td');
+              differenceCell.textContent = String(value == null ? '' : value);
+              differenceRow.appendChild(differenceCell);
+            });
+            differencesBody.appendChild(differenceRow);
+          });
+        }
+      }
+
+      async function loadIntegrityPanel(forceMonitor) {
+        if (integrityState.saving) {
+          integrityState.reloadAfterSave = true;
+          return;
+        }
+        var meta = getExchangeMeta(uiState.contextExchange);
+        var storageExchange = meta.statusKey;
+        integrityState.exchange = storageExchange;
+        var requestId = ++integrityState.requestId;
+        setIntegrityFeedback('Loading integrity catalog...', 'info');
+        try {
+          var payloads = await Promise.all([
+            fetchJson('/checksums/settings'),
+            fetchJson('/integrity/status?exchange=' + encodeURIComponent(storageExchange)),
+            fetchJson('/integrity/removed-coins?exchange=' + encodeURIComponent(storageExchange)),
+            fetchJson('/integrity/issues?exchange=' + encodeURIComponent(storageExchange) + '&limit=1000000')
+          ]);
+          if (requestId !== integrityState.requestId || getExchangeMeta(uiState.contextExchange).statusKey !== storageExchange) return;
+          integrityState.settings = payloads[0];
+          integrityState.status = payloads[1];
+          integrityState.removedCoins = Array.isArray(payloads[2].rows) ? payloads[2].rows : [];
+          integrityState.removedMappingStatus = String(payloads[2].mapping_status || '');
+          integrityState.removedMappingReason = String(payloads[2].mapping_reason || '');
+          integrityState.issues = (Array.isArray(payloads[3].rows) ? payloads[3].rows : []).filter(function (row) {
+            return String(row.market_status || '') !== 'removed';
+          });
+          integrityState.issueTotal = integrityState.issues.length;
+          renderIntegrityPanel();
+          setIntegrityFeedback('', '');
+          mountIntegrityJobMonitor(forceMonitor === true);
+        } catch (error) {
+          if (requestId !== integrityState.requestId) return;
+          setIntegrityFeedback(error && error.message ? error.message : 'Failed to load integrity status.', 'error');
+        }
+      }
+
+      function stopIntegrityPolling() {
+        if (integrityState.pollTimer) window.clearTimeout(integrityState.pollTimer);
+        integrityState.pollTimer = null;
+      }
+
+      async function pollIntegrityJobs() {
+        stopIntegrityPolling();
+        var panel = document.getElementById('integrity-panel');
+        if (!panel || !panel.classList.contains('active-panel')) return;
+        try {
+          var response = await fetch(
+            jobsApiUrl('/jobs/?states=pending,running&limit=100'),
+            { cache: 'no-store', credentials: 'same-origin' }
+          );
+          if (!response.ok) throw new Error('Job status request failed.');
+          var payload = await response.json();
+          var integrityTypes = {
+            ohlcv_integrity_scan: true,
+            ohlcv_hyperliquid_normalize_fallback: true,
+            ohlcv_integrity_repair: true,
+            ohlcv_integrity_repair_all: true,
+            ohlcv_removed_coin_delete: true,
+            ohlcv_removed_coins_delete: true,
+            ohlcv_checksum_publish: true,
+            ohlcv_checksum_reference: true
+          };
+          var selectedExchange = getExchangeMeta(uiState.contextExchange).statusKey;
+          var active = (Array.isArray(payload.jobs) ? payload.jobs : []).some(function (job) {
+            var jobType = String(job.type || '');
+            if (!integrityTypes[jobType]) return false;
+            if (jobType === 'ohlcv_checksum_publish' || jobType === 'ohlcv_checksum_reference') return true;
+            return String(job.exchange || '') === selectedExchange;
+          });
+          if (active) {
+            integrityState.hadActiveJob = true;
+          } else if (integrityState.hadActiveJob && !integrityState.saving) {
+            integrityState.hadActiveJob = false;
+            await loadIntegrityPanel(false);
+          }
+        } catch (error) {
+          void error;
+        }
+        integrityState.pollTimer = window.setTimeout(pollIntegrityJobs, 2000);
+      }
+
+      function startIntegrityPolling() {
+        stopIntegrityPolling();
+        pollIntegrityJobs();
+      }
+
+      async function saveIntegritySettings() {
+        if (integrityState.saving) return;
+        integrityState.saving = true;
+        document.getElementById('btn-integrity-save').disabled = true;
+        var requestId = ++integrityState.requestId;
+        try {
+          var result = await fetchJson('/checksums/settings', {
+            method: 'PUT',
+            body: JSON.stringify({
+              publish_enabled: Boolean(document.getElementById('integrity-publish-enabled').checked),
+              publish_archive: String(document.getElementById('integrity-publish-archive').value || ''),
+              reference_archive: String(document.getElementById('integrity-reference-archive').value || '')
+            })
+          });
+          if (requestId !== integrityState.requestId) return;
+          integrityState.settings = result.settings;
+          renderIntegrityPanel();
+          showToast('Checksum archive settings saved.', 'success');
+        } catch (error) {
+          if (requestId !== integrityState.requestId) return;
+          showToast(error && error.message ? error.message : 'Failed to save checksum settings.', 'error');
+        } finally {
+          integrityState.saving = false;
+          document.getElementById('btn-integrity-save').disabled = false;
+          if (integrityState.reloadAfterSave) {
+            integrityState.reloadAfterSave = false;
+            loadIntegrityPanel(true);
+          }
+        }
+      }
+
+      async function queueIntegrityOperation(path, body, successMessage) {
+        try {
+          var result = await fetchJson(path, {
+            method: 'POST',
+            body: body ? JSON.stringify(body) : undefined
+          });
+          integrityState.hadActiveJob = true;
+          startIntegrityPolling();
+          showToast(result.created === false ? 'Matching job is already active.' : successMessage, 'success');
+          mountIntegrityJobMonitor(true);
+        } catch (error) {
+          showToast(error && error.message ? error.message : 'Unable to queue integrity job.', 'error');
+        }
+      }
+
+      function closeIntegrityGapDetails() {
+        integrityDetailState.requestId += 1;
+        document.getElementById('integrity-gap-modal').hidden = true;
+      }
+
+      function setIntegrityGapFeedback(message, level) {
+        var box = document.getElementById('integrity-gap-feedback');
+        var text = String(message || '').trim();
+        box.hidden = !text;
+        box.className = level === 'error' ? 'callout warning' : 'callout';
+        box.textContent = text;
+      }
+
+      function renderIntegrityGapDetails(payload) {
+        var summary = document.getElementById('integrity-gap-summary');
+        summary.replaceChildren();
+        appendIntegritySummaryCard(summary, 'Candles', Number(payload.actual_candles || 0), 'of 1,440 expected');
+        appendIntegritySummaryCard(summary, 'Absent', Number(payload.missing_minutes || 0), 'all empty minutes');
+        appendIntegritySummaryCard(summary, 'Damaged', Number(payload.damaged_missing_minutes || 0), 'excluding possible inception');
+        appendIntegritySummaryCard(summary, 'Coverage', String(payload.first || 'none') + ' to ' + String(payload.last || 'none'), 'first to last candle');
+        appendIntegritySummaryCard(summary, 'Reason', String(payload.error || payload.status || ''), payload.earliest_local_day ? 'Earliest local coin day' : 'Established market history');
+
+        var context = document.getElementById('integrity-day-context');
+        context.replaceChildren();
+        (Array.isArray(payload.day_context) ? payload.day_context : []).forEach(function (item) {
+          var button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'integrity-context-day' + (item.selected ? ' selected' : '');
+          button.disabled = String(item.status || '') === 'missing';
+          button.setAttribute('data-integrity-context-day', String(item.day || ''));
+          button.title = String(item.error || item.status || '');
+          var dateLabel = document.createElement('span');
+          dateLabel.textContent = String(item.day || '');
+          var hours = document.createElement('span');
+          hours.className = 'integrity-context-hours';
+          var hourlyCoverage = String(item.hourly_coverage || '');
+          for (var hourIndex = 0; hourIndex < 24; hourIndex += 1) {
+            var marker = hourlyCoverage.charAt(hourIndex) || 'm';
+            var hourCell = document.createElement('i');
+            hourCell.className = 'integrity-context-hour' + (marker === 'x' ? ' partial' : (marker === 'm' ? ' missing' : ''));
+            hourCell.title = String(hourIndex).padStart(2, '0') + ':00 UTC - ' + (marker === 'p' ? 'complete' : (marker === 'x' ? 'partial' : 'missing'));
+            hours.appendChild(hourCell);
+          }
+          var candles = document.createElement('span');
+          candles.className = 'integrity-context-meta';
+          candles.textContent = String(Number(item.candles || 0)) + ' candles';
+          var status = document.createElement('span');
+          status.className = 'integrity-context-meta';
+          status.textContent = String(item.error || item.status || '');
+          button.append(dateLabel, hours, candles, status);
+          context.appendChild(button);
+        });
+
+        var coverage = String(payload.coverage || '');
+        var chart = document.getElementById('integrity-gap-chart');
+        chart.replaceChildren();
+        var classByMarker = { l: 'leading', i: 'internal', t: 'trailing', m: 'missing-day' };
+        var labelByMarker = { p: 'Present', l: 'Leading gap', i: 'Internal gap', t: 'Trailing gap', m: 'Missing day' };
+        for (var hour = 0; hour < 24; hour += 1) {
+          var row = document.createElement('div');
+          row.className = 'integrity-gap-hour';
+          var hourLabel = document.createElement('span');
+          hourLabel.className = 'integrity-gap-hour-label';
+          hourLabel.textContent = String(hour).padStart(2, '0') + ':00';
+          row.appendChild(hourLabel);
+          for (var minute = 0; minute < 60; minute += 1) {
+            var index = hour * 60 + minute;
+            var marker = coverage.charAt(index) || 'm';
+            var cell = document.createElement('span');
+            cell.className = 'integrity-gap-cell' + (classByMarker[marker] ? ' ' + classByMarker[marker] : '');
+            cell.title = String(hour).padStart(2, '0') + ':' + String(minute).padStart(2, '0') + ' UTC - ' + String(labelByMarker[marker] || 'Unknown');
+            row.appendChild(cell);
+          }
+          chart.appendChild(row);
+        }
+
+        var rangesBody = document.getElementById('integrity-gap-ranges');
+        rangesBody.replaceChildren();
+        var ranges = Array.isArray(payload.ranges) ? payload.ranges : [];
+        if (!ranges.length) {
+          var emptyRow = document.createElement('tr');
+          var emptyCell = document.createElement('td');
+          emptyCell.colSpan = 5;
+          emptyCell.className = 'integrity-empty';
+          emptyCell.textContent = 'No missing minute ranges.';
+          emptyRow.appendChild(emptyCell);
+          rangesBody.appendChild(emptyRow);
+        }
+        ranges.forEach(function (range) {
+          var tr = document.createElement('tr');
+          var assessment = range.possible_inception
+            ? 'Possible exchange inception; not necessarily damaged.'
+            : (range.kind === 'internal' ? 'Real interruption inside available data.' : 'Missing boundary coverage.');
+          [range.kind, range.start + ' UTC', range.end + ' UTC', range.minutes, assessment].forEach(function (value) {
+            var td = document.createElement('td');
+            td.textContent = String(value == null ? '' : value);
+            tr.appendChild(td);
+          });
+          rangesBody.appendChild(tr);
+        });
+      }
+
+      async function loadIntegrityGapDay(day) {
+        var requestId = ++integrityDetailState.requestId;
+        setIntegrityGapFeedback('Loading minute coverage...', 'info');
+        try {
+          var payload = await fetchJson(
+            '/integrity/day-details?exchange=' + encodeURIComponent(integrityDetailState.exchange)
+            + '&coin=' + encodeURIComponent(integrityDetailState.coin)
+            + '&day=' + encodeURIComponent(day)
+          );
+          if (requestId !== integrityDetailState.requestId || document.getElementById('integrity-gap-modal').hidden) return;
+          var select = document.getElementById('integrity-gap-day');
+          if (!Array.from(select.options).some(function (option) { return option.value === String(payload.day || ''); })) {
+            var contextOption = document.createElement('option');
+            contextOption.value = String(payload.day || '');
+            contextOption.textContent = String(payload.day || '') + ' (context)';
+            select.appendChild(contextOption);
+          }
+          select.value = String(payload.day || '');
+          renderIntegrityGapDetails(payload);
+          setIntegrityGapFeedback('', 'info');
+        } catch (error) {
+          if (requestId !== integrityDetailState.requestId) return;
+          setIntegrityGapFeedback(error && error.message ? error.message : 'Unable to load minute coverage.', 'error');
+        }
+      }
+
+      function openIntegrityGapDetails(exchange, coin) {
+        var days = integrityState.issues.filter(function (row) {
+          return String(row.exchange || '') === exchange && String(row.coin || '') === coin;
+        }).map(function (row) {
+          return String(row.day || '');
+        }).filter(Boolean).sort();
+        if (!days.length) return;
+        integrityDetailState.exchange = exchange;
+        integrityDetailState.coin = coin;
+        integrityDetailState.days = days;
+        document.getElementById('integrity-gap-subtitle').textContent = exchange + ' / ' + coin;
+        var select = document.getElementById('integrity-gap-day');
+        select.replaceChildren();
+        days.forEach(function (day) {
+          var option = document.createElement('option');
+          option.value = day;
+          option.textContent = day;
+          select.appendChild(option);
+        });
+        select.value = days[days.length - 1];
+        document.getElementById('integrity-gap-modal').hidden = false;
+        document.getElementById('btn-integrity-gap-close').focus();
+        loadIntegrityGapDay(select.value);
+      }
+
+      async function removeUnavailableIntegrityCoin(exchange, coin) {
+        return removeUnavailableIntegrityCoins(exchange, [coin], false);
+      }
+
+      function updateRemovedCoinSelectionUi() {
+        var selected = integrityState.selectedRemovedCoins instanceof Set
+          ? integrityState.selectedRemovedCoins
+          : new Set();
+        document.querySelectorAll('#integrity-removed-coins tr[data-integrity-removed-row]').forEach(function (row) {
+          var selectedNow = selected.has(String(row.getAttribute('data-coin') || ''));
+          row.classList.toggle('selected', selectedNow);
+          row.setAttribute('aria-selected', selectedNow ? 'true' : 'false');
+        });
+        var selectedButton = document.getElementById('btn-integrity-remove-selected');
+        var allButton = document.getElementById('btn-integrity-remove-all');
+        var removableCount = document.querySelectorAll('#integrity-removed-coins tr[data-integrity-removed-row]').length;
+        selectedButton.disabled = selected.size === 0;
+        selectedButton.textContent = selected.size ? 'Remove selected (' + selected.size + ')' : 'Remove selected';
+        allButton.disabled = removableCount === 0;
+      }
+
+      function applyRemovedCoinSelectionRange(targetRow) {
+        var start = integrityState.removedDragStart;
+        if (!start || !targetRow) return;
+        var rows = Array.from(document.querySelectorAll('#integrity-removed-coins tr[data-integrity-removed-row]'));
+        var startIndex = rows.indexOf(start.row);
+        var targetIndex = rows.indexOf(targetRow);
+        if (startIndex < 0 || targetIndex < 0) return;
+        var first = Math.min(startIndex, targetIndex);
+        var last = Math.max(startIndex, targetIndex);
+        for (var index = first; index <= last; index += 1) {
+          var coin = String(rows[index].getAttribute('data-coin') || '');
+          if (!coin) continue;
+          if (integrityState.removedDragMode === 'remove') integrityState.selectedRemovedCoins.delete(coin);
+          else integrityState.selectedRemovedCoins.add(coin);
+        }
+        updateRemovedCoinSelectionUi();
+      }
+
+      async function removeUnavailableIntegrityCoins(exchange, coins, removeAll) {
+        var requestId = integrityState.requestId;
+        var selectedExchange = getExchangeMeta(uiState.contextExchange).statusKey;
+        if (exchange !== selectedExchange) return;
+        var requestBody = removeAll
+          ? { exchange: exchange, all: true }
+          : { exchange: exchange, coins: Array.from(new Set(coins || [])) };
+        try {
+          var preview = await fetchJson('/integrity/removed-coins/preview', {
+            method: 'POST',
+            body: JSON.stringify(requestBody)
+          });
+          var period = preview.from_day && preview.to_day
+            ? ', ' + preview.from_day + ' to ' + preview.to_day
+            : '';
+          var blocked = Number(preview.blocked_count || 0);
+          if (!(await showConfirmDialog({
+            title: 'Remove unavailable market data',
+            message: 'Remove all PBGui OHLCV data for ' + Number(preview.coin_count || 0) + ' unavailable market(s)?',
+            detail: Number(preview.files || 0) + ' files, ' + fmtBytes(preview.bytes || 0) + period + (blocked ? '. ' + blocked + ' unsafe row(s) are excluded.' : '') + ' PB7 and PB8 runtime caches are not removed.',
+            items: Array.isArray(preview.coins) ? preview.coins : [],
+            listLabel: 'Unavailable markets',
+            confirmText: 'Remove market data'
+          }))) return;
+          if (
+            requestId !== integrityState.requestId
+            || getExchangeMeta(uiState.contextExchange).statusKey !== selectedExchange
+          ) return;
+          var queued = await fetchJson('/integrity/removed-coins/remove', {
+            method: 'POST',
+            body: JSON.stringify(requestBody)
+          });
+          integrityState.selectedRemovedCoins.clear();
+          updateRemovedCoinSelectionUi();
+          integrityState.hadActiveJob = true;
+          startIntegrityPolling();
+          showToast(queued.created === false ? 'Matching job is already active.' : 'Unavailable-market deletion queued.', 'success');
+          mountIntegrityJobMonitor(true);
+        } catch (error) {
+          showToast(error && error.message ? error.message : 'Unable to prepare unavailable-market deletion.', 'error');
         }
       }
 
@@ -6279,6 +7220,15 @@
         if (document.getElementById('best1m-panel').classList.contains('active-panel')) {
           refreshBest1mPanel(false);
         }
+        if (document.getElementById('integrity-panel').classList.contains('active-panel')) {
+          integrityState.requestId += 1;
+          integrityState.exchange = meta.statusKey;
+          integrityState.status = null;
+          integrityState.issues = [];
+          integrityState.removedCoins = [];
+          renderIntegrityPanel();
+          loadIntegrityPanel(true);
+        }
       }
 
       function renderSettingsPayload() {
@@ -7940,6 +8890,12 @@
           stopCopyDataSchedulePoll();
         }
         if (panelId === 'inventory-panel') loadInventoryPanel(false);
+        if (panelId === 'integrity-panel') {
+          loadIntegrityPanel(false);
+          startIntegrityPolling();
+        } else {
+          stopIntegrityPolling();
+        }
         syncSidebarShortcutState();
         syncActivityLogViewer(panelId);
       }
@@ -8007,6 +8963,150 @@
         });
         document.getElementById('btn-copy-data-schedule-cancel').addEventListener('click', function () {
           resetCopyDataScheduleEditor();
+        });
+        document.getElementById('btn-integrity-scan').addEventListener('click', function () {
+          var exchange = getExchangeMeta(uiState.contextExchange).statusKey;
+          queueIntegrityOperation('/integrity/scan', { exchange: exchange }, 'Integrity scan queued.');
+        });
+        document.getElementById('btn-integrity-normalize-hl').addEventListener('click', async function () {
+          if (getExchangeMeta(uiState.contextExchange).statusKey !== 'hyperliquid') return;
+          var requestId = integrityState.requestId;
+          if (!(await showConfirmDialog({
+            title: 'Normalize fallback candles',
+            message: 'Expand High and Low around existing Open and Close values for Hyperliquid other-exchange candles?',
+            detail: 'Only candles marked other_exchange with invalid envelope bounds are changed. Timestamps, Open, Close, Volume, gaps, and source assignments stay unchanged.',
+            items: ['Hyperliquid crypto'],
+            listLabel: 'Dataset',
+            confirmText: 'Normalize candles'
+          }))) return;
+          if (
+            requestId !== integrityState.requestId
+            || getExchangeMeta(uiState.contextExchange).statusKey !== 'hyperliquid'
+          ) return;
+          queueIntegrityOperation(
+            '/integrity/hyperliquid/normalize-fallback',
+            null,
+            'Fallback normalization queued.'
+          );
+        });
+        document.getElementById('btn-integrity-repair-all').addEventListener('click', function () {
+          var exchange = getExchangeMeta(uiState.contextExchange).statusKey;
+          queueIntegrityOperation('/integrity/repair-all', { exchange: exchange }, 'Repair all queued.');
+        });
+        document.getElementById('btn-integrity-save').addEventListener('click', function () {
+          saveIntegritySettings();
+        });
+        document.getElementById('btn-integrity-publish').addEventListener('click', function () {
+          queueIntegrityOperation('/checksums/publish', null, 'Checksum publication queued.');
+        });
+        document.getElementById('btn-integrity-reference').addEventListener('click', function () {
+          queueIntegrityOperation('/checksums/reference', null, 'Reference refresh queued.');
+        });
+        document.getElementById('integrity-issues').addEventListener('click', function (event) {
+          var detailsButton = event.target && event.target.closest ? event.target.closest('[data-integrity-gap-details]') : null;
+          if (detailsButton) {
+            openIntegrityGapDetails(
+              String(detailsButton.getAttribute('data-exchange') || ''),
+              String(detailsButton.getAttribute('data-coin') || '')
+            );
+            return;
+          }
+          var coinButton = event.target && event.target.closest ? event.target.closest('[data-integrity-repair-coin]') : null;
+          if (coinButton) {
+            queueIntegrityOperation(
+              '/integrity/repair-all',
+              {
+                exchange: String(coinButton.getAttribute('data-exchange') || ''),
+                coin: String(coinButton.getAttribute('data-coin') || '')
+              },
+              'Coin repair queued.'
+            );
+          }
+        });
+        document.getElementById('btn-integrity-gap-close').addEventListener('click', closeIntegrityGapDetails);
+        document.getElementById('integrity-gap-day').addEventListener('change', function (event) {
+          loadIntegrityGapDay(String(event.target.value || ''));
+        });
+        document.getElementById('integrity-day-context').addEventListener('click', function (event) {
+          var button = event.target && event.target.closest ? event.target.closest('[data-integrity-context-day]') : null;
+          if (!button || button.disabled) return;
+          loadIntegrityGapDay(String(button.getAttribute('data-integrity-context-day') || ''));
+        });
+        var removedCoinsBody = document.getElementById('integrity-removed-coins');
+        removedCoinsBody.addEventListener('click', function (event) {
+          var button = event.target && event.target.closest ? event.target.closest('[data-integrity-remove-coin]') : null;
+          if (!button) return;
+          removeUnavailableIntegrityCoin(
+            String(button.getAttribute('data-exchange') || ''),
+            String(button.getAttribute('data-coin') || '')
+          );
+        });
+        removedCoinsBody.addEventListener('mousedown', function (event) {
+          if (event.button !== 0 || (event.target && event.target.closest && event.target.closest('button'))) return;
+          var row = event.target && event.target.closest ? event.target.closest('[data-integrity-removed-row]') : null;
+          if (!row) return;
+          var coin = String(row.getAttribute('data-coin') || '');
+          integrityState.removedDragStart = { row: row, coin: coin, y: event.clientY };
+          integrityState.removedDragSelecting = false;
+          integrityState.removedDragMode = integrityState.selectedRemovedCoins.has(coin) ? 'remove' : 'add';
+          event.preventDefault();
+        });
+        removedCoinsBody.addEventListener('mousemove', function (event) {
+          var start = integrityState.removedDragStart;
+          if (!start) return;
+          if (!integrityState.removedDragSelecting && Math.abs(event.clientY - start.y) > 5) {
+            integrityState.removedDragSelecting = true;
+          }
+          if (!integrityState.removedDragSelecting) return;
+          var row = event.target && event.target.closest ? event.target.closest('[data-integrity-removed-row]') : null;
+          if (row) applyRemovedCoinSelectionRange(row);
+        });
+        removedCoinsBody.addEventListener('keydown', function (event) {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          if (event.target && event.target.closest && event.target.closest('button')) return;
+          var row = event.target && event.target.closest ? event.target.closest('[data-integrity-removed-row]') : null;
+          if (!row) return;
+          event.preventDefault();
+          var coin = String(row.getAttribute('data-coin') || '');
+          if (integrityState.selectedRemovedCoins.has(coin)) integrityState.selectedRemovedCoins.delete(coin);
+          else integrityState.selectedRemovedCoins.add(coin);
+          updateRemovedCoinSelectionUi();
+        });
+        document.addEventListener('mouseup', function () {
+          var start = integrityState.removedDragStart;
+          if (!start) return;
+          if (!integrityState.removedDragSelecting) {
+            if (integrityState.selectedRemovedCoins.has(start.coin)) integrityState.selectedRemovedCoins.delete(start.coin);
+            else integrityState.selectedRemovedCoins.add(start.coin);
+            updateRemovedCoinSelectionUi();
+          }
+          integrityState.removedDragStart = null;
+          integrityState.removedDragSelecting = false;
+          integrityState.removedDragMode = null;
+        });
+        document.getElementById('btn-integrity-remove-selected').addEventListener('click', function () {
+          removeUnavailableIntegrityCoins(
+            getExchangeMeta(uiState.contextExchange).statusKey,
+            Array.from(integrityState.selectedRemovedCoins || []),
+            false
+          );
+        });
+        document.getElementById('btn-integrity-remove-all').addEventListener('click', function () {
+          removeUnavailableIntegrityCoins(getExchangeMeta(uiState.contextExchange).statusKey, [], true);
+        });
+        document.addEventListener('keydown', function (event) {
+          if (event.key !== 'Delete' || !integrityState.selectedRemovedCoins.size) return;
+          var active = document.activeElement;
+          var tag = String(active && active.tagName || '').toLowerCase();
+          if (tag === 'input' || tag === 'textarea' || tag === 'select' || (active && active.isContentEditable)) return;
+          var panel = document.getElementById('integrity-panel');
+          if (!panel || !panel.classList.contains('active-panel')) return;
+          event.preventDefault();
+          removeUnavailableIntegrityCoins(
+            getExchangeMeta(uiState.contextExchange).statusKey,
+            Array.from(integrityState.selectedRemovedCoins),
+            false
+          );
         });
         document.getElementById('copy-data-schedule-list').addEventListener('click', function (event) {
           var button = event.target && event.target.closest ? event.target.closest('[data-copy-schedule-action]') : null;

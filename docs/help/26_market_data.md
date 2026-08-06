@@ -205,11 +205,15 @@ Controls the automatic 1m candle refresh loop for Binance USDM perpetuals.
 - **Min / Max lookback days** — window for the latest fetch (default: 2 / 7 days)
 - Changes are saved to `pbgui.ini` and applied in the next cycle — no restart needed.
 
+Multiplier-prefixed contracts keep their short coin name when they are the only market for that asset, for example `1000SHIB` remains `SHIB`. If the same exchange and quote list both contracts, PBGui keeps them separate: `1000CAT` is Simon's Cat and `CAT` is the unprefixed Caterpillar market on Binance and Bitget. Existing Market Data selections are migrated from the old ambiguous `CAT` name to `1000CAT`; select `CAT` separately if you also want the unprefixed market in automatic refreshes or Best 1m builds.
+
 ## Settings (Bybit / OKX / Bitget Latest 1m Auto-Refresh)
 
 These exchanges use the same enabled-coins, cycle interval, pause, API timeout, and min/max lookback controls. Defaults are a 3,600-second cycle with a 2–7 day lookback. Changes apply on the next PBData cycle without a restart.
 
 For Bybit, every completed 24x7 market day in that window is verified for all 1,440 contiguous minutes before refreshed files are written. A failed pagination or incomplete closed day is discarded without replacing existing data, and the next hourly cycle retries it. Overwrites also replace the source coverage for that day so the heatmap cannot retain stale minute availability.
+
+The automatic Bybit cycle refreshes only the running UTC day. On the first cycle at or after `00:15 UTC`, PBData finalizes the previous day for each enabled coin. A successful result is recorded in `data/ohlcv/checksums.sqlite` and survives restarts; only failed coins retry on later hourly cycles.
 
 Bitget lists active USDT linear swaps only. Its latest refresh and historical Best 1m backfill use the public `USDT-FUTURES` REST candle endpoints. Worker threads within one local download share an 18 req/s limiter and back off together on rate limits; avoid starting multiple Bitget downloads concurrently because the exchange limit applies to the public IP. There is no Bitget archive fallback. A local non-distributed backfill re-requests incomplete historical days and reports minutes Bitget cannot supply.
 
@@ -242,9 +246,51 @@ Shows per-coin result of the last completed cycle:
 - `note` — `no_local_data` means no local data existed yet; max lookback was used automatically
 - `next_run_in_s` — estimated seconds until next cycle
 
+For Bybit, the status also separates the current-day refresh from daily finalization with `current_result`, `current_minutes_written`, `finalization_day`, `finalization_result`, and `last_finalized_day`.
+
 ### Restart Behavior
 
-When PBData restarts, it reads the last run timestamp and waits the remaining interval — it does not immediately re-fetch. If PBData crashed mid-cycle, the run resumes from the last completed coin.
+After a restart, PBData starts a new cycle after its normal startup offset. Completed Bybit finalizations are skipped using the persistent checksum catalog; failed or interrupted coins remain eligible for the next hourly attempt.
+
+## OHLCV Integrity
+
+Open **OHLCV Integrity** to inspect the daily checksum catalog for the exchange selected at the top of Market Data. Read-only scan, summary, grouped findings, checksums, and public-reference comparison support Binance USDM (`binanceusdm` storage), Bybit, OKX, Bitget, and Hyperliquid crypto. Hyperliquid XYZ/TradFi directories are excluded until session-aware validation is implemented.
+
+The initial Bybit scan is queued automatically after an update. Scans for Binance USDM, OKX, Bitget, and Hyperliquid crypto are deliberately manual in this first rollout because the combined archive contains roughly 1.8 million daily files. Select an exchange and use **Run full scan**; integrity scan jobs are serialized. Until a scan completes, that exchange shows `Pending`. Non-Bybit catalogs are point-in-time snapshots and must be rescanned after their underlying files change.
+
+Repeated full scans reuse catalog results for files whose nanosecond modification time and size are unchanged. Those files are still discovered so deleted or newly added days remain visible, but their NPZ payload is not reopened or rehashed. Changed files and days whose inception/current-day classification may have changed are always validated again.
+
+For each coin, a contiguous suffix in its earliest local daily file is classified as `inception_partial`; the scanner does not synthesize missing dates before the first local file. Later partial days and internal gaps remain invalid. A newest partial closed day is not accepted merely from its local position.
+
+Findings are grouped by coin with the damaged-day count, date range, missing minutes, and validation reasons. All five exchanges offer **Repair coin** and **Repair all**. Bybit uses its exact-day finalizer; Binance USDM, OKX, and Bitget refetch only the requested damaged day through their normal builders. Hyperliquid repair improves that exact day from available Hyperliquid API/L2Book data and then fills remaining minutes from Binance followed by Bybit. Every path recalculates the checksum and retains a finding when the result is still incomplete.
+
+Integrity validates the High, Low, Close, and Volume values used by Passivbot. Exchange Open values outside High/Low are accepted because Open is not stored in Passivbot's backtest representation. For Hyperliquid, **Normalize fallback candles** offers a confirmed maintenance job for historical `other_exchange` minutes created by the Cross-Exchange Fallback. It only expands High/Low to enclose the existing Open/Close; timestamps, Open, Close, Volume, gaps, and source assignments remain unchanged. Newly generated fallback candles are normalized automatically.
+
+The table always loads all currently damaged days. **Repair all** runs them sequentially in one cancellable background job. A failure for one day is retained in the result and does not stop the remaining repairs. Summary cards and rows refresh automatically when an Integrity job finishes.
+
+The Repair Queue uses one row per coin instead of repeating a coin for every damaged day. Each row summarizes its damaged-day count, date range, total missing minutes, and reason counts. **Repair coin** runs one sequential batch scoped to all damaged days for that coin.
+
+Use **Details** to inspect each damaged day before repairing it. The minute-coverage view shows 24 hourly rows with one cell per minute: present candles are green, a leading range on the earliest local day is yellow as a possible exchange-inception boundary, internal gaps are red, and trailing gaps are orange. A day selector is available when the grouped coin has multiple findings, and the range table lists exact UTC start/end times and minute counts.
+
+Above the minute chart, **Surrounding Days** shows seven days before and seven days after the selected date as compact 24-hour coverage rows. Complete hours are green, partial hours orange, and missing hours red. Any cataloged neighboring day can be clicked to inspect its full minute coverage, including valid days that are not part of the Repair Queue.
+
+The Repair Queue's **Missing** count excludes a leading range on the earliest local coin day because trading may simply have started later than `00:00 UTC`. The detail view still displays those absent minutes in yellow. Only missing minutes from the first available candle through `23:59 UTC` count as damaged.
+
+Repair All retries transient network/time-out failures once. Bybit independently verifies exchange inception from the exact current instrument's `launchTime` when local damaged files would otherwise obscure it. Binance applies the equivalent check from the exact current market's `onboardDate`, because Binance may reuse a symbol while still serving the previous instrument generation through its archive and API. If either exchange confirms a newer inception, **Repair coin** or **Repair all** automatically removes the complete obsolete local generation before that date, including its source-index coverage and checksum rows, while preserving all days from the confirmed inception onward. Future Binance full builds also start at that current `onboardDate`, so the old generation is not downloaded again. The job result reports removed days separately. The Binance BTC USDT futures launch day at `2019-09-08 19:00 UTC` and Bybit XTZ at `2021-01-11 05:50 UTC` each have one independently confirmed source-native gap; PBGui records only those exact minutes as `source_gap` rather than fabricating candles or repeatedly attempting impossible repairs. If any days still fail, successful repairs remain saved but the batch is shown under **Failed** with its partial result instead of appearing fully successful under Done.
+
+Hyperliquid exact-day repair checks both local and configured archived/NAS L2Book hours before running the normal Binance-then-Bybit fallback. It also expands High/Low around Open/Close for any existing historical `other_exchange` candle on that exact day before final validation. If the historical day remains incomplete, PBGui compares every exact missing minute with the current donor instruments' local `onboardDate`/`launchTime` metadata. Minutes proven to predate both donors, including native PURR history without a matching donor, are cataloged as `source_gap`. If metadata says a donor may cover a minute, PBGui requires successful exact-day queries to both donors before accepting that the minute is absent from their retained history; a network or exchange error keeps the day damaged and repairable. Source-gap rows leave the Repair Queue but remain visible in the separate **Source gaps** summary count. The status is bound to the unchanged NPZ fingerprint or continued absence of a complete day, so new or modified data is automatically validated strictly again. PBGui never creates carry-forward candles for this classification.
+
+The **Unavailable Coin Data** table is scoped to the selected exchange and lists every local coin absent or inactive in its current `mapping.json`, including coins whose existing files are still valid. **From** and **To** show the earliest and latest local daily OHLCV files for each market. Click rows or drag across rows to select a range, then use **Remove selected** or the `Delete` key. **Remove all** selects every currently removable unavailable market. One server-side preview revalidates the complete selection and shows its market count, file count, size, and date range before the required confirmation. A single persistent batch job then rechecks every market immediately before deleting its complete PBGui OHLCV raw data and source index; individual failures do not skip later markets and remain visible in the job result. Unsafe rows are excluded from Remove all. Removed markets are excluded from the Repair Queue. PB7 and PB8 runtime caches are not removed. **Repair all** skips unavailable markets and reports their count separately.
+
+Checksum sharing uses the configured Config/Optimize archives:
+
+- **Publish checksum snapshot** enables one daily publication after Bybit finalization completes and all five exchange scans have completed.
+- **Publish archive** accepts only the configured writable own GitHub archive with a server-side access token.
+- **Reference archive** may independently select any configured public GitHub archive. Compare-only systems do not need a token or cluster membership.
+- **Publish now** requires completed scans for all five exchanges, creates a consistent SQLite backup, compresses it as `checksums.sqlite.gz`, and replaces the asset on the fixed `checksums-latest` GitHub release.
+- **Refresh reference** anonymously downloads that release asset, validates it, retains the previous good copy on failure, and compares it read-only with the local catalog.
+
+The checksum snapshot contains only OHLCV identifiers, daily counts, validation states, timestamps, and content hashes. Archive credentials remain server-side and are never included in Market Data task payloads, release URLs, or logs. The selected reference repository must be public for anonymous downloads.
 
 ---
 - Read-only inventory for PBGui and PB7 cache data

@@ -768,7 +768,10 @@ def test_results_are_read_only_from_pb8_root(tmp_path, monkeypatch) -> None:
             {
                 "backtest": {"starting_balance": 5000, "btc_collateral_cap": 0.25, "end_date": "2026-07-01"},
                 "bot": {"long": {"risk": {"total_wallet_exposure_limit": 2.0, "n_positions": 6}}},
-                "live": {"approved_coins": {"long": ["BTC"], "short": ["ETH"]}},
+                "live": {
+                    "strategy_kind": "ema_anchor",
+                    "approved_coins": {"long": ["BTC"], "short": ["ETH"]},
+                },
             }
         ),
         encoding="utf-8",
@@ -795,6 +798,7 @@ def test_results_are_read_only_from_pb8_root(tmp_path, monkeypatch) -> None:
     assert results[0]["btc_collateral_cap"] == 0.25
     assert results[0]["end_date"] == "2026-07-01"
     assert results[0]["coins_text"] == "BTC, ETH"
+    assert results[0]["strategy"] == "ema_anchor"
     assert results[0]["twe_long"] == 2.0
     assert results[0]["pos_long"] == 6
 

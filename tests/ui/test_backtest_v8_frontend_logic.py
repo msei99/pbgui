@@ -601,3 +601,42 @@ def test_shared_backtest_shell_owns_v7_table_and_status_patterns() -> None:
     assert ".badge-backtesting" in style_source
     assert ".badge-complete" in style_source
     assert "definition.selection.setSelected" in shell_source
+
+
+def test_backtest_v8_results_render_strategy_without_changing_v7_rows() -> None:
+    """The shared local Results renderer adds Strategy only when V8 rows are visible."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "_renderResultsTableInto")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const window = {{}};
+        let _activeResultsCtx = null;
+        const backtestEditorAdapter = {{version: 'v8'}};
+        const esc = (value) => String(value == null ? '' : value);
+        const fmt = (value) => String(value == null ? '' : value);
+        const fmtDate = (value) => String(value || '');
+        function toggleResultAction() {{}}
+        {function}
+        const rth = (label, key) => '<th data-key="' + key + '">' + label + '</th>';
+        const v8 = {{innerHTML: ''}};
+        _renderResultsTableInto(v8, [{{
+          backtest_version: 'v8', config_name: 'demo', result_name: 'run', strategy: 'ema_anchor',
+          path: '/result', exchanges: ['bybit'], coins: [], modified: '2026-08-05',
+          adg: 1, gain: 2, drawdown_worst: 3, sharpe_ratio: 4,
+          starting_balance: 1000, final_balance: 1200, twe_long: 2, twe_short: 0,
+          pos_long: 1, pos_short: 0
+        }}], null, rth, {{showVersion: true, showStrategy: true}});
+        assert.match(v8.innerHTML, /data-key="strategy">Strategy/);
+        assert.match(v8.innerHTML, /class="mono">ema_anchor/);
+
+        const v7 = {{innerHTML: ''}};
+        _renderResultsTableInto(v7, [{{
+          backtest_version: 'v7', config_name: 'legacy', result_name: 'run', path: '/legacy',
+          exchanges: ['bybit'], coins: [], modified: '2026-08-05'
+        }}], null, rth, {{showVersion: true, showStrategy: true}});
+        assert.doesNotMatch(v7.innerHTML, /data-key="strategy"/);
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout

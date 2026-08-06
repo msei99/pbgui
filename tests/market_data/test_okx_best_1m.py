@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 import bitget_best_1m as bitget
+import binance_best_1m as binance
 import okx_best_1m as okx
 
 
@@ -21,6 +22,71 @@ def _ts_ms(year: int, month: int, day: int, hour: int, minute: int) -> int:
     """Return a UTC timestamp in milliseconds."""
 
     return int(datetime(year, month, day, hour, minute, tzinfo=timezone.utc).timestamp() * 1000)
+
+
+def test_binance_exact_refetch_writes_only_requested_day(monkeypatch) -> None:
+    """Integrity repair cannot overwrite neighboring days from a monthly archive."""
+    target = date(2024, 1, 15)
+    target_ms = _ts_ms(2024, 1, 15, 0, 0)
+    monkeypatch.setattr(binance, "_ccxt_find_inception", lambda *_args, **_kwargs: target_ms)
+    monkeypatch.setattr(binance, "_find_first_archive_month", lambda *_args, **_kwargs: (2024, 1))
+    monkeypatch.setattr(binance, "_list_existing_days", lambda _coin: [])
+
+    async def download(_urls):
+        return {url: b"monthly" for url in _urls}
+
+    monkeypatch.setattr(binance, "_async_download_bytes_bulk", download)
+    monkeypatch.setattr(
+        binance,
+        "_parse_archive_monthly_bytes",
+        lambda *_args, **_kwargs: {
+            "2024-01-01": {0: {"t": 1}},
+            "2024-01-15": {0: {"t": target_ms}},
+        },
+    )
+    written = []
+    monkeypatch.setattr(
+        binance,
+        "_write_candles_for_day",
+        lambda _coin, day, _candles, *, overwrite: written.append((day, overwrite)) or 1,
+    )
+
+    binance.improve_best_binance_1m_for_coin(
+        coin="BTC",
+        start_date_override=target,
+        end_date=target,
+        refetch=True,
+    )
+
+    assert written == [("2024-01-15", True)]
+
+
+def test_binance_current_inception_uses_exact_local_market_metadata(monkeypatch, tmp_path) -> None:
+    """A reused Binance symbol starts at its current onboardDate, not old API history."""
+    markets_path = tmp_path / "ccxt_markets.json"
+    markets_path.write_text(
+        json.dumps({
+            "AIA/USDT:USDT": {
+                "active": True,
+                "created": 1768907700000,
+                "info": {"onboardDate": "1768907700000", "status": "TRADING"},
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(binance, "_coin_to_ccxt_symbol", lambda _coin: "AIA/USDT:USDT")
+
+    assert binance.get_current_market_inception_ms("AIA", markets_path=markets_path) == 1768907700000
+
+
+def test_binance_inception_falls_back_to_api_when_metadata_is_missing(monkeypatch, tmp_path) -> None:
+    """Missing local metadata preserves the bounded CCXT inception fallback."""
+    fallback_ms = _ts_ms(2024, 1, 15, 0, 0)
+    exchange = type("Exchange", (), {"fetch_ohlcv": lambda *_args, **_kwargs: [[fallback_ms]]})()
+    monkeypatch.setattr(binance, "get_current_market_inception_ms", lambda _coin: None)
+    monkeypatch.setattr(binance, "_get_ccxt_exchange", lambda _timeout: exchange)
+
+    assert binance._ccxt_find_inception("BTC") == fallback_ms
 
 
 def _archive_zip_bytes(csv_text: str) -> bytes:
@@ -497,6 +563,73 @@ def test_bitget_mapping_preserves_power_of_ten_base_prefix() -> None:
 
     assert bitget._coin_to_bitget_symbol("BONK") == "1000BONKUSDT"
     assert bitget.get_storage_coin_dir("BONK") == "1000BONK_USDT:USDT"
+
+
+def test_binance_cat_markets_use_distinct_symbols_and_storage_dirs(monkeypatch) -> None:
+    """Binance downloader inputs cannot collapse CAT and 1000CAT storage."""
+    symbols = {"CAT": "CATUSDT", "1000CAT": "1000CATUSDT"}
+    monkeypatch.setattr(binance, "_get_binance_symbol", lambda coin, _exchange: symbols[coin])
+
+    assert binance._coin_to_archive_symbol("CAT") == "CATUSDT"
+    assert binance._coin_to_archive_symbol("1000CAT") == "1000CATUSDT"
+    assert binance._coin_dir("CAT") == "CAT_USDT:USDT"
+    assert binance._coin_dir("1000CAT") == "1000CAT_USDT:USDT"
+
+
+def test_bitget_cat_markets_resolve_distinctly_from_legacy_mapping(monkeypatch, tmp_path) -> None:
+    """Bitget repairs old duplicate CAT mapping names before alias construction."""
+    mapping_path = tmp_path / "data" / "coindata" / "bitget" / "mapping.json"
+    mapping_path.parent.mkdir(parents=True)
+    mapping_path.write_text(json.dumps([
+        {
+            "symbol": "1000CATUSDT",
+            "ccxt_symbol": "1000CAT/USDT:USDT",
+            "base": "1000CAT",
+            "coin": "CAT",
+            "quote": "USDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+        },
+        {
+            "symbol": "CATUSDT",
+            "ccxt_symbol": "CAT/USDT:USDT",
+            "base": "CAT",
+            "coin": "CAT",
+            "quote": "USDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+        },
+    ]), encoding="utf-8")
+    monkeypatch.setattr(bitget, "__file__", str(tmp_path / "bitget_best_1m.py"))
+    monkeypatch.setattr(bitget, "_BITGET_USDT_MAP", {})
+    monkeypatch.setattr(bitget, "_BITGET_USDT_MAP_SIG", None)
+
+    assert bitget._coin_to_bitget_symbol("CAT") == "CATUSDT"
+    assert bitget._coin_to_bitget_symbol("1000CAT") == "1000CATUSDT"
+    assert bitget.get_storage_coin_dir("CAT") == "CAT_USDT:USDT"
+    assert bitget.get_storage_coin_dir("1000CAT") == "1000CAT_USDT:USDT"
+
+
+def test_market_data_config_migrates_legacy_cat_to_prefixed_market(monkeypatch, tmp_path) -> None:
+    """Version-one CAT selections keep referring to Simon's Cat after disambiguation."""
+    import market_data
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "version": 1,
+        "enabled_coins": {"binance": ["BTC", "CAT"], "bitget": ["CAT"]},
+        "auto_enable_new_coins": {"binance": False, "bitget": True},
+    }), encoding="utf-8")
+    monkeypatch.setattr(market_data, "get_market_data_config_path", lambda: config_path)
+
+    config = market_data.load_market_data_config()
+
+    assert config.version == market_data.MARKET_DATA_CONFIG_VERSION
+    assert config.enabled_coins["binance"] == ["1000CAT", "BTC"]
+    assert config.enabled_coins["bitget"] == ["1000CAT"]
+    assert config.auto_enable_new_coins == {"binance": False, "bitget": True}
 
 
 def test_bitget_rest_row_maps_base_volume_to_bv() -> None:

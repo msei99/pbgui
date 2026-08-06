@@ -19,6 +19,7 @@ from cmc_pool import CmcPoolClient, CmcPoolExhaustedError
 from cmc_runtime import build_cmc_pool_client
 from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
+from market_symbol_mapping import disambiguate_multiplier_market_coins
 from pbgui_purefunc import IniSnapshot, load_ini_snapshot, save_ini, update_ini
 from ini_watcher import IniWatcher
 
@@ -151,6 +152,16 @@ def compute_coin_name(market_id, quote=""):
     if name.upper() == "XBT":
         name = "BTC"
     return name.upper()
+
+
+def _is_tradfi_market(exchange_id: str, market: dict) -> bool:
+    """Identify exchange-native TradFi/RWA perpetuals from authoritative metadata."""
+    info = market.get("info") or {}
+    if exchange_id == "binance":
+        return str(info.get("contractType") or "").upper() == "TRADIFI_PERPETUAL"
+    if exchange_id == "bitget":
+        return str(info.get("isRwa") or "").upper() == "YES"
+    return False
 
 
 def build_symbol_mappings(symbols):
@@ -386,7 +397,7 @@ def get_symbol_for_coin(coin: str, exchange: str, use_cache=True) -> str:
         if not isinstance(mapping, list):
             mapping = []
 
-        for record in mapping if isinstance(mapping, list) else []:
+        for record in disambiguate_multiplier_market_coins(mapping):
             symbol = str(record.get("symbol") or "").strip().upper()
             if not symbol:
                 continue
@@ -568,6 +579,7 @@ class CoinData:
         try:
             mapping = _read_json_with_retry(mapping_file, retries=1, delay_s=0.2)
             if isinstance(mapping, list):
+                mapping = disambiguate_multiplier_market_coins(mapping)
                 self._exchange_mappings[exchange] = mapping
                 self._exchange_mapping_ts[exchange] = file_sig
                 return mapping
@@ -1659,8 +1671,9 @@ class CoinData:
                 # Extract base coin (e.g., "BTC" from "BTC/USDT:USDT")
                 base = market.get("base", "")
                 
-                # Detect HIP-3 (stock perpetuals)
+                # Detect non-crypto perpetuals before CMC enrichment.
                 is_hip3 = self._detect_hip3(exchange_id, market, cmc_best)
+                is_tradfi = _is_tradfi_market(exchange_id, market)
                 
                 # Find CMC data for this coin
                 # Use market_id-derived coin when possible; for exchanges like
@@ -1672,7 +1685,7 @@ class CoinData:
                     coin_name = coin_from_market_id
                 else:
                     coin_name = normalize_symbol(base, self._symbol_mappings)
-                if not is_hip3 and cmc_best:
+                if not is_hip3 and not is_tradfi and cmc_best:
                     exchange_price = prev_prices.get(market_id)
                     cmc_record, match_method, _ = self._resolve_cmc_record_no_symbolmap(
                         coin_name=coin_name,
@@ -1745,6 +1758,7 @@ class CoinData:
                     
                     # HIP-3 flag
                     "is_hip3": is_hip3,
+                    "is_tradfi": is_tradfi,
                     "dex": market.get("info", {}).get("dex") if is_hip3 else None,
                     "open_interest": self._to_float(market.get("info", {}).get("openInterest")),
                     
@@ -1753,6 +1767,8 @@ class CoinData:
                 }
                 
                 mapping.append(record)
+
+            mapping = disambiguate_multiplier_market_coins(mapping)
             
             # Save mapping
             self.save_exchange_mapping(exchange_id, mapping)

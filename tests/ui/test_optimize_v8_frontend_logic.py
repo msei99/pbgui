@@ -950,6 +950,34 @@ def test_installed_override_helpers_and_backend_result_flags_are_visible() -> No
     _run_node(script)
 
 
+def test_v8_results_show_and_sort_strategy_without_changing_v7_columns() -> None:
+    """Only PB8 result rows add the backend-provided strategy column."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _page_function(page, name)
+        for name in ("resultHeaderLabel", "getResultSortValue", "sortResults")
+    )
+    assert "if (optimizeEditorAdapter.isV8) sortKeys.splice(2, 0, 'strategy');" in page
+    assert "optimizeEditorAdapter.isV8 ? 7 : 6" in page
+    assert "escapeHtml(result.strategy || '-')" in page
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const state = {{resultSortKey: 'strategy', resultSortDir: 'asc'}};
+        {functions}
+        assert.equal(resultHeaderLabel('strategy'), 'Strategy');
+        assert.equal(getResultSortValue({{strategy: 'EMA_Anchor'}}, 'strategy'), 'ema_anchor');
+        const rows = [
+          {{name: 'grid', strategy: 'trailing_grid_v7'}},
+          {{name: 'ema', strategy: 'ema_anchor'}},
+          {{name: 'martingale', strategy: 'trailing_martingale'}}
+        ];
+        assert.deepEqual(sortResults(rows).map((row) => row.name), ['ema', 'grid', 'martingale']);
+        """
+    )
+    _run_node(script)
+
+
 def test_pareto_contract_enables_backend_advertised_median_and_scenario() -> None:
     """The toolbar consumes backend mode, scenario, and available-statistic metadata including median."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")

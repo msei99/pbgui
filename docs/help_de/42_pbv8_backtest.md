@@ -46,7 +46,7 @@ PB8 speichert wiederverwendbare Datensaetze unter `pb8/caches/hlcvs_data` und te
 
 ## Results
 
-Der **Version**-Filter ist standardmäßig auf PBv8 gesetzt und kann auf PBv7 oder **Both** umgeschaltet werden. Die Liste zeigt Version, Config, Exchange, Run-Verzeichnis und kompakte skalare Werte. Finale Balance und Equity stammen aus den letzten Werten von PB8s `balance_and_equity.csv` beziehungsweise der komprimierten `.csv.gz`-Datei, wenn die Analyse keine expliziten Endwerte enthält. PBv7- und PBv8-Zeilen können gemeinsam ausgewählt und über **Compare** verglichen werden; jede Equity-Datei wird aus dem passenden Resultroot geladen. **Delete Selected** unterstützt ebenfalls eine gemischte Auswahl und sendet jedes Result an sein zuständiges PBv7- oder PBv8-Backend.
+Der **Version**-Filter ist standardmäßig auf PBv8 gesetzt und kann auf PBv7 oder **Both** umgeschaltet werden. Die Liste zeigt Version, Config, aktive PB8-Strategie, Exchange, Run-Verzeichnis und kompakte skalare Werte. Die sortierbare Strategy-Spalte erscheint, sobald V8-Zeilen sichtbar sind, und bleibt in einer reinen V7-Ansicht ausgeblendet. Finale Balance und Equity stammen aus den letzten Werten von PB8s `balance_and_equity.csv` beziehungsweise der komprimierten `.csv.gz`-Datei, wenn die Analyse keine expliziten Endwerte enthält. PBv7- und PBv8-Zeilen können gemeinsam ausgewählt und über **Compare** verglichen werden; jede Equity-Datei wird aus dem passenden Resultroot geladen. **Delete Selected** unterstützt ebenfalls eine gemischte Auswahl und sendet jedes Result an sein zuständiges PBv7- oder PBv8-Backend.
 
 PB8 kann beim Backtest historische Daten herunterladen. Config, Exchanges, Coin-Auswahl, Zeitraum und Migrationsbericht sollten vor einem großen Backtest geprüft werden.
 

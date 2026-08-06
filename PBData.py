@@ -6,7 +6,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePath
 from time import sleep
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 import platform
 import traceback
 from dataclasses import dataclass
@@ -87,6 +87,65 @@ class PBDataConfigError(ValueError):
         self.section = section
         self.key = key
         super().__init__(f"invalid [{section}] {key}")
+
+
+def _bybit_cycle_window(now_utc: datetime | None = None) -> tuple[datetime, date, date, bool]:
+    """Return one stable UTC snapshot for current-day refresh and finalization."""
+    value = now_utc or datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    value = value.astimezone(timezone.utc)
+    current_day = value.date()
+    return value, current_day, current_day - timedelta(days=1), (value.hour, value.minute) >= (0, 15)
+
+
+def _queue_daily_checksum_jobs(*, publish_ready: bool, day: date | None = None) -> list[str]:
+    """Queue at most one automatic publish/reference job per UTC day."""
+    from market_data_integrity import SUPPORTED_EXCHANGES, catalog_summary
+    from task_queue import enqueue_unique_job
+
+    snapshot = load_ini_snapshot()
+
+    def setting(key: str) -> str:
+        if not snapshot.has_option("market_data", key):
+            return ""
+        return str(snapshot.get("market_data", key) or "").strip()
+
+    day_s = (day or datetime.now(timezone.utc).date()).isoformat()
+    queued: list[str] = []
+    reference_archive = setting("checksum_reference_archive")
+    if reference_archive:
+        result = enqueue_unique_job(
+            job_type="ohlcv_checksum_reference",
+            payload={"archive": reference_archive},
+            exchange="bybit",
+            dedupe_key=f"ohlcv-checksum-reference:{reference_archive}:{day_s}",
+            states=("pending", "running", "done"),
+        )
+        if result.created:
+            queued.append(result.job_id)
+
+    publish_enabled = setting("checksum_publish_enabled").lower() in {"true", "1", "yes", "on"}
+    publish_archive = setting("checksum_publish_archive")
+    catalog_ready = (
+        all(
+            bool(catalog_summary(exchange=exchange).get("initial_scan_complete"))
+            for exchange in SUPPORTED_EXCHANGES
+        )
+        if publish_ready and publish_enabled and publish_archive
+        else False
+    )
+    if publish_ready and publish_enabled and publish_archive and catalog_ready:
+        result = enqueue_unique_job(
+            job_type="ohlcv_checksum_publish",
+            payload={"archive": publish_archive},
+            exchange="bybit",
+            dedupe_key=f"ohlcv-checksum-publish:{publish_archive}:{day_s}",
+            states=("pending", "running", "done"),
+        )
+        if result.created:
+            queued.append(result.job_id)
+    return queued
 
 
 async def _wait_for_flag(flag_path: _Path, timeout: float) -> bool:
@@ -1277,13 +1336,38 @@ class PBData():
                     pass
 
     async def _bybit_latest_1m_loop(self):
-        """Background loop: refresh Bybit 1m candles for enabled coins."""
+        """Refresh today hourly and finalize yesterday once after 00:15 UTC."""
         await asyncio.sleep(16)  # Slight offset from binance loop
         while True:
             try:
                 if not self._bybit_latest_1m_enabled:
                     await asyncio.sleep(5)
                     continue
+
+                try:
+                    from market_data_integrity import INITIAL_SCAN_VERSION, initial_scan_required
+                    from task_queue import enqueue_unique_job
+
+                    if initial_scan_required("bybit"):
+                        scan_job = enqueue_unique_job(
+                            job_type="ohlcv_integrity_scan",
+                            payload={"exchange": "bybit", "scan_version": INITIAL_SCAN_VERSION},
+                            exchange="bybit",
+                            dedupe_key=f"ohlcv-integrity-scan:bybit:v{INITIAL_SCAN_VERSION}",
+                        )
+                        if scan_job.created:
+                            _human_log(
+                                SERVICE,
+                                f"[market-data] queued initial Bybit OHLCV integrity scan job={scan_job.job_id}",
+                                level="INFO",
+                            )
+                except Exception as e:
+                    _human_log(SERVICE, f"[market-data] failed to queue Bybit integrity scan: {e}", level="WARNING")
+
+                try:
+                    _queue_daily_checksum_jobs(publish_ready=False)
+                except Exception as e:
+                    _human_log(SERVICE, f"[market-data] failed to queue checksum reference refresh: {e}", level="WARNING")
 
                 cfg = load_market_data_config()
                 coins, missing_saved_coins, auto_enable_new_coins = get_effective_enabled_coins("bybit", cfg=cfg)
@@ -1305,6 +1389,7 @@ class PBData():
 
                 _coins_done_offset = 0
 
+                cycle_now_utc, cycle_day, finalize_day, finalize_due = _bybit_cycle_window()
                 now = datetime.now()
                 now_ts = now.timestamp()
                 _prev_bbt: dict = {}
@@ -1321,6 +1406,14 @@ class PBData():
                     "coins_done": _coins_done_offset,
                     "coins_total": len(coins),
                     "coins": _prune_coin_status_map(_prev_bbt, coins),
+                    "cycle_day_utc": cycle_day.isoformat(),
+                    "daily_finalize_after_utc": "00:15",
+                    "daily_finalize_target": finalize_day.isoformat(),
+                    "daily_finalize_due": len(coins) if finalize_due else 0,
+                    "daily_finalize_succeeded": 0,
+                    "daily_finalize_failed": 0,
+                    "daily_finalize_pending": 0,
+                    "catchup_failed": 0,
                 }
                 try:
                     await self._update_market_data_status("bybit_latest_1m", status_bbt)
@@ -1329,44 +1422,140 @@ class PBData():
 
                 for coin in coins:
                     coin_status: dict = {"last_fetch": None, "result": "skipped"}
-                    max_lb = int(self._bybit_latest_1m_max_lookback_days)
-                    lookback_days = int(self._bybit_latest_1m_min_lookback_days)
 
                     try:
-                        from bybit_best_1m import get_newest_day as bybit_get_newest_day
-                        newest_day = bybit_get_newest_day(coin) or ""
-                        if newest_day:
-                            d_new = datetime.strptime(newest_day, "%Y%m%d").date()
-                            days_since = (datetime.utcnow().date() - d_new).days
-                            if days_since < 0:
-                                days_since = 0
-                            lookback_days = max(lookback_days, days_since + 1)
-                        else:
-                            lookback_days = max_lb
-                            coin_status["note"] = "no_local_data"
-                    except Exception as e:
-                        coin_status["error"] = f"coverage:{type(e).__name__}"
-
-                    if lookback_days > max_lb:
-                        coin_status["note"] = "window_limited"
-                        lookback_days = max_lb
-
-                    try:
-                        from bybit_best_1m import update_latest_bybit_1m_for_coin
-                        res = await asyncio.to_thread(
-                            update_latest_bybit_1m_for_coin,
-                            coin=coin,
-                            lookback_days=int(lookback_days),
-                            overwrite=True,
-                            timeout_s=float(self._bybit_latest_1m_api_timeout_seconds),
+                        from bybit_best_1m import (
+                            finalize_bybit_1m_day_for_coin,
+                            get_day_path as bybit_day_path,
+                            get_storage_coin_dir as bybit_storage_coin,
+                            update_current_bybit_1m_for_coin,
                         )
+                        from market_data_integrity import (
+                            catalog_operation_lock,
+                            day_is_finalized,
+                            oldest_unfinalized_day,
+                            record_daily_file,
+                        )
+
+                        storage_coin = bybit_storage_coin(coin)
+                        pending_finalize_day = None
+                        target_finalize_day = finalize_day
+                        yesterday_not_applicable = False
+                        try:
+                            if finalize_due:
+                                yesterday_path = bybit_day_path(coin, finalize_day.isoformat())
+                                if not day_is_finalized(
+                                    exchange="bybit",
+                                    coin=storage_coin,
+                                    day=finalize_day,
+                                    path=yesterday_path,
+                                ):
+                                    pending_finalize_day = finalize_day
+                                else:
+                                    pending_finalize_day = oldest_unfinalized_day(
+                                        exchange="bybit",
+                                        coin=storage_coin,
+                                        through_day=finalize_day - timedelta(days=1),
+                                        lookback_days=min(30, max(1, int(self._bybit_latest_1m_max_lookback_days))),
+                                        path_for_day=lambda candidate: bybit_day_path(coin, candidate.isoformat()),
+                                    )
+                            target_finalize_day = pending_finalize_day or finalize_day
+                            finalize_path = bybit_day_path(coin, target_finalize_day.isoformat())
+                            coin_status["finalization_day"] = target_finalize_day.isoformat()
+                            if not finalize_due:
+                                coin_status["finalization_result"] = "not_due"
+                            elif pending_finalize_day is None:
+                                coin_status["finalization_result"] = "already_complete"
+                                coin_status["last_finalized_day"] = finalize_day.isoformat()
+                                status_bbt["daily_finalize_succeeded"] += 1
+                            else:
+                                def finalize_and_record() -> tuple[dict, object | None]:
+                                    with catalog_operation_lock():
+                                        result = finalize_bybit_1m_day_for_coin(
+                                            coin=coin,
+                                            day=target_finalize_day,
+                                            timeout_s=float(self._bybit_latest_1m_api_timeout_seconds),
+                                        )
+                                        if str(result.get("result") or "error") != "ok":
+                                            return result, None
+                                        checked = record_daily_file(
+                                            exchange="bybit",
+                                            coin=storage_coin,
+                                            day=target_finalize_day,
+                                            path=finalize_path,
+                                            allow_inception_prefix=int(result.get("minutes_written") or 0) < 1440,
+                                        )
+                                        return result, checked
+
+                                finalized, validation = await asyncio.to_thread(finalize_and_record)
+                                coin_status["finalization_result"] = str(finalized.get("result") or "error")
+                                coin_status["finalization_minutes_written"] = int(finalized.get("minutes_written") or 0)
+                                if coin_status["finalization_result"] == "ok":
+                                    if validation is None or not validation.valid:
+                                        raise RuntimeError(
+                                            (validation.error if validation is not None else "")
+                                            or "finalized day failed checksum validation"
+                                        )
+                                    coin_status["last_finalized_day"] = target_finalize_day.isoformat()
+                                    status_bbt["daily_finalize_succeeded"] += 1
+                                elif coin_status["finalization_result"] == "not_applicable":
+                                    coin_status["inception_day"] = str(finalized.get("inception_day") or "")
+                                    yesterday_not_applicable = target_finalize_day == finalize_day
+                                    status_bbt["daily_finalize_succeeded"] += 1
+                                else:
+                                    coin_status["finalization_error"] = str(finalized.get("error") or "Bybit finalization failed")
+                                    failure_key = "daily_finalize_failed" if target_finalize_day == finalize_day else "catchup_failed"
+                                    status_bbt[failure_key] += 1
+                        except Exception as finalize_exc:
+                            coin_status["finalization_result"] = "error"
+                            coin_status["finalization_error"] = str(finalize_exc)
+                            if finalize_due:
+                                failure_key = "daily_finalize_failed" if target_finalize_day == finalize_day else "catchup_failed"
+                                status_bbt[failure_key] += 1
+
+                        if finalize_due:
+                            try:
+                                yesterday_complete = yesterday_not_applicable or day_is_finalized(
+                                    exchange="bybit",
+                                    coin=storage_coin,
+                                    day=finalize_day,
+                                    path=bybit_day_path(coin, finalize_day.isoformat()),
+                                )
+                            except Exception as pending_exc:
+                                yesterday_complete = False
+                                coin_status.setdefault("finalization_error", str(pending_exc))
+                            if not yesterday_complete:
+                                status_bbt["daily_finalize_pending"] += 1
+
+                        try:
+                            res = await asyncio.to_thread(
+                                update_current_bybit_1m_for_coin,
+                                coin=coin,
+                                now_utc=cycle_now_utc,
+                                timeout_s=float(self._bybit_latest_1m_api_timeout_seconds),
+                            )
+                            coin_status["current_result"] = str(res.get("result") or "error")
+                            coin_status["current_minutes_written"] = int(res.get("minutes_written") or 0)
+                            if coin_status["current_result"] != "ok":
+                                coin_status["current_error"] = str(res.get("error") or "Bybit current-day refresh failed")
+                        except Exception as current_exc:
+                            coin_status["current_result"] = "error"
+                            coin_status["current_minutes_written"] = 0
+                            coin_status["current_error"] = str(current_exc)
                         coin_status["last_fetch"] = datetime.now().isoformat(sep=" ", timespec="seconds")
-                        coin_status["result"] = str(res.get("result") or "ok")
-                        coin_status["lookback_days"] = int(lookback_days)
-                        coin_status["closed_days_checked"] = int(res.get("closed_days_checked") or 0)
-                        coin_status["minutes_written"] = int(res.get("minutes_written") or 0)
+                        coin_status["current_day"] = cycle_day.isoformat()
+                        coin_status["minutes_written"] = coin_status["current_minutes_written"]
+                        coin_status["result"] = (
+                            "error"
+                            if coin_status["current_result"] != "ok" or coin_status.get("finalization_result") == "error"
+                            else "ok"
+                        )
                         if coin_status["result"] != "ok":
-                            coin_status["error"] = str(res.get("error") or "Bybit refresh failed")
+                            coin_status["error"] = str(
+                                coin_status.get("finalization_error")
+                                or coin_status.get("current_error")
+                                or "Bybit refresh failed"
+                            )
                         try:
                             _refresh_inventory_coin("bybit", "1m", coin)
                         except Exception:
@@ -1406,6 +1595,19 @@ class PBData():
                 status_bbt["running"] = False
                 status_bbt["current_coin"] = None
                 status_bbt["last_run_duration_s"] = int(datetime.now().timestamp() - now_ts)
+                if (
+                    finalize_due
+                    and not status_bbt.get("stopped")
+                    and int(status_bbt.get("coins_done") or 0) == int(status_bbt.get("coins_total") or 0)
+                    and int(status_bbt.get("daily_finalize_failed") or 0) == 0
+                    and int(status_bbt.get("daily_finalize_pending") or 0) == 0
+                ):
+                    try:
+                        queued_jobs = _queue_daily_checksum_jobs(publish_ready=True, day=cycle_day)
+                        if queued_jobs:
+                            status_bbt["checksum_jobs_queued"] = queued_jobs
+                    except Exception as e:
+                        _human_log(SERVICE, f"[market-data] failed to queue checksum publication: {e}", level="WARNING")
                 try:
                     await self._update_market_data_status("bybit_latest_1m", status_bbt)
                 except Exception:

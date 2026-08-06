@@ -1,4 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+import json
 
 import hyperliquid_best_1m as hb
 
@@ -17,6 +19,144 @@ def _recent_weekday() -> date:
             return d
         d -= timedelta(days=1)
     return date.today()
+
+
+def test_hyperliquid_exact_day_reads_archived_l2book_hours(monkeypatch, tmp_path) -> None:
+    """Integrity repair resolves archived L2Book hours instead of requiring local raw files."""
+    archived = tmp_path / "archive" / "BTC_USDC:USDC" / "20260102-01.lz4"
+    archived.parent.mkdir(parents=True)
+    archived.write_bytes(b"archived")
+    day_start = int(datetime(2026, 1, 2, tzinfo=timezone.utc).timestamp() * 1000)
+    resolved = []
+
+    def resolve(**kwargs):
+        resolved.append(kwargs["hour"])
+        return archived if kwargs["hour"] == 1 else None
+
+    monkeypatch.setattr(hb, "_resolve_l2book_hour_path", resolve)
+    monkeypatch.setattr(
+        hb,
+        "iter_hyperliquid_l2book_mid_prices",
+        lambda path: iter([(day_start + 62 * 60_000, Decimal("100.5"))]) if path == archived else iter(()),
+    )
+
+    result = hb._l2book_minutes_for_day(coin="BTC", day="20260102")
+
+    assert resolved == list(range(24))
+    assert result[62]["c"] == 100.5
+
+
+def test_hyperliquid_source_gap_requires_every_minute_before_donors(monkeypatch, tmp_path) -> None:
+    """Current local market metadata bounds source gaps at exact donor inception minutes."""
+    coindata = tmp_path / "coindata"
+    for exchange, market, info in (
+        ("binance", {"id": "TESTUSDT", "created": 1767318000000}, {"onboardDate": "1767318000000"}),
+        ("bybit", {"id": "TESTUSDT", "created": 1767324000000}, {"launchTime": "1767324000000"}),
+    ):
+        path = coindata / exchange / "ccxt_markets.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"TEST/USDT:USDT": {**market, "info": info}}), encoding="utf-8")
+    monkeypatch.setattr(hb, "_get_symbol_for_coin", lambda *_args: "TESTUSDT")
+    hb._SOURCE_GAP_MARKETS_CACHE.clear()
+
+    before = hb.classify_hyperliquid_pre_donor_gap(
+        coin="TEST",
+        day="2026-01-02",
+        missing_minutes={30},
+        coindata_root=coindata,
+    )
+    covered = hb.classify_hyperliquid_pre_donor_gap(
+        coin="TEST",
+        day="2026-01-02",
+        missing_minutes={120},
+        coindata_root=coindata,
+    )
+
+    assert before["eligible"] is True
+    assert covered["eligible"] is False
+    assert "binanceusdm may cover" in covered["reason"]
+
+
+def test_external_fallback_expands_envelope_after_l2_boundary_adjustment(monkeypatch, tmp_path) -> None:
+    """Adjusted fallback Open/Close values remain enclosed by High/Low."""
+    target_day = date(2026, 1, 2)
+    day_start = int(datetime(2026, 1, 2, tzinfo=timezone.utc).timestamp() * 1000)
+    day_path = tmp_path / "2026-01-02.npz"
+    day_path.write_bytes(b"existing")
+    existing = {
+        0: {"t": day_start, "o": 12.0, "h": 12.0, "l": 12.0, "c": 12.0, "v": 1.0},
+        2: {"t": day_start + 120_000, "o": 8.0, "h": 8.0, "l": 8.0, "c": 8.0, "v": 1.0},
+    }
+    written = []
+
+    class FakeExchange:
+        def __init__(self, _exchange_id):
+            pass
+
+        def fetch_ohlcv(self, _symbol, _market_type, _timeframe, *, limit, since):
+            return [[day_start + 60_000, 10.0, 11.0, 9.0, 10.0, 2.0]]
+
+    monkeypatch.setattr(hb, "normalize_hyperliquid_coin", lambda coin: coin)
+    monkeypatch.setattr(hb, "normalize_market_data_coin_dir", lambda *_args: "BTC_USDC:USDC")
+    monkeypatch.setattr(hb, "_best_day_path", lambda **_kwargs: day_path)
+    monkeypatch.setattr(hb, "_read_day_npz", lambda *_args, **_kwargs: dict(existing))
+    monkeypatch.setattr(hb, "get_source_codes_for_day", lambda **_kwargs: [hb.SOURCE_CODE_L2BOOK, 0, hb.SOURCE_CODE_L2BOOK] + [0] * 1437)
+    monkeypatch.setattr(hb, "_write_day_npz", lambda _path, candles: written.append(candles))
+    monkeypatch.setattr(hb, "update_source_index_for_day", lambda **_kwargs: None)
+    monkeypatch.setattr(hb, "Exchange", FakeExchange)
+    stats = {}
+
+    added = hb._fill_missing_from_exchange_perp_1m(
+        exchange_id="binanceusdm",
+        symbol="BTC/USDT:USDT",
+        coin="BTC",
+        start_date=target_day,
+        end_date=target_day,
+        sleep_s=0.0,
+        stats_out=stats,
+    )
+
+    fallback = written[0][1]
+    assert added == 1
+    assert fallback["o"] == 12.0
+    assert fallback["c"] == 8.0
+    assert fallback["h"] == 12.0
+    assert fallback["l"] == 8.0
+    assert stats == {"days_requested": 1, "days_completed": 1}
+
+
+def test_external_fallback_records_fetch_errors_as_incomplete(monkeypatch, tmp_path) -> None:
+    """A donor network failure cannot become proof that historical candles are unavailable."""
+    day_path = tmp_path / "2026-01-02.npz"
+    day_path.write_bytes(b"existing")
+
+    class FailingExchange:
+        def __init__(self, _exchange_id):
+            pass
+
+        def fetch_ohlcv(self, *_args, **_kwargs):
+            raise RuntimeError("network down")
+
+    monkeypatch.setattr(hb, "normalize_hyperliquid_coin", lambda coin: coin)
+    monkeypatch.setattr(hb, "normalize_market_data_coin_dir", lambda *_args: "BTC_USDC:USDC")
+    monkeypatch.setattr(hb, "_best_day_path", lambda **_kwargs: day_path)
+    monkeypatch.setattr(hb, "_read_day_npz", lambda *_args, **_kwargs: {0: {"t": 1}})
+    monkeypatch.setattr(hb, "Exchange", FailingExchange)
+    monkeypatch.setattr(hb, "append_exchange_download_log", lambda *_args, **_kwargs: None)
+    stats = {}
+
+    added = hb._fill_missing_from_exchange_perp_1m(
+        exchange_id="bybit",
+        symbol="BTC/USDT:USDT",
+        coin="BTC",
+        start_date=date(2026, 1, 2),
+        end_date=date(2026, 1, 2),
+        sleep_s=0.0,
+        stats_out=stats,
+    )
+
+    assert added == 0
+    assert stats == {"days_requested": 1, "errors": 1}
 
 
 def test_best_sync_start_bootstrap_prefers_oldest_api_day() -> None:

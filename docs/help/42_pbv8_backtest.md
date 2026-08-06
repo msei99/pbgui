@@ -46,7 +46,7 @@ PB8 stores reusable datasets under `pb8/caches/hlcvs_data` and temporary materia
 
 ## Results
 
-The **Version** filter defaults to PBv8 and can switch to PBv7 or **Both**. The list shows each result's version, config, exchange, run directory, and compact scalar metrics. Final balance and equity use the terminal values recorded in PB8's `balance_and_equity.csv` or compressed `.csv.gz` artifact when analysis metadata does not provide explicit totals. Select PBv7 and PBv8 rows together and click **Compare** to overlay their equity and balance series; each file is read from its matching result root. **Delete Selected** also supports a mixed selection and sends every result to its owning PBv7 or PBv8 backend.
+The **Version** filter defaults to PBv8 and can switch to PBv7 or **Both**. The list shows each result's version, config, active PB8 strategy, exchange, run directory, and compact scalar metrics. The sortable Strategy column appears whenever V8 rows are visible and remains absent from a pure V7 view. Final balance and equity use the terminal values recorded in PB8's `balance_and_equity.csv` or compressed `.csv.gz` artifact when analysis metadata does not provide explicit totals. Select PBv7 and PBv8 rows together and click **Compare** to overlay their equity and balance series; each file is read from its matching result root. **Delete Selected** also supports a mixed selection and sends every result to its owning PBv7 or PBv8 backend.
 
 PB8 may download historical data when a backtest starts. Review the config, exchanges, coin selection, dates, and PB8 migration report before running a large backtest.
 

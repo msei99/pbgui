@@ -54,6 +54,7 @@ _REGISTRY_ENTRIES = [
     *_entries("market_data", ("hl_aws_profile",), "TaskWorker", "next_operation", "Applies to next operation"),
     *_entries("market_data", ("hl_l2book_scan_timeout_s", "hl_l2book_scan_workers"), "TaskWorker", "next_cycle", "Applies next cycle"),
     *_entries("market_data", ("l2book_archive_enabled", "l2book_archive_dir"), "MarketData", "next_operation", "Applies to next operation"),
+    *_entries("market_data", ("checksum_publish_enabled", "checksum_publish_archive", "checksum_reference_archive"), "MarketData", "next_operation", "Applies to next checksum operation"),
     *_entries("config_archive", ("my_archive", "my_archive_path", "my_archive_username", "my_archive_email", "my_archive_access_token", "auto_pull_interval"), "BacktestV7", "next_operation", "Applies to next operation"),
 ]
 

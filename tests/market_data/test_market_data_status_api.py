@@ -934,3 +934,439 @@ def test_bitget_distributed_failed_job_retry_starts_fresh_runner(monkeypatch) ->
 
     assert result == {"success": True, "job_id": "bitget-dist-1", "runner_started": True}
     assert started == ["bitget-dist-1"]
+
+
+def test_checksum_settings_keep_publish_and_reference_archives_independent(monkeypatch) -> None:
+    """A writable own archive and a public comparison archive may differ."""
+    monkeypatch.setattr(
+        market_data_api,
+        "list_github_archives",
+        lambda: [
+            {"name": "mine", "can_publish": True, "can_reference": True},
+            {"name": "community", "can_publish": False, "can_reference": True},
+        ],
+    )
+    saved = {}
+
+    def update(mutator):
+        parser = configparser.ConfigParser()
+        mutator(parser)
+        saved.update(dict(parser["market_data"]))
+
+    monkeypatch.setattr(market_data_api, "update_ini", update)
+    monkeypatch.setattr(market_data_api, "_checksum_settings_payload", lambda: {"saved": True})
+
+    result = market_data_api._save_checksum_settings(
+        {
+            "publish_enabled": True,
+            "publish_archive": "mine",
+            "reference_archive": "community",
+        }
+    )
+
+    assert result == {"saved": True}
+    assert saved == {
+        "checksum_publish_enabled": "true",
+        "checksum_publish_archive": "mine",
+        "checksum_reference_archive": "community",
+    }
+
+
+def test_checksum_settings_reject_non_writable_publish_archive(monkeypatch) -> None:
+    """Reference-only community archives cannot be selected as publishers."""
+    monkeypatch.setattr(
+        market_data_api,
+        "list_github_archives",
+        lambda: [{"name": "community", "can_publish": False, "can_reference": True}],
+    )
+
+    with pytest.raises(ValueError, match="writable own archive"):
+        market_data_api._save_checksum_settings(
+            {
+                "publish_enabled": True,
+                "publish_archive": "community",
+                "reference_archive": "community",
+            }
+        )
+
+
+def test_integrity_repair_job_payload_contains_only_identifiers(monkeypatch) -> None:
+    """Repair API queues validated identifiers without paths or credentials."""
+    calls = []
+
+    def enqueue(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(job_id="repair-job", created=True)
+
+    monkeypatch.setattr(market_data_api, "enqueue_unique_job", enqueue)
+    result = market_data_api.queue_integrity_repair(
+        {"exchange": "bybit", "coin": "BTC_USDT:USDT", "day": "2026-07-13"},
+        session=None,
+    )
+
+    assert result == {"success": True, "job_id": "repair-job", "created": True}
+    assert calls[0]["payload"] == {
+        "exchange": "bybit",
+        "coin": "BTC_USDT:USDT",
+        "day": "2026-07-13",
+    }
+
+
+def test_integrity_repair_all_queues_one_batch_job(monkeypatch) -> None:
+    """Repair All uses one durable job rather than one queue file per damaged day."""
+    monkeypatch.setattr(
+        market_data_api,
+        "list_integrity_issues",
+        lambda **_kwargs: {
+            "total": 3,
+            "rows": [
+                {"coin": "BTC_USDT:USDT", "market_status": "available"},
+                {"coin": "ETH_USDT:USDT", "market_status": "available"},
+                {"coin": "OLD_USDT:USDT", "market_status": "removed"},
+            ],
+        },
+    )
+    calls = []
+
+    def enqueue(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(job_id="repair-all-job", created=True)
+
+    monkeypatch.setattr(market_data_api, "enqueue_unique_job", enqueue)
+    result = market_data_api.queue_integrity_repair_all(session=None)
+
+    assert result == {
+        "success": True,
+        "job_id": "repair-all-job",
+        "created": True,
+        "total": 2,
+        "coin": "",
+    }
+    assert calls == [{
+        "job_type": "ohlcv_integrity_repair_all",
+        "payload": {"exchange": "bybit"},
+        "exchange": "bybit",
+        "dedupe_key": "ohlcv-integrity-repair-all:bybit:all",
+    }]
+
+
+def test_integrity_repair_all_can_scope_batch_to_one_coin(monkeypatch) -> None:
+    """Grouped Repair coin queues one sequential batch for that exact coin."""
+    monkeypatch.setattr(
+        market_data_api,
+        "list_integrity_issues",
+        lambda **_kwargs: {
+            "rows": [
+                {"coin": "KORU_USDT:USDT", "market_status": "available"},
+                {"coin": "KORU_USDT:USDT", "market_status": "available"},
+                {"coin": "BTC_USDT:USDT", "market_status": "available"},
+            ]
+        },
+    )
+    calls = []
+    monkeypatch.setattr(
+        market_data_api,
+        "enqueue_unique_job",
+        lambda **kwargs: calls.append(kwargs) or SimpleNamespace(job_id="coin-job", created=True),
+    )
+
+    result = market_data_api.queue_integrity_repair_all(
+        session=None,
+        body={"coin": "KORU_USDT:USDT"},
+    )
+
+    assert result["total"] == 2
+    assert result["coin"] == "KORU_USDT:USDT"
+    assert calls[0]["payload"] == {"exchange": "bybit", "coin": "KORU_USDT:USDT"}
+    assert calls[0]["dedupe_key"] == "ohlcv-integrity-repair-all:bybit:KORU_USDT:USDT"
+
+
+def test_hyperliquid_integrity_repair_all_queues_exchange_scoped_batch(monkeypatch) -> None:
+    """Hyperliquid uses the same durable coin-grouped repair queue as Bybit."""
+    monkeypatch.setattr(
+        market_data_api,
+        "list_integrity_issues",
+        lambda **kwargs: {
+            "rows": [{"coin": "BLAST_USDC:USDC", "market_status": "available"}]
+            if kwargs["exchange"] == "hyperliquid"
+            else [],
+        },
+    )
+    calls = []
+    monkeypatch.setattr(
+        market_data_api,
+        "enqueue_unique_job",
+        lambda **kwargs: calls.append(kwargs) or SimpleNamespace(job_id="hl-repair", created=True),
+    )
+
+    result = market_data_api.queue_integrity_repair_all(
+        session=None,
+        body={"exchange": "hyperliquid", "coin": "BLAST_USDC:USDC"},
+    )
+
+    assert result["total"] == 1
+    assert calls[0]["payload"] == {"exchange": "hyperliquid", "coin": "BLAST_USDC:USDC"}
+    assert calls[0]["exchange"] == "hyperliquid"
+    assert calls[0]["dedupe_key"] == "ohlcv-integrity-repair-all:hyperliquid:BLAST_USDC:USDC"
+
+
+def test_removed_integrity_coin_queues_revalidated_delete_job(monkeypatch) -> None:
+    """Removed-coin deletion queues identifiers only after a safe preview."""
+    preview = {"exchange": "bybit", "coin": "OLD_USDT:USDT", "files": 12, "bytes": 500}
+    monkeypatch.setattr(market_data_api, "unavailable_coin_data_preview", lambda **_kwargs: preview)
+    calls = []
+
+    def enqueue(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(job_id="remove-job", created=True)
+
+    monkeypatch.setattr(market_data_api, "enqueue_unique_job", enqueue)
+    result = market_data_api.queue_removed_integrity_coin(
+        {"exchange": "bybit", "coin": "OLD_USDT:USDT"},
+        session=None,
+    )
+
+    assert result["job_id"] == "remove-job"
+    assert result["preview"] == preview
+    assert calls == [{
+        "job_type": "ohlcv_removed_coin_delete",
+        "payload": {"exchange": "bybit", "coin": "OLD_USDT:USDT"},
+        "exchange": "bybit",
+        "dedupe_key": "ohlcv-removed-coin-delete:bybit:OLD_USDT:USDT",
+    }]
+
+
+def test_removed_integrity_coin_batch_queues_one_revalidated_job(monkeypatch) -> None:
+    """Selected or all unavailable markets become one exact restart-persistent batch job."""
+    preview = {
+        "exchange": "bybit",
+        "coins": ["OLD_A_USDT:USDT", "OLD_B_USDT:USDT"],
+        "coin_count": 2,
+        "files": 20,
+        "bytes": 500,
+    }
+    preview_calls = []
+    monkeypatch.setattr(
+        market_data_api,
+        "unavailable_coin_data_batch_preview",
+        lambda **kwargs: preview_calls.append(kwargs) or preview,
+    )
+    queued = []
+    monkeypatch.setattr(
+        market_data_api,
+        "enqueue_unique_job",
+        lambda **kwargs: queued.append(kwargs) or SimpleNamespace(job_id="batch-remove", created=True),
+    )
+
+    shown = market_data_api.preview_removed_integrity_coins(
+        {"exchange": "bybit", "coins": ["OLD_B_USDT:USDT", "OLD_A_USDT:USDT"]},
+        session=None,
+    )
+    result = market_data_api.queue_removed_integrity_coins(
+        {"exchange": "bybit", "all": True},
+        session=None,
+    )
+
+    assert shown == preview
+    assert preview_calls == [
+        {"exchange": "bybit", "coins": ["OLD_B_USDT:USDT", "OLD_A_USDT:USDT"]},
+        {"exchange": "bybit", "coins": None},
+    ]
+    assert result["job_id"] == "batch-remove"
+    assert queued == [{
+        "job_type": "ohlcv_removed_coins_delete",
+        "payload": {"exchange": "bybit", "coins": preview["coins"]},
+        "exchange": "bybit",
+        "dedupe_key": "ohlcv-removed-coins-delete:bybit",
+    }]
+
+
+def test_checksum_publish_requires_completed_idle_catalog(monkeypatch) -> None:
+    """Manual publishing cannot replace a good release from an incomplete catalog."""
+    monkeypatch.setattr(
+        market_data_api,
+        "_checksum_settings_payload",
+        lambda: {
+            "publish_archive": "mine",
+            "catalogs": {"bybit": {"initial_scan_complete": False}},
+        },
+    )
+    with pytest.raises(Exception) as incomplete:
+        market_data_api.queue_checksum_publish(session=None)
+    assert incomplete.value.status_code == 409
+
+    monkeypatch.setattr(
+        market_data_api,
+        "_checksum_settings_payload",
+        lambda: {
+            "publish_archive": "mine",
+            "catalogs": {"bybit": {"initial_scan_complete": True}},
+        },
+    )
+    monkeypatch.setattr(
+        market_data_api,
+        "list_jobs",
+        lambda **_kwargs: [{"type": "ohlcv_integrity_repair", "status": "pending"}],
+    )
+    with pytest.raises(Exception) as updating:
+        market_data_api.queue_checksum_publish(session=None)
+    assert updating.value.status_code == 409
+
+
+@pytest.mark.parametrize(
+    ("requested", "storage"),
+    [
+        ("binance", "binanceusdm"),
+        ("binanceusdm", "binanceusdm"),
+        ("bybit", "bybit"),
+        ("okx", "okx"),
+        ("bitget", "bitget"),
+        ("hyperliquid", "hyperliquid"),
+    ],
+)
+def test_integrity_scan_queues_selected_storage_exchange(monkeypatch, requested: str, storage: str) -> None:
+    """Every supported GUI exchange gets an exchange-scoped scan job."""
+    calls = []
+    monkeypatch.setattr(
+        market_data_api,
+        "enqueue_unique_job",
+        lambda **kwargs: calls.append(kwargs) or SimpleNamespace(job_id="scan-job", created=True),
+    )
+
+    result = market_data_api.queue_integrity_scan(session=None, body={"exchange": requested})
+
+    assert result["exchange"] == storage
+    assert calls[0]["payload"]["exchange"] == storage
+    assert calls[0]["exchange"] == storage
+    assert calls[0]["dedupe_key"] == f"ohlcv-integrity-scan:{storage}:v{market_data_api.INITIAL_SCAN_VERSION}"
+
+
+def test_hyperliquid_fallback_normalization_queues_one_scoped_job(monkeypatch) -> None:
+    """The maintenance endpoint queues one deduplicated Hyperliquid job."""
+    calls = []
+    monkeypatch.setattr(
+        market_data_api,
+        "enqueue_unique_job",
+        lambda **kwargs: calls.append(kwargs) or SimpleNamespace(job_id="normalize-job", created=True),
+    )
+
+    result = market_data_api.queue_hyperliquid_fallback_normalization(session=None)
+
+    assert result["job_id"] == "normalize-job"
+    assert calls == [{
+        "job_type": "ohlcv_hyperliquid_normalize_fallback",
+        "payload": {"exchange": "hyperliquid", "dry_run": False},
+        "exchange": "hyperliquid",
+        "dedupe_key": "ohlcv-hyperliquid-normalize-fallback:v1",
+    }]
+
+
+def test_removed_coin_listing_uses_selected_storage_exchange(monkeypatch) -> None:
+    """Unavailable-market listing follows the global exchange selection."""
+    calls = []
+    monkeypatch.setattr(
+        market_data_api,
+        "list_removed_coin_data",
+        lambda **kwargs: calls.append(kwargs) or {"exchange": kwargs["exchange"], "rows": []},
+    )
+
+    result = market_data_api.get_removed_integrity_coins(exchange="hyperliquid", session=None)
+
+    assert result["exchange"] == "hyperliquid"
+    assert calls == [{"exchange": "hyperliquid"}]
+
+
+def test_integrity_day_details_normalizes_exchange_and_forwards_identifiers(monkeypatch) -> None:
+    """The authenticated detail endpoint exposes only validated storage identifiers."""
+    calls = []
+    monkeypatch.setattr(
+        market_data_api,
+        "daily_gap_details",
+        lambda **kwargs: calls.append(kwargs) or {"coverage": "p" * 1440},
+    )
+
+    result = market_data_api.get_integrity_day_details(
+        exchange="binance",
+        coin="BTC_USDT:USDT",
+        day="2019-09-08",
+        session=None,
+    )
+
+    assert len(result["coverage"]) == 1440
+    assert calls == [{
+        "exchange": "binanceusdm",
+        "coin": "BTC_USDT:USDT",
+        "day": "2019-09-08",
+    }]
+
+
+def test_integrity_status_scopes_catalog_and_comparison(monkeypatch) -> None:
+    """Selected-exchange status cannot leak another exchange's comparison rows."""
+    catalogs = {
+        exchange: {"exchange": exchange, "initial_scan_complete": True, "counts": {}}
+        for exchange in market_data_api.SUPPORTED_EXCHANGES
+    }
+    monkeypatch.setattr(
+        market_data_api,
+        "_checksum_settings_payload",
+        lambda: {
+            "catalogs": catalogs,
+            "reference": {"available": True, "matches_selected": True},
+        },
+    )
+    monkeypatch.setattr(market_data_api, "reference_database_path", lambda: Path(__file__))
+    compared = []
+    monkeypatch.setattr(
+        market_data_api,
+        "compare_catalogs_readonly",
+        lambda **kwargs: compared.append(kwargs) or {"counts": {}, "differences": []},
+    )
+
+    result = market_data_api.get_integrity_status(exchange="binance", session=None)
+
+    assert result["exchange"] == "binanceusdm"
+    assert result["catalog"]["exchange"] == "binanceusdm"
+    assert result["repair_supported"] is True
+    assert compared[0]["exchange"] == "binanceusdm"
+
+
+def test_unknown_mutation_exchanges_are_rejected(monkeypatch) -> None:
+    """Repair and removal reject exchange identifiers outside the integrity boundary."""
+    monkeypatch.setattr(market_data_api, "enqueue_unique_job", lambda **_kwargs: pytest.fail("job was queued"))
+
+    with pytest.raises(Exception) as repair:
+        market_data_api.queue_integrity_repair_all(session=None, body={"exchange": "unknown"})
+    with pytest.raises(Exception) as removal:
+        market_data_api.queue_removed_integrity_coin(
+            {"exchange": "unknown", "coin": "BTC_USDT:USDT"},
+            session=None,
+        )
+
+    assert repair.value.status_code == 422
+    assert removal.value.status_code == 422
+
+
+def test_checksum_settings_identify_stale_reference_archive(monkeypatch) -> None:
+    """Changing reference selection suppresses comparison until that archive is refreshed."""
+    values = {
+        ("market_data", "checksum_publish_archive"): "",
+        ("market_data", "checksum_reference_archive"): "community",
+        ("market_data", "checksum_publish_enabled"): "false",
+    }
+    monkeypatch.setattr(market_data_api, "load_ini", lambda section, key: values.get((section, key), ""))
+    monkeypatch.setattr(
+        market_data_api,
+        "list_github_archives",
+        lambda: [{"name": "community", "repository": "owner/new", "can_reference": True}],
+    )
+    monkeypatch.setattr(market_data_api, "catalog_summary", lambda **_kwargs: {"initial_scan_complete": True})
+    monkeypatch.setattr(
+        market_data_api,
+        "reference_status",
+        lambda: {"available": True, "source": "https://github.com/owner/old"},
+    )
+
+    payload = market_data_api._checksum_settings_payload()
+
+    assert payload["reference"]["selected_repository"] == "owner/new"
+    assert payload["reference"]["matches_selected"] is False

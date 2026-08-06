@@ -25,6 +25,7 @@ from requests.adapters import HTTPAdapter
 
 from market_data import append_exchange_download_log, get_exchange_raw_root_dir
 from market_data_sources import SOURCE_CODE_API, update_source_index_for_day
+from market_symbol_mapping import disambiguate_multiplier_market_coins
 
 
 SERVICE = "BitgetBest1m"
@@ -281,7 +282,7 @@ def _load_bitget_usdt_map() -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
     try:
         raw = json.loads(mapping_path.read_text(encoding="utf-8"))
-        for rec in raw if isinstance(raw, list) else []:
+        for rec in disambiguate_multiplier_market_coins(raw if isinstance(raw, list) else []):
             if not bool(rec.get("swap")) or not bool(rec.get("active", True)):
                 continue
             if str(rec.get("quote") or "").strip().upper() != "USDT":

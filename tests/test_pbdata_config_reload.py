@@ -1,6 +1,7 @@
 """Focused tests for PBData's atomic runtime configuration reload."""
 
 import asyncio
+import configparser
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,54 @@ import PBData as pbdata_module
 from PBData import PBData, PBDataConfigError, PBDataRuntimeConfig, _bounded_shutdown_step
 from ini_watcher import IniWatcher
 from pbgui_purefunc import load_ini_snapshot
+
+
+def test_bybit_daily_finalization_opens_at_0015_utc() -> None:
+    """Bybit finalization must target yesterday only from 00:15 UTC onward."""
+    before = pbdata_module.datetime(2026, 8, 3, 0, 14, 59, tzinfo=pbdata_module.timezone.utc)
+    at_cutoff = pbdata_module.datetime(2026, 8, 3, 0, 15, 0, tzinfo=pbdata_module.timezone.utc)
+
+    _, current_before, target_before, due_before = pbdata_module._bybit_cycle_window(before)
+    _, current_after, target_after, due_after = pbdata_module._bybit_cycle_window(at_cutoff)
+
+    assert current_before.isoformat() == "2026-08-03"
+    assert target_before.isoformat() == "2026-08-02"
+    assert due_before is False
+    assert current_after == current_before
+    assert target_after == target_before
+    assert due_after is True
+
+
+def test_daily_checksum_jobs_keep_archive_credentials_out_of_payload(monkeypatch) -> None:
+    """Automatic checksum jobs contain archive names only and dedupe completed days."""
+    parser = configparser.ConfigParser()
+    parser.add_section("market_data")
+    parser.set("market_data", "checksum_publish_enabled", "true")
+    parser.set("market_data", "checksum_publish_archive", "mine")
+    parser.set("market_data", "checksum_reference_archive", "public-reference")
+    monkeypatch.setattr(pbdata_module, "load_ini_snapshot", lambda: parser)
+    summary_exchanges = []
+    monkeypatch.setattr(
+        "market_data_integrity.catalog_summary",
+        lambda **kwargs: summary_exchanges.append(kwargs["exchange"]) or {"initial_scan_complete": True},
+    )
+    calls = []
+
+    def enqueue(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(created=True, job_id=f"job-{len(calls)}")
+
+    monkeypatch.setattr("task_queue.enqueue_unique_job", enqueue)
+    queued = pbdata_module._queue_daily_checksum_jobs(
+        publish_ready=True,
+        day=pbdata_module.date(2026, 8, 3),
+    )
+
+    assert queued == ["job-1", "job-2"]
+    assert calls[0]["payload"] == {"archive": "public-reference"}
+    assert calls[1]["payload"] == {"archive": "mine"}
+    assert all(call["states"] == ("pending", "running", "done") for call in calls)
+    assert set(summary_exchanges) == {"binanceusdm", "bybit", "okx", "bitget", "hyperliquid"}
 
 
 def _owner(path: Path, users=("alice", "bob")) -> PBData:

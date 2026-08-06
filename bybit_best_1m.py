@@ -31,8 +31,10 @@ Main public API:
 from __future__ import annotations
 
 import asyncio
+from math import isfinite
 import os
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -49,6 +51,8 @@ from market_data_sources import (
     replace_source_index_for_day,
     update_source_index_for_day,
 )
+from file_lock import advisory_file_lock
+from market_data_integrity import catalog_operation_lock
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -149,6 +153,11 @@ def _coin_dir(coin: str) -> str:
     return f"{base}_USDT:USDT"
 
 
+def get_storage_coin_dir(coin: str) -> str:
+    """Return the canonical Bybit OHLCV storage directory for one base coin."""
+    return _coin_dir(coin)
+
+
 # ---------------------------------------------------------------------------
 # Storage paths
 # ---------------------------------------------------------------------------
@@ -170,6 +179,11 @@ def _bybit_day_path(coin: str, day: str) -> Path:
     base = get_exchange_raw_root_dir(STORAGE_EXCHANGE)
     cdir = _coin_dir(coin)
     return base / "1m" / cdir / f"{_day_tag(day)}.npz"
+
+
+def get_day_path(coin: str, day: str) -> Path:
+    """Return the canonical Bybit daily NPZ path."""
+    return _bybit_day_path(coin, day)
 
 
 def _list_existing_days(coin: str) -> list[date]:
@@ -258,10 +272,13 @@ def _write_day_npz(path: Path, candles_by_minute: dict[int, dict[str, Any]]) -> 
         except Exception:
             continue
     arr = np.array(rows, dtype=_NPZ_DTYPE)
-    tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "wb") as f:
-        np.savez_compressed(f, candles=arr)
-    os.replace(tmp, path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        with open(tmp, "wb") as f:
+            np.savez_compressed(f, candles=arr)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +307,81 @@ def _find_inception_date(coin: str, *, timeout_s: float = 30.0) -> date:
             level="WARNING",
         )
     return date(2020, 1, 1)
+
+
+def _probe_inception_date_strict(
+    coin: str,
+    *,
+    timeout_s: float = 30.0,
+    markets_path: Path | None = None,
+) -> date | None:
+    """Return the verified exchange inception date, or None when it cannot be proven."""
+    import json
+
+    symbol = _coin_to_ccxt_symbol(coin)
+    symbol_id = _get_bybit_usdt_symbol(coin)
+
+    def market_launch_date(market: Any) -> date | None:
+        if not isinstance(market, dict):
+            return None
+        info = market.get("info") if isinstance(market.get("info"), dict) else {}
+        market_id = str(market.get("id") or info.get("symbol") or "").strip().upper()
+        if market_id != symbol_id or str(market.get("quote") or "").strip().upper() != "USDT":
+            return None
+        if not bool(market.get("swap")) or not bool(market.get("linear")) or market.get("active") is False:
+            return None
+        launch_raw = info.get("launchTime") or market.get("created")
+        try:
+            launch_ms = int(launch_raw)
+        except (TypeError, ValueError):
+            return None
+        if launch_ms <= 0:
+            return None
+        return datetime.fromtimestamp(launch_ms / 1000, tz=timezone.utc).date()
+
+    current_markets_path = markets_path or (
+        Path(__file__).resolve().parent / "data" / "coindata" / "bybit" / "ccxt_markets.json"
+    )
+    if current_markets_path.is_file() and not current_markets_path.is_symlink():
+        try:
+            with current_markets_path.open("r", encoding="utf-8") as handle:
+                current_markets = json.load(handle)
+            launch_day = market_launch_date(current_markets.get(symbol) if isinstance(current_markets, dict) else None)
+            if launch_day is not None:
+                return launch_day
+        except (OSError, ValueError) as exc:
+            append_exchange_download_log(
+                STORAGE_EXCHANGE,
+                f"[bybit_finalize_1m] inception_metadata_failed coin={coin} err={exc}",
+                level="WARNING",
+            )
+
+    import ccxt  # type: ignore
+
+    exchange = ccxt.bybit({"enableRateLimit": False, "timeout": int(timeout_s * 1000)})
+    try:
+        exchange.load_markets()
+        launch_day = market_launch_date(exchange.market(symbol))
+        if launch_day is not None:
+            return launch_day
+    except Exception as exc:
+        append_exchange_download_log(
+            STORAGE_EXCHANGE,
+            f"[bybit_finalize_1m] inception_metadata_probe_failed coin={coin} err={exc}",
+            level="WARNING",
+        )
+    probe_ms = int(datetime(2019, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+    try:
+        page = exchange.fetch_ohlcv(symbol, "1m", since=probe_ms, limit=1)
+        if page:
+            return datetime.fromtimestamp(int(page[0][0]) / 1000, tz=timezone.utc).date()
+    except Exception as exc:
+        append_exchange_download_log(
+            STORAGE_EXCHANGE,
+            f"[bybit_finalize_1m] inception_probe_failed coin={coin} err={exc}",
+            level="WARNING",
+        )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -450,34 +542,42 @@ def _write_candles_for_day(
     candles: dict[int, dict[str, Any]],
     *,
     overwrite: bool = False,
+    preserve_existing: bool = False,
 ) -> int:
     """Merge candles into existing NPZ (or create new). Returns number of new candles written."""
     path = _bybit_day_path(coin, day)
-    existing: dict[int, dict[str, Any]] = {}
-    if not overwrite and path.exists():
-        existing = _read_day_npz(path, day=day)
-    before_keys: set[int] = set() if overwrite else set(existing.keys())
-    for idx, c in candles.items():
-        if overwrite or idx not in before_keys:
-            existing[idx] = c
-    added = len(existing) - len(before_keys)
-    if added > 0 or overwrite:
-        _write_day_npz(path, existing)
-        try:
-            written = list(existing.keys()) if overwrite else [i for i in candles if i not in before_keys]
-            source_index_writer = (
-                replace_source_index_for_day if overwrite else update_source_index_for_day
-            )
-            source_index_writer(
-                exchange=STORAGE_EXCHANGE,
-                coin=_coin_dir(coin),
-                day=day,
-                minute_indices=written,
-                code=SOURCE_CODE_API,
-            )
-        except Exception:
-            pass
-    return max(0, added)
+    with catalog_operation_lock():
+        with advisory_file_lock(path):
+            existing: dict[int, dict[str, Any]] = {}
+            if (not overwrite or preserve_existing) and path.exists():
+                existing = _read_day_npz(path, day=day)
+            before_keys = set(existing.keys())
+            for idx, c in candles.items():
+                if overwrite or idx not in before_keys:
+                    existing[idx] = c
+            added = len(existing) - len(before_keys)
+            if added > 0 or overwrite:
+                _write_day_npz(path, existing)
+                try:
+                    written = list(existing.keys()) if overwrite else [i for i in candles if i not in before_keys]
+                    source_index_writer = (
+                        replace_source_index_for_day if overwrite else update_source_index_for_day
+                    )
+                    source_index_writer(
+                        exchange=STORAGE_EXCHANGE,
+                        coin=_coin_dir(coin),
+                        day=day,
+                        minute_indices=written,
+                        code=SOURCE_CODE_API,
+                    )
+                except Exception as exc:
+                    append_exchange_download_log(
+                        STORAGE_EXCHANGE,
+                        f"[bybit_best_1m] source_index_write_failed coin={coin} day={day} err={exc}",
+                        level="WARNING",
+                    )
+                    raise
+            return max(0, added)
 
 
 def _validate_closed_day(
@@ -496,6 +596,29 @@ def _validate_closed_day(
         return f"ends at minute {indices[-1]}, expected 1439"
     if len(indices) != (indices[-1] - indices[0] + 1):
         return f"contains {len(indices)} candles with internal gaps"
+    return None
+
+
+def _validate_candle_values(candles: dict[int, dict[str, Any]]) -> str | None:
+    """Validate finite values and Passivbot-relevant HLC bounds before replacement."""
+    float32_max = float(np.finfo(np.float32).max)
+    for minute, candle in candles.items():
+        try:
+            open_price = float(candle["o"])
+            high_price = float(candle["h"])
+            low_price = float(candle["l"])
+            close_price = float(candle["c"])
+            volume = float(candle["v"])
+        except (KeyError, TypeError, ValueError):
+            return f"minute {minute} has invalid candle fields"
+        if not all(isfinite(value) for value in (open_price, high_price, low_price, close_price, volume)):
+            return f"minute {minute} has non-finite values"
+        if any(abs(value) > float32_max for value in (open_price, high_price, low_price, close_price, volume)):
+            return f"minute {minute} exceeds float32 storage range"
+        if volume < 0:
+            return f"minute {minute} has negative volume"
+        if low_price > close_price or high_price < close_price or low_price > high_price:
+            return f"minute {minute} has invalid HLC bounds"
     return None
 
 
@@ -689,6 +812,173 @@ def improve_best_bybit_1m_for_coin(
 # Latest refresh: update_latest_bybit_1m_for_coin
 # Called by PBData background loop (or directly by task_worker latest path)
 # ---------------------------------------------------------------------------
+
+def _fetch_bybit_1m_range(
+    *,
+    coin: str,
+    start_ms: int,
+    end_ms: int,
+    timeout_s: float,
+) -> tuple[dict[str, dict[int, dict[str, Any]]], int, str | None]:
+    """Fetch an exact half-open Bybit 1m range without writing partial results."""
+    import ccxt  # type: ignore
+
+    coin_u = str(coin or "").strip().upper()
+    symbol = _coin_to_ccxt_symbol(coin_u)
+    exchange = ccxt.bybit({"enableRateLimit": False, "timeout": int(timeout_s * 1000)})
+    cursor = int(start_ms)
+    pages = 0
+    candles_by_day: dict[str, dict[int, dict[str, Any]]] = {}
+    while cursor < int(end_ms):
+        try:
+            page = exchange.fetch_ohlcv(symbol, timeframe="1m", since=cursor, limit=CCXT_LIMIT)
+        except Exception as exc:
+            return candles_by_day, pages, f"{type(exc).__name__}: {exc}"
+        if not page:
+            break
+        next_cursor = cursor
+        for row in page:
+            ts_ms = int(row[0])
+            if ts_ms < int(start_ms):
+                continue
+            if ts_ms >= int(end_ms):
+                break
+            day_obj = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()
+            day_s = day_obj.strftime("%Y-%m-%d")
+            day_start = _day_start_ms(day_obj)
+            minute_index = int((ts_ms - day_start) // 60_000)
+            if 0 <= minute_index < 1440:
+                candles_by_day.setdefault(day_s, {})[minute_index] = {
+                    "t": ts_ms,
+                    "o": float(row[1]),
+                    "h": float(row[2]),
+                    "l": float(row[3]),
+                    "c": float(row[4]),
+                    "v": float(row[5]),
+                }
+            next_cursor = max(next_cursor, ts_ms + 60_000)
+        pages += 1
+        if next_cursor <= cursor:
+            break
+        cursor = next_cursor
+    return candles_by_day, pages, None
+
+
+def update_current_bybit_1m_for_coin(
+    *,
+    coin: str,
+    now_utc: datetime | None = None,
+    timeout_s: float = 30.0,
+) -> dict[str, Any]:
+    """Refresh only the current UTC day for one Bybit coin."""
+    coin_u = str(coin or "").strip().upper()
+    now_value = now_utc or datetime.now(timezone.utc)
+    if now_value.tzinfo is None:
+        now_value = now_value.replace(tzinfo=timezone.utc)
+    now_value = now_value.astimezone(timezone.utc)
+    day_obj = now_value.date()
+    day_s = day_obj.strftime("%Y-%m-%d")
+    start_ms = _day_start_ms(day_obj)
+    next_day_ms = start_ms + 86_400_000
+    end_ms = min(next_day_ms, int(now_value.timestamp() * 1000) + 120_000)
+    append_exchange_download_log(
+        STORAGE_EXCHANGE,
+        f"[bybit_current_1m] start coin={coin_u} day={day_s}",
+    )
+    fetched, pages, error = _fetch_bybit_1m_range(
+        coin=coin_u,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        timeout_s=timeout_s,
+    )
+    if error:
+        append_exchange_download_log(
+            STORAGE_EXCHANGE,
+            f"[bybit_current_1m] discard_partial coin={coin_u} day={day_s} err={error}",
+            level="WARNING",
+        )
+        return {"coin": coin_u, "day": day_s, "result": "error", "error": error, "pages": pages, "minutes_written": 0}
+    candles = fetched.get(day_s, {})
+    if not candles:
+        return {"coin": coin_u, "day": day_s, "result": "error", "error": "no candles fetched", "pages": pages, "minutes_written": 0}
+    value_error = _validate_candle_values(candles)
+    if value_error:
+        return {"coin": coin_u, "day": day_s, "result": "error", "error": value_error, "pages": pages, "minutes_written": 0}
+    _write_candles_for_day(coin_u, day_s, candles, overwrite=True, preserve_existing=True)
+    return {"coin": coin_u, "day": day_s, "result": "ok", "pages": pages, "minutes_written": len(candles)}
+
+
+def finalize_bybit_1m_day_for_coin(
+    *,
+    coin: str,
+    day: date | str,
+    timeout_s: float = 30.0,
+    verify_inception_independently: bool = False,
+) -> dict[str, Any]:
+    """Fetch and atomically replace one closed Bybit day after strict validation."""
+    coin_u = str(coin or "").strip().upper()
+    if isinstance(day, str):
+        day_obj = datetime.strptime(day, "%Y-%m-%d").date()
+    else:
+        day_obj = day
+    if day_obj >= datetime.now(timezone.utc).date():
+        return {"coin": coin_u, "day": str(day_obj), "result": "error", "error": "day is not closed", "minutes_written": 0}
+    day_s = day_obj.strftime("%Y-%m-%d")
+    start_ms = _day_start_ms(day_obj)
+    append_exchange_download_log(
+        STORAGE_EXCHANGE,
+        f"[bybit_finalize_1m] start coin={coin_u} day={day_s}",
+    )
+    fetched, pages, error = _fetch_bybit_1m_range(
+        coin=coin_u,
+        start_ms=start_ms,
+        end_ms=start_ms + 86_400_000,
+        timeout_s=timeout_s,
+    )
+    if error:
+        append_exchange_download_log(
+            STORAGE_EXCHANGE,
+            f"[bybit_finalize_1m] discard_partial coin={coin_u} day={day_s} err={error}",
+            level="WARNING",
+        )
+        return {"coin": coin_u, "day": day_s, "result": "error", "error": error, "pages": pages, "minutes_written": 0}
+    candles = fetched.get(day_s, {})
+    existing_days = _list_existing_days(coin_u)
+    if not candles and (verify_inception_independently or not any(existing_day < day_obj for existing_day in existing_days)):
+        inception_day = _probe_inception_date_strict(coin_u, timeout_s=timeout_s)
+        if inception_day is not None and inception_day > day_obj:
+            return {
+                "coin": coin_u,
+                "day": day_s,
+                "result": "not_applicable",
+                "inception_day": inception_day.isoformat(),
+                "pages": pages,
+                "minutes_written": 0,
+            }
+    first_index = min(candles) if candles else 0
+    allow_inception_prefix = False
+    if first_index > 0 and (verify_inception_independently or not any(existing_day < day_obj for existing_day in existing_days)):
+        allow_inception_prefix = _probe_inception_date_strict(coin_u, timeout_s=timeout_s) == day_obj
+    validation_error = _validate_closed_day(candles, allow_inception_prefix=allow_inception_prefix)
+    if validation_error is None:
+        validation_error = _validate_candle_values(candles)
+    if validation_error:
+        append_exchange_download_log(
+            STORAGE_EXCHANGE,
+            f"[bybit_finalize_1m] incomplete coin={coin_u} day={day_s} err={validation_error}",
+            level="WARNING",
+        )
+        return {"coin": coin_u, "day": day_s, "result": "error", "error": validation_error, "pages": pages, "minutes_written": 0}
+    _write_candles_for_day(coin_u, day_s, candles, overwrite=True)
+    written = _read_day_npz(_bybit_day_path(coin_u, day_s), day=day_s)
+    persisted_error = _validate_closed_day(written, allow_inception_prefix=allow_inception_prefix)
+    if persisted_error:
+        return {"coin": coin_u, "day": day_s, "result": "error", "error": f"persisted validation failed: {persisted_error}", "pages": pages, "minutes_written": 0}
+    append_exchange_download_log(
+        STORAGE_EXCHANGE,
+        f"[bybit_finalize_1m] done coin={coin_u} day={day_s} minutes={len(written)}",
+    )
+    return {"coin": coin_u, "day": day_s, "result": "ok", "pages": pages, "minutes_written": len(written), "path": str(_bybit_day_path(coin_u, day_s))}
 
 def update_latest_bybit_1m_for_coin(
     *,

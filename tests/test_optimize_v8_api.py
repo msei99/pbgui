@@ -1218,6 +1218,7 @@ def test_config_metadata_seed_backtests_and_result_mode(optimize_v8_roots) -> No
     pareto.write_text(json.dumps(suite_result), encoding="utf-8")
 
     rows = {row["name"]: row for row in optimize_v8.list_configs(None)["configs"]}
+    result_rows = {row["name"]: row for row in optimize_v8.list_results(None)["results"]}
 
     assert rows["owned"]["seed_mode"] == "self"
     assert rows["owned"]["seed_source"] == "__self__"
@@ -1225,6 +1226,7 @@ def test_config_metadata_seed_backtests_and_result_mode(optimize_v8_roots) -> No
     assert rows["owned"]["result_mode"] == "suite"
     assert rows["owned"]["scenario_count"] == 2
     assert rows["uncertain"]["backtest_count"] is None
+    assert result_rows["owned"]["strategy"] == "ema_anchor"
 
 
 def test_pareto_seed_validation_rejects_empty_and_unrelated_sources(optimize_v8_roots) -> None:

@@ -1,6 +1,7 @@
 """FastAPI endpoints for market data status monitoring and standalone page shell."""
 
 import asyncio
+from contextlib import nullcontext
 from datetime import date as _date, datetime as _datetime, timedelta as _timedelta, timezone as _timezone
 import shutil
 import shlex
@@ -66,6 +67,24 @@ from tradfi_sync import auto_map_tradfi, fetch_tiingo_meta, fetch_xyz_spec
 from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
 from secure_files import atomic_write_private_text, ensure_private_directory
+from github_archive import list_github_archives
+from market_data_integrity import (
+    INITIAL_SCAN_VERSION,
+    SUPPORTED_EXCHANGES,
+    catalog_operation_lock,
+    catalog_summary,
+    compare_catalogs_readonly,
+    daily_gap_details,
+    invalidate_catalog_for_deletion,
+    integrity_job_lock,
+    list_integrity_issues,
+    list_removed_coin_data,
+    unavailable_coin_data_batch_preview,
+    unavailable_coin_data_preview,
+    reference_database_path,
+    reference_status,
+)
+from task_queue import enqueue_unique_job, list_jobs
 
 from .auth import require_auth, SessionToken
 from .heatmap import _get_missing_lag_minutes
@@ -187,6 +206,16 @@ def _normalize_settings_exchange(exchange: str) -> str:
     return ex
 
 
+def _integrity_storage_exchange(exchange: str) -> str:
+    """Normalize a GUI exchange key to its integrity storage identifier."""
+    ex = str(exchange or "").strip().lower()
+    if ex in {"binance", "binance-usdm"}:
+        ex = "binanceusdm"
+    if ex not in SUPPORTED_EXCHANGES:
+        raise ValueError("Unsupported integrity exchange")
+    return ex
+
+
 def _get_exchange_settings_meta(exchange: str) -> tuple[str, dict[str, Any]]:
     ex = _normalize_settings_exchange(exchange)
     meta = SETTINGS_EXCHANGES.get(ex)
@@ -301,6 +330,63 @@ def _build_market_data_settings_payload(exchange: str) -> dict[str, Any]:
         "settings": settings,
         "apply": apply_metadata("market_data"),
     }
+
+
+def _checksum_settings_payload() -> dict[str, Any]:
+    """Return global checksum sharing settings with safe archive metadata."""
+    archives = list_github_archives()
+    archives_by_name = {str(row.get("name") or ""): row for row in archives}
+    publish_archive = str(load_ini("market_data", "checksum_publish_archive") or "").strip()
+    reference_archive = str(load_ini("market_data", "checksum_reference_archive") or "").strip()
+    reference = reference_status()
+    selected_reference = archives_by_name.get(reference_archive, {})
+    selected_repository = str(selected_reference.get("repository") or "")
+    reference["selected_repository"] = selected_repository
+    reference["matches_selected"] = bool(
+        selected_repository
+        and str(reference.get("source") or "") == f"https://github.com/{selected_repository}"
+    )
+    catalogs = {exchange: catalog_summary(exchange=exchange) for exchange in SUPPORTED_EXCHANGES}
+    return {
+        "publish_enabled": _read_bool_ini("market_data", "checksum_publish_enabled", False),
+        "publish_archive": publish_archive,
+        "reference_archive": reference_archive,
+        "archives": archives,
+        "catalog": catalogs["bybit"],
+        "catalogs": catalogs,
+        "reference": reference,
+        "apply": apply_metadata("market_data"),
+    }
+
+
+def _save_checksum_settings(body: dict[str, Any]) -> dict[str, Any]:
+    """Validate and persist independent publish/reference archive choices."""
+    if not isinstance(body, dict):
+        raise ValueError("Settings must be an object")
+    publish_enabled = body.get("publish_enabled", False)
+    if not isinstance(publish_enabled, bool):
+        raise ValueError("publish_enabled must be a boolean")
+    publish_archive = str(body.get("publish_archive") or "").strip()
+    reference_archive = str(body.get("reference_archive") or "").strip()
+    archives = {str(row["name"]): row for row in list_github_archives()}
+    if publish_archive and publish_archive not in archives:
+        raise ValueError("Publish archive is not a configured GitHub archive")
+    if publish_archive and not bool(archives[publish_archive].get("can_publish")):
+        raise ValueError("Publish archive must be the writable own archive with a configured token")
+    if publish_enabled and not publish_archive:
+        raise ValueError("Select a publish archive before enabling publication")
+    if reference_archive and reference_archive not in archives:
+        raise ValueError("Reference archive is not a configured GitHub archive")
+
+    def mutate_ini(parser) -> None:
+        if not parser.has_section("market_data"):
+            parser.add_section("market_data")
+        parser.set("market_data", "checksum_publish_enabled", "true" if publish_enabled else "false")
+        parser.set("market_data", "checksum_publish_archive", publish_archive)
+        parser.set("market_data", "checksum_reference_archive", reference_archive)
+
+    update_ini(mutate_ini)
+    return _checksum_settings_payload()
 
 
 def _save_market_data_settings(exchange: str, request: dict[str, Any]) -> dict[str, Any]:
@@ -434,6 +520,358 @@ def _safe_provider_error(action: str, exc: Exception) -> str:
 
     _log(SERVICE, f"{action} failed: {type(exc).__name__}", level="WARNING")
     return f"{action} failed ({type(exc).__name__})."
+
+
+@router.get("/checksums/settings")
+def get_checksum_settings(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Return global checksum sharing settings and safe archive choices."""
+    try:
+        return _checksum_settings_payload()
+    except Exception as exc:
+        _log(SERVICE, f"Loading checksum settings failed: {exc}", level="ERROR")
+        raise HTTPException(status_code=500, detail="Unable to load checksum settings") from exc
+
+
+@router.put("/checksums/settings")
+def save_checksum_settings(body: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Persist checksum publication and reference archive selection."""
+    try:
+        return {"success": True, "settings": _save_checksum_settings(body)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        _log(SERVICE, f"Saving checksum settings failed: {exc}", level="ERROR")
+        raise HTTPException(status_code=500, detail="Unable to save checksum settings") from exc
+
+
+@router.get("/integrity/status")
+def get_integrity_status(
+    exchange: str = Query(default="bybit"),
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return local catalog and installed-reference status."""
+    try:
+        storage_exchange = _integrity_storage_exchange(exchange)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    checksum_settings = _checksum_settings_payload()
+    result = {
+        "exchange": storage_exchange,
+        "catalog": checksum_settings["catalogs"][storage_exchange],
+        "catalogs": checksum_settings["catalogs"],
+        "reference": checksum_settings["reference"],
+        "repair_supported": storage_exchange in SUPPORTED_EXCHANGES,
+        "scope_note": "Hyperliquid crypto only" if storage_exchange == "hyperliquid" else "",
+    }
+    if (
+        reference_database_path().is_file()
+        and bool(checksum_settings["reference"].get("available"))
+        and bool(checksum_settings["reference"].get("matches_selected"))
+    ):
+        try:
+            result["comparison"] = compare_catalogs_readonly(exchange=storage_exchange, limit=100)
+        except Exception as exc:
+            _log(SERVICE, f"Checksum comparison failed: {exc}", level="WARNING")
+            result["comparison_error"] = "Checksum comparison failed"
+    return result
+
+
+@router.get("/integrity/issues")
+def get_integrity_issues(
+    exchange: str = Query(default="bybit"),
+    limit: int = Query(default=1_000_000, ge=1, le=1_000_000),
+    offset: int = Query(default=0, ge=0),
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return damaged OHLCV days from the checksum catalog."""
+    try:
+        return list_integrity_issues(
+            exchange=_integrity_storage_exchange(exchange),
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/integrity/day-details")
+def get_integrity_day_details(
+    exchange: str = Query(...),
+    coin: str = Query(...),
+    day: str = Query(...),
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return read-only minute coverage for one integrity finding."""
+    try:
+        return daily_gap_details(
+            exchange=_integrity_storage_exchange(exchange),
+            coin=coin,
+            day=day,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        _log(SERVICE, f"Loading OHLCV day details failed: {exc}", level="ERROR")
+        raise HTTPException(status_code=500, detail="Unable to load OHLCV day details") from exc
+
+
+@router.get("/integrity/removed-coins")
+def get_removed_integrity_coins(
+    exchange: str = "bybit",
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """List local OHLCV markets absent or inactive in the selected mapping."""
+    try:
+        return list_removed_coin_data(exchange=_integrity_storage_exchange(exchange))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/integrity/scan")
+def queue_integrity_scan(
+    session: SessionToken = Depends(require_auth),
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Queue an idempotent full integrity scan for one supported exchange."""
+    try:
+        exchange = _integrity_storage_exchange(str((body or {}).get("exchange") or "bybit"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    queued = enqueue_unique_job(
+        job_type="ohlcv_integrity_scan",
+        payload={"exchange": exchange, "scan_version": INITIAL_SCAN_VERSION},
+        exchange=exchange,
+        dedupe_key=f"ohlcv-integrity-scan:{exchange}:v{INITIAL_SCAN_VERSION}",
+    )
+    return {"success": True, "job_id": queued.job_id, "created": queued.created, "exchange": exchange}
+
+
+@router.post("/integrity/hyperliquid/normalize-fallback")
+def queue_hyperliquid_fallback_normalization(
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Queue one bounded normalization of existing other-exchange candle envelopes."""
+    queued = enqueue_unique_job(
+        job_type="ohlcv_hyperliquid_normalize_fallback",
+        payload={"exchange": "hyperliquid", "dry_run": False},
+        exchange="hyperliquid",
+        dedupe_key="ohlcv-hyperliquid-normalize-fallback:v1",
+    )
+    return {"success": True, "job_id": queued.job_id, "created": queued.created}
+
+
+@router.post("/integrity/repair")
+def queue_integrity_repair(body: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Queue a targeted repair for one validated exchange/coin/day identifier."""
+    coin = str(body.get("coin") or "").strip()
+    day = str(body.get("day") or "").strip()
+    try:
+        exchange = _integrity_storage_exchange(str(body.get("exchange") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not coin or coin in {".", ".."} or any(ch in coin for ch in ("/", "\\", "\x00")) or any(ord(ch) < 32 for ch in coin):
+        raise HTTPException(status_code=422, detail="Invalid repair coin")
+    try:
+        _datetime.strptime(day, "%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid repair day") from exc
+    queued = enqueue_unique_job(
+        job_type="ohlcv_integrity_repair",
+        payload={"exchange": exchange, "coin": coin, "day": day},
+        exchange=exchange,
+        dedupe_key=f"ohlcv-integrity-repair:{exchange}:{coin}:{day}",
+    )
+    return {"success": True, "job_id": queued.job_id, "created": queued.created}
+
+
+@router.post("/integrity/repair-all")
+def queue_integrity_repair_all(
+    session: SessionToken = Depends(require_auth),
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Queue one sequential batch for all repairable days, optionally scoped to one coin."""
+    request = body if isinstance(body, dict) else {}
+    try:
+        requested_exchange = _integrity_storage_exchange(str(request.get("exchange") or "bybit"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    coin = str(request.get("coin") or "").strip()
+    if coin and (
+        coin in {".", ".."}
+        or any(ch in coin for ch in ("/", "\\", "\x00"))
+        or any(ord(ch) < 32 for ch in coin)
+    ):
+        raise HTTPException(status_code=422, detail="Invalid repair coin")
+    issues = list_integrity_issues(exchange=requested_exchange, limit=1_000_000)["rows"]
+    repairable = [
+        row
+        for row in issues
+        if str(row.get("market_status") or "") != "removed"
+        and (not coin or str(row.get("coin") or "") == coin)
+    ]
+    issue_count = len(repairable)
+    if issue_count <= 0:
+        raise HTTPException(status_code=409, detail=f"No matching damaged {requested_exchange} days are available for repair")
+    payload = {"exchange": requested_exchange}
+    if coin:
+        payload["coin"] = coin
+    queued = enqueue_unique_job(
+        job_type="ohlcv_integrity_repair_all",
+        payload=payload,
+        exchange=requested_exchange,
+        dedupe_key=f"ohlcv-integrity-repair-all:{requested_exchange}:{coin or 'all'}",
+    )
+    return {
+        "success": True,
+        "job_id": queued.job_id,
+        "created": queued.created,
+        "total": issue_count,
+        "coin": coin,
+    }
+
+
+@router.post("/integrity/removed-coin/preview")
+def preview_removed_integrity_coin(body: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Preview all PBGui OHLCV data for a confirmed unavailable market."""
+    try:
+        exchange = _integrity_storage_exchange(str(body.get("exchange") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        return unavailable_coin_data_preview(
+            exchange=exchange,
+            coin=str(body.get("coin") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/integrity/removed-coin/remove")
+def queue_removed_integrity_coin(body: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Queue deletion of all PBGui OHLCV data for a confirmed removed market."""
+    try:
+        exchange = _integrity_storage_exchange(str(body.get("exchange") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    coin = str(body.get("coin") or "").strip()
+    try:
+        preview = unavailable_coin_data_preview(exchange=exchange, coin=coin)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    queued = enqueue_unique_job(
+        job_type="ohlcv_removed_coin_delete",
+        payload={"exchange": exchange, "coin": coin},
+        exchange=exchange,
+        dedupe_key=f"ohlcv-removed-coin-delete:{exchange}:{coin}",
+    )
+    return {
+        "success": True,
+        "job_id": queued.job_id,
+        "created": queued.created,
+        "preview": preview,
+    }
+
+
+def _removed_coin_batch_preview_from_body(body: dict[str, Any]) -> dict[str, Any]:
+    """Validate one batch request and rebuild its current server-side footprint."""
+    try:
+        exchange = _integrity_storage_exchange(str(body.get("exchange") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    remove_all = body.get("all") is True
+    raw_coins = body.get("coins")
+    if remove_all:
+        coins = None
+    elif isinstance(raw_coins, list) and raw_coins:
+        coins = [str(coin or "").strip() for coin in raw_coins]
+    else:
+        raise HTTPException(status_code=422, detail="Select unavailable markets or request all")
+    try:
+        return unavailable_coin_data_batch_preview(exchange=exchange, coins=coins)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/integrity/removed-coins/preview")
+def preview_removed_integrity_coins(body: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Preview one revalidated batch of unavailable local markets."""
+    return _removed_coin_batch_preview_from_body(body)
+
+
+@router.post("/integrity/removed-coins/remove")
+def queue_removed_integrity_coins(body: dict[str, Any], session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Queue one restart-persistent batch deletion for unavailable local markets."""
+    preview = _removed_coin_batch_preview_from_body(body)
+    exchange = str(preview["exchange"])
+    coins = list(preview["coins"])
+    queued = enqueue_unique_job(
+        job_type="ohlcv_removed_coins_delete",
+        payload={"exchange": exchange, "coins": coins},
+        exchange=exchange,
+        dedupe_key=f"ohlcv-removed-coins-delete:{exchange}",
+    )
+    return {
+        "success": True,
+        "job_id": queued.job_id,
+        "created": queued.created,
+        "preview": preview,
+    }
+
+
+@router.post("/checksums/publish")
+def queue_checksum_publish(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Queue publication to the configured writable own archive."""
+    settings = _checksum_settings_payload()
+    archive = str(settings.get("publish_archive") or "")
+    if not archive:
+        raise HTTPException(status_code=409, detail="No publish archive is selected")
+    incomplete = [
+        exchange
+        for exchange, catalog in settings.get("catalogs", {}).items()
+        if not bool(catalog.get("initial_scan_complete"))
+    ]
+    if incomplete:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Initial OHLCV integrity scans are incomplete: {', '.join(incomplete)}",
+        )
+    if any(
+        str(job.get("type") or "") in {
+            "ohlcv_integrity_scan",
+            "ohlcv_hyperliquid_normalize_fallback",
+            "ohlcv_integrity_repair",
+            "ohlcv_integrity_repair_all",
+            "ohlcv_removed_coin_delete",
+            "ohlcv_removed_coins_delete",
+        }
+        for job in list_jobs(states=["pending", "running"], limit=0)
+    ):
+        raise HTTPException(status_code=409, detail="OHLCV integrity data is currently being updated")
+    day = _datetime.now(_timezone.utc).date().isoformat()
+    queued = enqueue_unique_job(
+        job_type="ohlcv_checksum_publish",
+        payload={"archive": archive},
+        exchange="bybit",
+        dedupe_key=f"ohlcv-checksum-publish:{archive}:{day}",
+    )
+    return {"success": True, "job_id": queued.job_id, "created": queued.created}
+
+
+@router.post("/checksums/reference")
+def queue_checksum_reference(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Queue anonymous refresh of the configured public reference archive."""
+    settings = _checksum_settings_payload()
+    archive = str(settings.get("reference_archive") or "")
+    if not archive:
+        raise HTTPException(status_code=409, detail="No reference archive is selected")
+    day = _datetime.now(_timezone.utc).date().isoformat()
+    queued = enqueue_unique_job(
+        job_type="ohlcv_checksum_reference",
+        payload={"archive": archive},
+        exchange="bybit",
+        dedupe_key=f"ohlcv-checksum-reference:{archive}:{day}",
+    )
+    return {"success": True, "job_id": queued.job_id, "created": queued.created}
 
 
 @router.get("/settings/{exchange}")
@@ -3618,26 +4056,37 @@ def delete_inventory_selected(
             raise ValueError("No matching coins selected.")
 
         storage_ex = _inventory_storage_exchange(exchange)
+        integrity_coins = [
+            str(row.get("coin") or "").strip()
+            for row in selected_rows
+            if str(row.get("dataset") or "").strip().lower() in ("1m", "candles_1m")
+        ]
         deleted_count = 0
         rebuilt_days_total = 0
         rebuilt_minutes_total = 0
         deleted_size = 0
 
-        for row in selected_rows:
-            actual_dataset = str(row.get("dataset") or "").strip()
-            actual_dataset_lower = actual_dataset.lower()
-            actual_coin = str(row.get("coin") or "").strip()
-            coin_dir = get_exchange_raw_root_dir(storage_ex) / actual_dataset / actual_coin
-            if coin_dir.exists():
-                shutil.rmtree(coin_dir)
-                deleted_count += 1
-                deleted_size += int(row.get("total_bytes", 0) or 0)
+        integrity_scope = storage_ex in SUPPORTED_EXCHANGES and bool(integrity_coins)
+        job_lock = integrity_job_lock() if integrity_scope else nullcontext()
+        deletion_lock = catalog_operation_lock() if integrity_scope else nullcontext()
+        with job_lock, deletion_lock:
+            if storage_ex in SUPPORTED_EXCHANGES and integrity_coins:
+                invalidate_catalog_for_deletion(exchange=storage_ex, coins=integrity_coins)
+            for row in selected_rows:
+                actual_dataset = str(row.get("dataset") or "").strip()
+                actual_dataset_lower = actual_dataset.lower()
+                actual_coin = str(row.get("coin") or "").strip()
+                coin_dir = get_exchange_raw_root_dir(storage_ex) / actual_dataset / actual_coin
+                if coin_dir.exists():
+                    shutil.rmtree(coin_dir)
+                    deleted_count += 1
+                    deleted_size += int(row.get("total_bytes", 0) or 0)
 
-            if actual_dataset_lower in ("1m", "candles_1m"):
-                _remove_source_index_dirs_for_coin(storage_ex, actual_coin)
-                rebuilt_days, rebuilt_minutes = _rebuild_source_index_from_api_for_coin(storage_ex, actual_coin)
-                rebuilt_days_total += int(rebuilt_days)
-                rebuilt_minutes_total += int(rebuilt_minutes)
+                if actual_dataset_lower in ("1m", "candles_1m"):
+                    _remove_source_index_dirs_for_coin(storage_ex, actual_coin)
+                    rebuilt_days, rebuilt_minutes = _rebuild_source_index_from_api_for_coin(storage_ex, actual_coin)
+                    rebuilt_days_total += int(rebuilt_days)
+                    rebuilt_minutes_total += int(rebuilt_minutes)
 
         rebuild_msg = ""
         if rebuilt_days_total > 0:
@@ -3698,40 +4147,55 @@ def delete_inventory_older_than(
             raise ValueError("No matching coins selected.")
 
         storage_ex = _inventory_storage_exchange(exchange)
+        integrity_coins = [
+            str(row.get("coin") or "").strip()
+            for row in rows
+            if str(row.get("dataset") or "").strip().lower() in ("1m", "candles_1m")
+        ]
         deleted_count = 0
         deleted_size = 0
         coins_deleted_days: dict[str, set[str]] = {}
 
-        for row in rows:
-            actual_coin = str(row.get("coin") or "").strip()
-            actual_dataset = str(row.get("dataset") or "").strip()
-            actual_dataset_lower = actual_dataset.lower()
-            coin_dir = get_exchange_raw_root_dir(storage_ex) / actual_dataset / actual_coin
-            if not coin_dir.exists():
-                continue
-
-            for file_path in coin_dir.iterdir():
-                if not file_path.is_file():
+        integrity_scope = storage_ex in SUPPORTED_EXCHANGES and bool(integrity_coins)
+        job_lock = integrity_job_lock() if integrity_scope else nullcontext()
+        deletion_lock = catalog_operation_lock() if integrity_scope else nullcontext()
+        with job_lock, deletion_lock:
+            if storage_ex in SUPPORTED_EXCHANGES and integrity_coins:
+                invalidate_catalog_for_deletion(
+                    exchange=storage_ex,
+                    coins=integrity_coins,
+                    before_day=f"{cutoff_day[:4]}-{cutoff_day[4:6]}-{cutoff_day[6:8]}",
+                )
+            for row in rows:
+                actual_coin = str(row.get("coin") or "").strip()
+                actual_dataset = str(row.get("dataset") or "").strip()
+                actual_dataset_lower = actual_dataset.lower()
+                coin_dir = get_exchange_raw_root_dir(storage_ex) / actual_dataset / actual_coin
+                if not coin_dir.exists():
                     continue
-                file_day = _extract_inventory_file_day(file_path.name)
-                if not file_day or file_day >= cutoff_day:
-                    continue
-                file_size = int(file_path.stat().st_size)
-                file_path.unlink()
-                deleted_count += 1
-                deleted_size += file_size
-                if actual_dataset_lower in ("1m", "candles_1m"):
-                    coins_deleted_days.setdefault(actual_coin, set()).add(file_day)
 
-        updated_count = 0
-        for coin_name, deleted_days in coins_deleted_days.items():
-            removed = remove_days_from_index(
-                exchange=storage_ex,
-                coin=coin_name,
-                days_to_remove=deleted_days,
-            )
-            if removed > 0:
-                updated_count += 1
+                for file_path in coin_dir.iterdir():
+                    if not file_path.is_file():
+                        continue
+                    file_day = _extract_inventory_file_day(file_path.name)
+                    if not file_day or file_day >= cutoff_day:
+                        continue
+                    file_size = int(file_path.stat().st_size)
+                    file_path.unlink()
+                    deleted_count += 1
+                    deleted_size += file_size
+                    if actual_dataset_lower in ("1m", "candles_1m"):
+                        coins_deleted_days.setdefault(actual_coin, set()).add(file_day)
+
+            updated_count = 0
+            for coin_name, deleted_days in coins_deleted_days.items():
+                removed = remove_days_from_index(
+                    exchange=storage_ex,
+                    coin=coin_name,
+                    days_to_remove=deleted_days,
+                )
+                if removed > 0:
+                    updated_count += 1
 
         index_msg = f" Updated {updated_count} source indexes." if updated_count > 0 else ""
         return {
@@ -3765,14 +4229,21 @@ def clear_inventory_dataset(
         dataset_dir = get_exchange_raw_root_dir(storage_ex) / dataset_name
         cleaned_indexes = 0
 
-        if dataset_name.lower() in ("1m", "candles_1m") and dataset_dir.exists():
-            for coin_dir in dataset_dir.iterdir():
-                if not coin_dir.is_dir():
-                    continue
-                cleaned_indexes += _remove_source_index_dirs_for_coin(storage_ex, coin_dir.name)
+        is_integrity_dataset = storage_ex in SUPPORTED_EXCHANGES and dataset_name.lower() in ("1m", "candles_1m")
+        job_lock = integrity_job_lock() if is_integrity_dataset else nullcontext()
+        deletion_lock = catalog_operation_lock() if is_integrity_dataset else nullcontext()
+        with job_lock, deletion_lock:
+            if is_integrity_dataset:
+                invalidate_catalog_for_deletion(exchange=storage_ex)
 
-        if dataset_dir.exists():
-            shutil.rmtree(dataset_dir)
+            if dataset_name.lower() in ("1m", "candles_1m") and dataset_dir.exists():
+                for coin_dir in dataset_dir.iterdir():
+                    if not coin_dir.is_dir():
+                        continue
+                    cleaned_indexes += _remove_source_index_dirs_for_coin(storage_ex, coin_dir.name)
+
+            if dataset_dir.exists():
+                shutil.rmtree(dataset_dir)
 
         index_msg = f" Cleaned {cleaned_indexes} source indexes." if cleaned_indexes > 0 else ""
         return {

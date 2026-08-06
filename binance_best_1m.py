@@ -29,6 +29,7 @@ SERVICE = "BinanceBest1m"
 import asyncio
 import calendar
 import io
+import json
 import os
 import time
 import zipfile
@@ -89,6 +90,28 @@ def _coin_to_ccxt_symbol(coin: str) -> str:
     # Strip trailing USDT → base, then format as CCXT perp symbol
     base = archive[:-4] if archive.endswith("USDT") else archive
     return f"{base}/USDT:USDT"
+
+
+def get_current_market_inception_ms(coin: str, *, markets_path: Path | None = None) -> int | None:
+    """Return the current Binance instrument's onboard timestamp from local market metadata."""
+    path = (
+        Path(markets_path)
+        if markets_path is not None
+        else Path(__file__).resolve().parent / "data" / "coindata" / "binance" / "ccxt_markets.json"
+    )
+    if not path.is_file() or path.is_symlink():
+        return None
+    try:
+        markets = json.loads(path.read_text(encoding="utf-8"))
+        market = markets.get(_coin_to_ccxt_symbol(coin)) if isinstance(markets, dict) else None
+        if not isinstance(market, dict) or market.get("active") is False:
+            return None
+        info = market.get("info") if isinstance(market.get("info"), dict) else {}
+        raw_value = info.get("onboardDate") or market.get("created")
+        value = int(raw_value)
+        return value if value > 0 else None
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
 
 
 def _coin_dir(coin: str) -> str:
@@ -237,7 +260,10 @@ def _get_ccxt_exchange(timeout_s: float = 30.0):
 
 
 def _ccxt_find_inception(coin: str, timeout_s: float = 30.0) -> int | None:
-    """Return the timestamp (ms) of the very first 1m candle for this coin."""
+    """Return the current instrument's inception, falling back to its first API candle."""
+    current_inception = get_current_market_inception_ms(coin)
+    if current_inception is not None:
+        return current_inception
     ex = _get_ccxt_exchange(timeout_s)
     sym = _coin_to_ccxt_symbol(coin)
     since_ms = int(datetime(2018, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
@@ -738,7 +764,11 @@ def improve_best_binance_1m_for_coin(
 
     # Determine archive range: first_archive up to (but not including) current month
     today = date.today()
-    archive_end_month = (today.year, today.month)  # exclusive
+    if d_end.month == 12:
+        end_exclusive_month = (d_end.year + 1, 1)
+    else:
+        end_exclusive_month = (d_end.year, d_end.month + 1)
+    archive_end_month = min((today.year, today.month), end_exclusive_month)
 
     # --- Step 4: Monthly ZIPs for complete past months (parallel download) ---
     if first_archive_date and not _stop():
@@ -817,7 +847,7 @@ def improve_best_binance_1m_for_coin(
                 fb_days_skipped = 0
                 for fb_i in range(num_days_fb):
                     fb_day = date(year, month, fb_i + 1)
-                    if fb_day > d_end or fb_day > monthly_cutoff:
+                    if fb_day < d_start or fb_day > d_end or fb_day > monthly_cutoff:
                         continue
                     fb_day_s = fb_day.strftime("%Y-%m-%d")
                     fb_path = _binance_day_path(coin_u, fb_day_s)
@@ -867,7 +897,7 @@ def improve_best_binance_1m_for_coin(
                     if _stop():
                         break
                     d_day = datetime.strptime(day_s, "%Y-%m-%d").date()
-                    if d_day > d_end:
+                    if d_day < d_start or d_day > d_end:
                         continue
                     w = _write_candles_for_day(coin_u, day_s, month_data[day_s], overwrite=refetch)
                     minutes_written += w
@@ -951,7 +981,7 @@ def improve_best_binance_1m_for_coin(
     # Pre-scan: collect days that need download vs can be skipped
     step5_days_needed: list[str] = []
     step5_days_skip: set[str] = set()
-    _d5 = cur_month_start
+    _d5 = max(cur_month_start, d_start)
     while _d5 <= min(d_end, archive_cutoff):
         _day_s5 = _d5.strftime("%Y-%m-%d")
         _path5 = _binance_day_path(coin_u, _day_s5)
@@ -971,7 +1001,7 @@ def improve_best_binance_1m_for_coin(
         step5_bytes = {}
 
     # Process in order
-    _d5 = cur_month_start
+    _d5 = max(cur_month_start, d_start)
     while _d5 <= min(d_end, archive_cutoff) and not _stop():
         day_s = _d5.strftime("%Y-%m-%d")
         if day_s in step5_days_skip:
@@ -1001,7 +1031,7 @@ def improve_best_binance_1m_for_coin(
         _d5 = _d5 + timedelta(days=1)
 
     # --- Step 6: CCXT for last 2 days (no archive yet) ---
-    ccxt_start = archive_cutoff + timedelta(days=1)
+    ccxt_start = max(d_start, archive_cutoff + timedelta(days=1))
     if ccxt_start <= d_end and not _stop():
         since_ms = int(datetime(ccxt_start.year, ccxt_start.month, ccxt_start.day, tzinfo=timezone.utc).timestamp() * 1000)
         end_ms = int(datetime(d_end.year, d_end.month, d_end.day, tzinfo=timezone.utc).timestamp() * 1000) + 86_400_000

@@ -96,7 +96,9 @@ def test_backtest_sort_state_validates_restores_and_persists() -> None:
     )
     config_header_keys = re.findall(r"thSort\('[^']+',\s*'([^']+)'\)", source)
     result_header_keys = re.findall(r"rthFn\('[^']+',\s*'([^']+)'\)", source)
-    shared_result_header_keys = [key for key in result_header_keys if key != "backtest_version"]
+    shared_result_header_keys = [
+        key for key in result_header_keys if key not in {"backtest_version", "strategy"}
+    ]
     assert config_header_keys
     assert result_header_keys
     assert source.index("applyBacktestSortState(initialViewState.sorts);") < source.index("loadConfigs();", source.index("var initialViewState"))

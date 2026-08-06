@@ -51,7 +51,7 @@ Permanente Vorbereitungsfehler setzen nur ihre Queue-Zeile auf einen handlungsfa
 
 ## Results Und Paretos
 
-Ergebnisse werden nur aus `<pb8dir>/optimize_results` gelesen. Die Panels Results und Paretos bieten den gemeinsamen PB7-Workflow fuer Ergebnisansicht, Loeschen, 3D-Plots, Pareto Dash, Kandidaten-JSON, Metrik-Zusammenfassungen und Seed-Bundles.
+Ergebnisse werden nur aus `<pb8dir>/optimize_results` gelesen. Die Results-Tabelle zeigt fuer jeden Lauf die konfigurierte PB8-Strategie und kann nach dieser Spalte sortiert werden. Die Panels Results und Paretos bieten den gemeinsamen PB7-Workflow fuer Ergebnisansicht, Loeschen, 3D-Plots, Pareto Dash, Kandidaten-JSON, Metrik-Zusammenfassungen und Seed-Bundles.
 
 PB8 unterscheidet drei Workflows:
 

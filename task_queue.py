@@ -68,6 +68,15 @@ class EnqueueResult:
     path: str
 
 
+@dataclass
+class UniqueEnqueueResult:
+    """Result from an idempotent active-job enqueue."""
+
+    job_id: str
+    path: str
+    created: bool
+
+
 @_serialized_task_write
 def enqueue_job(*, job_type: str, payload: dict[str, Any], exchange: str = "") -> EnqueueResult:
     ensure_task_dirs()
@@ -86,6 +95,53 @@ def enqueue_job(*, job_type: str, payload: dict[str, Any], exchange: str = "") -
     path = get_task_state_dir("pending") / f"{jid}.json"
     _atomic_write_json(path, job)
     return EnqueueResult(job_id=jid, path=str(path))
+
+
+@_serialized_task_write
+def enqueue_unique_job(
+    *,
+    job_type: str,
+    payload: dict[str, Any],
+    exchange: str = "",
+    dedupe_key: str,
+    states: tuple[str, ...] = ("pending", "running"),
+) -> UniqueEnqueueResult:
+    """Enqueue one active job for a stable dedupe key."""
+    ensure_task_dirs()
+    key = str(dedupe_key or "").strip()
+    if not key:
+        raise ValueError("dedupe_key is required")
+    allowed_states = tuple(state for state in states if state in {"pending", "running", "done", "failed"})
+    if not allowed_states:
+        raise ValueError("At least one valid dedupe state is required")
+    for path in _iter_job_paths(list(allowed_states)):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(job, dict) and str(job.get("dedupe_key") or "") == key:
+            return UniqueEnqueueResult(
+                job_id=str(job.get("id") or path.stem),
+                path=str(path),
+                created=False,
+            )
+
+    jid = f"{int(time.time())}-{uuid4().hex[:10]}"
+    job = {
+        "id": jid,
+        "type": str(job_type).strip(),
+        "exchange": str(exchange).strip().lower(),
+        "created_ts": int(time.time()),
+        "updated_ts": int(time.time()),
+        "payload": payload or {},
+        "dedupe_key": key,
+        "status": "pending",
+        "progress": {},
+        "error": "",
+    }
+    path = get_task_state_dir("pending") / f"{jid}.json"
+    _atomic_write_json(path, job)
+    return UniqueEnqueueResult(job_id=jid, path=str(path), created=True)
 
 
 @_serialized_task_write

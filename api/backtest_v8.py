@@ -1171,6 +1171,7 @@ def _list_results() -> list[dict]:
                     "path": str(result_dir),
                     "coins": coins,
                     "coins_text": ", ".join(coins),
+                    "strategy": str(live.get("strategy_kind") or "").strip(),
                     "modified": datetime.datetime.fromtimestamp(resolved.stat().st_mtime).isoformat(),
                     "metrics": metrics,
                     "adg": _analysis_value(analysis, "adg_w_usd", "adg_usd", "adg_strategy_eq", "adg"),

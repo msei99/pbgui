@@ -1072,7 +1072,7 @@ var BACKTEST_SORT_DEFAULTS = {
 };
 var BACKTEST_SORT_COLUMNS = {
   configs: ['name', 'exchanges', 'coins', 'twe_long', 'start_date', 'end_date', 'results', 'modified'],
-  results: ['backtest_version', 'config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
+  results: ['backtest_version', 'config_name', 'strategy', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
   archive: ['backtest_version', 'config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
   legacy: ['config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance']
 };
@@ -5403,10 +5403,13 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
     return !!((r && r.coins_text) || (r && Array.isArray(r.coins) && r.coins.length));
   });
   var showVersion = !!options.showVersion;
+  var showStrategy = !!options.showStrategy && data.some(function(r) {
+    return String(r && r.backtest_version || '').toLowerCase() === 'v8';
+  });
 
-  /* Columns: Version (main Results only) | Backtest Name | Exch. | Result Time | ADG | Gain | Worst DD | Sharpe | Start B. | Final B. | TWE | POS | Actions */
+  /* Columns: Version (main Results only) | Backtest Name | Strategy (V8) | Exch. | Result Time | ADG | Gain | Worst DD | Sharpe | Start B. | Final B. | TWE | POS | Actions */
   var html = '\x3Ctable class="tbl">\x3Cthead>\x3Ctr>' +
-    (showVersion ? rthFn('Version', 'backtest_version') : '') + rthFn('Backtest Name', 'config_name') + (showCoins ? rthFn('Coins', 'coins_text') : '') + rthFn('Exch.', 'exchange_dir') + rthFn('Result Time', 'modified') +
+    (showVersion ? rthFn('Version', 'backtest_version') : '') + rthFn('Backtest Name', 'config_name') + (showStrategy ? rthFn('Strategy', 'strategy') : '') + (showCoins ? rthFn('Coins', 'coins_text') : '') + rthFn('Exch.', 'exchange_dir') + rthFn('Result Time', 'modified') +
     rthFn('ADG', 'adg') + rthFn('Gain', 'gain') + rthFn('Worst DD', 'drawdown_worst') + rthFn('Sharpe', 'sharpe_ratio') +
     rthFn('Start B.', 'starting_balance') + rthFn('Final B.', 'final_balance') +
     '\x3Cth>TWE\x3C/th>\x3Cth>POS\x3C/th>' +
@@ -5425,6 +5428,7 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
     html += '\x3Ctr data-idx="' + i + '" data-path="' + esc(r.path) + '"' + liqStyle + '>' +
       (showVersion ? '\x3Ctd>PB' + esc((r.backtest_version || '').toUpperCase()) + '\x3C/td>' : '') +
       '\x3Ctd title="' + esc(btName) + esc(liqTitle) + '" style="max-width:250px">' + (r.liquidated ? '\x3Cspan style="color:var(--red)" title="Liquidated">\u26a0\ufe0f\x3C/span> ' : '') + esc(btName) + '\x3C/td>' +
+      (showStrategy ? '\x3Ctd class="mono">' + esc(r.strategy || '-') + '\x3C/td>' : '') +
       (showCoins ? '\x3Ctd title="' + esc(coinsText) + '" style="max-width:140px">' + esc(coinsText) + '\x3C/td>' : '') +
       '\x3Ctd>' + esc(Array.isArray(r.exchanges) ? r.exchanges.join(', ') : '') + '\x3C/td>' +
       '\x3Ctd>' + fmtDate(r.modified) + '\x3C/td>' +
@@ -5483,7 +5487,7 @@ function renderResults() {
       return 0;
     });
 
-    _renderResultsTableInto(el, filtered, chartsEl, rth, { showVersion: true, allowV8Convert: !backtestEditorAdapter.isV8 });
+    _renderResultsTableInto(el, filtered, chartsEl, rth, { showVersion: true, showStrategy: true, allowV8Convert: !backtestEditorAdapter.isV8 });
   } catch (e) {
     if (el) el.innerHTML = '\x3Cdiv class="empty-state">Failed to render results: ' + esc(e.message || e) + '\x3C/div>';
     toast('Render results failed: ' + (e.message || e), 'err');

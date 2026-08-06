@@ -51,7 +51,7 @@ Permanent preparation errors move only their queue row to an actionable error st
 
 ## Results And Paretos
 
-Results are read only from `<pb8dir>/optimize_results`. The Results and Paretos panels provide the shared PB7 workflow for result inspection, deletion, 3D plots, Pareto Dash, candidate JSON, metric summaries, and seed bundles.
+Results are read only from `<pb8dir>/optimize_results`. The Results table shows each run's configured PB8 strategy and can sort by that column. The Results and Paretos panels provide the shared PB7 workflow for result inspection, deletion, 3D plots, Pareto Dash, candidate JSON, metric summaries, and seed bundles.
 
 PB8 result actions distinguish three different workflows:
 

@@ -1466,6 +1466,11 @@ def _list_results() -> list[dict]:
             first_data = _all_results_first(directory / "all_results.bin")
         contract = _pareto_contract(first_data or {})
         readiness = _checkpoint_resume_readiness(directory, for_listing=True)
+        result_config = first_data if isinstance(first_data, dict) else {}
+        recovered_config = readiness.get("config") if isinstance(readiness.get("config"), dict) else {}
+        result_live = result_config.get("live") if isinstance(result_config.get("live"), dict) else {}
+        recovered_live = recovered_config.get("live") if isinstance(recovered_config.get("live"), dict) else {}
+        strategy = str(result_live.get("strategy_kind") or recovered_live.get("strategy_kind") or "").strip()
         has_pareto = bool(paretos)
         summary = _pareto_summary(first_data or {}, "mean")
         objective_names = [spec["metric"] for spec in contract["objectives"] if spec["metric"] in summary]
@@ -1493,6 +1498,7 @@ def _list_results() -> list[dict]:
                 "resume_reasons": readiness["reasons"],
                 "evaluations": progress["evaluations"],
                 "progress": progress,
+                "strategy": strategy,
                 "mode": contract["mode"],
                 "scenario_count": contract["scenario_count"],
                 "scenario_labels": contract["scenario_labels"],

@@ -10286,6 +10286,7 @@ function paretoSortIndicator(sortKey) {
 function resultHeaderLabel(sortKey) {
   if (sortKey === 'name') return 'Name';
   if (sortKey === 'result') return 'Result Directory';
+  if (sortKey === 'strategy') return 'Strategy';
   if (sortKey === 'pareto_count') return 'Paretos';
   if (sortKey === 'mode') return 'Mode';
   if (sortKey === 'modified') return 'Modified';
@@ -10301,7 +10302,9 @@ function renderResultsTableHead() {
   var thead = el('results-thead');
   if (!thead) return;
   var html = '<tr>';
-  ['name', 'result', 'pareto_count', 'mode', 'modified'].forEach(function(sortKey) {
+  var sortKeys = ['name', 'result', 'pareto_count', 'mode', 'modified'];
+  if (optimizeEditorAdapter.isV8) sortKeys.splice(2, 0, 'strategy');
+  sortKeys.forEach(function(sortKey) {
     var isActive = state.resultSortKey === sortKey;
     var ariaSort = 'none';
     if (isActive) ariaSort = state.resultSortDir === 'desc' ? 'descending' : 'ascending';
@@ -10317,6 +10320,7 @@ function renderResultsTableHead() {
 function getResultSortValue(item, sortKey) {
   if (sortKey === 'name') return String(item && (item.name || item.result) || '').toLowerCase();
   if (sortKey === 'result') return String(item && item.result || '').toLowerCase();
+  if (sortKey === 'strategy') return String(item && item.strategy || '').toLowerCase();
   if (sortKey === 'pareto_count') return Number(item && item.pareto_count || 0);
   if (sortKey === 'mode') return String(item && item.mode || '').toLowerCase();
   if (sortKey === 'modified') {
@@ -10442,7 +10446,7 @@ function renderResults() {
   renderResultsTableHead();
   tbody.innerHTML = '';
   if (!results.length) {
-    renderEmpty('results-tbody', 6, 'No optimize results found.', '', '');
+    renderEmpty('results-tbody', optimizeEditorAdapter.isV8 ? 7 : 6, 'No optimize results found.', '', '');
     updateResultSelectionUi(results);
     updateMetaCounts();
     return;
@@ -10461,6 +10465,7 @@ function renderResults() {
     tr.innerHTML = ''
       + '<td><strong>' + escapeHtml(result.name || result.result) + '</strong></td>'
       + '<td class="mono ellipsis">' + escapeHtml(result.result || '-') + '</td>'
+      + (optimizeEditorAdapter.isV8 ? '<td class="mono">' + escapeHtml(result.strategy || '-') + '</td>' : '')
       + '<td class="result-pareto-count" title="Double-click to open the new FastAPI Pareto Explorer">' + escapeHtml(String(result.pareto_count || 0)) + '</td>'
       + '<td class="result-mode-cell">' + resultModeMarkup(result) + '</td>'
       + '<td class="muted">' + escapeHtml(formatIso(result.modified)) + '</td>'
