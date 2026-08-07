@@ -856,6 +856,7 @@ def summarize_backtest_result(result_dir: Path, archive_root: Path) -> dict:
     config = _read_json_object_nofollow(result_dir / "config.json", archive_root, required=True)
     backtest = config.get("backtest", {}) if isinstance(config, dict) else {}
     bot = config.get("bot", {}) if isinstance(config, dict) else {}
+    live = config.get("live", {}) if isinstance(config, dict) else {}
     adg = analysis.get("adg_usd", analysis.get("adg", 0))
     drawdown = analysis.get("drawdown_worst_usd", analysis.get("drawdown_worst", 0))
     sharpe = analysis.get("sharpe_ratio_usd", analysis.get("sharpe_ratio", 0))
@@ -879,6 +880,7 @@ def summarize_backtest_result(result_dir: Path, archive_root: Path) -> dict:
         "config_version": version["config_version"],
         "config_family": version["config_family"],
         "backtest_version": version["backtest_version"],
+        "strategy": str(live.get("strategy_kind") or "").strip(),
         "pb7_config_version": version["pb7_config_version"],
         "pbgui_version": version["pbgui_version"],
         "layout": "current" if is_new_backtest_result_path(result_dir, archive_root) else "legacy",

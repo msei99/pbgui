@@ -269,7 +269,7 @@ def test_v8_archive_results_can_open_the_pb8_run_editor() -> None:
     assert "'addResultToArchive'" not in adapter.split("var unsupported =", 1)[1].split("];", 1)[0]
     assert "backtest_version: selectedResult.backtest_version || backtestEditorAdapter.version" in page
     assert "archiveResultApiFetch" in page
-    assert "{ showVersion: true }" in page
+    assert "{ showVersion: true, showStrategy: true }" in page
     assert "Add to Run is available only for PB7 archive results." not in page
 
 
@@ -824,6 +824,15 @@ def test_backtest_v8_results_render_strategy_without_changing_v7_rows() -> None:
     )
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_backtest_archive_enables_strategy_for_v8_rows() -> None:
+    """Archive results must opt into the shared conditional Strategy column."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "renderArchiveResults")
+
+    assert "{ showVersion: true, showStrategy: true }" in function
+    assert "(r.strategy || '')" in function
 
 
 def test_backtest_v8_configs_render_sortable_strategy_without_changing_v7_rows() -> None:

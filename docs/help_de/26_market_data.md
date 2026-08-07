@@ -398,7 +398,7 @@ Pyth-Links behalten jetzt die für `pythdata.app` nötige encodierte Symbol-Tren
 
 - `Fetch start date` gilt nur für Equity (Daily-Metadaten-Endpoint).
 - Für FX gibt es keinen dedizierten Startdate-Metadata-Fetch-Button.
-- Auto-Map sowie Metadata/Price-Refresh benötigen ein aktives Tiingo-Vault-Profil unter **Setup -> API Keys -> TradFi**.
+- Auto-Map sowie Metadata/Price-Refresh benötigen ein aktives Tiingo-Vault-Profil. Der Token kann direkt unter **Settings -> TradFi / Tiingo** angezeigt, konfiguriert oder ersetzt werden; erweiterte Profil-Metadaten werden weiterhin unter **Setup -> API Keys -> TradFi** verwaltet. Bulk-Status- und Settings-Antworten bleiben frei von Secrets.
 
 ## Download l2Book from AWS
 
@@ -458,6 +458,10 @@ Das Job-Panel zeigt drei Bereiche:
 - **Pending** — eingereihte Jobs
 - **Running** — aktuell laufender Job mit Live-Fortschritt
 - **Failed / Done** — abgeschlossene Jobs
+
+Die fokussierten Best-1m-History-Tabs wenden den ausgewählten Job-Typ vor dem History-Limit an, damit andere hochfrequente Jobs abgeschlossene oder fehlgeschlagene Jobs der aktuellen Exchange-Aktion nicht verdecken.
+
+Ein API-Neustart kann den separaten Market-Data-Queue-Controller über die Service-Cgroup stoppen. Jeder laufende, nicht abgebrochene Job wird mit unverändert gespeichertem Fortschritt nach **Pending** zurückgesetzt; der rekonstruierte Worker setzt ihn anhand der bereits geschriebenen Daten fort, statt ihn als fehlgeschlagen zu markieren. Explizite Abbrüche und echte Verarbeitungsfehler wechseln weiterhin nach **Failed**.
 
 Aktionen:
 - **Run** — markiert einen Pending-Job für manuelle Priorität und erlaubt einen zusätzlichen parallelen Slot für denselben Job-Typ neben dem bereits laufenden Job
@@ -523,9 +527,9 @@ Im Job-Panel können u. a. angezeigt werden:
 
 ## Tiingo-Credentials
 
-Das Tiingo-Profil wird unter **Setup -> API Keys -> TradFi** angelegt oder ersetzt. Market Data erhält nur serverseitigen Verfügbarkeits- und Quota-Status, niemals den gespeicherten Key. Tiingo nicht in `pbgui.ini` eintragen und PB7-TradFi-Einträge nicht manuell bearbeiten.
+Der Tiingo-Token wird direkt unter **Settings -> TradFi / Tiingo** angezeigt, angelegt oder ersetzt; erweiterte Profil-Metadaten werden unter **Setup -> API Keys -> TradFi** verwaltet. Beide Wege verwenden denselben Credential Vault. Das Eingabefeld wird nie vorbefüllt; der gespeicherte Key wird erst nach einem ausdrücklichen Klick auf das Auge angefordert und beim Verbergen oder Verlassen der Seite wieder gelöscht. Tiingo nicht in `pbgui.ini` eintragen und PB7-TradFi-Einträge nicht manuell bearbeiten.
 
-Diese Seite zeigt Runtime-Quota-Werte (Stunde/Tag/Monatsbandbreite), Provider-Links und Mapping-Werkzeuge, die das aktive Vault-Profil verwenden.
+Diese Seite bietet eine ausdrückliche Anzeige sowie eine sichere Eingabe zum Erstellen oder Ersetzen des aktiven Tiingo-Vault-Tokens, Runtime-Quota-Werte (Stunde/Tag/Monatsbandbreite), Provider-Links und Mapping-Werkzeuge. Profil- und Settings-Antworten bleiben frei von Secrets.
 
 ## Troubleshooting
 

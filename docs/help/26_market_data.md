@@ -398,7 +398,7 @@ Pyth links now preserve the encoded symbol separator required by `pythdata.app`,
 
 - `Fetch start date` is equity-only (daily metadata endpoint).
 - FX symbols do not use a dedicated start-date metadata fetch button.
-- Auto-Map and metadata/price refresh require an active Tiingo vault profile under **Setup -> API Keys -> TradFi**.
+- Auto-Map and metadata/price refresh require an active Tiingo vault profile. Reveal, configure, or replace its token directly under **Settings -> TradFi / Tiingo**, or manage advanced profile metadata under **Setup -> API Keys -> TradFi**. Bulk status and settings responses remain secret-free.
 
 ## Download l2Book from AWS
 
@@ -458,6 +458,10 @@ The job panel shows three sections:
 - **Pending** — jobs queued for execution
 - **Running** — currently executing job with live progress
 - **Failed / Done** — completed jobs
+
+Focused Best 1m history tabs apply the selected job type before the history limit, so unrelated high-frequency jobs do not hide completed or failed jobs for the current exchange action.
+
+An API restart can stop the separate Market Data Queue controller through the service cgroup. Any non-cancelled running job is moved back to **Pending** with its persisted progress intact, and the reconstructed worker resumes it from the data already written instead of marking it as failed. Explicit cancellation and genuine processing errors still move jobs to **Failed**.
 
 Actions:
 - **Run** — marks one pending job for manual priority and allows one additional same-type job to start in parallel with the already running one
@@ -523,9 +527,9 @@ Job panel can show:
 
 ## Tiingo Credentials
 
-Create or replace the Tiingo profile under **Setup -> API Keys -> TradFi**. Market Data receives only server-side availability and quota status; it never receives the stored key. Do not add Tiingo to `pbgui.ini` or edit PB7 TradFi entries manually.
+Reveal, create, or replace the Tiingo token directly under **Settings -> TradFi / Tiingo**, or manage advanced profile metadata under **Setup -> API Keys -> TradFi**. Both paths use the same credential vault. The input is never prefilled; the stored key is requested only after an explicit click on the eye and is cleared when hidden or when the page is left. Do not add Tiingo to `pbgui.ini` or edit PB7 TradFi entries manually.
 
-This page provides runtime quota indicators (hour/day/month bandwidth), provider links, and mapping tools that use the active vault profile.
+This page provides an explicit reveal and secure create/replace input for the active Tiingo vault token, runtime quota indicators (hour/day/month bandwidth), provider links, and mapping tools that use the active vault profile. Profile lists and settings responses remain secret-free.
 
 ## Troubleshooting
 

@@ -21,7 +21,7 @@ from pathlib import Path as _Path
 from typing import Any, Optional
 
 import httpx
-from fastapi import APIRouter, Body, Depends, HTTPException, Path as PathParam, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Path as PathParam, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -1458,6 +1458,10 @@ class TradFiProjectionRetry(BaseModel):
     operation_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
 
 
+class TradFiRevealRequest(BaseModel):
+    profile_id: str = Field(min_length=1, max_length=128)
+
+
 def _tradfi_api_key(credentials: dict[str, str]) -> str:
     """Return a provider API key from supported vault field aliases."""
 
@@ -1561,6 +1565,28 @@ def _tradfi_projection_status(store: CredentialStore) -> dict[str, Any]:
         "applied_at": status.get("applied_at"),
         "last_error": str(status.get("last_error") or "") or None,
     }
+
+
+@router.post("/tradfi/reveal")
+def reveal_tradfi_api_key(
+    body: TradFiRevealRequest,
+    response: Response,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, str]:
+    """Reveal one explicitly requested third-party API key without caching it."""
+
+    store = _credential_store()
+    try:
+        credentials = store.load_tradfi_credentials(body.profile_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CredentialNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="TradFi profile not found") from exc
+    value = _tradfi_api_key(credentials)
+    if not value:
+        raise HTTPException(status_code=404, detail="TradFi API key is not configured")
+    response.headers["Cache-Control"] = "no-store"
+    return {"value": value}
 
 
 @router.get("/tradfi/config")

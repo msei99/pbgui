@@ -72,3 +72,12 @@ def test_build_coin_filter_controls_and_payload_contract_are_present() -> None:
     assert 'data-action="build-tradfi-only"' in source
     assert 'data-action="build-no-local-data"' in source
     assert "buildCoinsWithDownloadedHistory = new Set(bD.coins_with_downloaded_history||[])" in source
+
+
+def test_job_history_requests_filter_before_the_api_limit() -> None:
+    """History tabs must ask the API for the focused job type before limiting results."""
+    source = PAGE.read_text(encoding="utf-8")
+    function = _extract_function(source, "loadHistoryTab")
+
+    assert "&limit=20&job_type=' + encodeURIComponent(jt)" in function
+    assert function.index("var jt = JOB_TYPES[ns]") < function.index("await fetch")

@@ -194,7 +194,7 @@ Stock-perp backtests for Hyperliquid XYZ symbols require 1-minute OHLCV data for
 
 A registration link is shown when a provider is selected.
 
-Saved profiles show only metadata such as provider, active state, and generation. **Test Connection** uses the saved profile server-side when the fields are empty, or one-time credentials from the authenticated request body before saving. Stored TradFi values cannot be revealed.
+Saved profiles show only metadata such as provider, active state, and generation. **Test Connection** uses the saved profile server-side when the fields are empty, or one-time credentials from the authenticated request body before saving. Click the eye next to **API key** to reveal only the selected profile's stored third-party key; hiding it, selecting another profile, losing authentication, or leaving the page clears it again. A Tiingo token can also be revealed, created, or replaced directly under **Market Data -> Settings -> TradFi / Tiingo** through the same credential vault.
 
 PBGui automatically projects the active master-side TradFi profiles into its reserved PB7 `api-keys.json` subtree with atomic merge and retry handling. Do not edit PB7 TradFi entries manually. Replacing a provider key creates a new vault generation; provider rotation is optional and is not required for credential migration.
 

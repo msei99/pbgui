@@ -194,7 +194,7 @@ Für Hyperliquid-XYZ-Symbol-Backtests werden 1-Minuten-OHLCV-Daten traditionelle
 
 Bei der Auswahl eines Providers wird ein Link zur Registrierungsseite angezeigt.
 
-Gespeicherte Profile zeigen nur Metadaten wie Provider, Aktivstatus und Generation. **Test Connection** verwendet bei leeren Feldern das gespeicherte Profil serverseitig oder vor dem Speichern einmalige Credentials aus dem authentifizierten Request-Body. Gespeicherte TradFi-Werte können nicht enthüllt werden.
+Gespeicherte Profile zeigen nur Metadaten wie Provider, Aktivstatus und Generation. **Test Connection** verwendet bei leeren Feldern das gespeicherte Profil serverseitig oder vor dem Speichern einmalige Credentials aus dem authentifizierten Request-Body. Ein Klick auf das Auge neben **API key** zeigt ausschließlich den gespeicherten Drittanbieter-Key des ausgewählten Profils; beim Verbergen, Profilwechsel, Authentifizierungsverlust oder Verlassen der Seite wird er wieder gelöscht. Ein Tiingo-Token kann außerdem direkt unter **Market Data -> Settings -> TradFi / Tiingo** über denselben Credential Vault angezeigt, erstellt oder ersetzt werden.
 
 PBGui projiziert aktive TradFi-Profile auf Mastern automatisch in den reservierten PB7-Teil von `api-keys.json`, inklusive atomarem Merge und Retry. PB7-TradFi-Einträge nicht manuell bearbeiten. Das Ersetzen eines Provider-Keys erzeugt eine neue Vault-Generation; Provider-Rotation ist optional und keine Voraussetzung für die Credential-Migration.
 

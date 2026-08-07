@@ -1753,11 +1753,11 @@
         if (!panel) return;
         panel.innerHTML = '\x3Cdiv class="hlda-empty"\x3ELoading…\x3C/div\x3E';
         try {
-            var resp = await fetch(API_BASE + '/jobs/?states=' + tab + '&limit=20', authOptions());
+            var jt = JOB_TYPES[ns];
+            var resp = await fetch(API_BASE + '/jobs/?states=' + tab + '&limit=20&job_type=' + encodeURIComponent(jt), authOptions());
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             var data = await resp.json();
             var jobs = data.jobs || data;
-            var jt = JOB_TYPES[ns];
             var filtered = jobs.filter(function(j) { return (j.type||'').toLowerCase()===jt; });
             filtered.sort(function(a,b) { return (b.updated_ts||0)-(a.updated_ts||0); });
             if (!filtered.length) { panel.innerHTML = '\x3Cdiv class="hlda-empty"\x3ENo ' + tab + ' jobs.\x3C/div\x3E'; return; }

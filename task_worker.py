@@ -498,7 +498,30 @@ def _run_job(job_path: Path) -> None:
         move_job_file(job_path, "done")
     except Exception as e:
         _job_log(f"job error {job_path.name}: {e}")
-        mark_error(str(e))
+        cancel_requested = _is_cancel_requested(job_path)
+        if _STOP and job_path.exists() and not cancel_requested:
+            try:
+                update_job_file(
+                    job_path,
+                    mutate=lambda o: o.update(
+                        {
+                            "status": "pending",
+                            "error": "worker stopped; requeued",
+                            "worker_pid": 0,
+                            "run_started_ts": 0,
+                            "finished_ts": 0,
+                            "manual_parallel": False,
+                            "run_requested": False,
+                            "run_requested_ts": 0,
+                        }
+                    ),
+                )
+                move_job_file(job_path, "pending")
+                _job_log(f"worker stopping; requeued job {job_path.name}", level="WARNING")
+                return
+            except Exception as requeue_exc:
+                _job_log(f"failed to requeue stopped job {job_path.name}: {requeue_exc}", level="ERROR")
+        mark_error("cancelled" if cancel_requested else str(e))
         move_job_file(job_path, "failed")
 
 

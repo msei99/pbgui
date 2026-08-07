@@ -3083,8 +3083,21 @@
                 </div>
               </div>
               <div class="callout" id="settings-tiingo-credential-status">
-                Tiingo credentials are managed in Setup &gt; API Keys &gt; TradFi and are never sent to this page.
+                Tiingo credentials use the shared TradFi vault. A stored token is sent to this field only after an explicit click on the eye.
               </div>
+              <div class="settings-grid settings-grid-wide">
+                <label class="settings-field">
+                  <span class="field-label">New Tiingo API token</span>
+                  <div class="pw-wrap">
+                    <input id="settings-tiingo-token" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="Enter only to configure or replace">
+                    <button type="button" class="pw-eye-btn" onclick="toggleTiingoTokenVisible(this)" tabindex="-1" title="Show or hide the Tiingo token">&#128065;</button>
+                  </div>
+                </label>
+                <div class="settings-field" style="align-self:end;">
+                  <button class="btn primary" id="btn-save-tiingo-token" type="button">Save token to vault</button>
+                </div>
+              </div>
+              <div class="note">Click the eye to reveal the active Tiingo token for this field. The revealed value is cleared again when hidden or when you leave the page.</div>
               <div id="settings-tiingo-usage" class="stack"></div>
             </article>
 
@@ -3690,7 +3703,11 @@
         dragMode: null,
         activeSubsection: 'normal',
         baselineRequest: '',
-        isDirty: false
+        isDirty: false,
+        tiingoConfigured: false,
+        tiingoProfileId: '',
+        tiingoSaveGeneration: 0,
+        tiingoRevealGeneration: 0
       };
       var integrityState = {
         settings: null,
@@ -4887,6 +4904,29 @@
         return response.json();
       }
 
+      async function fetchApiKeysJson(path, options) {
+        var requestOptions = options || {};
+        requestOptions.cache = requestOptions.cache || 'no-store';
+        requestOptions.headers = requestOptions.headers || {};
+        if (requestOptions.body && !requestOptions.headers['Content-Type']) {
+          requestOptions.headers['Content-Type'] = 'application/json';
+        }
+        var response = await fetch(jobsApiUrl('/api-keys' + path), requestOptions);
+        var payload = null;
+        try {
+          payload = await response.json();
+        } catch (error) {
+          void error;
+        }
+        if (response.status === 401) clearTiingoRevealedToken();
+        if (!response.ok) {
+          var detail = payload && payload.detail;
+          var message = detail && typeof detail === 'object' ? detail.message : detail;
+          throw new Error(message || ('HTTP ' + response.status));
+        }
+        return payload || {};
+      }
+
       async function fetchJobsJson(path, options) {
         var requestOptions = options || {};
         requestOptions.cache = requestOptions.cache || 'no-store';
@@ -5540,6 +5580,62 @@
           btn.textContent = '\uD83D\uDC41';
         }
       };
+
+      function clearTiingoRevealedToken() {
+        settingsState.tiingoRevealGeneration += 1;
+        var input = document.getElementById('settings-tiingo-token');
+        if (!input) return;
+        if (input.dataset.revealed === 'true') input.value = '';
+        delete input.dataset.revealed;
+        input.type = 'password';
+        var button = input.nextElementSibling;
+        if (button && button.classList.contains('pw-eye-btn')) button.textContent = '\uD83D\uDC41';
+      }
+
+      async function toggleTiingoTokenVisible(button) {
+        var input = document.getElementById('settings-tiingo-token');
+        if (!input) return;
+        if (input.type === 'text') {
+          if (input.dataset.revealed === 'true') {
+            clearTiingoRevealedToken();
+          } else {
+            input.type = 'password';
+            button.textContent = '\uD83D\uDC41';
+          }
+          return;
+        }
+        if (input.value) {
+          input.type = 'text';
+          button.textContent = '\uD83D\uDE48';
+          return;
+        }
+        if (!settingsState.tiingoConfigured || !settingsState.tiingoProfileId) {
+          showToast('No stored Tiingo token is available.', 'warning');
+          return;
+        }
+
+        var profileId = settingsState.tiingoProfileId;
+        var generation = ++settingsState.tiingoRevealGeneration;
+        button.disabled = true;
+        try {
+          var result = await fetchApiKeysJson('/tradfi/reveal', {
+            method: 'POST',
+            body: JSON.stringify({ profile_id: profileId })
+          });
+          if (generation !== settingsState.tiingoRevealGeneration
+              || profileId !== settingsState.tiingoProfileId) return;
+          input.value = String(result.value || '');
+          input.dataset.revealed = 'true';
+          input.type = 'text';
+          button.textContent = '\uD83D\uDE48';
+        } catch (error) {
+          if (generation !== settingsState.tiingoRevealGeneration) return;
+          showToast(error && error.message ? error.message : 'Failed to reveal Tiingo token.', 'error');
+        } finally {
+          button.disabled = false;
+        }
+      }
+      window.toggleTiingoTokenVisible = toggleTiingoTokenVisible;
 
       function formatBytes(bytes) {
         var value = Number(bytes || 0);
@@ -7275,12 +7371,22 @@
           setFieldValue('settings-scan-workers', settings.l2book_scan_workers);
           setFieldValue('settings-archive-enabled', settings.l2book_archive_enabled);
           setFieldValue('settings-archive-dir', settings.l2book_archive_dir);
+          clearTiingoRevealedToken();
           settingsState.tiingoConfigured = Boolean(settings.tiingo_configured);
+          settingsState.tiingoProfileId = String(settings.tiingo_profile_id || '');
+          var tiingoTokenInput = document.getElementById('settings-tiingo-token');
+          if (tiingoTokenInput) {
+            tiingoTokenInput.value = '';
+            tiingoTokenInput.type = 'password';
+            tiingoTokenInput.placeholder = settingsState.tiingoConfigured
+              ? 'Stored in vault; enter only to replace'
+              : 'Enter Tiingo API token';
+          }
           var credentialStatus = document.getElementById('settings-tiingo-credential-status');
           if (credentialStatus) {
             credentialStatus.textContent = settingsState.tiingoConfigured
-              ? 'An active Tiingo vault profile is available. Credentials stay server-side.'
-              : 'No active Tiingo vault profile. Configure one in Setup > API Keys > TradFi.';
+              ? 'An active Tiingo vault profile is available. Enter a new token below only to replace it.'
+              : 'No active Tiingo vault profile. Enter a token below to create one.';
           }
           renderTiingoUsage(settings.tiingo_usage || {}, settingsState.tiingoConfigured);
           loadTradfiMappings();
@@ -8856,6 +8962,68 @@
         }
       }
 
+      async function saveTiingoToken() {
+        var input = document.getElementById('settings-tiingo-token');
+        var button = document.getElementById('btn-save-tiingo-token');
+        if (input && input.dataset.revealed === 'true') {
+          showToast('Hide the revealed token before entering a replacement.', 'warning');
+          return;
+        }
+        var token = String(input && input.value || '').trim();
+        if (!token) {
+          showToast('Enter a new Tiingo API token.', 'error');
+          return;
+        }
+        if (button && button.disabled) return;
+
+        var generation = ++settingsState.tiingoSaveGeneration;
+        if (button) button.disabled = true;
+        if (input) input.disabled = true;
+        try {
+          var profilePayload = await fetchApiKeysJson('/tradfi/profiles');
+          if (generation !== settingsState.tiingoSaveGeneration) return;
+          var profiles = Array.isArray(profilePayload.profiles) ? profilePayload.profiles : [];
+          var profile = profiles.find(function (item) {
+            return item && String(item.id || '') === settingsState.tiingoProfileId;
+          }) || profiles.find(function (item) {
+            return item && item.provider === 'tiingo' && item.active && !item.pending;
+          }) || profiles.find(function (item) {
+            return item && item.provider === 'tiingo' && !item.pending;
+          }) || null;
+          var result = await fetchApiKeysJson('/tradfi/config', {
+            method: 'PUT',
+            body: JSON.stringify({
+              profile_id: profile ? profile.id : null,
+              provider: 'tiingo',
+              label: profile && profile.label ? profile.label : 'Market Data Tiingo',
+              active: true,
+              shared: profile ? Boolean(profile.shared) : true,
+              api_key: token,
+              create_new: !profile
+            })
+          });
+          if (generation !== settingsState.tiingoSaveGeneration) return;
+          settingsState.tiingoConfigured = Boolean(result.profile && result.profile.has_api_key);
+          settingsState.tiingoProfileId = String(result.profile && result.profile.id || '');
+          await loadSettings('hyperliquid', { keepFeedback: true });
+          showToast(
+            result.status === 'pending'
+              ? 'Tiingo token submitted; vault publication is still pending.'
+              : 'Tiingo token saved to the credential vault.',
+            result.status === 'pending' ? 'warning' : 'success'
+          );
+        } catch (error) {
+          showToast(error && error.message ? error.message : 'Failed to save Tiingo token.', 'error');
+        } finally {
+          if (input && input.value === token) input.value = '';
+          token = '';
+          if (generation === settingsState.tiingoSaveGeneration) {
+            if (button) button.disabled = false;
+            if (input) input.disabled = false;
+          }
+        }
+      }
+
       function setActivePanel(panelId) {
         var activeLabel = 'Overview';
         sectionButtons.forEach(function (item) {
@@ -9516,6 +9684,9 @@
         document.getElementById('btn-test-tiingo').addEventListener('click', function () {
           testTiingo();
         });
+        document.getElementById('btn-save-tiingo-token').addEventListener('click', function () {
+          saveTiingoToken();
+        });
         document.getElementById('btn-tradfi-search-ticker').addEventListener('click', function () {
           searchTradfiTicker();
         });
@@ -9554,6 +9725,8 @@
         });
         updateTradfiActionButtons();
       }
+
+      window.addEventListener('pagehide', clearTiingoRevealedToken);
 
       function restorePanel() {
         var panelId = 'settings-panel';

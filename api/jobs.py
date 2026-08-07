@@ -33,6 +33,7 @@ class CancelJobRequest(BaseModel):
 def get_jobs(
     states: str = "pending,running",
     limit: int = 50,
+    job_type: str = "",
     session: SessionToken = Depends(require_auth)
 ):
     """List jobs by state.
@@ -40,13 +41,15 @@ def get_jobs(
     Args:
         states: Comma-separated list of states (pending,running,done,failed)
         limit: Maximum number of jobs to return
+        job_type: Optional comma-separated job types applied before the limit
         session: Authenticated session (auto-injected)
         
     Returns:
         {"jobs": [...], "worker_running": bool}
     """
     state_list = [s.strip() for s in states.split(",") if s.strip()]
-    jobs = list_jobs(states=state_list, limit=limit)
+    job_types = [value.strip() for value in job_type.split(",") if value.strip()]
+    jobs = list_jobs(states=state_list, limit=limit, job_types=job_types)
     
     # Include worker status
     worker_pid = read_worker_pid()

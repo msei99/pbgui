@@ -989,9 +989,10 @@
                     <div class="form-group">
                         <label>API Key</label>
                         <div class="pw-wrap">
-                            <input type="password" id="tradfiApiKey" />
-                            <button type="button" class="pw-eye-btn" onclick="togglePwVisible('tradfiApiKey', this)" tabindex="-1">&#128065;</button>
+                            <input type="password" id="tradfiApiKey" autocomplete="new-password" />
+                            <button type="button" class="pw-eye-btn" onclick="toggleTradfiApiKeyVisible(this)" tabindex="-1" title="Show or hide the stored API key">&#128065;</button>
                         </div>
+                        <div style="font-size:var(--fs-xs);color:#718096;margin-top:4px;">Click the eye to reveal the selected profile's API key. The revealed value is cleared when hidden, when another profile is selected, or when you leave the page.</div>
                     </div>
                     <div class="form-group" id="tradfiSecretGroup">
                         <label>API Secret</label>
@@ -1204,11 +1205,13 @@
             setTimeout(() => { const f = document.getElementById("userFilter"); if (f) f.focus(); }, 50);
         }
     });
+    window.addEventListener("pagehide", clearTradfiRevealedApiKey);
 
     // ── API helpers ─────────────────────────────────────────
     async function apiFetch(path, options = {}) {
         const url = API_BASE + path;
         const resp = await fetch(url, { headers: HEADERS, ...options });
+        if (resp.status === 401) clearTradfiRevealedApiKey();
         if (!resp.ok) {
             let detail = null;
             try {
@@ -1772,6 +1775,7 @@
             }))) return;
         }
         formDirty = false;
+        clearTradfiRevealedApiKey();
         ["editPanel","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
             document.getElementById(id).style.display = "none";
         });
@@ -2426,6 +2430,7 @@
     let tradfiActionController = null;
     let tradfiActionBusy = false;
     let tradfiPendingSaveIntent = null;
+    let tradfiRevealGeneration = 0;
 
     function invalidateTradfiAction() {
         tradfiActionGeneration += 1;
@@ -2452,7 +2457,7 @@
             generation: ++tradfiActionGeneration,
             profileId: tradfiProfileId,
             provider: document.getElementById("tradfiProvider").value,
-            apiKey: document.getElementById("tradfiApiKey").value,
+            apiKey: tradfiApiKeyForAction(),
             apiSecret: document.getElementById("tradfiApiSecret").value,
         };
         tradfiActionController = new AbortController();
@@ -2482,7 +2487,7 @@
             label: document.getElementById("tradfiLabel").value,
             active: document.getElementById("tradfiActive").checked,
             shared: document.getElementById("tradfiShared").checked,
-            apiKey: document.getElementById("tradfiApiKey").value.trim(),
+            apiKey: tradfiApiKeyForAction().trim(),
             apiSecret: document.getElementById("tradfiApiSecret").value.trim(),
             createNew: !tradfiProfileId,
             rotateReplacement: !!rotateReplacement,
@@ -2582,8 +2587,75 @@
         });
     }
 
+    function clearTradfiRevealedApiKey() {
+        tradfiRevealGeneration += 1;
+        const input = document.getElementById("tradfiApiKey");
+        if (!input) return;
+        if (input.dataset.revealed === "true") input.value = "";
+        delete input.dataset.revealed;
+        input.type = "password";
+        const button = input.nextElementSibling;
+        if (button && button.classList.contains("pw-eye-btn")) button.textContent = "\uD83D\uDC41";
+    }
+
+    function tradfiApiKeyForAction() {
+        const input = document.getElementById("tradfiApiKey");
+        if (!input) return "";
+        if (input.dataset.revealed === "true") {
+            clearTradfiRevealedApiKey();
+            return "";
+        }
+        return input.value;
+    }
+
+    async function toggleTradfiApiKeyVisible(button) {
+        const input = document.getElementById("tradfiApiKey");
+        if (!input) return;
+        if (input.type === "text") {
+            if (input.dataset.revealed === "true") {
+                clearTradfiRevealedApiKey();
+            } else {
+                input.type = "password";
+                button.textContent = "\uD83D\uDC41";
+            }
+            return;
+        }
+        if (input.value) {
+            input.type = "text";
+            button.textContent = "\uD83D\uDE48";
+            return;
+        }
+        const profile = tradfiProfiles.find(item => item && item.id === tradfiProfileId) || null;
+        if (!profile || !profile.has_api_key) {
+            showToast("No stored API key is available for the selected profile", "warning");
+            return;
+        }
+
+        const profileId = tradfiProfileId;
+        const generation = ++tradfiRevealGeneration;
+        button.disabled = true;
+        try {
+            const data = await apiFetch("/tradfi/reveal", {
+                method: "POST",
+                cache: "no-store",
+                body: JSON.stringify({ profile_id: profileId }),
+            });
+            if (generation !== tradfiRevealGeneration || profileId !== tradfiProfileId) return;
+            input.value = String(data.value || "");
+            input.dataset.revealed = "true";
+            input.type = "text";
+            button.textContent = "\uD83D\uDE48";
+        } catch (e) {
+            if (generation !== tradfiRevealGeneration) return;
+            showToast("Could not reveal API key: " + e.message, "error");
+        } finally {
+            button.disabled = false;
+        }
+    }
+
     function onTradfiProviderChange() {
         invalidateTradfiAction();
+        clearTradfiRevealedApiKey();
         const prov = document.getElementById("tradfiProvider").value;
         const needsSecret = tradfiNeedsSecret.includes(prov);
         const secretGroup = document.getElementById("tradfiSecretGroup");
@@ -2758,7 +2830,7 @@
 
     async function tradfiTest() {
         const prov = document.getElementById("tradfiProvider").value;
-        const key = document.getElementById("tradfiApiKey").value.trim();
+        const key = tradfiApiKeyForAction().trim();
         const secret = document.getElementById("tradfiApiSecret").value.trim();
         if (!key && !tradfiKeySaved) {
             showToast("Enter an API key first", "warning");

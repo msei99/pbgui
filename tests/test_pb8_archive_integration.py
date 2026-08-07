@@ -85,6 +85,7 @@ def test_generic_archive_metadata_preserves_pb7_aliases_and_nested_v8_risk(tmp_p
 
     assert summary["config_version"] == "v8.0.0"
     assert summary["backtest_version"] == "v8"
+    assert summary["strategy"] == "trailing_grid_v7"
     assert summary["twe_long"] == 1.5
     assert summary["twe_short"] == 0.75
     assert summary["pos_long"] == 5

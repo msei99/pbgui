@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import pandas as pd
 
@@ -48,6 +50,6 @@ def test_storage_coin_resolution_uses_exchange_symbol_mapping(tmp_path, monkeypa
     exchange_root = tmp_path / "binanceusdm"
     (exchange_root / "1m" / "1000PEPE_USDT:USDT").mkdir(parents=True)
     monkeypatch.setattr(market_data, "get_exchange_raw_root_dir", lambda _exchange: exchange_root)
-    monkeypatch.setattr(PBCoinData, "get_symbol_for_coin", lambda _coin, _exchange: "1000PEPEUSDT")
+    monkeypatch.setattr(sys.modules["PBCoinData"], "get_symbol_for_coin", lambda _coin, _exchange: "1000PEPEUSDT")
 
     assert backtest_price._storage_coin_dir("binanceusdm", "PEPE") == "1000PEPE_USDT:USDT"

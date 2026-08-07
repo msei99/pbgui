@@ -7,12 +7,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import Response
 
 from credential_store import CredentialStore
 
 
-def test_tradfi_routes_have_no_reveal_and_return_metadata_only(monkeypatch, tmp_path: Path) -> None:
-    """TradFi APIs never expose stored values and no reveal route remains."""
+def test_tradfi_bulk_routes_return_metadata_only(monkeypatch, tmp_path: Path) -> None:
+    """TradFi save, profile, and config responses never include stored values."""
 
     from api import api_keys
 
@@ -46,14 +47,35 @@ def test_tradfi_routes_have_no_reveal_and_return_metadata_only(monkeypatch, tmp_
     assert profiles["profiles"][0]["configured"] is True
     assert profiles["profiles"][0]["has_api_key"] is True
     assert config.has_api_key is True
-    assert all(route.path != "/tradfi/reveal" for route in api_keys.router.routes)
-
     deleted = api_keys.clear_tradfi_config(
         profile_id=saved["profile"]["id"],
         session=None,
     )
     assert deleted["tombstone"]["status"] == "tombstoned"
     assert store.list_tradfi() == []
+
+
+def test_tradfi_reveal_returns_only_requested_key_without_caching(monkeypatch, tmp_path: Path) -> None:
+    """An explicit authenticated POST may reveal one selected third-party API key."""
+
+    from api import api_keys
+
+    store = CredentialStore(tmp_path / "credentials")
+    record = store.create_tradfi("tiingo", {"api_key": "vault-only-token"})
+    monkeypatch.setattr(api_keys, "_credential_store", lambda: store)
+
+    reveal_routes = [route for route in api_keys.router.routes if route.path == "/tradfi/reveal"]
+    assert len(reveal_routes) == 1
+    assert reveal_routes[0].methods == {"POST"}
+    response = Response()
+    revealed = api_keys.reveal_tradfi_api_key(
+        api_keys.TradFiRevealRequest(profile_id=record["id"]),
+        response,
+        session=None,
+    )
+
+    assert revealed == {"value": "vault-only-token"}
+    assert response.headers["Cache-Control"] == "no-store"
 
 
 def test_tradfi_test_accepts_profile_id_or_one_time_body_secret(monkeypatch, tmp_path: Path) -> None:
@@ -232,8 +254,8 @@ def test_market_data_and_runtime_consumers_resolve_tiingo_from_vault(monkeypatch
     assert profiles["tiingo"]["api_key"] == "server-only-token"
 
 
-def test_frontend_and_market_data_sources_contain_no_tiingo_secret_state() -> None:
-    """Tiingo tokens are absent from browser fields, action bodies, and settings persistence."""
+def test_frontend_tiingo_secret_input_uses_vault_contract() -> None:
+    """Market Data submits replacements without persisting tokens in settings or bulk state."""
 
     root = Path(__file__).resolve().parent.parent
     frontend = (root / "frontend" / "market_data_main.html").read_text(encoding="utf-8")
@@ -241,11 +263,26 @@ def test_frontend_and_market_data_sources_contain_no_tiingo_secret_state() -> No
     editor = (root / "frontend" / "api_keys_editor.html").read_text(encoding="utf-8")
 
     assert "tiingo_api_key" not in frontend
-    assert "settings-tiingo-api-key" not in frontend
-    assert "JSON.stringify({ api_key:" not in frontend
+    assert 'id="settings-tiingo-token" type="password" autocomplete="new-password"' in frontend
+    assert "fetchApiKeysJson('/tradfi/profiles')" in frontend
+    assert "fetchApiKeysJson('/tradfi/config'" in frontend
+    assert "api_key: token" in frontend
+    assert "tiingoTokenInput.value = '';" in frontend
+    assert "if (input && input.value === token) input.value = '';" in frontend
+    assert "setFieldValue('settings-tiingo-token'" not in frontend
+    assert "fetchApiKeysJson('/tradfi/reveal'" in frontend
+    assert "method: 'POST'" in frontend
+    assert "JSON.stringify({ profile_id: profileId })" in frontend
+    assert "input.value = String(result.value || '');" in frontend
+    assert "window.toggleTiingoTokenVisible = toggleTiingoTokenVisible;" in frontend
+    assert "window.addEventListener('pagehide', clearTiingoRevealedToken)" in frontend
     assert 'settings.get("tiingo_api_key")' not in api_source
     assert '"tradfi_profiles"' not in api_source
-    assert "/tradfi/reveal" not in editor
+    assert 'apiFetch("/tradfi/reveal"' in editor
+    assert 'method: "POST"' in editor
+    assert 'cache: "no-store"' in editor
+    assert 'if (resp.status === 401) clearTradfiRevealedApiKey();' in editor
+    assert "window.addEventListener(\"pagehide\", clearTradfiRevealedApiKey)" in editor
     assert 'id="tradfiProfilesBody"' in editor
     assert "selectTradfiProfile(this.dataset.profileId)" in editor
     assert "item.active === true" in editor

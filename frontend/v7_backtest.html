@@ -8976,7 +8976,7 @@ function renderArchiveResults(name) {
     if (coinFilter && (!Array.isArray(r.coins) || r.coins.indexOf(coinFilter) < 0)) return false;
     if (!textFilter) return true;
     var hay = ((r.backtest_version || '') + ' ' + (r.config_version || r.pb7_config_version || '') + ' ' +
-      (r.config_name || '') + ' ' + (r.result_name || '') + ' ' + (r.display_name || '') + ' ' + (r.coins_text || '')).toLowerCase();
+      (r.config_name || '') + ' ' + (r.strategy || '') + ' ' + (r.result_name || '') + ' ' + (r.display_name || '') + ' ' + (r.coins_text || '')).toLowerCase();
     return hay.indexOf(textFilter) >= 0;
   });
   updateResultsCountLabel('archive-results-count-label', filtered.length, archiveResults.length);
@@ -8997,7 +8997,7 @@ function renderArchiveResults(name) {
     return 0;
   });
 
-  _renderResultsTableInto(tableEl, sorted, chartsEl, _rthA, { showVersion: true });
+  _renderResultsTableInto(tableEl, sorted, chartsEl, _rthA, { showVersion: true, showStrategy: true });
   setSelectedArchiveResults(selectedPaths);
 }
 

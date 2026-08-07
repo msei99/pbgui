@@ -169,10 +169,16 @@ def enqueue_running_job(*, job_type: str, payload: dict[str, Any], exchange: str
     return EnqueueResult(job_id=jid, path=str(path))
 
 
-def list_jobs(*, states: list[str] | None = None, limit: int = 50) -> list[dict[str, Any]]:
+def list_jobs(
+    *,
+    states: list[str] | None = None,
+    limit: int = 50,
+    job_types: list[str] | None = None,
+) -> list[dict[str, Any]]:
     ensure_task_dirs()
     if not states:
         states = ["pending", "running", "done", "failed"]
+    allowed_types = {str(value or "").strip().lower() for value in (job_types or []) if str(value or "").strip()}
     out: list[dict[str, Any]] = []
     for s in states:
         d = get_task_state_dir(s)
@@ -182,6 +188,8 @@ def list_jobs(*, states: list[str] | None = None, limit: int = 50) -> list[dict[
             try:
                 obj = json.loads(p.read_text(encoding="utf-8"))
                 if isinstance(obj, dict):
+                    if allowed_types and str(obj.get("type") or "").strip().lower() not in allowed_types:
+                        continue
                     obj["_path"] = str(p)
                     out.append(obj)
             except Exception:

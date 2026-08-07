@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 import sys
 import threading
@@ -70,6 +71,7 @@ def test_okx_pipeline_starts_next_coin_after_archive_stage(monkeypatch, tmp_path
     monkeypatch.setattr(task_worker, "append_exchange_download_log", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(task_worker, "_refresh_inventory_coin", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(task_worker, "_is_cancel_requested", lambda _job_path: False)
+    monkeypatch.setattr(task_worker, "integrity_job_lock", lambda: nullcontext())
 
     task_worker._run_okx_best_1m(
         job_path,
@@ -111,6 +113,50 @@ def test_run_job_records_actual_run_timestamps(monkeypatch, tmp_path) -> None:
     assert obj["status"] == "done"
     assert obj["run_started_ts"] > obj["created_ts"]
     assert obj["finished_ts"] >= obj["run_started_ts"]
+
+
+def test_run_job_requeues_when_worker_stops(monkeypatch, tmp_path) -> None:
+    """A graceful worker stop should preserve progress and requeue instead of failing the job."""
+    job_path = tmp_path / "hl-job.json"
+    job_path.write_text(
+        json.dumps(
+            {
+                "id": "hl-job",
+                "type": "hl_best_1m",
+                "status": "running",
+                "payload": {"coins": ["XYZ:AMAT"]},
+                "progress": {"stage": "tiingo_wait", "chunk_done": 1528},
+                "worker_pid": 1234,
+                "run_started_ts": 100,
+            }
+        ),
+        encoding="utf-8",
+    )
+    moved: list[str] = []
+
+    def update(path, mutate):
+        obj = json.loads(path.read_text(encoding="utf-8"))
+        mutate(obj)
+        path.write_text(json.dumps(obj), encoding="utf-8")
+
+    def stop_job(*_args):
+        raise RuntimeError("Worker stopping")
+
+    monkeypatch.setattr(task_worker, "_STOP", True)
+    monkeypatch.setattr(task_worker, "_run_hl_best_1m", stop_job)
+    monkeypatch.setattr(task_worker, "update_job_file", update)
+    monkeypatch.setattr(task_worker, "move_job_file", lambda _path, state: moved.append(state))
+
+    task_worker._run_job(job_path)
+
+    obj = json.loads(job_path.read_text(encoding="utf-8"))
+    assert moved == ["pending"]
+    assert obj["status"] == "pending"
+    assert obj["error"] == "worker stopped; requeued"
+    assert obj["progress"] == {"stage": "tiingo_wait", "chunk_done": 1528}
+    assert obj["worker_pid"] == 0
+    assert obj["run_started_ts"] == 0
+    assert obj["finished_ts"] == 0
 
 
 def test_run_job_dispatches_persisted_okx_best_1m_job(monkeypatch, tmp_path) -> None:
