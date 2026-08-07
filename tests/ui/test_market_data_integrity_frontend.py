@@ -6,6 +6,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_hyperliquid_best_1m_iframe_uses_a_valid_query_string() -> None:
+    """The focused Hyperliquid actions iframe must route section through a real query parameter."""
+    page = (ROOT / "frontend" / "market_data_main.html").read_text(encoding="utf-8")
+
+    assert "apiUrl('/data-actions/hyperliquid') + '?section='" in page
+    assert "apiUrl('/data-actions/hyperliquid') + '&section='" not in page
+
+
 def test_integrity_panel_exposes_independent_archive_controls() -> None:
     """Market Data offers separate publish and reference archive selections."""
     page = (ROOT / "frontend" / "market_data_main.html").read_text(encoding="utf-8")

@@ -164,6 +164,9 @@
         padding: 8px 12px; border-radius: 6px; font-size: var(--fs-sm); cursor: pointer; height: 38px;
     }
     .hlda-root .hlda-mini-btn:hover { background: #4a5568; color: var(--hlda-text); }
+    .hlda-root .hlda-mini-btn.active {
+        border-color: rgba(38,166,154,.7); background: rgba(38,166,154,.16); color: var(--hlda-accent);
+    }
     .hlda-root .hlda-mini-btn:disabled { opacity: .5; cursor: not-allowed; }
     .hlda-root .hlda-picker-meta {
         color: var(--hlda-text3); font-size: var(--fs-xs); white-space: nowrap;
@@ -523,7 +526,8 @@
 
     var dlCoins = [], dlSelected = new Set(), dlArchive = {oldest_day:'',newest_day:''}, dlHasCreds = false, dlFilter = '';
     var dlDragStart = null, dlDragSelecting = false, dlDragMode = null;
-    var buildCoins = [], buildSelected = new Set(), buildFilter = '';
+    var buildCoins = [], buildSelected = new Set(), buildFilter = '', buildTradfiOnly = false, buildNoLocalData = false;
+    var buildCoinsWithDownloadedHistory = new Set();
     var buildDragStart = null, buildDragSelecting = false, buildDragMode = null;
     var expandedJobs = { dl: new Set(), build: new Set() };
     var activeJobs = { dl: [], build: [] };
@@ -736,6 +740,18 @@
             case 'build-clear-selection':
                 buildClearSelection();
                 break;
+            case 'build-tradfi-only':
+                buildTradfiOnly = !buildTradfiOnly;
+                t.classList.toggle('active', buildTradfiOnly);
+                t.setAttribute('aria-pressed', buildTradfiOnly ? 'true' : 'false');
+                renderBuildCoinPicker();
+                break;
+            case 'build-no-local-data':
+                buildNoLocalData = !buildNoLocalData;
+                t.classList.toggle('active', buildNoLocalData);
+                t.setAttribute('aria-pressed', buildNoLocalData ? 'true' : 'false');
+                renderBuildCoinPicker();
+                break;
             case 'switch-tab':
                 switchTab(ns, t.getAttribute('data-tab'));
                 break;
@@ -929,6 +945,7 @@
             dlCoins = dlD.coins||[]; dlHasCreds = dlD.has_aws_creds;
             dlArchive = dlD.archive_range||{oldest_day:'',newest_day:''};
             buildCoins = bD.eligible_coins||[];
+            buildCoinsWithDownloadedHistory = new Set(bD.coins_with_downloaded_history||[]);
             populateDownload(); populateBuild();
             connectWS();
         } catch(e) {
@@ -1002,6 +1019,8 @@
                 '\x3Cdiv class="hlda-hint"\x3ELeave this empty to queue all eligible coins. Drag across visible coin rows to add or remove larger ranges quickly.\x3C/div\x3E' +
                 '\x3Cdiv class="hlda-picker-toolbar"\x3E' +
                     '\x3Cdiv class="hlda-picker-filter-wrap"\x3E\x3Cinput type="text" class="hlda-filter-input" id="' + P + 'search-build" placeholder="Filter enabled coin list" data-action="build-filter"\x3E\x3C/div\x3E' +
+                    '\x3Cbutton type="button" class="hlda-mini-btn" id="' + P + 'build-tradfi-only" data-action="build-tradfi-only" aria-pressed="false"\x3ETradFi only\x3C/button\x3E' +
+                    '\x3Cbutton type="button" class="hlda-mini-btn" id="' + P + 'build-no-local-data" data-action="build-no-local-data" aria-pressed="false"\x3ENo downloaded history\x3C/button\x3E' +
                     '\x3Cbutton type="button" class="hlda-mini-btn" id="' + P + 'build-select-visible" data-action="build-select-visible"\x3ESelect visible\x3C/button\x3E' +
                     '\x3Cbutton type="button" class="hlda-mini-btn" id="' + P + 'build-clear-selection" data-action="build-clear-selection"\x3EClear all\x3C/button\x3E' +
                     '\x3Cspan class="hlda-picker-meta" id="' + P + 'build-selected-count"\x3E0 selected / ' + buildCoins.length + ' total\x3C/span\x3E' +
@@ -1173,6 +1192,10 @@
     function getBuildVisibleCoins() {
         var filter = String(buildFilter || '').toLowerCase();
         return buildCoins.filter(function(coin) {
+            var coinUpper = String(coin || '').toUpperCase();
+            var isTradfi = coinUpper.indexOf('XYZ:') === 0 || coinUpper.indexOf('XYZ-') === 0;
+            if (buildTradfiOnly && !isTradfi) return false;
+            if (buildNoLocalData && buildCoinsWithDownloadedHistory.has(coin)) return false;
             return !filter || coin.toLowerCase().indexOf(filter) >= 0;
         });
     }

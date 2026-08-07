@@ -23,6 +23,13 @@ SOURCE_LABELS = {
     SOURCE_CODE_L2BOOK: "l2Book_mid",
     SOURCE_CODE_OTHER: "other_exchange",
 }
+_SOURCE_CODE_BYTE_TABLES = tuple(
+    bytes(
+        1 if any(((value >> (slot * 2)) & 0x03) == code for slot in range(4)) else 0
+        for value in range(256)
+    )
+    for code in range(4)
+)
 
 
 def _source_label_for_code(exchange: str, code: int) -> str | None:
@@ -71,6 +78,17 @@ def get_source_index_path(exchange: str, coin: str) -> Path:
         raise ValueError("coin is empty")
     base = Path(__file__).resolve().parent / "data" / "ohlcv" / ex
     return base / "1m_src" / cn / "sources.idx"
+
+
+def source_index_contains_code(*, exchange: str, coin: str, code: int) -> bool:
+    """Return whether a source index contains at least one minute with the requested code."""
+    code_i = int(code)
+    if code_i < 0 or code_i > 3:
+        raise ValueError("source code must be between 0 and 3")
+    existing = _read_index(get_source_index_path(exchange, coin))
+    if existing is None:
+        return False
+    return 1 in existing[2].translate(_SOURCE_CODE_BYTE_TABLES[code_i])
 
 
 def _read_index(path: Path) -> tuple[int, int, bytearray] | None:

@@ -7467,7 +7467,7 @@
         var frame = document.getElementById('best1m-hyperliquid-frame');
         if (!frame) return;
         var targetSection = section === 'download' ? 'download' : 'build';
-        var nextSrc = apiUrl('/data-actions/hyperliquid') + '&section=' + encodeURIComponent(targetSection);
+        var nextSrc = apiUrl('/data-actions/hyperliquid') + '?section=' + encodeURIComponent(targetSection);
         if (forceReload || frame.dataset.src !== nextSrc) {
           frame.dataset.src = nextSrc;
           frame.src = nextSrc;

@@ -70,6 +70,47 @@ def test_hyperliquid_other_code_stays_other_exchange(monkeypatch, tmp_path) -> N
     assert counts["20240101"]["other_exchange"] == 1
 
 
+def test_source_index_contains_code_detects_requested_minute_source(monkeypatch, tmp_path) -> None:
+    """Fast source presence checks should distinguish Tiingo/fallback history from API minutes."""
+    monkeypatch.setattr(
+        sources,
+        "get_source_index_path",
+        lambda exchange, coin: tmp_path / str(exchange) / str(coin) / "sources.idx",
+    )
+    sources.update_source_index_for_day(
+        exchange="hyperliquid",
+        coin="XYZ-AAPL_USDC:USDC",
+        day="2024-01-01",
+        minute_indices=[0],
+        code=sources.SOURCE_CODE_API,
+    )
+
+    assert sources.source_index_contains_code(
+        exchange="hyperliquid",
+        coin="XYZ-AAPL_USDC:USDC",
+        code=sources.SOURCE_CODE_API,
+    ) is True
+    assert sources.source_index_contains_code(
+        exchange="hyperliquid",
+        coin="XYZ-AAPL_USDC:USDC",
+        code=sources.SOURCE_CODE_OTHER,
+    ) is False
+
+    sources.update_source_index_for_day(
+        exchange="hyperliquid",
+        coin="XYZ-AAPL_USDC:USDC",
+        day="2024-01-01",
+        minute_indices=[1],
+        code=sources.SOURCE_CODE_OTHER,
+    )
+
+    assert sources.source_index_contains_code(
+        exchange="hyperliquid",
+        coin="XYZ-AAPL_USDC:USDC",
+        code=sources.SOURCE_CODE_OTHER,
+    ) is True
+
+
 def test_replace_source_index_clears_stale_minutes(monkeypatch, tmp_path) -> None:
     """Replacing a day must remove source bits for candles no longer on disk."""
     monkeypatch.setattr(sources, "get_source_index_path", lambda exchange, coin: tmp_path / str(exchange) / str(coin) / "sources.idx")

@@ -1643,26 +1643,26 @@ def build_ohlcv_info(
     Return info needed by the Build best 1m OHLCV form:
       - eligible_coins: list[str] — coins eligible for building
       - all_coins: list[str] — all enabled Hyperliquid coins
+      - coins_with_downloaded_history: list[str] — coins with local build history
     """
-    from market_data import get_effective_enabled_coins, load_market_data_config
-    import json as _j
+    from market_data import (
+        get_effective_enabled_coins,
+        get_exchange_raw_root_dir,
+        load_market_data_config,
+        normalize_market_data_coin_dir,
+    )
+    from market_data_tradfi import load_tradfi_map
 
     cfg = load_market_data_config()
     all_coins, _, _ = get_effective_enabled_coins("hyperliquid", cfg=cfg)
 
-    # Load TradFi map for eligibility check
-    tradfi_map_path = Path(__file__).resolve().parents[1] / "data" / "tradfi_symbol_map.json"
     tradfi_by_xyz: dict[str, dict] = {}
-    try:
-        if tradfi_map_path.exists():
-            raw = _j.loads(tradfi_map_path.read_text(encoding="utf-8"))
-            if isinstance(raw, list):
-                for r in raw:
-                    xyz = str(r.get("xyz_coin") or "").strip().upper()
-                    if xyz:
-                        tradfi_by_xyz[xyz] = dict(r)
-    except Exception:
-        pass
+    for record in load_tradfi_map():
+        if not isinstance(record, dict):
+            continue
+        xyz = str(record.get("xyz_coin") or "").strip().upper()
+        if xyz:
+            tradfi_by_xyz[xyz] = dict(record)
 
     def _extract_xyz_coin_name(coin: str) -> str | None:
         c_u = str(coin or "").strip().upper()
@@ -1684,6 +1684,10 @@ def build_ohlcv_info(
 
     eligible: list[str] = []
     for coin in all_coins:
+        coin_upper = str(coin or "").strip().upper()
+        if not coin_upper.startswith(("XYZ:", "XYZ-")):
+            eligible.append(coin)
+            continue
         xyz_name = _extract_xyz_coin_name(coin)
         if not xyz_name:
             continue
@@ -1694,15 +1698,42 @@ def build_ohlcv_info(
                 str(entry.get("tiingo_ticker") or "").strip()
                 or str(entry.get("tiingo_fx_ticker") or "").strip()
             )
-            if status == "ok" and has_tiingo:
+            if status not in {"no_provider", "pending", "delisted"} and has_tiingo:
                 eligible.append(coin)
+
+    from market_data_sources import SOURCE_CODE_OTHER, source_index_contains_code
+
+    one_minute_root = get_exchange_raw_root_dir("hyperliquid") / "1m"
+    coins_with_downloaded_history: list[str] = []
+    for coin in eligible:
+        storage_coin = normalize_market_data_coin_dir("hyperliquid", coin)
+        coin_dir = one_minute_root / storage_coin
+        is_tradfi = str(coin).strip().upper().startswith(("XYZ:", "XYZ-"))
+        if is_tradfi:
+            has_downloaded_history = source_index_contains_code(
+                exchange="hyperliquid",
+                coin=storage_coin,
+                code=SOURCE_CODE_OTHER,
+            )
         else:
-            # Non-XYZ (crypto): always allow
-            eligible.append(coin)
+            try:
+                has_downloaded_history = (
+                    coin_dir.is_dir()
+                    and not coin_dir.is_symlink()
+                    and any(
+                        path.is_file() and not path.is_symlink() and path.suffix == ".npz"
+                        for path in coin_dir.iterdir()
+                    )
+                )
+            except OSError:
+                has_downloaded_history = False
+        if has_downloaded_history:
+            coins_with_downloaded_history.append(coin)
 
     return {
         "eligible_coins": eligible,
         "all_coins": all_coins,
+        "coins_with_downloaded_history": coins_with_downloaded_history,
     }
 
 

@@ -2,9 +2,58 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from api import heatmap
+
+
+def test_build_ohlcv_info_reports_coins_with_downloaded_history(tmp_path: Path, monkeypatch) -> None:
+    """The Hyperliquid build picker should receive read-only downloaded-history metadata."""
+    exchange_root = tmp_path / "hyperliquid"
+    btc_dir = exchange_root / "1m" / "BTC_DIR"
+    btc_dir.mkdir(parents=True)
+    (btc_dir / "2026-01-01.npz").write_bytes(b"test")
+    monkeypatch.setattr("market_data.load_market_data_config", lambda: {})
+    monkeypatch.setattr(
+        "market_data.get_effective_enabled_coins",
+        lambda _exchange, cfg=None: (["BTC", "ETH"], [], False),
+    )
+    monkeypatch.setattr("market_data.get_exchange_raw_root_dir", lambda _exchange: exchange_root)
+    monkeypatch.setattr(
+        "market_data.normalize_market_data_coin_dir",
+        lambda _exchange, coin: f"{coin}_DIR",
+    )
+
+    payload = heatmap.build_ohlcv_info(session=None)
+
+    assert payload["eligible_coins"] == ["BTC", "ETH"]
+    assert payload["coins_with_downloaded_history"] == ["BTC"]
+
+
+def test_build_ohlcv_info_excludes_tradfi_without_downloadable_mapping(tmp_path: Path, monkeypatch) -> None:
+    """XYZ build options should match the canonical Tiingo downloader eligibility rules."""
+    monkeypatch.setattr("market_data.load_market_data_config", lambda: {})
+    monkeypatch.setattr(
+        "market_data.get_effective_enabled_coins",
+        lambda _exchange, cfg=None: (["BTC", "xyz:AAPL", "xyz:EUR", "xyz:MSFT", "xyz:NONE"], [], False),
+    )
+    monkeypatch.setattr("market_data.get_exchange_raw_root_dir", lambda _exchange: tmp_path)
+    monkeypatch.setattr("market_data.normalize_market_data_coin_dir", lambda _exchange, coin: coin)
+    monkeypatch.setattr(
+        "market_data_tradfi.load_tradfi_map",
+        lambda: [
+            {"xyz_coin": "AAPL", "status": "ok", "tiingo_ticker": "AAPL"},
+            {"xyz_coin": "EUR", "status": "alias", "tiingo_fx_ticker": "eurusd"},
+            {"xyz_coin": "MSFT", "status": "pending", "tiingo_ticker": "MSFT"},
+            {"xyz_coin": "NONE", "status": "no_provider"},
+        ],
+    )
+    monkeypatch.setattr("market_data_sources.source_index_contains_code", lambda **_kwargs: True)
+
+    payload = heatmap.build_ohlcv_info(session=None)
+
+    assert payload["eligible_coins"] == ["BTC", "xyz:AAPL", "xyz:EUR"]
 
 
 def test_okx_1m_overview_uses_source_index(monkeypatch) -> None:
