@@ -10377,6 +10377,10 @@
       send({ cmd: 'load_remote_branch_commits', remote_url: remoteUrl, branch: branchName, limit: 50 });
     }
 
+    function combinedUpdateButtonClass(pbguiUpdateAvailable, runtimeUpdateAvailable) {
+      return pbguiUpdateAvailable && runtimeUpdateAvailable ? 'sb-btn warning' : 'sb-btn ok';
+    }
+
     function renderSidebarActions() {
       const managedRows = getManagedRows();
       const sidebarActions = document.getElementById('sidebar-actions');
@@ -10401,7 +10405,7 @@
         const masterPb8Only = !!st.pb8_installed && !st.pb7_installed;
         const masterCombinedCommand = masterPb8Only ? 'master-update-pbgui-pb8' : 'master-update-pb';
         const masterCombinedText = masterPb8Only ? 'Update PBGui and PB8' : 'Update PBGui and PB7';
-        const masterBothBtnClass = (st.pbgui_update_available || (masterPb8Only ? st.pb8_update_available : st.pb7_update_available)) ? 'sb-btn warning' : 'sb-btn ok';
+        const masterBothBtnClass = combinedUpdateButtonClass(st.pbgui_update_available, masterPb8Only ? st.pb8_update_available : st.pb7_update_available);
         const pendingSrc = st.pending_updates != null ? st.pending_updates : ((st.summary_row || {}).updates);
         const hasLinuxUpdates = String(pendingSrc || '').trim() && String(pendingSrc).trim() !== '0' && String(pendingSrc).trim() !== 'N/A';
         const needsReboot = !!(st.summary_row || {}).reboot_required;
@@ -10455,7 +10459,7 @@
         const pb8Only = !!st.pb8_installed && !st.pb7_installed;
         const combinedCommand = pb8Only ? 'vps-update-pbgui-pb8' : 'vps-update-pb';
         const combinedText = pb8Only ? 'Update PBGui and PB8' : 'Update PBGui and PB7';
-        const bothBtnClass = (st.pbgui_update_available || (pb8Only ? st.pb8_update_available : st.pb7_update_available)) ? 'sb-btn warning' : 'sb-btn ok';
+        const bothBtnClass = combinedUpdateButtonClass(st.pbgui_update_available, pb8Only ? st.pb8_update_available : st.pb7_update_available);
         const pendingSrc = st.pending_updates != null ? st.pending_updates : ((st.summary_row || {}).updates);
         const hasLinuxUpdates = String(pendingSrc || '').trim() && String(pendingSrc).trim() !== '0' && String(pendingSrc).trim() !== 'N/A';
         const linuxUpdateBtnClass = hasLinuxUpdates ? 'sb-btn warning' : 'sb-btn ok';

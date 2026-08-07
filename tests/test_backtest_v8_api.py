@@ -824,6 +824,30 @@ def test_results_are_read_only_from_pb8_root(tmp_path, monkeypatch) -> None:
     assert results[0]["pos_long"] == 6
 
 
+def test_combined_results_report_configured_exchanges(tmp_path, monkeypatch) -> None:
+    """Combined PB8 result directories must retain the real exchanges needed by chart controls."""
+    root = tmp_path / "pb8" / "backtests" / "pbgui"
+    result_dir = root / "demo" / "combined" / "run-1"
+    result_dir.mkdir(parents=True)
+    (result_dir / "analysis.json").write_text(json.dumps({"gain_usd": 1.2}), encoding="utf-8")
+    (result_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "backtest": {"exchanges": ["binance", "bybit"], "starting_balance": 1000},
+                "live": {"approved_coins": {"long": ["HYPE"], "short": []}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(backtest_v8, "_results_root", lambda: root)
+
+    results = backtest_v8._list_results()
+
+    assert results[0]["exchange_dir"] == "combined"
+    assert results[0]["exchanges"] == ["binance", "bybit"]
+    assert results[0]["coins"] == ["HYPE"]
+
+
 def test_results_use_terminal_balance_and_equity_from_gzip_csv(tmp_path, monkeypatch) -> None:
     """PB8 result totals must use the last authoritative compressed CSV values."""
     root = tmp_path / "pb8-results"

@@ -74,6 +74,7 @@ from api.archive_helpers import (
     write_optimize_meta,
 )
 from api.auth import SessionToken, authenticate_websocket, require_auth, validate_token
+from api.backtest_price import build_market_price_payload
 from api.pb7_bridge import (
     get_allowed_override_params,
     get_bot_param_keys,
@@ -3599,6 +3600,14 @@ def list_results(name: str = None, session: SessionToken = Depends(require_auth)
 
                 bt = config_data.get("backtest", {})
                 bot = config_data.get("bot", {})
+                live = config_data.get("live", {}) if isinstance(config_data.get("live"), dict) else {}
+                approved = live.get("approved_coins", {}) if isinstance(live.get("approved_coins"), dict) else {}
+                coins = sorted({
+                    str(coin)
+                    for side in ("long", "short")
+                    for coin in (approved.get(side) if isinstance(approved.get(side), list) else [])
+                    if str(coin).strip() and str(coin).strip().lower() != "all"
+                })
 
                 # Support old & new analysis key formats
                 adg = analysis.get("adg_usd", analysis.get("adg", 0))
@@ -3639,6 +3648,7 @@ def list_results(name: str = None, session: SessionToken = Depends(require_auth)
                     "final_balance": final_balance,
                     "liquidated": liquidated,
                     "exchanges": bt.get("exchanges", []),
+                    "coins": coins,
                     "start_date": bt.get("start_date", ""),
                     "end_date": bt.get("end_date", ""),
                     "btc_collateral_cap": float(bt.get("btc_collateral_cap") or 0),
@@ -3843,6 +3853,29 @@ def get_result_equity(path: str, session: SessionToken = Depends(require_auth)):
                                      "Cache-Control": "max-age=3600"})
     else:
         raise HTTPException(404, "balance_and_equity data not found")
+
+
+@router.get("/results/price")
+def get_result_price(
+    path: str,
+    exchange: str = Query(...),
+    coin: str = Query(...),
+    max_points: int = Query(default=6000, ge=2, le=10000),
+    session: SessionToken = Depends(require_auth),
+):
+    """Return a bounded PBGui MarketData close-price series for one result market."""
+    result_dir = _resolve_result_dir(path)
+    config_file = result_dir / "config.json"
+    if not config_file.is_file() or config_file.is_symlink():
+        raise HTTPException(status_code=404, detail="config.json not found")
+    config = load_pb7_config(config_file, neutralize_added=True)
+    try:
+        return build_market_price_payload(config, exchange=exchange, coin=coin, max_points=max_points)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        _log(SERVICE, f"Failed to load PBGui MarketData price series: {exc}", level="ERROR")
+        raise HTTPException(status_code=500, detail="Unable to load PBGui MarketData price series") from exc
 
 
 @router.get("/results/fills")

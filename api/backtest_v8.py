@@ -27,11 +27,12 @@ from shutil import rmtree
 from typing import Optional
 
 import psutil
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 
 from api.archive_helpers import _read_json_object_nofollow, atomic_write_json, config_version_info
 from api.auth import SessionToken, authenticate_websocket, require_auth
+from api.backtest_price import build_market_price_payload
 from api.pb8_ohlcv_tools import (
     PB8OhlcvUnavailableError,
     build_pb8_ohlcv_preflight,
@@ -1125,6 +1126,17 @@ def _list_results() -> list[dict]:
             coins = sorted(set((approved.get("long") or []) + (approved.get("short") or [])))
             metrics = _scalar_metrics(analysis)
             exchange = parts[1] if len(parts) > 1 else ""
+            configured_exchanges = backtest.get("exchanges") or []
+            if isinstance(configured_exchanges, str):
+                configured_exchanges = [configured_exchanges]
+            configured_exchanges = [
+                str(item).strip()
+                for item in configured_exchanges
+                if str(item or "").strip() and str(item).strip().lower() not in {"combined", "suite_runs"}
+            ]
+            result_exchanges = configured_exchanges or (
+                [exchange] if exchange and exchange.lower() not in {"combined", "suite_runs"} else []
+            )
             starting_balance = _analysis_value(
                 analysis,
                 "starting_balance_usd",
@@ -1165,7 +1177,7 @@ def _list_results() -> list[dict]:
                     "config_name": parts[0] if parts else "",
                     "exchange": exchange,
                     "exchange_dir": exchange,
-                    "exchanges": [exchange] if exchange else [],
+                    "exchanges": result_exchanges,
                     "run": "/".join(parts[2:-1]) if len(parts) > 3 else (parts[-2] if len(parts) > 1 else ""),
                     "result_name": result_dir.name,
                     "path": str(result_dir),
@@ -2246,6 +2258,28 @@ def _result_csv(path: str, filename: str) -> FileResponse:
 def get_result_equity(path: str, session: SessionToken = Depends(require_auth)) -> FileResponse:
     """Serve PB8 balance/equity CSV through the shared V7 result contract."""
     return _result_csv(path, "balance_and_equity.csv")
+
+
+@router.get("/results/price")
+def get_result_price(
+    path: str,
+    exchange: str = Query(...),
+    coin: str = Query(...),
+    max_points: int = Query(default=6000, ge=2, le=10000),
+    session: SessionToken = Depends(require_auth),
+) -> dict:
+    """Return a bounded PBGui MarketData close-price series for one result market."""
+    result_dir = _resolve_result_dir(path)
+    config = _result_config(result_dir)
+    if not config:
+        raise HTTPException(status_code=404, detail="Result config not found")
+    try:
+        return build_market_price_payload(config, exchange=exchange, coin=coin, max_points=max_points)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        _log(SERVICE, f"Failed to load PBGui MarketData price series: {exc}", level="ERROR")
+        raise HTTPException(status_code=500, detail="Unable to load PBGui MarketData price series") from exc
 
 
 @router.get("/results/fills")

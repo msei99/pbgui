@@ -311,6 +311,7 @@ def test_v8_supports_every_shared_native_backtest_operation() -> None:
         '@router.get("/results/config")',
         '@router.get("/results/files")',
         '@router.get("/results/equity")',
+        '@router.get("/results/price")',
         '@router.get("/results/fills")',
         '@router.get("/results/image")',
         '@router.delete("/results")',
@@ -322,6 +323,102 @@ def test_v8_supports_every_shared_native_backtest_operation() -> None:
 
     for route in required_routes:
         assert route in api_source
+
+
+def test_combined_pb8_result_builds_price_market_options() -> None:
+    """Configured exchanges from a combined PB8 result must populate the shared price selector."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "resultPriceMarkets")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        {function}
+        const markets = resultPriceMarkets({{
+          exchange_dir: 'combined',
+          exchanges: ['binance', 'bybit'],
+          coins: ['HYPE']
+        }});
+        assert.deepEqual(markets, [
+          {{exchange: 'binance', coin: 'HYPE'}},
+          {{exchange: 'bybit', coin: 'HYPE'}}
+        ]);
+        assert.deepEqual(resultPriceMarkets({{
+          exchange_dir: 'suite_runs',
+          exchanges: ['bybit'],
+          coins: ['HYPE']
+        }}), [{{exchange: 'bybit', coin: 'HYPE'}}]);
+        """
+    )
+
+    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+
+
+def test_balance_chart_renders_market_price_on_second_axis() -> None:
+    """The shared balance chart must add a close-price trace without replacing balance or equity."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "renderBEChart")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let plot = null;
+        const document = {{getElementById() {{ return {{}}; }}}};
+        const Plotly = {{newPlot(id, traces, layout) {{ plot = {{id, traces, layout}}; }}}};
+        function fmtDate() {{ return 'date'; }}
+        function _chartLayout(title, axis) {{ return {{title, yaxis: {{title: axis}}, margin: {{r: 20}}}}; }}
+        function _plotlyConf() {{ return {{}}; }}
+        {function}
+        renderBEChart(
+          {{id: 'be-chart-1', type: 'be', result: {{config_name: 'demo', exchange_dir: 'combined'}}}},
+          {{time: ['2026-07-22T00:00:00Z'], balance: [1000], equity: [1010], balance_btc: [], equity_btc: []}},
+          {{exchange: 'bybit', coin: 'ADA', time: ['2026-07-22T00:00:00Z'], close: [0.62]}}
+        );
+        assert.equal(plot.traces.length, 3);
+        assert.equal(plot.traces[2].name, 'bybit / ADA close');
+        assert.equal(plot.traces[2].yaxis, 'y2');
+        assert.equal(plot.traces[2].line.color, '#d946ef');
+        assert.equal(plot.traces[2].line.dash, undefined);
+        assert.equal(plot.layout.yaxis2.overlaying, 'y');
+        assert.equal(plot.layout.yaxis2.side, 'right');
+        """
+    )
+
+    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+
+
+def test_price_coverage_is_measured_against_visible_chart_range() -> None:
+    """Pre-inception config dates must not mark complete visible chart coverage as partial."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "renderBEWithSelectedPrice")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        var _priceCache = {{}};
+        var _priceRequestSeq = {{}};
+        let status = null;
+        function selectedPriceMarket() {{ return {{exchange: 'bybit', coin: 'HYPE'}}; }}
+        function setPriceOverlayStatus(_cd, text, warning) {{ status = {{text, warning}}; }}
+        function resultApiFetch() {{ return Promise.resolve({{
+          available: true,
+          coverage_complete: false,
+          coverage_start: '2024-12-05T00:00:00Z',
+          coverage_end: '2026-07-30T23:59:00Z',
+          time: ['2024-12-05T00:00:00Z', '2026-07-30T23:59:00Z'],
+          close: [10, 50]
+        }}); }}
+        function renderBEChart() {{}}
+        {function}
+        renderBEWithSelectedPrice(
+          {{id: 'be-chart-1', type: 'be', path: '/result', result: {{}}, idx: 1}},
+          {{time: ['2025-01-06T19:00:00Z', '2026-07-29T23:00:00Z']}}
+        );
+        setImmediate(function() {{
+          assert.equal(status.text, '2 price points, full chart coverage');
+          assert.equal(status.warning, false);
+        }});
+        """
+    )
+
+    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
 
 
 def test_notification_bell_opens_transient_gui_messages() -> None:

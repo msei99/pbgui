@@ -140,6 +140,22 @@ class TestVpsManagerFrontendLogic:
         assert "st.pb8_installed ? 'Updates the installed PB8 runtime.'" in sidebar_source
         assert "PB8-only leaves PBRun disabled" not in source
 
+    def test_combined_update_button_warns_only_when_both_components_need_updates(self) -> None:
+        """Combined PBGui/runtime actions must not duplicate one component's warning state."""
+        _run_node_assertions(
+            ["combinedUpdateButtonClass"],
+            bootstrap="",
+            assertions="""
+              assert.equal(combinedUpdateButtonClass(false, false), 'sb-btn ok');
+              assert.equal(combinedUpdateButtonClass(true, false), 'sb-btn ok');
+              assert.equal(combinedUpdateButtonClass(false, true), 'sb-btn ok');
+              assert.equal(combinedUpdateButtonClass(true, true), 'sb-btn warning');
+            """,
+        )
+        source = HTML_PATH.read_text(encoding="utf-8")
+        sidebar_source = _extract_function(source, "renderSidebarActions")
+        assert sidebar_source.count("combinedUpdateButtonClass(st.pbgui_update_available") == 2
+
     def test_bulk_runtime_updates_are_profile_aware(self) -> None:
         """Overview bulk actions delegate runtime selection to each host profile."""
         source = HTML_PATH.read_text(encoding="utf-8")

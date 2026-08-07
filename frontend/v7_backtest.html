@@ -6427,6 +6427,31 @@ function startJsonResize(e, preId) {
   document.addEventListener('mouseup', onUp);
 }
 
+function resultPriceMarkets(result) {
+  var coins = Array.isArray(result && result.coins) ? result.coins.slice() : [];
+  if (!coins.length && result && result.coins_text) coins = String(result.coins_text).split(',');
+  coins = coins.map(function(value) { return String(value || '').trim(); }).filter(function(value, index, values) {
+    return value && value.toLowerCase() !== 'all' && values.indexOf(value) === index;
+  });
+  var exchangeDir = String(result && result.exchange_dir || '').trim();
+  var exchangeDirLower = exchangeDir.toLowerCase();
+  var exchanges = exchangeDir && exchangeDirLower !== 'combined' && exchangeDirLower !== 'suite_runs'
+    ? [exchangeDir]
+    : (Array.isArray(result && result.exchanges) ? result.exchanges.slice() : []);
+  exchanges = exchanges.map(function(value) { return String(value || '').trim(); }).filter(function(value, index, values) {
+    return value && value.toLowerCase() !== 'combined' && values.indexOf(value) === index;
+  });
+  var markets = [];
+  exchanges.forEach(function(exchange) {
+    coins.forEach(function(coin) { markets.push({ exchange: exchange, coin: coin }); });
+  });
+  return markets;
+}
+
+function priceMarketOptionValue(market) {
+  return encodeURIComponent(market.exchange) + '|' + encodeURIComponent(market.coin);
+}
+
 /* ── Chart rendering based on active icon buttons ── */
 function onResultActionsChanged() {
   var chartsEl = _activeResultsCtx.chartsEl || document.getElementById('results-charts');
@@ -6490,7 +6515,19 @@ function onResultActionsChanged() {
 
       /* 1. Balance & Equity chart */
       var beId = 'be-chart-' + idx;
-      html += '\x3Cdiv style="margin-bottom:var(--sp-xs)">\x3Clabel class="sb-toggle">\x3Cinput type="checkbox" id="log-toggle-' + idx + '" onchange="toggleLogScale(\'' + beId + '\', this.checked)">\x3Cspan style="font-size:var(--fs-sm)">logarithmic\x3C/span>\x3C/label>\x3C/div>';
+      var priceMarkets = resultPriceMarkets(r);
+      html += '\x3Cdiv style="margin-bottom:var(--sp-xs);display:flex;align-items:center;gap:var(--sp-md);flex-wrap:wrap">';
+      html += '\x3Clabel class="sb-toggle">\x3Cinput type="checkbox" id="log-toggle-' + idx + '" onchange="toggleLogScale(\'' + beId + '\', this.checked)">\x3Cspan style="font-size:var(--fs-sm)">logarithmic\x3C/span>\x3C/label>';
+      if (priceMarkets.length) {
+        html += '\x3Clabel style="font-size:var(--fs-sm);color:var(--text-dim)">Price (PBGui MarketData) ';
+        html += '\x3Cselect class="sb-input" style="max-width:220px" id="price-market-' + idx + '" onchange="rerenderBEChartPrice(' + idx + ')">';
+        priceMarkets.forEach(function(market) {
+          html += '\x3Coption value="' + esc(priceMarketOptionValue(market)) + '">' + esc(market.exchange + ' / ' + market.coin) + '\x3C/option>';
+        });
+        html += '\x3C/select>\x3C/label>';
+        html += '\x3Cspan id="price-status-' + idx + '" style="font-size:var(--fs-xs);color:var(--text-dim)">\x3C/span>';
+      }
+      html += '\x3C/div>';
       html += chartWrap(beId, vsClose);
       chartDivs.push({ id: beId, type: 'be', path: r.path, result: r, idx: idx });
 
@@ -6630,17 +6667,96 @@ function onResultActionsChanged() {
 
 /* ── Balance & Equity chart ── */
 var _beCache = {}; /* path → parsed BE data */
+var _priceCache = {}; /* path|exchange|coin → bounded PBGui MarketData payload */
+var _priceRequestSeq = {}; /* chart id → latest request generation */
+
+function selectedPriceMarket(cd) {
+  var select = document.getElementById('price-market-' + cd.idx);
+  if (!select || !select.value || select.value.indexOf('|') < 0) return null;
+  var parts = select.value.split('|', 2);
+  try {
+    return { exchange: decodeURIComponent(parts[0]), coin: decodeURIComponent(parts[1]) };
+  } catch (_err) {
+    return null;
+  }
+}
+
+function setPriceOverlayStatus(cd, text, warning) {
+  var status = document.getElementById('price-status-' + cd.idx);
+  if (!status) return;
+  status.textContent = text || '';
+  status.style.color = warning ? 'var(--orange)' : 'var(--text-dim)';
+}
+
+function renderBEWithSelectedPrice(cd, be) {
+  if (cd.type !== 'be') {
+    renderBEChart(cd, be, null);
+    return;
+  }
+  var market = selectedPriceMarket(cd);
+  if (!market) {
+    renderBEChart(cd, be, null);
+    return;
+  }
+  var cacheKey = cd.path + '|' + market.exchange + '|' + market.coin;
+  var requestSeq = (_priceRequestSeq[cd.id] || 0) + 1;
+  _priceRequestSeq[cd.id] = requestSeq;
+  setPriceOverlayStatus(cd, 'Loading close prices...', false);
+  var request = _priceCache[cacheKey]
+    ? Promise.resolve(_priceCache[cacheKey])
+    : resultApiFetch(
+        cd.result,
+        '/results/price?path=' + encodeURIComponent(cd.path)
+          + '&exchange=' + encodeURIComponent(market.exchange)
+          + '&coin=' + encodeURIComponent(market.coin)
+          + '&max_points=6000'
+      ).then(function(payload) {
+        _priceCache[cacheKey] = payload;
+        return payload;
+      });
+  request.then(function(payload) {
+    if (_priceRequestSeq[cd.id] !== requestSeq) return;
+    if (!(payload && payload.available && payload.time && payload.time.length)) {
+      setPriceOverlayStatus(cd, 'No matching PBGui MarketData for this range.', true);
+      renderBEChart(cd, be, null);
+      return;
+    }
+    var chartStart = Date.parse((be.time || [])[0] || '');
+    var chartEnd = Date.parse((be.time || [])[be.time.length - 1] || '');
+    var coverageStart = Date.parse(payload.coverage_start || '');
+    var coverageEnd = Date.parse(payload.coverage_end || '');
+    var coversChart = Number.isFinite(chartStart) && Number.isFinite(chartEnd)
+      && Number.isFinite(coverageStart) && Number.isFinite(coverageEnd)
+      ? coverageStart <= chartStart && coverageEnd >= chartEnd
+      : !!payload.coverage_complete;
+    var coverage = coversChart
+      ? 'full chart coverage'
+      : ('partial: ' + String(payload.coverage_start || '?').slice(0, 10) + ' to ' + String(payload.coverage_end || '?').slice(0, 10));
+    setPriceOverlayStatus(cd, String(payload.time.length) + ' price points, ' + coverage, !coversChart);
+    renderBEChart(cd, be, payload);
+  }).catch(function(error) {
+    if (_priceRequestSeq[cd.id] !== requestSeq) return;
+    setPriceOverlayStatus(cd, 'Price unavailable: ' + error.message, true);
+    renderBEChart(cd, be, null);
+  });
+}
+
+function rerenderBEChartPrice(idx) {
+  var result = (_activeResultsCtx.data || [])[idx];
+  if (!result || !_beCache[result.path]) return;
+  renderBEWithSelectedPrice({ id: 'be-chart-' + idx, type: 'be', path: result.path, result: result, idx: idx }, _beCache[result.path]);
+}
 
 function loadAndRenderBEChart(cd) {
   if (_beCache[cd.path]) {
     var _cached = _beCache[cd.path];
-    requestAnimationFrame(function() { renderBEChart(cd, _cached); });
+    requestAnimationFrame(function() { renderBEWithSelectedPrice(cd, _cached); });
     return;
   }
   fetchCSV(cd.path, 'equity', cd.result).then(function(csv) {
     var be = normalizeBE(csv, cd.result);
     _beCache[cd.path] = be;
-    requestAnimationFrame(function() { renderBEChart(cd, be); });
+    requestAnimationFrame(function() { renderBEWithSelectedPrice(cd, be); });
   }).catch(function(e) {
     document.getElementById(cd.id).innerHTML = '<div style="color:var(--red);padding:var(--sp-md)">Failed to load BE data: ' + esc(e.message) + '</div>';
   });
@@ -6696,7 +6812,7 @@ function normalizeBE(csv, result) {
   return be;
 }
 
-function renderBEChart(cd, be) {
+function renderBEChart(cd, be, price) {
   if (!be.time.length) {
     document.getElementById(cd.id).innerHTML = '<div style="color:var(--text-dim);padding:var(--sp-md)">No balance and equity data found</div>';
     return;
@@ -6732,6 +6848,25 @@ function renderBEChart(cd, be) {
       { x: be.time, y: balArr, name: balName, line: { width: 2.5 } }
     ];
     var layout = _chartLayout(titleText, 'Balance');
+    if (price && price.time && price.time.length) {
+      traces.push({
+        x: price.time,
+        y: price.close,
+        name: price.exchange + ' / ' + price.coin + ' close',
+        mode: 'lines',
+        yaxis: 'y2',
+        line: { color: '#d946ef', width: 1.5 },
+        hovertemplate: '%{y:.8g}\x3Cextra>Coin price\x3C/extra>'
+      });
+      layout.margin.r = 80;
+      layout.yaxis2 = {
+        title: price.coin + ' Price',
+        overlaying: 'y',
+        side: 'right',
+        showgrid: false,
+        zeroline: false
+      };
+    }
     Plotly.newPlot(cd.id, traces, layout, _plotlyConf());
   }
 }
