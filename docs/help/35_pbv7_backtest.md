@@ -191,7 +191,7 @@ The Configs table also offers **V8** for the saved V7 backtest config. Both conv
 Clicking a row opens a full-featured chart panel with:
 - **Equity curve** (log scale toggle)
 - **Price (PBGui MarketData)** selector for overlaying one result exchange/coin close-price series on a contrasting second Y-axis; coverage is evaluated against the visible equity-chart range, and partial or unavailable data is shown beside the selector while the equity chart remains visible
-- **PnL** over time  
+- **PnL** over time, grouped by symbol and shown net of recorded trading fees on authoritative fill timestamps
 - **TWE** (total wallet exposure) chart  
 - **Hedged PnL** if available  
 - Full **analysis metrics** table  

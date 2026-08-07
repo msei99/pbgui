@@ -6688,7 +6688,34 @@ function setPriceOverlayStatus(cd, text, warning) {
   status.style.color = warning ? 'var(--orange)' : 'var(--text-dim)';
 }
 
-function renderBEWithSelectedPrice(cd, be) {
+function loadPricePayload(cd, market) {
+  var cacheKey = cd.path + '|' + market.exchange + '|' + market.coin;
+  if (_priceCache[cacheKey]) return Promise.resolve(_priceCache[cacheKey]);
+  return resultApiFetch(
+    cd.result,
+    '/results/price?path=' + encodeURIComponent(cd.path)
+      + '&exchange=' + encodeURIComponent(market.exchange)
+      + '&coin=' + encodeURIComponent(market.coin)
+      + '&max_points=6000'
+  ).then(function(payload) {
+    _priceCache[cacheKey] = payload;
+    return payload;
+  });
+}
+
+function pricePayloadCoversChart(payload, be) {
+  if (!(payload && payload.available && payload.time && payload.time.length)) return false;
+  var chartStart = Date.parse((be.time || [])[0] || '');
+  var chartEnd = Date.parse((be.time || [])[be.time.length - 1] || '');
+  var coverageStart = Date.parse(payload.coverage_start || '');
+  var coverageEnd = Date.parse(payload.coverage_end || '');
+  return Number.isFinite(chartStart) && Number.isFinite(chartEnd)
+    && Number.isFinite(coverageStart) && Number.isFinite(coverageEnd)
+    ? coverageStart <= chartStart && coverageEnd >= chartEnd
+    : !!payload.coverage_complete;
+}
+
+function renderBEWithSelectedPrice(cd, be, autoSelectCoverage) {
   if (cd.type !== 'be') {
     renderBEChart(cd, be, null);
     return;
@@ -6698,37 +6725,43 @@ function renderBEWithSelectedPrice(cd, be) {
     renderBEChart(cd, be, null);
     return;
   }
-  var cacheKey = cd.path + '|' + market.exchange + '|' + market.coin;
+  var markets = [market];
+  if (autoSelectCoverage) {
+    resultPriceMarkets(cd.result).forEach(function(candidate) {
+      if (candidate.coin === market.coin && candidate.exchange !== market.exchange) markets.push(candidate);
+    });
+  }
   var requestSeq = (_priceRequestSeq[cd.id] || 0) + 1;
   _priceRequestSeq[cd.id] = requestSeq;
   setPriceOverlayStatus(cd, 'Loading close prices...', false);
-  var request = _priceCache[cacheKey]
-    ? Promise.resolve(_priceCache[cacheKey])
-    : resultApiFetch(
-        cd.result,
-        '/results/price?path=' + encodeURIComponent(cd.path)
-          + '&exchange=' + encodeURIComponent(market.exchange)
-          + '&coin=' + encodeURIComponent(market.coin)
-          + '&max_points=6000'
-      ).then(function(payload) {
-        _priceCache[cacheKey] = payload;
-        return payload;
-      });
-  request.then(function(payload) {
+  Promise.all(markets.map(function(candidate) {
+    return loadPricePayload(cd, candidate).then(function(payload) {
+      return { market: candidate, payload: payload };
+    }).catch(function(error) {
+      return { market: candidate, payload: null, error: error };
+    });
+  })).then(function(entries) {
     if (_priceRequestSeq[cd.id] !== requestSeq) return;
+    var picked = entries[0];
+    if (autoSelectCoverage) {
+      var fullCoverage = entries.find(function(entry) { return pricePayloadCoversChart(entry.payload, be); });
+      var firstAvailable = entries.find(function(entry) {
+        return entry.payload && entry.payload.available && entry.payload.time && entry.payload.time.length;
+      });
+      picked = fullCoverage || firstAvailable || picked;
+    }
+    if (!picked.payload && picked.error) throw picked.error;
+    var payload = picked.payload;
+    if (picked.market.exchange !== market.exchange) {
+      var select = document.getElementById('price-market-' + cd.idx);
+      if (select) select.value = priceMarketOptionValue(picked.market);
+    }
     if (!(payload && payload.available && payload.time && payload.time.length)) {
       setPriceOverlayStatus(cd, 'No matching PBGui MarketData for this range.', true);
       renderBEChart(cd, be, null);
       return;
     }
-    var chartStart = Date.parse((be.time || [])[0] || '');
-    var chartEnd = Date.parse((be.time || [])[be.time.length - 1] || '');
-    var coverageStart = Date.parse(payload.coverage_start || '');
-    var coverageEnd = Date.parse(payload.coverage_end || '');
-    var coversChart = Number.isFinite(chartStart) && Number.isFinite(chartEnd)
-      && Number.isFinite(coverageStart) && Number.isFinite(coverageEnd)
-      ? coverageStart <= chartStart && coverageEnd >= chartEnd
-      : !!payload.coverage_complete;
+    var coversChart = pricePayloadCoversChart(payload, be);
     var coverage = coversChart
       ? 'full chart coverage'
       : ('partial: ' + String(payload.coverage_start || '?').slice(0, 10) + ' to ' + String(payload.coverage_end || '?').slice(0, 10));
@@ -6744,19 +6777,19 @@ function renderBEWithSelectedPrice(cd, be) {
 function rerenderBEChartPrice(idx) {
   var result = (_activeResultsCtx.data || [])[idx];
   if (!result || !_beCache[result.path]) return;
-  renderBEWithSelectedPrice({ id: 'be-chart-' + idx, type: 'be', path: result.path, result: result, idx: idx }, _beCache[result.path]);
+  renderBEWithSelectedPrice({ id: 'be-chart-' + idx, type: 'be', path: result.path, result: result, idx: idx }, _beCache[result.path], false);
 }
 
 function loadAndRenderBEChart(cd) {
   if (_beCache[cd.path]) {
     var _cached = _beCache[cd.path];
-    requestAnimationFrame(function() { renderBEWithSelectedPrice(cd, _cached); });
+    requestAnimationFrame(function() { renderBEWithSelectedPrice(cd, _cached, true); });
     return;
   }
   fetchCSV(cd.path, 'equity', cd.result).then(function(csv) {
     var be = normalizeBE(csv, cd.result);
     _beCache[cd.path] = be;
-    requestAnimationFrame(function() { renderBEWithSelectedPrice(cd, be); });
+    requestAnimationFrame(function() { renderBEWithSelectedPrice(cd, be, true); });
   }).catch(function(e) {
     document.getElementById(cd.id).innerHTML = '<div style="color:var(--red);padding:var(--sp-md)">Failed to load BE data: ' + esc(e.message) + '</div>';
   });
@@ -7098,17 +7131,18 @@ function renderPnlChart(cd, csv) {
   var headers = csv.headers.map(function(h) { return h.trim(); });
   var coinCol = headers.indexOf('coin') >= 0 ? 'coin' : 'symbol';
   var pnlCol = 'pnl';
+  var feeCol = headers.indexOf('fee_paid') >= 0 ? 'fee_paid' : null;
 
   /* Resolve timestamps with the historical load_fills() priority. */
   var r = cd.result;
   var times = resolveFilsTimes(rows, headers, r);
 
-  /* Group PnL by coin, cumulative */
+  /* Group realized PnL and fees by coin, cumulative. */
   var coins = {};
   rows.forEach(function(row, i) {
     var coin = row[coinCol] || 'unknown';
     if (!coins[coin]) coins[coin] = { times: [], pnl: [], cumPnl: 0 };
-    coins[coin].cumPnl += parseFloat(row[pnlCol]) || 0;
+    coins[coin].cumPnl += (parseFloat(row[pnlCol]) || 0) + (feeCol ? (parseFloat(row[feeCol]) || 0) : 0);
     coins[coin].times.push(times[i]);
     coins[coin].pnl.push(coins[coin].cumPnl);
   });
@@ -7123,14 +7157,14 @@ function renderPnlChart(cd, csv) {
 
   var name = r.display_name || (r.config_name + '/' + (r.exchange_dir || '') + '/' + (r.result_name || ''));
   var timeStr = fmtDate(r.modified);
-  var layout = _chartLayout(name + ' ' + timeStr, 'PnL');
+  var layout = _chartLayout(name + ' ' + timeStr, 'Net PnL');
   Plotly.newPlot(cd.id, traces, layout, _plotlyConf());
 }
 
-/* resolveFillsTimes — mirrors historical load_fills() column priority:
+/* resolveFillsTimes — use authoritative timestamps when present:
    1. time  (already a datetime string)
-   2. minute (offset from end_date)
-   3. timestamp (numeric ms/s  OR  datetime string like "2020-01-05 21:33:00")
+   2. timestamp (numeric ms/s OR datetime string like "2020-01-05 21:33:00")
+   3. minute (legacy offset from end_date)
 */
 function resolveFilsTimes(rows, headers, result) {
   var times = [];
@@ -7141,8 +7175,28 @@ function resolveFilsTimes(rows, headers, result) {
     return times;
   }
 
+  if (headers.indexOf('timestamp') >= 0) {
+    /* Numeric (ms if > 1e11, else seconds) OR datetime string. */
+    var firstVal = (rows[0] || {})['timestamp'] || '';
+    var isNumeric = /^[-+]?\d+(\.\d+)?$/.test(String(firstVal).trim());
+    rows.forEach(function(r) {
+      var raw = r['timestamp'] || '';
+      if (isNumeric) {
+        var n = parseFloat(raw) || 0;
+        var ms = n > 1e11 ? n : n * 1000;
+        times.push(new Date(ms).toISOString());
+      } else {
+        /* PB backtest datetime strings are UTC even when they omit an explicit zone. */
+        var normalized = raw.replace(' ', 'T');
+        if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(normalized)) normalized += 'Z';
+        times.push(new Date(normalized).toISOString());
+      }
+    });
+    return times;
+  }
+
   if (headers.indexOf('minute') >= 0) {
-    /* Historical behavior: start_time = end_date_ts - max_minute * 60 */
+    /* Legacy format: start_time = end_date_ts - max_minute * 60 */
     var endDate = result.end_date || '';
     var endTs = endDate ? new Date(endDate).getTime() : Date.now();
     var maxMin = 0;
@@ -7151,25 +7205,6 @@ function resolveFilsTimes(rows, headers, result) {
     rows.forEach(function(r) {
       var m = parseFloat(r['minute']) || 0;
       times.push(new Date(startTs + m * 60000).toISOString());
-    });
-    return times;
-  }
-
-  if (headers.indexOf('timestamp') >= 0) {
-    /* Numeric (ms if > 1e11, else seconds) OR datetime string. */
-    var firstVal = (rows[0] || {})['timestamp'] || '';
-    var firstNum = parseFloat(firstVal);
-    var isNumeric = !isNaN(firstNum);
-    rows.forEach(function(r) {
-      var raw = r['timestamp'] || '';
-      if (isNumeric) {
-        var n = parseFloat(raw) || 0;
-        var ms = n > 1e11 ? n : n * 1000;
-        times.push(new Date(ms).toISOString());
-      } else {
-        /* datetime string like "2020-01-05 21:33:00" — replace space with T for ISO parse */
-        times.push(new Date(raw.replace(' ', 'T')).toISOString());
-      }
     });
     return times;
   }

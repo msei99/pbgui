@@ -388,33 +388,119 @@ def test_balance_chart_renders_market_price_on_second_axis() -> None:
 def test_price_coverage_is_measured_against_visible_chart_range() -> None:
     """Pre-inception config dates must not mark complete visible chart coverage as partial."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
-    function = _extract_function(source, "renderBEWithSelectedPrice")
+    coverage_function = _extract_function(source, "pricePayloadCoversChart")
+    render_function = _extract_function(source, "renderBEWithSelectedPrice")
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
-        var _priceCache = {{}};
         var _priceRequestSeq = {{}};
         let status = null;
-        function selectedPriceMarket() {{ return {{exchange: 'bybit', coin: 'HYPE'}}; }}
-        function setPriceOverlayStatus(_cd, text, warning) {{ status = {{text, warning}}; }}
-        function resultApiFetch() {{ return Promise.resolve({{
+        const payload = {{
           available: true,
           coverage_complete: false,
           coverage_start: '2024-12-05T00:00:00Z',
           coverage_end: '2026-07-30T23:59:00Z',
           time: ['2024-12-05T00:00:00Z', '2026-07-30T23:59:00Z'],
           close: [10, 50]
-        }}); }}
+        }};
+        function selectedPriceMarket() {{ return {{exchange: 'bybit', coin: 'HYPE'}}; }}
+        function setPriceOverlayStatus(_cd, text, warning) {{ status = {{text, warning}}; }}
+        function loadPricePayload() {{ return Promise.resolve(payload); }}
+        function resultPriceMarkets() {{ return [{{exchange: 'bybit', coin: 'HYPE'}}]; }}
         function renderBEChart() {{}}
-        {function}
+        {coverage_function}
+        {render_function}
         renderBEWithSelectedPrice(
           {{id: 'be-chart-1', type: 'be', path: '/result', result: {{}}, idx: 1}},
-          {{time: ['2025-01-06T19:00:00Z', '2026-07-29T23:00:00Z']}}
+          {{time: ['2025-01-06T19:00:00Z', '2026-07-29T23:00:00Z']}},
+          false
         );
         setImmediate(function() {{
           assert.equal(status.text, '2 price points, full chart coverage');
           assert.equal(status.warning, false);
         }});
+        """
+    )
+
+    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+
+
+def test_combined_result_prefers_exchange_with_full_price_coverage() -> None:
+    """Initial combined charts should avoid a later-listed market when another exchange covers the chart."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    coverage_function = _extract_function(source, "pricePayloadCoversChart")
+    render_function = _extract_function(source, "renderBEWithSelectedPrice")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        var _priceRequestSeq = {{}};
+        let rendered = null;
+        let status = null;
+        const select = {{value: 'binance|HYPE'}};
+        const document = {{getElementById() {{ return select; }}}};
+        function selectedPriceMarket() {{ return {{exchange: 'binance', coin: 'HYPE'}}; }}
+        function resultPriceMarkets() {{ return [
+          {{exchange: 'binance', coin: 'HYPE'}},
+          {{exchange: 'bybit', coin: 'HYPE'}}
+        ]; }}
+        function priceMarketOptionValue(market) {{ return market.exchange + '|' + market.coin; }}
+        function loadPricePayload(_cd, market) {{ return Promise.resolve({{
+          available: true,
+          exchange: market.exchange,
+          coin: market.coin,
+          coverage_start: market.exchange === 'bybit' ? '2024-12-05T00:00:00Z' : '2025-05-30T00:00:00Z',
+          coverage_end: '2026-07-31T23:59:00Z',
+          time: ['2025-01-01T00:00:00Z'],
+          close: [50]
+        }}); }}
+        function setPriceOverlayStatus(_cd, text, warning) {{ status = {{text, warning}}; }}
+        function renderBEChart(_cd, _be, payload) {{ rendered = payload; }}
+        {coverage_function}
+        {render_function}
+        renderBEWithSelectedPrice(
+          {{id: 'be-chart-1', type: 'be', path: '/result', result: {{}}, idx: 1}},
+          {{time: ['2025-02-01T00:00:00Z', '2026-07-31T00:00:00Z']}},
+          true
+        );
+        setImmediate(function() {{
+          assert.equal(select.value, 'bybit|HYPE');
+          assert.equal(rendered.exchange, 'bybit');
+          assert.match(status.text, /full chart coverage/);
+          assert.equal(status.warning, false);
+        }});
+        """
+    )
+
+    subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+
+
+def test_pb8_symbol_pnl_uses_real_timestamps_and_net_fees() -> None:
+    """PB8 fill timestamps must not be shifted to end_date and per-symbol PnL must be net of fees."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    time_function = _extract_function(source, "resolveFilsTimes")
+    render_function = _extract_function(source, "renderPnlChart")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let plot = null;
+        let axisTitle = null;
+        const document = {{getElementById: () => ({{}})}};
+        const Plotly = {{newPlot(_id, traces) {{ plot = traces; }}}};
+        function fmtDate() {{ return 'date'; }}
+        function _chartLayout(_title, axis) {{ axisTitle = axis; return {{}}; }}
+        function _plotlyConf() {{ return {{}}; }}
+        {time_function}
+        {render_function}
+        renderPnlChart(
+          {{id: 'pnl-1', result: {{end_date: '2030-01-01', config_name: 'demo'}}}},
+          {{headers: ['', 'timestamp', 'minute', 'coin', 'pnl', 'fee_paid'], rows: [
+            {{timestamp: '2026-07-20 12:00:00', minute: '10', coin: 'HYPE', pnl: '10', fee_paid: '-1'}},
+            {{timestamp: '2026-07-21 13:00:00', minute: '20', coin: 'HYPE', pnl: '5', fee_paid: '-1'}}
+          ]}}
+        );
+        assert.deepEqual(plot[0].x, ['2026-07-20T12:00:00.000Z', '2026-07-21T13:00:00.000Z']);
+        assert.deepEqual(plot[0].y, [9, 13]);
+        assert.equal(axisTitle, 'Net PnL');
         """
     )
 
