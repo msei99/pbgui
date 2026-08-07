@@ -190,7 +190,7 @@ Auch die Configs-Tabelle bietet **V8** für die gespeicherte V7-Backtest-Config.
 
 Ein Klick auf eine Zeile öffnet ein vollständiges Chart-Panel mit:
 - **Equity-Kurve** (log-Skala umschaltbar)
-- **Price (PBGui MarketData)**-Auswahl, um die Schlusskurse einer Result-Exchange/Coin-Kombination kontrastreich auf einer zweiten Y-Achse einzublenden; die Abdeckung wird gegen den sichtbaren Equity-Chart-Zeitraum geprüft, und partielle oder fehlende Daten werden neben der Auswahl angezeigt, während der Equity-Chart sichtbar bleibt
+- **Price (PBGui MarketData)**-Auswahl, um die Schlusskurse einer Result-Exchange/Coin-Kombination als gedämpfte gepunktete Linie auf einer kontrastierenden zweiten Y-Achse einzublenden; die Abdeckung wird gegen den sichtbaren Equity-Chart-Zeitraum geprüft, und partielle oder fehlende Daten werden neben der Auswahl angezeigt, während der Equity-Chart sichtbar bleibt
 - **PnL** über Zeit, nach Symbol gruppiert, abzüglich erfasster Trading-Gebühren und auf den verbindlichen Fill-Zeitstempeln
 - **TWE** (Total Wallet Exposure) Chart
 - **Hedged PnL** falls vorhanden

@@ -375,8 +375,9 @@ def test_balance_chart_renders_market_price_on_second_axis() -> None:
         assert.equal(plot.traces.length, 3);
         assert.equal(plot.traces[2].name, 'bybit / ADA close');
         assert.equal(plot.traces[2].yaxis, 'y2');
-        assert.equal(plot.traces[2].line.color, '#d946ef');
-        assert.equal(plot.traces[2].line.dash, undefined);
+        assert.equal(plot.traces[2].line.color, 'rgba(217, 70, 239, 0.7)');
+        assert.equal(plot.traces[2].line.width, 1.25);
+        assert.equal(plot.traces[2].line.dash, 'dot');
         assert.equal(plot.layout.yaxis2.overlaying, 'y');
         assert.equal(plot.layout.yaxis2.side, 'right');
         """
