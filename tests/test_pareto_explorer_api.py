@@ -371,7 +371,7 @@ def test_full_load_progress_cooperatively_yields_the_api_thread(tmp_path, monkey
     job_id = str(job["job_id"])
     pareto_explorer._update_load_job(job_id, refresh_options={})
     pareto_explorer._LOAD_CANCEL_EVENTS[job_id] = threading.Event()
-    sleeps: list[float] = []
+    yielded_states: list[tuple[float, float, str]] = []
 
     class FakeLoader:
         """Minimal completed loader returned after invoking scan progress."""
@@ -386,9 +386,14 @@ def test_full_load_progress_cooperatively_yields_the_api_thread(tmp_path, monkey
     monkeypatch.setattr(pareto_explorer, "_load_loader", fake_load_loader)
     monkeypatch.setattr(pareto_explorer, "_serialize_load_result_from_loader", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(pareto_explorer, "_build_server_refresh_bundle", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(pareto_explorer.time, "sleep", sleeps.append)
+
+    def record_yield(seconds: float) -> None:
+        current_job = pareto_explorer._get_load_job(job_id) or {}
+        yielded_states.append((seconds, float(current_job.get("current") or 0), str(current_job.get("message") or "")))
+
+    monkeypatch.setattr(pareto_explorer.time, "sleep", record_yield)
 
     pareto_explorer._run_full_load_job(job_id)
 
-    assert sleeps == [pareto_explorer._LOAD_COOPERATIVE_YIELD_SECONDS]
+    assert yielded_states == [(pareto_explorer._LOAD_COOPERATIVE_YIELD_SECONDS, 100.0, "Scanning")]
     assert pareto_explorer._get_load_job(job_id)["status"] == "complete"

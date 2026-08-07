@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import stat
 from pathlib import Path
 
 import msgpack
@@ -291,6 +292,7 @@ def test_loader_reconstructs_pb8_compressed_results_and_snapshot_boundary(tmp_pa
     assert selected.bot_params["long.risk.n_positions"] == 150
     assert selected.bot_params["long.strategy.ema_anchor.entry.ema_dist"] == -0.1
     assert loader.get_full_config(150)["candidate"] == 150
+    assert loader.load_stats["selection_cache"] == "built"
     cache_meta_path = result_dir / "all_results.bin.scan_cache.meta.json"
     assert cache_meta_path.exists()
     assert (result_dir / "all_results.bin.scan_cache.npz").exists()
@@ -304,15 +306,49 @@ def test_loader_reconstructs_pb8_compressed_results_and_snapshot_boundary(tmp_pa
 
     assert cached_loader.load(load_strategy=["performance"], max_configs=2)
     assert cached_loader.load_stats["scan_cache"] == "hit"
-    assert cached_loader.load_stats["checkpoint_blocks"] == 1
+    assert cached_loader.load_stats["selection_cache"] == "hit"
+    assert cached_loader.load_stats["checkpoint_blocks"] == 0
     assert [config.config_index for config in cached_loader.configs] == [150, 149]
     assert cached_loader.get_full_config(149)["candidate"] == 149
 
     coverage_loader = ParetoDataLoader(str(result_dir))
     assert coverage_loader.load(load_strategy=["coverage"], max_configs=3)
     assert coverage_loader.load_stats["scan_cache"] == "hit"
+    assert coverage_loader.load_stats["selection_cache"] == "built"
     assert coverage_loader.load_stats["checkpoint_blocks"] == 2
     assert [config.config_index for config in coverage_loader.configs] == [0, 75, 150]
+
+    def fail_checkpoint_reconstruction(*_args, **_kwargs):
+        raise AssertionError("selection cache hit must avoid checkpoint reconstruction")
+
+    monkeypatch.setattr(ParetoDataLoader, "_load_diff_selected_from_checkpoints", fail_checkpoint_reconstruction)
+    cached_coverage_loader = ParetoDataLoader(str(result_dir))
+    assert cached_coverage_loader.load(load_strategy=["coverage"], max_configs=3)
+    assert cached_coverage_loader.load_stats["selection_cache"] == "hit"
+    assert cached_coverage_loader.load_stats["checkpoint_blocks"] == 0
+    assert [config.config_index for config in cached_coverage_loader.configs] == [0, 75, 150]
+
+
+def test_selection_cache_is_private_and_invalidates_on_source_change(tmp_path: Path) -> None:
+    """Persisted selected configs must be owner-only and tied to one source identity."""
+    result_dir = tmp_path / "result"
+    result_dir.mkdir()
+    source = result_dir / "all_results.bin"
+    source.write_bytes(b"initial")
+    loader = ParetoDataLoader(str(result_dir))
+    selected_order = [7]
+    raw_configs = {7: {"candidate": 7}}
+
+    assert loader._write_selection_cache(["performance"], 1, selected_order, raw_configs)
+    cache_path = loader._selection_cache_path(["performance"], 1)
+    assert stat.S_IMODE(cache_path.stat().st_mode) == 0o600
+    assert Path(f"{source}.selection_cache.lock").is_file()
+    assert not Path(f"{cache_path}.lock").exists()
+    assert loader._load_selection_cache(["performance"], 1, selected_order) == raw_configs
+
+    source.write_bytes(b"changed-source")
+
+    assert loader._load_selection_cache(["performance"], 1, selected_order) is None
 
 
 def test_full_load_rejects_source_changes_during_selected_reconstruction(tmp_path: Path, monkeypatch) -> None:

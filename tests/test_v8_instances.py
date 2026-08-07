@@ -436,6 +436,25 @@ def test_instance_list_merges_exact_pb8_runtime_observations(monkeypatch: pytest
     assert enriched[1]["status"] == "collecting"
 
 
+def test_instance_list_reports_active_pb8_strategy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """PB8 Run list rows should expose canonical live.strategy_kind."""
+    _configure_root(monkeypatch, tmp_path)
+    _install_test_pipeline(monkeypatch)
+    config_dir = tmp_path / "data" / "run_v8" / "alice"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.json").write_text(json.dumps({
+        "live": {"user": "alice", "strategy_kind": "trailing_martingale"},
+        "bot": {},
+        "pbgui": {"enabled_on": "disabled", "version": 1},
+    }), encoding="utf-8")
+    monkeypatch.setattr(v8_instances, "_desired_pb8_state", lambda: ({}, {}, {}))
+
+    rows = v8_instances._list_instances()
+
+    assert len(rows) == 1
+    assert rows[0]["strategy"] == "trailing_martingale"
+
+
 def test_instance_list_surfaces_remote_pb8_runtime_blocker(monkeypatch: pytest.MonkeyPatch) -> None:
     """An observed PB8 launch failure is shown as blocked rather than generic sync needed."""
 

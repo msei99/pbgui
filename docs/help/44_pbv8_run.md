@@ -4,7 +4,7 @@ PBv8 Run manages Passivbot V8 live instances. PB7 and PB8 Run use the same edito
 
 ## Run List
 
-Open **PBv8 -> Run** to view configs stored below `data/run_v8`. PB7 and PB8 use the same responsive Run-list layout with sidebar search and status filters. The table shows the exchange user, target host, config and running versions, exposure summary, confirmed running hosts, note, and PBCluster desired state.
+Open **PBv8 -> Run** to view configs stored below `data/run_v8`. PB7 and PB8 use the same responsive Run-list layout with sidebar search and status filters. The table shows the active PB8 strategy, exchange user, target host, config and running versions, exposure summary, confirmed running hosts, note, and PBCluster desired state. Strategy is sortable and included in list search.
 
 The main **Status** column combines published desired state with exact PB8 process observations reported by the local runner and remote monitors:
 

@@ -744,6 +744,27 @@ def test_startup_removes_only_orphan_uuid_queue_snapshots(tmp_path, monkeypatch)
     assert (queue / "configs" / "manual").is_dir()
 
 
+def test_config_list_reports_active_pb8_strategy(tmp_path, monkeypatch) -> None:
+    """Saved PB8 backtest summaries should expose canonical live.strategy_kind."""
+    configs, _v7_configs, _queue, _logs = _patch_roots(tmp_path, monkeypatch)
+    config_dir = configs / "demo"
+    config_dir.mkdir(parents=True)
+    (config_dir / "backtest.json").write_text(
+        json.dumps({
+            "backtest": {"exchanges": ["bybit"]},
+            "live": {"strategy_kind": "ema_anchor", "approved_coins": {}},
+            "bot": {},
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(backtest_v8, "_results_root", lambda: tmp_path / "results")
+
+    rows = backtest_v8.list_configs(session=None)["configs"]
+
+    assert len(rows) == 1
+    assert rows[0]["strategy"] == "ema_anchor"
+
+
 def test_results_are_read_only_from_pb8_root(tmp_path, monkeypatch) -> None:
     """The V8 result parser must not discover analysis files under PB7 roots."""
     pb8_root = tmp_path / "pb8" / "backtests" / "pbgui"

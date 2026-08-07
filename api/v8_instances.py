@@ -942,6 +942,7 @@ def _list_instances() -> list[dict[str, Any]]:
             result.append({
                 "name": directory.name,
                 "user": str(live.get("user") or ""),
+                "strategy": str(live.get("strategy_kind") or "").strip(),
                 "enabled_on": enabled_on,
                 "version": _coerce_version(pbgui.get("version")),
                 "note": str(pbgui.get("note") or ""),

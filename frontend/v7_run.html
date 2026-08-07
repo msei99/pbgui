@@ -674,6 +674,7 @@ var COLS = [
   { key: 'note',            label: 'Note' },
   { key: '_actions',        label: '' },
 ];
+if (runListAdapter.isV8) COLS.splice(2, 0, { key: 'strategy', label: 'Strategy' });
 
 var STATUS_LABELS = {
   synced:          'synced',
@@ -699,9 +700,12 @@ function buildCells(r) {
   if ((!r.running_on || !r.running_on.length) && r.blocked_on && r.blocked_on.length) {
     runOn = 'blocked on ' + r.blocked_on.join(', ');
   }
-  return [
+  var cells = [
     esc(r.name),
     esc(r.user || '\u2013'),
+  ];
+  if (runListAdapter.isV8) cells.push(esc(r.strategy || '\u2013'));
+  return cells.concat([
     esc(r.enabled_on || '\u2013'),
     '<span class="' + stClass + '"' + stTitle + '>' + esc(stLabel) + '</span>',
     (r.version != null ? String(r.version) : '\u2013'),
@@ -717,7 +721,7 @@ function buildCells(r) {
     '<button class="btn-edit" data-balance="' + esc(r.name) + '" title="Open Balance Calculator">$</button>' +
     (runListAdapter.supportsConversion ? '<button class="btn-v8" data-convert-v8="' + esc(r.name) + '" title="Convert this V7 run config to V8">V8</button>' : '') +
     '<button class="btn-del" data-delete="' + esc(r.name) + '" title="Delete">\u2716</button>',
-  ];
+  ]);
 }
 
 function createTr(r, cells) {
@@ -791,6 +795,7 @@ function render() {
     var q = filterSearch.toLowerCase();
     filtered = filtered.filter(function(r) {
       return r.name.toLowerCase().indexOf(q) >= 0 ||
+        (r.strategy || '').toLowerCase().indexOf(q) >= 0 ||
         (r.note || '').toLowerCase().indexOf(q) >= 0 ||
         (r.enabled_on || '').toLowerCase().indexOf(q) >= 0;
     });

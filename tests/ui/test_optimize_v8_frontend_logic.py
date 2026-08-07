@@ -1132,3 +1132,13 @@ def test_sidebar_result_actions_follow_backend_capabilities() -> None:
         """
     )
     _run_node(script)
+
+
+def test_pb8_config_list_shows_sortable_strategy_column() -> None:
+    """PB8 config rows should expose the strategy already returned by the API."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+
+    assert "if (optimizeEditorAdapter.isV8) configSortKeys.push('strategy');" in page
+    assert "if (sortKey === 'strategy') return 'Strategy';" in page
+    assert "if (sortKey === 'strategy') return String(cfg && cfg.strategy || '').toLowerCase();" in page
+    assert "optimizeEditorAdapter.isV8 ? '<td>' + escapeHtml(cfg.strategy || '-') + '</td>' : ''" in page

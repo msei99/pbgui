@@ -9526,6 +9526,7 @@ function compareSortValues(aValue, bValue, direction) {
 function configHeaderLabel(sortKey) {
   if (sortKey === 'name') return 'Name';
   if (sortKey === 'exchange') return 'Exchange';
+  if (sortKey === 'strategy') return 'Strategy';
   if (sortKey === 'backtest_count') return 'Backtests';
   if (sortKey === 'start_date') return 'Start';
   if (sortKey === 'end_date') return 'End';
@@ -9561,7 +9562,10 @@ function renderConfigsTableHead() {
   var thead = el('configs-thead');
   if (!thead) return;
   var html = '<tr>';
-  ['name', 'exchange', 'backtest_count', 'start_date', 'end_date'].forEach(function(sortKey) {
+  var configSortKeys = ['name', 'exchange'];
+  if (optimizeEditorAdapter.isV8) configSortKeys.push('strategy');
+  configSortKeys = configSortKeys.concat(['backtest_count', 'start_date', 'end_date']);
+  configSortKeys.forEach(function(sortKey) {
     var isActive = state.configSortKey === sortKey;
     var ariaSort = isActive ? (state.configSortDir === 'desc' ? 'descending' : 'ascending') : 'none';
     html += '<th class="sortable' + (isActive ? ' active' : '') + '" data-sort-key="' + escapeHtml(sortKey) + '" aria-sort="' + ariaSort + '">'
@@ -9595,6 +9599,7 @@ function renderQueueTableHead() {
 function getConfigSortValue(cfg, sortKey) {
   if (sortKey === 'name') return String(cfg && cfg.name || '').toLowerCase();
   if (sortKey === 'exchange') return String(cfg && cfg.exchange || '').toLowerCase();
+  if (sortKey === 'strategy') return String(cfg && cfg.strategy || '').toLowerCase();
   if (sortKey === 'backtest_count') return Number(cfg && cfg.backtest_count || 0);
   if (sortKey === 'start_date') return String(cfg && cfg.start_date || '');
   if (sortKey === 'end_date') return String(cfg && cfg.end_date || '');
@@ -9913,7 +9918,7 @@ function renderConfigs() {
   var tbody = el('configs-tbody');
   tbody.innerHTML = '';
   if (!configs.length) {
-    renderEmpty('configs-tbody', 8, 'No optimize configs found.', 'Create Config', 'empty-create-config');
+    renderEmpty('configs-tbody', optimizeEditorAdapter.isV8 ? 9 : 8, 'No optimize configs found.', 'Create Config', 'empty-create-config');
     updateConfigSelectionUi(configs);
     updateMetaCounts();
     return;
@@ -9929,6 +9934,7 @@ function renderConfigs() {
     tr.innerHTML = ''
       + '<td title="' + escapeHtml(cfg.name) + '">' + escapeHtml(cfg.name) + '</td>'
       + '<td>' + escapeHtml(formatExchange(cfg.exchange)) + '</td>'
+      + (optimizeEditorAdapter.isV8 ? '<td>' + escapeHtml(cfg.strategy || '-') + '</td>' : '')
       + '<td>' + escapeHtml(String(cfg.backtest_count || 0)) + '</td>'
       + '<td class="muted">' + escapeHtml(cfg.start_date || '-') + '</td>'
       + '<td class="muted">' + escapeHtml(cfg.end_date || '-') + '</td>'

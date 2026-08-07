@@ -10,6 +10,7 @@ PBv8 Optimize verwaltet Passivbot-V8-Optimizer-Configs, Queue-Jobs, Ergebnisse u
 - Der visuelle Editor liest und schreibt verschachtelte PB8-Bot- und Bound-Pfade. Raw JSON bleibt synchron und erhaelt zukuenftige oder seltene Expertenfelder, einschliesslich unbekannter `fixed_runtime_overrides` und kanonischer oder kurzer `fixed_params`-Selektoren.
 - Haeufig verwendete Optimizer-Controls bleiben in den vorhandenen PBv7-Editorbereichen. PB8-spezifischer RNG Seed, Fine-Tune-Selektoren, Polish Percentage und Polish Bounds Mode sind integriert, ohne einen zweiten Editor zu bauen.
 - Gespeicherte Configs werden durch PB8 validiert und als recoverable Bundles unter `data/opt_v8` abgelegt.
+- Die Configs-Tabelle zeigt die aktive PB8-Strategie und kann nach Strategy sortiert werden.
 - Die offizielle **Convert to V8**-Migration steht fuer PBv7-Optimize-Configs bereit. Die Migration stoppt, wenn PB8 ungeloeste oder manuell zu pruefende Felder meldet.
 - PBv7-Pareto-Kandidaten bieten dieselbe offizielle Migration und werden nur aus verwalteten PB7-Resultverzeichnissen akzeptiert.
 

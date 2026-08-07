@@ -1071,7 +1071,7 @@ var BACKTEST_SORT_DEFAULTS = {
   legacy: { col: 'adg', asc: false }
 };
 var BACKTEST_SORT_COLUMNS = {
-  configs: ['name', 'exchanges', 'coins', 'twe_long', 'start_date', 'end_date', 'results', 'modified'],
+  configs: ['name', 'exchanges', 'strategy', 'coins', 'twe_long', 'start_date', 'end_date', 'results', 'modified'],
   results: ['backtest_version', 'config_name', 'strategy', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
   archive: ['backtest_version', 'config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
   legacy: ['config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance']
@@ -1673,7 +1673,8 @@ function renderConfigs() {
     return;
   }
   var html = '<table class="tbl"><thead><tr>' +
-    thSort('Name', 'name') + thSort('Exchange', 'exchanges') + thSort('Coins', 'coins') +
+    thSort('Name', 'name') + thSort('Exchange', 'exchanges') +
+    (backtestEditorAdapter.isV8 ? thSort('Strategy', 'strategy') : '') + thSort('Coins', 'coins') +
     thSort('TWE L/S', 'twe_long') + thSort('Start', 'start_date') + thSort('End', 'end_date') +
     thSort('Results', 'results') + thSort('Modified', 'modified') +
     '<th>Actions</th></tr></thead><tbody>';
@@ -1684,6 +1685,7 @@ function renderConfigs() {
     html += '<tr data-name="' + esc(c.name) + '">' +
       '<td title="' + esc(c.name) + '">' + esc(c.name) + '</td>' +
       '<td>' + esc(Array.isArray(c.exchanges) ? c.exchanges.join(', ') : c.exchanges) + '</td>' +
+      (backtestEditorAdapter.isV8 ? '<td>' + esc(c.strategy || '-') + '</td>' : '') +
       '<td>' + c.coins + '</td>' +
       '<td>' + fmt(c.twe_long, 2) + ' / ' + fmt(c.twe_short, 2) + '</td>' +
       '<td>' + esc(c.start_date || '—') + '</td>' +

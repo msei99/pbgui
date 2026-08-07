@@ -640,3 +640,12 @@ def test_backtest_v8_results_render_strategy_without_changing_v7_rows() -> None:
     )
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_backtest_v8_configs_render_sortable_strategy_without_changing_v7_rows() -> None:
+    """The shared Configs renderer should add Strategy only for PB8."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+
+    assert "configs: ['name', 'exchanges', 'strategy', 'coins'" in source
+    assert "backtestEditorAdapter.isV8 ? thSort('Strategy', 'strategy') : ''" in source
+    assert "backtestEditorAdapter.isV8 ? '<td>' + esc(c.strategy || '-') + '</td>' : ''" in source

@@ -1795,6 +1795,7 @@ def list_configs(session: SessionToken = Depends(require_auth)) -> dict:
                     {
                         "name": directory.name,
                         "exchanges": backtest.get("exchanges") or [],
+                        "strategy": str(live.get("strategy_kind") or "").strip(),
                         "coins": len(coins),
                         "start_date": backtest.get("start_date") or "",
                         "end_date": backtest.get("end_date") or "",

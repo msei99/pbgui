@@ -10,6 +10,7 @@ PBv8 Optimize manages Passivbot V8 optimizer configurations, queued jobs, result
 - The visual editor reads and writes nested PB8 bot and bound paths. Raw JSON remains synchronized and preserves future or expert fields, including unknown `fixed_runtime_overrides` and canonical or shorthand `fixed_params` selectors.
 - Frequently used optimizer controls remain in their existing PBv7 editor sections. PB8-only RNG seed, fine-tune selectors, polish percentage, and polish bounds mode are included without creating a separate editor.
 - Saved configurations are validated by PB8 and stored as recoverable bundles under `data/opt_v8`.
+- The Configs table shows the active PB8 strategy and supports sorting by Strategy.
 - Official **Convert to V8** migration is available for PBv7 Optimize configurations. Migration stops when PB8 reports unresolved or manual-review fields.
 - PBv7 Pareto candidates expose the same official migration action and are accepted only from managed PB7 result directories.
 

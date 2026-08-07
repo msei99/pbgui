@@ -139,6 +139,32 @@ def test_pb8_update_warning_only_uses_runtime_not_ready_hosts() -> None:
     _run_node(script)
 
 
+def test_run_list_adds_strategy_only_for_pb8() -> None:
+    """The shared Run list should add one escaped Strategy cell only for PB8."""
+    page = (ROOT / "frontend" / "v7_run.html").read_text(encoding="utf-8")
+    build_cells = _page_function(page, "buildCells")
+    assert "if (runListAdapter.isV8) COLS.splice(2, 0, { key: 'strategy', label: 'Strategy' });" in page
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const STATUS_LABELS = {{disabled: 'disabled'}};
+        const esc = (value) => String(value == null ? '' : value);
+        let runListAdapter = {{isV8: true, supportsForcedModes: false, supportsConversion: false}};
+        {build_cells}
+        const row = {{name: 'demo', user: 'alice', strategy: 'ema_anchor', status: 'disabled'}};
+        const v8 = buildCells(row);
+        assert.equal(v8.length, 12);
+        assert.equal(v8[2], 'ema_anchor');
+
+        runListAdapter = {{isV8: false, supportsForcedModes: false, supportsConversion: false}};
+        const v7 = buildCells(row);
+        assert.equal(v7.length, 11);
+        assert.notEqual(v7[2], 'ema_anchor');
+        """
+    )
+    _run_node(script)
+
+
 def test_run_editor_preserves_configured_target_when_capability_is_unconfirmed() -> None:
     """A stale capability response must not make a configured target look disabled."""
 

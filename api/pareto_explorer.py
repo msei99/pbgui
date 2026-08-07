@@ -32,7 +32,7 @@ router = APIRouter()
 _DEFAULT_LOAD_STRATEGY = ["performance", "robustness", "sharpe", "coverage"]
 _DEFAULT_MAX_CONFIGS = 2000
 _LOAD_JOB_TTL_SECONDS = 900
-_LOAD_COOPERATIVE_YIELD_SECONDS = 0.001
+_LOAD_COOPERATIVE_YIELD_SECONDS = 0.01
 _LOAD_JOBS: dict[str, dict] = {}
 _LOAD_JOBS_LOCK = threading.Lock()
 _LOAD_WORKERS: dict[str, threading.Thread] = {}
@@ -2693,8 +2693,6 @@ def _run_full_load_job(job_id: str) -> None:
         def _progress_callback(current: object, total: object, message: object) -> None:
             if cancel_event.is_set():
                 raise InterruptedError("Full load interrupted by API shutdown")
-            # Msgpack reconstruction is GIL-heavy for multi-gigabyte result files.
-            time.sleep(_LOAD_COOPERATIVE_YIELD_SECONDS)
             try:
                 current_num = float(current or 0)
             except Exception:
@@ -2703,20 +2701,29 @@ def _run_full_load_job(job_id: str) -> None:
                 total_num = float(total or 0)
             except Exception:
                 total_num = 0.0
+            message_text = str(message or "Loading full result set...")
             if total_num > 0:
-                progress = int(max(0, min(99, round((current_num / total_num) * 100))))
+                ratio = max(0.0, min(1.0, current_num / total_num))
+                if message_text.startswith(("Loading/parsing", "Loading binary")):
+                    progress = int(round(ratio * 85))
+                elif message_text.startswith(("Parsing selected", "Parsed ", "Reconstructed ")):
+                    progress = 85 + int(round(ratio * 14))
+                else:
+                    progress = int(round(ratio * 99))
             else:
                 progress = 0
             _update_load_job(
                 job_id,
                 status="loading",
                 stage="loading",
-                message=str(message or "Loading full result set..."),
+                message=message_text,
                 current=current_num,
                 total=total_num,
                 progress=progress,
                 error=None,
             )
+            # Publish first, then release the GIL so status requests see this batch.
+            time.sleep(_LOAD_COOPERATIVE_YIELD_SECONDS)
 
         loader = _load_loader(
             result_path,

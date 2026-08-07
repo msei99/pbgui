@@ -20,6 +20,7 @@ import hashlib
 import traceback
 from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
+from secure_files import atomic_write_private_bytes
 
 SERVICE = "ParetoDataLoader"
 
@@ -34,6 +35,7 @@ _MSGSPEC_MSGPACK_DECODER = msgspec.msgpack.Decoder() if _HAS_MSGSPEC else None
 _DISABLE_SCAN_CACHE = os.environ.get("PBG_DISABLE_SCAN_CACHE") == "1"
 _FULL_SCAN_CACHE = os.environ.get("PBG_FULL_SCAN_CACHE") == "1"
 _SCAN_CACHE_VERSION = 8
+_SELECTION_CACHE_VERSION = 1
 _DIFF_SNAPSHOT_INTERVAL = 100
 
 
@@ -413,6 +415,91 @@ class ParetoDataLoader:
                 pass
             return False
 
+    def _selection_cache_path(self, load_strategy: List[str], max_configs: int) -> Path:
+        """Return the bounded persistent cache path for one candidate selection."""
+        options = json.dumps(
+            [list(load_strategy), int(max_configs)],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        suffix = hashlib.sha256(options).hexdigest()[:16]
+        return Path(f"{self.all_results_path}.selection_cache.{suffix}.msgpack")
+
+    def _selection_cache_lock_path(self) -> Path:
+        """Return one shared lock target for all candidate-selection variants."""
+        return Path(f"{self.all_results_path}.selection_cache")
+
+    def _load_selection_cache(
+        self,
+        load_strategy: List[str],
+        max_configs: int,
+        selected_order: List[int],
+    ) -> Optional[Dict[int, Dict]]:
+        """Load reconstructed selected configs when source and options still match."""
+        path = self._selection_cache_path(load_strategy, max_configs)
+        try:
+            with advisory_file_lock(self._selection_cache_lock_path()):
+                payload = msgpack.unpackb(path.read_bytes(), raw=False, strict_map_key=False)
+            if not isinstance(payload, dict):
+                return None
+            if int(payload.get("version") or -1) != _SELECTION_CACHE_VERSION:
+                return None
+            if payload.get("source") != self._all_results_signature():
+                return None
+            if list(payload.get("load_strategy") or []) != list(load_strategy):
+                return None
+            if int(payload.get("max_configs") or -1) != int(max_configs):
+                return None
+            items = payload.get("configs")
+            if not isinstance(items, list):
+                return None
+            cached_indices = [int(item[0]) for item in items if isinstance(item, list) and len(item) == 2]
+            if cached_indices != [int(idx) for idx in selected_order]:
+                return None
+            configs = {
+                int(item[0]): item[1]
+                for item in items
+                if isinstance(item, list) and len(item) == 2 and isinstance(item[1], dict)
+            }
+            return configs if len(configs) == len(selected_order) else None
+        except Exception:
+            return None
+
+    def _write_selection_cache(
+        self,
+        load_strategy: List[str],
+        max_configs: int,
+        selected_order: List[int],
+        raw_configs: Dict[int, Dict],
+    ) -> bool:
+        """Persist reconstructed candidates atomically and bound old option variants."""
+        path = self._selection_cache_path(load_strategy, max_configs)
+        try:
+            configs = [[int(idx), raw_configs[int(idx)]] for idx in selected_order if int(idx) in raw_configs]
+            if len(configs) != len(selected_order):
+                return False
+            payload = {
+                "version": _SELECTION_CACHE_VERSION,
+                "source": self._all_results_signature(),
+                "load_strategy": list(load_strategy),
+                "max_configs": int(max_configs),
+                "configs": configs,
+            }
+            packed = msgpack.packb(payload, use_bin_type=True)
+            with advisory_file_lock(self._selection_cache_lock_path()):
+                atomic_write_private_bytes(path, packed)
+                variants = sorted(
+                    path.parent.glob(f"{Path(self.all_results_path).name}.selection_cache.*.msgpack"),
+                    key=lambda item: item.stat().st_mtime_ns,
+                    reverse=True,
+                )
+                for stale in variants[3:]:
+                    stale.unlink(missing_ok=True)
+            return True
+        except Exception as exc:
+            _log(SERVICE, f'Failed to write Pareto selection cache: {exc}', level='WARNING')
+            return False
+
     def _load_diff_selected_from_checkpoints(
         self,
         selected_order: List[int],
@@ -777,14 +864,40 @@ class ParetoDataLoader:
                     idx_to_metrics: Dict[int, ConfigMetrics] = {}
                     idx_to_raw: Dict[int, Dict] = {}
                     checkpoint_blocks = 0
+                    selection_cache_status = 'miss'
+                    cached_selection = self._load_selection_cache(load_strategy, max_configs, selected_order)
 
-                    if self._diff_compressed_results:
+                    if cached_selection is not None:
+                        idx_to_raw = cached_selection
+                        selection_cache_status = 'hit'
+                        for n_done, i in enumerate(selected_order, 1):
+                            config_data = idx_to_raw[i]
+                            pre_rob = None
+                            if overall_rob_v is not None:
+                                try:
+                                    pre_rob = float(overall_rob_v[i])
+                                except Exception:
+                                    pre_rob = None
+                            if isinstance(config_data, dict) and any(isinstance(k, bytes) for k in config_data.keys()):
+                                metrics = self._parse_config_light_raw(i, config_data, precomputed_overall_robustness=pre_rob)
+                            else:
+                                metrics = self._parse_config_light(
+                                    i,
+                                    config_data,
+                                    precomputed_overall_robustness=pre_rob,
+                                    compute_overall_robustness=False,
+                                )
+                            idx_to_metrics[i] = metrics
+                            if progress_callback and (n_done % 25 == 0 or n_done == len(selected_order)):
+                                progress_callback(n_done, len(selected_order), f"Parsed {n_done}/{len(selected_order)} selection-cache configs")
+                    elif self._diff_compressed_results:
                         idx_to_raw, checkpoint_blocks = self._load_diff_selected_from_checkpoints(
                             selected_order,
                             offsets,
                             progress_callback=progress_callback,
                         )
-                        for i, config_data in idx_to_raw.items():
+                        for n_done, i in enumerate(selected_order, 1):
+                            config_data = idx_to_raw[i]
                             pre_rob = None
                             if overall_rob_v is not None:
                                 try:
@@ -796,6 +909,8 @@ class ParetoDataLoader:
                                 config_data,
                                 precomputed_overall_robustness=pre_rob,
                             )
+                            if progress_callback and (n_done % 25 == 0 or n_done == len(selected_order)):
+                                progress_callback(n_done, len(selected_order), f"Parsed {n_done}/{len(selected_order)} reconstructed configs")
                     else:
                         with open(self.all_results_path, 'rb') as f:
                             file_size = os.path.getsize(self.all_results_path)
@@ -853,6 +968,13 @@ class ParetoDataLoader:
                     source = meta.get("source") or {}
                     if source != self._all_results_signature():
                         raise RuntimeError("all_results.bin changed while reading the scan cache")
+                    if selection_cache_status == 'miss' and self._write_selection_cache(
+                        load_strategy,
+                        max_configs,
+                        selected_order,
+                        idx_to_raw,
+                    ):
+                        selection_cache_status = 'built'
 
                     # Compute Pareto front
                     t_pareto0 = time.perf_counter()
@@ -869,6 +991,7 @@ class ParetoDataLoader:
                         'load_strategy': load_strategy,
                         'max_configs': max_configs,
                         'scan_cache': 'hit',
+                        'selection_cache': selection_cache_status,
                         'checkpoint_blocks': checkpoint_blocks,
                         'timings': {
                             'total': t_total,
@@ -1254,7 +1377,8 @@ class ParetoDataLoader:
                 offsets_all,
                 progress_callback=progress_callback,
             )
-            for idx, config_data in raw_selected.items():
+            for n_done, idx in enumerate(selected_order, 1):
+                config_data = raw_selected[idx]
                 pre_rob = None
                 if overall_rob_all is not None:
                     try:
@@ -1263,6 +1387,8 @@ class ParetoDataLoader:
                         pre_rob = None
                 metrics = self._parse_config_light_raw(idx, config_data, precomputed_overall_robustness=pre_rob)
                 parsed_selected[idx] = metrics
+                if progress_callback and (n_done % 25 == 0 or n_done == len(selected_order)):
+                    progress_callback(n_done, len(selected_order), f"Parsed {n_done}/{len(selected_order)} reconstructed configs")
         else:
             pairs = [(int(offsets_all[i]), int(i)) for i in selected_order if 0 <= int(i) < len(offsets_all)]
             pairs.sort(key=lambda x: x[0])
@@ -1336,6 +1462,7 @@ class ParetoDataLoader:
 
         # Write persistent scan cache (best-effort).
         scan_cache_status = 'disabled' if _DISABLE_SCAN_CACHE else 'miss'
+        selection_cache_status = 'disabled' if _DISABLE_SCAN_CACHE else 'miss'
         if not _DISABLE_SCAN_CACHE:
             try:
                 cache_meta = {
@@ -1390,6 +1517,8 @@ class ParetoDataLoader:
                     scan_cache_status = 'built'
             except Exception:
                 pass
+            if self._write_selection_cache(load_strategy, max_configs, selected_order, raw_selected):
+                selection_cache_status = 'built'
 
         # Compute Pareto front based on objectives (optimized)
         t_pareto0 = time.perf_counter()
@@ -1408,6 +1537,7 @@ class ParetoDataLoader:
             'load_strategy': load_strategy,
             'max_configs': max_configs,
             'scan_cache': scan_cache_status,
+            'selection_cache': selection_cache_status,
             'checkpoint_blocks': checkpoint_blocks,
             'timings': {
                 'total': t_total,
