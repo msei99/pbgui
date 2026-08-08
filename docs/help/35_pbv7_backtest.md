@@ -213,6 +213,8 @@ Available from the **🔄 Backtest** toolbar button. Options:
 
 For archived results, these controls initially use the values stored in the archived `config.json`, including the end date and market-data choice. Clearing **Use PBGui Market Data** is an explicit override and is not replaced by the global Backtest setting when the queued job starts.
 
+The date fields use the same visible calendar button and PBGui date picker as the Backtest editor instead of the browser's native date icon.
+
 ---
 
 ## Archive panel

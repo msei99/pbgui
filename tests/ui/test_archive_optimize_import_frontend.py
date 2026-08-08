@@ -86,6 +86,26 @@ def test_archive_rebacktest_uses_archived_defaults_and_explicit_boolean() -> Non
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
+def test_rebacktest_dialogs_use_the_editor_calendar_control() -> None:
+    """All re-backtest date fields should use the editor's visible calendar button."""
+    source = BACKTEST_PATH.read_text(encoding="utf-8")
+    helper = _extract_function(source, "backtestDialogDateInputHtml")
+
+    assert '<input type="text"' in helper
+    assert "window.__dp.show" in helper
+    assert "📅" in helper
+    for name in (
+        "showInitialBacktestQueueDraftModal",
+        "rebacktestSelected",
+        "rebacktestSelectedArchive",
+        "rebacktestSelectedLegacy",
+    ):
+        function = _extract_function(source, name)
+        assert "backtestDialogDateInputHtml('rbt-start'" in function
+        assert "backtestDialogDateInputHtml('rbt-end'" in function
+        assert 'type="date" id="rbt-' not in function
+
+
 def test_foreign_archives_hide_and_guard_content_mutations() -> None:
     """Foreign archives retain read actions while result and schedule mutations stay unavailable."""
     source = BACKTEST_PATH.read_text(encoding="utf-8")

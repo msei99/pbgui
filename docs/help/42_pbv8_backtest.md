@@ -28,6 +28,7 @@ Frequently used PB8-specific backtest fields have structured controls:
 
 - **Market Settings Overrides** appears below `market_settings_sources`. Add all-exchange or exchange-specific coin rows and override quantity/price steps, minimum quantity/cost, and contract multiplier. Blank values inherit from the selected source; exchange-specific rows take precedence. Fields unknown to the current PBGui version are preserved without modification. Backtest fees remain controlled by the dedicated maker/taker fee overrides above because PB8 resolves them before applying market-setting overrides.
 - **Result Metrics** is kept inside **Additional Parameters** because it only controls terminal and queue-log output. **Default** uses metrics implied by optimize scoring and limits, **All** shows every metric, and **Custom additions** uses a searchable categorized list loaded from the installed PB8 runtime. Complete metrics remain computed and saved in every mode.
+- **minimum_coin_age_days** preserves an explicit `0`, including Pareto-to-Backtest drafts. Use `0` to disable the age gate; blank or invalid input falls back to `30` days.
 
 **Additional Parameters** contains Result Metrics, the PBGui-managed `base_dir` as read-only, and the expert-only `hlcvs_data_dir` and `hlcvs_data_override_mode` fields. Prepared-dataset replay requires a server-side PB8 dataset path with a valid manifest and is normally left at `null`; PB8 then resolves datasets automatically. Future unknown top-level backtest fields also appear in this fallback section.
 

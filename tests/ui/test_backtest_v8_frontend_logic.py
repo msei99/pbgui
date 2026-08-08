@@ -91,6 +91,39 @@ def test_v8_optimize_result_draft_opens_without_repreparing() -> None:
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
+def test_backtest_editor_preserves_zero_minimum_coin_age() -> None:
+    """Saving a Pareto draft must not replace an explicit zero-day age gate with 30."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    collect = _extract_function(source, "collectConfig")
+    snippet = "\n".join(
+        line.strip()
+        for line in collect.splitlines()
+        if "minimumCoinAgeDays" in line
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let inputValue = '';
+        const document = {{getElementById(id) {{
+          assert.equal(id, 'cfg-min-coin-age');
+          return {{value: inputValue}};
+        }}}};
+        function serialize(value) {{
+          inputValue = value;
+          const cfg = {{live: {{}}}};
+          {snippet}
+          return cfg.live.minimum_coin_age_days;
+        }}
+        assert.equal(serialize('0'), 0);
+        assert.equal(serialize('12.5'), 12.5);
+        assert.equal(serialize(''), 30);
+        assert.equal(serialize('invalid'), 30);
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_v7_page_offers_saved_config_conversion() -> None:
     """PB7 config and result rows should expose the V8 migration handoff."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")

@@ -213,6 +213,8 @@ Verfügbar über die **🔄 Backtest**-Schaltfläche in der Toolbar. Optionen:
 
 Bei archivierten Ergebnissen verwenden diese Controls zunächst die Werte aus der archivierten `config.json`, einschließlich Enddatum und Market-Data-Auswahl. Das Deaktivieren von **Use PBGui Market Data** ist ein expliziter Override und wird beim Queue-Start nicht durch die globale Backtest-Einstellung ersetzt.
 
+Die Datumsfelder verwenden denselben sichtbaren Kalender-Button und PBGui-Date-Picker wie der Backtest-Editor anstelle des nativen Browser-Datumssymbols.
+
 ---
 
 ## Panel: Archive

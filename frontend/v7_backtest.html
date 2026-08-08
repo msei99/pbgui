@@ -2049,9 +2049,9 @@ function showInitialBacktestQueueDraftModal(items) {
   var body =
     '<div style="display:flex;flex-direction:column;gap:var(--sp-md);height:100%;min-width:0">' +
       '<div style="flex-shrink:0"><div class="sb-label">start_date</div>' +
-        '<input type="date" id="rbt-start" class="sb-input" style="width:100%" value="' + esc(defStart) + '"></div>' +
+        backtestDialogDateInputHtml('rbt-start', defStart) + '</div>' +
       '<div style="flex-shrink:0"><div class="sb-label">end_date</div>' +
-        '<input type="date" id="rbt-end" class="sb-input" style="width:100%" value="' + esc(today) + '"></div>' +
+        backtestDialogDateInputHtml('rbt-end', today) + '</div>' +
       '<div style="flex-shrink:0"><div class="sb-label">Starting Balance</div>' +
         '<div style="display:flex;align-items:center;gap:var(--sp-xs)">' +
           '<input id="rbt-balance" class="sb-input" style="flex:1;text-align:right" type="number" min="1" step="100" value="' + defBalance + '">' +
@@ -4249,6 +4249,17 @@ function fieldDate2(id, label, value, tip, span) {
   return fmtGroupSpan(id, label, inputHtml, tip, span || 1);
 }
 
+function backtestDialogDateInputHtml(id, value) {
+  var dateVal = value || '';
+  return '<div style="position:relative">' +
+    '<input type="text" id="' + escAttr(id) + '" class="sb-input" value="' + escAttr(dateVal) + '"' +
+    ' data-prev="' + escAttr(dateVal) + '" style="width:100%;box-sizing:border-box;padding-right:26px">' +
+    '<button type="button" data-dp="' + escAttr(id) + '" onclick="window.__dp.show(\'' + escAttr(id) + '\',this)"' +
+    ' style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:transparent;border:none;' +
+    'padding:0 3px;font-size:var(--fs-sm);line-height:1;cursor:pointer" title="Open calendar">📅</button>' +
+    '</div>';
+}
+
 function cfgDateValueToMs(value) {
   var v = String(value || '').trim().toLowerCase();
   if (!v) return null;
@@ -4606,7 +4617,8 @@ function collectConfig() {
   cfg.logging.level = parseInt(normalizeLogLevelValue(document.getElementById('cfg-logging').value, 1), 10);
 
   if (!cfg.live) cfg.live = {};
-  cfg.live.minimum_coin_age_days = parseFloat(document.getElementById('cfg-min-coin-age').value) || 30;
+  var minimumCoinAgeDays = parseFloat(document.getElementById('cfg-min-coin-age').value);
+  cfg.live.minimum_coin_age_days = Number.isFinite(minimumCoinAgeDays) ? minimumCoinAgeDays : 30;
   cfg.live.hsl_signal_mode = normalizeBacktestHslSignalModeValue(document.getElementById('cfg-hsl-signal-mode').value);
 
   // Coins — approved_coins supports "all" (string) per side or globally
@@ -7774,9 +7786,9 @@ function rebacktestSelected() {
     var body =
       '<div style="display:flex;flex-direction:column;gap:var(--sp-md);height:100%;min-width:0">' +
         '<div style="flex-shrink:0"><div class="sb-label">start_date</div>' +
-          '<input type="date" id="rbt-start" class="sb-input" style="width:100%" value="' + esc(defStart) + '"></div>' +
+          backtestDialogDateInputHtml('rbt-start', defStart) + '</div>' +
         '<div style="flex-shrink:0"><div class="sb-label">end_date</div>' +
-          '<input type="date" id="rbt-end" class="sb-input" style="width:100%" value="' + esc(today) + '"></div>' +
+          backtestDialogDateInputHtml('rbt-end', today) + '</div>' +
         '<div style="flex-shrink:0"><div class="sb-label">Starting Balance</div>' +
           '<div style="display:flex;align-items:center;gap:var(--sp-xs)">' +
             '<input id="rbt-balance" class="sb-input" style="flex:1;text-align:right" type="number" min="1" step="100" value="' + defBalance + '">' +
@@ -7868,9 +7880,9 @@ function rebacktestSelectedArchive() {
     var body =
       '\x3Cdiv style="display:flex;flex-direction:column;gap:var(--sp-md);height:100%;min-width:0">' +
         '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">start_date\x3C/div>' +
-          '\x3Cinput type="date" id="rbt-start" class="sb-input" style="width:100%" value="' + esc(defStart) + '">\x3C/div>' +
+          backtestDialogDateInputHtml('rbt-start', defStart) + '\x3C/div>' +
         '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">end_date\x3C/div>' +
-          '\x3Cinput type="date" id="rbt-end" class="sb-input" style="width:100%" value="' + esc(defEnd) + '">\x3C/div>' +
+          backtestDialogDateInputHtml('rbt-end', defEnd) + '\x3C/div>' +
         '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">Starting Balance\x3C/div>' +
           '\x3Cdiv style="display:flex;align-items:center;gap:var(--sp-xs)">' +
             '\x3Cinput id="rbt-balance" class="sb-input" style="flex:1;text-align:right" type="number" min="1" step="100" value="' + defBalance + '">' +
@@ -8071,9 +8083,9 @@ function rebacktestSelectedLegacy() {
     var body =
       '\x3Cdiv style="display:flex;flex-direction:column;gap:var(--sp-md);height:100%;min-width:0">' +
         '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">start_date\x3C/div>' +
-          '\x3Cinput type="date" id="rbt-start" class="sb-input" style="width:100%" value="' + esc(defStart) + '">\x3C/div>' +
+          backtestDialogDateInputHtml('rbt-start', defStart) + '\x3C/div>' +
         '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">end_date\x3C/div>' +
-          '\x3Cinput type="date" id="rbt-end" class="sb-input" style="width:100%" value="' + esc(today) + '">\x3C/div>' +
+          backtestDialogDateInputHtml('rbt-end', today) + '\x3C/div>' +
         '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">Starting Balance\x3C/div>' +
           '\x3Cdiv style="display:flex;align-items:center;gap:var(--sp-xs)">' +
             '\x3Cinput id="rbt-balance" class="sb-input" style="flex:1;text-align:right" type="number" min="1" step="100" value="' + defBalance + '">' +
