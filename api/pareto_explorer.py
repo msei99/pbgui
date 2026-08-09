@@ -2558,6 +2558,42 @@ def _serialize_config_detail(
     loader.ensure_details(config)
     risk_profile = loader.compute_risk_profile_score(config)
     full_config = loader.get_full_config(config.config_index)
+    override_configs: dict[str, dict] = {}
+    override_error = ""
+    if isinstance(full_config, dict) and str(getattr(loader, "optimize_version", "v7")).lower() == "v8":
+        from api.backtest_v8 import (
+            _configs_dir as _backtest_configs_dir,
+            _load_override_payloads,
+            _override_filenames,
+        )
+        from api.optimize_v8 import _configs_dir as _optimize_configs_dir
+
+        referenced = _override_filenames(full_config)
+        if referenced:
+            result_dir = _resolve_result_dir(str(getattr(loader, "results_path", "") or ""))
+            candidates = [result_dir] if result_dir is not None else []
+            base_config_path = str((full_config.get("live") or {}).get("base_config_path") or "").strip()
+            if base_config_path:
+                base_path = Path(base_config_path).expanduser().resolve()
+                allowed_roots = [_backtest_configs_dir().resolve(), _optimize_configs_dir().resolve()]
+                if (
+                    base_path.is_file()
+                    and not base_path.is_symlink()
+                    and any(base_path.is_relative_to(root) for root in allowed_roots)
+                ):
+                    candidates.append(base_path.parent)
+            last_error = "Referenced PB8 override configs are unavailable"
+            for candidate in dict.fromkeys(candidates):
+                try:
+                    override_configs = _load_override_payloads(full_config, candidate)
+                    last_error = ""
+                    break
+                except HTTPException as exc:
+                    last_error = str(exc.detail)
+                except RuntimeError as exc:
+                    last_error = str(exc)
+            if last_error:
+                override_error = last_error
     preferred_metrics: list[str] = []
     for metric_name in list(loader.scoring_metrics or []):
         if metric_name not in preferred_metrics:
@@ -2619,6 +2655,8 @@ def _serialize_config_detail(
         "scenario_metrics": _json_safe(config.scenario_metrics),
         "has_scenarios": bool(loader.scenario_labels) and bool(config.scenario_metrics),
         "full_config": _json_safe(full_config),
+        "override_configs": _json_safe(override_configs),
+        "override_error": override_error,
     }
 
 

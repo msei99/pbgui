@@ -96,7 +96,7 @@
       navSubtitle: isV8 ? 'PBv8 EDIT' : 'PBv7 EDIT',
       navCurrent: isV8 ? 'v8_run' : 'v7_run',
       backtestPath: isV8 ? '/api/backtest-v8/main_page' : '/api/backtest-v7/main_page',
-      supportsStrategyExplorer: !isV8,
+      supportsStrategyExplorer: true,
       supportsDynamicIgnore: !isV8,
       supportsBalanceCalculator: true,
       capabilityKey: isV8 ? 'pb8_capable' : 'pb7_capable',

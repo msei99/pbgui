@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
 <script src="/app/js/backtest_shell.js?v=4"></script>
-<script src="/app/js/backtest_editor_adapter.js?v=7"></script>
+<script src="/app/js/backtest_editor_adapter.js?v=8"></script>
 <script src="/app/js/backtest_advanced_fields.js?v=1"></script>
 <style>
 /* ── Design Tokens ─────────────────────────────── */
@@ -1872,10 +1872,18 @@ function goStrategyExplorer() {
   var explorerBase = strategyExplorerApiBase();
   try {
     var cfg = collectConfig();
-    fetch(explorerBase + '/draft', {
-      method: 'POST',
-      headers: bearerHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ config: cfg })
+    var overridesPromise = backtestEditorAdapter.isV8 && typeof coinOvSnapshotAllFiles === 'function'
+      ? coinOvSnapshotAllFiles()
+      : Promise.resolve({});
+    overridesPromise.then(function(overrideConfigs) {
+      return fetch(explorerBase + '/draft', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(backtestEditorAdapter.isV8
+          ? { config: cfg, override_configs: overrideConfigs || {} }
+          : { config: cfg })
+      });
     }).then(function(res) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.json();
@@ -1890,10 +1898,11 @@ function goStrategyExplorer() {
   }
 }
 
-function strategyExplorerApiBase() {
+function strategyExplorerApiBase(version) {
   var match = String(API_BASE || '').match(/^(https?:\/\/[^/]+)/);
   var origin = match ? match[1] : window.location.origin;
-  return origin + '/api/strategy-explorer';
+  var isV8 = version ? String(version).toLowerCase() === 'v8' : backtestEditorAdapter.isV8;
+  return origin + (isV8 ? '/api/strategy-explorer-v8' : '/api/strategy-explorer');
 }
 
 function getConfigDefaultExchange(cfg) {
@@ -8427,20 +8436,26 @@ function strategyExplorerFromResult() {
   var selectedResult = results.find(function(result) { return result.path === path; }) || {
     backtest_version: backtestEditorAdapter.version
   };
-  var explorerBase = strategyExplorerApiBase();
+  var selectedIsV8 = String(selectedResult.backtest_version || '').toLowerCase() === 'v8';
+  var explorerBase = strategyExplorerApiBase(selectedResult.backtest_version);
   toast('Opening Strategy Explorer…', 'ok');
   resultApiFetch(selectedResult, '/results/config?path=' + encodeURIComponent(path)).then(function(cfg) {
     return fetch(explorerBase + '/draft', {
       method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: cfg })
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(selectedIsV8 ? {
+        config: cfg,
+        result_path: path,
+        provenance: { kind: 'backtest_result' }
+      } : { config: cfg })
     });
   }).then(function(res) {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }).then(function(data) {
-    var url = explorerBase + '/main_page?draft_id=' + encodeURIComponent(data.draft_id || '')
-      + '&result_path=' + encodeURIComponent(path);
+    var url = explorerBase + '/main_page?draft_id=' + encodeURIComponent(data.draft_id || '');
+    if (!selectedIsV8) url += '&result_path=' + encodeURIComponent(path);
     window.location.href = url;
   }).catch(function(e) {
     toast('Failed to open Strategy Explorer: ' + e.message, 'err');

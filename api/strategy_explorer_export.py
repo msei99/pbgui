@@ -14,9 +14,19 @@ from typing import Any, Callable
 
 SERVICE = "StrategyExplorerExport"
 MAX_EXPORT_FRAMES = 2500
+MAX_EXPORT_OUTPUT_BYTES = 512 * 1024 * 1024
+_EXPORT_SLOT = threading.BoundedSemaphore(1)
 
 ProgressCallback = Callable[[float, str], None]
 CancelCallback = Callable[[], bool]
+
+
+class MovieExportBusyError(RuntimeError):
+    """Raised when the single shared Movie Builder export slot is occupied."""
+
+
+class MovieExportTooLargeError(RuntimeError):
+    """Raised before reading an encoded movie that exceeds the output limit."""
 
 
 def _parse_version(value: str | None) -> tuple[int, int, int]:
@@ -426,7 +436,7 @@ def _normalize_export_options(options: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def export_plotly_animation_to_mp4(
+def _export_plotly_animation_to_mp4(
     figure_json: dict[str, Any],
     *,
     options: dict[str, Any] | None = None,
@@ -641,5 +651,28 @@ def export_plotly_animation_to_mp4(
                 pass
             stderr_thread.join(timeout=5)
 
+        if out_mp4.stat().st_size > MAX_EXPORT_OUTPUT_BYTES:
+            raise MovieExportTooLargeError("Movie export output exceeds the 512 MiB limit")
         _export_progress(progress_cb, 1.0, "Movie export ready.")
         return out_mp4.read_bytes(), {"codec": codec, "preset": preset, "ffmpeg": ffmpeg_source, "frames": len(frames), "options": opts}
+
+
+def export_plotly_animation_to_mp4(
+    figure_json: dict[str, Any],
+    *,
+    options: dict[str, Any] | None = None,
+    progress_cb: ProgressCallback | None = None,
+    cancel_cb: CancelCallback | None = None,
+) -> tuple[bytes, dict[str, Any]]:
+    """Render one export at a time so PB7 and PB8 cannot exhaust encoders together."""
+    if not _EXPORT_SLOT.acquire(blocking=False):
+        raise MovieExportBusyError("Another Movie Builder export is already running")
+    try:
+        return _export_plotly_animation_to_mp4(
+            figure_json,
+            options=options,
+            progress_cb=progress_cb,
+            cancel_cb=cancel_cb,
+        )
+    finally:
+        _EXPORT_SLOT.release()

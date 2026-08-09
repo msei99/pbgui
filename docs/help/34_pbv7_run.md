@@ -104,7 +104,7 @@ Dynamic Ignore is a target-host capability, not a per-instance or per-VPS key se
 ### Validate parameters before going live
 1. Open the instance with **Edit**
 2. Click **📊 Backtest** → run a backtest with the same config
-3. Click **🔍 Strategy Explorer** → explore Pareto metrics interactively
+3. Click **🔍 Strategy Explorer** → inspect entry/close orders, test parameter changes, run bounded simulations, compare fills, and build a replay movie
 
 ### Check if you have enough balance
 1. Open the instance with **Edit**

@@ -553,7 +553,7 @@ textarea.json-invalid:focus {
       <button class="sb-btn info" onclick="openCopyUserModal()" title="Copy current config to another user">📋 Copy</button>
       <hr class="sb-sep">
       <button class="sb-btn" onclick="goBacktest()" title="Open in Backtest">📊 Backtest</button>
-      <button class="sb-btn" data-v7-only onclick="goStrategyExplorer()" title="Open Strategy Explorer">🔍 Strategy Explorer</button>
+      <button class="sb-btn" onclick="goStrategyExplorer()" title="Open Strategy Explorer">🔍 Strategy Explorer</button>
       <button class="sb-btn" onclick="goBalanceCalc()" title="Open Balance Calculator page">💰 Balance Calculator</button>
       <button class="sb-btn" onclick="calculateBalance()" title="Calculate needed balance from current config (shown inline)">⚡ Calc Balance</button>
       <hr class="sb-sep">
@@ -1210,7 +1210,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 
 <script src="/app/js/editor_shared.js?v=13"></script>
 <script src="/app/js/pbgui_dialogs.js?v=5"></script>
-<script src="/app/js/run_editor_adapter.js?v=6"></script>
+<script src="/app/js/run_editor_adapter.js?v=7"></script>
 <script src="/app/js/log_viewer_panel.js?v=29"></script>
 <script src="/app/js/coin_overrides_editor.js?v=23"></script>
 <script>
@@ -1725,7 +1725,7 @@ function goBacktest() {
 function strategyExplorerApiBase() {
   var match = String(API_BASE || '').match(/^(https?:\/\/[^/]+)/);
   var origin = match ? match[1] : window.location.origin;
-  return origin + '/api/strategy-explorer';
+  return origin + (runEditorAdapter.isV8 ? '/api/strategy-explorer-v8' : '/api/strategy-explorer');
 }
 
 function goStrategyExplorer() {
@@ -1735,11 +1735,18 @@ function goStrategyExplorer() {
   window.PBGuiEditorShared.clearFixedValidationStatus();
   var config = collectConfig();
   var explorerBase = strategyExplorerApiBase();
-  fetch(explorerBase + '/draft', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ config: config })
+  var overridesPromise = runEditorAdapter.isV8 && typeof coinOvSnapshotAllFiles === 'function'
+    ? coinOvSnapshotAllFiles()
+    : Promise.resolve({});
+  overridesPromise.then(function(overrideConfigs) {
+    return fetch(explorerBase + '/draft', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(runEditorAdapter.isV8
+        ? { config: config, override_configs: overrideConfigs || {} }
+        : { config: config })
+    });
   }).then(function(res) {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();

@@ -133,15 +133,26 @@ def _get_draft_config(draft_id: str) -> dict[str, Any] | None:
 
 def _page_context(request: Request, session: SessionToken) -> dict[str, str]:
     """Build replacement values for the standalone HTML page."""
+    del session
     scheme = request.url.scheme
     host = request.url.hostname or "127.0.0.1"
     port = request.url.port
     origin = f"{scheme}://{host}" + (f":{port}" if port else "")
     return {
-        "token": session.token,
+        "token": "",
         "api_base": origin + "/api/strategy-explorer",
         "ws_base": origin.replace("http://", "ws://").replace("https://", "wss://"),
     }
+
+
+def _script_json(value: Any) -> str:
+    """Serialize one inline-script value without permitting an HTML end tag."""
+    return (
+        json.dumps(value)
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+    )
 
 
 @router.get("/main_page", response_class=HTMLResponse)
@@ -159,13 +170,13 @@ def main_page(
     html = html_path.read_text(encoding="utf-8")
     ctx = _page_context(request, session)
     replacements = {
-        '"%%TOKEN%%"': json.dumps(ctx["token"]),
-        '"%%API_BASE%%"': json.dumps(ctx["api_base"]),
-        '"%%WS_BASE%%"': json.dumps(ctx["ws_base"]),
-        '"%%DRAFT_ID%%"': json.dumps(str(draft_id or "")),
-        '"%%RESULT_PATH%%"': json.dumps(str(result_path or "")),
-        '"%%VERSION%%"': json.dumps(PBGUI_VERSION),
-        '"%%SERIAL%%"': json.dumps(PBGUI_SERIAL),
+        '"%%TOKEN%%"': _script_json(ctx["token"]),
+        '"%%API_BASE%%"': _script_json(ctx["api_base"]),
+        '"%%WS_BASE%%"': _script_json(ctx["ws_base"]),
+        '"%%DRAFT_ID%%"': _script_json(str(draft_id or "")),
+        '"%%RESULT_PATH%%"': _script_json(str(result_path or "")),
+        '"%%VERSION%%"': _script_json(PBGUI_VERSION),
+        '"%%SERIAL%%"': _script_json(PBGUI_SERIAL),
     }
     for token, value in replacements.items():
         html = html.replace(token, value)
@@ -447,7 +458,11 @@ def get_movie_export_options(session: SessionToken = Depends(require_auth)) -> d
 @router.post("/movie/export")
 def export_movie(body: dict[str, Any], session: SessionToken = Depends(require_auth)) -> Response:
     """Export a posted Movie Builder Plotly animation as MP4."""
-    from api.strategy_explorer_export import export_plotly_animation_to_mp4
+    from api.strategy_explorer_export import (
+        MovieExportBusyError,
+        MovieExportTooLargeError,
+        export_plotly_animation_to_mp4,
+    )
 
     figure = body.get("figure") if isinstance(body, dict) else None
     if not isinstance(figure, dict):
@@ -482,6 +497,14 @@ def export_movie(body: dict[str, Any], session: SessionToken = Depends(require_a
                 "Content-Disposition": f'attachment; filename="{filename}"',
             },
         )
+    except MovieExportBusyError as exc:
+        if progress_id:
+            _set_movie_progress(progress_id, progress=1.0, message=str(exc), done=True, error=str(exc))
+        raise HTTPException(503, str(exc)) from exc
+    except MovieExportTooLargeError as exc:
+        if progress_id:
+            _set_movie_progress(progress_id, progress=1.0, message=str(exc), done=True, error=str(exc))
+        raise HTTPException(413, str(exc)) from exc
     except Exception as exc:
         if progress_id:
             _set_movie_progress(progress_id, progress=1.0, message=str(exc), done=True, error=str(exc))

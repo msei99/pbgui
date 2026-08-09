@@ -173,6 +173,7 @@ Abgeschlossene Queue-Jobs invalidieren jetzt sofort den gecachten Results-Stand.
 | **🔄 Backtest** | Ausgewählte Ergebnisse als neue Backtests neu ausführen (öffnet Datums-/Balance-/Exchange-Modal) |
 | **▶ Add to Run** | Live-Run aus der ausgewählten Config erstellen |
 | **📈 Compare** | Ausgewählte Ergebnisse zur Vergleichsansicht hinzufügen |
+| **🔍 Strategy Explorer** | Genau ein ausgewaehltes Result im zugehoerigen PB7- oder PB8-Strategy-Explorer oeffnen; PB8 verwendet einen authentifizierten opaken Draft und behaelt lokale Stored-Fill-Provenance fuer Compare |
 | **🧬 Optimize from Result** | Den Optimize-Editor direkt mit dem ausgewählten Ergebnis als Draft und `Starting Seeds = self` öffnen |
 | **🗑 Delete Selected** | Ausgewählte Ergebnisse von Disk löschen |
 

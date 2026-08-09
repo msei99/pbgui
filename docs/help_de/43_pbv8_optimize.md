@@ -54,6 +54,8 @@ Permanente Vorbereitungsfehler setzen nur ihre Queue-Zeile auf einen handlungsfa
 
 Ergebnisse werden nur aus `<pb8dir>/optimize_results` gelesen. Die Results-Tabelle zeigt fuer jeden Lauf die konfigurierte PB8-Strategie und kann nach dieser Spalte sortiert werden. Die Panels Results und Paretos bieten den gemeinsamen PB7-Workflow fuer Ergebnisansicht, Loeschen, 3D-Plots, Pareto Dash, Kandidaten-JSON, Metrik-Zusammenfassungen und Seed-Bundles.
 
+Ein Wechsel des Optimize-Results leert vorherige Pareto-Zeilen, Metadaten und Auswahl sofort, bevor das neue Result geladen wird. Eine spaete Antwort des vorherigen Results kann keine veralteten Zeilen wiederherstellen.
+
 PB8 unterscheidet drei Workflows:
 
 - Ein Pareto-Kandidat als PB8-Backtest-Draft startet einen eigenstaendigen Backtest.
@@ -61,6 +63,8 @@ PB8 unterscheidet drei Workflows:
 - Checkpoint Resume setzt den bestehenden Backend-Zustand und Resultstream fort.
 
 Der gemeinsame Pareto Explorer verwendet versionsspezifische Roots und versteht PB8s verschachtelte Bounds und Bot-Parameter, Scoring-Ziele, Limits, Suite-Metriken und inkrementelle `all_results.bin`-Eintraege.
+
+Im PB8 Pareto Explorer oeffnet **Strategy Explorer** den ausgewaehlten Kandidaten mit seinen Sparse Overrides. Fuer einen Vergleich wird der erste Kandidat mit **Pin Explorer Baseline** fixiert, ein anderer Kandidat desselben Results ausgewaehlt und danach Strategy Explorer geoeffnet. Fehlende referenzierte Override-Dateien blockieren Pinning oder Oeffnen, statt stillschweigend ignoriert zu werden.
 
 Suite-Summaries behalten ihre konfigurierten Objective- und Szenarionamen und unterstuetzen `mean`, `min`, `max`, `std` und `median`. Listeneintraege enthalten ausserdem das kanonische Feld `gain`, das in dieser Reihenfolge aus PB8s gespeicherter Metrik `gain_usd`, `gain_strategy_eq` oder `gain` stammt. Statistiken verwenden wenn vorhanden den angeforderten Metrik-Statistikwert und sonst das gespeicherte skalare Objective. Nicht zugehoerige Suite-Statistiken werden nicht an den Browser uebertragen. Ein kompakter Dateisignatur-Cache beschleunigt wiederholte grosse Pareto-Listen; geaenderte, geloeschte, fehlerhafte oder gerade neu geschriebene Kandidaten werden einzeln behandelt.
 

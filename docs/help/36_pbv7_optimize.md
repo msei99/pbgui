@@ -225,6 +225,7 @@ PB8 result actions are enabled only when their required artifacts exist. Exact *
 
 Open this panel from **Results → Paretos**.
 It shows the Pareto JSON files for one selected result set.
+When you switch to another result set, PBGui clears the previous rows immediately and shows only candidates returned for the new selection.
 
 Sidebar actions:
 

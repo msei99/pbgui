@@ -66,6 +66,14 @@ Allgemeine Hinweise:
 - Zu kleine Intervalle führen oft zu **Rate Limits (HTTP 429)**.
 - Wenn du häufig Backoffs siehst: Intervalle erhöhen oder Anzahl aktiver User reduzieren.
 
+### Dashboard-Live-Sessions
+
+Das Dashboard oeffnet private Exchange-WebSockets nur, solange eine Browser-Live-Session sie benoetigt. Sessions desselben Users teilen Watcher; das konfigurierte Limit **Max private WS** verhindert unbegrenzt viele Clients. Exchanges ohne die benoetigten privaten Streaming-Methoden verwenden automatisch die von PBData gepflegten Datenbankdaten.
+
+Das Trennen eines Tabs, Logout, Session-Ablauf und API-Neustart geben die zugehoerigen Watcher und privaten Clients frei. Eine Produktionspruefung mit wiederholten Sessions fuer einen und zehn User bestaetigte, dass Watcher-, Subscriber-, Client-, File-Descriptor- und Thread-Zahlen auf ihre Idle-Werte zurueckkehren. Der PBData-Speicher blieb unveraendert; FastAPI erreichte nach wiederholten Zehn-User-Zyklen einen stabilen warmen Cache, statt pro Zyklus weiter zu wachsen.
+
+Fuer authentifizierte Diagnosen meldet `GET /api/live/status` das konfigurierte Limit sowie aktuelle Watcher-, Subscriber-, Private-Client- und Cleanup-Task-Zahlen. Nach dem Schliessen aller Dashboard-Live-Sessions sollten diese Werte auf null zurueckkehren. Kurzzeitig hoeherer FastAPI-Speicher nach der ersten Session ist normal, weil Exchange-Bibliotheken und Market-Metadaten warm bleiben.
+
 ## Rate-Limit Kontrolle (REST Pause)
 
 PBData nutzt eine kleine Pause zwischen Usern in den Shared REST Pollern.
@@ -139,3 +147,9 @@ Die meisten PBData-Settings werden in `pbgui.ini` unter `[pbdata]` gespeichert, 
 - Prüfen, ob PBData läuft (Start/Stop-Buttons im Control-Strip)
 - Im **Status**-Tab die Fetch Summary auf aktuelle Zeitstempel prüfen
 - Bei Überlast: Combined-Intervall erhöhen
+
+### Live-Session-Ressourcen kehren nicht auf null zurueck
+
+- Alle Dashboard-Tabs schliessen und den Disconnect-Cleanup abwarten.
+- Das authentifizierte `GET /api/live/status` pruefen; Watcher-, Subscriber-, Private-Client- und Cleanup-Task-Zahlen sollten sich bei null einpendeln.
+- Bleiben Werte ungleich null, `PBGui.log` auf `LiveSession`-Warnungen pruefen und die API auf der Services-Seite neu starten. PBData muss fuer den Dashboard-Live-Session-Cleanup nicht neu gestartet werden.

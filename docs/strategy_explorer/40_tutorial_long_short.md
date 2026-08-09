@@ -1,54 +1,61 @@
 # Tutorial: Understanding Long vs Short grids
 
-This tutorial explains how Strategy Explorer displays Long and Short grids, and how to avoid common misinterpretations.
+This tutorial explains how the shared PB7/PB8 Strategy Explorer GUI displays Long and Short output and how to avoid common misinterpretations.
 
 ---
 
 ## 1) Long grids
 ### Long entry grid
-- Represents **buy** orders that open/increase a Long position.
-- Usually placed **below** the current price.
+- Represents buy orders that open or increase a Long position.
+- Usually appears below the current price, depending on strategy and state.
 
 ### Long close grid
-- Represents **sell** orders that reduce/close a Long position.
-- Usually placed **above** the entry price (take-profit ladder).
+- Represents sell orders that reduce or close a Long position.
+- Usually appears above the position price.
+
+For a PB8 snapshot, Long entries come from the supplied flat state. Long closes come from a separate representative hypothetical Long position at the selected price.
 
 ---
 
 ## 2) Short grids
 ### Short entry grid
-- Represents **sell** orders that open/increase a Short position.
-- Usually placed **above** the current price.
+- Represents sell orders that open or increase a Short position.
+- Usually appears above the current price, depending on strategy and state.
 
 ### Short close grid
-- Represents **buy** orders that reduce/close a Short position.
-- Usually placed **below** the entry price.
+- Represents buy orders that reduce or close a Short position.
+- Usually appears below the position price.
+
+For a PB8 snapshot, Short entries come from the supplied flat state. Short closes come from a separate representative hypothetical Short position at the selected price.
 
 ---
 
 ## 3) Both sides active
 If both Long and Short are enabled in the config:
 
-- Snapshot view can show both sets of grids.
-- Movie Builder lets you select the side you want to animate.
+- Snapshot can show output for both sides.
+- Movie Builder lets you select `Auto`, `Long`, or `Short`.
 
-If you only see fills on one side:
-- That’s normal if the strategy/backtest only traded one direction.
+If only one side has fills, the native or local replay may simply have traded one direction. PB8's representative snapshot positions do not mean those positions existed historically or in a live account.
 
 ---
 
 ## 4) Trailing lines
 Trailing is path-dependent.
 
-- Trailing thresholds and retracement lines give intuition about when trailing becomes eligible and when it triggers.
-- Exact fill sequences can still differ depending on candle path and state injection.
+- Snapshot reference lines explain one supplied state at Analysis Time.
+- PB7 local/PB7-engine tools retain their existing behavior.
+- PB8 Native Replay supplies real candles and fills, but PB8 upstream does not expose per-frame historical ideal-order ladders or a complete resting-order trace.
+
+Do not infer an exact historical order sequence from a PB8 snapshot or movie.
 
 ---
 
 ## 5) Debugging checklist
-If grids look “inverted” or “wrong”:
+If grids look inverted or wrong:
 
-- Confirm you’re looking at the intended side (Long vs Short).
-- Confirm exchange/coin selection.
+- Confirm **Side** (`Long` or `Short`).
+- Confirm **Exchange** and **Coin**.
 - Confirm Analysis Time is inside the period you care about.
-- If comparing to a backtest, launch Strategy Explorer from that backtest result to auto-align time.
+- For PB8 closes, remember the representative hypothetical position assumption.
+- For result comparison, use the direct Backtest Results handoff so stored PB8 provenance remains behind the opaque draft.

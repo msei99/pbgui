@@ -155,7 +155,6 @@
         if (!isV8) return;
         installRunHandoff();
         var unsupported = [
-          'goStrategyExplorer', 'strategyExplorerFromResult',
           'optimizePresetFromResult'
         ];
         document.querySelectorAll('#sidebar-editor button[onclick], #ctx-results button[onclick]').forEach(function (button) {

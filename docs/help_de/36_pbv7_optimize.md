@@ -225,6 +225,7 @@ PB8-Result-Aktionen sind nur aktiv, wenn ihre benoetigten Artefakte existieren. 
 
 Wird über **Results → Paretos** geöffnet.
 Hier werden die Pareto-JSON-Dateien eines ausgewählten Ergebnis-Sets angezeigt.
+Beim Wechsel zu einem anderen Ergebnis-Set leert PBGui die bisherigen Zeilen sofort und zeigt danach nur Kandidaten der neuen Auswahl.
 
 Sidebar-Aktionen:
 

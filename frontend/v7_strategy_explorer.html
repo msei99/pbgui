@@ -131,7 +131,7 @@ pre.debug-json { max-height: 460px; white-space: pre-wrap; word-break: break-wor
 .movie-layout { display: flex; flex-direction: column; gap: var(--sp-md); }
 .movie-config-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-md); align-items: end; }
 .movie-result-grid { display: grid; grid-template-columns: minmax(420px, 2fr) minmax(320px, 1fr); gap: var(--sp-md); align-items: start; }
-.movie-plot { height: 560px; min-height: 420px; content-visibility: auto; contain-intrinsic-size: 560px; }
+.movie-plot { height: 760px; min-height: 760px; content-visibility: auto; contain-intrinsic-size: 760px; }
 .movie-plot:fullscreen { width: 100vw; height: 100vh !important; min-height: 100vh; background: var(--bg); padding: 8px; }
 .movie-plot:fullscreen > div { height: 100% !important; }
 .movie-progress { margin-top: 10px; display: none; }
@@ -149,6 +149,8 @@ pre.debug-json { max-height: 460px; white-space: pre-wrap; word-break: break-wor
 .segment-tabs button:hover { color: var(--text); background: rgba(77,166,255,.08); }
 .segment-tabs button.active { color: #fff; background: rgba(77,166,255,.18); outline: 1px solid rgba(77,166,255,.75); outline-offset: -1px; }
 .slider-field { margin-bottom: 12px; }
+.slider-field.near-bound { border-left: 3px solid #f59e0b; padding-left: 8px; }
+.near-bound-badge { color: #fbbf24; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
 .slider-label { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: var(--fs-sm); }
 .slider-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slider-meta { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
@@ -160,7 +162,7 @@ input.param-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance:
 input.param-slider::-moz-range-track { height: 4px; background: rgba(255,255,255,.22); border-radius: 999px; border: 0; }
 input.param-slider::-moz-range-progress { height: 4px; background: var(--accent); border-radius: 999px; border: 0; }
 input.param-slider::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: 0; box-shadow: 0 0 0 1px rgba(14,17,23,.95); }
-.param-select { width: 100%; border: 1px solid var(--border); border-radius: 6px; background: #0b0e14; color: var(--text); padding: 7px 8px; min-height: 32px; margin-top: 6px; }
+.param-select, .param-text { width: 100%; border: 1px solid var(--border); border-radius: 6px; background: #0b0e14; color: var(--text); padding: 7px 8px; min-height: 32px; margin-top: 6px; }
 .param-check { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: var(--text-dim); font-size: var(--fs-sm); }
 .param-check input { width: auto; }
 .inline-note { color: var(--text-dim); font-size: var(--fs-xs); margin: -2px 0 10px; }
@@ -197,7 +199,7 @@ input.param-slider::-moz-range-thumb { width: 12px; height: 12px; border-radius:
   <main id="main-content">
     <section class="page-title">
       <div>
-        <h1>Strategy Explorer</h1>
+        <h1 id="strategy-explorer-title">Strategy Explorer</h1>
         <p id="page-subtitle">Visual analysis of PB7 grid strategies using the PB7/Rust calculation path.</p>
       </div>
       <div class="toolbar">
@@ -271,7 +273,7 @@ input.param-slider::-moz-range-thumb { width: 12px; height: 12px; border-radius:
         <div class="grid" style="margin-top:var(--sp-md)">
           <div class="field third"><label for="max-candles-input">Simulation Max Candles</label><input id="max-candles-input" type="number" min="50" max="20000" step="50" value="2000"></div>
           <div class="field third"><label for="max-orders-input">Simulation Max Entry Fills</label><input id="max-orders-input" type="number" min="1" max="2000" step="1" value="200"></div>
-          <div class="field third"><label for="sim-start-state-select">Simulation Start State (PBGui)</label><select id="sim-start-state-select"><option value="flat">Flat (Compare)</option><option value="manual">Manual (custom)</option></select></div>
+          <div class="field third"><label id="sim-start-state-label" for="sim-start-state-select">Simulation Start State (PBGui)</label><select id="sim-start-state-select"><option value="flat">Flat (Compare)</option><option value="manual">Manual (custom)</option></select></div>
         </div>
         <div class="grid" id="sim-manual-start-grid" style="display:none;margin-top:var(--sp-md)">
           <div class="field third"><label for="sim-start-balance-input">Start Balance</label><input id="sim-start-balance-input" type="number" min="0" step="10" value="1000"></div>
@@ -302,7 +304,7 @@ input.param-slider::-moz-range-thumb { width: 12px; height: 12px; border-radius:
       <section class="panel-card">
         <h3>Compare</h3>
         <div class="grid">
-          <div class="field full"><label>Compare mode</label><div class="toolbar"><label class="check-row"><input type="radio" name="compare-mode" value="pb7_b_c" checked>PB7 Backtest Result vs PBGui Simulation vs PB7 Backtest Engine</label><label class="check-row"><input type="radio" name="compare-mode" value="b_c">PBGui Simulation vs PB7 Backtest Engine</label></div></div>
+          <div class="field full"><label>Compare mode</label><div class="toolbar"><label class="check-row" id="compare-mode-primary"><input type="radio" name="compare-mode" value="pb7_b_c" checked>PB7 Backtest Result vs PBGui Simulation vs PB7 Backtest Engine</label><label class="check-row" id="compare-mode-secondary"><input type="radio" name="compare-mode" value="b_c">PBGui Simulation vs PB7 Backtest Engine</label></div></div>
           <div class="field third"><label for="compare-max-candles">Compare max candles (1m)</label><input id="compare-max-candles" type="number" min="10" max="20000" step="50" value="10000"></div>
           <div class="field full compare-pb7-only"><label for="compare-pb7-folder">PB7 backtest folder (contains fills.csv)</label><input id="compare-pb7-folder" type="text" placeholder="/path/to/backtest/result"></div>
           <label class="check-row full compare-pb7-only"><input id="compare-use-fills-range" type="checkbox" checked>Use fills.csv time range for PBGui Simulation / PB7 Backtest Engine</label>
@@ -324,7 +326,7 @@ input.param-slider::-moz-range-thumb { width: 12px; height: 12px; border-radius:
           <h3>Movie Builder Config</h3>
           <p class="hint" id="movie-status">Build replay frames from the selected candle window.</p>
           <div class="movie-config-grid">
-            <div class="field"><label for="movie-engine-select" data-tip="PBGui Simulation shows local replay grids/fills. PB7 Backtest Engine uses PB7 Rust fills. PB7 fills.csv uses an existing result folder without recomputing fills.">Movie engine</label><select id="movie-engine-select"><option value="local_simulation">PBGui Simulation</option><option value="pb7_engine">PB7 Backtest Engine</option><option value="pb7_fills">PB7 fills.csv (from backtest)</option></select></div>
+            <div class="field"><label id="movie-engine-label" for="movie-engine-select" data-tip="PBGui Simulation shows local replay grids/fills. PB7 Backtest Engine uses PB7 Rust fills. PB7 fills.csv uses an existing result folder without recomputing fills.">Movie engine</label><select id="movie-engine-select"><option value="local_simulation">PBGui Simulation</option><option value="pb7_engine">PB7 Backtest Engine</option><option value="pb7_fills">PB7 fills.csv (from backtest)</option></select></div>
             <div class="field"><label for="movie-side-select" data-tip="Side to display in the movie preview. Auto prefers Long.">Side</label><select id="movie-side-select"><option value="auto" selected>Auto</option><option value="long">Long</option><option value="short">Short</option></select></div>
             <div class="field"><label for="movie-start-date-input" data-tip="Movie start date. Defaults to the Analysis start date but can be changed independently for Movie Builder.">Start Date</label><div style="position:relative"><input id="movie-start-date-input" type="text" placeholder="YYYY-MM-DD" style="padding-right:28px"><button type="button" data-dp="movie-start-date-input" onclick="window.__dp.show('movie-start-date-input', this)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:transparent;border:none;color:var(--text);padding:0 3px;font-size:var(--fs-sm);line-height:1;cursor:pointer" title="Open calendar">📅</button></div></div>
             <div class="field"><label for="movie-start-time-input" data-tip="Movie start time with minute precision. Defaults to the Analysis start time.">Start Time</label><input id="movie-start-time-input" type="time" value="00:00"></div>
@@ -332,7 +334,7 @@ input.param-slider::-moz-range-thumb { width: 12px; height: 12px; border-radius:
             <div class="field"><label for="movie-duration-select" data-tip="Duration presets depend on Step Size. Custom keeps the Frames value unchanged.">Duration</label><select id="movie-duration-select"></select></div>
             <div class="field"><label for="movie-frames-input" data-tip="Number of frames to generate when Duration is Custom, or computed from Duration / Step Size.">Frames</label><input id="movie-frames-input" type="number" min="10" max="20000" step="1" value="200"></div>
             <div class="field"><label for="movie-visible-input" data-tip="Number of candles shown in the moving viewport.">Visible candles</label><input id="movie-visible-input" type="number" min="10" max="500" step="5" value="60"></div>
-            <div class="field"><label for="movie-pb7-folder" data-tip="Backtest result folder containing fills.csv, used by the PB7 fills.csv engine.">PB7 backtest folder</label><input id="movie-pb7-folder" type="text" placeholder="/path/to/backtest/result"></div>
+            <div class="field"><label id="movie-result-label" for="movie-pb7-folder" data-tip="Backtest result folder containing fills.csv, used by the PB7 fills.csv engine.">PB7 backtest folder</label><input id="movie-pb7-folder" type="text" placeholder="/path/to/backtest/result"></div>
             <div class="field"><label>&nbsp;</label><button class="action-btn primary" id="btn-build-movie">Generate Movie</button></div>
             <div class="field"><label>&nbsp;</label><button class="action-btn danger" id="btn-stop-movie" type="button" disabled>Stop Movie Builder</button></div>
           </div>
@@ -372,14 +374,22 @@ input.param-slider::-moz-range-thumb { width: 12px; height: 12px; border-radius:
 
 <script src="/app/js/json_panel.js?v=1"></script>
 <script>
-var TOKEN = "%%TOKEN%%";
 var API_BASE = "%%API_BASE%%";
 var WS_BASE = "%%WS_BASE%%";
 var DRAFT_ID = "%%DRAFT_ID%%";
 var RESULT_PATH = "%%RESULT_PATH%%";
 var PBGUI_VERSION = "%%VERSION%%";
 var PBGUI_SERIAL = "%%SERIAL%%";
-var state = { config: null, snapshot: null, markets: null, simulations: {}, activeSimulationMode: 'local_simulation', longSegment: 'entry_grid', shortSegment: 'entry_grid', source: 'default', exchangeParamOverrides: {}, stateParamOverrides: {}, autoExchangeParams: true, hslSignalModes: ['pside', 'unified'] };
+var IS_V8 = /\/api\/strategy-explorer-v8(?:\/|$)/.test(String(API_BASE || ''));
+var STRATEGY_LABEL = IS_V8 ? 'PB8' : 'PB7';
+var state = { config: null, snapshot: null, markets: null, simulations: {}, activeSimulationMode: 'local_simulation', longSegment: 'entry_grid', shortSegment: 'entry_grid', source: 'default', exchangeParamOverrides: {}, stateParamOverrides: {}, autoExchangeParams: true, hslSignalModes: ['pside', 'unified'], compareBaselineAvailable: false };
+var sessionRequestGeneration = 0;
+var snapshotRequestGeneration = 0;
+var marketRequestGeneration = 0;
+var compareRequestGeneration = 0;
+var simulationRequestGeneration = 0;
+var movieRequestGeneration = 0;
+var configRevision = 0;
 var movieAbortController = null;
 var movieExportAbortController = null;
 var movieProgressTimer = null;
@@ -393,9 +403,13 @@ var lastMovieFigureSpec = null;
 var lastMovieExportUrl = '';
 var lastMovieOptionsKey = '';
 var movieCurrentFrame = 0;
+var moviePlaybackPaused = true;
+var STRATEGY_REFRESH_CACHE_KEY = 'pbgui_strategy_explorer_refresh:' + (IS_V8 ? 'v8:' : 'v7:') + (DRAFT_ID || 'default');
+var STRATEGY_REFRESH_CACHE_MAX_BYTES = 3 * 1024 * 1024;
 var MAX_PLOT_CANDLES = 900;
 var rawConfigDirty = false;
 var rawConfigTimer = null;
+var rawConfigEditGeneration = 0;
 var FIELD_TOOLTIPS = {
   ohlcv_source: 'Select which local 1m OHLCV store should be used for the chart and candle-backed state injection.',
   exchange: 'Exchange / market namespace used to load markets.json metadata and OHLCV candles.',
@@ -429,9 +443,117 @@ var PARAM_FIELD_META = {
   hsl_panic_close_order_type: { type: 'select', options: ['limit', 'market'] },
   'live.hsl_signal_mode': { type: 'select', global: true, options: function() { return state.hslSignalModes && state.hslSignalModes.length ? state.hslSignalModes : ['pside', 'unified']; }, label: 'live.hsl_signal_mode (global)' }
 };
+var DEFAULT_SEGMENTS = SEGMENTS;
+var DEFAULT_PARAM_FIELD_META = PARAM_FIELD_META;
+
+function normalizeParamGroups(groups) {
+  if (!groups || typeof groups !== 'object') return null;
+  var items = Array.isArray(groups) ? groups : Object.keys(groups).map(function(key) {
+    var item = groups[key];
+    return Array.isArray(item) ? { key: key, label: key, fields: item } : Object.assign({ key: key }, item || {});
+  });
+  var normalized = items.map(function(group, idx) {
+    group = group || {};
+    var fields = Array.isArray(group.fields) ? group.fields.filter(function(field) { return typeof field === 'string' && field; }) : [];
+    return {
+      key: String(group.key || group.name || ('group_' + idx)),
+      label: String(group.label || group.title || group.key || group.name || ('Group ' + (idx + 1))),
+      fields: fields
+    };
+  }).filter(function(group) { return group.fields.length; });
+  return normalized.length ? normalized : null;
+}
+
+function setLabelText(label, text) {
+  if (!label) return;
+  for (var i = label.childNodes.length - 1; i >= 0; i--) {
+    if (label.childNodes[i].nodeType === 3) {
+      label.childNodes[i].textContent = text;
+      return;
+    }
+  }
+  label.appendChild(document.createTextNode(text));
+}
+
+function configureSimulationModes(page) {
+  var modes = Array.isArray(page && page.simulation_modes) ? page.simulation_modes.filter(function(mode) {
+    return mode && mode.key;
+  }) : [];
+  if (!modes.length) modes = IS_V8
+    ? [{ key: 'pb8_engine', label: 'PB8 Native Replay' }]
+    : [{ key: 'local_simulation', label: 'PBGui Simulation' }, { key: 'pb7_engine', label: 'PB7 Backtest Engine' }];
+  if (IS_V8) modes = modes.slice(0, 1);
+  var buttons = [document.getElementById('btn-run-local-sim'), document.getElementById('btn-run-pb7-engine')];
+  buttons.forEach(function(button, idx) {
+    var mode = modes[idx];
+    if (!button) return;
+    button.style.display = mode ? '' : 'none';
+    button.disabled = !mode;
+    if (mode) {
+      button.dataset.simulationMode = String(mode.key);
+      button.textContent = String(mode.label || mode.key);
+    }
+  });
+  state.activeSimulationMode = String(modes[0].key);
+  var stateLabel = document.getElementById('sim-start-state-label');
+  if (stateLabel) stateLabel.textContent = 'Simulation Start State (' + String(modes[0].label || STRATEGY_LABEL) + ')';
+  updateSimulationButtons();
+}
+
+function configureVersionUi(page) {
+  page = page || {};
+  if (IS_V8) STRATEGY_LABEL = String(page.strategy_label || 'PB8');
+  document.title = IS_V8 ? 'PBGui - PB8 Strategy Explorer' : 'PBGui - Strategy Explorer';
+  var title = document.getElementById('strategy-explorer-title');
+  if (title) title.textContent = IS_V8 ? STRATEGY_LABEL + ' Strategy Explorer' : 'Strategy Explorer';
+  var subtitle = document.getElementById('page-subtitle');
+  if (subtitle) subtitle.textContent = IS_V8
+    ? 'Visual analysis of PB8 strategies using native PB8 replay.'
+    : 'Visual analysis of PB7 grid strategies using the PB7/Rust calculation path.';
+  if (IS_V8) {
+    var sourceSelect = document.getElementById('ohlcv-source-select');
+    if (sourceSelect) sourceSelect.innerHTML = '<option value="PB8 native candles">PB8 native candles</option>';
+    setLabelText(document.getElementById('compare-mode-primary'), 'PB8 Native Replay Compare');
+    var secondary = document.getElementById('compare-mode-secondary');
+    if (secondary) secondary.style.display = 'none';
+    var compareInput = document.getElementById('compare-pb7-folder');
+    if (compareInput) { compareInput.readOnly = true; compareInput.placeholder = 'Available from a stored-result handoff'; }
+    var compareLabel = compareInput && compareInput.previousElementSibling;
+    if (compareLabel) compareLabel.textContent = 'Stored PB8 result (optional)';
+    var fillsRange = document.getElementById('compare-use-fills-range');
+    if (fillsRange && fillsRange.parentElement) fillsRange.parentElement.style.display = 'none';
+    var movieEngine = document.getElementById('movie-engine-select');
+    if (movieEngine) movieEngine.innerHTML = '<option value="pb8_engine">PB8 Native Replay</option>';
+    var movieEngineLabel = document.getElementById('movie-engine-label');
+    if (movieEngineLabel) movieEngineLabel.dataset.tip = 'PB8 Native Replay builds frames and fills with the native PB8 engine.';
+    var movieResultInput = document.getElementById('movie-pb7-folder');
+    if (movieResultInput && movieResultInput.closest('.field')) movieResultInput.closest('.field').style.display = 'none';
+    var startState = document.getElementById('sim-start-state-select');
+    if (startState) {
+      Array.from(startState.options).forEach(function(option) {
+        if (option.value === 'manual') option.remove();
+      });
+      startState.value = 'flat';
+      startState.disabled = true;
+    }
+    var manualGrid = document.getElementById('sim-manual-start-grid');
+    if (manualGrid) manualGrid.style.display = 'none';
+  }
+  configureSimulationModes(page);
+}
 
 function paramBounds(name, value) {
   var v = Number(value || 0);
+  var meta = PARAM_FIELD_META[name] || {};
+  var fallback;
+  if (meta.min !== undefined || meta.max !== undefined || meta.step !== undefined) {
+    fallback = { min: 0, max: Math.max(10, v * 2 || 10), step: 0.001 };
+    return {
+      min: meta.min !== undefined && isFinite(Number(meta.min)) ? Number(meta.min) : fallback.min,
+      max: meta.max !== undefined && isFinite(Number(meta.max)) ? Number(meta.max) : fallback.max,
+      step: meta.step !== undefined && Number(meta.step) > 0 ? Number(meta.step) : fallback.step
+    };
+  }
   if (name === 'n_positions') return { min: 1, max: 50, step: 1 };
   if (name === 'total_wallet_exposure_limit') return { min: 0, max: Math.max(10, v * 2 || 10), step: 0.05 };
   if (name.indexOf('forager_score_weights.') === 0 || name.indexOf('hsl_tier_ratios.') === 0 || name === 'hsl_red_threshold' || name === 'hsl_no_restart_drawdown_threshold') return { min: 0, max: 1, step: 0.01 };
@@ -566,14 +688,16 @@ function installCandleZoomHandler(target, candles) {
 }
 function tooltip(key) { return FIELD_TOOLTIPS[key] || ''; }
 function paramTooltip(name) {
+  var metaTip = (PARAM_FIELD_META[name] || {}).tooltip;
+  if (metaTip) return String(metaTip);
   var specific = FIELD_TOOLTIPS[name];
   if (specific) return specific;
-  if (name.indexOf('forager_score_weights.') === 0) return 'Forager coin-scoring weight. PB7 normalizes these weights and uses them when ranking eligible coins.';
-  if (name.indexOf('forager_') === 0) return 'Forager filter/scoring parameter used by PB7 coin selection and candidate ranking.';
-  if (name.indexOf('hsl_tier_ratios.') === 0) return 'Hard Stop Loss tier ratio. PB7 requires yellow < orange between 0 and 1.';
-  if (name.indexOf('hsl_') === 0) return 'Hard Stop Loss parameter used by PB7 backtests and live risk handling.';
+  if (name.indexOf('forager_score_weights.') === 0) return 'Forager coin-scoring weight. ' + STRATEGY_LABEL + ' normalizes these weights and uses them when ranking eligible coins.';
+  if (name.indexOf('forager_') === 0) return 'Forager filter/scoring parameter used by ' + STRATEGY_LABEL + ' coin selection and candidate ranking.';
+  if (name.indexOf('hsl_tier_ratios.') === 0) return 'Hard Stop Loss tier ratio. ' + STRATEGY_LABEL + ' requires yellow < orange between 0 and 1.';
+  if (name.indexOf('hsl_') === 0) return 'Hard Stop Loss parameter used by ' + STRATEGY_LABEL + ' backtests and live risk handling.';
   if (name === 'live.hsl_signal_mode') return 'Global HSL signal mode. pside tracks each side independently; unified uses one account-level combined signal.';
-  if (name.indexOf('ema_span') >= 0) return 'EMA span used by PB7/Rust to build the entry EMA band.';
+  if (name.indexOf('ema_span') >= 0) return 'EMA span used by ' + STRATEGY_LABEL + ' to build the entry EMA band.';
   if (name.indexOf('volatility_weight') >= 0) return 'Multiplier applied to the injected LogRange EMA volatility when calculating this parameter.';
   if (name.indexOf('we_weight') >= 0) return 'Wallet-exposure weight used to adjust this parameter as exposure changes.';
   if (name.indexOf('grid_spacing') >= 0) return 'Spacing between grid entry orders.';
@@ -583,19 +707,150 @@ function paramTooltip(name) {
   if (name.indexOf('markup') >= 0) return 'Close grid markup distance from the position/reference price.';
   if (name.indexOf('qty_pct') >= 0) return 'Order quantity as a fraction of the relevant exposure/position budget.';
   if (name.indexOf('unstuck') >= 0) return 'Auto-unstuck parameter used when positions exceed configured risk thresholds.';
-  if (name.indexOf('risk_') === 0) return 'Risk control parameter used by PB7 exposure enforcement.';
+  if (name.indexOf('risk_') === 0) return 'Risk control parameter used by ' + STRATEGY_LABEL + ' exposure enforcement.';
   if (name === 'total_wallet_exposure_limit') return 'Maximum total wallet exposure for this side.';
   if (name === 'n_positions') return 'Maximum number of concurrently active positions for this side.';
-  return 'PB7 bot parameter: ' + name;
+  return STRATEGY_LABEL + ' bot parameter: ' + name;
 }
 function apiFetch(path, opts) {
   opts = opts || {};
-  opts.headers = Object.assign({'Authorization': 'Bearer ' + TOKEN}, opts.headers || {});
+  opts.credentials = 'same-origin';
+  opts.headers = Object.assign({}, opts.headers || {});
   if (opts.body && !opts.headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
   return fetch(API_BASE + path, opts).then(function(res) {
     if (!res.ok) return res.text().then(function(text) { throw new Error(text || ('HTTP ' + res.status)); });
     return res.json();
   });
+}
+function containsSensitiveRefreshKey(value) {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some(containsSensitiveRefreshKey);
+  return Object.keys(value).some(function(key) {
+    var normalized = String(key || '').toLowerCase().replace(/[\s-]+/g, '_');
+    if (/(^|_)(password|passwd|secret|token|api_key|private_key|credential|session)($|_)/.test(normalized)) return true;
+    return containsSensitiveRefreshKey(value[key]);
+  });
+}
+function refreshCacheConfig(config) {
+  if (!IS_V8 || !config || typeof config !== 'object' || Array.isArray(config) || containsSensitiveRefreshKey(config)) return null;
+  var stored = {};
+  ['config_version', 'backtest', 'bot', 'live', 'coin_overrides'].forEach(function(key) {
+    if (Object.prototype.hasOwnProperty.call(config, key)) stored[key] = JSON.parse(JSON.stringify(config[key]));
+  });
+  return Object.keys(stored).length ? stored : null;
+}
+function refreshCacheControls() {
+  function value(id, fallback) {
+    var node = document.getElementById(id);
+    return node ? node.value : fallback;
+  }
+  var activeStage = document.querySelector('.sb-section.active[data-stage]');
+  return {
+    stage: activeStage ? activeStage.dataset.stage : 'analysis',
+    exchange: value('exchange-select', ''),
+    coin: value('coin-select', ''),
+    start_date: value('start-date-input', ''),
+    start_time: value('start-time-input', '00:00'),
+    balance: value('balance-input', '1000'),
+    reference_price: value('reference-price-input', '100'),
+    context_days: value('context-days-input', '5'),
+    movie_start_date: value('movie-start-date-input', ''),
+    movie_start_time: value('movie-start-time-input', '00:00'),
+    movie_step: value('movie-step-select', '240'),
+    movie_duration: value('movie-duration-select', 'Custom (Frames)'),
+    movie_frames: value('movie-frames-input', '200'),
+    movie_visible: value('movie-visible-input', '60'),
+    movie_side: value('movie-side-select', 'auto'),
+    movie_generated: !!(lastMovieData && (lastMovieData.frames || []).length)
+  };
+}
+function refreshCacheMovieData(data) {
+  if (!IS_V8 || !data || !Array.isArray(data.frames) || !data.frames.length) return null;
+  var metadata = data.metadata || {};
+  return {
+    ok: data.ok !== false,
+    engine: data.engine || 'pb8_engine',
+    message: data.message || '',
+    metadata: {
+      exchange: metadata.exchange || '', coin: metadata.coin || '', engine: metadata.engine || '',
+      start_time: metadata.start_time || '', step_mins: metadata.step_mins || 0,
+      start_timestamp_ms: metadata.start_timestamp_ms || 0, end_timestamp_ms: metadata.end_timestamp_ms || 0,
+      displayed_fill_count: metadata.displayed_fill_count || 0, total_fill_count: metadata.total_fill_count || 0,
+      fills_truncated: metadata.fills_truncated === true,
+      displayed_fill_end_timestamp_ms: metadata.displayed_fill_end_timestamp_ms || 0,
+      orders_available: metadata.orders_available === true
+    },
+    events: data.events || { long: [], short: [] },
+    frames: data.frames
+  };
+}
+function persistStrategyRefreshState() {
+  var config = refreshCacheConfig(state.config);
+  if (!config) return;
+  var payload = {
+    saved_at: Date.now(),
+    config: config,
+    controls: refreshCacheControls(),
+    movie_data: refreshCacheMovieData(lastMovieData)
+  };
+  try {
+    var serialized = JSON.stringify(payload);
+    if (serialized.length > STRATEGY_REFRESH_CACHE_MAX_BYTES) {
+      payload.movie_data = null;
+      serialized = JSON.stringify(payload);
+    }
+    window.sessionStorage.setItem(STRATEGY_REFRESH_CACHE_KEY, serialized);
+  } catch (err) {
+    try {
+      payload.movie_data = null;
+      window.sessionStorage.setItem(STRATEGY_REFRESH_CACHE_KEY, JSON.stringify(payload));
+    } catch (_ignored) {}
+  }
+}
+function readStrategyRefreshState() {
+  if (!IS_V8) return null;
+  try {
+    var cached = JSON.parse(window.sessionStorage.getItem(STRATEGY_REFRESH_CACHE_KEY) || 'null');
+    if (!cached || !cached.config || containsSensitiveRefreshKey(cached.config)) return null;
+    if (Date.now() - Number(cached.saved_at || 0) > 24 * 60 * 60 * 1000) return null;
+    return cached;
+  } catch (err) {
+    return null;
+  }
+}
+function cachedSnapshotOptions(cached) {
+  var controls = cached && cached.controls ? cached.controls : {};
+  return {
+    exchange: controls.exchange || '', coin: controls.coin || '',
+    start_date: controls.start_date || '', start_time: controls.start_time || '00:00',
+    balance: Number(controls.balance || 1000), reference_price: Number(controls.reference_price || 100),
+    context_days: Number(controls.context_days || 5), load_candles: true
+  };
+}
+function restoreStrategyRefreshControls(cached) {
+  var controls = cached && cached.controls ? cached.controls : {};
+  function setValue(id, value) {
+    var node = document.getElementById(id);
+    if (node && value !== undefined && value !== null) node.value = String(value);
+  }
+  var exchange = document.getElementById('exchange-select');
+  if (exchange && optionExists(exchange, controls.exchange)) exchange.value = controls.exchange;
+  updateCoinSelect(controls.coin || '');
+  setValue('start-date-input', controls.start_date);
+  setValue('start-time-input', controls.start_time);
+  setValue('balance-input', controls.balance);
+  setValue('reference-price-input', controls.reference_price);
+  setValue('context-days-input', controls.context_days);
+  setValue('movie-start-date-input', controls.movie_start_date);
+  setValue('movie-start-time-input', controls.movie_start_time);
+  setValue('movie-step-select', controls.movie_step);
+  syncMovieDurationOptions();
+  if (optionExists(document.getElementById('movie-duration-select'), controls.movie_duration)) setValue('movie-duration-select', controls.movie_duration);
+  setValue('movie-frames-input', controls.movie_frames);
+  setValue('movie-visible-input', controls.movie_visible);
+  setValue('movie-side-select', controls.movie_side);
+  var contextValue = document.getElementById('context-days-value');
+  if (contextValue) contextValue.textContent = Number(controls.context_days || 5).toFixed(2);
 }
 function cfgDateValueToMs(value) {
   var v = String(value || '').trim().toLowerCase();
@@ -792,6 +1047,7 @@ function syncControlsFromConfig(cfg) {
 }
 function selectedOptions() {
   return {
+    draft_id: IS_V8 ? (DRAFT_ID || '') : '',
     ohlcv_source: document.getElementById('ohlcv-source-select').value || 'PB7 cache/historical',
     exchange: document.getElementById('exchange-select').value || '',
     coin: document.getElementById('coin-select').value || '',
@@ -805,6 +1061,35 @@ function selectedOptions() {
     load_candles: true,
     context_days: Number(document.getElementById('context-days-input').value || 5)
   };
+}
+function invalidateConfigRequests() {
+  configRevision += 1;
+  marketRequestGeneration += 1;
+  snapshotRequestGeneration += 1;
+  compareRequestGeneration += 1;
+  simulationRequestGeneration += 1;
+  movieRequestGeneration += 1;
+  stopSimulationProgressPolling();
+  stopCompareProgressPolling();
+  stopMovieProgressPolling();
+  simulationProgressId = '';
+  compareProgressId = '';
+  movieProgressId = '';
+}
+function invalidateSimulationRequest() {
+  simulationRequestGeneration += 1;
+  stopSimulationProgressPolling();
+  simulationProgressId = '';
+}
+function invalidateCompareRequest() {
+  compareRequestGeneration += 1;
+  stopCompareProgressPolling();
+  compareProgressId = '';
+}
+function invalidateMovieRequest() {
+  movieRequestGeneration += 1;
+  stopMovieProgressPolling();
+  movieProgressId = '';
 }
 function syncOptionsFromConfig(snapshot) {
   var cfg = snapshot.config || {};
@@ -827,14 +1112,19 @@ function syncOptionsFromConfig(snapshot) {
   document.getElementById('balance-input').value = deepGet(cfg, ['backtest', 'starting_balance'], 1000) || 1000;
 }
 function populateMarkets() {
+  var generation = ++marketRequestGeneration;
   return apiFetch('/markets', { method: 'POST', body: JSON.stringify({ config: state.config || {}, options: selectedOptions() }) }).then(function(data) {
+    if (generation !== marketRequestGeneration) return null;
     state.markets = data;
     var exchangeEl = document.getElementById('exchange-select');
     var exchanges = data.exchanges || [];
     exchangeEl.innerHTML = exchanges.map(function(ex) { return '<option value="' + esc(ex) + '">' + esc(ex) + '</option>'; }).join('');
     updateCoinSelect();
+    return data;
   }).catch(function(err) {
+    if (generation !== marketRequestGeneration) return null;
     setMessages([{ level: 'warning', text: 'Failed to load market selectors: ' + err.message }]);
+    return null;
   });
 }
 function updateCoinSelect(preferredCoin) {
@@ -861,26 +1151,12 @@ function inferInitialSelectors(snapshot) {
   if (optionExists(exchangeEl, market.exchange)) exchangeEl.value = market.exchange;
   updateCoinSelect(market.coin);
   applySelectedMarketToConfig();
-  syncRawFromState();
 }
 function applySelectedMarketToConfig() {
-  var exchange = document.getElementById('exchange-select').value || '';
-  var coin = document.getElementById('coin-select').value || '';
-  if (!state.config) state.config = {};
-  if (exchange) {
-    var bt = deepEnsure(state.config, ['backtest']);
-    bt.exchanges = [exchange];
-  }
-  if (coin) {
-    var live = deepEnsure(state.config, ['live']);
-    if (!live.approved_coins || typeof live.approved_coins !== 'object' || Array.isArray(live.approved_coins)) live.approved_coins = {};
-    live.approved_coins.long = [coin];
-    live.approved_coins.short = [coin];
-  }
+  invalidateConfigRequests();
 }
 function changeMarket() {
   applySelectedMarketToConfig();
-  syncRawFromState();
   recalculate();
 }
 function changeOhlcvSource() {
@@ -914,28 +1190,63 @@ function compareOptions() {
     compare_mode: selected ? selected.value : 'pb7_b_c',
     compare_max_candles: Number(document.getElementById('compare-max-candles').value || 2000),
     compare_max_orders: 20000,
-    pb7_backtest_dir: document.getElementById('compare-pb7-folder').value || '',
+    pb7_backtest_dir: IS_V8 ? '' : (document.getElementById('compare-pb7-folder').value || ''),
     use_fills_range: document.getElementById('compare-use-fills-range').checked,
     mismatches_only: document.getElementById('compare-mismatches-only').checked
   });
 }
 function updateCompareModeUi() {
   var selected = document.querySelector('input[name="compare-mode"]:checked');
-  var isPb7Result = !selected || selected.value === 'pb7_b_c';
+  var isPb7Result = IS_V8 || !selected || selected.value === 'pb7_b_c';
   document.querySelectorAll('.compare-pb7-only').forEach(function(el) { el.style.display = isPb7Result ? '' : 'none'; });
 }
 function applyInitialResultPath(resultPath) {
   var input = document.getElementById('compare-pb7-folder');
   var movieInput = document.getElementById('movie-pb7-folder');
   if ((!input && !movieInput) || !resultPath) return;
+  if (IS_V8) {
+    if (input) input.value = 'Loaded from selected PB8 result';
+    if (movieInput) movieInput.value = 'Loaded from selected PB8 result';
+    return;
+  }
   if (!/^(\/|~\/|[A-Za-z]:[\\/])/.test(String(resultPath)) && String(resultPath).indexOf('/') < 0 && String(resultPath).indexOf('\\') < 0) return;
   if (input && !input.value) input.value = resultPath;
   if (movieInput && !movieInput.value) movieInput.value = resultPath;
 }
-function compareStatusTable(summary) {
+function compareSourceLabels(data) {
+  var raw = (data && data.sources) || deepGet(data || {}, ['summary', 'sources'], null);
+  var labels = IS_V8
+    ? { pb7: 'Stored PB8 Result', b: 'Fresh PB8 Replay', c: 'PB8 Native Replay', stored: 'Stored PB8 Result', fresh: 'Fresh PB8 Replay' }
+    : { pb7: 'PB7 Backtest Result', b: 'PBGui Simulation', c: 'PB7 Backtest Engine' };
+  if (Array.isArray(raw)) raw.forEach(function(item) {
+    if (typeof item === 'string') labels[item] = item;
+    else if (item && item.key) labels[item.key] = String(item.label || item.key);
+  });
+  else if (raw && typeof raw === 'object') Object.keys(raw).forEach(function(key) {
+    var item = raw[key];
+    labels[key] = String(item && typeof item === 'object' ? (item.label || key) : (item || key));
+  });
+  if (IS_V8 && raw && typeof raw === 'object') {
+    if (Object.prototype.hasOwnProperty.call(raw, 'pb7')) {
+      labels.pb7 = 'Stored PB8 Result';
+      if (Object.prototype.hasOwnProperty.call(raw, 'c')) labels.c = 'Fresh PB8 Replay';
+    } else if (Object.prototype.hasOwnProperty.call(raw, 'b') && Object.prototype.hasOwnProperty.call(raw, 'c')) {
+      labels.b = state.compareBaselineAvailable ? 'Current PB8 Config' : 'PB8 Native Replay A';
+      labels.c = state.compareBaselineAvailable ? 'Pinned PB8 Baseline' : 'PB8 Native Replay B';
+    } else if (Object.prototype.hasOwnProperty.call(raw, 'c')) {
+      labels.c = 'Fresh PB8 Replay';
+    }
+  }
+  return labels;
+}
+function compareStatusTable(summary, data) {
   var sides = ['long', 'short'];
   var statuses = ['match', 'pb7_only', 'b_only', 'c_only', 'pb7_and_b', 'pb7_and_c', 'b_and_c', 'mismatch'];
-  var labels = {
+  var labels = IS_V8 ? {
+    match: 'Match', pb7_only: 'Stored PB8 Result only', b_only: 'Fresh PB8 Replay only',
+    c_only: 'PB8 Native Replay only', pb7_and_b: 'Stored + Fresh PB8', pb7_and_c: 'Stored + Native PB8',
+    b_and_c: 'Fresh + Native PB8', mismatch: 'Mismatch'
+  } : {
     match: 'Match',
     pb7_only: 'PB7 Result only',
     b_only: 'PBGui Simulation only',
@@ -945,23 +1256,44 @@ function compareStatusTable(summary) {
     b_and_c: 'PBGui Simulation + PB7 Backtest Engine',
     mismatch: 'Mismatch'
   };
+  var backendLabels = (data && data.status_labels) || deepGet(data || {}, ['summary', 'status_labels'], {});
+  if (backendLabels && typeof backendLabels === 'object') Object.keys(backendLabels).forEach(function(key) { labels[key] = String(backendLabels[key]); });
+  if (data && data.sources) {
+    var sourceKeys = Object.keys(data.sources || {});
+    if (IS_V8 && sourceKeys.indexOf('pb7') >= 0 && sourceKeys.indexOf('c') >= 0) {
+      statuses = ['match', 'pb7_only', 'c_only', 'pb7_and_c', 'mismatch'];
+      labels.c_only = 'Fresh PB8 Replay only';
+      labels.pb7_and_c = 'Stored PB8 Result + Fresh PB8 Replay';
+    } else if (IS_V8 && sourceKeys.indexOf('b') >= 0 && sourceKeys.indexOf('c') >= 0) {
+      statuses = ['match', 'b_only', 'c_only', 'b_and_c', 'mismatch'];
+      labels.b_only = state.compareBaselineAvailable ? 'Current PB8 Config only' : 'PB8 Native Replay A only';
+      labels.c_only = state.compareBaselineAvailable ? 'Pinned PB8 Baseline only' : 'PB8 Native Replay B only';
+      labels.b_and_c = state.compareBaselineAvailable ? 'Current Config + Pinned Baseline' : 'PB8 Native Replay A + B';
+    } else {
+      var discovered = {};
+      sides.forEach(function(side) { Object.keys((summary || {})[side] || {}).forEach(function(key) { if (Number((summary[side] || {})[key] || 0)) discovered[key] = true; }); });
+      if (Object.keys(discovered).length) statuses = Object.keys(discovered);
+    }
+  }
   var rows = sides.map(function(side) {
     var counts = (summary || {})[side] || {};
     return '<tr><td>' + side.toUpperCase() + '</td>' + statuses.map(function(status) { return '<td>' + esc(counts[status] || 0) + '</td>'; }).join('') + '</tr>';
   }).join('');
   return '<table class="orders"><thead><tr><th>Side</th>' + statuses.map(function(status) { return '<th>' + esc(labels[status] || status) + '</th>'; }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table>';
 }
-function compareEventsTable(events) {
-  var labels = { pb7: 'PB7 Backtest Result', b: 'PBGui Simulation', c: 'PB7 Backtest Engine' };
+function compareEventsTable(events, data) {
+  var labels = compareSourceLabels(data);
   var rows = Object.keys(events || {}).map(function(key) {
     var item = events[key] || {};
     return '<tr><td>' + esc(labels[key] || key) + '</td><td>' + esc(item.long || 0) + '</td><td>' + esc(item.short || 0) + '</td><td>' + esc(item.total || 0) + '</td></tr>';
   }).join('');
   return '<table class="orders"><thead><tr><th>Source</th><th>Long</th><th>Short</th><th>Total</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
-function compareRowsTable(rows) {
+function compareRowsTable(rows, data) {
   if (!rows || !rows.length) return '<table class="orders"><tbody><tr><td class="muted" style="text-align:left">No rows</td></tr></tbody></table>';
-  var statusLabels = { pb7_only: 'PB7 Result only', b_only: 'PBGui Simulation only', c_only: 'PB7 Backtest Engine only', pb7_and_b: 'PB7 Result + PBGui', pb7_and_c: 'PB7 Result + PB7 Backtest Engine', b_and_c: 'PBGui Simulation + PB7 Backtest Engine', match: 'Match', mismatch: 'Mismatch' };
+  var statusLabels = IS_V8
+    ? { pb7_only: 'Stored PB8 Result only', b_only: 'Fresh PB8 Replay only', c_only: 'PB8 Native Replay only', pb7_and_b: 'Stored + Fresh PB8', pb7_and_c: 'Stored + Native PB8', b_and_c: 'Fresh + Native PB8', match: 'Match', mismatch: 'Mismatch' }
+    : { pb7_only: 'PB7 Result only', b_only: 'PBGui Simulation only', c_only: 'PB7 Backtest Engine only', pb7_and_b: 'PB7 Result + PBGui', pb7_and_c: 'PB7 Result + PB7 Backtest Engine', b_and_c: 'PBGui Simulation + PB7 Backtest Engine', match: 'Match', mismatch: 'Mismatch' };
   var cols = [
     ['idx', '#'], ['timestamp', 'timestamp'], ['order_type', 'order_type'], ['qty', 'qty'], ['price', 'price'], ['status', 'status'],
     ['pb7_timestamp', 'pb7_timestamp'], ['pb7_order_type', 'pb7_order_type'], ['pb7_qty', 'pb7_qty'], ['pb7_price', 'pb7_price'], ['pb7_pos_size', 'pb7_pos_size'], ['pb7_pos_price', 'pb7_pos_price'], ['pb7_wallet_balance', 'pb7_wallet_balance'], ['pb7_pnl', 'pb7_pnl'], ['pb7_fee_paid', 'pb7_fee_paid'], ['pb7_wallet_exposure', 'pb7_wallet_exposure'],
@@ -969,6 +1301,26 @@ function compareRowsTable(rows) {
     ['c_timestamp', 'engine_timestamp'], ['c_order_type', 'engine_order_type'], ['c_qty', 'engine_qty'], ['c_price', 'engine_price'], ['c_pos_size', 'engine_pos_size'], ['c_pos_price', 'engine_pos_price'], ['c_wallet_balance', 'engine_wallet_balance'], ['c_pnl', 'engine_pnl'], ['c_fee_paid', 'engine_fee_paid'], ['c_wallet_exposure', 'engine_wallet_exposure'],
     ['in_pb7', 'in_pb7'], ['in_b', 'in_pbgui'], ['in_c', 'in_engine']
   ];
+  if (IS_V8) {
+    var sourceKeys = Object.keys((data && data.sources) || {});
+    var storedVsFresh = sourceKeys.indexOf('pb7') >= 0 && sourceKeys.indexOf('c') >= 0;
+    if (storedVsFresh) statusLabels.c_only = 'Fresh PB8 Replay only';
+    else if (state.compareBaselineAvailable && sourceKeys.indexOf('b') >= 0 && sourceKeys.indexOf('c') >= 0) {
+      statusLabels.b_only = 'Current PB8 Config only';
+      statusLabels.c_only = 'Pinned PB8 Baseline only';
+      statusLabels.b_and_c = 'Current Config + Pinned Baseline';
+    }
+    if (storedVsFresh) cols = cols.filter(function(col) { return col[0].indexOf('b_') !== 0 && col[0] !== 'in_b'; });
+    else if (sourceKeys.indexOf('b') >= 0 && sourceKeys.indexOf('c') >= 0) cols = cols.filter(function(col) { return col[0].indexOf('pb7_') !== 0 && col[0] !== 'in_pb7'; });
+    cols = cols.map(function(col) {
+      var replayALabel = state.compareBaselineAvailable ? 'current_' : 'replay_a_';
+      var replayBLabel = state.compareBaselineAvailable ? 'pinned_' : 'replay_b_';
+      var label = String(col[1]).replace(/^pb7_/, 'stored_').replace(/^pbgui_/, replayALabel);
+      label = label.replace(/^engine_/, storedVsFresh ? 'fresh_' : replayBLabel);
+      label = label.replace(/^in_pb7$/, 'in_stored').replace(/^in_pbgui$/, state.compareBaselineAvailable ? 'in_current' : 'in_replay_a').replace(/^in_engine$/, storedVsFresh ? 'in_fresh' : (state.compareBaselineAvailable ? 'in_pinned' : 'in_replay_b'));
+      return [col[0], label];
+    });
+  }
   function cell(row, key, idx) {
     if (key === 'idx') return esc(row.compare_index || idx + 1);
     var val = row[key];
@@ -991,8 +1343,8 @@ function renderCompareResult(data) {
     resultRoot.innerHTML = '';
     return;
   }
-  summaryRoot.innerHTML = compareEventsTable(deepGet(data, ['summary', 'events'], {})) + '<div style="margin-top:12px">' + compareStatusTable(data.summary || {}) + '</div>';
-  resultRoot.innerHTML = '<h4>LONG Compare Rows</h4>' + compareRowsTable(deepGet(data, ['rows', 'long'], [])) + '<h4>SHORT Compare Rows</h4>' + compareRowsTable(deepGet(data, ['rows', 'short'], []));
+  summaryRoot.innerHTML = compareEventsTable(deepGet(data, ['summary', 'events'], {}), data) + '<div style="margin-top:12px">' + compareStatusTable(data.summary || {}, data) + '</div>';
+  resultRoot.innerHTML = '<h4>LONG Compare Rows</h4>' + compareRowsTable(deepGet(data, ['rows', 'long'], []), data) + '<h4>SHORT Compare Rows</h4>' + compareRowsTable(deepGet(data, ['rows', 'short'], []), data);
 }
 function debugBlock(title, value) {
   return '<h4>' + esc(title) + '</h4><pre class="debug-json">' + esc(JSON.stringify(value || {}, null, 2)) + '</pre>';
@@ -1052,7 +1404,8 @@ function renderPlot(sideKey, snapshot, prefix) {
   var gridCloses = deepGet(side, ['orders', 'gridonly_closes'], closes);
   var trailingEntries = deepGet(side, ['orders', 'simulated_entry_trailing'], []);
   var potentialTrailingPrices = deepGet(side, ['orders', 'potential_entry_trailing_prices'], []);
-  var params = side.params || {};
+  var params = side.visual_params || side.params || {};
+  var visualParams = side.visual_params || params;
   var stateParams = deepGet(side, ['debug', 'state_params'], {}) || {};
   var trailingBundle = deepGet(side, ['debug', 'entry_input', 'tb'], {}) || {};
   var entryMode = deepGet(side, ['modes', 'entry'], 'GridOnly');
@@ -1214,7 +1567,7 @@ function renderPlot(sideKey, snapshot, prefix) {
     var fgEntryMax = maxValue(gridEntryPrices, maxValue(entryPrices, 0));
     var nEntryMin = minValue(entryPrices, fgEntryMin);
     var nEntryMax = maxValue(entryPrices, fgEntryMax);
-    var thresholdPct = num(params.entry_trailing_threshold_pct, 0);
+    var thresholdPct = num(visualParams.entry_trailing_threshold_pct, 0);
     var boundaryPrice = num(deepGet(side, ['debug', 'potential_trailing', 'gridfirst_cutoff_price'], 0), 0);
     var entryTrailingBounds = null;
     if (fgEntryMin > 0 && fgEntryMax > 0) {
@@ -1268,7 +1621,7 @@ function renderPlot(sideKey, snapshot, prefix) {
   legendLine('EMA Band', '#b77dff', 'solid', 3, 'ema');
   addHoverLine([ref], 'EMA Band', 'ema');
 
-  var analysisTs = deepGet(market, ['metadata', 'ohlcv', 'selected_start'], '') || x1;
+  var analysisTs = deepGet(market, ['metadata', 'ohlcv', 'grid_time'], '') || deepGet(market, ['metadata', 'ohlcv', 'selected_start'], '') || x1;
   if (candles.length && analysisTs) {
     shapes.push({ type: 'line', xref: 'x', x0: analysisTs, x1: analysisTs, yref: 'paper', y0: 0, y1: 1, line: { color: 'cyan', dash: 'dot', width: 2 }, layer: 'above' });
     annotations.push({ x: analysisTs, y: 1, xref: 'x', yref: 'paper', text: 'Analysis Time', showarrow: false, xanchor: 'left', yanchor: 'bottom', font: { color: 'cyan', size: 11 } });
@@ -1276,20 +1629,20 @@ function renderPlot(sideKey, snapshot, prefix) {
 
   if (entryMode !== 'GridOnly') {
     var entryRef = entryPrices.length ? entryPrices[0] : ref;
-    var eth = sideKey === 'long' ? entryRef * (1 - num(params.entry_trailing_threshold_pct, 0)) : entryRef * (1 + num(params.entry_trailing_threshold_pct, 0));
-    if (num(params.entry_trailing_threshold_pct, 0) > 0) {
+    var eth = sideKey === 'long' ? entryRef * (1 - num(visualParams.entry_trailing_threshold_pct, 0)) : entryRef * (1 + num(visualParams.entry_trailing_threshold_pct, 0));
+    if (num(visualParams.entry_trailing_threshold_pct, 0) > 0) {
       addShapeLine(eth, 'rgba(255, 255, 0, 0.6)', 'dash', 1);
       legendLine('Trailing Start (Threshold)', 'rgba(255, 255, 0, 0.6)', 'dash', 1, 'entry_trailing');
       addHoverLine([eth], 'Trailing Start (Threshold)', 'entry_trailing');
     }
-    if (num(params.entry_trailing_retracement_pct, 0) > 0) {
-      var retr = num(params.entry_trailing_threshold_pct, 0) > 0
-        ? (sideKey === 'long' ? entryRef * (1 - num(params.entry_trailing_threshold_pct, 0) + num(params.entry_trailing_retracement_pct, 0)) : entryRef * (1 + num(params.entry_trailing_threshold_pct, 0) - num(params.entry_trailing_retracement_pct, 0)))
-        : (sideKey === 'long' ? num(trailingBundle.min_since_open, entryRef) * (1 + num(params.entry_trailing_retracement_pct, 0)) : num(trailingBundle.max_since_open, entryRef) * (1 - num(params.entry_trailing_retracement_pct, 0)));
+    if (num(visualParams.entry_trailing_retracement_pct, 0) > 0) {
+      var retr = num(visualParams.entry_trailing_threshold_pct, 0) > 0
+        ? (sideKey === 'long' ? entryRef * (1 - num(visualParams.entry_trailing_threshold_pct, 0) + num(visualParams.entry_trailing_retracement_pct, 0)) : entryRef * (1 + num(visualParams.entry_trailing_threshold_pct, 0) - num(visualParams.entry_trailing_retracement_pct, 0)))
+        : (sideKey === 'long' ? num(trailingBundle.min_since_open, entryRef) * (1 + num(visualParams.entry_trailing_retracement_pct, 0)) : num(trailingBundle.max_since_open, entryRef) * (1 - num(visualParams.entry_trailing_retracement_pct, 0)));
       addShapeLine(retr, 'rgba(255, 255, 0, 0.35)', 'dot', 1);
       legendLine('Trailing Trigger (Retracement, conditional)', 'rgba(255, 255, 0, 0.35)', 'dot', 1, 'entry_trailing');
       addHoverLine([retr], 'Trailing Trigger (Retracement, conditional)', 'entry_trailing');
-      if (num(params.entry_trailing_threshold_pct, 0) > 0) {
+      if (num(visualParams.entry_trailing_threshold_pct, 0) > 0) {
         addBand(eth, retr, 'rgba(255, 255, 0, 0.08)', 1);
         legendBand('Entry Trailing (Conditional Trigger Zone)', 'rgba(255, 255, 0, 0.12)', 'entry_trailing');
       }
@@ -1298,14 +1651,14 @@ function renderPlot(sideKey, snapshot, prefix) {
 
   if (closeMode !== 'GridOnly') {
     var closeRef = num(deepGet(side, ['debug', 'position_close', 'price'], 0), 0) || ref;
-    if (num(params.close_trailing_threshold_pct, 0) > 0) {
-      var closeThr = sideKey === 'long' ? closeRef * (1 + num(params.close_trailing_threshold_pct, 0)) : closeRef * (1 - num(params.close_trailing_threshold_pct, 0));
+    if (num(visualParams.close_trailing_threshold_pct, 0) > 0) {
+      var closeThr = sideKey === 'long' ? closeRef * (1 + num(visualParams.close_trailing_threshold_pct, 0)) : closeRef * (1 - num(visualParams.close_trailing_threshold_pct, 0));
       addShapeLine(closeThr, 'rgba(0, 0, 255, 0.6)', 'dash', 1);
       legendLine('Close Trailing Start (Threshold, conditional)', 'rgba(0, 0, 255, 0.6)', 'dash', 1, 'close_trailing');
       addHoverLine([closeThr], 'Close Trailing Start (Threshold, conditional)', 'close_trailing');
     }
-    if (num(params.close_trailing_retracement_pct, 0) > 0) {
-      var closeRetr = sideKey === 'long' ? num(trailingBundle.max_since_open, closeRef) * (1 - num(params.close_trailing_retracement_pct, 0)) : num(trailingBundle.min_since_open, closeRef) * (1 + num(params.close_trailing_retracement_pct, 0));
+    if (num(visualParams.close_trailing_retracement_pct, 0) > 0) {
+      var closeRetr = sideKey === 'long' ? num(trailingBundle.max_since_open, closeRef) * (1 - num(visualParams.close_trailing_retracement_pct, 0)) : num(trailingBundle.min_since_open, closeRef) * (1 + num(visualParams.close_trailing_retracement_pct, 0));
       addShapeLine(closeRetr, 'rgba(0, 0, 255, 0.35)', 'dot', 1);
       legendLine('Close Trailing Trigger (Retracement, conditional)', 'rgba(0, 0, 255, 0.35)', 'dot', 1, 'close_trailing');
       addHoverLine([closeRetr], 'Close Trailing Trigger (Retracement, conditional)', 'close_trailing');
@@ -1371,25 +1724,31 @@ function bindRawConfigEditor() {
   pre.spellcheck = false;
   pre.dataset.editableBound = '1';
   pre.addEventListener('input', function() {
+    var editGeneration = ++rawConfigEditGeneration;
+    invalidateConfigRequests();
     rawConfigDirty = true;
     setRawConfigStatus('Validating JSON...', false);
     if (rawConfigTimer) clearTimeout(rawConfigTimer);
     rawConfigTimer = setTimeout(function() {
+      if (editGeneration !== rawConfigEditGeneration) return;
       try {
         var parsed = JSON.parse(pre.textContent || '{}');
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Config JSON must be an object.');
         state.config = parsed;
+        var revision = configRevision;
         rawConfigDirty = false;
         setRawConfigStatus('JSON valid. Updating market selectors...', false);
         syncControlsFromConfig(state.config);
         populateMarkets().then(function() {
+          if (revision !== configRevision || editGeneration !== rawConfigEditGeneration) return false;
           syncControlsFromConfig(state.config);
           setRawConfigStatus('JSON valid. Recalculating...', false);
-          return recalculate({ preserveConfig: true, reportError: true });
-        }).then(function() {
+          return recalculate({ preserveConfig: true, reportError: true }).then(function() { return true; });
+        }).then(function(updated) {
+          if (!updated || editGeneration !== rawConfigEditGeneration) return;
           setRawConfigStatus('JSON valid. Snapshot updated.', false);
         }).catch(function(err) {
-          setRawConfigStatus('JSON valid, but recalculation failed: ' + err.message, true);
+          if (editGeneration === rawConfigEditGeneration) setRawConfigStatus('JSON valid, but recalculation failed: ' + err.message, true);
         });
       } catch (err) {
         setRawConfigStatus('Invalid JSON/config: ' + err.message, true);
@@ -1403,43 +1762,87 @@ function paramMeta(name) {
 function paramLabel(name) {
   return paramMeta(name).label || name;
 }
-function paramValue(params, name) {
-  if (name.indexOf('live.') === 0) return deepGet(state.config || {}, name.split('.'), '');
-  return deepGet(params || {}, name.split('.'), undefined);
+function paramFieldPath(sideKey, name) {
+  var metaPath = String(paramMeta(name).path || name);
+  var path = metaPath.split('.').filter(Boolean);
+  if (path[0] === 'bot' && (path[1] === 'long' || path[1] === 'short')) path = path.slice(2);
+  var global = name.indexOf('live.') === 0 || path[0] === 'live' || paramMeta(name).global === true;
+  if (global && path[0] !== 'live') path = name.split('.');
+  return { global: global, path: path, side: sideKey };
+}
+function paramValue(params, name, sideKey) {
+  var field = paramFieldPath(sideKey, name);
+  if (field.global) return deepGet(state.config || {}, field.path, '');
+  return deepGet(params || {}, field.path, undefined);
 }
 function setParamValue(sideKey, name, value) {
-  var path = name.split('.');
-  var rootPath = name.indexOf('live.') === 0 ? path.slice(0, -1) : ['bot', sideKey].concat(path.slice(0, -1));
+  var field = paramFieldPath(sideKey, name);
+  var path = field.path;
+  var rootPath = field.global ? path.slice(0, -1) : ['bot', sideKey].concat(path.slice(0, -1));
   var target = deepEnsure(state.config, rootPath);
   target[path[path.length - 1]] = value;
+  invalidateConfigRequests();
+}
+function paramNearBound(sideKey, name, value) {
+  if (!IS_V8 || !isFinite(Number(value))) return '';
+  var field = paramFieldPath(sideKey, name);
+  if (field.global) return '';
+  var configured = deepGet(state.config || {}, ['optimize', 'bounds', sideKey].concat(field.path), null);
+  var meta = paramMeta(name);
+  var bounds = Array.isArray(configured) && configured.length >= 2
+    ? configured
+    : (meta.min !== undefined && meta.max !== undefined ? [meta.min, meta.max] : null);
+  if (!bounds) return '';
+  var lower = Number(bounds[0]);
+  var upper = Number(bounds[1]);
+  var current = Number(value);
+  if (!isFinite(lower) || !isFinite(upper) || upper <= lower) return '';
+  var tolerance = (upper - lower) * 0.05;
+  if (current <= lower + tolerance) return 'lower';
+  if (current >= upper - tolerance) return 'upper';
+  return '';
 }
 function renderParamField(sideKey, valuePrefix, name, params) {
   var meta = paramMeta(name);
-  var val = paramValue(params, name);
+  var val = paramValue(params, name, sideKey);
   var tip = paramTooltip(name);
   var label = paramLabel(name);
-  if (meta.type === 'bool') {
-    return '<div class="slider-field">'
-      + '<div class="slider-label"><span class="slider-name" data-tip="' + esc(tip) + '">' + esc(label) + '</span><span class="slider-meta"><span class="help" data-tip="' + esc(tip) + '">?</span></span></div>'
-      + '<label class="param-check"><input class="param-bool" data-param-side="' + esc(sideKey) + '" data-param-name="' + esc(name) + '" type="checkbox"' + (val ? ' checked' : '') + '>Enabled</label>'
+  var nearBound = paramNearBound(sideKey, name, val);
+  var fieldClass = 'slider-field' + (nearBound ? ' near-bound' : '');
+  var boundBadge = nearBound ? '<span class="near-bound-badge">' + (nearBound === 'lower' ? 'Near lower bound' : 'Near upper bound') + '</span>' : '';
+  if (meta.type === 'bool' || meta.type === 'boolean') {
+    return '<div class="' + fieldClass + '">'
+      + '<div class="slider-label"><span class="slider-name" data-tip="' + esc(tip) + '">' + esc(label) + '</span><span class="slider-meta">' + boundBadge + '<span class="help" data-tip="' + esc(tip) + '">?</span></span></div>'
+      + '<label class="param-check"><input class="param-bool" aria-label="' + esc(label) + '" data-param-side="' + esc(sideKey) + '" data-param-name="' + esc(name) + '" type="checkbox"' + (val ? ' checked' : '') + '>Enabled</label>'
       + '</div>';
   }
   if (meta.type === 'select') {
     var options = typeof meta.options === 'function' ? meta.options() : (meta.options || []);
     options = Array.isArray(options) ? options.slice() : [];
-    if (val !== undefined && val !== null && String(val) !== '' && options.indexOf(String(val)) < 0) options.unshift(String(val));
-    return '<div class="slider-field">'
-      + '<div class="slider-label"><span class="slider-name" data-tip="' + esc(tip) + '">' + esc(label) + '</span><span class="slider-meta"><span class="slider-value">' + esc(val || '-') + '</span><span class="help" data-tip="' + esc(tip) + '">?</span></span></div>'
-      + '<select class="param-select" data-param-side="' + esc(sideKey) + '" data-param-name="' + esc(name) + '" data-tip="' + esc(tip) + '">'
-      + options.map(function(opt) { return '<option value="' + esc(opt) + '"' + (String(opt) === String(val) ? ' selected' : '') + '>' + esc(opt) + '</option>'; }).join('')
+    var optionValues = options.map(function(opt) { return String(opt && typeof opt === 'object' ? opt.value : opt); });
+    if (val !== undefined && val !== null && String(val) !== '' && optionValues.indexOf(String(val)) < 0) options.unshift(String(val));
+    return '<div class="' + fieldClass + '">'
+      + '<div class="slider-label"><span class="slider-name" data-tip="' + esc(tip) + '">' + esc(label) + '</span><span class="slider-meta">' + boundBadge + '<span class="slider-value">' + esc(val || '-') + '</span><span class="help" data-tip="' + esc(tip) + '">?</span></span></div>'
+      + '<select class="param-select" aria-label="' + esc(label) + '" data-param-side="' + esc(sideKey) + '" data-param-name="' + esc(name) + '" data-tip="' + esc(tip) + '">'
+      + options.map(function(opt) {
+        var optionValue = opt && typeof opt === 'object' ? opt.value : opt;
+        var optionLabel = opt && typeof opt === 'object' ? (opt.label === undefined ? optionValue : opt.label) : opt;
+        return '<option value="' + esc(optionValue) + '"' + (String(optionValue) === String(val) ? ' selected' : '') + '>' + esc(optionLabel) + '</option>';
+      }).join('')
       + '</select></div>';
+  }
+  if (meta.type === 'string' || meta.type === 'text') {
+    return '<div class="' + fieldClass + '">'
+      + '<div class="slider-label"><span class="slider-name" data-tip="' + esc(tip) + '">' + esc(label) + '</span><span class="slider-meta">' + boundBadge + '<span class="help" data-tip="' + esc(tip) + '">?</span></span></div>'
+      + '<input class="param-text" aria-label="' + esc(label) + '" data-param-side="' + esc(sideKey) + '" data-param-name="' + esc(name) + '" type="text" value="' + esc(val === undefined || val === null ? '' : val) + '" data-tip="' + esc(tip) + '">'
+      + '</div>';
   }
   var numVal = Number(val || 0);
   var b = paramBounds(name, numVal);
   var display = numVal.toFixed(b.step >= 1 ? 2 : 4);
-  return '<div class="slider-field">'
-    + '<div class="slider-label"><span class="slider-name" data-tip="' + esc(tip) + '">' + esc(label) + '</span><span class="slider-meta"><span class="slider-value" id="sv-' + esc(valuePrefix) + '-' + esc(name) + '">' + esc(display) + '</span><span class="help" data-tip="' + esc(tip) + '">?</span></span></div>'
-    + '<input class="param-slider" data-param-side="' + esc(sideKey) + '" data-param-name="' + esc(name) + '" type="range" min="' + esc(b.min) + '" max="' + esc(b.max) + '" step="' + esc(b.step) + '" value="' + esc(val === undefined ? 0 : val) + '" data-tip="' + esc(tip) + '">'
+  return '<div class="' + fieldClass + '">'
+    + '<div class="slider-label"><span class="slider-name" data-tip="' + esc(tip) + '">' + esc(label) + '</span><span class="slider-meta">' + boundBadge + '<span class="slider-value" id="sv-' + esc(valuePrefix) + '-' + esc(name) + '">' + esc(display) + '</span><span class="help" data-tip="' + esc(tip) + '">?</span></span></div>'
+    + '<input class="param-slider" aria-label="' + esc(label) + '" data-param-side="' + esc(sideKey) + '" data-param-name="' + esc(name) + '" type="range" min="' + esc(b.min) + '" max="' + esc(b.max) + '" step="' + esc(b.step) + '" value="' + esc(val === undefined ? 0 : val) + '" data-tip="' + esc(tip) + '">'
     + '</div>';
 }
 function renderSideTuning(sideKey, snapshot, prefix) {
@@ -1453,7 +1856,7 @@ function renderSideTuning(sideKey, snapshot, prefix) {
   }).join('') + '</div>';
   html += (segment.fields || []).map(function(name) { return renderParamField(sideKey, valuePrefix, name, params); }).join('');
   if (segmentKey === 'entry_grid') {
-    html += '<div class="inline-note">Theoretical Max Grid Orders: ' + esc(deepGet(snapshot, ['sides', sideKey, 'summary', 'entry_orders'], 0)) + ' (Reason: Wallet Limit) | Orders follow PB7/Rust output.</div>';
+    html += '<div class="inline-note">Theoretical Max Grid Orders: ' + esc(deepGet(snapshot, ['sides', sideKey, 'summary', 'entry_orders'], 0)) + ' (Reason: Wallet Limit) | Orders follow ' + esc(STRATEGY_LABEL) + ' output.</div>';
   }
   if (segmentKey === 'entry_grid' || segmentKey === 'entry_trailing') {
     html += '<div class="inline-note">Injected <code>entry_volatility_logrange_ema_1h</code>: ' + esc(fmt(deepGet(snapshot, ['sides', sideKey, 'debug', 'state_params', 'entry_volatility_logrange_ema_1h'], 0), 8)) + '</div>';
@@ -1490,6 +1893,13 @@ function renderSideTuning(sideKey, snapshot, prefix) {
   root.querySelectorAll('.param-bool').forEach(function(input) {
     input.addEventListener('change', function() {
       setParamValue(input.dataset.paramSide, input.dataset.paramName, !!input.checked);
+      syncRawFromState();
+      recalculate();
+    });
+  });
+  root.querySelectorAll('.param-text').forEach(function(input) {
+    input.addEventListener('change', function() {
+      setParamValue(input.dataset.paramSide, input.dataset.paramName, input.value);
       syncRawFromState();
       recalculate();
     });
@@ -1587,6 +1997,13 @@ function renderExchangeState(snapshot) {
   });
 }
 function renderSnapshot(snapshot) {
+  var dynamicGroups = normalizeParamGroups(snapshot.param_groups);
+  SEGMENTS = IS_V8 && dynamicGroups ? dynamicGroups : DEFAULT_SEGMENTS;
+  PARAM_FIELD_META = IS_V8 && snapshot.param_field_meta && typeof snapshot.param_field_meta === 'object' && !Array.isArray(snapshot.param_field_meta)
+    ? snapshot.param_field_meta
+    : DEFAULT_PARAM_FIELD_META;
+  if (!SEGMENTS.some(function(segment) { return segment.key === state.longSegment; })) state.longSegment = SEGMENTS[0].key;
+  if (!SEGMENTS.some(function(segment) { return segment.key === state.shortSegment; })) state.shortSegment = SEGMENTS[0].key;
   state.snapshot = snapshot;
   state.config = JSON.parse(JSON.stringify(snapshot.config || {}));
   var loadedRows = Number(deepGet(snapshot, ['market', 'metadata', 'ohlcv', 'rows'], 0) || 0);
@@ -1619,9 +2036,12 @@ function recalculate(options) {
     var bt = deepEnsure(state.config, ['backtest']);
     bt.starting_balance = Number(document.getElementById('balance-input').value || 1000);
   }
+  var generation = ++snapshotRequestGeneration;
   return apiFetch('/snapshot', { method: 'POST', body: JSON.stringify({ config: state.config, options: selectedOptions() }) }).then(function(snapshot) {
+    if (generation !== snapshotRequestGeneration) return null;
     renderSnapshot(snapshot); setMessages(snapshot.messages || []);
   }).catch(function(err) {
+    if (generation !== snapshotRequestGeneration) return null;
     setMessages([{ level: 'error', text: 'Failed to calculate Strategy Explorer snapshot: ' + err.message }]);
     if (options.reportError) throw err;
   });
@@ -1640,6 +2060,19 @@ function simulationOptions() {
     opts.sim_start_short_price = Number(document.getElementById('sim-start-short-price-input').value || 0);
   }
   return opts;
+}
+function simulationSnapshotForPlot(data) {
+  var snapshot = JSON.parse(JSON.stringify(state.snapshot || {}));
+  if (IS_V8 && Array.isArray(data && data.candles) && data.candles.length) {
+    snapshot.candles = data.candles;
+    var metadata = data.metadata || {};
+    var market = snapshot.market || (snapshot.market = {});
+    var marketMetadata = market.metadata || (market.metadata = {});
+    var ohlcv = marketMetadata.ohlcv || (marketMetadata.ohlcv = {});
+    if (metadata.start_timestamp_ms) ohlcv.selected_start = new Date(Number(metadata.start_timestamp_ms)).toISOString();
+    if (metadata.end_timestamp_ms) ohlcv.grid_time = new Date(Number(metadata.end_timestamp_ms)).toISOString();
+  }
+  return snapshot;
 }
 function inferredManualStartPrice() {
   var price = Number(deepGet(state.snapshot || {}, ['market', 'reference_price'], 0) || 0);
@@ -1666,12 +2099,13 @@ function updateSimulationStartStateUi() {
 function updateSimulationButtons() {
   var localBtn = document.getElementById('btn-run-local-sim');
   var pb7Btn = document.getElementById('btn-run-pb7-engine');
-  if (localBtn) localBtn.classList.toggle('active-sim', state.activeSimulationMode === 'local_simulation');
-  if (pb7Btn) pb7Btn.classList.toggle('active-sim', state.activeSimulationMode === 'pb7_engine');
+  if (localBtn) localBtn.classList.toggle('active-sim', state.activeSimulationMode === (localBtn.dataset.simulationMode || 'local_simulation'));
+  if (pb7Btn) pb7Btn.classList.toggle('active-sim', state.activeSimulationMode === (pb7Btn.dataset.simulationMode || 'pb7_engine'));
 }
 function runSimulation(mode) {
   stopSimulationProgressPolling();
   var opts = simulationOptions();
+  var generation = ++simulationRequestGeneration;
   state.activeSimulationMode = mode;
   updateSimulationButtons();
   simulationProgressId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : String(Date.now()) + '-' + String(Math.random()).slice(2);
@@ -1688,6 +2122,7 @@ function runSimulation(mode) {
     if (pb7Btn) pb7Btn.disabled = false;
   }
   apiFetch('/simulate', { method: 'POST', body: JSON.stringify({ config: state.config, options: opts, mode: mode, progress_id: simulationProgressId }) }).then(function(data) {
+    if (generation !== simulationRequestGeneration) { stopSimulationProgressPolling(); finishSimulationButtons(); return; }
     stopSimulationProgressPolling();
     setSimulationProgress(1, data.message || 'Simulation finished.');
     state.simulations[mode] = data;
@@ -1696,12 +2131,14 @@ function runSimulation(mode) {
     document.getElementById('sim-long').innerHTML = eventRows(deepGet(data, ['events', 'long'], []));
     document.getElementById('sim-short').innerHTML = eventRows(deepGet(data, ['events', 'short'], []));
     if (state.snapshot) {
-      renderPlot('long', state.snapshot, 'sim-');
-      renderPlot('short', state.snapshot, 'sim-');
+      var simulationSnapshot = simulationSnapshotForPlot(data);
+      renderPlot('long', simulationSnapshot, 'sim-');
+      renderPlot('short', simulationSnapshot, 'sim-');
     }
     if (!data.ok) setMessages([{ level: 'warning', text: data.message || 'Simulation finished.' }]);
     finishSimulationButtons();
   }).catch(function(err) {
+    if (generation !== simulationRequestGeneration) { stopSimulationProgressPolling(); finishSimulationButtons(); return; }
     stopSimulationProgressPolling();
     setSimulationProgress(1, 'Simulation failed: ' + err.message);
     setMessages([{ level: 'error', text: 'Simulation failed: ' + err.message }]);
@@ -1728,6 +2165,7 @@ function startSimulationProgressPolling(progressId) {
   simulationProgressTimer = setInterval(function() {
     if (!progressId) return;
     apiFetch('/simulate/progress/' + encodeURIComponent(progressId)).then(function(data) {
+      if (progressId !== simulationProgressId) return;
       setSimulationProgress(Number(data.progress || 0), data.message || 'Running Simulation...');
       if (data.done) stopSimulationProgressPolling();
     }).catch(function() {});
@@ -1740,6 +2178,7 @@ function runCompare() {
   var oldText = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = 'Compare running...'; }
   compareProgressId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : String(Date.now()) + '-' + String(Math.random()).slice(2);
+  var generation = ++compareRequestGeneration;
   opts.progress_id = compareProgressId;
   setMessages([{ level: 'info', text: 'Running Compare...' }]);
   document.getElementById('compare-summary').innerHTML = '<span class="muted">Compare running...</span>';
@@ -1750,12 +2189,18 @@ function runCompare() {
     if (btn) { btn.disabled = false; btn.textContent = oldText || 'Start Compare'; }
   }
   apiFetch('/compare', { method: 'POST', body: JSON.stringify({ config: state.config, options: opts, progress_id: compareProgressId }) }).then(function(data) {
+    if (generation !== compareRequestGeneration) { stopCompareProgressPolling(); finishCompareButton(); return; }
     stopCompareProgressPolling();
     setCompareProgress(1, data.message || 'Compare finished.');
     renderCompareResult(data);
-    setMessages([{ level: data.ok ? 'info' : 'warning', text: data.message || 'Compare finished.' }]);
+    var partial = deepGet(data, ['summary', 'coverage', 'partial'], false) === true;
+    setMessages([{
+      level: partial || !data.ok ? 'warning' : 'info',
+      text: (data.message || 'Compare finished.') + (partial ? ' The configured candle limit covers only part of the stored fill range.' : '')
+    }]);
     finishCompareButton();
   }).catch(function(err) {
+    if (generation !== compareRequestGeneration) { stopCompareProgressPolling(); finishCompareButton(); return; }
     stopCompareProgressPolling();
     setCompareProgress(1, 'Compare failed: ' + err.message);
     document.getElementById('compare-summary').innerHTML = '<span class="muted">Compare failed: ' + esc(err.message) + '</span>';
@@ -1784,6 +2229,7 @@ function startCompareProgressPolling(progressId) {
   compareProgressTimer = setInterval(function() {
     if (!progressId) return;
     apiFetch('/compare/progress/' + encodeURIComponent(progressId)).then(function(data) {
+      if (progressId !== compareProgressId) return;
       setCompareProgress(Number(data.progress || 0), data.message || 'Running Compare...');
       if (data.done) stopCompareProgressPolling();
     }).catch(function() {});
@@ -1822,6 +2268,7 @@ function syncMovieDurationOptions() {
   if (!select) return;
   var previous = select.value || 'Custom (Frames)';
   var presets = movieDurationPresets(movieStepLabel());
+  if (IS_V8) presets = presets.filter(function(item) { return item[1] === null || Number(item[1]) < 20000; });
   select.innerHTML = presets.map(function(item) {
     var minutes = item[1] === null ? '' : String(item[1]);
     var anchor = item[2] === null ? '' : String(item[2]);
@@ -1872,10 +2319,20 @@ function chooseMovieHandoffWindow(spanMinutes) {
 }
 function applyBacktestHandoff(handoff, resultPath) {
   handoff = handoff || {};
+  if (IS_V8 && handoff.provenance_available) {
+    applyInitialResultPath('opaque-provenance');
+    setLabelText(document.getElementById('compare-mode-primary'), 'Stored PB8 Result vs Fresh PB8 Replay');
+  }
+  if (IS_V8 && handoff.compare_available) {
+    state.compareBaselineAvailable = true;
+    var compareInput = document.getElementById('compare-pb7-folder');
+    if (compareInput) compareInput.value = 'Pinned Pareto baseline (opaque)';
+    setLabelText(document.getElementById('compare-mode-primary'), 'Current PB8 Config vs Pinned PB8 Baseline');
+  }
   if (resultPath) applyInitialResultPath(resultPath);
   if (!handoff.fill_start || !handoff.fill_end) return;
   var engineEl = document.getElementById('movie-engine-select');
-  if (engineEl) engineEl.value = 'pb7_fills';
+  if (engineEl) engineEl.value = IS_V8 ? 'pb8_engine' : 'pb7_fills';
   var fillStart = String(handoff.fill_start || '').replace(' ', 'T');
   var fillEnd = String(handoff.fill_end || '').replace(' ', 'T');
   if (fillStart.length >= 16) {
@@ -1932,12 +2389,14 @@ function startMovieProgressPolling(progressId) {
   movieProgressTimer = setInterval(function() {
     if (!progressId) return;
     apiFetch('/movie/progress/' + encodeURIComponent(progressId)).then(function(data) {
+      if (progressId !== movieProgressId) return;
       setMovieProgress(Number(data.progress || 0), data.message || 'Generating movie...');
       if (data.done) stopMovieProgressPolling();
     }).catch(function() {});
   }, 700);
 }
 function stopMovieBuilder() {
+  movieRequestGeneration += 1;
   var activeProgressId = movieProgressId;
   var stoppingExport = !!movieExportAbortController;
   if (activeProgressId) {
@@ -2063,11 +2522,12 @@ function renderMovieDetails(data) {
   var sideKey = selectedMovieSideKey(events);
   var sideEvents = events[sideKey] || [];
   var meta = data.metadata || {};
+  var engineLabel = IS_V8 && (data.engine === 'pb8_engine' || data.engine === 'pb8_native_replay') ? 'PB8 Native Replay' : (data.engine || '-');
   document.getElementById('movie-frame-details').innerHTML = '<div class="metric-grid" style="grid-template-columns:1fr 1fr;margin-bottom:12px">'
     + '<div class="metric-card"><div class="label">Frames</div><div class="value">' + esc(frames.length) + '</div></div>'
     + '<div class="metric-card"><div class="label">Fills</div><div class="value">' + esc(sideEvents.length) + '</div></div>'
     + '</div>'
-    + '<p class="hint">Engine: ' + esc(data.engine || '-') + ' | Market: ' + esc(meta.exchange || '') + ' ' + esc(meta.coin || '') + '</p>'
+    + '<p class="hint">Engine: ' + esc(engineLabel) + ' | Market: ' + esc(meta.exchange || '') + ' ' + esc(meta.coin || '') + '</p>'
     + '<h4>Frames</h4>' + movieRows(frames)
     + '<h4>Fills</h4>' + eventRows(sideEvents);
 }
@@ -2106,10 +2566,11 @@ function buildMovieFigureSpec(data, initialFrameIdx) {
   var candle = frames.map(function(f) { return f.candle || {}; });
   var visible = Math.max(10, Number(document.getElementById('movie-visible-input').value || 60));
   var traceCandles = { type: 'candlestick', name: 'Price', x: xs, open: candle.map(function(c) { return Number(c.open || 0); }), high: candle.map(function(c) { return Number(c.high || 0); }), low: candle.map(function(c) { return Number(c.low || 0); }), close: candle.map(function(c) { return Number(c.close || 0); }) };
-  var emaHigh = frames.map(function(f) { return Number(deepGet(f, [sideKey, 'debug', 'state_params', 'ema_bands', 'upper'], deepGet(f, ['candle', 'high'], 0))); });
-  var emaLow = frames.map(function(f) { return Number(deepGet(f, [sideKey, 'debug', 'state_params', 'ema_bands', 'lower'], deepGet(f, ['candle', 'low'], 0))); });
-  var traceEmaHigh = { type: 'scatter', mode: 'lines', name: 'EMA High', x: xs, y: emaHigh, line: { color: 'magenta', width: 1 } };
-  var traceEmaLow = { type: 'scatter', mode: 'lines', name: 'EMA Low', x: xs, y: emaLow, line: { color: 'cyan', width: 1, dash: 'dot' } };
+  var emaHigh = frames.map(function(f) { var value = deepGet(f, [sideKey, 'debug', 'state_params', 'ema_bands', 'upper'], null); return value === null ? null : Number(value); });
+  var emaLow = frames.map(function(f) { var value = deepGet(f, [sideKey, 'debug', 'state_params', 'ema_bands', 'lower'], null); return value === null ? null : Number(value); });
+  var hasEmaBands = emaHigh.some(function(value) { return isFinite(value); }) && emaLow.some(function(value) { return isFinite(value); });
+  var traceEmaHigh = { type: 'scatter', mode: 'lines', name: hasEmaBands ? 'EMA High' : '', showlegend: hasEmaBands, x: hasEmaBands ? xs : [], y: hasEmaBands ? emaHigh : [], line: { color: 'magenta', width: 1 } };
+  var traceEmaLow = { type: 'scatter', mode: 'lines', name: hasEmaBands ? 'EMA Low' : '', showlegend: hasEmaBands, x: hasEmaBands ? xs : [], y: hasEmaBands ? emaLow : [], line: { color: 'cyan', width: 1, dash: 'dot' } };
   function orderPrices(frame, kind) {
     return (deepGet(frame, [sideKey, 'orders', kind], []) || []).map(function(order) { return Number(order.price || 0); }).filter(function(price) { return isFinite(price) && price > 0; });
   }
@@ -2123,7 +2584,11 @@ function buildMovieFigureSpec(data, initialFrameIdx) {
     var gx = [];
     var gy = [];
     (prices || []).forEach(function(price) { gx.push(x0, x1, null); gy.push(price, price, null); });
-    return { type: 'scatter', mode: 'lines', name: name, x: gx, y: gy, line: { color: color, width: width || 1, dash: 'dot' } };
+    return {
+      type: 'scatter', mode: 'lines', name: name, x: gx, y: gy,
+      line: { color: color, width: width || 1, dash: 'dot' },
+      hovertemplate: esc(name) + '<br>Price: %{y:.8f}<extra></extra>'
+    };
   }
   function upcomingFillPrices(kind, frameTs) {
     var isEntry = kind === 'entry';
@@ -2178,8 +2643,8 @@ function buildMovieFigureSpec(data, initialFrameIdx) {
     for (var ci = 0; ci < cand.length && out.length < 200; ci++) {
       var ev = sorted[cand[ci]];
       var evType = String(ev.event || '').toLowerCase();
-      if (isEntry && evType === 'entry') out.push(Number(ev.price || 0));
-      if (!isEntry && !onlyEntries && evType === 'close') out.push(Number(ev.price || 0));
+      if (isEntry && evType.indexOf('entry') >= 0) out.push(Number(ev.price || 0));
+      if (!isEntry && !onlyEntries && evType.indexOf('close') >= 0) out.push(Number(ev.price || 0));
     }
     var filtered = [];
     var best = null;
@@ -2195,6 +2660,10 @@ function buildMovieFigureSpec(data, initialFrameIdx) {
   }
   function movieFrameState(frame, closePrice) {
     var frameMs = new Date(frame.timestamp || '').getTime();
+    var fillStateEnd = Number(deepGet(data, ['metadata', 'displayed_fill_end_timestamp_ms'], 0) || 0);
+    if (deepGet(data, ['metadata', 'fills_truncated'], false) === true && fillStateEnd > 0 && frameMs > fillStateEnd) {
+      return { balance: NaN, posSize: NaN, posPrice: null, walletExposure: null };
+    }
     var last = null;
     if (isFinite(frameMs)) {
       for (var i = 0; i < sortedSideEvents.length; i++) {
@@ -2234,9 +2703,7 @@ function buildMovieFigureSpec(data, initialFrameIdx) {
     var stackCounts = {};
     var yStackCounts = {};
     function plotDate(ms) {
-      var d = new Date(ms);
-      function pad(n, w) { return String(n).padStart(w || 2, '0'); }
-      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+      return new Date(ms).toISOString();
     }
     function stackStep(n) { if (n <= 0) return 0; var k = Math.floor((n + 1) / 2); return n % 2 === 1 ? k : -k; }
     (sideEvents || []).forEach(function(ev, idx) {
@@ -2294,7 +2761,7 @@ function buildMovieFigureSpec(data, initialFrameIdx) {
     var entryPrices = orderPrices(frame, 'entries');
     var closePrices = orderPrices(frame, 'closes');
     var closePrice = Number(deepGet(frame, ['candle', 'close'], 0));
-    var useFillPreview = data.engine === 'pb7_fills' || data.engine === 'pb7_engine';
+    var useFillPreview = data.engine === 'pb7_fills' || data.engine === 'pb7_engine' || data.engine === 'pb8_engine' || data.engine === 'pb8_native_replay';
     var upcomingEntries = useFillPreview ? upcomingFillPrices('entry', frame.timestamp) : [];
     var upcomingCloses = useFillPreview ? upcomingFillPrices('close', frame.timestamp) : [];
     var trailEntry = trailingPrice(frame, 'entries', closePrice);
@@ -2333,8 +2800,26 @@ function buildMovieFigureSpec(data, initialFrameIdx) {
   var init = plotFrames[activeFrame] || plotFrames[0] || dynamicFrame(frames[0], 0);
   var initData = [traceCandles, traceEmaHigh, traceEmaLow].concat(init.data || []);
   var playFrameNames = plotFrames.slice(activeFrame).map(function(frame) { return frame.name; });
-  var layout = { title: 'Animation: ' + esc(deepGet(data, ['metadata', 'coin'], '')) + ' | Frames: ' + frames.length, paper_bgcolor: '#1a1d24', plot_bgcolor: '#1a1d24', font: { color: '#fafafa' }, height: 760, margin: { l: 55, r: 260, t: 60, b: 150 }, xaxis: { type: 'date', gridcolor: '#333640', rangeslider: { visible: false }, range: deepGet(init, ['layout', 'xaxis', 'range'], [xs[0], xs[0]]) }, yaxis: { title: 'Price', gridcolor: '#333640', autorange: false, range: deepGet(init, ['layout', 'yaxis', 'range'], [0, 1]) }, legend: { x: 1.02, y: 0.85, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(0,0,0,0.5)' }, annotations: deepGet(init, ['layout', 'annotations'], []), updatemenus: [{ type: 'buttons', direction: 'left', showactive: false, x: 0.01, y: -0.06, xanchor: 'left', yanchor: 'top', pad: { r: 10, t: 10 }, buttons: [{ label: 'Play', method: 'animate', args: [playFrameNames, { frame: { duration: 120, redraw: false }, fromcurrent: true, mode: 'immediate', transition: { duration: 0, easing: 'linear' } }] }, { label: 'Slow', method: 'animate', args: [playFrameNames, { frame: { duration: 240, redraw: false }, fromcurrent: true, mode: 'immediate', transition: { duration: 0, easing: 'linear' } }] }, { label: 'Very Slow', method: 'animate', args: [playFrameNames, { frame: { duration: 480, redraw: false }, fromcurrent: true, mode: 'immediate', transition: { duration: 0, easing: 'linear' } }] }, { label: 'Pause', method: 'animate', args: [[null], { frame: { duration: 0, redraw: false }, mode: 'immediate', transition: { duration: 0 } }] }] }], sliders: [{ active: activeFrame, steps: plotFrames.map(function(_, k) { return { method: 'animate', args: [[String(k)], { mode: 'immediate', frame: { duration: 0, redraw: false }, transition: { duration: 0 } }], label: String(k) }; }), transition: { duration: 0 }, x: 0.01, y: -0.15, currentvalue: { font: { size: 12 }, prefix: 'Frame: ', visible: true, xanchor: 'left' }, len: 0.99, pad: { b: 10, t: 10 } }] };
+  var layout = { title: 'Animation: ' + esc(deepGet(data, ['metadata', 'coin'], '')) + ' | Frames: ' + frames.length, paper_bgcolor: '#1a1d24', plot_bgcolor: '#1a1d24', font: { color: '#fafafa' }, height: 760, hovermode: 'closest', hoverdistance: 50, margin: { l: 55, r: 260, t: 60, b: 150 }, xaxis: { type: 'date', gridcolor: '#333640', rangeslider: { visible: false }, autorange: false, range: deepGet(init, ['layout', 'xaxis', 'range'], [xs[0], xs[0]]) }, yaxis: { title: 'Price', gridcolor: '#333640', autorange: false, range: deepGet(init, ['layout', 'yaxis', 'range'], [0, 1]) }, legend: { x: 1.02, y: 0.85, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(0,0,0,0.5)' }, annotations: deepGet(init, ['layout', 'annotations'], []), updatemenus: [{ type: 'buttons', direction: 'left', showactive: false, x: 0.01, y: -0.06, xanchor: 'left', yanchor: 'top', pad: { r: 10, t: 10 }, buttons: [{ label: 'Play', method: 'animate', args: [playFrameNames, { frame: { duration: 120, redraw: false }, fromcurrent: true, mode: 'immediate', transition: { duration: 0, easing: 'linear' } }] }, { label: 'Slow', method: 'animate', args: [playFrameNames, { frame: { duration: 240, redraw: false }, fromcurrent: true, mode: 'immediate', transition: { duration: 0, easing: 'linear' } }] }, { label: 'Very Slow', method: 'animate', args: [playFrameNames, { frame: { duration: 480, redraw: false }, fromcurrent: true, mode: 'immediate', transition: { duration: 0, easing: 'linear' } }] }, { label: 'Pause', method: 'animate', args: [[null], { frame: { duration: 0, redraw: false }, mode: 'immediate', transition: { duration: 0 } }] }] }], sliders: [{ active: activeFrame, steps: plotFrames.map(function(_, k) { return { method: 'animate', args: [[String(k)], { mode: 'immediate', frame: { duration: 0, redraw: false }, transition: { duration: 0 } }], label: String(k) }; }), transition: { duration: 0 }, x: 0.01, y: -0.15, currentvalue: { font: { size: 12 }, prefix: 'Frame: ', visible: true, xanchor: 'left' }, len: 0.99, pad: { b: 10, t: 10 } }] };
+  delete layout.xaxis.autorange;
   return { data: initData, layout: layout, frames: plotFrames, activeFrame: activeFrame };
+}
+function stepMovieFrame(direction) {
+  if (!moviePlaybackPaused || !lastMovieFigureSpec || !window.Plotly) return false;
+  var plot = document.getElementById('movie-plot');
+  var frames = lastMovieFigureSpec.frames || [];
+  if (!plot || !frames.length) return false;
+  var current = Math.max(0, Math.min(frames.length - 1, currentMovieFrameIndex()));
+  var next = Math.max(0, Math.min(frames.length - 1, current + (direction < 0 ? -1 : 1)));
+  movieCurrentFrame = next;
+  if (next !== current) {
+    Plotly.animate(plot, [String(next)], {
+      mode: 'immediate',
+      frame: { duration: 0, redraw: false },
+      transition: { duration: 0 }
+    });
+  }
+  return true;
 }
 function renderMoviePlot(data, initialFrameIdx) {
   var target = 'movie-plot';
@@ -2345,14 +2830,21 @@ function renderMoviePlot(data, initialFrameIdx) {
     return;
   }
   Plotly.purge(target);
+  moviePlaybackPaused = true;
   Plotly.newPlot(target, spec.data, spec.layout, moviePlotlyConfig(target)).then(function() {
     Plotly.addFrames(target, spec.frames);
     var plot = document.getElementById(target);
+    if (plot && Plotly.Plots && Plotly.Plots.resize) Plotly.Plots.resize(plot);
     if (plot && plot.on) {
       plot.on('plotly_sliderchange', function(ev) {
         var label = deepGet(ev || {}, ['step', 'label'], null);
         var idx = Number(label);
         if (isFinite(idx)) movieCurrentFrame = idx;
+        moviePlaybackPaused = true;
+      });
+      plot.on('plotly_buttonclicked', function(ev) {
+        var label = String(deepGet(ev || {}, ['button', 'label'], ''));
+        moviePlaybackPaused = label === 'Pause';
       });
       plot.on('plotly_animated', function() { movieCurrentFrame = currentMovieFrameIndex(); });
     }
@@ -2367,7 +2859,7 @@ function selectedMovieFrameOptions(progressId) {
   opts.visible_candles = Number(document.getElementById('movie-visible-input').value || 60);
   opts.movie_engine = document.getElementById('movie-engine-select').value || 'local_simulation';
   opts.movie_side = selectedMovieSideKey();
-  opts.pb7_backtest_dir = document.getElementById('movie-pb7-folder').value || document.getElementById('compare-pb7-folder').value || '';
+  opts.pb7_backtest_dir = IS_V8 ? '' : (document.getElementById('movie-pb7-folder').value || document.getElementById('compare-pb7-folder').value || '');
   opts.sim_max_candles = Math.max(10, opts.frames * opts.step_mins + 5);
   opts.sim_max_orders = 20000;
   opts.progress_id = progressId;
@@ -2398,12 +2890,18 @@ function applyMovieFrameResult(data) {
   renderMoviePlot(data);
   setMovieExportAvailable(true);
   if (!data.ok || !(data.frames || []).length) throw new Error(data.message || 'No movie frames generated.');
+  persistStrategyRefreshState();
   return data;
 }
-function requestMovieFrames(progressId, signal) {
+function requestMovieFrames(progressId, signal, generation) {
   var opts = selectedMovieFrameOptions(progressId);
   var optsKey = movieFrameOptionsKey(opts);
   return apiFetch('/movie/frames', { method: 'POST', signal: signal, body: JSON.stringify({ config: state.config, options: opts, progress_id: progressId }) }).then(function(data) {
+    if (generation !== movieRequestGeneration) {
+      var staleError = new Error('Movie request was superseded by a configuration change.');
+      staleError.name = 'AbortError';
+      throw staleError;
+    }
     var result = applyMovieFrameResult(data);
     lastMovieOptionsKey = optsKey;
     return result;
@@ -2412,6 +2910,7 @@ function requestMovieFrames(progressId, signal) {
 function buildMovieFrames() {
   if (movieAbortController) movieAbortController.abort();
   movieProgressId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : String(Date.now()) + '-' + String(Math.random()).slice(2);
+  var generation = ++movieRequestGeneration;
   var buttons = [document.getElementById('btn-build-movie')].filter(Boolean);
   var stopBtn = document.getElementById('btn-stop-movie');
   var exportBtn = document.getElementById('btn-export-movie');
@@ -2430,7 +2929,7 @@ function buildMovieFrames() {
   startMovieProgressPolling(movieProgressId);
   document.getElementById('movie-output').innerHTML = '<span class="muted">Generating movie...</span>';
   movieAbortController = new AbortController();
-  requestMovieFrames(movieProgressId, movieAbortController.signal).then(function(data) {
+  requestMovieFrames(movieProgressId, movieAbortController.signal, generation).then(function(data) {
     setMovieProgress(1, data.message || 'Movie Builder finished.');
     setMessages([{ level: data.ok ? 'info' : 'warning', text: data.message || 'Movie Builder finished.' }]);
     stopMovieProgressPolling();
@@ -2455,8 +2954,9 @@ function buildMovieFrames() {
 function fetchMovieExportBlob(body, signal) {
   return fetch(API_BASE + '/movie/export', {
     method: 'POST',
+    credentials: 'same-origin',
     signal: signal,
-    headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   }).then(function(res) {
     if (!res.ok) return res.text().then(function(text) {
@@ -2477,11 +2977,17 @@ function exportMovieMp4() {
   var buildBtn = document.getElementById('btn-build-movie');
   var stopBtn = document.getElementById('btn-stop-movie');
   var oldLabel = btn ? btn.textContent : 'Export MP4';
+  var generation = ++movieRequestGeneration;
   if (btn) { btn.disabled = true; btn.textContent = 'Exporting MP4...'; }
   if (buildBtn) buildBtn.disabled = true;
   if (stopBtn) stopBtn.disabled = false;
 
   function exportGeneratedMovie(data) {
+    if (generation !== movieRequestGeneration) {
+      var staleError = new Error('Movie export was superseded by a configuration change.');
+      staleError.name = 'AbortError';
+      throw staleError;
+    }
     var spec = buildMovieFigureSpec(data, 0);
     if (!spec || !(spec.frames || []).length) throw new Error('Movie export needs generated Plotly frames.');
     var opts = selectedMovieExportOptions(spec);
@@ -2492,6 +2998,11 @@ function exportMovieMp4() {
     startMovieProgressPolling(movieProgressId);
     movieExportAbortController = new AbortController();
     return fetchMovieExportBlob({ figure: { data: spec.data, layout: spec.layout, frames: spec.frames }, options: opts, progress_id: movieProgressId }, movieExportAbortController.signal).then(function(result) {
+      if (generation !== movieRequestGeneration) {
+        var staleError = new Error('Movie export was superseded by a configuration change.');
+        staleError.name = 'AbortError';
+        throw staleError;
+      }
       return { result: result, options: opts };
     });
   }
@@ -2506,7 +3017,7 @@ function exportMovieMp4() {
     startMovieProgressPolling(movieProgressId);
     document.getElementById('movie-output').innerHTML = '<span class="muted">Generating movie frames for export...</span>';
     movieAbortController = new AbortController();
-    chain = requestMovieFrames(movieProgressId, movieAbortController.signal).then(function(data) {
+    chain = requestMovieFrames(movieProgressId, movieAbortController.signal, generation).then(function(data) {
       stopMovieProgressPolling();
       movieAbortController = null;
       return exportGeneratedMovie(data);
@@ -2551,25 +3062,93 @@ function selectStage(stage) {
   if (stage === 'simulation' && state.snapshot) {
     setTimeout(function() { renderSimulationWorkspace(state.snapshot); }, 0);
   }
+  if (stage === 'movie') {
+    setTimeout(function() {
+      var plot = document.getElementById('movie-plot');
+      if (plot && window.Plotly && Plotly.Plots && Plotly.Plots.resize) Plotly.Plots.resize(plot);
+    }, 0);
+  }
+  persistStrategyRefreshState();
+}
+function applySessionBootstrap(data, snapshot, cached, warning, generation, snapshotGeneration) {
+  if (generation !== sessionRequestGeneration || snapshotGeneration !== snapshotRequestGeneration) return Promise.resolve(null);
+  configureVersionUi(data.page || {});
+  if (Array.isArray(deepGet(data, ['page', 'hsl_signal_modes'], null))) state.hslSignalModes = data.page.hsl_signal_modes;
+  state.source = deepGet(snapshot, ['source'], warning ? 'refresh-cache' : 'default');
+  renderSnapshot(snapshot || {});
+  syncOptionsFromConfig(snapshot || {});
+  return populateMarkets().then(function() {
+    if (generation !== sessionRequestGeneration || snapshotGeneration !== snapshotRequestGeneration) return null;
+    inferInitialSelectors(snapshot || {});
+    if (cached) restoreStrategyRefreshControls(cached);
+    applyInitialResultPath(data.result_path || RESULT_PATH || '');
+    applyBacktestHandoff(data.handoff || {}, data.result_path || RESULT_PATH || '');
+    document.getElementById('movie-status').textContent = deepGet(data, ['movie', 'message'], 'Build replay frames from the selected candle window.');
+    setMovieExportAvailable(true);
+    var controls = cached && cached.controls ? cached.controls : {};
+    var stage = String(controls.stage || 'analysis');
+    if (!document.getElementById('stage-' + stage)) stage = 'analysis';
+    selectStage(stage);
+    if (cached && cached.movie_data) {
+      applyMovieFrameResult(cached.movie_data);
+      lastMovieOptionsKey = movieFrameOptionsKey(selectedMovieFrameOptions(''));
+    }
+    var messages = data.messages || deepGet(snapshot, ['messages'], []);
+    if (warning) messages = [{ level: 'warning', text: warning }].concat(messages || []);
+    setMessages(messages || []);
+    persistStrategyRefreshState();
+    if (stage === 'movie' && controls.movie_generated && !(cached && cached.movie_data)) {
+      setTimeout(function() { buildMovieFrames(); }, 0);
+    }
+    return data;
+  });
 }
 function loadSession() {
-  var qs = '?draft_id=' + encodeURIComponent(DRAFT_ID || '') + '&result_path=' + encodeURIComponent(RESULT_PATH || '');
-  apiFetch('/session' + qs).then(function(data) {
-    if (Array.isArray(deepGet(data, ['page', 'hsl_signal_modes'], null))) state.hslSignalModes = data.page.hsl_signal_modes;
-    state.source = deepGet(data, ['snapshot', 'source'], 'default');
-    renderSnapshot(data.snapshot || {}); syncOptionsFromConfig(data.snapshot || {});
-    return populateMarkets().then(function() {
-      inferInitialSelectors(data.snapshot || {});
-      applyInitialResultPath(data.result_path || RESULT_PATH || '');
-      applyBacktestHandoff(data.handoff || {}, data.result_path || RESULT_PATH || '');
-      document.getElementById('movie-status').textContent = deepGet(data, ['movie', 'message'], 'Build replay frames from the selected candle window.');
-      setMovieExportAvailable(true);
-      setMessages(data.messages || deepGet(data, ['snapshot', 'messages'], []));
+  var generation = ++sessionRequestGeneration;
+  var snapshotGeneration = ++snapshotRequestGeneration;
+  var cached = readStrategyRefreshState();
+  var qs = '?draft_id=' + encodeURIComponent(DRAFT_ID || '');
+  if (!IS_V8) qs += '&result_path=' + encodeURIComponent(RESULT_PATH || '');
+  return apiFetch('/session' + qs).then(function(data) {
+    if (!cached || !cached.config) {
+      return applySessionBootstrap(data, data.snapshot || {}, null, '', generation, snapshotGeneration);
+    }
+    return apiFetch('/snapshot', {
+      method: 'POST',
+      body: JSON.stringify({ config: cached.config, options: cachedSnapshotOptions(cached) })
+    }).then(function(snapshot) {
+      snapshot.source = 'refresh-cache';
+      return applySessionBootstrap(data, snapshot, cached, '', generation, snapshotGeneration);
+    }).catch(function() {
+      return applySessionBootstrap(data, data.snapshot || {}, null, '', generation, snapshotGeneration);
     });
-  }).catch(function(err) { setMessages([{ level: 'error', text: 'Failed to load Strategy Explorer session: ' + err.message }]); });
+  }, function(err) {
+    if (generation !== sessionRequestGeneration || snapshotGeneration !== snapshotRequestGeneration) return null;
+    var missingDraft = IS_V8 && DRAFT_ID && String(err && err.message || '').indexOf('draft not found') >= 0;
+    if (!missingDraft || !cached || !cached.config) throw err;
+    return apiFetch('/snapshot', {
+      method: 'POST',
+      body: JSON.stringify({ config: cached.config, options: cachedSnapshotOptions(cached) })
+    }).then(function(snapshot) {
+      DRAFT_ID = '';
+      snapshot.source = 'refresh-cache';
+      return applySessionBootstrap(
+        { page: {}, handoff: {}, movie: { message: 'Restored Movie Builder state from this browser tab.' }, messages: [] },
+        snapshot,
+        cached,
+        'The server-side handoff draft expired. PBGui restored the non-sensitive Strategy Explorer and Movie state from this browser tab; stored-result Compare provenance is no longer available.',
+        generation,
+        snapshotGeneration
+      );
+    });
+  }).catch(function(err) {
+    if (generation === sessionRequestGeneration && snapshotGeneration === snapshotRequestGeneration) {
+      setMessages([{ level: 'error', text: 'Failed to load Strategy Explorer session: ' + err.message }]);
+    }
+  });
 }
 document.querySelectorAll('.sb-section[data-stage]').forEach(function(btn) { btn.addEventListener('click', function() { selectStage(btn.dataset.stage); }); });
-document.querySelectorAll('input[name="compare-mode"]').forEach(function(input) { input.addEventListener('change', updateCompareModeUi); });
+document.querySelectorAll('input[name="compare-mode"]').forEach(function(input) { input.addEventListener('change', function() { invalidateCompareRequest(); updateCompareModeUi(); }); });
 document.querySelectorAll('.accordion-head').forEach(function(btn) { btn.addEventListener('click', function() { var card = btn.closest('.accordion-card'); if (card) card.classList.toggle('collapsed'); }); });
 document.getElementById('exchange-select').addEventListener('change', function() { updateCoinSelect(); changeMarket(); });
 document.getElementById('coin-select').addEventListener('change', changeMarket);
@@ -2580,21 +3159,43 @@ document.getElementById('start-time-input').addEventListener('change', recalcula
 document.getElementById('context-days-input').addEventListener('change', recalculate);
 document.getElementById('auto-exchange-params').addEventListener('change', function() { state.autoExchangeParams = this.checked; recalculate(); });
 document.getElementById('btn-reset-exchange-params').addEventListener('click', function() { state.exchangeParamOverrides = {}; state.autoExchangeParams = true; var autoEl = document.getElementById('auto-exchange-params'); if (autoEl) autoEl.checked = true; recalculate(); });
-document.getElementById('sim-start-state-select').addEventListener('change', updateSimulationStartStateUi);
-document.getElementById('btn-run-local-sim').addEventListener('click', function() { runSimulation('local_simulation'); });
-document.getElementById('btn-run-pb7-engine').addEventListener('click', function() { runSimulation('pb7_engine'); });
+document.getElementById('sim-start-state-select').addEventListener('change', function() { invalidateSimulationRequest(); updateSimulationStartStateUi(); });
+['sim-start-balance-input', 'sim-start-long-size-input', 'sim-start-long-price-input', 'sim-start-short-size-input', 'sim-start-short-price-input', 'max-candles-input', 'max-orders-input'].forEach(function(id) {
+  var input = document.getElementById(id);
+  if (input) input.addEventListener('input', invalidateSimulationRequest);
+});
+document.getElementById('btn-run-local-sim').addEventListener('click', function() { runSimulation(this.dataset.simulationMode || 'local_simulation'); });
+document.getElementById('btn-run-pb7-engine').addEventListener('click', function() { runSimulation(this.dataset.simulationMode || 'pb7_engine'); });
 document.getElementById('btn-run-compare').addEventListener('click', runCompare);
-document.getElementById('movie-step-select').addEventListener('change', function() { syncMovieDurationOptions(); updateMovieDurationFrames(); });
-document.getElementById('movie-duration-select').addEventListener('change', updateMovieDurationFrames);
-document.getElementById('movie-frames-input').addEventListener('input', function() { var sel = document.getElementById('movie-duration-select'); if (sel && sel.value !== 'Custom (Frames)') sel.value = 'Custom (Frames)'; });
-document.getElementById('movie-visible-input').addEventListener('input', function() { if (lastMovieData) renderMoviePlot(lastMovieData, currentMovieFrameIndex()); });
+document.getElementById('movie-step-select').addEventListener('change', function() { invalidateMovieRequest(); syncMovieDurationOptions(); updateMovieDurationFrames(); });
+document.getElementById('movie-duration-select').addEventListener('change', function() { invalidateMovieRequest(); updateMovieDurationFrames(); });
+document.getElementById('movie-frames-input').addEventListener('input', function() { invalidateMovieRequest(); var sel = document.getElementById('movie-duration-select'); if (sel && sel.value !== 'Custom (Frames)') sel.value = 'Custom (Frames)'; });
+document.getElementById('movie-visible-input').addEventListener('input', function() { invalidateMovieRequest(); if (lastMovieData) renderMoviePlot(lastMovieData, currentMovieFrameIndex()); });
+['movie-engine-select', 'movie-side-select', 'movie-start-date-input', 'movie-start-time-input'].forEach(function(id) {
+  var input = document.getElementById(id);
+  if (input) input.addEventListener('change', invalidateMovieRequest);
+});
+['compare-max-candles', 'compare-use-fills-range', 'compare-mismatches-only'].forEach(function(id) {
+  var input = document.getElementById(id);
+  if (input) input.addEventListener('change', invalidateCompareRequest);
+});
 document.getElementById('btn-build-movie').addEventListener('click', buildMovieFrames);
 document.getElementById('btn-stop-movie').addEventListener('click', stopMovieBuilder);
 document.getElementById('btn-export-movie').addEventListener('click', exportMovieMp4);
-document.getElementById('movie-export-preset').addEventListener('change', applyMovieExportPreset);
+document.addEventListener('keydown', function(event) {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+  var movieStage = document.getElementById('stage-movie');
+  if (!movieStage || !movieStage.classList.contains('active')) return;
+  var active = document.activeElement;
+  var tag = active && active.tagName ? active.tagName.toLowerCase() : '';
+  if (active && (active.isContentEditable || tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'button')) return;
+  if (stepMovieFrame(event.key === 'ArrowLeft' ? -1 : 1)) event.preventDefault();
+});
+window.addEventListener('beforeunload', persistStrategyRefreshState);
+document.getElementById('movie-export-preset').addEventListener('change', function() { invalidateMovieRequest(); applyMovieExportPreset(); });
 ['movie-export-codec', 'movie-export-width', 'movie-export-height', 'movie-export-scale', 'movie-export-crf', 'movie-export-ffmpeg-preset'].forEach(function(id) {
   var el = document.getElementById(id);
-  if (el) el.addEventListener('change', markMovieExportCustom);
+  if (el) el.addEventListener('change', function() { invalidateMovieRequest(); markMovieExportCustom(); });
 });
 document.addEventListener('fullscreenchange', function() {
   if (!window.Plotly) return;
@@ -2658,9 +3259,14 @@ document.addEventListener('fullscreenchange', function() {
     }
   });
 })();
-window.PBGUI_NAV_CONFIG = { subtitle: 'Strategy Explorer', current: 'v7_strategy_explorer', token: TOKEN, apiBase: API_BASE, version: PBGUI_VERSION, serial: PBGUI_SERIAL };
+configureVersionUi({});
+window.PBGUI_NAV_CONFIG = { subtitle: IS_V8 ? 'PBv8 Strategy Explorer' : 'Strategy Explorer', current: IS_V8 ? 'v8_strategy_explorer' : 'v7_strategy_explorer', apiBase: API_BASE, version: PBGUI_VERSION, serial: PBGUI_SERIAL };
 syncMovieDurationOptions();
-applyInitialResultPath(RESULT_PATH || '');
+var initialRefreshState = readStrategyRefreshState();
+if (initialRefreshState && initialRefreshState.controls && initialRefreshState.controls.stage) {
+  selectStage(String(initialRefreshState.controls.stage));
+}
+if (!IS_V8) applyInitialResultPath(RESULT_PATH || '');
 loadMovieExportOptions();
 loadSession();
 updateCompareModeUi();

@@ -117,9 +117,11 @@ Settings controls what data is loaded.
 
 The first scan of a large result can take time. A successful scan creates a persistent cache, so the next load is much faster even after an API restart. The cache is rebuilt automatically when `all_results.bin` changes. If the interactive UI feels slow after loading, reduce Max Configs or work in pareto-only mode until you know which part of the result is worth deeper inspection.
 
+Changing Result Path immediately clears the previous detail, selection, and pinned baseline. Late background-load, chart, detail, playground, preset, command-center, or Deep Intelligence responses from the previous result are ignored.
+
 ## Optimize Preset Refinement
 
-The preset panel creates a PBv7 Optimize config from the selected Pareto config.
+The preset panel creates an Optimize config for the selected result's PBv7 or PBv8 generation and uses that version's save and queue APIs.
 
 - Choose **Optimization goal** first. The default Balanced option keeps the run scoring.
 - Keep the generated **Preset name** unless you need a custom name.
@@ -144,6 +146,6 @@ Use a small bounds window first. A tight window is useful for refinement, but to
 
 ## Related
 
-- PBv7 Optimize: create and queue follow-up optimize runs.
-- PBv7 Backtest: validate a selected config before trusting it.
-- Strategy Explorer: inspect one config visually after narrowing the shortlist.
+- PBv7/PBv8 Optimize: create and queue follow-up optimize runs.
+- PBv7/PBv8 Backtest: validate a selected config before trusting it.
+- Strategy Explorer: inspect one config visually after narrowing the shortlist. For PB8, pin one candidate with **Pin Explorer Baseline**, select a different candidate from the same result, and open Strategy Explorer to compare both with native bounded replays. The baseline is temporary and page-local; changing the result or reloading clears it. Referenced sparse overrides must be available or PBGui blocks the handoff. Explorer fields within 5% of the active Optimize bounds are highlighted; runtime parameter ranges are the fallback when configured bounds are absent.

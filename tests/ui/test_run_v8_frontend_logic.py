@@ -107,6 +107,22 @@ def test_pb8_template_hsl_coin_mode_has_a_select_option() -> None:
     assert "hsl_signal_mode: getVal('f-hsl-signal-mode')" in page
 
 
+def test_pb8_run_editor_exposes_cookie_authenticated_strategy_handoff() -> None:
+    """PB8 Run must expose Strategy Explorer and include sparse override files in its draft."""
+    page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+    adapter = (ROOT / "frontend" / "js" / "run_editor_adapter.js").read_text(encoding="utf-8")
+    handoff = _page_function(page, "goStrategyExplorer")
+
+    assert "supportsStrategyExplorer: true" in adapter
+    assert 'data-v7-only onclick="goStrategyExplorer()"' not in page
+    assert '/app/js/run_editor_adapter.js?v=7' in page
+    assert "'/api/strategy-explorer-v8'" in page
+    assert "coinOvSnapshotAllFiles()" in handoff
+    assert "override_configs: overrideConfigs || {}" in handoff
+    assert "credentials: 'same-origin'" in handoff
+    assert "Authorization" not in handoff
+
+
 def test_pb8_update_warning_only_uses_runtime_not_ready_hosts() -> None:
     """Only backend-confirmed PB8 runtime blockers should show the update prompt."""
 

@@ -80,6 +80,7 @@
       { page: 'v8_run',               icon: '&#9654;',   label: 'Run'               },
       { page: 'v8_backtest',          icon: '&#9194;',   label: 'Backtest'          },
       { page: 'v8_optimize',          icon: '&#9881;',   label: 'Optimize'          },
+      { page: 'v8_strategy_explorer', icon: '&#128065;', label: 'Strategy Explorer' },
       { page: 'v8_pareto_explorer',   icon: '&#9733;',   label: 'Pareto Explorer'   }
     ]}
   ];
@@ -1003,6 +1004,7 @@
     'v8_run':             '/api/v8/main_page',
     'v8_backtest':        '/api/backtest-v8/main_page',
     'v8_optimize':        '/api/optimize-v8/main_page',
+    'v8_strategy_explorer': '/api/strategy-explorer-v8/main_page',
     'v8_pareto_explorer': '/api/pareto-explorer/main_page?optimize_version=v8'
   };
 
@@ -1029,7 +1031,8 @@
     'v8_run':                      '44_pbv8_run',
     'v8_backtest':                 '42_pbv8_backtest',
     'v8_optimize':                 '43_pbv8_optimize',
-    'v8_pareto_explorer':          '43_pbv8_optimize'
+    'v8_strategy_explorer':        '00_strategy_explorer_help',
+    'v8_pareto_explorer':          '37_pareto_explorer'
   };
 
   function syncHelpOverlayState() {

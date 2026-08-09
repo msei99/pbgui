@@ -927,6 +927,68 @@ def test_config_detail_top_metrics_keeps_gain_when_many_scoring_metrics() -> Non
     ]
 
 
+def test_pb8_config_detail_loads_sparse_override_payloads(monkeypatch, tmp_path: Path) -> None:
+    """Pareto detail must carry referenced PB8 override files into Explorer drafts."""
+
+    class FakeConfig:
+        """Minimal PB8 candidate used by config-detail serialization."""
+
+        config_index = 7
+        is_pareto = True
+        scenario_metrics = {}
+        suite_metrics = {"adg_w_usd": 0.1, "drawdown_worst_usd": 0.05}
+
+    class FakeLoader:
+        """Minimal PB8 loader with a managed result directory."""
+
+        optimize_version = "v8"
+        results_path = str(tmp_path)
+        scoring_metrics = ["adg_w_usd"]
+        scoring_goals = {"adg_w_usd": "max"}
+        scenario_labels = []
+        configs = [FakeConfig()]
+
+        def get_config_by_index(self, _config_index: int) -> FakeConfig:
+            return self.configs[0]
+
+        def get_pareto_configs(self) -> list[FakeConfig]:
+            return list(self.configs)
+
+        def ensure_bot_params(self, _config: FakeConfig) -> None:
+            return None
+
+        def ensure_details(self, _config: FakeConfig) -> None:
+            return None
+
+        def compute_risk_profile_score(self, _config: FakeConfig) -> dict:
+            return {"overall": 1.0}
+
+        def get_full_config(self, _config_index: int) -> dict:
+            return {"coin_overrides": {"BTC": {"override_config_path": "BTC.json"}}}
+
+        def compute_trading_style(self, _config: FakeConfig) -> str:
+            return "Balanced"
+
+        def compute_overall_robustness(self, _config: FakeConfig) -> float:
+            return 1.0
+
+    (tmp_path / "BTC.json").write_text(
+        json.dumps({"bot": {"long": {"risk": {"n_positions": 2}}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pareto_explorer, "_resolve_result_dir", lambda _path: tmp_path)
+
+    detail = pareto_explorer._serialize_config_detail(FakeLoader(), 7)
+
+    assert detail["override_error"] == ""
+    assert detail["override_configs"]["BTC.json"]["bot"]["long"]["risk"]["n_positions"] == 2
+
+    (tmp_path / "BTC.json").write_text("{", encoding="utf-8")
+    malformed = pareto_explorer._serialize_config_detail(FakeLoader(), 7)
+    assert "Failed to read BTC.json" in malformed["override_error"]
+    assert malformed["override_configs"] == {}
+
+
 def test_correlation_top_performers_deduplicates_configs() -> None:
     """Top Performer radar selection should not return the same config repeatedly."""
 

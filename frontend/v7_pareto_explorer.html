@@ -1116,6 +1116,8 @@ input[type="range"]::-moz-range-thumb {
       <div class="ctx-actions" style="display:block">
         <button class="sb-btn" id="btn-back-optimize">← Back to Optimize</button>
         <button class="sb-btn" id="btn-run-backtest">🚀 Run Backtest</button>
+        <button class="sb-btn" id="btn-pin-strategy-baseline">Pin Explorer Baseline</button>
+        <button class="sb-btn" id="btn-open-strategy-explorer">🔍 Strategy Explorer</button>
         <button class="sb-btn" id="btn-load-all-results">📂 Scan all_results</button>
         <button class="sb-btn" id="btn-load-pareto-only" style="display:none;">↩ Show Passivbot Paretos</button>
       </div>
@@ -1667,6 +1669,9 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     playgroundRefreshTimer: null,
     deepPlotResizeTimer: null,
     loadRequestSeq: 0,
+    bootstrapRequestSeq: 0,
+    resultContextGeneration: 0,
+    commandCenterRequestSeq: 0,
     playgroundRequestSeq: 0,
     detailRequestSeq: 0,
     deepParametersRequestSeq: 0,
@@ -1687,6 +1692,8 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     commandCenter: null,
     selectedConfigIndex: null,
     selectedDetail: null,
+    strategyCompareBaseline: null,
+    optimizeVersion: String(window.OPTIMIZE_VERSION || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7',
     plotSessionId: '',
     plotSessionKind: '',
     playground: {
@@ -1757,7 +1764,18 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   function optimizeVersion() {
     var sessionVersion = state.session && state.session.optimize_version;
     var resultVersion = state.session && state.session.result && state.session.result.optimize_version;
-    return String(resultVersion || sessionVersion || window.OPTIMIZE_VERSION || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7';
+    state.optimizeVersion = String(resultVersion || sessionVersion || state.optimizeVersion || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7';
+    return state.optimizeVersion;
+  }
+
+  function syncStrategyExplorerActions() {
+    var isV8 = optimizeVersion() === 'v8';
+    var button = el('btn-pin-strategy-baseline');
+    if (button) {
+      button.style.display = isV8 ? '' : 'none';
+      button.disabled = !isV8;
+    }
+    if (!isV8) state.strategyCompareBaseline = null;
   }
 
   function optimizeApiBase() {
@@ -1766,6 +1784,10 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 
   function backtestApiBase() {
     return window.location.origin + '/api/backtest-' + optimizeVersion();
+  }
+
+  function strategyExplorerApiBase() {
+    return window.location.origin + (state.optimizeVersion === 'v8' ? '/api/strategy-explorer-v8' : '/api/strategy-explorer');
   }
 
   function readRouteState() {
@@ -2490,41 +2512,43 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 
   function waitForNextFullLoadPoll(delayMs) {
     return new Promise(function(resolve) {
-      state.fullLoadPollTimer = window.setTimeout(function() {
-        state.fullLoadPollTimer = null;
-        resolve();
-      }, delayMs);
+      window.setTimeout(resolve, delayMs);
     });
   }
 
-  function pollFullLoadStatus() {
-    if (!state.fullLoadJobId) return Promise.resolve(null);
-    clearFullLoadPoll();
-    return apiFetch('/load-status?job_id=' + encodeURIComponent(state.fullLoadJobId)).then(function(data) {
+  function pollFullLoadStatus(jobId) {
+    var activeJobId = String(jobId || state.fullLoadJobId || '');
+    if (!activeJobId) return Promise.resolve(null);
+    return apiFetch('/load-status?job_id=' + encodeURIComponent(activeJobId)).then(function(data) {
       var job = data && data.job ? data.job : null;
       if (!job) throw new Error('Load status returned no job payload.');
+      var ownsJob = state.fullLoadJobId === activeJobId;
       if (data && data.status === 'loading') {
-        setFullLoadStatus('loading', job.message || 'Scanning full result stream...', job.progress || 0);
+        if (ownsJob) setFullLoadStatus('loading', job.message || 'Scanning full result stream...', job.progress || 0);
         return waitForNextFullLoadPoll(350).then(function() {
-          return pollFullLoadStatus();
+          return pollFullLoadStatus(activeJobId);
         });
       }
       if (data && data.status === 'error') {
-        state.fullLoadPending = false;
-        state.fullLoadJobId = '';
-        clearFullLoadPoll();
+        if (ownsJob) {
+          state.fullLoadPending = false;
+          state.fullLoadJobId = '';
+          clearFullLoadPoll();
+        }
         throw new Error(job.error || job.message || 'Full load failed.');
       }
       if (!(data && data.payload)) {
-        setFullLoadStatus('loading', job.message || 'Finalizing full result payload...', Math.max(95, job.progress || 0));
+        if (ownsJob) setFullLoadStatus('loading', job.message || 'Finalizing full result payload...', Math.max(95, job.progress || 0));
         return waitForNextFullLoadPoll(200).then(function() {
-          return pollFullLoadStatus();
+          return pollFullLoadStatus(activeJobId);
         });
       }
-      state.fullLoadPending = false;
-      state.fullLoadJobId = '';
-      clearFullLoadPoll();
-      setFullLoadStatus('loading', job.message || 'Full load complete. Starting follow-up refreshes...', Math.max(70, job.progress || 100));
+      if (ownsJob) {
+        state.fullLoadPending = false;
+        state.fullLoadJobId = '';
+        clearFullLoadPoll();
+        setFullLoadStatus('loading', job.message || 'Full load complete. Starting follow-up refreshes...', Math.max(70, job.progress || 100));
+      }
       return data;
     });
   }
@@ -3188,6 +3212,8 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   function loadPresetPreview(options) {
     options = options || {};
     var seq = ++state.presetPreviewRequestSeq;
+    var contextGeneration = state.resultContextGeneration;
+    var resultPath = state.resultPath;
     el('preset-status').textContent = options.includeConfig ? 'Building preset config...' : 'Building preset preview...';
     return apiFetch('/optimize-preset/build', {
       method: 'POST',
@@ -3201,9 +3227,13 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
           renderDetail(detail);
         }
         return loadPresetPreview(options);
+      }, function() {
+        return seq === state.presetPreviewRequestSeq
+          && contextGeneration === state.resultContextGeneration
+          && resultPath === state.resultPath;
       });
     }).then(function(data) {
-      if (seq !== state.presetPreviewRequestSeq) return data;
+      if (seq !== state.presetPreviewRequestSeq || contextGeneration !== state.resultContextGeneration || resultPath !== state.resultPath) return data;
       renderPresetPreview(data);
       el('preset-status').textContent = '';
       return data;
@@ -3367,11 +3397,13 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     var requestSeq = state.playgroundRequestSeq + 1;
     state.playgroundRequestSeq = requestSeq;
     if (!state.resultPath) return Promise.resolve(null);
+    var contextGeneration = state.resultContextGeneration;
+    var resultPath = state.resultPath;
     return apiFetch('/playground', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        result_path: state.resultPath,
+        result_path: resultPath,
         load_strategy: state.loadStrategy,
         max_configs: state.maxConfigs,
         all_results_loaded: state.allResultsLoaded,
@@ -3395,15 +3427,20 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }).then(function(data) {
       return resolveBackgroundLoadResponse(data, function(payload) {
         return payload && payload.refresh_bundle ? payload.refresh_bundle.playground : null;
+      }, function() {
+        return requestSeq === state.playgroundRequestSeq
+          && contextGeneration === state.resultContextGeneration
+          && resultPath === state.resultPath;
       });
     }).then(function(data) {
-      if (requestSeq !== state.playgroundRequestSeq) return data;
+      if (requestSeq !== state.playgroundRequestSeq || contextGeneration !== state.resultContextGeneration || resultPath !== state.resultPath) return data;
       renderPlayground(data, { followBestMatch: followBestMatch });
       if (!followBestMatch && data && data.best_match && data.best_match.config_index != null && state.selectedConfigIndex == null) {
         return loadConfigDetail(data.best_match.config_index).then(function() { return data; });
       }
       return data;
     }).catch(function(err) {
+      if (requestSeq !== state.playgroundRequestSeq || contextGeneration !== state.resultContextGeneration || resultPath !== state.resultPath) return null;
       pushMessage('error', 'Playground load failed: ' + err.message);
       throw err;
     });
@@ -3473,7 +3510,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }).then(function(data) {
       return resolveBackgroundLoadResponse(data, function(payload) {
         return payload && payload.refresh_bundle && payload.refresh_bundle.deep_intelligence ? payload.refresh_bundle.deep_intelligence.payload : null;
-      });
+      }, function() { return seq === state.deepParametersRequestSeq; });
     }).then(function(data) {
       if (seq !== state.deepParametersRequestSeq) return data;
       renderDeepParameters(data);
@@ -3607,7 +3644,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }).then(function(data) {
       return resolveBackgroundLoadResponse(data, function(payload) {
         return payload && payload.refresh_bundle && payload.refresh_bundle.deep_intelligence ? payload.refresh_bundle.deep_intelligence.payload : null;
-      });
+      }, function() { return seq === state.deepScenariosRequestSeq; });
     }).then(function(data) {
       if (seq !== state.deepScenariosRequestSeq) return data;
       renderDeepScenarios(data);
@@ -3712,7 +3749,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }).then(function(data) {
       return resolveBackgroundLoadResponse(data, function(payload) {
         return payload && payload.refresh_bundle && payload.refresh_bundle.deep_intelligence ? payload.refresh_bundle.deep_intelligence.payload : null;
-      });
+      }, function() { return seq === state.deepEvolutionRequestSeq; });
     }).then(function(data) {
       if (seq !== state.deepEvolutionRequestSeq) return data;
       renderDeepEvolution(data);
@@ -3780,7 +3817,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }).then(function(data) {
       return resolveBackgroundLoadResponse(data, function(payload) {
         return payload && payload.refresh_bundle && payload.refresh_bundle.deep_intelligence ? payload.refresh_bundle.deep_intelligence.payload : null;
-      });
+      }, function() { return seq === state.deepCorrelationsRequestSeq; });
     }).then(function(data) {
       if (seq !== state.deepCorrelationsRequestSeq) return data;
       renderDeepCorrelations(data);
@@ -3856,6 +3893,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 
   function renderSession(data) {
     state.session = data || null;
+    syncStrategyExplorerActions();
     var result = data && data.result ? data.result : null;
     var valid = !!(data && data.result_valid);
     var load = data && data.load ? data.load : null;
@@ -3990,11 +4028,14 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     options = options || {};
     var skipPlaygroundRefresh = !!options.skipPlaygroundRefresh;
     if (!state.resultPath) return Promise.resolve(null);
+    var requestSeq = ++state.commandCenterRequestSeq;
+    var contextGeneration = state.resultContextGeneration;
+    var resultPath = state.resultPath;
     return apiFetch('/command-center', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        result_path: state.resultPath,
+        result_path: resultPath,
         load_strategy: state.loadStrategy,
         max_configs: state.maxConfigs,
         all_results_loaded: state.allResultsLoaded,
@@ -4003,8 +4044,13 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }).then(function(data) {
       return resolveBackgroundLoadResponse(data, function(payload) {
         return payload && payload.refresh_bundle ? payload.refresh_bundle.command_center : null;
+      }, function() {
+        return requestSeq === state.commandCenterRequestSeq
+          && contextGeneration === state.resultContextGeneration
+          && resultPath === state.resultPath;
       });
     }).then(function(data) {
+      if (requestSeq !== state.commandCenterRequestSeq || contextGeneration !== state.resultContextGeneration || resultPath !== state.resultPath) return data;
       state.commandCenter = data || null;
       renderChampions(data);
       renderInsights(data);
@@ -4021,6 +4067,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       renderDetail(state.selectedDetail);
       return data;
     }).catch(function(err) {
+      if (requestSeq !== state.commandCenterRequestSeq || contextGeneration !== state.resultContextGeneration || resultPath !== state.resultPath) return null;
       pushMessage('error', 'Command Center load failed: ' + err.message);
       throw err;
     });
@@ -4032,12 +4079,16 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     var requestSeq = state.detailRequestSeq + 1;
     state.detailRequestSeq = requestSeq;
     if (!state.resultPath) return Promise.resolve(null);
+    state.presetPreviewRequestSeq += 1;
+    var resultPath = state.resultPath;
+    var contextGeneration = state.resultContextGeneration;
     state.selectedConfigIndex = configIndex;
+    renderDetail(null);
     return apiFetch('/config-detail', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        result_path: state.resultPath,
+        result_path: resultPath,
         config_index: configIndex,
         load_strategy: state.loadStrategy,
         max_configs: state.maxConfigs,
@@ -4050,14 +4101,19 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }).then(function(data) {
       return resolveBackgroundLoadResponse(data, function(payload) {
         return { ok: true, detail: payload && payload.refresh_bundle ? payload.refresh_bundle.detail : null };
+      }, function() {
+        return requestSeq === state.detailRequestSeq
+          && contextGeneration === state.resultContextGeneration
+          && resultPath === state.resultPath;
       });
     }).then(function(data) {
-      if (requestSeq !== state.detailRequestSeq) return data;
+      if (requestSeq !== state.detailRequestSeq || contextGeneration !== state.resultContextGeneration || resultPath !== state.resultPath) return data;
       renderDetail(data && data.detail ? data.detail : null);
       renderChampions(state.commandCenter);
       if (skipPlaygroundRefresh) return data;
       return loadPlayground().then(function() { return data; });
     }).catch(function(err) {
+      if (requestSeq !== state.detailRequestSeq || contextGeneration !== state.resultContextGeneration || resultPath !== state.resultPath) return null;
       pushMessage('error', 'Config detail load failed: ' + err.message);
       throw err;
     });
@@ -4128,6 +4184,69 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     openBacktestDraft(detail.full_config, suggestDraftName(detail.full_config)).catch(function(err) {
       pushMessage('error', 'Run Backtest failed: ' + err.message);
     });
+  }
+
+  function openSelectedStrategyExplorer() {
+    var detail = state.selectedDetail;
+    if (!detail || !detail.full_config || detail.config_index !== state.selectedConfigIndex) {
+      pushMessage('error', 'No selected config with full configuration is available yet.');
+      return;
+    }
+    if (detail.override_error) {
+      pushMessage('error', 'PB8 override configs are unavailable: ' + detail.override_error);
+      return;
+    }
+    optimizeVersion();
+    var explorerBase = strategyExplorerApiBase();
+    var compareBaseline = state.strategyCompareBaseline
+      && state.strategyCompareBaseline.result_path === state.resultPath
+      && state.strategyCompareBaseline.config_index !== state.selectedConfigIndex
+      ? state.strategyCompareBaseline
+      : null;
+    fetch(explorerBase + '/draft', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        config: detail.full_config,
+        compare_config: compareBaseline ? compareBaseline.config : undefined,
+        compare_override_configs: compareBaseline ? compareBaseline.override_configs : undefined,
+        override_configs: detail.override_configs || {},
+        provenance: {
+          kind: 'optimize_result',
+          compare_baseline: !!compareBaseline
+        }
+      })
+    }).then(function(res) {
+      if (!res.ok) return res.text().then(function(text) { throw new Error(text || ('HTTP ' + res.status)); });
+      return res.json();
+    }).then(function(draft) {
+      window.location.href = explorerBase + '/main_page?draft_id=' + encodeURIComponent((draft && draft.draft_id) || '');
+    }).catch(function(err) {
+      pushMessage('error', 'Open Strategy Explorer failed: ' + err.message);
+    });
+  }
+
+  function pinSelectedStrategyBaseline() {
+    if (optimizeVersion() !== 'v8') return;
+    var detail = state.selectedDetail;
+    if (!detail || !detail.full_config || detail.config_index !== state.selectedConfigIndex) {
+      pushMessage('error', 'No selected config with full configuration is available yet.');
+      return;
+    }
+    if (detail.override_error) {
+      pushMessage('error', 'PB8 override configs are unavailable: ' + detail.override_error);
+      return;
+    }
+    state.strategyCompareBaseline = {
+      result_path: state.resultPath,
+      config_index: state.selectedConfigIndex,
+      config: JSON.parse(JSON.stringify(detail.full_config)),
+      override_configs: JSON.parse(JSON.stringify(detail.override_configs || {}))
+    };
+    var button = el('btn-pin-strategy-baseline');
+    if (button) button.textContent = 'Baseline pinned: #' + String(state.selectedConfigIndex == null ? '-' : state.selectedConfigIndex);
+    pushMessage('info', 'Strategy Explorer comparison baseline pinned. Select another config and open Strategy Explorer.');
   }
 
   function bindEvents() {
@@ -4355,6 +4474,8 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       });
     });
     el('btn-run-backtest').addEventListener('click', runSelectedConfigBacktest);
+    el('btn-open-strategy-explorer').addEventListener('click', openSelectedStrategyExplorer);
+    el('btn-pin-strategy-baseline').addEventListener('click', pinSelectedStrategyBaseline);
     el('btn-load-all-results').addEventListener('click', loadAllResultsFromSidebar);
     el('btn-load-pareto-only').addEventListener('click', loadParetoOnlyFromSidebar);
     el('btn-back-optimize').addEventListener('click', function() {
@@ -4378,6 +4499,10 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   }
 
   function applyLoadData(data) {
+    state.detailRequestSeq += 1;
+    state.playgroundRequestSeq += 1;
+    state.commandCenterRequestSeq += 1;
+    state.presetPreviewRequestSeq += 1;
     if (state.allResultsLoaded && data && data.cache_hit) {
       setFullLoadStatus('loaded', 'Full result restored from cache.', 100);
     }
@@ -4443,15 +4568,17 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     return data;
   }
 
-  function resolveBackgroundLoadResponse(data, extractPayload) {
+  function resolveBackgroundLoadResponse(data, extractPayload, isCurrent) {
     if (!(data && data.status === 'loading' && data.job && data.job.job_id)) {
       return Promise.resolve(data);
     }
+    if (typeof isCurrent === 'function' && !isCurrent()) return Promise.resolve(null);
     state.fullLoadJobId = data.job.job_id;
     setFullLoadStatus('loading', (data.job && data.job.message) || 'Scanning full result stream...', (data.job && data.job.progress) || 0);
-    return pollFullLoadStatus().then(function(statusData) {
+    return pollFullLoadStatus(data.job.job_id).then(function(statusData) {
       var payload = statusData && statusData.payload ? statusData.payload : null;
       if (!payload) throw new Error('Full load completed without payload.');
+      if (typeof isCurrent === 'function' && !isCurrent()) return null;
       applyLoadData(payload);
       return typeof extractPayload === 'function' ? extractPayload(payload) : payload;
     });
@@ -4460,11 +4587,30 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   function loadParetoData(options) {
     options = options || {};
     var seq = ++state.loadRequestSeq;
+    state.fullLoadJobId = '';
+    clearFullLoadPoll();
+    state.bootstrapRequestSeq += 1;
+    state.resultContextGeneration += 1;
+    state.commandCenterRequestSeq += 1;
+    state.playgroundRequestSeq += 1;
+    state.detailRequestSeq += 1;
+    state.presetPreviewRequestSeq += 1;
     state.deepParametersRequestSeq += 1;
     state.deepScenariosRequestSeq += 1;
     state.deepEvolutionRequestSeq += 1;
     state.deepCorrelationsRequestSeq += 1;
-    state.resultPath = String(el('result-path-input').value || '').trim();
+    var nextResultPath = String(el('result-path-input').value || '').trim();
+    if (nextResultPath !== state.resultPath) {
+      state.detailRequestSeq += 1;
+      state.selectedConfigIndex = null;
+      renderDetail(null);
+      if (state.strategyCompareBaseline && state.strategyCompareBaseline.result_path !== nextResultPath) {
+        state.strategyCompareBaseline = null;
+        var baselineButton = el('btn-pin-strategy-baseline');
+        if (baselineButton) baselineButton.textContent = 'Pin Explorer Baseline';
+      }
+    }
+    state.resultPath = nextResultPath;
     state.loadStrategy = selectedLoadStrategies();
     state.maxConfigs = parseInt(el('max-configs-input').value || '2000', 10) || 2000;
     state.persistDefaults = !!el('persist-defaults-toggle').checked;
@@ -4516,7 +4662,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       if (state.allResultsLoaded && data && data.status === 'loading' && data.job && data.job.job_id) {
         state.fullLoadJobId = data.job.job_id;
         setFullLoadStatus('loading', (data.job && data.job.message) || 'Scanning full result stream...', (data.job && data.job.progress) || 0);
-        return pollFullLoadStatus().then(function(statusData) {
+        return pollFullLoadStatus(data.job.job_id).then(function(statusData) {
           if (seq !== state.loadRequestSeq) return null;
           var payload = statusData && statusData.payload ? statusData.payload : null;
           if (!payload) throw new Error('Full load completed without payload.');
@@ -4544,14 +4690,19 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   }
 
   function bootstrapSession() {
-    var query = '?result_path=' + encodeURIComponent(state.resultPath || '')
+    var requestSeq = ++state.bootstrapRequestSeq;
+    var contextGeneration = state.resultContextGeneration;
+    var resultPath = state.resultPath;
+    var query = '?result_path=' + encodeURIComponent(resultPath || '')
       + '&optimize_version=' + encodeURIComponent(optimizeVersion());
     return apiFetch('/session' + query).then(function(data) {
+      if (requestSeq !== state.bootstrapRequestSeq || contextGeneration !== state.resultContextGeneration || resultPath !== state.resultPath) return null;
       renderSession(data);
       window.selectStage(state.stage);
       applyDeepTabUi(state.deepTab, false);
       updateLocationState();
       return loadCommandCenterData().then(function() {
+        if (requestSeq !== state.bootstrapRequestSeq || contextGeneration !== state.resultContextGeneration || resultPath !== state.resultPath) return null;
         if (state.stage === 'deep_intelligence') {
           return refreshDeepIntelligence().then(function() {
             state.deepIntelligenceNeedsVisibleRender = false;
@@ -4562,6 +4713,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
         return data;
       });
     }).catch(function(err) {
+      if (requestSeq !== state.bootstrapRequestSeq || contextGeneration !== state.resultContextGeneration || resultPath !== state.resultPath) return null;
       renderSession({
         result_valid: false,
         result: null,
@@ -4592,6 +4744,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   window.PBGuiJsonPanel.setContent('detail-full-config', 'No config selected.', { expanded: false });
 
   readRouteState();
+  syncStrategyExplorerActions();
   bindEvents();
   initSidebarResize();
   bootstrapSession();

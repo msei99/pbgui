@@ -927,6 +927,54 @@ def test_request_generations_reject_stale_http_and_settings_merge_metadata() -> 
     _run_node(script)
 
 
+def test_switching_result_sets_clears_stale_paretos_before_loading() -> None:
+    """Selecting another optimize result must clear old Pareto rows before its request completes."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    function = _page_function(page, "loadParetos")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const deferred = [];
+        function apiFetch(path) {{ return new Promise((resolve) => deferred.push({{path, resolve}})); }}
+        function normalizeParetoStatistic(value) {{ return value || 'mean'; }}
+        function clearParetoMeta() {{ state.paretoMode = 'none'; }}
+        function applyParetoMeta(meta) {{ state.paretoMode = meta.mode || 'unknown'; }}
+        const renders = [];
+        function renderParetos() {{ renders.push(state.paretos.map((item) => item.path)); }}
+        const optimizeEditorAdapter = {{paretosPath: (query) => '/paretos?' + query}};
+        const state = {{
+          paretoLoadSeq: 0,
+          paretoMode: 'normal',
+          paretoScenario: 'Aggregated',
+          paretoStatistic: 'mean',
+          selectedResultPath: '/old',
+          selectedResultName: 'old',
+          paretos: [{{path: '/old/pareto.json'}}],
+          selectedParetos: new Set(['/old/pareto.json'])
+        }};
+        {function}
+        (async () => {{
+          const firstLoad = loadParetos('/new-a', 'new-a');
+          assert.deepEqual(state.paretos, []);
+          assert.equal(state.selectedParetos.size, 0);
+          assert.deepEqual(renders.at(-1), []);
+
+          const secondLoad = loadParetos('/new-b', 'new-b');
+          deferred[0].resolve({{paretos: [{{path: '/new-a/stale.json'}}], meta: {{mode: 'normal'}}}});
+          await firstLoad;
+          assert.deepEqual(state.paretos, []);
+
+          deferred[1].resolve({{paretos: [{{path: '/new-b/current.json'}}], meta: {{mode: 'normal'}}}});
+          await secondLoad;
+          assert.equal(state.selectedResultPath, '/new-b');
+          assert.deepEqual(state.paretos.map((item) => item.path), ['/new-b/current.json']);
+          assert.deepEqual(renders.at(-1), ['/new-b/current.json']);
+        }})().catch((error) => {{ console.error(error); process.exitCode = 1; }});
+        """
+    )
+    _run_node(script)
+
+
 def test_installed_override_helpers_and_backend_result_flags_are_visible() -> None:
     """Every installed helper renders and PB8 result controls use explicit backend capabilities."""
     script = textwrap.dedent(

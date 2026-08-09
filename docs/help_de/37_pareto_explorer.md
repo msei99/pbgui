@@ -117,9 +117,11 @@ Settings steuert, welche Daten geladen werden.
 
 Der erste Scan eines grossen Results kann dauern. Ein erfolgreicher Scan erzeugt einen persistenten Cache, sodass der naechste Load auch nach einem API-Restart deutlich schneller ist. Wenn sich `all_results.bin` aendert, wird der Cache automatisch neu gebaut. Wenn die interaktive UI danach traege wirkt, reduziere Max Configs oder arbeite im Pareto-only-Modus, bis klar ist, welcher Bereich des Ergebnisses eine tiefere Analyse lohnt.
 
+Ein Wechsel des Result Path leert sofort vorherige Details, Auswahl und fixierte Baseline. Spaete Background-Load-, Chart-, Detail-, Playground-, Preset-, Command-Center- oder Deep-Intelligence-Antworten des vorherigen Results werden ignoriert.
+
 ## Optimize Preset Refinement
 
-Das Preset-Panel erstellt eine PBv7-Optimize-Config aus der selektierten Pareto-Config.
+Das Preset-Panel erstellt eine Optimize-Config fuer die PBv7- oder PBv8-Generation des ausgewaehlten Results und verwendet deren Save- und Queue-APIs.
 
 - Wähle zuerst **Optimization goal**. Die Standardoption Balanced behält das Run-Scoring bei.
 - Den generierten **Preset name** kannst du meistens unverändert lassen.
@@ -144,6 +146,6 @@ Starte mit einem kleinen Bounds Window. Ein enges Window ist gut für Refinement
 
 ## Verwandt
 
-- PBv7 Optimize: Folge-Optimize-Runs erstellen und queuen.
-- PBv7 Backtest: eine selektierte Config validieren, bevor du ihr vertraust.
-- Strategy Explorer: eine einzelne Config visuell prüfen, nachdem die Shortlist eingegrenzt ist.
+- PBv7/PBv8 Optimize: Folge-Optimize-Runs erstellen und queuen.
+- PBv7/PBv8 Backtest: eine selektierte Config validieren, bevor du ihr vertraust.
+- Strategy Explorer: eine einzelne Config nach dem Eingrenzen der Shortlist visuell pruefen. Bei PB8 wird ein Kandidat mit **Pin Explorer Baseline** fixiert, ein anderer Kandidat desselben Results ausgewaehlt und beide anschliessend im Strategy Explorer ueber begrenzte native Replays verglichen. Die Baseline ist temporaer und seitenlokal; Result-Wechsel oder Reload loeschen sie. Referenzierte Sparse Overrides muessen verfuegbar sein, sonst blockiert PBGui den Handoff. Explorer-Felder innerhalb von 5% der aktiven Optimize-Bounds werden markiert; fehlen konfigurierte Bounds, dienen Runtime-Parameterbereiche als Fallback.

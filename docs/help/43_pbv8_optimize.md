@@ -54,6 +54,8 @@ Permanent preparation errors move only their queue row to an actionable error st
 
 Results are read only from `<pb8dir>/optimize_results`. The Results table shows each run's configured PB8 strategy and can sort by that column. The Results and Paretos panels provide the shared PB7 workflow for result inspection, deletion, 3D plots, Pareto Dash, candidate JSON, metric summaries, and seed bundles.
 
+Switching Optimize result sets clears previous Pareto rows, metadata, and selections immediately before loading the new result. A late response from the earlier result cannot restore stale rows.
+
 PB8 result actions distinguish three different workflows:
 
 - Opening a Pareto candidate as a PB8 Backtest draft performs a standalone backtest.
@@ -61,6 +63,8 @@ PB8 result actions distinguish three different workflows:
 - Resuming a checkpoint continues the existing backend state and result stream.
 
 The shared Pareto Explorer uses version-specific roots and understands PB8 nested bounds, nested bot parameters, scoring goals, limits, suite metrics, and incremental `all_results.bin` records.
+
+In PB8 Pareto Explorer, **Strategy Explorer** opens the selected candidate with its sparse overrides. To compare two candidates, pin the first with **Pin Explorer Baseline**, select a different candidate from the same result, and open Strategy Explorer. Missing referenced override files block pinning or opening instead of being silently ignored.
 
 Suite summaries keep their configured objective and scenario names and support `mean`, `min`, `max`, `std`, and `median`. List rows also include canonical `gain`, using PB8's persisted `gain_usd`, `gain_strategy_eq`, or `gain` metric in that order. Statistics use the requested metric statistic when available and otherwise use the persisted scalar objective. Unrelated suite statistics are not sent to the browser. Compact file-signature caching keeps repeated large Pareto lists responsive while changed, deleted, malformed, or actively rewritten candidates are handled independently.
 

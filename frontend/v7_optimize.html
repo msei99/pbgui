@@ -11667,12 +11667,15 @@ function refreshOptimizePageOnReturn() {
 async function loadParetos(path, name) {
   var loadSeq = ++state.paretoLoadSeq;
   if (path) {
+    state.paretos = [];
+    state.selectedParetos.clear();
+    clearParetoMeta({ keepStatistic: true });
     if (path !== state.selectedResultPath) {
-      state.selectedParetos.clear();
       state.paretoScenario = 'Aggregated';
     }
     state.selectedResultPath = path;
     state.selectedResultName = name || state.selectedResultName;
+    renderParetos();
   }
   if (!state.selectedResultPath) {
     state.paretos = [];

@@ -65,5 +65,6 @@ def test_strategy_explorer_uses_shared_bilingual_help() -> None:
     topics = _js_object_entries(NAV_PATH.read_text(encoding="utf-8"), "GUIDE_TOPICS")
 
     assert topics["v7_strategy_explorer"] == "00_strategy_explorer_help"
+    assert topics["v8_strategy_explorer"] == "00_strategy_explorer_help"
     assert "window.PBGUI_HELP_OPENER" not in source
     assert 'id="help-ovl"' not in source

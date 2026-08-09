@@ -104,7 +104,7 @@ Dynamic Ignore ist eine Capability des Ziel-Hosts und keine Key-Einstellung pro 
 ### Parameter vor dem Live-Betrieb validieren
 1. Instanz mit **Edit** öffnen
 2. **📊 Backtest** klicken → Backtest mit derselben Config starten
-3. **🔍 Strategy Explorer** klicken → Pareto-Metriken interaktiv erkunden
+3. **🔍 Strategy Explorer** klicken → Entry-/Close-Orders pruefen, Parameteraenderungen testen, begrenzte Simulationen ausfuehren, Fills vergleichen und einen Replay-Movie bauen
 
 ### Benötigte Balance prüfen
 1. Instanz mit **Edit** öffnen

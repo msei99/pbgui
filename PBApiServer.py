@@ -93,6 +93,11 @@ from api.optimize_v8 import startup as opt8_startup, shutdown as opt8_shutdown
 from api.pareto_explorer import router as pareto_explorer_router, shutdown as pareto_explorer_shutdown
 from api.pb7_ohlcv_tools import startup as ohlcv_preload_startup
 from api.strategy_explorer import router as strategy_explorer_router
+from api.strategy_explorer_v8 import (
+    router as strategy_explorer_v8_router,
+    shutdown as strategy_explorer_v8_shutdown,
+    startup as strategy_explorer_v8_startup,
+)
 from logging_helpers import (
     get_rotate_settings,
     human_log as _log,
@@ -684,6 +689,7 @@ async def _lifespan(app: FastAPI):
         ohlcv_preload_startup()
         vps_manager_startup()
         market_data_startup()
+        strategy_explorer_v8_startup()
 
         lifecycle_tasks = [
             asyncio.create_task(_deferred_startup(), name="deferred-startup"),
@@ -704,6 +710,7 @@ async def _lifespan(app: FastAPI):
             ("dashboard", dashboard_shutdown),
             ("heatmap", heatmap_shutdown),
             ("pareto-explorer", pareto_explorer_shutdown),
+            ("strategy-explorer-v8", strategy_explorer_v8_shutdown),
             ("coin-data", coin_data_shutdown),
             ("market-data", market_data_shutdown),
             ("vps-manager", vps_manager_shutdown),
@@ -846,6 +853,7 @@ app.include_router(optimize_v7_router, prefix="/api/optimize-v7", tags=["optimiz
 app.include_router(optimize_v8_router, prefix="/api/optimize-v8", tags=["optimize-v8"])
 app.include_router(pareto_explorer_router, prefix="/api/pareto-explorer", tags=["pareto-explorer"])
 app.include_router(strategy_explorer_router, prefix="/api/strategy-explorer", tags=["strategy-explorer"])
+app.include_router(strategy_explorer_v8_router, prefix="/api/strategy-explorer-v8", tags=["strategy-explorer-v8"])
 
 
 @app.exception_handler(PB7ConfigurationError)

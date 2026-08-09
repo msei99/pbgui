@@ -1,54 +1,61 @@
 # Tutorial: Strategy Explorer Quickstart
 
-This tutorial gets you from “open Strategy Explorer” to “I can interpret what I see”.
+This tutorial gets you from "open Strategy Explorer" to "I can interpret what I see" in the shared PB7/PB8 page shell and workflow.
 
 ---
 
 ## 1) Choose a market
-1. Open Strategy Explorer.
-2. In **Data + Time & View**:
+1. Open Strategy Explorer directly or use **Strategy Explorer** from PB8 Run, PB8 Backtest, Backtest Results, or Pareto Explorer.
+2. In the shared controls:
    - Select **Exchange**
    - Select **Coin**
-3. Confirm you see a message like “Loaded N candles…”.
+3. Confirm that candles load for the selected window.
 
-If you see “No candles found”, you need to download/prepare OHLCV data in PB7 first.
+PB7 uses its existing local OHLCV choices. PB8 labels its source **PB8 native candles** and uses native PB8 candle preparation. A handoff preloads its config and applicable overrides.
 
 ---
 
 ## 2) Set Analysis Time
-1. Use the day slider/date/time controls to pick a moment.
-2. Keep **Context days** reasonably small at first (e.g. 3–10) to make the chart readable.
+1. Use **Start Date** and **Start Time** to select a moment.
+2. Keep **Chart Context** reasonably small at first, for example 3-10 days.
 
 Rule of thumb:
-- Analysis Time = the “right edge” candle used to compute grids.
+- Start Date/Start Time select the first displayed candle. Chart Context extends forward; its right-edge candle is Analysis Time and supplies the snapshot state.
+- PB8 entry orders use a supplied flat position; PB8 close orders use a representative hypothetical position at that price.
+
+The PB8 snapshot is not a live-account state or forecast.
 
 ---
 
 ## 3) Read the snapshot
 Look for:
 
-- Entry grid levels (where new positions would be opened)
-- Close grid levels (where positions would be reduced/closed)
-- Trailing thresholds/triggers
+- Entry order levels
+- Close order levels
+- Available strategy reference or trailing lines
+- Long/Short parameter and summary values
+
+PB7 keeps its existing local/PB7-engine snapshot behavior. PB8 shows native ideal orders for the supplied states, not exact orders that historically rested on an exchange.
 
 Ask yourself:
 
 - Are entry levels where I expect?
-- Is the close ladder too aggressive / too conservative?
-- Does trailing activate when price reaches the threshold and then retraces?
+- Is the representative close output too aggressive or conservative?
+- Does changing a parameter have the expected effect?
 
 ---
 
-## 4) (Optional) Enable historical simulation
-If you want to see fills (markers) based on a local candle-walk:
+## 4) (Optional) Run Simulation
+If you want historical fills:
 
-1. Enable **Historical Simulation**.
-2. Move Analysis Time forward/backward to understand how fills accumulate.
+1. Open **Simulation**.
+2. For PB7, choose **PBGui Simulation** or **PB7 Backtest Engine**.
+3. For PB8, run **PB8 Native Replay**.
 
-This is primarily a debugging/intuition tool; exact matching with PB7 backtests is not guaranteed.
+PB8 replay is a bounded native backtest over the selected candles, with server limits of 20,000 candles and 2,000 displayed fills. It does not forecast a live account.
 
 ---
 
 ## 5) Next steps
-- If you want to reconcile with a PB7 backtest: continue with “Compare (PB7 vs B vs C)”.
-- If you want an animation: continue with “Movie Builder”.
+- To reconcile a stored result with calculations, continue with "Compare".
+- To animate a candle window, continue with "Movie Builder".

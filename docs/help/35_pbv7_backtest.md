@@ -173,6 +173,7 @@ Completed queue jobs now invalidate the cached Results list immediately. If you 
 | **🔄 Backtest** | Re-run selected results as new backtests (opens date/balance/exchange modal) |
 | **▶ Add to Run** | Create a live run from the selected config |
 | **📈 Compare** | Add selected results to the comparison view |
+| **🔍 Strategy Explorer** | Open exactly one selected result in its owning PB7 or PB8 Strategy Explorer; PB8 uses an authenticated opaque draft and retains local stored-fill provenance for Compare |
 | **🧬 Optimize from Result** | Open the Optimize editor directly with the selected result as draft and `Starting Seeds = self` |
 | **🗑 Delete Selected** | Delete selected results from disk |
 

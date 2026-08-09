@@ -158,7 +158,7 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
 
     assert '/app/css/backtest_shell.css?v=3' in v7_source
     assert '/app/js/backtest_shell.js?v=4' in v7_source
-    assert '/app/js/backtest_editor_adapter.js?v=7' in v7_source
+    assert '/app/js/backtest_editor_adapter.js?v=8' in v7_source
     assert "PBGuiBacktestShell.upgradeLegacy" in v7_source
     assert "PBGuiBacktestEditorAdapter.create(BACKTEST_VERSION)" in v7_source
     assert "sideConfig.risk" in adapter_source
@@ -315,7 +315,25 @@ def test_v8_backtest_result_can_open_pb8_optimize() -> None:
     assert "'/api/optimize-v8/main_page?opt_draft_id='" in adapter
     unsupported = adapter.split("var unsupported =", 1)[1].split("];", 1)[0]
     assert "'optimizeFromResult'" not in unsupported
-    assert "/app/js/backtest_editor_adapter.js?v=7" in page
+    assert "/app/js/backtest_editor_adapter.js?v=8" in page
+
+
+def test_v8_backtest_strategy_explorer_handoffs_use_cookie_drafts() -> None:
+    """PB8 config and result handoffs must remain visible and use opaque same-origin drafts."""
+    adapter = (ROOT / "frontend" / "js" / "backtest_editor_adapter.js").read_text(encoding="utf-8")
+    page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+
+    unsupported = adapter.split("var unsupported =", 1)[1].split("];", 1)[0]
+    assert "'goStrategyExplorer'" not in unsupported
+    assert "'strategyExplorerFromResult'" not in unsupported
+    assert "'/api/strategy-explorer-v8'" in page
+    assert "credentials: 'same-origin'" in _extract_function(page, "goStrategyExplorer")
+    result_handoff = _extract_function(page, "strategyExplorerFromResult")
+    assert "override_configs: selectedResult.override_configs || {}" not in result_handoff
+    assert "result_path: path" in result_handoff
+    assert "provenance: { kind: 'backtest_result' }" in result_handoff
+    assert "if (!selectedIsV8) url += '&result_path='" in result_handoff
+    assert "Authorization" not in result_handoff
 
 
 def test_v8_supports_every_shared_native_backtest_operation() -> None:
