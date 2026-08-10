@@ -108,6 +108,50 @@ def _is_home_relative_log_path(log_path: str) -> bool:
     return normalized.startswith("software/") or normalized.startswith(("pb7/logs/", "pb8/logs/"))
 
 
+def _remote_log_follow_command(log_path: str, full_path: str) -> str:
+    """Build a remote tail command which follows native bot log aliases."""
+    parts = PurePosixPath(log_path).parts
+    is_native_bot_log = (
+        (len(parts) == 4 and parts[0] == "software" and parts[1] in {"pb7", "pb8"}
+         and parts[2] == "logs")
+        or (len(parts) == 3 and parts[0] in {"pb7", "pb8"} and parts[1] == "logs")
+    )
+    if not is_native_bot_log:
+        return f"tail -F -n 0 {full_path} 2>/dev/null"
+
+    script = "\n".join((
+        f"path={full_path}",
+        'current=""',
+        'if [ -f "$path" ]; then current=$(readlink -f -- "$path" 2>/dev/null || true); fi',
+        'catch_up=200',
+        'if [ -n "$current" ]; then catch_up=0; fi',
+        'last=""',
+        'tail_pid=""',
+        'cleanup() {',
+        '  if [ -n "$tail_pid" ]; then',
+        '    kill "$tail_pid" 2>/dev/null || true',
+        '    wait "$tail_pid" 2>/dev/null || true',
+        '    tail_pid=""',
+        '  fi',
+        '}',
+        "trap 'exit 0' HUP INT TERM",
+        'trap cleanup EXIT',
+        'while :; do',
+        '  current=""',
+        '  if [ -f "$path" ]; then current=$(readlink -f -- "$path" 2>/dev/null || true); fi',
+        '  if [ -n "$current" ] && [ "$current" != "$last" ]; then',
+        '    cleanup',
+        '    tail -F -n "$catch_up" -- "$current" 2>/dev/null &',
+        '    tail_pid=$!',
+        '    last=$current',
+        '    catch_up=200',
+        '  fi',
+        '  sleep 1',
+        'done',
+    ))
+    return f"sh -c {shlex.quote(script)}"
+
+
 def _normalize_pb_version(pb_version: object) -> str:
     """Return the supported Passivbot runtime version for a logical identifier."""
     value = str(pb_version or "7").strip().lower()
@@ -718,8 +762,9 @@ class AsyncLogStreamer:
         proc = None
         try:
             while stream.active and attempt <= _MAX_RETRIES:
+                follow_command = _remote_log_follow_command(stream.log_path, full_path)
                 proc = await self._pool.start_process(
-                    stream.hostname, f"tail -F -n 0 {full_path} 2>/dev/null"
+                    stream.hostname, follow_command
                 )
                 if not proc:
                     attempt += 1

@@ -1,7 +1,9 @@
 """Tests for async log path resolution helpers."""
 
 import asyncio
+import os
 import shlex
+import signal
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -119,6 +121,55 @@ def test_remote_pb8_logs_path_uses_cached_pb8dir():
     )
 
     assert path == "/srv/passivbot8/logs/live-bot.log"
+
+
+def test_regular_remote_log_follow_command_uses_direct_tail():
+    """Keep ordinary daemon log streams on the lightweight direct tail path."""
+    command = async_logs._remote_log_follow_command(
+        "data/logs/PBRun.log",
+        '"$HOME"/software/pbgui/data/logs/PBRun.log',
+    )
+
+    assert command == 'tail -F -n 0 "$HOME"/software/pbgui/data/logs/PBRun.log 2>/dev/null'
+
+
+def test_native_bot_log_stream_follows_replaced_symlink(tmp_path):
+    """Show new startup lines promptly when PB7 replaces its current-log alias."""
+
+    async def exercise_stream() -> None:
+        old_log = tmp_path / "old.log"
+        new_log = tmp_path / "new.log"
+        alias = tmp_path / "bot.log"
+        replacement = tmp_path / "bot.log.next"
+        old_log.write_text("old history\n", encoding="utf-8")
+        alias.symlink_to(old_log)
+        command = async_logs._remote_log_follow_command(
+            "software/pb7/logs/bot.log",
+            shlex.quote(str(alias)),
+        )
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        assert process.stdout is not None
+        try:
+            await asyncio.sleep(1.2)
+            with old_log.open("a", encoding="utf-8") as handle:
+                handle.write("old live\n")
+                handle.flush()
+            assert (await asyncio.wait_for(process.stdout.readline(), 3)).decode().strip() == "old live"
+
+            new_log.write_text("new startup\n", encoding="utf-8")
+            replacement.symlink_to(new_log)
+            replacement.replace(alias)
+            assert (await asyncio.wait_for(process.stdout.readline(), 3)).decode().strip() == "new startup"
+        finally:
+            if process.returncode is None:
+                os.killpg(process.pid, signal.SIGTERM)
+            await asyncio.wait_for(process.wait(), 3)
+
+    asyncio.run(exercise_stream())
 
 
 @pytest.mark.parametrize(

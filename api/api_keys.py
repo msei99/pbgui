@@ -8,6 +8,7 @@ All endpoints require auth (Bearer token).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from functools import wraps
 import os
@@ -390,16 +391,39 @@ def _get_agent_address(private_key: str) -> Optional[str]:
         return None
 
 
+def _hl_credential_fingerprint(user, agent_address: Optional[str] = None) -> Optional[str]:
+    """Identify expiry-relevant HL credentials without storing secret material."""
+    private_key = str(getattr(user, "private_key", "") or "")
+    if private_key and agent_address is None:
+        agent_address = _get_agent_address(private_key)
+    if private_key and not agent_address:
+        return None
+    public_identity = {
+        "agent_address": str(agent_address or "").lower(),
+        "has_private_key": bool(private_key),
+        "is_vault": bool(getattr(user, "is_vault", False)),
+        "wallet_address": str(getattr(user, "wallet_address", "") or "").lower(),
+    }
+    encoded = json.dumps(public_identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _check_hl_expiry_single(user, users_obj=None) -> HLExpiryInfo:
-    """Check expiry for a single Hyperliquid user and persist to the local state file."""
+    """Check one Hyperliquid key and persist state for saved credentials only."""
     from datetime import datetime, timezone
 
     info = HLExpiryInfo(name=user.name, is_vault=user.is_vault)
+    persist_state = users_obj is not None
 
     if not user.private_key:
         info.status = "no_expiry"
         info.error = "No private key configured"
-        clear_user_state(user.name, ("hl_valid_until",))
+        if persist_state:
+            update_user_state(
+                user.name,
+                hl_valid_until=None,
+                hl_credential_fingerprint=_hl_credential_fingerprint(user),
+            )
         return info
 
     agent_addr = _get_agent_address(user.private_key)
@@ -409,6 +433,7 @@ def _check_hl_expiry_single(user, users_obj=None) -> HLExpiryInfo:
         return info
 
     info.agent_address = agent_addr
+    credential_fingerprint = _hl_credential_fingerprint(user, agent_addr)
 
     try:
         if user.is_vault and user.wallet_address:
@@ -442,13 +467,23 @@ def _check_hl_expiry_single(user, users_obj=None) -> HLExpiryInfo:
 
         if not matched:
             info.status = "no_expiry"
-            clear_user_state(user.name, ("hl_valid_until",))
+            if persist_state:
+                update_user_state(
+                    user.name,
+                    hl_valid_until=None,
+                    hl_credential_fingerprint=credential_fingerprint,
+                )
             return info
 
         valid_until = matched.get("validUntil")
         if valid_until is None:
             info.status = "no_expiry"
-            clear_user_state(user.name, ("hl_valid_until",))
+            if persist_state:
+                update_user_state(
+                    user.name,
+                    hl_valid_until=None,
+                    hl_credential_fingerprint=credential_fingerprint,
+                )
             return info
 
         info.valid_until = int(valid_until)
@@ -467,7 +502,12 @@ def _check_hl_expiry_single(user, users_obj=None) -> HLExpiryInfo:
         else:
             info.status = "ok"
 
-        update_user_state(user.name, hl_valid_until=int(valid_until))
+        if persist_state:
+            update_user_state(
+                user.name,
+                hl_valid_until=int(valid_until),
+                hl_credential_fingerprint=credential_fingerprint,
+            )
 
         return info
 
@@ -492,7 +532,7 @@ def _refresh_hl_expiry_cache(users_obj=None) -> dict[str, HLExpiryInfo]:
     result: dict[str, HLExpiryInfo] = {}
     for user in users_obj:
         if user.exchange == "hyperliquid":
-            info = _check_hl_expiry_single(user, users_obj=None)
+            info = _check_hl_expiry_single(user, users_obj=users_obj)
             result[user.name] = info
 
     with _hl_expiry_cache_lock:

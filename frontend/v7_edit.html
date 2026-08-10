@@ -1921,6 +1921,8 @@ async function refreshHostCapabilities() {
   try {
     var payload = await requestHostCapabilities();
     if (!payload) return;
+    var currentSelection = getVal('f-enabled-on');
+    if (currentSelection && currentSelection !== selected) selected = currentSelection;
     hostCapabilitiesByName = payload.host_capabilities || {};
     allHosts = payload.hosts || allHosts;
     if (selected && selected !== 'disabled' && allHosts.indexOf(selected) < 0) {

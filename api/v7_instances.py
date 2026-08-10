@@ -758,16 +758,21 @@ def _managed_vps_runtime_capability(hostname: str) -> dict | None:
 
     runtime_profile = str(getattr(vps, "runtime_profile", "") or "").strip().lower()
     setup_status = str(getattr(vps, "setup_status", "") or "").strip().lower()
-    capable = runtime_profile in _PB7_RUNTIME_PROFILES and setup_status == "successful"
+    profile_capable = runtime_profile in _PB7_RUNTIME_PROFILES
+    setup_complete = setup_status == "successful"
+    capable = True if profile_capable and setup_complete else False if not profile_capable else None
     if runtime_profile not in _PB7_RUNTIME_PROFILES:
         reason = f"VPS runtime profile is {runtime_profile or 'unknown'}"
-    elif setup_status != "successful":
-        reason = f"VPS setup status is {setup_status or 'unknown'}"
+    elif not setup_complete:
+        reason = (
+            "VPS inventory has a PB7 runtime profile but no completed setup status; "
+            "fresh host metadata is required"
+        )
     else:
         reason = "VPS inventory confirms a completed PB7 setup"
     return {
         "pb7_capable": capable,
-        "pb7_capability_confirmed": True,
+        "pb7_capability_confirmed": capable is not None,
         "pb7_capability_source": "vps_inventory",
         "pb7_capability_reason": reason,
         "pb7_capability_stale": False,
@@ -863,9 +868,12 @@ def _host_pb7_runtime_capability(hostname: str) -> dict:
             "setup_status": "successful" if ready is True else None,
         }
     managed = _managed_vps_runtime_capability(clean_host)
-    if managed is not None:
+    if managed is not None and managed["pb7_capable"] is not None:
         return managed
-    return _remote_host_meta_runtime_capability(clean_host)
+    remote = _remote_host_meta_runtime_capability(clean_host)
+    if remote["pb7_capable"] is not None:
+        return remote
+    return managed if managed is not None else remote
 
 
 def _validate_enabled_on_target(hostname: str) -> str:

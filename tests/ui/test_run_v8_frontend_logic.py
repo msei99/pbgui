@@ -216,6 +216,44 @@ def test_run_editor_preserves_configured_target_when_capability_is_unconfirmed()
     _run_node(script)
 
 
+def test_run_editor_preserves_host_selected_during_capability_refresh() -> None:
+    """A late capability response must not revert a host selected while it was loading."""
+
+    page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+    refresh_hosts = "async " + _page_function(page, "refreshHostCapabilities")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let allHosts = ['disabled'];
+        let hostCapabilitiesByName = {{}};
+        const select = {{options: [{{value: 'disabled'}}], value: 'disabled'}};
+        const document = {{getElementById: () => select}};
+        let resolveRequest;
+        function getVal() {{ return select.value; }}
+        function requestHostCapabilities() {{
+          return new Promise(resolve => {{ resolveRequest = resolve; }});
+        }}
+        function populateHosts() {{
+          select.options = allHosts.map(value => ({{value}}));
+          select.value = allHosts[0];
+        }}
+        {refresh_hosts}
+
+        (async () => {{
+          const pending = refreshHostCapabilities();
+          select.value = 'manibot51';
+          resolveRequest({{
+            hosts: ['disabled', 'manibot51'],
+            host_capabilities: {{manibot51: {{pb7_capable: true}}}}
+          }});
+          await pending;
+          assert.equal(select.value, 'manibot51');
+        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    _run_node(script)
+
+
 def test_v7_forced_mode_aliases_select_the_visible_editor_options() -> None:
     """Canonical PB7 forced modes must map to the editor's short option values."""
 

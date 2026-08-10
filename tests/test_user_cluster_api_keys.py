@@ -114,6 +114,45 @@ def test_hl_expiry_preview_uses_copy_without_persisting_override(monkeypatch) ->
     assert user.private_key == "stored-key"
 
 
+def test_hl_expiry_state_records_identity_only_for_saved_key(monkeypatch) -> None:
+    """Bind persisted expiry metadata to saved credentials and never to a preview."""
+    from api import api_keys
+
+    valid_until = 1_900_000_000_000
+    user = SimpleNamespace(
+        name="alice",
+        private_key="stored-key",
+        wallet_address="0xwallet",
+        is_vault=False,
+    )
+    updates = []
+    monkeypatch.setattr(api_keys, "_get_agent_address", lambda _key: "0xagent")
+    monkeypatch.setattr(
+        api_keys,
+        "_query_hl_info",
+        lambda _payload: [{"address": "0xagent", "validUntil": valid_until}],
+    )
+    monkeypatch.setattr(
+        api_keys,
+        "update_user_state",
+        lambda name, **fields: updates.append((name, fields)),
+    )
+
+    fingerprint = api_keys._hl_credential_fingerprint(user, "0xagent")
+    saved = api_keys._check_hl_expiry_single(
+        user,
+        users_obj=SimpleNamespace(_loaded_api_serial=42),
+    )
+    preview = api_keys._check_hl_expiry_single(user, users_obj=None)
+
+    assert saved.valid_until == valid_until
+    assert preview.valid_until == valid_until
+    assert updates == [(
+        "alice",
+        {"hl_valid_until": valid_until, "hl_credential_fingerprint": fingerprint},
+    )]
+
+
 def test_hl_expiry_routes_separate_saved_get_from_preview_post() -> None:
     """Only POST accepts an unsaved private key body for the expiry preview."""
     from api import api_keys

@@ -1804,6 +1804,51 @@ def test_materialize_api_keys_preview_and_apply_writes_secret_blob(
     assert after["counts"]["current"] == 1
 
 
+def test_materialize_api_keys_clears_only_changed_hl_expiry_state(monkeypatch, tmp_path: Path) -> None:
+    """Credential projection invalidates only HL users whose relevant fields changed."""
+
+    root = _init_cluster(tmp_path)
+    pb7 = tmp_path / "pb7"
+    pb7.mkdir()
+    target = pb7 / "api-keys.json"
+    current = {
+        "_api_serial": 1,
+        "changed-hl": {"exchange": "hyperliquid", "private_key": "old", "wallet_address": "0x1"},
+        "same-hl": {"exchange": "hyperliquid", "private_key": "same", "wallet_address": "0x2"},
+        "changed-bybit": {"exchange": "bybit", "key": "old", "secret": "old"},
+    }
+    desired = {
+        "_api_serial": 2,
+        "changed-hl": {"exchange": "hyperliquid", "private_key": "new", "wallet_address": "0x1"},
+        "same-hl": {"exchange": "hyperliquid", "private_key": "same", "wallet_address": "0x2"},
+        "changed-bybit": {"exchange": "bybit", "key": "new", "secret": "new"},
+    }
+    target.write_text(json.dumps(current), encoding="utf-8")
+    monkeypatch.setattr("cluster_sync_command.PBGDIR", str(tmp_path))
+    monkeypatch.setattr("cluster_sync_command.pb7dir", lambda: str(pb7))
+    cleared = []
+    monkeypatch.setattr(
+        "api_key_state.clear_user_state",
+        lambda name, keys: cleared.append((name, tuple(keys))),
+    )
+    raw_secret = json.dumps(desired).encode("utf-8")
+    secret_hash = "sha256:" + hashlib.sha256(raw_secret).hexdigest()
+    _write_secret_blob(root, secret_hash, raw_secret)
+    append_operation(
+        root,
+        "UPSERT_API_KEYS",
+        {"api_serial": 2, "payload_hash": HASH_A, "secret_blob_hash": secret_hash},
+        created_at=102,
+    )
+
+    result = run_command(root, NODE_B, "materialize-api-keys")
+
+    assert result["status"] == "written"
+    assert [name for name, _keys in cleared] == ["changed-hl"]
+    assert "hl_valid_until" in cleared[0][1]
+    assert "hl_credential_fingerprint" in cleared[0][1]
+
+
 def test_materialize_api_keys_blocks_when_secret_blob_is_missing(tmp_path: Path) -> None:
     """materialize-api-keys refuses to write when the desired secret blob is missing."""
 

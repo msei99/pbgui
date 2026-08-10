@@ -1624,11 +1624,13 @@ def _materialize_api_keys(cluster_root: Path, *, write: bool) -> dict[str, Any]:
     source_payload = _read_json_payload(raw, MAX_SECRET_BLOB_BYTES)
     is_vps_runner = str(identity.get("role") or "").strip().lower() == "vps"
     written = 0
+    changed_hl_users: set[str] = set()
     for projection_name, target, status_path in _api_keys_projection_targets(cluster_root):
         writer = PB7ApiKeysMergeWriter(target, status_path)
         current = writer.read()
         if exchange_payload(current) == exchange_payload(source_payload):
             continue
+        changed_hl_users.update(_changed_hl_credential_users(current, source_payload))
         backup_file = None
         if projection_name == "pb7" and not is_vps_runner and target.is_file():
             backup_dir = Path(PBGDIR) / "data" / "api-keys"
@@ -1646,6 +1648,15 @@ def _materialize_api_keys(cluster_root: Path, *, write: bool) -> dict[str, Any]:
             raise ClusterSyncCommandError(f"{projection_name} exchange API-key projection verification failed")
         written += 1
 
+    if changed_hl_users:
+        from api_key_state import clear_user_state
+
+        for user_name in sorted(changed_hl_users):
+            clear_user_state(
+                user_name,
+                ("hl_valid_until", "hl_credential_fingerprint"),
+            )
+
     counts = dict(plan.get("counts") or {})
     counts["written"] = written
     plan.update({
@@ -1657,6 +1668,33 @@ def _materialize_api_keys(cluster_root: Path, *, write: bool) -> dict[str, Any]:
         "message": "Exchange API keys were projected for configured runtimes. No bots were restarted.",
     })
     return plan
+
+
+def _changed_hl_credential_users(current: dict[str, Any], desired: dict[str, Any]) -> set[str]:
+    """Return HL users whose expiry-relevant credentials actually changed."""
+
+    def signature(payload: dict[str, Any], name: str) -> tuple[Any, ...] | None:
+        item = payload.get(name)
+        if not isinstance(item, dict) or str(item.get("exchange") or "").lower() != "hyperliquid":
+            return None
+        return (
+            str(item.get("private_key") or item.get("privateKey") or ""),
+            str(item.get("wallet_address") or item.get("walletAddress") or item.get("wallet") or ""),
+            bool(item.get("is_vault", False)),
+        )
+
+    changed: set[str] = set()
+    names = {
+        str(name)
+        for name in set(current) | set(desired)
+        if str(name) and not str(name).startswith("_")
+    }
+    for name in names:
+        old_signature = signature(current, name)
+        new_signature = signature(desired, name)
+        if (old_signature is not None or new_signature is not None) and old_signature != new_signature:
+            changed.add(name)
+    return changed
 
 
 def _build_materialize_api_keys_plan(cluster_root: Path, desired_state: dict[str, Any], node_id: str) -> dict[str, Any]:

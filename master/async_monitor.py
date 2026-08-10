@@ -107,6 +107,7 @@ SERVICE_CHECK_EVERY = 4     # every N iterations (= 60s at 15s)
 INSTANCE_COLLECT_INTERVAL = 30  # seconds
 HOST_META_INTERVAL = 10     # seconds
 PACKAGE_STATUS_INTERVAL = 3600  # seconds
+HL_EXPIRY_RETRY_SECONDS = 300
 METRICS_STREAM_STARTUP_GRACE_SECONDS = 30.0
 METRICS_STREAM_STALE_SECONDS = 15.0
 METRICS_STREAM_RECONNECT_AFTER_STALE_RESTARTS = 2
@@ -3589,6 +3590,7 @@ class VPSMonitor:
         self._alert_telegram_routes: dict[str, bool] = dict(ALERT_ROUTE_TELEGRAM_DEFAULTS)
         self._alert_routes_loaded = False
         self._hl_expiry_last_warned: dict[str, str] = {}
+        self._hl_expiry_retry_after: dict[str, float] = {}
 
         # Restart rate limiting
         self._restart_history: dict[str, dict[str, list[datetime]]] = {}
@@ -4281,7 +4283,57 @@ class VPSMonitor:
         for user in users:
             if getattr(user, "exchange", "") != "hyperliquid":
                 continue
-            vu = get_user_state(user.name).get("hl_valid_until")
+            if not inventory.should_warn(user.name):
+                continue
+            user_state = get_user_state(user.name)
+            stored_fingerprint = str(user_state.get("hl_credential_fingerprint") or "")
+            needs_refresh = not stored_fingerprint and user_state.get("hl_valid_until") is None
+            if stored_fingerprint:
+                try:
+                    from api.api_keys import _hl_credential_fingerprint
+
+                    current_fingerprint = await asyncio.to_thread(_hl_credential_fingerprint, user)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    _log(
+                        SERVICE,
+                        f"[alerts] HL credential identity failed for {user.name}: {type(exc).__name__}",
+                        level="WARNING",
+                    )
+                    current_fingerprint = None
+                needs_refresh = not current_fingerprint or current_fingerprint != stored_fingerprint
+
+            if needs_refresh:
+                now_monotonic = time.monotonic()
+                if self._hl_expiry_retry_after.get(user.name, 0.0) > now_monotonic:
+                    continue
+                try:
+                    from api.api_keys import _check_hl_expiry_single
+
+                    expiry_info = await asyncio.to_thread(
+                        _check_hl_expiry_single,
+                        user,
+                        users,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    _log(
+                        SERVICE,
+                        f"[alerts] HL expiry refresh failed for {user.name}: {type(exc).__name__}",
+                        level="WARNING",
+                    )
+                    expiry_info = None
+                if expiry_info is None or getattr(expiry_info, "status", "error") == "error":
+                    self._hl_expiry_retry_after[user.name] = now_monotonic + HL_EXPIRY_RETRY_SECONDS
+                    continue
+                self._hl_expiry_retry_after.pop(user.name, None)
+                user_state = get_user_state(user.name)
+                if not user_state.get("hl_credential_fingerprint"):
+                    continue
+
+            vu = user_state.get("hl_valid_until")
             if vu is None:
                 continue
             try:
@@ -4290,8 +4342,6 @@ class VPSMonitor:
             except Exception:
                 continue
             if days > warning_days:
-                continue
-            if not inventory.should_warn(user.name):
                 continue
             if self._hl_expiry_last_warned.get(user.name) == today_str:
                 continue

@@ -9,7 +9,12 @@ from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR
 
 SERVICE = "ApiKeyState"
-RUNTIME_STATE_KEYS: frozenset[str] = frozenset({"hl_valid_until", "bybit_expires_at", "bybit_ips"})
+RUNTIME_STATE_KEYS: frozenset[str] = frozenset({
+    "hl_valid_until",
+    "hl_credential_fingerprint",
+    "bybit_expires_at",
+    "bybit_ips",
+})
 _STATE_FILE = Path(PBGDIR) / "data" / "state" / "api_keys" / "api_key_state.json"
 _LEGACY_STATE_FILE = Path(PBGDIR) / "data" / "api_key_state.json"
 _STATE_LOCK = threading.Lock()

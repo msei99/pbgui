@@ -3463,6 +3463,7 @@ def test_v7_managed_runtime_inventory_excludes_pb8_only_host(
     (tmp_path / "pbgui.ini").write_text("[main]\npbname=master\n", encoding="utf-8")
     inventory = {
         "pb7-host": SimpleNamespace(runtime_profile="pb7", setup_status="successful"),
+        "legacy-pb7": SimpleNamespace(runtime_profile="pb7", setup_status=None),
         "pb8-host": SimpleNamespace(runtime_profile="pb8", setup_status="successful"),
         "setup-incomplete": SimpleNamespace(runtime_profile="pb7", setup_status="failed"),
     }
@@ -3479,8 +3480,14 @@ def test_v7_managed_runtime_inventory_excludes_pb8_only_host(
         "_monitor",
         SimpleNamespace(
             pool=True,
-            enabled_hosts={"pb7-host", "pb8-host", "setup-incomplete"},
+            enabled_hosts={"legacy-pb7", "pb7-host", "pb8-host", "setup-incomplete"},
             store=SimpleNamespace(host_meta={
+                "legacy-pb7": {
+                    "generated_at": time.time(),
+                    "pb7v": "v7.12.0",
+                    "pb7_config_schema": "v7.12.0",
+                    "pb7py": "3.12",
+                },
                 "pb8-host": {
                     "generated_at": time.time(),
                     "pb7v": "v7.12.0",
@@ -3493,8 +3500,10 @@ def test_v7_managed_runtime_inventory_excludes_pb8_only_host(
 
     response = v7_instances.get_hosts(session=SimpleNamespace())
 
-    assert response["hosts"] == ["disabled", "master", "pb7-host"]
-    assert response["host_capabilities"]["setup-incomplete"]["pb7_capable"] is False
+    assert response["hosts"] == ["disabled", "master", "legacy-pb7", "pb7-host"]
+    assert response["host_capabilities"]["legacy-pb7"]["pb7_capability_source"] == "host_meta"
+    assert response["host_capabilities"]["setup-incomplete"]["pb7_capable"] is None
+    assert response["host_capabilities"]["setup-incomplete"]["pb7_capability_confirmed"] is False
     assert response["host_capabilities"]["pb8-host"] == {
         "name": "pb8-host",
         "pb7_capable": False,

@@ -68,17 +68,45 @@ def _run_expiry_check(
     root: Path,
     user_names: list[str],
     observations: list[tuple[str, str, Any]],
-) -> tuple[VPSMonitor, list[str]]:
+    *,
+    state_fingerprint: str = "current-fingerprint",
+    refreshed_expiry_days: int = 2,
+    refresh_status: str = "ok",
+) -> tuple[VPSMonitor, list[str], list[str]]:
     """Run one expiry check with isolated users, state, config roots, and alerts."""
 
     users = [SimpleNamespace(name=name, exchange="hyperliquid") for name in user_names]
     expiry_ms = int((datetime.now(tz=timezone.utc) + timedelta(days=2)).timestamp() * 1000)
     user_module = types.ModuleType("User")
     user_module.Users = lambda: users
+    user_state = {
+        "hl_valid_until": expiry_ms,
+        "hl_credential_fingerprint": state_fingerprint,
+    }
     state_module = types.ModuleType("api_key_state")
-    state_module.get_user_state = lambda _name: {"hl_valid_until": expiry_ms}
+    state_module.get_user_state = lambda _name: dict(user_state)
     monkeypatch.setitem(sys.modules, "User", user_module)
     monkeypatch.setitem(sys.modules, "api_key_state", state_module)
+    checks: list[str] = []
+    api_keys_module = types.ModuleType("api.api_keys")
+    api_keys_module._hl_credential_fingerprint = lambda _user: "current-fingerprint"
+
+    def refresh_expiry(user, users_obj):
+        """Simulate a fresh exchange check for the loaded API-key generation."""
+
+        checks.append(user.name)
+        if refresh_status == "error":
+            return SimpleNamespace(status="error")
+        user_state.update({
+            "hl_valid_until": int(
+                (datetime.now(tz=timezone.utc) + timedelta(days=refreshed_expiry_days)).timestamp() * 1000
+            ),
+            "hl_credential_fingerprint": "current-fingerprint",
+        })
+        return SimpleNamespace(status=refresh_status)
+
+    api_keys_module._check_hl_expiry_single = refresh_expiry
+    monkeypatch.setitem(sys.modules, "api.api_keys", api_keys_module)
     monkeypatch.setattr(async_monitor, "PBGDIR", str(root))
     monkeypatch.setattr(async_monitor, "load_ini", lambda section, key: "7" if (section, key) == ("hl_expiry", "telegram_warning_days") else "")
 
@@ -86,6 +114,7 @@ def _run_expiry_check(
     monitor._telegram_token = "telegram-token"
     monitor._telegram_chat_id = "telegram-chat"
     monitor._hl_expiry_last_warned = {}
+    monitor._hl_expiry_retry_after = {}
     monitor.store = _make_store(observations)
     sent: list[str] = []
 
@@ -97,7 +126,7 @@ def _run_expiry_check(
     monitor._send_alert = capture
     monitor._save_alert_state = lambda: None
     asyncio.run(monitor.check_hl_expiry())
-    return monitor, sent
+    return monitor, sent, checks
 
 
 @pytest.mark.parametrize(
@@ -192,11 +221,12 @@ def test_hl_expiry_warning_follows_live_config_state(
     if desired is not None:
         _write_desired_state(tmp_path, desired)
 
-    _monitor, sent = _run_expiry_check(monkeypatch, tmp_path, user_names, observations)
+    _monitor, sent, checks = _run_expiry_check(monkeypatch, tmp_path, user_names, observations)
 
     message = "\n".join(sent)
     warned = {name for name in user_names if f"*{name}*" in message}
     assert warned == expected_warned
+    assert checks == []
 
 
 @pytest.mark.parametrize("runtime", ["7", "8"], ids=["pb7", "pb8"])
@@ -208,7 +238,7 @@ def test_suppressed_hl_user_is_not_daily_deduped(
     """A stopped bot may start later and still trigger its first warning that day."""
 
     _write_live_config(tmp_path, runtime, "bot", "alice", "disabled")
-    monitor, sent = _run_expiry_check(monkeypatch, tmp_path, ["alice"], [])
+    monitor, sent, _checks = _run_expiry_check(monkeypatch, tmp_path, ["alice"], [])
 
     assert sent == []
     assert "alice" not in monitor._hl_expiry_last_warned
@@ -219,3 +249,56 @@ def test_suppressed_hl_user_is_not_daily_deduped(
     assert len(sent) == 1
     assert "*alice*" in sent[0]
     assert "alice" in monitor._hl_expiry_last_warned
+
+
+@pytest.mark.parametrize(
+    ("refreshed_expiry_days", "expect_warning"),
+    [(90, False), (-2, True)],
+    ids=["new-key-valid", "new-key-expired"],
+)
+def test_hl_expiry_warning_refreshes_changed_hl_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    refreshed_expiry_days: int,
+    expect_warning: bool,
+) -> None:
+    """Refresh changed HL credentials once, then warn only from the fresh result."""
+
+    _write_live_config(tmp_path, "7", "bot", "alice", "runner")
+    monitor, sent, checks = _run_expiry_check(
+        monkeypatch,
+        tmp_path,
+        ["alice"],
+        [],
+        state_fingerprint="previous-fingerprint",
+        refreshed_expiry_days=refreshed_expiry_days,
+    )
+
+    assert checks == ["alice"]
+    assert bool(sent) is expect_warning
+    assert ("alice" in monitor._hl_expiry_last_warned) is expect_warning
+
+    asyncio.run(monitor.check_hl_expiry())
+    assert checks == ["alice"]
+
+
+def test_hl_expiry_refresh_error_uses_retry_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Do not retry a failed changed-credential check every monitor minute."""
+
+    _write_live_config(tmp_path, "7", "bot", "alice", "runner")
+    monitor, sent, checks = _run_expiry_check(
+        monkeypatch,
+        tmp_path,
+        ["alice"],
+        [],
+        state_fingerprint="previous-fingerprint",
+        refresh_status="error",
+    )
+
+    asyncio.run(monitor.check_hl_expiry())
+
+    assert sent == []
+    assert checks == ["alice"]
