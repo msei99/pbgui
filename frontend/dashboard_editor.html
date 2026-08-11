@@ -1106,10 +1106,8 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
           st.loading = false;
           st.source = d.source || 'db';
           st.lastTs = Date.now();
-          if (st.source === 'live' || st.source === 'mixed') {
-            if (typeof container._dpUpdate === 'function') container._dpUpdate(d.positions || [], d.source || 'db');
-            _setSourceStatus(container, '.dt-status', st.source, st.lastTs);
-          }
+          if (typeof container._dpUpdate === 'function') container._dpUpdate(d.positions || [], st.source);
+          _setSourceStatus(container, '.dt-status', st.source, st.lastTs);
         })
         .catch(function () { st.loading = false; _clearBadge(container, '.dt-status'); });
     }
@@ -2777,7 +2775,10 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
           else if (type === 'ADG')       buildAdgInline(ipDiv, r, c);
           else if (type === 'P+L')       buildPplInline(ipDiv, r, c);
           else if (type === 'BALANCE')   buildBalanceInline(ipDiv, r, c);
-          else if (type === 'POSITIONS') buildPositionsInline(ipDiv, r, c);
+          else if (type === 'POSITIONS') {
+            var liveState = _liveState['pos_' + r + '_' + c];
+            if (!liveState || !liveState.timer) buildPositionsInline(ipDiv, r, c);
+          }
         }
       }
     }
@@ -2796,7 +2797,9 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
           if (m.type === 'income_updated') {
             types = ['INCOME', 'TOP', 'PNL', 'ADG', 'P+L'];
           } else if (m.type === 'balance_updated') {
-            types = ['BALANCE', 'POSITIONS'];
+            types = ['BALANCE'];
+          } else if (m.type === 'positions_updated') {
+            types = ['POSITIONS'];
           }
           if (types) {
             /* merge into pending set and debounce rebuild by 300 ms */

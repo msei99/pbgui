@@ -306,6 +306,30 @@ def test_dashboard_positions_waits_for_live_before_rendering_db_fallback() -> No
     )
 
 
+def test_dashboard_editor_does_not_rebuild_live_positions_on_balance_updates() -> None:
+    """Balance notifications must not replace active live positions with a DB snapshot."""
+    source = (ROOT / "frontend" / "dashboard_editor.html").read_text(encoding="utf-8")
+    ws_start = source.index("function _rebuildCellsOfTypes(types)")
+    ws_end = source.index("_connectWs();", ws_start)
+    ws_source = source[ws_start:ws_end]
+
+    assert "types = ['BALANCE'];" in ws_source
+    assert "types = ['BALANCE', 'POSITIONS'];" not in ws_source
+    assert "m.type === 'positions_updated'" in ws_source
+    assert "if (!liveState || !liveState.timer) buildPositionsInline" in ws_source
+
+
+def test_dashboard_editor_live_positions_renders_backend_db_fallback() -> None:
+    """The live poller must render the endpoint's DB fallback when live retrieval fails."""
+    source = (ROOT / "frontend" / "dashboard_editor.html").read_text(encoding="utf-8")
+    live_start = source.index("function _connectLivePos(")
+    live_end = source.index("function _connectLiveBal(", live_start)
+    live_source = source[live_start:live_end]
+
+    assert "container._dpUpdate(d.positions || [], st.source)" in live_source
+    assert "if (st.source === 'live' || st.source === 'mixed')" not in live_source
+
+
 class _TickerExchange:
     """Minimal exchange stub returning a fixed ticker."""
 
