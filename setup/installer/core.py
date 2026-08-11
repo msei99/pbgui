@@ -62,6 +62,7 @@ LOCAL_PREREQUISITE_COMMANDS = {
     "systemctl": "systemd user services",
 }
 LOCAL_SYSTEMD_UNITS = (
+    "pbgui-vps-monitor.service",
     "pbgui-api.service",
     "pbgui-pbcluster.service",
     "pbgui-pbrun.service",
@@ -71,6 +72,7 @@ LOCAL_SYSTEMD_UNITS = (
     "pbgui-pbremote.service",
 )
 PBGUI_SERVICE_SCRIPTS = {
+    "VPSMonitor.py",
     "PBApiServer.py",
     "PBCluster.py",
     "PBRun.py",
@@ -1298,7 +1300,7 @@ def _run_local_master_install_impl(config: LocalMasterConfig, log: LogCallback, 
                 "--python",
                 pbgui_venv / "bin" / "python",
                 "--enable",
-                "api,pbrun,pbdata,pbcoindata,monitor-agent",
+                "vps-monitor,api,pbrun,pbdata,pbcoindata,monitor-agent",
             ],
             log,
         )

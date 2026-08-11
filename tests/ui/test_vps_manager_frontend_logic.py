@@ -140,6 +140,212 @@ class TestVpsManagerFrontendLogic:
         assert "st.pb8_installed ? 'Updates the installed PB8 runtime.'" in sidebar_source
         assert "PB8-only leaves PBRun disabled" not in source
 
+    def test_pb8_branch_sidebar_views_and_hash_routes_are_installed_only(self) -> None:
+        """Installed PB8 runtimes expose branch views with master and VPS context routes."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        sidebar_source = _extract_function(source, "renderSidebarActions")
+        view_hash_source = _extract_function(source, "viewHash")
+        restore_source = _extract_function(source, "restoreViewFromHash")
+        render_view_source = _extract_function(source, "renderView")
+        branch_panel_source = _extract_function(source, "renderBranchPanelForCurrentView")
+        host_switch_source = _extract_function(source, "selectSidebarVpsHost")
+
+        assert sidebar_source.count("st.pb8_installed ? `<button") == 2
+        assert 'selectView("master-pb8-branch")' in sidebar_source
+        assert "data-view='vps-pb8-branch'" in sidebar_source
+        assert "'#master/pb8-branch'" in view_hash_source
+        assert "'/pb8-branch'" in view_hash_source
+        assert "selectView('master-pb8-branch')" in restore_source
+        assert "selectView('vps-pb8-branch', hostname)" in restore_source
+        assert "renderMasterBranchView('pb8')" in render_view_source
+        assert "renderVpsBranchView('pb8')" in render_view_source
+        assert branch_panel_source.count("(detail.status || {}).pb8_installed") == 2
+        assert "store.view === 'vps-pb8-branch' && !row.pb8_installed" in host_switch_source
+
+    def test_pb7_and_pb8_branch_state_and_remote_caches_are_independent(self) -> None:
+        """Each runtime keeps distinct branch selections and remote response caches."""
+        assertions = """
+        const master = defaultMasterUi();
+        const vps = defaultVpsUi();
+
+        for (const ui of [master, vps]) {
+          ui.pb7Branch = 'v7';
+          ui.pb8Branch = 'v8';
+          ui.pb7RemoteBranches.push('seven');
+          ui.pb8RemoteBranches.push('eight');
+          ui.pb7RemoteCommits.seven = [{ full: '777' }];
+          ui.pb8RemoteCommits.eight = [{ full: '888' }];
+
+          assert.equal(ui.pb7Branch, 'v7');
+          assert.equal(ui.pb8Branch, 'v8');
+          assert.deepEqual(ui.pb7RemoteBranches, ['seven']);
+          assert.deepEqual(ui.pb8RemoteBranches, ['eight']);
+          assert.deepEqual(ui.pb7RemoteCommits.seven, [{ full: '777' }]);
+          assert.deepEqual(ui.pb8RemoteCommits.eight, [{ full: '888' }]);
+          assert.notEqual(ui.pb7RemoteBranches, ui.pb8RemoteBranches);
+          assert.notEqual(ui.pb7RemoteCommits, ui.pb8RemoteCommits);
+        }
+        """
+        _run_node_assertions(
+            ["defaultMasterUi", "defaultVpsUi"],
+            bootstrap="",
+            assertions=assertions,
+        )
+
+    def test_remote_branch_responses_follow_the_active_runtime_context(self) -> None:
+        """WebSocket responses remain bound to their requesting runtime after navigation."""
+        bootstrap = """
+        const store = {
+          view: 'master-pb8-branch',
+          pendingBranchRequests: {
+            eight: { runtime: 'pb8', scope: 'master', kind: 'branches', remoteUrl: 'https://example/pb8.git', branch: '' },
+            seven: { runtime: 'pb7', scope: 'master', kind: 'commits', remoteUrl: 'https://example/pb7.git', branch: 'v7-dev' }
+          },
+          master: {
+            pb7RemoteBranches: ['keep-seven'],
+            pb7RemoteCommits: {},
+            pb7RemoteCommitsRequest: 'seven',
+            pb8RemoteBranches: [],
+            pb8RemoteCommits: {},
+            pb8RemoteBranchesRequest: 'eight',
+            pb7BranchSelectInteracting: false,
+            pb8BranchSelectInteracting: false
+          },
+          pb7BranchSelectInteracting: false,
+          pb8BranchSelectInteracting: false
+        };
+        let syncs = 0;
+        function isMasterContextView() { return true; }
+        function isVpsContextView() { return false; }
+        function syncBranchViewPanel() { syncs += 1; }
+        function ensureVpsUi() { throw new Error('VPS state must not be used'); }
+        """
+        assertions = """
+        handleMessage({ type: 'remote_branches', request_id: 'eight', remote_url: 'https://example/pb8.git', branches: ['v8-dev'] });
+        assert.deepEqual(store.master.pb8RemoteBranches, ['v8-dev']);
+        assert.deepEqual(store.master.pb7RemoteBranches, ['keep-seven']);
+        assert.equal(store.master.pb8RemoteUrl, 'https://example/pb8.git');
+
+        store.view = 'master-pb7-branch';
+        handleMessage({ type: 'remote_branch_commits', request_id: 'seven', remote_url: 'https://example/pb7.git', branch: 'v7-dev', commits: [{ full: '777' }] });
+        assert.deepEqual(store.master.pb7RemoteCommits['v7-dev'], [{ full: '777' }]);
+        assert.deepEqual(store.master.pb8RemoteCommits, {});
+        assert.equal(syncs, 2);
+        """
+        _run_node_assertions(
+            ["runtimeBranchKeys", "isPb7BranchView", "isPb8BranchView", "activeRuntimeBranchRepo", "takeRuntimeBranchRequest", "handleMessage"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
+    def test_remote_head_is_used_without_manual_remote_branch_override(self) -> None:
+        """HEAD uses the loaded selected remote instead of stale local branch history."""
+        bootstrap = """
+        const ui = {
+          pb8Branch: 'feature',
+          pb8Commit: 'HEAD',
+          pb8ManualBranch: '',
+          pb8ManualCommit: '',
+          pb8RemoteBranches: ['feature'],
+          pb8RemoteCommits: { feature: [{ full: 'remote-head' }, { full: 'current' }] }
+        };
+        const state = {
+          current_branch: 'feature',
+          current_commit: 'current',
+          branches: { feature: [{ full: 'stale-local' }, { full: 'current' }] }
+        };
+        """
+        assertions = """
+        const model = pb7BranchModel(state, ui, 'pb8');
+        assert.equal(model.effectiveCommit, 'remote-head');
+        assert.equal(model.targetCommit, 'remote-head');
+        assert.equal(model.isBehindOrigin, true);
+        assert.equal(model.commitsBehind, 1);
+        assert.equal(model.usingRemoteCommitHistory, true);
+        """
+        _run_node_assertions(
+            ["runtimeBranchKeys", "branchModel", "pb7BranchModel"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
+    def test_pb8_branch_actions_use_update_commands_and_only_pb8_vars(self) -> None:
+        """PB8 branch actions use existing update commands with the contracted payload."""
+        bootstrap = """
+        const calls = [];
+        const pb8Ui = {
+          pb8Branch: 'v8-feature',
+          pb8Commit: 'HEAD',
+          pb8RemoteName: 'fork',
+          pb8RemoteUrl: 'https://example/pb8.git',
+          pb8ManualBranch: 'v8-feature',
+          pb8ManualCommit: 'cafebabe',
+          pb8RemoteBranches: ['v8-feature'],
+          pb8RemoteCommits: { 'v8-feature': [{ full: 'cafebabe' }] }
+        };
+        const branchState = {
+          current_branch: 'master',
+          current_commit: 'deadbeef',
+          branches: { master: [{ full: 'deadbeef' }], 'v8-feature': [{ full: 'cafebabe' }] },
+          remote_urls: { fork: 'https://example/pb8.git' },
+          default_remote_name: 'fork'
+        };
+        const store = {
+          master: Object.assign({}, pb8Ui),
+          vps: { runner: Object.assign({}, pb8Ui) },
+          detail: { kind: 'master', branches: { pb8: branchState } }
+        };
+        function ensureVpsUi(hostname) { return store.vps[hostname]; }
+        function shortHash(value) { return String(value || '').slice(0, 8); }
+        function runMasterWithLog(command, label, extraVars) { calls.push({ scope: 'master', command, label, extraVars }); }
+        function runVpsWithLog(hostname, command, label, extraVars) { calls.push({ scope: hostname, command, label, extraVars }); }
+        """
+        assertions = """
+        triggerPb7BranchAction('master', 'pb8');
+        store.detail = { kind: 'vps', hostname: 'runner', branches: { pb8: branchState } };
+        triggerPb7BranchAction('runner', 'pb8');
+
+        assert.equal(calls[0].command, 'master-update-pb8');
+        assert.equal(calls[1].command, 'vps-update-pb8');
+        for (const call of calls) {
+          assert.deepEqual(Object.keys(call.extraVars).sort(), [
+            'pb8_branch',
+            'pb8_commit',
+            'pb8_remote_name',
+            'pb8_remote_url',
+            'pb8_source_branch'
+          ]);
+          assert.equal(call.extraVars.pb8_branch, 'v8-feature');
+          assert.equal(call.extraVars.pb8_source_branch, 'v8-feature');
+          assert.equal(call.extraVars.pb8_commit, 'cafebabe');
+          assert.equal(call.extraVars.pb8_remote_name, 'fork');
+          assert.equal(call.extraVars.pb8_remote_url, 'https://example/pb8.git');
+          assert.equal(Object.keys(call.extraVars).some(key => key.startsWith('pb7_')), false);
+        }
+        """
+        _run_node_assertions(
+            ["runtimeBranchKeys", "branchModel", "pb7BranchModel", "triggerPb7BranchAction"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
+    def test_pb8_branch_selects_hold_live_rerenders_and_guides_match(self) -> None:
+        """PB8 selectors resist live replacement and both guides document explicit tracking."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        render_ui_source = _extract_function(source, "renderUi")
+        sync_source = _extract_function(source, "syncBranchViewPanel")
+        panel_source = _extract_function(source, "renderPb7BranchPanel")
+        english = (ROOT / "docs" / "help" / "32_vps_manager.md").read_text(encoding="utf-8")
+        german = (ROOT / "docs" / "help_de" / "32_vps_manager.md").read_text(encoding="utf-8")
+
+        assert "holdPb8BranchView" in render_ui_source
+        assert "store.pb8BranchSelectInteracting && isPb8BranchView()" in sync_source
+        assert panel_source.count("onfocus='store.${interactionField} = true'") >= 5
+        assert "PB8 Branch Management" in english
+        assert "PB8 Branch Management" in german
+        assert "normal **Update PB8**" in english
+        assert "normale Aktion **Update PB8**" in german
+
     def test_combined_update_button_warns_only_when_both_components_need_updates(self) -> None:
         """Combined PBGui/runtime actions must not duplicate one component's warning state."""
         _run_node_assertions(
@@ -1059,6 +1265,9 @@ class TestVpsManagerFrontendLogic:
           selected.push({ view: view, hostname: hostname });
           store.view = view;
           store.hostname = hostname;
+        }
+        function getOverviewRows() {
+          return [{ hostname: 'manibot90', pb8_installed: true }, { hostname: 'manibot91', pb8_installed: true }];
         }
         """
         assertions = """

@@ -142,6 +142,14 @@ def test_shared_nav_restarts_all_reported_services_and_waits_for_serials() -> No
     assert "fetch(apiBase + '/api/server-status'" in source
 
 
+def test_ordinary_api_restart_never_targets_persistent_vps_monitor() -> None:
+    """The monitor daemon has an explicit lifecycle separate from API restart."""
+
+    units = {str(item["unit"]) for item in PBApiServer._RUNTIME_SYSTEMD_SERVICES}
+
+    assert "pbgui-vps-monitor.service" not in units
+
+
 def test_blocked_restart_releases_master_update_reservation(monkeypatch) -> None:
     """Restart reserves against new updates and releases that reservation when another blocker wins."""
     class Lease:

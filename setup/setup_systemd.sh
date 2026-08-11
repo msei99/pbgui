@@ -4,7 +4,7 @@ set -euo pipefail
 TARGET_USER="${USER:-}"
 PBGUI_DIR=""
 PYTHON_BIN=""
-ENABLE_SERVICES="api,pbcluster,pbrun,pbdata,pbcoindata,monitor-agent"
+ENABLE_SERVICES="vps-monitor,api,pbcluster,pbrun,pbdata,pbcoindata,monitor-agent"
 START_SERVICES=true
 DISABLE_EXCLUDED=true
 CHANGED=false
@@ -61,7 +61,7 @@ Options:
   --user USER                 Target Linux user. Default: current user.
   --pbgui-dir PATH            PBGui directory. Default: current directory.
   --python PATH               PBGui venv Python. Default: ../venv_pbgui/bin/python.
-  --enable LIST               Comma-separated services to enable. Default: api,pbcluster,pbrun,pbdata,pbcoindata,monitor-agent.
+  --enable LIST               Comma-separated services to enable. Default: vps-monitor,api,pbcluster,pbrun,pbdata,pbcoindata,monitor-agent.
   --no-start                  Enable services but do not start/restart them now.
   --no-disable-excluded       Do not stop/disable services missing from --enable.
   -h, --help                  Show help.
@@ -127,6 +127,7 @@ validate_unit_path "Python executable" "$PYTHON_BIN"
 
 declare -a enabled=()
 declare -A allowed_services=(
+  [vps-monitor]=1
   [api]=1
   [pbcluster]=1
   [pbrun]=1
@@ -161,6 +162,7 @@ write_unit() {
   local script_name="$3"
   local exec_start_pre="${4:-}"
   local kill_mode="${5:-mixed}"
+  local unit_dependencies="${6:-}"
   local unit_path="$unit_dir/$unit_name"
   local temp_path
   temp_path="$(mktemp "$unit_dir/.${unit_name}.tmp.XXXXXX")"
@@ -170,6 +172,7 @@ write_unit() {
 Description=$description
 After=network-online.target
 Wants=network-online.target
+$unit_dependencies
 
 [Service]
 Type=simple
@@ -226,7 +229,8 @@ EOF
 }
 
 declare -A unit_changed
-write_unit "pbgui-api.service" "PBGui API Server" "PBApiServer.py" "ExecStartPre=/bin/bash $PBGUI_DIR/setup/stop_legacy_api.sh --pbgui-dir $PBGUI_DIR"
+write_unit "pbgui-vps-monitor.service" "PBGui VPS Monitor" "VPSMonitor.py"
+write_unit "pbgui-api.service" "PBGui API Server" "PBApiServer.py" "ExecStartPre=/bin/bash $PBGUI_DIR/setup/stop_legacy_api.sh --pbgui-dir $PBGUI_DIR" "mixed" $'After=pbgui-vps-monitor.service\nWants=pbgui-vps-monitor.service'
 write_unit "pbgui-pbcluster.service" "PBGui PBCluster Service" "PBCluster.py"
 write_unit "pbgui-pbrun.service" "PBGui PBRun Service" "PBRun.py" "" "process"
 write_unit "pbgui-pbdata.service" "PBGui PBData Service" "PBData.py"
@@ -361,7 +365,7 @@ if [[ "$reload_needed" == true ]]; then
 fi
 
 if [[ "$DISABLE_EXCLUDED" == true ]]; then
-  for managed_service in api pbcluster pbrun pbdata pbcoindata monitor-agent; do
+  for managed_service in vps-monitor api pbcluster pbrun pbdata pbcoindata monitor-agent; do
     disable_service_if_excluded "$managed_service"
   done
 fi

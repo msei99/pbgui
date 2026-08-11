@@ -18,7 +18,7 @@ The main view shows a table with all servers (Master + VPS) and their current st
 | **Online** | ✅ reachable / ❌ offline |
 | **Bots** | Count of unique running bots currently reported for that VPS |
 | **Started** | Last boot time |
-| **Updates** | Pending Linux package updates; healthy rows show only the count, while Stale/Missing/Error states remain visible |
+| **Updates** | Pending Linux package updates; click a non-zero count to review package names, installed/candidate versions, source, and Security/Kernel/Routine classification |
 | **PBGui / PBGui Branch / PBGui GitHub** | Installed version, branch, and whether it matches GitHub origin |
 | **PB7 / PB7 Branch / PB7 GitHub** | PB7 version, branch, and whether it matches GitHub origin |
 | **PB8 / PB8 Branch / PB8 GitHub** | PB8 version, branch, and whether it matches the current upstream PB8 revision |
@@ -45,7 +45,7 @@ The overview uses the normal shared PBGui FastAPI shell. When you switch to **Ma
 
 The Master and VPS detail headers repeat PBGui, PB7, and PB8 version cards with their branch/commit and update status. These values come from the same monitor-agent snapshot as the Overview row.
 
-PB8 updates intentionally use a detached checkout at the verified upstream `master` commit. When that detached commit exactly matches the verified upstream revision, VPS Manager labels it `master` instead of showing the low-level Git state as `unknown`.
+The normal **Update PB8** action intentionally returns PB8 to a detached checkout at the verified upstream `master` commit. When that detached commit exactly matches the verified upstream revision, VPS Manager labels it `master` instead of showing the low-level Git state as `unknown`. The explicit **PB8 Branch** view can instead track a validated v8 branch or commit from the configured upstream or a custom remote/fork.
 
 **Import Cluster Nodes** reads the local materialized `cluster_nodes` state and imports non-local nodes that have SSH metadata, regardless of their Cluster Sync mode. Disabled Cluster Sync nodes can still be imported into VPS Manager; disabled only means PBCluster should not replicate through that node. The import writes only safe local VPS Manager metadata such as hostname, SSH host, SSH user, SSH port and Remote PBGui Dir; passwords and private keys are not imported. CMC secrets are never VPS Manager fields: Cluster Sync materializes sealed pool generations separately. If local `/etc/hosts` is missing or points the hostname at a different IP, the import preview shows the required host entry changes and the apply step asks for the local sudo password before writing them. The modal asks for each imported host's VPS user password; rows left without a password are skipped, while entered passwords are used once to refresh remote settings, install the monitoring SSH key and keep the password only in the current browser/API session for later SSH-backed actions.
 
@@ -71,6 +71,7 @@ Sidebar actions:
 | **Host Logs** | Open the dedicated shared log-viewer screen for local service logs and file targets |
 | **PBGui Branch** | Open the PBGui branch management view |
 | **PB7 Branch** | Open the PB7 branch management view |
+| **PB8 Branch** | Open PB8 branch management when PB8 is installed |
 | **Update PBGui and PB7 / Update PBGui and PB8** | Update PBGui together with the runtime installed on a single-runtime host |
 | **Update PBGui** | Update only PBGui |
 | **Install PB7 / Update PB7** | Install a missing PB7 runtime or update the existing PB7 checkout and virtualenv |
@@ -83,6 +84,7 @@ The **Master** content area also contains:
 - a live status grid for CoinData / last command state
 - **PBGui Branch Management** for branch or commit switches
 - **PB7 Branch Management** with optional custom remote / fork URL support
+- **PB8 Branch Management** for installed PB8 checkouts, with independent branch/commit selection and optional custom remote / fork URL support
 - a **Monitor** section with server metrics plus runtime-labelled PB7 and PB8 activity from live processes and Cluster Sync desired state
 - a **Progress** section with separate status buckets; when a sidebar action starts a master ansible task, the main pane switches to the shared **Command Log Viewer** for the full output, and **Home** returns to the normal master overview
 
@@ -113,6 +115,7 @@ Sidebar actions:
 | **Change VPS** | Open the VPS configuration view for saved host settings |
 | **PBGui Branch** | Open the PBGui branch management view |
 | **PB7 Branch** | Open the PB7 branch management view |
+| **PB8 Branch** | Open PB8 branch management when PB8 is installed |
 | **Initialize** | Run initial VPS setup wizard |
 | **Delete VPS** | Remove this VPS from PBGui |
 | **Update PBGui** | Update PBGui on this VPS |
@@ -125,11 +128,13 @@ Sidebar actions:
 
 The **VPS** content area also contains:
 - a setup/config grid for password, swap, and firewall fields; **Apply VPS Changes** saves changes locally and applies changed swap and firewall settings on the VPS
-- **PBGui Branch Management** and **PB7 Branch Management** with the same switch / update workflow as the Master page
+- **PBGui Branch Management**, **PB7 Branch Management**, and installed-runtime **PB8 Branch Management** with the same switch / update workflow as the Master page
 - a **Remote Monitor** section with server metrics plus runtime-labelled PB7 and PB8 activity from detailed process metrics and Cluster Sync fallbacks
 - a **Progress** section with separate status buckets for init, setup and update runs; use the sidebar action buttons to open the shared **Command Log Viewer** whenever you need the full ansible output
 
 In cluster mode, **Update PBGui** and PBGui branch switches on a VPS sync PBCluster service files and restart PBCluster, PBRun and PBCoinData where those services are configured. VPS systemd migration checks include PBCluster, and the remote service/host log views expose `PBCluster.log`. Pure VPS runners still do not need `pbgui-api.service` or `PBApiServer.py`.
+
+PB7 and PB8 branch management keep separate browser state and remote caches. In either runtime view, choose a known remote or enter a fork URL, load its branches and commits, select the local target branch, and run the labelled switch/update action. The action remains disabled when the selected source branch is missing from a loaded remote. Live status updates do not rebuild the branch panel while one of its selectors is open. Running normal **Update PB8** without branch-management selections still restores the verified upstream `master`; use **PB8 Branch** only when intentionally tracking another validated v8 branch or commit.
 
 The sidebar keeps the detailed log workflows separate from the normal host overview:
 - utility actions such as **Task Logs**, **Host Logs**, **Change VPS**, **Initialize**, or **Delete VPS** stay above a divider, while the executable ansible playbook buttons are grouped below it
@@ -144,6 +149,7 @@ The sidebar keeps the detailed log workflows separate from the normal host overv
 
 The status cards above the setup grid are live operator hints:
 - Linux package status is independent of the VPS session password. Normal display refreshes read only from the monitor-agent cache. A successful **Update Linux** performs one final package probe, atomically updates that cache, and makes the master consume it immediately.
+- Click a non-zero **Updates** value in Overview or the host header to inspect the cached apt package list, including newly installed dependencies and planned removals. Security updates are marked for prompt installation, removals require a dependency/service review, kernel updates recommend a maintenance window and possible reboot, and routine updates can be scheduled with normal maintenance. Incomplete lists remain unclassified instead of understating urgency. Older agent caches remain readable but can show only the count until PBGui refreshes the agent payload.
 - **Credential Capability** and **Credential Protocol** report secret-free CMC pool readiness, active-key count, and catalog/materialized generations when available.
 - **Monitor Agent Cache** always shows **Source: agent cache** and an explicit **OK**, **Stale**, **Missing**, or **Error** state. A non-OK cache does not mean SSH is offline; SSH connection and telemetry/cache health are displayed separately.
 - The panel lists `live_metrics.ndjson`, `instance_snapshot.json`, `host_meta.json`, `service_status.json`, `package_status.json`, and `collector_status.json` with each file's effective age. Live data becomes stale after 15 seconds and collector status after 30 seconds. Collector loops and their last errors are listed separately.

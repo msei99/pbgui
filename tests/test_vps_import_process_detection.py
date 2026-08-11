@@ -2573,14 +2573,16 @@ def test_vps_manager_refresh_throttles_release_refresh_without_package_probe() -
     service._first_refresh_done = False
     service._pbgui_release_ts = 0
     service._pb7_release_ts = 0
+    service._pb8_branches_ts = 0
     service._sync_vps_inventory = lambda: calls.append("inventory")
     service._refresh_pbgui_release = lambda: (calls.append("pbgui"), setattr(service, "_pbgui_release_ts", int(time.time())))
     service._refresh_pb7_release = lambda repo: (calls.append("pb7"), setattr(service, "_pb7_release_ts", int(time.time())))
+    service._refresh_pb8_branches = lambda repo: (calls.append("pb8"), setattr(service, "_pb8_branches_ts", int(time.time())))
 
     service.refresh()
     service.refresh()
 
-    assert calls == ["inventory", "pbgui", "pb7", "inventory"]
+    assert calls == ["inventory", "pbgui", "pb7", "pb8", "inventory"]
     assert not hasattr(service, "_local_package_status_ts")
     assert not hasattr(service, "_refresh_local_package_status")
     source = Path("vps_manager_service.py").read_text(encoding="utf-8")
@@ -3053,7 +3055,8 @@ def test_slow_monitor_reads_use_agent_cache(filename: str) -> None:
     command = monitor_mod._monitor_agent_cache_read_command("software/pbgui", filename)
 
     assert f"data/monitor_agent/{filename}" in command
-    assert command.startswith("cat ")
+    expected_reader = "head -c 1048577 -- " if filename == "package_status.json" else "cat "
+    assert command.startswith(expected_reader)
     assert "python3 -u -c" not in command
     assert "systemctl" not in command
 
@@ -3104,7 +3107,7 @@ def test_master_update_playbooks_repair_required_systemd_units(playbook_path: st
     assert "Restart PBApiServer" in playbook
     assert "systemd-run --user" in playbook
     assert "systemctl --user enable pbgui-api.service" in playbook
-    assert "systemctl --user restart pbgui-api.service" in playbook
+    assert "systemctl --user start pbgui-api.service" in playbook
     assert "setup/setup_systemd.sh" in playbook
     assert "--no-start" in playbook
     assert "api,pbcluster,pbcoindata,monitor-agent" in playbook
@@ -3144,6 +3147,29 @@ def test_master_branch_switch_playbook_retains_required_unit_probe() -> None:
     assert "setup/setup_systemd.sh" in playbook
     assert "--no-start" in playbook
     assert "changed_when: systemd_setup_result.rc == 0" in systemd_setup_block
+
+
+@pytest.mark.parametrize("playbook_path", [
+    "master-update-pbgui.yml",
+    "master-update-pb.yml",
+    "vps-update-pbgui.yml",
+    "vps-update-pb.yml",
+    "master-switch-pbgui-branch.yml",
+    "vps-switch-pbgui-branch.yml",
+])
+def test_monitor_handoff_stops_legacy_api_before_starting_daemon(playbook_path: str) -> None:
+    """Update and branch handlers cannot overlap old API-owned and daemon monitors."""
+
+    playbook = Path(playbook_path).read_text(encoding="utf-8")
+    handler_marker = "Restart PBApiServer" if playbook_path.startswith("master-") else "Restart remote master PBApiServer"
+    handler = playbook.split(f"- name: {handler_marker}", 1)[1]
+
+    legacy_stop = handler.index("setup/stop_legacy_api.sh")
+    monitor_start = handler.index("systemctl --user restart pbgui-vps-monitor.service")
+    api_start = handler.index("systemctl --user start pbgui-api.service")
+    assert legacy_stop < monitor_start < api_start
+    assert "VPSMonitorRPCClient(timeout=1)" in handler
+    assert "Restart persistent VPS Monitor" not in playbook
 
 
 def test_service_control_uses_tri_state_credential_capability() -> None:
@@ -3208,6 +3234,71 @@ def test_service_control_unknown_capability_restarts_only_active_pbcoindata(
         assert "Restarting active PBCoinData while credential capability is unknown" in result.stdout
     else:
         assert "Leaving PBCoinData unchanged: credential capability is unknown" in result.stdout
+
+
+@pytest.mark.parametrize(("currently_active", "expected_restart"), [(True, True), (False, False)])
+def test_service_control_restarts_only_active_pbdata(
+    tmp_path: Path,
+    currently_active: bool,
+    expected_restart: bool,
+) -> None:
+    """Master updates restart old PBData code without enabling an inactive service."""
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls_path = tmp_path / "systemctl.calls"
+    fake_systemctl = fake_bin / "systemctl"
+    fake_systemctl.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$FAKE_SYSTEMCTL_CALLS\"\n"
+        "if [[ \"$*\" == *\"is-active\"* ]]; then\n"
+        "  [[ \"${FAKE_SYSTEMD_ACTIVE:-0}\" == \"1\" ]]\n"
+        "  exit\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_systemctl.chmod(0o755)
+    fake_sleep = fake_bin / "sleep"
+    fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_sleep.chmod(0o755)
+    unit_dir = tmp_path / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True)
+    (unit_dir / "pbgui-pbdata.service").write_text("[Service]\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", "setup/vps_service_control.sh", "restart", "PBData"],
+        cwd=Path(__file__).resolve().parents[1],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(tmp_path),
+            "PBGUI_DIR": str(tmp_path / "pbgui"),
+            "FAKE_SYSTEMCTL_CALLS": str(calls_path),
+            "FAKE_SYSTEMD_ACTIVE": "1" if currently_active else "0",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = calls_path.read_text(encoding="utf-8")
+    restarted = "--user restart pbgui-pbdata.service" in calls
+    assert restarted is expected_restart
+    if not expected_restart:
+        assert "Leaving PBData unchanged: service is not running" in result.stdout
+
+
+@pytest.mark.parametrize("playbook_path", ["master-update-pbgui.yml", "master-update-pb.yml"])
+def test_master_update_playbooks_restart_active_pbdata(playbook_path: str) -> None:
+    """Master PBGui updates include PBData before handing off the API restart."""
+
+    playbook = Path(playbook_path).read_text(encoding="utf-8")
+    restart_index = playbook.index("restart PBCluster PBData PBCoinData PBMonitorAgent")
+    api_restart_index = playbook.index("systemctl --user start pbgui-api.service")
+
+    assert restart_index < api_restart_index
 
 
 def test_local_master_metrics_are_recorded_in_host_history(monkeypatch: pytest.MonkeyPatch) -> None:

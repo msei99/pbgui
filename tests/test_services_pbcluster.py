@@ -58,16 +58,30 @@ def test_local_services_ui_includes_monitor_agent() -> None:
     assert "PBMonitorAgent.log" in source
 
 
+def test_local_services_ui_includes_persistent_vps_monitor() -> None:
+    """Services page exposes explicit daemon status without coupling it to API restart."""
+
+    source = Path("frontend/services_monitor.html").read_text(encoding="utf-8")
+
+    assert 'data-panel="vps-monitor"' in source
+    assert 'id="panel-vps-monitor"' in source
+    assert 'id="log-vps-monitor"' in source
+    assert "id: 'vps-monitor'" in source
+    assert "VPSMonitor.log" in source
+
+
 def test_master_installers_enable_monitor_agent_service() -> None:
-    """Local and remote browser installers include the monitor-agent systemd unit."""
+    """Master installers include persistent and per-host monitor services."""
 
     core_source = Path("setup/installer/core.py").read_text(encoding="utf-8")
     remote_source = Path("setup/installer/scripts/remote_master_bootstrap.sh").read_text(encoding="utf-8")
 
     assert '"pbgui-monitor-agent.service"' in core_source
     assert '"monitor_agent.py"' in core_source
-    assert '"api,pbrun,pbdata,pbcoindata,monitor-agent"' in core_source
-    assert "--enable api,pbrun,pbdata,pbcoindata,monitor-agent" in remote_source
+    assert '"pbgui-vps-monitor.service"' in core_source
+    assert '"VPSMonitor.py"' in core_source
+    assert '"vps-monitor,api,pbrun,pbdata,pbcoindata,monitor-agent"' in core_source
+    assert "--enable vps-monitor,api,pbrun,pbdata,pbcoindata,monitor-agent" in remote_source
 
 
 def test_local_services_ui_uses_real_restart_action() -> None:
@@ -288,8 +302,36 @@ def test_api_systemd_handoff_schedules_delayed_restart(monkeypatch, tmp_path) ->
     assert len(calls) == 1
     assert calls[0][0:2] == ["systemd-run", "--user"]
     assert "--collect" in calls[0]
-    assert "systemctl --user restart \"$unit\"" in calls[0][-1]
-    assert "deactivating" in calls[0][-1]
+    assert "systemctl --user stop \"$unit\"" in calls[0][-1]
+    assert "systemctl --user start \"$unit\"" in calls[0][-1]
+
+
+def test_api_systemd_handoff_starts_monitor_only_after_old_api_stops(monkeypatch, tmp_path) -> None:
+    """First migration never overlaps the daemon with the old in-process monitor."""
+
+    commands: list[str] = []
+    monkeypatch.setattr(services, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(services, "_systemd_unit_for_service", lambda name: "pbgui-api.service")
+    monkeypatch.setattr(
+        services,
+        "_systemd_service_status",
+        lambda name: {"running": True, "systemd_state": "active", "unit": "pbgui-api.service"},
+    )
+    monkeypatch.setattr(services, "_systemd_user_env", lambda: {})
+    monkeypatch.setattr(
+        services.subprocess,
+        "run",
+        lambda args, **kwargs: commands.append(args[-1]) or subprocess.CompletedProcess(args, 0, stdout="", stderr=""),
+    )
+
+    services._schedule_api_systemd_handoff([], start_vps_monitor=True)
+
+    command = commands[0]
+    stop_index = command.index('systemctl --user stop "$unit"')
+    monitor_index = command.index("systemctl --user start pbgui-vps-monitor.service")
+    api_index = command.index('systemctl --user start "$unit"')
+    assert stop_index < monitor_index < api_index
+    assert "deactivating" in command
 
 
 def test_migration_status_requires_start_sh_cleanup(monkeypatch, tmp_path) -> None:
@@ -383,7 +425,7 @@ def test_run_systemd_migration_deletes_legacy_start_sh(monkeypatch, tmp_path) ->
     before = {
         "warnings": [],
         "legacy_crontab": {"entries": []},
-        "required_services": ["api-server", "pbcluster", "pbrun", "pbdata", "pbcoindata", "monitor-agent"],
+        "required_services": ["vps-monitor", "api-server", "pbcluster", "pbrun", "pbdata", "pbcoindata", "monitor-agent"],
         "missing_default_units": [],
         "not_ready_default_units": [],
         "legacy_start_sh": {"path": str(start_script), "exists": True},
@@ -400,7 +442,12 @@ def test_run_systemd_migration_deletes_legacy_start_sh(monkeypatch, tmp_path) ->
     monkeypatch.setattr(services, "_service_action", lambda service, action: calls.append((service, action)) or {"running": True, "manager": "systemd"})
     monkeypatch.setattr(services, "_systemd_unit_for_service", lambda service: "pbgui-api.service")
     monkeypatch.setattr(services, "_remove_legacy_crontab_entries", lambda: {"removed": []})
-    monkeypatch.setattr(services, "_schedule_api_systemd_handoff", lambda logs: "handoff scheduled")
+    handoffs: list[bool] = []
+    monkeypatch.setattr(
+        services,
+        "_schedule_api_systemd_handoff",
+        lambda logs, *, start_vps_monitor=False: handoffs.append(start_vps_monitor) or "handoff scheduled",
+    )
     monkeypatch.setattr(services.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, stdout="", stderr=""))
 
     result = services._run_systemd_migration()
@@ -409,6 +456,7 @@ def test_run_systemd_migration_deletes_legacy_start_sh(monkeypatch, tmp_path) ->
     assert not start_script.exists()
     assert any("Deleted legacy start.sh" in line for line in result["logs"])
     assert calls == [("pbcluster", "restart"), ("pbrun", "restart"), ("pbdata", "restart"), ("pbcoindata", "restart"), ("monitor-agent", "restart")]
+    assert handoffs == [True]
 
 
 def test_worker_restart_uses_single_restart_action() -> None:

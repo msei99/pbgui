@@ -108,7 +108,15 @@ def test_post_update_package_helper_writes_fresh_atomic_cache(tmp_path: Path) ->
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     apt_get = bin_dir / "apt-get"
-    apt_get.write_text("#!/bin/sh\nprintf '0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\\n'\n", encoding="utf-8")
+    apt_get.write_text(
+        "#!/bin/sh\nprintf '%s\\n' "
+        "'Inst openssl [3.0.2] (3.0.3 Ubuntu:24.04/noble-security [amd64])' "
+        "'Inst linux-image-generic [6.8.0.1] (6.8.0.2 Ubuntu:24.04/noble-updates [amd64])' "
+        "'Inst curl [8.5.0] (8.5.1 Ubuntu:24.04/noble-updates [amd64]) []' "
+        "'Inst linux-modules-extra (6.8.0.2 Ubuntu:24.04/noble-updates [amd64]) []' "
+        "'3 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.'\n",
+        encoding="utf-8",
+    )
     apt_get.chmod(0o700)
     pbgui_dir = tmp_path / "pbgui"
     pbgui_dir.mkdir()
@@ -126,7 +134,14 @@ def test_post_update_package_helper_writes_fresh_atomic_cache(tmp_path: Path) ->
 
     assert result.returncode == 0, result.stderr
     payload = json.loads((pbgui_dir / "data" / "monitor_agent" / "package_status.json").read_text(encoding="utf-8"))
-    assert payload["upgrades"] == "0"
+    assert payload["upgrades"] == "3"
+    assert [item["name"] for item in payload["packages"]] == ["openssl", "linux-image-generic", "curl", "linux-modules-extra"]
+    assert payload["new_installs"] == 1
+    assert payload["security_updates"] == 1
+    assert payload["kernel_updates"] == 2
+    assert payload["routine_updates"] == 1
+    assert payload["urgency"] == "security"
+    assert payload["details_complete"] is True
     assert payload["source"] == "monitor-agent"
     assert payload["schema_version"] == 1
     assert payload["generated_at"] > 0
@@ -471,6 +486,78 @@ def test_package_probe_script_fails_closed_on_apt_and_parse_errors() -> None:
     assert "except Exception" not in script
 
 
+def test_embedded_package_probe_parses_real_trailing_markers(tmp_path: Path) -> None:
+    """The daemon collector includes newly installed apt dependencies."""
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    apt_get = bin_dir / "apt-get"
+    apt_get.write_text(
+        "#!/bin/sh\nprintf '%s\\n' "
+        "'Inst network-manager [1.1] (1.2 Ubuntu:24.04/noble-security [amd64]) []' "
+        "'Inst dependency-only (2.0 Ubuntu:24.04/noble-updates [amd64]) []' "
+        "'Remv obsolete-agent [0.9]' "
+        "'1 upgraded, 1 newly installed, 1 to remove and 0 not upgraded.'\n",
+        encoding="utf-8",
+    )
+    apt_get.chmod(0o700)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+    result = subprocess.run(
+        monitor_mod.PACKAGE_STATUS_SCRIPT,
+        shell=True,
+        executable="/bin/bash",
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["upgrades"] == "1"
+    assert [item["name"] for item in payload["packages"]] == ["network-manager", "dependency-only", "obsolete-agent"]
+    assert payload["new_installs"] == 1
+    assert payload["removals"] == 1
+    assert payload["removal_updates"] == 1
+    assert payload["packages"][2]["removed"] is True
+    assert payload["security_updates"] == 1
+    assert payload["details_complete"] is True
+
+
+def test_package_contract_rejects_oversized_detail_lists() -> None:
+    """Optional package details remain bounded before entering monitor state."""
+
+    payload = {
+        **_envelope(1_000.0),
+        "upgrades": "501",
+        "reboot": False,
+        "packages": [
+            {
+                "name": f"package-{index}",
+                "installed_version": "1",
+                "candidate_version": "2",
+                "source": "Ubuntu:24.04/noble-updates",
+                "architecture": "amd64",
+                "security": False,
+                "kernel": False,
+            }
+            for index in range(501)
+        ],
+    }
+
+    with pytest.raises(monitor_mod.MonitorAgentPayloadError, match="invalid package details"):
+        monitor_mod._validate_monitor_agent_payload("package_status.json", payload, now=1_001.0)
+
+
+def test_remote_package_cache_read_is_byte_bounded() -> None:
+    """One corrupt remote package cache cannot produce unbounded SSH output."""
+
+    command = monitor_mod._monitor_agent_cache_read_command("software/pbgui", "package_status.json")
+
+    assert command.startswith("head -c 1048577 -- ")
+
+
 def test_tail_command_prefers_canonical_and_falls_back_only_when_absent() -> None:
     """The master prefers current canonical data while retaining rolling legacy reads."""
 
@@ -560,6 +647,28 @@ def test_live_stream_valid_invalid_valid_recovery_keeps_last_known(monkeypatch) 
         assert live["state"] == "ok"
         assert live["error"] is None
         assert process.closed is True
+
+    asyncio.run(exercise())
+
+
+def test_stale_package_payload_remains_available_as_last_known() -> None:
+    """A valid stale package cache is returned while retaining its stale diagnostic."""
+
+    async def exercise() -> None:
+        now = time.time()
+        package = _valid_payloads(now - 7201.0)["package_status.json"]
+        pool = _CachePool({"package_status.json": package})
+        monitor = object.__new__(VPSMonitor)
+        monitor.pool = pool
+        monitor.store = VPSStore()
+
+        payload = await monitor._read_monitor_agent_json(
+            "vps-1", "package_status.json", stale_after=7200.0
+        )
+
+        assert payload == package
+        status = monitor.store.streams["vps-1"]["monitor_agent"]["files"]["package_status.json"]
+        assert status["state"] == "stale"
 
     asyncio.run(exercise())
 
@@ -729,7 +838,8 @@ def test_host_meta_cache_miss_has_no_fallback_and_package_is_nested() -> None:
         assert meta["package_status"]["source"] == "monitor-agent"
         assert meta["upgrades"] == "2"
         assert len(pool.commands) == 3
-        assert all(command.startswith("cat ") for command in pool.commands)
+        assert all(command.startswith("cat ") for command in pool.commands[:2])
+        assert pool.commands[2].startswith("head -c 1048577 -- ")
         assert "_collect_host_meta_direct" not in inspect.getsource(monitor_mod)
         assert "direct-ssh" not in inspect.getsource(monitor_mod)
 

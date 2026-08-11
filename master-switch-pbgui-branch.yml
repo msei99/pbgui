@@ -104,9 +104,12 @@
         fi
         unit_dir="${target_home:-$HOME}/.config/systemd/user"
         required_units="pbgui-api.service"
+        if [ -f "{{ pbgdir }}/VPSMonitor.py" ]; then
+          required_units="pbgui-vps-monitor.service $required_units"
+        fi
         starter_help="$({{ pbgui_python | default(ansible_playbook_python) }} "{{ pbgdir }}/starter.py" -h 2>&1 || true)"
         if printf '%s' "$starter_help" | grep -q 'PBCluster'; then
-          required_units="pbgui-api.service pbgui-pbcluster.service pbgui-pbcoindata.service pbgui-monitor-agent.service"
+          required_units="$required_units pbgui-pbcluster.service pbgui-pbcoindata.service pbgui-monitor-agent.service"
         fi
         uid="$(id -u "$target_user" 2>/dev/null || id -u)"
         run_user_systemctl() {
@@ -151,6 +154,15 @@
         if printf '%s' "$starter_help" | grep -q 'PBCluster'; then
           enable_services="api,pbcluster,pbcoindata,monitor-agent"
         fi
+        if [ -f "{{ pbgdir }}/VPSMonitor.py" ] && /bin/bash "$setup_script" --help 2>&1 | grep -q 'vps-monitor'; then
+          enable_services="vps-monitor,$enable_services"
+        else
+          systemctl --user stop pbgui-vps-monitor.service >/dev/null 2>&1 || true
+          systemctl --user disable pbgui-vps-monitor.service >/dev/null 2>&1 || true
+          rm -f "$HOME/.config/systemd/user/default.target.wants/pbgui-vps-monitor.service" \
+            "$HOME/.config/systemd/user/pbgui-vps-monitor.service"
+          systemctl --user daemon-reload >/dev/null 2>&1 || true
+        fi
         args=("$setup_script" --pbgui-dir "{{ pbgdir }}" --python "{{ ansible_playbook_python }}" --enable "$enable_services" --no-start)
         if /bin/bash "$setup_script" --help 2>&1 | grep -q -- '--no-disable-excluded'; then
           args+=(--no-disable-excluded)
@@ -189,8 +201,28 @@
       shell: |
         set -euo pipefail
         restart_unit="pbgui-api-restart-$(date +%s%N)"
-        systemd-run --user --unit="$restart_unit" --collect /bin/bash -lc 'sleep 1; systemctl --user enable pbgui-api.service; systemctl --user restart pbgui-api.service'
+        systemd-run --user --unit="$restart_unit" --collect --setenv=PBGUI_DIR="$PBGUI_DIR" --setenv=PBGUI_PYTHON="$PBGUI_PYTHON" /bin/bash -lc '
+          sleep 1
+          cd "$PBGUI_DIR"
+          systemctl --user stop pbgui-api.service >/dev/null 2>&1 || true
+          /bin/bash "$PBGUI_DIR/setup/stop_legacy_api.sh" --pbgui-dir "$PBGUI_DIR"
+          if [ -f "$PBGUI_DIR/VPSMonitor.py" ]; then
+            systemctl --user enable pbgui-vps-monitor.service
+            systemctl --user restart pbgui-vps-monitor.service
+            monitor_ready=0
+            for _ in $(seq 1 30); do
+              if "$PBGUI_PYTHON" -c "from master.vps_monitor_client import VPSMonitorRPCClient; VPSMonitorRPCClient(timeout=1).call(\"hello\")"; then monitor_ready=1; break; fi
+              sleep 1
+            done
+            [ "$monitor_ready" = 1 ] || exit 1
+          fi
+          systemctl --user enable pbgui-api.service
+          systemctl --user start pbgui-api.service
+        '
       args:
         executable: /bin/bash
+      environment:
+        PBGUI_DIR: "{{ pbgdir }}"
+        PBGUI_PYTHON: "{{ pbgui_python | default(ansible_playbook_python) }}"
       changed_when: true
       listen: "restart pbgui"

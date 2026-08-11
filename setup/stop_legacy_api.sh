@@ -31,8 +31,16 @@ for proc_dir in /proc/[0-9]*; do
   [[ "${executable##*/}" == python* ]] || continue
   argv=()
   mapfile -d '' -t argv < "$proc_dir/cmdline" || true
-  if [[ "${argv[1]:-}" == "$api_script" ]] \
-    || [[ "${argv[1]:-}" == "-u" && "${argv[2]:-}" == "$api_script" ]]; then
+  script_arg="${argv[1]:-}"
+  [[ "$script_arg" == "-u" ]] && script_arg="${argv[2]:-}"
+  [[ -n "$script_arg" ]] || continue
+  if [[ "$script_arg" == /* ]]; then
+    resolved_script="$(readlink -f -- "$script_arg" 2>/dev/null || true)"
+  else
+    process_cwd="$(readlink -f -- "$proc_dir/cwd" 2>/dev/null || true)"
+    resolved_script="$(readlink -f -- "$process_cwd/$script_arg" 2>/dev/null || true)"
+  fi
+  if [[ "$resolved_script" == "$api_script" ]]; then
     legacy_pids+=("$pid")
   fi
 done

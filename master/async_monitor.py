@@ -817,8 +817,38 @@ def _validate_monitor_agent_payload(filename: str, payload: Any, *, now: float |
     elif filename == "package_status.json":
         _monitor_agent_require(payload, ("upgrades", "reboot"))
         _monitor_agent_require_type(payload, "upgrades", str)
+        new_installs = payload.get("new_installs", 0)
+        if type(new_installs) is not int or new_installs < 0:
+            raise MonitorAgentPayloadError("invalid new_installs")
+        removals = payload.get("removals", 0)
+        if type(removals) is not int or removals < 0:
+            raise MonitorAgentPayloadError("invalid removals")
         if type(payload.get("reboot")) is not bool:
             raise MonitorAgentPayloadError("invalid type for reboot")
+        if len(json.dumps(payload, separators=(",", ":")).encode("utf-8")) > 1024 * 1024:
+            raise MonitorAgentPayloadError("package status payload is too large")
+        packages = payload.get("packages")
+        if packages is not None:
+            if not isinstance(packages, list) or len(packages) > 500:
+                raise MonitorAgentPayloadError("invalid package details")
+            text_limits = {
+                "name": 200,
+                "installed_version": 256,
+                "candidate_version": 256,
+                "source": 300,
+                "architecture": 64,
+            }
+            for package in packages:
+                if not isinstance(package, dict):
+                    raise MonitorAgentPayloadError("invalid package detail")
+                for key, limit in text_limits.items():
+                    value = package.get(key)
+                    if not isinstance(value, str) or len(value) > limit:
+                        raise MonitorAgentPayloadError("invalid package detail field")
+                if type(package.get("security")) is not bool or type(package.get("kernel")) is not bool:
+                    raise MonitorAgentPayloadError("invalid package detail flags")
+                if "removed" in package and type(package.get("removed")) is not bool:
+                    raise MonitorAgentPayloadError("invalid package removal flag")
     elif filename == "collector_status.json":
         _monitor_agent_require(payload, ("hostname", "agent_version", "loops"))
         if not _monitor_agent_require_type(payload, "hostname", str).strip():
@@ -1779,7 +1809,8 @@ def _monitor_agent_tail_command(remote_pbgui_dir: str) -> str:
 
 def _monitor_agent_cache_read_command(remote_pbgui_dir: str, filename: str) -> str:
     cache_path = remote_path_join(remote_pbgui_dir, "data", "monitor_agent", filename)
-    return f"cat {remote_shell_path(cache_path)}"
+    command = "head -c 1048577 --" if filename == "package_status.json" else "cat"
+    return f"{command} {remote_shell_path(cache_path)}"
 
 
 INSTANCE_COLLECT_SCRIPT = r'''python3 -u -c "
@@ -3483,6 +3514,7 @@ import json, os, re, subprocess
 
 env = os.environ.copy()
 env['LANG'] = 'C'
+env['LC_ALL'] = 'C'
 res = subprocess.run(
     ['apt-get', 'dist-upgrade', '-s'],
     stdout=subprocess.PIPE,
@@ -3496,9 +3528,75 @@ if res.returncode != 0:
 match = re.search(r'(\d+) upgraded', res.stdout or '')
 if not match:
     raise RuntimeError('apt output did not contain an upgrade count')
+upgrade_count = int(match.group(1))
+new_install_match = re.search(r'(\d+) newly installed', res.stdout or '')
+new_install_count = int(new_install_match.group(1)) if new_install_match else 0
+removal_match = re.search(r'(\d+) to remove', res.stdout or '')
+removal_count = int(removal_match.group(1)) if removal_match else 0
+expected_package_changes = upgrade_count + new_install_count + removal_count
+install_re = re.compile(r'^Inst\s+(\S+)(?:\s+\[([^\]]*)\])?\s+\((\S+)(?:\s+(.+?))?\)(?:\s+\[[^\]]*\])*$')
+arch_re = re.compile(r'\s+\[([^\]]+)\]\s*$')
+kernel_re = re.compile(r'^(?:linux-(?:image|headers|modules|tools|generic|virtual)|ubuntu-kernel-accessories)')
+packages = []
+for line in (res.stdout or '').splitlines():
+    item = install_re.match(line.strip())
+    if not item:
+        continue
+    name, installed, candidate, source_tail = item.groups()
+    source = str(source_tail or '').strip()
+    architecture = ''
+    architecture_match = arch_re.search(source)
+    if architecture_match:
+        architecture = architecture_match.group(1).strip()
+        source = source[:architecture_match.start()].strip()
+    packages.append({
+        'name': name[:200],
+        'installed_version': str(installed or '')[:256],
+        'candidate_version': candidate[:256],
+        'source': source[:300],
+        'architecture': architecture[:64],
+        'security': 'security' in source.lower(),
+        'kernel': bool(kernel_re.match(name.lower())),
+        'removed': False,
+    })
+    if len(packages) >= 500:
+        break
+remove_re = re.compile(r'^Remv\s+(\S+)(?:\s+\[([^\]]*)\])?(?:\s+\(([^)]*)\))?')
+for line in (res.stdout or '').splitlines():
+    item = remove_re.match(line.strip())
+    if not item:
+        continue
+    name, installed, source = item.groups()
+    packages.append({
+        'name': name[:200],
+        'installed_version': str(installed or '')[:256],
+        'candidate_version': 'removed',
+        'source': str(source or '')[:300],
+        'architecture': '',
+        'security': False,
+        'kernel': bool(kernel_re.match(name.lower())),
+        'removed': True,
+    })
+    if len(packages) >= 500:
+        break
+security_updates = sum(1 for package in packages if package['security'])
+removal_updates = sum(1 for package in packages if package['removed'] and not package['security'])
+kernel_updates = sum(1 for package in packages if package['kernel'] and not package['security'] and not package['removed'])
+categorized_updates = sum(1 for package in packages if package['security'] or package['kernel'] or package['removed'])
+details_complete = len(packages) == expected_package_changes
 result = {
-    'upgrades': match.group(1),
+    'upgrades': str(upgrade_count),
+    'new_installs': new_install_count,
+    'removals': removal_count,
     'reboot': os.path.exists('/var/run/reboot-required'),
+    'packages': packages,
+    'security_updates': security_updates,
+    'kernel_updates': kernel_updates,
+    'removal_updates': removal_updates,
+    'routine_updates': max(len(packages) - categorized_updates, 0),
+    'urgency': 'security' if security_updates else ('unknown' if not details_complete else ('removal' if removal_updates else ('kernel' if kernel_updates else ('routine' if expected_package_changes else 'none')))),
+    'details_complete': details_complete,
+    'details_truncated': expected_package_changes > len(packages) and len(packages) >= 500,
 }
 
 print(json.dumps(result))
@@ -5350,7 +5448,7 @@ class VPSMonitor:
                 "checked_at": now,
                 "source": MONITOR_AGENT_SOURCE,
             })
-            return None
+            return payload if filename == "package_status.json" else None
         self._update_monitor_agent_file_status(hostname, filename, {
             "state": "ok",
             "error": None,

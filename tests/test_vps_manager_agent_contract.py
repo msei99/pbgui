@@ -136,13 +136,144 @@ def test_package_status_normalizes_and_age_progresses() -> None:
         "state": "ok",
         "available": True,
         "upgrades": 7,
+        "new_installs": 0,
+        "removals": 0,
         "reboot_required": False,
+        "packages": [],
+        "security_updates": None,
+        "kernel_updates": None,
+        "removal_updates": None,
+        "routine_updates": None,
+        "urgency": "unknown",
+        "details_available": False,
+        "details_complete": False,
+        "classification_complete": False,
+        "details_truncated": False,
         "generated_at": 9_900.0,
         "checked_at": 10_000.0,
         "age": 100.0,
         "error": None,
     }
     assert later["age"] == 125.0
+
+
+def test_package_status_normalizes_security_and_kernel_details() -> None:
+    """Package details are bounded, categorized, and safe for frontend rendering."""
+
+    payload = _package_payload(9_990, upgrades="3", reboot=False)
+    payload.update({
+        "packages": [
+            {
+                "name": "openssl\n<script>",
+                "installed_version": "3.0.2",
+                "candidate_version": "3.0.3",
+                "source": "Ubuntu:24.04/noble-security",
+                "architecture": "amd64",
+                "security": True,
+                "kernel": False,
+            },
+            {
+                "name": "linux-image-generic",
+                "installed_version": "6.8.0.1",
+                "candidate_version": "6.8.0.2",
+                "source": "Ubuntu:24.04/noble-updates",
+                "architecture": "amd64",
+                "security": False,
+                "kernel": True,
+            },
+            {
+                "name": "curl",
+                "installed_version": "8.5.0",
+                "candidate_version": "8.5.1",
+                "source": "Ubuntu:24.04/noble-updates",
+                "architecture": "amd64",
+                "security": False,
+                "kernel": False,
+            },
+        ],
+        "security_updates": 1,
+        "kernel_updates": 1,
+        "routine_updates": 1,
+        "details_complete": True,
+    })
+
+    result = _normalize_package_status(payload, now=10_000)
+
+    assert result["urgency"] == "security"
+    assert result["details_available"] is True
+    assert result["details_complete"] is True
+    assert result["classification_complete"] is True
+    assert result["security_updates"] == 1
+    assert result["kernel_updates"] == 1
+    assert result["routine_updates"] == 1
+    assert result["new_installs"] == 0
+    assert result["removals"] == 0
+    assert result["packages"][0]["name"] == "openssl<script>"
+    assert result["packages"][0]["category"] == "security"
+    assert result["packages"][1]["category"] == "kernel"
+    assert result["packages"][2]["category"] == "routine"
+
+
+def test_package_removals_are_explicit_and_raise_urgency() -> None:
+    """A complete dist-upgrade transaction exposes package removals for review."""
+
+    payload = _package_payload(9_990, upgrades="1", reboot=False)
+    payload.update({
+        "new_installs": 0,
+        "removals": 1,
+        "packages": [
+            {
+                "name": "curl",
+                "installed_version": "8.5.0",
+                "candidate_version": "8.5.1",
+                "source": "Ubuntu:24.04/noble-updates",
+                "architecture": "amd64",
+                "security": False,
+                "kernel": False,
+                "removed": False,
+            },
+            {
+                "name": "obsolete-agent",
+                "installed_version": "0.9",
+                "candidate_version": "removed",
+                "source": "",
+                "architecture": "",
+                "security": False,
+                "kernel": False,
+                "removed": True,
+            },
+        ],
+        "details_complete": True,
+    })
+
+    result = _normalize_package_status(payload, now=10_000)
+
+    assert result["urgency"] == "removal"
+    assert result["removal_updates"] == 1
+    assert result["packages"][1]["category"] == "removal"
+
+
+def test_incomplete_package_details_do_not_understate_urgency() -> None:
+    """Missing apt transaction entries remain unclassified unless security is known."""
+
+    payload = _package_payload(9_990, upgrades="2", reboot=False)
+    payload.update({
+        "packages": [{
+            "name": "curl",
+            "installed_version": "8.5.0",
+            "candidate_version": "8.5.1",
+            "source": "Ubuntu:24.04/noble-updates",
+            "architecture": "amd64",
+            "security": False,
+            "kernel": False,
+        }],
+        "details_complete": False,
+    })
+
+    result = _normalize_package_status(payload, now=10_000)
+
+    assert result["urgency"] == "unknown"
+    assert result["classification_complete"] is False
 
 
 def test_stale_values_remain_last_known_but_na_is_never_zero() -> None:

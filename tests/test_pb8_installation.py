@@ -176,8 +176,81 @@ def test_verified_detached_pb8_upstream_is_labelled_master() -> None:
     assert service_mod._pb8_branch_label("feature", "✅") == "feature"
 
 
-def test_local_pb8_command_requires_master_and_rejects_custom_vars(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Direct local PB8 requests cannot bypass role or inject playbook variables."""
+def test_master_pb8_branch_state_exposes_runtime_remotes_and_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Master details provide the complete PB8 branch-management contract."""
+    service = object.__new__(VPSManagerService)
+    service._pb8_branches = {"feature": [{"full": "b" * 40}]}
+    service._build_pb8_github_status = lambda _commit: "❌ different"
+    monkeypatch.setattr(service_mod, "configured_pb8dir", lambda: "/runtime/pb8")
+    monkeypatch.setattr(service_mod, "configured_pb8venv", lambda: "/runtime/venv_pb8/bin/python")
+    monkeypatch.setattr(
+        service_mod,
+        "_pb8_runtime_info",
+        lambda _repo, _python: {"branch": "feature", "commit": "a" * 40},
+    )
+    monkeypatch.setattr(service_mod, "list_git_remotes", lambda _repo: ["origin", "fork"])
+    monkeypatch.setattr(service_mod, "get_git_remote_url", lambda _repo, remote: f"https://example.test/{remote}.git")
+    monkeypatch.setattr(service_mod, "get_git_branch_remote", lambda _repo, _branch: "fork")
+    monkeypatch.setattr(service_mod, "get_git_branch_remotes", lambda _repo, _branches: {"feature": "fork"})
+
+    state = service._build_master_pb8_branch_state()
+
+    assert state["current_branch"] == "feature"
+    assert state["current_commit"] == "a" * 40
+    assert state["branches"] == {"feature": [{"full": "b" * 40}]}
+    assert state["default_remote_name"] == "fork"
+    assert state["branch_tracking_remotes"] == {"feature": "fork"}
+    assert state["upstream_remote_url"] == "https://github.com/enarjord/passivbot.git"
+
+
+def test_remote_pb8_branch_state_does_not_copy_controller_remotes() -> None:
+    """Remote PB8 branch controls start from telemetry without controller Git configuration."""
+    service = object.__new__(VPSManagerService)
+    service._host_meta = lambda _state: {
+        "pb8b": "feature",
+        "pb8c": "a" * 40,
+    }
+    service._build_pb8_github_status = lambda _commit: "❌ different"
+
+    state = service._build_vps_pb8_branch_state({}, "runner-a")
+
+    assert state["current_branch"] == "feature"
+    assert state["current_commit"] == "a" * 40
+    assert state["branches"] == {
+        "feature": [{"short": "aaaaaaa", "full": "a" * 40}],
+    }
+    assert state["known_remotes"] == ["origin", "fork"]
+    assert state["remote_urls"] == {}
+    assert state["branch_tracking_remotes"] == {}
+
+
+@pytest.mark.parametrize("playbook_path", ["master-update-pb8.yml", "vps-update-pb8.yml"])
+def test_pb8_playbooks_validate_optional_branch_before_checkout(playbook_path: str) -> None:
+    """Explicit PB8 branch changes preserve the official path and validate v8 before checkout."""
+    source = Path(playbook_path).read_text(encoding="utf-8")
+
+    assert "pb8_branch_switch" in source
+    assert "Check PB8 checkout for tracked changes" in source
+    assert "Refuse PB8 branch switch with tracked changes" in source
+    assert "Require selected PB8 source branch" in source
+    assert "Resolve selected PB8 ref" in source
+    assert "Require selected PB8 commit to belong to source branch" in source
+    assert "Verify selected PB8 commit before checkout" in source
+    assert "Mark PB8 runtime unavailable for branch checkout" in source
+    assert "Checkout selected PB8 branch at verified commit" in source
+    assert "Set selected PB8 branch upstream" in source
+    verify = source.index("Verify selected PB8 commit before checkout")
+    checkout = source.index("Checkout selected PB8 branch at verified commit")
+    assert source.index("Check PB8 checkout for tracked changes") < source.index("Inspect selected PB8 remote")
+    assert source.index("Require selected PB8 commit to belong to source branch") < verify
+    assert verify < source.index("Mark PB8 runtime unavailable for branch checkout") < checkout
+    assert "--expected-major\n          - \"8\"" in source
+    assert "Fetch and verify latest official Passivbot v8" in source
+    assert "Checkout verified official Passivbot v8 commit" in source
+
+
+def test_local_pb8_command_requires_master_and_rejects_unrelated_custom_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Direct local PB8 requests cannot bypass role or inject unrelated playbook variables."""
     calls: list[dict] = []
     service = object.__new__(VPSManagerService)
     service.vpsmanager = SimpleNamespace(update_master=lambda **kwargs: calls.append(kwargs))
@@ -194,6 +267,62 @@ def test_local_pb8_command_requires_master_and_rejects_custom_vars(monkeypatch: 
             extra_vars={"pb8dir": "/tmp/other"},
         )
     assert calls == []
+
+
+def test_local_pb8_branch_command_passes_only_validated_switch_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local PB8 branch switch preserves its label and normalized safe variables."""
+    calls: list[dict] = []
+    service = object.__new__(VPSManagerService)
+    service.vpsmanager = SimpleNamespace(update_master=lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(service_mod, "load_ini", lambda _section, _parameter: "master")
+    monkeypatch.setattr(
+        service_mod,
+        "_pb8_runtime_info",
+        lambda _repo, _python: {"installed": True},
+    )
+
+    service.run_master_command(
+        command="master-update-pb8",
+        command_text="Sync fork/feature -> feature",
+        extra_vars={
+            "pb8_branch": "feature",
+            "pb8_source_branch": "feature/source",
+            "pb8_commit": "A" * 40,
+            "pb8_remote_name": "fork",
+            "pb8_remote_url": "https://github.com/example/passivbot.git",
+        },
+    )
+
+    assert calls[0]["command_text"] == "Sync fork/feature -> feature"
+    assert calls[0]["extra_vars"] == {
+        "pb8_branch": "feature",
+        "pb8_source_branch": "feature/source",
+        "pb8_commit": "a" * 40,
+        "pb8_remote_name": "fork",
+        "pb8_remote_url": "https://github.com/example/passivbot.git",
+    }
+
+
+@pytest.mark.parametrize(
+    "extra_vars",
+    [
+        {"pb8_branch": "../master"},
+        {"pb8_branch": "feature/.hidden"},
+        {"pb8_branch": "feature", "pb8_source_branch": "bad branch"},
+        {"pb8_branch": "feature", "pb8_remote_name": "-fork"},
+        {"pb8_branch": "feature", "pb8_remote_name": ".fork"},
+        {"pb8_branch": "feature", "pb8_remote_name": "foo..bar"},
+        {"pb8_branch": "feature", "pb8_remote_url": "https://example.test/repo.git\n--upload-pack=x"},
+        {"pb8_branch": "feature", "pb8_remote_url": "file:///tmp/passivbot.git"},
+        {"pb8_branch": "feature", "pb8_remote_url": "https://token@example.test/passivbot.git"},
+        {"pb8_branch": "feature", "pb8_commit": "abc123"},
+        {"pb8_branch": "feature", "target_hosts": "all"},
+    ],
+)
+def test_pb8_branch_vars_reject_invalid_git_identifiers(extra_vars: dict[str, str]) -> None:
+    """PB8 branch variables fail closed before reaching Git or Ansible."""
+    with pytest.raises(ValueError):
+        service_mod._validate_pb8_branch_extra_vars(extra_vars)
 
 
 @pytest.mark.parametrize(
@@ -328,6 +457,52 @@ def test_remote_pb8_command_starts_only_for_fresh_master() -> None:
     assert captured["command_text"] == "Install PB8"
     assert captured["extra_vars"] == {"pb8_min_free_bytes": service_mod.PB8_MIN_FREE_DISK_BYTES}
     assert result["command"] == "vps-update-pb8"
+
+
+def test_remote_pb8_branch_command_uses_installed_runtime_without_disk_reserve() -> None:
+    """An installed remote PB8 runtime accepts a validated branch switch payload."""
+    captured: dict[str, object] = {}
+    service = object.__new__(VPSManagerService)
+    vps = SimpleNamespace(hostname="runner-a", user_pw=None, command_run_id="run-branch")
+    vps._task_log_path = lambda command, _fallback: Path(f"{command}--run-branch.log")
+    service.vpsmanager = SimpleNamespace(
+        update_vps=lambda target, **kwargs: captured.update(kwargs)
+    )
+    service._require_vps = lambda _hostname: vps
+    service._apply_session_secrets_to_vps = lambda _token, _vps: None
+    service._get_monitor_state = lambda: {}
+    service._get_host_telemetry = lambda _state, _hostname: {
+        "meta": {"role": "vps", "pb8ready": True},
+        "system": {"disk_free": 1 * 1024**3},
+    }
+    service._host_telemetry_fresh = lambda _state: True
+    service._credential_playbook_vars = lambda _hostname, _state: {}
+    service._raise_if_vps_task_active = lambda _vps, _label: None
+
+    service.run_vps_command(
+        token="token",
+        hostname="runner-a",
+        command="vps-update-pb8",
+        command_text="Sync fork/feature -> feature",
+        extra_vars={
+            "pb8_branch": "feature",
+            "pb8_source_branch": "feature",
+            "pb8_commit": "b" * 40,
+            "pb8_remote_name": "fork",
+            "pb8_remote_url": "git@github.com:example/passivbot.git",
+        },
+    )
+
+    assert captured["command"] == "vps-update-pb8"
+    assert captured["command_text"] == "Sync fork/feature -> feature"
+    assert captured["extra_vars"] == {
+        "pb8_branch": "feature",
+        "pb8_source_branch": "feature",
+        "pb8_commit": "b" * 40,
+        "pb8_remote_name": "fork",
+        "pb8_remote_url": "git@github.com:example/passivbot.git",
+        "pb8_min_free_bytes": 0,
+    }
 
 
 def test_installed_remote_pb8_update_does_not_require_installation_disk_reserve() -> None:

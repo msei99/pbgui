@@ -18,7 +18,7 @@ Die Hauptansicht zeigt eine Tabelle mit allen Servern (Master + VPS) und ihrem a
 | **Online** | ✅ erreichbar / ❌ offline |
 | **Bots** | Anzahl eindeutig laufender Bots, die aktuell für diesen VPS per Telemetrie gemeldet werden |
 | **Started** | Letzter Boot-Zeitpunkt |
-| **Updates** | Ausstehende Linux-Paketupdates; gesunde Zeilen zeigen nur die Anzahl, während Stale/Missing/Error sichtbar bleiben |
+| **Updates** | Ausstehende Linux-Paketupdates; ein Klick auf eine Anzahl größer null zeigt Paketnamen, installierte/neue Version, Quelle und die Einordnung Security/Kernel/Routine |
 | **PBGui / PBGui Branch / PBGui GitHub** | Installierte Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
 | **PB7 / PB7 Branch / PB7 GitHub** | PB7-Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
 | **PB8 / PB8 Branch / PB8 GitHub** | PB8-Version, Branch und ob sie mit der aktuellen Upstream-PB8-Revision uebereinstimmt |
@@ -45,7 +45,7 @@ Die Übersicht nutzt jetzt die normale gemeinsame PBGui-FastAPI-Shell. Beim Wech
 
 Die Detailkoepfe fuer Master und VPS wiederholen die Versionskarten fuer PBGui, PB7 und PB8 samt Branch/Commit und Update-Status. Die Werte stammen aus demselben Monitor-Agent-Snapshot wie die Overview-Zeile.
 
-PB8-Updates verwenden absichtlich einen Detached Checkout auf dem verifizierten Upstream-`master`-Commit. Wenn dieser Detached Commit exakt der verifizierten Upstream-Revision entspricht, zeigt VPS Manager `master` statt des technischen Git-Zustands `unknown` an.
+Die normale Aktion **Update PB8** setzt PB8 absichtlich auf einen Detached Checkout des verifizierten Upstream-`master`-Commits zurueck. Wenn dieser Detached Commit exakt der verifizierten Upstream-Revision entspricht, zeigt VPS Manager `master` statt des technischen Git-Zustands `unknown` an. Die explizite Ansicht **PB8 Branch** kann stattdessen einen validierten v8-Branch oder Commit aus dem konfigurierten Upstream oder einer Custom-Remote/einem Fork verfolgen.
 
 **Import Cluster Nodes** liest den lokal materialisierten `cluster_nodes`-State und importiert nicht-lokale Nodes mit SSH-Metadaten, unabhängig vom Cluster-Sync-Modus. Deaktivierte Cluster-Sync-Nodes können trotzdem in den VPS Manager importiert werden; disabled bedeutet nur, dass PBCluster nicht über diesen Node replizieren soll. Importiert werden nur sichere lokale VPS-Manager-Metadaten wie Hostname, SSH-Host, SSH-User, SSH-Port und Remote PBGui Dir; Passwörter und Private Keys werden nicht importiert. CMC-Secrets sind keine VPS-Manager-Felder: Cluster Sync materialisiert versiegelte Pool-Generationen getrennt. Wenn lokale `/etc/hosts`-Einträge fehlen oder auf eine andere IP zeigen, zeigt die Import-Vorschau die nötigen Host-Eintragsänderungen und fragt beim Anwenden nach dem lokalen sudo-Passwort, bevor sie geschrieben werden. Das Modal fragt das VPS-User-Passwort pro importiertem Host ab; Zeilen ohne Passwort werden übersprungen, während eingegebene Passwörter einmalig genutzt werden, um Remote-Settings zu lesen, den Monitoring-SSH-Key zu installieren und das Passwort nur in der aktuellen Browser/API-Session für spätere SSH-Aktionen zu halten.
 
@@ -71,6 +71,7 @@ Sidebar-Aktionen:
 | **Host Logs** | Den dedizierten Shared-Log-Viewer für lokale Service-Logs und dateibasierte Ziele öffnen |
 | **PBGui Branch** | Die PBGui-Branch-Verwaltung öffnen |
 | **PB7 Branch** | Die PB7-Branch-Verwaltung öffnen |
+| **PB8 Branch** | Bei installiertem PB8 die PB8-Branch-Verwaltung öffnen |
 | **Update PBGui and PB7 / Update PBGui and PB8** | PBGui zusammen mit der auf einem Single-Runtime-Host installierten Runtime aktualisieren |
 | **Update PBGui** | Nur PBGui aktualisieren |
 | **Install PB7 / Update PB7** | Eine fehlende PB7-Runtime installieren oder den vorhandenen PB7-Checkout und dessen Virtualenv aktualisieren |
@@ -83,6 +84,7 @@ Der **Master**-Inhaltsbereich enthält zusätzlich:
 - ein Live-Statusraster für CoinData / letzten Command
 - **PBGui Branch Management** für Branch- oder Commit-Wechsel
 - **PB7 Branch Management** mit optionaler Custom-Remote- / Fork-URL
+- **PB8 Branch Management** fuer installierte PB8-Checkouts mit unabhaengiger Branch-/Commit-Auswahl und optionaler Custom-Remote- / Fork-URL
 - einen **Monitor**-Bereich mit Server-Metriken plus runtime-gekennzeichneter PB7-/PB8-Aktivitaet aus laufenden Prozessen und Cluster-Sync-Zielzustand
 - einen **Progress**-Bereich mit getrennten Status-Buckets; sobald eine Sidebar-Aktion einen Master-Ansible-Task startet, schaltet die Hauptfläche auf den gemeinsamen **Command Log Viewer** um, und **Home** bringt zurück zur normalen Master-Ansicht
 
@@ -113,6 +115,7 @@ Sidebar-Aktionen:
 | **Change VPS** | Die VPS-Konfigurationsansicht für gespeicherte Host-Einstellungen öffnen |
 | **PBGui Branch** | Die PBGui-Branch-Verwaltung öffnen |
 | **PB7 Branch** | Die PB7-Branch-Verwaltung öffnen |
+| **PB8 Branch** | Bei installiertem PB8 die PB8-Branch-Verwaltung öffnen |
 | **Initialize** | Ersteinrichtungs-Assistent starten |
 | **Delete VPS** | Diesen VPS aus PBGui entfernen |
 | **Update PBGui** | PBGui auf diesem VPS aktualisieren |
@@ -125,11 +128,13 @@ Sidebar-Aktionen:
 
 Der **VPS**-Inhaltsbereich enthält zusätzlich:
 - ein Setup-/Konfigurationsraster für Passwort, Swap und Firewall-Felder; **Apply VPS Changes** speichert Änderungen lokal und wendet geänderte Swap- und Firewall-Einstellungen auf der VPS an
-- **PBGui Branch Management** und **PB7 Branch Management** mit demselben Switch-/Update-Workflow wie beim Master
+- **PBGui Branch Management**, **PB7 Branch Management** und bei installierter Runtime **PB8 Branch Management** mit demselben Switch-/Update-Workflow wie beim Master
 - einen **Remote Monitor** mit Server-Metriken plus runtime-gekennzeichneter PB7-/PB8-Aktivitaet aus detaillierten Prozessmetriken und Cluster-Sync-Fallbacks
 - einen **Progress**-Bereich mit getrennten Status-Buckets für Init-, Setup- und Update-Läufe; für die vollständige Ansible-Ausgabe werden die Sidebar-Aktionsknöpfe auf den gemeinsamen **Command Log Viewer** umgeschaltet
 
 Im Cluster-Modus synchronisieren **Update PBGui** und PBGui-Branch-Wechsel auf einer VPS die PBCluster-Service-Dateien und starten PBCluster, PBRun und PBCoinData neu, sofern diese Services konfiguriert sind. VPS-systemd-Migrationsprüfungen schließen PBCluster ein, und die Remote-Service-/Host-Log-Ansichten zeigen `PBCluster.log`. Reine VPS-Runner brauchen weiterhin kein `pbgui-api.service` und kein `PBApiServer.py`.
+
+Die PB7- und PB8-Branch-Verwaltung fuehren getrennten Browser-State und getrennte Remote-Caches. In beiden Runtime-Ansichten kann eine bekannte Remote gewaehlt oder eine Fork-URL eingegeben werden. Danach lassen sich Remote-Branches und Commits laden, der lokale Ziel-Branch waehlen und die passend beschriftete Switch-/Update-Aktion starten. Fehlt der gewaehlte Source-Branch auf einer geladenen Remote, bleibt die Aktion deaktiviert. Live-Statusupdates bauen das Branch-Panel nicht neu auf, solange einer seiner Selektoren geoeffnet ist. **Update PB8** ohne Branch-Management-Auswahl stellt weiterhin den verifizierten Upstream-`master` wieder her; **PB8 Branch** ist nur fuer das bewusste Tracking eines anderen validierten v8-Branches oder Commits gedacht.
 
 Die Sidebar trennt die Log-Workflows jetzt bewusst von der normalen Host-Ansicht:
 - Utility-Aktionen wie **Task Logs**, **Host Logs**, **Change VPS**, **Initialize** oder **Delete VPS** bleiben oberhalb eines Trenners, während die ausführbaren Ansible-Playbook-Knöpfe darunter gruppiert sind
@@ -144,6 +149,7 @@ Die Sidebar trennt die Log-Workflows jetzt bewusst von der normalen Host-Ansicht
 
 Die Status-Kacheln oberhalb des Setup-Rasters sind jetzt direkte Operator-Hinweise:
 - Der Linux-Paketstatus ist unabhängig vom VPS-Session-Passwort. Normale Anzeige-Updates lesen ausschließlich den Monitor-Agent-Cache. Ein erfolgreiches **Update Linux** führt einmalig einen abschließenden Paket-Probe aus, aktualisiert diesen Cache atomar und lässt den Master ihn sofort einlesen.
+- Ein Klick auf einen von null verschiedenen **Updates**-Wert in der Overview oder im Host-Header öffnet die gecachte apt-Paketliste einschließlich neu installierter Abhängigkeiten und geplanter Entfernungen. Security-Updates werden zur zeitnahen Installation markiert, Entfernungen verlangen eine Prüfung der Abhängigkeiten und Dienste, Kernel-Updates empfehlen ein Wartungsfenster und gegebenenfalls einen Reboot, Routine-Updates können in der normalen Wartung installiert werden. Unvollständige Listen bleiben unklassifiziert, statt die Dringlichkeit zu niedrig anzugeben. Ältere Agent-Caches bleiben lesbar, zeigen aber nur die Anzahl, bis PBGui den Agent-Payload aktualisiert.
 - **Credential Capability** und **Credential Protocol** melden secret-freie CMC-Pool-Readiness, aktive Key-Anzahl sowie Katalog-/Materialisierungs-Generationen, wenn verfügbar.
 - **Monitor Agent Cache** zeigt immer **Source: agent cache** und einen eindeutigen Zustand **OK**, **Stale**, **Missing** oder **Error**. Ein nicht-OK Cache bedeutet nicht, dass SSH offline ist; SSH-Verbindung und Telemetrie-/Cache-Zustand werden getrennt angezeigt.
 - Das Panel listet `live_metrics.ndjson`, `instance_snapshot.json`, `host_meta.json`, `service_status.json`, `package_status.json` und `collector_status.json` mit dem effektiven Alter jeder Datei. Live-Daten werden nach 15 Sekunden stale, der Collector-Status nach 30 Sekunden. Collector-Loops und deren letzte Fehler werden separat angezeigt.

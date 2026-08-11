@@ -10,7 +10,7 @@ PBAPIServer ist das FastAPI-Backend, das alle Echtzeit-Funktionen von PBGui antr
   - **Schicht 2 (On-Demand):** `api/live.py` öffnet private ccxtpro-WebSocket-Verbindungen zu Exchanges (für Positionen/Balances) wenn ein Browser sich verbindet — ref‑counted und wird geschlossen wenn kein Browser verbunden ist
   - **Schicht 3 (Browser):** Vanilla JS empfängt Updates via SSE (Server-Sent Events)
 - Versorgt die Services-Seite (Start/Stop/Restart aller PBGui-Dienste)
-- Versorgt den VPS Monitor (SSH-Verbindungen, Live-Metriken, Remote-Log-Streaming, Datei-Sync)
+- Proxyt VPS-Monitor-State und -Kommandos, während der unabhängige Dienst `pbgui-vps-monitor.service` persistente SSH-Verbindungen, Live-Metriken und Remote-Log-Streams besitzt
 - Verwaltet die Job-Queue (Backtests, Optimierungen) mit Echtzeit-Status-Updates
 - Stellt API-Key-Verwaltung bereit
 - Stellt Market-Data-Pipeline-Status und -Steuerung bereit
@@ -33,7 +33,7 @@ Host und Port können auf der **PBAPIServer-Detailseite** geändert werden (`Sys
 
 - **Start**: Über den Start-Button auf der Services-Übersicht oder der Detailseite. PBAPIServer startet als Hintergrundprozess.
 - **Stop**: Nicht über die GUI möglich (der Server kann sich nicht selbst stoppen, während er die Seite ausliefert). Bei Bedarf über Terminal stoppen.
-- **Restart**: Über den Restart-Button. PBGui startet aktive verwaltete Dienste mit älterer Code-Serial neu, danach zuletzt den API-Server, und lädt anschließend die Seite neu.
+- **Restart**: Über den Restart-Button. PBGui startet aktive verwaltete Dienste mit älterer Code-Serial neu, danach zuletzt den API-Server, und lädt anschließend die Seite neu. Der dedizierte VPS-Monitor-Daemon ist nicht Teil eines normalen API-Restarts, damit seine SSH-Sessions verbunden bleiben.
 
 Die Navigationsleiste zeigt einen orangefarbenen **Restart**-Button, wenn der API-Prozess oder ein aktiver PBCluster-, PBRun-, PBData-, PBCoinData- oder PBMonitorAgent-Prozess noch einen älteren Wert aus `api/serial.txt` verwendet. Der Bestätigungsdialog listet die betroffenen Dienste auf. Detached Bots, Backtests, Optimierungen und Market-Data-Jobs werden nicht neu gestartet.
 
@@ -77,7 +77,7 @@ PBAPIServer betreibt mehrere interne Hintergrund-Tasks:
 
 - **Task-Worker-Watchdog**: Prüft alle 60 Sekunden, ob der Job-Queue-Worker lebt; startet ihn automatisch neu, falls abgestürzt
 - **Serial-Watcher**: Überwacht `api/serial.txt` via inotify auf Änderungen; sendet eine Restart-Benachrichtigung an alle verbundenen Clients via SSE
-- **VPS Monitor**: Verwaltet SSH-Verbindungspool, Live-Metriken und Remote-Log-Streaming für verbundene VPS-Hosts
+- **VPS-Monitor-Client**: Liest den owner-only lokalen Unix-RPC-State aus `pbgui-vps-monitor.service`; beim API-Shutdown werden nur dieser lokale Client und sein lazy Aktionspool geschlossen
 - **File Sync Worker**: Überwacht lokale Konfigurationsdateien und synchronisiert Änderungen zu Remote-VPS-Hosts via inotifywait
 
 ## Fehlerbehebung

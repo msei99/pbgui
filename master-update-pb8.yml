@@ -10,6 +10,13 @@
     pb8dir: "{{ install_dir }}/pb8"
     pb8venv: "{{ install_dir }}/venv_pb8"
     pb8_guard_script: "{{ pb8_guard | default(pbgdir + '/pb7_guard.py') }}"
+    pb8_branch_switch: "{{ (pb8_branch | default('') | string | trim | length) > 0 }}"
+    pb8_target_branch: "{{ pb8_branch | default('master') }}"
+    pb8_source_branch_value: "{{ pb8_source_branch | default(pb8_target_branch) }}"
+    pb8_target_commit: "{{ pb8_commit | default('') }}"
+    pb8_remote_name_value: "{{ pb8_remote_name | default('origin') }}"
+    pb8_remote_url_value: "{{ pb8_remote_url | default('') }}"
+    pb8_selected_ref: "{{ pb8_target_commit if pb8_target_commit != '' else 'refs/remotes/' ~ pb8_remote_name_value ~ '/' ~ pb8_source_branch_value }}"
 
   tasks:
     - name: Read local PBGui role before PB8 changes
@@ -77,6 +84,7 @@
         dest: "{{ pbgdir }}/data/locks/pb8-runtime-invalid"
         content: "PB8 installation or update in progress\n"
         mode: "0600"
+      when: not pb8_branch_switch
 
     - name: Inspect existing PB8 checkout
       stat:
@@ -92,6 +100,33 @@
       fail:
         msg: "PB8 target exists but is not a Git checkout: {{ pb8dir }}"
       when: not pb8_git.stat.exists and pb8_target.stat.exists
+
+    - name: Require installed PB8 checkout for branch switch
+      assert:
+        that:
+          - pb8_git.stat.exists
+        fail_msg: "Install PB8 before switching its branch."
+      when: pb8_branch_switch
+
+    - name: Check PB8 checkout for tracked changes
+      command:
+        argv:
+          - git
+          - status
+          - --porcelain
+          - --untracked-files=no
+      args:
+        chdir: "{{ pb8dir }}"
+      register: pb8_git_status
+      changed_when: false
+      when: pb8_branch_switch
+
+    - name: Refuse PB8 branch switch with tracked changes
+      assert:
+        that:
+          - pb8_git_status.stdout == ''
+        fail_msg: "Uncommitted tracked changes detected in PB8. Commit or stash them before switching branches."
+      when: pb8_branch_switch
 
     - name: Clone official Passivbot without checking out source
       command:
@@ -117,7 +152,9 @@
           - --fetch-url
           - https://github.com/enarjord/passivbot.git
       changed_when: false
-      when: pb8_git.stat.exists
+      when:
+        - pb8_git.stat.exists
+        - not pb8_branch_switch
 
     - name: Fetch and verify latest official Passivbot v8 for a new checkout
       command:
@@ -133,7 +170,9 @@
           - --fetch-url
           - https://github.com/enarjord/passivbot.git
       changed_when: false
-      when: not pb8_git.stat.exists
+      when:
+        - not pb8_git.stat.exists
+        - not pb8_branch_switch
 
     - name: Checkout verified official Passivbot v8 commit
       command:
@@ -149,6 +188,156 @@
           - --checkout
       register: pb8_repo
       changed_when: "'checkout_changed=true' in pb8_repo.stdout"
+      when: not pb8_branch_switch
+
+    - name: Inspect selected PB8 remote
+      command:
+        argv:
+          - git
+          - remote
+          - get-url
+          - "{{ pb8_remote_name_value }}"
+      args:
+        chdir: "{{ pb8dir }}"
+      register: pb8_selected_remote
+      failed_when: false
+      changed_when: false
+      when: pb8_branch_switch
+
+    - name: Require URL for a missing PB8 remote
+      assert:
+        that:
+          - pb8_remote_url_value != ''
+        fail_msg: "PB8 remote {{ pb8_remote_name_value }} is not configured; provide its remote URL."
+      when:
+        - pb8_branch_switch
+        - pb8_selected_remote.rc != 0
+
+    - name: Add selected PB8 remote
+      command:
+        argv:
+          - git
+          - remote
+          - add
+          - "{{ pb8_remote_name_value }}"
+          - "{{ pb8_remote_url_value }}"
+      args:
+        chdir: "{{ pb8dir }}"
+      when:
+        - pb8_branch_switch
+        - pb8_selected_remote.rc != 0
+
+    - name: Update selected PB8 remote URL
+      command:
+        argv:
+          - git
+          - remote
+          - set-url
+          - "{{ pb8_remote_name_value }}"
+          - "{{ pb8_remote_url_value }}"
+      args:
+        chdir: "{{ pb8dir }}"
+      when:
+        - pb8_branch_switch
+        - pb8_selected_remote.rc == 0
+        - pb8_remote_url_value != ''
+
+    - name: Fetch selected PB8 remote
+      command:
+        argv:
+          - git
+          - fetch
+          - "{{ pb8_remote_name_value }}"
+      args:
+        chdir: "{{ pb8dir }}"
+      changed_when: false
+      when: pb8_branch_switch
+
+    - name: Require selected PB8 source branch
+      command:
+        argv:
+          - git
+          - show-ref
+          - --verify
+          - --quiet
+          - "refs/remotes/{{ pb8_remote_name_value }}/{{ pb8_source_branch_value }}"
+      args:
+        chdir: "{{ pb8dir }}"
+      changed_when: false
+      when: pb8_branch_switch
+
+    - name: Resolve selected PB8 ref
+      command:
+        argv:
+          - git
+          - rev-parse
+          - "{{ pb8_selected_ref }}^{commit}"
+      args:
+        chdir: "{{ pb8dir }}"
+      register: pb8_resolved_commit
+      changed_when: false
+      when: pb8_branch_switch
+
+    - name: Require selected PB8 commit to belong to source branch
+      command:
+        argv:
+          - git
+          - merge-base
+          - --is-ancestor
+          - "{{ pb8_resolved_commit.stdout }}"
+          - "refs/remotes/{{ pb8_remote_name_value }}/{{ pb8_source_branch_value }}"
+      args:
+        chdir: "{{ pb8dir }}"
+      changed_when: false
+      when: pb8_branch_switch
+
+    - name: Verify selected PB8 commit before checkout
+      command:
+        argv:
+          - python3
+          - "{{ pb8_guard_script }}"
+          - --repo
+          - "{{ pb8dir }}"
+          - --ref
+          - "{{ pb8_resolved_commit.stdout }}"
+          - --expected-major
+          - "8"
+      changed_when: false
+      when: pb8_branch_switch
+
+    - name: Mark PB8 runtime unavailable for branch checkout
+      copy:
+        dest: "{{ pbgdir }}/data/locks/pb8-runtime-invalid"
+        content: "PB8 branch switch in progress\n"
+        mode: "0600"
+      when: pb8_branch_switch
+
+    - name: Checkout selected PB8 branch at verified commit
+      command:
+        argv:
+          - git
+          - checkout
+          - -B
+          - "{{ pb8_target_branch }}"
+          - "{{ pb8_resolved_commit.stdout }}"
+      args:
+        chdir: "{{ pb8dir }}"
+      register: pb8_branch_checkout
+      changed_when: true
+      when: pb8_branch_switch
+
+    - name: Set selected PB8 branch upstream
+      command:
+        argv:
+          - git
+          - branch
+          - --set-upstream-to
+          - "{{ pb8_remote_name_value }}/{{ pb8_source_branch_value }}"
+          - "{{ pb8_target_branch }}"
+      args:
+        chdir: "{{ pb8dir }}"
+      changed_when: false
+      when: pb8_branch_switch
 
     - name: Check PB8 virtualenv
       stat:

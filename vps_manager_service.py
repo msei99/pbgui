@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, Callable
+from urllib.parse import urlsplit
 import yaml
 
 from api.vps import get_monitor, get_monitor_state_snapshot, get_metric_history_snapshot
@@ -40,7 +41,7 @@ from master.cluster_state import ClusterStateError, credential_lifecycle_status,
 from MonitorConfig import MonitorConfig
 from PBCoinData import CoinData
 from pb7_guard import PB7_PINNED_COMMIT
-from pb7_release import build_local_pb7_release_info, get_current_pb7_status, load_more_pb7_commits, read_local_pb7_version
+from pb7_release import build_local_pb7_release_info, get_current_pb7_status, load_more_pb7_commits, load_pb7_branch_history, read_local_pb7_version
 from pbgui_release import build_local_pbgui_release_info, load_more_pbgui_commits
 from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, load_ini_section, pb7dir as configured_pb7dir, pb8dir as configured_pb8dir, pb8venv as configured_pb8venv, save_ini, save_ini_section
 from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir, _strict_ssh_client, _validate_vps_hostname, strip_ansi
@@ -50,8 +51,19 @@ SERVICE = "VPSManagerApi"
 
 PB7_UPSTREAM_REMOTE_NAME = "origin"
 PB7_UPSTREAM_REMOTE_URL = "https://github.com/enarjord/passivbot.git"
+PB8_UPSTREAM_REMOTE_NAME = "origin"
+PB8_UPSTREAM_REMOTE_URL = "https://github.com/enarjord/passivbot.git"
 COMMAND_MASTER_UPDATE_PB8 = "master-update-pb8"
 COMMAND_MASTER_UPDATE_PBGUI_PB8 = "master-update-pbgui-pb8"
+PB8_BRANCH_EXTRA_KEYS = frozenset({
+    "pb8_branch",
+    "pb8_source_branch",
+    "pb8_commit",
+    "pb8_remote_name",
+    "pb8_remote_url",
+})
+SAFE_GIT_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+SAFE_GIT_REMOTE_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 PB8_REMOTE_ROLES = frozenset({"master", "vps", "slave"})
 PB7_MIN_FREE_DISK_BYTES = 3 * 1024 * 1024 * 1024
 PB8_MIN_FREE_DISK_BYTES = 3 * 1024 * 1024 * 1024
@@ -122,6 +134,102 @@ def _pb8_branch_label(branch: Any, github_status: Any) -> str:
     if value == "unknown" and str(github_status or "").startswith("✅"):
         return "master"
     return value
+
+
+def _validate_git_branch(value: Any, field: str) -> str:
+    """Return one shell-safe Git branch name accepted by PB8 playbooks."""
+    branch = str(value or "").strip()
+    if (
+        not branch
+        or len(branch) > 255
+        or branch.startswith(("-", ".", "/"))
+        or branch.endswith(("/", ".", ".lock"))
+        or ".." in branch
+        or "@{" in branch
+        or "//" in branch
+        or not SAFE_GIT_BRANCH_RE.fullmatch(branch)
+    ):
+        raise ValueError(f"Invalid {field}.")
+    try:
+        result = subprocess.run(
+            ["git", "check-ref-format", "--branch", branch],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(f"Could not validate {field}.") from exc
+    if result.returncode != 0:
+        raise ValueError(f"Invalid {field}.")
+    return branch
+
+
+def _validate_git_remote_url(value: Any, *, allow_empty: bool = True) -> str:
+    """Allow credential-free HTTPS and SSH Git remote URLs only."""
+    remote_url = str(value or "").strip()
+    if not remote_url and allow_empty:
+        return ""
+    if (
+        not remote_url
+        or len(remote_url) > 2048
+        or remote_url.startswith("-")
+        or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in remote_url)
+    ):
+        raise ValueError("Invalid Git remote URL.")
+    if re.fullmatch(r"[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._~+/-]+", remote_url):
+        return remote_url
+    parsed = urlsplit(remote_url)
+    if parsed.scheme not in {"https", "ssh"} or not parsed.hostname or not parsed.path:
+        raise ValueError("Git remote URL must use credential-free HTTPS or SSH.")
+    if parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("Git remote URL must not contain credentials, query parameters, or fragments.")
+    if parsed.scheme == "https" and parsed.username:
+        raise ValueError("HTTPS Git remote URL must not contain user information.")
+    if not re.fullmatch(r"/[A-Za-z0-9._~+/-]+", parsed.path):
+        raise ValueError("Invalid Git remote URL path.")
+    return remote_url
+
+
+def _public_git_remote_url(repo_dir: str, remote_name: str) -> str:
+    """Return a configured remote URL only when it is safe for browser display."""
+    try:
+        return _validate_git_remote_url(get_git_remote_url(repo_dir, remote_name))
+    except ValueError:
+        return ""
+
+
+def _validate_pb8_branch_extra_vars(extra_vars: dict[str, Any] | None) -> dict[str, Any]:
+    """Validate and normalize an explicit PB8 branch switch request."""
+    values = dict(extra_vars or {})
+    unknown = sorted(set(values) - PB8_BRANCH_EXTRA_KEYS)
+    if unknown:
+        raise ValueError(f"PB8 branch switch does not accept: {', '.join(unknown)}")
+    target_branch = _validate_git_branch(values.get("pb8_branch"), "PB8 target branch")
+    source_branch = _validate_git_branch(
+        values.get("pb8_source_branch") or target_branch,
+        "PB8 source branch",
+    )
+    remote_name = str(values.get("pb8_remote_name") or PB8_UPSTREAM_REMOTE_NAME).strip()
+    if (
+        remote_name in {".", ".."}
+        or remote_name.startswith(("-", "."))
+        or remote_name.endswith(".lock")
+        or ".." in remote_name
+        or not SAFE_GIT_REMOTE_RE.fullmatch(remote_name)
+    ):
+        raise ValueError("Invalid PB8 remote name.")
+    remote_url = _validate_git_remote_url(values.get("pb8_remote_url"))
+    commit = str(values.get("pb8_commit") or "").strip().lower()
+    if commit and not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("PB8 commit must be a full 40-character SHA.")
+    return {
+        "pb8_branch": target_branch,
+        "pb8_source_branch": source_branch,
+        "pb8_commit": commit,
+        "pb8_remote_name": remote_name,
+        "pb8_remote_url": remote_url,
+    }
 
 
 def _public_runtime_role(role: Any) -> str:
@@ -1281,12 +1389,84 @@ def _normalize_package_status(
         state = "error"
         errors.append("Package-status cache does not contain valid upgrade and reboot values")
         available = False
+    packages: list[dict[str, Any]] = []
+    raw_packages = raw.get("packages")
+    if isinstance(raw_packages, list):
+        for raw_package in raw_packages[:500]:
+            if not isinstance(raw_package, dict):
+                continue
+
+            def package_text(key: str, limit: int = 256) -> str:
+                value = raw_package.get(key)
+                if not isinstance(value, str):
+                    return ""
+                return "".join(char for char in value if ord(char) >= 32 and ord(char) != 127).strip()[:limit]
+
+            name = package_text("name", 200)
+            candidate_version = package_text("candidate_version")
+            if not name or not candidate_version:
+                continue
+            security = raw_package.get("security") is True
+            kernel = raw_package.get("kernel") is True
+            removed = raw_package.get("removed") is True
+            packages.append({
+                "name": name,
+                "installed_version": package_text("installed_version"),
+                "candidate_version": candidate_version,
+                "source": package_text("source", 300),
+                "architecture": package_text("architecture", 64),
+                "security": security,
+                "kernel": kernel,
+                "removed": removed,
+                "category": "security" if security else ("removal" if removed else ("kernel" if kernel else "routine")),
+            })
+
+    removals = max(_safe_int(raw.get("removals"), 0), 0)
+    details_complete = bool(
+        available
+        and raw.get("details_complete") is True
+        and upgrades is not None
+        and upgrades + max(_safe_int(raw.get("new_installs"), 0), 0) + removals == len(packages)
+    )
+    new_installs = max(_safe_int(raw.get("new_installs"), 0), 0)
+    security_updates = sum(1 for item in packages if item["security"])
+    removal_updates = sum(1 for item in packages if item["removed"] and not item["security"])
+    kernel_updates = sum(1 for item in packages if item["kernel"] and not item["security"] and not item["removed"])
+    routine_updates = sum(1 for item in packages if not item["security"] and not item["kernel"] and not item["removed"])
+    details_truncated = bool(raw.get("details_truncated") is True and packages)
+    classification_complete = bool(details_complete and security_updates + removal_updates + kernel_updates + routine_updates == len(packages))
+    if not available or (upgrades == 0 and new_installs == 0 and removals == 0):
+        urgency = "none"
+    elif security_updates > 0:
+        urgency = "security"
+    elif not classification_complete:
+        urgency = "unknown"
+    elif removal_updates > 0:
+        urgency = "removal"
+    elif kernel_updates > 0:
+        urgency = "kernel"
+    elif packages:
+        urgency = "routine"
+    else:
+        urgency = "unknown"
     return {
         "source": "agent_cache",
         "state": state if state in {"ok", "stale", "missing", "error"} else "error",
         "available": available,
         "upgrades": upgrades if available else "N/A",
+        "new_installs": new_installs if available else None,
+        "removals": removals if available else None,
         "reboot_required": reboot_required if available else None,
+        "packages": packages if available else [],
+        "security_updates": security_updates if available and packages else None,
+        "kernel_updates": kernel_updates if available and packages else None,
+        "removal_updates": removal_updates if available and packages else None,
+        "routine_updates": routine_updates if available and packages else None,
+        "urgency": urgency,
+        "details_available": bool(available and packages),
+        "details_complete": details_complete,
+        "classification_complete": classification_complete,
+        "details_truncated": details_truncated,
         "generated_at": generated_at or None,
         "checked_at": checked_at,
         "age": round(age, 1) if age is not None else None,
@@ -1619,6 +1799,8 @@ class VPSManagerService:
         self._pbgui_release_ts = 0
         self._pb7_release: dict[str, Any] = {}
         self._pb7_release_ts = 0
+        self._pb8_branches: dict[str, list[dict[str, Any]]] = {}
+        self._pb8_branches_ts = 0
         self._refresh_lock = threading.Lock()
         # Quick detail is pushed every second. Any status that requires a slower
         # validation step must reuse the last full-detail result instead of
@@ -1908,6 +2090,10 @@ class VPSManagerService:
         self._pb7_release = build_local_pb7_release_info(repo_dir)
         self._pb7_release_ts = _now_ts()
 
+    def _refresh_pb8_branches(self, repo_dir: str | None) -> None:
+        self._pb8_branches = load_pb7_branch_history(repo_dir)
+        self._pb8_branches_ts = _now_ts()
+
     def _read_local_agent_json(self, filename: str) -> tuple[dict[str, Any] | None, str]:
         """Read one local monitor-agent cache without executing system commands."""
 
@@ -2171,7 +2357,11 @@ class VPSManagerService:
             self._refresh_completed_linux_updates()
             now = _now_ts()
             release_stale = (
-                now - min(int(self._pbgui_release_ts or 0), int(self._pb7_release_ts or 0))
+                now - min(
+                    int(self._pbgui_release_ts or 0),
+                    int(self._pb7_release_ts or 0),
+                    int(self._pb8_branches_ts or 0),
+                )
             ) > LOCAL_RELEASE_REFRESH_SECONDS
             if force or release_stale or not self._first_refresh_done:
                 try:
@@ -2182,6 +2372,10 @@ class VPSManagerService:
                     self._refresh_pb7_release(_configured_pb7dir())
                 except Exception as exc:
                     _log(SERVICE, f"refresh local commit data failed: {exc}", level="WARNING")
+                try:
+                    self._refresh_pb8_branches(configured_pb8dir())
+                except Exception as exc:
+                    _log(SERVICE, f"refresh PB8 branch data failed: {exc}", level="WARNING")
 
             self._first_refresh_done = True
         finally:
@@ -3284,6 +3478,7 @@ class VPSManagerService:
             "branches": {
                 "pbgui": self._build_master_pbgui_branch_state(),
                 "pb7": self._build_master_pb7_branch_state(),
+                "pb8": self._build_master_pb8_branch_state(),
             },
             "monitor": master_monitor,
             "progress": self._build_master_progress(include_log=True),
@@ -3298,6 +3493,7 @@ class VPSManagerService:
             "branches": {
                 "pbgui": self._build_master_pbgui_branch_state(),
                 "pb7": self._build_master_pb7_branch_state(),
+                "pb8": self._build_master_pb8_branch_state(),
             },
             "monitor": self._build_local_master_monitor_payload(refresh=False),
             "progress": self._build_master_progress(include_log=True),
@@ -3327,6 +3523,7 @@ class VPSManagerService:
             "branches": {
                 "pbgui": self._build_vps_pbgui_branch_state(host_state),
                 "pb7": self._build_vps_pb7_branch_state(host_state, hostname),
+                "pb8": self._build_vps_pb8_branch_state(host_state, hostname),
             },
             "monitor": monitor_payload,
             "progress": self._build_vps_progress(vps, include_logs=not quick),
@@ -4401,7 +4598,7 @@ class VPSManagerService:
         for opt in ("origin", "fork"):
             if opt not in known_remotes:
                 known_remotes.append(opt)
-        remote_urls = {name: get_git_remote_url(repo_dir, name) for name in known_remotes if repo_dir}
+        remote_urls = {name: _public_git_remote_url(repo_dir, name) for name in known_remotes if repo_dir}
         tracking_remote_name = get_git_branch_remote(repo_dir, current_branch or "") if repo_dir else ""
         branch_tracking_remotes = get_git_branch_remotes(repo_dir, list(branches.keys())) if repo_dir else {}
         default_remote_name = tracking_remote_name if tracking_remote_name in known_remotes else ("fork" if "fork" in known_remotes else ("origin" if "origin" in known_remotes else (known_remotes[0] if known_remotes else "")))
@@ -4415,6 +4612,35 @@ class VPSManagerService:
             "default_remote_name": default_remote_name,
             "upstream_remote_name": PB7_UPSTREAM_REMOTE_NAME,
             "upstream_remote_url": PB7_UPSTREAM_REMOTE_URL,
+        }
+
+    def _build_master_pb8_branch_state(self) -> dict[str, Any]:
+        repo_dir = configured_pb8dir()
+        pb8_info = _pb8_runtime_info(repo_dir, configured_pb8venv())
+        current_commit = str(pb8_info.get("commit") or "")
+        current_branch = _pb8_branch_label(
+            pb8_info.get("branch"),
+            self._build_pb8_github_status(current_commit),
+        )
+        branches = dict(self._pb8_branches or {})
+        known_remotes = list_git_remotes(repo_dir) if repo_dir else []
+        for opt in ("origin", "fork"):
+            if opt not in known_remotes:
+                known_remotes.append(opt)
+        remote_urls = {name: _public_git_remote_url(repo_dir, name) for name in known_remotes if repo_dir}
+        tracking_remote_name = get_git_branch_remote(repo_dir, current_branch or "") if repo_dir else ""
+        branch_tracking_remotes = get_git_branch_remotes(repo_dir, list(branches.keys())) if repo_dir else {}
+        default_remote_name = tracking_remote_name if tracking_remote_name in known_remotes else ("origin" if "origin" in known_remotes else (known_remotes[0] if known_remotes else ""))
+        return {
+            "current_branch": current_branch,
+            "current_commit": current_commit,
+            "branches": branches,
+            "known_remotes": known_remotes,
+            "remote_urls": remote_urls,
+            "branch_tracking_remotes": branch_tracking_remotes,
+            "default_remote_name": default_remote_name,
+            "upstream_remote_name": PB8_UPSTREAM_REMOTE_NAME,
+            "upstream_remote_url": PB8_UPSTREAM_REMOTE_URL,
         }
 
     def _build_vps_pbgui_branch_state(self, host_state: dict[str, Any]) -> dict[str, Any]:
@@ -4435,7 +4661,7 @@ class VPSManagerService:
         for opt in ("origin", "fork"):
             if opt not in known_remotes:
                 known_remotes.append(opt)
-        remote_urls = {name: get_git_remote_url(repo_dir, name) for name in known_remotes if repo_dir}
+        remote_urls = {name: _public_git_remote_url(repo_dir, name) for name in known_remotes if repo_dir}
         current_commit = str(meta.get("pb7c") or "")
         current_branch = _pb7_branch_label(meta.get("pb7b"), current_commit)
         tracking_remote_name = get_git_branch_remote(repo_dir, current_branch or "") if repo_dir else ""
@@ -4452,6 +4678,31 @@ class VPSManagerService:
             "default_remote_name": default_remote_name,
             "upstream_remote_name": PB7_UPSTREAM_REMOTE_NAME,
             "upstream_remote_url": PB7_UPSTREAM_REMOTE_URL,
+        }
+
+    def _build_vps_pb8_branch_state(self,
+                                    host_state: dict[str, Any],
+                                    hostname: str) -> dict[str, Any]:
+        meta = self._host_meta(host_state)
+        current_commit = str(meta.get("pb8c") or "")
+        current_branch = _pb8_branch_label(
+            meta.get("pb8b"),
+            self._build_pb8_github_status(current_commit),
+        )
+        branches = {
+            current_branch: [{"short": _short_commit(current_commit), "full": current_commit}]
+        } if current_branch and current_commit else {}
+        return {
+            "hostname": hostname,
+            "current_branch": current_branch,
+            "current_commit": current_commit,
+            "branches": branches,
+            "known_remotes": ["origin", "fork"],
+            "remote_urls": {},
+            "branch_tracking_remotes": {},
+            "default_remote_name": "origin",
+            "upstream_remote_name": PB8_UPSTREAM_REMOTE_NAME,
+            "upstream_remote_url": PB8_UPSTREAM_REMOTE_URL,
         }
 
     def _build_master_progress(self, *, include_log: bool = False) -> dict[str, Any]:
@@ -5579,27 +5830,45 @@ class VPSManagerService:
                 branches[branch_name] = commits
                 release_info["branches"] = branches
                 self._pb7_release = release_info
+        elif repo == "pb8":
+            commits = load_more_pb7_commits(branch_name, configured_pb8dir(), int(limit))
+            if commits:
+                self._pb8_branches = dict(self._pb8_branches or {})
+                self._pb8_branches[branch_name] = commits
         else:
             raise ValueError(f"Unknown repo: {repo}")
 
     def load_remote_branches(self, remote_url: str) -> list[str]:
         if not remote_url:
             return []
-        return list_remote_git_branches(remote_url)
+        return list_remote_git_branches(_validate_git_remote_url(remote_url, allow_empty=False))
 
     def load_remote_branch_commits(self, remote_url: str, branch_name: str, limit: int = 50) -> list[dict[str, Any]]:
         if not remote_url or not branch_name:
             return []
-        return list_remote_git_branch_commits(remote_url, branch_name, limit=int(limit))
+        return list_remote_git_branch_commits(
+            _validate_git_remote_url(remote_url, allow_empty=False),
+            _validate_git_branch(branch_name, "Git source branch"),
+            limit=int(limit),
+        )
 
     def run_master_command(self, *, command: str, command_text: str, debug: bool = False, sudo_pw: str | None = None, extra_vars: dict[str, Any] | None = None) -> None:
         if command in {COMMAND_MASTER_UPDATE_PB8, COMMAND_MASTER_UPDATE_PBGUI_PB8}:
             if load_ini("main", "role").strip().lower() != "master":
                 raise ValueError("PB8 can only be installed or updated on a PBGui master.")
-            if extra_vars:
+            pb8_branch_vars = (
+                _validate_pb8_branch_extra_vars(extra_vars)
+                if command == COMMAND_MASTER_UPDATE_PB8 and extra_vars and "pb8_branch" in extra_vars
+                else None
+            )
+            if extra_vars and pb8_branch_vars is None:
                 raise ValueError("PB8 update does not accept custom playbook variables.")
             pb8_info = _pb8_runtime_info(configured_pb8dir(), configured_pb8venv())
-            if command == COMMAND_MASTER_UPDATE_PB8:
+            if pb8_branch_vars and not pb8_info.get("installed"):
+                raise ValueError("Install PB8 before switching its branch.")
+            if pb8_branch_vars:
+                extra_vars = pb8_branch_vars
+            elif command == COMMAND_MASTER_UPDATE_PB8:
                 command_text = "Update PB8" if pb8_info.get("installed") else "Install PB8"
             else:
                 command_text = "Update PBGui and PB8"
@@ -5631,14 +5900,23 @@ class VPSManagerService:
                     command_text = "Update PB7" if pb7_action["installed"] else "Install PB7"
                 command_extra_vars["pb7_min_free_bytes"] = int(pb7_action["required_free_disk_bytes"])
             if command in {COMMAND_VPS_UPDATE_PB8, COMMAND_VPS_UPDATE_PBGUI_PB8}:
-                if extra_vars:
+                pb8_branch_vars = (
+                    _validate_pb8_branch_extra_vars(extra_vars)
+                    if command == COMMAND_VPS_UPDATE_PB8 and extra_vars and "pb8_branch" in extra_vars
+                    else None
+                )
+                if extra_vars and pb8_branch_vars is None:
                     raise ValueError("PB8 update does not accept custom playbook variables.")
                 telemetry_fresh = self._host_telemetry_fresh(host_state)
                 pb8_action = _pb8_remote_action_status(host_state, telemetry_fresh=telemetry_fresh)
                 if not pb8_action["allowed"]:
                     raise ValueError(str(pb8_action["reason"]))
                 host_meta = self._host_meta(host_state)
-                if command == COMMAND_VPS_UPDATE_PB8:
+                if pb8_branch_vars and not pb8_action["installed"]:
+                    raise ValueError("Install PB8 before switching its branch.")
+                if pb8_branch_vars:
+                    command_extra_vars.update(pb8_branch_vars)
+                elif command == COMMAND_VPS_UPDATE_PB8:
                     command_text = "Update PB8" if bool(host_meta.get("pb8ready")) else "Install PB8"
                 else:
                     command_text = "Update PBGui and PB8"

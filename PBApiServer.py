@@ -644,8 +644,6 @@ async def _lifespan(app: FastAPI):
             level="ERROR",
             meta={"traceback": traceback.format_exc()},
         )
-    from master.async_monitor import VPSMonitor
-    from master.async_logs import AsyncLogStreamer
     from api.vps import init as vps_init
     from api.v7_instances import init as v7_init
     from api.v8_instances import init as v8_init
@@ -666,8 +664,20 @@ async def _lifespan(app: FastAPI):
     _vps_monitor = None
     lifecycle_tasks: list[asyncio.Task] = []
     try:
-        monitor = VPSMonitor()
-        streamer = AsyncLogStreamer(monitor.pool)
+        monitor_unit = Path.home() / ".config" / "systemd" / "user" / "pbgui-vps-monitor.service"
+        if monitor_unit.exists():
+            from master.vps_monitor_client import RemoteLogStreamerProxy, VPSMonitorProxy
+
+            monitor = VPSMonitorProxy()
+            streamer = RemoteLogStreamerProxy(monitor.client)
+            _log(SERVICE, "[lifespan] using persistent VPS monitor daemon", level="INFO")
+        else:
+            from master.async_logs import AsyncLogStreamer
+            from master.async_monitor import VPSMonitor
+
+            monitor = VPSMonitor()
+            streamer = AsyncLogStreamer(monitor.pool)
+            _log(SERVICE, "[lifespan] using in-process VPS monitor compatibility mode", level="WARNING")
         vps_init(monitor, streamer)
         v7_init(monitor)
         v8_init(monitor)

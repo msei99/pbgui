@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: vps_service_control.sh start|stop|restart PBRun [PBCluster] [PBCoinData] [PBMonitorAgent]
+Usage: vps_service_control.sh start|stop|restart PBRun [PBCluster] [PBData] [PBCoinData] [PBMonitorAgent]
 
 Controls VPS PBGui services. Uses systemd user units when all requested units
 exist and the user manager is available; otherwise falls back to starter.py.
@@ -55,6 +55,7 @@ unit_for() {
   case "$1" in
     PBRun) printf '%s\n' 'pbgui-pbrun.service' ;;
     PBCluster) printf '%s\n' 'pbgui-pbcluster.service' ;;
+    PBData) printf '%s\n' 'pbgui-pbdata.service' ;;
     PBCoinData) printf '%s\n' 'pbgui-pbcoindata.service' ;;
     PBMonitorAgent) printf '%s\n' 'pbgui-monitor-agent.service' ;;
     *)
@@ -68,6 +69,7 @@ script_for() {
   case "$1" in
     PBRun) printf '%s\n' 'PBRun.py' ;;
     PBCluster) printf '%s\n' 'PBCluster.py' ;;
+    PBData) printf '%s\n' 'PBData.py' ;;
     PBCoinData) printf '%s\n' 'PBCoinData.py' ;;
     PBMonitorAgent) printf '%s\n' 'monitor_agent.py' ;;
     *) return 1 ;;
@@ -76,7 +78,7 @@ script_for() {
 
 service_capability_state() {
   case "$1" in
-    PBRun|PBCluster|PBMonitorAgent) printf '%s\n' enabled ;;
+    PBRun|PBCluster|PBData|PBMonitorAgent) printf '%s\n' enabled ;;
     PBCoinData)
       local active="${PBGUI_CREDENTIAL_ACTIVE:-}"
       active="${active,,}"
@@ -136,6 +138,10 @@ active_services=()
 for service in "${requested_services[@]}"; do
   unit_for "$service" >/dev/null
   capability_state="$(service_capability_state "$service")"
+  if [[ "$service" == "PBData" && "$action" == "restart" ]] && ! service_is_running "$service"; then
+    echo "Leaving PBData unchanged: service is not running"
+    continue
+  fi
   if [[ "$service" == "PBCoinData" && "$capability_state" == "unknown" ]]; then
     if [[ "$action" == "restart" ]] && service_is_running "$service"; then
       echo "Restarting active $service while credential capability is unknown"

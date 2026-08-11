@@ -300,10 +300,11 @@ async def acknowledge_alert(request: Request, session: SessionToken = Depends(re
     alert_id = str(body.get("id") or "").strip()
     if not alert_id:
         raise HTTPException(status_code=400, detail="alert id required")
-    ok = _monitor.acknowledge_alert(alert_id)
+    ok = await asyncio.to_thread(_monitor.acknowledge_alert, alert_id)
     if not ok:
         raise HTTPException(status_code=404, detail="alert not found")
-    return {"ok": True, **get_alert_snapshot()}
+    snapshot = await asyncio.to_thread(get_alert_snapshot)
+    return {"ok": True, **snapshot}
 
 
 @router.post("/api/vps/alerts/ack-all")
@@ -435,7 +436,7 @@ async def ws_vps(websocket: WebSocket):
             elif cmd == "subscribe_logs":
                 # Stop previous sub
                 if log_stream_id and _streamer:
-                    _streamer.stop_stream(log_stream_id)
+                    await _stop_remote_stream(log_stream_id)
                 log_stream_id, log_sid = await _cmd_subscribe_logs(
                     websocket, request
                 )
@@ -443,7 +444,7 @@ async def ws_vps(websocket: WebSocket):
             # ── unsubscribe_logs ──
             elif cmd == "unsubscribe_logs":
                 if log_stream_id and _streamer:
-                    _streamer.stop_stream(log_stream_id)
+                    await _stop_remote_stream(log_stream_id)
                 log_stream_id = None
                 log_sid = None
 
@@ -454,16 +455,16 @@ async def ws_vps(websocket: WebSocket):
 
             # ── get_cpu_history ──
             elif cmd == "get_cpu_history":
-                result = _cmd_get_cpu_history(request)
+                result = await _cmd_get_cpu_history(request)
                 await websocket.send_json(result)
 
             elif cmd == "get_metric_history":
-                result = _cmd_get_metric_history(request)
+                result = await _cmd_get_metric_history(request)
                 await websocket.send_json(result)
 
             # ── set_setting ──
             elif cmd == "set_setting":
-                _cmd_set_setting(request)
+                await _cmd_set_setting(request)
 
             # ── list_local_logs ──
             elif cmd == "list_local_logs":
@@ -504,9 +505,14 @@ async def ws_vps(websocket: WebSocket):
         for task in push_tasks:
             task.cancel()
         await asyncio.gather(*push_tasks, return_exceptions=True)
-        # Cleanup remote log subscription
+        # Daemon-backed streams use a bounded idle lease so an API restart does
+        # not tear down their SSH channel before the browser reconnects.
         if log_stream_id and _streamer:
-            _streamer.stop_stream(log_stream_id)
+            detach = getattr(_streamer, "detach_stream", None)
+            if callable(detach):
+                detach(log_stream_id)
+            else:
+                _streamer.stop_stream(log_stream_id)
         _log(SERVICE, f"[ws] Client disconnected: {websocket.client}")
 
 
@@ -540,10 +546,18 @@ async def _push_log_loop(ws: WebSocket,
             stream_id = get_stream_id()
             if not stream_id or not _streamer:
                 continue
-            lines = _streamer.read_stream(stream_id, max_lines=50)
+            read_async = getattr(_streamer, "read_stream_async", None)
+            if callable(read_async):
+                lines = await read_async(stream_id, max_lines=50)
+            else:
+                lines = _streamer.read_stream(stream_id, max_lines=50)
             if not lines:
                 continue
-            status = _streamer.get_stream_status(stream_id)
+            status_async = getattr(_streamer, "get_stream_status_async", None)
+            if callable(status_async):
+                status = await status_async(stream_id)
+            else:
+                status = _streamer.get_stream_status(stream_id)
             msg: dict = {
                 "type": "log_lines",
                 "lines": lines,
@@ -598,6 +612,17 @@ async def _send_full_state(ws: WebSocket):
 
 
 # ── Command handlers ─────────────────────────────────────────
+
+async def _stop_remote_stream(stream_id: str) -> None:
+    """Stop one remote log stream without blocking the API event loop."""
+    if not _streamer:
+        return
+    stop_async = getattr(_streamer, "stop_stream_async", None)
+    if callable(stop_async):
+        await stop_async(stream_id)
+    else:
+        _streamer.stop_stream(stream_id)
+
 
 async def _cmd_restart_service(request: dict) -> dict:
     host = request.get("host", "")
@@ -823,7 +848,11 @@ async def _cmd_subscribe_logs(ws: WebSocket,
     # to prevent duplicates (tail -f starts immediately, initial fetch is
     # a separate SSH command that may overlap).
     if _streamer:
-        _streamer.read_stream(stream_id, max_lines=9999)
+        read_async = getattr(_streamer, "read_stream_async", None)
+        if callable(read_async):
+            await read_async(stream_id, max_lines=9999)
+        else:
+            _streamer.read_stream(stream_id, max_lines=9999)
 
     return stream_id, sid
 
@@ -849,16 +878,16 @@ async def _cmd_kill_instance(request: dict) -> dict:
     }
 
 
-def _cmd_set_setting(request: dict):
+async def _cmd_set_setting(request: dict):
     key = request.get("key", "")
     value = request.get("value", "")
     if key in _UI_SETTINGS_KEYS:
-        save_ini("vps_monitor_ui", key, str(value))
+        await asyncio.to_thread(save_ini, "vps_monitor_ui", key, str(value))
         if _monitor:
             _monitor.store.set_ui_setting(key, str(value))
         _log(SERVICE, f"[setting] {key} = {value}")
     elif key in _VPS_SETTINGS_KEYS:
-        save_ini("vps_monitor", key, str(value))
+        await asyncio.to_thread(save_ini, "vps_monitor", key, str(value))
         if _monitor:
             _monitor.store.set_ui_setting(key, str(value))
             # Apply live — avoids waiting for next ini-watcher cycle
@@ -883,13 +912,13 @@ def _cmd_get_local_logs(request: dict) -> dict:
     return resp
 
 
-def _cmd_get_cpu_history(request: dict) -> dict:
+async def _cmd_get_cpu_history(request: dict) -> dict:
     host = str(request.get("host") or "").strip()
     bot_name = str(request.get("bot_name") or "").strip()
     sid = request.get("sid")
     if not host:
         return {"type": "error", "error": "host required", "cmd": "get_cpu_history"}
-    payload = get_cpu_history_snapshot(host, bot_name=bot_name)
+    payload = await asyncio.to_thread(get_cpu_history_snapshot, host, bot_name=bot_name)
     resp: dict = {
         "type": "cpu_history",
         "cmd": "get_cpu_history",
@@ -902,14 +931,19 @@ def _cmd_get_cpu_history(request: dict) -> dict:
     return resp
 
 
-def _cmd_get_metric_history(request: dict) -> dict:
+async def _cmd_get_metric_history(request: dict) -> dict:
     host = str(request.get("host") or "").strip()
     bot_name = str(request.get("bot_name") or "").strip()
     metric = str(request.get("metric") or "cpu").strip().lower()
     sid = request.get("sid")
     if not host:
         return {"type": "error", "error": "host required", "cmd": "get_metric_history"}
-    payload = get_metric_history_snapshot(host, bot_name=bot_name, metric=metric)
+    payload = await asyncio.to_thread(
+        get_metric_history_snapshot,
+        host,
+        bot_name=bot_name,
+        metric=metric,
+    )
     resp: dict = {
         "type": "metric_history",
         "cmd": "get_metric_history",

@@ -45,8 +45,9 @@ SERVICE = "Services"
 
 router = APIRouter()
 
-_SERVICES = ["pbcluster", "pbrun", "pbdata", "pbcoindata", "monitor-agent", "api-server"]
+_SERVICES = ["vps-monitor", "pbcluster", "pbrun", "pbdata", "pbcoindata", "monitor-agent", "api-server"]
 _SYSTEMD_SERVICE_UNITS = {
+    "vps-monitor": "pbgui-vps-monitor.service",
     "pbcluster": "pbgui-pbcluster.service",
     "pbrun": "pbgui-pbrun.service",
     "pbdata": "pbgui-pbdata.service",
@@ -57,6 +58,7 @@ _SYSTEMD_SERVICE_UNITS = {
 _SYSTEMD_RUNNING_STATES = {"active", "activating", "reloading"}
 _SYSTEMD_ENABLED_STATES = {"enabled", "enabled-runtime"}
 _SERVICE_SCRIPT_NAMES = {
+    "vps-monitor": "VPSMonitor.py",
     "pbcluster": "PBCluster.py",
     "pbrun": "PBRun.py",
     "pbdata": "PBData.py",
@@ -65,6 +67,7 @@ _SERVICE_SCRIPT_NAMES = {
     "api-server": "PBApiServer.py",
 }
 _SERVICE_PID_FILES = {
+    "vps-monitor": "",
     "pbcluster": "pbcluster.pid",
     "pbrun": "pbrun.pid",
     "pbdata": "pbdata.pid",
@@ -72,7 +75,7 @@ _SERVICE_PID_FILES = {
     "monitor-agent": "pbmonitoragent.pid",
     "api-server": "api_server.pid",
 }
-_MIGRATION_DEFAULT_SERVICES = ["api", "pbcluster", "pbrun", "pbdata", "pbcoindata", "monitor-agent"]
+_MIGRATION_DEFAULT_SERVICES = ["vps-monitor", "api", "pbcluster", "pbrun", "pbdata", "pbcoindata", "monitor-agent"]
 _MIGRATION_LEGACY_STOP_SERVICES = ["pbcluster", "pbrun", "pbdata", "pbcoindata"]
 _fetch_summary_snapshot: Dict[str, Any] = {}
 _poller_metrics_snapshot: Dict[str, Any] = {}
@@ -99,6 +102,8 @@ def _get_service(name: str):
         return CoinData()
     if name == "monitor-agent":
         raise RuntimeError("PBMonitorAgent requires the pbgui-monitor-agent.service systemd user unit.")
+    if name == "vps-monitor":
+        raise RuntimeError("VPSMonitor requires the pbgui-vps-monitor.service systemd user unit.")
     if name == "api-server":
         # Lazy import to avoid circular import (PBApiServer.py imports api/services.py)
         mod = importlib.import_module("PBApiServer")
@@ -615,7 +620,7 @@ def _pbcoindata_required() -> bool:
 def _migration_required_services(pbgdir: Path | None = None) -> set[str]:
     """Return local services that should be enabled by migration on this host."""
     root = Path(pbgdir or PBGDIR)
-    required = {"api-server"}
+    required = {"api-server", "vps-monitor"}
     required.add("monitor-agent")
     if _pbcluster_required(root):
         required.add("pbcluster")
@@ -776,7 +781,7 @@ def _stop_legacy_services(logs: list[str]) -> None:
             logs.append(f"Warning: could not stop legacy {service}: {exc}")
 
 
-def _schedule_api_systemd_handoff(logs: list[str]) -> str:
+def _schedule_api_systemd_handoff(logs: list[str], *, start_vps_monitor: bool = False) -> str:
     """Restart the API through systemd after the HTTP response is sent."""
     import threading
     from logging_helpers import rotate_managed_log_before_open
@@ -789,7 +794,13 @@ def _schedule_api_systemd_handoff(logs: list[str]) -> str:
         handoff_log = Path(PBGDIR) / "data" / "logs" / "api-systemd-handoff.log"
         rotate_managed_log_before_open(handoff_log, "api_handoff")
         restart_unit = f"pbgui-api-restart-{os.getpid()}.service"
-        restart_cmd = f"""unit={shlex.quote(unit)}
+        monitor_start = (
+            "systemctl --user enable pbgui-vps-monitor.service\n"
+            "  systemctl --user start pbgui-vps-monitor.service\n"
+            if start_vps_monitor else ""
+        )
+        restart_cmd = f"""set -e
+unit={shlex.quote(unit)}
 logfile={shlex.quote(str(handoff_log))}
 {{
   printf '%s delayed restart for %s requested by migration\n' "$(date -Is)" "$unit"
@@ -802,7 +813,8 @@ logfile={shlex.quote(str(handoff_log))}
     printf '%s waiting for %s to leave state %s\n' "$(date -Is)" "$unit" "$state"
     sleep 1
   done
-  systemctl --user restart "$unit"
+  systemctl --user stop "$unit"
+  {monitor_start}  systemctl --user start "$unit"
   rc=$?
   printf '%s restart command for %s exited rc=%s\n' "$(date -Is)" "$unit" "$rc"
   exit "$rc"
@@ -824,7 +836,13 @@ logfile={shlex.quote(str(handoff_log))}
     pidfile = Path(PBGDIR) / "data" / "pid" / "api_server.pid"
     handoff_log = Path(PBGDIR) / "data" / "logs" / "api-systemd-handoff.log"
     rotate_managed_log_before_open(handoff_log, "api_handoff")
-    handoff_cmd = f"""old_pid={current_pid}
+    monitor_start = (
+        "systemctl --user enable pbgui-vps-monitor.service\n"
+        "  systemctl --user start pbgui-vps-monitor.service\n"
+        if start_vps_monitor else ""
+    )
+    handoff_cmd = f"""set -e
+old_pid={current_pid}
 pidfile={shlex.quote(str(pidfile))}
 logfile={shlex.quote(str(handoff_log))}
 {{
@@ -835,10 +853,15 @@ logfile={shlex.quote(str(handoff_log))}
     fi
     sleep 1
   done
+  if kill -0 "$old_pid" 2>/dev/null; then
+    printf '%s old API pid %s did not stop; refusing monitor handoff\n' "$(date -Is)" "$old_pid"
+    exit 1
+  fi
   if [ -f "$pidfile" ] && [ "$(cat "$pidfile" 2>/dev/null || true)" = "$old_pid" ]; then
     rm -f "$pidfile"
     printf '%s removed stale pidfile %s\n' "$(date -Is)" "$pidfile"
   fi
+  {monitor_start}
   printf '%s starting %s\n' "$(date -Is)" {shlex.quote(unit)}
   systemctl --user start {shlex.quote(unit)}
   printf '%s start command exited rc=%s\n' "$(date -Is)" "$?"
@@ -969,7 +992,7 @@ def _run_systemd_migration() -> dict[str, Any]:
 
     _stop_legacy_services(logs)
     for service in enable_services:
-        if service == "api":
+        if service in {"api", "vps-monitor"}:
             continue
         service_id = "api-server" if service == "api" else service
         action_result = _service_action(service_id, "restart")
@@ -998,7 +1021,10 @@ def _run_systemd_migration() -> dict[str, Any]:
         except Exception as exc:
             warnings.append(f"Could not delete legacy start.sh {legacy_start_sh}: {exc}")
 
-    api_message = _schedule_api_systemd_handoff(logs)
+    api_message = _schedule_api_systemd_handoff(
+        logs,
+        start_vps_monitor="vps-monitor" in enable_services,
+    )
     logs.append(api_message)
     after = _migration_status_payload()
     return {

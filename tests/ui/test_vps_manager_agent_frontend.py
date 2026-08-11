@@ -137,6 +137,7 @@ def test_pb8_versions_render_in_overview_and_host_details() -> None:
         _extract_function(source, name)
         for name in (
             "esc",
+            "escAttr",
             "getOverviewVersionCore",
             "getOverviewVersionTone",
             "getOverviewGithubTarget",
@@ -165,6 +166,63 @@ def test_pb8_versions_render_in_overview_and_host_details() -> None:
         assert.match(html, /data-role='pb8-label'>PB8 ⚠/);
         assert.ok(html.includes("data-role='pb8-ver'>v8.1.2 /3.12"));
         assert.ok(html.includes("data-role='pb8-branch'>master (abcdef0) -&gt; v8.1.3 (1234567)"));
+        """
+    )
+    result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+
+
+def test_linux_update_counts_open_escaped_package_details() -> None:
+    """Overview and host update counts open a safe package urgency report."""
+
+    source = HTML_PATH.read_text(encoding="utf-8")
+    overview = _extract_function(source, "renderOverviewTable")
+    modal = _extract_function(source, "openPackageUpdatesModal")
+    handler = _extract_function(source, "handleVpsManagerAction")
+
+    assert "data-vps-action='package-updates'" in overview
+    assert "Security updates available" in modal
+    assert "Kernel updates available" in modal
+    assert "Package removals planned" in modal
+    assert "Routine updates available" in modal
+    assert "Stale cache:" in modal
+    assert "esc(item.name || '-')" in modal
+    assert "esc(item.candidate_version || '-')" in modal
+    assert "openPackageUpdatesModal(host)" in handler
+    assert "onclick='openPackageUpdatesModal" not in source
+
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in ("esc", "openPackageUpdatesModal")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const nodes = {{
+          alertModalTitle: {{textContent: ''}},
+          alertModalBody: {{className: '', innerHTML: '', scrollTop: 0}},
+          alertModalBtnRow: {{innerHTML: ''}},
+          alertModalOverlay: {{classList: {{add() {{}}}}}}
+        }};
+        global.document = {{getElementById(id) {{ return nodes[id]; }}}};
+        function prepareAlertModalWindow() {{}}
+        function formatAgentAge() {{ return '3h'; }}
+        function levelTag(tone, label) {{ return '<span>' + esc(label) + '</span>'; }}
+        function getPackageStatusForHost() {{ return {{
+          state: 'stale', available: true, upgrades: 1, urgency: 'security', age: 10800,
+          security_updates: 1, kernel_updates: 0, removal_updates: 0, routine_updates: 0,
+          new_installs: 0, removals: 0,
+          details_complete: true, classification_complete: true,
+          packages: [{{name: '<img src=x onerror=1>', installed_version: '1', candidate_version: '2<script>', source: '<b>security</b>', architecture: 'amd64', security: true, kernel: false, removed: false}}]
+        }}; }}
+        global.setTimeout = function(fn) {{ fn(); }};
+        {functions}
+        openPackageUpdatesModal('host<script>');
+        assert.equal(nodes.alertModalTitle.textContent, 'Linux Updates — host<script>');
+        assert.equal(nodes.alertModalBody.innerHTML.includes('<img src=x'), false);
+        assert.equal(nodes.alertModalBody.innerHTML.includes('<script>'), false);
+        assert.match(nodes.alertModalBody.innerHTML, /&lt;img src=x onerror=1&gt;/);
+        assert.match(nodes.alertModalBody.innerHTML, /Stale cache:/);
         """
     )
     result = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)

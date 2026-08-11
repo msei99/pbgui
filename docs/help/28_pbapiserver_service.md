@@ -10,7 +10,7 @@ PBAPIServer is the FastAPI backend that powers all real-time features of PBGui. 
   - **Layer 2 (on-demand):** `api/live.py` opens private ccxtpro WebSocket connections to exchanges (for positions/balances) when a browser subscribes — ref-counted and shut down when no browsers are connected
   - **Layer 3 (browser):** Vanilla JS receives updates via SSE (Server-Sent Events)
 - Powers the Services page (start/stop/restart all PBGui daemons)
-- Powers the VPS Monitor (SSH connections, live metrics, remote log streaming, file sync)
+- Proxies VPS Monitor state and commands while the independent `pbgui-vps-monitor.service` owns persistent SSH connections, live metrics, and remote log streams
 - Manages the Job Queue (backtests, optimizations) with real-time status updates
 - Serves API Keys management endpoints
 - Serves Market Data pipeline status and control
@@ -33,7 +33,7 @@ You can change host and port on the **PBAPIServer Details** page (`System → Se
 
 - **Start**: Use the Start button on the Services overview or details page. PBAPIServer spawns as a background process.
 - **Stop**: Not supported from GUI (the server cannot stop itself while serving the page). Stop via terminal if needed.
-- **Restart**: Use the Restart button. PBGui restarts active managed services that still run an older code serial, then restarts the API server last and reloads the page.
+- **Restart**: Use the Restart button. PBGui restarts active managed services that still run an older code serial, then restarts the API server last and reloads the page. The dedicated VPS Monitor daemon is not part of an ordinary API restart, so its SSH sessions remain connected.
 
 The nav bar shows an orange **Restart** button when the API or an active PBCluster, PBRun, PBData, PBCoinData, or PBMonitorAgent process still runs an older `api/serial.txt` value. The confirmation lists affected services. Detached bots, backtests, optimizations, and Market Data jobs are not restarted.
 
@@ -77,7 +77,7 @@ PBAPIServer runs several internal background tasks:
 
 - **Task-worker watchdog**: Checks every 60 seconds if the job queue worker is alive; auto-restarts it if crashed
 - **Serial watcher**: Monitors `api/serial.txt` via inotify for changes; broadcasts a restart notification to all connected clients via SSE
-- **VPS Monitor**: Manages SSH connection pool, live metrics, and remote log streaming for connected VPS hosts
+- **VPS Monitor client**: Reads the owner-only local Unix RPC state from `pbgui-vps-monitor.service`; API shutdown closes only this local client and its lazy operation pool
 - **File Sync Worker**: Watches local config files and syncs changes to remote VPS hosts via inotifywait
 
 ## Troubleshooting

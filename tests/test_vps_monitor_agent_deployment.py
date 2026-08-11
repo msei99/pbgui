@@ -243,6 +243,7 @@ def test_setup_systemd_first_run_then_idempotent_second_run(tmp_path: Path) -> N
     unit_path = tmp_path / "home" / "agent-user" / ".config" / "systemd" / "user" / "pbgui-monitor-agent.service"
     unit_dir = unit_path.parent
     expected_scripts = {
+        "pbgui-vps-monitor.service": "VPSMonitor.py",
         "pbgui-api.service": "PBApiServer.py",
         "pbgui-pbcluster.service": "PBCluster.py",
         "pbgui-pbrun.service": "PBRun.py",
@@ -256,6 +257,8 @@ def test_setup_systemd_first_run_then_idempotent_second_run(tmp_path: Path) -> N
         assert f"ExecStart={python_bin} -u {pbgui_dir}/{script_name}" in unit_source
     api_source = (unit_dir / "pbgui-api.service").read_text(encoding="utf-8")
     assert f"ExecStartPre=/bin/bash {pbgui_dir}/setup/stop_legacy_api.sh --pbgui-dir {pbgui_dir}" in api_source
+    assert "After=pbgui-vps-monitor.service" in api_source
+    assert "Wants=pbgui-vps-monitor.service" in api_source
     pbrun_source = (unit_dir / "pbgui-pbrun.service").read_text(encoding="utf-8")
     assert "KillSignal=SIGTERM" in pbrun_source
     assert "KillMode=process" in pbrun_source
@@ -286,6 +289,7 @@ def test_api_handoff_stops_only_exact_legacy_process(tmp_path: Path) -> None:
     decoy_script.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
 
     legacy = subprocess.Popen([sys.executable, str(api_script)])
+    relative_legacy = subprocess.Popen([sys.executable, "PBApiServer.py"], cwd=pbgui_dir)
     decoy = subprocess.Popen([sys.executable, str(decoy_script)])
     try:
         pidfile.write_text(f"{legacy.pid}\n", encoding="utf-8")
@@ -300,10 +304,11 @@ def test_api_handoff_stops_only_exact_legacy_process(tmp_path: Path) -> None:
 
         assert result.returncode == 0, result.stderr
         legacy.wait(timeout=5)
+        relative_legacy.wait(timeout=5)
         assert decoy.poll() is None
         assert not pidfile.exists()
     finally:
-        for process in (legacy, decoy):
+        for process in (legacy, relative_legacy, decoy):
             if process.poll() is None:
                 process.terminate()
             process.wait(timeout=5)

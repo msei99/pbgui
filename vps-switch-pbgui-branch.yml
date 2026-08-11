@@ -85,6 +85,11 @@
       when: target_commit == ""
       notify: restart pbgui
 
+    - name: Check whether target branch supports persistent VPS monitoring
+      stat:
+        path: "{{ pbgdir }}/VPSMonitor.py"
+      register: vps_monitor_entrypoint
+
     - name: Check required PBGui systemd units
       shell: |
         target_user={{ user | default('', true) | quote }}
@@ -93,7 +98,11 @@
           target_home="$(getent passwd "$target_user" | cut -d: -f6)"
         fi
         unit_dir="${target_home:-$HOME}/.config/systemd/user"
-        for unit in pbgui-pbcluster.service pbgui-pbrun.service pbgui-monitor-agent.service; do
+        units="pbgui-pbcluster.service pbgui-pbrun.service pbgui-monitor-agent.service"
+        if [ -f "{{ pbgdir }}/VPSMonitor.py" ] && [ "{{ pbgui_role | default('') | string | lower }}" = master ]; then
+          units="pbgui-vps-monitor.service $units"
+        fi
+        for unit in $units; do
           if [ ! -f "$unit_dir/$unit" ]; then
             echo "missing=$unit"
           fi
@@ -153,7 +162,21 @@
     - name: Build enabled PBGui service list
       set_fact:
         pbgui_credential_capability_known: "{{ credential_active is defined and credential_active is not none }}"
-        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if (credential_active | default(false)) else []) + (['api'] if (pbgui_role | default('') | lower) == 'master' else []) }}"
+        pbgui_enabled_services: "{{ ['pbcluster', 'pbrun', 'monitor-agent'] + (['pbcoindata'] if (credential_active | default(false)) else []) + ((['vps-monitor'] if (vps_monitor_entrypoint.stat.exists | default(false)) else []) + ['api'] if (pbgui_role | default('') | lower) == 'master' else []) }}"
+      listen: "restart pbgui"
+
+    - name: Remove unsupported persistent VPS monitor unit after rollback
+      shell: |
+        set -euo pipefail
+        systemctl --user stop pbgui-vps-monitor.service >/dev/null 2>&1 || true
+        systemctl --user disable pbgui-vps-monitor.service >/dev/null 2>&1 || true
+        rm -f "$HOME/.config/systemd/user/default.target.wants/pbgui-vps-monitor.service" \
+          "$HOME/.config/systemd/user/pbgui-vps-monitor.service"
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+      args:
+        executable: /bin/bash
+      when: (pbgui_role | default('') | string | lower) == 'master' and not (vps_monitor_entrypoint.stat.exists | default(false))
+      changed_when: true
       listen: "restart pbgui"
 
     - name: Sync PBGui systemd user services
@@ -176,9 +199,29 @@
       shell: |
         set -euo pipefail
         restart_unit="pbgui-api-restart-$(date +%s%N)"
-        systemd-run --user --unit="$restart_unit" --collect /bin/bash -lc 'sleep 1; systemctl --user enable pbgui-api.service; systemctl --user restart pbgui-api.service'
+        systemd-run --user --unit="$restart_unit" --collect --setenv=PBGUI_DIR="$PBGUI_DIR" --setenv=PBGUI_PYTHON="$PBGUI_PYTHON" /bin/bash -lc '
+          sleep 1
+          cd "$PBGUI_DIR"
+          systemctl --user stop pbgui-api.service >/dev/null 2>&1 || true
+          /bin/bash "$PBGUI_DIR/setup/stop_legacy_api.sh" --pbgui-dir "$PBGUI_DIR"
+          if [ -f "$PBGUI_DIR/VPSMonitor.py" ]; then
+            systemctl --user enable pbgui-vps-monitor.service
+            systemctl --user restart pbgui-vps-monitor.service
+            monitor_ready=0
+            for _ in $(seq 1 30); do
+              if "$PBGUI_PYTHON" -c "from master.vps_monitor_client import VPSMonitorRPCClient; VPSMonitorRPCClient(timeout=1).call(\"hello\")"; then monitor_ready=1; break; fi
+              sleep 1
+            done
+            [ "$monitor_ready" = 1 ] || exit 1
+          fi
+          systemctl --user enable pbgui-api.service
+          systemctl --user start pbgui-api.service
+        '
       args:
         executable: /bin/bash
+      environment:
+        PBGUI_DIR: "{{ install_dir }}/pbgui"
+        PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"
       changed_when: true
       when: (pbgui_role | default('') | string | lower) == 'master'
       listen: "restart pbgui"

@@ -1189,6 +1189,13 @@
 
     .table-button:hover { color: #83d4ff; }
 
+    .update-count-button {
+      min-width: 36px;
+      min-height: 36px;
+      padding: 6px 10px;
+      text-align: center;
+    }
+
     .table-small {
       table-layout: fixed;
       width: 100%;
@@ -2820,6 +2827,26 @@
       gap: 2px;
     }
 
+    button.system-metric {
+      width: 100%;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    button.system-metric:not(:disabled):hover,
+    button.system-metric:not(:disabled):focus-visible {
+      border-color: rgba(77, 166, 255, 0.45);
+      background: rgba(24, 42, 68, 0.96);
+      outline: none;
+    }
+
+    button.system-metric:disabled {
+      cursor: default;
+      opacity: 1;
+    }
+
     .system-metric-label {
       font-size: var(--fs-xs);
       text-transform: uppercase;
@@ -3058,7 +3085,10 @@
       vps: {},
       sidebarSelectInteracting: false,
       pb7BranchSelectInteracting: false,
+      pb8BranchSelectInteracting: false,
       pbguiBranchSelectInteracting: false,
+      branchRequestCounter: 0,
+      pendingBranchRequests: {},
       helpLang: 'en',
       helpTopics: [],
       helpTopicIndex: -1,
@@ -3199,8 +3229,24 @@
         pb7RemoteUrl: '',
         pb7ManualBranch: '',
         pb7ManualCommit: '',
+        pb7RemoteBranches: [],
+        pb7RemoteCommits: {},
         pb7RemoteBranchesKey: '',
-        pb7RemoteCommitsKey: ''
+        pb7RemoteCommitsKey: '',
+        pb7RemoteBranchesRequest: '',
+        pb7RemoteCommitsRequest: '',
+        pb8Branch: '',
+        pb8Commit: 'HEAD',
+        pb8RemoteName: '',
+        pb8RemoteUrl: '',
+        pb8ManualBranch: '',
+        pb8ManualCommit: '',
+        pb8RemoteBranches: [],
+        pb8RemoteCommits: {},
+        pb8RemoteBranchesKey: '',
+        pb8RemoteCommitsKey: '',
+        pb8RemoteBranchesRequest: '',
+        pb8RemoteCommitsRequest: ''
       };
     }
 
@@ -3257,8 +3303,24 @@
         pb7RemoteUrl: '',
         pb7ManualBranch: '',
         pb7ManualCommit: '',
+        pb7RemoteBranches: [],
+        pb7RemoteCommits: {},
         pb7RemoteBranchesKey: '',
-        pb7RemoteCommitsKey: ''
+        pb7RemoteCommitsKey: '',
+        pb7RemoteBranchesRequest: '',
+        pb7RemoteCommitsRequest: '',
+        pb8Branch: '',
+        pb8Commit: 'HEAD',
+        pb8RemoteName: '',
+        pb8RemoteUrl: '',
+        pb8ManualBranch: '',
+        pb8ManualCommit: '',
+        pb8RemoteBranches: [],
+        pb8RemoteCommits: {},
+        pb8RemoteBranchesKey: '',
+        pb8RemoteCommitsKey: '',
+        pb8RemoteBranchesRequest: '',
+        pb8RemoteCommitsRequest: ''
       };
     }
 
@@ -3662,120 +3724,148 @@
       send({ cmd: 'run_vps_deploy', hostnames: selected, command: nextCommand, mode: mode, extra_vars: extraVars, debug: !!deployConfig.debug });
     }
 
-    function clearPb7RemoteCache(uiState) {
-      if (!uiState) return;
-      uiState.remoteBranches = [];
-      uiState.pb7RemoteCommits = {};
-      uiState.pb7RemoteBranchesKey = '';
-      uiState.pb7RemoteCommitsKey = '';
+    function runtimeBranchKeys(runtime) {
+      const repo = runtime === 'pb8' ? 'pb8' : 'pb7';
+      return {
+        repo: repo,
+        label: repo === 'pb8' ? 'PB8' : 'PB7',
+        branch: repo + 'Branch',
+        commit: repo + 'Commit',
+        remoteName: repo + 'RemoteName',
+        remoteUrl: repo + 'RemoteUrl',
+        manualBranch: repo + 'ManualBranch',
+        manualCommit: repo + 'ManualCommit',
+        remoteBranches: repo + 'RemoteBranches',
+        remoteCommits: repo + 'RemoteCommits',
+        remoteBranchesKey: repo + 'RemoteBranchesKey',
+        remoteCommitsKey: repo + 'RemoteCommitsKey',
+        remoteBranchesRequest: repo + 'RemoteBranchesRequest',
+        remoteCommitsRequest: repo + 'RemoteCommitsRequest'
+      };
     }
 
-    function setPb7RemoteName(scope, value) {
+    function clearPb7RemoteCache(uiState, runtime) {
+      if (!uiState) return;
+      const keys = runtimeBranchKeys(runtime);
+      uiState[keys.remoteBranches] = [];
+      uiState[keys.remoteCommits] = {};
+      uiState[keys.remoteBranchesKey] = '';
+      uiState[keys.remoteCommitsKey] = '';
+      uiState[keys.remoteBranchesRequest] = '';
+      uiState[keys.remoteCommitsRequest] = '';
+    }
+
+    function setPb7RemoteName(scope, value, runtime) {
+      const keys = runtimeBranchKeys(runtime);
       if (scope === 'master') {
-        const state = store.detail && store.detail.kind === 'master' ? (store.detail.branches.pb7 || {}) : {};
-        store.master.pb7RemoteName = value;
-        store.master.pb7RemoteUrl = String((state.remote_urls || {})[value] || '');
-        clearPb7RemoteCache(store.master);
+        const state = store.detail && store.detail.kind === 'master' ? (store.detail.branches[keys.repo] || {}) : {};
+        store.master[keys.remoteName] = value;
+        store.master[keys.remoteUrl] = String((state.remote_urls || {})[value] || '');
+        clearPb7RemoteCache(store.master, keys.repo);
       } else {
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === scope ? store.detail : null;
-        const state = detail ? (detail.branches.pb7 || {}) : {};
+        const state = detail ? (detail.branches[keys.repo] || {}) : {};
         const ui = ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
-        ui.pb7RemoteName = value;
-        ui.pb7RemoteUrl = String((state.remote_urls || {})[value] || '');
-        clearPb7RemoteCache(ui);
+        ui[keys.remoteName] = value;
+        ui[keys.remoteUrl] = String((state.remote_urls || {})[value] || '');
+        clearPb7RemoteCache(ui, keys.repo);
       }
       syncBranchViewPanel();
     }
 
-    function setPb7RemoteUrl(scope, value) {
+    function setPb7RemoteUrl(scope, value, runtime) {
+      const keys = runtimeBranchKeys(runtime);
       if (scope === 'master') {
-        store.master.pb7RemoteUrl = value;
-        clearPb7RemoteCache(store.master);
+        store.master[keys.remoteUrl] = value;
+        clearPb7RemoteCache(store.master, keys.repo);
       } else {
         const ui = ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
-        ui.pb7RemoteUrl = value;
-        clearPb7RemoteCache(ui);
+        ui[keys.remoteUrl] = value;
+        clearPb7RemoteCache(ui, keys.repo);
       }
       refreshLocalInteractiveState();
     }
 
-    function setPb7LocalBranch(scope, value) {
+    function setPb7LocalBranch(scope, value, runtime) {
+      const keys = runtimeBranchKeys(runtime);
       const nextBranch = String(value || '');
       const isMaster = scope === 'master';
       const detail = store.detail && ((isMaster && store.detail.kind === 'master') || (!isMaster && store.detail.kind === 'vps' && store.detail.hostname === scope)) ? store.detail : null;
-      const state = detail ? (detail.branches.pb7 || {}) : {};
+      const state = detail ? (detail.branches[keys.repo] || {}) : {};
       const trackingRemotes = state.branch_tracking_remotes || {};
       const trackingRemoteName = String(trackingRemotes[nextBranch] || '');
       const remoteUrls = state.remote_urls || {};
       if (isMaster) {
-        store.master.pb7Branch = nextBranch;
+        store.master[keys.branch] = nextBranch;
         if (trackingRemoteName) {
-          store.master.pb7RemoteName = trackingRemoteName;
-          store.master.pb7RemoteUrl = String(remoteUrls[trackingRemoteName] || '');
-          clearPb7RemoteCache(store.master);
+          store.master[keys.remoteName] = trackingRemoteName;
+          store.master[keys.remoteUrl] = String(remoteUrls[trackingRemoteName] || '');
+          clearPb7RemoteCache(store.master, keys.repo);
         }
       } else {
         const ui = ensureVpsUi(scope, detail);
-        ui.pb7Branch = nextBranch;
+        ui[keys.branch] = nextBranch;
         if (trackingRemoteName) {
-          ui.pb7RemoteName = trackingRemoteName;
-          ui.pb7RemoteUrl = String(remoteUrls[trackingRemoteName] || '');
-          clearPb7RemoteCache(ui);
+          ui[keys.remoteName] = trackingRemoteName;
+          ui[keys.remoteUrl] = String(remoteUrls[trackingRemoteName] || '');
+          clearPb7RemoteCache(ui, keys.repo);
         }
       }
       syncBranchViewPanel();
     }
 
-    function setPb7ManualBranch(scope, value) {
+    function setPb7ManualBranch(scope, value, runtime) {
+      const keys = runtimeBranchKeys(runtime);
       const nextBranch = String(value || '');
       if (scope === 'master') {
-        store.master.pb7ManualBranch = nextBranch;
-        store.master.pb7ManualCommit = '';
+        store.master[keys.manualBranch] = nextBranch;
+        store.master[keys.manualCommit] = '';
         if (nextBranch) {
-          store.master.pb7Branch = nextBranch;
-          store.master.pb7Commit = 'HEAD';
+          store.master[keys.branch] = nextBranch;
+          store.master[keys.commit] = 'HEAD';
         }
       } else {
         const ui = ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
-        ui.pb7ManualBranch = nextBranch;
-        ui.pb7ManualCommit = '';
+        ui[keys.manualBranch] = nextBranch;
+        ui[keys.manualCommit] = '';
         if (nextBranch) {
-          ui.pb7Branch = nextBranch;
-          ui.pb7Commit = 'HEAD';
+          ui[keys.branch] = nextBranch;
+          ui[keys.commit] = 'HEAD';
         }
       }
       syncBranchViewPanel();
     }
 
-    function syncPb7RemoteLoads(scope, uiState, state) {
+    function syncPb7RemoteLoads(scope, uiState, state, runtime) {
       if (!uiState || !state) return;
-      const remoteName = String(uiState.pb7RemoteName || state.default_remote_name || '');
-      const remoteUrl = String(uiState.pb7RemoteUrl || (state.remote_urls || {})[remoteName] || '');
-      const sourceBranch = String(uiState.pb7ManualBranch || uiState.pb7Branch || state.current_branch || '');
-      const remoteBranches = Array.isArray(uiState.remoteBranches) ? uiState.remoteBranches : [];
+      const keys = runtimeBranchKeys(runtime);
+      const remoteName = String(uiState[keys.remoteName] || state.default_remote_name || '');
+      const remoteUrl = String(uiState[keys.remoteUrl] || (state.remote_urls || {})[remoteName] || '');
+      const sourceBranch = String(uiState[keys.manualBranch] || uiState[keys.branch] || state.current_branch || '');
+      const remoteBranches = Array.isArray(uiState[keys.remoteBranches]) ? uiState[keys.remoteBranches] : [];
       const branchesKey = remoteUrl ? (remoteName + '|' + remoteUrl) : '';
-      if (branchesKey && uiState.pb7RemoteBranchesKey !== branchesKey) {
-        uiState.pb7RemoteBranchesKey = branchesKey;
-        uiState.pb7RemoteCommitsKey = '';
-        loadRemoteBranches(scope);
+      if (branchesKey && uiState[keys.remoteBranchesKey] !== branchesKey) {
+        uiState[keys.remoteBranchesKey] = branchesKey;
+        uiState[keys.remoteCommitsKey] = '';
+        loadRemoteBranches(scope, keys.repo);
       }
       const canLoadCommits = remoteUrl && sourceBranch && (!remoteBranches.length || remoteBranches.indexOf(sourceBranch) >= 0);
       const commitsKey = canLoadCommits ? (branchesKey + '|' + sourceBranch) : '';
-      if (commitsKey && uiState.pb7RemoteCommitsKey !== commitsKey) {
-        uiState.pb7RemoteCommitsKey = commitsKey;
-        loadRemoteBranchCommits(scope);
+      if (commitsKey && uiState[keys.remoteCommitsKey] !== commitsKey) {
+        uiState[keys.remoteCommitsKey] = commitsKey;
+        loadRemoteBranchCommits(scope, keys.repo);
       }
       if (!commitsKey) {
-        uiState.pb7RemoteCommitsKey = '';
+        uiState[keys.remoteCommitsKey] = '';
       }
     }
 
     function isMasterContextView() {
-      return store.view === 'master' || store.view === 'master-task-log' || store.view === 'master-host-logs' || store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch' || store.view === 'master-ufw';
+      return store.view === 'master' || store.view === 'master-task-log' || store.view === 'master-host-logs' || store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch' || store.view === 'master-pb8-branch' || store.view === 'master-ufw';
     }
 
     function isVpsContextView() {
-      return !!store.hostname && (store.view === 'vps' || store.view === 'vps-task-log' || store.view === 'vps-host-logs' || store.view === 'vps-setup' || store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch' || store.view === 'vps-ufw');
+      return !!store.hostname && (store.view === 'vps' || store.view === 'vps-task-log' || store.view === 'vps-host-logs' || store.view === 'vps-setup' || store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch' || store.view === 'vps-pb8-branch' || store.view === 'vps-ufw');
     }
 
     function isOverviewSettingsView() {
@@ -3834,6 +3924,16 @@
 
     function isPb7BranchView() {
       return store.view === 'master-pb7-branch' || store.view === 'vps-pb7-branch';
+    }
+
+    function isPb8BranchView() {
+      return store.view === 'master-pb8-branch' || store.view === 'vps-pb8-branch';
+    }
+
+    function activeRuntimeBranchRepo() {
+      if (isPb8BranchView()) return 'pb8';
+      if (isPb7BranchView()) return 'pb7';
+      return '';
     }
 
     function isPbguiBranchView() {
@@ -4178,8 +4278,7 @@
           hasServerMetrics: !!monitor.server,
           serverStale: !!(monitor.server && (monitor.server.telemetry_stale || monitor.server.telemetry_fresh === false)),
           hasV7Rows: Array.isArray(monitor.v7) && monitor.v7.length > 0,
-          hasV7Fallback: Array.isArray(monitor.v7_running) && monitor.v7_running.length > 0,
-          remoteBranches: Array.isArray(store.master.remoteBranches) ? store.master.remoteBranches : []
+          hasV7Fallback: Array.isArray(monitor.v7_running) && monitor.v7_running.length > 0
         });
       }
       if (store.view === 'master-ufw' || store.view === 'vps-ufw') {
@@ -4206,10 +4305,10 @@
           ready: !!detail
         });
       }
-      if (store.view === 'master-pb7-branch') {
+      if (store.view === 'master-pb7-branch' || store.view === 'master-pb8-branch') {
         const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
         return stableStringify({
-          view: 'master-pb7-branch',
+          view: store.view,
           ready: !!detail
         });
       }
@@ -4221,7 +4320,7 @@
           browse: !!store.taskLog.browse
         });
       }
-      if (store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch') {
+      if (store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch' || store.view === 'vps-pb8-branch') {
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
         return stableStringify({
           view: store.view,
@@ -4248,7 +4347,6 @@
           uiFirewallIps: store.view === 'vps-setup' && ui && ui.form ? String(ui.form.firewall_ssh_ips || '') : '',
           userPwStored: store.view === 'vps-setup' ? !!(((secretStatus.user_pw) || {}).stored) : false,
           userPwRemaining: store.view === 'vps-setup' ? Number((((secretStatus.user_pw) || {}).remaining_seconds) || 0) : 0,
-          remoteBranches: ui && Array.isArray(ui.remoteBranches) ? ui.remoteBranches : [],
           taskLogFile: store.taskLog.file || '',
           taskLogTitle: store.taskLog.title || '',
           taskLogBrowse: !!store.taskLog.browse
@@ -4408,6 +4506,7 @@
       const updatesNum = Number.isFinite(updatesCount) ? updatesCount : 'N/A';
       const updatesTone = !packageAvailable || packageState !== 'ok' ? 'warning' : (updatesCount === 0 ? 'ok' : 'error');
       const updatesSub = 'Source: agent cache · ' + (packageState.charAt(0).toUpperCase() + packageState.slice(1)) + (packageState === 'stale' ? ' · last-known values' : '');
+      const updatesClickable = Number.isFinite(updatesCount) && updatesCount > 0;
       const reboot = packageAvailable ? packageStatus.reboot_required === true : null;
       const rebootTone = reboot === null ? 'warning' : (reboot ? 'error' : 'ok');
       const rebootText = reboot === null ? 'N/A' : (reboot ? 'Required' : 'OK');
@@ -4445,6 +4544,7 @@
         updatesNum,
         updatesTone,
         updatesSub,
+        updatesClickable,
         reboot,
         rebootTone,
         rebootText,
@@ -4479,11 +4579,11 @@
               <div class='system-metric-value' data-role='boot-time'>${esc(model.bootTime)}</div>
               <div class='system-metric-sub' data-role='uptime'>${model.uptime ? `Uptime: ${esc(model.uptime)}` : ''}</div>
             </div>
-            <div class='system-metric'>
+            <button class='system-metric' type='button' data-role='updates-card' data-vps-action='package-updates' data-host='${escAttr(model.hostname)}' ${model.updatesClickable ? `title='Show Linux update details for ${escAttr(model.hostname)}'` : 'disabled'}>
               <div class='system-metric-label'>Updates</div>
               <div class='system-metric-value'><span class='dot ${model.updatesTone}' data-role='updates-dot'></span><span data-role='updates-count'>${model.updatesNum}</span></div>
               <div class='system-metric-sub' data-role='updates-sub'>${esc(model.updatesSub)}</div>
-            </div>
+            </button>
             <div class='system-metric'>
               <div class='system-metric-label'>Reboot</div>
               <div class='system-metric-value'><span class='dot ${model.rebootTone}' data-role='reboot-dot'></span><span data-role='reboot-value'>${esc(model.rebootText)}</span></div>
@@ -4523,6 +4623,7 @@
       const bootTimeNode = header.querySelector('[data-role="boot-time"]');
       const uptimeNode = header.querySelector('[data-role="uptime"]');
       const updatesDot = header.querySelector('[data-role="updates-dot"]');
+      const updatesCard = header.querySelector('[data-role="updates-card"]');
       const updatesCountNode = header.querySelector('[data-role="updates-count"]');
       const updatesSubNode = header.querySelector('[data-role="updates-sub"]');
       const rebootDot = header.querySelector('[data-role="reboot-dot"]');
@@ -4541,7 +4642,7 @@
       const pb8VerNode = header.querySelector('[data-role="pb8-ver"]');
       const pb8BranchNode = header.querySelector('[data-role="pb8-branch"]');
 
-      if (!onlineDot || !hostnameNode || !tagsNode || !bootTimeNode || !updatesDot || !updatesCountNode || !rebootDot || !pbguiLabelNode || !pbguiDot || !pbguiVerNode || !pbguiBranchNode || !pb7LabelNode || !pb7Dot || !pb7VerNode || !pb7BranchNode || !pb8LabelNode || !pb8Dot || !pb8VerNode || !pb8BranchNode) {
+      if (!onlineDot || !hostnameNode || !tagsNode || !bootTimeNode || !updatesCard || !updatesDot || !updatesCountNode || !rebootDot || !pbguiLabelNode || !pbguiDot || !pbguiVerNode || !pbguiBranchNode || !pb7LabelNode || !pb7Dot || !pb7VerNode || !pb7BranchNode || !pb8LabelNode || !pb8Dot || !pb8VerNode || !pb8BranchNode) {
         container.innerHTML = renderSystemHeader(status, summary, isMaster, rtd);
         return;
       }
@@ -4552,6 +4653,9 @@
       setNodeTextIfChanged(bootTimeNode, model.bootTime);
       setNodeTextIfChanged(uptimeNode, model.uptime ? 'Uptime: ' + model.uptime : '');
       setNodeClassNameIfChanged(updatesDot, 'dot ' + model.updatesTone);
+      updatesCard.disabled = !model.updatesClickable;
+      updatesCard.setAttribute('data-host', model.hostname);
+      updatesCard.title = model.updatesClickable ? 'Show Linux update details for ' + model.hostname : '';
       setNodeTextIfChanged(updatesCountNode, model.updatesNum);
       setNodeTextIfChanged(updatesSubNode, model.updatesSub);
       setNodeClassNameIfChanged(rebootDot, 'dot ' + model.rebootTone);
@@ -5161,8 +5265,8 @@
         setHtmlIfChanged('deploys-history-live', renderVpsLoggingDeployHistory());
         return;
       }
-      if (store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch' || store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch') {
-        if ((store.pbguiBranchSelectInteracting && isPbguiBranchView()) || (store.pb7BranchSelectInteracting && isPb7BranchView())) {
+      if (store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch' || store.view === 'master-pb8-branch' || store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch' || store.view === 'vps-pb8-branch') {
+        if ((store.pbguiBranchSelectInteracting && isPbguiBranchView()) || (store.pb7BranchSelectInteracting && isPb7BranchView()) || (store.pb8BranchSelectInteracting && isPb8BranchView())) {
           return;
         }
         syncBranchViewPanel();
@@ -7142,6 +7246,13 @@
         return;
       }
       if (msg.type === 'error') {
+        const branchRequest = takeRuntimeBranchRequest(msg.request_id);
+        if (branchRequest) {
+          const retryKey = branchRequest.pending.kind === 'branches'
+            ? branchRequest.keys.remoteBranchesKey
+            : branchRequest.keys.remoteCommitsKey;
+          branchRequest.uiState[retryKey] = '';
+        }
         if (msg.cmd === 'set_context' && String(msg.error || '').indexOf('Unknown VPS:') === 0) {
           store.hostname = '';
           store.view = 'overview';
@@ -7243,17 +7354,15 @@
       if (msg.type === 'remote_branches') {
         const branches = Array.isArray(msg.branches) ? msg.branches : [];
         const url = String(msg.remote_url || '');
-        if (isMasterContextView()) {
-          store.master.remoteBranches = branches;
-          store.master.pb7RemoteUrl = url;
-          store.master.pb7RemoteCommits = {};
-        } else if (isVpsContextView()) {
-          const ui = ensureVpsUi(store.hostname, store.detail && store.detail.hostname === store.hostname ? store.detail : null);
-          ui.remoteBranches = branches;
-          ui.pb7RemoteUrl = url;
-          ui.pb7RemoteCommits = {};
-        }
-        if (!store.pb7BranchSelectInteracting) {
+        const target = takeRuntimeBranchRequest(msg.request_id);
+        if (!target || target.pending.kind !== 'branches' || target.pending.remoteUrl !== url) return;
+        target.uiState[target.keys.remoteBranches] = branches;
+        target.uiState[target.keys.remoteUrl] = url;
+        target.uiState[target.keys.remoteCommits] = {};
+        const activeScope = target.pending.scope === 'master'
+          ? isMasterContextView()
+          : isVpsContextView() && store.hostname === target.pending.scope;
+        if (activeScope && activeRuntimeBranchRepo() === target.pending.runtime && !store[target.pending.runtime + 'BranchSelectInteracting']) {
           syncBranchViewPanel();
         }
         return;
@@ -7360,17 +7469,15 @@
         const commits = Array.isArray(msg.commits) ? msg.commits : [];
         const url = String(msg.remote_url || '');
         const branch = String(msg.branch || '');
-        if (isMasterContextView()) {
-          store.master.pb7RemoteUrl = url;
-          store.master.pb7RemoteCommits = store.master.pb7RemoteCommits || {};
-          store.master.pb7RemoteCommits[branch] = commits;
-        } else if (isVpsContextView()) {
-          const ui = ensureVpsUi(store.hostname, store.detail && store.detail.hostname === store.hostname ? store.detail : null);
-          ui.pb7RemoteUrl = url;
-          ui.pb7RemoteCommits = ui.pb7RemoteCommits || {};
-          ui.pb7RemoteCommits[branch] = commits;
-        }
-        if (!store.pb7BranchSelectInteracting) {
+        const target = takeRuntimeBranchRequest(msg.request_id);
+        if (!target || target.pending.kind !== 'commits' || target.pending.remoteUrl !== url || target.pending.branch !== branch) return;
+        target.uiState[target.keys.remoteUrl] = url;
+        target.uiState[target.keys.remoteCommits] = target.uiState[target.keys.remoteCommits] || {};
+        target.uiState[target.keys.remoteCommits][branch] = commits;
+        const activeScope = target.pending.scope === 'master'
+          ? isMasterContextView()
+          : isVpsContextView() && store.hostname === target.pending.scope;
+        if (activeScope && activeRuntimeBranchRepo() === target.pending.runtime && !store[target.pending.runtime + 'BranchSelectInteracting']) {
           syncBranchViewPanel();
         }
         return;
@@ -7648,11 +7755,15 @@
     function ensureMasterUi(detail) {
       if (!detail || !detail.branches) return store.master;
       const pb7State = detail.branches.pb7 || {};
+      const pb8State = detail.branches.pb8 || {};
       if (!store.master.initialized) {
         store.master.pbguiBranch = detail.branches.pbgui.current_branch || '';
         store.master.pb7Branch = pb7State.current_branch || '';
         store.master.pb7RemoteName = pb7State.default_remote_name || '';
         store.master.pb7RemoteUrl = (pb7State.remote_urls || {})[store.master.pb7RemoteName] || '';
+        store.master.pb8Branch = pb8State.current_branch || '';
+        store.master.pb8RemoteName = pb8State.default_remote_name || '';
+        store.master.pb8RemoteUrl = (pb8State.remote_urls || {})[store.master.pb8RemoteName] || '';
         store.master.initialized = true;
       }
       return store.master;
@@ -7680,6 +7791,9 @@
         ui.pb7Branch = detail.branches && detail.branches.pb7 ? (detail.branches.pb7.current_branch || '') : ui.pb7Branch;
         ui.pb7RemoteName = detail.branches && detail.branches.pb7 ? (detail.branches.pb7.default_remote_name || '') : ui.pb7RemoteName;
         ui.pb7RemoteUrl = detail.branches && detail.branches.pb7 ? ((detail.branches.pb7.remote_urls || {})[ui.pb7RemoteName] || '') : ui.pb7RemoteUrl;
+        ui.pb8Branch = detail.branches && detail.branches.pb8 ? (detail.branches.pb8.current_branch || '') : ui.pb8Branch;
+        ui.pb8RemoteName = detail.branches && detail.branches.pb8 ? (detail.branches.pb8.default_remote_name || '') : ui.pb8RemoteName;
+        ui.pb8RemoteUrl = detail.branches && detail.branches.pb8 ? ((detail.branches.pb8.remote_urls || {})[ui.pb8RemoteName] || '') : ui.pb8RemoteUrl;
         ui.initialized = true;
       } else if (detail && detail.config) {
         const dirty = ui.dirtyFields || {};
@@ -7701,12 +7815,14 @@
       if (view === 'master-host-logs') return '#master/host-logs';
       if (view === 'master-pbgui-branch') return '#master/pbgui-branch';
       if (view === 'master-pb7-branch') return '#master/pb7-branch';
+      if (view === 'master-pb8-branch') return '#master/pb8-branch';
       if (view === 'master-ufw') return '#master/ufw';
       if (hostname) {
         if (view === 'vps') return '#vps/' + encodeURIComponent(hostname);
         if (view === 'vps-setup') return '#vps/' + encodeURIComponent(hostname) + '/setup';
         if (view === 'vps-pbgui-branch') return '#vps/' + encodeURIComponent(hostname) + '/pbgui-branch';
         if (view === 'vps-pb7-branch') return '#vps/' + encodeURIComponent(hostname) + '/pb7-branch';
+        if (view === 'vps-pb8-branch') return '#vps/' + encodeURIComponent(hostname) + '/pb8-branch';
         if (view === 'vps-ufw') return '#vps/' + encodeURIComponent(hostname) + '/ufw';
       }
       return '#overview';
@@ -7717,8 +7833,8 @@
     }
 
     function detailContextKey(view, hostname) {
-      const masterViews = ['master', 'master-task-log', 'master-host-logs', 'master-pbgui-branch', 'master-pb7-branch', 'master-ufw'];
-      const vpsViews = ['vps', 'vps-task-log', 'vps-host-logs', 'vps-setup', 'vps-pbgui-branch', 'vps-pb7-branch', 'vps-ufw'];
+      const masterViews = ['master', 'master-task-log', 'master-host-logs', 'master-pbgui-branch', 'master-pb7-branch', 'master-pb8-branch', 'master-ufw'];
+      const vpsViews = ['vps', 'vps-task-log', 'vps-host-logs', 'vps-setup', 'vps-pbgui-branch', 'vps-pb7-branch', 'vps-pb8-branch', 'vps-ufw'];
       if (masterViews.indexOf(view) >= 0) return 'master';
       if (hostname && vpsViews.indexOf(view) >= 0) return 'vps:' + hostname;
       return 'overview';
@@ -7749,7 +7865,7 @@
           monitor_agent: summary.monitor_agent || { source: 'agent_cache', state: 'missing', files: {}, loops: {} }
         },
         config: {},
-        branches: { pbgui: {}, pb7: {} },
+        branches: { pbgui: {}, pb7: {}, pb8: {} },
         monitor: {},
         progress: {
           command: String(summary.task_command || ''),
@@ -7777,7 +7893,7 @@
       store.view = view;
       if (typeof hostname === 'string') {
         store.hostname = hostname;
-      } else if (view !== 'vps' && view !== 'vps-task-log' && view !== 'vps-host-logs' && view !== 'vps-setup' && view !== 'vps-pbgui-branch' && view !== 'vps-pb7-branch' && view !== 'vps-ufw') {
+      } else if (view !== 'vps' && view !== 'vps-task-log' && view !== 'vps-host-logs' && view !== 'vps-setup' && view !== 'vps-pbgui-branch' && view !== 'vps-pb7-branch' && view !== 'vps-pb8-branch' && view !== 'vps-ufw') {
         store.hostname = '';
       }
       if (view === 'add') {
@@ -7804,8 +7920,10 @@
     function selectSidebarVpsHost(hostname) {
       const nextHost = String(hostname || '').trim();
       if (!nextHost) return;
-      const keepViews = ['vps-setup', 'vps-pbgui-branch', 'vps-pb7-branch', 'vps-host-logs', 'vps-ufw'];
-      const nextView = keepViews.indexOf(store.view) >= 0 ? store.view : 'vps';
+      const keepViews = ['vps-setup', 'vps-pbgui-branch', 'vps-pb7-branch', 'vps-pb8-branch', 'vps-host-logs', 'vps-ufw'];
+      const row = getOverviewRows().find(function (item) { return String((item || {}).hostname || '') === nextHost; }) || {};
+      const keepCurrentView = keepViews.indexOf(store.view) >= 0 && !(store.view === 'vps-pb8-branch' && !row.pb8_installed);
+      const nextView = keepCurrentView ? store.view : 'vps';
       selectView(nextView, nextHost);
     }
 
@@ -7836,6 +7954,10 @@
         selectView('master-pb7-branch');
         return;
       }
+      if (hash === 'master/pb8-branch') {
+        selectView('master-pb8-branch');
+        return;
+      }
       if (hash === 'master/ufw') {
         selectView('master-ufw');
         return;
@@ -7847,6 +7969,7 @@
         if (sub === 'setup') selectView('vps-setup', hostname);
         else if (sub === 'pbgui-branch') selectView('vps-pbgui-branch', hostname);
         else if (sub === 'pb7-branch') selectView('vps-pb7-branch', hostname);
+        else if (sub === 'pb8-branch') selectView('vps-pb8-branch', hostname);
         else if (sub === 'ufw') selectView('vps-ufw', hostname);
         else selectView('vps', hostname);
       }
@@ -9822,6 +9945,84 @@
       return false;
     }
 
+    function getPackageStatusForHost(hostname) {
+      const host = String(hostname || '').trim();
+      const row = getOverviewRows().find(function (item) {
+        return String((item || {}).hostname || '').trim() === host;
+      });
+      if (store.detail && store.detail.status) {
+        const detailHost = String(store.detail.hostname || (store.detail.status || {}).name || '').trim();
+        if (detailHost === host && (store.detail.status.package_status || (store.detail.status.summary_row || {}).package_status)) {
+          return store.detail.status.package_status || (store.detail.status.summary_row || {}).package_status || {};
+        }
+      }
+      return (row || {}).package_status || {};
+    }
+
+    function openPackageUpdatesModal(hostname) {
+      const host = String(hostname || '').trim();
+      const status = getPackageStatusForHost(host);
+      const packages = Array.isArray(status.packages) ? status.packages : [];
+      const count = status.available === true ? Number.parseInt(String(status.upgrades), 10) : NaN;
+      const securityCount = Number(status.security_updates || 0);
+      const kernelCount = Number(status.kernel_updates || 0);
+      const routineCount = Number(status.routine_updates || 0);
+      const newInstallCount = Number(status.new_installs || 0);
+      const removalCount = Number(status.removals || 0);
+      const removalUpdateCount = Number(status.removal_updates || 0);
+      const classificationComplete = status.classification_complete === true;
+      const categoryValue = function (value) { return classificationComplete ? esc(String(value)) : 'N/A'; };
+      const urgency = String(status.urgency || 'unknown');
+      const urgencyMeta = urgency === 'security'
+        ? { tone: 'error', title: 'Security updates available', text: 'Install these updates promptly. Review service impact before updating production hosts.' }
+        : urgency === 'removal'
+          ? { tone: 'warning', title: 'Package removals planned', text: 'Review removed packages and dependent services before installing this transaction.' }
+        : urgency === 'kernel'
+          ? { tone: 'warning', title: 'Kernel updates available', text: 'Plan a maintenance window. A reboot may be required after installation.' }
+          : urgency === 'routine'
+            ? { tone: 'info', title: 'Routine updates available', text: 'Install during normal maintenance after reviewing package changes.' }
+            : { tone: 'info', title: 'Update details unavailable', text: 'The cached count is available, but this agent cache does not contain package-level details yet.' };
+      const packageRows = packages.map(function (item) {
+        const badges = [];
+        if (item.security === true) badges.push(levelTag('error', 'Security'));
+        if (item.removed === true) badges.push(levelTag('warning', 'Removal'));
+        else if (item.kernel === true) badges.push(levelTag('warning', 'Kernel'));
+        if (!badges.length) badges.push(levelTag('info', 'Routine'));
+        return `<tr><td><strong>${esc(item.name || '-')}</strong><div class='field-help'>${esc(item.architecture || '')}</div></td><td class='code'>${esc(item.installed_version || 'not installed')}</td><td class='code'>${esc(item.candidate_version || '-')}</td><td>${esc(item.source || '-')}</td><td>${badges.join(' ')}</td></tr>`;
+      }).join('');
+      const completeness = status.details_truncated
+        ? '<div class="notice warning">The package list was truncated for safety.</div>'
+        : (Number.isFinite(count) && packages.length !== count + newInstallCount + removalCount
+          ? '<div class="notice info">The package count is known, but detailed apt output was incomplete. Refresh or update PBGui on this host to refresh the agent cache.</div>'
+          : '');
+      const staleNotice = String(status.state || '').toLowerCase() === 'stale'
+        ? `<div class='notice warning'><strong>Stale cache:</strong> these are last-known package details from ${esc(formatAgentAge(status.age))} ago. Refresh the agent cache before making an urgency decision.</div>`
+        : '';
+
+      prepareAlertModalWindow(1120, 820);
+      document.getElementById('alertModalTitle').textContent = 'Linux Updates — ' + (host || 'Host');
+      const box = document.getElementById('alertModalBody');
+      box.className = 'notice modal-scroll-body';
+      box.innerHTML = `
+        <div style='display:grid;gap:14px'>
+          <div class='notice ${urgencyMeta.tone}'><strong>${esc(urgencyMeta.title)}</strong><div>${esc(urgencyMeta.text)}</div></div>
+          ${staleNotice}
+          <div class='master-status-grid'>
+            <div class='status-item'><div class='status-label'>Upgrades</div><div class='status-value'>${Number.isFinite(count) ? esc(String(count)) : 'N/A'}</div></div>
+            <div class='status-item'><div class='status-label'>New installs</div><div class='status-value'>${classificationComplete ? esc(String(newInstallCount)) : 'N/A'}</div></div>
+            <div class='status-item'><div class='status-label'>Removals</div><div class='status-value'>${classificationComplete ? esc(String(removalUpdateCount)) : 'N/A'}</div></div>
+            <div class='status-item'><div class='status-label'>Security</div><div class='status-value'>${categoryValue(securityCount)}</div></div>
+            <div class='status-item'><div class='status-label'>Kernel</div><div class='status-value'>${categoryValue(kernelCount)}</div></div>
+            <div class='status-item'><div class='status-label'>Routine</div><div class='status-value'>${categoryValue(routineCount)}</div></div>
+          </div>
+          ${completeness}
+          ${packageRows ? `<div class='table-wrap'><table><thead><tr><th>Package</th><th>Installed</th><th>Candidate</th><th>Source</th><th>Type</th></tr></thead><tbody>${packageRows}</tbody></table></div>` : '<div class="empty-state">No package details are present in the current agent cache.</div>'}
+        </div>`;
+      document.getElementById('alertModalBtnRow').innerHTML = '<button class="btn ghost" type="button" onclick="closeAlertModal()">Close</button>';
+      document.getElementById('alertModalOverlay').classList.add('visible');
+      setTimeout(function () { box.scrollTop = 0; }, 0);
+    }
+
     function renderOverviewTable(rows) {
       const sortedRows = getSortedOverviewRows(rows);
       if (!sortedRows.length) {
@@ -9869,7 +10070,10 @@
           const statusLine = model.state === 'ok'
             ? ''
             : `<div class='status-sub'>${levelTag(model.tone === 'error' ? 'error' : 'warning', model.label)}${model.state === 'stale' ? ' · Last-known' : ''}</div>`;
-          return `<div>${esc(updates)} ${packageStatus.reboot_required === true ? levelTag('warning', 'Reboot') : ''}</div>${statusLine}`;
+          const updateValue = packageStatus.available === true && Number.parseInt(String(packageStatus.upgrades), 10) > 0
+            ? `<button class='table-button update-count-button' type='button' data-vps-action='package-updates' data-host='${escAttr(row.hostname || '')}' title='Show Linux update details'>${esc(updates)}</button>`
+            : esc(updates);
+          return `<div>${updateValue} ${packageStatus.reboot_required === true ? levelTag('warning', 'Reboot') : ''}</div>${statusLine}`;
         }
         if (column.key === 'pbgui') return renderOverviewVersionCell(row.pbgui, row.pbgui_github);
         if (column.key === 'pbgui_branch') return esc(row.pbgui_branch || '-');
@@ -9914,16 +10118,16 @@
       const branches = state && state.branches ? state.branches : {};
       const currentBranch = String(state && state.current_branch || 'unknown');
       const currentCommit = String(state && state.current_commit || '');
-      const branchKey = repo === 'pb7' ? 'pb7Branch' : 'pbguiBranch';
-      const commitKey = repo === 'pb7' ? 'pb7Commit' : 'pbguiCommit';
+      const branchKey = repo === 'pbgui' ? 'pbguiBranch' : repo + 'Branch';
+      const commitKey = repo === 'pbgui' ? 'pbguiCommit' : repo + 'Commit';
       let availableBranches = Object.keys(branches);
       let selectedBranch = String(uiState[branchKey] || currentBranch || availableBranches[0] || '');
       if (selectedBranch && availableBranches.length && availableBranches.indexOf(selectedBranch) < 0) {
-        if (repo !== 'pb7') {
+        if (repo === 'pbgui') {
           selectedBranch = availableBranches.indexOf(currentBranch) >= 0 ? currentBranch : availableBranches[0];
         }
       }
-      if (repo === 'pb7' && selectedBranch && availableBranches.indexOf(selectedBranch) < 0) {
+      if (repo !== 'pbgui' && selectedBranch && availableBranches.indexOf(selectedBranch) < 0) {
         availableBranches = [selectedBranch].concat(availableBranches);
       }
       uiState[branchKey] = selectedBranch;
@@ -9968,30 +10172,35 @@
       };
     }
 
-    function pb7BranchModel(state, uiState) {
+    function pb7BranchModel(state, uiState, runtime) {
+      const keys = runtimeBranchKeys(runtime);
       const model = branchModel({
         current_branch: state.current_branch,
         current_commit: state.current_commit,
         branches: state.branches
-      }, uiState, 'pb7');
-      const manualBranch = String(uiState.pb7ManualBranch || '');
-      const manualCommit = String(uiState.pb7ManualCommit || '');
+      }, uiState, keys.repo);
+      const manualBranch = String(uiState[keys.manualBranch] || '');
+      const manualCommit = String(uiState[keys.manualCommit] || '');
       const targetBranch = String(model.selectedBranch || '');
       const sourceBranch = String(manualBranch || targetBranch || '');
-      const remoteBranches = Array.isArray(uiState.remoteBranches) ? uiState.remoteBranches : [];
+      const remoteBranches = Array.isArray(uiState[keys.remoteBranches]) ? uiState[keys.remoteBranches] : [];
       const sourceBranchKnown = !!sourceBranch && remoteBranches.length > 0;
       const sourceBranchExists = !!sourceBranch && remoteBranches.indexOf(sourceBranch) >= 0;
-      const remoteCommitMap = uiState.pb7RemoteCommits || {};
+      const remoteCommitMap = uiState[keys.remoteCommits] || {};
       const remoteCommits = sourceBranch && Array.isArray(remoteCommitMap[sourceBranch]) ? remoteCommitMap[sourceBranch] : [];
-      const commits = manualBranch ? remoteCommits : model.commits;
+      const hasRemoteHistory = remoteCommits.length > 0;
+      const commits = hasRemoteHistory ? remoteCommits : model.commits;
       const headCommit = commits.length ? String(commits[0].full || '') : '';
       const remoteHeadCommit = remoteCommits.length ? String(remoteCommits[0].full || '') : '';
       const remoteCurrentCommitIndex = remoteCommits.findIndex(function (item) { return String(item.full || '') === model.currentCommit; });
       const selectedRemoteCommit = manualCommit || 'HEAD';
-      const effectiveCommit = selectedRemoteCommit !== 'HEAD' ? selectedRemoteCommit : (manualBranch ? headCommit : ((uiState.pb7Commit !== 'HEAD' ? model.targetCommit : '') || model.targetCommit));
+      const effectiveCommit = selectedRemoteCommit !== 'HEAD'
+        ? selectedRemoteCommit
+        : (hasRemoteHistory ? remoteHeadCommit : ((uiState[keys.commit] !== 'HEAD' ? model.targetCommit : '') || model.targetCommit));
       const branchChanged = !!targetBranch && targetBranch !== model.currentBranch;
-      const isBehindOrigin = !manualBranch && model.isBehindOrigin;
-      const commitsBehind = !manualBranch ? model.commitsBehind : (selectedRemoteCommit === 'HEAD' && targetBranch === model.currentBranch && sourceBranch === targetBranch && remoteCurrentCommitIndex > 0 ? remoteCurrentCommitIndex : 0);
+      const remoteBehind = hasRemoteHistory && selectedRemoteCommit === 'HEAD' && targetBranch === model.currentBranch && sourceBranch === targetBranch && remoteCurrentCommitIndex > 0;
+      const isBehindOrigin = hasRemoteHistory ? remoteBehind : (!manualBranch && model.isBehindOrigin);
+      const commitsBehind = hasRemoteHistory ? (remoteBehind ? remoteCurrentCommitIndex : 0) : (!manualBranch ? model.commitsBehind : 0);
       const commitChanged = !!effectiveCommit && effectiveCommit !== model.currentCommit && !isBehindOrigin;
       const onTarget = targetBranch === model.currentBranch && !commitChanged && !isBehindOrigin && selectedRemoteCommit === 'HEAD';
       return Object.assign({}, model, {
@@ -10012,7 +10221,7 @@
         isBehindOrigin: isBehindOrigin,
         commitsBehind: commitsBehind,
         onTarget: onTarget,
-        usingRemoteCommitHistory: !!manualBranch && remoteCommits.length > 0
+        usingRemoteCommitHistory: hasRemoteHistory
       });
     }
 
@@ -10131,35 +10340,37 @@
         </div>`;
     }
 
-    function renderPb7BranchPanel(scope, state) {
+    function renderPb7BranchPanel(scope, state, runtime) {
+      const keys = runtimeBranchKeys(runtime);
       const isMaster = scope === 'master';
       const uiState = isMaster ? store.master : ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
-      const manualBranch = String(uiState.pb7ManualBranch || '');
-      const manualCommit = String(uiState.pb7ManualCommit || '');
-      const model = pb7BranchModel(state, uiState);
+      const manualBranch = String(uiState[keys.manualBranch] || '');
+      const manualCommit = String(uiState[keys.manualCommit] || '');
+      const model = pb7BranchModel(state, uiState, keys.repo);
       const effectiveBranch = model.effectiveBranch;
       const sourceBranch = model.sourceBranch;
       const effectiveCommit = model.effectiveCommit;
       const usingCustomRemote = !!manualBranch;
       const actionLabel = model.isBehindOrigin ? 'Update Local Branch' : effectiveBranch !== model.currentBranch ? 'Switch Local Branch' : model.commitChanged ? 'Reset Local Branch' : 'Already Selected';
       const remoteUrls = state.remote_urls || {};
-      const selectedRemoteName = String(uiState.pb7RemoteName || state.default_remote_name || '');
-      const derivedRemoteUrl = uiState.pb7RemoteUrl || remoteUrls[selectedRemoteName] || '';
+      const selectedRemoteName = String(uiState[keys.remoteName] || state.default_remote_name || '');
+      const derivedRemoteUrl = uiState[keys.remoteUrl] || remoteUrls[selectedRemoteName] || '';
       const upstreamRepoUrl = state.upstream_remote_url || remoteUrls[state.upstream_remote_name || 'origin'] || remoteUrls.origin || '';
-      const remoteBranches = Array.isArray(uiState.remoteBranches) ? uiState.remoteBranches : [];
+      const remoteBranches = Array.isArray(uiState[keys.remoteBranches]) ? uiState[keys.remoteBranches] : [];
       const sourceRef = selectedRemoteName && sourceBranch ? (selectedRemoteName + '/' + sourceBranch) : sourceBranch;
       const targetRef = effectiveBranch ? ('local ' + effectiveBranch) : 'local branch';
       const sourceMissing = model.sourceBranchKnown && !model.sourceBranchExists;
-      const remoteCommitSetter = isMaster ? `setMasterField('pb7ManualCommit', this.value); syncBranchViewPanel();` : `setVpsUiField(${js(scope)}, 'pb7ManualCommit', this.value); syncBranchViewPanel();`;
-      const branchFieldSetter = `setPb7LocalBranch(${js(scope)}, this.value)`;
-      const remoteNameSetter = `setPb7RemoteName(${js(scope)}, this.value)`;
-      const remoteUrlSetter = `setPb7RemoteUrl(${js(scope)}, this.value)`;
-      const manualBranchSetter = `setPb7ManualBranch(${js(scope)}, this.value)`;
+      const remoteCommitSetter = isMaster ? `setMasterField('${keys.manualCommit}', this.value); syncBranchViewPanel();` : `setVpsUiField(${js(scope)}, '${keys.manualCommit}', this.value); syncBranchViewPanel();`;
+      const branchFieldSetter = `setPb7LocalBranch(${js(scope)}, this.value, '${keys.repo}')`;
+      const remoteNameSetter = `setPb7RemoteName(${js(scope)}, this.value, '${keys.repo}')`;
+      const remoteUrlSetter = `setPb7RemoteUrl(${js(scope)}, this.value, '${keys.repo}')`;
+      const manualBranchSetter = `setPb7ManualBranch(${js(scope)}, this.value, '${keys.repo}')`;
+      const interactionField = keys.repo + 'BranchSelectInteracting';
       return `
         <div class='panel'>
           <div class='panel-head'>
             <div>
-              <div class='panel-title'>${isMaster ? 'Local PB7 Branch Management' : 'VPS PB7 Branch Management'}</div>
+              <div class='panel-title'>${isMaster ? 'Local ' + keys.label + ' Branch Management' : 'VPS ' + keys.label + ' Branch Management'}</div>
               <div class='panel-sub'>Current: <span class='code'>${esc(model.currentBranch)}</span> @ <span class='code'>${esc(shortHash(model.currentCommit))}</span></div>
             </div>
           </div>
@@ -10172,13 +10383,11 @@
                 </div>
               </div>
               <div class='panel-body'>
-                <div class='button-row'>
-                  <button class='btn ghost' type='button' onclick='switchPb7ToUpstream(${js(scope)})'>Use pinned upstream PB7</button>
-                </div>
+                ${keys.repo === 'pb7' ? `<div class='button-row'><button class='btn ghost' type='button' onclick='switchPb7ToUpstream(${js(scope)})'>Use pinned upstream PB7</button></div>` : ''}
                 <div class='field-grid'>
                   <div class='field'>
                     <label>Selected Remote</label>
-                    <select onchange='${remoteNameSetter}'>
+                    <select onfocus='store.${interactionField} = true' onmousedown='store.${interactionField} = true' onblur='store.${interactionField} = false; syncBranchViewPanel()' onchange='${remoteNameSetter}'>
                       ${(Array.isArray(state.known_remotes) ? state.known_remotes : []).map(function (remoteName) {
                         const selected = remoteName === selectedRemoteName ? ' selected' : '';
                         return `<option value='${escAttr(remoteName)}'${selected}>${esc(remoteName)}</option>`;
@@ -10187,11 +10396,11 @@
                   </div>
                   <div class='field span-2'>
                     <label>Selected Remote URL</label>
-                    <input type='text' value='${escAttr(derivedRemoteUrl)}' onchange='${remoteUrlSetter}' placeholder='https://github.com/&lt;user&gt;/passivbot.git'>
+                    <input type='text' value='${escAttr(derivedRemoteUrl)}' onfocus='store.${interactionField} = true' onblur='store.${interactionField} = false; syncBranchViewPanel()' onchange='${remoteUrlSetter}' placeholder='https://github.com/&lt;user&gt;/passivbot.git'>
                   </div>
                   <div class='field'>
                     <label>Remote Branch</label>
-                    <select onfocus='store.pb7BranchSelectInteracting = true' onmousedown='store.pb7BranchSelectInteracting = true' onblur='store.pb7BranchSelectInteracting = false; syncBranchViewPanel()' onchange='store.pb7BranchSelectInteracting = false; ${manualBranchSetter}'>
+                    <select onfocus='store.${interactionField} = true' onmousedown='store.${interactionField} = true' onblur='store.${interactionField} = false; syncBranchViewPanel()' onchange='store.${interactionField} = false; ${manualBranchSetter}'>
                       <option value=''>Use local branch target</option>
                       ${remoteBranches.map(function (branch) {
                         return `<option value='${escAttr(branch)}'${branch === manualBranch ? ' selected' : ''}>${esc(branch)}</option>`;
@@ -10200,7 +10409,7 @@
                   </div>
                   <div class='field'>
                     <label>Remote Commit</label>
-                    <select onfocus='store.pb7BranchSelectInteracting = true' onmousedown='store.pb7BranchSelectInteracting = true' onblur='store.pb7BranchSelectInteracting = false; syncBranchViewPanel()' onchange='store.pb7BranchSelectInteracting = false; ${remoteCommitSetter}'>
+                    <select onfocus='store.${interactionField} = true' onmousedown='store.${interactionField} = true' onblur='store.${interactionField} = false; syncBranchViewPanel()' onchange='store.${interactionField} = false; ${remoteCommitSetter}'>
                       <option value='HEAD'${model.selectedRemoteCommit === 'HEAD' ? ' selected' : ''}>HEAD (latest remote)</option>
                       ${model.remoteCommits.map(function (commit) {
                         const hash = String(commit.full || '');
@@ -10218,13 +10427,13 @@
               <div class='panel-head'>
                 <div>
                   <div class='panel-title'>${usingCustomRemote ? 'Local Branch Target from Remote Source' : 'Local Branch Target'}</div>
-                  <div class='panel-sub'>${usingCustomRemote ? `Apply branch data from <span class='code'>${esc(selectedRemoteName || 'remote')}</span>.` : 'Select what the local PB7 checkout should point to.'}</div>
+                  <div class='panel-sub'>${usingCustomRemote ? `Apply branch data from <span class='code'>${esc(selectedRemoteName || 'remote')}</span>.` : `Select what the local ${keys.label} checkout should point to.`}</div>
                 </div>
               </div>
               <div class='panel-body'>
                 <div class='field'>
                   <label>${usingCustomRemote ? 'Local Branch Name' : 'Local Branch'}</label>
-                  <select onfocus='store.pb7BranchSelectInteracting = true' onmousedown='store.pb7BranchSelectInteracting = true' onblur='store.pb7BranchSelectInteracting = false; syncBranchViewPanel()' onchange='store.pb7BranchSelectInteracting = false; ${branchFieldSetter}'>
+                  <select onfocus='store.${interactionField} = true' onmousedown='store.${interactionField} = true' onblur='store.${interactionField} = false; syncBranchViewPanel()' onchange='store.${interactionField} = false; ${branchFieldSetter}'>
                     ${model.availableBranches.map(function (branch) {
                       return `<option value='${escAttr(branch)}'${branch === model.selectedBranch ? ' selected' : ''}>${esc(branch)}</option>`;
                     }).join('')}
@@ -10238,7 +10447,7 @@
               ${sourceMissing ? `<div>Selected remote does not currently provide branch <span class='code'>${esc(sourceBranch)}</span>. Choose another remote or set a different remote branch before switching.</div>` : ''}
             </div>
             <div class='button-row'>
-              <button class='btn primary' type='button' ${model.onTarget || sourceMissing ? 'disabled' : ''} onclick='triggerPb7BranchAction(${js(scope)})'>${esc(actionLabel)}</button>
+              <button class='btn primary' type='button' ${model.onTarget || sourceMissing ? 'disabled' : ''} onclick='triggerPb7BranchAction(${js(scope)}, ${js(keys.repo)})'>${esc(actionLabel)}</button>
             </div>
             ${renderBranchMessage({
               availableBranches: model.availableBranches,
@@ -10284,30 +10493,33 @@
       }
     }
 
-    function triggerPb7BranchAction(scope) {
+    function triggerPb7BranchAction(scope, runtime) {
+      const keys = runtimeBranchKeys(runtime);
       const isMaster = scope === 'master';
       const detail = store.detail && ((isMaster && store.detail.kind === 'master') || (!isMaster && store.detail.kind === 'vps' && store.detail.hostname === scope)) ? store.detail : null;
       if (!detail) return;
       const uiState = isMaster ? store.master : ensureVpsUi(scope, detail);
-      const state = detail.branches.pb7;
-      const model = pb7BranchModel(state, uiState);
+      const state = detail.branches[keys.repo];
+      const model = pb7BranchModel(state, uiState, keys.repo);
       const effectiveBranch = String(model.effectiveBranch || '');
       const sourceBranch = String(model.sourceBranch || effectiveBranch || '');
       const effectiveCommit = String(model.effectiveCommit || '');
-      const extraVars = { pb7_branch: effectiveBranch };
-      const remoteName = String(uiState.pb7RemoteName || state.default_remote_name || '');
-      const remoteUrl = String(uiState.pb7RemoteUrl || (state.remote_urls || {})[remoteName] || '');
-      if (sourceBranch) extraVars.pb7_source_branch = sourceBranch;
-      if (effectiveCommit) extraVars.pb7_commit = effectiveCommit;
+      if (!effectiveBranch || (model.sourceBranchKnown && !model.sourceBranchExists)) return;
+      const extraVars = {};
+      extraVars[keys.repo + '_branch'] = effectiveBranch;
+      const remoteName = String(uiState[keys.remoteName] || state.default_remote_name || '');
+      const remoteUrl = String(uiState[keys.remoteUrl] || (state.remote_urls || {})[remoteName] || '');
+      if (sourceBranch) extraVars[keys.repo + '_source_branch'] = sourceBranch;
+      if (effectiveCommit) extraVars[keys.repo + '_commit'] = effectiveCommit;
       if (remoteUrl) {
-        extraVars.pb7_remote_name = remoteName || 'fork';
-        extraVars.pb7_remote_url = remoteUrl;
+        extraVars[keys.repo + '_remote_name'] = remoteName || 'fork';
+        extraVars[keys.repo + '_remote_url'] = remoteUrl;
       }
       const label = 'Sync ' + (remoteName ? (remoteName + '/') : '') + sourceBranch + ' -> ' + effectiveBranch + (effectiveCommit ? ' @ ' + shortHash(effectiveCommit) : '');
       if (isMaster) {
-        runMasterWithLog('master-switch-pb7-branch', label, extraVars);
+        runMasterWithLog(keys.repo === 'pb8' ? 'master-update-pb8' : 'master-switch-pb7-branch', label, extraVars);
       } else {
-        runVpsWithLog(scope, 'vps-switch-pb7-branch', label, extraVars, false);
+        runVpsWithLog(scope, keys.repo === 'pb8' ? 'vps-update-pb8' : 'vps-switch-pb7-branch', label, extraVars, false);
       }
     }
 
@@ -10338,43 +10550,82 @@
       }
     }
 
-    function loadRemoteBranches(scope) {
+    function beginRuntimeBranchRequest(scope, runtime, kind, remoteUrl, branch) {
+      const keys = runtimeBranchKeys(runtime);
+      const uiState = scope === 'master'
+        ? store.master
+        : ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
+      store.branchRequestCounter += 1;
+      const requestId = [keys.repo, scope, kind, store.branchRequestCounter].join(':');
+      const requestField = kind === 'branches' ? keys.remoteBranchesRequest : keys.remoteCommitsRequest;
+      uiState[requestField] = requestId;
+      store.pendingBranchRequests[requestId] = {
+        runtime: keys.repo,
+        scope: scope,
+        kind: kind,
+        remoteUrl: remoteUrl,
+        branch: branch || ''
+      };
+      return requestId;
+    }
+
+    function takeRuntimeBranchRequest(requestId) {
+      const id = String(requestId || '');
+      const pending = id ? store.pendingBranchRequests[id] : null;
+      if (!pending) return null;
+      delete store.pendingBranchRequests[id];
+      const keys = runtimeBranchKeys(pending.runtime);
+      const uiState = pending.scope === 'master'
+        ? store.master
+        : ensureVpsUi(pending.scope, store.detail && store.detail.hostname === pending.scope ? store.detail : null);
+      const requestField = pending.kind === 'branches' ? keys.remoteBranchesRequest : keys.remoteCommitsRequest;
+      if (uiState[requestField] !== id) return null;
+      uiState[requestField] = '';
+      return { pending: pending, keys: keys, uiState: uiState };
+    }
+
+    function loadRemoteBranches(scope, runtime) {
+      const keys = runtimeBranchKeys(runtime);
       if (scope === 'master') {
-        const state = store.detail && store.detail.kind === 'master' ? store.detail.branches.pb7 : null;
-        const remoteName = store.master.pb7RemoteName || (state ? state.default_remote_name : '');
-        const remoteUrl = store.master.pb7RemoteUrl || (state ? (state.remote_urls || {})[remoteName] : '') || '';
+        const state = store.detail && store.detail.kind === 'master' ? store.detail.branches[keys.repo] : null;
+        const remoteName = store.master[keys.remoteName] || (state ? state.default_remote_name : '');
+        const remoteUrl = store.master[keys.remoteUrl] || (state ? (state.remote_urls || {})[remoteName] : '') || '';
         if (!remoteUrl) {
           toast('Please provide a remote URL first.', 'warning');
           return;
         }
-        send({ cmd: 'load_remote_branches', remote_url: remoteUrl });
+        const requestId = beginRuntimeBranchRequest(scope, keys.repo, 'branches', remoteUrl, '');
+        send({ cmd: 'load_remote_branches', remote_url: remoteUrl, request_id: requestId });
       } else {
         const ui = ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
-        const state = store.detail && store.detail.kind === 'vps' && store.detail.hostname === scope ? store.detail.branches.pb7 : null;
-        const remoteName = ui.pb7RemoteName || (state ? state.default_remote_name : '');
-        const remoteUrl = ui.pb7RemoteUrl || (state ? (state.remote_urls || {})[remoteName] : '') || '';
+        const state = store.detail && store.detail.kind === 'vps' && store.detail.hostname === scope ? store.detail.branches[keys.repo] : null;
+        const remoteName = ui[keys.remoteName] || (state ? state.default_remote_name : '');
+        const remoteUrl = ui[keys.remoteUrl] || (state ? (state.remote_urls || {})[remoteName] : '') || '';
         if (!remoteUrl) {
           toast('Please provide a remote URL first.', 'warning');
           return;
         }
-        send({ cmd: 'load_remote_branches', remote_url: remoteUrl });
+        const requestId = beginRuntimeBranchRequest(scope, keys.repo, 'branches', remoteUrl, '');
+        send({ cmd: 'load_remote_branches', remote_url: remoteUrl, request_id: requestId });
       }
     }
 
-    function loadRemoteBranchCommits(scope) {
+    function loadRemoteBranchCommits(scope, runtime) {
+      const keys = runtimeBranchKeys(runtime);
       const isMaster = scope === 'master';
       const detail = store.detail && ((isMaster && store.detail.kind === 'master') || (!isMaster && store.detail.kind === 'vps' && store.detail.hostname === scope)) ? store.detail : null;
       if (!detail) return;
       const uiState = isMaster ? store.master : ensureVpsUi(scope, detail);
-      const state = detail.branches.pb7;
-      const remoteName = String(uiState.pb7RemoteName || state.default_remote_name || '');
-      const remoteUrl = String(uiState.pb7RemoteUrl || (state.remote_urls || {})[remoteName] || '');
-      const branchName = String(uiState.pb7ManualBranch || uiState.pb7Branch || state.current_branch || '');
+      const state = detail.branches[keys.repo];
+      const remoteName = String(uiState[keys.remoteName] || state.default_remote_name || '');
+      const remoteUrl = String(uiState[keys.remoteUrl] || (state.remote_urls || {})[remoteName] || '');
+      const branchName = String(uiState[keys.manualBranch] || uiState[keys.branch] || state.current_branch || '');
       if (!remoteUrl || !branchName) {
         toast('Please provide a remote URL and source branch first.', 'warning');
         return;
       }
-      send({ cmd: 'load_remote_branch_commits', remote_url: remoteUrl, branch: branchName, limit: 50 });
+      const requestId = beginRuntimeBranchRequest(scope, keys.repo, 'commits', remoteUrl, branchName);
+      send({ cmd: 'load_remote_branch_commits', remote_url: remoteUrl, branch: branchName, limit: 50, request_id: requestId });
     }
 
     function combinedUpdateButtonClass(pbguiUpdateAvailable, runtimeUpdateAvailable) {
@@ -10426,6 +10677,7 @@
           <button class='sb-btn' type='button' onclick='selectView("master-ufw")'>Change UFW</button>
           <button class='sb-btn' type='button' onclick='selectView("master-pbgui-branch")'>PBGui Branch</button>
           <button class='sb-btn' type='button' onclick='selectView("master-pb7-branch")'>PB7 Branch</button>
+          ${st.pb8_installed ? `<button class='sb-btn' type='button' onclick='selectView("master-pb8-branch")'>PB8 Branch</button>` : ''}
           <div class='sb-separator'>Tasks</div>
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' ${store.master.debug ? 'checked' : ''} onchange="setMasterBool('debug', this.checked)"> Debug</label>
@@ -10490,6 +10742,7 @@
           ${!isRemoteMaster ? `<button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-setup' data-host='${escAttr(selectedHost)}'>Change VPS</button>` : ''}
           <button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-pbgui-branch' data-host='${escAttr(selectedHost)}'>PBGui Branch</button>
           <button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-pb7-branch' data-host='${escAttr(selectedHost)}'>PB7 Branch</button>
+          ${st.pb8_installed ? `<button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-pb8-branch' data-host='${escAttr(selectedHost)}'>PB8 Branch</button>` : ''}
           ${showClusterNodeBtn ? `<button class='${clusterNodeBtnClass}' type='button' title='${escAttr(clusterNode.reason || '')}' data-vps-action='add-cluster-node' data-host='${escAttr(selectedHost)}'>${esc(clusterNodeBtnText)}</button>` : ''}
           <button class='sb-btn' type='button' data-vps-action='initialize-vps' data-host='${escAttr(selectedHost)}'>Initialize</button>
           <button class='sb-btn danger' type='button' data-vps-action='delete-vps' data-host='${escAttr(selectedHost)}'>Delete VPS</button>
@@ -12088,7 +12341,7 @@
         return `<div class='empty-state'>Waiting for master detail...</div>`;
       }
       ensureMasterUi(detail);
-      const label = repo === 'pbgui' ? 'PBGui' : 'PB7';
+      const label = repo === 'pbgui' ? 'PBGui' : (repo === 'pb8' ? 'PB8' : 'PB7');
       return `
 
         <h2 class='page-section-title'>Master - ${esc(label)} Branch</h2>
@@ -12328,7 +12581,7 @@
         sendContext();
         return `<div class='empty-state'>Waiting for VPS detail for ${esc(store.hostname || 'selected host')}...</div>`;
       }
-      const label = repo === 'pbgui' ? 'PBGui' : 'PB7';
+      const label = repo === 'pbgui' ? 'PBGui' : (repo === 'pb8' ? 'PB8' : 'PB7');
       return `
 
         <h2 class='page-section-title'>${esc(detail.hostname)} &mdash; ${label} Branch</h2>
@@ -12342,7 +12595,13 @@
       }
       if (store.view === 'master-pb7-branch') {
         const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
-        return detail ? renderPb7BranchPanel('master', (detail.branches || {}).pb7 || {}) : '';
+        return detail ? renderPb7BranchPanel('master', (detail.branches || {}).pb7 || {}, 'pb7') : '';
+      }
+      if (store.view === 'master-pb8-branch') {
+        const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
+        return detail && (detail.status || {}).pb8_installed
+          ? renderPb7BranchPanel('master', (detail.branches || {}).pb8 || {}, 'pb8')
+          : `<div class='notice warning'>Install PB8 before opening PB8 Branch Management.</div>`;
       }
       if (store.view === 'vps-pbgui-branch') {
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
@@ -12350,7 +12609,13 @@
       }
       if (store.view === 'vps-pb7-branch') {
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
-        return detail ? renderPb7BranchPanel(detail.hostname, (detail.branches || {}).pb7 || {}) : '';
+        return detail ? renderPb7BranchPanel(detail.hostname, (detail.branches || {}).pb7 || {}, 'pb7') : '';
+      }
+      if (store.view === 'vps-pb8-branch') {
+        const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
+        return detail && (detail.status || {}).pb8_installed
+          ? renderPb7BranchPanel(detail.hostname, (detail.branches || {}).pb8 || {}, 'pb8')
+          : `<div class='notice warning'>Install PB8 before opening PB8 Branch Management.</div>`;
       }
       return '';
     }
@@ -12362,11 +12627,14 @@
       if (store.pb7BranchSelectInteracting && isPb7BranchView()) {
         return;
       }
-      if (store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch') {
+      if (store.pb8BranchSelectInteracting && isPb8BranchView()) {
+        return;
+      }
+      if (store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch' || store.view === 'master-pb8-branch') {
         setHtmlIfChanged('master-branch-panel', renderBranchPanelForCurrentView());
         return;
       }
-      if (store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch') {
+      if (store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch' || store.view === 'vps-pb8-branch') {
         setHtmlIfChanged('vps-branch-panel', renderBranchPanelForCurrentView());
       }
     }
@@ -12724,6 +12992,8 @@
         html = renderMasterBranchView('pbgui');
       } else if (store.view === 'master-pb7-branch') {
         html = renderMasterBranchView('pb7');
+      } else if (store.view === 'master-pb8-branch') {
+        html = renderMasterBranchView('pb8');
       } else if (store.view === 'master-ufw' || store.view === 'vps-ufw') {
         html = renderUfwView();
       } else if (store.view === 'master') {
@@ -12742,6 +13012,8 @@
         html = renderVpsBranchView('pbgui');
       } else if (store.view === 'vps-pb7-branch') {
         html = renderVpsBranchView('pb7');
+      } else if (store.view === 'vps-pb8-branch') {
+        html = renderVpsBranchView('pb8');
       } else if (store.view === 'settings-vps-logging') {
         html = renderVpsLoggingSettingsView();
       } else if (store.view === 'deploys-vps-logging') {
@@ -12778,15 +13050,18 @@
       }
       renderSummaryBar();
       const holdPb7BranchView = store.pb7BranchSelectInteracting && isPb7BranchView();
+      const holdPb8BranchView = store.pb8BranchSelectInteracting && isPb8BranchView();
       const holdPbguiBranchView = store.pbguiBranchSelectInteracting && isPbguiBranchView();
       const holdVpsSetupFieldView = !opts.forceView && isActiveVpsSetupFormField();
-      if (!holdPb7BranchView && !holdPbguiBranchView && !holdVpsSetupFieldView) {
+      if (!holdPb7BranchView && !holdPb8BranchView && !holdPbguiBranchView && !holdVpsSetupFieldView) {
         renderView(!!opts.forceView);
       }
-      if (!holdPb7BranchView && !holdPbguiBranchView && store.view === 'master-pb7-branch' && store.detail && store.detail.kind === 'master') {
-        syncPb7RemoteLoads('master', store.master, (store.detail.branches || {}).pb7 || {});
-      } else if (!holdPb7BranchView && !holdPbguiBranchView && store.view === 'vps-pb7-branch' && store.hostname && store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname) {
-        syncPb7RemoteLoads(store.hostname, ensureVpsUi(store.hostname, store.detail), (store.detail.branches || {}).pb7 || {});
+      const runtime = activeRuntimeBranchRepo();
+      const runtimeAvailable = runtime !== 'pb8' || !!(store.detail && (store.detail.status || {}).pb8_installed);
+      if (!holdPb7BranchView && !holdPb8BranchView && !holdPbguiBranchView && runtimeAvailable && runtime && store.view === 'master-' + runtime + '-branch' && store.detail && store.detail.kind === 'master') {
+        syncPb7RemoteLoads('master', store.master, (store.detail.branches || {})[runtime] || {}, runtime);
+      } else if (!holdPb7BranchView && !holdPb8BranchView && !holdPbguiBranchView && runtimeAvailable && runtime && store.view === 'vps-' + runtime + '-branch' && store.hostname && store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname) {
+        syncPb7RemoteLoads(store.hostname, ensureVpsUi(store.hostname, store.detail), (store.detail.branches || {})[runtime] || {}, runtime);
       }
       syncTaskLogViewer();
       syncDeployLogViewers();
@@ -12853,6 +13128,8 @@
         runVpsWithLog(host, String(trigger.getAttribute('data-command') || ''), String(trigger.getAttribute('data-command-text') || ''));
       } else if (action === 'update-linux') {
         updateLinuxVpsAction(host);
+      } else if (action === 'package-updates') {
+        openPackageUpdatesModal(host);
       } else if (action === 'password-command') {
         vpsActionWithPw(host, String(trigger.getAttribute('data-command') || ''), String(trigger.getAttribute('data-command-text') || ''));
       } else if (action === 'purge-vps') {
