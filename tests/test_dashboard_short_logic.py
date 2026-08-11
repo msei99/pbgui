@@ -222,6 +222,90 @@ def test_dashboard_top_older_fetch_cannot_overwrite_newer_render() -> None:
     )
 
 
+def test_dashboard_positions_waits_for_live_before_rendering_db_fallback() -> None:
+    """Do not flash the DB snapshot while an allowed live positions request is pending."""
+    html = (ROOT / "frontend" / "dashboard_positions.html").read_text(encoding="utf-8")
+    source = html.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+    for placeholder, value in {
+        "%%TOKEN%%": "test-token",
+        "%%API_BASE%%": "/api",
+        "%%API_HOST%%": "localhost",
+        "%%USERS%%": '["alice"]',
+        "%%HEIGHT%%": "0",
+        "%%POSITION%%": "0",
+    }.items():
+        source = source.replace(placeholder, value)
+
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const vm = require('node:vm');
+        const fragment = {json.dumps(source)};
+        const requests = [];
+        const renders = [];
+        const container = {{ appendChild: function () {{}}, innerHTML: '' }};
+
+        global.window = global;
+        window.location = {{ protocol: 'http:' }};
+        global.document = {{ getElementById: function () {{ return container; }} }};
+        global.DashRender = {{
+            VERSION: '20260610l',
+            injectCSS: function () {{}},
+            buildPositions: function (target, data) {{ renders.push(data.id); }}
+        }};
+        window.DashRender = global.DashRender;
+        global.WebSocket = class {{
+            constructor(url) {{ this.url = url; }}
+            close() {{}}
+        }};
+        global.fetch = function (url) {{
+            return new Promise(function (resolve, reject) {{ requests.push({{ url, resolve, reject }}); }});
+        }};
+        global.setTimeout = function () {{ return 1; }};
+        global.clearTimeout = function () {{}};
+
+        (async function () {{
+            vm.runInThisContext(fragment);
+            assert.equal(requests.length, 1);
+
+            requests[0].resolve({{
+                ok: true,
+                json: async function () {{ return {{ id: 'db', source: 'db', positions: [{{ symbol: 'UNIUSDC' }}] }}; }}
+            }});
+            await new Promise(setImmediate);
+            await new Promise(setImmediate);
+
+            assert.equal(requests.length, 2);
+            assert.deepEqual(renders, []);
+
+            requests[1].resolve({{
+                ok: true,
+                json: async function () {{ return {{ id: 'live', source: 'live', positions: [{{ symbol: 'UNIUSDC' }}] }}; }}
+            }});
+            await new Promise(setImmediate);
+            await new Promise(setImmediate);
+
+            assert.deepEqual(renders, ['live']);
+        }})().catch(function (error) {{
+            console.error(error);
+            process.exitCode = 1;
+        }});
+        """
+    )
+    result = subprocess.run(
+        ["node", "-e", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        "Dashboard positions live-first regression failed\n"
+        f"STDOUT:\n{result.stdout}\n"
+        f"STDERR:\n{result.stderr}"
+    )
+
+
 class _TickerExchange:
     """Minimal exchange stub returning a fixed ticker."""
 

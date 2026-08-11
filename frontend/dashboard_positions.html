@@ -87,15 +87,19 @@
         fetchPositions(false, seq)
             .then(function (d) {
                 if (!d || seq !== loadSeq) return;
-                renderPositions(d);
-                if (!liveAllowedFromDb(d)) return;
+                if (!liveAllowedFromDb(d)) {
+                    renderPositions(d);
+                    return;
+                }
                 fetchPositions(true, seq)
                     .then(function (liveData) {
                         if (!liveData || seq !== loadSeq) return;
                         var source = String(liveData.source || 'db').toLowerCase();
-                        if (source === 'live' || source === 'mixed') renderPositions(liveData);
+                        renderPositions(source === 'live' || source === 'mixed' ? liveData : d);
                     })
-                    .catch(function () {});
+                    .catch(function () {
+                        if (seq === loadSeq) renderPositions(d);
+                    });
             })
             .catch(function (e) {
                 if (seq !== loadSeq) return;
