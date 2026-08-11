@@ -36,6 +36,7 @@ from cmc_runtime import build_cmc_pool_client, read_cmc_cluster_snapshot
 from credential_store import CredentialNotFoundError, CredentialStore, credential_mutation_lock
 from credential_reconciler import reconcile_pending_credentials
 from master.cluster_state import credential_lifecycle_status, default_cluster_root, read_local_identity, rebuild_materialized_state
+from master_update_lock import MasterUpdateBusyError, acquire_master_update_lock
 from pbgui_purefunc import PBGDIR, load_ini, load_ini_snapshot, save_ini, save_ini_section, update_ini
 from ini_settings import APPLY_GROUPS, apply_metadata, apply_metadata_for
 from logging_helpers import human_log as _log
@@ -1597,20 +1598,52 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
     import threading
     import time
 
+    api_server = None
+    restart_lease = None
     try:
         api_server = importlib.import_module("PBApiServer")
+        try:
+            restart_lease = acquire_master_update_lock(Path(PBGDIR))
+        except MasterUpdateBusyError as exc:
+            raise HTTPException(status_code=409, detail=f"Cannot restart API server: {exc}") from exc
         restart_blocked, restart_block_reason = asyncio.run(api_server._restart_block_state())
         if restart_blocked:
+            restart_lease.release()
+            restart_lease = None
             detail = restart_block_reason or "An API-owned mutable operation is still running."
             raise HTTPException(status_code=409, detail=f"Cannot restart API server: {detail}")
 
-        systemd_unit = _systemd_unit_for_service("api-server")
-        if systemd_unit:
-            ok, output = _queue_api_systemd_restart(systemd_unit)
-            if not ok:
-                _log(SERVICE, f"[restart] systemd restart scheduling failed for {systemd_unit}: {output}", level="ERROR")
-                raise RuntimeError(output or f"Could not schedule restart for {systemd_unit}.")
-            _log(SERVICE, f"[restart] systemd restart scheduled for {systemd_unit}: {output}", level="WARNING")
+        if _systemd_unit_for_service("api-server"):
+            monitor = get_monitor()
+            monitor_handoff = bool(
+                monitor is not None
+                and monitor.__class__.__module__ == "master.async_monitor"
+                and monitor.__class__.__name__ == "VPSMonitor"
+            )
+            try:
+                if not api_server._restart_current_api_systemd_unit(monitor_handoff=monitor_handoff):
+                    raise RuntimeError("pbgui-api.service does not own the current API process")
+            except Exception:
+                restart_lease.release()
+                restart_lease = None
+                raise
+            api_server._api_restart_lease = restart_lease
+
+            def _release_failed_systemd_restart() -> None:
+                time.sleep(api_server._SYSTEMD_RESTART_WATCHDOG_SECONDS)
+                if api_server._api_restart_lease is restart_lease:
+                    api_server._api_restart_lease = None
+                    restart_lease.release()
+                    _log(SERVICE, "[restart] scheduled systemd handoff did not stop the API; restart reservation released", level="ERROR")
+
+            try:
+                threading.Thread(target=_release_failed_systemd_restart, daemon=True).start()
+            except Exception:
+                if api_server._api_restart_lease is restart_lease:
+                    api_server._api_restart_lease = None
+                restart_lease.release()
+                restart_lease = None
+                raise
             return {"ok": True, "message": "Restarting…"}
 
         pbgdir = Path(PBGDIR)
@@ -1629,26 +1662,44 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
         pid_file = pbgdir / "data" / "pid" / "api_server.pid"
 
         def _do_restart() -> None:
-            time.sleep(0.3)  # let HTTP response reach the browser first
-            pid_file.unlink(missing_ok=True)
-            env = os.environ.copy()
-            env["PBGUI_RESTART_DELAY"] = "3"
-            subprocess.Popen(
-                [venv_python, str(pbgdir / "PBApiServer.py")],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-                cwd=str(pbgdir),
-                env=env,
-            )
-            os.kill(os.getpid(), signal.SIGTERM)
+            try:
+                time.sleep(0.3)  # let HTTP response reach the browser first
+                pid_file.unlink(missing_ok=True)
+                env = os.environ.copy()
+                env["PBGUI_RESTART_DELAY"] = "3"
+                subprocess.Popen(
+                    [venv_python, str(pbgdir / "PBApiServer.py")],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                    cwd=str(pbgdir),
+                    env=env,
+                )
+                os.kill(os.getpid(), signal.SIGTERM)
+            except Exception as exc:
+                if api_server._api_restart_lease is restart_lease:
+                    api_server._api_restart_lease = None
+                    restart_lease.release()
+                _log(SERVICE, f"[restart] direct API restart failed: {exc}", level="ERROR")
 
         _log(SERVICE, "[restart] restart requested by user", level="WARNING")
-        threading.Thread(target=_do_restart, daemon=True).start()
+        api_server._api_restart_lease = restart_lease
+        try:
+            threading.Thread(target=_do_restart, daemon=True).start()
+        except Exception:
+            if api_server._api_restart_lease is restart_lease:
+                api_server._api_restart_lease = None
+            restart_lease.release()
+            restart_lease = None
+            raise
         return {"ok": True, "message": "Restarting\u2026"}
     except HTTPException:
+        if restart_lease is not None and getattr(api_server, "_api_restart_lease", None) is not restart_lease:
+            restart_lease.release()
         raise
     except Exception as e:
+        if restart_lease is not None and getattr(api_server, "_api_restart_lease", None) is not restart_lease:
+            restart_lease.release()
         _log(SERVICE, f"restart api-server failed: {e}", level="ERROR", meta={"operation": "restart_api_server", "service": "api-server", "traceback": traceback.format_exc()})
         raise HTTPException(status_code=500, detail=str(e))
 

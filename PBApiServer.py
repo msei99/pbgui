@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import pwd
 import signal
 import shlex
 import subprocess
@@ -124,6 +125,8 @@ _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 _SERIAL_FILE = Path(__file__).parent / "api" / "serial.txt"
 _API_SYSTEMD_UNIT = "pbgui-api.service"
+_VPS_MONITOR_SYSTEMD_UNIT = "pbgui-vps-monitor.service"
+_SYSTEMD_RESTART_WATCHDOG_SECONDS = 300
 _RUNTIME_SYSTEMD_SERVICES = (
     {"service": "PBCluster", "label": "PBCluster", "unit": "pbgui-pbcluster.service"},
     {"service": "PBRun", "label": "PBRun", "unit": "pbgui-pbrun.service"},
@@ -312,7 +315,45 @@ def _systemd_user_env() -> dict[str, str]:
     return env
 
 
-def _queue_current_api_systemd_restart(service_units=()) -> tuple[bool, str]:
+def _prepare_vps_monitor_systemd_unit() -> tuple[bool, str]:
+    """Install and enable monitor/API units without changing running services."""
+
+    setup_script = Path(PBGDIR) / "setup" / "setup_systemd.sh"
+    if not setup_script.is_file():
+        return False, "setup/setup_systemd.sh is missing"
+    try:
+        username = pwd.getpwuid(os.getuid()).pw_name
+        proc = subprocess.run(
+            [
+                "/bin/bash",
+                str(setup_script),
+                "--user",
+                username,
+                "--pbgui-dir",
+                str(Path(PBGDIR)),
+                "--python",
+                str(Path(sys.executable)),
+                "--enable",
+                "vps-monitor,api",
+                "--no-start",
+                "--no-disable-excluded",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(Path(PBGDIR)),
+            env=_systemd_user_env(),
+        )
+    except Exception as exc:
+        return False, str(exc)
+    output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if proc.returncode != 0:
+        return False, output or f"setup_systemd.sh exited with {proc.returncode}"
+    return True, output
+
+
+def _queue_current_api_systemd_restart(service_units=(), *, monitor_handoff: bool = False) -> tuple[bool, str]:
     """Queue stale daemon restarts followed by API from an external transient unit."""
 
     allowed_units = {str(item["unit"]) for item in _RUNTIME_SYSTEMD_SERVICES}
@@ -324,13 +365,59 @@ def _queue_current_api_systemd_restart(service_units=()) -> tuple[bool, str]:
         if unit not in ordered_units:
             ordered_units.append(unit)
     restart_unit = f"pbgui-api-restart-{os.getpid()}-{time_ns()}"
-    restart_lines = ["set -e", "sleep 0.5"]
+    restart_lines = ["set -Eeuo pipefail"]
+    if monitor_handoff:
+        restart_lines.extend([
+            "api_stopped=0",
+            "rollback_monitor_handoff() {",
+            "  rc=$?",
+            "  trap - ERR",
+            "  set +e",
+            "  if [ \"$api_stopped\" = 1 ]; then",
+            f"    systemctl --user stop {shlex.quote(_VPS_MONITOR_SYSTEMD_UNIT)} >/dev/null 2>&1 || true",
+            f"    systemctl --user disable {shlex.quote(_VPS_MONITOR_SYSTEMD_UNIT)} >/dev/null 2>&1 || true",
+            f'    rm -f "$HOME/.config/systemd/user/default.target.wants/{_VPS_MONITOR_SYSTEMD_UNIT}" "$HOME/.config/systemd/user/{_VPS_MONITOR_SYSTEMD_UNIT}"',
+            "    systemctl --user daemon-reload",
+            f"    systemctl --user start {shlex.quote(_API_SYSTEMD_UNIT)}",
+            "  fi",
+            "  exit \"$rc\"",
+            "}",
+            "trap rollback_monitor_handoff ERR",
+        ])
+    restart_lines.append("sleep 0.5")
     restart_lines.extend(f"systemctl --user restart {shlex.quote(unit)}" for unit in ordered_units)
-    restart_lines.append(f"systemctl --user restart {shlex.quote(_API_SYSTEMD_UNIT)}")
+    if monitor_handoff:
+        restart_lines.extend([
+            f"systemctl --user stop {shlex.quote(_API_SYSTEMD_UNIT)}",
+            "api_stopped=1",
+            '/bin/bash "$PBGUI_DIR/setup/stop_legacy_api.sh" --pbgui-dir "$PBGUI_DIR"',
+            f"systemctl --user restart {shlex.quote(_VPS_MONITOR_SYSTEMD_UNIT)}",
+            "monitor_ready=0",
+            "for _ in $(seq 1 30); do",
+            '  if "$PBGUI_PYTHON" -c \'from master.vps_monitor_client import VPSMonitorRPCClient; result=VPSMonitorRPCClient(timeout=1).call("hello"); raise SystemExit(0 if result.get("service") == "VPSMonitor" else 1)\'; then',
+            "    monitor_ready=1",
+            "    break",
+            "  fi",
+            "  sleep 1",
+            "done",
+            '[ "$monitor_ready" = 1 ]',
+            f"systemctl --user start {shlex.quote(_API_SYSTEMD_UNIT)}",
+            "trap - ERR",
+        ])
+    else:
+        restart_lines.append(f"systemctl --user restart {shlex.quote(_API_SYSTEMD_UNIT)}")
     restart_cmd = "\n".join(restart_lines)
+    command = ["systemd-run", "--user", f"--unit={restart_unit}", "--collect"]
+    if monitor_handoff:
+        command.extend([
+            f"--setenv=PBGUI_DIR={Path(PBGDIR)}",
+            f"--setenv=PBGUI_PYTHON={Path(sys.executable)}",
+            f"--working-directory={Path(PBGDIR)}",
+        ])
+    command.extend(["/bin/bash", "-lc", restart_cmd])
     try:
         proc = subprocess.run(
-            ["systemd-run", "--user", f"--unit={restart_unit}", "--collect", "/bin/bash", "-lc", restart_cmd],
+            command,
             check=False,
             capture_output=True,
             text=True,
@@ -356,7 +443,7 @@ def _configured_cors() -> tuple[list[str], bool]:
     return origins, True
 
 
-def _restart_current_api_systemd_unit(service_units=()) -> bool:
+def _restart_current_api_systemd_unit(service_units=(), *, monitor_handoff: bool | None = None) -> bool:
     """Restart stale PBGui daemons and API when systemd owns this process."""
     env = _systemd_user_env()
     try:
@@ -386,10 +473,17 @@ def _restart_current_api_systemd_unit(service_units=()) -> bool:
     if props.get("ActiveState") != "active" or main_pid != os.getpid():
         return False
 
-    ok, output = _queue_current_api_systemd_restart(service_units)
+    if monitor_handoff is None:
+        monitor_handoff = _vps_monitor_in_process
+    if monitor_handoff:
+        prepared, prepare_output = _prepare_vps_monitor_systemd_unit()
+        if not prepared:
+            raise RuntimeError(f"Could not prepare persistent VPS monitor: {prepare_output}")
+        _log(SERVICE, "[restart] prepared persistent VPS monitor systemd unit", level="INFO")
+    ok, output = _queue_current_api_systemd_restart(service_units, monitor_handoff=monitor_handoff)
     if not ok:
         _log(SERVICE, f"[restart] systemd restart scheduling failed: {output}", level="ERROR")
-        return False
+        raise RuntimeError(output or "Could not schedule systemd restart")
     _log(SERVICE, f"[restart] queued systemd restart for {_API_SYSTEMD_UNIT}: {output}", level="WARNING")
     return True
 
@@ -523,6 +617,7 @@ def _redirect_api_console_output():
 # ── VPS monitoring lifecycle ─────────────────────────────────
 
 _vps_monitor = None
+_vps_monitor_in_process = False
 
 # ── Task-worker watchdog ──────────────────────────────────────
 
@@ -578,7 +673,7 @@ async def _lifespan(app: FastAPI):
     """FastAPI lifespan: startup and graceful shutdown of VPS monitoring."""
     from credential_process_registry import ProcessCapabilityHeartbeat
 
-    global _vps_monitor
+    global _vps_monitor, _vps_monitor_in_process
     capability_heartbeat = ProcessCapabilityHeartbeat(Path(PBGDIR), SERVICE)
     capability_heartbeat.__enter__()
     _runtime_restart_reasons.clear()
@@ -662,6 +757,7 @@ async def _lifespan(app: FastAPI):
         pass
 
     _vps_monitor = None
+    _vps_monitor_in_process = False
     lifecycle_tasks: list[asyncio.Task] = []
     try:
         monitor_unit = Path.home() / ".config" / "systemd" / "user" / "pbgui-vps-monitor.service"
@@ -677,6 +773,8 @@ async def _lifespan(app: FastAPI):
 
             monitor = VPSMonitor()
             streamer = AsyncLogStreamer(monitor.pool)
+            _vps_monitor_in_process = True
+            _runtime_restart_reasons.append("VPS Monitor systemd migration required")
             _log(SERVICE, "[lifespan] using in-process VPS monitor compatibility mode", level="WARNING")
         vps_init(monitor, streamer)
         v7_init(monitor)
@@ -1530,17 +1628,33 @@ async def server_restart(session: SessionToken = Depends(require_auth)):
         level="WARNING",
     )
 
+    try:
+        systemd_restart_scheduled = _restart_current_api_systemd_unit(stale_units)
+    except Exception as exc:
+        if _api_restart_lease is restart_lease:
+            _api_restart_lease = None
+        restart_lease.release()
+        _log(SERVICE, f"[restart] could not schedule safe systemd restart: {exc}", level="ERROR")
+        raise HTTPException(status_code=500, detail=f"Could not schedule safe PBGui restart: {exc}") from exc
+    if stale_units and not systemd_restart_scheduled:
+        if _api_restart_lease is restart_lease:
+            _api_restart_lease = None
+        restart_lease.release()
+        raise HTTPException(status_code=409, detail="Managed daemon restarts require the systemd user service installation")
+
     async def _do_restart():
         global _api_restart_lease
         try:
             await asyncio.sleep(0.3)  # let response reach the client first
+            if systemd_restart_scheduled:
+                await asyncio.sleep(_SYSTEMD_RESTART_WATCHDOG_SECONDS)
+                if _api_restart_lease is restart_lease:
+                    _api_restart_lease = None
+                    restart_lease.release()
+                    _log(SERVICE, "[restart] scheduled systemd handoff did not stop the API; restart reservation released", level="ERROR")
+                return
             _close_server_status_streams()
             await asyncio.sleep(0)
-            if _restart_current_api_systemd_unit(stale_units):
-                await asyncio.sleep(5)
-                raise RuntimeError("The scheduled systemd PBGui service restart did not stop the current process")
-            if stale_units:
-                raise RuntimeError("Managed daemon restarts require the systemd user service installation")
             pbgdir = Path(__file__).resolve().parent
             venv_python = None
             for candidate in [

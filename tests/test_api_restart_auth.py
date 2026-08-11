@@ -105,6 +105,7 @@ def test_server_status_includes_stale_managed_daemons(monkeypatch) -> None:
 
     monkeypatch.setattr(PBApiServer, "_startup_serial", 2052)
     monkeypatch.setattr(PBApiServer, "_read_serial", lambda: 2052)
+    monkeypatch.setattr(PBApiServer, "_runtime_restart_reasons", [])
     monkeypatch.setattr(PBApiServer, "_restart_block_state", lambda: asyncio.sleep(0, result=(False, "")))
     monkeypatch.setattr(
         PBApiServer,
@@ -129,6 +130,26 @@ def test_server_status_includes_stale_managed_daemons(monkeypatch) -> None:
     assert payload["api_restart_required"] is False
     assert payload["service_restart_required"] is True
     assert [item["service"] for item in payload["restart_services"]] == ["PBRun"]
+
+
+def test_missing_monitor_unit_keeps_restart_prompt_visible(monkeypatch) -> None:
+    """Compatibility mode requests the one-time systemd monitor handoff."""
+
+    monkeypatch.setattr(PBApiServer, "_startup_serial", 2154)
+    monkeypatch.setattr(PBApiServer, "_read_serial", lambda: 2154)
+    monkeypatch.setattr(PBApiServer, "_runtime_restart_reasons", ["VPS Monitor systemd migration required"])
+    monkeypatch.setattr(PBApiServer, "_restart_block_state", lambda: asyncio.sleep(0, result=(False, "")))
+    monkeypatch.setattr(
+        PBApiServer,
+        "_runtime_service_restart_state",
+        lambda: {"current_serial": "2154", "inspection_error": "", "stale_services": []},
+    )
+
+    payload = asyncio.run(PBApiServer.server_status(session=object()))
+
+    assert payload["needs_restart"] is True
+    assert payload["api_restart_required"] is True
+    assert "VPS Monitor systemd migration required" in payload["runtime_restart_reasons"]
 
 
 def test_shared_nav_restarts_all_reported_services_and_waits_for_serials() -> None:

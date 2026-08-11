@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -265,6 +266,174 @@ def test_root_restart_rejects_unknown_systemd_unit() -> None:
 
     assert ok is False
     assert "unsupported PBGui systemd unit" in output
+
+
+def test_root_restart_migrates_in_process_monitor_before_api(monkeypatch) -> None:
+    """A systemd-owned API installs the missing monitor unit and hands off once."""
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        if args[0] == "systemctl":
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=f"ActiveState=active\nMainPID={PBApiServer.os.getpid()}\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(args, 0, stdout="queued", stderr="")
+
+    monkeypatch.setattr(PBApiServer, "_vps_monitor_in_process", True)
+    monkeypatch.setattr(PBApiServer.subprocess, "run", fake_run)
+
+    assert PBApiServer._restart_current_api_systemd_unit(["pbgui-pbdata.service"]) is True
+
+    setup_call = next(args for args in calls if args[0] == "/bin/bash")
+    assert setup_call[setup_call.index("--enable") + 1] == "vps-monitor,api"
+    assert "--no-start" in setup_call
+    assert "--no-disable-excluded" in setup_call
+    command = next(args for args in calls if args[0] == "systemd-run")
+    script = command[-1]
+    stale_index = script.index("restart pbgui-pbdata.service")
+    api_stop_index = script.index("stop pbgui-api.service")
+    legacy_stop_index = script.index("stop_legacy_api.sh")
+    monitor_index = script.index("restart pbgui-vps-monitor.service")
+    health_index = script.index("VPSMonitorRPCClient(timeout=1)")
+    api_start_index = script.index("start pbgui-api.service", health_index)
+    assert stale_index < api_stop_index < legacy_stop_index < monitor_index < health_index < api_start_index
+    assert "trap rollback_monitor_handoff ERR" in script
+    assert script.index("api_stopped=1") < legacy_stop_index
+    assert "disable pbgui-vps-monitor.service" in script
+
+
+def test_root_restart_keeps_healthy_monitor_out_of_api_restart(monkeypatch) -> None:
+    """An API already using the proxy neither reconciles nor restarts the monitor."""
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        if args[0] == "systemctl":
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=f"ActiveState=active\nMainPID={PBApiServer.os.getpid()}\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(args, 0, stdout="queued", stderr="")
+
+    monkeypatch.setattr(PBApiServer, "_vps_monitor_in_process", False)
+    monkeypatch.setattr(PBApiServer.subprocess, "run", fake_run)
+
+    assert PBApiServer._restart_current_api_systemd_unit() is True
+
+    assert not any(args[0] == "/bin/bash" for args in calls)
+    script = next(args for args in calls if args[0] == "systemd-run")[-1]
+    assert "pbgui-vps-monitor.service" not in script
+    assert "restart pbgui-api.service" in script
+
+
+def test_monitor_unit_prepare_failure_never_schedules_or_falls_back(monkeypatch) -> None:
+    """A failed one-time migration leaves the current in-process monitor alive."""
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        if args[0] == "systemctl":
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=f"ActiveState=active\nMainPID={PBApiServer.os.getpid()}\n",
+                stderr="",
+            )
+        if args[0] == "/bin/bash":
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="setup failed")
+        raise AssertionError("systemd handoff must not be scheduled")
+
+    monkeypatch.setattr(PBApiServer, "_vps_monitor_in_process", True)
+    monkeypatch.setattr(PBApiServer.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="setup failed"):
+        PBApiServer._restart_current_api_systemd_unit()
+    assert not any(args[0] == "systemd-run" for args in calls)
+
+
+def test_services_restart_reuses_root_systemd_handoff(monkeypatch) -> None:
+    """The Services restart endpoint uses the same monitor migration boundary."""
+
+    calls: list[bool | None] = []
+
+    class VPSMonitor:
+        """Represent the live __main__ module's in-process monitor."""
+
+        __module__ = "master.async_monitor"
+
+    class Lease:
+        """Provide the restart lock interface without touching runtime files."""
+
+        def release(self) -> None:
+            return None
+
+    async def unblocked() -> tuple[bool, str]:
+        return False, ""
+
+    monkeypatch.setattr(PBApiServer, "_restart_block_state", unblocked)
+    monkeypatch.setattr(PBApiServer, "_api_restart_lease", None)
+    monkeypatch.setattr(services, "_systemd_unit_for_service", lambda name: "pbgui-api.service")
+    monkeypatch.setattr(services, "get_monitor", lambda: VPSMonitor())
+    monkeypatch.setattr(services, "acquire_master_update_lock", lambda _root: Lease())
+    monkeypatch.setattr(threading, "Thread", lambda *args, **kwargs: type("Thread", (), {"start": lambda self: None})())
+    monkeypatch.setattr(
+        PBApiServer,
+        "_restart_current_api_systemd_unit",
+        lambda service_units=(), *, monitor_handoff=None: calls.append(monitor_handoff) or True,
+    )
+
+    assert services.restart_api_server(session=None)["ok"] is True
+    assert calls == [True]
+
+
+def test_services_restart_thread_failure_releases_lease(monkeypatch) -> None:
+    """Failure to start the handoff watchdog cannot retain the master lock."""
+
+    class Lease:
+        """Track release calls for the restart reservation."""
+
+        def __init__(self) -> None:
+            self.releases = 0
+
+        def release(self) -> None:
+            self.releases += 1
+
+    class BrokenThread:
+        """Fail exactly where the watchdog thread would be started."""
+
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def start(self) -> None:
+            raise RuntimeError("thread unavailable")
+
+    async def unblocked() -> tuple[bool, str]:
+        return False, ""
+
+    lease = Lease()
+    monkeypatch.setattr(PBApiServer, "_restart_block_state", unblocked)
+    monkeypatch.setattr(PBApiServer, "_api_restart_lease", None)
+    monkeypatch.setattr(PBApiServer, "_restart_current_api_systemd_unit", lambda **kwargs: True)
+    monkeypatch.setattr(services, "_systemd_unit_for_service", lambda name: "pbgui-api.service")
+    monkeypatch.setattr(services, "get_monitor", lambda: None)
+    monkeypatch.setattr(services, "acquire_master_update_lock", lambda _root: lease)
+    monkeypatch.setattr(threading, "Thread", BrokenThread)
+
+    with pytest.raises(services.HTTPException) as exc_info:
+        services.restart_api_server(session=None)
+
+    assert exc_info.value.status_code == 500
+    assert lease.releases == 1
+    assert PBApiServer._api_restart_lease is None
 
 
 def test_pbcoindata_start_is_not_blocked_without_cmc_key(monkeypatch) -> None:
@@ -862,6 +1031,7 @@ def test_lifespan_startup_failure_still_runs_all_shutdown_hooks(monkeypatch, tmp
     calls: list[str] = []
     migration_errors: list[str] = []
     monkeypatch.setattr(PBApiServer, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(PBApiServer.Path, "home", classmethod(lambda cls: tmp_path))
 
     class FakeMonitor:
         def __init__(self):
