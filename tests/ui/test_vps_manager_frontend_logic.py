@@ -130,13 +130,19 @@ class TestVpsManagerFrontendLogic:
         assert "pb7_reason: String(st.pb7_action_reason || '')" in signature_source
 
     def test_pb8_only_sidebar_uses_pb8_update_matrix(self) -> None:
-        """PB8-only hosts update PBGui with PB8 and do not show an installation disk warning."""
+        """PB8-only and dual-runtime hosts expose the appropriate PBGui/PB8 updates."""
         source = HTML_PATH.read_text(encoding="utf-8")
         sidebar_source = _extract_function(source, "renderSidebarActions")
 
         assert "const pb8Only = !!st.pb8_installed && !st.pb7_installed" in sidebar_source
         assert "pb8Only ? 'vps-update-pbgui-pb8' : 'vps-update-pb'" in sidebar_source
         assert "pb8Only ? 'Update PBGui and PB8' : 'Update PBGui and PB7'" in sidebar_source
+        assert "const masterHasBothRuntimes = !!st.pb7_installed && !!st.pb8_installed" in sidebar_source
+        assert "masterHasBothRuntimes ? `<button" in sidebar_source
+        assert 'runMasterWithLog("master-update-pbgui-pb8", "Update PBGui and PB8")' in sidebar_source
+        assert "const hasBothRuntimes = !!st.pb7_installed && !!st.pb8_installed" in sidebar_source
+        assert "hasBothRuntimes ? `<button" in sidebar_source
+        assert "data-command='vps-update-pbgui-pb8' data-command-text='Update PBGui and PB8'" in sidebar_source
         assert "st.pb8_installed ? 'Updates the installed PB8 runtime.'" in sidebar_source
         assert "PB8-only leaves PBRun disabled" not in source
 
@@ -360,7 +366,7 @@ class TestVpsManagerFrontendLogic:
         )
         source = HTML_PATH.read_text(encoding="utf-8")
         sidebar_source = _extract_function(source, "renderSidebarActions")
-        assert sidebar_source.count("combinedUpdateButtonClass(st.pbgui_update_available") == 2
+        assert sidebar_source.count("combinedUpdateButtonClass(st.pbgui_update_available") == 4
 
     def test_bulk_runtime_updates_are_profile_aware(self) -> None:
         """Overview bulk actions delegate runtime selection to each host profile."""

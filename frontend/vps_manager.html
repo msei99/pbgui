@@ -10654,9 +10654,11 @@
         const masterPb8BtnClass = st.pb8_update_available ? 'sb-btn warning' : (st.pb8_installed ? 'sb-btn ok' : 'sb-btn install');
         const masterPb8ButtonText = st.pb8_installed ? 'Update PB8' : 'Install PB8';
         const masterPb8Only = !!st.pb8_installed && !st.pb7_installed;
+        const masterHasBothRuntimes = !!st.pb7_installed && !!st.pb8_installed;
         const masterCombinedCommand = masterPb8Only ? 'master-update-pbgui-pb8' : 'master-update-pb';
         const masterCombinedText = masterPb8Only ? 'Update PBGui and PB8' : 'Update PBGui and PB7';
         const masterBothBtnClass = combinedUpdateButtonClass(st.pbgui_update_available, masterPb8Only ? st.pb8_update_available : st.pb7_update_available);
+        const masterPbguiPb8BtnClass = combinedUpdateButtonClass(st.pbgui_update_available, st.pb8_update_available);
         const pendingSrc = st.pending_updates != null ? st.pending_updates : ((st.summary_row || {}).updates);
         const hasLinuxUpdates = String(pendingSrc || '').trim() && String(pendingSrc).trim() !== '0' && String(pendingSrc).trim() !== 'N/A';
         const needsReboot = !!(st.summary_row || {}).reboot_required;
@@ -10686,6 +10688,7 @@
           <button class='${masterPbguiBtnClass}' type='button' onclick='runMasterWithLog("master-update-pbgui", "Update PBGui")'>Update PBGui</button>
           <button class='${masterPb7BtnClass}' type='button' onclick='runMasterWithLog("master-update-pb7", "${masterPb7ButtonText}")'>${masterPb7ButtonText}</button>
           ${st.pb8_action_allowed ? `<button class='${masterPb8BtnClass}' type='button' onclick='runMasterWithLog("master-update-pb8", "${masterPb8ButtonText}")'>${masterPb8ButtonText}</button>` : ''}
+          ${masterHasBothRuntimes ? `<button class='${masterPbguiPb8BtnClass}' type='button' onclick='runMasterWithLog("master-update-pbgui-pb8", "Update PBGui and PB8")'>Update PBGui and PB8</button>` : ''}
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' ${store.master.updateReboot ? 'checked' : ''} ${linuxUpdateSupported ? '' : 'disabled'} onchange="setMasterBool('updateReboot', this.checked)"> Reboot after Linux update</label>
           </div>
@@ -10709,9 +10712,11 @@
         const pb8BtnClass = st.pb8_update_available ? 'sb-btn warning' : (st.pb8_installed ? 'sb-btn ok' : 'sb-btn install');
         const pb8ButtonText = st.pb8_installed ? 'Update PB8' : 'Install PB8';
         const pb8Only = !!st.pb8_installed && !st.pb7_installed;
+        const hasBothRuntimes = !!st.pb7_installed && !!st.pb8_installed;
         const combinedCommand = pb8Only ? 'vps-update-pbgui-pb8' : 'vps-update-pb';
         const combinedText = pb8Only ? 'Update PBGui and PB8' : 'Update PBGui and PB7';
         const bothBtnClass = combinedUpdateButtonClass(st.pbgui_update_available, pb8Only ? st.pb8_update_available : st.pb7_update_available);
+        const pbguiPb8BtnClass = combinedUpdateButtonClass(st.pbgui_update_available, st.pb8_update_available);
         const pendingSrc = st.pending_updates != null ? st.pending_updates : ((st.summary_row || {}).updates);
         const hasLinuxUpdates = String(pendingSrc || '').trim() && String(pendingSrc).trim() !== '0' && String(pendingSrc).trim() !== 'N/A';
         const linuxUpdateBtnClass = hasLinuxUpdates ? 'sb-btn warning' : 'sb-btn ok';
@@ -10756,6 +10761,7 @@
           ${st.pb8_action_allowed ? `<button class='${pb8BtnClass}' type='button' title='${escAttr(st.pb8_installed ? 'Updates the installed PB8 runtime.' : (st.pb8_install_profile === 'live' ? 'Installs the minimal PB8 live profile.' : 'Installs the PB8 full profile.'))}' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb8' data-command-text='${pb8ButtonText}'>${pb8ButtonText}</button>` : ''}
           ${!st.pb8_action_allowed && st.pb8_action_reason ? `<div class='notice warning'>${esc(st.pb8_action_reason)}</div>` : ''}
           <button class='${bothBtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='${combinedCommand}' data-command-text='${combinedText}'>${combinedText}</button>
+          ${hasBothRuntimes ? `<button class='${pbguiPb8BtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pbgui-pb8' data-command-text='Update PBGui and PB8'>Update PBGui and PB8</button>` : ''}
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' data-update-reboot-toggle='${escAttr(selectedHost)}' data-vps-ui-field='updateReboot' data-host='${escAttr(selectedHost)}' ${ui.updateReboot ? 'checked' : ''}> Reboot after Linux update</label>
           </div>

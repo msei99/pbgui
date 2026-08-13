@@ -72,7 +72,7 @@ Sidebar actions:
 | **PBGui Branch** | Open the PBGui branch management view |
 | **PB7 Branch** | Open the PB7 branch management view |
 | **PB8 Branch** | Open PB8 branch management when PB8 is installed |
-| **Update PBGui and PB7 / Update PBGui and PB8** | Update PBGui together with the runtime installed on a single-runtime host |
+| **Update PBGui and PB7 / Update PBGui and PB8** | Update PBGui together with the selected runtime; combined PB7+PB8 hosts offer both actions |
 | **Update PBGui** | Update only PBGui |
 | **Install PB7 / Update PB7** | Install a missing PB7 runtime or update the existing PB7 checkout and virtualenv |
 | **Install PB8 / Update PB8** | Install PB8 from upstream `master`, or update the existing separate PB8 checkout and virtualenv |
@@ -120,7 +120,7 @@ Sidebar actions:
 | **Delete VPS** | Remove this VPS from PBGui |
 | **Update PBGui** | Update PBGui on this VPS |
 | **Install PB7 / Update PB7** | Install PB7 on a PB8-only host or update an existing PB7 runtime |
-| **Update PBGui and PB7 / Update PBGui and PB8** | Update PBGui together with the runtime present on a single-runtime host |
+| **Update PBGui and PB7 / Update PBGui and PB8** | Update PBGui together with the selected runtime; combined PB7+PB8 hosts offer both actions |
 | **Install PB8 / Update PB8** | Installation is available when fresh telemetry reports a supported role and at least 3 GiB free disk; an already validated PB8 runtime can be updated without the first-install reserve |
 | **Update Linux** | Run `apt upgrade` (optional reboot checkbox) |
 | **Reboot VPS** | Restart the VPS |
