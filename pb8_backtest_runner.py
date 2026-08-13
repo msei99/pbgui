@@ -10,6 +10,8 @@ import sys
 import time
 from pathlib import Path
 
+import psutil
+
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
 from secure_files import atomic_write_private_text
 
@@ -24,17 +26,8 @@ def main(argv: list[str] | None = None) -> int:
     returncode = 1
     error = ""
     try:
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            try:
-                ownership = json.loads(Path(ownership_path).read_text(encoding="utf-8"))
-                if int(ownership.get("pid") or 0) == os.getpid():
-                    break
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                pass
-            time.sleep(0.05)
-        else:
-            raise RuntimeError("PBGui did not publish runner ownership before timeout")
+        ownership = {"pid": os.getpid(), "create_time": psutil.Process(os.getpid()).create_time()}
+        atomic_write_private_text(Path(ownership_path), json.dumps(ownership, indent=4) + "\n")
         pbgui_dir = Path(__file__).resolve().parent
         invalid_marker = pbgui_dir / "data" / "locks" / "pb8-runtime-invalid"
         if invalid_marker.exists() or invalid_marker.is_symlink():
@@ -53,10 +46,13 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             runtime_lease.release()
         try:
-            result = asyncio.run(backtest_module.main())
+            try:
+                result = asyncio.run(backtest_module.main())
+                returncode = int(result) if isinstance(result, int) else 0
+            except SystemExit as exc:
+                returncode = int(exc.code) if isinstance(exc.code, int) else (0 if exc.code is None else 1)
         finally:
             sys.argv = previous_argv
-        returncode = int(result) if isinstance(result, int) else 0
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
     payload = {

@@ -12,7 +12,6 @@
 (function () {
     'use strict';
 
-    var TOKEN      = "%%TOKEN%%";
     var API_BASE   = "%%API_BASE%%";
     var API_HOST   = "%%API_HOST%%";
     var USERS      = %%USERS%%;
@@ -103,7 +102,7 @@
             + '&period='     + encodeURIComponent(currentPeriod)
             + '&sum_period=' + encodeURIComponent(currentSumPeriod);
 
-        fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+        fetch(url)
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(function (d) {
                 if (seq !== loadSeq || !isCurrentGeneration()) return;
@@ -209,7 +208,7 @@
     }
 
     function connect() {
-        if (!isCurrentGeneration() || !TOKEN || !API_HOST) return;
+        if (!isCurrentGeneration() || !API_HOST) return;
         clearTimeout(reconnTimer);
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
         var socket = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard');
@@ -248,7 +247,7 @@
         else { setTimeout(function () { waitForPlotly(cb); }, 50); }
     }
 
-    var DR_VERSION = '20260610l';
+    var DR_VERSION = '20260812b';
 
     function _loadRenderScript(cb) {
         if (window.DashRender && window.DashRender.VERSION !== DR_VERSION) {

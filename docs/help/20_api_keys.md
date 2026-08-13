@@ -54,10 +54,10 @@ Press **Escape** to close without saving (confirms if there are unsaved changes)
 | Field | Description |
 |---|---|
 | **Username** | Key in `api-keys.json`; can be renamed — type a new name and save |
-| **Exchange** | Exchange name (e.g. `bybit`, `binanceusdm`, `hyperliquid`) |
+| **Exchange** | Exchange name (for example `bybit`, `hyperliquid`, `bitunix`, or `weex`) |
 | **API Key** | Exchange API key |
 | **Secret** | API secret |
-| **Passphrase** | Required by some exchanges (e.g. OKX) |
+| **Passphrase** | Required by some exchanges, including OKX and WEEX |
 | **Wallet Address** | Hyperliquid only |
 | **Private Key** | Hyperliquid only |
 | **Is Vault** | Hyperliquid vault mode |
@@ -65,13 +65,11 @@ Press **Escape** to close without saving (confirms if there are unsaved changes)
 | **Options** | Optional JSON object (e.g. `{"defaultType": "swap"}`) |
 | **Extra** | Optional JSON passthrough for exchange-specific fields |
 
-### Eye-toggle (exchange credentials)
+### Stored credentials
 
-Stored exchange fields (Secret, Passphrase, Private Key) have an 👁 button:
+Credential details return only fixed masks and presence information. Secret, Passphrase, and Private Key are replacement-only: leave them empty to keep the stored value, or enter a new value and save. They are never revealed by PBGui.
 
-- **Click** — fetches the real stored value from the server and shows it in plain text
-- **Click again** — hides and clears the field (saving with an empty field keeps the stored value unchanged)
-- To replace a credential, reveal it, clear it, type the new value, and save
+The API Key eye button is the only stored exchange credential reveal. It performs an authenticated same-origin POST for the selected user, uses `Cache-Control: no-store`, and clears the value when hidden, when another user is selected, on authentication loss, and when the page is left.
 
 TradFi vault secrets are different: stored values are never returned to the browser. Their eye buttons can only show text entered during the current edit. Leave a field empty to keep the stored value, or enter a replacement and save.
 
@@ -79,6 +77,7 @@ TradFi vault secrets are different: stored values are never returned to the brow
 
 - Standard exchanges require **API Key + Secret**
 - Passphrase exchanges additionally require **Passphrase**
+- Bitunix requires **API Key + Secret**; WEEX additionally requires **Passphrase**
 - Hyperliquid requires **Wallet Address**; Private Key required only on creation (leave blank on edit to keep existing)
 - Username must be unique; rename is rejected if the new name is already in use or the user is in use by a bot
 

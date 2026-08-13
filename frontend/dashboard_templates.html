@@ -282,7 +282,6 @@ body {
 (function() {
   'use strict';
 
-  var TOKEN    = "%%TOKEN%%";
   var API_BASE = "%%API_BASE%%";
   var CURRENT  = %%CURRENT%%;
 
@@ -302,7 +301,7 @@ body {
 
   /* ── API helpers ── */
   function apiGet(path, cb) {
-    fetch(API_BASE + path, {headers: {'Authorization': 'Bearer ' + TOKEN}})
+    fetch(API_BASE + path)
       .then(function(r) { return r.json(); })
       .then(cb)
       .catch(function() { cb(null); });
@@ -310,14 +309,14 @@ body {
   function apiPost(path, body, cb) {
     fetch(API_BASE + path, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN},
+      headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body)
     }).then(function(r) { return r.json(); }).then(cb).catch(function() { cb(null); });
   }
   function apiDel(path, cb) {
     fetch(API_BASE + path, {
       method: 'DELETE',
-      headers: {'Authorization': 'Bearer ' + TOKEN}
+      headers: {}
     }).then(function(r) { return r.json(); }).then(cb).catch(function() { cb(null); });
   }
 
@@ -833,7 +832,7 @@ body {
         if (!oldName || !newName || newName === oldName) { renameWrap.style.display = 'none'; return; }
         fetch(API_BASE + '/dashboards/templates/' + encodeURIComponent(oldName), {
           method: 'PATCH',
-          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN},
+          headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({new_name: newName})
         }).then(function(r) { return r.json(); }).then(function(res) {
           if (res && res.status === 'ok') {

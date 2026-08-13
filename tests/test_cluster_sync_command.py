@@ -1705,6 +1705,47 @@ def test_materialize_v7_blocks_when_required_blob_is_missing(tmp_path: Path) -> 
     assert not (root.parent / "run_v7" / "local_inst" / "config.json").exists()
 
 
+def test_targeted_v7_materialization_ignores_unrelated_missing_blob(tmp_path: Path) -> None:
+    """The apply-bundle fast path checks only V7 instances named in its bundle."""
+
+    root = _init_cluster(tmp_path)
+    manifest_hash = _write_config_blob_set(root, {"config.json": b'{"live":{"user":"target"}}'})
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "target_inst",
+            "version": "2",
+            "assigned_host": NODE_A,
+            "desired_state": "running",
+            "config_manifest_hash": manifest_hash,
+        },
+        created_at=102,
+    )
+    append_operation(
+        root,
+        "UPSERT_CONFIG",
+        {
+            "instance": "missing_inst",
+            "version": "2",
+            "assigned_host": NODE_A,
+            "desired_state": "running",
+            "config_manifest_hash": HASH_A,
+        },
+        created_at=103,
+    )
+
+    result = cluster_sync_command._materialize_v7_configs(
+        root,
+        write=True,
+        instance_names={"target_inst"},
+    )
+
+    assert result["counts"]["written_instances"] == 1
+    assert (root.parent / "run_v7" / "target_inst" / "config.json").read_bytes() == b'{"live":{"user":"target"}}'
+    assert not (root.parent / "run_v7" / "missing_inst").exists()
+
+
 def test_materialize_v7_repairs_missing_local_blobs_from_existing_config(tmp_path: Path) -> None:
     """materialize-v7 rebuilds missing blobs from matching local run_v7 files."""
 

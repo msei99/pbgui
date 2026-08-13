@@ -262,8 +262,8 @@ class TestEnums:
 
     def test_exchanges_contains_all_supported(self):
         """All supported exchanges must be in the Exchanges enum."""
-        expected = {"binance", "bybit", "bitget", "gateio",
-                    "hyperliquid", "okx", "kucoin"}
+        expected = {"binance", "bybit", "bitget", "gateio", "hyperliquid",
+                    "okx", "kucoin", "bitunix", "weex"}
         assert set(Exchanges.list()) == expected
 
     def test_v7_exchanges(self):
@@ -272,10 +272,12 @@ class TestEnums:
         assert "hyperliquid" in result
         assert "gateio" in result
         assert "kucoin" in result
+        assert "bitunix" not in result
+        assert "weex" not in result
 
     def test_passphrase_exchanges(self):
         """Exchanges requiring a passphrase."""
-        assert set(Passphrase.list()) == {"bitget", "okx", "kucoin"}
+        assert set(Passphrase.list()) == {"bitget", "okx", "kucoin", "weex"}
 
     def test_enum_list_returns_strings(self):
         """All enum list() methods return lists of strings."""
@@ -323,6 +325,17 @@ class TestExchangeConstructor:
         """Every supported exchange can be instantiated without error."""
         ex = Exchange(exchange_id)
         assert ex.name == exchange_id
+
+    @pytest.mark.parametrize("exchange_id", ["bitunix", "weex"])
+    def test_pb8_native_exchanges_use_read_only_bridge(self, exchange_id):
+        """Bitunix and WEEX must not fall through to PBGui's local CCXT."""
+        from pb8_exchange_bridge import PB8ExchangeInstance
+
+        user = MagicMock()
+        ex = Exchange(exchange_id, user=user)
+        ex.connect()
+
+        assert isinstance(ex.instance, PB8ExchangeInstance)
 
 
 # ============================================================================

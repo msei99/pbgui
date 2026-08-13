@@ -828,7 +828,7 @@
      *   opts.fromControl, opts.toControl, opts.toNowControl — CUSTOM date controls
      *   opts.height        — chart height in px
      *   opts.displayModeBar, opts.responsive — Plotly options
-     *   opts.apiBase, opts.token — for delete/backup API calls
+     *   opts.apiBase — for same-origin cookie-authenticated delete/backup API calls
      *   opts.onReload      — callback to reload after delete/restore
      *   opts.users, opts.period, opts.lastN, opts.filterVal — static display values
      */
@@ -1362,10 +1362,7 @@
             var url = (opts.apiBase || '') + '/dashboard' + path;
             fetch(url, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + (opts.token || '')
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
             })
             .then(function (r) { return r.json(); })
@@ -1384,7 +1381,7 @@
             backupDiv.style.display = 'block';
             backupDiv.innerHTML = '<span style="color:#94a3b8;font-size:0.73rem;">Loading backups\u2026</span>';
             var url = (opts.apiBase || '') + '/dashboard/income/backups';
-            fetch(url, { headers: { 'Authorization': 'Bearer ' + (opts.token || '') } })
+            fetch(url)
             .then(function (r) { return r.json(); })
             .then(function (d) {
                 backupDiv.innerHTML = '';
@@ -1413,10 +1410,7 @@
                         var url2 = (opts.apiBase || '') + '/dashboard/income/restore';
                         fetch(url2, {
                             method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Authorization': 'Bearer ' + (opts.token || '')
-                            },
+                            headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ path: sel.value })
                         })
                         .then(function (r) { return r.json(); })
@@ -2139,7 +2133,7 @@
         titleSpan.textContent = 'Positions';
         hdr.appendChild(titleSpan);
 
-        if (opts.apiBase && opts.token) {
+        if (opts.apiBase) {
             var manageBtn = document.createElement('button');
             manageBtn.className = 'dp-manage-btn';
             manageBtn.type = 'button';
@@ -2342,9 +2336,7 @@
         function fetchFreshClosePrice(row, state, tr, amountInput, quoteInput) {
             if (!shouldLoadFreshClosePrice(row, state)) return;
             state.closePriceLoading = true;
-            fetch((opts.apiBase || '') + '/dashboard/positions/close_price?user=' + encodeURIComponent(row.user || '') + '&symbol=' + encodeURIComponent(row.symbol || '') + '&side=' + encodeURIComponent(row.side || ''), {
-                headers: { 'Authorization': 'Bearer ' + (opts.token || '') }
-            })
+            fetch((opts.apiBase || '') + '/dashboard/positions/close_price?user=' + encodeURIComponent(row.user || '') + '&symbol=' + encodeURIComponent(row.symbol || '') + '&side=' + encodeURIComponent(row.side || ''))
             .then(function (resp) {
                 return resp.json().then(function (data) {
                     if (!resp.ok) throw new Error(data && data.detail ? data.detail : resp.statusText);
@@ -2443,10 +2435,7 @@
             setStatus(statusEl, 'Working...', '');
             fetch((opts.apiBase || '') + '/dashboard/positions/manage', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + (opts.token || '')
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
             })
             .then(function (resp) {
@@ -2613,21 +2602,23 @@
 
         function updateManageRowControls(tr, row, state) {
             var isMarket = state.action === 'market_close';
+            var marketSupported = row.market_close_supported !== false;
+            var marketDisabled = isMarket && !marketSupported;
             var amountInput = tr.querySelector('.dp-manage-amount');
             var quoteInput = tr.querySelector('.dp-manage-quote');
             var quick = tr.querySelector('.dp-quick');
             var runBtn = tr.querySelector('.dp-row-run');
-            if (amountInput) amountInput.disabled = !isMarket;
-            if (quoteInput) quoteInput.disabled = !isMarket || Number(row && row.price || 0) <= 0;
-            if (quick) quick.style.visibility = isMarket ? 'visible' : 'hidden';
+            if (amountInput) amountInput.disabled = !isMarket || marketDisabled;
+            if (quoteInput) quoteInput.disabled = !isMarket || marketDisabled || Number(row && row.price || 0) <= 0;
+            if (quick) quick.style.visibility = isMarket && !marketDisabled ? 'visible' : 'hidden';
             if (runBtn) {
                 var minMessage = isMarket ? marketCloseMinMessage(row, state.amount, state) : '';
                 var modeClass = state.action === 'panic_symbol' ? ' danger' : (state.action === 'graceful_stop_symbol' ? ' warn' : (state.action === 'tp_only_symbol' ? ' ok' : ''));
                 var modeText = state.action === 'panic_symbol' ? 'Panic' : (state.action === 'graceful_stop_symbol' ? 'Graceful stop' : (state.action === 'tp_only_symbol' ? 'Take Profit Only' : ''));
-                runBtn.textContent = isMarket ? 'Market Close' : modeText;
+                runBtn.textContent = marketDisabled ? 'Unavailable' : (isMarket ? 'Market Close' : modeText);
                 runBtn.className = 'dp-row-run' + (isMarket ? ' danger' : modeClass);
-                runBtn.disabled = manageState.actionInFlight || !!minMessage || (isMarket && state.closePriceLoading);
-                runBtn.title = manageState.actionInFlight ? 'Another manage action is still running.' : (state.closePriceLoading ? 'Loading fresh close price...' : (minMessage || ''));
+                runBtn.disabled = manageState.actionInFlight || marketDisabled || !!minMessage || (isMarket && state.closePriceLoading);
+                runBtn.title = marketDisabled ? String(row.market_close_reason || 'Direct market close is unavailable for this exchange.') : (manageState.actionInFlight ? 'Another manage action is still running.' : (state.closePriceLoading ? 'Loading fresh close price...' : (minMessage || '')));
             }
         }
 
@@ -2727,6 +2718,10 @@
                         var opt = document.createElement('option');
                         opt.value = item[0];
                         opt.textContent = item[1];
+                        if (item[0] === 'market_close' && row.market_close_supported === false) {
+                            opt.disabled = true;
+                            opt.textContent += ' (unavailable)';
+                        }
                         if (state.action === item[0]) opt.selected = true;
                         actionSelect.appendChild(opt);
                     });
@@ -2825,6 +2820,10 @@
                             action: state.action
                         };
                         if (state.action === 'market_close') {
+                            if (currentRow.market_close_supported === false) {
+                                setStatus(manageState.status, currentRow.market_close_reason || 'Direct market close is unavailable for this exchange.', 'err');
+                                return;
+                            }
                             var amount = parseAmountValue(state.amount);
                             if (isNaN(amount) || amount <= 0) {
                                 setStatus(manageState.status, 'Enter an amount greater than zero.', 'err');
@@ -2851,7 +2850,7 @@
         }
 
         function openManageModal() {
-            if (!rows.length || !opts.apiBase || !opts.token) return;
+            if (!rows.length || !opts.apiBase) return;
             var old = document.getElementById('dp-manage-modal');
             if (old && old.parentNode) old.parentNode.removeChild(old);
             manageState.overlay = null;
@@ -2926,7 +2925,7 @@
 
             var note = document.createElement('div');
             note.className = 'dp-note';
-            note.textContent = 'Market close sends a direct reduce-only market order for the row amount. Panic, Graceful Stop and Take Profit Only actions save the Passivbot config and sync it. Use preview to inspect all-position configs without saving or syncing.';
+            note.textContent = 'Market close sends a direct reduce-only market order only for exchange contracts verified by PBGui; unavailable contracts remain visibly disabled. Panic, Graceful Stop and Take Profit Only actions save the Passivbot config and sync it. Use preview to inspect all-position configs without saving or syncing.';
             body.appendChild(note);
 
             var statusMsg = document.createElement('div');
@@ -4099,7 +4098,7 @@
     /* ──────────────────────────── Export ───────────────────────────────── */
 
     global.DashRender = {
-        VERSION:            '20260610l',
+        VERSION:            '20260812b',
         injectCSS:          injectCSS,
         tweColor:           tweColor,
         upnlColor:          upnlColor,

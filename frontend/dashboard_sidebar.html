@@ -240,7 +240,6 @@
 (function() {
   'use strict';
 
-  var TOKEN    = "%%TOKEN%%";
   var API_BASE = "%%API_BASE%%";
   var DASHBOARDS    = (%%DASHBOARDS%%).slice().sort(function(a,b){return a.toLowerCase().localeCompare(b.toLowerCase());});
   var CURRENT       = "%%CURRENT%%";
@@ -260,10 +259,7 @@
   function sendAction(action, params) {
     fetch(API_BASE + '/nav/request', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + TOKEN
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({action: action, params: params || {}})
     }).catch(function() {});
   }

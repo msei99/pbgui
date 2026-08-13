@@ -8,7 +8,172 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import User as user_module
+import pytest
+from fastapi import HTTPException
 from master.cluster_state import default_cluster_root, load_operations, read_local_identity, rebuild_materialized_state
+
+
+def test_weex_requires_passphrase_server_side(monkeypatch) -> None:
+    """WEEX credentials must fail closed even when a client bypasses the browser form."""
+    from api import api_keys
+
+    monkeypatch.setattr(api_keys, "_get_users", lambda: SimpleNamespace(find_user=lambda _name: None))
+    data = api_keys.UserCreateUpdate(exchange="weex", key="key", secret="secret")
+
+    with pytest.raises(HTTPException) as exc_info:
+        api_keys.create_user(name="weex-user", data=data, session=None)
+
+    assert exc_info.value.status_code == 400
+    assert "Passphrase is required for weex" in str(exc_info.value.detail)
+
+
+def test_bitunix_credentials_do_not_require_passphrase(monkeypatch) -> None:
+    """Bitunix uses key and secret only."""
+    from api import api_keys
+
+    stored = SimpleNamespace(users=[], find_user=lambda _name: None, save=lambda: None)
+    monkeypatch.setattr(api_keys, "_get_users", lambda: stored)
+    monkeypatch.setattr(api_keys, "delete_user_state", lambda _name: None)
+    data = api_keys.UserCreateUpdate(exchange="bitunix", key="key", secret="secret")
+
+    result = api_keys.create_user(name="bitunix-user", data=data, session=None)
+
+    assert result.exchange == "bitunix"
+    assert stored.users[0].passphrase is None
+
+
+def test_user_detail_never_contains_credential_values() -> None:
+    """Bulk and detail responses may expose presence, never stored credential material."""
+    from api import api_keys
+
+    user = SimpleNamespace(
+        name="alice",
+        exchange="weex",
+        key="public-key",
+        secret="secret-value",
+        passphrase="passphrase-value",
+        wallet_address=None,
+        private_key="private-value",
+        is_vault=False,
+        quote="USDT",
+        options=None,
+        extra=None,
+    )
+
+    detail = api_keys._user_to_detail(user, False)
+
+    assert detail.key is None
+    assert detail.key_masked == "********"
+    assert detail.secret_masked == "********"
+    assert detail.passphrase_masked == "********"
+    assert detail.private_key_masked == "********"
+    assert not any(value in str(detail) for value in (user.key, user.secret, user.passphrase, user.private_key))
+
+
+def test_api_key_reveal_is_post_only_no_store_and_private_fields_are_unavailable(monkeypatch) -> None:
+    """Only one explicitly selected API key may be revealed through a POST body."""
+    from api import api_keys
+
+    user = SimpleNamespace(key="public-key")
+    monkeypatch.setattr(api_keys, "_get_users", lambda: SimpleNamespace(find_user=lambda name: user if name == "alice" else None))
+    response = api_keys.Response()
+
+    result = api_keys.reveal_user_key(api_keys.UserKeyRevealRequest(name="alice"), response, session=None)
+
+    assert result == {"value": "public-key"}
+    assert response.headers["Cache-Control"] == "no-store"
+    reveal_routes = [route for route in api_keys.router.routes if "reveal" in route.path and route.path != "/tradfi/reveal"]
+    assert [(route.path, route.methods) for route in reveal_routes] == [("/reveal-key", {"POST"})]
+
+
+def test_api_key_backup_diff_redacts_all_credentials(monkeypatch, tmp_path: Path) -> None:
+    """Backup comparison may expose structure, never credential values."""
+    from api import api_keys
+
+    backup_dir = tmp_path / "data" / "api-keys"
+    backup_dir.mkdir(parents=True)
+    first = {
+        "alice": {"key": "first-public", "secret": "first-secret", "passphrase": "first-pass"},
+        "wallet": {"private_key": "first-private"},
+    }
+    second = {
+        "alice": {"key": "second-public", "secret": "second-secret", "passphrase": "second-pass"},
+        "wallet": {"private_key": "second-private"},
+    }
+    (backup_dir / "api-keys7_first.json").write_text(json.dumps(first), encoding="utf-8")
+    (backup_dir / "api-keys7_second.json").write_text(json.dumps(second), encoding="utf-8")
+    monkeypatch.setattr(api_keys, "_PBGDIR", str(tmp_path))
+    response = api_keys.Response()
+
+    result = api_keys.diff_backups(
+        api_keys.DiffRequest(filename1="api-keys7_first.json", filename2="api-keys7_second.json"),
+        response,
+        session=None,
+    )
+
+    rendered = "\n".join(result["lines1"] + result["lines2"])
+    for secret in (
+        "first-public", "first-secret", "first-pass", "first-private",
+        "second-public", "second-secret", "second-pass", "second-private",
+    ):
+        assert secret not in rendered
+    assert rendered.count("<redacted>") == 8
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_update_keeps_stored_api_key_when_detail_field_is_blank(monkeypatch) -> None:
+    """Masked detail editing must not erase an unchanged API key."""
+    from api import api_keys
+
+    user = SimpleNamespace(
+        name="alice", exchange="weex", key="stored-key", secret="stored-secret",
+        passphrase="stored-pass", wallet_address=None, private_key=None, is_vault=False,
+        quote="USDT", options=None, extra=None,
+    )
+    users = SimpleNamespace(find_user=lambda name: user if name == "alice" else None, save=lambda: None)
+    monkeypatch.setattr(api_keys, "_get_users", lambda: users)
+    monkeypatch.setattr(api_keys, "delete_user_state", lambda _name: None)
+    monkeypatch.setattr(api_keys, "_is_user_in_use", lambda _name: False)
+    data = api_keys.UserCreateUpdate(exchange="weex", key=None, secret=None, passphrase=None, quote="USDT")
+
+    api_keys.update_user(name="alice", data=data, session=None)
+
+    assert user.key == "stored-key"
+    assert user.secret == "stored-secret"
+    assert user.passphrase == "stored-pass"
+
+
+def test_exchange_change_requires_replacements_and_clears_irrelevant_credentials(monkeypatch) -> None:
+    """Credentials from one venue must never silently migrate to another venue."""
+    from api import api_keys
+
+    user = SimpleNamespace(
+        name="alice", exchange="weex", key="old-key", secret="old-secret",
+        passphrase="old-pass", wallet_address=None, private_key=None, is_vault=False,
+        quote="USDT", options=None, extra=None,
+    )
+    users = SimpleNamespace(find_user=lambda name: user if name == "alice" else None, save=lambda: None)
+    monkeypatch.setattr(api_keys, "_get_users", lambda: users)
+    monkeypatch.setattr(api_keys, "delete_user_state", lambda _name: None)
+    monkeypatch.setattr(api_keys, "_is_user_in_use", lambda _name: False)
+
+    with pytest.raises(HTTPException, match="API Key"):
+        api_keys.update_user(
+            name="alice",
+            data=api_keys.UserCreateUpdate(exchange="bitunix", key=None, secret=None),
+            session=None,
+        )
+
+    api_keys.update_user(
+        name="alice",
+        data=api_keys.UserCreateUpdate(exchange="bitunix", key="new-key", secret="new-secret"),
+        session=None,
+    )
+
+    assert user.key == "new-key"
+    assert user.secret == "new-secret"
+    assert user.passphrase is None
+    assert user.private_key is None
 
 
 def _blob_path(root: Path, base: str, blob_hash: str) -> Path:

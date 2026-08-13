@@ -11,6 +11,9 @@ You can build multi-widget layouts, combine data from multiple users, and rearra
 - If multiple dashboards exist, a **selectbox** appears — pick the dashboard you want.
 - All dashboards are listed as quick-access buttons in the sidebar.
 - Widgets refresh automatically in the background. Hit ↻ to force-reload immediately.
+- Bitunix and WEEX PB8 users use PB8's own read-only clients for wallet balance, positions, orders, prices/OHLCV, and fill-derived realised trade PnL. The clients run in isolated short-lived processes and are closed after every request; a bounded snapshot avoids duplicate account calls.
+- Bitunix funding income is not available from PB8 v8.1.0's connector, so its performance widgets currently cover fill-derived realised PnL and fees rather than claiming complete funding parity. Production acceptance still requires live read-only credentials for exchange response and pagination verification.
+- Direct **Market close** remains visible but disabled for Bitunix and WEEX until each exchange's hedge/one-way and close-order contract has been separately live-tested. Panic, Graceful Stop, and Take Profit Only remain available because they update Passivbot configuration rather than guessing exchange order parameters.
 
 ---
 

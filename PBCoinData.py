@@ -455,8 +455,8 @@ class CoinData:
         self.metadata = None
         self.data_ts = 0
         self.metadata_ts = 0
-        self._exchange = Exchanges.list()[0]
-        self.exchanges = Exchanges.list()
+        self._exchange = V7.list()[0]
+        self.exchanges = V7.list()
         self.exchange_index = self.exchanges.index(self.exchange)
         self.update_symbols_ts = 0
         self.update_mappings_ts = 0

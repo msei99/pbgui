@@ -3,6 +3,7 @@ import ccxt.pro as ccxt_pro
 from User import User
 from enum import Enum
 import json
+import hashlib
 from pathlib import Path
 import time
 from time import sleep
@@ -11,6 +12,24 @@ from pbgui_purefunc import PBGDIR
 from logging_helpers import human_log as _log
 
 SERVICE = "Exchange"
+
+
+def credential_fingerprint(user: User | None) -> str:
+    """Return a value-free generation key for one exchange credential set."""
+    if user is None:
+        return ""
+    payload = "\0".join(
+        str(value or "")
+        for value in (
+            getattr(user, "exchange", ""),
+            getattr(user, "key", ""),
+            getattr(user, "secret", ""),
+            getattr(user, "passphrase", ""),
+            getattr(user, "wallet_address", ""),
+            getattr(user, "private_key", ""),
+        )
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 from ccxt.base.errors import (
     AuthenticationError,
@@ -263,6 +282,8 @@ class Exchanges(Enum):
     HYPERLIQUID = 'hyperliquid'
     OKX = 'okx'
     KUCOIN = 'kucoin'
+    BITUNIX = 'bitunix'
+    WEEX = 'weex'
 
     @staticmethod
     def list():
@@ -285,6 +306,7 @@ class Passphrase(Enum):
     BITGET = 'bitget'
     OKX = 'okx'
     KUCOIN = 'kucoin'
+    WEEX = 'weex'
 
     @staticmethod
     def list():
@@ -312,6 +334,7 @@ class Exchange:
         self.instance = None
         self._markets = None
         self._user = user
+        self.credential_fingerprint = credential_fingerprint(user)
 
 
     # _log removed: Exchange module uses `logging_helpers.human_log` directly
@@ -325,6 +348,10 @@ class Exchange:
             self._user = new_user
 
     def connect(self):
+        if self.id in {"bitunix", "weex"}:
+            from pb8_exchange_bridge import PB8ExchangeInstance
+            self.instance = PB8ExchangeInstance(self.id, self.user)
+            return
         # Create a ccxt sync instance and apply sensible defaults for timeouts
         self.instance = getattr(ccxt, self.id) ()
         try:
@@ -1013,6 +1040,8 @@ class Exchange:
         try:
             balance = self.instance.fetch_balance(params = {"type": market_type})
         except Exception as e:
+            if self.id in {"bitunix", "weex"}:
+                raise
             return e
         if self.id == "hyperliquid":
             return float(balance["total"]["USDC"])
@@ -1053,6 +1082,8 @@ class Exchange:
         all_histories = []
         all = []
         if not self.instance: self.connect()
+        if self.id in {"bitunix", "weex"}:
+            return self.instance.fetch_income(since=since)
         if self.id == "bybit":
             day = 24 * 60 * 60 * 1000
             week = 7 * day
@@ -1571,6 +1602,9 @@ class Exchange:
             return []
         if not self.instance:
             self.connect()
+
+        if self.id in {"bitunix", "weex"}:
+            return self.instance.fetch_executions(since=since)
 
         if self.id == "hyperliquid":
             day = 24 * 60 * 60 * 1000

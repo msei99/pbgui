@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -49,7 +50,11 @@ def test_optimize_and_queue_drafts_round_trip_isolated_copies() -> None:
         session=None,
     )["draft_id"]
     queue_payload = backtest_v8.get_queue_draft(queue_id, session=None)
-    assert queue_payload["items"] == [{"name": "candidate", "config": optimize_payload["config"]}]
+    assert queue_payload["items"] == [{
+        "name": "candidate",
+        "config": optimize_payload["config"],
+        "override_configs": {},
+    }]
 
     with pytest.raises(HTTPException) as error:
         backtest_v8.create_queue_draft({"items": []}, session=None)
@@ -405,6 +410,8 @@ def test_failed_migration_publishes_no_v8_config(tmp_path, monkeypatch) -> None:
         )
 
     assert error.value.status_code == 422
+    assert error.value.detail["code"] == "migration_manual_review"
+    assert error.value.detail["report"]["manual_review_fields"] == ["bot.long.example"]
     assert not (configs / "demo_v8").exists()
     assert not list(configs.glob(".migrate-*"))
 
@@ -462,12 +469,13 @@ def test_bundle_save_publishes_new_sparse_override_with_config(tmp_path, monkeyp
     configs, _v7_configs, _queue, _logs = _patch_roots(tmp_path, monkeypatch)
     monkeypatch.setattr(backtest_v8, "prepare_pb8_config", lambda config, **_kwargs: config)
     monkeypatch.setattr(backtest_v8, "cache_prepared_pb8_config", lambda *_args: None)
+    monkeypatch.setattr(backtest_v8, "validate_pb8_override_bundle", lambda *_args: None)
     config = {
         "config_version": "v8.0.0",
         "backtest": {},
         "coin_overrides": {"HYPE": {"override_config_path": "HYPE.json"}},
     }
-    sparse = {"bot": {"long": {"risk": {"n_positions": 3}}}}
+    sparse = {"bot": {"long": {"risk": {"entry_cooldown_minutes": 3}}}}
 
     result = backtest_v8.save_config(
         "demo",
@@ -601,6 +609,7 @@ def test_add_to_queue_captures_v8_config_snapshot(tmp_path, monkeypatch) -> None
         "save_prepared_pb8_config",
         lambda config, path: Path(path).write_text(json.dumps(config), encoding="utf-8") or config,
     )
+    monkeypatch.setattr(backtest_v8, "validate_pb8_override_bundle", lambda _path: None)
 
     response = backtest_v8.add_to_queue({"name": "demo"}, session=None)
 
@@ -660,6 +669,9 @@ def test_worker_launches_pb8_cli_with_queue_snapshot(tmp_path, monkeypatch) -> N
     def fake_popen(command, **kwargs):
         captured["command"] = command
         captured["cwd"] = kwargs["cwd"]
+        ownership = Path(command[4])
+        ownership.parent.mkdir(parents=True, exist_ok=True)
+        ownership.write_text(json.dumps({"pid": 4248, "create_time": 123.0}), encoding="utf-8")
         ready = Path(command[5])
         ready.parent.mkdir(parents=True, exist_ok=True)
         ready.write_text("4248\n", encoding="utf-8")
@@ -687,6 +699,7 @@ def test_worker_launches_pb8_cli_with_queue_snapshot(tmp_path, monkeypatch) -> N
     monkeypatch.setattr(backtest_v8, "load_ini_section", lambda _section: {"use_pbgui_market_data": "True"})
     monkeypatch.setattr(backtest_v8, "_get_pbgui_market_data_path", lambda: str(tmp_path / "market-data"))
     monkeypatch.setattr(backtest_v8, "rotate_managed_log_before_open", lambda *_args: None)
+    monkeypatch.setattr(backtest_v8, "_systemd_user_manager_available", lambda: False)
     monkeypatch.setattr(backtest_v8.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(backtest_v8.psutil, "Process", lambda _pid: type("Proc", (), {"create_time": lambda self: 123.0})())
     monkeypatch.setattr(backtest_v8, "_log", lambda *_args, **_kwargs: None)
@@ -705,6 +718,34 @@ def test_worker_launches_pb8_cli_with_queue_snapshot(tmp_path, monkeypatch) -> N
     assert saved_queue["pb8_commit"] == "abc123"
     assert json.loads(snapshot_path.read_text(encoding="utf-8"))["backtest"]["ohlcv_source_dir"] == str(tmp_path / "market-data")
     assert saved_queue["config_snapshot"]["backtest"].get("ohlcv_source_dir") is None
+
+
+def test_linux_backtest_uses_separate_transient_systemd_unit(tmp_path, monkeypatch) -> None:
+    """A PB8 backtest must leave the API service cgroup so API restarts cannot stop it."""
+    _configs, _v7_configs, _queue, logs = _patch_roots(tmp_path, monkeypatch)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(backtest_v8, "_systemd_user_manager_available", lambda: True)
+    monkeypatch.setattr(backtest_v8, "which", lambda _name: "/usr/bin/systemd-run")
+    monkeypatch.setattr(backtest_v8.subprocess, "run", fake_run)
+    log_path = logs / "persistent-job.log"
+    log_path.parent.mkdir(parents=True)
+    command = ["/venv/bin/python", "/pbgui/pb8_backtest_runner.py", "backtest"]
+
+    process = backtest_v8._launch_backtest_runner("persistent-job", command, Path("/pb8"), log_path)
+
+    assert process is None
+    launched, kwargs = calls[0]
+    assert launched[:4] == ["/usr/bin/systemd-run", "--user", "--quiet", "--collect"]
+    assert any(part.startswith("--unit=pbgui-pb8-backtest-persistent-job-") for part in launched)
+    assert "--property=Type=exec" in launched
+    assert f"--property=StandardOutput=append:{log_path}" in launched
+    assert launched[-3:] == command
+    assert kwargs["timeout"] == 15
 
 
 def test_worker_leaves_backtest_queued_while_pb8_update_lock_is_held(tmp_path, monkeypatch) -> None:
@@ -960,16 +1001,17 @@ def test_result_files_include_nested_plots_without_allowing_traversal(tmp_path, 
 
 def test_override_param_metadata_preserves_v8_leaf_types(monkeypatch) -> None:
     """Shared override controls receive enough type data for booleans and strings."""
-    monkeypatch.setattr(
-        backtest_v8,
-        "get_pb8_template_config",
-        lambda: {
-            "bot": {"long": {"hsl": {"enabled": False, "restart_after_red_policy": "threshold"}}, "short": {}},
-            "live": {"leverage": 10},
+    monkeypatch.setattr(backtest_v8, "get_pb8_coin_override_metadata", lambda mode, strategy: {
+        "contract_version": 1,
+        "hsl_signal_mode": mode,
+        "strategy_kind": strategy,
+        "params": {
+            "bot": {"long": {"hsl.enabled": {"type": "boolean", "default": False}, "hsl.restart_after_red_policy": {"type": "string", "default": "threshold"}}, "short": {}},
+            "live": {"leverage": {"type": "number", "default": 10}},
         },
-    )
+    })
 
-    params = backtest_v8.get_override_params(session=None)["params"]
+    params = backtest_v8.get_override_params("coin", "trailing_martingale", session=None)["params"]
 
     assert params["bot"]["long"]["hsl.enabled"] == {"type": "boolean", "default": False}
     assert params["bot"]["long"]["hsl.restart_after_red_policy"] == {"type": "string", "default": "threshold"}
@@ -1021,6 +1063,9 @@ def test_second_start_cannot_launch_same_queue_item_twice(tmp_path, monkeypatch)
 
     def fake_popen(command, **_kwargs):
         launches.append(command)
+        ownership = Path(command[4])
+        ownership.parent.mkdir(parents=True, exist_ok=True)
+        ownership.write_text(json.dumps({"pid": 4250, "create_time": 123.0}), encoding="utf-8")
         ready = Path(command[5])
         ready.parent.mkdir(parents=True, exist_ok=True)
         ready.write_text("4250\n", encoding="utf-8")
@@ -1046,6 +1091,7 @@ def test_second_start_cannot_launch_same_queue_item_twice(tmp_path, monkeypatch)
     )
     monkeypatch.setattr(backtest_v8, "_runtime_commit", lambda _path: "abc123")
     monkeypatch.setattr(backtest_v8, "rotate_managed_log_before_open", lambda *_args: None)
+    monkeypatch.setattr(backtest_v8, "_systemd_user_manager_available", lambda: False)
     monkeypatch.setattr(backtest_v8.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(backtest_v8.psutil, "Process", FakePsutilProcess)
     monkeypatch.setattr(backtest_v8, "_log", lambda *_args, **_kwargs: None)
@@ -1078,6 +1124,7 @@ def test_backtest_settings_share_the_pb7_configuration(monkeypatch) -> None:
         else pytest.fail(f"Unexpected settings section: {section}"),
     )
     monkeypatch.setattr(backtest_v8, "save_ini_section", lambda section, values: saved.update(section=section, values=values))
+    monkeypatch.setattr(backtest_v8, "get_pb8_exchange_metadata", lambda: {"backtest": ["binance", "weex"]})
 
     settings = backtest_v8.get_settings(None)
     assert settings == {
@@ -1086,6 +1133,7 @@ def test_backtest_settings_share_the_pb7_configuration(monkeypatch) -> None:
         "cpu_max": 16,
         "use_pbgui_market_data": True,
         "hsl_signal_modes": ["coin", "pside", "unified"],
+        "exchange_options": ["binance", "weex"],
         "hlcvs_cleanup_enabled": True,
         "hlcvs_cleanup_days": 9,
         "hlcvs_cleanup_interval_h": 12,

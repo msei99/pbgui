@@ -14,6 +14,7 @@ import csv
 import datetime
 import glob
 import gzip
+import hashlib
 import io
 import json
 import math
@@ -487,16 +488,22 @@ def _archived_backtest_version(result_dir: Path, archive_dir: Path) -> str:
     return config_version_info(config)["backtest_version"]
 
 
-def _load_archived_backtest_config(result_dir: Path, archive_dir: Path) -> tuple[dict, str]:
-    """Load an archived backtest config through its owning generation adapter."""
+def _load_archived_backtest_config(result_dir: Path, archive_dir: Path) -> tuple[dict, str, dict[str, dict]]:
+    """Load an archived backtest config and its generation-owned sparse overrides."""
     version = _archived_backtest_version(result_dir, archive_dir)
     config_file = result_dir / "config.json"
     try:
         if version == "v8":
+            from api import backtest_v8
             from pb8_config import load_pb8_config
 
-            return load_pb8_config(config_file), version
-        return load_pb7_config(config_file, neutralize_added=True), version
+            config = load_pb8_config(config_file)
+            overrides = {
+                filename: _read_json_object_nofollow(result_dir / filename, archive_dir, required=True)
+                for filename in backtest_v8._override_filenames(config)
+            }
+            return config, version, overrides
+        return load_pb7_config(config_file, neutralize_added=True), version, {}
     except Exception as exc:
         raise HTTPException(422, f"Invalid {version.upper()} backtest config: {exc}") from exc
 
@@ -749,7 +756,7 @@ def _queue_archive_retest_run(
     schedule_id: str | None = None,
     schedule_target_id: str | None = None,
 ) -> dict:
-    cfg, backtest_version = _load_archived_backtest_config(result_dir, archive_dir)
+    cfg, backtest_version, override_configs = _load_archived_backtest_config(result_dir, archive_dir)
     run_id = uuid.uuid4().hex
     source_relative_path = result_dir.resolve().relative_to(archive_dir.resolve()).as_posix()
     archive_config_name = _archive_retest_config_name(result_dir, cfg)
@@ -783,6 +790,7 @@ def _queue_archive_retest_run(
             {
                 "name": queue_name,
                 "config": cfg,
+                "override_configs": override_configs,
                 "use_pbgui_market_data": bool(options.get("use_pbgui_market_data", False)),
             },
             session=None,
@@ -4534,12 +4542,52 @@ def _add_optimize_config_to_archive_sync(
         archive_dir = _require_own_archive(name, "Adding Optimize configs")
         version = _normalize_archive_version(version, default="v7") or "v7"
         cfg = _load_local_optimize_config(config_name, version)
+        override_payloads = {}
+        if version == "v8":
+            from api import optimize_v8
+
+            override_payloads = optimize_v8._load_override_payloads(
+                cfg,
+                optimize_v8._config_dir(config_name),
+            )
+            if override_payloads:
+                cfg = copy.deepcopy(cfg)
+                cfg.setdefault("pbgui", {})["archive_override_fingerprint"] = hashlib.sha256(
+                    json.dumps(override_payloads, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                ).hexdigest()
         _log(SERVICE, f"Archiving {version.upper()} optimize config {config_name} to archive {name}", level="INFO")
         migration = maybe_migrate_own_archive(name, archive_dir, _own_archive_name())
         dest, meta, skipped = resolve_optimize_archive_destination(archive_dir, config_name, cfg)
         metadata_repaired = False
         if not skipped:
-            write_archive_json(dest, cfg, archive_dir)
+            legacy_temp = dest.with_suffix(dest.suffix + ".tmp")
+            if legacy_temp.is_symlink():
+                raise RuntimeError(f"Archive temporary path must not be a symlink: {legacy_temp}")
+            stage_root = archive_dir / ".pbgui-stage" / uuid.uuid4().hex
+            stage_root.mkdir(parents=True)
+            staged_config = stage_root / dest.relative_to(archive_dir)
+            staged_overrides = staged_config.parent / f"{staged_config.stem}.overrides"
+            try:
+                write_archive_json(staged_config, cfg, stage_root)
+                for filename, payload in override_payloads.items():
+                    write_archive_json(staged_overrides / filename, payload, stage_root)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if override_payloads:
+                    final_overrides = dest.parent / f"{dest.stem}.overrides"
+                    if final_overrides.exists():
+                        if dest.exists() or final_overrides.is_symlink() or not final_overrides.is_dir():
+                            raise RuntimeError(f"Archive override destination already exists: {final_overrides}")
+                        shutil.rmtree(final_overrides)
+                    os.replace(staged_overrides, final_overrides)
+                os.replace(staged_config, dest)
+            except Exception:
+                final_overrides = dest.parent / f"{dest.stem}.overrides"
+                if final_overrides.exists() and final_overrides.is_dir() and not final_overrides.is_symlink():
+                    shutil.rmtree(final_overrides, ignore_errors=True)
+                dest.unlink(missing_ok=True)
+                raise
+            finally:
+                shutil.rmtree(stage_root, ignore_errors=True)
         meta_path = dest.with_name(dest.stem + ".meta.json")
         if skipped and meta_path.exists() and not meta_path.is_symlink():
             existing_meta = load_json_file(meta_path)
@@ -4653,6 +4701,16 @@ def import_archive_optimize_config(name: str, body: dict, session: SessionToken 
         snapshot_path = ""
         try:
             raw_cfg = _read_json_object_nofollow(source_file, archive_dir, required=True)
+            archived_overrides = {}
+            if version == "v8":
+                from api import optimize_v8
+
+                for filename in optimize_v8._override_filenames(raw_cfg):
+                    archived_overrides[filename] = _read_json_object_nofollow(
+                        source_file.parent / f"{source_file.stem}.overrides" / filename,
+                        archive_dir,
+                        required=True,
+                    )
             with tempfile.NamedTemporaryFile(
                 mode="w",
                 encoding="utf-8",
@@ -4707,7 +4765,12 @@ def import_archive_optimize_config(name: str, body: dict, session: SessionToken 
             else:
                 collision_action = "overwrite"
         if version == "v8":
-            optimize_v8._save_config_bundle(import_name, cfg, create_only=collision_action != "overwrite")
+            optimize_v8._save_config_bundle(
+                import_name,
+                cfg,
+                create_only=collision_action != "overwrite",
+                override_payloads=archived_overrides,
+            )
         else:
             cfg = _normalize_backtest_base_dir(cfg, import_name)
             save_pb7_config(cfg, target_file)
@@ -4739,7 +4802,13 @@ def delete_archive_optimize_config(
             raise HTTPException(409, f"Optimize config belongs to {metadata['optimize_version'].upper()}")
         meta_file = config_file.with_name(config_file.stem + ".meta.json")
         try:
+            override_dir = config_file.parent / f"{config_file.stem}.overrides"
+            if override_dir.exists():
+                if override_dir.is_symlink() or not override_dir.is_dir() or not is_inside_archive(override_dir, archive_dir):
+                    raise HTTPException(400, "Invalid archived optimize override directory")
             config_file.unlink()
+            if override_dir.exists():
+                shutil.rmtree(override_dir)
             if meta_file.exists() and meta_file.is_file() and is_inside_archive(meta_file, archive_dir):
                 meta_file.unlink()
             cleanup_empty_parents(config_file, archive_dir)
@@ -4773,7 +4842,7 @@ def rebacktest_archive_results(name: str, body: dict, session: SessionToken = De
         result_dir = Path(str(raw_path))
         if not is_inside_archive(result_dir, archive_dir):
             raise HTTPException(400, "Invalid result path")
-        base_cfg, backtest_version = _load_archived_backtest_config(result_dir, archive_dir)
+        base_cfg, backtest_version, override_configs = _load_archived_backtest_config(result_dir, archive_dir)
         for exchange in exchange_runs:
             cfg = copy.deepcopy(base_cfg)
             backtest = cfg.setdefault("backtest", {})
@@ -4796,6 +4865,7 @@ def rebacktest_archive_results(name: str, body: dict, session: SessionToken = De
             if backtest_version == "v8":
                 from api import backtest_v8
 
+                queue_body["override_configs"] = override_configs
                 queued = backtest_v8.add_to_queue(queue_body, session=None)
             else:
                 queued = add_to_queue(queue_body, session=session)

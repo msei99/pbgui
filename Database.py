@@ -444,7 +444,7 @@ class Database():
         exchange = Exchange(user.exchange, user)
 
         # Only fetch executions for exchanges where we have explicit support.
-        if exchange.id not in ('hyperliquid', 'binance', 'bitget', 'bybit', 'kucoinfutures', 'okx', 'gateio'):
+        if exchange.id not in ('hyperliquid', 'binance', 'bitget', 'bybit', 'kucoinfutures', 'okx', 'gateio', 'bitunix', 'weex'):
             return None
 
         since = None
@@ -551,6 +551,13 @@ class Database():
                         since = max(0, now_ms - 365 * day)
             except Exception:
                 pass
+
+        if exchange.id in {'bitunix', 'weex'} and now_ms is not None and since is None:
+            try:
+                days = int(initial_lookback_days) if initial_lookback_days is not None else 30
+                since = max(0, now_ms - days * day)
+            except Exception:
+                since = max(0, now_ms - 30 * day)
 
         _human_log(SERVICE, f"fetch_executions: user={user.name} exchange={exchange.id} since={since}", level='INFO', user=user.name)
         start_ts = time.time()
@@ -746,6 +753,7 @@ class Database():
         _owns_exchange = _exchange is None
         exchange = _exchange or Exchange(user.exchange, user)
         all_orders = []
+        fetch_failed = False
         try:
             for position in positions_db:
                 try:
@@ -753,15 +761,20 @@ class Database():
                     orders = exchange.fetch_all_open_orders(position[1][0:-4] + f"/{stable_coin}:{stable_coin}")
                     # If fetch returns None or an exception-like value, skip
                     if orders is None:
-                        continue
+                        fetch_failed = True
+                        break
                     all_orders.extend(orders)
                 except Exception as e:
                     # Fetch failed (possibly rate limit) — log and skip this position
                     _human_log(SERVICE, f"DB update_orders fetch_all_open_orders failed for {user.name} pos={position[1]}: {e}", level='WARNING', user=user.name)
-                    continue
+                    fetch_failed = True
+                    break
         finally:
             if _owns_exchange:
                 exchange.close()  # Release aiohttp resources
+        if fetch_failed:
+            _human_log(SERVICE, f"DB update_orders aborting without mutation for {user.name}: incomplete exchange snapshot", level='WARNING', user=user.name)
+            return
         # Existing order IDs in DB (uniqueid column); use a set to avoid
         # inserting duplicates even if the DB uniqueness constraint is
         # missing or was added after the table was first created.

@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
-<script src="/app/js/optimize_editor_adapter.js?v=9"></script>
+<script src="/app/js/optimize_editor_adapter.js?v=10"></script>
 <style>
 :root {
   --bg: #0e1117;
@@ -470,6 +470,20 @@ button, input, textarea, select { font: inherit; }
 .limits-table-scoring col.col-metric { width: 62%; }
 .limits-table-scoring col.col-goal { width: 16%; }
 .limits-table-scoring col.col-actions { width: 22%; }
+
+.limits-table-limits.pb8-scenario-table col.col-metric { width: 24%; }
+.limits-table-limits.pb8-scenario-table col.col-penalize { width: 13%; }
+.limits-table-limits.pb8-scenario-table col.col-scenario { width: 17%; }
+.limits-table-limits.pb8-scenario-table col.col-stat { width: 8%; }
+.limits-table-limits.pb8-scenario-table col.col-value { width: 17%; }
+.limits-table-limits.pb8-scenario-table col.col-enabled { width: 7%; }
+.limits-table-limits.pb8-scenario-table col.col-actions { width: 14%; }
+
+.limits-table-scoring.pb8-scenario-table col.col-metric { width: 36%; }
+.limits-table-scoring.pb8-scenario-table col.col-goal { width: 10%; }
+.limits-table-scoring.pb8-scenario-table col.col-scenario { width: 20%; }
+.limits-table-scoring.pb8-scenario-table col.col-aggregate { width: 14%; }
+.limits-table-scoring.pb8-scenario-table col.col-actions { width: 20%; }
 
 .runtime-overrides-table col.col-key { width: 42%; }
 .runtime-overrides-table col.col-value { width: 44%; }
@@ -2537,7 +2551,7 @@ textarea.json-invalid:focus {
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=13"></script>
-<script src="/app/js/suite_editor.js?v=8"></script>
+<script src="/app/js/suite_editor.js?v=10"></script>
 <script src="/app/js/log_viewer_panel.js?v=29"></script>
 <script src="/app/js/pbgui_dialogs.js?v=5"></script>
 <script>
@@ -2569,6 +2583,7 @@ var state = {
     cpu_max: 1,
     host_cpu_count: 1,
     hsl_signal_modes: [],
+    exchange_options: [],
     optimize_backend_options: [],
     optimize_backend_default: 'pymoo',
     pymoo_algorithm_options: [],
@@ -2625,6 +2640,7 @@ var state = {
   editorDraftName: '',
   editorBackendHint: '',
   editorLastConfig: null,
+  editorOverrideConfigs: {},
   importConfigSource: 'local',
   importArchives: [],
   importArchiveConfigs: [],
@@ -2877,6 +2893,12 @@ function fieldText2(id, label, value, editable, placeholder, tip, span) {
     (placeholder ? ' placeholder="' + esc(placeholder) + '"' : '') + '>', tip, span || 1);
 }
 
+function toggleOptimizeObjectiveScenarioInput() {
+  var mode = el('opted-objective-scenario-mode');
+  var wrap = el('opted-objective-scenario-name-wrap');
+  if (wrap) wrap.style.display = mode && mode.value === 'named' ? '' : 'none';
+}
+
 function normalizeLimitsMeta(raw) {
   var meta = raw && typeof raw === 'object' ? raw : {};
   var metricsByGroup = meta.metrics_by_group && typeof meta.metrics_by_group === 'object'
@@ -3092,13 +3114,21 @@ function normalizeLimitEntry(rawEntry) {
   var penalizeIf = rawEntry.penalize_if == null && !enabled
     ? 'greater_than'
     : normalizeLimitPenalizeIf(rawEntry.penalize_if);
-  var normalized = {
+  var normalized = optimizeEditorAdapter.isV8 ? Object.assign({}, rawEntry) : {};
+  delete normalized.stat;
+  delete normalized.scenario;
+  delete normalized.range;
+  delete normalized.value;
+  normalized = Object.assign(normalized, {
     metric: metric,
-    penalize_if: penalizeIf,
-    enabled: enabled
-  };
+    penalize_if: penalizeIf
+  });
+  if (Object.prototype.hasOwnProperty.call(rawEntry, 'enabled')) normalized.enabled = enabled;
   if (rawEntry.stat != null && String(rawEntry.stat).trim() !== '') {
     normalized.stat = String(rawEntry.stat).trim().toLowerCase();
+  }
+  if (optimizeEditorAdapter.isV8 && Object.prototype.hasOwnProperty.call(rawEntry, 'scenario')) {
+    normalized.scenario = rawEntry.scenario == null ? null : String(rawEntry.scenario).trim();
   }
   if (isLimitRangePenalize(penalizeIf)) {
     var range = Array.isArray(rawEntry.range) ? rawEntry.range : [0, 1];
@@ -3147,6 +3177,8 @@ function defaultLimitForm(metricType) {
     currency: 'usd',
     enabled: true,
     penalize_if: 'greater_than',
+    scenario_mode: 'inherit',
+    scenario_name: '',
     stat: '',
     value: 0,
     range_low: 0,
@@ -3156,6 +3188,7 @@ function defaultLimitForm(metricType) {
 
 function normalizeLimitForm(rawForm) {
   var meta = currentLimitsMeta();
+  var isV8 = typeof optimizeEditorAdapter !== 'undefined' && optimizeEditorAdapter.isV8;
   var form = Object.assign({}, rawForm || {});
   var metricType = meta.type_options.indexOf(form.metric_type) >= 0 ? form.metric_type : 'all';
   var metricOptions = limitMetricOptions(metricType, form.base_metric);
@@ -3168,12 +3201,18 @@ function normalizeLimitForm(rawForm) {
   if (stat !== '' && meta.stat_options.indexOf(stat) < 0) {
     meta.stat_options = uniqStrings(meta.stat_options.concat([stat]));
   }
+  var scenarioMode = ['inherit', 'aggregate', 'named'].indexOf(form.scenario_mode) >= 0
+    ? form.scenario_mode
+    : 'inherit';
   return {
+    _source_entry: form._source_entry,
     metric_type: metricType,
     base_metric: baseMetric,
     currency: currency,
     enabled: form.enabled == null ? true : !!form.enabled,
     penalize_if: penalizeIf,
+    scenario_mode: isV8 ? scenarioMode : 'inherit',
+    scenario_name: isV8 ? String(form.scenario_name || '').trim() : '',
     stat: stat,
     value: normalizeLimitNumber(form.value, 0),
     range_low: normalizeLimitNumber(form.range_low, 0),
@@ -3184,12 +3223,16 @@ function normalizeLimitForm(rawForm) {
 function limitEntryToForm(entry) {
   var normalized = normalizeLimitEntry(entry) || { metric: '', penalize_if: 'greater_than', value: 0 };
   var split = splitLimitMetricName(normalized.metric);
+  var hasScenario = Object.prototype.hasOwnProperty.call(normalized, 'scenario');
   return normalizeLimitForm({
+    _source_entry: normalized,
     metric_type: (typeof getMetricGroupFromMeta === 'function' ? getMetricGroupFromMeta(split.base_metric) : 'all') || 'all',
     base_metric: split.base_metric,
     currency: split.currency || 'usd',
     enabled: normalized.enabled !== false,
     penalize_if: normalized.penalize_if,
+    scenario_mode: !hasScenario ? 'inherit' : (normalized.scenario == null ? 'aggregate' : 'named'),
+    scenario_name: normalized.scenario == null ? '' : normalized.scenario,
     stat: normalized.stat || '',
     value: normalized.value,
     range_low: normalized.range ? normalized.range[0] : 0,
@@ -3200,11 +3243,28 @@ function limitEntryToForm(entry) {
 function buildLimitEntryFromForm(rawForm) {
   var form = normalizeLimitForm(rawForm);
   if (!form.base_metric) throw new Error('Select a metric for the limit.');
-  var entry = {
+  var entry = Object.assign({}, form._source_entry || {}, {
     metric: buildLimitMetricName(form.base_metric, form.currency),
-    penalize_if: form.penalize_if,
-    enabled: form.enabled !== false
-  };
+    penalize_if: form.penalize_if
+  });
+  if (!form._source_entry || Object.prototype.hasOwnProperty.call(form._source_entry, 'enabled')) {
+    entry.enabled = form.enabled !== false;
+  } else {
+    delete entry.enabled;
+  }
+  delete entry.scenario;
+  delete entry.stat;
+  delete entry.range;
+  delete entry.value;
+  if (optimizeEditorAdapter.isV8) {
+    if (form.scenario_mode === 'aggregate') {
+      entry.scenario = null;
+    } else if (form.scenario_mode === 'named') {
+      if (!form.scenario_name) throw new Error('Enter a named scenario for the limit.');
+      if (form.stat) throw new Error('A named limit scenario cannot also use Stat.');
+      entry.scenario = form.scenario_name;
+    }
+  }
   if (form.stat) entry.stat = form.stat;
   if (isLimitRangePenalize(form.penalize_if)) {
     if (form.range_high < form.range_low) throw new Error('Range Low must be less than or equal to Range High.');
@@ -3258,6 +3318,31 @@ function renderInlineSelectControl(options, selectedValue, onChange, defaultLabe
 
 function renderInlineNumberInput(value, onChange) {
   return '<input type="text" class="limits-number-input" inputmode="decimal" autocomplete="off" value="' + escAttr(String(value == null ? '' : value)) + '" oninput="' + onChange + '">';
+}
+
+function renderInlineTextInput(value, onChange, placeholder) {
+  return '<input type="text" autocomplete="off" value="' + escAttr(String(value == null ? '' : value)) + '" placeholder="' + escAttr(placeholder || '') + '" oninput="' + onChange + '">';
+}
+
+function renderScenarioEditor(form, updateFnName, inheritsObjectiveScenario) {
+  var options = [
+    { value: 'inherit', label: inheritsObjectiveScenario ? 'inherit objective scenario' : 'suite aggregate (omitted)' },
+    { value: 'aggregate', label: 'suite aggregate (explicit null)' },
+    { value: 'named', label: 'named' }
+  ];
+  var html = '<div class="limits-inline-stack">'
+    + renderInlineSelectControl(options, form.scenario_mode, updateFnName + "('scenario_mode', this.value)");
+  if (form.scenario_mode === 'named') {
+    html += renderInlineTextInput(form.scenario_name, updateFnName + "('scenario_name', this.value)", 'scenario label');
+  }
+  return html + '</div>';
+}
+
+function formatScenarioSelection(entry, inheritsObjectiveScenario) {
+  if (!Object.prototype.hasOwnProperty.call(entry || {}, 'scenario')) {
+    return inheritsObjectiveScenario ? 'inherit objective scenario' : 'suite aggregate (omitted)';
+  }
+  return entry.scenario == null ? 'suite aggregate (explicit null)' : String(entry.scenario);
 }
 
 function renderInlineMetricEditor(form, updateFnName) {
@@ -3364,7 +3449,7 @@ function updateLimitAddField(field, value) {
   var next = Object.assign({}, state.limitAddForm || defaultLimitForm());
   next[field] = value;
   state.limitAddForm = isLimitNumberFormField(field) ? next : normalizeLimitForm(next);
-  if (!isLimitNumberFormField(field)) renderOptimizeLimitsEditor();
+  if (!isLimitNumberFormField(field) && field !== 'scenario_name') renderOptimizeLimitsEditor();
 }
 
 function startLimitAdd() {
@@ -3386,7 +3471,7 @@ function updateLimitEditField(field, value) {
   var next = Object.assign({}, state.limitEditForm || defaultLimitForm());
   next[field] = value;
   state.limitEditForm = isLimitNumberFormField(field) ? next : normalizeLimitForm(next);
-  if (!isLimitNumberFormField(field)) renderOptimizeLimitsEditor();
+  if (!isLimitNumberFormField(field) && field !== 'scenario_name') renderOptimizeLimitsEditor();
 }
 
 function startLimitEdit(index) {
@@ -3563,12 +3648,13 @@ function renderOptimizeLimitsEditor() {
   var statOptions = meta.stat_options.map(function(value) {
     return { value: String(value), label: value === '' ? 'default' : String(value) };
   });
+  var isV8 = optimizeEditorAdapter.isV8;
 
   if (entries.length) {
-    html += '<div class="limits-table-wrap"><table class="limits-table limits-table-limits"><colgroup>'
-      + '<col class="col-metric"><col class="col-penalize"><col class="col-stat"><col class="col-value"><col class="col-enabled"><col class="col-actions">'
+    html += '<div class="limits-table-wrap"><table class="limits-table limits-table-limits' + (isV8 ? ' pb8-scenario-table' : '') + '"><colgroup>'
+      + '<col class="col-metric"><col class="col-penalize">' + (isV8 ? '<col class="col-scenario">' : '') + '<col class="col-stat"><col class="col-value"><col class="col-enabled"><col class="col-actions">'
       + '</colgroup><thead><tr>'
-      + '<th>Metric</th><th>Penalize If</th><th>Stat</th><th>Value</th><th>Enabled</th><th>Actions</th>'
+      + '<th>Metric</th><th>Penalize If</th>' + (isV8 ? '<th>Scenario</th>' : '') + '<th>Stat</th><th>Value</th><th>Enabled</th><th>Actions</th>'
       + '</tr></thead><tbody>';
     entries.forEach(function(entry, index) {
       if (state.limitEditIndex === index && state.limitEditForm) {
@@ -3578,6 +3664,7 @@ function renderOptimizeLimitsEditor() {
           + '<td><div class="limits-inline-stack">'
             + renderInlineSelectControl(meta.penalize_if_options, form.penalize_if, "updateLimitEditField('penalize_if', this.value)")
             + '</div></td>'
+          + (isV8 ? '<td>' + renderScenarioEditor(form, 'updateLimitEditField', false) + '</td>' : '')
           + '<td><div class="limits-inline-stack">'
             + renderInlineSelectControl(statOptions, form.stat, "updateLimitEditField('stat', this.value)", 'default')
             + '</div></td>'
@@ -3594,6 +3681,7 @@ function renderOptimizeLimitsEditor() {
       html += '<tr class="limits-editable-row" onclick="startLimitEdit(' + index + ')" title="Click row to edit inline">'
         + '<td class="mono">' + escapeHtml(entry.metric || '?') + '</td>'
         + '<td>' + escapeHtml(entry.penalize_if || '?') + '</td>'
+        + (isV8 ? '<td>' + escapeHtml(formatScenarioSelection(entry, false)) + '</td>' : '')
         + '<td>' + escapeHtml(entry.stat || '') + '</td>'
         + '<td class="mono">' + escapeHtml(formatLimitDisplayValue(entry)) + '</td>'
         + '<td>' + escapeHtml(entry.enabled === false ? 'no' : 'yes') + '</td>'
@@ -3610,16 +3698,17 @@ function renderOptimizeLimitsEditor() {
 
   if (state.limitAddVisible) {
     var addForm = normalizeLimitForm(state.limitAddForm || defaultLimitForm());
-    html += '<div class="limits-table-wrap"><table class="limits-table limits-table-limits"><colgroup>'
-      + '<col class="col-metric"><col class="col-penalize"><col class="col-stat"><col class="col-value"><col class="col-enabled"><col class="col-actions">'
+    html += '<div class="limits-table-wrap"><table class="limits-table limits-table-limits' + (isV8 ? ' pb8-scenario-table' : '') + '"><colgroup>'
+      + '<col class="col-metric"><col class="col-penalize">' + (isV8 ? '<col class="col-scenario">' : '') + '<col class="col-stat"><col class="col-value"><col class="col-enabled"><col class="col-actions">'
       + '</colgroup><thead><tr>'
-      + '<th>Metric</th><th>Penalize If</th><th>Stat</th><th>Value</th><th>Enabled</th><th>Actions</th>'
+      + '<th>Metric</th><th>Penalize If</th>' + (isV8 ? '<th>Scenario</th>' : '') + '<th>Stat</th><th>Value</th><th>Enabled</th><th>Actions</th>'
       + '</tr></thead><tbody>'
       + '<tr class="is-editing">'
       + '<td>' + renderInlineMetricEditor(addForm, 'updateLimitAddField') + '</td>'
       + '<td><div class="limits-inline-stack">'
         + renderInlineSelectControl(meta.penalize_if_options, addForm.penalize_if, "updateLimitAddField('penalize_if', this.value)")
         + '</div></td>'
+      + (isV8 ? '<td>' + renderScenarioEditor(addForm, 'updateLimitAddField', false) + '</td>' : '')
       + '<td><div class="limits-inline-stack">'
         + renderInlineSelectControl(statOptions, addForm.stat, "updateLimitAddField('stat', this.value)", 'default')
         + '</div></td>'
@@ -3676,10 +3765,24 @@ function normalizeScoringEntry(rawEntry) {
   }
   var canonicalMetric = canonicalizeLimitMetricName(metric);
   if (!canonicalMetric) return null;
-  return {
+  var normalized = optimizeEditorAdapter.isV8 && rawEntry && typeof rawEntry === 'object'
+    ? Object.assign({}, rawEntry)
+    : {};
+  delete normalized.scenario;
+  delete normalized.aggregate;
+  normalized = Object.assign(normalized, {
     metric: canonicalMetric,
     goal: normalizeScoringGoal(goal, canonicalMetric)
-  };
+  });
+  if (optimizeEditorAdapter.isV8 && rawEntry && typeof rawEntry === 'object') {
+    if (Object.prototype.hasOwnProperty.call(rawEntry, 'scenario')) {
+      normalized.scenario = rawEntry.scenario == null ? null : String(rawEntry.scenario).trim();
+    }
+    if (rawEntry.aggregate != null && String(rawEntry.aggregate).trim() !== '') {
+      normalized.aggregate = String(rawEntry.aggregate).trim().toLowerCase();
+    }
+  }
+  return normalized;
 }
 
 function normalizeScoringEntries(rawScoring) {
@@ -3717,12 +3820,16 @@ function defaultScoringForm(metricType) {
     metric_type: type,
     base_metric: baseMetric,
     currency: currency,
-    goal: defaultScoringGoal(buildLimitMetricName(baseMetric, currency))
+    goal: defaultScoringGoal(buildLimitMetricName(baseMetric, currency)),
+    scenario_mode: 'inherit',
+    scenario_name: '',
+    aggregate: ''
   });
 }
 
 function normalizeScoringForm(rawForm) {
   var meta = currentLimitsMeta();
+  var isV8 = typeof optimizeEditorAdapter !== 'undefined' && optimizeEditorAdapter.isV8;
   var form = Object.assign({}, rawForm || {});
   var metricType = meta.type_options.indexOf(form.metric_type) >= 0 ? form.metric_type : 'all';
   var metricOptions = limitMetricOptions(metricType, form.base_metric);
@@ -3731,22 +3838,34 @@ function normalizeScoringForm(rawForm) {
   var currencyMetric = isLimitCurrencyMetric(baseMetric);
   var currency = currencyMetric && meta.currency_options.indexOf(form.currency) >= 0 ? form.currency : (currencyMetric ? 'usd' : '');
   var metricName = buildLimitMetricName(baseMetric, currency);
+  var scenarioMode = ['inherit', 'aggregate', 'named'].indexOf(form.scenario_mode) >= 0
+    ? form.scenario_mode
+    : 'inherit';
   return {
+    _source_entry: form._source_entry,
     metric_type: metricType,
     base_metric: baseMetric,
     currency: currency,
-    goal: normalizeScoringGoal(form.goal, metricName)
+    goal: normalizeScoringGoal(form.goal, metricName),
+    scenario_mode: isV8 ? scenarioMode : 'inherit',
+    scenario_name: isV8 ? String(form.scenario_name || '').trim() : '',
+    aggregate: isV8 ? String(form.aggregate || '').trim().toLowerCase() : ''
   };
 }
 
 function scoringEntryToForm(entry) {
   var normalized = normalizeScoringEntry(entry) || { metric: '', goal: 'min' };
   var split = splitLimitMetricName(normalized.metric);
+  var hasScenario = Object.prototype.hasOwnProperty.call(normalized, 'scenario');
   return normalizeScoringForm({
+    _source_entry: normalized,
     metric_type: (typeof getMetricGroupFromMeta === 'function' ? getMetricGroupFromMeta(split.base_metric) : 'all') || 'all',
     base_metric: split.base_metric,
     currency: split.currency || 'usd',
-    goal: normalized.goal || defaultScoringGoal(normalized.metric)
+    goal: normalized.goal || defaultScoringGoal(normalized.metric),
+    scenario_mode: !hasScenario ? 'inherit' : (normalized.scenario == null ? 'aggregate' : 'named'),
+    scenario_name: normalized.scenario == null ? '' : normalized.scenario,
+    aggregate: normalized.aggregate || ''
   });
 }
 
@@ -3754,10 +3873,67 @@ function buildScoringEntryFromForm(rawForm) {
   var form = normalizeScoringForm(rawForm);
   if (!form.base_metric) throw new Error('Select a metric for scoring.');
   var metric = buildLimitMetricName(form.base_metric, form.currency);
-  return {
+  var entry = Object.assign({}, form._source_entry || {}, {
     metric: metric,
     goal: normalizeScoringGoal(form.goal, metric)
-  };
+  });
+  delete entry.scenario;
+  delete entry.aggregate;
+  if (optimizeEditorAdapter.isV8) {
+    if (form.scenario_mode === 'aggregate') {
+      entry.scenario = null;
+    } else if (form.scenario_mode === 'named') {
+      if (!form.scenario_name) throw new Error('Enter a named scenario for the scoring objective.');
+      if (form.aggregate) throw new Error('A named scoring scenario cannot also use Aggregate.');
+      entry.scenario = form.scenario_name;
+    }
+    if (form.aggregate) entry.aggregate = form.aggregate;
+  }
+  return entry;
+}
+
+function validatePb8ScenarioBases(scoring, limits, objectiveScenario, suiteEnabled, scenarioLabels) {
+  if (!optimizeEditorAdapter.isV8) return;
+  var allowedAggregates = ['', 'mean', 'min', 'max', 'std', 'median'];
+  var labels = new Set();
+  (scenarioLabels || []).forEach(function(label) {
+    var raw = String(label == null ? '' : label);
+    var normalized = raw.trim();
+    if (!normalized) throw new Error('Suite scenario labels cannot be empty.');
+    if (raw !== normalized) throw new Error('Suite scenario labels cannot contain leading or trailing whitespace: ' + raw);
+    if (labels.has(normalized)) throw new Error('Duplicate Suite scenario label: ' + normalized);
+    labels.add(normalized);
+  });
+  if (objectiveScenario) {
+    if (!suiteEnabled) throw new Error('Objective Scenario requires Suite mode.');
+    if (!labels.has(String(objectiveScenario))) throw new Error('Unknown Objective Scenario: ' + objectiveScenario);
+  }
+  (scoring || []).forEach(function(entry) {
+    var aggregate = String(entry.aggregate || '').trim().toLowerCase();
+    if (allowedAggregates.indexOf(aggregate) < 0) throw new Error('Unsupported scoring aggregate: ' + aggregate);
+    var hasScenario = Object.prototype.hasOwnProperty.call(entry, 'scenario');
+    var namedScenario = hasScenario && entry.scenario != null && String(entry.scenario).trim() !== '';
+    if (hasScenario && entry.scenario != null && !String(entry.scenario).trim()) {
+      throw new Error('Scoring scenario label cannot be empty.');
+    }
+    if ((hasScenario || aggregate) && !suiteEnabled) throw new Error('Scoring Scenario and Aggregate require Suite mode.');
+    if (namedScenario && !labels.has(String(entry.scenario))) throw new Error('Unknown scoring scenario: ' + entry.scenario);
+    if (namedScenario && aggregate) throw new Error('A named scoring scenario cannot also use Aggregate.');
+    if (!hasScenario && objectiveScenario && aggregate) {
+      throw new Error('A scoring objective inheriting a named objective_scenario cannot also use Aggregate.');
+    }
+  });
+  (limits || []).forEach(function(entry) {
+    var hasScenario = Object.prototype.hasOwnProperty.call(entry, 'scenario');
+    var namedScenario = Object.prototype.hasOwnProperty.call(entry, 'scenario')
+      && entry.scenario != null && String(entry.scenario).trim() !== '';
+    if (hasScenario && entry.scenario != null && !String(entry.scenario).trim()) {
+      throw new Error('Limit scenario label cannot be empty.');
+    }
+    if (hasScenario && !suiteEnabled) throw new Error('Limit Scenario requires Suite mode.');
+    if (namedScenario && !labels.has(String(entry.scenario))) throw new Error('Unknown limit scenario: ' + entry.scenario);
+    if (namedScenario && entry.stat) throw new Error('A named limit scenario cannot also use Stat.');
+  });
 }
 
 function setScoringEntries(rawScoring, opts) {
@@ -3797,7 +3973,7 @@ function updateScoringAddField(field, value) {
     next.goal = defaultScoringGoal(scoringFormMetricName(next));
   }
   state.scoringAddForm = next;
-  renderOptimizeScoringEditor();
+  if (field !== 'scenario_name') renderOptimizeScoringEditor();
 }
 
 function startScoringAdd() {
@@ -3826,7 +4002,7 @@ function updateScoringEditField(field, value) {
     next.goal = defaultScoringGoal(scoringFormMetricName(next));
   }
   state.scoringEditForm = next;
-  renderOptimizeScoringEditor();
+  if (field !== 'scenario_name') renderOptimizeScoringEditor();
 }
 
 function startScoringEdit(index) {
@@ -3955,12 +4131,16 @@ function renderOptimizeScoringEditor() {
   var goalOptions = meta.goal_options.map(function(value) {
     return { value: value, label: value };
   });
+  var aggregateOptions = currentLimitsMeta().stat_options.map(function(value) {
+    return { value: String(value), label: value === '' ? 'default' : String(value) };
+  });
+  var isV8 = optimizeEditorAdapter.isV8;
 
   if (entries.length) {
-    html += '<div class="limits-table-wrap"><table class="limits-table limits-table-scoring"><colgroup>'
-      + '<col class="col-metric"><col class="col-goal"><col class="col-actions">'
+    html += '<div class="limits-table-wrap"><table class="limits-table limits-table-scoring' + (isV8 ? ' pb8-scenario-table' : '') + '"><colgroup>'
+      + '<col class="col-metric"><col class="col-goal">' + (isV8 ? '<col class="col-scenario"><col class="col-aggregate">' : '') + '<col class="col-actions">'
       + '</colgroup><thead><tr>'
-      + '<th>Metric</th><th>Goal</th><th>Actions</th>'
+      + '<th>Metric</th><th>Goal</th>' + (isV8 ? '<th>Scenario</th><th>Aggregate</th>' : '') + '<th>Actions</th>'
       + '</tr></thead><tbody>';
     entries.forEach(function(entry, index) {
       if (state.scoringEditIndex === index && state.scoringEditForm) {
@@ -3970,6 +4150,8 @@ function renderOptimizeScoringEditor() {
           + '<td><div class="limits-inline-stack">'
             + renderInlineSelectControl(goalOptions, form.goal, "updateScoringEditField('goal', this.value)")
             + '</div></td>'
+          + (isV8 ? '<td>' + renderScenarioEditor(form, 'updateScoringEditField', true) + '</td>' : '')
+          + (isV8 ? '<td><div class="limits-inline-stack">' + renderInlineSelectControl(aggregateOptions, form.aggregate, "updateScoringEditField('aggregate', this.value)", 'default') + '</div></td>' : '')
           + '<td class="cell-actions"><div class="limits-inline-actions">'
             + '<button class="tiny-btn" type="button" onclick="saveScoringEdit()">Save</button>'
             + '<button class="tiny-btn" type="button" onclick="cancelScoringEdit()">Cancel</button>'
@@ -3981,6 +4163,8 @@ function renderOptimizeScoringEditor() {
       html += '<tr class="limits-editable-row" onclick="startScoringEdit(' + index + ')" title="Click row to edit inline">'
         + '<td class="mono">' + escapeHtml(entry.metric || '?') + '</td>'
         + '<td>' + escapeHtml(entry.goal || '?') + '</td>'
+        + (isV8 ? '<td>' + escapeHtml(formatScenarioSelection(entry, true)) + '</td>' : '')
+        + (isV8 ? '<td>' + escapeHtml(entry.aggregate || '') + '</td>' : '')
         + '<td class="cell-actions"><div class="limits-inline-actions">'
         + '<span class="limits-inline-hint">Click row</span>'
         + '<button class="icon-btn danger" type="button" onclick="event.stopPropagation(); deleteScoringEntry(' + index + ')" title="Delete objective">🗑</button>'
@@ -3994,16 +4178,18 @@ function renderOptimizeScoringEditor() {
 
   if (state.scoringAddVisible) {
     var addForm = normalizeScoringForm(state.scoringAddForm || defaultScoringForm());
-    html += '<div class="limits-table-wrap"><table class="limits-table limits-table-scoring"><colgroup>'
-      + '<col class="col-metric"><col class="col-goal"><col class="col-actions">'
+    html += '<div class="limits-table-wrap"><table class="limits-table limits-table-scoring' + (isV8 ? ' pb8-scenario-table' : '') + '"><colgroup>'
+      + '<col class="col-metric"><col class="col-goal">' + (isV8 ? '<col class="col-scenario"><col class="col-aggregate">' : '') + '<col class="col-actions">'
       + '</colgroup><thead><tr>'
-      + '<th>Metric</th><th>Goal</th><th>Actions</th>'
+      + '<th>Metric</th><th>Goal</th>' + (isV8 ? '<th>Scenario</th><th>Aggregate</th>' : '') + '<th>Actions</th>'
       + '</tr></thead><tbody>'
       + '<tr class="is-editing">'
       + '<td>' + renderInlineMetricRowEditor(addForm, 'updateScoringAddField') + '</td>'
       + '<td><div class="limits-inline-stack">'
         + renderInlineSelectControl(goalOptions, addForm.goal, "updateScoringAddField('goal', this.value)")
         + '</div></td>'
+      + (isV8 ? '<td>' + renderScenarioEditor(addForm, 'updateScoringAddField', true) + '</td>' : '')
+      + (isV8 ? '<td><div class="limits-inline-stack">' + renderInlineSelectControl(aggregateOptions, addForm.aggregate, "updateScoringAddField('aggregate', this.value)", 'default') + '</div></td>' : '')
       + '<td class="cell-actions"><div class="limits-inline-actions">'
         + '<button class="tiny-btn" type="button" onclick="addScoringEntry()">Add</button>'
         + '<button class="tiny-btn" type="button" onclick="cancelScoringAdd()">Cancel</button>'
@@ -6603,6 +6789,14 @@ function uniqStrings(values) {
   });
 }
 
+function optimizeExchangeOptions(selected) {
+  var fallback = ['binance', 'bybit', 'gateio', 'bitget', 'okx', 'hyperliquid', 'kucoin'];
+  var source = optimizeEditorAdapter.isV8 && Array.isArray(state.settings.exchange_options) && state.settings.exchange_options.length
+    ? state.settings.exchange_options
+    : fallback;
+  return uniqStrings(source.concat(Array.isArray(selected) ? selected : []));
+}
+
 function currentMultiselectValues(id, fallback) {
   var stateRef = _optMs[id];
   if (stateRef && Array.isArray(stateRef.selected)) return stateRef.selected.slice();
@@ -6694,7 +6888,7 @@ var KNOWN_OPT_EXTRA_PARAMS = {
   ])
 };
 if (optimizeEditorAdapter.isV8) {
-  ['seed'].forEach(function(key) {
+  ['seed', 'objective_scenario'].forEach(function(key) {
     KNOWN_OPT_EXTRA_PARAMS.optimize.add(key);
   });
 }
@@ -7590,6 +7784,7 @@ function serializeOptimizeExtraParamKeyMap(keyMap) {
   }));
 }
 
+var _optMarketLabels = {};
 var _optMsController = window.PBGuiEditorShared.createMultiselectController({
   controllerName: 'opt-v7-ms',
   counterpartMap: _optMsCp,
@@ -7598,10 +7793,21 @@ var _optMsController = window.PBGuiEditorShared.createMultiselectController({
     return !!_optCoinMsIds[id] && value === 'all';
   },
   formatTagLabel: function(ctx) {
-    return ctx.value === 'all' ? '★ all' : ctx.value;
+    if (ctx.value === 'all') return '★ all';
+    if (ctx.meta && ctx.meta.status === 'invalid') return '? ' + (ctx.meta.raw || ctx.value);
+    return _optMarketLabels[ctx.value] || ctx.value;
+  },
+  formatOptionLabel: function(ctx) {
+    var label = _optMarketLabels[ctx.value] || ctx.value;
+    return ctx.inOther ? label + ' ⇄' : label;
   },
   formatTagClass: function(ctx) {
-    return ctx.value === 'all' ? 'ms-tag ms-tag-all' : 'ms-tag';
+    if (ctx.value === 'all') return 'ms-tag ms-tag-all';
+    return 'ms-tag' + (ctx.meta && ctx.meta.status === 'invalid' ? ' ms-tag-invalid' : '');
+  },
+  formatTagTitle: function(ctx) {
+    if (!ctx.meta || ctx.meta.status !== 'invalid') return '';
+    return 'PB8 could not resolve this market identifier for the current exchange selection.';
   },
   onAfterRender: function(id) {
     if (!editorVisible()) return;
@@ -7623,7 +7829,9 @@ var SUITE_BASE_MS_ID_MAP = {
 };
 var _optKvData = {};
 var _optKvSymCache = {};
+var _optKvLabelCache = {};
 var _optKvHighlight = {};
+var _optMarketStatusVerified = !optimizeEditorAdapter.isV8;
 var _optKvMeta = {
   'opt-kv-cs': { expId: 'exp-opt-coin-sources', label: 'coin_sources' },
   'suite-kv-cs': { expId: 'suite-exp-csrc', label: 'coin_sources' }
@@ -7691,7 +7899,9 @@ function normalizeOptimizeCoinSources(backtestCoinSources, legacyCoinSources) {
       : {});
   var normalized = {};
   Object.keys(source).forEach(function(coin) {
-    var coinKey = String(coin || '').trim().toUpperCase();
+    var coinKey = optimizeEditorAdapter.isV8
+      ? String(coin || '').trim()
+      : String(coin || '').trim().toUpperCase();
     var exchangeValue = String(source[coin] || '').trim().toLowerCase();
     if (!coinKey || !exchangeValue) return;
     normalized[coinKey] = exchangeValue;
@@ -7717,9 +7927,10 @@ function optKvRenderChips(prefix) {
     return;
   }
   var html = '';
-  keys.forEach(function(coin) {
+  keys.forEach(function(coin, index) {
+    var label = ((_optKvLabelCache[entries[coin]] || {})[coin]) || _optMarketLabels[coin] || coin;
     html += '<span class="kv-chip"><span class="kv-chip-ex">' + esc(entries[coin]) + '</span>'
-      + esc(coin) + '<span class="ms-x" onclick="optKvRemove(\'' + prefix + '\',\'' + esc(coin) + '\')">×</span></span>';
+      + esc(label) + '<span class="ms-x" onclick="optKvRemoveAt(\'' + prefix + '\',' + index + ')">×</span></span>';
   });
   container.innerHTML = html;
 }
@@ -7747,6 +7958,11 @@ function optKvRemove(prefix, coin) {
   scheduleStructuredEditorSync();
 }
 
+function optKvRemoveAt(prefix, index) {
+  var coin = Object.keys(_optKvData[prefix] || {}).sort()[index];
+  if (coin !== undefined) optKvRemove(prefix, coin);
+}
+
 function optKvClearAll(prefix) {
   _optKvData[prefix] = {};
   optKvRenderChips(prefix);
@@ -7760,7 +7976,9 @@ function optKvAdd(prefix, coin) {
   var exchangeNode = el(prefix + '-exchange');
   if (!exchangeNode || !coin) return;
   var exchange = String(exchangeNode.value || '').trim().toLowerCase();
-  var normalizedCoin = String(coin || '').trim().toUpperCase();
+  var normalizedCoin = optimizeEditorAdapter.isV8
+    ? String(coin || '').trim()
+    : String(coin || '').trim().toUpperCase();
   if (!normalizedCoin || !exchange) return;
   if (!_optKvData[prefix]) _optKvData[prefix] = {};
   _optKvData[prefix][normalizedCoin] = exchange;
@@ -7835,6 +8053,10 @@ async function optKvLoadCoins(prefix) {
   try {
     var data = await optFetchV7Json('/symbols?exchange=' + encodeURIComponent(exchange));
     _optKvSymCache[exchange] = Array.isArray(data.symbols) ? data.symbols.slice().sort() : [];
+    _optKvLabelCache[exchange] = {};
+    (data.catalog || []).forEach(function(entry) {
+      if (entry && entry.config_id) _optKvLabelCache[exchange][entry.config_id] = entry.display || entry.coin || entry.config_id;
+    });
   } catch (error) {
     console.error('optKvLoadCoins failed for', exchange, error);
     _optKvSymCache[exchange] = [];
@@ -7858,14 +8080,19 @@ function optKvShowDd(prefix, filter) {
     var className = 'ms-option';
     if (existingExchange) className += existingExchange === exchange ? ' selected' : ' in-other';
     if (!existingExchange && visibleIdx === highlightIdx) className += ' highlighted';
-    html += '<div class="' + className + '" data-val="' + escAttr(symbol) + '" onclick="optKvAdd(\'' + prefix + '\', \'' + esc(symbol) + '\')">'
-      + escapeHtml(symbol)
+    html += '<div class="' + className + '" data-prefix="' + escAttr(prefix) + '" data-val="' + escAttr(symbol) + '" onclick="optKvAddFromOption(this)">'
+      + escapeHtml((_optKvLabelCache[exchange] || {})[symbol] || symbol)
       + (existingExchange ? ' <span style="opacity:.7">(' + escapeHtml(existingExchange) + ')</span>' : '')
       + '</div>';
     if (!existingExchange) visibleIdx += 1;
   });
   dropdown.innerHTML = html || '<div class="ms-option" style="color:var(--text-dim)">No matches</div>';
   dropdown.classList.add('open');
+}
+
+function optKvAddFromOption(option) {
+  if (!option) return;
+  optKvAdd(option.getAttribute('data-prefix'), option.getAttribute('data-val'));
 }
 
 function setOptBotParamStatus(paramStatus) {
@@ -7897,6 +8124,7 @@ async function loadOptSymbols(cfg, opts) {
   var live = cfg.live || {};
   var pbgui = cfg.pbgui || {};
   var requestSeq = ++_optSymbolsLoadSeq;
+  if (optimizeEditorAdapter.isV8) _optMarketStatusVerified = false;
   var exchanges = currentMultiselectValues('ms-opt-exchanges', Array.isArray(backtest.exchanges) ? backtest.exchanges : (backtest.exchange ? [backtest.exchange] : []));
   var approvedLong = opts.preferConfigValues
     ? coinSideSelection(live.approved_coins, 'long', true)
@@ -7931,9 +8159,25 @@ async function loadOptSymbols(cfg, opts) {
 
   if (!exchanges.length) return;
 
-  var symbolResults = await Promise.allSettled(exchanges.map(function(exchange) {
-    return optFetchV7Json('/symbols?exchange=' + encodeURIComponent(exchange));
-  }));
+  var symbolResults;
+  if (optimizeEditorAdapter.isV8) {
+    try {
+      var resolverResult = await optFetchV7Json('/coins/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ exchanges: exchanges, coins: seededCoins })
+      });
+      symbolResults = [{ status: 'fulfilled', value: resolverResult }];
+      _optMarketStatusVerified = true;
+    } catch (error) {
+      if (requestSeq === _optSymbolsLoadSeq) toast('PB8 market resolver error: ' + error.message, 'err');
+      return;
+    }
+  } else {
+    symbolResults = await Promise.allSettled(exchanges.map(function(exchange) {
+      return optFetchV7Json('/symbols?exchange=' + encodeURIComponent(exchange));
+    }));
+  }
   var tagResults = await Promise.allSettled(exchanges.map(function(exchange) {
     return optFetchV7Json('/tags?exchange=' + encodeURIComponent(exchange));
   }));
@@ -7941,9 +8185,17 @@ async function loadOptSymbols(cfg, opts) {
   if (requestSeq !== _optSymbolsLoadSeq) return;
 
   var symbols = seededCoins.slice();
+  _optMarketLabels = {};
   symbolResults.forEach(function(result) {
     if (result.status !== 'fulfilled' || !result.value || !Array.isArray(result.value.symbols)) return;
     symbols = symbols.concat(result.value.symbols);
+    (result.value.catalog || []).forEach(function(entry) {
+      if (entry && entry.config_id) _optMarketLabels[entry.config_id] = entry.display || entry.coin || entry.config_id;
+    });
+    Object.keys(result.value.statuses || {}).forEach(function(identifier) {
+      var status = result.value.statuses[identifier];
+      if (status && status.display && !_optMarketLabels[identifier]) _optMarketLabels[identifier] = status.display;
+    });
   });
   symbols = uniqStrings(symbols).sort();
 
@@ -7960,6 +8212,12 @@ async function loadOptSymbols(cfg, opts) {
   optRebuildMs('ms-opt-ign-long', symbols, ignoredLong);
   optRebuildMs('ms-opt-ign-short', symbols, ignoredShort);
   optRebuildMs('ms-opt-tags', tags, selectedTags);
+  if (optimizeEditorAdapter.isV8 && symbolResults[0] && symbolResults[0].status === 'fulfilled') {
+    var resolverStatuses = symbolResults[0].value.statuses || {};
+    ['ms-opt-app-long', 'ms-opt-app-short', 'ms-opt-ign-long', 'ms-opt-ign-short'].forEach(function(id) {
+      _optMsController.applyCoinStatus(id, resolverStatuses);
+    });
+  }
   restoreOptimizeRawAnchor(loadedAnchor);
 }
 
@@ -8202,7 +8460,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
   var pymooRefDirs = ((pymoo.algorithms || {}).nsga3 || {}).ref_dirs || {};
   var coinSources = normalizeOptimizeCoinSources(backtest.coin_sources, pbgui.coin_sources);
   var coinSourceKeys = Object.keys(coinSources).sort();
-  var coinSourceExchangeOptions = uniqStrings(['binance', 'bybit', 'gateio', 'bitget', 'okx', 'hyperliquid', 'kucoin'].concat(Array.isArray(backtest.exchanges) ? backtest.exchanges : []));
+  var coinSourceExchangeOptions = optimizeExchangeOptions(Array.isArray(backtest.exchanges) ? backtest.exchanges : []);
   var coinSourceExchangeOptionsHtml = coinSourceExchangeOptions.map(function(exchange) {
     return '<option>' + escapeHtml(exchange) + '</option>';
   }).join('');
@@ -8339,6 +8597,13 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
         + '<span class="arrow">▶</span> Scoring'
       + '</div>'
       + '<div class="expander-body">'
+        + (optimizeEditorAdapter.isV8
+          ? '<div class="form-row cols-8">'
+            + fieldSelect2('opted-objective-scenario-mode', 'objective_scenario', [{ value: 'aggregate', label: 'suite aggregate' }, { value: 'named', label: 'named scenario' }], optimize.objective_scenario == null ? 'aggregate' : 'named', false, 'Default scenario basis inherited by scoring entries whose Scenario is set to inherit.', 2)
+              .replace('<select id="opted-objective-scenario-mode"', '<select id="opted-objective-scenario-mode" onchange="toggleOptimizeObjectiveScenarioInput();scheduleStructuredEditorSync()"')
+            + '<div class="form-group" id="opted-objective-scenario-name-wrap" style="grid-column:span 3;' + (optimize.objective_scenario == null ? 'display:none;' : '') + '"><label>scenario label</label><input type="text" id="opted-objective-scenario-name" value="' + escapeHtml(optimize.objective_scenario == null ? '' : optimize.objective_scenario) + '" oninput="scheduleStructuredEditorSync()"></div>'
+            + '</div>'
+          : '')
         + '<div id="opted-scoring-panel"></div>'
       + '</div>'
     + '</div>'
@@ -8468,6 +8733,10 @@ function populateOptimizeEditor(config, opts) {
   var live = cfg.live || {};
   var optimize = cfg.optimize || {};
   ensureOptimizePymooSection(optimize);
+  var objectiveScenarioMode = el('opted-objective-scenario-mode');
+  var objectiveScenarioName = el('opted-objective-scenario-name');
+  if (objectiveScenarioMode) objectiveScenarioMode.value = optimize.objective_scenario == null ? 'aggregate' : 'named';
+  if (objectiveScenarioName) objectiveScenarioName.value = optimize.objective_scenario == null ? '' : String(optimize.objective_scenario);
   var pbgui = cfg.pbgui || {};
   var logging = cfg.logging || {};
   var coinSources = normalizeOptimizeCoinSources(backtest.coin_sources, pbgui.coin_sources);
@@ -8478,7 +8747,7 @@ function populateOptimizeEditor(config, opts) {
   var exchanges = Array.isArray(backtest.exchanges)
     ? backtest.exchanges.slice()
     : (backtest.exchange ? [backtest.exchange] : []);
-  var exchangeOptions = uniqStrings(['binance', 'bybit', 'gateio', 'bitget', 'okx', 'hyperliquid', 'kucoin'].concat(exchanges));
+  var exchangeOptions = optimizeExchangeOptions(exchanges);
   optRebuildMs('ms-opt-exchanges', exchangeOptions, exchanges);
   el('opted-start-date').value = backtest.start_date || '';
   el('opted-end-date').value = resolveOptimizeEditorEndDateValue(backtest.end_date);
@@ -8585,7 +8854,7 @@ function populateOptimizeEditor(config, opts) {
     });
   }
   if (typeof suiteInit === 'function') {
-    suiteInit('suite-container', { apiBase: API_BASE, version: optimizeEditorAdapter.version, aggregateMetrics: currentLimitsMeta().all_valid_metrics });
+    suiteInit('suite-container', { apiBase: API_BASE, version: optimizeEditorAdapter.version, aggregateMetrics: currentLimitsMeta().all_valid_metrics, exchanges: optimizeExchangeOptions(exchanges) });
     suiteLoad(cfg, { preserveEdit: false });
   }
   setScoringEntries(optimize.scoring, { suppressSync: true });
@@ -8601,6 +8870,7 @@ function populateOptimizeEditor(config, opts) {
   }
   cfgWireDateRange('opted-start-date', 'opted-end-date');
   bindOptimizeBackendUi();
+  toggleOptimizeObjectiveScenarioInput();
   updateOptimizeBackendSections();
   toggleOptimizeSeedPathInput();
   loadOptSymbols(cfg, { preferConfigValues: true }).catch(function(error) {
@@ -8740,6 +9010,14 @@ function collectEditorConfig(baseConfig, opts) {
   optimize.enable_overrides = collectOptimizeEnableOverrides(optimize.enable_overrides);
   optimize.compress_results_file = !!el('opted-compress-results').checked;
   optimize.write_all_results = !!el('opted-write-all-results').checked;
+  if (optimizeEditorAdapter.isV8) {
+    var objectiveModeNode = el('opted-objective-scenario-mode');
+    var objectiveNameNode = el('opted-objective-scenario-name');
+    var objectiveMode = objectiveModeNode ? objectiveModeNode.value : 'aggregate';
+    var objectiveName = objectiveNameNode ? String(objectiveNameNode.value || '').trim() : '';
+    if (strict && objectiveMode === 'named' && !objectiveName) throw new Error('Objective scenario label is required.');
+    optimize.objective_scenario = objectiveMode === 'named' ? objectiveName : null;
+  }
   delete backtest.compress_results_file;
   delete backtest.write_all_results;
   var effectiveAlgorithm = getEffectiveOptimizePymooAlgorithm(optimize.backend, optimize.pymoo.algorithm, getScoringEntries().length);
@@ -8805,6 +9083,26 @@ function collectEditorConfig(baseConfig, opts) {
   bot.long = longBot;
   bot.short = shortBot;
   var suite = typeof suiteCollect === 'function' ? suiteCollect() : { suite_enabled: false };
+  if (strict) {
+    if (optimizeEditorAdapter.isV8) {
+      if (!_optMarketStatusVerified) throw new Error('PB8 market identifiers have not been verified. Retry market loading before saving.');
+      var invalidCoinCount = 0;
+      Object.keys(_optCoinMsIds).forEach(function(id) {
+        (_optMs[id] && _optMs[id].selected || []).forEach(function(value) {
+          var meta = _optMsController.getCoinMeta(id, value);
+          if (meta && meta.status === 'invalid') invalidCoinCount += 1;
+        });
+      });
+      if (invalidCoinCount) throw new Error('Resolve or remove invalid PB8 market identifiers before saving.');
+    }
+    validatePb8ScenarioBases(
+      optimize.scoring,
+      optimize.limits,
+      optimize.objective_scenario,
+      !!suite.suite_enabled,
+      (suite.scenarios || []).map(function(scenario) { return scenario && scenario.label; })
+    );
+  }
   cfg.backtest.suite_enabled = !!suite.suite_enabled;
   if (suite.suite_enabled) {
     cfg.backtest.scenarios = Array.isArray(suite.scenarios) ? suite.scenarios : [];
@@ -9395,6 +9693,7 @@ function closeEditor() {
   state.editorDraftName = '';
   state.editorBackendHint = '';
   state.editorLastConfig = null;
+  state.editorOverrideConfigs = {};
   resetOptimizeEditorUiState();
   setOptBotParamStatus({});
   setPanel(returnPanel);
@@ -10621,11 +10920,15 @@ function normalizeOptimizeEditorPayload(data) {
   var config = wrapped ? data.config : (data || {});
   var paramStatus = wrapped ? (data.param_status || {}) : (((config || {})._pbgui_param_status) || {});
   var backendHint = wrapped ? String(data.backend_hint || '').trim().toLowerCase() : '';
-  return { config: config, param_status: paramStatus, backend_hint: backendHint };
+  var overrideConfigs = wrapped && data.override_configs && typeof data.override_configs === 'object'
+    ? data.override_configs
+    : {};
+  return { config: config, param_status: paramStatus, backend_hint: backendHint, override_configs: overrideConfigs };
 }
 
 function openEditorWithConfig(configOrPayload, name, sourceName) {
   var payload = normalizeOptimizeEditorPayload(configOrPayload);
+  state.editorOverrideConfigs = deepClone(payload.override_configs || {});
   showStructuredEditor(payload.config, name, sourceName, payload.param_status, payload.backend_hint);
 }
 
@@ -11077,7 +11380,8 @@ async function openSeededOptimizeFromResult(resultPath, seedPath, suggestedName,
   openEditorWithConfig({
     config: draft,
     param_status: resultPayload.param_status,
-    backend_hint: resultPayload.backend_hint
+    backend_hint: resultPayload.backend_hint,
+    override_configs: resultPayload.override_configs
   }, suggestedName || '', '');
   if (statusMessage) setPageEditorStatus(statusMessage, 'ok');
 }
@@ -11125,10 +11429,20 @@ function buildBacktestMainPageUrl(extraParams) {
   return base + '?' + params.toString();
 }
 
-async function openBacktestDraft(config, draftName) {
+function normalizeParetoBacktestPayload(payload) {
+  if (optimizeEditorAdapter.isV8 && payload && payload.config && typeof payload.config === 'object') {
+    return { config: payload.config, override_configs: payload.override_configs || {} };
+  }
+  return { config: payload || {}, override_configs: {} };
+}
+
+async function openBacktestDraft(config, draftName, overrideConfigs) {
   var draft = await authFetch(optimizeEditorAdapter.backtestApiBase() + '/optimize-draft', {
     method: 'POST',
-    body: JSON.stringify({ config: extractConfigSections(config) })
+    body: JSON.stringify({
+      config: extractConfigSections(config),
+      override_configs: overrideConfigs || {}
+    })
   });
   window.location.href = buildBacktestMainPageUrl({
     opt_draft_id: draft && draft.draft_id ? draft.draft_id : '',
@@ -11159,13 +11473,20 @@ async function backtestSelectedParetos(paths) {
   });
   if (selectedItems.length === 1) {
     var singleData = await apiFetch(optimizeEditorAdapter.paretoFilePath(selectedItems[0].path));
-    return openBacktestDraft(singleData || {}, selectedItems[0].name || state.selectedResultName || 'pareto_backtest');
+    var singlePayload = normalizeParetoBacktestPayload(singleData);
+    return openBacktestDraft(
+      singlePayload.config,
+      selectedItems[0].name || state.selectedResultName || 'pareto_backtest',
+      singlePayload.override_configs
+    );
   }
   var queueItems = await Promise.all(selectedItems.map(function(item) {
     return apiFetch(optimizeEditorAdapter.paretoFilePath(item.path)).then(function(data) {
+      var payload = normalizeParetoBacktestPayload(data);
       return {
         name: item.name || 'pareto_backtest',
-        config: extractConfigSections(data || {})
+        config: extractConfigSections(payload.config),
+        override_configs: payload.override_configs
       };
     });
   }));
@@ -11275,9 +11596,12 @@ async function saveEditor(andQueue) {
     configPayload = parsed.value;
   }
   isNewName = !!(state.editorSourceName && state.editorSourceName !== name);
+  var savePayload = optimizeEditorAdapter.isV8
+    ? { config: configPayload, override_configs: state.editorOverrideConfigs || {} }
+    : configPayload;
   await apiFetch('/configs/' + encodeURIComponent(name), {
     method: 'PUT',
-    body: JSON.stringify(configPayload)
+    body: JSON.stringify(savePayload)
   });
   if (!(optimizeEditorAdapter.isV8 && isNewName)) {
     await refreshOpenedQueueSnapshot(queueFilename, name);
@@ -11720,10 +12044,16 @@ async function queueConfig(name) {
 
 async function migrateOptimizeConfigToV8(name) {
   var targetName = (String(name || '').trim() + '_v8').slice(0, 120);
-  var response = await authFetch(window.location.origin + '/api/optimize-v8/migrate-v7', {
-    method: 'POST',
-    body: JSON.stringify({ source_name: name, target_name: targetName })
-  });
+  var response;
+  try {
+    response = await authFetch(window.location.origin + '/api/optimize-v8/migrate-v7', {
+      method: 'POST',
+      body: JSON.stringify({ source_name: name, target_name: targetName })
+    });
+  } catch (error) {
+    await showOptimizeMigrationError(error);
+    return;
+  }
   var migratedName = response && response.name ? response.name : targetName;
   toast('Converted Optimize config to PB8: ' + migratedName, 'ok');
   window.location.href = window.location.origin + '/api/optimize-v8/main_page?open_config=' + encodeURIComponent(migratedName);
@@ -11731,13 +12061,33 @@ async function migrateOptimizeConfigToV8(name) {
 
 async function migrateParetoConfigToV8(path, name) {
   var targetName = (String(name || 'pareto').trim() + '_v8').slice(0, 120);
-  var response = await authFetch(window.location.origin + '/api/optimize-v8/migrate-v7', {
-    method: 'POST',
-    body: JSON.stringify({ source_path: path, target_name: targetName })
-  });
+  var response;
+  try {
+    response = await authFetch(window.location.origin + '/api/optimize-v8/migrate-v7', {
+      method: 'POST',
+      body: JSON.stringify({ source_path: path, target_name: targetName })
+    });
+  } catch (error) {
+    await showOptimizeMigrationError(error);
+    return;
+  }
   var migratedName = response && response.name ? response.name : targetName;
   toast('Converted Pareto config to PB8: ' + migratedName, 'ok');
   window.location.href = window.location.origin + '/api/optimize-v8/main_page?open_config=' + encodeURIComponent(migratedName);
+}
+
+async function showOptimizeMigrationError(error) {
+  var report = error && error.detail && typeof error.detail === 'object' ? error.detail.report : null;
+  var detail = report
+    ? 'Official PB8 migration report:\n\n' + JSON.stringify(report, null, 2) +
+      '\n\nThe V7 source was not changed and no runnable PB8 config was published.'
+    : 'The V7 source was not changed and no runnable PB8 config was published.';
+  await window.PBGuiDialogs.alert({
+    title: 'PB8 migration failed',
+    message: error && error.message ? error.message : 'PB8 migration failed',
+    detail: detail,
+    confirmText: 'OK'
+  });
 }
 
 async function duplicateSelected() {
@@ -12288,7 +12638,8 @@ function attachEventHandlers() {
     if (target.classList.contains('pareto-open')) {
       return apiFetch(optimizeEditorAdapter.paretoFilePath(path))
         .then(function(data) {
-          openJsonModal('Pareto JSON - ' + path.split('/').slice(-1)[0], data);
+          var payload = normalizeParetoBacktestPayload(data);
+          openJsonModal('Pareto JSON - ' + path.split('/').slice(-1)[0], payload.config);
         })
         .catch(handleError);
     }
@@ -12514,6 +12865,7 @@ async function handleIncomingDraft() {
       method: 'POST',
       body: JSON.stringify({ config: draft.config || {} })
     });
+    if (prepared && typeof prepared === 'object') prepared.override_configs = draft.override_configs || {};
     var payload = normalizeOptimizeEditorPayload(prepared);
     applyOptimizeSeedConfig(payload.config, 'self', '');
     var suggested = draftName || (((payload.config || {}).backtest || {}).base_dir || '').split('/').slice(-1)[0] || '';

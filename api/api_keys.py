@@ -82,6 +82,7 @@ class UserDetail(BaseModel):
     name: str
     exchange: str
     key: Optional[str] = None
+    key_masked: Optional[str] = None
     secret_masked: Optional[str] = None
     passphrase_masked: Optional[str] = None
     wallet_address: Optional[str] = None
@@ -111,6 +112,12 @@ class UserCreateUpdate(BaseModel):
     quote: Optional[str] = None
     options: Optional[dict] = None
     extra: Optional[dict] = None
+
+
+class UserKeyRevealRequest(BaseModel):
+    """Identify one stored third-party API key requested for explicit reveal."""
+
+    name: str
 
 
 class TestResult(BaseModel):
@@ -344,11 +351,12 @@ def _user_to_detail(user, in_use: bool) -> UserDetail:
     return UserDetail(
         name=user.name,
         exchange=user.exchange,
-        key=user.key,
-        secret_masked=_mask(user.secret),
-        passphrase_masked=_mask(user.passphrase),
+        key=None,
+        key_masked="********" if user.key else None,
+        secret_masked="********" if user.secret else None,
+        passphrase_masked="********" if user.passphrase else None,
         wallet_address=user.wallet_address,
-        private_key_masked=_mask(user.private_key),
+        private_key_masked="********" if user.private_key else None,
         is_vault=user.is_vault,
         quote=user.quote,
         options=user.options if isinstance(user.options, dict) else None,
@@ -650,7 +658,7 @@ def get_main_page(
     origin = f"{scheme}://{host}" + (f":{port}" if port else "")
     api_base = origin + "/api/api-keys"
 
-    html = html.replace('"%%TOKEN%%"',    json.dumps(session.token))
+    html = html.replace('"%%TOKEN%%"',    json.dumps(""))
     html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
 
     from pbgui_purefunc import PBGUI_VERSION
@@ -857,9 +865,10 @@ def restore_backup(
 @router.post("/backups/diff")
 def diff_backups(
     req: DiffRequest,
+    response: Response,
     session: SessionToken = Depends(require_auth),
 ) -> dict:
-    """Return SequenceMatcher opcodes + line arrays for two backup files.
+    """Return a redacted structural diff for two backup files.
 
     filename1/filename2 may be '_current_pb7' to compare
     against the live api-keys.json.
@@ -887,24 +896,22 @@ def diff_backups(
             live = _Path(pb7dir()) / "api-keys.json"
             if not live.exists():
                 raise HTTPException(status_code=404, detail=f"Live api-keys.json not found for {filename}")
-            try:
-                text = _json_.dumps(
-                    _json_.loads(live.read_text(encoding="utf-8")),
-                    indent=4, ensure_ascii=False,
-                )
-            except Exception:
-                text = live.read_text(encoding="utf-8")
-            return text.splitlines()
-        path = backup_dir / filename
-        if not path.exists():
-            raise HTTPException(status_code=404, detail=f"Backup not found: {filename}")
+            path = live
+        else:
+            path = backup_dir / filename
+            if not path.exists():
+                raise HTTPException(status_code=404, detail=f"Backup not found: {filename}")
+        if path.is_symlink():
+            raise HTTPException(status_code=400, detail="Refusing symlinked API-key file")
         try:
-            text = _json_.dumps(
-                _json_.loads(path.read_text(encoding="utf-8")),
-                indent=4, ensure_ascii=False,
-            )
-        except Exception:
-            text = path.read_text(encoding="utf-8")
+            payload = _json_.loads(path.read_text(encoding="utf-8"))
+        except (OSError, _json_.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail="API-key file is not valid JSON") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="API-key file must contain a JSON object")
+        from User import _redact_api_keys_payload
+
+        text = _json_.dumps(_redact_api_keys_payload(payload), indent=4, ensure_ascii=False)
         return text.splitlines()
 
     lines1 = read_lines(req.filename1)
@@ -912,6 +919,7 @@ def diff_backups(
     matcher = _difflib.SequenceMatcher(None, lines1, lines2, autojunk=False)
     opcodes = [[tag, i1, i2, j1, j2] for tag, i1, i2, j1, j2 in matcher.get_opcodes()]
 
+    response.headers["Cache-Control"] = "no-store"
     return {
         "filename1": req.filename1,
         "filename2": req.filename2,
@@ -944,7 +952,7 @@ def create_user(
 ) -> UserDetail:
     """Create a new API key user."""
     from User import User
-    from Exchange import Exchanges
+    from Exchange import Exchanges, Passphrase
 
     if not name or not name.strip():
         raise HTTPException(status_code=400, detail="Username is required")
@@ -952,6 +960,8 @@ def create_user(
 
     if data.exchange not in Exchanges.list():
         raise HTTPException(status_code=400, detail=f"Unknown exchange: {data.exchange}")
+    if data.exchange in Passphrase.list() and not data.passphrase:
+        raise HTTPException(status_code=400, detail=f"Passphrase is required for {data.exchange}")
 
     is_hl = data.exchange == "hyperliquid"
     if not is_hl:
@@ -998,15 +1008,13 @@ def update_user(
     session: SessionToken = Depends(require_auth),
 ) -> UserDetail:
     """Update an existing API key user."""
-    from Exchange import Exchanges
+    from Exchange import Exchanges, Passphrase
     global _hl_expiry_cache_ts, _bybit_expiry_cache_ts
 
     if data.exchange not in Exchanges.list():
         raise HTTPException(status_code=400, detail=f"Unknown exchange: {data.exchange}")
 
     is_hl = data.exchange == "hyperliquid"
-    if not is_hl and not data.key:
-        raise HTTPException(status_code=400, detail="API Key is required")
     if is_hl and not data.wallet_address:
         raise HTTPException(status_code=400, detail="Wallet Address is required for Hyperliquid")
 
@@ -1014,6 +1022,25 @@ def update_user(
     user = users.find_user(name)
     if not user:
         raise HTTPException(status_code=404, detail=f"User '{name}' not found")
+    exchange_changed = data.exchange != user.exchange
+    if not is_hl:
+        if data.key == "":
+            raise HTTPException(status_code=400, detail="API Key is required")
+        if data.secret == "":
+            raise HTTPException(status_code=400, detail="API Secret is required")
+        effective_key = data.key if exchange_changed else (data.key or user.key)
+        effective_secret = data.secret if exchange_changed else (data.secret or user.secret)
+        if not effective_key:
+            raise HTTPException(status_code=400, detail="API Key is required")
+        if not effective_secret:
+            raise HTTPException(status_code=400, detail="API Secret is required")
+    elif exchange_changed and not data.private_key:
+        raise HTTPException(status_code=400, detail="Private Key is required for Hyperliquid")
+    effective_passphrase = data.passphrase if exchange_changed else (data.passphrase if data.passphrase is not None else user.passphrase)
+    if data.exchange in Passphrase.list() and data.passphrase == "":
+        raise HTTPException(status_code=400, detail=f"Passphrase is required for {data.exchange}")
+    if data.exchange in Passphrase.list() and not effective_passphrase:
+        raise HTTPException(status_code=400, detail=f"Passphrase is required for {data.exchange}")
 
     old_exchange = user.exchange
     old_wallet_address = user.wallet_address
@@ -1026,7 +1053,8 @@ def update_user(
     vault_changed = data.is_vault != old_is_vault
     exchange_changed = data.exchange != old_exchange
     user.exchange = data.exchange
-    user.key = data.key
+    if data.key is not None:
+        user.key = data.key
     # Masked fields: null means "leave unchanged" (frontend "••• leave blank to keep" UX)
     if data.secret is not None:
         user.secret = data.secret
@@ -1035,6 +1063,17 @@ def update_user(
     user.wallet_address = data.wallet_address
     if data.private_key is not None:
         user.private_key = data.private_key
+    if exchange_changed:
+        if is_hl:
+            user.key = None
+            user.secret = None
+            user.passphrase = None
+        else:
+            user.wallet_address = None
+            user.private_key = None
+            user.is_vault = False
+            if data.exchange not in Passphrase.list():
+                user.passphrase = None
     user.is_vault = data.is_vault
     user.quote = data.quote
     user.options = data.options
@@ -1146,21 +1185,21 @@ def delete_user(
     return {"deleted": name}
 
 
-@router.get("/{name}/reveal")
-def reveal_user_field(
-    name: str = PathParam(..., description="User name"),
-    field: str = Query(..., description="secret | passphrase | private_key"),
+@router.post("/reveal-key")
+def reveal_user_key(
+    body: UserKeyRevealRequest,
+    response: Response,
     session: SessionToken = Depends(require_auth),
 ) -> dict:
-    """Return the real (unmasked) credential for the eye-toggle."""
-    if field not in ("secret", "passphrase", "private_key"):
-        raise HTTPException(status_code=400, detail="field must be secret, passphrase or private_key")
+    """Reveal only one explicitly selected third-party API key without caching it."""
     users = _get_users()
-    user = users.find_user(name)
+    user = users.find_user(body.name)
     if not user:
-        raise HTTPException(status_code=404, detail=f"User '{name}' not found")
-    value = getattr(user, field, None) or ""
-    return {"value": value}
+        raise HTTPException(status_code=404, detail="User not found")
+    if not user.key:
+        raise HTTPException(status_code=404, detail="API key is not configured")
+    response.headers["Cache-Control"] = "no-store"
+    return {"value": user.key}
 
 
 # ── TradFi test (must be registered BEFORE /{name}/test to avoid shadowing) ──

@@ -158,7 +158,7 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
 
     assert '/app/css/backtest_shell.css?v=3' in v7_source
     assert '/app/js/backtest_shell.js?v=4' in v7_source
-    assert '/app/js/backtest_editor_adapter.js?v=8' in v7_source
+    assert '/app/js/backtest_editor_adapter.js?v=9' in v7_source
     assert "PBGuiBacktestShell.upgradeLegacy" in v7_source
     assert "PBGuiBacktestEditorAdapter.create(BACKTEST_VERSION)" in v7_source
     assert "sideConfig.risk" in adapter_source
@@ -315,7 +315,7 @@ def test_v8_backtest_result_can_open_pb8_optimize() -> None:
     assert "'/api/optimize-v8/main_page?opt_draft_id='" in adapter
     unsupported = adapter.split("var unsupported =", 1)[1].split("];", 1)[0]
     assert "'optimizeFromResult'" not in unsupported
-    assert "/app/js/backtest_editor_adapter.js?v=8" in page
+    assert "/app/js/backtest_editor_adapter.js?v=9" in page
 
 
 def test_v8_backtest_strategy_explorer_handoffs_use_cookie_drafts() -> None:
@@ -626,7 +626,7 @@ def test_v8_advanced_backtest_fields_use_the_intended_editor_sections() -> None:
     additional_builder = source.split("function buildExtraBtExpanderHtml", 1)[1].split("function setCfgBotParamStatus", 1)[0]
     assert "buildResultMetricsHtml()" in additional_builder
     assert "title=\"' + escAttr(item.metric)" in source
-    assert "'gateio','defx','paradex'" in source
+    assert "var exchanges = backtestExchangeOptions();" in source
     assert "<th>Maker</th>" not in source
 
 
@@ -673,10 +673,68 @@ def test_v8_advanced_field_transformations_round_trip() -> None:
         assert.equal(Object.prototype.hasOwnProperty.call(specialResult.overrides_by_exchange.__proto__, 'BTC'), true);
         assert.equal(specialResult.overrides_by_exchange.__proto__.BTC.c_mult, 2);
         assert.equal(JSON.parse(JSON.stringify(specialResult)).overrides_by_exchange.__proto__.BTC.c_mult, 2);
+        const exact = advanced.serializeMarketSettings([
+          { scope: 'global', coin: '1000ABC/USDT:USDT', values: { c_mult: 1000 } }
+        ], {}, true);
+        assert.deepEqual(exact.overrides, { '1000ABC/USDT:USDT': { c_mult: 1000 } });
         """
     )
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_suite_coin_lists_preserve_pb8_identifiers_only() -> None:
+    """Suite scenarios must keep exact PB8 identifiers while retaining PB7 uppercase behavior."""
+    script = textwrap.dedent(
+        """
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
+        _suiteAvailableCoins = () => [];
+
+        _suiteState.preserveMarketIdentifiers = false;
+        _suiteEnsureCoinMsState('pb7', ['btc', '1000abcusdt']);
+        assert.deepEqual(_suiteMsState.pb7.selected, ['BTC', '1000ABCUSDT']);
+
+        _suiteState.preserveMarketIdentifiers = true;
+        _suiteEnsureCoinMsState('pb8', ['bitget::1000ABCUSDT', 'xyz:TSLA', '1000ABC/USDT:USDT']);
+        assert.deepEqual(_suiteMsState.pb8.selected, [
+          'bitget::1000ABCUSDT', 'xyz:TSLA', '1000ABC/USDT:USDT'
+        ]);
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_suite_exchange_options_are_injected_for_pb8_and_reset_for_pb7() -> None:
+    """Shared Suite selectors must use runtime PB8 choices without changing PB7."""
+    script = textwrap.dedent(
+        """
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
+        _suiteLoadBotParams = () => Promise.resolve([]);
+
+        suiteInit('suite', {version: 'v8', exchanges: ['binance', 'weex', 'weex']});
+        assert.deepEqual(_suiteState.exchanges, ['binance', 'weex']);
+
+        suiteInit('suite', {version: 'v7'});
+        assert.deepEqual(_suiteState.exchanges, ['binance','bybit','bitget','okx','hyperliquid','kucoin']);
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_pb8_config_editor_waits_for_runtime_exchange_settings() -> None:
+    """A fast editor open must not render PB7 fallback exchanges for PB8."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    show_editor = source.split("function showConfigEditor", 1)[1].split("function ", 1)[0]
+
+    assert "backtestEditorAdapter.isV8" in show_editor
+    assert "settings.exchange_options" in show_editor
+    assert "settingsLoadPromise.then" in show_editor
 
 
 def test_v8_advanced_fields_reject_invalid_raw_values_and_escape_attributes() -> None:
@@ -721,7 +779,7 @@ def test_editor_adapter_preserves_v7_paths_and_writes_v8_risk_paths() -> None:
         v8.setSideValue(v8Side, 'total_wallet_exposure_limit', 3.0);
         assert.equal(v8Side.risk.total_wallet_exposure_limit, 3.0);
         assert.equal(v8Side.total_wallet_exposure_limit, undefined);
-        assert.equal(v8.metadataApiBase('https://example.test/api/backtest-v8'), 'https://example.test/api/v7');
+        assert.equal(v8.metadataApiBase('https://example.test/api/backtest-v8'), 'https://example.test/api/v8');
         assert.equal(v8.docsApiBase('https://example.test/api/backtest-v8'), 'https://example.test/api');
         assert.equal(v8.getHslValue({ hsl: { enabled: true } }, 'enabled', false), true);
         assert.equal(v7.getHslValue({ hsl_enabled: true }, 'enabled', false), true);
@@ -736,7 +794,7 @@ def test_editor_adapter_preserves_v7_paths_and_writes_v8_risk_paths() -> None:
 def test_shared_coin_override_editor_preserves_nested_v8_paths() -> None:
     """Dotted V8 override selectors must round-trip as nested canonical objects."""
     script = textwrap.dedent(
-        """
+        r"""
         const assert = require('node:assert/strict');
         const fs = require('node:fs');
         global.window = { PBGuiEditorShared: { clearFixedValidationStatus() {}, setFixedValidationError() {} } };
@@ -818,6 +876,27 @@ def test_shared_coin_override_editor_preserves_nested_v8_paths() -> None:
         _covSaveEdit = () => { savedActiveEdit = true; return true; };
         coinOvEdit('BONK');
         assert.equal(savedActiveEdit, true);
+
+        _covState.preserveMarketIdentifiers = true;
+        _covState.pendingConfigFileWrites = {};
+        _covState.overrideConfigs = {};
+        coinOvLoad({ coin_overrides: {
+          'bitget::ABCUSDT': { override_config_path: 'plain.json' },
+          'bitget::1000ABCUSDT': { override_config_path: 'scaled.json' },
+          'xyz:TSLA': {}
+        } });
+        assert.deepEqual(Object.keys(_covState.overrides).sort(), [
+          'bitget::1000ABCUSDT', 'bitget::ABCUSDT', 'xyz:TSLA'
+        ]);
+        assert.equal(_covNormalizeCoin('1000ABC/USDT:USDT'), '1000ABC/USDT:USDT');
+        _covState.overrides = { '1000ABC/USDT:USDT': {} };
+        _covState.editCoin = '1000ABC/USDT:USDT';
+        assert.equal(_covSaveConfigFile('1000ABC/USDT:USDT'), true);
+        const exactFilename = _covState.overrides['1000ABC/USDT:USDT'].override_config_path;
+        assert.match(exactFilename, /^1000ABC_USDT_USDT-[0-9a-f]{8}\.json$/);
+        assert.doesNotMatch(exactFilename, /[/:]/);
+        const moduleSource = fs.readFileSync('frontend/js/coin_overrides_editor.js', 'utf8');
+        assert.doesNotMatch(moduleSource, /onclick="coinOvEdit\(\\'" \+ esc\(c\)/);
         """
     )
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)

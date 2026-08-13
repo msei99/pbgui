@@ -67,12 +67,13 @@
     return source;
   }
 
-  function serializeMarketSettings(rows, extras) {
+  function serializeMarketSettings(rows, extras, preserveMarketIdentifiers) {
     var result = cloneObject(extras);
     result.overrides = {};
     result.overrides_by_exchange = {};
     (rows || []).forEach(function(row) {
-      var coin = String(row.coin || '').trim().toUpperCase();
+      var coin = String(row.coin || '').trim();
+      if (!preserveMarketIdentifiers) coin = coin.toUpperCase();
       if (!coin) return;
       var values = cloneObject(row.values);
       if (row.scope === 'exchange') {

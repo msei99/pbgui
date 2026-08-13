@@ -3153,6 +3153,8 @@ class PBData():
                                             if _exec_budget_ok:
                                                 did_run = True
                                                 res = await asyncio.to_thread(self.db.update_executions, user)
+                                                if isinstance(res, dict) and res.get('error'):
+                                                    raise RuntimeError(f"Execution update failed for {user.name}")
                                                 try:
                                                     if isinstance(res, dict):
                                                         fetched = res.get('fetched')
@@ -3409,6 +3411,14 @@ class PBData():
                                 # 3-4 extra REST calls per user per cycle → 429s.  With a
                                 # persistent instance the cache hit skips those calls entirely.
                                 _n_due = int(_balance_due) + int(_positions_due) + int(_orders_due)
+                                from Exchange import credential_fingerprint as _credential_fingerprint
+                                current_fingerprint = _credential_fingerprint(user)
+                                cached_exchange = _user_exch.get(user.name)
+                                if cached_exchange is not None and getattr(cached_exchange, 'credential_fingerprint', '') != current_fingerprint:
+                                    try:
+                                        cached_exchange.close()
+                                    finally:
+                                        _user_exch.pop(user.name, None)
                                 if user.name not in _user_exch:
                                     _user_exch[user.name] = _Exchange(user.exchange, user)
                                 _shared_exch = _user_exch[user.name]
@@ -4186,7 +4196,7 @@ class PBData():
                             for u in self.users
                             if u.name in self.fetch_users
                             and u.name in (self.trades_users or [])
-                            and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'kucoin', 'okx', 'gateio')
+                            and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'kucoin', 'okx', 'gateio', 'bitunix', 'weex')
                         ]
                     except Exception:
                         exec_users = []
@@ -4381,7 +4391,7 @@ class PBData():
                     for u in self.users
                     if u.name in self.fetch_users
                     and u.name in (self.trades_users or [])
-                    and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'kucoin', 'okx', 'gateio')
+                    and getattr(u, 'exchange', None) in ('hyperliquid', 'binance', 'bitget', 'bybit', 'kucoin', 'okx', 'gateio', 'bitunix', 'weex')
                 ]
             except Exception:
                 exec_users = []

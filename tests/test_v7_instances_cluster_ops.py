@@ -174,8 +174,8 @@ def test_record_cluster_config_upsert_missing_instance_dir_is_warning_only(monke
     assert not (tmp_path / "data" / "cluster" / "desired_state.json").exists()
 
 
-def test_legacy_v7_api_ssh_sync_is_disabled(monkeypatch, tmp_path: Path) -> None:
-    """The old V7 API sync path must not write to VPS hosts on cluster-mode."""
+def test_v7_fast_activation_falls_back_without_cluster_state(monkeypatch, tmp_path: Path) -> None:
+    """Fast activation remains non-blocking when Cluster state is unavailable."""
 
     instance_dir = tmp_path / "data" / "run_v7" / "test_inst"
     _write_config(instance_dir, 9, "vps-a")
@@ -183,7 +183,9 @@ def test_legacy_v7_api_ssh_sync_is_disabled(monkeypatch, tmp_path: Path) -> None
 
     result = asyncio.run(v7_instances._ssh_sync_instance("test_inst"))
 
-    assert result["disabled"] is True
+    assert result["pending"] is True
+    assert result["direct"] is False
+    assert result["cluster_sync"] is True
     assert result["hosts"] == {}
     assert result["ok"] == 0
     assert result["failed"] == 0
@@ -203,7 +205,7 @@ def test_backup_draft_save_clears_tombstone(monkeypatch, tmp_path: Path) -> None
     async def noop_runtime_check(name: str, cfg: dict) -> None:
         return None
 
-    async def noop_ssh_sync(name: str) -> dict:
+    async def noop_ssh_sync(name: str, operation: dict | None = None) -> dict:
         return {"ok": 0, "failed": 0, "hosts": []}
 
     class FakeUsers:
@@ -249,7 +251,7 @@ def test_save_after_deleted_instance_uses_highest_cluster_version(monkeypatch, t
     async def noop_runtime_check(name: str, cfg: dict) -> None:
         return None
 
-    async def noop_ssh_sync(name: str) -> dict:
+    async def noop_ssh_sync(name: str, operation: dict | None = None) -> dict:
         return {"ok": 0, "failed": 0, "hosts": []}
 
     class FakeUsers:
@@ -300,7 +302,7 @@ def test_save_imported_config_ignores_submitted_version(monkeypatch, tmp_path: P
     async def noop_runtime_check(name: str, cfg: dict) -> None:
         return None
 
-    async def noop_ssh_sync(name: str) -> dict:
+    async def noop_ssh_sync(name: str, operation: dict | None = None) -> dict:
         return {"ok": 0, "failed": 0, "hosts": []}
 
     class FakeUsers:
@@ -364,7 +366,7 @@ def test_copy_instance_config_copies_referenced_override_files(monkeypatch, tmp_
     async def noop_runtime_check(name: str, cfg: dict) -> None:
         return None
 
-    async def noop_ssh_sync(name: str) -> dict:
+    async def noop_ssh_sync(name: str, operation: dict | None = None) -> dict:
         return {"ok": 0, "failed": 0, "hosts": []}
 
     class FakeUsers:

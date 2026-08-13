@@ -62,6 +62,190 @@ def _payload(*, enabled_on: str = "disabled", note: str = "first") -> dict:
     }
 
 
+def test_available_users_are_filtered_by_pb8_live_exchange_capabilities(monkeypatch) -> None:
+    """PB8 Run must include Bitunix/WEEX users without exposing PB7-only entries."""
+    users = SimpleNamespace(
+        list=lambda: ["bitunix-user", "weex-user", "unsupported-user"],
+        find_exchange=lambda name: {
+            "bitunix-user": "bitunix",
+            "weex-user": "weex",
+            "unsupported-user": "unsupported",
+        }[name],
+    )
+    import User
+
+    monkeypatch.setattr(User, "Users", lambda: users)
+    monkeypatch.setattr(
+        v8_instances,
+        "get_pb8_exchange_metadata",
+        lambda: {"live": ["bitunix", "weex"]},
+    )
+
+    assert v8_instances._available_users() == [
+        {"name": "bitunix-user", "exchange": "bitunix"},
+        {"name": "weex-user", "exchange": "weex"},
+    ]
+
+
+def test_pb8_symbol_and_status_routes_use_official_market_identifier_bridge(monkeypatch) -> None:
+    """PB8 metadata routes must preserve collision-safe IDs and exact imported values."""
+    calls = []
+
+    def resolve(exchanges, identifiers=None, **_kwargs):
+        calls.append((exchanges, identifiers))
+        return {
+            "contract_version": 1,
+            "exchanges": list(exchanges),
+            "symbols": ["BTC", "bitget::ABCUSDT", "bitget::1000ABCUSDT"],
+            "catalog": [
+                {"config_id": "BTC", "coin": "BTC", "resolutions": []},
+                {"config_id": "bitget::ABCUSDT", "coin": "ABC", "resolutions": []},
+                {"config_id": "bitget::1000ABCUSDT", "coin": "1000ABC", "resolutions": []},
+            ],
+            "statuses": {
+                value: {"input": value, "normalized": value, "status": "valid", "reason": "resolved"}
+                for value in identifiers or []
+            },
+        }
+
+    monkeypatch.setattr(v8_instances, "get_pb8_market_identifiers", resolve)
+
+    symbols = v8_instances.get_v8_symbols("bitget", session=None)
+    statuses = v8_instances.get_v8_coin_statuses(
+        {"exchanges": ["bitget"], "coins": ["1000ABC/USDT:USDT", "all"]}, session=None
+    )
+
+    assert symbols["symbols"] == ["BTC", "bitget::ABCUSDT", "bitget::1000ABCUSDT"]
+    assert statuses["statuses"]["1000ABC/USDT:USDT"]["normalized"] == "1000ABC/USDT:USDT"
+    assert statuses["statuses"]["all"]["normalized"] == "all"
+    assert calls == [(["bitget"], None), (["bitget"], ["1000ABC/USDT:USDT"])]
+
+
+def test_pb8_empty_status_request_still_returns_catalog(monkeypatch) -> None:
+    """New and all-only editors need PB8 catalog options without submitted identifiers."""
+    monkeypatch.setattr(
+        v8_instances,
+        "get_pb8_market_identifiers",
+        lambda exchanges, identifiers=None: {
+            "contract_version": 1,
+            "exchanges": exchanges,
+            "symbols": ["BTC"],
+            "catalog": [{"config_id": "BTC", "coin": "BTC", "resolutions": []}],
+            "statuses": {},
+        },
+    )
+
+    result = v8_instances.get_v8_coin_statuses(
+        {"exchanges": ["bitget"], "coins": []}, session=None
+    )
+
+    assert result["symbols"] == ["BTC"]
+
+
+def test_pb8_coin_filter_projects_coindata_policy_onto_resolver_catalog(monkeypatch) -> None:
+    """CoinData filtering must return PB8 config IDs rather than ambiguous short names."""
+    from api import editor_market_data
+
+    monkeypatch.setattr(
+        editor_market_data,
+        "filter_symbols",
+        lambda *_args, **_kwargs: (["BTC", "1000ABC", "MISSING"], ["ABC"]),
+    )
+    monkeypatch.setattr(
+        v8_instances,
+        "get_pb8_market_identifiers",
+        lambda *_args, **_kwargs: {
+            "catalog": [
+                {"config_id": "BTC", "coin": "BTC"},
+                {"config_id": "bitget::ABCUSDT", "coin": "ABC"},
+                {"config_id": "bitget::1000ABCUSDT", "coin": "1000ABC"},
+            ]
+        },
+    )
+
+    result = v8_instances.filter_v8_coins("bitget", 0, 10.0, False, False, "", session=None)
+
+    assert result == {
+        "approved": ["BTC", "bitget::1000ABCUSDT"],
+        "ignored": ["bitget::ABCUSDT"],
+        "unresolved": ["MISSING"],
+    }
+
+
+def test_pb8_coin_filter_projects_namespaced_hyperliquid_aliases(monkeypatch) -> None:
+    """CoinData XYZ-TSLA policy must project onto PB8's xyz:TSLA config identifier."""
+    from api import editor_market_data
+
+    monkeypatch.setattr(editor_market_data, "filter_symbols", lambda *_args, **_kwargs: (["XYZ-TSLA"], []))
+    monkeypatch.setattr(
+        v8_instances,
+        "get_pb8_market_identifiers",
+        lambda *_args, **_kwargs: {"catalog": [{"config_id": "xyz:TSLA", "coin": "xyz:TSLA"}]},
+    )
+
+    result = v8_instances.filter_v8_coins("hyperliquid", 0, 10.0, False, False, "", session=None)
+
+    assert result == {"approved": ["xyz:TSLA"], "ignored": [], "unresolved": []}
+
+
+def test_pb8_market_route_maps_resolver_unavailability_to_503(monkeypatch) -> None:
+    """Incomplete PB8 catalogs must fail as retryable service errors without CoinData fallback."""
+    monkeypatch.setattr(
+        v8_instances,
+        "get_pb8_market_identifiers",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            v8_instances.PB8MarketDataUnavailableError("resolver unavailable")
+        ),
+    )
+    monkeypatch.setattr(v8_instances, "_log", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(v8_instances.HTTPException) as exc_info:
+        v8_instances.get_v8_symbols("bitget", session=None)
+
+    assert exc_info.value.status_code == 503
+    assert "resolver unavailable" in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"exchanges": [], "coins": ["BTC"]},
+        {"exchanges": "bitget", "coins": ["BTC"]},
+        {"exchanges": [" bitget "], "coins": ["BTC"]},
+        {"exchanges": ["bitget"], "coins": "BTC"},
+        {"exchanges": ["bitget"], "coins": [" BTC "]},
+    ],
+)
+def test_pb8_market_status_rejects_malformed_client_requests(body) -> None:
+    """Malformed resolver requests must return HTTP 422 instead of empty success or 503."""
+    with pytest.raises(v8_instances.HTTPException) as exc_info:
+        v8_instances.get_v8_coin_statuses(body, session=None)
+
+    assert exc_info.value.status_code == 422
+
+
+def test_pb8_override_references_preserve_exact_market_identifiers() -> None:
+    """Scoped, namespaced, and exact-symbol override keys must not be uppercased or collapsed."""
+    config = {
+        "coin_overrides": {
+            "bitget::1000ABCUSDT": {"override_config_path": "scaled.json"},
+            "xyz:TSLA": {"override_config_path": "hip3.json"},
+            "1000ABC/USDT:USDT": {"override_config_path": "symbol.json"},
+        }
+    }
+
+    assert v8_instances._referenced_overrides(config) == {
+        "bitget::1000ABCUSDT": "scaled.json",
+        "xyz:TSLA": "hip3.json",
+        "1000ABC/USDT:USDT": "symbol.json",
+    }
+
+    with pytest.raises(v8_instances.HTTPException, match="duplicate coin override identifier"):
+        v8_instances._referenced_overrides(
+            {"coin_overrides": {"ABC": {}, " ABC ": {"override_config_path": "other.json"}}}
+        )
+
+
 def test_save_publishes_canonical_pb8_manifest_and_explicit_upsert(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -627,6 +811,7 @@ def test_frontend_and_server_register_the_complete_pb8_live_surface() -> None:
         "defer_broad_candle_warmup",
         "enable_archive_candle_fetch",
         "enable_forager_ws_candles",
+        "exchange_symbol_unavailable_cooldown_hours",
         "execution_delay_seconds",
         "fee_conversion_max_age_ms",
         "fee_pct_fallback",

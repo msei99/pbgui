@@ -805,7 +805,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
     </div>
     <div class="form-group">
       <label><span data-tip="Market-distance threshold used by the PB8 order-replacement churn gate.">order_replacement_churn_gate_market_dist_pct</span></label>
-      <input type="number" id="f-churn-market-dist" min="0" step="0.001" value="0.005">
+      <input type="number" id="f-churn-market-dist" min="0" max="0.999999" step="0.001" value="0.005">
     </div>
     <div class="form-group">
       <label><span data-tip="Required stable period in minutes before the churn gate permits replacement again.">order_replacement_churn_gate_stability_minutes</span></label>
@@ -883,7 +883,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
     </div>
     <div class="form-group" data-v8-only>
       <label><span data-tip="Minutes between REST audits of PB8 forager candles received over WebSocket.">forager_ws_candle_rest_audit_minutes</span></label>
-      <input type="number" id="f-forager-ws-audit" min="0" step="1" value="30">
+      <input type="number" id="f-forager-ws-audit" min="0.000001" max="60" step="1" value="30">
     </div>
     </div>
 
@@ -926,11 +926,15 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
     <div class="subsection-title" data-v8-only>PB8 Runtime</div>
     <div class="form-row cols-8" data-v8-only>
     <div class="form-group" style="grid-column:span 2">
+      <label><span data-tip="Hours PB8 keeps an exchange-reported unavailable symbol in its in-memory cooldown. 0 disables the cooldown. The state resets when PB8 restarts.">exchange_symbol_unavailable_cooldown_hours</span></label>
+      <input type="number" id="f-exchange-symbol-cooldown" min="0" max="876600" step="0.1" value="6">
+    </div>
+    <div class="form-group" style="grid-column:span 2">
       <label><span data-tip="Optional path to a PB8 custom-endpoints definition. Leave blank to use built-in endpoints.">custom_endpoints_path</span></label>
       <input type="text" id="f-custom-endpoints-path" value="" placeholder="default">
     </div>
-    <div class="form-group" style="grid-column:span 6">
-      <label><span data-tip="PB8 startup phase budget overrides as a JSON object. An empty object uses runtime defaults.">startup_phase_budgets</span></label>
+    <div class="form-group" style="grid-column:span 4">
+      <label><span data-tip="Expert diagnostic reporting thresholds only; these values do not gate startup or trading. Use canonical phase names with elapsed_ms and/or since_previous_ms non-negative integer values. An empty object uses runtime defaults.">startup_phase_budgets (Expert/Diagnostic)</span></label>
       <textarea class="json-editor" id="f-startup-phase-budgets" rows="4">{}</textarea>
       <div id="f-startup-phase-budgets-status" class="field-status field-status-inline" aria-live="polite"></div>
     </div>
@@ -1210,9 +1214,9 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 
 <script src="/app/js/editor_shared.js?v=13"></script>
 <script src="/app/js/pbgui_dialogs.js?v=5"></script>
-<script src="/app/js/run_editor_adapter.js?v=7"></script>
+<script src="/app/js/run_editor_adapter.js?v=8"></script>
 <script src="/app/js/log_viewer_panel.js?v=29"></script>
-<script src="/app/js/coin_overrides_editor.js?v=23"></script>
+<script src="/app/js/coin_overrides_editor.js?v=25"></script>
 <script>
 /* ─── Injected Vars ────────────────────────────────────────── */
 var API_BASE       = "%%API_BASE%%";
@@ -1231,6 +1235,7 @@ var cfg = {};            // full config object
 var _fromBacktestConfig = '';  // set when navigating from backtest "Add to Run"
 var paramStatus = {};    // { long: {param: 'neutralized'|'pb_default'}, short: {...} }
 var allSymbols = [];     // available symbols for current exchange
+var pb8MarketLabels = {};
 var allTags = [];        // available tags for current exchange
 var allUsers = [];       // [{name, exchange}]
 var allHosts = [];       // [string]
@@ -1842,7 +1847,7 @@ async function init() {
       allHosts = ['disabled'];
       if (configuredHost && configuredHost !== 'disabled') allHosts.push(configuredHost);
       populateHosts();
-      coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8 });
+      coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8, preserveMarketIdentifiers: runEditorAdapter.isV8, context: { hslSignalMode: (cfg.live || {}).hsl_signal_mode, strategyKind: (cfg.live || {}).strategy_kind } });
       coinOvSetConfigName(IS_NEW === 'true' ? '' : INSTANCE_NAME);
       populateForm();
       if (typeof coinOvSetOverrideConfigs === 'function') {
@@ -1863,7 +1868,7 @@ async function init() {
       allHosts = ['disabled'];
       if (configuredHost && configuredHost !== 'disabled') allHosts.push(configuredHost);
       populateHosts();
-      coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8 });
+      coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8, preserveMarketIdentifiers: runEditorAdapter.isV8, context: { hslSignalMode: (cfg.live || {}).hsl_signal_mode, strategyKind: (cfg.live || {}).strategy_kind } });
       coinOvSetConfigName('');
       populateForm();
       queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });
@@ -1876,7 +1881,7 @@ async function init() {
       allHosts = ['disabled'];
       if (configuredHost && configuredHost !== 'disabled') allHosts.push(configuredHost);
       populateHosts();
-      coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8 });
+      coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8, preserveMarketIdentifiers: runEditorAdapter.isV8, context: { hslSignalMode: (cfg.live || {}).hsl_signal_mode, strategyKind: (cfg.live || {}).strategy_kind } });
       coinOvSetConfigName(INSTANCE_NAME);
       populateForm();
       if (typeof coinOvSetOverrideConfigs === 'function') coinOvSetOverrideConfigs(draftOverrideConfigs);
@@ -1887,6 +1892,11 @@ async function init() {
     document.getElementById('f-user').addEventListener('change', function() {
       queueSymbolsAndTagsLoad();
     });
+    if (runEditorAdapter.isV8) {
+      document.getElementById('f-hsl-signal-mode').addEventListener('change', function() {
+        coinOvSetContext({ hslSignalMode: this.value, strategyKind: getVal('f-strategy-kind') });
+      });
+    }
     await refreshHostCapabilities();
     document.getElementById('f-enabled-on').addEventListener('focus', refreshHostCapabilities);
 
@@ -2059,6 +2069,7 @@ function buildDefaultConfig(user) {
 
 async function loadSymbolsAndTags(sourceCfg, opts) {
   opts = opts || {};
+  var requestSeq = ++_symbolsAndTagsLoadSeq;
   var user = document.getElementById('f-user').value;
   var exchange = '';
   for (var i = 0; i < allUsers.length; i++) {
@@ -2089,7 +2100,6 @@ async function loadSymbolsAndTags(sourceCfg, opts) {
     return;
   }
 
-  var requestSeq = ++_symbolsAndTagsLoadSeq;
   try {
     var results = await Promise.all([
       apiFetch('/symbols?exchange=' + encodeURIComponent(exchange)).then(function(r) { return r.json(); }),
@@ -2098,6 +2108,10 @@ async function loadSymbolsAndTags(sourceCfg, opts) {
     if (requestSeq !== _symbolsAndTagsLoadSeq) return;
 
     allSymbols = results[0].symbols || [];
+    pb8MarketLabels = {};
+    (results[0].catalog || []).forEach(function(entry) {
+      if (entry && entry.config_id) pb8MarketLabels[entry.config_id] = entry.display || entry.coin || entry.config_id;
+    });
     allTags = results[1].tags || [];
     var loadedAnchor = captureRawEditorAnchor();
     rebuildMultiselect('ms-approved-long', ['all'].concat(allSymbols), approvedLong);
@@ -2105,9 +2119,9 @@ async function loadSymbolsAndTags(sourceCfg, opts) {
     rebuildMultiselect('ms-ignored-long', allSymbols, ignoredLong);
     rebuildMultiselect('ms-ignored-short', allSymbols, ignoredShort);
     rebuildMultiselect('ms-tags', allTags, selectedTags);
-    coinOvSetCoins(allSymbols);
+    coinOvSetCoins(allSymbols, pb8MarketLabels);
     restoreRawEditorAnchor(loadedAnchor);
-    await refreshCoinStatuses(exchange);
+    await refreshCoinStatuses(exchange, requestSeq);
   } catch (e) {
     if (requestSeq !== _symbolsAndTagsLoadSeq) return;
     console.error('Failed to load symbols/tags:', e);
@@ -2253,6 +2267,9 @@ function changeRunStrategyKind(nextStrategy) {
     _applyBotJsonHighlight(textarea, paramStatus[side]);
   });
   _activeRunStrategyKind = cleanNext;
+  if (typeof coinOvSetContext === 'function') {
+    coinOvSetContext({ hslSignalMode: getVal('f-hsl-signal-mode'), strategyKind: cleanNext });
+  }
   refreshBotParamStatusLabels();
   scheduleStructuredEditorSync();
 }
@@ -2354,6 +2371,9 @@ function populateForm(opts) {
   setVal('f-forced-long', forcedModeSelectValue(live.forced_mode_long));
   setVal('f-forced-short', forcedModeSelectValue(live.forced_mode_short));
   setVal('f-hsl-signal-mode', live.hsl_signal_mode || 'unified');
+  if (runEditorAdapter.isV8 && typeof coinOvSetContext === 'function') {
+    coinOvSetContext({ hslSignalMode: live.hsl_signal_mode, strategyKind: live.strategy_kind });
+  }
   setVal('f-hsl-cooldown-policy', live.hsl_position_during_cooldown_policy || 'panic');
   setVal('f-max-restarts', live.max_n_restarts_per_day != null ? live.max_n_restarts_per_day : 10);
   setVal('f-max-disk-candles', live.max_disk_candles_per_symbol_per_tf != null ? live.max_disk_candles_per_symbol_per_tf : 1000000);
@@ -2384,6 +2404,7 @@ function populateForm(opts) {
   setChk('f-hsl-accept-incomplete', live.hsl_accept_incomplete_history);
   setChk('f-force-cold-startup', live.force_cold_startup);
   setVal('f-fee-conversion-age', live.fee_conversion_max_age_ms != null ? live.fee_conversion_max_age_ms : 86400000);
+  setVal('f-exchange-symbol-cooldown', live.exchange_symbol_unavailable_cooldown_hours != null ? live.exchange_symbol_unavailable_cooldown_hours : 6);
   setVal('f-fee-pct-fallback', live.fee_pct_fallback != null ? live.fee_pct_fallback : 0.0002);
   setVal('f-fee-pct-sanity', live.fee_pct_sanity_abs_max != null ? live.fee_pct_sanity_abs_max : 0.001);
   setVal('f-churn-activation-count', live.order_replacement_churn_gate_activation_count != null ? live.order_replacement_churn_gate_activation_count : 10);
@@ -2816,6 +2837,7 @@ function collectConfig() {
     var structuredLive = Object.assign({}, result.live, {
       custom_endpoints_path: getVal('f-custom-endpoints-path').trim() || null,
       enable_forager_ws_candles: getChk('f-enable-forager-ws'),
+      exchange_symbol_unavailable_cooldown_hours: getNum('f-exchange-symbol-cooldown'),
       fee_conversion_max_age_ms: getInt('f-fee-conversion-age'),
       fee_pct_fallback: getNum('f-fee-pct-fallback'),
       fee_pct_sanity_abs_max: getNum('f-fee-pct-sanity'),
@@ -3441,6 +3463,10 @@ document.getElementById('f-apply-filters').addEventListener('change', async func
       '&tags=' + encodeURIComponent(tags);
     var resp = await apiFetch(url);
     var data = await resp.json();
+    if (!resp.ok) throw new Error((data && data.detail) || resp.statusText || 'Filter request failed');
+    if (runEditorAdapter.isV8 && Array.isArray(data.unresolved) && data.unresolved.length) {
+      throw new Error('PB8 could not project filtered coins: ' + data.unresolved.join(', '));
+    }
     setMultiselectValues('ms-approved-long', data.approved || []);
     setMultiselectValues('ms-approved-short', data.approved || []);
     setMultiselectValues('ms-ignored-long', data.ignored || []);
@@ -3631,11 +3657,20 @@ var _runMsController = window.PBGuiEditorShared.createMultiselectController({
   controllerName: 'run-' + runEditorAdapter.version + '-ms',
   counterpartMap: msCounterpart,
   coinIds: msCoinIds,
+  formatTagLabel: function(ctx) {
+    if (ctx.value === 'all') return '★ all';
+    if (ctx.meta && ctx.meta.status === 'invalid') return '? ' + (ctx.meta.raw || ctx.value);
+    return pb8MarketLabels[ctx.value] || (ctx.meta && ctx.meta.normalized) || ctx.value;
+  },
+  formatOptionLabel: function(ctx) {
+    var label = pb8MarketLabels[ctx.value] || ctx.value;
+    return ctx.inOther ? label + ' ⇄' : label;
+  },
   formatTagTitle: function(ctx) {
     if (!ctx.meta) return '';
     if (ctx.meta.status === 'invalid') {
       return (ctx.meta.changed ? ('Normalized from ' + ctx.meta.raw + ' to ' + ctx.meta.normalized + '. ') : '') +
-        'CoinData could not resolve this entry to an active coin for the current exchange.';
+        (runEditorAdapter.isV8 ? 'PB8 could not resolve this market identifier for the current exchange.' : 'CoinData could not resolve this entry to an active coin for the current exchange.');
     }
     if (ctx.meta.changed) {
       return 'Normalized from ' + ctx.meta.raw + ' to ' + ctx.meta.normalized + '.';
@@ -3680,7 +3715,7 @@ function getCoinTagTitle(value, meta) {
   if (!meta) return '';
   if (meta.status === 'invalid') {
     return (meta.changed ? ('Normalized from ' + meta.raw + ' to ' + meta.normalized + '. ') : '') +
-      'CoinData could not resolve this entry to an active coin for the current exchange.';
+      (runEditorAdapter.isV8 ? 'PB8 could not resolve this market identifier for the current exchange.' : 'CoinData could not resolve this entry to an active coin for the current exchange.');
   }
   if (meta.changed) {
     return 'Normalized from ' + meta.raw + ' to ' + meta.normalized + '.';
@@ -3688,7 +3723,7 @@ function getCoinTagTitle(value, meta) {
   return '';
 }
 
-async function refreshCoinStatuses(exchange) {
+async function refreshCoinStatuses(exchange, requestSeq) {
   var wrapIds = ['ms-approved-long', 'ms-approved-short', 'ms-ignored-long', 'ms-ignored-short'];
   if (!exchange) {
     var emptyAnchor = captureRawEditorAnchor();
@@ -3718,12 +3753,19 @@ async function refreshCoinStatuses(exchange) {
     });
     var data = await resp.json();
     if (!resp.ok) throw new Error((data && data.detail) || resp.statusText || 'Failed to resolve coin status');
+    if (requestSeq != null && requestSeq !== _symbolsAndTagsLoadSeq) return;
+    Object.keys(data.statuses || {}).forEach(function(identifier) {
+      var status = data.statuses[identifier];
+      if (status && status.display) pb8MarketLabels[identifier] = status.display;
+    });
+    if (runEditorAdapter.isV8) coinOvSetCoins(allSymbols, pb8MarketLabels);
     var applyAnchor = captureRawEditorAnchor();
     wrapIds.forEach(function(wrapId) {
       applyMultiselectCoinStatus(wrapId, data.statuses || {});
     });
     restoreRawEditorAnchor(applyAnchor);
   } catch (e) {
+    if (requestSeq != null && requestSeq !== _symbolsAndTagsLoadSeq) return;
     console.error('Failed to resolve coin statuses:', e);
     var errorAnchor = captureRawEditorAnchor();
     wrapIds.forEach(function(wrapId) { clearMultiselectCoinMeta(wrapId); });

@@ -42,6 +42,7 @@ def optimize_v8_roots(tmp_path, monkeypatch):
     monkeypatch.setattr(optimize_v8, "_v7_configs_dir", lambda: v7_configs)
     monkeypatch.setattr(optimize_v8, "prepare_pb8_config", lambda config, **kwargs: copy.deepcopy(config))
     monkeypatch.setattr(optimize_v8, "load_pb8_config", lambda path: json.loads(Path(path).read_text(encoding="utf-8")))
+    monkeypatch.setattr(optimize_v8, "validate_pb8_override_bundle", lambda _path: None)
     with optimize_v8._result_progress_cache_lock:
         optimize_v8._result_progress_cache.clear()
     with optimize_v8._backtest_count_cache_lock:
@@ -182,6 +183,96 @@ def test_config_bundle_round_trips_all_strategies_and_optimizer_options(optimize
     assert loaded["optimize"]["pymoo"]["algorithms"]["nsga3"]["ref_dirs"]["n_partitions"] == 8
     assert loaded["optimize"]["fixed_runtime_overrides"] == {"bot.short.risk.n_positions": 2}
     assert loaded["pbgui"]["additional_parameters"]["future_runtime_option"]["enabled"] is True
+
+
+def test_pb81_scenario_bases_survive_config_and_queue_round_trip(optimize_v8_roots) -> None:
+    """PB8.1 objective, scoring, and limit scenario selection must remain structurally exact."""
+    config = _full_pb8_config()
+    config["config_version"] = "v8.1.0"
+    config["backtest"].update(
+        {
+            "suite_enabled": True,
+            "scenarios": [{"label": "bull"}, {"label": "bear"}],
+            "aggregate": {"default": "mean"},
+        }
+    )
+    config["optimize"]["objective_scenario"] = "bull"
+    config["optimize"]["scoring"] = [
+        {"metric": "adg_strategy_eq", "goal": "max"},
+        {"metric": "sharpe_ratio_strategy_eq", "goal": "max", "scenario": None, "aggregate": "median"},
+        {"metric": "drawdown_worst_strategy_eq", "goal": "min", "scenario": "bear"},
+    ]
+    config["optimize"]["limits"] = [
+        {"metric": "drawdown_worst_strategy_eq", "penalize_if": "greater_than", "value": 0.5},
+        {"metric": "drawdown_worst_strategy_eq", "penalize_if": "greater_than", "scenario": None, "stat": "max", "value": 0.4},
+        {"metric": "drawdown_worst_strategy_eq", "penalize_if": "greater_than", "scenario": "bear", "value": 0.3},
+    ]
+
+    optimize_v8.save_config("scenario-bases", config, session=None)
+    loaded = optimize_v8.get_config("scenario-bases", None)["config"]
+    filename = optimize_v8.add_to_queue({"name": "scenario-bases"}, None)["filename"]
+    snapshot = optimize_v8._read_json(optimize_v8._snapshot_file(filename))
+
+    for candidate in (loaded, snapshot):
+        assert candidate["optimize"]["objective_scenario"] == "bull"
+        assert candidate["optimize"]["scoring"] == config["optimize"]["scoring"]
+        assert candidate["optimize"]["limits"] == config["optimize"]["limits"]
+
+
+def test_pb81_optimize_override_bundle_survives_save_duplicate_and_queue(
+    optimize_v8_roots, monkeypatch
+) -> None:
+    """Optimize must stage, validate, duplicate, and snapshot referenced sparse overrides."""
+    config = _full_pb8_config()
+    config["config_version"] = "v8.1.0"
+    config["coin_overrides"] = {"1000CATUSDT": {"override_config_path": "1000CATUSDT.json"}}
+    overrides = {
+        "1000CATUSDT.json": {
+            "bot": {"long": {"risk": {"entry_cooldown_minutes": 0}}},
+        }
+    }
+    validated = []
+    monkeypatch.setattr(
+        optimize_v8,
+        "validate_pb8_override_bundle",
+        lambda path: validated.append(Path(path)),
+    )
+
+    optimize_v8.save_config(
+        "override-bundle",
+        {"config": config, "override_configs": overrides},
+        session=None,
+    )
+    loaded = optimize_v8.get_config("override-bundle", None)
+    duplicated = optimize_v8.duplicate_config(
+        "override-bundle", {"new_name": "override-copy"}, session=None
+    )
+    filename = optimize_v8.add_to_queue({"name": "override-copy"}, None)["filename"]
+    queue_loaded = optimize_v8.get_queue_config(filename, None)
+
+    assert loaded["override_configs"] == overrides
+    assert duplicated["config"]["coin_overrides"] == config["coin_overrides"]
+    assert queue_loaded["override_configs"] == overrides
+    assert json.loads(
+        (optimize_v8._snapshot_dir(filename) / "1000CATUSDT.json").read_text(encoding="utf-8")
+    ) == overrides["1000CATUSDT.json"]
+    assert len(validated) == 3
+    assert validated[0].name == validated[1].name == optimize_v8._CONFIG_FILENAME
+    assert validated[0].parent.name.startswith(".override-bundle.stage-")
+    assert validated[1].parent.name.startswith(".override-copy.stage-")
+    assert validated[2].name == optimize_v8._CONFIG_FILENAME
+    assert validated[2].parent.name.startswith(f".{filename}.stage-")
+
+
+def test_pb81_optimize_override_bundle_rejects_missing_file(optimize_v8_roots) -> None:
+    """A config may not publish when one referenced sparse override is unavailable."""
+    config = _full_pb8_config()
+    config["coin_overrides"] = {"CAT": {"override_config_path": "CAT.json"}}
+
+    with pytest.raises(HTTPException, match="Override config not supplied"):
+        optimize_v8.save_config("missing-override", {"config": config, "override_configs": {}}, session=None)
+
+    assert not optimize_v8._config_dir("missing-override").exists()
 
 
 def test_config_save_moves_misplaced_hsl_values_to_pb8_bot_schema(optimize_v8_roots) -> None:
@@ -582,6 +673,31 @@ def test_resume_compatibility_rejects_before_queue_mutation(optimize_v8_roots, m
     assert "optimize.backend" in str(exc_info.value.detail)
     assert terminated == []
     assert after == before
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value", "expected_field"),
+    [
+        ("optimize", "objective_scenario", "bull", "optimize.objective_scenario"),
+        ("backtest", "aggregate", {"default": "median"}, "backtest.aggregate"),
+    ],
+)
+def test_resume_compatibility_includes_pb81_scenario_basis(
+    optimize_v8_roots, section, key, value, expected_field
+) -> None:
+    """A checkpoint with a different effective suite basis must be rejected before launch."""
+    _configs, _queue, _logs, results = optimize_v8_roots
+    optimize_v8.save_config("resume-basis", _full_pb8_config(), None)
+    filename = optimize_v8.add_to_queue({"name": "resume-basis"}, None)["filename"]
+    incompatible = _full_pb8_config()
+    incompatible[section][key] = value
+    result = _make_resumable_result(results / f"incompatible-{key}", incompatible)
+
+    with pytest.raises(HTTPException) as exc_info:
+        optimize_v8.resume_checkpoint(filename, {"source": str(result)}, None)
+
+    assert exc_info.value.status_code == 422
+    assert expected_field in str(exc_info.value.detail)
 
 
 def test_transactional_result_resume_supports_checkpoint_only_artifacts(optimize_v8_roots) -> None:
@@ -1404,6 +1520,7 @@ def test_queue_settings_match_pb7_and_apply_only_to_launch_copy(monkeypatch) -> 
         },
     )
     monkeypatch.setattr(optimize_v8, "get_metadata", lambda _session: {"backends": [], "optimize_defaults": {}})
+    monkeypatch.setattr(optimize_v8, "get_pb8_exchange_metadata", lambda: {"optimize": ["binance", "weex"]})
     monkeypatch.setattr(optimize_v8, "save_ini_section", lambda section, values: saved.update(section=section, values=values))
 
     settings = optimize_v8.get_settings(None)
@@ -1413,6 +1530,7 @@ def test_queue_settings_match_pb7_and_apply_only_to_launch_copy(monkeypatch) -> 
     assert settings["use_pbgui_market_data"] is True
     assert settings["cpu_max"] == 8
     assert settings["hsl_signal_modes"] == ["coin", "pside", "unified"]
+    assert settings["exchange_options"] == ["binance", "weex"]
 
     source = {"backtest": {"ohlcv_source_dir": "original"}, "optimize": {"n_cpus": 2}}
     automatic = optimize_v8._apply_queue_launch_settings(
@@ -1966,6 +2084,110 @@ def test_repair_config_rewrites_immutable_snapshot_without_second_prepare(optimi
     assert repaired["exchange"] == ["bybit"]
     assert snapshot["optimize"]["seed"] == 44
     assert snapshot["optimize"]["n_cpus"] == 8
+
+
+def test_repair_config_rolls_back_snapshot_when_queue_write_fails(optimize_v8_roots, monkeypatch) -> None:
+    """Repair must preserve the old queue record and snapshot if metadata persistence fails."""
+    optimize_v8.save_config("replacement", {"backtest": {"exchanges": ["bybit"]}, "optimize": {"seed": 44}}, None)
+    _write_queue_job("repair-rollback", 3)
+    old_queue = optimize_v8._read_json(optimize_v8._queue_file("repair-rollback"))
+    old_snapshot = optimize_v8._read_json(optimize_v8._snapshot_file("repair-rollback"))
+    original_write = optimize_v8._write_json
+
+    def fail_queue_write(path, payload):
+        if Path(path) == optimize_v8._queue_file("repair-rollback"):
+            raise OSError("injected queue write failure")
+        return original_write(path, payload)
+
+    monkeypatch.setattr(optimize_v8, "_write_json", fail_queue_write)
+
+    with pytest.raises(OSError, match="injected queue write failure"):
+        optimize_v8.repair_queue_config("repair-rollback", {"name": "replacement"}, None)
+
+    assert optimize_v8._read_json(optimize_v8._queue_file("repair-rollback")) == old_queue
+    assert optimize_v8._read_json(optimize_v8._snapshot_file("repair-rollback")) == old_snapshot
+
+
+def test_startup_recovers_interrupted_queue_repair(optimize_v8_roots) -> None:
+    """A durable repair journal restores the previous snapshot after process interruption."""
+    _write_queue_job("repair-crash", 1)
+    original = optimize_v8._read_json(optimize_v8._snapshot_file("repair-crash"))
+    snapshot_root = optimize_v8._snapshot_dir("repair-crash").parent
+    backup = snapshot_root / ".repair-crash.repair-backup-test"
+    optimize_v8._snapshot_dir("repair-crash").replace(backup)
+    optimize_v8._snapshot_dir("repair-crash").mkdir()
+    optimize_v8._write_json(optimize_v8._snapshot_file("repair-crash"), {"optimize": {"seed": 99}})
+    repair_root = optimize_v8._queue_dir() / "repair"
+    repair_root.mkdir(parents=True)
+    optimize_v8._write_json(
+        repair_root / "repair-crash.json",
+        {"filename": "repair-crash", "backup": backup.name},
+    )
+
+    optimize_v8._reconcile_queue_artifacts()
+
+    assert optimize_v8._read_json(optimize_v8._snapshot_file("repair-crash")) == original
+    assert not backup.exists()
+    assert not (repair_root / "repair-crash.json").exists()
+
+
+def test_optimize_override_payload_limits_preserve_existing_bundle(optimize_v8_roots) -> None:
+    """Oversized sparse overrides fail before replacing an existing Optimize bundle."""
+    config = {
+        "backtest": {"exchanges": ["bybit"]},
+        "coin_overrides": {"BTC": {"override_config_path": "BTC.json"}},
+        "optimize": {},
+    }
+    optimize_v8.save_config(
+        "bounded",
+        {"config": {**config, "optimize": {"seed": 1}}, "override_configs": {"BTC.json": {"value": 1}}},
+        None,
+    )
+    before = optimize_v8._read_json(optimize_v8._config_file("bounded"))
+
+    with pytest.raises(HTTPException) as error:
+        optimize_v8.save_config(
+            "bounded",
+            {"config": {**config, "optimize": {"seed": 2}}, "override_configs": {"BTC.json": {"value": "x" * (1024 * 1024)}}},
+            None,
+        )
+
+    assert error.value.status_code == 413
+    assert optimize_v8._read_json(optimize_v8._config_file("bounded")) == before
+
+
+def test_migrate_v7_publishes_config_and_report_as_one_bundle(optimize_v8_roots, monkeypatch) -> None:
+    """Successful migration publishes its official report in the same atomic config bundle."""
+    source = optimize_v8._v7_configs_dir() / "legacy.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("{}", encoding="utf-8")
+    report = {"output_written": True, "manual_review_fields": [], "status": "ok"}
+    monkeypatch.setattr(
+        optimize_v8,
+        "migrate_pb7_config",
+        lambda *_args, **_kwargs: {"report": report, "config": {"backtest": {}, "optimize": {}}},
+    )
+
+    response = optimize_v8.migrate_v7({"source_name": "legacy", "target_name": "migrated"}, None)
+
+    assert response["report"] == report
+    assert optimize_v8._read_json(optimize_v8._config_dir("migrated") / "migration_report.json") == report
+
+
+def test_migrate_v7_returns_official_manual_review_report(optimize_v8_roots, monkeypatch) -> None:
+    """Rejected migration exposes the official report without publishing a config."""
+    source = optimize_v8._v7_configs_dir() / "legacy.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("{}", encoding="utf-8")
+    report = {"output_written": False, "manual_review_fields": ["bot.long.example"]}
+    monkeypatch.setattr(optimize_v8, "migrate_pb7_config", lambda *_args, **_kwargs: {"report": report})
+
+    with pytest.raises(HTTPException) as error:
+        optimize_v8.migrate_v7({"source_name": "legacy", "target_name": "rejected"}, None)
+
+    assert error.value.status_code == 422
+    assert error.value.detail["report"] == report
+    assert not optimize_v8._config_dir("rejected").exists()
 
 
 def test_startup_reconciliation_repairs_partial_and_cleans_only_stale_orphans(optimize_v8_roots, monkeypatch) -> None:

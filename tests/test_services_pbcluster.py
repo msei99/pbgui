@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -796,6 +797,26 @@ def test_live_unsubscribe_awaits_watcher_cleanup() -> None:
         assert key not in live._watcher_tasks
         assert key not in live._watcher_subs
         await live.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_live_watcher_without_ws_client_uses_db_polling(monkeypatch) -> None:
+    """Unsupported private WebSockets must retain live updates through DB polling."""
+    from api import live
+    from Exchange import Exchange
+
+    async def scenario() -> None:
+        polled = []
+        monkeypatch.setattr(Exchange, "get_private_ws_client", staticmethod(lambda *_args, **_kwargs: asyncio.sleep(0, result=None)))
+
+        async def fake_poll(user, kind, db) -> None:
+            polled.append((user.name, kind, db.__class__.__name__))
+
+        monkeypatch.setattr(live, "_db_poll_loop", fake_poll)
+        await live._watcher_loop(SimpleNamespace(name="alice", exchange="weex"), "positions")
+
+        assert polled and polled[0][:2] == ("alice", "positions")
 
     asyncio.run(scenario())
 

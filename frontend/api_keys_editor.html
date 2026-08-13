@@ -729,20 +729,21 @@
             <div class="form-grid" id="standardFields">
                 <div class="form-group">
                     <label>API Key</label>
-                    <input type="text" id="editKey" />
+                    <div class="pw-wrap">
+                        <input type="password" id="editKey" />
+                        <button type="button" class="pw-eye-btn" onclick="toggleApiKeyVisible(this)" tabindex="-1">&#128065;</button>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>API Secret</label>
                     <div class="pw-wrap">
                         <input type="password" id="editSecret" />
-                        <button type="button" class="pw-eye-btn" onclick="togglePwVisible('editSecret', this)" tabindex="-1">&#128065;</button>
                     </div>
                 </div>
                 <div class="form-group" id="passphraseGroup" style="display:none;">
                     <label>Passphrase / Password</label>
                     <div class="pw-wrap">
                         <input type="password" id="editPassphrase" />
-                        <button type="button" class="pw-eye-btn" onclick="togglePwVisible('editPassphrase', this)" tabindex="-1">&#128065;</button>
                     </div>
                 </div>
             </div>
@@ -782,7 +783,6 @@
                     <label>Private Key</label>
                     <div class="pw-wrap">
                         <input type="password" id="editPrivateKey" />
-                        <button type="button" class="pw-eye-btn" onclick="togglePwVisible('editPrivateKey', this)" tabindex="-1">&#128065;</button>
                     </div>
                 </div>
                 <div class="form-checkbox">
@@ -1077,7 +1077,7 @@
     <script src="/app/js/pbgui_dialogs.js?v=5"></script>
     <script>
     // ── Config ──────────────────────────────────────────────
-    // TOKEN, API_BASE, PBGUI_VERSION and PBGUI_SERIAL are injected server-side by /main_page.
+    // Browser authentication uses the same-origin HttpOnly session cookie.
     // The server replaces "%%PLACEHOLDER%%" (with quotes) via html.replace(),
     // so guard strings must use a DIFFERENT form to avoid being replaced too.
     var TOKEN          = "%%TOKEN%%";
@@ -1088,10 +1088,7 @@
     if (API_BASE       === "%%" + "API_BASE%%") API_BASE       = "/api/api-keys";
     if (PBGUI_VERSION  === "%%" + "VERSION%%")  PBGUI_VERSION  = "";
     if (PBGUI_SERIAL   === "%%" + "SERIAL%%")   PBGUI_SERIAL   = "";
-    const HEADERS = {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + TOKEN,
-    };
+    const HEADERS = { "Content-Type": "application/json" };
 
     // Exchange metadata (populated from server)
     let EXCHANGES = [];
@@ -1102,6 +1099,7 @@
     let currentUsers = [];
     let editMode = null; // "create" | "edit"
     let editingName = null;
+    let apiKeyRevealGeneration = 0;
     let hlExpiryData = {};
     let bybitExpiryData = {};  // live-only; ips inside are never persisted
     // Sort / filter state
@@ -1176,6 +1174,10 @@
         // Dirty-tracking: any input/change inside the edit panel marks it dirty
         document.getElementById("editPanel").addEventListener("input", () => { formDirty = true; });
         document.getElementById("editPanel").addEventListener("change", () => { formDirty = true; });
+        document.getElementById("editKey").addEventListener("input", function() {
+            apiKeyRevealGeneration += 1;
+            delete this.dataset.revealed;
+        });
         // Restore panel from URL hash without showing the user list first.
         // loadUsers() still runs in the background so Back → list works.
         const hash = window.location.hash;
@@ -1210,8 +1212,11 @@
     // ── API helpers ─────────────────────────────────────────
     async function apiFetch(path, options = {}) {
         const url = API_BASE + path;
-        const resp = await fetch(url, { headers: HEADERS, ...options });
-        if (resp.status === 401) clearTradfiRevealedApiKey();
+        const resp = await fetch(url, { credentials: "same-origin", headers: HEADERS, ...options });
+        if (resp.status === 401) {
+            clearTradfiRevealedApiKey();
+            clearRevealedApiKey();
+        }
         if (!resp.ok) {
             let detail = null;
             try {
@@ -1514,6 +1519,7 @@
     }
 
     function showEditPanel(user) {
+        clearRevealedApiKey();
         formDirty = false;
         ["hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
             document.getElementById(id).style.display = "none";
@@ -1537,17 +1543,17 @@
         // Exchange select
         const sel = document.getElementById("editExchange");
         sel.value = user.exchange || EXCHANGES[0];
+        sel.dataset.originalExchange = sel.value;
         sel.disabled = isEdit && user.in_use;
 
         // Standard fields
-        document.getElementById("editKey").value = user.key || "";
-        const _encName = encodeURIComponent(user.name || "");
-        setupMaskedField("editSecret",     isEdit ? (user.secret_masked     || "") : "", isEdit ? `/${_encName}/reveal?field=secret`     : "");
-        setupMaskedField("editPassphrase", isEdit ? (user.passphrase_masked || "") : "", isEdit ? `/${_encName}/reveal?field=passphrase` : "");
+        setupMaskedField("editKey", isEdit ? (user.key_masked || "") : "", "");
+        setupMaskedField("editSecret", isEdit ? (user.secret_masked || "") : "", "");
+        setupMaskedField("editPassphrase", isEdit ? (user.passphrase_masked || "") : "", "");
 
         // HL fields
         document.getElementById("editWallet").value = user.wallet_address || "";
-        setupMaskedField("editPrivateKey", isEdit ? (user.private_key_masked || "") : "", isEdit ? `/${_encName}/reveal?field=private_key` : "");
+        setupMaskedField("editPrivateKey", isEdit ? (user.private_key_masked || "") : "", "");
         document.getElementById("editIsVault").checked = user.is_vault || false;
 
         // Advanced
@@ -1594,7 +1600,17 @@
     }
 
     function onExchangeChange() {
-        const exchange = document.getElementById("editExchange").value;
+        const exchangeSelect = document.getElementById("editExchange");
+        const exchange = exchangeSelect.value;
+        const originalExchange = exchangeSelect.dataset.originalExchange || exchange;
+        if (editMode === "edit" && exchange !== originalExchange) {
+            clearRevealedApiKey();
+            ["editKey", "editSecret", "editPassphrase", "editPrivateKey"].forEach(function(id) {
+                setupMaskedField(id, "", "");
+            });
+            document.getElementById("editWallet").value = "";
+            document.getElementById("editIsVault").checked = false;
+        }
         const isHL = exchange === "hyperliquid";
         const isBybit = exchange === "bybit";
         const needsPassphrase = PASSPHRASE_EXCHANGES.includes(exchange);
@@ -1776,6 +1792,7 @@
         }
         formDirty = false;
         clearTradfiRevealedApiKey();
+        clearRevealedApiKey();
         ["editPanel","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
             document.getElementById(id).style.display = "none";
         });
@@ -1825,8 +1842,9 @@
                 return;
             }
         } else {
-            const apiKey = document.getElementById("editKey").value.trim();
-            if (!apiKey) {
+            const apiKey = getMaskedFieldValue("editKey");
+            const apiKeyAlreadySaved = !isCreate && document.getElementById("editKey").placeholder.includes("saved");
+            if (!apiKey && !apiKeyAlreadySaved) {
                 showToast("API Key is required", "error");
                 return;
             }
@@ -1868,7 +1886,7 @@
 
         const data = {
             exchange: exchange,
-            key: isHL ? null : (document.getElementById("editKey").value || null),
+            key: isHL ? null : getMaskedFieldValue("editKey"),
             secret: isHL ? null : getMaskedFieldValue("editSecret"),
             passphrase: PASSPHRASE_EXCHANGES.includes(exchange) ? getMaskedFieldValue("editPassphrase") : null,
             wallet_address: isHL ? (document.getElementById("editWallet").value || null) : null,
@@ -1986,7 +2004,7 @@
         const isHL = exchange === "hyperliquid";
         const override = {};
         if (!isHL) {
-            const keyVal = document.getElementById("editKey").value.trim();
+            const keyVal = getMaskedFieldValue("editKey");
             if (keyVal) override.key = keyVal;
             const secretVal = getMaskedFieldValue("editSecret");
             if (secretVal) override.secret = secretVal;
@@ -2106,6 +2124,7 @@
         if (eyeBtn && eyeBtn.classList.contains("pw-eye-btn")) eyeBtn.textContent = "\uD83D\uDC41";
         // Clear any previously-revealed real value
         delete inp.dataset.realValue;
+        delete inp.dataset.revealed;
         if (maskedValue) {
             inp.value = "";
             inp.placeholder = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (saved \u2014 leave blank to keep)";
@@ -2128,6 +2147,7 @@
         const inp = document.getElementById(inputId);
         if (!inp) return null;
         const val = inp.value;
+        if (inp.dataset.revealed === "true") return null;
         // Field was revealed (realValue set) but user explicitly cleared the content.
         // Return "" as a sentinel meaning "intentionally cleared" so validation can catch it.
         // Note: re-hiding unchanged deletes realValue (see togglePwVisible), so that case
@@ -2176,6 +2196,64 @@
         }
     }
 
+    async function toggleApiKeyVisible(btn) {
+        const inp = document.getElementById("editKey");
+        if (!inp) return;
+        if (inp.type !== "password") {
+            if (inp.dataset.revealed === "true") clearRevealedApiKey();
+            else {
+                inp.type = "password";
+                btn.textContent = "\uD83D\uDC41";
+            }
+            return;
+        }
+        if (inp.value) {
+            inp.type = "text";
+            btn.textContent = "\uD83D\uDE48";
+            return;
+        }
+        if (!editingName || editMode !== "edit") {
+            inp.type = "text";
+            btn.textContent = "\uD83D\uDE48";
+            return;
+        }
+        try {
+            const requestedName = editingName;
+            const generation = ++apiKeyRevealGeneration;
+            const data = await apiFetch("/reveal-key", {
+                method: "POST",
+                cache: "no-store",
+                body: JSON.stringify({name: requestedName})
+            });
+            if (generation !== apiKeyRevealGeneration || editMode !== "edit" || editingName !== requestedName) return;
+            inp.value = data.value || "";
+            inp.dataset.revealed = "true";
+            inp.type = "text";
+            btn.textContent = "\uD83D\uDE48";
+        } catch (e) {
+            showToast("Could not reveal API key: " + e.message, "error");
+        }
+    }
+
+    function clearRevealedApiKey() {
+        apiKeyRevealGeneration += 1;
+        const inp = document.getElementById("editKey");
+        if (!inp) return;
+        if (inp.dataset.revealed === "true") inp.value = "";
+        delete inp.dataset.revealed;
+        inp.type = "password";
+        const button = inp.nextElementSibling;
+        if (button) button.textContent = "\uD83D\uDC41";
+    }
+
+    window.addEventListener("pagehide", function() {
+        clearRevealedApiKey();
+        ["editKey", "editSecret", "editPassphrase", "editPrivateKey"].forEach(function(id) {
+            const input = document.getElementById(id);
+            if (input) input.value = "";
+        });
+    });
+
     function escapeAttr(str) {
         return String(str == null ? "" : str)
             .split("&").join("&amp;")
@@ -2189,7 +2267,8 @@
         /* Log to PBV7UI.log */
         fetch('/api/notify_log', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ msg: message, level: type === 'success' ? 'ok' : type })
         }).catch(function() {});
         if (type === "error" || type === "warning") {
@@ -2245,6 +2324,7 @@
 
     async function toggleComments() {
         if (commentsVisible) { backToList(); return; }
+        clearRevealedApiKey();
         commentsVisible = true;
         ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","hlConfigPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
             document.getElementById(id).style.display = "none";
@@ -2349,6 +2429,7 @@
 
     async function toggleHLConfig() {
         if (hlConfigVisible) { backToList(); return; }
+        clearRevealedApiKey();
         hlConfigVisible = true;
         ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","tradfiPanel","backupsPanel","logPanel"].forEach(id => {
             document.getElementById(id).style.display = "none";
@@ -2526,6 +2607,7 @@
 
     async function toggleTradfi() {
         if (tradfiVisible) { backToList(); return; }
+        clearRevealedApiKey();
         tradfiVisible = true;
         ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","backupsPanel","logPanel"].forEach(id => {
             document.getElementById(id).style.display = "none";
@@ -3001,6 +3083,7 @@
 
     async function toggleBackups() {
         if (backupsVisible) { backToList(); return; }
+        clearRevealedApiKey();
         backupsVisible = true;
         ["editPanel","userListView","hlExpiryPanel","bybitExpiryPanel","commentsPanel","hlConfigPanel","tradfiPanel","logPanel"].forEach(id => {
             document.getElementById(id).style.display = "none";
@@ -3342,6 +3425,7 @@
 
     function toggleLogPanel() {
         if (logPanelVisible) { backToList(); return; }
+        clearRevealedApiKey();
         logPanelVisible = true;
         ['editPanel','userListView','hlExpiryPanel','bybitExpiryPanel','commentsPanel','hlConfigPanel','tradfiPanel','backupsPanel'].forEach(id => {
             document.getElementById(id).style.display = 'none';
@@ -3448,7 +3532,7 @@
         if (_topicCache[idx] !== undefined) { cb(_topicCache[idx]); return; }
         var t = helpTopics[idx];
         if (!t) { cb(''); return; }
-        fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+        fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { credentials: 'same-origin' })
           .then(function(r) { return r.json(); })
           .then(function(d) { _topicCache[idx] = mdToHtml(d.content || ''); cb(_topicCache[idx]); })
           .catch(function() { _topicCache[idx] = ''; cb(''); });
@@ -3571,7 +3655,7 @@
 
       function loadHelpIndex(keyword) {
         helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch(docsBase + '/docs/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+        fetch(docsBase + '/docs/index?lang=' + helpLang, { credentials: 'same-origin' })
           .then(function (r) { return r.json(); })
           .then(function (data) {
             helpTopics = data || [];
@@ -3615,7 +3699,7 @@
         if (!t) return;
         _rawHtml = null; _sMarks = []; _sIdx = -1; helpSearchCount.textContent = '';
         helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-        fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+        fetch(docsBase + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { credentials: 'same-origin' })
           .then(function (r) { return r.json(); })
           .then(function (d) {
             _rawHtml = mdToHtml(d.content || '');
@@ -3666,7 +3750,7 @@
             /* Expose opener for the shared Guide button handler */
             window._openApiKeysHelp = function () {
         if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
-        window.PBGuiSharedHelp.open('api_keys', { token: TOKEN });
+        window.PBGuiSharedHelp.open('api_keys');
       };
             window.PBGUI_HELP_OPENER = window._openApiKeysHelp;
     }());
@@ -3677,7 +3761,7 @@
     window.PBGUI_NAV_CONFIG = {
         subtitle: 'API KEYS',
         current:  'system_api_keys',
-        token:    TOKEN,
+        authenticated: true,
         apiBase:  API_BASE,
         version:  PBGUI_VERSION,
         serial:   PBGUI_SERIAL

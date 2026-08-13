@@ -23,7 +23,7 @@ import traceback
 import uuid
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from shutil import rmtree
+from shutil import rmtree, which
 from typing import Optional
 
 import psutil
@@ -54,11 +54,14 @@ from pb8_config import (
     PB8ConfigurationError,
     cache_prepared_pb8_config,
     get_pb8_result_metrics,
+    get_pb8_coin_override_metadata,
+    get_pb8_exchange_metadata,
     get_pb8_optimize_metadata,
     get_pb8_template_config,
     load_pb8_config,
     migrate_pb7_config,
     prepare_pb8_config,
+    validate_pb8_override_bundle,
     save_prepared_pb8_config,
 )
 from pbgui_purefunc import (
@@ -368,6 +371,7 @@ def _save_config_bundle_locked(
             raise HTTPException(status_code=422, detail="PB8 preparation changed override-file references")
         _require_override_files(prepared, stage_dir)
         atomic_write_json(stage_dir / "backtest.json", prepared)
+        validate_pb8_override_bundle(stage_dir / "backtest.json")
         _publish_config_bundle(stage_dir, target_dir)
         cache_prepared_pb8_config(prepared, target_dir / "backtest.json")
         return prepared
@@ -612,6 +616,56 @@ def _read_process_record(filename: str) -> Optional[dict]:
         return {"pid": pid, "create_time": create_time}
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
+
+
+def _systemd_user_manager_available() -> bool:
+    """Return whether a transient user unit can isolate a persistent backtest."""
+    if platform.system() != "Linux" or which("systemd-run") is None:
+        return False
+    runtime_dir = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+    return (runtime_dir / "systemd" / "private").exists()
+
+
+def _launch_backtest_runner(filename: str, command: list[str], cwd: Path, log_path: Path) -> subprocess.Popen | None:
+    """Launch a runner outside the API cgroup when user systemd is available."""
+    if _systemd_user_manager_available():
+        atomic_write_private_text(log_path, "")
+        unit = f"pbgui-pb8-backtest-{filename}-{time.time_ns()}"
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        result = subprocess.run(
+            [
+                str(which("systemd-run")), "--user", "--quiet", "--collect", f"--unit={unit}",
+                "--property=Type=exec", "--property=UMask=0077", f"--property=WorkingDirectory={cwd}",
+                f"--property=StandardOutput=append:{log_path}", f"--property=StandardError=append:{log_path}",
+                f"--setenv=PATH={Path(command[0]).parent}{os.pathsep}{os.environ.get('PATH', '')}", "--", *command,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env={**os.environ, "XDG_RUNTIME_DIR": runtime_dir},
+        )
+        if result.returncode != 0:
+            detail = ((result.stderr or "") + (result.stdout or "")).strip()
+            raise RuntimeError(f"Could not start persistent PB8 backtest unit: {detail or result.returncode}")
+        return None
+
+    log_file = open(log_path, "w", encoding="utf-8")
+    try:
+        kwargs = {
+            "cwd": str(cwd),
+            "stdout": log_file,
+            "stderr": log_file,
+            "env": {**os.environ, "PATH": str(Path(command[0]).parent) + os.pathsep + os.environ.get("PATH", "")},
+            "close_fds": True,
+        }
+        if platform.system() == "Windows":
+            kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
+        else:
+            kwargs["start_new_session"] = True
+        return subprocess.Popen(command, **kwargs)
+    finally:
+        log_file.close()
 
 
 def _process_matches(filename: str, record: dict) -> bool:
@@ -1367,50 +1421,36 @@ class BacktestV8Worker:
                 str(pb8_dir),
                 str(snapshot.resolve()),
             ]
-            log_file = open(log_path, "w", encoding="utf-8")
+            process = _launch_backtest_runner(filename, command, pb8_dir, log_path)
             try:
-                kwargs = {
-                    "cwd": str(pb8_dir),
-                    "stdout": log_file,
-                    "stderr": log_file,
-                    "env": {**os.environ, "PATH": str(Path(cli_path).parent) + os.pathsep + os.environ.get("PATH", "")},
-                    "close_fds": True,
-                }
-                if platform.system() == "Windows":
-                    kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
-                else:
-                    kwargs["start_new_session"] = True
-                process = subprocess.Popen(command, **kwargs)
-            finally:
-                log_file.close()
-            try:
-                create_time = psutil.Process(process.pid).create_time()
-                atomic_write_private_text(
-                    _pid_file(filename),
-                    json.dumps({"pid": process.pid, "create_time": create_time}, indent=4) + "\n",
-                )
+                record = None
                 ready_deadline = time.monotonic() + 120
                 while time.monotonic() < ready_deadline:
-                    if _launch_ready_file(filename).is_file():
+                    record = _read_process_record(filename)
+                    if record and _launch_ready_file(filename).is_file():
                         ready_pid = int(_launch_ready_file(filename).read_text(encoding="utf-8").strip() or 0)
-                        if ready_pid == process.pid:
+                        if ready_pid == record["pid"]:
                             break
-                    if hasattr(process, "poll") and process.poll() is not None:
+                    if process is not None and hasattr(process, "poll") and process.poll() is not None:
                         raise RuntimeError("PB8 runner exited before acquiring the runtime launch lock")
                     time.sleep(0.05)
                 else:
                     raise RuntimeError("PB8 runner did not acquire the runtime launch lock before timeout")
                 _launch_ready_file(filename).unlink(missing_ok=True)
             except Exception as exc:
-                _terminate_process(process.pid)
+                record = record or _read_process_record(filename)
+                if record and _process_matches(filename, record):
+                    _terminate_process(int(record["pid"]))
+                elif process is not None:
+                    _terminate_process(process.pid)
                 data["status_override"] = "error"
                 atomic_write_json(queue_file, data)
                 _log(SERVICE, f"Failed to publish V8 process ownership for {filename}: {exc}", level="ERROR")
                 raise HTTPException(status_code=500, detail=f"Failed to publish PB8 process ownership: {exc}") from exc
             _log(SERVICE, f"Launched V8 backtest {data.get('name')} ({filename})", level="INFO")
             return {
-                "pid": process.pid,
-                "create_time": create_time,
+                "pid": record["pid"],
+                "create_time": record["create_time"],
                 "command_markers": [runner, str(snapshot.resolve())],
             }
         except HTTPException:
@@ -1540,7 +1580,14 @@ def create_queue_draft(body: dict, session: SessionToken = Depends(require_auth)
         config = item.get("config")
         if not isinstance(config, dict):
             raise HTTPException(status_code=422, detail="each item.config must be a dict")
-        normalized.append({"name": str(item.get("name") or "rebacktest"), "config": copy.deepcopy(config)})
+        override_configs = _validate_override_payloads(config, item.get("override_configs") or {})
+        if set(override_configs) != _override_filenames(config):
+            raise HTTPException(status_code=422, detail="each item must supply every referenced override config")
+        normalized.append({
+            "name": str(item.get("name") or "rebacktest"),
+            "config": copy.deepcopy(config),
+            "override_configs": override_configs,
+        })
     with _DRAFT_LOCK:
         _clean_drafts(reserve_slot=True)
         draft_id = secrets.token_urlsafe(16)
@@ -1570,6 +1617,7 @@ def get_settings(session: SessionToken = Depends(require_auth)) -> dict:
         "cpu_max": cpu_max,
         "use_pbgui_market_data": str(settings.get("use_pbgui_market_data", "False")).lower() == "true",
         "hsl_signal_modes": ["coin", "pside", "unified"],
+        "exchange_options": get_pb8_exchange_metadata()["backtest"],
         "hlcvs_cleanup_enabled": str(settings.get("hlcvs_cleanup_enabled", "False")).lower() == "true",
         "hlcvs_cleanup_days": _bounded_setting(settings, "hlcvs_cleanup_days", 7, 1, 365),
         "hlcvs_cleanup_interval_h": _bounded_setting(settings, "hlcvs_cleanup_interval_h", 24, 1, 168),
@@ -1659,21 +1707,14 @@ def get_result_metrics(session: SessionToken = Depends(require_auth)) -> dict:
 
 
 @router.get("/override-params")
-def get_override_params(session: SessionToken = Depends(require_auth)) -> dict:
-    """Return V8 leaf paths accepted by the shared coin-override editor."""
+def get_override_params(
+    hsl_signal_mode: str = Query(...),
+    strategy_kind: str = Query(...),
+    session: SessionToken = Depends(require_auth),
+) -> dict:
+    """Return PB8's typed coin-override policy for the effective config context."""
     try:
-        template = get_pb8_template_config()
-        bot = template.get("bot") if isinstance(template.get("bot"), dict) else {}
-        live = template.get("live") if isinstance(template.get("live"), dict) else {}
-        return {
-            "params": {
-                "bot": {
-                    side: _flatten_leaf_metadata((bot.get(side) or {}))
-                    for side in ("long", "short")
-                },
-                "live": _flatten_leaf_metadata(live),
-            }
-        }
+        return get_pb8_coin_override_metadata(hsl_signal_mode, strategy_kind)
     except PB8ConfigurationError as exc:
         raise _configuration_error("Loading PB8 override parameters", exc, 503) from exc
 
@@ -1933,11 +1974,14 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
             config = result.get("config")
             unresolved = report.get("manual_review_fields") or report.get("dropped_unsupported_fields")
             if not report.get("output_written") or not isinstance(config, dict) or unresolved:
-                detail = "Migration requires manual review"
+                message = "Migration requires manual review"
                 fields = report.get("manual_review_fields") or report.get("dropped_unsupported_fields") or []
                 if fields:
-                    detail += ": " + "; ".join(str(item) for item in fields[:5])
-                raise HTTPException(status_code=422, detail=detail)
+                    message += ": " + "; ".join(str(item) for item in fields[:5])
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": "migration_manual_review", "message": message, "report": report},
+                )
             migration_source.unlink(missing_ok=True)
             prepared = save_prepared_pb8_config(_normalize_config(config, target_name), output)
             atomic_write_json(stage_dir / "migration_report.json", report)
@@ -2015,10 +2059,12 @@ def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)) -> d
                     raise HTTPException(status_code=400, detail="config must be an object")
                 if isinstance(provided, dict):
                     config = prepare_pb8_config(_normalize_config(provided, name), base_config_path=str(config_path))
+                    supplied_overrides = _validate_override_payloads(config, body.get("override_configs") or {})
                 else:
                     if not config_path.is_file() or config_path.is_symlink():
                         raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
                     config = load_pb8_config(config_path)
+                    supplied_overrides = {}
                 backtest = config.get("backtest") if isinstance(config.get("backtest"), dict) else {}
                 payload = {
                     "name": name,
@@ -2032,11 +2078,23 @@ def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)) -> d
                 _queue_dir().mkdir(parents=True, exist_ok=True)
                 snapshot = _snapshot_file(filename)
                 snapshot.parent.mkdir(parents=True, exist_ok=True)
-                if config_path.parent.is_dir():
-                    _copy_override_files(config, config_path.parent, snapshot.parent, _configs_dir())
-                else:
-                    _require_override_files(config, config_path.parent)
+                referenced = _override_filenames(config)
+                for override_filename in referenced:
+                    destination = _safe_path(snapshot.parent / override_filename, snapshot.parent)
+                    if override_filename in supplied_overrides:
+                        atomic_write_json(destination, supplied_overrides[override_filename])
+                    elif config_path.parent.is_dir():
+                        source = _safe_path(config_path.parent / override_filename, _configs_dir())
+                        if not source.is_file() or source.is_symlink():
+                            raise HTTPException(status_code=422, detail=f"Override config not found: {override_filename}")
+                        shutil.copy2(source, destination)
+                    else:
+                        raise HTTPException(status_code=422, detail=f"Override config not supplied: {override_filename}")
+                if set(supplied_overrides) != referenced and supplied_overrides:
+                    raise HTTPException(status_code=422, detail="Every referenced override config must be supplied")
                 save_prepared_pb8_config(config, snapshot)
+                if referenced:
+                    validate_pb8_override_bundle(snapshot)
                 atomic_write_json(_queue_file(filename), payload)
             except PB8ConfigurationError as exc:
                 rmtree(_snapshot_file(filename).parent, ignore_errors=True)

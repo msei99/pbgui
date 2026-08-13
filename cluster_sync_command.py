@@ -51,6 +51,7 @@ from master.cluster_state import (
     MEMBERSHIP_OPS,
     PB8_OPERATION_CAPABILITY,
     SYNC_EXCLUDE_FILES,
+    V7_OPS,
     V2_CREDENTIAL_OPS,
     append_operation,
     build_config_manifest,
@@ -1312,75 +1313,98 @@ def _verify_remote_node_for_gap_repair(cluster_root: Path, remote_node: str, clu
         raise ClusterSyncCommandError("remote node is not a state replica")
 
 
-def _materialize_v7_configs(cluster_root: Path, *, write: bool) -> dict[str, Any]:
+def _materialize_v7_configs(
+    cluster_root: Path,
+    *,
+    write: bool,
+    instance_names: set[str] | None = None,
+) -> dict[str, Any]:
     """Preview or write V7 config blobs into data/run_v7."""
 
-    materialized = _safe_state_call(
-        lambda: rebuild_materialized_state(cluster_root) if write else read_materialized_state(cluster_root)
-    )
-    identity = _safe_state_call(lambda: read_local_identity(cluster_root))
-    desired_state = materialized.get("desired_state") if isinstance(materialized, dict) else {}
-    desired_state = desired_state if isinstance(desired_state, dict) else {}
-    node_id = str(identity["node_id"])
-    role = str(identity.get("role") or "").strip().lower()
-    materialize_all = role == "master"
     run_root = Path(cluster_root).parent / "run_v7"
-    plan = _build_materialize_v7_plan(Path(cluster_root), run_root, node_id, desired_state, materialize_all=materialize_all)
-    if not write:
-        plan.update({"ok": True, "read_only": True})
-        return plan
+    transaction = advisory_file_lock(run_root / ".write") if write else nullcontext()
+    with transaction:
+        materialized = _safe_state_call(
+            lambda: rebuild_materialized_state(cluster_root) if write else read_materialized_state(cluster_root)
+        )
+        identity = _safe_state_call(lambda: read_local_identity(cluster_root))
+        desired_state = materialized.get("desired_state") if isinstance(materialized, dict) else {}
+        desired_state = desired_state if isinstance(desired_state, dict) else {}
+        if instance_names is not None:
+            requested = {str(name) for name in instance_names}
+            for name in requested:
+                _validate_relative_name(name, "instance")
+            filtered = dict(desired_state)
+            filtered["instances"] = {
+                name: item
+                for name, item in (desired_state.get("instances") or {}).items()
+                if name in requested
+            }
+            filtered["tombstones"] = {
+                name: item
+                for name, item in (desired_state.get("tombstones") or {}).items()
+                if name in requested
+            }
+            desired_state = filtered
+        node_id = str(identity["node_id"])
+        role = str(identity.get("role") or "").strip().lower()
+        materialize_all = role == "master"
+        plan = _build_materialize_v7_plan(Path(cluster_root), run_root, node_id, desired_state, materialize_all=materialize_all)
+        if not write:
+            plan.update({"ok": True, "read_only": True})
+            return plan
 
-    if int((plan.get("counts") or {}).get("error") or 0) > 0:
-        repaired = _repair_local_v7_config_blobs(Path(cluster_root), run_root, node_id, desired_state, plan, materialize_all=materialize_all)
-        if repaired:
-            plan = _build_materialize_v7_plan(Path(cluster_root), run_root, node_id, desired_state, materialize_all=materialize_all)
-            plan["repaired_config_blobs"] = repaired
+        if int((plan.get("counts") or {}).get("error") or 0) > 0:
+            repaired = _repair_local_v7_config_blobs(Path(cluster_root), run_root, node_id, desired_state, plan, materialize_all=materialize_all)
+            if repaired:
+                plan = _build_materialize_v7_plan(Path(cluster_root), run_root, node_id, desired_state, materialize_all=materialize_all)
+                plan["repaired_config_blobs"] = repaired
 
-    if int((plan.get("counts") or {}).get("error") or 0) > 0:
-        raise ClusterSyncCommandError("materialization blocked by missing or invalid blobs")
+        if int((plan.get("counts") or {}).get("error") or 0) > 0:
+            raise ClusterSyncCommandError("materialization blocked by missing or invalid blobs")
 
-    written: list[dict[str, Any]] = []
-    deleted: list[dict[str, Any]] = []
-    for item in plan.get("items") or []:
-        if not isinstance(item, dict) or item.get("action") not in {"add", "update"} or item.get("status") != "ready":
-            continue
-        instance = str(item.get("instance") or "")
-        _validate_relative_name(instance, "instance")
-        files_written = 0
-        for file_item in item.get("files") or []:
-            if not isinstance(file_item, dict) or file_item.get("action") != "write":
+        written: list[dict[str, Any]] = []
+        deleted: list[dict[str, Any]] = []
+        for item in plan.get("items") or []:
+            if not isinstance(item, dict) or item.get("action") not in {"add", "update"} or item.get("status") != "ready":
                 continue
-            filename = str(file_item.get("name") or "")
-            blob_hash = str(file_item.get("hash") or "")
-            _validate_relative_name(filename, "config filename")
-            raw = _read_verified_blob(ClusterPaths.from_root(cluster_root).config_blobs, blob_hash, f"file blob for {instance}/{filename}")
-            _atomic_write_bytes(run_root / instance / filename, raw, mode=0o644)
-            files_written += 1
-        written.append({"instance": instance, "files": files_written})
-    for item in plan.get("items") or []:
-        if not isinstance(item, dict) or item.get("action") != "delete" or item.get("status") != "ready":
-            continue
-        instance = str(item.get("instance") or "")
-        _validate_relative_name(instance, "instance")
-        target = run_root / instance
-        if not target.is_dir():
-            continue
-        backup_path = _backup_and_delete_tombstoned_v7_dir(Path(cluster_root), target, instance)
-        deleted.append({"instance": instance, "backup": str(backup_path)})
+            instance = str(item.get("instance") or "")
+            _validate_relative_name(instance, "instance")
+            files_written = 0
+            for file_item in item.get("files") or []:
+                if not isinstance(file_item, dict) or file_item.get("action") != "write":
+                    continue
+                filename = str(file_item.get("name") or "")
+                blob_hash = str(file_item.get("hash") or "")
+                _validate_relative_name(filename, "config filename")
+                raw = _read_verified_blob(ClusterPaths.from_root(cluster_root).config_blobs, blob_hash, f"file blob for {instance}/{filename}")
+                _atomic_write_bytes(run_root / instance / filename, raw, mode=0o644)
+                files_written += 1
+            written.append({"instance": instance, "files": files_written})
+        for item in plan.get("items") or []:
+            if not isinstance(item, dict) or item.get("action") != "delete" or item.get("status") != "ready":
+                continue
+            instance = str(item.get("instance") or "")
+            _validate_relative_name(instance, "instance")
+            target = run_root / instance
+            if not target.is_dir():
+                continue
+            backup_path = _backup_and_delete_tombstoned_v7_dir(Path(cluster_root), target, instance)
+            deleted.append({"instance": instance, "backup": str(backup_path)})
 
-    counts = dict(plan.get("counts") or {})
-    counts["written_instances"] = len(written)
-    counts["written_files"] = sum(int(item.get("files") or 0) for item in written)
-    counts["deleted_instances"] = len(deleted)
-    plan.update({
-        "ok": True,
-        "read_only": False,
-        "counts": counts,
-        "written": written,
-        "deleted": deleted,
-        "message": "V7 config files were materialized. Tombstoned local config directories were backed up and removed. No bots were started or stopped.",
-    })
-    return plan
+        counts = dict(plan.get("counts") or {})
+        counts["written_instances"] = len(written)
+        counts["written_files"] = sum(int(item.get("files") or 0) for item in written)
+        counts["deleted_instances"] = len(deleted)
+        plan.update({
+            "ok": True,
+            "read_only": False,
+            "counts": counts,
+            "written": written,
+            "deleted": deleted,
+            "message": "V7 config files were materialized. Tombstoned local config directories were backed up and removed. No bots were started or stopped.",
+        })
+        return plan
 
 
 def _backup_and_delete_tombstoned_v7_dir(cluster_root: Path, target: Path, instance: str) -> Path:
@@ -3332,6 +3356,17 @@ def _apply_bundle(
         written_ops.append({"op_id": str(operation["op_id"]), "actor": str(operation["actor"]), "seq": int(operation["seq"])})
 
     materialized = _safe_state_call(lambda: rebuild_materialized_state(cluster_root))
+    v7_instances = {
+        str(operation.get("instance") or "")
+        for operation in operations
+        if str(operation.get("op") or "") in V7_OPS
+        and str(operation.get("instance") or "")
+    }
+    v7_materialization = (
+        _materialize_v7_configs(cluster_root, write=True, instance_names=v7_instances)
+        if v7_instances
+        else {"status": "delegated_to_pbcluster"}
+    )
     return {
         "ok": True,
         "count": len(written_ops),
@@ -3340,7 +3375,7 @@ def _apply_bundle(
         "secret_blobs": len(written_secret),
         "sealed_blobs": len(written_sealed),
         "generation": int(((materialized.get("cluster_nodes") or {}).get("generation") or 0)),
-        "materialization": {"status": "delegated_to_pbcluster"},
+        "materialization": v7_materialization,
     }
 
 

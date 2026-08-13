@@ -23,7 +23,7 @@ def test_set_instance_forced_mode_panic_saves_and_syncs(monkeypatch, tmp_path):
         """Save raw JSON for assertion."""
         path.write_text(json.dumps(cfg), encoding="utf-8")
 
-    async def fake_sync(name):
+    async def fake_sync(name, operation=None):
         """Record that the forced-mode action triggered sync."""
         synced["called"] = True
         return {"name": name, "ok": 1, "failed": 0, "hosts": {}}
@@ -61,7 +61,7 @@ def test_set_instance_forced_mode_graceful_stop(monkeypatch, tmp_path):
         """Save raw JSON for assertion."""
         path.write_text(json.dumps(cfg), encoding="utf-8")
 
-    async def fake_sync(name):
+    async def fake_sync(name, operation=None):
         """Return a successful sync result."""
         return {"name": name, "ok": 1, "failed": 0, "hosts": {}}
 
@@ -158,7 +158,7 @@ def test_set_instance_forced_mode_tp_only(monkeypatch, tmp_path):
         """Save raw JSON for assertion."""
         path.write_text(json.dumps(cfg), encoding="utf-8")
 
-    async def fake_sync(name):
+    async def fake_sync(name, operation=None):
         """Return a successful sync result."""
         return {"name": name, "ok": 1, "failed": 0, "hosts": {}}
 

@@ -7,6 +7,7 @@ All endpoints require auth (Bearer token).
 from __future__ import annotations
 
 import asyncio as _asyncio
+import hashlib
 import json
 import math
 import threading
@@ -520,6 +521,54 @@ def _dashboard_coin_key(symbol: str) -> str:
     return key
 
 
+def _pb8_dashboard_coin_key(symbol: str, exchange: str, existing_identifiers: list[str] | None = None) -> str:
+    """Resolve one dashboard symbol to PB8's exact single-exchange config ID."""
+    from pb8_config import (
+        PB8ConfigurationError,
+        PB8MarketDataUnavailableError,
+        PB8MarketRequestError,
+        get_pb8_market_identifiers,
+    )
+
+    normalized_symbol = str(symbol or "").strip()
+    normalized_exchange = str(exchange or "").strip().lower()
+    if not normalized_symbol or not normalized_exchange:
+        raise HTTPException(status_code=400, detail="symbol and exchange are required")
+    try:
+        result = get_pb8_market_identifiers([normalized_exchange], existing_identifiers or [])
+    except (PB8ConfigurationError, PB8MarketDataUnavailableError, PB8MarketRequestError) as exc:
+        raise HTTPException(status_code=503, detail=f"PB8 market identity is unavailable: {exc}") from exc
+    existing_matches = [
+        identifier
+        for identifier, status in (result.get("statuses") or {}).items()
+        if isinstance(status, dict)
+        and status.get("status") == "valid"
+        and any(
+            str(resolution.get("exchange") or "").lower() == normalized_exchange
+            and _dashboard_symbol_from_ccxt(str(resolution.get("symbol") or "")) == normalized_symbol
+            for resolution in (status.get("resolutions") or [])
+        )
+    ]
+    existing_matches = list(dict.fromkeys(existing_matches))
+    if len(existing_matches) == 1:
+        return existing_matches[0]
+    if len(existing_matches) > 1:
+        raise HTTPException(status_code=409, detail="PB8 config contains duplicate market identifiers for this symbol")
+    matches = [
+        str(entry.get("config_id") or "")
+        for entry in (result.get("catalog") or [])
+        if any(
+            str(resolution.get("exchange") or "").lower() == normalized_exchange
+            and _dashboard_symbol_from_ccxt(str(resolution.get("symbol") or "")) == normalized_symbol
+            for resolution in (entry.get("resolutions") or [])
+        )
+    ]
+    matches = list(dict.fromkeys(item for item in matches if item))
+    if len(matches) != 1:
+        raise HTTPException(status_code=409, detail="PB8 market identity is ambiguous or unavailable")
+    return matches[0]
+
+
 def _resolve_close_amount(position_size: float, amount: float | None, percent: float | None) -> float:
     """Resolve requested close amount and reject unsafe partial/full close values."""
     size = abs(float(position_size or 0.0))
@@ -549,19 +598,29 @@ def _apply_symbol_forced_mode(
     mode: str,
     *,
     runtime: str = "v7",
+    exchange: str = "",
     override_configs: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     """Set a per-symbol long/short forced_mode override."""
     normalized_side = str(side or "long").strip().lower()
     if normalized_side not in {"long", "short"}:
         raise HTTPException(status_code=400, detail="side must be long or short")
-    coin = _dashboard_coin_key(symbol)
+    existing_identifiers = list((cfg.get("coin_overrides") or {}).keys()) if isinstance(cfg.get("coin_overrides"), dict) else []
+    coin = (
+        _pb8_dashboard_coin_key(symbol, exchange, existing_identifiers)
+        if runtime == "v8"
+        else _dashboard_coin_key(symbol)
+    )
     forced_key = "forced_mode_long" if normalized_side == "long" else "forced_mode_short"
     coin_cfg = cfg.setdefault("coin_overrides", {}).setdefault(coin, {})
     if runtime == "v8":
         if override_configs is None:
             raise HTTPException(status_code=500, detail="PB8 override bundle is unavailable")
-        filename = str(coin_cfg.get("override_config_path") or f"{coin}.json")
+        filename = str(coin_cfg.get("override_config_path") or "")
+        if not filename:
+            stem = "".join(char if char.isalnum() or char in "_-" else "_" for char in coin).strip("_") or "market"
+            digest = hashlib.sha256(coin.encode("utf-8")).hexdigest()[:8]
+            filename = f"{stem[:80]}-{digest}.json"
         coin_cfg["override_config_path"] = filename
         live_cfg = override_configs.setdefault(filename, {}).setdefault("live", {})
     else:
@@ -583,6 +642,7 @@ def _apply_panic_symbol(
     side: str,
     *,
     runtime: str = "v7",
+    exchange: str = "",
     override_configs: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     """Set a per-symbol long/short forced_mode override to panic."""
@@ -592,6 +652,7 @@ def _apply_panic_symbol(
         side,
         _PANIC_OVERRIDE_MODE,
         runtime=runtime,
+        exchange=exchange,
         override_configs=override_configs,
     )
 
@@ -607,6 +668,7 @@ def _apply_graceful_stop_symbol(
     side: str,
     *,
     runtime: str = "v7",
+    exchange: str = "",
     override_configs: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     """Set a per-symbol long/short forced_mode override to graceful stop."""
@@ -616,6 +678,7 @@ def _apply_graceful_stop_symbol(
         side,
         _GRACEFUL_STOP_MODE,
         runtime=runtime,
+        exchange=exchange,
         override_configs=override_configs,
     )
 
@@ -631,6 +694,7 @@ def _apply_tp_only_symbol(
     side: str,
     *,
     runtime: str = "v7",
+    exchange: str = "",
     override_configs: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     """Set a per-symbol long/short forced_mode override to take profit only."""
@@ -640,6 +704,7 @@ def _apply_tp_only_symbol(
         side,
         _TP_ONLY_MODE,
         runtime=runtime,
+        exchange=exchange,
         override_configs=override_configs,
     )
 
@@ -812,11 +877,17 @@ def _prune_exchange_cache(now: float, keep_key: str | None = None) -> None:
 
 def _get_exchange(user_obj):
     """Return a cached, connected Exchange instance for the given user object."""
-    from Exchange import Exchange
-    key = f"{user_obj.name}:{user_obj.exchange}"
+    from Exchange import Exchange, credential_fingerprint
+    prefix = f"{user_obj.name}:{user_obj.exchange}:"
+    key = prefix + credential_fingerprint(user_obj)
     now = _time.time()
     with _exchange_cache_lock:
         _prune_exchange_cache(now, keep_key=key)
+        for stale_key in [item for item in _exchange_cache if item.startswith(prefix) and item != key]:
+            stale = _exchange_cache.pop(stale_key, None)
+            _exchange_cache_last_used.pop(stale_key, None)
+            if stale:
+                stale.close()
         if key not in _exchange_cache:
             ex = Exchange(user_obj.exchange, user_obj)
             ex.connect()
@@ -848,6 +919,23 @@ def _market_close_params(exchange_id: str, side: str, hedged_symbol: bool = Fals
     elif ex_id == "bybit":
         params["positionIdx"] = 2 if normalized_side == "short" else 1
     return params
+
+
+def _market_close_capability(exchange_id: str) -> dict[str, Any]:
+    """Return the verified direct-close capability for a dashboard exchange."""
+    normalized = str(exchange_id or "").strip().lower()
+    reasons = {
+        "bitunix": "Direct market close is disabled until Bitunix positionId and hedge-side parameters are live-tested.",
+        "weex": "Direct market close is disabled until WEEX COMBINED-mode position-side parameters are live-tested.",
+    }
+    reason = reasons.get(normalized, "")
+    return {"market_close_supported": not bool(reason), "market_close_reason": reason}
+
+
+def _require_market_close_capability(exchange_id: str) -> None:
+    capability = _market_close_capability(exchange_id)
+    if not capability["market_close_supported"]:
+        raise HTTPException(status_code=409, detail=capability["market_close_reason"])
 
 
 def _market_close_param_candidates(exchange_id: str, side: str, hedged_symbol: bool = False) -> list[dict[str, Any]]:
@@ -1837,7 +1925,7 @@ def get_editor_page(
     from pathlib import Path as _P
     html_path = _P(__file__).parent.parent / "frontend" / "dashboard_editor.html"
     html = html_path.read_text(encoding="utf-8")
-    html = html.replace("%%TOKEN%%", session.token)
+    html = html.replace("%%TOKEN%%", "")
     html = html.replace("%%API_BASE%%", api_base)
     html = html.replace("%%DASHBOARD_NAME%%", _json.dumps(name))
     html = html.replace("%%VIEW_ONLY%%", "1" if view_only else "0")
@@ -1879,7 +1967,7 @@ def get_main_page(
     api_base = origin + "/api"
     ws_base  = api_base.replace("http://", "ws://").replace("https://", "wss://")
 
-    html = html.replace('"%%TOKEN%%"',         _json.dumps(session.token))
+    html = html.replace('"%%TOKEN%%"',         _json.dumps(""))
     html = html.replace('"%%API_BASE%%"',      _json.dumps(api_base))
     html = html.replace('"%%WS_BASE%%"',       _json.dumps(ws_base))
     html = html.replace('"%%CURRENT%%"',       _json.dumps(current))
@@ -1922,10 +2010,10 @@ def get_templates_page(
     from pathlib import Path as _P
     html_path = _P(__file__).parent.parent / "frontend" / "dashboard_templates.html"
     html = html_path.read_text(encoding="utf-8")
-    html = html.replace('"%%TOKEN%%"', f'"{session.token}"')
+    html = html.replace('"%%TOKEN%%"', '""')
     html = html.replace('"%%API_BASE%%"', f'"{api_base}"')
     html = html.replace('%%CURRENT%%', _json.dumps(current))
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
 
 
 # ---------------------------------------------------------------- period helper
@@ -2477,6 +2565,8 @@ def get_positions_data(
             })
 
     all_positions.sort(key=lambda x: (x["user"], x["symbol"]))
+    for row in all_positions:
+        row.update(_market_close_capability(row.get("exchange")))
     if used_live and used_db:
         source = "mixed"
     elif used_live:
@@ -2492,6 +2582,7 @@ def _execute_market_close(payload: PositionManagePayload) -> dict[str, Any]:
     user_obj = all_users.find_user(payload.user)
     if not user_obj:
         raise HTTPException(status_code=404, detail=f"User '{payload.user}' not found")
+    _require_market_close_capability(user_obj.exchange)
     db = _get_db()
     positions = []
     live_position_price = 0.0
@@ -2594,6 +2685,7 @@ def get_position_close_price(
     user_obj = _get_users().find_user(user)
     if not user_obj:
         raise HTTPException(status_code=404, detail=f"User '{user}' not found")
+    _require_market_close_capability(user_obj.exchange)
     snapshot = _market_close_price_snapshot(user_obj, symbol, side)
     return {"ok": True, "user": user, "symbol": symbol, "side": side, **snapshot}
 
@@ -2632,6 +2724,7 @@ async def manage_position(
                 payload.symbol,
                 payload.side,
                 runtime=runtime,
+                exchange=user_obj.exchange,
                 override_configs=working_overrides,
             )
         elif action == "graceful_stop_symbol":
@@ -2640,6 +2733,7 @@ async def manage_position(
                 payload.symbol,
                 payload.side,
                 runtime=runtime,
+                exchange=user_obj.exchange,
                 override_configs=working_overrides,
             )
         else:
@@ -2648,6 +2742,7 @@ async def manage_position(
                 payload.symbol,
                 payload.side,
                 runtime=runtime,
+                exchange=user_obj.exchange,
                 override_configs=working_overrides,
             )
     else:

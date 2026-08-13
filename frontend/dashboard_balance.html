@@ -57,7 +57,6 @@
 <script>
 (function () {
     // Config injected directly by the dashboard view renderer.
-    var TOKEN    = "%%TOKEN%%";
     var API_BASE = "%%API_BASE%%";
     var API_HOST = "%%API_HOST%%";
     var EDIT_MODE = %%EDIT_MODE%%;
@@ -83,7 +82,7 @@
         }
     }
 
-    var DR_VERSION = '20260610l';
+    var DR_VERSION = '20260812b';
 
     /* Load dashboard_render.js once (CSS + shared render primitives) */
     function _loadRenderScript(cb) {
@@ -306,10 +305,10 @@
     }
 
     function syncSelection() {
-        if (!EDIT_MODE || !TOKEN || !API_BASE || !POSITION) return;
+        if (!EDIT_MODE || !API_BASE || !POSITION) return;
         fetch(API_BASE + '/dashboard/balance/selection', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN},
+            headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({position: POSITION, users: selectedUsers})
         }).catch(function() {});
     }
@@ -358,14 +357,14 @@
 
     function fetchBalanceData(live, seq) {
         var url = API_BASE + '/dashboard/balance?users=' + encodeURIComponent(usersParam()) + (live ? '&live=1' : '');
-        return fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+        return fetch(url)
             .then(function(r) { if (isStale() || seq !== fetchSeq) return null; if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
             .then(function(d) { if (isStale() || seq !== fetchSeq) return null; return d; });
     }
 
     function fetchBalance() {
         if (isStale()) return;
-        if (!TOKEN || !API_BASE) return;
+        if (!API_BASE) return;
         var seq = ++fetchSeq;
         fetchBalanceData(false, seq)
             .then(function(d) {
@@ -392,7 +391,7 @@
 
     function connect() {
         if (isStale()) return;
-        if (!TOKEN || !API_HOST) return;
+        if (!API_HOST) return;
         clearTimeout(reconnTimer);
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
         ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard');

@@ -12,6 +12,7 @@ import threading
 import time
 from pathlib import Path
 
+from file_lock import advisory_file_lock
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
 from pbgui_purefunc import pb8_runtime_status
 from pbgui_purefunc import PBGDIR
@@ -28,12 +29,28 @@ class PB8RuntimeBusyError(PB8ConfigurationError):
     status_code = 503
 
 
+class PB8MarketDataUnavailableError(PB8ConfigurationError):
+    """Raised when PB8 cannot provide a complete collision-safe market catalog."""
+
+    retryable = True
+    status_code = 503
+
+
+class PB8MarketRequestError(PB8ConfigurationError):
+    """Raised when a caller submits an invalid bounded market request."""
+
+    status_code = 422
+
+
 _CACHE_TTL_SECONDS = 30.0
 _CACHE_MAX_CONFIGS = 64
 _cache_lock = threading.RLock()
 _template_cache: tuple[float, tuple, dict] | None = None
 _result_metrics_cache: tuple[float, tuple, list[str]] | None = None
 _optimize_metadata_cache: tuple[float, tuple, dict] | None = None
+_coin_override_metadata_cache: OrderedDict[tuple, tuple[float, tuple, dict]] = OrderedDict()
+_exchange_metadata_cache: tuple[float, tuple, dict] | None = None
+_market_catalog_cache: OrderedDict[tuple, tuple[float, tuple, dict]] = OrderedDict()
 _config_cache: OrderedDict[str, tuple[float, tuple[int, int], tuple, dict]] = OrderedDict()
 
 
@@ -217,6 +234,144 @@ def get_pb8_optimize_metadata() -> dict:
             raise PB8ConfigurationError("PB8 config helper returned invalid optimize metadata")
         _optimize_metadata_cache = (now + _CACHE_TTL_SECONDS, fingerprint, copy.deepcopy(metadata))
         return copy.deepcopy(metadata)
+
+
+def get_pb8_coin_override_metadata(hsl_signal_mode: str, strategy_kind: str) -> dict:
+    """Return typed PB8 coin-override metadata for one effective config context."""
+    fingerprint = _runtime_fingerprint()
+    cache_key = (str(hsl_signal_mode), str(strategy_kind))
+    with _cache_lock:
+        cached = _coin_override_metadata_cache.get(cache_key)
+        if cached and cached[0] > time.monotonic() and cached[1] == fingerprint:
+            _coin_override_metadata_cache.move_to_end(cache_key)
+            return copy.deepcopy(cached[2])
+        metadata = _call_helper(
+            "coin_override_metadata",
+            hsl_signal_mode=hsl_signal_mode,
+            strategy_kind=strategy_kind,
+        )
+        if metadata.get("contract_version") != 1 or not isinstance(metadata.get("params"), dict):
+            raise PB8ConfigurationError("PB8 config helper returned invalid coin override metadata")
+        _coin_override_metadata_cache[cache_key] = (
+            time.monotonic() + _CACHE_TTL_SECONDS,
+            fingerprint,
+            copy.deepcopy(metadata),
+        )
+        _coin_override_metadata_cache.move_to_end(cache_key)
+        while len(_coin_override_metadata_cache) > 16:
+            _coin_override_metadata_cache.popitem(last=False)
+        return copy.deepcopy(metadata)
+
+
+def validate_pb8_override_bundle(config_path: Path | str) -> None:
+    """Validate staged inline and file coin overrides through PB8's runtime parser."""
+    result = _call_helper("validate_overrides", config_path=str(Path(config_path).resolve()))
+    if result.get("valid") is not True:
+        raise PB8ConfigurationError("PB8 config helper did not validate coin overrides")
+
+
+def get_pb8_exchange_metadata() -> dict:
+    """Return PB8's vetted live and historical exchange capabilities."""
+    global _exchange_metadata_cache
+    with _cache_lock:
+        now = time.monotonic()
+        fingerprint = _runtime_fingerprint()
+        if _exchange_metadata_cache and _exchange_metadata_cache[0] > now and _exchange_metadata_cache[1] == fingerprint:
+            return copy.deepcopy(_exchange_metadata_cache[2])
+        metadata = _call_helper("exchange_metadata")
+        required = ("live", "backtest", "optimize", "suite")
+        if metadata.get("contract_version") != 1 or any(
+            not isinstance(metadata.get(key), list)
+            or not all(isinstance(item, str) and item for item in metadata[key])
+            for key in required
+        ):
+            raise PB8ConfigurationError("PB8 config helper returned invalid exchange metadata")
+        normalized = {
+            "contract_version": 1,
+            **{key: sorted(set(metadata[key])) for key in required},
+        }
+        _exchange_metadata_cache = (now + _CACHE_TTL_SECONDS, fingerprint, copy.deepcopy(normalized))
+        return copy.deepcopy(normalized)
+
+
+def get_pb8_market_identifiers(
+    exchanges: list[str],
+    identifiers: list[str] | None = None,
+    *,
+    quote: str | None = None,
+) -> dict:
+    """Return PB8.1's official collision-aware market catalog and statuses."""
+    if not isinstance(exchanges, list) or not exchanges or len(exchanges) > 16:
+        raise PB8MarketRequestError("Select between one and 16 exchanges")
+    if identifiers is not None and not isinstance(identifiers, list):
+        raise PB8MarketRequestError("Market identifiers must be an array")
+    if identifiers is not None and len(identifiers) > 1000:
+        raise PB8MarketRequestError("Market identifiers exceed the maximum of 1000 items")
+    normalized_exchanges = []
+    for exchange in exchanges:
+        if not isinstance(exchange, str) or exchange != exchange.strip() or not exchange:
+            raise PB8MarketRequestError("Exchange names must be non-empty trimmed strings")
+        if len(exchange.encode("utf-8")) > 64 or any(ord(char) < 32 or ord(char) == 127 for char in exchange):
+            raise PB8MarketRequestError("Invalid exchange name")
+        normalized_exchanges.append(exchange)
+    normalized_identifiers = []
+    for identifier in identifiers or []:
+        if not isinstance(identifier, str) or identifier != identifier.strip() or not identifier:
+            raise PB8MarketRequestError("Market identifiers must be non-empty trimmed strings")
+        if len(identifier.encode("utf-8")) > 256 or any(ord(char) < 32 or ord(char) == 127 for char in identifier):
+            raise PB8MarketRequestError("Invalid market identifier")
+        normalized_identifiers.append(identifier)
+    if quote is not None and (
+        not isinstance(quote, str)
+        or quote != quote.strip()
+        or not quote
+        or len(quote) > 16
+        or not quote.isalnum()
+    ):
+        raise PB8MarketRequestError("Quote must contain at most 16 letters or digits")
+    fingerprint = _runtime_fingerprint()
+    cache_key = (tuple(normalized_exchanges), quote or "")
+    with _cache_lock:
+        cached = _market_catalog_cache.get(cache_key)
+        if not normalized_identifiers and cached and cached[0] > time.monotonic() and cached[1] == fingerprint:
+            _market_catalog_cache.move_to_end(cache_key)
+            return copy.deepcopy(cached[2])
+    try:
+        with advisory_file_lock(Path(PBGDIR) / "data" / ".pb8-market-helper"):
+            if not normalized_identifiers:
+                with _cache_lock:
+                    cached = _market_catalog_cache.get(cache_key)
+                    if cached and cached[0] > time.monotonic() and cached[1] == fingerprint:
+                        _market_catalog_cache.move_to_end(cache_key)
+                        return copy.deepcopy(cached[2])
+            result = _call_helper(
+                "market_identifiers",
+                exchanges=normalized_exchanges,
+                identifiers=normalized_identifiers,
+                quote=quote,
+            )
+    except PB8RuntimeBusyError:
+        raise
+    except PB8ConfigurationError as exc:
+        raise PB8MarketDataUnavailableError(str(exc)) from exc
+    if (
+        result.get("contract_version") != 1
+        or not isinstance(result.get("symbols"), list)
+        or not isinstance(result.get("catalog"), list)
+        or not isinstance(result.get("statuses"), dict)
+    ):
+        raise PB8ConfigurationError("PB8 config helper returned invalid market identifiers")
+    if not normalized_identifiers:
+        with _cache_lock:
+            _market_catalog_cache[cache_key] = (
+                time.monotonic() + _CACHE_TTL_SECONDS,
+                fingerprint,
+                copy.deepcopy(result),
+            )
+            _market_catalog_cache.move_to_end(cache_key)
+            while len(_market_catalog_cache) > 32:
+                _market_catalog_cache.popitem(last=False)
+    return copy.deepcopy(result)
 
 
 def prepare_pb8_config(config: dict, *, base_config_path: str = "") -> dict:

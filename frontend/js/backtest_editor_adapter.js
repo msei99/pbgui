@@ -126,7 +126,7 @@
       metadataApiBase: function (apiBase) {
         if (!isV8) return String(apiBase || '').replace('/backtest-v7', '/v7');
         var match = String(apiBase || '').match(/^(https?:\/\/[^/]+)/);
-        return (match ? match[1] : window.location.origin) + '/api/v7';
+        return (match ? match[1] : window.location.origin) + '/api/v8';
       },
       docsApiBase: function (apiBase) {
         return String(apiBase || '').replace(/\/backtest-v[78]$/, '');

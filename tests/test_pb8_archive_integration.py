@@ -56,6 +56,7 @@ def _patch_pb8_config_io(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(optimize_v8, "load_pb8_config", pb8_config.load_pb8_config)
     monkeypatch.setattr(optimize_v8, "prepare_pb8_config", lambda config, **_kwargs: copy.deepcopy(config))
     monkeypatch.setattr(optimize_v8, "cache_prepared_pb8_config", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(optimize_v8, "validate_pb8_override_bundle", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(backtest_v8, "load_pb8_config", pb8_config.load_pb8_config)
     monkeypatch.setattr(backtest_v8, "prepare_pb8_config", lambda config, **_kwargs: copy.deepcopy(config))
 
@@ -151,11 +152,21 @@ def test_v8_optimize_archive_add_list_view_import_and_delete(tmp_path: Path, mon
     monkeypatch.setattr(backtest_v7, "maybe_migrate_own_archive", lambda *_args, **_kwargs: {"status": {"status": "current"}})
     monkeypatch.setattr(backtest_v7, "_log", lambda *_args, **_kwargs: None)
 
-    optimize_v8.save_config("source", _v8_config("source"), session=None)
+    config = _v8_config("source")
+    config["coin_overrides"] = {"BTC": {"override_config_path": "BTC.json"}}
+    override = {"bot": {"long": {"risk": {"n_positions": 1}}}}
+    optimize_v8.save_config(
+        "source",
+        {"config": config, "override_configs": {"BTC.json": override}},
+        session=None,
+    )
     exported = backtest_v7._add_optimize_config_to_archive_sync("mine", "source", "v8")
     archive_path = Path(exported["path"])
 
     assert archive_path.relative_to(archive).parts[:4] == ("pbgui", "configs", "v8.0.0", "optimize")
+    assert json.loads(
+        (archive_path.parent / f"{archive_path.stem}.overrides/BTC.json").read_text(encoding="utf-8")
+    ) == override
     listed = backtest_v7.list_archive_optimize("mine", version="v8", session=None)["configs"]
     assert [(item["name"], item["optimize_version"]) for item in listed] == [("source", "v8")]
     assert backtest_v7.list_archive_optimize("mine", version="v7", session=None)["configs"] == []
@@ -169,22 +180,58 @@ def test_v8_optimize_archive_add_list_view_import_and_delete(tmp_path: Path, mon
     )
     assert imported == {"ok": True, "name": "restored", "collision": "created", "optimize_version": "v8"}
     assert json.loads((configs / "restored/optimize.json").read_text(encoding="utf-8"))["config_version"] == "v8.0.0"
+    assert json.loads((configs / "restored/BTC.json").read_text(encoding="utf-8")) == override
 
     deleted = backtest_v7.delete_archive_optimize_config(
         "mine", str(archive_path), version="v8", session=None
     )
     assert deleted["ok"] is True
     assert not archive_path.exists()
+    assert not (archive_path.parent / f"{archive_path.stem}.overrides").exists()
+
+
+def test_v8_optimize_archive_repairs_orphan_override_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retrying an interrupted archive publish replaces its orphan sidecars."""
+    archives = tmp_path / "data/archives"
+    archive = archives / "mine"
+    archive.mkdir(parents=True)
+    configs = tmp_path / "data/opt_v8"
+    _patch_pb8_config_io(monkeypatch)
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "mine")
+    monkeypatch.setattr(optimize_v8, "_configs_dir", lambda: configs)
+    monkeypatch.setattr(backtest_v7, "maybe_migrate_own_archive", lambda *_args, **_kwargs: {"status": {"status": "current"}})
+    monkeypatch.setattr(backtest_v7, "_log", lambda *_args, **_kwargs: None)
+    config = _v8_config("source")
+    config["coin_overrides"] = {"BTC": {"override_config_path": "BTC.json"}}
+    override = {"bot": {"long": {"risk": {"n_positions": 1}}}}
+    optimize_v8.save_config("source", {"config": config, "override_configs": {"BTC.json": override}}, None)
+
+    destination, _meta, _skipped = archive_helpers.resolve_optimize_archive_destination(
+        archive, "source", optimize_v8.load_pb8_config(optimize_v8._config_file("source"))
+    )
+    orphan = destination.parent / f"{destination.stem}.overrides"
+    _write_json(orphan / "stale.json", {"stale": True})
+
+    exported = backtest_v7._add_optimize_config_to_archive_sync("mine", "source", "v8")
+
+    assert Path(exported["path"]).is_file()
+    assert not (orphan / "stale.json").exists()
+    assert json.loads((orphan / "BTC.json").read_text(encoding="utf-8")) == override
 
 
 def test_v8_archive_rebacktest_uses_v8_queue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Rebacktest routes each PB8 archived config to the PB8 snapshot queue."""
     archives = tmp_path / "archives"
     archive = archives / "mine"
+    config = _v8_config()
+    config["coin_overrides"] = {"BTC": {"override_config_path": "BTC.json"}}
     result = _make_result(
         archive / "pbgui/configs/v8.0.0/backtests/demo/bybit",
-        _v8_config(),
+        config,
     )
+    override = {"bot": {"long": {"risk": {"n_positions": 1}}}}
+    _write_json(result / "BTC.json", override)
     queued = []
     _patch_pb8_config_io(monkeypatch)
     monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives)
@@ -200,16 +247,21 @@ def test_v8_archive_rebacktest_uses_v8_queue(tmp_path: Path, monkeypatch: pytest
     assert response["queued"] == 2
     assert [item["config"]["backtest"]["exchanges"] for item in queued] == [["bybit"], ["hyperliquid"]]
     assert all(item["config"]["bot"]["long"]["risk"]["n_positions"] == 5 for item in queued)
+    assert all(item["override_configs"] == {"BTC.json": override} for item in queued)
     assert all(item["backtest_version"] == "v8" for item in response["queue_items"])
 
 
 def test_v8_archive_retest_queues_immutable_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Retest-and-replace stores PB8 configs in the immutable V8 queue snapshot root."""
     archive = tmp_path / "archives/mine"
+    config = _v8_config()
+    config["coin_overrides"] = {"BTC": {"override_config_path": "BTC.json"}}
     result = _make_result(
         archive / "pbgui/configs/v8.0.0/backtests/demo/bybit",
-        _v8_config(),
+        config,
     )
+    override = {"bot": {"long": {"risk": {"n_positions": 1}}}}
+    _write_json(result / "BTC.json", override)
     configs = tmp_path / "data/bt_v8"
     queue = tmp_path / "data/bt_v8_queue"
     logs = tmp_path / "data/logs/backtests_v8"
@@ -230,4 +282,5 @@ def test_v8_archive_retest_queues_immutable_snapshot(tmp_path: Path, monkeypatch
     assert snapshot.is_relative_to(queue / "configs")
     assert json.loads(snapshot.read_text(encoding="utf-8")) == snapshot_before
     assert snapshot_before["bot"]["long"]["risk"]["n_positions"] == 5
+    assert json.loads((snapshot.parent / "BTC.json").read_text(encoding="utf-8")) == override
     assert not (tmp_path / "data/bt_v7_queue").exists()

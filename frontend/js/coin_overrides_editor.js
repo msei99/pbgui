@@ -17,12 +17,17 @@ var _covState = {
   editCoin: null,       // coin currently being edited (null = none)
   allowedParams: null,  // { bot: { long: {...}, short: {...} }, live: {...} } from API
   allowedParamsError: '',
+  context: { hslSignalMode: '', strategyKind: '' },
+  contextAware: false,
+  metadataGeneration: 0,
   availableCoins: [],   // populated from approved coins
+  marketLabels: {},
   containerId: '',
   apiBase: '',
   configName: '',       // current config folder name (for override_config_path lookups)
   overrideConfigs: {},  // cache: { COIN: { long: {...}, short: {...} } } loaded from override files
   deferConfigFileWrites: false,
+  preserveMarketIdentifiers: false,
   pendingConfigFileWrites: {},
   loadGeneration: 0,
   request: null,
@@ -462,15 +467,35 @@ function coinOvInit(containerId, opts) {
   _covState.containerId = containerId;
   _covState.apiBase = (opts && opts.apiBase) || '';
   _covState.deferConfigFileWrites = !!(opts && opts.deferConfigFileWrites);
+  _covState.preserveMarketIdentifiers = !!(opts && opts.preserveMarketIdentifiers);
   _covState.request = opts && typeof opts.request === 'function' ? opts.request : null;
+  _covState.contextAware = !!(opts && opts.context);
+  if (opts && opts.context) {
+    _covState.context = {
+      hslSignalMode: String(opts.context.hslSignalMode || ''),
+      strategyKind: String(opts.context.strategyKind || '')
+    };
+  }
   _covEnsureValidationStyles();
   _fetchAllowedParams();
 }
 
 function _fetchAllowedParams() {
+  var generation = ++_covState.metadataGeneration;
   _covState.allowedParams = null;
   _covState.allowedParamsError = '';
-  return _covRequest('/override-params').then(function(data) {
+  var context = _covState.context || {};
+  if (_covState.contextAware && (!context.hslSignalMode || !context.strategyKind)) {
+    _covState.allowedParams = {};
+    _covState.allowedParamsError = 'Override context is unavailable';
+    if (_covState.editCoin) _covRender();
+    return Promise.resolve({});
+  }
+  var query = _covState.contextAware
+    ? '?hsl_signal_mode=' + encodeURIComponent(context.hslSignalMode) + '&strategy_kind=' + encodeURIComponent(context.strategyKind)
+    : '';
+  return _covRequest('/override-params' + query).then(function(data) {
+    if (generation !== _covState.metadataGeneration) return _covState.allowedParams || {};
     var params = data && data.params;
     if (!params || typeof params !== 'object' || Array.isArray(params)) {
       throw new Error('Override parameter metadata is invalid');
@@ -479,11 +504,25 @@ function _fetchAllowedParams() {
     if (_covState.editCoin) _covRender();
     return params;
   }).catch(function(error) {
+    if (generation !== _covState.metadataGeneration) return _covState.allowedParams || {};
     _covState.allowedParams = {};
     _covState.allowedParamsError = (error && error.message) || 'Override parameters could not be loaded';
     if (_covState.editCoin) _covRender();
     return {};
   });
+}
+
+function coinOvSetContext(context) {
+  var next = {
+    hslSignalMode: String((context && context.hslSignalMode) || ''),
+    strategyKind: String((context && context.strategyKind) || '')
+  };
+  if (next.hslSignalMode === _covState.context.hslSignalMode &&
+      next.strategyKind === _covState.context.strategyKind) return Promise.resolve(_covState.allowedParams || {});
+  if (_covState.editCoin && _covSaveEdit() === false) return Promise.resolve(_covState.allowedParams || {});
+  _covState.context = next;
+  _covState.contextAware = true;
+  return _fetchAllowedParams();
 }
 
 /* ── Load from config ───────────────────────────────────────── */
@@ -505,6 +544,9 @@ function coinOvLoad(cfg, opts) {
     if (!co.hasOwnProperty(coin)) continue;
     var norm = _covNormalizeCoin(coin);
     if (_covState.overrides[norm]) {
+      if (_covState.preserveMarketIdentifiers) {
+        throw new Error('Duplicate PB8 market identifier after trimming: ' + norm);
+      }
       // Duplicate after normalization — short name wins, merge missing keys only
       var existing = _covState.overrides[norm];
       var incoming = co[coin];
@@ -544,6 +586,7 @@ function coinOvLoad(cfg, opts) {
 /** Normalize exchange symbol to short coin name (e.g. HYPEUSDT → HYPE, 1000BONKUSDT → BONK). */
 function _covNormalizeCoin(symbol) {
   if (!symbol) return symbol;
+  if (_covState.preserveMarketIdentifiers) return String(symbol).trim();
   var s = symbol.toUpperCase();
   // Strip quote suffixes
   var quotes = ['USDT', 'USDC', 'BUSD', 'USD'];
@@ -566,8 +609,9 @@ function _covNormalizeCoin(symbol) {
 }
 
 /* ── Update available coins ─────────────────────────────────── */
-function coinOvSetCoins(coins) {
+function coinOvSetCoins(coins, labels) {
   _covState.availableCoins = (coins || []).filter(function(c) { return c !== 'all'; }).sort();
+  _covState.marketLabels = labels && typeof labels === 'object' ? Object.assign({}, labels) : {};
   _covRender();
 }
 
@@ -599,7 +643,7 @@ function coinOvSetOverrideConfigs(configs, opts) {
 }
 
 /** Load an override config file for a coin. Returns a promise resolving to the raw file dict.
- *  Auto-filters to allowed override params on load. */
+ *  Preserves the complete document so ignored and non-override fields are not lost. */
 function _covLoadOverrideFile(coin) {
   var data = _covState.overrides[coin];
   if (!data || !data.override_config_path || !_covState.configName) {
@@ -613,19 +657,18 @@ function _covLoadOverrideFile(coin) {
   return _covRequest('/override-config/' + encodeURIComponent(_covState.configName) + '/' + encodeURIComponent(filename))
     .then(function(resp) {
       var cfg = resp.config || {};
-      cfg = _covFilterOverrideConfig(cfg);
       var current = _covState.overrides[coin];
       if (generation === _covState.loadGeneration && configName === _covState.configName && current && current.override_config_path === filename) {
         _covState.overrideConfigs[coin] = cfg;
       }
       return cfg;
     })
-    .catch(function() {
+    .catch(function(error) {
       var current = _covState.overrides[coin];
       if (generation === _covState.loadGeneration && configName === _covState.configName && current && current.override_config_path === filename) {
-        _covState.overrideConfigs[coin] = null;
+        _covState.overrideConfigs[coin] = { __pbgui_load_error__: (error && error.message) || 'Override file could not be loaded' };
       }
-      return null;
+      return _covState.overrideConfigs[coin];
     });
 }
 
@@ -767,12 +810,12 @@ function _covRender() {
       var badge = _covBadge(ov[c]);
       var tooltipHtml = _covTooltipHtml(ov[c]);
       h += '\x3Ctr' + (isEditing ? ' style="background:rgba(77,166,255,.06)"' : '') + '>';
-      h += '\x3Ctd style="font-weight:600">' + esc(c) + '\x3C/td>';
+      h += '\x3Ctd style="font-weight:600" title="' + esc(c) + '">' + esc(_covState.marketLabels[c] || c) + '\x3C/td>';
       h += '\x3Ctd>\x3Cspan class="cov-badge" data-tooltip="' + tooltipHtml.replace(/"/g, '&quot;') + '">' + badge + '\x3C/span>\x3C/td>';
       h += '\x3Ctd>';
-      h += '\x3Cbutton type="button" class="act-btn" onclick="coinOvEdit(\'' + esc(c) + '\')">' +
+      h += '\x3Cbutton type="button" class="act-btn" onclick="coinOvEditAt(' + i + ')">' +
            (isEditing ? 'Editing' : 'Edit') + '\x3C/button> ';
-      h += '\x3Cbutton type="button" class="act-btn act-btn-danger" onclick="coinOvRemove(\'' + esc(c) + '\')">\u00d7\x3C/button>';
+      h += '\x3Cbutton type="button" class="act-btn act-btn-danger" onclick="coinOvRemoveAt(' + i + ')">\u00d7\x3C/button>';
       h += '\x3C/td>\x3C/tr>';
     }
     h += '\x3C/tbody>\x3C/table>';
@@ -844,7 +887,8 @@ function _covShowCoinDd(filter) {
   var dd = document.getElementById('cov-coin-dd');
   if (!dd) return;
   var ov = _covState.overrides;
-  var f = (filter || '').toUpperCase();
+  var rawFilter = String(filter || '').trim();
+  var f = rawFilter.toUpperCase();
   var html = '';
   var avail = _covState.availableCoins;
   // Also allow coins not in available list (typed custom coins already added don't repeat)
@@ -853,13 +897,13 @@ function _covShowCoinDd(filter) {
     var c = avail[i];
     if (ov[c]) continue; // already has overrides
     if (f && c.toUpperCase().indexOf(f) < 0) continue;
-    html += '\x3Cdiv class="ms-option" data-val="' + esc(c) + '">' + esc(c) + '\x3C/div>';
+    html += '\x3Cdiv class="ms-option" data-val="' + esc(c) + '">' + esc(_covState.marketLabels[c] || c) + '\x3C/div>';
     shown++;
     if (shown > 200) break;
   }
   if (shown === 0 && f) {
     // Allow adding custom coin if typed and not already present
-    var custom = f.toUpperCase();
+    var custom = _covState.preserveMarketIdentifiers ? rawFilter : f;
     if (!ov[custom]) {
       html += '\x3Cdiv class="ms-option" data-val="' + esc(custom) + '">' + esc(custom) + ' (custom)\x3C/div>';
     }
@@ -1049,6 +1093,18 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+function _covDefaultOverrideFilename(coin) {
+  if (!_covState.preserveMarketIdentifiers) return coin + '.json';
+  var value = String(coin || 'market');
+  var safe = value.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^\.+/, '').slice(0, 80) || 'market';
+  var hash = 2166136261;
+  for (var i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return safe + '-' + (hash >>> 0).toString(16).padStart(8, '0') + '.json';
+}
+
 /* ── Remove coin ─────────────────────────────────────────────── */
 function coinOvRemove(coin) {
   delete _covState.overrides[coin];
@@ -1057,6 +1113,11 @@ function coinOvRemove(coin) {
   if (_covState.editCoin === coin) _covState.editCoin = null;
   _covRender();
   _covNotifyStructuredSync();
+}
+
+function coinOvRemoveAt(index) {
+  var coin = Object.keys(_covState.overrides).sort()[index];
+  if (coin !== undefined) coinOvRemove(coin);
 }
 
 /* ── Edit coin ───────────────────────────────────────────────── */
@@ -1078,6 +1139,11 @@ function coinOvEdit(coin) {
   }
 }
 
+function coinOvEditAt(index) {
+  var coin = Object.keys(_covState.overrides).sort()[index];
+  if (coin !== undefined) coinOvEdit(coin);
+}
+
 /* ── Build edit HTML ─────────────────────────────────────────── */
 function _covEditHtml(coin) {
   var data = _covState.overrides[coin] || {};
@@ -1096,6 +1162,11 @@ function _covEditHtml(coin) {
       esc(_covState.allowedParamsError) + '\x3C/div>';
   } else if (_covAllowedParamCount(allowed) === 0) {
     h += '\x3Cdiv style="margin-bottom:var(--sp-sm);color:var(--text-dim);font-size:var(--fs-sm)">No inline override parameters were reported by this Passivbot runtime.\x3C/div>';
+  }
+  var unsupported = _covUnsupportedInlineParams(data, allowed);
+  if (unsupported.length) {
+    h += '\x3Cdiv style="margin-bottom:var(--sp-sm);color:var(--red);font-size:var(--fs-sm)">Unsupported inline override values are preserved but PB8 will reject them: ' +
+      esc(unsupported.join(', ')) + '\x3C/div>';
   }
 
   /* Bot Long / Bot Short / Live sections — inline parameter overrides */
@@ -1129,8 +1200,8 @@ function _covEditHtml(coin) {
         h += '\x3Ctr>';
         h += '\x3Ctd>' + esc(pk) + '\x3C/td>';
         h += '\x3Ctd>' + _covInputHtml(inputId, pk, pv, secAllowed[pk]) + '\x3C/td>';
-        h += '\x3Ctd>\x3Cbutton type="button" class="act-btn act-btn-danger" onclick="covRemoveParam(\'' +
-             esc(coin) + '\',\'' + sec.key + '\',\'' + esc(pk) + '\')">\u00d7\x3C/button>\x3C/td>';
+        h += '\x3Ctd>\x3Cbutton type="button" class="act-btn act-btn-danger" onclick="covRemoveCurrentParam(\'' +
+             sec.key + '\',\'' + esc(pk) + '\')">\u00d7\x3C/button>\x3C/td>';
         h += '\x3C/tr>';
       }
       h += '\x3C/tbody>\x3C/table>';
@@ -1149,7 +1220,7 @@ function _covEditHtml(coin) {
       h += '\x3Cdiv class="form-group">\x3Clabel>Value\x3C/label>';
       h += '\x3Cinput type="text" id="cov-pv-' + secId + '" placeholder="0.5">\x3C/div>';
       h += '\x3Cdiv class="form-group">';
-      h += '\x3Cbutton type="button" class="act-btn" onclick="covAddParam(\'' + esc(coin) + '\',\'' + sec.key + '\')" ' +
+      h += '\x3Cbutton type="button" class="act-btn" onclick="covAddCurrentParam(\'' + sec.key + '\')" ' +
            'style="height:var(--input-h)">Add\x3C/button>';
       h += '\x3C/div>\x3C/div>';
     }
@@ -1161,11 +1232,15 @@ function _covEditHtml(coin) {
   /* Shows ONLY the file content (override_config_path), NOT merged with base config. */
   /* Passivbot merge order: base config → file overrides → inline overrides (inline wins). */
   var ovFile = _covState.overrideConfigs[coin];
+  var fileLoadError = ovFile && ovFile.__pbgui_load_error__;
   var fileLong = (ovFile && ovFile.bot && ovFile.bot.long) ? ovFile.bot.long : {};
   var fileShort = (ovFile && ovFile.bot && ovFile.bot.short) ? ovFile.bot.short : {};
   var fileLongJson = JSON.stringify(fileLong, null, 4);
   var fileShortJson = JSON.stringify(fileShort, null, 4);
   var hasFile = ovFile && (Object.keys(fileLong).length > 0 || Object.keys(fileShort).length > 0);
+  if (fileLoadError) {
+    h += '\x3Cdiv style="margin-top:var(--sp-xs);color:var(--red);font-size:var(--fs-sm)">Override file unavailable: ' + esc(fileLoadError) + '\x3C/div>';
+  }
 
   h += '\x3Cdiv style="margin-top:var(--sp-xs)">';
   h += '\x3Cdiv style="display:flex;align-items:center;gap:var(--sp-sm);margin-bottom:var(--sp-xs);cursor:pointer" onclick="covToggleConfig()">';
@@ -1311,6 +1386,10 @@ function covAddParam(coin, secKey) {
   _covNotifyStructuredSync();
 }
 
+function covAddCurrentParam(secKey) {
+  if (_covState.editCoin) covAddParam(_covState.editCoin, secKey);
+}
+
 function covRemoveParam(coin, secKey, param) {
   _covSaveEdit();
   var data = _covState.overrides[coin];
@@ -1324,6 +1403,10 @@ function covRemoveParam(coin, secKey, param) {
   }
   _covRender();
   _covNotifyStructuredSync();
+}
+
+function covRemoveCurrentParam(secKey, param) {
+  if (_covState.editCoin) covRemoveParam(_covState.editCoin, secKey, param);
 }
 
 /* ── Save edit form values back to state ─────────────────────── */
@@ -1375,7 +1458,19 @@ function _covSaveConfigFile(coin) {
   var data = _covState.overrides[coin];
   if (!data) return true;
 
-  var fileContent = {};
+  var existingFile = _covState.overrideConfigs[coin];
+  if (existingFile && existingFile.__pbgui_load_error__) {
+    toast('Override file could not be loaded. It was not changed.', 'err');
+    return false;
+  }
+  var fileContent = existingFile && typeof existingFile === 'object'
+    ? JSON.parse(JSON.stringify(existingFile))
+    : {};
+  if (fileContent.bot && typeof fileContent.bot === 'object') {
+    delete fileContent.bot.long;
+    delete fileContent.bot.short;
+    if (!Object.keys(fileContent.bot).length) delete fileContent.bot;
+  }
   var hasContent = false;
   var sides = ['long', 'short'];
   for (var i = 0; i < sides.length; i++) {
@@ -1399,7 +1494,8 @@ function _covSaveConfigFile(coin) {
     }
   }
 
-  var filename = coin + '.json';
+  hasContent = hasContent || Object.keys(fileContent).length > 0;
+  var filename = data.override_config_path || _covDefaultOverrideFilename(coin);
   if (hasContent) {
     // Set override_config_path and save file
     data.override_config_path = filename;
@@ -1527,6 +1623,19 @@ function _covGetNested(obj, path) {
     cur = cur[path[i]];
   }
   return cur;
+}
+
+function _covUnsupportedInlineParams(data, allowed) {
+  var unsupported = [];
+  [['bot', 'long'], ['bot', 'short'], ['live']].forEach(function(path) {
+    var prefix = path.join('.');
+    var values = _covFlattenLeaves(_covGetNested(data, path) || {});
+    var accepted = _covGetNested(allowed, path) || {};
+    Object.keys(values).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(accepted, key)) unsupported.push(prefix + '.' + key);
+    });
+  });
+  return unsupported.sort();
 }
 
 function _covEnsureNested(obj, path) {

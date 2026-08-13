@@ -35,6 +35,7 @@
       max_active_candle_tail_gap_minutes: 'f-max-active-tail-gap', balance_override: 'f-bal-override',
       balance_hysteresis_snap_pct: 'f-bal-hyst', custom_endpoints_path: 'f-custom-endpoints-path',
       enable_forager_ws_candles: 'f-enable-forager-ws', fee_conversion_max_age_ms: 'f-fee-conversion-age',
+      exchange_symbol_unavailable_cooldown_hours: 'f-exchange-symbol-cooldown',
       fee_pct_fallback: 'f-fee-pct-fallback', fee_pct_sanity_abs_max: 'f-fee-pct-sanity',
       forager_ws_candle_rest_audit_minutes: 'f-forager-ws-audit', force_cold_startup: 'f-force-cold-startup',
       hsl_accept_incomplete_history: 'f-hsl-accept-incomplete',

@@ -45,9 +45,11 @@ from pb8_config import (
     PB8ConfigurationError,
     cache_prepared_pb8_config,
     get_pb8_optimize_metadata,
+    get_pb8_exchange_metadata,
     load_pb8_config,
     migrate_pb7_config,
     prepare_pb8_config,
+    validate_pb8_override_bundle,
 )
 from pbgui_purefunc import PBGDIR, PBGUI_SERIAL, PBGUI_VERSION, load_ini_section, pb7dir, pb8_runtime_status, save_ini_section
 from secure_files import atomic_write_private_text, ensure_private_directory, ensure_private_directory_tree
@@ -63,6 +65,8 @@ _LAUNCH_MODES = {"fresh", "pareto_seed", "checkpoint_resume"}
 _RESULT_PROGRESS_CACHE_TTL_SECONDS = 15 * 60
 _RESULT_PROGRESS_CACHE_MAX_ENTRIES = 64
 _RESULT_LIST_SCAN_LIMIT_BYTES = 8 * 1024 * 1024
+_MAX_OVERRIDE_BYTES = 1024 * 1024
+_MAX_OVERRIDE_BUNDLE_BYTES = 8 * 1024 * 1024
 _BACKTEST_COUNT_CACHE_TTL_SECONDS = 30
 _BACKTEST_COUNT_CACHE_MAX_ENTRIES = 128
 _PARETO_LIST_CACHE_TTL_SECONDS = 5 * 60
@@ -439,7 +443,129 @@ def _publish_bundle(stage: Path, target: Path) -> None:
     rmtree(backup, ignore_errors=True)
 
 
-def _save_config_bundle(name: str, config: dict, *, create_only: bool = False) -> dict:
+def _override_filenames(config: dict) -> set[str]:
+    """Return safe sparse-override filenames referenced by an Optimize config."""
+    overrides = config.get("coin_overrides")
+    if overrides is None:
+        return set()
+    if not isinstance(overrides, dict):
+        raise HTTPException(status_code=422, detail="coin_overrides must be an object")
+    filenames = set()
+    for item in overrides.values():
+        if not isinstance(item, dict) or not item.get("override_config_path"):
+            continue
+        filename = str(item["override_config_path"]).strip()
+        if (
+            not filename.endswith(".json")
+            or filename.startswith(".")
+            or "/" in filename
+            or "\\" in filename
+            or Path(filename).name != filename
+            or filename in {_CONFIG_FILENAME, "migration_report.json"}
+            or any(ord(char) < 32 or ord(char) == 127 for char in filename)
+        ):
+            raise HTTPException(status_code=422, detail=f"Invalid override config path: {filename}")
+        filenames.add(filename)
+    return filenames
+
+
+def _load_override_payloads(config: dict, directory: Path) -> dict[str, dict]:
+    """Load the complete referenced sparse-override set from a managed bundle."""
+    result = {}
+    for filename in _override_filenames(config):
+        path = _safe_path(directory / filename, directory)
+        if not path.is_file() or path.is_symlink():
+            raise HTTPException(status_code=422, detail=f"Override config not found: {filename}")
+        payload = _read_json(path)
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail=f"Override config {filename} must be an object")
+        result[filename] = payload
+    return result
+
+
+def _resolve_override_payloads(config: dict, supplied: object, source_dir: Path | None) -> dict[str, dict]:
+    """Resolve submitted and inherited overrides into one complete exact bundle."""
+    if supplied is None:
+        supplied = {}
+    if not isinstance(supplied, dict):
+        raise HTTPException(status_code=422, detail="override_configs must be an object")
+    referenced = _override_filenames(config)
+    unknown = set(str(name) for name in supplied) - referenced
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unreferenced override config: {sorted(unknown)[0]}")
+    result = {}
+    total_bytes = 0
+    for filename in referenced:
+        payload = supplied.get(filename)
+        if payload is None and source_dir is not None:
+            path = _safe_path(source_dir / filename, source_dir)
+            if path.is_file() and not path.is_symlink():
+                payload = _read_json(path)
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail=f"Override config not supplied: {filename}")
+        try:
+            encoded = json.dumps(payload, allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=f"Override config {filename} is not valid JSON") from exc
+        if len(encoded) > _MAX_OVERRIDE_BYTES:
+            raise HTTPException(status_code=413, detail=f"Override config {filename} exceeds 1 MiB")
+        total_bytes += len(encoded)
+        if total_bytes > _MAX_OVERRIDE_BUNDLE_BYTES:
+            raise HTTPException(status_code=413, detail="Override config bundle exceeds 8 MiB")
+        result[filename] = copy.deepcopy(payload)
+    return result
+
+
+def _write_override_payloads(directory: Path, payloads: dict[str, dict]) -> None:
+    """Write one validated sparse-override set into a private bundle directory."""
+    for filename, payload in payloads.items():
+        _write_json(_safe_path(directory / filename, directory), payload)
+
+
+def _stage_snapshot_bundle(filename: str, prepared: dict, override_payloads: dict[str, dict]) -> Path:
+    """Build and validate an immutable queue bundle outside its final path."""
+    root = ensure_private_directory(_queue_dir() / "snapshots")
+    stage = _safe_path(root / f".{_validate_name(filename)}.stage-{uuid.uuid4().hex}", root)
+    ensure_private_directory(stage)
+    try:
+        _write_override_payloads(stage, override_payloads)
+        _write_json(stage / _CONFIG_FILENAME, prepared)
+        validate_pb8_override_bundle(stage / _CONFIG_FILENAME)
+        return stage
+    except Exception:
+        rmtree(stage, ignore_errors=True)
+        raise
+
+
+def _publish_snapshot_bundle(stage: Path, target: Path, *, retain_backup: bool = False) -> Path | None:
+    """Atomically replace one queue snapshot and optionally retain rollback state."""
+    backup = target.parent / f".{target.name}.backup-{uuid.uuid4().hex}"
+    existed = target.is_dir() and not target.is_symlink()
+    if target.exists() and not existed:
+        raise HTTPException(status_code=409, detail="Queue snapshot target is unsafe")
+    if existed:
+        os.replace(target, backup)
+    try:
+        os.replace(stage, target)
+    except Exception:
+        if existed and backup.exists() and not target.exists():
+            os.replace(backup, target)
+        raise
+    if retain_backup and existed:
+        return backup
+    rmtree(backup, ignore_errors=True)
+    return None
+
+
+def _save_config_bundle(
+    name: str,
+    config: dict,
+    *,
+    create_only: bool = False,
+    override_payloads: object = None,
+    source_dir: Path | None = None,
+    migration_report: dict | None = None,
+) -> dict:
     root = ensure_private_directory(_configs_dir())
     target = _config_dir(name)
     if create_only and target.exists():
@@ -447,9 +573,19 @@ def _save_config_bundle(name: str, config: dict, *, create_only: bool = False) -
     stage = _safe_path(root / f".{name}.stage-{uuid.uuid4().hex}", root)
     ensure_private_directory(stage)
     try:
-        prepared = prepare_pb8_config(_normalize_config(config, name), base_config_path=str(stage / _CONFIG_FILENAME))
+        if source_dir is None and target.is_dir() and not target.is_symlink():
+            source_dir = target
+        normalized = _normalize_config(config, name)
+        resolved_overrides = _resolve_override_payloads(normalized, override_payloads, source_dir)
+        _write_override_payloads(stage, resolved_overrides)
+        prepared = prepare_pb8_config(normalized, base_config_path=str(stage / _CONFIG_FILENAME))
+        if _override_filenames(prepared) != set(resolved_overrides):
+            raise HTTPException(status_code=422, detail="PB8 preparation changed override-file references")
         _validate_forager_optimize_search_space(prepared)
         _write_json(stage / _CONFIG_FILENAME, prepared)
+        if migration_report is not None:
+            _write_json(stage / "migration_report.json", migration_report)
+        validate_pb8_override_bundle(stage / _CONFIG_FILENAME)
         current_report = target / "migration_report.json"
         if current_report.is_file() and not current_report.is_symlink():
             copy2(current_report, stage / current_report.name)
@@ -803,6 +939,13 @@ def _recover_result_config(result_dir: Path) -> dict | None:
     return None
 
 
+def _result_override_payloads(result_dir: Path, config: dict) -> dict[str, dict]:
+    """Load sparse overrides colocated with a managed result config."""
+    if not _override_filenames(config):
+        return {}
+    return _load_override_payloads(config, result_dir)
+
+
 def _checkpoint_resume_readiness(result_dir: Path, *, for_listing: bool = False) -> dict:
     checkpoint = _safe_path(result_dir / "checkpoint.pkl", _results_root())
     all_results = _safe_path(result_dir / "all_results.bin", _results_root())
@@ -847,6 +990,7 @@ def _resume_compatibility_fields(config: dict) -> dict:
     return {
         "config_version": config.get("config_version"),
         "optimize.backend": optimize.get("backend"),
+        "optimize.objective_scenario": optimize.get("objective_scenario"),
         "optimize.scoring": optimize.get("scoring"),
         "optimize.limits": optimize.get("limits"),
         "optimize.bounds": optimize.get("bounds"),
@@ -859,6 +1003,7 @@ def _resume_compatibility_fields(config: dict) -> dict:
         "backtest.end_date": backtest.get("end_date"),
         "backtest.suite_enabled": backtest.get("suite_enabled"),
         "backtest.scenarios": backtest.get("scenarios"),
+        "backtest.aggregate": backtest.get("aggregate"),
         "backtest.suite": backtest.get("suite"),
     }
 
@@ -1117,6 +1262,24 @@ def _reconcile_queue_artifacts() -> None:
         ensure_private_directory_tree(_queue_dir(), _queue_dir() / "state")
         ensure_private_directory_tree(_queue_dir(), _queue_dir() / "snapshots")
         ensure_private_directory_tree(_queue_dir(), _queue_dir() / "launch")
+        ensure_private_directory_tree(_queue_dir(), _queue_dir() / "repair")
+        for journal in sorted((_queue_dir() / "repair").glob("*.json")):
+            try:
+                filename = _validate_name(journal.stem)
+                repair = _read_json(journal)
+                backup_name = str(repair.get("backup") or "")
+                expected_prefix = f".{filename}.repair-backup-"
+                if Path(backup_name).name != backup_name or not backup_name.startswith(expected_prefix):
+                    raise RuntimeError("Invalid queue repair backup name")
+                backup = _safe_path((_queue_dir() / "snapshots") / backup_name, _queue_dir())
+                target = _snapshot_dir(filename)
+                if target.exists():
+                    rmtree(target, ignore_errors=True)
+                if backup.is_dir() and not backup.is_symlink():
+                    os.replace(backup, target)
+                journal.unlink(missing_ok=True)
+            except Exception as exc:
+                _log(SERVICE, f"Could not recover PB8 Optimize queue repair {journal.name}: {exc}", level="ERROR")
         _recover_pending_reorder_unlocked()
         queue_ids: set[str] = set()
         next_order = 0
@@ -2464,7 +2627,12 @@ class OptimizeV8Worker:
                 launch_dir = _launch_dir(filename)
                 rmtree(launch_dir, ignore_errors=True)
                 ensure_private_directory_tree(_queue_dir(), launch_dir)
+                _write_override_payloads(
+                    launch_dir,
+                    _load_override_payloads(prepared, _snapshot_dir(filename)),
+                )
                 _write_json(_launch_config_file(filename), prepared)
+                validate_pb8_override_bundle(_launch_config_file(filename))
                 _write_json(_launch_options_file(filename), options)
                 _state_file(filename).unlink(missing_ok=True)
                 _ready_file(filename).unlink(missing_ok=True)
@@ -2693,6 +2861,7 @@ def get_settings(session: SessionToken = Depends(require_auth)) -> dict:
         "optimize_defaults": metadata.get("optimize_defaults") or {},
         "strategies": metadata.get("strategies") or [],
         "hsl_signal_modes": ["coin", "pside", "unified"],
+        "exchange_options": get_pb8_exchange_metadata()["optimize"],
     }
 
 
@@ -2782,7 +2951,13 @@ def get_config(name: str, session: SessionToken = Depends(require_auth)) -> dict
         with _config_lock():
             if not path.is_file() or path.is_symlink():
                 raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
-            return {"name": name, "config": load_pb8_config(path), "param_status": {}}
+            config = load_pb8_config(path)
+            return {
+                "name": name,
+                "config": config,
+                "param_status": {},
+                "override_configs": _load_override_payloads(config, path.parent),
+            }
     except PB8ConfigurationError as exc:
         raise _configuration_error(f"Loading PB8 optimize config {name}", exc) from exc
 
@@ -2791,12 +2966,23 @@ def get_config(name: str, session: SessionToken = Depends(require_auth)) -> dict
 def save_config(name: str, body: dict, create_only: bool = False, session: SessionToken = Depends(require_auth)) -> dict:
     name = _validate_name(name)
     config = body.get("config") if isinstance(body, dict) and "config" in body else body
+    override_payloads = body.get("override_configs") if isinstance(body, dict) and "config" in body else None
     if not isinstance(config, dict):
         raise HTTPException(status_code=400, detail="config must be an object")
     try:
         with _config_lock():
-            prepared = _save_config_bundle(name, config, create_only=create_only)
-        return {"ok": True, "name": name, "config": prepared}
+            prepared = _save_config_bundle(
+                name,
+                config,
+                create_only=create_only,
+                override_payloads=override_payloads,
+            )
+        return {
+            "ok": True,
+            "name": name,
+            "config": prepared,
+            "override_configs": _load_override_payloads(prepared, _config_dir(name)),
+        }
     except PB8ConfigurationError as exc:
         raise _configuration_error(f"Saving PB8 optimize config {name}", exc) from exc
 
@@ -2808,7 +2994,12 @@ def duplicate_config(name: str, body: dict, session: SessionToken = Depends(requ
     with _config_lock():
         if not source.is_file() or source.is_symlink():
             raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
-        prepared = _save_config_bundle(new_name, load_pb8_config(source), create_only=True)
+        prepared = _save_config_bundle(
+            new_name,
+            load_pb8_config(source),
+            create_only=True,
+            source_dir=source.parent,
+        )
     return {"ok": True, "name": new_name, "config": prepared}
 
 
@@ -2845,9 +3036,20 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
             config = result.get("config")
             unresolved = report.get("manual_review_fields") or report.get("dropped_unsupported_fields")
             if not report.get("output_written") or not isinstance(config, dict) or unresolved:
-                raise HTTPException(status_code=422, detail="Migration requires manual review")
-            prepared = _save_config_bundle(target_name, config, create_only=True)
-            _write_json(_config_dir(target_name) / "migration_report.json", report)
+                fields = report.get("manual_review_fields") or report.get("dropped_unsupported_fields") or []
+                message = "Migration requires manual review"
+                if fields:
+                    message += ": " + "; ".join(str(item) for item in fields[:5])
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": "migration_manual_review", "message": message, "report": report},
+                )
+            prepared = _save_config_bundle(
+                target_name,
+                config,
+                create_only=True,
+                migration_report=report,
+            )
             return {"ok": True, "name": target_name, "config": prepared, "report": report}
         finally:
             rmtree(stage, ignore_errors=True)
@@ -2885,28 +3087,40 @@ def reorder_queue(body: dict, session: SessionToken = Depends(require_auth)) -> 
 def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)) -> dict:
     name = _validate_name(str((body or {}).get("name") or ""))
     config = (body or {}).get("config")
+    override_payloads = (body or {}).get("override_configs") if isinstance(config, dict) else None
     try:
         with _config_lock():
             if isinstance(config, dict):
-                prepared = _save_config_bundle(name, config)
+                prepared = _save_config_bundle(name, config, override_payloads=override_payloads)
             else:
                 path = _config_file(name)
                 if not path.is_file() or path.is_symlink():
                     raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
                 prepared = load_pb8_config(path)
+            overrides = _load_override_payloads(prepared, _config_dir(name))
         options = _validate_launch_options((body or {}).get("launch_options") or _runtime_options_from_config(prepared))
     except PB8ConfigurationError as exc:
         raise _configuration_error(f"Queueing PB8 optimize config {name}", exc) from exc
-    return _create_queue_record(name, prepared, options)
+    return _create_queue_record(name, prepared, options, overrides)
 
 
-def _create_queue_record(name: str, prepared: dict, options: dict) -> dict:
+def _create_queue_record(
+    name: str,
+    prepared: dict,
+    options: dict,
+    override_payloads: dict[str, dict] | None = None,
+) -> dict:
     """Publish one queue record and remove partial artifacts if persistence fails."""
     filename = str(uuid.uuid4())
+    stage = None
     try:
+        if override_payloads is None:
+            with _config_lock():
+                override_payloads = _load_override_payloads(prepared, _config_dir(name))
+        stage = _stage_snapshot_bundle(filename, prepared, override_payloads)
         with _queue_lock():
-            ensure_private_directory_tree(_queue_dir(), _snapshot_dir(filename))
-            _write_json(_snapshot_file(filename), prepared)
+            _publish_snapshot_bundle(stage, _snapshot_dir(filename))
+            stage = None
             current = _load_queue()
             order = min((item["order"] for item in current if isinstance(item.get("order"), int)), default=0) - 1
             backtest = prepared.get("backtest") if isinstance(prepared.get("backtest"), dict) else {}
@@ -2921,6 +3135,8 @@ def _create_queue_record(name: str, prepared: dict, options: dict) -> dict:
             }
             _write_json(_queue_file(filename), data)
     except Exception:
+        if stage is not None:
+            rmtree(stage, ignore_errors=True)
         with _queue_lock():
             _queue_file(filename).unlink(missing_ok=True)
             rmtree(_snapshot_dir(filename), ignore_errors=True)
@@ -3012,7 +3228,13 @@ def get_queue_config(filename: str, session: SessionToken = Depends(require_auth
     path = _snapshot_file(filename)
     if not path.is_file() or path.is_symlink():
         raise HTTPException(status_code=404, detail="Queue config snapshot not found")
-    return {"name": _read_json(_queue_file(filename)).get("name", filename), "config": _read_json(path), "param_status": {}}
+    config = _read_json(path)
+    return {
+        "name": _read_json(_queue_file(filename)).get("name", filename),
+        "config": config,
+        "param_status": {},
+        "override_configs": _load_override_payloads(config, path.parent),
+    }
 
 
 @router.post("/queue/{filename}/repair-config")
@@ -3024,21 +3246,57 @@ def repair_queue_config(filename: str, body: dict, session: SessionToken = Depen
             raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
         try:
             prepared = load_pb8_config(config_path)
+            overrides = _load_override_payloads(prepared, _config_dir(name))
         except PB8ConfigurationError as exc:
             raise _configuration_error(f"Repairing PB8 optimize queue config {name}", exc) from exc
+    stage = _stage_snapshot_bundle(filename, prepared, overrides)
     with _queue_lock():
-        queue_path = _queue_file(filename)
-        if not queue_path.is_file():
-            raise HTTPException(status_code=404, detail="Queue item not found")
-        data = _read_json(queue_path)
-        ensure_private_directory_tree(_queue_dir(), _snapshot_dir(filename))
-        _write_json(_snapshot_file(filename), prepared)
-        data["name"] = name
-        data["config_path"] = str(config_path)
-        data["snapshot_path"] = str(_snapshot_file(filename))
-        backtest = prepared.get("backtest") if isinstance(prepared.get("backtest"), dict) else {}
-        data["exchange"] = backtest.get("exchanges") or []
-        _write_json(queue_path, data)
+        backup = None
+        target = _snapshot_dir(filename)
+        published = False
+        journal = None
+        try:
+            queue_path = _queue_file(filename)
+            if not queue_path.is_file():
+                raise HTTPException(status_code=404, detail="Queue item not found")
+            data = _read_json(queue_path)
+            repair_root = ensure_private_directory(_queue_dir() / "repair")
+            backup = _safe_path(
+                (_queue_dir() / "snapshots") / f".{filename}.repair-backup-{uuid.uuid4().hex}",
+                _queue_dir(),
+            )
+            journal = _safe_path(repair_root / f"{filename}.json", repair_root)
+            _write_json(journal, {"filename": filename, "backup": backup.name})
+            if target.exists():
+                if not target.is_dir() or target.is_symlink():
+                    raise HTTPException(status_code=409, detail="Queue snapshot target is unsafe")
+                os.replace(target, backup)
+            else:
+                backup = None
+            os.replace(stage, target)
+            published = True
+            stage = None
+            data["name"] = name
+            data["config_path"] = str(config_path)
+            data["snapshot_path"] = str(_snapshot_file(filename))
+            backtest = prepared.get("backtest") if isinstance(prepared.get("backtest"), dict) else {}
+            data["exchange"] = backtest.get("exchanges") or []
+            _write_json(queue_path, data)
+            if backup is not None:
+                rmtree(backup, ignore_errors=True)
+            journal.unlink(missing_ok=True)
+        except Exception:
+            if published:
+                if target.exists():
+                    rmtree(target, ignore_errors=True)
+                if backup is not None and backup.exists():
+                    os.replace(backup, target)
+            if journal is not None:
+                journal.unlink(missing_ok=True)
+            raise
+        finally:
+            if stage is not None:
+                rmtree(stage, ignore_errors=True)
     return {"ok": True, "filename": filename, "name": name, "json": data["config_path"]}
 
 
@@ -3378,7 +3636,12 @@ def get_result_config(path: str, session: SessionToken = Depends(require_auth)) 
     if config is None:
         raise HTTPException(status_code=404, detail="No recoverable PB8 config found for result")
     try:
-        return {"config": prepare_pb8_config(config), "param_status": {}}
+        prepared = prepare_pb8_config(config, base_config_path=str(result_dir / _CONFIG_FILENAME))
+        return {
+            "config": prepared,
+            "param_status": {},
+            "override_configs": _result_override_payloads(result_dir, prepared),
+        }
     except PB8ConfigurationError as exc:
         raise _configuration_error("Loading PB8 result config", exc) from exc
 
@@ -3397,6 +3660,7 @@ def queue_result_resume(body: dict, session: SessionToken = Depends(require_auth
                 detail="Checkpoint cannot be resumed: " + "; ".join(readiness["reasons"]),
             )
         config = copy.deepcopy(readiness["config"])
+        result_overrides = _result_override_payloads(result_dir, config)
         try:
             candidate = prepare_pb8_config(_normalize_config(config, name))
         except PB8ConfigurationError as exc:
@@ -3405,9 +3669,15 @@ def queue_result_resume(body: dict, session: SessionToken = Depends(require_auth
         options = _validate_launch_options({"mode": "checkpoint_resume", "source": str(result_dir)})
         try:
             with _config_lock():
-                prepared = _save_config_bundle(name, candidate, create_only=True)
+                prepared = _save_config_bundle(
+                    name,
+                    candidate,
+                    create_only=True,
+                    override_payloads=result_overrides,
+                )
                 created_config = True
-            return _create_queue_record(name, prepared, options)
+                saved_overrides = _load_override_payloads(prepared, _config_dir(name))
+            return _create_queue_record(name, prepared, options, saved_overrides)
         except Exception:
             if created_config:
                 try:
@@ -3845,7 +4115,11 @@ def get_pareto_file(path: str, session: SessionToken = Depends(require_auth)) ->
         pareto = _resolve_result_path(path, require_directory=False)
         if not pareto.is_file() or pareto.parent.name != "pareto":
             raise HTTPException(status_code=400, detail="Path is not a managed PB8 pareto file")
-        return _read_json(pareto)
+        config = _read_json(pareto)
+        return {
+            "config": config,
+            "override_configs": _result_override_payloads(pareto.parent.parent, config),
+        }
 
 
 @router.post("/paretos/seed-bundle")

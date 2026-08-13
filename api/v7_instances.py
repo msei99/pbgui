@@ -46,6 +46,7 @@ from master.cluster_state import (
     read_local_identity,
     rebuild_materialized_state,
 )
+from master.cluster_sync_worker import push_v7_activation
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config, strip_pbgui_param_status
 import pbgui_purefunc
 from pbgui_purefunc import PBGDIR
@@ -275,7 +276,7 @@ def _record_cluster_config_upsert(
     *,
     parent_version: int | str | None = None,
     allow_tombstone_recreate: bool = False,
-) -> None:
+) -> dict | None:
     """Record a V7 config write in the local cluster oplog without blocking saves."""
 
     try:
@@ -323,10 +324,12 @@ def _record_cluster_config_upsert(
             payload["parent_version"] = str(parent_version)
         if allow_tombstone_recreate:
             payload["allow_tombstone_recreate"] = True
-        append_operation(cluster_root, "UPSERT_CONFIG", payload)
+        operation = append_operation(cluster_root, "UPSERT_CONFIG", payload)
         rebuild_materialized_state(cluster_root)
+        return operation
     except Exception as exc:
         _log(SERVICE, f"Cluster oplog update skipped for V7 config '{name}': {exc}", level="WARNING")
+        return None
 
 
 def _record_cluster_instance_delete(name: str, version: int | str | None) -> None:
@@ -1027,22 +1030,60 @@ async def _ensure_target_runtime_compatible(name: str, cfg: dict) -> None:
 
 # ── Cluster Sync Handoff ─────────────────────────────────────
 
-async def _ssh_sync_instance(name: str) -> dict:
-    """Return the legacy activation payload without remote SSH writes."""
+async def _ssh_sync_instance(name: str, operation: dict | None = None) -> dict:
+    """Try one bounded direct activation before PBCluster completes replication."""
     config_path = Path(f"{PBGDIR}/data/run_v7/{name}/config.json")
     if not config_path.is_file():
         return {"name": name, "error": f"Config not found: {name}"}
-    _log(SERVICE, f"Skipped legacy V7 remote write for '{name}': {LEGACY_V7_API_SSH_SYNC_DISABLED_REASON}")
-    return {
-        "name": name,
-        "local": True,
-        "hosts": {},
-        "ok": 0,
-        "failed": 0,
-        "disabled": True,
-        "cluster_sync": True,
-        "reason": LEGACY_V7_API_SSH_SYNC_DISABLED_REASON,
-    }
+    try:
+        cluster_root = _cluster_root()
+        if operation is None:
+            desired = rebuild_materialized_state(cluster_root, write=False).get("desired_state") or {}
+            current = (desired.get("instances") or {}).get(name) or {}
+            candidates = [
+                item
+                for item in load_operations(
+                    cluster_root,
+                    expected_cluster_id=str(read_local_identity(cluster_root).get("cluster_id") or ""),
+                )
+                if str(item.get("op") or "") == "UPSERT_CONFIG"
+                and str(item.get("instance") or "") == name
+                and str(item.get("version") or "") == str(current.get("version") or "")
+                and str(item.get("config_manifest_hash") or "") == str(current.get("config_manifest_hash") or "")
+            ]
+            operation = max(
+                candidates,
+                key=lambda item: (int(item.get("created_at") or 0), str(item.get("actor") or ""), int(item.get("seq") or 0)),
+                default=None,
+            )
+        if operation is None:
+            raise RuntimeError("current cluster operation is unavailable")
+        direct = await asyncio.to_thread(push_v7_activation, cluster_root, operation, timeout=4)
+        host = str(direct.get("pbname") or "")
+        success = bool(direct.get("ok"))
+        return {
+            "name": name,
+            "local": not bool(direct.get("direct")),
+            "hosts": {host: {"success": success}} if host else {},
+            "ok": 1 if success and direct.get("direct") else 0,
+            "failed": 0,
+            "direct": bool(direct.get("direct")),
+            "cluster_sync": True,
+            "materialization": direct.get("materialization") or {},
+        }
+    except Exception as exc:
+        _log(SERVICE, f"Fast V7 activation for '{name}' deferred to PBCluster: {exc}", level="WARNING")
+        return {
+            "name": name,
+            "local": True,
+            "hosts": {},
+            "ok": 0,
+            "failed": 0,
+            "direct": False,
+            "cluster_sync": True,
+            "pending": True,
+            "reason": "Fast activation deferred to PBCluster",
+        }
 
 
 # ── Endpoints ────────────────────────────────────────────────
@@ -1247,8 +1288,8 @@ async def set_instance_forced_mode(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not save config for '{name}': {exc}") from exc
 
-    _record_cluster_config_upsert(name, instance_dir, cfg, parent_version=version_base)
-    sync_result = await _ssh_sync_instance(name)
+    operation = _record_cluster_config_upsert(name, instance_dir, cfg, parent_version=version_base)
+    sync_result = await _ssh_sync_instance(name, operation)
     _log(SERVICE, f"Set forced mode '{label}' for all positions on '{name}' (v{cfg['pbgui']['version']})", level="WARNING")
     return {
         "ok": True,
@@ -1926,7 +1967,7 @@ async def _save_instance_config_payload(
 
     version = cfg["pbgui"]["version"]
 
-    _record_cluster_config_upsert(
+    operation = _record_cluster_config_upsert(
         name,
         instance_dir,
         cfg,
@@ -1934,8 +1975,8 @@ async def _save_instance_config_payload(
         allow_tombstone_recreate=backup_src_dir is not None or is_new_instance,
     )
 
-    # Return a legacy sync payload; PBCluster owns remote materialization.
-    sync_result = await _ssh_sync_instance(name)
+    # Try the bounded target fast path; PBCluster remains the replication fallback.
+    sync_result = await _ssh_sync_instance(name, operation)
 
     _log(SERVICE, f"Saved config for '{name}' (v{version})")
     result = {

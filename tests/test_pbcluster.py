@@ -643,6 +643,36 @@ def test_cluster_sync_worker_coalesces_triggers_written_during_its_pass(
     assert worker._consume_trigger_change() is False
 
 
+def test_cluster_sync_worker_retries_v7_change_written_during_boot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A V7 change written during a pass schedules one immediate catch-up pass."""
+
+    worker = ClusterSyncWorker(tmp_path)
+    revisions = iter([
+        (("bot-a", "1", "hash-a"),),
+        (("bot-a", "2", "hash-b"),),
+        (("bot-a", "2", "hash-b"),),
+        (("bot-a", "2", "hash-b"),),
+    ])
+    reasons: list[str] = []
+
+    monkeypatch.setattr(worker, "_v7_state_revision", lambda: next(revisions))
+
+    def run_once(*, reason: str) -> dict:
+        reasons.append(reason)
+        if len(reasons) == 2:
+            worker.stop()
+        return {"reason": reason}
+
+    monkeypatch.setattr(worker, "run_once", run_once)
+
+    worker.run_forever()
+
+    assert reasons == ["boot", "event"]
+
+
 def test_cluster_sync_worker_event_clears_peer_backoff(tmp_path: Path) -> None:
     """Explicit sync events retry peers immediately after repair actions."""
 
@@ -972,7 +1002,7 @@ def test_cluster_sync_worker_pushes_ops_blobs_and_remote_materializes(tmp_path: 
     assert remote_manifest.is_file()
     assert "missing-blobs" in [command for _, command in client.calls]
     remote_config = tmp_path / "node-b" / "data" / "run_v7" / "bot-a" / "config.json"
-    assert not remote_config.exists()
+    assert json.loads(remote_config.read_text(encoding="utf-8"))["live"]["user"] == "bot-a"
     local_manifest = root_a / "config_blobs" / "sha256" / manifest_digest[:2] / f"{manifest_digest}.json"
     local_manifest.unlink()
     remote_worker = ClusterSyncWorker(tmp_path / "node-b", peer_client=client)
@@ -982,6 +1012,68 @@ def test_cluster_sync_worker_pushes_ops_blobs_and_remote_materializes(tmp_path: 
     assert local_manifest.is_file()
     assert json.loads(remote_config.read_text(encoding="utf-8"))["live"]["user"] == "bot-a"
     assert json.loads((root_b / "desired_state.json").read_text(encoding="utf-8"))["instances"]["bot-a"]["assigned_host"] == NODE_B
+
+
+def test_push_v7_activation_uses_one_bounded_apply_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Fast activation skips the handshake and sends one bounded target bundle."""
+
+    root_a = default_cluster_root(tmp_path / "node-a")
+    root_b = default_cluster_root(tmp_path / "node-b")
+    ensure_local_identity(root_a, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
+    ensure_local_identity(root_b, role="vps", pbname="runner-b", cluster_id=CLUSTER_ID, node_id=NODE_B)
+    master_membership = append_operation(
+        root_a,
+        "ADD_NODE",
+        {"node_id": NODE_ID, "role": "master", "pbname": "master-a", "ssh_host": "master-a"},
+    )
+    runner_membership = append_operation(
+        root_b,
+        "ADD_NODE",
+        {"node_id": NODE_B, "role": "vps", "pbname": "runner-b", "ssh_host": "runner-b"},
+    )
+    write_operation(root_a, runner_membership, allow_legacy_membership=True)
+    write_operation(root_b, master_membership, allow_legacy_membership=True)
+    instance_dir = tmp_path / "node-a" / "data" / "run_v7" / "bot-a"
+    instance_dir.mkdir(parents=True)
+    (instance_dir / "config.json").write_text('{"pbgui":{"version":7}}', encoding="utf-8")
+    manifest_hash = _write_config_blobs_for_instance(root_a, instance_dir)
+    operation = append_operation(
+        root_a,
+        "UPSERT_CONFIG",
+        {
+            "instance": "bot-a",
+            "version": "7",
+            "assigned_host": NODE_B,
+            "desired_state": "running",
+            "config_manifest_hash": manifest_hash,
+        },
+    )
+    rebuild_materialized_state(root_a)
+    calls: list[tuple[str, dict]] = []
+    settings: list[tuple[int, int, Path]] = []
+
+    class ClientStub:
+        """Capture one direct forced-command request."""
+
+        def __init__(self, *, timeout: int, connect_timeout: int, cluster_root: Path) -> None:
+            settings.append((timeout, connect_timeout, cluster_root))
+
+        def run(self, peer, local_node_id, command_text, payload=None) -> dict:
+            calls.append((command_text, json.loads(payload)))
+            return {"ok": True, "materialization": {"ok": True}}
+
+    monkeypatch.setattr(cluster_sync_worker, "SshClusterPeerClient", ClientStub)
+
+    result = cluster_sync_worker.push_v7_activation(root_a, operation, timeout=4)
+
+    assert settings == [(4, 2, root_a)]
+    assert [command for command, _payload in calls] == ["apply-bundle"]
+    assert calls[0][1]["operations"] == [operation]
+    assert result["status"] == "activated"
+    assert result["pbname"] == "runner-b"
 
 
 def test_cluster_sync_worker_limits_operation_bundle_size() -> None:

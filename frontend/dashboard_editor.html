@@ -490,7 +490,6 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
   'use strict';
 
   /* ── injected by FastAPI ── */
-  var TOKEN   = "%%TOKEN%%";
   var API_BASE = "%%API_BASE%%";
   var ORIG_NAME  = %%DASHBOARD_NAME%%;  /* JSON-encoded: "MyDash" or "" */
   var VIEW_ONLY  = %%VIEW_ONLY%%;       /* 0 = edit, 1 = view-only */
@@ -543,10 +542,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
 
   function apiFetch(path, opts) {
     opts = opts || {};
-    opts.headers = Object.assign(
-      { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      opts.headers || {}
-    );
+    opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
     return fetch(API_BASE + path, opts);
   }
 
@@ -994,7 +990,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     reportHeight();
   }
 
-   var DR_VERSION = '20260610l';
+   var DR_VERSION = '20260812b';
 
   /* ── lazy-load shared render module ── */
   function _ensureRenderScript(cb) {
@@ -1100,7 +1096,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       st.lastFetch = Date.now();
       st.loading = true;
       var url = API_BASE + '/dashboard/positions_data?users=' + encodeURIComponent(users.join(',')) + '&live=1';
-      fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+      fetch(url)
         .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
         .then(function (d) {
           st.loading = false;
@@ -1137,7 +1133,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       st.lastFetch = Date.now();
       st.loading = true;
       var url = API_BASE + '/dashboard/balance?users=' + encodeURIComponent(users.join(',')) + '&live=1';
-      fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+      fetch(url)
         .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
         .then(function (d) {
           st.loading = false;
@@ -1175,7 +1171,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     }
     var url = API_BASE + '/dashboard/balance'
       + '?users=' + encodeURIComponent(usersParam);
-    fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(url)
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (d) {
         if (_buildGen[_gKey] !== _gen) return;
@@ -1245,7 +1241,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       + '?users='  + encodeURIComponent(usersParam)
       + '&period=' + encodeURIComponent(period)
       + '&top='    + topN;
-    fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(url)
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (d) {
         if (_buildGen[_gKey] !== _gen) return;
@@ -1383,7 +1379,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       + '&period=' + encodeURIComponent(period)
       + '&last_n=' + lastN
       + '&filter=' + filterVal;
-    fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(url)
       .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
       .then(function (d) {
         if (_buildGen[_gKey] !== _gen) return;
@@ -1493,7 +1489,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             fromControl: fromCtrl, toControl: toCtrl, toNowControl: toNowCtrl,
             lastNControl: lastNCtrl, filterControl: filterCtrl,
             usersControl: usersCtrl,
-            apiBase: API_BASE, token: TOKEN,
+            apiBase: API_BASE,
             onReload: function () { buildIncomeInline(container, r, c); },
             users: users || ['ALL'],
             icon: _widgetIcon('INCOME'), onDelete: _makeDeleteCb(r, c),
@@ -1546,7 +1542,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       + '?users='  + encodeURIComponent(usersParam)
       + '&period=' + encodeURIComponent(period)
       + '&mode='   + encodeURIComponent(mode);
-    fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(url)
       .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
       .then(function (d) {
         if (_buildGen[_gKey] !== _gen) return;
@@ -1681,7 +1677,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       + '?users='  + encodeURIComponent(usersParam)
       + '&period=' + encodeURIComponent(period)
       + '&mode='   + encodeURIComponent(mode);
-    fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(url)
       .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
       .then(function (d) {
         if (_buildGen[_gKey] !== _gen) return;
@@ -1814,7 +1810,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       + '?users='      + encodeURIComponent(usersParam)
       + '&period='     + encodeURIComponent(period)
       + '&sum_period=' + encodeURIComponent(sumPeriod);
-    fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(url)
       .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
       .then(function (d) {
         if (_buildGen[_gKey] !== _gen) return;
@@ -1937,7 +1933,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     }
     var url = API_BASE + '/dashboard/positions_data'
       + '?users=' + encodeURIComponent(usersParam);
-    fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+    fetch(url)
       .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
       .then(function (d) {
         if (_buildGen[_gKey] !== _gen) return;
@@ -1949,7 +1945,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
           DashRender.buildPositions(container, d, {
             usersControl: usersCtrl, position: pos,
             icon: _widgetIcon('POSITIONS'), onDelete: _makeDeleteCb(r, c),
-            apiBase: API_BASE, token: TOKEN, onReload: function () { buildPositionsInline(container, r, c); }
+            apiBase: API_BASE, onReload: function () { buildPositionsInline(container, r, c); }
           });
           _attachViewDrag(container, r, c);
           _connectLivePos(container, pos, users, d.positions || []);
@@ -2064,7 +2060,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
         + '&timeframe=' + encodeURIComponent(requestTimeframe)
         + '&limit='     + _tfLimit(requestTimeframe)
         + '&live=1';
-      fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+      fetch(url)
         .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
         .then(function (d) {
           if (seq !== window[_loadSeqKey]) return;
@@ -2084,7 +2080,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
                   + '&timeframe=' + encodeURIComponent(tf)
                   + '&limit='     + _tfLimit(tf)
                   + '&live=1';
-                fetch(tfUrl, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+                fetch(tfUrl)
                   .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
                   .then(function (d2) {
                     if (_fid !== _tfFetchId || seq !== window[_loadSeqKey]) return;
@@ -2110,7 +2106,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
                   + '&since='     + since
                   + '&limit=300'
                   + '&live=1';
-                fetch(moreUrl, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+                fetch(moreUrl)
                   .then(function (resp) { if (!resp.ok) throw new Error(resp.status); return resp.json(); })
                   .then(function (older) {
                     if (seq !== window[_loadSeqKey] || currentTimeframe !== fetchTf) { done(); return; }

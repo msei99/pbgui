@@ -158,7 +158,7 @@
         return /^(?:long|short)(?:\.|$)/.test(clean) ? 'bot.' + clean : clean;
       },
       metadataApiBase: function () {
-        return apiBase.replace(/\/optimize-v[78]$/, '/v7');
+        return apiBase.replace(/\/optimize-v[78]$/, isV8 ? '/v8' : '/v7');
       },
       docsApiBase: function () {
         return apiBase.replace(/\/optimize-v[78]$/, '');

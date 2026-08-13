@@ -108,6 +108,73 @@ BLOB_COVERAGE_MAX_BYTES_PER_PEER_PASS = 64 * 1024 * 1024
 BLOB_COVERAGE_RECOVERY_SCAN_HASHES_PER_PEER_PASS = 64
 
 
+def push_v7_activation(
+    cluster_root: Path | str,
+    operation: dict[str, Any],
+    *,
+    timeout: int = 4,
+) -> dict[str, Any]:
+    """Push one V7 config operation directly to its assigned peer."""
+
+    root = Path(cluster_root)
+    identity = read_local_identity(root)
+    cluster_id = str(identity.get("cluster_id") or "")
+    validate_operation(
+        operation,
+        expected_cluster_id=cluster_id,
+        cluster_root=root,
+    )
+    if str(operation.get("op") or "") != "UPSERT_CONFIG":
+        raise ClusterSyncWorkerError("fast activation requires UPSERT_CONFIG")
+    if str(operation.get("desired_state") or "") != "running":
+        return {"ok": True, "status": "not_running", "direct": False}
+
+    target_node_id = str(operation.get("assigned_host") or "")
+    local_node_id = str(identity.get("node_id") or "")
+    if not target_node_id:
+        raise ClusterSyncWorkerError("fast activation operation has no assigned_host")
+    if target_node_id == local_node_id:
+        return {"ok": True, "status": "local", "direct": False}
+
+    materialized = read_materialized_state(root)
+    nodes = ((materialized.get("cluster_nodes") or {}).get("nodes") or {})
+    nodes = nodes if isinstance(nodes, dict) else {}
+    peer = nodes.get(target_node_id) if isinstance(nodes.get(target_node_id), dict) else None
+    if not isinstance(peer, dict):
+        raise ClusterSyncWorkerError("assigned cluster node is unavailable")
+    local_node = nodes.get(local_node_id) if isinstance(nodes.get(local_node_id), dict) else {}
+    allowed, reason = _peer_topology_allows(
+        local_node_id,
+        local_node,
+        target_node_id,
+        peer,
+        nodes,
+    )
+    if not allowed:
+        raise ClusterSyncWorkerError(reason or "assigned cluster node is not reachable from this node")
+    if not str(peer.get("ssh_host") or "").strip():
+        raise ClusterSyncWorkerError("assigned cluster node has no ssh_host")
+
+    config_blobs, secret_blobs, sealed_blobs = _collect_local_blobs_for_operations(root, [operation])
+    payload = _apply_bundle_payload([operation], config_blobs, secret_blobs, sealed_blobs)
+    if len(payload.encode("utf-8")) > APPLY_BUNDLE_TARGET_BYTES:
+        raise ClusterSyncWorkerError("fast activation bundle exceeds the transport limit")
+    client = SshClusterPeerClient(
+        timeout=max(1, int(timeout)),
+        connect_timeout=min(2, max(1, int(timeout))),
+        cluster_root=root,
+    )
+    result = client.run(peer, local_node_id, "apply-bundle", payload=payload)
+    return {
+        "ok": bool(result.get("ok")),
+        "status": "activated" if result.get("ok") else "error",
+        "direct": True,
+        "node_id": target_node_id,
+        "pbname": str(peer.get("pbname") or peer.get("hostname") or ""),
+        "materialization": result.get("materialization") or {},
+    }
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     """Atomically write one JSON status file."""
 
@@ -164,11 +231,14 @@ class ClusterSyncWorker:
         """Run boot reconciliation and then periodic local maintenance."""
 
         _log(SERVICE, "PBCluster worker starting")
+        boot_v7_revision = self._v7_state_revision()
         self.run_once(reason="boot")
         self._consume_trigger_change()
+        if self._v7_state_revision() != boot_v7_revision:
+            self._sync_requested.set()
         next_periodic = time.time() + self._periodic_delay()
         while not self._stop.is_set():
-            wait_for = min(2.0, max(0.1, next_periodic - time.time()))
+            wait_for = min(0.25, max(0.1, next_periodic - time.time()))
             triggered = self._sync_requested.wait(wait_for)
             if self._stop.is_set():
                 break
@@ -178,10 +248,33 @@ class ClusterSyncWorker:
             if not triggered and not trigger_changed and not periodic_due:
                 continue
             reason = "event" if triggered or trigger_changed else "periodic"
+            v7_revision = self._v7_state_revision()
             self.run_once(reason=reason)
             self._consume_trigger_change()
+            if self._v7_state_revision() != v7_revision:
+                self._sync_requested.set()
             next_periodic = time.time() + self._periodic_delay()
         _log(SERVICE, "PBCluster worker stopped")
+
+    def _v7_state_revision(self) -> tuple[tuple[str, str, str], ...]:
+        """Return a compact revision that detects V7 changes during a sync pass."""
+
+        try:
+            desired = read_materialized_state(self.cluster_root).get("desired_state") or {}
+        except (ClusterStateError, OSError, TypeError, ValueError):
+            return ()
+        revision: list[tuple[str, str, str]] = []
+        for section in ("instances", "tombstones"):
+            items = desired.get(section) if isinstance(desired, dict) else {}
+            items = items if isinstance(items, dict) else {}
+            for name, item in items.items():
+                value = item if isinstance(item, dict) else {}
+                revision.append((
+                    str(name),
+                    str(value.get("version") or ""),
+                    str(value.get("config_manifest_hash") or value.get("op_id") or ""),
+                ))
+        return tuple(sorted(revision))
 
     def _periodic_delay(self) -> int:
         """Use event-driven sync with a bounded safety poll on passive VPS replicas."""

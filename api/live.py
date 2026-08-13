@@ -282,9 +282,10 @@ async def _watcher_loop(user: Any, kind: str) -> None:
             _log(
                 SERVICE,
                 f"[live] No WS client for {user.name} ({user.exchange}), kind={kind}. "
-                "Exchange WS cap reached or exchange unsupported; live updates unavailable.",
+                "Exchange WS cap reached or exchange unsupported; switching to DB polling.",
                 level="WARNING",
             )
+            await _db_poll_loop(user, kind, db)
             return
 
         # For balance: send DB snapshot immediately so the badge shows data

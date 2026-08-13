@@ -40,7 +40,7 @@ def test_v7_and_v8_use_one_optimize_template() -> None:
     assert '"%%OPTIMIZE_VERSION%%": "v8"' in api_v8
     assert '"%%OPTIMIZE_NAV_CURRENT%%": "v8_optimize"' in api_v8
     assert not (ROOT / "frontend" / "v8_optimize.html").exists()
-    assert '/app/js/optimize_editor_adapter.js?v=9' in page
+    assert '/app/js/optimize_editor_adapter.js?v=10' in page
     assert "PBGuiOptimizeEditorAdapter.create(OPTIMIZE_VERSION" in page
     assert 'backtestVersion: BACKTEST_VERSION' in page
     for panel in ("panel-configs", "panel-queue", "panel-results", "panel-paretos"):
@@ -111,7 +111,7 @@ def test_adapter_preserves_v7_and_round_trips_nested_v8_paths() -> None:
         assert.equal(v8.queueLogFile('job'), 'optimizes_v8/job.log');
         assert.equal(v8.websocketPath, '/api/optimize-v8/ws/opt8');
         assert.equal(v8.backtestApiBase(), 'https://example.test/api/backtest-v8');
-        assert.equal(v8.metadataApiBase(), 'https://example.test/api/v7');
+        assert.equal(v8.metadataApiBase(), 'https://example.test/api/v8');
         assert.equal(v8.canonicalFixedParam('long.strategy.*'), 'bot.long.strategy.*');
         assert.equal(v8.canonicalFixedParam('bot.long.strategy.*'), 'bot.long.strategy.*');
 
@@ -1190,3 +1190,119 @@ def test_pb8_config_list_shows_sortable_strategy_column() -> None:
     assert "if (sortKey === 'strategy') return 'Strategy';" in page
     assert "if (sortKey === 'strategy') return String(cfg && cfg.strategy || '').toLowerCase();" in page
     assert "optimizeEditorAdapter.isV8 ? '<td>' + escapeHtml(cfg.strategy || '-') + '</td>' : ''" in page
+
+
+def test_pb8_scenario_bases_round_trip_without_changing_pb7_entries() -> None:
+    """PB8 scoring and limit scenario fields must survive while PB7 keeps its legacy shape."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _page_function(page, name)
+        for name in (
+            "normalizeLimitEntry",
+            "normalizeLimitForm",
+            "limitEntryToForm",
+            "buildLimitEntryFromForm",
+            "normalizeScoringEntry",
+            "normalizeScoringForm",
+            "scoringEntryToForm",
+            "buildScoringEntryFromForm",
+            "validatePb8ScenarioBases",
+        )
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const optimizeEditorAdapter = {{isV8: true}};
+        function currentLimitsMeta() {{ return {{
+          type_options: ['all'], stat_options: ['', 'mean', 'min', 'max', 'std', 'median'],
+          currency_options: ['usd', 'btc'], goal_options: ['min', 'max']
+        }}; }}
+        function canonicalizeLimitMetricName(value) {{ return String(value || '').trim(); }}
+        function normalizeLimitPenalizeIf(value) {{ return String(value || 'greater_than'); }}
+        function isLimitRangePenalize(value) {{ return value === 'outside_range' || value === 'inside_range'; }}
+        function normalizeLimitNumber(value, fallback) {{ const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; }}
+        function limitMetricOptions(_type, current) {{ return current ? [current] : ['metric']; }}
+        function isLimitCurrencyMetric() {{ return false; }}
+        function getMetricGroupFromMeta() {{ return 'all'; }}
+        function splitLimitMetricName(metric) {{ return {{base_metric: metric, currency: '', metric}}; }}
+        function buildLimitMetricName(metric) {{ return metric; }}
+        function defaultScoringGoal() {{ return 'max'; }}
+        function normalizeScoringGoal(value) {{ return String(value || 'max'); }}
+        {functions}
+
+        const scoring = normalizeScoringEntry({{
+          metric: 'adg', goal: 'max', scenario: null, aggregate: 'median', future_field: {{keep: true}}
+        }});
+        assert.equal(Object.hasOwn(scoring, 'scenario'), true);
+        assert.equal(scoring.scenario, null);
+        assert.equal(scoring.aggregate, 'median');
+        assert.deepEqual(scoring.future_field, {{keep: true}});
+        assert.deepEqual(buildScoringEntryFromForm(scoringEntryToForm(scoring)), scoring);
+
+        const namedScoring = normalizeScoringEntry({{metric: 'adg', goal: 'max', scenario: 'bull'}});
+        assert.deepEqual(buildScoringEntryFromForm(scoringEntryToForm(namedScoring)), namedScoring);
+        const inherited = normalizeScoringEntry({{metric: 'adg', goal: 'max'}});
+        assert.equal(Object.hasOwn(inherited, 'scenario'), false);
+
+        const limit = normalizeLimitEntry({{
+          metric: 'drawdown', penalize_if: 'greater_than', scenario: 'bear', value: 0.2, future_field: ['keep']
+        }});
+        assert.deepEqual(buildLimitEntryFromForm(limitEntryToForm(limit)), limit);
+        assert.equal(Object.hasOwn(limit, 'enabled'), false);
+        assert.deepEqual(limit.future_field, ['keep']);
+        assert.throws(
+          () => buildLimitEntryFromForm({{...limitEntryToForm(limit), stat: 'max'}}),
+          /cannot also use Stat/
+        );
+        assert.throws(
+          () => validatePb8ScenarioBases([{{metric: 'adg', goal: 'max', aggregate: 'mean'}}], [], 'bull', true, ['bull']),
+          /inheriting a named objective_scenario/
+        );
+        assert.throws(
+          () => validatePb8ScenarioBases([{{metric: 'adg', goal: 'max', scenario: 'bera'}}], [], null, true, ['bear']),
+          /Unknown scoring scenario/
+        );
+        assert.throws(
+          () => validatePb8ScenarioBases([{{metric: 'adg', goal: 'max', scenario: null}}], [], null, false, []),
+          /require Suite mode/
+        );
+        assert.throws(
+          () => validatePb8ScenarioBases([{{metric: 'adg', goal: 'max', scenario: ''}}], [], null, true, ['bull']),
+          /cannot be empty/
+        );
+        assert.throws(
+          () => validatePb8ScenarioBases([], [], null, true, ['bull', 'bull']),
+          /Duplicate Suite scenario label/
+        );
+        assert.throws(
+          () => validatePb8ScenarioBases([], [], null, true, [' bull ']),
+          /leading or trailing whitespace/
+        );
+
+        optimizeEditorAdapter.isV8 = false;
+        assert.deepEqual(
+          normalizeScoringEntry({{metric: 'adg', goal: 'max', scenario: 'bull', aggregate: 'median'}}),
+          {{metric: 'adg', goal: 'max'}}
+        );
+        assert.equal(
+          Object.hasOwn(normalizeLimitEntry({{metric: 'drawdown', scenario: 'bear', value: 0.2}}), 'scenario'),
+          false
+        );
+        """
+    )
+    _run_node(script)
+
+
+def test_pb8_scenario_controls_are_not_rendered_for_pb7() -> None:
+    """The shared page must gate PB8 objective, Scenario, and Aggregate controls by version."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+
+    assert "id=\"opted-objective-scenario-mode\"" in page
+    assert "(isV8 ? '<th>Scenario</th>' : '')" in page
+    assert "optimizeEditorAdapter.isV8" in _page_function(page, "renderOptimizeScoringEditor")
+    assert "optimizeEditorAdapter.isV8" in _page_function(page, "renderOptimizeLimitsEditor")
+    assert "field !== 'scenario_name'" in _page_function(page, "updateScoringEditField")
+    assert "field !== 'scenario_name'" in _page_function(page, "updateLimitEditField")
+    assert "Resolve or remove invalid PB8 market identifiers before saving." in page
+    assert "PB8 market resolver error:" in page
+    assert "PB8 market identifiers have not been verified." in page

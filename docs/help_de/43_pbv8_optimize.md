@@ -22,6 +22,10 @@ Die Forager-Slider fuer Volume- und Volatility-EMA-Spans haben ein Minimum von `
 
 Mehrere ausgewaehlte Exchanges behalten PB8s kombiniertes Dataset-Verhalten. Fuer getrennte Exchange-Pruefungen muessen explizite Suite-Szenarien verwendet werden.
 
+PB8.1-Scoring-Objectives koennen das globale **Objective Scenario** erben, ausdruecklich das Suite-Aggregat verwenden oder ein benanntes Suite-Szenario auswaehlen. Aggregate unterstuetzen `mean`, `min`, `max`, `std` und `median`. Limits koennen das Suite-Aggregat mit ausgelassenem Scenario verwenden, ein ausdrueckliches `scenario: null` erhalten oder ein benanntes Suite-Szenario auswaehlen; ausgelassen und explizit null haben dieselbe Laufzeitbasis, bleiben aber strukturell verschieden. Ein benanntes Scoring-Szenario darf nicht gleichzeitig Aggregate verwenden und ein benanntes Limit-Szenario nicht gleichzeitig Stat. Szenarionamen muessen in der aktiven Suite vorhanden sein. PBGui erhaelt diese Unterschiede beim Synchronisieren von Visual Editor und Raw JSON.
+
+Die PB8-Marktauswahl verwendet den offiziellen Resolver fuer das vollstaendige Exchange-Set. Eindeutige Maerkte bleiben in der Config kurz; echte Multiplikator- oder Venue-Kollisionen verwenden exakte Scoped-Identifier, waehrend der Editor kompakte Labels beibehaelt. Importierte exakte IDs bleiben in Coin-Listen, Coin Sources, Suite-Szenarien und Raw JSON unveraendert.
+
 ## Queue
 
 Queue-Eintraege enthalten unveraenderliche PB8-Config-Snapshots. Eine spaetere Aenderung der gespeicherten Config veraendert keinen bestehenden Queue-Eintrag.

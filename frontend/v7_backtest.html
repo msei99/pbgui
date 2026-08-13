@@ -9,8 +9,8 @@
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
 <script src="/app/js/backtest_shell.js?v=4"></script>
-<script src="/app/js/backtest_editor_adapter.js?v=8"></script>
-<script src="/app/js/backtest_advanced_fields.js?v=1"></script>
+<script src="/app/js/backtest_editor_adapter.js?v=9"></script>
+<script src="/app/js/backtest_advanced_fields.js?v=2"></script>
 <style>
 /* ── Design Tokens ─────────────────────────────── */
 :root {
@@ -1041,7 +1041,7 @@ var archiveResultsMode = 'backtests';
 var selectedArchiveMigrationStatus = null;
 var legacyResults = [];        // results in legacy pb7/backtests paths
 var compareSet  = [];          // paths of results to compare
-var settings    = { autostart: false, cpu: 1, cpu_max: null, hsl_signal_modes: [], use_pbgui_market_data: false, hlcvs_cleanup_enabled: false, hlcvs_cleanup_days: 7, hlcvs_cleanup_interval_h: 24 };
+var settings    = { autostart: false, cpu: 1, cpu_max: null, hsl_signal_modes: [], exchange_options: [], use_pbgui_market_data: false, hlcvs_cleanup_enabled: false, hlcvs_cleanup_days: 7, hlcvs_cleanup_interval_h: 24 };
 var settingsLoadPromise = null;
 var settingsModalDirty = false;
 var currentPanel = 'configs';
@@ -1747,6 +1747,25 @@ function v8MigrationTargetName(parts) {
   return value.slice(0, 120) + '_v8';
 }
 
+function v8MigrationError(payload, status) {
+  var detail = payload && payload.detail;
+  var message = typeof detail === 'string'
+    ? detail
+    : (detail && detail.message) || ('HTTP ' + status);
+  var error = new Error(message);
+  error.detail = detail;
+  return error;
+}
+
+function v8MigrationReportText(error) {
+  var detail = error && error.detail;
+  if (!detail || typeof detail !== 'object' || !detail.report) {
+    return 'The V7 source was not changed and no runnable V8 config was published.';
+  }
+  return 'Official PB8 migration report:\n\n' + JSON.stringify(detail.report, null, 2) +
+    '\n\nThe V7 source was not changed and no runnable V8 config was published.';
+}
+
 async function migrateV7SourceToV8(requestBody) {
   var targetName = requestBody.target_name;
   try {
@@ -1767,14 +1786,14 @@ async function migrateV7SourceToV8(requestBody) {
       window.location.href = window.location.origin + '/api/backtest-v8/main_page?config=' + encodeURIComponent(targetName);
       return;
     }
-    if (!response.ok) throw new Error(payload.detail || ('HTTP ' + response.status));
+    if (!response.ok) throw v8MigrationError(payload, response.status);
     window.location.href = window.location.origin + '/api/backtest-v8/main_page?config=' + encodeURIComponent(payload.name || targetName);
   } catch (error) {
     toast('V8 conversion failed: ' + error.message, 'err');
     await window.PBGuiDialogs.alert({
       title: 'V8 conversion failed',
       message: error.message,
-      detail: 'The V7 source was not changed and no runnable V8 config was published.',
+      detail: v8MigrationReportText(error),
       confirmText: 'OK'
     });
   }
@@ -2104,7 +2123,8 @@ function showInitialBacktestQueueDraftModal(items) {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 name: String((item && item.name) || getInitialBacktestDraftName(cfg, null) || 'rebacktest'),
-                config: cfg
+                config: cfg,
+                override_configs: (item && item.override_configs) || {}
               })
             }));
           });
@@ -2255,7 +2275,7 @@ function marketSettingsUnknownCount(row) {
 }
 
 function marketSettingsRowHtml(row, index) {
-  var exchanges = ['binance','bybit','bitget','okx','hyperliquid','kucoin','gateio','defx','paradex'];
+  var exchanges = backtestExchangeOptions();
   var exchangeValue = String(row.exchange || '').toLowerCase();
   if (exchangeValue && exchanges.indexOf(exchangeValue) < 0) exchanges.push(exchangeValue);
   var scopeOptions = '<option value="global"' + (row.scope === 'global' ? ' selected' : '') + '>All exchanges</option>' +
@@ -2340,7 +2360,7 @@ function marketSettingsSet(index, kind, field, value) {
     if (String(value).trim() === '') delete row.values[field];
     else row.values[field] = value;
   } else if (kind === 'coin') {
-    row.coin = String(value || '').toUpperCase();
+    row.coin = String(value || '').trim();
   } else {
     row[kind] = value;
     if (kind === 'scope') marketSettingsRender();
@@ -2357,7 +2377,7 @@ function marketSettingsCollect() {
     });
     return next;
   });
-  return window.PBGuiBacktestAdvancedFields.serializeMarketSettings(rows, _marketSettingsRootExtras);
+  return window.PBGuiBacktestAdvancedFields.serializeMarketSettings(rows, _marketSettingsRootExtras, backtestEditorAdapter.isV8);
 }
 
 function marketSettingsValidate() {
@@ -2367,7 +2387,7 @@ function marketSettingsValidate() {
   var positiveFields = new Set(['qty_step', 'price_step', 'min_qty', 'c_mult']);
   for (var i = 0; i < _marketSettingsRows.length; i++) {
     var row = _marketSettingsRows[i];
-    var coin = String(row.coin || '').trim().toUpperCase();
+    var coin = String(row.coin || '').trim();
     var exchange = row.scope === 'exchange' ? String(row.exchange || '').trim().toLowerCase() : '*';
     if (!coin) return 'Market Settings row ' + (i + 1) + ' requires a coin.';
     if (row.scope === 'exchange' && !exchange) return 'Market Settings row ' + (i + 1) + ' requires an exchange.';
@@ -2539,6 +2559,16 @@ function pb8AdvancedFieldsValidate() {
 }
 
 function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
+  if (backtestEditorAdapter.isV8 &&
+      (!Array.isArray(settings.exchange_options) || !settings.exchange_options.length) &&
+      settingsLoadPromise) {
+    settingsLoadPromise.then(function() {
+      showConfigEditor(name, cfg, rawOverride, paramStatusOverride);
+    }).catch(function() {
+      showConfigEditor(name, cfg, rawOverride, paramStatusOverride);
+    });
+    return;
+  }
   resetBacktestEditorUiState();
   document.getElementById('configs-list').style.display = 'none';
   document.getElementById('configs-toolbar').style.display = 'none';
@@ -2564,8 +2594,9 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   setCfgBotParamStatus(paramStatus);
 
   /* ── Row 1: Identity & Time (cols-8: 4+2+1+1) ── */
-  var exAll = ['binance','bybit','bitget','okx','hyperliquid','kucoin','combined'];
   var exSel = bt.exchanges || [];
+  var exAll = backtestExchangeOptions(exSel);
+  var exchangeOptionsHtml = exAll.map(function(exchange) { return '<option>' + esc(exchange) + '</option>'; }).join('');
   html += '<div class="form-row cols-8">';
   html += '<div class="form-group span-4"><label><span data-tip="Exchanges from which to fetch 1m OHLCV data for backtesting.">exchanges</span> ' +
     '<span class="ms-clear-btn" onclick="cfgClearMs(\'ms-cfg-exchanges\')" title="Clear all">\u00d7</span></label>' +
@@ -2638,7 +2669,8 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   var hslSignalMode = normalizeBacktestHslSignalModeValue(live.hsl_signal_mode);
   html += fieldSelect('cfg-hsl-signal-mode', 'hsl_signal_mode',
     getBacktestHslSignalModeOptions(hslSignalMode), hslSignalMode, false,
-    'pside: each side tracks its own HSL drawdown independently.\nunified: both sides share one account-level combined signal.');
+    'coin: each coin may override its HSL settings.\npside: each side tracks its own HSL drawdown independently.\nunified: both sides share one account-level combined signal.')
+    .replace('<select id="cfg-hsl-signal-mode"', '<select id="cfg-hsl-signal-mode" onchange="coinOvSetContext({hslSignalMode:this.value,strategyKind:String(((_cfgEditorCfg||{}).live||{}).strategy_kind||\'\')})"');
   html += fieldSelect('cfg-logging', 'logging_level', LOG_LEVEL_OPTIONS,
     normalizeLogLevelValue(cfg.logging && cfg.logging.level, 1), false, 'Controls global verbosity for Passivbot and tooling.');
   html += '</div>';
@@ -2677,7 +2709,7 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
       '<div style="display:flex;gap:var(--sp-sm);align-items:end;margin-top:var(--sp-xs)">' +
         '<div class="form-group" style="width:140px"><label>Exchange</label>' +
           '<select id="kv-cs-exchange" class="form-input" onchange="kvLoadCoins(\'kv-cs\')">' +
-            '<option>binance</option><option>bybit</option><option>bitget</option><option>okx</option><option>hyperliquid</option><option>kucoin</option>' +
+            exchangeOptionsHtml +
           '</select></div>' +
         '<div class="form-group" style="flex:1"><label>Coin</label>' +
           '<div class="ms-wrap" id="kv-cs-coin">' +
@@ -2703,7 +2735,7 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
       '<div style="display:flex;gap:var(--sp-sm);align-items:end;margin-top:var(--sp-xs)">' +
         '<div class="form-group" style="width:140px"><label>Exchange</label>' +
           '<select id="kv-mss-exchange" class="form-input" onchange="kvLoadCoins(\'kv-mss\')">' +
-            '<option>binance</option><option>bybit</option><option>bitget</option><option>okx</option><option>hyperliquid</option><option>kucoin</option>' +
+            exchangeOptionsHtml +
           '</select></div>' +
         '<div class="form-group" style="flex:1"><label>Coin</label>' +
           '<div class="ms-wrap" id="kv-mss-coin">' +
@@ -2877,7 +2909,7 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   _cfgEditorCfg = cfg;
   loadCfgSymbols(cfg);
   // Init and populate suite editor
-  suiteInit('suite-container', { apiBase: API_BASE, version: backtestEditorAdapter.version });
+  suiteInit('suite-container', { apiBase: API_BASE, version: backtestEditorAdapter.version, exchanges: backtestExchangeOptions(exSel) });
   suiteLoad(cfg, { preserveEdit: false });
   cfgWireDateRange('cfg-start-date', 'cfg-end-date');
   var cfgEndDateEl = document.getElementById('cfg-end-date');
@@ -2889,7 +2921,7 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   resultMetricsRender();
   loadPb8ResultMetrics();
   // Init and populate coin overrides editor
-  coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: true });
+  coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: true, preserveMarketIdentifiers: backtestEditorAdapter.isV8, context: { hslSignalMode: live.hsl_signal_mode, strategyKind: live.strategy_kind } });
   coinOvSetConfigName(name);
   coinOvLoad(cfg);
   if (Object.keys(initialDraftOverrideConfigs).length) {
@@ -3313,7 +3345,7 @@ function cfgSyncEditorFromParsed(name, cfg) {
   var live = (cfg && cfg.live) || {};
   var pbgui = (cfg && cfg.pbgui) || {};
   var logging = (cfg && cfg.logging) || {};
-  var exAll = ['binance','bybit','bitget','okx','hyperliquid','kucoin','combined'];
+  var exAll = backtestExchangeOptions(Array.isArray(bt.exchanges) ? bt.exchanges : []);
   var anchor = cfgCaptureRawAnchor();
   var mfEnabled = bt.maker_fee_override !== null && bt.maker_fee_override !== undefined;
   var tfEnabled = bt.taker_fee_override !== null && bt.taker_fee_override !== undefined;
@@ -3328,6 +3360,9 @@ function cfgSyncEditorFromParsed(name, cfg) {
   cfgSetFieldValue('cfg-btc-ltv', bt.btc_collateral_ltv_cap || 0);
   cfgSetFieldValue('cfg-min-coin-age', live.minimum_coin_age_days !== undefined ? live.minimum_coin_age_days : 30);
   cfgSetFieldValue('cfg-hsl-signal-mode', normalizeBacktestHslSignalModeValue(live.hsl_signal_mode));
+  if (backtestEditorAdapter.isV8 && typeof coinOvSetContext === 'function') {
+    coinOvSetContext({ hslSignalMode: live.hsl_signal_mode, strategyKind: live.strategy_kind });
+  }
   cfgSetFieldValue('cfg-liq-thresh', bt.liquidation_threshold !== undefined ? bt.liquidation_threshold : 0.05);
   cfgSetFieldValue('cfg-mo-slippage', bt.market_order_slippage_pct !== undefined ? bt.market_order_slippage_pct : 0.0005);
   cfgSetFieldValue('cfg-ohlcv-dir', bt.ohlcv_source_dir || '');
@@ -3455,6 +3490,7 @@ function toggleExpander(id) {
 /* ─── Config editor multiselect component ─────────────────── */
 var _cfgEditorCfg = null;  // store cfg reference for exchange-change reloads
 var _cfgSymbolsLoadSeq = 0;
+var _cfgMarketLabels = {};
 var _structuredEditorSyncing = false;
 var _cfgMsCp = {
   'ms-cfg-app-long':  'ms-cfg-ign-long',
@@ -3472,13 +3508,17 @@ var _cfgMsController = window.PBGuiEditorShared.createMultiselectController({
   controllerName: 'bt-v7-ms',
   counterpartMap: _cfgMsCp,
   coinIds: _cfgCoinMsIds,
-  isExclusiveValue: function(id, value) {
-    return value === 'all';
-  },
   formatTagLabel: function(ctx) {
     if (ctx.value === 'all') return '★ all';
     if (ctx.meta && ctx.meta.status === 'invalid') return '? ' + (ctx.meta.raw || ctx.value);
-    return (ctx.meta && ctx.meta.normalized) || ctx.value;
+    return _cfgMarketLabels[ctx.value] || (ctx.meta && ctx.meta.normalized) || ctx.value;
+  },
+  formatOptionLabel: function(ctx) {
+    var label = _cfgMarketLabels[ctx.value] || ctx.value;
+    return ctx.inOther ? label + ' ⇄' : label;
+  },
+  isExclusiveValue: function(id, value) {
+    return value === 'all';
   },
   formatTagClass: function(ctx) {
     if (ctx.value === 'all') return 'ms-tag ms-tag-all';
@@ -3488,7 +3528,7 @@ var _cfgMsController = window.PBGuiEditorShared.createMultiselectController({
     if (!ctx.meta) return '';
     if (ctx.meta.status === 'invalid') {
       return (ctx.meta.changed ? ('Normalized from ' + ctx.meta.raw + ' to ' + ctx.meta.normalized + '. ') : '') +
-        'CoinData could not resolve this entry to an active coin for the current exchange selection.';
+        (backtestEditorAdapter.isV8 ? 'PB8 could not resolve this market identifier for the current exchange selection.' : 'CoinData could not resolve this entry to an active coin for the current exchange selection.');
     }
     if (ctx.meta.changed) {
       return 'Normalized from ' + ctx.meta.raw + ' to ' + ctx.meta.normalized + '.';
@@ -3522,9 +3562,11 @@ function resetBacktestEditorUiState() {
     _cfgMsController.rebuild(id, [], [], { silent: true });
   });
   _cfgEditorCfg = null;
+  _cfgMarketLabels = {};
   _cfgSymbolsLoadSeq += 1;
   _kvData = {};
   _kvSymCache = {};
+  _kvLabelCache = {};
   _kvHighlight = {};
   _marketSettingsRows = [];
   _marketSettingsRootExtras = {};
@@ -3568,7 +3610,7 @@ function cfgCoinTagTitle(value, meta) {
   if (!meta) return '';
   if (meta.status === 'invalid') {
     return (meta.changed ? ('Normalized from ' + meta.raw + ' to ' + meta.normalized + '. ') : '') +
-      'CoinData could not resolve this entry to an active coin for the current exchange selection.';
+      (backtestEditorAdapter.isV8 ? 'PB8 could not resolve this market identifier for the current exchange selection.' : 'CoinData could not resolve this entry to an active coin for the current exchange selection.');
   }
   if (meta.changed) {
     return 'Normalized from ' + meta.raw + ' to ' + meta.normalized + '.';
@@ -3702,18 +3744,33 @@ async function loadCfgSymbols(cfg) {
   }
 
   try {
+    var symbolRequest = backtestEditorAdapter.isV8
+      ? cfgFetchV7Json('/coins/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ exchanges: exchanges, coins: seededCoins })
+        }).then(function(result) { return [result]; })
+      : Promise.all(exchanges.map(function(exchange) {
+          return cfgFetchV7Json('/symbols?exchange=' + encodeURIComponent(exchange));
+        }));
     var results = await Promise.all([
-      Promise.all(exchanges.map(function(exchange) {
-        return cfgFetchV7Json('/symbols?exchange=' + encodeURIComponent(exchange));
-      })),
+      symbolRequest,
       Promise.all(exchanges.map(function(exchange) {
         return cfgFetchV7Json('/tags?exchange=' + encodeURIComponent(exchange));
       }))
     ]);
     var symbolSet = new Set();
     var tagSet = new Set();
+    _cfgMarketLabels = {};
     results[0].forEach(function(resp) {
       (resp.symbols || []).forEach(function(symbol) { symbolSet.add(symbol); });
+      (resp.catalog || []).forEach(function(entry) {
+        if (entry && entry.config_id) _cfgMarketLabels[entry.config_id] = entry.display || entry.coin || entry.config_id;
+      });
+      Object.keys(resp.statuses || {}).forEach(function(identifier) {
+        var status = resp.statuses[identifier];
+        if (status && status.display && !_cfgMarketLabels[identifier]) _cfgMarketLabels[identifier] = status.display;
+      });
     });
     results[1].forEach(function(resp) {
       (resp.tags || []).forEach(function(tag) { tagSet.add(tag); });
@@ -3728,10 +3785,15 @@ async function loadCfgSymbols(cfg) {
     cfgRebuildMs('ms-cfg-ign-long',  symbols, ignLong2);
     cfgRebuildMs('ms-cfg-ign-short', symbols, ignShort2);
     cfgRebuildMs('ms-cfg-tags', allTags, cfgTags);
-    coinOvSetCoins(symbols);
+    coinOvSetCoins(symbols, _cfgMarketLabels);
     marketSettingsRender();
     cfgRestoreRawAnchor(loadedAnchor);
-    cfgRefreshCoinStatuses(exchanges);
+    if (backtestEditorAdapter.isV8) {
+      var statuses = (results[0][0] && results[0][0].statuses) || {};
+      Object.keys(_cfgCoinMsIds).forEach(function(id) { cfgApplyCoinStatus(id, statuses); });
+    } else {
+      cfgRefreshCoinStatuses(exchanges);
+    }
   } catch (e) {
     console.error('loadCfgSymbols failed:', e);
     if (requestSeq !== _cfgSymbolsLoadSeq) return;
@@ -3743,6 +3805,7 @@ async function loadCfgSymbols(cfg) {
 /* ─── Generic key-value chip editor (coin_sources / market_settings_sources) ── */
 var _kvData = {};       // prefix → { coin: exchange, ... }
 var _kvSymCache = {};   // exchange → [symbols]
+var _kvLabelCache = {}; // exchange → { config_id: display label }
 var _kvHighlight = {};  // prefix → index (-1 = none)
 var _kvMeta = {
   'kv-cs': { expId: 'exp-coin-sources', label: 'coin_sources' },
@@ -3763,9 +3826,9 @@ function kvRenderChips(prefix) {
   var keys = Object.keys(entries).sort();
   if (!keys.length) { container.innerHTML = '<span style="color:var(--text-dim);font-size:var(--fs-xs)">No entries</span>'; return; }
   var html = '';
-  keys.forEach(function(coin) {
+  keys.forEach(function(coin, index) {
     html += '<span class="kv-chip"><span class="kv-chip-ex">' + esc(entries[coin]) + '</span>' +
-      esc(coin) + '<span class="ms-x" onclick="kvRemove(\'' + prefix + '\',\'' + esc(coin) + '\')">\u00d7</span></span>';
+      esc(_cfgMarketLabels[coin] || coin) + '<span class="ms-x" onclick="kvRemoveAt(\'' + prefix + '\',' + index + ')">\u00d7</span></span>';
   });
   container.innerHTML = html;
 }
@@ -3777,10 +3840,15 @@ function kvRemove(prefix, coin) {
   scheduleStructuredEditorSync();
 }
 
+function kvRemoveAt(prefix, index) {
+  var coin = Object.keys(_kvData[prefix] || {}).sort()[index];
+  if (coin !== undefined) kvRemove(prefix, coin);
+}
+
 function kvAdd(prefix, coin) {
   var exchange = document.getElementById(prefix + '-exchange').value;
   if (!coin) return;
-  coin = coin.toUpperCase();
+  coin = backtestEditorAdapter.isV8 ? String(coin).trim() : coin.toUpperCase();
   // swap if already exists with different exchange, no-op if same
   _kvData[prefix][coin] = exchange;
   kvRenderChips(prefix);
@@ -3858,6 +3926,10 @@ async function kvLoadCoins(prefix) {
     });
     var data = await r.json();
     _kvSymCache[exchange] = (data.symbols || []).slice().sort();
+    _kvLabelCache[exchange] = {};
+    (data.catalog || []).forEach(function(entry) {
+      if (entry && entry.config_id) _kvLabelCache[exchange][entry.config_id] = entry.display || entry.coin || entry.config_id;
+    });
   } catch(e) {
     console.error('kvLoadCoins failed for', exchange, e);
     _kvSymCache[exchange] = [];
@@ -3882,16 +3954,16 @@ function kvShowDd(prefix, filter) {
     var diffEx = existingEx !== undefined && existingEx !== exchange;
     var isHi = !sameEx && (visibleIdx === hiIdx);
     var cls = 'ms-option';
-    var label = s;
+    var label = (_kvLabelCache[exchange] || {})[s] || s;
     if (sameEx) {
       cls += ' selected';
-      label = s + ' \u2713';
+      label += ' \u2713';
     } else if (diffEx) {
       cls += ' in-other';
-      label = s + ' @ ' + existingEx + ' \u21c4';
+      label += ' @ ' + existingEx + ' \u21c4';
     }
     if (isHi) cls += ' highlighted';
-    html += '<div class="' + cls + '" data-val="' + s + '">' + label + '</div>';
+    html += '<div class="' + cls + '" data-val="' + escAttr(s) + '">' + esc(label) + '</div>';
     if (!sameEx) visibleIdx++;
     count++;
     if (count > 200) return;
@@ -3959,9 +4031,17 @@ async function cfgApplyFilters() {
       if (tags.length) url += '&tags=' + encodeURIComponent(tags.join(','));
       var resp = await fetch(url, { headers: bearerHeaders() });
       var data = await resp.json();
+      if (!resp.ok) throw new Error((data && data.detail) || resp.statusText || ('Filter failed for ' + ex));
+      if (backtestEditorAdapter.isV8 && Array.isArray(data.unresolved) && data.unresolved.length) {
+        throw new Error('PB8 could not project filtered coins: ' + data.unresolved.join(', '));
+      }
       (data.approved || []).forEach(function(c) { allApproved.add(c); });
       (data.ignored || []).forEach(function(c) { allIgnored.add(c); });
-    } catch(e) { console.error('filter failed for', ex, e); }
+    } catch(e) {
+      console.error('filter failed for', ex, e);
+      toast('Filter error for ' + ex + ': ' + e.message, 'err');
+      return;
+    }
   }
   // ignored = ignored minus approved
   allApproved.forEach(function(c) { allIgnored.delete(c); });
@@ -4402,6 +4482,19 @@ function normalizeBacktestHslSignalModeValue(value) {
   var options = getBacktestHslSignalModeOptions(selected);
   if (selected) return selected;
   return options.length ? String(options[0].value) : '';
+}
+
+function backtestExchangeOptions(selected) {
+  var fallback = ['binance','bybit','bitget','okx','hyperliquid','kucoin','combined'];
+  var source = backtestEditorAdapter.isV8 && Array.isArray(settings.exchange_options) && settings.exchange_options.length
+    ? settings.exchange_options
+    : fallback;
+  var result = [];
+  source.concat(Array.isArray(selected) ? selected : []).forEach(function(value) {
+    value = String(value || '').trim();
+    if (value && result.indexOf(value) < 0) result.push(value);
+  });
+  return result;
 }
 
 function fieldCheckbox(id, label, checked) {
@@ -9935,8 +10028,8 @@ window.PBGUI_NAV_CONFIG = {
   serial:   PBGUI_SERIAL
 };
 </script>
-<script src="/app/js/suite_editor.js?v=8"></script>
-<script src="/app/js/coin_overrides_editor.js?v=23"></script>
+<script src="/app/js/suite_editor.js?v=10"></script>
+<script src="/app/js/coin_overrides_editor.js?v=25"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */
 (function() {

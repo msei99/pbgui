@@ -20,6 +20,7 @@ var _suiteState = {
   containerId: '',
   apiBase: '',
   exchanges: ['binance','bybit','bitget','okx','hyperliquid','kucoin'],
+  preserveMarketIdentifiers: false,
 };
 
 /* ── Templates ──────────────────────────────────────────────── */
@@ -83,6 +84,13 @@ function suiteInit(containerId, opts) {
   _suiteState.containerId = containerId;
   _suiteState.apiBase = opts.apiBase || '';
   _suiteState.aggregateMetrics = _suiteNormalizeAggMetrics(opts.aggregateMetrics);
+  _suiteState.preserveMarketIdentifiers = String(opts.version || '').toLowerCase() === 'v8';
+  if (Array.isArray(opts.exchanges) && opts.exchanges.length) {
+    _suiteState.exchanges = opts.exchanges.map(function(value) { return String(value || '').trim(); })
+      .filter(function(value, index, values) { return value && values.indexOf(value) === index; });
+  } else {
+    _suiteState.exchanges = ['binance','bybit','bitget','okx','hyperliquid','kucoin'];
+  }
   if (String(opts.version || '').toLowerCase() === 'v8') {
     ['TWE Sensitivity', 'n_positions Sensitivity'].forEach(function(name) {
       var template = _suiteTemplates[name];
@@ -267,7 +275,10 @@ function _suiteClearCoinMs(id) {
 
 function _suiteEnsureCoinMsState(id, selected) {
   var options = _suiteAvailableCoins();
-  var chosen = (selected || []).filter(Boolean).map(function(value) { return value.toUpperCase(); });
+  var chosen = (selected || []).filter(Boolean).map(function(value) {
+    var identifier = String(value).trim();
+    return _suiteState.preserveMarketIdentifiers ? identifier : identifier.toUpperCase();
+  });
   chosen.forEach(function(value) {
     if (options.indexOf(value) < 0) options.push(value);
   });
@@ -365,7 +376,8 @@ function _suiteRenderCoinMs(id) {
 function _suiteAddCoinMsValue(id, value) {
   var state = _suiteMsState[id];
   if (!state) return;
-  value = (value || '').toUpperCase();
+  value = String(value || '').trim();
+  if (!_suiteState.preserveMarketIdentifiers) value = value.toUpperCase();
   if (!value) return;
   if (state.selected.indexOf(value) < 0) state.selected.push(value);
   var counterpartId = _suiteMsCounterpart[id];

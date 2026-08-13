@@ -54,10 +54,10 @@ Klick auf eine User-Zeile öffnet das Formular, oder **+ Add User** verwenden. D
 | Feld | Beschreibung |
 |---|---|
 | **Username** | Schlüssel in `api-keys.json`; kann umbenannt werden — neuen Namen eingeben und speichern |
-| **Exchange** | Exchange-Name (z. B. `bybit`, `binanceusdm`, `hyperliquid`) |
+| **Exchange** | Exchange-Name (z. B. `bybit`, `hyperliquid`, `bitunix` oder `weex`) |
 | **API Key** | Exchange-API-Key |
 | **Secret** | API-Secret |
-| **Passphrase** | Von manchen Exchanges erforderlich (z. B. OKX) |
+| **Passphrase** | Von manchen Exchanges erforderlich, unter anderem OKX und WEEX |
 | **Wallet Address** | Nur Hyperliquid |
 | **Private Key** | Nur Hyperliquid |
 | **Is Vault** | Hyperliquid-Vault-Modus |
@@ -65,13 +65,11 @@ Klick auf eine User-Zeile öffnet das Formular, oder **+ Add User** verwenden. D
 | **Options** | Optionales JSON-Objekt (z. B. `{"defaultType": "swap"}`) |
 | **Extra** | Optionaler JSON-Passthrough für Exchange-spezifische Felder |
 
-### Auge-Symbol (Exchange-Credentials)
+### Gespeicherte Credentials
 
-Gespeicherte Exchange-Felder (Secret, Passphrase, Private Key) haben einen 👁-Button:
+Credential-Details liefern nur feste Masken und Presence-Informationen. Secret, Passphrase und Private Key sind replacement-only: leer lassen, um den gespeicherten Wert zu behalten, oder einen neuen Wert eingeben und speichern. PBGui enthuellt diese Werte niemals.
 
-- **Klick** — ruft den echten gespeicherten Wert vom Server ab und zeigt ihn im Klartext
-- **Erneuter Klick** — verbirgt und leert das Feld (Speichern mit leerem Feld lässt den gespeicherten Wert unverändert)
-- Credential ersetzen: enthüllen, leeren, neuen Wert eingeben, speichern
+Nur der API Key besitzt ein Auge fuer gespeicherte Exchange-Credentials. Es sendet fuer den ausgewaehlten User einen authentifizierten Same-Origin-POST, verwendet `Cache-Control: no-store` und leert den Wert beim Verbergen, User-Wechsel, Authentifizierungsverlust und Verlassen der Seite.
 
 TradFi-Vault-Secrets funktionieren anders: Gespeicherte Werte werden nie an den Browser zurückgegeben. Das Auge kann dort nur Text anzeigen, der während der aktuellen Bearbeitung eingegeben wurde. Ein leeres Feld behält den gespeicherten Wert; ein neuer Wert ersetzt ihn beim Speichern.
 
@@ -79,6 +77,7 @@ TradFi-Vault-Secrets funktionieren anders: Gespeicherte Werte werden nie an den 
 
 - Standard-Exchanges benötigen **API Key + Secret**
 - Passphrase-Exchanges zusätzlich **Passphrase**
+- Bitunix benoetigt **API Key + Secret**; WEEX zusaetzlich eine **Passphrase**
 - Hyperliquid benötigt **Wallet Address**; Private Key nur bei der Erstellung Pflicht (beim Bearbeiten leer lassen, um den bestehenden Wert zu behalten)
 - Username muss eindeutig sein; Umbenennung wird abgelehnt, wenn der neue Name bereits vergeben ist oder der User von einem Bot verwendet wird
 

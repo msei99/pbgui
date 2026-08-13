@@ -38,13 +38,19 @@ from master.cluster_state import (
 )
 from pb8_config import (
     PB8ConfigurationError,
+    PB8MarketDataUnavailableError,
+    PB8MarketRequestError,
     PB8RuntimeBusyError,
     cache_prepared_pb8_config,
     get_pb8_template_config,
     get_pb8_optimize_metadata,
+    get_pb8_market_identifiers,
+    get_pb8_coin_override_metadata,
+    get_pb8_exchange_metadata,
     load_pb8_config,
     prepare_pb8_config,
     save_prepared_pb8_config,
+    validate_pb8_override_bundle,
 )
 import pbgui_purefunc
 from pbgui_purefunc import PBGDIR
@@ -169,7 +175,7 @@ def _validate_backup_id(backup_id: Any) -> str:
 
 
 def _referenced_overrides(config: dict[str, Any]) -> dict[str, str]:
-    """Return normalized coin-to-filename references from one config."""
+    """Return exact PB8 market-ID-to-filename references from one config."""
     raw = config.get("coin_overrides") if isinstance(config, dict) else None
     if raw is None:
         return {}
@@ -177,10 +183,19 @@ def _referenced_overrides(config: dict[str, Any]) -> dict[str, str]:
         raise HTTPException(status_code=422, detail="coin_overrides must be an object")
     references: dict[str, str] = {}
     owners: dict[str, str] = {}
+    seen_coins: set[str] = set()
     for coin, item in raw.items():
-        coin_name = str(coin or "").strip().upper()
-        if not coin_name or not isinstance(item, dict):
+        if not isinstance(coin, str) or not isinstance(item, dict):
             raise HTTPException(status_code=422, detail="Invalid coin override entry")
+        coin_name = coin.strip()
+        if (
+            not coin_name
+            or len(coin_name.encode("utf-8")) > 256
+            or any(ord(char) < 32 or ord(char) == 127 for char in coin_name)
+            or coin_name in seen_coins
+        ):
+            raise HTTPException(status_code=422, detail="Invalid or duplicate coin override identifier")
+        seen_coins.add(coin_name)
         filename = item.get("override_config_path")
         if filename is None:
             continue
@@ -456,6 +471,13 @@ def _configuration_http_error(action: str, exc: Exception) -> HTTPException:
     """Map isolated PB8 helper failures to a concise API response."""
 
     status_code = 503 if isinstance(exc, PB8RuntimeBusyError) else 422
+    _log(SERVICE, f"{action} failed: {exc}", level="WARNING")
+    return HTTPException(status_code=status_code, detail=str(exc))
+
+
+def _market_data_http_error(action: str, exc: Exception) -> HTTPException:
+    """Map PB8 market-catalog failures without changing config endpoint semantics."""
+    status_code = getattr(exc, "status_code", 503)
     _log(SERVICE, f"{action} failed: {exc}", level="WARNING")
     return HTTPException(status_code=status_code, detail=str(exc))
 
@@ -1175,9 +1197,16 @@ def get_v8_editor_draft(draft_id: str, session: SessionToken = Depends(require_a
 
 @router.get("/symbols")
 def get_v8_symbols(exchange: str = Query(...), session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
-    """Return generation-neutral market symbols for the shared editor."""
-    from api.editor_market_data import symbols
-    return {"symbols": symbols(exchange)}
+    """Return PB8's collision-safe market identifiers for one exchange."""
+    from api.editor_market_data import normalize_exchanges
+
+    exchanges = normalize_exchanges([exchange])
+    if not exchanges:
+        raise HTTPException(status_code=422, detail="Select a valid exchange")
+    try:
+        return get_pb8_market_identifiers(exchanges)
+    except (PB8ConfigurationError, PB8MarketDataUnavailableError, PB8MarketRequestError) as exc:
+        raise _market_data_http_error("PB8 market catalog", exc) from exc
 
 
 @router.get("/tags")
@@ -1199,25 +1228,98 @@ def filter_v8_coins(
 ) -> dict[str, Any]:
     """Apply common PBGui filters for a PB8 Run editor preview."""
     from api.editor_market_data import filter_symbols
+
     approved, ignored = filter_symbols(exchange, market_cap, vol_mcap, only_cpt, notices_ignore, tags)
-    return {"approved": approved, "ignored": ignored}
+    try:
+        resolved = get_pb8_market_identifiers([exchange])
+    except (PB8ConfigurationError, PB8MarketDataUnavailableError, PB8MarketRequestError) as exc:
+        raise _market_data_http_error("PB8 filtered market catalog", exc) from exc
+    approved_coins = {str(item).upper() for item in approved}
+    ignored_coins = {str(item).upper() for item in ignored}
+    projected_approved = []
+    projected_ignored = []
+    matched = set()
+    for entry in resolved["catalog"]:
+        coin = str(entry.get("coin") or "").upper()
+        coin_aliases = {coin}
+        if ":" in coin:
+            namespace, market_name = coin.split(":", 1)
+            if namespace and market_name:
+                coin_aliases.add(f"{namespace.upper()}-{market_name.upper()}")
+        config_id = str(entry.get("config_id") or "")
+        if not config_id:
+            continue
+        approved_match = coin_aliases & approved_coins
+        ignored_match = coin_aliases & ignored_coins
+        if approved_match:
+            projected_approved.append(config_id)
+            matched.update(approved_match)
+        elif ignored_match:
+            projected_ignored.append(config_id)
+            matched.update(ignored_match)
+    return {
+        "approved": projected_approved,
+        "ignored": projected_ignored,
+        "unresolved": sorted((approved_coins | ignored_coins) - matched),
+    }
 
 
 @router.post("/coins/status")
 def get_v8_coin_statuses(body: dict = Body(...), session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
-    """Resolve PB8 editor coin selections against current mappings."""
-    from api.editor_market_data import classify_coins, normalize_exchanges
-    exchanges = normalize_exchanges(body.get("exchanges", []))
+    """Resolve PB8 editor selections through PB8's official market resolver."""
+    from api.editor_market_data import normalize_exchanges
+
+    raw_exchanges = body.get("exchanges", [])
+    if not isinstance(raw_exchanges, list) or any(
+        not isinstance(item, str) or item != item.strip() or not item for item in raw_exchanges
+    ):
+        raise HTTPException(status_code=422, detail="exchanges must be an array of non-empty trimmed strings")
+    exchanges = normalize_exchanges(raw_exchanges)
     raw_coins = body.get("coins", [])
-    coins = [str(item).strip() for item in raw_coins if str(item).strip()] if isinstance(raw_coins, list) else []
-    return {"exchanges": exchanges, "statuses": classify_coins(exchanges, coins)}
+    if not isinstance(raw_coins, list):
+        raise HTTPException(status_code=422, detail="coins must be an array")
+    if not exchanges:
+        raise HTTPException(status_code=422, detail="Select at least one exchange")
+    coins = []
+    for item in raw_coins:
+        if not isinstance(item, str) or item != item.strip() or not item:
+            raise HTTPException(status_code=422, detail="coins entries must be non-empty trimmed strings")
+        coins.append(item)
+    if not coins:
+        try:
+            return get_pb8_market_identifiers(exchanges)
+        except (PB8ConfigurationError, PB8MarketDataUnavailableError, PB8MarketRequestError) as exc:
+            raise _market_data_http_error("PB8 market identifier catalog", exc) from exc
+    all_values = [coin for coin in coins if coin.lower() == "all"]
+    requested = [coin for coin in coins if coin.lower() != "all"]
+    try:
+        result = get_pb8_market_identifiers(exchanges, requested)
+    except (PB8ConfigurationError, PB8MarketDataUnavailableError, PB8MarketRequestError) as exc:
+        raise _market_data_http_error("PB8 market identifier status", exc) from exc
+    for value in all_values:
+        result["statuses"][value] = {
+            "input": value,
+            "normalized": "all",
+            "status": "valid",
+            "reason": "all",
+            "detail": "",
+            "resolutions": [],
+            "display": "all",
+        }
+    return result
 
 
 @router.get("/override-params")
-def get_v8_override_params(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
-    """Return installed PB8 leaf metadata for shared coin override controls."""
-    metadata = get_v8_editor_metadata(session)
-    return {"params": metadata["params"]}
+def get_v8_override_params(
+    hsl_signal_mode: str = Query(...),
+    strategy_kind: str = Query(...),
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return PB8's typed coin-override policy for the effective live context."""
+    try:
+        return get_pb8_coin_override_metadata(hsl_signal_mode, strategy_kind)
+    except (PB8ConfigurationError, PB8RuntimeBusyError) as exc:
+        raise _configuration_http_error("Loading PB8 coin override metadata", exc) from exc
 
 
 @router.get("/override-config/{name}/{filename}")
@@ -1336,6 +1438,7 @@ async def save_v8_instance_config(
             prepared["pbgui"] = prepared_pbgui
             saved = save_prepared_pb8_config(prepared, stage_dir / "config.json")
             secure_private_file(stage_dir / "config.json")
+            validate_pb8_override_bundle(stage_dir / "config.json")
         except HTTPException:
             shutil.rmtree(stage_dir, ignore_errors=True)
             raise
@@ -1639,9 +1742,11 @@ def _available_users() -> list[dict[str, str]]:
     from User import Users
 
     users = Users()
+    supported = set(get_pb8_exchange_metadata()["live"])
     return [
         {"name": name, "exchange": users.find_exchange(name) or ""}
         for name in users.list()
+        if (users.find_exchange(name) or "") in supported
     ]
 
 

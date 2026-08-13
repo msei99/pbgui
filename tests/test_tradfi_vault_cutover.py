@@ -281,7 +281,9 @@ def test_frontend_tiingo_secret_input_uses_vault_contract() -> None:
     assert 'apiFetch("/tradfi/reveal"' in editor
     assert 'method: "POST"' in editor
     assert 'cache: "no-store"' in editor
-    assert 'if (resp.status === 401) clearTradfiRevealedApiKey();' in editor
+    assert 'if (resp.status === 401)' in editor
+    assert 'clearTradfiRevealedApiKey();' in editor
+    assert 'clearRevealedApiKey();' in editor
     assert "window.addEventListener(\"pagehide\", clearTradfiRevealedApiKey)" in editor
     assert 'id="tradfiProfilesBody"' in editor
     assert "selectTradfiProfile(this.dataset.profileId)" in editor

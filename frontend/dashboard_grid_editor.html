@@ -71,7 +71,6 @@
 </div>
 <script>
 (function () {
-  var TOKEN = "%%TOKEN%%";
   var API_BASE = "%%API_BASE%%";
   var name = %%DASHBOARD_NAME%%;
   var rows = %%DASHBOARD_ROWS%%;
@@ -101,10 +100,7 @@
       var payload = { name: name, rows: rows, cols: cols };
       fetch(API_BASE + "/dashboard/grid/pending", {
         method: "POST",
-        headers: {
-          "Authorization": "Bearer " + TOKEN,
-          "Content-Type": "application/json"
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       }).then(function (r) {
         if (r.ok) { setStatus("saved", "saved"); } else { setStatus("error", "error"); }

@@ -9,6 +9,7 @@ import json
 import subprocess
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,13 +36,42 @@ DASHBOARD_REQUEST_FRAGMENTS = [
 ]
 
 
+def test_dashboard_pages_use_cookie_auth_without_rendering_session_token() -> None:
+    """Dashboard HTML should never expose or require the browser session token."""
+    class CookieOnlySession:
+        """Fail if page rendering attempts to read any session field."""
+
+        def __getattr__(self, name):
+            raise AssertionError(f"session field accessed: {name}")
+
+    request = SimpleNamespace(
+        url=SimpleNamespace(scheme="http", hostname="testserver", port=80),
+    )
+    responses = [
+        dashboard.get_main_page(request, current="", session=CookieOnlySession()),
+        dashboard.get_editor_page(
+            name="", api_base="/api", view_only=False, standalone=False, session=CookieOnlySession()
+        ),
+        dashboard.get_templates_page(current="", api_base="/api", session=CookieOnlySession()),
+    ]
+
+    for response in responses:
+        html = response.body.decode()
+        assert "%%TOKEN%%" not in html
+        assert "Authorization" not in html
+        assert "Bearer " not in html
+        assert response.headers["cache-control"] == "no-store"
+
+
 @pytest.mark.parametrize("filename", DASHBOARD_WS_FRAGMENTS)
 def test_dashboard_websocket_fragments_reject_stale_generations(filename: str) -> None:
     """Every rerenderable dashboard fragment must retire stale socket callbacks."""
     source = (ROOT / "frontend" / filename).read_text(encoding="utf-8")
 
     assert "function isCurrentGeneration()" in source
-    assert "if (!isCurrentGeneration() || !TOKEN || !API_HOST) return;" in source
+    assert "if (!isCurrentGeneration() || !API_HOST) return;" in source
+    assert "%%TOKEN%%" not in source
+    assert "Authorization" not in source
     assert ".onmessage = window[" in source or ".onmessage = window._dtWs.onclose" in source
     assert "!== socket) return;" in source
     assert "=== socket) socket.close();" in source
@@ -75,7 +105,7 @@ def test_dashboard_top_dequeued_old_reconnect_cannot_create_socket() -> None:
         window.location = {{ protocol: 'http:' }};
         global.document = {{ getElementById: function () {{ return {{}}; }} }};
         global.DashRender = {{
-            VERSION: '20260610l',
+            VERSION: '20260812b',
             injectCSS: function () {{}}
         }};
         window.DashRender = global.DashRender;
@@ -172,7 +202,7 @@ def test_dashboard_top_older_fetch_cannot_overwrite_newer_render() -> None:
             createTextNode: function () {{ return {{}}; }}
         }};
         global.DashRender = {{
-            VERSION: '20260610l',
+            VERSION: '20260812b',
             injectCSS: function () {{}},
             buildTop: function (target, data) {{ renders.push(data.id); }}
         }};
@@ -249,7 +279,7 @@ def test_dashboard_positions_waits_for_live_before_rendering_db_fallback() -> No
         window.location = {{ protocol: 'http:' }};
         global.document = {{ getElementById: function () {{ return container; }} }};
         global.DashRender = {{
-            VERSION: '20260610l',
+            VERSION: '20260812b',
             injectCSS: function () {{}},
             buildPositions: function (target, data) {{ renders.push(data.id); }}
         }};
@@ -405,6 +435,34 @@ def test_dashboard_exchange_cache_closes_idle_clients(monkeypatch):
     assert active.closed is False
 
 
+def test_dashboard_exchange_cache_replaces_rotated_credentials(monkeypatch):
+    """Credential rotation must close the old cached exchange immediately."""
+    closed = []
+
+    class FakeExchange:
+        def __init__(self, exchange, user):
+            from Exchange import credential_fingerprint
+            self.exchange = exchange
+            self.credential_fingerprint = credential_fingerprint(user)
+
+        def connect(self):
+            return None
+
+        def close(self):
+            closed.append(self.credential_fingerprint)
+
+    user = SimpleNamespace(name="alice", exchange="weex", key="old", secret="secret", passphrase="pass")
+    monkeypatch.setattr("Exchange.Exchange", FakeExchange)
+    monkeypatch.setattr(dashboard, "_exchange_cache", {})
+    monkeypatch.setattr(dashboard, "_exchange_cache_last_used", {})
+    first = dashboard._get_exchange(user)
+    user.key = "new"
+    second = dashboard._get_exchange(user)
+
+    assert first is not second
+    assert closed == [first.credential_fingerprint]
+
+
 def _order(price: float, side: str) -> list:
     """Build a minimal DB-style order row for classification tests."""
     return [0, 0, 0, 0, price, side]
@@ -529,6 +587,31 @@ def test_position_close_order_side_reduces_long_and_short():
     """Map position side to the opposite reduce-only market order side."""
     assert dashboard._position_close_order_side("long") == "sell"
     assert dashboard._position_close_order_side("short") == "buy"
+
+
+@pytest.mark.parametrize("exchange", ["bitunix", "weex"])
+def test_market_close_capability_disables_unverified_pb8_exchanges(exchange):
+    """Unverified native close contracts must remain visibly and server-side disabled."""
+    capability = dashboard._market_close_capability(exchange)
+
+    assert capability["market_close_supported"] is False
+    assert capability["market_close_reason"]
+    with pytest.raises(Exception) as exc_info:
+        dashboard._require_market_close_capability(exchange)
+    assert "disabled" in str(exc_info.value).lower()
+
+
+def test_execute_market_close_rejects_weex_before_exchange_connection(monkeypatch):
+    """A direct WEEX close request must fail before fetching state or creating a client."""
+    user = _UserStub(name="weex-user", exchange="weex")
+    monkeypatch.setattr(dashboard, "_get_users", lambda: SimpleNamespace(find_user=lambda _name: user))
+    monkeypatch.setattr(dashboard, "_get_exchange", lambda _user: pytest.fail("exchange connection must not be attempted"))
+    payload = dashboard.PositionManagePayload(user="weex-user", symbol="BTCUSDT", side="long", action="market_close", amount=1)
+
+    with pytest.raises(Exception) as exc_info:
+        dashboard._execute_market_close(payload)
+
+    assert "disabled" in str(exc_info.value).lower()
 
 
 def test_resolve_close_amount_supports_amount_and_percent():
@@ -754,17 +837,123 @@ def test_apply_pb8_panic_symbol_writes_referenced_override_file():
     cfg = {"live": {}, "coin_overrides": {"DOGE": {"override_config_path": "DOGE.json"}}}
     overrides = {"DOGE.json": {"bot": {"long": {"n_positions": 1}}}}
 
-    coin = dashboard._apply_panic_symbol(
-        cfg,
-        "DOGEUSDT",
-        "short",
-        runtime="v8",
-        override_configs=overrides,
-    )
+    original = dashboard._pb8_dashboard_coin_key
+    dashboard._pb8_dashboard_coin_key = lambda symbol, exchange, existing=None: "DOGE"
+
+    try:
+        coin = dashboard._apply_panic_symbol(
+            cfg,
+            "DOGEUSDT",
+            "short",
+            runtime="v8",
+            exchange="bitget",
+            override_configs=overrides,
+        )
+    finally:
+        dashboard._pb8_dashboard_coin_key = original
 
     assert coin == "DOGE"
     assert overrides["DOGE.json"]["live"]["forced_mode_short"] == "panic"
     assert "live" not in cfg["coin_overrides"]["DOGE"]
+
+
+def test_pb8_dashboard_forced_mode_preserves_exact_collision_identity(monkeypatch):
+    """PB8 dashboard actions must not collapse multiplier markets to a short alias."""
+    monkeypatch.setattr(
+        "pb8_config.get_pb8_market_identifiers",
+        lambda exchanges, identifiers=None: {
+            "catalog": [
+                {
+                    "config_id": "CATUSDT",
+                    "resolutions": [{"exchange": exchanges[0], "symbol": "CAT/USDT:USDT"}],
+                },
+                {
+                    "config_id": "1000CATUSDT",
+                    "resolutions": [{"exchange": exchanges[0], "symbol": "1000CAT/USDT:USDT"}],
+                },
+            ],
+            "statuses": {},
+        },
+    )
+    cfg = {"live": {}, "coin_overrides": {}}
+    overrides = {}
+
+    coin = dashboard._apply_panic_symbol(
+        cfg,
+        "1000CATUSDT",
+        "long",
+        runtime="v8",
+        exchange="bitget",
+        override_configs=overrides,
+    )
+
+    assert coin == "1000CATUSDT"
+    assert "CATUSDT" not in cfg["coin_overrides"]
+    filename = cfg["coin_overrides"]["1000CATUSDT"]["override_config_path"]
+    assert filename.startswith("1000CATUSDT-") and filename.endswith(".json")
+    assert overrides[filename]["live"]["forced_mode_long"] == "panic"
+
+
+def test_pb8_dashboard_forced_mode_reuses_existing_exact_identifier(monkeypatch):
+    """Dashboard actions update an existing exact key instead of adding a canonical alias."""
+    monkeypatch.setattr(
+        "pb8_config.get_pb8_market_identifiers",
+        lambda exchanges, identifiers=None: {
+            "catalog": [{
+                "config_id": "1000ABCUSDT",
+                "resolutions": [{"exchange": exchanges[0], "symbol": "1000ABC/USDT:USDT"}],
+            }],
+            "statuses": {
+                "1000ABC/USDT:USDT": {
+                    "status": "valid",
+                    "resolutions": [{"exchange": exchanges[0], "symbol": "1000ABC/USDT:USDT"}],
+                }
+            },
+        },
+    )
+    cfg = {
+        "live": {},
+        "coin_overrides": {"1000ABC/USDT:USDT": {"override_config_path": "scaled.json"}},
+    }
+    overrides = {"scaled.json": {}}
+
+    coin = dashboard._apply_panic_symbol(
+        cfg,
+        "1000ABCUSDT",
+        "long",
+        runtime="v8",
+        exchange="bitget",
+        override_configs=overrides,
+    )
+
+    assert coin == "1000ABC/USDT:USDT"
+    assert set(cfg["coin_overrides"]) == {"1000ABC/USDT:USDT"}
+    assert overrides["scaled.json"]["live"]["forced_mode_long"] == "panic"
+
+
+def test_pb8_dashboard_forced_mode_creates_safe_filename_for_exact_identifier(monkeypatch):
+    """A new exact PB8 key receives a local safe filename independent of market syntax."""
+    monkeypatch.setattr(
+        "pb8_config.get_pb8_market_identifiers",
+        lambda exchanges, identifiers=None: {
+            "catalog": [{
+                "config_id": "1000ABC/USDT:USDT",
+                "resolutions": [{"exchange": exchanges[0], "symbol": "1000ABC/USDT:USDT"}],
+            }],
+            "statuses": {},
+        },
+    )
+    cfg = {"live": {}, "coin_overrides": {}}
+    overrides = {}
+
+    coin = dashboard._apply_panic_symbol(
+        cfg, "1000ABCUSDT", "long", runtime="v8", exchange="bitget", override_configs=overrides
+    )
+
+    filename = cfg["coin_overrides"][coin]["override_config_path"]
+    assert filename.endswith(".json")
+    assert "/" not in filename and ":" not in filename
+    assert overrides[filename]["live"]["forced_mode_long"] == "panic"
 
 
 def test_apply_pb8_panic_all_uses_canonical_mode_name():

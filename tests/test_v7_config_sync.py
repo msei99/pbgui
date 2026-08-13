@@ -105,8 +105,8 @@ def test_api_key_ssh_sync_routes_are_removed() -> None:
     assert "createApiSyncStatusController" not in vps_source
 
 
-def test_v7_routes_do_not_remote_write_configs() -> None:
-    """Ensure V7 save/delete paths no longer perform direct remote writes."""
+def test_v7_routes_do_not_use_legacy_sftp_config_writes() -> None:
+    """Ensure V7 save/delete paths do not restore the removed SFTP transport."""
 
     source = _read("api/v7_instances.py")
     forbidden = [
@@ -135,8 +135,40 @@ def test_v7_sync_hook_returns_cluster_handoff(tmp_path, monkeypatch) -> None:
     result = asyncio.run(v7_instances._ssh_sync_instance("demo"))
 
     assert result["cluster_sync"] is True
-    assert result["disabled"] is True
+    assert result["pending"] is True
+    assert result["direct"] is False
     assert result["hosts"] == {}
+
+
+def test_v7_sync_hook_uses_bounded_direct_activation(tmp_path, monkeypatch) -> None:
+    """A current V7 operation gets one four-second direct activation attempt."""
+
+    import api.v7_instances as v7_instances
+
+    monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
+    instance_dir = tmp_path / "data" / "run_v7" / "demo"
+    instance_dir.mkdir(parents=True)
+    (instance_dir / "config.json").write_text("{}", encoding="utf-8")
+    operation = {"op": "UPSERT_CONFIG", "instance": "demo"}
+    calls: list[tuple[Path, dict, int]] = []
+
+    def activate(cluster_root: Path, pushed_operation: dict, *, timeout: int) -> dict:
+        calls.append((cluster_root, pushed_operation, timeout))
+        return {
+            "ok": True,
+            "direct": True,
+            "pbname": "runner-a",
+            "materialization": {"ok": True},
+        }
+
+    monkeypatch.setattr(v7_instances, "push_v7_activation", activate)
+
+    result = asyncio.run(v7_instances._ssh_sync_instance("demo", operation))
+
+    assert calls == [(tmp_path / "data" / "cluster", operation, 4)]
+    assert result["ok"] == 1
+    assert result["direct"] is True
+    assert result["hosts"] == {"runner-a": {"success": True}}
 
 
 def test_api_key_rows_use_data_attributes_instead_of_inline_javascript() -> None:

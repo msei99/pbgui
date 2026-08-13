@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!-- PBGui Dashboard — standalone FastAPI page.
      Full dashboard view/edit experience with PBGui navigation.
-     Injected placeholders: TOKEN, API_BASE, WS_BASE, CURRENT, DASHBOARDS_JSON
+     Injected placeholders: API_BASE, WS_BASE, CURRENT, DASHBOARDS_JSON
 -->
 <html lang="en">
 <head>
@@ -790,7 +790,6 @@ html, body {
   'use strict';
 
   /* ── injected by FastAPI ── */
-  var TOKEN      = "%%TOKEN%%";
   var API_BASE   = "%%API_BASE%%";
   var WS_BASE    = "%%WS_BASE%%";
   var VERSION    = "%%VERSION%%";
@@ -819,7 +818,6 @@ html, body {
   function apiFetch(path, opts) {
     opts = opts || {};
     opts.headers = opts.headers || {};
-    opts.headers['Authorization'] = 'Bearer ' + TOKEN;
     opts.headers['Content-Type']  = opts.headers['Content-Type'] || 'application/json';
     return fetch(API_BASE + path, opts);
   }
@@ -1429,7 +1427,7 @@ html, body {
 
     function loadHelpIndex() {
       helpTocList.innerHTML = '<div class="help-loading">Loading...</div>';
-      fetch(API_BASE + '/docs/index?lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+      fetch(API_BASE + '/docs/index?lang=' + helpLang)
         .then(function (r) { return r.json(); })
         .then(function (data) {
           helpTopics = data || [];
@@ -1472,7 +1470,7 @@ html, body {
       var t = helpTopics[idx];
       if (!t) return;
       helpContent.innerHTML = '<div class="help-loading">Loading...</div>';
-      fetch(API_BASE + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang, { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+      fetch(API_BASE + '/docs/content?file=' + encodeURIComponent(t.file) + '&lang=' + helpLang)
         .then(function (r) { return r.json(); })
         .then(function (d) { helpContent.innerHTML = mdToHtml(d.content || ''); helpContent.scrollTop = 0; })
         .catch(function () { helpContent.innerHTML = '<div class="help-loading">Failed to load content.</div>'; });
@@ -1531,7 +1529,7 @@ html, body {
     /* Expose opener for the shared Guide button handler */
     window._openDashboardHelp = function () {
       if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
-      window.PBGuiSharedHelp.open('dashboard', { token: _NAV_TOKEN });
+      window.PBGuiSharedHelp.open('dashboard');
     };
     window.PBGUI_HELP_OPENER = window._openDashboardHelp;
   }());
@@ -1539,16 +1537,14 @@ html, body {
 }());
 </script>
 
-<!-- pbgui_nav.js config — separate script block at global scope so TOKEN is accessible -->
+<!-- pbgui_nav.js config -->
 <script>
-  var _NAV_TOKEN   = "%%TOKEN%%";
   var _NAV_API     = "%%API_BASE%%";
   var _NAV_VER     = "%%VERSION%%";
   var _NAV_SERIAL  = "%%SERIAL%%";
   window.PBGUI_NAV_CONFIG = {
     subtitle: 'DASHBOARD',
     current:  'dashboards',
-    token:    _NAV_TOKEN,
     apiBase:  _NAV_API,
     version:  _NAV_VER,
     serial:   _NAV_SERIAL
