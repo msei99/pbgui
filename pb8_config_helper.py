@@ -9,6 +9,26 @@ import sys
 from pathlib import Path
 
 
+def _optimize_basis_contract(limits_module, scoring_fields, reducers_module=None) -> dict:
+    """Describe the installed PB8 optimizer's canonical suite-reduction fields."""
+    reducers = getattr(reducers_module, "SUPPORTED_REDUCERS", None)
+    if reducers is not None:
+        limit_basis_field = "reducer"
+    else:
+        reducers = getattr(limits_module, "SUPPORTED_LIMIT_STATS", None)
+        if reducers is None:
+            reducers = getattr(limits_module, "SUPPORTED_AGGREGATE_MODES", None)
+        limit_basis_field = "stat"
+    if not reducers:
+        raise RuntimeError("PB8 exposes no supported optimizer suite reducers")
+    scoring_basis_field = "reducer" if "reducer" in scoring_fields else "aggregate"
+    return {
+        "statistics": sorted(reducers),
+        "limit_basis_field": limit_basis_field,
+        "scoring_basis_field": scoring_basis_field,
+    }
+
+
 def _load_pb8_modules(pb8_dir: Path):
     """Import PB8 modules only after its source directory is selected."""
     src_dir = pb8_dir / "src"
@@ -19,8 +39,8 @@ def _load_pb8_modules(pb8_dir: Path):
     from config.load import load_prepared_config, prepare_config
     from config.coerce import normalize_hsl_signal_mode
     from config.metrics import ANALYSIS_SHARED_KEYS, CURRENCY_METRICS
-    from config.limits import SUPPORTED_LIMIT_STATS
-    from config.scoring import DEFAULT_OBJECTIVE_GOALS, OBJECTIVE_GOALS
+    from config import limits as limits_module
+    from config.scoring import DEFAULT_OBJECTIVE_GOALS, OBJECTIVE_GOALS, SCORING_ENTRY_FIELDS
     from config.schema import CONFIG_SCHEMA_VERSION, get_template_config
     from config.optimize_bounds import get_optimize_bounds_defaults
     from config.strategy_spec import get_all_strategy_defaults, get_supported_strategy_kinds, get_strategy_spec
@@ -35,6 +55,16 @@ def _load_pb8_modules(pb8_dir: Path):
     from optimization.backends.pymoo_backend import SUPPORTED_PYMOO_ALGORITHMS, SUPPORTED_REF_DIR_METHODS
     from optimizer_overrides import KNOWN_OPTIMIZER_OVERRIDES
     from passivbot_version import __version__
+
+    try:
+        from config import reducers as reducers_module
+    except ImportError:
+        reducers_module = None
+    optimize_basis = _optimize_basis_contract(
+        limits_module,
+        SCORING_ENTRY_FIELDS,
+        reducers_module,
+    )
 
     return {
         "load_prepared_config": load_prepared_config,
@@ -57,7 +87,9 @@ def _load_pb8_modules(pb8_dir: Path):
         "pymoo_ref_dir_methods": sorted(SUPPORTED_REF_DIR_METHODS),
         "objective_goals": list(OBJECTIVE_GOALS),
         "default_objective_goals": dict(DEFAULT_OBJECTIVE_GOALS),
-        "limit_statistics": sorted(SUPPORTED_LIMIT_STATS),
+        "limit_statistics": optimize_basis["statistics"],
+        "limit_basis_field": optimize_basis["limit_basis_field"],
+        "scoring_basis_field": optimize_basis["scoring_basis_field"],
         "optimizer_overrides": sorted(KNOWN_OPTIMIZER_OVERRIDES),
         "migrate_v7": migrate_v7_trailing_grid_file,
         "result_metrics": sorted(
@@ -472,11 +504,14 @@ def _optimize_metadata(modules: dict) -> dict:
             "metrics": metrics,
             "goals": modules["objective_goals"],
             "default_goals": modules["default_objective_goals"],
+            "basis_field": modules["scoring_basis_field"],
             "defaults": copy.deepcopy(optimize.get("scoring") or []),
         },
         "limits": {
             "metrics": metrics,
             "statistics": modules["limit_statistics"],
+            "basis_field": modules["limit_basis_field"],
+            "scoring_basis_field": modules["scoring_basis_field"],
             "operators": [
                 "greater_than",
                 "greater_than_or_equal",

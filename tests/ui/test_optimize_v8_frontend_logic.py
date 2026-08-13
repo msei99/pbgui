@@ -40,7 +40,7 @@ def test_v7_and_v8_use_one_optimize_template() -> None:
     assert '"%%OPTIMIZE_VERSION%%": "v8"' in api_v8
     assert '"%%OPTIMIZE_NAV_CURRENT%%": "v8_optimize"' in api_v8
     assert not (ROOT / "frontend" / "v8_optimize.html").exists()
-    assert '/app/js/optimize_editor_adapter.js?v=10' in page
+    assert '/app/js/optimize_editor_adapter.js?v=11' in page
     assert "PBGuiOptimizeEditorAdapter.create(OPTIMIZE_VERSION" in page
     assert 'backtestVersion: BACKTEST_VERSION' in page
     for panel in ("panel-configs", "panel-queue", "panel-results", "panel-paretos"):
@@ -1213,10 +1213,12 @@ def test_pb8_scenario_bases_round_trip_without_changing_pb7_entries() -> None:
         f"""
         const assert = require('node:assert/strict');
         const optimizeEditorAdapter = {{isV8: true}};
-        function currentLimitsMeta() {{ return {{
+        const limitsMeta = {{
           type_options: ['all'], stat_options: ['', 'mean', 'min', 'max', 'std', 'median'],
-          currency_options: ['usd', 'btc'], goal_options: ['min', 'max']
-        }}; }}
+          currency_options: ['usd', 'btc'], goal_options: ['min', 'max'],
+          limit_basis_field: 'reducer', scoring_basis_field: 'reducer'
+        }};
+        function currentLimitsMeta() {{ return limitsMeta; }}
         function canonicalizeLimitMetricName(value) {{ return String(value || '').trim(); }}
         function normalizeLimitPenalizeIf(value) {{ return String(value || 'greater_than'); }}
         function isLimitRangePenalize(value) {{ return value === 'outside_range' || value === 'inside_range'; }}
@@ -1231,11 +1233,11 @@ def test_pb8_scenario_bases_round_trip_without_changing_pb7_entries() -> None:
         {functions}
 
         const scoring = normalizeScoringEntry({{
-          metric: 'adg', goal: 'max', scenario: null, aggregate: 'median', future_field: {{keep: true}}
+          metric: 'adg', goal: 'max', scenario: null, reducer: 'median', future_field: {{keep: true}}
         }});
         assert.equal(Object.hasOwn(scoring, 'scenario'), true);
         assert.equal(scoring.scenario, null);
-        assert.equal(scoring.aggregate, 'median');
+        assert.equal(scoring.reducer, 'median');
         assert.deepEqual(scoring.future_field, {{keep: true}});
         assert.deepEqual(buildScoringEntryFromForm(scoringEntryToForm(scoring)), scoring);
 
@@ -1245,7 +1247,7 @@ def test_pb8_scenario_bases_round_trip_without_changing_pb7_entries() -> None:
         assert.equal(Object.hasOwn(inherited, 'scenario'), false);
 
         const limit = normalizeLimitEntry({{
-          metric: 'drawdown', penalize_if: 'greater_than', scenario: 'bear', value: 0.2, future_field: ['keep']
+          metric: 'drawdown', penalize_if: 'greater_than', scenario: 'bear', reducer: '', value: 0.2, future_field: ['keep']
         }});
         assert.deepEqual(buildLimitEntryFromForm(limitEntryToForm(limit)), limit);
         assert.equal(Object.hasOwn(limit, 'enabled'), false);
@@ -1255,9 +1257,15 @@ def test_pb8_scenario_bases_round_trip_without_changing_pb7_entries() -> None:
           /cannot also use Stat/
         );
         assert.throws(
-          () => validatePb8ScenarioBases([{{metric: 'adg', goal: 'max', aggregate: 'mean'}}], [], 'bull', true, ['bull']),
+          () => validatePb8ScenarioBases([{{metric: 'adg', goal: 'max', reducer: 'mean'}}], [], 'bull', true, ['bull']),
           /inheriting a named objective_scenario/
         );
+        limitsMeta.limit_basis_field = 'stat';
+        limitsMeta.scoring_basis_field = 'aggregate';
+        const legacyLimit = normalizeLimitEntry({{metric: 'drawdown', penalize_if: 'greater_than', stat: 'median', value: 0.2}});
+        const legacyScoring = normalizeScoringEntry({{metric: 'adg', goal: 'max', aggregate: 'median'}});
+        assert.equal(legacyLimit.stat, 'median');
+        assert.equal(legacyScoring.aggregate, 'median');
         assert.throws(
           () => validatePb8ScenarioBases([{{metric: 'adg', goal: 'max', scenario: 'bera'}}], [], null, true, ['bear']),
           /Unknown scoring scenario/

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pb8_config
 import pb8_config_helper
@@ -601,12 +602,16 @@ def test_optimize_metadata_builds_nonempty_bounds_and_bot_defaults_for_every_str
         "pymoo_ref_dir_methods": ["das_dennis"],
         "objective_goals": ["min", "max"],
         "limit_statistics": ["mean"],
+        "limit_basis_field": "reducer",
+        "scoring_basis_field": "reducer",
         "optimizer_overrides": [],
         "fixed_runtime_overrides": {},
     }
 
     metadata = pb8_config_helper._optimize_metadata(modules)
 
+    assert metadata["limits"]["basis_field"] == "reducer"
+    assert metadata["scoring"]["basis_field"] == "reducer"
     assert set(metadata["active_bounds"]) == set(strategies)
     for kind in strategies:
         for side in ("long", "short"):
@@ -614,3 +619,27 @@ def test_optimize_metadata_builds_nonempty_bounds_and_bot_defaults_for_every_str
                 kind: all_bounds[side]["strategy"][kind]
             }
             assert metadata["strategy_defaults"][side][kind]
+
+
+def test_optimize_basis_contract_supports_legacy_and_reducer_pb8() -> None:
+    """PBGui must follow each installed PB8 generation's canonical reduction fields."""
+    legacy = pb8_config_helper._optimize_basis_contract(
+        SimpleNamespace(SUPPORTED_LIMIT_STATS={"mean", "median"}),
+        {"metric", "goal", "scenario", "aggregate"},
+    )
+    current = pb8_config_helper._optimize_basis_contract(
+        SimpleNamespace(),
+        {"metric", "goal", "scenario", "reducer"},
+        SimpleNamespace(SUPPORTED_REDUCERS={"mean", "median"}),
+    )
+
+    assert legacy == {
+        "statistics": ["mean", "median"],
+        "limit_basis_field": "stat",
+        "scoring_basis_field": "aggregate",
+    }
+    assert current == {
+        "statistics": ["mean", "median"],
+        "limit_basis_field": "reducer",
+        "scoring_basis_field": "reducer",
+    }

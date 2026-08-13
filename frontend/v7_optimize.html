@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
-<script src="/app/js/optimize_editor_adapter.js?v=10"></script>
+<script src="/app/js/optimize_editor_adapter.js?v=11"></script>
 <style>
 :root {
   --bg: #0e1117;
@@ -2929,6 +2929,8 @@ function normalizeLimitsMeta(raw) {
     stat_options: Array.isArray(meta.stat_options)
       ? meta.stat_options.slice()
       : ['', 'mean', 'min', 'max', 'std', 'median'],
+    limit_basis_field: meta.limit_basis_field === 'reducer' ? 'reducer' : 'stat',
+    scoring_basis_field: meta.scoring_basis_field === 'reducer' ? 'reducer' : 'aggregate',
     goal_options: Array.isArray(meta.goal_options) && meta.goal_options.length
       ? meta.goal_options.slice()
       : ['min', 'max'],
@@ -3115,7 +3117,18 @@ function normalizeLimitEntry(rawEntry) {
     ? 'greater_than'
     : normalizeLimitPenalizeIf(rawEntry.penalize_if);
   var normalized = optimizeEditorAdapter.isV8 ? Object.assign({}, rawEntry) : {};
+  var basisField = currentLimitsMeta().limit_basis_field;
+  var basisValue = rawEntry[basisField];
+  if (basisValue == null) basisValue = rawEntry.reducer;
+  if (basisValue == null) basisValue = rawEntry.stat;
+  if (basisValue == null) basisValue = rawEntry.aggregate;
+  if (basisValue == null) basisValue = rawEntry.scenario_stat;
+  if (basisValue == null) basisValue = rawEntry.field;
   delete normalized.stat;
+  delete normalized.reducer;
+  delete normalized.aggregate;
+  delete normalized.scenario_stat;
+  delete normalized.field;
   delete normalized.scenario;
   delete normalized.range;
   delete normalized.value;
@@ -3124,8 +3137,8 @@ function normalizeLimitEntry(rawEntry) {
     penalize_if: penalizeIf
   });
   if (Object.prototype.hasOwnProperty.call(rawEntry, 'enabled')) normalized.enabled = enabled;
-  if (rawEntry.stat != null && String(rawEntry.stat).trim() !== '') {
-    normalized.stat = String(rawEntry.stat).trim().toLowerCase();
+  if (basisValue != null && String(basisValue).trim() !== '') {
+    normalized[basisField] = String(basisValue).trim().toLowerCase();
   }
   if (optimizeEditorAdapter.isV8 && Object.prototype.hasOwnProperty.call(rawEntry, 'scenario')) {
     normalized.scenario = rawEntry.scenario == null ? null : String(rawEntry.scenario).trim();
@@ -3233,7 +3246,7 @@ function limitEntryToForm(entry) {
     penalize_if: normalized.penalize_if,
     scenario_mode: !hasScenario ? 'inherit' : (normalized.scenario == null ? 'aggregate' : 'named'),
     scenario_name: normalized.scenario == null ? '' : normalized.scenario,
-    stat: normalized.stat || '',
+    stat: normalized[currentLimitsMeta().limit_basis_field] || '',
     value: normalized.value,
     range_low: normalized.range ? normalized.range[0] : 0,
     range_high: normalized.range ? normalized.range[1] : 1
@@ -3254,6 +3267,10 @@ function buildLimitEntryFromForm(rawForm) {
   }
   delete entry.scenario;
   delete entry.stat;
+  delete entry.reducer;
+  delete entry.aggregate;
+  delete entry.scenario_stat;
+  delete entry.field;
   delete entry.range;
   delete entry.value;
   if (optimizeEditorAdapter.isV8) {
@@ -3265,7 +3282,7 @@ function buildLimitEntryFromForm(rawForm) {
       entry.scenario = form.scenario_name;
     }
   }
-  if (form.stat) entry.stat = form.stat;
+  if (form.stat) entry[currentLimitsMeta().limit_basis_field] = form.stat;
   if (isLimitRangePenalize(form.penalize_if)) {
     if (form.range_high < form.range_low) throw new Error('Range Low must be less than or equal to Range High.');
     entry.range = [form.range_low, form.range_high];
@@ -3768,8 +3785,17 @@ function normalizeScoringEntry(rawEntry) {
   var normalized = optimizeEditorAdapter.isV8 && rawEntry && typeof rawEntry === 'object'
     ? Object.assign({}, rawEntry)
     : {};
+  var basisField = currentLimitsMeta().scoring_basis_field;
+  var basisValue = rawEntry && typeof rawEntry === 'object' ? rawEntry[basisField] : null;
+  if (basisValue == null && rawEntry && typeof rawEntry === 'object') basisValue = rawEntry.reducer;
+  if (basisValue == null && rawEntry && typeof rawEntry === 'object') basisValue = rawEntry.aggregate;
+  if (basisValue == null && rawEntry && typeof rawEntry === 'object') basisValue = rawEntry.stat;
+  if (basisValue == null && rawEntry && typeof rawEntry === 'object') basisValue = rawEntry.scenario_stat;
   delete normalized.scenario;
   delete normalized.aggregate;
+  delete normalized.reducer;
+  delete normalized.stat;
+  delete normalized.scenario_stat;
   normalized = Object.assign(normalized, {
     metric: canonicalMetric,
     goal: normalizeScoringGoal(goal, canonicalMetric)
@@ -3778,8 +3804,8 @@ function normalizeScoringEntry(rawEntry) {
     if (Object.prototype.hasOwnProperty.call(rawEntry, 'scenario')) {
       normalized.scenario = rawEntry.scenario == null ? null : String(rawEntry.scenario).trim();
     }
-    if (rawEntry.aggregate != null && String(rawEntry.aggregate).trim() !== '') {
-      normalized.aggregate = String(rawEntry.aggregate).trim().toLowerCase();
+    if (basisValue != null && String(basisValue).trim() !== '') {
+      normalized[basisField] = String(basisValue).trim().toLowerCase();
     }
   }
   return normalized;
@@ -3865,7 +3891,7 @@ function scoringEntryToForm(entry) {
     goal: normalized.goal || defaultScoringGoal(normalized.metric),
     scenario_mode: !hasScenario ? 'inherit' : (normalized.scenario == null ? 'aggregate' : 'named'),
     scenario_name: normalized.scenario == null ? '' : normalized.scenario,
-    aggregate: normalized.aggregate || ''
+    aggregate: normalized[currentLimitsMeta().scoring_basis_field] || ''
   });
 }
 
@@ -3879,6 +3905,9 @@ function buildScoringEntryFromForm(rawForm) {
   });
   delete entry.scenario;
   delete entry.aggregate;
+  delete entry.reducer;
+  delete entry.stat;
+  delete entry.scenario_stat;
   if (optimizeEditorAdapter.isV8) {
     if (form.scenario_mode === 'aggregate') {
       entry.scenario = null;
@@ -3887,7 +3916,7 @@ function buildScoringEntryFromForm(rawForm) {
       if (form.aggregate) throw new Error('A named scoring scenario cannot also use Aggregate.');
       entry.scenario = form.scenario_name;
     }
-    if (form.aggregate) entry.aggregate = form.aggregate;
+    if (form.aggregate) entry[currentLimitsMeta().scoring_basis_field] = form.aggregate;
   }
   return entry;
 }
@@ -3909,7 +3938,7 @@ function validatePb8ScenarioBases(scoring, limits, objectiveScenario, suiteEnabl
     if (!labels.has(String(objectiveScenario))) throw new Error('Unknown Objective Scenario: ' + objectiveScenario);
   }
   (scoring || []).forEach(function(entry) {
-    var aggregate = String(entry.aggregate || '').trim().toLowerCase();
+    var aggregate = String(entry[currentLimitsMeta().scoring_basis_field] || '').trim().toLowerCase();
     if (allowedAggregates.indexOf(aggregate) < 0) throw new Error('Unsupported scoring aggregate: ' + aggregate);
     var hasScenario = Object.prototype.hasOwnProperty.call(entry, 'scenario');
     var namedScenario = hasScenario && entry.scenario != null && String(entry.scenario).trim() !== '';
@@ -3932,7 +3961,7 @@ function validatePb8ScenarioBases(scoring, limits, objectiveScenario, suiteEnabl
     }
     if (hasScenario && !suiteEnabled) throw new Error('Limit Scenario requires Suite mode.');
     if (namedScenario && !labels.has(String(entry.scenario))) throw new Error('Unknown limit scenario: ' + entry.scenario);
-    if (namedScenario && entry.stat) throw new Error('A named limit scenario cannot also use Stat.');
+    if (namedScenario && entry[currentLimitsMeta().limit_basis_field]) throw new Error('A named limit scenario cannot also use Stat.');
   });
 }
 

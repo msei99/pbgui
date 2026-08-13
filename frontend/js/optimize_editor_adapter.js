@@ -369,6 +369,8 @@
           all_valid_metrics: limits.metrics,
           penalize_if_options: limits.operators,
           stat_options: [''].concat(limits.statistics || []),
+          limit_basis_field: limits.basis_field || 'stat',
+          scoring_basis_field: scoring.basis_field || limits.scoring_basis_field || 'aggregate',
           goal_options: scoring.goals || ['min', 'max'],
           default_goal_map: scoring.default_goals || {}
         } : (source.limits_meta || null);
