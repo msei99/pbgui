@@ -142,9 +142,26 @@
     - name: Restart PBApiServer
       shell: |
         set -euo pipefail
+        update_pid="$$"
+        ancestor="$$"
+        while [ "$ancestor" -gt 1 ]; do
+          process_name="$(ps -o comm= -p "$ancestor" | tr -d ' ')"
+          case "$process_name" in
+            ansible-playboo*) update_pid="$ancestor" ;;
+          esac
+          parent="$(ps -o ppid= -p "$ancestor" | tr -d ' ')"
+          [ -n "$parent" ] || break
+          ancestor="$parent"
+        done
+        read -r -a update_stat < "/proc/$update_pid/stat"
+        update_start="${update_stat[21]}"
         restart_unit="pbgui-api-restart-$(date +%s%N)"
-        systemd-run --user --unit="$restart_unit" --collect --setenv=PBGUI_DIR="$PBGUI_DIR" --setenv=PBGUI_PYTHON="$PBGUI_PYTHON" /bin/bash -c '
-          sleep 1
+        systemd-run --user --unit="$restart_unit" --collect --setenv=PBGUI_DIR="$PBGUI_DIR" --setenv=PBGUI_PYTHON="$PBGUI_PYTHON" --setenv=PBGUI_UPDATE_PID="$update_pid" --setenv=PBGUI_UPDATE_START="$update_start" /bin/bash -c '
+          while [ -r "/proc/$PBGUI_UPDATE_PID/stat" ]; do
+            read -r -a current_stat < "/proc/$PBGUI_UPDATE_PID/stat" || break
+            [ "${current_stat[21]}" = "$PBGUI_UPDATE_START" ] || break
+            sleep 1
+          done
           cd "$PBGUI_DIR"
           systemctl --user stop pbgui-api.service >/dev/null 2>&1 || true
           /bin/bash "$PBGUI_DIR/setup/stop_legacy_api.sh" --pbgui-dir "$PBGUI_DIR"

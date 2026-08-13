@@ -40,6 +40,19 @@ def test_combined_runtime_playbooks_compose_existing_safe_updates() -> None:
     assert core_mod._command_updates_pbgui("vps-update-pbgui-pb7-pb8") is True
 
 
+def test_local_master_restart_waits_for_imported_pb8_update() -> None:
+    """The local API restart must not kill a later PB8 import in the same playbook."""
+    source = Path("master-update-pbgui.yml").read_text(encoding="utf-8")
+    handler = source.split("Restart PBApiServer", 1)[1]
+
+    assert 'ansible-playboo*) update_pid="$ancestor"' in handler
+    assert '--setenv=PBGUI_UPDATE_PID="$update_pid"' in handler
+    assert '--setenv=PBGUI_UPDATE_START="$update_start"' in handler
+    assert 'while [ -r "/proc/$PBGUI_UPDATE_PID/stat" ]' in handler
+    assert '[ "${current_stat[21]}" = "$PBGUI_UPDATE_START" ]' in handler
+    assert "sleep 1\n          cd \"$PBGUI_DIR\"" not in handler
+
+
 @pytest.mark.parametrize(
     ("role", "expected"),
     [("master", "master"), ("slave", "slave"), ("vps", "slave"), ("", "slave")],
