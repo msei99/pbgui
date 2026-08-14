@@ -4022,6 +4022,7 @@ async function cfgApplyFilters() {
 
   var allApproved = new Set();
   var allIgnored  = new Set();
+  var allUnresolved = new Set();
   for (var j = 0; j < exchanges.length; j++) {
     var ex = exchanges[j];
     if (ex === 'combined') continue;
@@ -4033,8 +4034,8 @@ async function cfgApplyFilters() {
       var resp = await fetch(url, { headers: bearerHeaders() });
       var data = await resp.json();
       if (!resp.ok) throw new Error((data && data.detail) || resp.statusText || ('Filter failed for ' + ex));
-      if (backtestEditorAdapter.isV8 && Array.isArray(data.unresolved) && data.unresolved.length) {
-        throw new Error('PB8 could not project filtered coins: ' + data.unresolved.join(', '));
+      if (backtestEditorAdapter.isV8 && Array.isArray(data.unresolved)) {
+        data.unresolved.forEach(function(c) { allUnresolved.add(c); });
       }
       (data.approved || []).forEach(function(c) { allApproved.add(c); });
       (data.ignored || []).forEach(function(c) { allIgnored.add(c); });
@@ -4052,7 +4053,9 @@ async function cfgApplyFilters() {
   cfgSetMs('ms-cfg-app-short', appArr);
   cfgSetMs('ms-cfg-ign-long',  ignArr);
   cfgSetMs('ms-cfg-ign-short', ignArr);
-  toast('Filters applied: ' + appArr.length + ' approved, ' + ignArr.length + ' ignored', 'ok');
+  var unresolvedSuffix = allUnresolved.size ? '; ' + allUnresolved.size + ' unavailable PB8 symbols skipped' : '';
+  toast('Filters applied: ' + appArr.length + ' approved, ' + ignArr.length + ' ignored' + unresolvedSuffix,
+    allUnresolved.size ? 'info' : 'ok');
 }
 
 

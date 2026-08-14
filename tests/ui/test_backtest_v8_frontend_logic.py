@@ -977,6 +977,57 @@ def test_shared_backtest_shell_owns_v7_table_and_status_patterns() -> None:
     assert "definition.selection.setSelected" in shell_source
 
 
+def test_v8_apply_filters_keeps_resolved_coins_when_some_symbols_are_unavailable() -> None:
+    """PB8 filter projection gaps must not discard the valid approved and ignored selections."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "cfgApplyFilters")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const API_BASE = '/api/backtest-v8';
+        const backtestEditorAdapter = {{
+          isV8: true,
+          metadataApiBase: () => '/api/v8'
+        }};
+        const fields = {{
+          'cfg-market-cap': {{value: '1500'}},
+          'cfg-vol-mcap': {{value: '10'}},
+          'cfg-only-cpt': {{checked: false}},
+          'cfg-notices-ignore': {{checked: false}}
+        }};
+        const document = {{getElementById: id => fields[id]}};
+        const selected = {{}};
+        const messages = [];
+        function cfgGetMs(id) {{ return id === 'ms-cfg-exchanges' ? ['bybit'] : []; }}
+        function cfgSetMs(id, values) {{ selected[id] = values; }}
+        function bearerHeaders() {{ return {{}}; }}
+        function toast(message, level) {{ messages.push({{message, level}}); }}
+        function fetch(url) {{
+          assert.match(url, /market_cap=1500/);
+          return Promise.resolve({{
+            ok: true,
+            json: () => Promise.resolve({{
+              approved: ['BTC', 'ETH'],
+              ignored: ['DOGE'],
+              unresolved: ['OPENAI', 'UNITREE']
+            }})
+          }});
+        }}
+        {function}
+        (async () => {{
+          await cfgApplyFilters();
+          assert.deepEqual(selected['ms-cfg-app-long'], ['BTC', 'ETH']);
+          assert.deepEqual(selected['ms-cfg-app-short'], ['BTC', 'ETH']);
+          assert.deepEqual(selected['ms-cfg-ign-long'], ['DOGE']);
+          assert.equal(messages[0].level, 'info');
+          assert.match(messages[0].message, /2 unavailable PB8 symbols skipped/);
+        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_backtest_v8_results_render_strategy_without_changing_v7_rows() -> None:
     """The shared local Results renderer adds Strategy only when V8 rows are visible."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
