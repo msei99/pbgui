@@ -213,6 +213,66 @@ def test_delayed_config_load_does_not_replace_results_sidebar() -> None:
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
+def test_delayed_v8_settings_load_does_not_replace_results_sidebar() -> None:
+    """A deferred V8 editor render must stop after the user leaves Configs."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "showConfigEditor")
+    function = function[: function.index("  resetBacktestEditorUiState();")] + "  resetBacktestEditorUiState();\n}"
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const backtestEditorAdapter = {{isV8: true}};
+        const settings = {{exchange_options: []}};
+        let currentPanel = 'configs';
+        let resolveSettings;
+        let settingsLoadPromise = new Promise(resolve => {{
+          resolveSettings = () => {{ settingsLoadPromise = null; resolve(); }};
+        }});
+        let editorRenderCount = 0;
+        function resetBacktestEditorUiState() {{ editorRenderCount += 1; }}
+        {function}
+        (async () => {{
+          showConfigEditor('alpha', {{}});
+          currentPanel = 'results';
+          resolveSettings();
+          await new Promise(resolve => setImmediate(resolve));
+          assert.equal(editorRenderCount, 0);
+        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_v8_result_without_saved_config_opens_as_new_draft() -> None:
+    """A PB8 result group must not be reused as a nonexistent source config when saving under a new name."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = source.split("function rebacktestSelected()", 1)[1].split("/* Multiple:", 1)[0]
+    source_logic = "\n".join(
+        line.strip()
+        for line in function.splitlines()
+        if "hasSavedSource" in line or "editingConfig = hasSavedSource" in line
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        function resultEditorSource(isV8, configNames) {{
+          const backtestEditorAdapter = {{isV8}};
+          const configs = configNames.map(name => ({{name}}));
+          const name = 'hash';
+          let editingConfig = null;
+          {source_logic}
+          return editingConfig;
+        }}
+        assert.equal(resultEditorSource(true, ['saved-config']), '__new__');
+        assert.equal(resultEditorSource(true, ['saved-config', 'hash']), 'hash');
+        assert.equal(resultEditorSource(false, []), 'hash');
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_backtest_settings_modal_opens_immediately_then_refreshes_authoritative_values() -> None:
     """The settings dialog must render before its deduplicated backend refresh finishes."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")

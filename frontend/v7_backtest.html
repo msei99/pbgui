@@ -2559,6 +2559,7 @@ function pb8AdvancedFieldsValidate() {
 }
 
 function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
+  if (currentPanel !== 'configs') return;
   if (backtestEditorAdapter.isV8 &&
       (!Array.isArray(settings.exchange_options) || !settings.exchange_options.length) &&
       settingsLoadPromise) {
@@ -7864,7 +7865,8 @@ function rebacktestSelected() {
     apiFetch('/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
       var matched = results.find(function(r) { return r.path === sel[0]; });
       var name = matched ? matched.config_name : (sel[0].split('/').slice(-3, -2)[0] || 'rebacktest');
-      editingConfig = name;
+      var hasSavedSource = !backtestEditorAdapter.isV8 || configs.some(function(item) { return item.name === name; });
+      editingConfig = hasSavedSource ? name : '__new__';
       selectPanel('configs');
       showConfigEditor(name, cfg);
     }).catch(function(e) { toast('Failed to load config: ' + e.message, 'err'); });
