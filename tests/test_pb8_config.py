@@ -488,6 +488,7 @@ def test_helper_market_identifiers_uses_pb8_catalog_and_preserves_exact_ids() ->
         ("bitget::ABCUSDT", "bitget"): "ABC/USDT:USDT",
         ("bitget::1000ABCUSDT", "bitget"): "1000ABC/USDT:USDT",
         ("1000ABC/USDT:USDT", "bitget"): "1000ABC/USDT:USDT",
+        ("USD1", "bitget"): "1/USDT:USDT",
     }
 
     def coin_to_symbol(identifier, exchange, **_kwargs):
@@ -510,13 +511,17 @@ def test_helper_market_identifiers_uses_pb8_catalog_and_preserves_exact_ids() ->
         "UnknownMarketIdentifier": UnknownMarketIdentifier,
         "coin_to_symbol": coin_to_symbol,
         "approved_all_market_identifiers": lambda _rows: {
-            "BTC", "bitget::ABCUSDT", "bitget::1000ABCUSDT"
+            "BTC", "USD1", "bitget::ABCUSDT", "bitget::1000ABCUSDT"
         },
         "filter_markets": lambda markets, _exchange, **_kwargs: (markets, None),
         "get_quote": lambda _exchange, quote=None: quote or "USDT",
         "load_markets": lambda exchange, **_kwargs: asyncio.sleep(
             0,
-            result={symbol: {} for (identifier, item_exchange), symbol in symbols.items() if item_exchange == exchange},
+            result={
+                symbol: {}
+                for (identifier, item_exchange), symbol in symbols.items()
+                if item_exchange == exchange and identifier != "USD1"
+            },
         ),
         "looks_like_exact_market_identifier": lambda value: "::" in value or "/" in value or ":" in value,
         "reject_cross_exchange_market_identifier_collisions": reject_collisions,
@@ -544,6 +549,7 @@ def test_helper_market_identifiers_uses_pb8_catalog_and_preserves_exact_ids() ->
         "bitget::ABCUSDT": "ABC",
         "bitget::1000ABCUSDT": "1000ABC",
     }
+    assert "USD1" not in result["symbols"]
     assert all(entry["display"] for entry in result["catalog"])
     assert result["statuses"]["BTC"]["status"] == "valid"
     assert result["statuses"]["ABC"]["reason"] == "ambiguous"

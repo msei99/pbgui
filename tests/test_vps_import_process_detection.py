@@ -2591,6 +2591,26 @@ def test_vps_manager_refresh_throttles_release_refresh_without_package_probe() -
     assert "subprocess" not in refresh_body
 
 
+def test_vps_manager_refresh_checks_pbgui_remote_head_automatically() -> None:
+    """Live state refresh checks PBGui upstream between slower full release refreshes."""
+    calls: list[str] = []
+    now = int(time.time())
+    service = object.__new__(VPSManagerService)
+    service._refresh_lock = threading.Lock()
+    service._first_refresh_done = True
+    service._pbgui_release_ts = now
+    service._pb7_release_ts = now
+    service._pb8_branches_ts = now
+    service._pbgui_release_head_check_ts = 0
+    service._sync_vps_inventory = lambda: calls.append("inventory")
+    service._refresh_completed_linux_updates = lambda: None
+    service._refresh_pbgui_release_if_changed = lambda: calls.append("pbgui-head")
+
+    service.refresh()
+
+    assert calls == ["inventory", "pbgui-head"]
+
+
 def test_completed_linux_update_forces_one_fresh_package_cache_read() -> None:
     """Each successful Linux update run invalidates the master package snapshot exactly once."""
     service = object.__new__(VPSManagerService)

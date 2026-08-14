@@ -7667,6 +7667,11 @@
         }
       } else if (cmd === 'refresh') {
         toast('Refreshed.', 'info');
+        if (isMasterContextView()) {
+          fetchMasterDetail();
+        } else if (isVpsContextView() && store.hostname) {
+          fetchVpsDetail(store.hostname);
+        }
       } else if (cmd === 'read_vps_settings') {
         if (isVpsContextView() && store.hostname && msg.data) {
           const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;

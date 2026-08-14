@@ -285,6 +285,8 @@ async def _market_identifiers(modules: dict, payload: dict) -> dict:
             for item in resolved["resolutions"]
             if item["symbol"] in eligible_by_exchange.get(item["exchange"], set())
         ]
+        if not eligible_resolutions:
+            continue
         resolved["resolutions"] = eligible_resolutions
         catalog.append(
             {
@@ -294,6 +296,7 @@ async def _market_identifiers(modules: dict, payload: dict) -> dict:
                 "resolutions": eligible_resolutions,
             }
         )
+    symbols = sorted(entry["config_id"] for entry in catalog)
     label_counts = {}
     for entry in catalog:
         label_counts[entry["display"]] = label_counts.get(entry["display"], 0) + 1

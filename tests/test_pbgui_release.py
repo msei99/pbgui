@@ -49,8 +49,10 @@ def test_pbgui_branch_history_discovers_single_branch_clone_remote_heads(tmp_pat
 
     commits = pbgui_release.load_more_pbgui_commits("db_manager", checkout, limit=5)
     history = pbgui_release.load_pbgui_branch_history(checkout, limit=5)
+    remote_main_commit = pbgui_release.load_pbgui_remote_branch_commit("main", checkout)
 
     assert commits[0]["message"] == "db branch"
+    assert remote_main_commit == _git(source, "rev-parse", "main").stdout.strip()
     assert "db_manager" in history
     assert "main" in history
     assert "origin/db_manager" in _git(checkout, "branch", "-a").stdout

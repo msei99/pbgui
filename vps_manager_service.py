@@ -42,7 +42,7 @@ from MonitorConfig import MonitorConfig
 from PBCoinData import CoinData
 from pb7_guard import PB7_PINNED_COMMIT
 from pb7_release import build_local_pb7_release_info, get_current_pb7_status, load_more_pb7_commits, load_pb7_branch_history, read_local_pb7_version
-from pbgui_release import build_local_pbgui_release_info, load_more_pbgui_commits
+from pbgui_release import build_local_pbgui_release_info, load_more_pbgui_commits, load_pbgui_remote_branch_commit
 from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, load_ini_section, pb7dir as configured_pb7dir, pb8dir as configured_pb8dir, pb8venv as configured_pb8venv, save_ini, save_ini_section
 from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir, _strict_ssh_client, _validate_vps_hostname, strip_ansi
 from vps_inventory_store import delete_inventory_path
@@ -72,6 +72,7 @@ INIT_METHODS = ["root", "password", "private_key"]
 SESSION_SECRET_TTL_SECONDS = 15 * 60
 CLUSTER_IMPORT_JOB_TTL_SECONDS = 30 * 60
 LOCAL_RELEASE_REFRESH_SECONDS = 60 * 60
+PBGUI_RELEASE_HEAD_CHECK_SECONDS = 60
 MONITOR_AGENT_SCHEMA_VERSION = 1
 MONITOR_AGENT_LIVE_STALE_SECONDS = 15.0
 MONITOR_AGENT_COLLECTOR_STALE_SECONDS = 30.0
@@ -1797,6 +1798,7 @@ class VPSManagerService:
         self._first_refresh_done = False
         self._pbgui_release: dict[str, Any] = {}
         self._pbgui_release_ts = 0
+        self._pbgui_release_head_check_ts = 0
         self._pb7_release: dict[str, Any] = {}
         self._pb7_release_ts = 0
         self._pb8_branches: dict[str, list[dict[str, Any]]] = {}
@@ -2083,6 +2085,17 @@ class VPSManagerService:
         self._pbgui_release = build_local_pbgui_release_info()
         self._pbgui_release_ts = _now_ts()
 
+    def _refresh_pbgui_release_if_changed(self) -> None:
+        """Refresh full PBGui release metadata only when the tracked remote head changes."""
+        try:
+            release = self._get_pbgui_release()
+            branch = str(release.get("current_branch") or "")
+            remote_commit = load_pbgui_remote_branch_commit(branch)
+            if remote_commit and remote_commit != str(release.get("origin_commit") or ""):
+                self._refresh_pbgui_release()
+        finally:
+            self._pbgui_release_head_check_ts = _now_ts()
+
     def _get_pb7_release(self) -> dict[str, Any]:
         return self._pb7_release or {}
 
@@ -2366,6 +2379,7 @@ class VPSManagerService:
             if force or release_stale or not self._first_refresh_done:
                 try:
                     self._refresh_pbgui_release()
+                    self._pbgui_release_head_check_ts = now
                 except Exception as exc:
                     _log(SERVICE, f"refresh git origin failed: {exc}", level="WARNING")
                 try:
@@ -2376,6 +2390,11 @@ class VPSManagerService:
                     self._refresh_pb8_branches(configured_pb8dir())
                 except Exception as exc:
                     _log(SERVICE, f"refresh PB8 branch data failed: {exc}", level="WARNING")
+            elif now - int(getattr(self, "_pbgui_release_head_check_ts", 0) or 0) > PBGUI_RELEASE_HEAD_CHECK_SECONDS:
+                try:
+                    self._refresh_pbgui_release_if_changed()
+                except Exception as exc:
+                    _log(SERVICE, f"checking PBGui update failed: {exc}", level="WARNING")
 
             self._first_refresh_done = True
         finally:

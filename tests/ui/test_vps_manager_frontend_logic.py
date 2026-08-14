@@ -368,6 +368,16 @@ class TestVpsManagerFrontendLogic:
         sidebar_source = _extract_function(source, "renderSidebarActions")
         assert sidebar_source.count("combinedUpdateButtonClass(st.pbgui_update_available") == 4
 
+    def test_manual_refresh_reloads_current_detail_for_update_indicators(self) -> None:
+        """A completed git refresh must immediately reload the detail that controls update colors."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        refresh_branch = source.split("} else if (cmd === 'refresh') {", 1)[1].split(
+            "} else if (cmd === 'read_vps_settings')", 1
+        )[0]
+
+        assert "fetchMasterDetail();" in refresh_branch
+        assert "fetchVpsDetail(store.hostname);" in refresh_branch
+
     def test_bulk_runtime_updates_are_profile_aware(self) -> None:
         """Overview bulk actions delegate runtime selection to each host profile."""
         source = HTML_PATH.read_text(encoding="utf-8")

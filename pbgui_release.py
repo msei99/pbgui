@@ -112,6 +112,26 @@ def load_pbgui_origin_version(repo_dir: Path | None = None) -> str:
     return _read_origin_version(root)
 
 
+def load_pbgui_remote_branch_commit(branch_name: str, repo_dir: Path | None = None) -> str:
+    """Read one remote PBGui branch head without updating local Git refs."""
+    root = Path(repo_dir or PBGDIR)
+    branch = str(branch_name or "").strip()
+    if not branch or not re.fullmatch(r"[A-Za-z0-9._/-]+", branch):
+        return ""
+    result = _run_subprocess(
+        ["git", "-C", str(root), "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
+        timeout=20,
+        suppress_stderr=True,
+    )
+    if not result or result.returncode != 0:
+        return ""
+    fields = str(result.stdout or "").strip().split(maxsplit=1)
+    if not fields:
+        return ""
+    commit = fields[0]
+    return commit if re.fullmatch(r"[0-9a-fA-F]{40,64}", commit) else ""
+
+
 def load_pbgui_branch_history(repo_dir: Path | None = None, limit: int = 50) -> dict[str, list[dict[str, str]]]:
     root = Path(repo_dir or PBGDIR)
     _fetch_pbgui_remote_heads(root)

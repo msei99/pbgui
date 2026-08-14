@@ -149,16 +149,17 @@ def test_pb8_coin_filter_projects_coindata_policy_onto_resolver_catalog(monkeypa
     monkeypatch.setattr(
         editor_market_data,
         "filter_symbols",
-        lambda *_args, **_kwargs: (["BTC", "1000ABC", "MISSING"], ["ABC"]),
+        lambda *_args, **_kwargs: (["BTC", "1000ABC", "MISSING", "USD1"], ["ABC"]),
     )
     monkeypatch.setattr(
         v8_instances,
         "get_pb8_market_identifiers",
         lambda *_args, **_kwargs: {
             "catalog": [
-                {"config_id": "BTC", "coin": "BTC"},
-                {"config_id": "bitget::ABCUSDT", "coin": "ABC"},
-                {"config_id": "bitget::1000ABCUSDT", "coin": "1000ABC"},
+                {"config_id": "BTC", "coin": "BTC", "resolutions": [{"exchange": "bitget", "symbol": "BTC/USDT:USDT"}]},
+                {"config_id": "bitget::ABCUSDT", "coin": "ABC", "resolutions": [{"exchange": "bitget", "symbol": "ABC/USDT:USDT"}]},
+                {"config_id": "bitget::1000ABCUSDT", "coin": "1000ABC", "resolutions": [{"exchange": "bitget", "symbol": "1000ABC/USDT:USDT"}]},
+                {"config_id": "USD1", "coin": "USD1", "resolutions": []},
             ]
         },
     )
@@ -168,7 +169,7 @@ def test_pb8_coin_filter_projects_coindata_policy_onto_resolver_catalog(monkeypa
     assert result == {
         "approved": ["BTC", "bitget::1000ABCUSDT"],
         "ignored": ["bitget::ABCUSDT"],
-        "unresolved": ["MISSING"],
+        "unresolved": ["MISSING", "USD1"],
     }
 
 
@@ -180,7 +181,11 @@ def test_pb8_coin_filter_projects_namespaced_hyperliquid_aliases(monkeypatch) ->
     monkeypatch.setattr(
         v8_instances,
         "get_pb8_market_identifiers",
-        lambda *_args, **_kwargs: {"catalog": [{"config_id": "xyz:TSLA", "coin": "xyz:TSLA"}]},
+        lambda *_args, **_kwargs: {
+            "catalog": [
+                {"config_id": "xyz:TSLA", "coin": "xyz:TSLA", "resolutions": [{"exchange": "hyperliquid", "symbol": "xyz:TSLA/USDC:USDC"}]}
+            ]
+        },
     )
 
     result = v8_instances.filter_v8_coins("hyperliquid", 0, 10.0, False, False, "", session=None)

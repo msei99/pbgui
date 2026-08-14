@@ -1240,6 +1240,8 @@ def filter_v8_coins(
     projected_ignored = []
     matched = set()
     for entry in resolved["catalog"]:
+        if not isinstance(entry.get("resolutions"), list) or not entry["resolutions"]:
+            continue
         coin = str(entry.get("coin") or "").upper()
         coin_aliases = {coin}
         if ":" in coin:

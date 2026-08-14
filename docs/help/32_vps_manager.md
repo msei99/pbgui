@@ -36,7 +36,7 @@ Left sidebar:
 | Button | Action |
 |--------|--------|
 | **Add VPS** | Open the add / initialize form |
-| **Refresh** | Reload all VPS status and version data via the refresh icon |
+| **Refresh** | Optionally force an immediate reload of all VPS status and version data via the refresh icon |
 | **Overview / Settings / History** | Switch between the live Overview table, shared deploy settings, and recent deploy history |
 | **Import by Hostname** | Open the manual hostname import dialog from the **Import Host** sidebar section; the hostname must already resolve via local `/etc/hosts` |
 | **Import Cluster Nodes** | Preview and import safe SSH metadata from Cluster Sync nodes into local VPS Manager host entries; secrets are not imported |
@@ -49,7 +49,7 @@ The normal **Update PB8** action intentionally returns PB8 to a detached checkou
 
 **Import Cluster Nodes** reads the local materialized `cluster_nodes` state and imports non-local nodes that have SSH metadata, regardless of their Cluster Sync mode. Disabled Cluster Sync nodes can still be imported into VPS Manager; disabled only means PBCluster should not replicate through that node. The import writes only safe local VPS Manager metadata such as hostname, SSH host, SSH user, SSH port and Remote PBGui Dir; passwords and private keys are not imported. CMC secrets are never VPS Manager fields: Cluster Sync materializes sealed pool generations separately. If local `/etc/hosts` is missing or points the hostname at a different IP, the import preview shows the required host entry changes and the apply step asks for the local sudo password before writing them. The modal asks for each imported host's VPS user password; rows left without a password are skipped, while entered passwords are used once to refresh remote settings, install the monitoring SSH key and keep the password only in the current browser/API session for later SSH-backed actions.
 
-The page keeps a live WebSocket connection for overview rows, progress logs, and branch state. Browser authentication is cookie-only; PBGui never renders the session token into this page or sends a browser Bearer header.
+The page keeps a live WebSocket connection for overview rows, progress logs, and branch state. PBGui checks the tracked PBGui branch head automatically every 60 seconds and refreshes the full release metadata when it changes, so update colors do not require the manual Refresh action. Browser authentication is cookie-only; PBGui never renders the session token into this page or sends a browser Bearer header.
 
 Live updates do not close the **VPS** selector anymore while you are choosing another host from the sidebar.
 
