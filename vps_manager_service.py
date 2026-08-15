@@ -5748,7 +5748,8 @@ class VPSManagerService:
             swap_value = metrics[9] / 1024 / 1024 if len(metrics) == 10 else 0.0
             start_ts = _safe_int(monitor.get("st"))
             bot_name = str(monitor.get("u") or "")
-            pnl_hist_total, pnls_hist_total = self._bot_pnl_total(hostname, bot_name)
+            history_name = bot_name if pb_version == "7" else f"{pb_version}:{bot_name}"
+            pnl_hist_total, pnls_hist_total = self._bot_pnl_total(hostname, history_name)
             item = {
                 "server": hostname,
                 "version": meta.get("pb8v" if pb_version == "8" else "pb7v", "N/A"),
@@ -5766,9 +5767,9 @@ class VPSManagerService:
                 "pnls_hist_total": pnls_hist_total,
                 "pnl_hist_total": pnl_hist_total,
                 "errors_today": _safe_int(monitor.get("et")),
-                "errors_4w": self._bot_count_total(hostname, bot_name, "errors"),
+                "errors_4w": self._bot_count_total(hostname, history_name, "errors"),
                 "tracebacks_today": _safe_int(monitor.get("tt")),
-                "tracebacks_4w": self._bot_count_total(hostname, bot_name, "tracebacks"),
+                "tracebacks_4w": self._bot_count_total(hostname, history_name, "tracebacks"),
             }
             item["levels"] = {
                 "cpu": _metric_level(item["cpu"], cfg.cpu_warning_v7, cfg.cpu_error_v7),

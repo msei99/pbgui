@@ -773,6 +773,47 @@ def _validate_monitor_agent_payload(filename: str, payload: Any, *, now: float |
         bot_logs = _monitor_agent_require_type(payload, "bot_logs", dict)
         if any(not isinstance(name, str) for name in bot_logs):
             raise MonitorAgentPayloadError("invalid bot_logs keys")
+        history = payload.get("history")
+        if history is not None:
+            if not isinstance(history, dict) or len(history) > 512:
+                raise MonitorAgentPayloadError("invalid bot history")
+            if len(json.dumps(history, separators=(",", ":")).encode("utf-8")) > 4 * 1024 * 1024:
+                raise MonitorAgentPayloadError("bot history is too large")
+            for history_name, entry in history.items():
+                if (not isinstance(history_name, str) or len(history_name) > 258
+                        or history_name[:2] not in {"7:", "8:"}
+                        or not history_name[2:] or history_name[2:] in {".", ".."}
+                        or "/" in history_name or "\\" in history_name or "\x00" in history_name
+                        or any(ord(char) < 32 or ord(char) == 127 for char in history_name)):
+                    raise MonitorAgentPayloadError("invalid bot history name")
+                if not isinstance(entry, dict):
+                    raise MonitorAgentPayloadError("invalid bot history entry")
+                _monitor_agent_require(entry, ("from_hour", "to_hour", "errors", "tracebacks", "pnl"))
+                from_hour = entry.get("from_hour")
+                to_hour = entry.get("to_hour")
+                if (type(from_hour) is not int or type(to_hour) is not int or from_hour <= 0
+                        or to_hour < from_hour or to_hour - from_hour >= COUNT_HISTORY_WINDOW_HOURS
+                        or to_hour > int(checked_at // COUNT_HISTORY_STEP_SECONDS) + 1):
+                    raise MonitorAgentPayloadError("invalid bot history range")
+                for metric in ("errors", "tracebacks"):
+                    buckets = entry.get(metric)
+                    if not isinstance(buckets, dict) or len(buckets) > COUNT_HISTORY_WINDOW_HOURS:
+                        raise MonitorAgentPayloadError("invalid bot history buckets")
+                    for raw_hour, raw_count in buckets.items():
+                        if (not isinstance(raw_hour, str) or not raw_hour.isdecimal()
+                                or not from_hour <= int(raw_hour) <= to_hour
+                                or type(raw_count) is not int or not 0 <= raw_count <= 1_000_000):
+                            raise MonitorAgentPayloadError("invalid bot history bucket")
+                pnl = entry.get("pnl")
+                if pnl is not None:
+                    if not isinstance(pnl, dict):
+                        raise MonitorAgentPayloadError("invalid bot PNL history")
+                    _monitor_agent_require(pnl, ("total_pnl", "total_fills", "last_fill_ts", "source"))
+                    _monitor_agent_require_number(pnl, "total_pnl")
+                    if (type(pnl.get("total_fills")) is not int or pnl["total_fills"] < 0
+                            or type(pnl.get("last_fill_ts")) is not int or pnl["last_fill_ts"] < 0
+                            or not isinstance(pnl.get("source"), str) or len(pnl["source"]) > 160):
+                        raise MonitorAgentPayloadError("invalid bot PNL history fields")
     elif filename == "host_meta.json":
         _monitor_agent_require(payload, (
             "role", "boot", "reboot", "pbgv", "pbgc", "pbgb", "pbgpy",
@@ -1665,9 +1706,26 @@ class BotPnlHistoryStore:
                                 "pnl": float(entry.get("pnl") or 0.0),
                                 "fills": int(entry.get("fills") or 0),
                             }
+                        raw_summary = payload.get("summary")
+                        normalized_summary = None
+                        if isinstance(raw_summary, dict):
+                            try:
+                                summary_pnl = float(raw_summary.get("pnl") or 0.0)
+                                summary_fills = int(raw_summary.get("fills") or 0)
+                                summary_last_fill = int(raw_summary.get("last_fill_ts") or 0)
+                                if math.isfinite(summary_pnl) and summary_fills >= 0 and summary_last_fill >= 0:
+                                    normalized_summary = {
+                                        "pnl": summary_pnl,
+                                        "fills": summary_fills,
+                                        "last_fill_ts": summary_last_fill,
+                                        "source": str(raw_summary.get("source") or "")[:160],
+                                    }
+                            except (TypeError, ValueError):
+                                normalized_summary = None
                         self._series[bot_name] = {
                             "days": normalized_days,
                             "last_fill_ts": int(payload.get("last_fill_ts") or 0),
+                            "summary": normalized_summary,
                         }
         except Exception as exc:
             _log(SERVICE, f"[history] Failed to load {self.data_path.name}: {exc}", level="WARNING")
@@ -1709,6 +1767,29 @@ class BotPnlHistoryStore:
         self._dirty = True
         return True
 
+    def set_summary(self, bot_name: str, *, pnl: float, fills: int,
+                    last_fill_ts: int = 0, source: str = "") -> bool:
+        """Replace one authoritative total without inventing daily net-PNL buckets."""
+
+        name = str(bot_name or '').strip()
+        if not name or fills < 0 or not math.isfinite(float(pnl)):
+            return False
+        payload = self._ensure_bot(name)
+        summary = {
+            "pnl": float(pnl),
+            "fills": int(fills),
+            "last_fill_ts": max(int(last_fill_ts or 0), 0),
+            "source": str(source or "")[:160],
+        }
+        if payload.get("summary") == summary:
+            return False
+        payload["summary"] = summary
+        payload["last_fill_ts"] = max(
+            int(payload.get("last_fill_ts") or 0), summary["last_fill_ts"]
+        )
+        self._dirty = True
+        return True
+
     def get_last_fill_ts(self, bot_name: str) -> int:
         self.load()
         payload = self._series.get(str(bot_name or '').strip()) or {}
@@ -1717,6 +1798,9 @@ class BotPnlHistoryStore:
     def get_total(self, bot_name: str) -> tuple[float, int]:
         self.load()
         payload = self._series.get(str(bot_name or '').strip()) or {}
+        summary = payload.get("summary")
+        if isinstance(summary, dict):
+            return float(summary.get("pnl") or 0.0), int(summary.get("fills") or 0)
         days = payload.get("days") or {}
         total_pnl = 0.0
         total_fills = 0
@@ -1739,6 +1823,7 @@ class BotPnlHistoryStore:
             except Exception:
                 continue
         day_keys.sort()
+        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else None
         points: list[float] = []
         cumulative_points: list[float] = []
         fills_points: list[int] = []
@@ -1757,15 +1842,19 @@ class BotPnlHistoryStore:
             fills_points.append(day_fills)
             best_day_pnl = day_pnl if best_day_pnl is None else max(best_day_pnl, day_pnl)
             worst_day_pnl = day_pnl if worst_day_pnl is None else min(worst_day_pnl, day_pnl)
+        if summary is not None:
+            total = float(summary.get("pnl") or 0.0)
+            total_fills = int(summary.get("fills") or 0)
         return {
             "available": True,
             "scope": "bot",
             "metric": metric,
             "hostname": hostname,
             "bot_name": name,
-            "source": source,
+            "source": str((summary or {}).get("source") or source),
             "timezone_basis": "UTC",
             "series_exists": bool(day_keys),
+            "summary_only": summary is not None and not day_keys,
             "days": day_keys,
             "start_day": day_keys[0] if day_keys else 0,
             "end_day": day_keys[-1] if day_keys else 0,
@@ -1924,9 +2013,11 @@ YESTERDAY = datetime.fromtimestamp(YESTERDAY_START, timezone.utc).strftime('%Y-%
 # PNL regex (matches PBRun patterns)
 FILL_SUMMARY_RE = re.compile(r'\[fill\]\s+(\d+)\s+fills,\s+pnl=([+-]?(?:\d+\.?\d*|\d*\.\d+))\s+\w+')
 FILL_PNL_RE = re.compile(r'\bpnl=([+-]?(?:\d+\.?\d*|\d*\.\d+))\b')
+FILL_FEE_RE = re.compile(r'\bfee=([+-]?(?:\d+\.?\d*|\d*\.\d+))\b')
 FILL_EVENT_TS_RE = re.compile(r'\[fill\]\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z\b')
 SYNC_EXCLUDE_FILES = {'approved_coins.json', 'config_run.json', 'ignored_coins.json', 'running_version.txt'}
 PB8_PNL_CACHE_VERSION = 1
+HISTORY_WINDOW_HOURS = 24 * 28
 
 # shared helpers (used by both counting and dump mode)
 
@@ -2146,6 +2237,73 @@ def _count_hourly_occurrences(lines, needle):
             continue
         buckets[hour] = buckets.get(hour, 0) + 1
     return buckets
+
+def _count_hourly_files(files, needle, from_hour, to_hour):
+    buckets = {}
+    for fp in files or []:
+        try:
+            with open(fp, 'r', encoding='utf-8', errors='ignore') as handle:
+                for line in handle:
+                    if needle not in line:
+                        continue
+                    ts_val = _parse_log_timestamp(line)
+                    if ts_val is None:
+                        continue
+                    hour = ts_val // 3600
+                    if hour < from_hour or hour > to_hour:
+                        continue
+                    buckets[str(hour)] = buckets.get(str(hour), 0) + 1
+        except Exception as exc:
+            _log(SERVICE, f'[monitor-history] Failed to read {fp}: {exc}', level='WARNING')
+    return buckets
+
+def _pb8_pnl_summary(files):
+    latest_summary = None
+    individual_fills = []
+    last_fill_ts = 0
+    ordered_files = sorted(
+        (fp for fp in files or [] if os.path.isfile(fp)),
+        key=lambda fp: (os.path.getmtime(fp), fp),
+    )
+    for file_index, fp in enumerate(ordered_files):
+        try:
+            with open(fp, 'r', encoding='utf-8', errors='ignore') as handle:
+                for line_number, line in enumerate(handle):
+                    log_ts = _parse_log_timestamp(line)
+                    if log_ts is None or '[fill]' not in line:
+                        continue
+                    order = (log_ts, file_index, line_number)
+                    summary = FILL_SUMMARY_RE.search(line)
+                    if summary:
+                        candidate = (order, int(summary.group(1)), float(summary.group(2)))
+                        if latest_summary is None or candidate[0] > latest_summary[0]:
+                            latest_summary = candidate
+                        continue
+                    event_ts = _parse_fill_event_timestamp(line)
+                    if event_ts is None:
+                        continue
+                    last_fill_ts = max(last_fill_ts, event_ts)
+                    pnl_match = FILL_PNL_RE.search(line)
+                    fee_match = FILL_FEE_RE.search(line)
+                    net_pnl = float(pnl_match.group(1)) if pnl_match else 0.0
+                    if fee_match:
+                        net_pnl += float(fee_match.group(1))
+                    individual_fills.append((order, net_pnl))
+        except Exception as exc:
+            _log(SERVICE, f'[monitor-history] Failed to read PB8 PNL log {fp}: {exc}', level='WARNING')
+    if latest_summary is None:
+        return None
+    summary_order, fills, pnl = latest_summary
+    for order, net_pnl in individual_fills:
+        if order > summary_order:
+            fills += 1
+            pnl += net_pnl
+    return {
+        'total_pnl': pnl,
+        'total_fills': fills,
+        'last_fill_ts': last_fill_ts,
+        'source': 'PB8 fill batch summary',
+    }
 
 def _process_pb7_line(line, mode, bc=None, lines_out=None, last_day=None,
                       fill_event_dates=False, today_start=0, yesterday_start=0):
@@ -2575,6 +2733,7 @@ if rebuild_pnl_mode:
 monitors = []
 v7 = []
 v8 = []
+bot_history = {}
 new_cache = {'_version': EXPECTED_CACHE_VERSION}
 
 cluster_context = _load_cluster_context()
@@ -2851,6 +3010,24 @@ for name, process_info in sorted(running_v8.items()):
         if os.path.isfile(os.path.join(cfg_dir, err_name)):
             bot_entry['sidebar'].append(f'data/run_v8/{name}/{err_name}')
 
+    history_to_hour = int(time.time() // 3600)
+    history_from_hour = history_to_hour - HISTORY_WINDOW_HOURS + 1
+    native_history_files = list(old_native_logs)
+    if os.path.isfile(native_log):
+        native_history_files.append(native_log)
+    traceback_history_files = [fp for fp in (old_err, err_log) if os.path.isfile(fp)]
+    bot_history[cache_key] = {
+        'from_hour': history_from_hour,
+        'to_hour': history_to_hour,
+        'errors': _count_hourly_files(
+            native_history_files, ' ERROR ', history_from_hour, history_to_hour,
+        ),
+        'tracebacks': _count_hourly_files(
+            traceback_history_files, 'Traceback', history_from_hour, history_to_hour,
+        ),
+        'pnl': _pb8_pnl_summary(native_history_files),
+    }
+
     bc = dict(host_cache.get(cache_key, {}))
     bc.setdefault('today', TODAY)
     for key, default in (('et', 0), ('tt', 0), ('ct', 0), ('pt', 0.0), ('log_off', 0), ('err_off', 0)):
@@ -3011,7 +3188,7 @@ for name in sorted(candidate_v8_names):
     })
 
 print(json.dumps({'monitors': monitors, 'v7': v7, 'v8': v8, 'cache': new_cache,
-    'bot_logs': bot_logs}))
+    'bot_logs': bot_logs, 'history': bot_history}))
 "'''
 
 
@@ -5595,11 +5772,44 @@ class VPSMonitor:
         del hostname, bot_logs
         return
 
+    def _import_agent_bot_history(self, hostname: str, history: Any) -> None:
+        """Idempotently replace bounded history from the validated local agent snapshot."""
+
+        if not hostname or not isinstance(history, dict):
+            return
+        changed_pnl = False
+        for history_name, entry in history.items():
+            if not isinstance(entry, dict):
+                continue
+            from_hour = int(entry.get('from_hour') or 0)
+            to_hour = int(entry.get('to_hour') or 0)
+            key = self._bot_history_key(hostname, history_name)
+            for metric in ('errors', 'tracebacks'):
+                buckets = entry.get(metric) if isinstance(entry.get(metric), dict) else {}
+                store = self._bot_count_history[metric]
+                for hour in range(from_hour, to_hour + 1):
+                    store.set_count(key, hour=hour, value=int(buckets.get(str(hour), 0) or 0))
+            pnl = entry.get('pnl')
+            if isinstance(pnl, dict):
+                changed_pnl = self._bot_pnl_history.set_summary(
+                    self._bot_pnl_history_key(hostname, history_name),
+                    pnl=float(pnl.get('total_pnl') or 0.0),
+                    fills=int(pnl.get('total_fills') or 0),
+                    last_fill_ts=int(pnl.get('last_fill_ts') or 0),
+                    source=str(pnl.get('source') or ''),
+                ) or changed_pnl
+        now = time.time()
+        for store in self._bot_count_history.values():
+            store.maybe_flush(now_ts=now)
+        if changed_pnl:
+            self._bot_pnl_history.maybe_flush(now_ts=now)
+
     def _bot_history_key(self, hostname: str, bot_name: str) -> str:
         return f"{hostname}:{bot_name}"
 
-    def _bot_pnl_history_key(self, bot_name: str) -> str:
-        return str(bot_name or '').strip()
+    def _bot_pnl_history_key(self, hostname: str, bot_name: str) -> str:
+        name = str(bot_name or '').strip()
+        return self._bot_history_key(hostname, name) if name.startswith('8:') else name
 
     def _bot_count_total(self, hostname: str, bot_name: str, metric: str) -> int:
         hostname = str(hostname or '').strip()
@@ -5617,8 +5827,8 @@ class VPSMonitor:
         )
         return int(payload.get('total_count') or 0)
 
-    def _bot_pnl_total(self, bot_name: str) -> tuple[float, int]:
-        return self._bot_pnl_history.get_total(self._bot_pnl_history_key(bot_name))
+    def _bot_pnl_total(self, hostname: str, bot_name: str) -> tuple[float, int]:
+        return self._bot_pnl_history.get_total(self._bot_pnl_history_key(hostname, bot_name))
 
     def get_host_cpu_history(self, hostname: str) -> dict[str, Any]:
         return self.get_host_metric_history(hostname, 'cpu')
@@ -5701,7 +5911,7 @@ class VPSMonitor:
             )
         if metric == 'pnl':
             return self._bot_pnl_history.build_payload(
-                self._bot_pnl_history_key(bot_name),
+                self._bot_pnl_history_key(hostname, bot_name),
                 hostname=hostname,
                 metric='pnl',
                 source=source,
@@ -5786,6 +5996,7 @@ class VPSMonitor:
         v7_list = parsed.get('v7', [])
         v8_list = parsed.get('v8', [])
         bot_logs = parsed.get('bot_logs', {})
+        self._import_agent_bot_history(hostname, parsed.get('history'))
         if isinstance(monitors, list) and isinstance(v7_list, list) and isinstance(v8_list, list):
             enriched_monitors = []
             for monitor in monitors:
@@ -5795,7 +6006,7 @@ class VPSMonitor:
                     history_name = bot_name if str(item.get('p') or '7') == '7' else f"{item.get('p')}:{bot_name}"
                     item['errors_4w'] = self._bot_count_total(hostname, history_name, 'errors')
                     item['tracebacks_4w'] = self._bot_count_total(hostname, history_name, 'tracebacks')
-                    total_pnl, total_fills = self._bot_pnl_total(history_name)
+                    total_pnl, total_fills = self._bot_pnl_total(hostname, history_name)
                     item['pnl_hist_total'] = total_pnl
                     item['pnls_hist_total'] = total_fills
                 enriched_monitors.append(item)

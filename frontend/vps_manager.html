@@ -11535,6 +11535,9 @@
     function metricHistoryEmpty(metric, payload) {
       const meta = metricHistoryMeta(metric);
       const isBot = !!String(payload && payload.bot_name || '').trim();
+      if ((meta.pnlMetric || meta.fillsMetric) && payload && payload.summary_only) {
+        return 'PB8 provides an authoritative total, but no reliable daily net-PNL breakdown.';
+      }
       if (isBot && meta.botEmpty) return meta.botEmpty;
       return meta.empty;
     }

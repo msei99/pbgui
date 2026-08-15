@@ -591,8 +591,9 @@ def test_remote_monitor_payload_keeps_pb7_and_pb8_processes_separate() -> None:
         traceback_error_v7=5,
     )
     service._build_remote_server_metrics = lambda _hostname, _state: {}
-    service._bot_pnl_total = lambda _hostname, _name: (0.0, 0)
-    service._bot_count_total = lambda _hostname, _name, _kind: 0
+    history_lookups = []
+    service._bot_pnl_total = lambda _hostname, name: (history_lookups.append(("pnl", name)) or (0.0, 0))
+    service._bot_count_total = lambda _hostname, name, kind: (history_lookups.append((kind, name)) or 0)
     metrics = [0] * 10
     host_state = {
         "meta": {"pb7v": "v7.7.7", "pb8v": "v8.0.0"},
@@ -612,6 +613,10 @@ def test_remote_monitor_payload_keeps_pb7_and_pb8_processes_separate() -> None:
     assert [(item["name"], item["pb_version"], item["version"]) for item in payload["v8"]] == [
         ("same", "8", "v8.0.0")
     ]
+    assert ("pnl", "same") in history_lookups
+    assert ("pnl", "8:same") in history_lookups
+    assert ("errors", "8:same") in history_lookups
+    assert ("tracebacks", "8:same") in history_lookups
     assert payload["v8_running"] == [{
         "name": "v8-fallback",
         "version": 3,

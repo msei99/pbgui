@@ -594,6 +594,32 @@ class TestVpsManagerFrontendLogic:
             assertions=assertions,
         )
 
+    def test_pb8_summary_only_pnl_history_explains_missing_daily_curve(self) -> None:
+        """An authoritative PB8 total must not be presented as a fabricated daily series."""
+
+        bootstrap = """
+        const METRIC_HISTORY_META = {
+          pnl: { pnlMetric: true, empty: 'No bot PNL history available yet.' },
+          pnl_fills: { fillsMetric: true, empty: 'No bot fill history available yet.' }
+        };
+        """
+        assertions = """
+        const payload = { bot_name: '8:pb8_bot', summary_only: true };
+        assert.equal(
+          metricHistoryEmpty('pnl', payload),
+          'PB8 provides an authoritative total, but no reliable daily net-PNL breakdown.'
+        );
+        assert.equal(
+          metricHistoryEmpty('pnl_fills', payload),
+          'PB8 provides an authoritative total, but no reliable daily net-PNL breakdown.'
+        );
+        """
+        _run_node_assertions(
+            ["metricHistoryMeta", "metricHistoryEmpty"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
     def test_vps_manager_delete_and_remote_purge_are_separate_actions(self) -> None:
         """Deleting a VPS record stays local while remote install purge is explicit."""
         source = HTML_PATH.read_text(encoding="utf-8")
