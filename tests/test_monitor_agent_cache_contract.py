@@ -1523,6 +1523,94 @@ def test_agent_process_identity_distinguishes_same_v7_v8_name(
     assert decoy is None
 
 
+def test_agent_process_collection_keeps_pb8_virtualenv_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolving the Python symlink must not replace the sibling PB8 CLI path."""
+
+    real_path = Path
+    proc_root = tmp_path / "proc"
+    proc_dir = proc_root / "123"
+    proc_dir.mkdir(parents=True)
+    pb8_dir = tmp_path / "pb8"
+    pb8_dir.mkdir()
+    runtime_python = tmp_path / "runtime" / "python3"
+    runtime_python.parent.mkdir()
+    runtime_python.touch()
+    pb8_python = tmp_path / "venv_pb8" / "bin" / "python"
+    pb8_python.parent.mkdir(parents=True)
+    pb8_python.symlink_to(runtime_python)
+    pb8_cli = pb8_python.parent / "passivbot"
+    pb8_cli.touch()
+    config_path = tmp_path / "data" / "run_v8" / "pb8_bot" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.touch()
+    (proc_dir / "cwd").symlink_to(pb8_dir, target_is_directory=True)
+    argv = [str(pb8_python), str(pb8_cli), "live", str(config_path), "--fail-on-stale-rust"]
+    (proc_dir / "cmdline").write_bytes(b"\x00".join(arg.encode() for arg in argv) + b"\x00")
+    stat_parts = ["123", "(bot)", "S", *(["0"] * 19)]
+    stat_parts[13] = "10"
+    stat_parts[14] = "0"
+    stat_parts[21] = "20"
+    (proc_dir / "stat").write_text(" ".join(stat_parts), encoding="utf-8")
+    (proc_dir / "status").write_text("VmRSS:\t2048 kB\nVmSwap:\t0 kB\n", encoding="utf-8")
+
+    monkeypatch.setattr(monitor_agent, "PBGDIR", tmp_path)
+    monkeypatch.setattr(monitor_agent, "_pb7_dir", lambda: tmp_path / "pb7")
+    monkeypatch.setattr(
+        monitor_agent,
+        "_read_ini",
+        lambda: SimpleNamespace(
+            get=lambda _section, key, fallback="": {
+                "pb8dir": str(pb8_dir), "pb8venv": str(pb8_python),
+            }.get(key, fallback)
+        ),
+    )
+    monkeypatch.setattr(
+        monitor_agent,
+        "Path",
+        lambda value: proc_root if str(value) == "/proc" else real_path(value),
+    )
+
+    bots = monitor_agent._bot_processes({}, {}, {})
+
+    assert bots == [{
+        "name": "pb8_bot", "p": "8", "cpu": 0.0, "cpu_60s": 0.0,
+        "cpu_60s_window": 0.0, "rss_mb": 2.0, "swap_mb": 0.0,
+    }]
+
+
+def test_bot_metric_history_records_zero_swap_for_pb8() -> None:
+    """A running PB8 process with zero swap still produces a valid history point."""
+
+    class Recorder:
+        """Capture one history store's record calls."""
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, Any]]] = []
+
+        def record(self, key: str, **kwargs: Any) -> None:
+            """Store one record invocation."""
+
+            self.calls.append((key, kwargs))
+
+    monitor = object.__new__(VPSMonitor)
+    memory = Recorder()
+    swap = Recorder()
+    monitor._bot_metric_history = {"memory": memory, "swap": swap}
+
+    monitor._record_bot_metric_history(
+        "pb-host",
+        [{"name": "pb8_bot", "p": "8", "rss_mb": 12.5, "swap_mb": 0.0}],
+        120.0,
+    )
+
+    assert memory.calls[0][0] == "pb-host:8:pb8_bot"
+    assert swap.calls == [("pb-host:8:pb8_bot", {
+        "minute": 2, "value": 0.0, "confirmed": True, "same_minute_mode": "peak",
+    })]
+
+
 def test_agent_process_caches_reject_pid_reuse(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

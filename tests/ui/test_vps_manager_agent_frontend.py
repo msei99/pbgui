@@ -277,6 +277,12 @@ def test_manager_renderers_keep_host_and_bot_payloads_out_of_inline_code() -> No
         assert.match(cells.name.html, /data-vps-action='open-bot-log'/);
         assert.match(cells.name.html, /&#39;/);
 
+        const pb8Cells = _renderServiceRowCells({{name: 'pb8_bot'}}, 'pb-host', '8');
+        assert.match(pb8Cells.cpu.html, /data-cpu-history-bot='8:pb8_bot'/);
+        assert.match(pb8Cells.memory_mb.html, /data-history-bot='8:pb8_bot'/);
+        assert.match(pb8Cells.swap_mb.html, /data-history-bot='8:pb8_bot'/);
+        assert.match(pb8Cells.pnl_today.html, /data-history-bot='8:pb8_bot'/);
+
         const overview = renderOverviewTable([{{nav: 'vps', hostname: attack, name: attack}}]);
         const body = overview.slice(overview.indexOf('<tbody>'), overview.indexOf('</tbody>'));
         assert.equal(body.includes('onclick='), false);

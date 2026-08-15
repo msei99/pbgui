@@ -723,7 +723,7 @@ def _bot_processes(previous: dict[int, tuple[int, float]], history: dict[int, de
     pb8_dir_raw = str(cfg.get("main", "pb8dir", fallback="") or "").strip()
     pb8_venv_raw = str(cfg.get("main", "pb8venv", fallback="") or "").strip()
     pb8_dir = Path(pb8_dir_raw).expanduser().resolve() if pb8_dir_raw else None
-    pb8_python = Path(pb8_venv_raw).expanduser().resolve() if pb8_venv_raw else None
+    pb8_python = Path(pb8_venv_raw).expanduser().absolute() if pb8_venv_raw else None
     pb8_cli = pb8_python.parent / "passivbot" if pb8_python else None
     for proc_dir in Path("/proc").iterdir():
         if not proc_dir.name.isdigit():
@@ -811,7 +811,7 @@ def _bot_identity_from_process(
     if config_path.name != "config.json" or config_path.parent.parent != run_v8_root:
         return None
     expected = [str(pb8_cli), "live", str(config_path), "--fail-on-stale-rust"]
-    normalized = [str(Path(argv[0]).resolve()), *argv[1:]] if argv else []
+    normalized = [str(Path(argv[0]).absolute()), *argv[1:]] if argv else []
     if normalized not in (expected, [str(pb8_python), *expected]):
         return None
     try:

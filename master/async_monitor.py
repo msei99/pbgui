@@ -5569,7 +5569,7 @@ class VPSMonitor:
                 key,
                 minute=minute,
                 value=bot.get('swap_mb'),
-                confirmed=float(bot.get('swap_mb') or 0.0) > 0.0,
+                confirmed=isinstance(bot.get('swap_mb'), (int, float)) and not isinstance(bot.get('swap_mb'), bool),
                 same_minute_mode='peak',
             )
 

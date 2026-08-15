@@ -5332,8 +5332,8 @@
         'data/logs/tradfi_sync.log': 'data/logs/tradfi_sync.log'
       };
       if (serviceMap[normalized]) return serviceMap[normalized];
-      const newBotMatch = normalized.match(/software\/pb7\/logs\/(.+)\.log$/);
-      if (newBotMatch) return 'Bot:' + newBotMatch[1] + ':7';
+      const newBotMatch = normalized.match(/software\/pb([78])\/logs\/(.+)\.log$/);
+      if (newBotMatch) return 'Bot:' + newBotMatch[2] + ':' + newBotMatch[1];
       const oldBotMatch = normalized.match(/pb7\/logs\/(\d{8}_.+?)\.log$/);
       if (oldBotMatch) return 'software/pb7/logs/' + oldBotMatch[1] + '.log';
       const botErrMatch = normalized.match(/(?:data\/)?run_v7\/([^/]+)\/(passivbot_err\.log(?:\.old)?)$/);
@@ -6570,7 +6570,8 @@
 
     function openBotLog(hostname, botName, pbVersion) {
       const ui = ensureVpsUi(hostname, store.detail && store.detail.hostname === hostname ? store.detail : null);
-      ui.log.filename = 'software/pb7/logs/' + botName + '.log';
+      const version = String(pbVersion || '7') === '8' ? '8' : '7';
+      ui.log.filename = 'software/pb' + version + '/logs/' + botName + '.log';
       ui.log.openKey = String(Date.now());
       openVpsHostLogs(hostname);
     }
@@ -11504,7 +11505,8 @@
 
     function metricHistoryTitle(metric, host, bot) {
       const meta = metricHistoryMeta(metric);
-      return bot ? (meta.label + ' History - ' + bot + ' @ ' + host) : (meta.label + ' History - ' + host);
+      const botLabel = String(bot || '').replace(/^[78]:/, '');
+      return botLabel ? (meta.label + ' History - ' + botLabel + ' @ ' + host) : (meta.label + ' History - ' + host);
     }
 
     function metricHistorySubtitle(metric, payload) {
@@ -12770,10 +12772,11 @@
     }
 
     function _renderServiceRowCells(item, host, pbVersion) {
+      const historyName = String(pbVersion || '7') === '7' ? String(item.name || '') : String(pbVersion) + ':' + String(item.name || '');
       const hasErrorsToday = Number(item.errors_today || 0) > 0;
       const hasTracebacksToday = Number(item.tracebacks_today || 0) > 0;
-      const errorHistoryBubble = _historyMetricBubble(item.errors_4w, host, item.name || '', 'errors');
-      const tracebackHistoryBubble = _historyMetricBubble(item.tracebacks_4w, host, item.name || '', 'tracebacks');
+      const errorHistoryBubble = _historyMetricBubble(item.errors_4w, host, historyName, 'errors');
+      const tracebackHistoryBubble = _historyMetricBubble(item.tracebacks_4w, host, historyName, 'tracebacks');
       const memoryLevel = (item.levels && item.levels.memory) || 'ok';
       const swapLevel = (item.levels && item.levels.swap) || 'ok';
       const pnlsToday = Number(item.pnls_today || 0);
@@ -12784,15 +12787,15 @@
           sig: [host, pbVersion, String(item.name || ''), String(item.start_time || '')].join('|')
         },
         cpu: {
-          html: `<div><span class='cpu-clickable' data-cpu-history-host='${escAttr(host)}' data-cpu-history-bot='${escAttr(item.name || '')}'>${_cpuTag(item.cpu)}</span><div class='field-help'>${esc(_cpuSubline(item))}</div></div>`,
+          html: `<div><span class='cpu-clickable' data-cpu-history-host='${escAttr(host)}' data-cpu-history-bot='${escAttr(historyName)}'>${_cpuTag(item.cpu)}</span><div class='field-help'>${esc(_cpuSubline(item))}</div></div>`,
           sig: [String(Number(item.cpu) || 0), String(Number(item.cpu_60s) || 0), String(Number(item.cpu_60s_window) || 0), item.cpu_60s_confirmed ? '1' : '0'].join('|')
         },
         memory_mb: {
-          html: `<span class='cpu-clickable' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(item.name || '')}' data-history-metric='memory'>${_memSwapTag(item.memory_mb, 'MB', memoryLevel)}</span>`,
+          html: `<span class='cpu-clickable' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(historyName)}' data-history-metric='memory'>${_memSwapTag(item.memory_mb, 'MB', memoryLevel)}</span>`,
           sig: [String(Number(item.memory_mb) || 0), memoryLevel].join('|')
         },
         swap_mb: {
-          html: `<span class='cpu-clickable' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(item.name || '')}' data-history-metric='swap'>${_memSwapTag(item.swap_mb, 'MB', swapLevel)}</span>`,
+          html: `<span class='cpu-clickable' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(historyName)}' data-history-metric='swap'>${_memSwapTag(item.swap_mb, 'MB', swapLevel)}</span>`,
           sig: [String(Number(item.swap_mb) || 0), swapLevel].join('|')
         },
         errors_today: {
@@ -12812,11 +12815,11 @@
           sig: [host, String(item.name || ''), 'tracebacks', String(Number(item.tracebacks_4w) || 0)].join('|')
         },
         pnl_today: {
-          html: `<div><span class='cpu-clickable' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(item.name || '')}' data-history-metric='pnl'>${_pnlValueHtml(item.pnl_today)}</span></div><div class='field-help cpu-clickable' title='Realized fill count' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(item.name || '')}' data-history-metric='pnl_fills'>fills: ${esc(pnlsToday)}</div>`,
+          html: `<div><span class='cpu-clickable' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(historyName)}' data-history-metric='pnl'>${_pnlValueHtml(item.pnl_today)}</span></div><div class='field-help cpu-clickable' title='Realized fill count' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(historyName)}' data-history-metric='pnl_fills'>fills: ${esc(pnlsToday)}</div>`,
           sig: [String((Number(item.pnl_today) || 0).toFixed(2)), String(pnlsToday)].join('|')
         },
         pnl_hist_total: {
-          html: `<div><span class='cpu-clickable' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(item.name || '')}' data-history-metric='pnl'>${_pnlValueHtml(item.pnl_hist_total)}</span></div><div class='field-help cpu-clickable' title='Realized fill count' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(item.name || '')}' data-history-metric='pnl_fills'>fills: ${esc(pnlsHistTotal)}</div>`,
+          html: `<div><span class='cpu-clickable' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(historyName)}' data-history-metric='pnl'>${_pnlValueHtml(item.pnl_hist_total)}</span></div><div class='field-help cpu-clickable' title='Realized fill count' data-history-host='${escAttr(host)}' data-history-bot='${escAttr(historyName)}' data-history-metric='pnl_fills'>fills: ${esc(pnlsHistTotal)}</div>`,
           sig: [String((Number(item.pnl_hist_total) || 0).toFixed(2)), String(pnlsHistTotal)].join('|')
         }
       };
