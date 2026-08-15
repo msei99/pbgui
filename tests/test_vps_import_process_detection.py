@@ -2643,6 +2643,16 @@ def test_linux_update_playbooks_refresh_package_cache_before_finishing() -> None
     assert '"{{ pbgdir }}/setup/refresh_package_status.py"' in local_playbook
 
 
+def test_remote_linux_update_refreshes_package_cache_after_optional_reboot() -> None:
+    """The final VPS cache must describe the post-reboot system state."""
+
+    remote_playbook = Path("vps-update.yml").read_text(encoding="utf-8")
+
+    assert remote_playbook.index("- name: Reboot if required") < remote_playbook.index(
+        "- name: refresh monitor package status after Linux update and optional reboot"
+    )
+
+
 def test_vps_manager_cluster_status_reads_materialized_nodes_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Quick VPS detail does not build the full Cluster bootstrap plan."""
     cluster_root = tmp_path / "data" / "cluster"

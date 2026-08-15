@@ -1475,6 +1475,17 @@ def _normalize_package_status(
     }
 
 
+def _package_status_for_boot(package_status: dict[str, Any], boot_ts: int) -> dict[str, Any]:
+    """Discard a reboot requirement observed before the current boot."""
+
+    generated_at = _safe_float(package_status.get("generated_at"), 0.0)
+    if package_status.get("reboot_required") is not True or generated_at <= 0 or boot_ts <= generated_at:
+        return package_status
+    current = dict(package_status)
+    current["reboot_required"] = False
+    return current
+
+
 def _python_major_minor(executable: str | None) -> str:
     candidate = str(executable or "").strip()
     if not candidate:
@@ -3680,6 +3691,7 @@ class VPSManagerService:
             if _truthy((instance or {}).get("running")) and str((instance or {}).get("name") or "").strip()
         )
         package_status, monitor_agent = self._get_remote_agent_contract(host_state)
+        package_status = _package_status_for_boot(package_status, boot)
         remote_pb8_github = self._build_pb8_github_status(str(meta.get("pb8c") or ""))
         remote_pb8_branch = _pb8_branch_label(meta.get("pb8b"), remote_pb8_github)
         pb7_installed = bool(

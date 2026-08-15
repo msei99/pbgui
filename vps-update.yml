@@ -63,13 +63,6 @@
       debug:
         var: update_result.stdout_lines
 
-    - name: refresh monitor package status after Linux update
-      ansible.builtin.script:
-        cmd: "setup/refresh_package_status.py --pbgdir {{ install_dir }}/pbgui"
-        executable: python3
-      register: package_status_refresh
-      changed_when: false
-
     - name: Check if reboot required
       stat:
         path: /var/run/reboot-required
@@ -87,4 +80,11 @@
         - reboot_required_file.stat.exists == true
         - reboot_requested
       become: yes
+
+    - name: refresh monitor package status after Linux update and optional reboot
+      ansible.builtin.script:
+        cmd: "setup/refresh_package_status.py --pbgdir {{ install_dir }}/pbgui"
+        executable: python3
+      register: package_status_refresh
+      changed_when: false
     

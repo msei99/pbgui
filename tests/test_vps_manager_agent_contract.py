@@ -14,6 +14,7 @@ from vps_manager_service import (
     VPSManagerService,
     _normalize_monitor_agent,
     _normalize_package_status,
+    _package_status_for_boot,
 )
 
 
@@ -106,6 +107,17 @@ def _write_local_payloads(root: Path, now: float) -> Path:
         text = json.dumps(payload) + ("\n" if filename.endswith(".ndjson") else "")
         (data_dir / filename).write_text(text, encoding="utf-8")
     return data_dir
+
+
+def test_reboot_requirement_older_than_current_boot_is_cleared() -> None:
+    """A completed reboot invalidates a positive requirement from an older cache."""
+
+    stale = {"generated_at": 100.0, "reboot_required": True, "upgrades": 0}
+    current = _package_status_for_boot(stale, 110)
+
+    assert current["reboot_required"] is False
+    assert stale["reboot_required"] is True
+    assert _package_status_for_boot(stale, 90)["reboot_required"] is True
 
 
 def test_vps_manager_contains_no_direct_package_probe() -> None:
