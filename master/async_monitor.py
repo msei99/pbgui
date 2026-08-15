@@ -1924,7 +1924,9 @@ YESTERDAY = datetime.fromtimestamp(YESTERDAY_START, timezone.utc).strftime('%Y-%
 # PNL regex (matches PBRun patterns)
 FILL_SUMMARY_RE = re.compile(r'\[fill\]\s+(\d+)\s+fills,\s+pnl=([+-]?(?:\d+\.?\d*|\d*\.\d+))\s+\w+')
 FILL_PNL_RE = re.compile(r'\bpnl=([+-]?(?:\d+\.?\d*|\d*\.\d+))\b')
+FILL_EVENT_TS_RE = re.compile(r'\[fill\]\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z\b')
 SYNC_EXCLUDE_FILES = {'approved_coins.json', 'config_run.json', 'ignored_coins.json', 'running_version.txt'}
+PB8_PNL_CACHE_VERSION = 1
 
 # shared helpers (used by both counting and dump mode)
 
@@ -1933,6 +1935,15 @@ def _utc_ts(ts_str):
 
 def _parse_log_timestamp(line):
     mts = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z', str(line or ''))
+    if not mts:
+        return None
+    try:
+        return _utc_ts(mts.group(1))
+    except Exception:
+        return None
+
+def _parse_fill_event_timestamp(line):
+    mts = FILL_EVENT_TS_RE.search(str(line or ''))
     if not mts:
         return None
     try:
@@ -2136,7 +2147,8 @@ def _count_hourly_occurrences(lines, needle):
         buckets[hour] = buckets.get(hour, 0) + 1
     return buckets
 
-def _process_pb7_line(line, mode, bc=None, lines_out=None, last_day=None):
+def _process_pb7_line(line, mode, bc=None, lines_out=None, last_day=None,
+                      fill_event_dates=False, today_start=0, yesterday_start=0):
     if ' ERROR ' in line:
         if mode == 'count' and bc is not None:
             if last_day == 'today': bc['et'] += 1
@@ -2145,17 +2157,28 @@ def _process_pb7_line(line, mode, bc=None, lines_out=None, last_day=None):
     if mode == 'count' and bc is not None:
         if '[fill]' not in line:
             return
+        fill_day = last_day
+        if fill_event_dates:
+            fill_ts = _parse_fill_event_timestamp(line)
+            if fill_ts is None:
+                return
+            if fill_ts >= today_start:
+                fill_day = 'today'
+            elif fill_ts >= yesterday_start:
+                fill_day = 'yesterday'
+            else:
+                fill_day = None
         m = FILL_SUMMARY_RE.search(line)
         if m:
             c = int(m.group(1)); pnl = float(m.group(2))
-            if last_day == 'today': bc['ct'] += c; bc['pt'] += pnl
+            if fill_day == 'today': bc['ct'] += c; bc['pt'] += pnl
         else:
             m = FILL_PNL_RE.search(line)
             if m:
                 pnl = float(m.group(1))
-                if last_day == 'today': bc['ct'] += 1; bc['pt'] += pnl
+                if fill_day == 'today': bc['ct'] += 1; bc['pt'] += pnl
 
-def _read_pb7_tail(fp, offset, today_start, yesterday_start, bc):
+def _read_pb7_tail(fp, offset, today_start, yesterday_start, bc, fill_event_dates=False):
     # Incrementally read one pb7 log file from offset to EOF.
     last_day = None
     try:
@@ -2174,7 +2197,11 @@ def _read_pb7_tail(fp, offset, today_start, yesterday_start, bc):
                         elif ts_val >= yesterday_start: last_day = 'yesterday'
                         else: last_day = None
                     except: pass
-                _process_pb7_line(line, 'count', bc=bc, last_day=last_day)
+                _process_pb7_line(
+                    line, 'count', bc=bc, last_day=last_day,
+                    fill_event_dates=fill_event_dates,
+                    today_start=today_start, yesterday_start=yesterday_start,
+                )
             return f.tell()
     except Exception:
         pass
@@ -2216,7 +2243,7 @@ def _file_start_sig(fp):
     return ''
 
 def _read_pb7_file(fp, mode, today_start, yesterday_start, bc=None, lines_out=None,
-                   target_start=None, target_end=None):
+                   target_start=None, target_end=None, fill_event_dates=False):
     # Read one pb7 log file. Returns earliest_ts seen or None.
     last_day = None
     earliest = None
@@ -2243,7 +2270,11 @@ def _read_pb7_file(fp, mode, today_start, yesterday_start, bc=None, lines_out=No
                     except: pass
                 if mode == 'dump' and not in_target:
                     continue
-                _process_pb7_line(line, mode, bc=bc, lines_out=lines_out, last_day=last_day)
+                _process_pb7_line(
+                    line, mode, bc=bc, lines_out=lines_out, last_day=last_day,
+                    fill_event_dates=fill_event_dates,
+                    today_start=today_start, yesterday_start=yesterday_start,
+                )
     except Exception as exc:
         _log(SERVICE, f'[monitor-helper] Failed to read PB7 log file {fp}: {exc}', level='WARNING')
     return earliest
@@ -2826,17 +2857,29 @@ for name, process_info in sorted(running_v8.items()):
         bc.setdefault(key, default)
     for key in ('log_fp', 'log_sig', 'err_sig'):
         bc.setdefault(key, '')
+    pnl_cache_current = bc.get('pnl_cache_version') == PB8_PNL_CACHE_VERSION
+    if not pnl_cache_current:
+        bc.update({
+            'today': TODAY, 'et': 0, 'tt': 0, 'ct': 0, 'pt': 0.0,
+            'log_off': 0, 'err_off': 0, 'log_fp': '', 'log_sig': '', 'err_sig': '',
+        })
     if bc['today'] != TODAY:
         bc.update({'today': TODAY, 'et': 0, 'tt': 0, 'ct': 0, 'pt': 0.0})
 
-    first_run = cache_key not in host_cache
+    first_run = cache_key not in host_cache or not pnl_cache_current
     if first_run:
         for fp in old_native_logs:
-            earliest = _read_pb7_file(fp, 'count', TODAY_START, YESTERDAY_START, bc=bc)
+            earliest = _read_pb7_file(
+                fp, 'count', TODAY_START, YESTERDAY_START, bc=bc,
+                fill_event_dates=True,
+            )
             if earliest is not None and earliest < YESTERDAY_START:
                 break
         if os.path.isfile(native_log):
-            _read_pb7_file(native_log, 'count', TODAY_START, YESTERDAY_START, bc=bc)
+            _read_pb7_file(
+                native_log, 'count', TODAY_START, YESTERDAY_START, bc=bc,
+                fill_event_dates=True,
+            )
         for fp in (old_err, err_log):
             if os.path.isfile(fp):
                 _read_err_file(fp, 'count', TODAY_START, YESTERDAY_START, bc=bc)
@@ -2852,7 +2895,10 @@ for name, process_info in sorted(running_v8.items()):
             offset = bc['log_off']
             if (bc.get('log_fp') and bc['log_fp'] != current_fp) or offset > os.path.getsize(native_log) or (offset and bc.get('log_sig') and bc['log_sig'] != current_sig):
                 offset = 0
-            bc['log_off'] = _read_pb7_tail(native_log, offset, TODAY_START, YESTERDAY_START, bc)
+            bc['log_off'] = _read_pb7_tail(
+                native_log, offset, TODAY_START, YESTERDAY_START, bc,
+                fill_event_dates=True,
+            )
             bc['log_fp'] = current_fp
             bc['log_sig'] = current_sig
         if os.path.isfile(err_log):
@@ -2878,6 +2924,7 @@ for name, process_info in sorted(running_v8.items()):
         'ct': bc['ct'], 'pt': bc['pt'], 'log_off': bc['log_off'],
         'err_off': bc['err_off'], 'log_fp': bc['log_fp'],
         'log_sig': bc['log_sig'], 'err_sig': bc['err_sig'],
+        'pnl_cache_version': PB8_PNL_CACHE_VERSION,
     }
 
 candidate_names = set()

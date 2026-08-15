@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import ast
+from datetime import datetime, timezone
 import inspect
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -1603,6 +1606,55 @@ def test_embedded_instance_collector_remains_valid_python() -> None:
     assert "def _pb8_last_error(config_dir):" in monitor_mod.INSTANCE_COLLECT_SCRIPT
     assert "cluster_gate = 'runtime_not_ready'" in monitor_mod.INSTANCE_COLLECT_SCRIPT
     assert "blocked_reason = 'PB8 exits on start: ' + last_error" in monitor_mod.INSTANCE_COLLECT_SCRIPT
+    assert "'pnl_cache_version': PB8_PNL_CACHE_VERSION" in monitor_mod.INSTANCE_COLLECT_SCRIPT
+
+
+def test_embedded_pb8_pnl_uses_fill_timestamp_and_skips_batch_summaries() -> None:
+    """PB8 startup history must not become today's PnL based on its log timestamp."""
+
+    prefix = 'python3 -u -c "\n'
+    source = monitor_mod.INSTANCE_COLLECT_SCRIPT[len(prefix):-2]
+    tree = ast.parse(source)
+    names = {
+        "FILL_SUMMARY_RE",
+        "FILL_PNL_RE",
+        "FILL_EVENT_TS_RE",
+        "_utc_ts",
+        "_parse_fill_event_timestamp",
+        "_process_pb7_line",
+    }
+    selected = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in names:
+            selected.append(node)
+        elif isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id in names for target in node.targets
+        ):
+            selected.append(node)
+    namespace = {"re": re, "datetime": datetime, "timezone": timezone}
+    exec(compile(ast.Module(body=selected, type_ignores=[]), "<pb8-pnl-parser>", "exec"), namespace)
+    process = namespace["_process_pb7_line"]
+    today_start = int(datetime(2026, 8, 15, tzinfo=timezone.utc).timestamp())
+    yesterday_start = today_start - 86400
+    counters = {"et": 0, "ct": 0, "pt": 0.0}
+
+    process(
+        "2026-08-15T07:07:09Z INFO [fill] 365 fills, pnl=-50.603262 USDT, pnl_known=365",
+        "count", bc=counters, last_day="today", fill_event_dates=True,
+        today_start=today_start, yesterday_start=yesterday_start,
+    )
+    process(
+        "2026-08-15T07:07:09Z INFO [fill] 2026-08-14T23:59:59Z BTC long close -1 @ 1, pnl=-7 USDT",
+        "count", bc=counters, last_day="today", fill_event_dates=True,
+        today_start=today_start, yesterday_start=yesterday_start,
+    )
+    process(
+        "2026-08-15T07:07:09Z INFO [fill] 2026-08-15T06:00:00Z BTC long close -1 @ 1, pnl=+2.5 USDT",
+        "count", bc=counters, last_day="today", fill_event_dates=True,
+        today_start=today_start, yesterday_start=yesterday_start,
+    )
+
+    assert counters == {"et": 0, "ct": 1, "pt": 2.5}
 
 
 def test_embedded_instance_collector_reports_unstamped_pb8_runtime(tmp_path: Path) -> None:
