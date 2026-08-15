@@ -9,6 +9,12 @@
       var origin = String(window.API_BASE || '').replace(/\/api\/backtest-v8$/, '');
       var runBase = origin + '/api/v8';
 
+      function openDraft(payload, suggestedName) {
+        var url = runBase + '/edit_page?new=1&draft_id=' + encodeURIComponent(payload.draft_id);
+        if (suggestedName) url += '&name=' + encodeURIComponent(suggestedName);
+        window.location.href = url;
+      }
+
       function navigate(config, overrideConfigs, suggestedName) {
         var candidate = JSON.parse(JSON.stringify(config || {}));
         candidate.pbgui = candidate.pbgui && typeof candidate.pbgui === 'object' ? candidate.pbgui : {};
@@ -24,11 +30,7 @@
             if (!response.ok) throw new Error((payload && payload.detail) || ('HTTP ' + response.status));
             return payload;
           });
-        }).then(function(payload) {
-          var url = runBase + '/edit_page?new=1&draft_id=' + encodeURIComponent(payload.draft_id);
-          if (suggestedName) url += '&name=' + encodeURIComponent(suggestedName);
-          window.location.href = url;
-        });
+        }).then(function(payload) { openDraft(payload, suggestedName); });
       }
 
       window.addConfigToRunByName = function(name) {
@@ -49,9 +51,12 @@
           if (typeof window.toast === 'function') window.toast('Select exactly 1 result', 'err');
           return;
         }
-        window.apiFetch('/results/config?path=' + encodeURIComponent(selected[0])).then(function(config) {
-          var name = String(selected[0]).split('/').filter(Boolean).pop() || 'pb8-run';
-          return navigate(config || {}, {}, name);
+        window.apiFetch('/results/run-draft', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: selected[0] })
+        }).then(function(payload) {
+          openDraft(payload, payload.name || 'pb8-run');
         }).catch(function(error) {
           if (typeof window.toast === 'function') window.toast('Failed: ' + error.message, 'err');
         });

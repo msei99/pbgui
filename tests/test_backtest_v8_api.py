@@ -105,6 +105,32 @@ def test_build_optimize_preset_from_pb8_backtest_result(tmp_path: Path, monkeypa
     assert result["near_bounds_count"] == 0
 
 
+def test_result_run_draft_reuses_canonical_result_without_pb8_prepare(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Add to Run stores the emitted PB8 result directly instead of re-preparing it."""
+
+    result_dir = tmp_path / "result-1"
+    result_dir.mkdir()
+    config = {"live": {"user": "alice"}, "pbgui": {"enabled_on": "old-host"}}
+    (result_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.setattr(backtest_v8, "_resolve_result_dir", lambda _path: result_dir)
+    captured = {}
+
+    def store(candidate: dict) -> dict:
+        captured["config"] = candidate
+        return {"draft_id": "draft-1", "expires_in": 300}
+
+    monkeypatch.setattr(backtest_v8, "store_v8_editor_draft", store)
+
+    result = backtest_v8.create_result_run_draft({"path": "result-1"}, session=None)
+
+    assert result == {"draft_id": "draft-1", "expires_in": 300, "name": "result-1"}
+    assert captured["config"]["live"]["user"] == "alice"
+    assert captured["config"]["pbgui"] == {"enabled_on": "disabled", "runtime": "pb8"}
+
+
 def test_shared_backtest_refine_builder_routes_pb8_actions_to_pb8() -> None:
     """The shared result builder must save, queue, and open PB8 presets in PB8 APIs."""
     source = (Path(__file__).parents[1] / "frontend" / "js" / "optimize_preset_builder.js").read_text(encoding="utf-8")

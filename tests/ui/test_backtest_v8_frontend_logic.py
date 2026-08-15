@@ -158,7 +158,7 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
 
     assert '/app/css/backtest_shell.css?v=3' in v7_source
     assert '/app/js/backtest_shell.js?v=4' in v7_source
-    assert '/app/js/backtest_editor_adapter.js?v=9' in v7_source
+    assert '/app/js/backtest_editor_adapter.js?v=10' in v7_source
     assert "PBGuiBacktestShell.upgradeLegacy" in v7_source
     assert "PBGuiBacktestEditorAdapter.create(BACKTEST_VERSION)" in v7_source
     assert "sideConfig.risk" in adapter_source
@@ -375,7 +375,20 @@ def test_v8_backtest_result_can_open_pb8_optimize() -> None:
     assert "'/api/optimize-v8/main_page?opt_draft_id='" in adapter
     unsupported = adapter.split("var unsupported =", 1)[1].split("];", 1)[0]
     assert "'optimizeFromResult'" not in unsupported
-    assert "/app/js/backtest_editor_adapter.js?v=9" in page
+    assert "/app/js/backtest_editor_adapter.js?v=10" in page
+
+
+def test_v8_result_add_to_run_uses_direct_canonical_draft() -> None:
+    """PB8 result handoff must avoid a redundant result fetch and PB8 prepare subprocess."""
+
+    adapter = (ROOT / "frontend" / "js" / "backtest_editor_adapter.js").read_text(encoding="utf-8")
+    handoff = _extract_function(adapter, "installRunHandoff")
+
+    assert "window.apiFetch('/results/run-draft'" in handoff
+    assert "body: JSON.stringify({ path: selected[0] })" in handoff
+    add_to_run = handoff.split("window.addToRun = function()", 1)[1].split("window.addToRunFromArchive", 1)[0]
+    assert "'/results/config?path='" not in add_to_run
+    assert "openDraft(payload, payload.name || 'pb8-run')" in add_to_run
 
 
 def test_v8_backtest_strategy_explorer_handoffs_use_cookie_drafts() -> None:
@@ -420,6 +433,7 @@ def test_v8_supports_every_shared_native_backtest_operation() -> None:
         '@router.get("/results")',
         '@router.get("/results/analysis")',
         '@router.get("/results/config")',
+        '@router.post("/results/run-draft")',
         '@router.get("/results/files")',
         '@router.get("/results/equity")',
         '@router.get("/results/price")',

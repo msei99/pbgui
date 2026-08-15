@@ -1214,7 +1214,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 
 <script src="/app/js/editor_shared.js?v=13"></script>
 <script src="/app/js/pbgui_dialogs.js?v=5"></script>
-<script src="/app/js/run_editor_adapter.js?v=8"></script>
+<script src="/app/js/run_editor_adapter.js?v=9"></script>
 <script src="/app/js/log_viewer_panel.js?v=29"></script>
 <script src="/app/js/coin_overrides_editor.js?v=25"></script>
 <script>
@@ -1796,30 +1796,71 @@ async function goBalanceCalc() {
 async function init() {
   try {
     runEditorAdapter.configureUi();
+    var draftPromise = null;
+    if (runEditorAdapter.isV8 && DRAFT_ID) {
+      draftPromise = fetchPreparedDraftConfig(DRAFT_ID).catch(function() { return null; });
+    }
+    var metadataPromise = null;
     if (runEditorAdapter.isV8) {
-      var metadataResponse = await apiFetch('/editor/metadata');
-      if (!metadataResponse.ok) throw new Error('PB8 editor metadata: HTTP ' + metadataResponse.status);
-      editorMetadata = await metadataResponse.json();
+      metadataPromise = apiFetch('/editor/metadata').then(function(response) {
+        if (!response.ok) throw new Error('PB8 editor metadata: HTTP ' + response.status);
+        return response.json();
+      });
+    }
+    var usersPromise = apiFetch('/users').then(function(response) { return response.json(); });
+
+    // A handoff draft is already canonical. Render it before slow PB8 runtime metadata arrives.
+    var draftResp = draftPromise ? await draftPromise : null;
+    if (draftResp && draftResp.config) {
+      cfg = draftResp.config;
+      paramStatus = draftResp.param_status || {};
+      draftOverrideConfigs = draftResp.override_configs || {};
+      _fromBacktestConfig = (cfg.pbgui || {}).from_backtest_config || '';
+      var draftConfiguredHost = String(((cfg.pbgui || {}).enabled_on) || '').trim();
+      allHosts = ['disabled'];
+      if (draftConfiguredHost && draftConfiguredHost !== 'disabled') allHosts.push(draftConfiguredHost);
+      populateHosts();
+      (runEditorAdapter.configureRuntimeConfig(cfg) || []).forEach(function(key) {
+        _managedLiveKeys.add(key);
+        KNOWN_LIVE_PARAMS.add(key);
+      });
+      coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: true, preserveMarketIdentifiers: true, context: { hslSignalMode: (cfg.live || {}).hsl_signal_mode, strategyKind: (cfg.live || {}).strategy_kind } });
+      coinOvSetConfigName('');
+      populateForm();
+      if (typeof coinOvSetOverrideConfigs === 'function') {
+        coinOvSetOverrideConfigs(draftOverrideConfigs, { markPending: true });
+      } else {
+        console.error('coinOvSetOverrideConfigs is not available; backup override files will be loaded on demand');
+      }
+      seedSymbolsAndTags(cfg, { preferConfigValues: true });
+      var draftBackupInfo = (cfg.pbgui || {}).from_backup_config || null;
+      if (draftBackupInfo) toast('Loaded backup ' + draftBackupInfo.name + '/' + draftBackupInfo.timestamp + ' as an editor draft. Save to apply and sync.', 'warn');
+    }
+
+    if (metadataPromise) {
+      var metadataResponse = await metadataPromise;
+      editorMetadata = metadataResponse;
       (runEditorAdapter.configureRuntimeMetadata(editorMetadata) || []).forEach(function(key) {
         _managedLiveKeys.add(key);
         KNOWN_LIVE_PARAMS.add(key);
       });
       var strategySelect = document.getElementById('f-strategy-kind');
+      var selectedStrategy = strategySelect.value;
       (editorMetadata.strategies || []).forEach(function(strategy) {
-        var option = document.createElement('option');
-        option.value = String(strategy);
-        option.textContent = String(strategy);
-        strategySelect.appendChild(option);
+        ensureSelectOption('f-strategy-kind', String(strategy));
       });
+      if (selectedStrategy) strategySelect.value = selectedStrategy;
+      removeKnownExtraLiveFields();
       strategySelect.addEventListener('change', function() {
         changeRunStrategyKind(this.value);
       });
     }
-    var usersResp = await apiFetch('/users').then(function(r) { return r.json(); });
+    var usersResp = await usersPromise;
     allUsers = usersResp.users || [];
 
     // Populate user dropdown
     var userSel = document.getElementById('f-user');
+    var selectedUser = userSel.value;
     userSel.innerHTML = '';
     allUsers.forEach(function(u) {
       var opt = document.createElement('option');
@@ -1827,18 +1868,21 @@ async function init() {
       opt.textContent = u.name;
       userSel.appendChild(opt);
     });
+    ensureSelectOption('f-user', selectedUser);
+    if (selectedUser) userSel.value = selectedUser;
     setupImportUserCombobox();
 
     // Load config or create new
-    var draftResp = null;
-    if (DRAFT_ID) {
+    if (!draftResp && DRAFT_ID) {
       try {
         draftResp = await fetchPreparedDraftConfig(DRAFT_ID);
       } catch (e) {
         draftResp = null;
       }
     }
-    if (draftResp && draftResp.config) {
+    if (runEditorAdapter.isV8 && draftResp && draftResp.config) {
+      queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });
+    } else if (draftResp && draftResp.config) {
       cfg = draftResp.config;
       paramStatus = draftResp.param_status || {};
       draftOverrideConfigs = draftResp.override_configs || {};
@@ -1914,7 +1958,10 @@ async function requestHostCapabilities() {
     ? window.crypto.randomUUID()
     : 'host-capability-' + Date.now() + '-' + generation;
   var hostQuery = '?request_id=' + encodeURIComponent(requestId);
-  if (runEditorAdapter.isV8 && INSTANCE_NAME) hostQuery += '&name=' + encodeURIComponent(INSTANCE_NAME);
+  if (runEditorAdapter.isV8) {
+    if (INSTANCE_NAME) hostQuery += '&name=' + encodeURIComponent(INSTANCE_NAME);
+    hostQuery += '&config_schema=' + encodeURIComponent(String((cfg || {}).config_version || ''));
+  }
   var response = await apiFetch('/hosts' + hostQuery, {
     signal: _hostCapabilityController.signal,
     cache: 'no-store'
@@ -1936,7 +1983,8 @@ async function refreshHostCapabilities() {
     hostCapabilitiesByName = payload.host_capabilities || {};
     allHosts = payload.hosts || allHosts;
     if (selected && selected !== 'disabled' && allHosts.indexOf(selected) < 0) {
-      allHosts.push(selected);
+      var selectedCapability = hostCapabilitiesByName[selected] || null;
+      if (!selectedCapability || selectedCapability.schema_compatible !== false) allHosts.push(selected);
     }
     populateHosts();
     var select = document.getElementById('f-enabled-on');
@@ -1978,8 +2026,13 @@ function updateEnabledOnAvailability() {
       return;
     }
     var capability = hostCapabilitiesByName[opt.value] || null;
-    opt.disabled = !capability || capability[runEditorAdapter.capabilityKey] !== true;
-    if (opt.disabled) opt.textContent += ' (' + runEditorAdapter.label + ' capability unconfirmed)';
+    var schemaBlocked = runEditorAdapter.isV8 && capability && capability.schema_compatible === false;
+    opt.disabled = !capability || capability[runEditorAdapter.capabilityKey] !== true || schemaBlocked;
+    if (schemaBlocked) {
+      opt.textContent += ' (' + String(capability.schema_reason || 'PB8 config schema unsupported') + ')';
+    } else if (opt.disabled) {
+      opt.textContent += ' (' + runEditorAdapter.label + ' capability unconfirmed)';
+    }
   });
 }
 
@@ -2067,15 +2120,8 @@ function buildDefaultConfig(user) {
   };
 }
 
-async function loadSymbolsAndTags(sourceCfg, opts) {
+function seedSymbolsAndTags(sourceCfg, opts) {
   opts = opts || {};
-  var requestSeq = ++_symbolsAndTagsLoadSeq;
-  var user = document.getElementById('f-user').value;
-  var exchange = '';
-  for (var i = 0; i < allUsers.length; i++) {
-    if (allUsers[i].name === user) { exchange = allUsers[i].exchange; break; }
-  }
-
   var approvedLong = getCoinsForLoad(sourceCfg, 'approved_coins', 'long', 'ms-approved-long', opts);
   var approvedShort = getCoinsForLoad(sourceCfg, 'approved_coins', 'short', 'ms-approved-short', opts);
   var ignoredLong = getCoinsForLoad(sourceCfg, 'ignored_coins', 'long', 'ms-ignored-long', opts);
@@ -2092,6 +2138,31 @@ async function loadSymbolsAndTags(sourceCfg, opts) {
   rebuildMultiselect('ms-tags', selectedTags, selectedTags);
   coinOvSetCoins(seededCoins);
   restoreRawEditorAnchor(seededAnchor);
+  return {
+    approvedLong: approvedLong,
+    approvedShort: approvedShort,
+    ignoredLong: ignoredLong,
+    ignoredShort: ignoredShort,
+    selectedTags: selectedTags,
+    seededCoins: seededCoins,
+  };
+}
+
+async function loadSymbolsAndTags(sourceCfg, opts) {
+  opts = opts || {};
+  var requestSeq = ++_symbolsAndTagsLoadSeq;
+  var user = document.getElementById('f-user').value;
+  var exchange = '';
+  for (var i = 0; i < allUsers.length; i++) {
+    if (allUsers[i].name === user) { exchange = allUsers[i].exchange; break; }
+  }
+  var seeded = seedSymbolsAndTags(sourceCfg, opts);
+  var approvedLong = seeded.approvedLong;
+  var approvedShort = seeded.approvedShort;
+  var ignoredLong = seeded.ignoredLong;
+  var ignoredShort = seeded.ignoredShort;
+  var selectedTags = seeded.selectedTags;
+  var seededCoins = seeded.seededCoins;
 
   if (!exchange) {
     allSymbols = seededCoins.slice();
@@ -2586,6 +2657,21 @@ function getExtraLiveElement(key) {
   return id ? document.getElementById(id) : null;
 }
 
+function removeKnownExtraLiveFields() {
+  _extraLiveKeys = _extraLiveKeys.filter(function(key) {
+    if (!KNOWN_LIVE_PARAMS.has(key)) return true;
+    var field = getExtraLiveElement(key);
+    var group = field ? field.closest('.form-group') : null;
+    if (group) group.remove();
+    delete _extraLiveFieldIds[key];
+    return false;
+  });
+  if (_extraLiveKeys.length === 0) {
+    var expander = document.getElementById('exp-extra-live');
+    if (expander) expander.remove();
+  }
+}
+
 function ensureSelectOption(id, value) {
   var text = String(value || '').trim();
   if (!text) return;
@@ -2909,6 +2995,7 @@ async function saveConfig() {
   btnSave.disabled = true;
   btnSave.innerHTML = '<span class="spinner"></span> Saving...';
   try {
+    if (_editorInitPromise) await _editorInitPromise;
     await _symbolsAndTagsLoadPromise;
     if (!ensureRawJsonValidForSave()) return;
     if (!ensureStructuredJsonFieldsValidForSave()) return;

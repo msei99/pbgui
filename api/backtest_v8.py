@@ -27,12 +27,13 @@ from shutil import rmtree, which
 from typing import Optional
 
 import psutil
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 
 from api.archive_helpers import _read_json_object_nofollow, atomic_write_json, config_version_info
 from api.auth import SessionToken, authenticate_websocket, require_auth
 from api.backtest_price import build_market_price_payload
+from api.v8_instances import store_v8_editor_draft
 from api.pb8_ohlcv_tools import (
     PB8OhlcvUnavailableError,
     build_pb8_ohlcv_preflight,
@@ -2219,6 +2220,27 @@ def get_result_config(path: str, session: SessionToken = Depends(require_auth)) 
     if not config:
         raise HTTPException(status_code=404, detail="Result config not found")
     return config
+
+
+@router.post("/results/run-draft")
+def create_result_run_draft(body: dict = Body(...), session: SessionToken = Depends(require_auth)) -> dict:
+    """Create a Run editor draft directly from a canonical PB8 result config."""
+
+    path = str(body.get("path") or "").strip() if isinstance(body, dict) else ""
+    if not path:
+        raise HTTPException(status_code=400, detail="Missing result path")
+    result_dir = _resolve_result_dir(path)
+    config = _result_config(result_dir)
+    if not config:
+        raise HTTPException(status_code=404, detail="Result config not found")
+    candidate = copy.deepcopy(config)
+    pbgui = candidate.get("pbgui") if isinstance(candidate.get("pbgui"), dict) else {}
+    pbgui["runtime"] = "pb8"
+    pbgui["enabled_on"] = "disabled"
+    candidate["pbgui"] = pbgui
+    draft = store_v8_editor_draft(candidate)
+    draft["name"] = result_dir.name
+    return draft
 
 
 @router.post("/results/optimize-preset/build")

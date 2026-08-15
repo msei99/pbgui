@@ -50,13 +50,13 @@ PBRun ueberwacht PB7 und PB8 mit demselben Controller-Dienst. Ein Neustart diese
 
 ## Zulaessige Hosts
 
-Die Zielauswahl ist fail-closed. Ein Host erscheint nur, wenn eine dieser Quellen seine PB8-Faehigkeit bestaetigt:
+Die Zielauswahl ist fail-closed. Ein Host erscheint nur, wenn eine dieser Quellen seine PB8-Faehigkeit bestaetigt und sein gemeldetes `pb8_config_schema` mindestens so neu wie `config_version` der aktuellen Config ist:
 
 - Der lokale `pb8_runtime_status` ist bereit.
 - VPS Manager meldet das Runtime-Profil `pb8` oder `pb7_pb8` und ein erfolgreiches Setup.
 - Ein nicht verwalteter Remote-Host meldet ueber frische Host-Metadaten einen `pb8ready`-Wert.
 
-Reine PB7-, nicht bereite, veraltete und unbekannte neue Ziele werden mit HTTP 409 abgelehnt. Ein unveraendertes unbekanntes Ziel aus einer aelteren gespeicherten Config darf erhalten bleiben, damit die Config ohne erzwungenen unsicheren Umzug bearbeitet werden kann; fuer ein neues Deployment kann es nicht ausgewaehlt werden.
+Reine PB7-, nicht bereite, veraltete, schema-inkompatible und unbekannte neue Ziele werden mit HTTP 409 abgelehnt. Eine `v8.1.0`-Config kann zum Beispiel keinen Host verwenden, der nur Schema `v8.0.0` meldet; zuerst muss PB8 auf diesem Host aktualisiert werden. Ein unveraendertes unbekanntes Ziel aus einer aelteren gespeicherten Config darf erhalten bleiben, damit die Config ohne erzwungenen unsicheren Umzug bearbeitet werden kann; fuer ein neues Deployment kann es nicht ausgewaehlt werden.
 
 ## Cluster-Rollout
 

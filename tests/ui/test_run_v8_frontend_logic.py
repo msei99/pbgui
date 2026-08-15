@@ -115,7 +115,7 @@ def test_pb8_run_editor_exposes_cookie_authenticated_strategy_handoff() -> None:
 
     assert "supportsStrategyExplorer: true" in adapter
     assert 'data-v7-only onclick="goStrategyExplorer()"' not in page
-    assert '/app/js/run_editor_adapter.js?v=8' in page
+    assert '/app/js/run_editor_adapter.js?v=9' in page
     assert "'/api/strategy-explorer-v8'" in page
     assert "coinOvSnapshotAllFiles()" in handoff
     assert "override_configs: overrideConfigs || {}" in handoff
@@ -254,6 +254,47 @@ def test_run_editor_preserves_host_selected_during_capability_refresh() -> None:
     _run_node(script)
 
 
+def test_run_editor_removes_schema_incompatible_pb8_target() -> None:
+    """The PB8 selector must remove a host known to support only an older schema."""
+
+    page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+    request_hosts = "async " + _page_function(page, "requestHostCapabilities")
+    refresh_hosts = "async " + _page_function(page, "refreshHostCapabilities")
+    assert "&config_schema=" in request_hosts
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let allHosts = ['disabled', 'old-vps'];
+        let hostCapabilitiesByName = {{}};
+        const select = {{options: [{{value: 'disabled'}}, {{value: 'old-vps'}}], value: 'old-vps'}};
+        const document = {{getElementById: () => select}};
+        const runEditorAdapter = {{isV8: true, capabilityKey: 'pb8_capable', label: 'PB8'}};
+        function getVal() {{ return select.value; }}
+        async function requestHostCapabilities() {{
+          return {{
+            hosts: ['disabled', 'current-vps'],
+            host_capabilities: {{
+              'current-vps': {{pb8_capable: true, schema_compatible: true}},
+              'old-vps': {{pb8_capable: true, schema_compatible: false}}
+            }}
+          }};
+        }}
+        function populateHosts() {{
+          select.options = allHosts.map(value => ({{value}}));
+          select.value = allHosts[0];
+        }}
+        {refresh_hosts}
+
+        (async () => {{
+          await refreshHostCapabilities();
+          assert.deepEqual(allHosts, ['disabled', 'current-vps']);
+          assert.equal(select.value, 'disabled');
+        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    _run_node(script)
+
+
 def test_v7_forced_mode_aliases_select_the_visible_editor_options() -> None:
     """Canonical PB7 forced modes must map to the editor's short option values."""
 
@@ -293,6 +334,39 @@ def test_log_panel_waits_for_remote_assignment_before_opening() -> None:
     assert "await _editorInitPromise" in open_log_panel
     assert "if (_logPanelOpen) return" in open_log_panel
     assert "_editorInitPromise = init();" in page
+
+
+def test_save_waits_for_editor_initialization_before_validating_raw_json() -> None:
+    """An early Save click must not validate the temporarily empty Raw JSON field."""
+
+    page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+    save_config = "async " + _page_function(page, "saveConfig")
+
+    init_wait = save_config.index("if (_editorInitPromise) await _editorInitPromise")
+    symbols_wait = save_config.index("await _symbolsAndTagsLoadPromise")
+    validation = save_config.index("if (!ensureRawJsonValidForSave()) return")
+    assert init_wait < symbols_wait < validation
+
+
+def test_pb8_handoff_draft_renders_before_runtime_metadata() -> None:
+    """A canonical PB8 handoff draft must not wait for cold PB8 metadata subprocesses."""
+
+    page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+    init_source = "async " + _page_function(page, "init")
+
+    draft_request = init_source.index("draftPromise = fetchPreparedDraftConfig(DRAFT_ID)")
+    metadata_request = init_source.index("metadataPromise = apiFetch('/editor/metadata')")
+    users_request = init_source.index("var usersPromise = apiFetch('/users')")
+    draft_wait = init_source.index("var draftResp = draftPromise ? await draftPromise : null")
+    assert "metadataPromise = apiFetch('/editor/metadata')" in init_source
+    assert "var usersPromise = apiFetch('/users')" in init_source
+    assert "runEditorAdapter.configureRuntimeConfig(cfg)" in init_source
+    draft_render = init_source.index("populateForm();", draft_wait)
+    metadata_wait = init_source.index("var metadataResponse = await metadataPromise")
+    users_wait = init_source.index("var usersResp = await usersPromise")
+    assert draft_request < metadata_request < users_request < draft_wait < draft_render < metadata_wait < users_wait
+    assert "if (runEditorAdapter.isV8 && draftResp && draftResp.config)" in init_source
+    assert "queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });" in init_source
 
 
 def test_import_user_field_is_searchable_and_rejects_unknown_users() -> None:

@@ -559,6 +559,41 @@ def test_host_list_contains_only_confirmed_pb8_targets_and_unknown_current(
     assert "runtime-broken" not in result["hosts"]
 
 
+def test_pb8_host_list_excludes_older_config_schemas(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A host must not be selectable when its PB8 schema is older than the config."""
+
+    monkeypatch.setattr(
+        v8_instances.pbgui_purefunc,
+        "pb8_runtime_status",
+        lambda: {"ready": True, "config_schema": "v8.1.0"},
+    )
+    monkeypatch.setattr(v8_instances, "_master_hostname", lambda: "master-a")
+    monkeypatch.setattr(v8_instances, "_managed_vps_entries", lambda: {
+        "current-vps": SimpleNamespace(runtime_profile="pb8", setup_status="successful"),
+        "old-vps": SimpleNamespace(runtime_profile="pb8", setup_status="successful"),
+    })
+    monkeypatch.setattr(
+        v8_instances,
+        "_remote_cluster_target_status",
+        lambda _host: {"ready": True, "reason": "joined"},
+    )
+    now = time.time()
+    v8_instances._monitor = SimpleNamespace(
+        enabled_hosts=["current-vps", "old-vps"],
+        store=SimpleNamespace(host_meta={
+            "current-vps": {"generated_at": now, "pb8ready": True, "pb8_config_schema": "v8.1.0"},
+            "old-vps": {"generated_at": now, "pb8ready": True, "pb8_config_schema": "v8.0.0"},
+        }),
+    )
+
+    result = v8_instances.get_v8_hosts(name="", config_schema="v8.1.0", session=None)
+
+    assert result["hosts"] == ["disabled", "current-vps", "master-a"]
+    assert result["host_capabilities"]["current-vps"]["schema_compatible"] is True
+    assert result["host_capabilities"]["old-vps"]["schema_compatible"] is False
+    assert "old-vps" not in result["hosts"]
+
+
 def test_pb8_target_requires_joined_remote_cluster_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     """An installed PB8 runtime is not deployable before Cluster Remote Join completes."""
 
@@ -713,13 +748,18 @@ def test_instance_list_does_not_request_pb8_update_for_other_blockers(monkeypatc
 def test_editor_metadata_covers_live_logging_monitor_and_empty_objects(monkeypatch: pytest.MonkeyPatch) -> None:
     """Runtime metadata exposes every editable PB8 runtime section, including empty JSON objects."""
 
-    monkeypatch.setattr(v8_instances, "get_pb8_template_config", lambda: {
-        "bot": {"long": {}, "short": {}},
-        "live": {"startup_phase_budgets": {}, "market_orders_allowed": False},
-        "logging": {"level": 1, "live_event_debug_profiles": []},
-        "monitor": {"enabled": True, "snapshot_interval_seconds": 1.0},
-    })
+    monkeypatch.setattr(
+        v8_instances,
+        "get_pb8_template_config",
+        lambda: pytest.fail("editor metadata must reuse the optimizer template"),
+    )
     monkeypatch.setattr(v8_instances, "get_pb8_optimize_metadata", lambda: {
+        "template": {
+            "bot": {"long": {}, "short": {}},
+            "live": {"startup_phase_budgets": {}, "market_orders_allowed": False},
+            "logging": {"level": 1, "live_event_debug_profiles": []},
+            "monitor": {"enabled": True, "snapshot_interval_seconds": 1.0},
+        },
         "strategies": ["trailing_martingale"],
         "strategy_specs": {},
         "strategy_defaults": {},
@@ -761,6 +801,23 @@ def test_target_validation_rejects_pb7_only_and_new_unknown_but_preserves_unchan
 
     assert incompatible.value.status_code == 409
     assert unknown.value.status_code == 409
+
+
+def test_target_validation_rejects_older_pb8_config_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Server-side save validation must reject bypassed stale-runtime assignments."""
+
+    monkeypatch.setattr(v8_instances, "_monitor", None)
+    monkeypatch.setattr(v8_instances, "_host_runtime_capability", lambda _host: {
+        "pb8_capable": True,
+        "config_schema": "v8.0.0",
+    })
+
+    with pytest.raises(v8_instances.HTTPException) as incompatible:
+        asyncio.run(v8_instances._ensure_target_compatible("alice", "old-vps", "v8.1.0"))
+
+    assert incompatible.value.status_code == 409
+    assert "supports only v8.0.0" in incompatible.value.detail
+    assert "Update PB8" in incompatible.value.detail
 
 
 def test_pb8_publication_waits_for_all_active_cluster_replicas(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

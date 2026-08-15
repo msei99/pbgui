@@ -50,13 +50,13 @@ PBRun supervises PB7 and PB8 through the same controller service. Restarting tha
 
 ## Eligible Hosts
 
-The target list is fail-closed. A host appears only when one of these sources confirms PB8 capability:
+The target list is fail-closed. A host appears only when one of these sources confirms PB8 capability and its reported `pb8_config_schema` is at least as new as the current config's `config_version`:
 
 - The local `pb8_runtime_status` is ready.
 - VPS Manager records runtime profile `pb8` or `pb7_pb8` and a successful setup.
 - An unmanaged remote host reports a fresh `pb8ready` value through host metadata.
 
-PB7-only, not-ready, stale, and unknown new targets are rejected with HTTP 409. An unchanged unknown target from an older saved config may remain selectable so the config can be edited without forcing an unsafe move; it cannot be selected for a new deployment.
+PB7-only, not-ready, stale, schema-incompatible, and unknown new targets are rejected with HTTP 409. For example, a `v8.1.0` config cannot target a host that reports only schema `v8.0.0`; update PB8 on that host first. An unchanged unknown target from an older saved config may remain selectable so the config can be edited without forcing an unsafe move; it cannot be selected for a new deployment.
 
 ## Cluster Rollout
 

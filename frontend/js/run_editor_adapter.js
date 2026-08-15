@@ -189,6 +189,17 @@
         }
         this.managedLiveKeys = managed;
         return managed.slice();
+      },
+      configureRuntimeConfig: function (config) {
+        if (!isV8) return [];
+        config = object(config);
+        return this.configureRuntimeMetadata({
+          params: {
+            live: object(config.live),
+            logging: object(config.logging),
+            monitor: object(config.monitor)
+          }
+        });
       }
     };
   }

@@ -522,7 +522,54 @@ def _managed_runtime_capability(hostname: str) -> dict[str, Any] | None:
         "stale": False,
         "runtime_profile": profile or None,
         "setup_status": setup_status or None,
+        "config_schema": None,
     }
+
+
+def _parse_config_schema(value: object) -> tuple[int, ...] | None:
+    """Parse PB8 config schema versions such as ``v8.1.0``."""
+
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized.startswith("v"):
+        normalized = normalized[1:]
+    parts = normalized.split(".")
+    if not parts or any(not part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
+def _host_supports_config_schema(required: object, supported: object) -> bool | None:
+    """Return whether a host schema is at least as new as the config schema."""
+
+    required_parts = _parse_config_schema(required)
+    supported_parts = _parse_config_schema(supported)
+    if required_parts is None or supported_parts is None:
+        return None
+    width = max(len(required_parts), len(supported_parts))
+    required_cmp = required_parts + (0,) * (width - len(required_parts))
+    supported_cmp = supported_parts + (0,) * (width - len(supported_parts))
+    return supported_cmp >= required_cmp
+
+
+def _with_schema_compatibility(capability: dict[str, Any], required_schema: str) -> dict[str, Any]:
+    """Attach the config-schema decision used by the PB8 host selector."""
+
+    result = dict(capability)
+    supported_schema = result.get("config_schema")
+    compatible = _host_supports_config_schema(required_schema, supported_schema) if required_schema else None
+    result["required_config_schema"] = required_schema or None
+    result["schema_compatible"] = compatible
+    if compatible is True:
+        result["schema_reason"] = f"Host supports PB8 config schema {supported_schema}"
+    elif compatible is False:
+        result["schema_reason"] = f"Host supports only PB8 config schema {supported_schema}"
+    elif required_schema:
+        result["schema_reason"] = "PB8 config schema capability is unavailable"
+    else:
+        result["schema_reason"] = "No PB8 config schema was requested"
+    return result
 
 
 def _remote_runtime_capability(hostname: str) -> dict[str, Any]:
@@ -536,6 +583,7 @@ def _remote_runtime_capability(hostname: str) -> dict[str, Any]:
         "stale": False,
         "runtime_profile": None,
         "setup_status": None,
+        "config_schema": None,
     }
     store = getattr(_monitor, "store", None) if _monitor is not None else None
     host_meta = getattr(store, "host_meta", {}) if store is not None else {}
@@ -560,6 +608,7 @@ def _remote_runtime_capability(hostname: str) -> dict[str, Any]:
         "pb8_capable": ready,
         "confirmed": True,
         "reason": "Fresh host metadata confirms PB8 readiness" if ready else "Fresh host metadata reports PB8 is not ready",
+        "config_schema": str(meta.get("pb8_config_schema") or "").strip() or None,
     }
 
 
@@ -576,8 +625,10 @@ def _host_runtime_capability(hostname: str) -> dict[str, Any]:
             "stale": False,
             "runtime_profile": None,
             "setup_status": None,
+            "config_schema": None,
         }
     if target == _master_hostname():
+        status: dict[str, Any] = {}
         try:
             status = pbgui_purefunc.pb8_runtime_status()
             ready = status.get("ready")
@@ -596,6 +647,7 @@ def _host_runtime_capability(hostname: str) -> dict[str, Any]:
             "stale": False,
             "runtime_profile": "pb8" if ready is True else None,
             "setup_status": "successful" if ready is True else None,
+            "config_schema": str(status.get("config_schema") or "").strip() or None,
         }
     managed = _managed_runtime_capability(target)
     remote = _remote_runtime_capability(target)
@@ -645,21 +697,48 @@ def _persisted_target(name: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
-async def _ensure_target_compatible(name: str, enabled_on: str) -> None:
-    """Reject PB7-only, not-ready, and unconfirmed new PB8 targets."""
+async def _ensure_target_compatible(name: str, enabled_on: str, config_schema: object = None) -> None:
+    """Reject runtime- or schema-incompatible PB8 targets."""
 
     target = _validate_target(enabled_on)
     if target == "disabled":
         return
+    required_schema = config_schema.strip() if isinstance(config_schema, str) else ""
     capability = _host_runtime_capability(target)
-    if capability["pb8_capable"] is None and _monitor is not None and hasattr(_monitor, "collect_host_meta_now"):
+    needs_refresh = capability["pb8_capable"] is None or (
+        bool(required_schema) and not capability.get("config_schema")
+    )
+    if needs_refresh and _monitor is not None and hasattr(_monitor, "collect_host_meta_now"):
         try:
             await _monitor.collect_host_meta_now(target, include_package_status=False)
         except Exception as exc:
             _log(SERVICE, f"PB8 capability refresh failed for '{target}': {exc.__class__.__name__}", level="WARNING")
         capability = _host_runtime_capability(target)
     if capability["pb8_capable"] is True:
-        return
+        if not required_schema:
+            return
+        schema_compatible = _host_supports_config_schema(required_schema, capability.get("config_schema"))
+        if schema_compatible is True:
+            return
+        if schema_compatible is False:
+            supported_schema = capability.get("config_schema")
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Cannot target '{target}' with PB8 instance '{name}': config schema {required_schema} "
+                    f"requires a newer PB8 runtime; this host supports only {supported_schema}. Update PB8 on "
+                    f"'{target}' before saving or starting this bot."
+                ),
+            )
+        if _persisted_target(name) == target:
+            return
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot target '{target}' with PB8 instance '{name}': support for config schema "
+                f"{required_schema} is not confirmed. Wait for fresh host metadata or update PB8 on '{target}'."
+            ),
+        )
     reason = str(capability.get("reason") or "PB8 capability is unavailable")
     if capability["pb8_capable"] is None and _persisted_target(name) == target:
         return
@@ -1107,8 +1186,8 @@ def get_new_v8_instance_config(session: SessionToken = Depends(require_auth)) ->
 def get_v8_editor_metadata(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     """Return runtime-derived metadata used by the shared Run editor."""
     try:
-        template = get_pb8_template_config()
         optimize_metadata = get_pb8_optimize_metadata()
+        template = optimize_metadata["template"]
         bot = template.get("bot") if isinstance(template.get("bot"), dict) else {}
         live = template.get("live") if isinstance(template.get("live"), dict) else {}
         logging_config = template.get("logging") if isinstance(template.get("logging"), dict) else {}
@@ -1156,10 +1235,18 @@ def create_v8_editor_draft(body: dict = Body(...), session: SessionToken = Depen
     if not isinstance(config, dict):
         raise HTTPException(status_code=400, detail="config must be an object")
     prepared = prepare_v8_editor_config({"config": config}, session)
-    submitted_overrides = body.get("override_configs") or {}
+    return store_v8_editor_draft(prepared["config"], body.get("override_configs"))
+
+
+def store_v8_editor_draft(config: dict[str, Any], submitted_overrides: Any = None) -> dict[str, Any]:
+    """Store an already canonical PB8 config without invoking the PB8 helper again."""
+
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail="config must be an object")
+    submitted_overrides = submitted_overrides or {}
     if not isinstance(submitted_overrides, dict):
         raise HTTPException(status_code=422, detail="override_configs must be an object")
-    references = _referenced_overrides(prepared["config"])
+    references = _referenced_overrides(config)
     override_configs = {}
     for coin, filename in references.items():
         value = submitted_overrides.get(filename, submitted_overrides.get(coin))
@@ -1173,7 +1260,7 @@ def create_v8_editor_draft(body: dict = Body(...), session: SessionToken = Depen
     if extras:
         raise HTTPException(status_code=422, detail=f"Unreferenced override '{sorted(extras)[0]}'")
     payload = {
-        "config": prepared["config"],
+        "config": copy.deepcopy(config),
         "param_status": {},
         "override_configs": override_configs,
     }
@@ -1398,7 +1485,7 @@ async def save_v8_instance_config(
         raise HTTPException(status_code=503, detail="Exchange user catalog is unavailable") from exc
     if user not in {item["name"] for item in available_users}:
         raise HTTPException(status_code=409, detail=f"Exchange user '{user}' is not configured")
-    await _ensure_target_compatible(name, enabled_on)
+    await _ensure_target_compatible(name, enabled_on, candidate.get("config_version"))
 
     path = _config_path(name)
     with _run_lock():
@@ -1755,6 +1842,7 @@ def _available_users() -> list[dict[str, str]]:
 @router.get("/hosts")
 def get_v8_hosts(
     name: str = Query("", description="Existing instance whose unchanged unknown target may be preserved"),
+    config_schema: str = Query("", description="PB8 config schema required by the current editor config"),
     request_id: str = Query(""),
     session: SessionToken = Depends(require_auth),
 ) -> dict[str, Any]:
@@ -1767,13 +1855,29 @@ def get_v8_hosts(
         host_meta = getattr(store, "host_meta", {}) if store is not None else {}
         if isinstance(host_meta, dict):
             candidates.update(str(item) for item in host_meta if str(item))
-    capabilities = {host: {"name": host, **_host_runtime_capability(host)} for host in sorted(candidates)}
-    hosts = ["disabled"] + [host for host in sorted(candidates) if capabilities[host]["pb8_capable"] is True]
+    required_schema = config_schema.strip() if isinstance(config_schema, str) else ""
+    capabilities = {
+        host: _with_schema_compatibility(
+            {"name": host, **_host_runtime_capability(host)},
+            required_schema,
+        )
+        for host in sorted(candidates)
+    }
+    hosts = ["disabled"] + [
+        host for host in sorted(candidates)
+        if capabilities[host]["pb8_capable"] is True
+        and (not required_schema or capabilities[host]["schema_compatible"] is True)
+    ]
     legacy_target = _persisted_target(name) if name else None
     if legacy_target and legacy_target not in hosts:
-        capability = capabilities.get(legacy_target) or {"name": legacy_target, **_host_runtime_capability(legacy_target)}
+        capability = capabilities.get(legacy_target) or _with_schema_compatibility(
+            {"name": legacy_target, **_host_runtime_capability(legacy_target)},
+            required_schema,
+        )
         capabilities[legacy_target] = capability
-        if capability["pb8_capable"] is None:
+        if capability["pb8_capable"] is None or (
+            capability["pb8_capable"] is True and capability["schema_compatible"] is None
+        ):
             hosts.append(legacy_target)
             capability["legacy_preserved"] = True
     return {
