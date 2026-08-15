@@ -412,6 +412,29 @@ def test_watch_v8_never_starts_internal_staging_configs(
     assert [runner.user for runner in run.run_v8] == ["bybit_BTCUSDT"]
 
 
+def test_pb8_config_change_triggers_immediate_rescan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one-second main-loop poll notices a materialized PB8 config immediately."""
+
+    run_root = tmp_path / "data" / "run_v8"
+    instance = run_root / "pb8_bot"
+    instance.mkdir(parents=True)
+    config = instance / "config.json"
+    config.write_text('{"pbgui":{"version":1}}', encoding="utf-8")
+    run = pbrun.PBRun.__new__(pbrun.PBRun)
+    run.pbgdir = tmp_path
+    run.v8_path = str(run_root)
+    run._v8_runtime_signature = run._current_v8_runtime_signature()
+    rescans: list[bool] = []
+    monkeypatch.setattr(run, "watch_v8", lambda: rescans.append(True))
+    monkeypatch.setattr(pbrun, "_log", lambda *_args, **_kwargs: None)
+    config.write_text('{"pbgui":{"version":2}}', encoding="utf-8")
+
+    changed = run.has_v8_runtime_changed()
+
+    assert changed is True
+    assert rescans == [True]
+
+
 def test_runv8_stop_escalates_process_group_sigint_term_kill(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

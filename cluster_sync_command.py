@@ -49,6 +49,7 @@ from master.cluster_state import (
     ClusterPaths,
     ClusterStateError,
     MEMBERSHIP_OPS,
+    PB8_OPS,
     PB8_OPERATION_CAPABILITY,
     SYNC_EXCLUDE_FILES,
     V7_OPS,
@@ -1421,7 +1422,12 @@ def _backup_and_delete_tombstoned_v7_dir(cluster_root: Path, target: Path, insta
     return backup_path
 
 
-def _materialize_pb8_configs(cluster_root: Path, *, write: bool) -> dict[str, Any]:
+def _materialize_pb8_configs(
+    cluster_root: Path,
+    *,
+    write: bool,
+    instance_names: set[str] | None = None,
+) -> dict[str, Any]:
     """Preview or exactly reconcile PB8 JSON config blobs into data/run_v8."""
 
     run_root = Path(cluster_root).parent / "run_v8"
@@ -1433,6 +1439,22 @@ def _materialize_pb8_configs(cluster_root: Path, *, write: bool) -> dict[str, An
         identity = _safe_state_call(lambda: read_local_identity(cluster_root))
         desired_state = materialized.get("desired_state") if isinstance(materialized, dict) else {}
         desired_state = desired_state if isinstance(desired_state, dict) else {}
+        if instance_names is not None:
+            requested = {str(name) for name in instance_names}
+            for name in requested:
+                _validate_relative_name(name, "instance")
+            filtered = dict(desired_state)
+            filtered["pb8_instances"] = {
+                name: item
+                for name, item in (desired_state.get("pb8_instances") or {}).items()
+                if name in requested
+            }
+            filtered["pb8_tombstones"] = {
+                name: item
+                for name, item in (desired_state.get("pb8_tombstones") or {}).items()
+                if name in requested
+            }
+            desired_state = filtered
         node_id = str(identity["node_id"])
         materialize_all = str(identity.get("role") or "").strip().lower() == "master"
         plan = _build_materialize_pb8_plan(
@@ -3367,6 +3389,23 @@ def _apply_bundle(
         if v7_instances
         else {"status": "delegated_to_pbcluster"}
     )
+    pb8_instances = {
+        str(operation.get("instance") or "")
+        for operation in operations
+        if str(operation.get("op") or "") in PB8_OPS
+        and str(operation.get("instance") or "")
+    }
+    pb8_materialization = (
+        _materialize_pb8_configs(cluster_root, write=True, instance_names=pb8_instances)
+        if pb8_instances
+        else {"status": "delegated_to_pbcluster"}
+    )
+    if v7_instances and pb8_instances:
+        materialization = {"v7": v7_materialization, "pb8": pb8_materialization}
+    elif pb8_instances:
+        materialization = pb8_materialization
+    else:
+        materialization = v7_materialization
     return {
         "ok": True,
         "count": len(written_ops),
@@ -3375,7 +3414,9 @@ def _apply_bundle(
         "secret_blobs": len(written_secret),
         "sealed_blobs": len(written_sealed),
         "generation": int(((materialized.get("cluster_nodes") or {}).get("generation") or 0)),
-        "materialization": v7_materialization,
+        "materialization": materialization,
+        "v7_materialization": v7_materialization,
+        "pb8_materialization": pb8_materialization,
     }
 
 

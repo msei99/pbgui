@@ -108,13 +108,15 @@ BLOB_COVERAGE_MAX_BYTES_PER_PEER_PASS = 64 * 1024 * 1024
 BLOB_COVERAGE_RECOVERY_SCAN_HASHES_PER_PEER_PASS = 64
 
 
-def push_v7_activation(
+def _push_config_activation(
     cluster_root: Path | str,
     operation: dict[str, Any],
     *,
+    expected_operation: str,
+    runtime: str,
     timeout: int = 4,
 ) -> dict[str, Any]:
-    """Push one V7 config operation directly to its assigned peer."""
+    """Push one config operation directly to its assigned peer."""
 
     root = Path(cluster_root)
     identity = read_local_identity(root)
@@ -124,8 +126,8 @@ def push_v7_activation(
         expected_cluster_id=cluster_id,
         cluster_root=root,
     )
-    if str(operation.get("op") or "") != "UPSERT_CONFIG":
-        raise ClusterSyncWorkerError("fast activation requires UPSERT_CONFIG")
+    if str(operation.get("op") or "") != expected_operation:
+        raise ClusterSyncWorkerError(f"fast {runtime} activation requires {expected_operation}")
     if str(operation.get("desired_state") or "") != "running":
         return {"ok": True, "status": "not_running", "direct": False}
 
@@ -173,6 +175,40 @@ def push_v7_activation(
         "pbname": str(peer.get("pbname") or peer.get("hostname") or ""),
         "materialization": result.get("materialization") or {},
     }
+
+
+def push_v7_activation(
+    cluster_root: Path | str,
+    operation: dict[str, Any],
+    *,
+    timeout: int = 4,
+) -> dict[str, Any]:
+    """Push one V7 config operation directly to its assigned peer."""
+
+    return _push_config_activation(
+        cluster_root,
+        operation,
+        expected_operation="UPSERT_CONFIG",
+        runtime="V7",
+        timeout=timeout,
+    )
+
+
+def push_pb8_activation(
+    cluster_root: Path | str,
+    operation: dict[str, Any],
+    *,
+    timeout: int = 4,
+) -> dict[str, Any]:
+    """Push one PB8 config operation directly to its assigned peer."""
+
+    return _push_config_activation(
+        cluster_root,
+        operation,
+        expected_operation="UPSERT_PB8_CONFIG",
+        runtime="PB8",
+        timeout=timeout,
+    )
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:

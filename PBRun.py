@@ -20,6 +20,7 @@ from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_loc
 
 SERVICE = "PBRun"
 from master.cluster_state import (
+    SYNC_EXCLUDE_FILES,
     build_config_manifest,
     compute_config_manifest_hash,
     default_cluster_root,
@@ -1423,6 +1424,7 @@ class PBRun():
         else:
             self.name = platform.node()
         self._v7_runtime_signature = None
+        self._v8_runtime_signature = None
         # Init PB7 directory
         self.pb7dir = None
         if ini_snapshot.has_option("main", "pb7dir"):
@@ -1477,6 +1479,7 @@ class PBRun():
             for runner in list(self.run_v8):
                 runner.stop()
             self.run_v8 = []
+            self._v8_runtime_signature = None
 
         self.name = new_name
         self.pb7dir = new_pb7dir
@@ -1724,6 +1727,68 @@ class PBRun():
         self.watch_v7()
         return True
 
+    def _current_v8_runtime_signature(self) -> tuple:
+        """Return the local PB8 desired-state and config signature."""
+
+        cluster_root = default_cluster_root(Path(self.pbgdir))
+        desired_path = cluster_root / "desired_state.json"
+        try:
+            desired = _read_json_file(desired_path)
+            instances = desired.get("pb8_instances") if isinstance(desired.get("pb8_instances"), dict) else {}
+            tombstones = desired.get("pb8_tombstones") if isinstance(desired.get("pb8_tombstones"), dict) else {}
+            desired_signature = (
+                str(desired.get("cluster_id") or ""),
+                tuple(
+                    sorted(
+                        (
+                            str(name),
+                            str(item.get("assigned_host") or ""),
+                            str(item.get("config_manifest_hash") or ""),
+                            bool(item.get("conflicted") is True),
+                            str(item.get("desired_state") or ""),
+                            str(item.get("version") or ""),
+                        )
+                        for name, item in instances.items()
+                        if isinstance(item, dict)
+                    )
+                ),
+                tuple(sorted(str(name) for name in tombstones)),
+            )
+        except OSError:
+            desired_signature = (str(desired_path), None)
+        except Exception as exc:
+            desired_signature = (str(desired_path), "error", str(exc))
+
+        signature: list[tuple] = [desired_signature]
+        run_root = Path(self.v8_path)
+        if not run_root.is_dir():
+            signature.append((str(run_root), None, None))
+            return tuple(signature)
+        for instance_dir in sorted(run_root.iterdir(), key=lambda item: item.name):
+            if not instance_dir.is_dir() or instance_dir.name.startswith(".pbgui-v8-stage-"):
+                continue
+            signature.append(("instance", instance_dir.name))
+            for item in sorted(instance_dir.glob("*.json"), key=lambda path: path.name):
+                if item.name in SYNC_EXCLUDE_FILES:
+                    continue
+                file_sig = self._file_signature(item)
+                signature.append((instance_dir.name, item.name, file_sig[1], file_sig[2]))
+        return tuple(signature)
+
+    def has_v8_runtime_changed(self) -> bool:
+        """Poll PB8 desired state and configs for immediate PBRun rescans."""
+
+        signature = self._current_v8_runtime_signature()
+        if self._v8_runtime_signature is None:
+            self._v8_runtime_signature = signature
+            return False
+        if signature == self._v8_runtime_signature:
+            return False
+        self._v8_runtime_signature = signature
+        _log(SERVICE, "Cluster/run_v8 state changed - rescanning PB8 instances")
+        self.watch_v8()
+        return True
+
     def fetch_cmc_credits(self):
         provider_refreshed = bool(self.coindata.fetch_api_status())
         return {
@@ -1868,6 +1933,7 @@ class PBRun():
             runner.watch()
             retained.append(runner)
         self.run_v8 = retained
+        self._v8_runtime_signature = self._current_v8_runtime_signature()
 
     def find_high_memory_bot(self):
         """Finds the bot with the highest memory usage."""
@@ -1995,15 +2061,20 @@ def main():
                         # Keep Cluster Sync start/stop reactions fast without running the
                         # expensive per-bot process scan every second.
                         run.has_v7_runtime_changed()
-                if run.pb8_ready and v8_changed:
-                    run.watch_v8()
+                v8_reconciled = False
+                if run.pb8_ready:
+                    if v8_changed:
+                        run.watch_v8()
+                        v8_reconciled = True
+                    else:
+                        v8_reconciled = run.has_v8_runtime_changed()
                 if now >= next_maintenance:
                     run.watch_memory()
                     next_maintenance = now + 5
                     for run_v7 in run.run_v7:
                         run_v7.watch()
                         run_v7.watch_dynamic()
-                    if run.pb8_ready and not v8_changed:
+                    if run.pb8_ready and not v8_reconciled:
                         run.watch_v8()
                     if maintenance_count % 2 == 0:
                         for run_v7 in run.run_v7:

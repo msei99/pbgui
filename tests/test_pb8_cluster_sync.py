@@ -16,6 +16,7 @@ from cluster_sync_command import run_command
 from file_lock import advisory_file_lock
 from master.cluster_state import (
     PB8_OPERATION_CAPABILITY,
+    append_node_placeholder,
     append_operation,
     ensure_local_identity,
     rebuild_materialized_state,
@@ -222,6 +223,83 @@ def test_materialize_v8_exactly_reconciles_json_and_backs_up_removals(
     assert not target.exists()
     assert (tombstone_backup / "config.json").read_bytes() == config_raw
     assert (tombstone_backup / "runtime.log").read_text(encoding="utf-8") == "keep"
+
+
+def test_apply_bundle_materializes_targeted_pb8_config(monkeypatch, tmp_path: Path) -> None:
+    """The single-command fast path writes its PB8 config before returning."""
+
+    root = _cluster(tmp_path)
+    _project_pb8_exchange_keys(monkeypatch, tmp_path, root)
+    config_raw = b'{"live":{"user":"pb8"}}'
+    _append_pb8_config(root, config_raw)
+    operation = max(
+        (
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in root.joinpath("oplog").glob("*/*.json")
+            if json.loads(path.read_text(encoding="utf-8")).get("op") == "UPSERT_PB8_CONFIG"
+        ),
+        key=lambda item: int(item["seq"]),
+    )
+    config_blobs, secret_blobs, sealed_blobs = cluster_sync_worker._collect_local_blobs_for_operations(
+        root,
+        [operation],
+    )
+    payload = cluster_sync_worker._apply_bundle_payload(
+        [operation],
+        config_blobs,
+        secret_blobs,
+        sealed_blobs,
+    ).encode("utf-8")
+
+    result = run_command(root, NODE_A, "apply-bundle", payload)
+
+    assert result["pb8_materialization"]["counts"]["written_instances"] == 1
+    assert result["materialization"] == result["pb8_materialization"]
+    assert (root.parent / "run_v8" / "pb8_bot" / "config.json").read_bytes() == config_raw
+
+
+def test_push_pb8_activation_uses_one_bounded_apply_bundle(monkeypatch, tmp_path: Path) -> None:
+    """PB8 fast activation skips a full peer pass and targets only its assigned VPS."""
+
+    root = _cluster(tmp_path)
+    append_node_placeholder(root, {
+        "node_id": NODE_B,
+        "role": "vps",
+        "pbname": "runner-b",
+        "ssh_host": "runner-b",
+    })
+    manifest_hash = _write_manifest(root, {"config.json": b'{"live":{"user":"pb8"}}'})
+    operation = append_operation(root, "UPSERT_PB8_CONFIG", {
+        "instance": "pb8_bot",
+        "version": "1",
+        "parent_version": "0",
+        "assigned_host": NODE_B,
+        "desired_state": "running",
+        "config_manifest_hash": manifest_hash,
+    })
+    rebuild_materialized_state(root)
+    calls: list[tuple[str, dict]] = []
+    settings: list[tuple[int, int, Path]] = []
+
+    class ClientStub:
+        """Capture one direct PB8 bundle request."""
+
+        def __init__(self, *, timeout: int, connect_timeout: int, cluster_root: Path) -> None:
+            settings.append((timeout, connect_timeout, cluster_root))
+
+        def run(self, peer, local_node_id, command_text, payload=None) -> dict:
+            calls.append((command_text, json.loads(payload)))
+            return {"ok": True, "materialization": {"ok": True}}
+
+    monkeypatch.setattr(cluster_sync_worker, "SshClusterPeerClient", ClientStub)
+
+    result = cluster_sync_worker.push_pb8_activation(root, operation, timeout=4)
+
+    assert settings == [(4, 2, root)]
+    assert [command for command, _payload in calls] == ["apply-bundle"]
+    assert calls[0][1]["operations"] == [operation]
+    assert result["status"] == "activated"
+    assert result["pbname"] == "runner-b"
 
 
 @pytest.mark.parametrize(

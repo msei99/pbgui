@@ -290,6 +290,31 @@ def test_save_publishes_canonical_pb8_manifest_and_explicit_upsert(
     assert desired["instances"] == {}
 
 
+def test_fast_pb8_activation_has_three_second_transport_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A PB8 save reserves time for PBRun to react within the five-second target."""
+
+    captured: dict[str, object] = {}
+
+    async def to_thread(function, *args, **kwargs):
+        captured.update({"function": function, "args": args, "kwargs": kwargs})
+        return {
+            "ok": True,
+            "direct": True,
+            "node_id": "node-b",
+            "pbname": "vps-b",
+            "materialization": {"ok": True},
+        }
+
+    monkeypatch.setattr(v8_instances.asyncio, "to_thread", to_thread)
+
+    result = asyncio.run(v8_instances._activate_pb8_target("alice", {"op": "UPSERT_PB8_CONFIG"}))
+
+    assert captured["function"] is v8_instances.push_pb8_activation
+    assert captured["kwargs"] == {"timeout": 3}
+    assert result["direct"] is True
+    assert result["pending"] is False
+
+
 def test_instance_name_must_match_exchange_user(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """PB8 rejects custom deployment names so one exchange user maps to exactly one live instance."""
 

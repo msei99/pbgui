@@ -36,6 +36,7 @@ from master.cluster_state import (
     read_materialized_state,
     rebuild_materialized_state,
 )
+from master.cluster_sync_worker import push_pb8_activation
 from pb8_config import (
     PB8ConfigurationError,
     PB8MarketDataUnavailableError,
@@ -950,6 +951,30 @@ def _record_upsert(name: str, instance_dir: Path, config: dict[str, Any], parent
     return operation
 
 
+async def _activate_pb8_target(name: str, operation: dict[str, Any]) -> dict[str, Any]:
+    """Try one bounded direct activation before PBCluster completes replication."""
+
+    try:
+        direct = await asyncio.to_thread(push_pb8_activation, _cluster_root(), operation, timeout=3)
+        success = bool(direct.get("ok"))
+        return {
+            "ok": success,
+            "direct": bool(direct.get("direct")),
+            "pending": not success,
+            "node_id": str(direct.get("node_id") or ""),
+            "host": str(direct.get("pbname") or ""),
+            "materialization": direct.get("materialization") or {},
+        }
+    except Exception as exc:
+        _log(SERVICE, f"Fast PB8 activation for '{name}' deferred to PBCluster: {exc}", level="WARNING")
+        return {
+            "ok": False,
+            "direct": False,
+            "pending": True,
+            "reason": "Fast activation deferred to PBCluster",
+        }
+
+
 def _record_delete(name: str, version: int) -> dict[str, Any]:
     """Publish an explicit PB8 tombstone operation before local deletion."""
 
@@ -1572,6 +1597,7 @@ async def save_v8_instance_config(
             cache_prepared_pb8_config(saved, path)
         except Exception as exc:
             _log(SERVICE, f"PB8 config cache warmup skipped for '{name}': {exc}", level="WARNING")
+    activation = await _activate_pb8_target(name, operation)
     _log(SERVICE, f"Saved PB8 live config '{name}' (v{saved['pbgui']['version']})", level="INFO")
     return {
         "ok": True,
@@ -1582,6 +1608,7 @@ async def save_v8_instance_config(
         "op_id": operation["op_id"],
         "overrides": sorted(override_payloads),
         "backup_id": backup_id,
+        "sync": activation,
     }
 
 
