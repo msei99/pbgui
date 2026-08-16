@@ -788,7 +788,7 @@ textarea.json-invalid:focus {
         <button class="sb-btn info" onclick="saveAndQueue()" title="Save and add to queue">▶ Save &amp; Queue</button>
         <button class="sb-btn" onclick="importConfig()" title="Import JSON config">📥 Import</button>
         <hr class="sb-sep">
-        <button class="sb-btn" id="sb-btn-results" onclick="goEditorResults()" title="Jump to results for this config" disabled>📊 Results</button>
+        <button class="sb-btn" id="sb-btn-results" onclick="goEditorResults()" title="Show all backtest results">📊 Results</button>
         <button class="sb-btn" id="sb-btn-convert-v8" onclick="convertConfigToV8(editingConfig)" title="Convert the saved V7 config to V8" disabled>⏩ Convert to V8</button>
         <button class="sb-btn" id="sb-btn-add-to-run" onclick="addConfigToRunByName(editingConfig)" title="Open this config in Run V7 editor" disabled>▶ Add to Run</button>
         <button class="sb-btn" onclick="goStrategyExplorer()" title="Open Strategy Explorer">🔍 Strategy Explorer</button>
@@ -1848,8 +1848,6 @@ function initBacktestOhlcvPreflightController() {
 }
 
 function showEditorSidebar() {
-  // Enable Results button only if results exist for this config
-  var btn = document.getElementById('sb-btn-results');
   var btnRun = document.getElementById('sb-btn-add-to-run');
   var btnConvertV8 = document.getElementById('sb-btn-convert-v8');
   var isExisting = editingConfig && editingConfig !== '__new__';
@@ -1857,19 +1855,6 @@ function showEditorSidebar() {
   if (btnConvertV8) {
     btnConvertV8.style.display = backtestEditorAdapter.isV8 ? 'none' : '';
     btnConvertV8.disabled = !isExisting;
-  }
-  if (btn) {
-    var hasResults = editingConfig && editingConfig !== '__new__' &&
-      results.some(function(r) { return r.config_name === editingConfig; });
-    btn.disabled = !hasResults;
-    // If results not loaded yet, fetch them and re-check
-    if (!hasResults && results.length === 0 && editingConfig && editingConfig !== '__new__') {
-      apiFetch('/results').then(function(d) {
-        results = d.results || [];
-        var found = results.some(function(r) { return r.config_name === editingConfig; });
-        if (btn) btn.disabled = !found;
-      }).catch(function() {});
-    }
   }
   backtestShell.setEditorMode(true);
 }
@@ -1880,9 +1865,13 @@ function hideEditorSidebar() {
 }
 
 function goEditorResults() {
-  var name = editingConfig || '';
   closeEditor();
-  viewConfigResults(name);
+  _pendingResultFilter = '';
+  var textFilter = document.getElementById('results-filter');
+  var configFilter = document.getElementById('results-config-filter');
+  if (textFilter) textFilter.value = '';
+  if (configFilter) configFilter.value = '';
+  selectPanel('results');
 }
 
 function goStrategyExplorer() {

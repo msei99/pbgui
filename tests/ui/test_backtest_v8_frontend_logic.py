@@ -213,6 +213,51 @@ def test_delayed_config_load_does_not_replace_results_sidebar() -> None:
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
+def test_editor_results_button_opens_the_unfiltered_results_panel() -> None:
+    """The editor sidebar must always provide access to all backtest results."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    button_start = source.index('<button class="sb-btn" id="sb-btn-results"')
+    button_markup = source[button_start : source.index("</button>", button_start)]
+    functions = "\n\n".join(
+        _extract_function(source, name) for name in ("showEditorSidebar", "goEditorResults")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const elements = {{
+          'sb-btn-add-to-run': {{disabled: true}},
+          'sb-btn-convert-v8': {{disabled: true, style: {{}}}},
+          'results-filter': {{value: 'old text'}},
+          'results-config-filter': {{value: 'old config'}}
+        }};
+        const document = {{getElementById(id) {{ return elements[id] || null; }}}};
+        const backtestEditorAdapter = {{isV8: true}};
+        const backtestShell = {{setEditorMode(value) {{ assert.equal(value, true); }}}};
+        let editingConfig = '__new__';
+        let _pendingResultFilter = 'old config';
+        let closed = 0;
+        let selectedPanel = '';
+        function closeEditor() {{ closed += 1; }}
+        function selectPanel(panel) {{ selectedPanel = panel; }}
+        {functions}
+        showEditorSidebar();
+        assert.equal(elements['sb-btn-add-to-run'].disabled, true);
+        assert.equal(elements['sb-btn-convert-v8'].style.display, 'none');
+        goEditorResults();
+        assert.equal(closed, 1);
+        assert.equal(selectedPanel, 'results');
+        assert.equal(_pendingResultFilter, '');
+        assert.equal(elements['results-filter'].value, '');
+        assert.equal(elements['results-config-filter'].value, '');
+        """
+    )
+
+    assert " disabled" not in button_markup
+    assert 'title="Show all backtest results"' in button_markup
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_delayed_v8_settings_load_does_not_replace_results_sidebar() -> None:
     """A deferred V8 editor render must stop after the user leaves Configs."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")

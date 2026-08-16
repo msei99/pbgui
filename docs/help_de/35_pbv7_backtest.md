@@ -69,7 +69,7 @@ Die Bearbeitung öffnet sich inline im Hauptbereich. Felder:
 | **← Back** | Zurück zur Config-Liste ohne Speichern |
 | **Add to Queue** | Speichern und einreihen → wechselt in Queue-Panel |
 | **Apply Filters** | Approved/Ignored-Coin-Listen anhand der aktuellen Filter befüllen |
-| **📊 View Results** | Zu den Ergebnissen dieser Config im Results-Panel springen |
+| **📊 Results** | Den Editor verlassen und die vollständige, ungefilterte Results-Liste öffnen; Config-spezifische Result-Icons an anderen Stellen filtern weiterhin auf diese Config |
 | **⏩ Convert to V8** | Die aktuell gespeicherte V7-Config mit PB8s offiziellem Migrator konvertieren und in PBv8 Backtest öffnen; bis zum ersten Speichern deaktiviert |
 | **💰 Balance Calculator** | Den gemeinsamen Balance Calculator unter Information mit der aktuellen Editor-Config als Draft öffnen |
 | **⚡ Calc Balance** | Dieselbe Balance-Berechnung inline in einem Modal ausführen, ohne die Backtest-Seite zu verlassen |
