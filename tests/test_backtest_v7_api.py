@@ -3,6 +3,7 @@
 import asyncio
 import copy
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -230,6 +231,31 @@ def test_delete_result_is_idempotent_for_missing_local_result(tmp_path, monkeypa
     response = backtest_v7.delete_result(str(stale_result), session=None)
 
     assert response == {"ok": True, "missing": True}
+
+
+def test_results_support_progressive_pages_and_config_filter(tmp_path, monkeypatch):
+    """PB7 must share the paginated result contract used by the common frontend."""
+    results_root = tmp_path / "pb7" / "backtests" / "pbgui"
+    for index, name in enumerate(("older", "newer"), start=1):
+        result_dir = results_root / name / "bybit" / "run-1"
+        result_dir.mkdir(parents=True)
+        analysis_path = result_dir / "analysis.json"
+        analysis_path.write_text(json.dumps({"gain_usd": index}), encoding="utf-8")
+        (result_dir / "config.json").write_text(
+            json.dumps({"backtest": {"starting_balance": 1000}, "bot": {}, "live": {}}),
+            encoding="utf-8",
+        )
+        os.utime(analysis_path, (index, index))
+    monkeypatch.setattr(backtest_v7, "_bt_results_base", lambda: str(results_root))
+
+    first_page = backtest_v7.list_results(offset=0, limit=1, session=None)
+    filtered = backtest_v7.list_results(name="older", offset=0, limit=20, session=None)
+
+    assert [item["config_name"] for item in first_page["results"]] == ["newer"]
+    assert first_page["pagination"]["total"] == 2
+    assert first_page["pagination"]["has_more"] is True
+    assert [item["config_name"] for item in filtered["results"]] == ["older"]
+    assert filtered["pagination"]["has_more"] is False
 
 
 def test_add_optimize_config_to_archive_uses_worker_thread(tmp_path, monkeypatch):

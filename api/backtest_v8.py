@@ -1162,12 +1162,39 @@ def _result_terminal_balances(result_dir: Path) -> dict[str, float]:
     return {}
 
 
-def _list_results() -> list[dict]:
+def _result_analysis_paths(name: Optional[str] = None) -> list[Path]:
     root = _results_root()
     if not root.is_dir():
         return []
+    search_root = root
+    if name:
+        search_root = _safe_path(root / _validate_name(name), root)
+        if not search_root.is_dir() or search_root.is_symlink():
+            return []
+    root_resolved = root.resolve()
+    indexed_paths = []
+    for analysis_path in search_root.glob("**/analysis.json"):
+        try:
+            if analysis_path.is_symlink():
+                continue
+            resolved = analysis_path.resolve()
+            resolved.relative_to(root_resolved)
+            if resolved.is_file():
+                indexed_paths.append((resolved.stat().st_mtime, str(resolved), resolved))
+        except (OSError, ValueError):
+            continue
+    indexed_paths.sort(reverse=True)
+    return [item[2] for item in indexed_paths]
+
+
+def _list_results(analysis_paths: Optional[list[Path]] = None) -> list[dict]:
+    root = _results_root()
+    if not root.is_dir():
+        return []
+    if analysis_paths is None:
+        analysis_paths = _result_analysis_paths()
     results = []
-    for analysis_path in root.glob("**/analysis.json"):
+    for analysis_path in analysis_paths:
         try:
             resolved = analysis_path.resolve()
             relative = resolved.relative_to(root.resolve())
@@ -2196,8 +2223,28 @@ def queue_log(filename: str, session: SessionToken = Depends(require_auth)) -> d
 
 
 @router.get("/results")
-def get_results(session: SessionToken = Depends(require_auth)) -> dict:
-    return {"results": _list_results()}
+def get_results(
+    name: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 0,
+    session: SessionToken = Depends(require_auth),
+) -> dict:
+    if offset < 0 or limit < 0 or limit > 100:
+        raise HTTPException(status_code=422, detail="offset must be non-negative and limit must be between 0 and 100")
+    paths = _result_analysis_paths(name)
+    page_paths = paths[offset:] if limit == 0 else paths[offset : offset + limit]
+    next_offset = offset + len(page_paths)
+    return {
+        "results": _list_results(page_paths),
+        "pagination": {
+            "total": len(paths),
+            "offset": offset,
+            "limit": limit,
+            "returned": len(page_paths),
+            "has_more": next_offset < len(paths),
+            "next_offset": next_offset,
+        },
+    }
 
 
 @router.get("/results/analysis")

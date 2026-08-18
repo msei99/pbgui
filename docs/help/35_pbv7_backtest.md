@@ -135,7 +135,7 @@ Use the **Select All** / **Deselect** toolbar above the table.
 
 When you select multiple completed queue rows and click **📈 Compare**, PBGui resolves the matching result batch for each selected queue item, opens the **Results** panel, preselects those result rows, and renders the comparison chart immediately. Queue items that are not complete yet or have no matching stored result are skipped.
 
-The green result action applies its config filter before opening **Results**. A previous unfiltered result table is never shown while the matching result list refreshes.
+The green result action applies its config filter before opening **Results** and requests only that config from the backend. The global list loads newest-first in small batches and renders each batch immediately, so already loaded results remain usable while older entries continue loading.
 
 ### Settings modal
 

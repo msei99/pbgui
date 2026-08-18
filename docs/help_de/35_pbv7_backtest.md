@@ -135,7 +135,7 @@ Zeigt alle ausstehenden, laufenden und abgeschlossenen Backtest-Jobs mit Echtzei
 
 Wenn du mehrere abgeschlossene Queue-Zeilen auswählst und **📈 Compare** klickst, löst PBGui pro ausgewähltem Queue-Eintrag den passenden Ergebnis-Batch auf, öffnet das **Results**-Panel, markiert diese Ergebniszeilen vor und rendert den Vergleich sofort. Queue-Einträge, die noch nicht abgeschlossen sind oder kein passendes gespeichertes Ergebnis haben, werden übersprungen.
 
-Die grüne Result-Aktion setzt ihren Config-Filter vor dem Öffnen von **Results**. Während die passende Ergebnisliste aktualisiert wird, erscheint keine vorherige ungefilterte Result-Tabelle.
+Die grüne Result-Aktion setzt ihren Config-Filter vor dem Öffnen von **Results** und fordert beim Backend nur diese Config an. Die globale Liste lädt neueste Results zuerst in kleinen Batches und rendert jeden Batch sofort, sodass bereits geladene Results nutzbar sind, während ältere Einträge weitergeladen werden.
 
 ### Einstellungs-Modal
 

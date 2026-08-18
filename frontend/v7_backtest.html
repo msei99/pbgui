@@ -839,7 +839,7 @@ textarea.json-invalid:focus {
             <option value="v7">PBv7</option><option value="v8">PBv8</option><option value="both">Both</option>
           </select>
           <label style="font-size:var(--fs-sm);color:var(--text-dim)">Config:</label>
-          <select id="results-config-filter" class="sb-input" style="max-width:200px" onchange="renderResults()">
+          <select id="results-config-filter" class="sb-input" style="max-width:200px" onchange="changeResultsConfigFilter()">
             <option value="">All configs</option>
           </select>
           <input type="text" id="results-filter" class="sb-input" style="max-width:200px" placeholder="Search name…" oninput="renderResults()">
@@ -1029,6 +1029,7 @@ var queueItems  = [];          // queue items from WS
 var _lastQueueHash = '';       // JSON hash of last queue state (skip re-render if unchanged)
 var results     = [];          // backtest results
 var resultsByVersion = { v7: [], v8: [] };
+var RESULTS_PAGE_SIZE = 20;
 var _resultsLoadGeneration = 0;
 var _resultsEmptyRetryTimer = null;
 var _resultsEmptyRetryCount = 0;
@@ -1449,7 +1450,13 @@ function selectPanel(id, opts) {
   if (id === 'configs') {
     if (configs.length === 0) loadConfigs(); else renderConfigs();
   }
-  if (id === 'results') { if (results.length === 0) loadResults(); else renderResults(); }
+  if (id === 'results') {
+    if (opts.deferResultsLoad) {
+      if (results.length > 0) renderResults();
+    } else {
+      loadResults('', { keepVisible: results.length > 0 });
+    }
+  }
   if (id === 'archive' && archives.length === 0) loadArchives();
   if (id === 'legacy') { if (legacyResults.length === 0) loadLegacyResults(); else renderLegacyResults(); }
   /* If returning to archive while results view is still open, restore DOM and
@@ -4984,18 +4991,18 @@ function viewConfigResults(name) {
     cfgSel.value = name;
   }
   /* If we already have results cached, filter and render immediately — no empty-table flash */
-  if (results.length > 0) {
+  var hasCachedResults = results.length > 0;
+  if (hasCachedResults) {
     _pendingResultFilter = '';  /* already applied */
-    selectPanel('results');
+    selectPanel('results', { deferResultsLoad: true });
     renderResults();
-    /* Refresh in background so newly finished jobs appear */
-    loadResults(name);
   } else {
     var list = document.getElementById('results-list');
     if (list) list.innerHTML = '\x3Cdiv class="empty-state">Checking for matching results…\x3C/div>';
     hideResultsCountLabel('results-count-label');
-    selectPanel('results');  /* triggers loadResults via results.length === 0 */
+    selectPanel('results', { deferResultsLoad: true });
   }
+  loadResults(name, { keepVisible: hasCachedResults });
 }
 
 function fillPbguiDataPath() {
@@ -5377,12 +5384,61 @@ function loadResults(filterName, loadOptions) {
   var loadGeneration = ++_resultsLoadGeneration;
   var selectedVersion = selectedResultsVersion();
   var versions = selectedVersion === 'both' ? ['v7', 'v8'] : [selectedVersion];
-  return Promise.all(versions.map(function(version) {
-    return apiFetchFrom(backtestApiBase(version), '/results').then(function(d) {
-      resultsByVersion[version] = (d.results || []).map(function(result) {
+  var progress = {};
+  versions.forEach(function(version) {
+    resultsByVersion[version] = [];
+    progress[version] = { loaded: 0, total: null, hasMore: true };
+  });
+  if (!loadOptions.emptyRetry && !loadOptions.keepVisible) {
+    var initialList = document.getElementById('results-list');
+    if (initialList) initialList.innerHTML = '\x3Cdiv class="empty-state">Loading results…\x3C/div>';
+    hideResultsCountLabel('results-count-label');
+  }
+
+  function renderLoadedPages() {
+    var applied = _applyResultsData(resultsByVersion.v7.concat(resultsByVersion.v8), selectedFilter);
+    var loaded = versions.reduce(function(total, version) { return total + progress[version].loaded; }, 0);
+    var totalsKnown = versions.every(function(version) { return Number.isFinite(progress[version].total); });
+    var total = totalsKnown
+      ? versions.reduce(function(sum, version) { return sum + progress[version].total; }, 0)
+      : null;
+    var loading = versions.some(function(version) { return progress[version].hasMore; });
+    var label = document.getElementById('results-count-label');
+    if (loading && label) {
+      label.textContent = total === null
+        ? 'Loaded ' + loaded + (loaded === 1 ? ' result…' : ' results…')
+        : 'Loaded ' + loaded + ' of ' + total + (total === 1 ? ' result…' : ' results…');
+      label.style.display = '';
+    }
+    return applied;
+  }
+
+  function loadVersionPage(version, offset) {
+    var path = '/results?offset=' + offset + '&limit=' + RESULTS_PAGE_SIZE;
+    if (selectedFilter) path += '&name=' + encodeURIComponent(selectedFilter);
+    return apiFetchFrom(backtestApiBase(version), path).then(function(d) {
+      if (loadGeneration !== _resultsLoadGeneration) return;
+      var page = (d.results || []).map(function(result) {
         return Object.assign({}, result, { backtest_version: version });
       });
+      resultsByVersion[version] = resultsByVersion[version].concat(page);
+      var pagination = d.pagination && typeof d.pagination === 'object' ? d.pagination : null;
+      progress[version].loaded = resultsByVersion[version].length;
+      progress[version].total = pagination && Number.isFinite(Number(pagination.total))
+        ? Number(pagination.total)
+        : progress[version].loaded;
+      progress[version].hasMore = !!(pagination && pagination.has_more);
+      renderLoadedPages();
+      if (progress[version].hasMore) {
+        var nextOffset = Number(pagination.next_offset);
+        if (!Number.isFinite(nextOffset) || nextOffset <= offset) nextOffset = offset + RESULTS_PAGE_SIZE;
+        return loadVersionPage(version, nextOffset);
+      }
     });
+  }
+
+  return Promise.all(versions.map(function(version) {
+    return loadVersionPage(version, 0);
   })).then(function() {
     if (loadGeneration !== _resultsLoadGeneration) return results;
     var applied = _applyResultsData(resultsByVersion.v7.concat(resultsByVersion.v8), selectedFilter);
@@ -5410,6 +5466,12 @@ function loadResults(filterName, loadOptions) {
 }
 
 function refreshResults() { loadResults(); }
+
+function changeResultsConfigFilter() {
+  var cfgSel = document.getElementById('results-config-filter');
+  if (cfgSel && cfgSel.value === '') loadResults('');
+  else renderResults();
+}
 
 /* ── CSV parser (handles unquoted commas in quoted fields) ── */
 function parseCSV(text) {
@@ -9996,7 +10058,7 @@ backtestShell = window.PBGuiBacktestShell.upgradeLegacy({
     'selectPanel:archive': function() { selectPanel('archive'); },
     'selectPanel:legacy': function() { selectPanel('legacy'); },
     filterConfigs: renderConfigs,
-    filterResults: renderResults,
+    filterResults: changeResultsConfigFilter,
     changeResultsVersion: function() { loadResults(''); }
   }
 });

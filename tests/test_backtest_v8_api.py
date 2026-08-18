@@ -891,6 +891,37 @@ def test_results_are_read_only_from_pb8_root(tmp_path, monkeypatch) -> None:
     assert results[0]["pos_long"] == 6
 
 
+def test_results_support_newest_first_pagination_and_config_filter(tmp_path, monkeypatch) -> None:
+    """PB8 result pages should avoid parsing unrelated configs before the first response."""
+    root = tmp_path / "pb8" / "backtests" / "pbgui"
+    for index, name in enumerate(("older", "newer"), start=1):
+        result_dir = root / name / "bybit" / "run-1"
+        result_dir.mkdir(parents=True)
+        analysis_path = result_dir / "analysis.json"
+        analysis_path.write_text(json.dumps({"gain_usd": index}), encoding="utf-8")
+        (result_dir / "config.json").write_text(
+            json.dumps({"backtest": {"starting_balance": 1000}, "bot": {}, "live": {"approved_coins": {}}}),
+            encoding="utf-8",
+        )
+        os.utime(analysis_path, (index, index))
+    monkeypatch.setattr(backtest_v8, "_results_root", lambda: root)
+
+    first_page = backtest_v8.get_results(offset=0, limit=1, session=None)
+    filtered = backtest_v8.get_results(name="older", offset=0, limit=20, session=None)
+
+    assert [item["config_name"] for item in first_page["results"]] == ["newer"]
+    assert first_page["pagination"] == {
+        "total": 2,
+        "offset": 0,
+        "limit": 1,
+        "returned": 1,
+        "has_more": True,
+        "next_offset": 1,
+    }
+    assert [item["config_name"] for item in filtered["results"]] == ["older"]
+    assert filtered["pagination"]["has_more"] is False
+
+
 def test_combined_results_report_configured_exchanges(tmp_path, monkeypatch) -> None:
     """Combined PB8 result directories must retain the real exchanges needed by chart controls."""
     root = tmp_path / "pb8" / "backtests" / "pbgui"

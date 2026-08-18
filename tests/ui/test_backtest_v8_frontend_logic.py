@@ -285,15 +285,16 @@ def test_queue_result_action_applies_filter_before_showing_results() -> None:
         let rendered = 0;
         let loadArgs = [];
         let hiddenCounts = 0;
-        function selectPanel(panel) {{
+        function selectPanel(panel, options) {{
           selectedSnapshots.push({{
             panel,
+            deferred: !!(options && options.deferResultsLoad),
             config: configFilter.value,
             list: nodes['results-list'].innerHTML
           }});
         }}
         function renderResults() {{ rendered += 1; }}
-        function loadResults(name) {{ loadArgs.push(name); }}
+        function loadResults(name, options) {{ loadArgs.push({{name, keepVisible: !!(options && options.keepVisible)}}); }}
         function hideResultsCountLabel() {{ hiddenCounts += 1; }}
         {function}
 
@@ -302,14 +303,80 @@ def test_queue_result_action_applies_filter_before_showing_results() -> None:
         assert.equal(configFilter.value, 'target config');
         assert.equal(_pendingResultFilter, 'target config');
         assert.match(selectedSnapshots[0].list, /Checking for matching results/);
+        assert.equal(selectedSnapshots[0].deferred, true);
         assert.equal(hiddenCounts, 1);
 
         results = [{{config_name: 'target config'}}];
         viewConfigResults('target config');
         assert.equal(_pendingResultFilter, '');
         assert.equal(selectedSnapshots[1].config, 'target config');
+        assert.equal(selectedSnapshots[1].deferred, true);
         assert.equal(rendered, 1);
-        assert.deepEqual(loadArgs, ['target config']);
+        assert.deepEqual(loadArgs, [
+          {{name: 'target config', keepVisible: false}},
+          {{name: 'target config', keepVisible: true}}
+        ]);
+        """
+    )
+
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_results_load_progressively_and_use_server_config_filter() -> None:
+    """Result pages must render incrementally and scope queue requests by config."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "loadResults")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const nodes = {{
+          'results-list': {{innerHTML: '<table>stale</table>'}},
+          'results-count-label': {{textContent: '', style: {{display: ''}}}}
+        }};
+        const document = {{getElementById(id) {{ return nodes[id] || null; }}}};
+        const requests = [];
+        const appliedCounts = [];
+        let results = [];
+        let resultsByVersion = {{v7: [], v8: []}};
+        let RESULTS_PAGE_SIZE = 20;
+        let _pendingResultFilter = '';
+        let _resultsLoadGeneration = 0;
+        let _resultsEmptyRetryTimer = null;
+        let _resultsEmptyRetryCount = 0;
+        let currentPanel = 'results';
+        function selectedResultsVersion() {{ return 'v8'; }}
+        function backtestApiBase(version) {{ return '/api/backtest-' + version; }}
+        function hideResultsCountLabel() {{ nodes['results-count-label'].style.display = 'none'; }}
+        function resultsForSelectedVersion(items) {{ return items.filter(item => item.backtest_version === 'v8'); }}
+        function _applyResultsData(items, filterName) {{
+          assert.equal(filterName, 'target config');
+          results = items;
+          appliedCounts.push(items.length);
+          nodes['results-count-label'].textContent = items.length + ' results';
+          return items;
+        }}
+        function apiFetchFrom(base, path) {{
+          requests.push(base + path);
+          if (path.includes('offset=0')) return Promise.resolve({{
+            results: [{{path: '/new', config_name: 'target config'}}],
+            pagination: {{total: 2, has_more: true, next_offset: 1}}
+          }});
+          return Promise.resolve({{
+            results: [{{path: '/old', config_name: 'target config'}}],
+            pagination: {{total: 2, has_more: false, next_offset: 2}}
+          }});
+        }}
+        function toast(message) {{ throw new Error(message); }}
+        {function}
+
+        loadResults('target config').then(() => {{
+          assert.deepEqual(appliedCounts, [1, 2, 2]);
+          assert.equal(results.length, 2);
+          assert.match(requests[0], /offset=0&limit=20&name=target%20config$/);
+          assert.match(requests[1], /offset=1&limit=20&name=target%20config$/);
+          assert.equal(nodes['results-count-label'].textContent, '2 results');
+        }}).catch(error => {{ console.error(error); process.exit(1); }});
         """
     )
 

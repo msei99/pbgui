@@ -3583,96 +3583,130 @@ def get_queue_log(filename: str, lines: int = 100,
 # ── REST: Results ─────────────────────────────────────────────
 
 @router.get("/results")
-def list_results(name: str = None, session: SessionToken = Depends(require_auth)):
+def list_results(
+    name: str = None,
+    offset: int = 0,
+    limit: int = 0,
+    session: SessionToken = Depends(require_auth),
+):
     """List backtest results. If name given, only for that config."""
     base = Path(_bt_results_base())
     if not base.exists():
-        return {"results": []}
+        return {"results": [], "pagination": {"total": 0, "offset": 0, "limit": limit, "returned": 0, "has_more": False, "next_offset": 0}}
+    if offset < 0 or limit < 0 or limit > 100:
+        raise HTTPException(status_code=422, detail="offset must be non-negative and limit must be between 0 and 100")
+    if name:
+        _validate_name(name)
 
     results = []
     search_dirs = [base / name] if name else [d for d in base.iterdir() if d.is_dir()]
-
+    indexed_analysis_files = []
     for config_dir in search_dirs:
-        if not config_dir.exists():
-            continue
-        for analysis_file in config_dir.glob("**/analysis.json"):
-            result_dir = analysis_file.parent
-            try:
-                with open(analysis_file, "r", encoding="utf-8") as f:
-                    analysis = json.load(f)
-                config_file = result_dir / "config.json"
-                config_data = {}
-                if config_file.exists():
-                    with open(config_file, "r", encoding="utf-8") as f:
-                        config_data = json.load(f)
+        if config_dir.exists() and config_dir.is_dir() and not config_dir.is_symlink():
+            for path in config_dir.glob("**/analysis.json"):
+                try:
+                    if path.is_file() and not path.is_symlink():
+                        indexed_analysis_files.append((path.stat().st_mtime, str(path), path))
+                except OSError:
+                    continue
+    indexed_analysis_files.sort(reverse=True)
+    analysis_files = [item[2] for item in indexed_analysis_files]
+    total = len(analysis_files)
+    page_files = analysis_files[offset:] if limit == 0 else analysis_files[offset : offset + limit]
 
-                bt = config_data.get("backtest", {})
-                bot = config_data.get("bot", {})
-                live = config_data.get("live", {}) if isinstance(config_data.get("live"), dict) else {}
-                approved = live.get("approved_coins", {}) if isinstance(live.get("approved_coins"), dict) else {}
-                coins = sorted({
-                    str(coin)
-                    for side in ("long", "short")
-                    for coin in (approved.get(side) if isinstance(approved.get(side), list) else [])
-                    if str(coin).strip() and str(coin).strip().lower() != "all"
-                })
+    for analysis_file in page_files:
+        result_dir = analysis_file.parent
+        try:
+            relative = analysis_file.relative_to(base)
+            config_dir = base / relative.parts[0]
+            if not config_dir.is_dir() or config_dir.is_symlink():
+                continue
+            with open(analysis_file, "r", encoding="utf-8") as f:
+                analysis = json.load(f)
+            config_file = result_dir / "config.json"
+            config_data = {}
+            if config_file.exists():
+                with open(config_file, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
 
-                # Support old & new analysis key formats
-                adg = analysis.get("adg_usd", analysis.get("adg", 0))
-                drawdown = analysis.get("drawdown_worst_usd", analysis.get("drawdown_worst", 0))
-                sharpe = analysis.get("sharpe_ratio_usd", analysis.get("sharpe_ratio", 0))
-                eqbal_diff = analysis.get(
-                    "equity_balance_diff_neg_max_usd",
-                    analysis.get("equity_balance_diff_neg_max", 0)
+            bt = config_data.get("backtest", {})
+            bot = config_data.get("bot", {})
+            live = config_data.get("live", {}) if isinstance(config_data.get("live"), dict) else {}
+            approved = live.get("approved_coins", {}) if isinstance(live.get("approved_coins"), dict) else {}
+            coins = sorted({
+                str(coin)
+                for side in ("long", "short")
+                for coin in (approved.get(side) if isinstance(approved.get(side), list) else [])
+                if str(coin).strip() and str(coin).strip().lower() != "all"
+            })
+
+            # Support old & new analysis key formats
+            adg = analysis.get("adg_usd", analysis.get("adg", 0))
+            drawdown = analysis.get("drawdown_worst_usd", analysis.get("drawdown_worst", 0))
+            sharpe = analysis.get("sharpe_ratio_usd", analysis.get("sharpe_ratio", 0))
+            eqbal_diff = analysis.get(
+                "equity_balance_diff_neg_max_usd",
+                analysis.get("equity_balance_diff_neg_max", 0)
+            )
+            gain = analysis.get("gain_usd", analysis.get("gain", 0))
+            starting_balance = bt.get("starting_balance", 0)
+            final_balance = starting_balance * gain if starting_balance else 0
+
+            # Liquidation detection: use passivbot's flag if available,
+            # fall back to heuristic for older results
+            liq_threshold = bt.get("liquidation_threshold", 0.05)
+            if "liquidated" in analysis:
+                liquidated = bool(analysis["liquidated"])
+            else:
+                liquidated = (
+                    drawdown >= 0.95
+                    or eqbal_diff >= 0.95
+                    or (starting_balance > 0 and final_balance < starting_balance * liq_threshold)
                 )
-                gain = analysis.get("gain_usd", analysis.get("gain", 0))
-                starting_balance = bt.get("starting_balance", 0)
-                final_balance = starting_balance * gain if starting_balance else 0
 
-                # Liquidation detection: use passivbot's flag if available,
-                # fall back to heuristic for older results
-                liq_threshold = bt.get("liquidation_threshold", 0.05)
-                if "liquidated" in analysis:
-                    liquidated = bool(analysis["liquidated"])
-                else:
-                    liquidated = (
-                        drawdown >= 0.95
-                        or eqbal_diff >= 0.95
-                        or (starting_balance > 0 and final_balance < starting_balance * liq_threshold)
-                    )
+            results.append({
+                "path": str(result_dir),
+                "display_name": str(result_dir.relative_to(base)),
+                "config_name": config_dir.name,
+                "result_name": result_dir.name,
+                "exchange_dir": result_dir.parent.name,
+                "adg": adg,
+                "drawdown_worst": drawdown,
+                "sharpe_ratio": sharpe,
+                "equity_balance_diff_neg_max": eqbal_diff,
+                "gain": gain,
+                "starting_balance": starting_balance,
+                "final_balance": final_balance,
+                "liquidated": liquidated,
+                "exchanges": bt.get("exchanges", []),
+                "coins": coins,
+                "start_date": bt.get("start_date", ""),
+                "end_date": bt.get("end_date", ""),
+                "btc_collateral_cap": float(bt.get("btc_collateral_cap") or 0),
+                "twe_long": bot.get("long", {}).get("total_wallet_exposure_limit", 0),
+                "twe_short": bot.get("short", {}).get("total_wallet_exposure_limit", 0),
+                "pos_long": bot.get("long", {}).get("n_positions", 0),
+                "pos_short": bot.get("short", {}).get("n_positions", 0),
+                "modified": datetime.datetime.fromtimestamp(
+                    analysis_file.stat().st_mtime
+                ).isoformat(),
+                "analysis": analysis,
+            })
+        except Exception as e:
+            _log(SERVICE, f"Error reading result {result_dir}: {e}", level="WARNING")
 
-                results.append({
-                    "path": str(result_dir),
-                    "display_name": str(result_dir.relative_to(base)),
-                    "config_name": config_dir.name,
-                    "result_name": result_dir.name,
-                    "exchange_dir": result_dir.parent.name,
-                    "adg": adg,
-                    "drawdown_worst": drawdown,
-                    "sharpe_ratio": sharpe,
-                    "equity_balance_diff_neg_max": eqbal_diff,
-                    "gain": gain,
-                    "starting_balance": starting_balance,
-                    "final_balance": final_balance,
-                    "liquidated": liquidated,
-                    "exchanges": bt.get("exchanges", []),
-                    "coins": coins,
-                    "start_date": bt.get("start_date", ""),
-                    "end_date": bt.get("end_date", ""),
-                    "btc_collateral_cap": float(bt.get("btc_collateral_cap") or 0),
-                    "twe_long": bot.get("long", {}).get("total_wallet_exposure_limit", 0),
-                    "twe_short": bot.get("short", {}).get("total_wallet_exposure_limit", 0),
-                    "pos_long": bot.get("long", {}).get("n_positions", 0),
-                    "pos_short": bot.get("short", {}).get("n_positions", 0),
-                    "modified": datetime.datetime.fromtimestamp(
-                        analysis_file.stat().st_mtime
-                    ).isoformat(),
-                    "analysis": analysis,
-                })
-            except Exception as e:
-                _log(SERVICE, f"Error reading result {result_dir}: {e}", level="WARNING")
-
-    return {"results": results}
+    next_offset = offset + len(page_files)
+    return {
+        "results": results,
+        "pagination": {
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "returned": len(page_files),
+            "has_more": next_offset < total,
+            "next_offset": next_offset,
+        },
+    }
 
 
 @router.get("/legacy/results")
