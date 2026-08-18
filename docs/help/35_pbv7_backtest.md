@@ -135,6 +135,8 @@ Use the **Select All** / **Deselect** toolbar above the table.
 
 When you select multiple completed queue rows and click **📈 Compare**, PBGui resolves the matching result batch for each selected queue item, opens the **Results** panel, preselects those result rows, and renders the comparison chart immediately. Queue items that are not complete yet or have no matching stored result are skipped.
 
+The green result action applies its config filter before opening **Results**. A previous unfiltered result table is never shown while the matching result list refreshes.
+
 ### Settings modal
 
 PB7 and PB8 use one shared queue settings configuration. Saving it on either Backtest page updates both workers. The CPU value is one global automatic PB7/PB8 process limit, not a separate allowance per version. The dialog renders immediately from its current state and refreshes authoritative host values in the background without overwriting edits.

@@ -135,6 +135,8 @@ Zeigt alle ausstehenden, laufenden und abgeschlossenen Backtest-Jobs mit Echtzei
 
 Wenn du mehrere abgeschlossene Queue-Zeilen auswählst und **📈 Compare** klickst, löst PBGui pro ausgewähltem Queue-Eintrag den passenden Ergebnis-Batch auf, öffnet das **Results**-Panel, markiert diese Ergebniszeilen vor und rendert den Vergleich sofort. Queue-Einträge, die noch nicht abgeschlossen sind oder kein passendes gespeichertes Ergebnis haben, werden übersprungen.
 
+Die grüne Result-Aktion setzt ihren Config-Filter vor dem Öffnen von **Results**. Während die passende Ergebnisliste aktualisiert wird, erscheint keine vorherige ungefilterte Result-Tabelle.
+
 ### Einstellungs-Modal
 
 PB7 und PB8 verwenden eine gemeinsame Queue-Settings-Konfiguration. Speichern auf einer der beiden Backtest-Seiten aktualisiert beide Worker. Der CPU-Wert ist ein globales automatisches PB7/PB8-Prozesslimit und keine separate Freigabe pro Version. Der Dialog erscheint sofort mit dem aktuellen Zustand und aktualisiert verbindliche Host-Werte im Hintergrund, ohne Eingaben zu ueberschreiben.

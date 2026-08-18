@@ -258,6 +258,65 @@ def test_editor_results_button_opens_the_unfiltered_results_panel() -> None:
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
+def test_queue_result_action_applies_filter_before_showing_results() -> None:
+    """Queue result navigation must never expose the stale unfiltered table."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "viewConfigResults")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const configFilter = {{
+          options: [{{value: ''}}],
+          value: '',
+          appendChild(option) {{ this.options.push(option); }}
+        }};
+        const nodes = {{
+          'results-filter': {{value: 'old search'}},
+          'results-config-filter': configFilter,
+          'results-list': {{innerHTML: '<table>all results</table>'}}
+        }};
+        const document = {{
+          getElementById(id) {{ return nodes[id] || null; }},
+          createElement(tag) {{ assert.equal(tag, 'option'); return {{value: '', textContent: ''}}; }}
+        }};
+        let results = [];
+        let _pendingResultFilter = '';
+        let selectedSnapshots = [];
+        let rendered = 0;
+        let loadArgs = [];
+        let hiddenCounts = 0;
+        function selectPanel(panel) {{
+          selectedSnapshots.push({{
+            panel,
+            config: configFilter.value,
+            list: nodes['results-list'].innerHTML
+          }});
+        }}
+        function renderResults() {{ rendered += 1; }}
+        function loadResults(name) {{ loadArgs.push(name); }}
+        function hideResultsCountLabel() {{ hiddenCounts += 1; }}
+        {function}
+
+        viewConfigResults('target config');
+        assert.equal(nodes['results-filter'].value, '');
+        assert.equal(configFilter.value, 'target config');
+        assert.equal(_pendingResultFilter, 'target config');
+        assert.match(selectedSnapshots[0].list, /Checking for matching results/);
+        assert.equal(hiddenCounts, 1);
+
+        results = [{{config_name: 'target config'}}];
+        viewConfigResults('target config');
+        assert.equal(_pendingResultFilter, '');
+        assert.equal(selectedSnapshots[1].config, 'target config');
+        assert.equal(rendered, 1);
+        assert.deepEqual(loadArgs, ['target config']);
+        """
+    )
+
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_delayed_v8_settings_load_does_not_replace_results_sidebar() -> None:
     """A deferred V8 editor render must stop after the user leaves Configs."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")

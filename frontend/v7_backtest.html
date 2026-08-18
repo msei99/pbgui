@@ -4970,24 +4970,30 @@ function addConfigToQueue(name) {
 function viewConfigResults(name) {
   _pendingResultFilter = name;
   document.getElementById('results-filter').value = '';
+  var cfgSel = document.getElementById('results-config-filter');
+  if (cfgSel && name) {
+    var hasRequestedOption = Array.prototype.some.call(cfgSel.options, function(option) {
+      return option.value === name;
+    });
+    if (!hasRequestedOption) {
+      var requestedOption = document.createElement('option');
+      requestedOption.value = name;
+      requestedOption.textContent = name;
+      cfgSel.appendChild(requestedOption);
+    }
+    cfgSel.value = name;
+  }
   /* If we already have results cached, filter and render immediately — no empty-table flash */
   if (results.length > 0) {
-    var cfgSel = document.getElementById('results-config-filter');
-    if (cfgSel) {
-      var names = {};
-      results.forEach(function(r) { if (r.config_name) names[r.config_name] = true; });
-      var sorted = Object.keys(names).sort();
-      cfgSel.innerHTML = '\x3Coption value="">All configs\x3C/option>';
-      sorted.forEach(function(n) {
-        cfgSel.innerHTML += '\x3Coption value="' + esc(n) + '"' + (n === name ? ' selected' : '') + '>' + esc(n) + '\x3C/option>';
-      });
-    }
     _pendingResultFilter = '';  /* already applied */
     selectPanel('results');
     renderResults();
     /* Refresh in background so newly finished jobs appear */
-    loadResults();
+    loadResults(name);
   } else {
+    var list = document.getElementById('results-list');
+    if (list) list.innerHTML = '\x3Cdiv class="empty-state">Checking for matching results…\x3C/div>';
+    hideResultsCountLabel('results-count-label');
     selectPanel('results');  /* triggers loadResults via results.length === 0 */
   }
 }
