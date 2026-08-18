@@ -231,6 +231,37 @@ def test_pb8_run_controls_and_exact_resume_are_version_routed() -> None:
     assert "btn-resume-result" in page
 
 
+def test_pb8_metadata_failure_shows_persistent_update_warning() -> None:
+    """An unavailable PB8 runtime must remain visible without aborting page initialization."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n\n".join(
+        _page_function(page, name) for name in ("setPb8RuntimeWarning", "loadOptimizeMetadata")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const detail = {{textContent: ''}};
+        const classes = new Set();
+        const document = {{
+          body: {{classList: {{toggle(name, active) {{ if (active) classes.add(name); else classes.delete(name); }}}}}}
+        }};
+        const optimizeEditorAdapter = {{isV8: true, metadataPath: '/metadata'}};
+        function el(id) {{ return id === 'pb8-runtime-warning-detail' ? detail : null; }}
+        async function apiFetch() {{ const error = new Error('Run Update PB8.'); error.status = 503; throw error; }}
+        {functions}
+        loadOptimizeMetadata().then(() => {{
+          assert.equal(detail.textContent, 'Run Update PB8.');
+          assert.equal(classes.has('pb8-runtime-warning-visible'), true);
+        }}).catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+
+    assert 'id="pb8-runtime-warning"' in page
+    assert "PB8 update required" in page
+    assert 'href="/api/vps-manager/main_page"' in page
+    _run_node(script)
+
+
 def test_pb8_queue_settings_keep_the_complete_shared_controls() -> None:
     """PB8 must expose the same autostart CPU and market-data settings as PB7."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
@@ -510,6 +541,7 @@ def test_pb8_runtime_metadata_preserves_hsl_enable_controls() -> None:
         ]}});
         const normalizeLimitsMeta = value => value;
         const deepClone = value => JSON.parse(JSON.stringify(value));
+        const setPb8RuntimeWarning = () => {{}};
         {load_metadata}
         (async () => {{
           await loadOptimizeMetadata();

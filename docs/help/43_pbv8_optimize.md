@@ -2,6 +2,8 @@
 
 PBv8 Optimize manages Passivbot V8 optimizer configurations, queued jobs, results, and Pareto candidates independently from PBv7. The page uses the same template, panels, and visual editor as PBv7 Optimize. A version adapter translates only the PB8 API paths and nested configuration model; there is no separate PB8 optimizer UI.
 
+If PB8 is unavailable after an incomplete installation or update, a persistent **PB8 update required** warning appears above the workspace with the runtime error and a link to VPS Manager. The page remains usable for diagnosis instead of hiding the issue in transient notifications.
+
 ## Configs
 
 - **New Config** loads optimizer defaults, strategies, bounds, scoring metrics, limits, backend options, and Pymoo choices from the installed PB8 runtime.

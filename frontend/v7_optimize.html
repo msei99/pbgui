@@ -53,6 +53,31 @@ button, input, textarea, select { font: inherit; }
 .conn-lost { background: var(--red); color: #fff; }
 .conn-waiting { background: var(--orange); color: #000; }
 
+#pb8-runtime-warning {
+  display: none;
+  min-height: 42px;
+  padding: 8px 16px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(255, 140, 0, .16);
+  border-top: 1px solid rgba(255, 140, 0, .45);
+  border-bottom: 1px solid rgba(255, 140, 0, .45);
+  color: #ffd29a;
+  font-size: var(--fs-sm);
+}
+#pb8-runtime-warning strong { color: #ffb454; white-space: nowrap; }
+#pb8-runtime-warning a {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 180, 84, .6);
+  border-radius: 4px;
+  color: #ffd29a;
+  font-weight: 600;
+}
+body.pb8-runtime-warning-visible #pb8-runtime-warning { display: flex; }
+body.pb8-runtime-warning-visible #page-body { height: calc(100vh - 94px); }
+
 #page-body { display: flex; height: calc(100vh - 52px); overflow: hidden; }
 #main-content {
   flex: 1;
@@ -2129,6 +2154,11 @@ textarea.json-invalid:focus {
   </div>
 </div>
 <div id="conn-banner" class="conn-waiting">Connecting to Optimize queue...</div>
+<div id="pb8-runtime-warning" role="alert">
+  <strong>PB8 update required</strong>
+  <span id="pb8-runtime-warning-detail">The PB8 runtime is unavailable.</span>
+  <a href="/api/vps-manager/main_page">Open VPS Manager</a>
+</div>
 
 <div id="page-body">
   <div id="sidebar">
@@ -4937,6 +4967,16 @@ function setBanner(kind, message) {
   banner.textContent = message;
 }
 
+function setPb8RuntimeWarning(error) {
+  if (!optimizeEditorAdapter.isV8) return;
+  var detail = el('pb8-runtime-warning-detail');
+  var visible = !!error;
+  if (detail && visible) {
+    detail.textContent = (error && error.message) || 'Passivbot V8 is unavailable. Run Update PB8.';
+  }
+  document.body.classList.toggle('pb8-runtime-warning-visible', visible);
+}
+
 function buildHttpError(response, text) {
   var message = text || ('HTTP ' + response.status);
   var detail = null;
@@ -4979,7 +5019,17 @@ async function apiFetch(path, opts) {
 
 async function loadOptimizeMetadata() {
   if (!optimizeEditorAdapter.metadataPath) return;
-  var payload = await apiFetch(optimizeEditorAdapter.metadataPath);
+  var payload;
+  try {
+    payload = await apiFetch(optimizeEditorAdapter.metadataPath);
+  } catch (error) {
+    if (optimizeEditorAdapter.isV8 && error && error.status === 503) {
+      setPb8RuntimeWarning(error);
+      return;
+    }
+    throw error;
+  }
+  setPb8RuntimeWarning(null);
   var metadata = optimizeEditorAdapter.normalizeMetadata(payload || {});
   if (metadata.optimizeDefaults && Object.keys(metadata.optimizeDefaults).length) {
     state.settings.optimize_defaults = metadata.optimizeDefaults;
