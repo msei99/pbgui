@@ -235,7 +235,8 @@ def test_pb8_metadata_failure_shows_persistent_update_warning() -> None:
     """An unavailable PB8 runtime must remain visible without aborting page initialization."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
     functions = "\n\n".join(
-        _page_function(page, name) for name in ("setPb8RuntimeWarning", "loadOptimizeMetadata")
+        _page_function(page, name)
+        for name in ("setPb8RuntimeWarning", "handlePb8RuntimeUnavailable", "loadSettings")
     )
     script = textwrap.dedent(
         f"""
@@ -246,10 +247,11 @@ def test_pb8_metadata_failure_shows_persistent_update_warning() -> None:
           body: {{classList: {{toggle(name, active) {{ if (active) classes.add(name); else classes.delete(name); }}}}}}
         }};
         const optimizeEditorAdapter = {{isV8: true, metadataPath: '/metadata'}};
+        const state = {{settingsLoadSeq: 0, settingsPushSeq: 0, navigationSeq: 0, settings: {{}}}};
         function el(id) {{ return id === 'pb8-runtime-warning-detail' ? detail : null; }}
         async function apiFetch() {{ const error = new Error('Run Update PB8.'); error.status = 503; throw error; }}
         {functions}
-        loadOptimizeMetadata().then(() => {{
+        loadSettings().then(() => {{
           assert.equal(detail.textContent, 'Run Update PB8.');
           assert.equal(classes.has('pb8-runtime-warning-visible'), true);
         }}).catch(error => {{ console.error(error); process.exit(1); }});

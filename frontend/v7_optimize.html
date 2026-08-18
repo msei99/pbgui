@@ -4977,6 +4977,12 @@ function setPb8RuntimeWarning(error) {
   document.body.classList.toggle('pb8-runtime-warning-visible', visible);
 }
 
+function handlePb8RuntimeUnavailable(error) {
+  if (!optimizeEditorAdapter.isV8 || !error || error.status !== 503) return false;
+  setPb8RuntimeWarning(error);
+  return true;
+}
+
 function buildHttpError(response, text) {
   var message = text || ('HTTP ' + response.status);
   var detail = null;
@@ -5023,10 +5029,7 @@ async function loadOptimizeMetadata() {
   try {
     payload = await apiFetch(optimizeEditorAdapter.metadataPath);
   } catch (error) {
-    if (optimizeEditorAdapter.isV8 && error && error.status === 503) {
-      setPb8RuntimeWarning(error);
-      return;
-    }
+    if (handlePb8RuntimeUnavailable(error)) return;
     throw error;
   }
   setPb8RuntimeWarning(null);
@@ -11977,7 +11980,13 @@ async function loadSettings() {
   var requestSeq = ++state.settingsLoadSeq;
   var pushSeq = state.settingsPushSeq;
   var navigationSeq = state.navigationSeq;
-  var settings = await apiFetch('/settings');
+  var settings;
+  try {
+    settings = await apiFetch('/settings');
+  } catch (error) {
+    if (handlePb8RuntimeUnavailable(error)) return;
+    throw error;
+  }
   if (requestSeq !== state.settingsLoadSeq || navigationSeq !== state.navigationSeq) return;
   var mutableQueueSettings = ['autostart', 'cpu', 'cpu_override', 'use_pbgui_market_data'];
   var queueSettingsWerePushed = pushSeq !== state.settingsPushSeq;
@@ -12930,6 +12939,7 @@ function connectWS() {
 
 function handleError(error) {
   console.error(error);
+  if (handlePb8RuntimeUnavailable(error)) return;
   toast(error && error.message ? error.message : 'Unexpected error', 'err');
 }
 
