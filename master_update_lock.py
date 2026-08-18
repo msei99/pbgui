@@ -132,6 +132,51 @@ def acquire_pb8_update_writer(install_dir: Path, stale_after: float = 14_400.0) 
             raise RuntimeError("Another PB8 installation or update is already active.") from exc
 
 
+def _pb8_update_process_active(install_dir: Path) -> bool:
+    """Return whether procfs shows an active PB8 update or build below this install root."""
+    proc_root = Path("/proc")
+    if not proc_root.is_dir():
+        return True
+    install_text = str(Path(install_dir).expanduser().resolve(strict=False))
+    pb8_text = str(Path(install_text) / "pb8")
+    playbook_markers = (
+        "master-update-pb8.yml",
+        "master-update-pbgui-pb8.yml",
+        "vps-update-pb8.yml",
+        "vps-update-pbgui-pb8.yml",
+    )
+    build_markers = ("pip", "maturin", "cargo", "rustc")
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            command = (entry / "cmdline").read_bytes()[:65_536].replace(b"\0", b" ").decode("utf-8", errors="ignore")
+        except OSError:
+            continue
+        if not command:
+            continue
+        if "ansible-playbook" in command and any(marker in command for marker in playbook_markers):
+            return True
+        if pb8_text in command and any(marker in command for marker in build_markers):
+            return True
+    return False
+
+
+def recover_orphaned_pb8_update_writer(install_dir: Path, min_age: float = 300.0) -> bool:
+    """Remove an old empty PB8 writer remnant only when no update/build process remains."""
+    owner_dir = Path(install_dir).expanduser().resolve(strict=False) / ".pbgui-pb8-update-active"
+    try:
+        if owner_dir.is_symlink() or not owner_dir.is_dir() or any(owner_dir.iterdir()):
+            return False
+        age = max(0.0, time.time() - owner_dir.stat().st_mtime)
+        if age < max(0.0, min_age) or _pb8_update_process_active(install_dir):
+            return False
+        owner_dir.rmdir()
+        return True
+    except (FileNotFoundError, OSError):
+        return False
+
+
 def release_pb8_update_writer(install_dir: Path) -> None:
     """Release one empty PB8 writer directory; repeated cleanup is harmless."""
     owner_dir = Path(install_dir).expanduser().resolve(strict=False) / ".pbgui-pb8-update-active"

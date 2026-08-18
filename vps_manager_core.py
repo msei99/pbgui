@@ -16,7 +16,7 @@ import paramiko
 
 from file_lock import advisory_file_lock
 from logging_helpers import append_managed_transcript_line, human_log as _log, rotate_managed_log_before_open
-from master_update_lock import acquire_master_update_lock
+from master_update_lock import acquire_master_update_lock, recover_orphaned_pb8_update_writer
 from master.cluster_ssh_keys import ensure_local_cluster_ssh_material
 from pbgui_purefunc import load_ini, pb7dir, pb7venv, save_ini
 from vps_inventory_store import delete_inventory_path, write_inventory_json, write_versioned_inventory_json
@@ -1259,6 +1259,15 @@ class VPSManager:
             self.privat_data_dir.mkdir(parents=True, exist_ok=True)
             self.remove_update_log()
             self.update_log = ""
+            if self.command in {"master-update-pb8", "master-update-pbgui-pb8"}:
+                install_dir = Path(PBGDIR).expanduser().resolve(strict=False).parent
+                if recover_orphaned_pb8_update_writer(install_dir):
+                    self._append_task_log(
+                        "[PBGui] Recovered orphaned PB8 update lock before starting the requested update.\n",
+                        task_name=self.command,
+                        fallback="master-update-pb",
+                        buffer_attr="update_log",
+                    )
             if debug:
                 tags = "debug,all"
                 verbosity = 3

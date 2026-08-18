@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -15,6 +16,7 @@ from master_update_lock import (
     MasterUpdateBusyError,
     acquire_master_update_lock,
     acquire_pb8_update_writer,
+    recover_orphaned_pb8_update_writer,
     release_pb8_update_writer,
 )
 from setup.installer import core
@@ -192,6 +194,60 @@ def test_pb8_writer_directory_rejects_live_owner_and_recovers_old_empty_remnant(
 
     assert recovered == owner
     release_pb8_update_writer(tmp_path)
+
+
+def test_gui_recovery_removes_only_old_empty_pb8_writer_without_active_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GUI retries recover crash remnants but preserve recent, populated, or active locks."""
+    owner = tmp_path / ".pbgui-pb8-update-active"
+    owner.mkdir()
+    monkeypatch.setattr("master_update_lock._pb8_update_process_active", lambda _root: False)
+
+    assert recover_orphaned_pb8_update_writer(tmp_path, min_age=300) is False
+    old = time.time() - 600
+    os.utime(owner, (old, old))
+    (owner / "unexpected").write_text("owned", encoding="utf-8")
+    assert recover_orphaned_pb8_update_writer(tmp_path, min_age=300) is False
+    (owner / "unexpected").unlink()
+    os.utime(owner, (old, old))
+    monkeypatch.setattr("master_update_lock._pb8_update_process_active", lambda _root: True)
+    assert recover_orphaned_pb8_update_writer(tmp_path, min_age=300) is False
+    monkeypatch.setattr("master_update_lock._pb8_update_process_active", lambda _root: False)
+
+    assert recover_orphaned_pb8_update_writer(tmp_path, min_age=300) is True
+    assert not owner.exists()
+
+
+def test_vps_manager_logs_automatic_pb8_writer_recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The local Update PB8 task reports automatic orphan recovery in its task log."""
+    callbacks: dict[str, object] = {}
+
+    class FakeLease:
+        """Provide the update lease contract without touching a real lock."""
+
+        def release(self) -> None:
+            """Release is intentionally empty for this launch-only test."""
+
+    monkeypatch.setattr(vps_core, "PBGDIR", tmp_path / "pbgui")
+    monkeypatch.setattr(vps_core, "acquire_master_update_lock", lambda _path: FakeLease())
+    monkeypatch.setattr(vps_core, "recover_orphaned_pb8_update_writer", lambda _path: True)
+    monkeypatch.setattr(vps_core, "_ansible_envvars", lambda: {})
+    monkeypatch.setattr(vps_core.ansible_runner, "run_async", lambda **kwargs: callbacks.update(kwargs))
+    manager = object.__new__(vps_core.VPSManager)
+    manager.command = "master-update-pb8"
+    manager.command_text = "Update PB8"
+    manager._master_update_lease = None
+    manager.update_log = ""
+    manager.remove_update_log = lambda: None
+    messages = []
+    manager._append_task_log = lambda message, **kwargs: messages.append((message, kwargs))
+
+    manager.update_master()
+
+    assert messages and "Recovered orphaned PB8 update lock" in messages[0][0]
+    assert callbacks["playbook"].endswith("master-update-pb8.yml")
 
 
 def test_vps_manager_holds_shared_lock_until_runner_finishes(

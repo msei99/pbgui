@@ -147,6 +147,7 @@ The sidebar keeps the detailed log workflows separate from the normal host overv
 - when ansible output already contains terminal ANSI colors, the shared viewer now preserves those colors in the browser instead of relying only on text-pattern guesses
 - ansible task logs with glued result markers or escaped payload control sequences like `\n` / `\r` are now expanded into readable separate display lines inside the shared viewer
 - structured ansible result payloads with JSON bodies are now pretty-printed into multiline blocks, which makes nested metadata like `stat` results readable directly in the shared viewer
+- local **Update PB8** retries automatically recover an orphaned writer lock left by a crashed update when the lock is empty, at least five minutes old, and no Ansible/PB8 build process is still running; the recovery is recorded in the task log, while recent, populated, or actively owned locks remain blocked
 
 The status cards above the setup grid are live operator hints:
 - Linux package status is independent of the VPS session password. Normal display refreshes read only from the monitor-agent cache. A successful **Update Linux** performs one final package probe after any requested reboot, atomically updates that cache, and makes the master consume it immediately.

@@ -147,6 +147,7 @@ Die Sidebar trennt die Log-Workflows jetzt bewusst von der normalen Host-Ansicht
 - wenn die Ansible-Ausgabe bereits Terminal-ANSI-Farben enthält, übernimmt der gemeinsame Viewer diese Farben jetzt auch im Browser, statt nur über Textmuster zu raten
 - Ansible-Task-Logs mit verklebten Ergebnis-Markern oder escaped Payload-Steuerzeichen wie `\n` / `\r` werden jetzt im gemeinsamen Viewer in lesbare getrennte Anzeigezeilen aufgelöst
 - strukturierte Ansible-Ergebnis-Payloads mit JSON-Inhalt werden jetzt als mehrzeilige Blöcke hübsch formatiert, damit verschachtelte Metadaten wie `stat` direkt im gemeinsamen Viewer lesbar sind
+- lokale **Update PB8**-Wiederholungen bereinigen automatisch einen verwaisten Writer-Lock eines abgestuerzten Updates, wenn der Lock leer, mindestens fuenf Minuten alt und kein Ansible-/PB8-Buildprozess mehr aktiv ist; die Bereinigung erscheint im Task-Log, waehrend neue, nicht leere oder noch aktive Locks blockiert bleiben
 
 Die Status-Kacheln oberhalb des Setup-Rasters sind jetzt direkte Operator-Hinweise:
 - Der Linux-Paketstatus ist unabhängig vom VPS-Session-Passwort. Normale Anzeige-Updates lesen ausschließlich den Monitor-Agent-Cache. Ein erfolgreiches **Update Linux** führt nach einem gegebenenfalls angeforderten Reboot einmalig einen abschließenden Paket-Probe aus, aktualisiert diesen Cache atomar und lässt den Master ihn sofort einlesen.
