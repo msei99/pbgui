@@ -337,9 +337,11 @@ def test_results_load_progressively_and_use_server_config_filter() -> None:
         const document = {{getElementById(id) {{ return nodes[id] || null; }}}};
         const requests = [];
         const appliedCounts = [];
+        let paintFrames = 0;
+        const window = {{requestAnimationFrame(callback) {{ paintFrames += 1; setImmediate(callback); }}}};
         let results = [];
         let resultsByVersion = {{v7: [], v8: []}};
-        let RESULTS_PAGE_SIZE = 20;
+        let RESULTS_PAGE_SIZE = 5;
         let _pendingResultFilter = '';
         let _resultsLoadGeneration = 0;
         let _resultsEmptyRetryTimer = null;
@@ -373,8 +375,9 @@ def test_results_load_progressively_and_use_server_config_filter() -> None:
         loadResults('target config').then(() => {{
           assert.deepEqual(appliedCounts, [1, 2, 2]);
           assert.equal(results.length, 2);
-          assert.match(requests[0], /offset=0&limit=20&name=target%20config$/);
-          assert.match(requests[1], /offset=1&limit=20&name=target%20config$/);
+          assert.match(requests[0], /offset=0&limit=5&name=target%20config$/);
+          assert.match(requests[1], /offset=1&limit=5&name=target%20config$/);
+          assert.equal(paintFrames, 2);
           assert.equal(nodes['results-count-label'].textContent, '2 results');
         }}).catch(error => {{ console.error(error); process.exit(1); }});
         """

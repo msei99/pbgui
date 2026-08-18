@@ -1029,7 +1029,7 @@ var queueItems  = [];          // queue items from WS
 var _lastQueueHash = '';       // JSON hash of last queue state (skip re-render if unchanged)
 var results     = [];          // backtest results
 var resultsByVersion = { v7: [], v8: [] };
-var RESULTS_PAGE_SIZE = 20;
+var RESULTS_PAGE_SIZE = 5;
 var _resultsLoadGeneration = 0;
 var _resultsEmptyRetryTimer = null;
 var _resultsEmptyRetryCount = 0;
@@ -5413,6 +5413,14 @@ function loadResults(filterName, loadOptions) {
     return applied;
   }
 
+  function waitForResultsPaint() {
+    return new Promise(function(resolve) {
+      window.requestAnimationFrame(function() {
+        window.requestAnimationFrame(resolve);
+      });
+    });
+  }
+
   function loadVersionPage(version, offset) {
     var path = '/results?offset=' + offset + '&limit=' + RESULTS_PAGE_SIZE;
     if (selectedFilter) path += '&name=' + encodeURIComponent(selectedFilter);
@@ -5432,7 +5440,9 @@ function loadResults(filterName, loadOptions) {
       if (progress[version].hasMore) {
         var nextOffset = Number(pagination.next_offset);
         if (!Number.isFinite(nextOffset) || nextOffset <= offset) nextOffset = offset + RESULTS_PAGE_SIZE;
-        return loadVersionPage(version, nextOffset);
+        return waitForResultsPaint().then(function() {
+          return loadVersionPage(version, nextOffset);
+        });
       }
     });
   }
