@@ -258,7 +258,7 @@ def test_setup_systemd_first_run_then_idempotent_second_run(tmp_path: Path) -> N
     api_source = (unit_dir / "pbgui-api.service").read_text(encoding="utf-8")
     assert f"ExecStartPre=/bin/bash {pbgui_dir}/setup/stop_legacy_api.sh --pbgui-dir {pbgui_dir}" in api_source
     assert "After=pbgui-vps-monitor.service" in api_source
-    assert "Wants=pbgui-vps-monitor.service" in api_source
+    assert "Wants=pbgui-vps-monitor.service" not in api_source
     pbrun_source = (unit_dir / "pbgui-pbrun.service").read_text(encoding="utf-8")
     assert "KillSignal=SIGTERM" in pbrun_source
     assert "KillMode=process" in pbrun_source
@@ -274,6 +274,22 @@ def test_setup_systemd_first_run_then_idempotent_second_run(tmp_path: Path) -> N
     for action in ("daemon-reload", " enable ", " restart ", " start ", "reset-failed"):
         assert action not in second_calls
     assert not list(unit_path.parent.glob(".pbgui-*.tmp.*"))
+
+
+def test_setup_systemd_preserve_state_only_updates_unit_files(tmp_path: Path) -> None:
+    """Update reconciliation must not enable, disable, start, stop, or restart services."""
+
+    env, pbgui_dir, python_bin, calls_path = _fake_systemd_environment(tmp_path)
+    result = _run_setup(env, pbgui_dir, python_bin, "--preserve-state")
+
+    assert result.returncode == 0, result.stderr
+    calls = calls_path.read_text(encoding="utf-8")
+    assert "--user daemon-reload" in calls
+    for action in (" enable ", " disable ", " start ", " stop ", " restart ", " reset-failed "):
+        assert action not in calls
+    unit_dir = tmp_path / "home" / "agent-user" / ".config" / "systemd" / "user"
+    assert (unit_dir / "pbgui-api.service").is_file()
+    assert (unit_dir / "pbgui-monitor-agent.service").is_file()
 
 
 def test_api_handoff_stops_only_exact_legacy_process(tmp_path: Path) -> None:
@@ -534,18 +550,24 @@ def test_update_playbooks_unconditionally_reconcile_monitor_agent(playbook_name:
     reconcile = reconcile.split("\n    - name:", 1)[0]
     assert "setup/setup_systemd.sh" in reconcile
     assert "monitor-agent" in tasks
-    assert "--enable" in reconcile
     if playbook_name.startswith("master-"):
-        assert "--no-start" in reconcile
+        assert "--preserve-state" in reconcile
+        assert "--enable" not in reconcile
         assert "Recover and verify monitor-agent without touching PBApiServer" in tasks
+        assert "monitor_agent_before.rc == 0" in tasks
     else:
+        assert "--enable" in reconcile
         assert "['--no-start'] if (pbgui_role | default('') | string | lower) == 'master'" in reconcile
         assert "Recover and verify master monitor-agent without touching PBApiServer" in tasks
     assert "pbgui_repo.changed" not in reconcile
     assert "pbgui_requirements.changed" not in reconcile
     assert "'changed=true' in (systemd_reconcile_result.stdout | default(''))" in reconcile
     assert "- name: Sync PBGui systemd user services" in handlers
-    assert "--no-start" in handlers
+    if playbook_name.startswith("master-"):
+        assert "--preserve-state" in handlers
+        assert "PBGUI_RESTART_ACTIVE_ONLY" in handlers
+    else:
+        assert "--no-start" in handlers
     assert "'changed=true' in (systemd_setup_result.stdout | default(''))" in handlers
     assert 'listen: "restart pbgui"' in handlers
     assert "PBMonitorAgent" in handlers

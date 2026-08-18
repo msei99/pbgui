@@ -3116,7 +3116,7 @@ def test_host_meta_migration_status_requires_monitor_agent_unit() -> None:
 
 @pytest.mark.parametrize("playbook_path", ["master-update-pbgui.yml", "master-update-pb.yml"])
 def test_master_update_playbooks_repair_required_systemd_units(playbook_path: str) -> None:
-    """Master updates unconditionally reconcile required units idempotently."""
+    """Master updates reconcile unit files without overriding operator service state."""
     playbook = Path(playbook_path).read_text(encoding="utf-8")
     tasks = playbook.split("  handlers:", 1)[0]
     reconcile_block = tasks.split("- name: Reconcile PBGui systemd user services", 1)[1].split("\n    - name:", 1)[0]
@@ -3129,18 +3129,21 @@ def test_master_update_playbooks_repair_required_systemd_units(playbook_path: st
     assert "{{ target_hosts | default('localhost') }}" in playbook
     assert "pbgui_python | default(ansible_playbook_python)" in playbook
     assert "force_handlers: true" in playbook
-    assert "api,pbcluster,pbcoindata,monitor-agent" in reconcile_block
-    assert "pbcoindata" in playbook
-    assert "monitor-agent" in playbook
+    assert "--preserve-state" in reconcile_block
+    assert "--enable" not in reconcile_block
     assert "PBMonitorAgent" in playbook
     assert "PBGUI_REQUIRE_PBCOINDATA" in playbook
+    assert 'PBGUI_RESTART_ACTIVE_ONLY: "1"' in playbook
     assert "Restart PBApiServer" in playbook
     assert "systemd-run --user" in playbook
-    assert "systemctl --user enable pbgui-api.service" in playbook
+    assert "systemctl --user enable pbgui-api.service" not in playbook
+    assert "systemctl --user enable pbgui-vps-monitor.service" not in playbook
     assert "systemctl --user start pbgui-api.service" in playbook
     assert "setup/setup_systemd.sh" in playbook
-    assert "--no-start" in playbook
-    assert "api,pbcluster,pbcoindata,monitor-agent" in playbook
+    assert "Check whether PBApiServer was active" in playbook
+    assert "Check whether persistent VPS Monitor was active" in playbook
+    assert "PBGUI_VPS_MONITOR_WAS_ACTIVE" in playbook
+    assert "when: (api_server_before.rc | default(1)) == 0" in playbook
     assert "failed_when: false" not in systemd_setup_block
 
 
@@ -3210,6 +3213,61 @@ def test_service_control_uses_tri_state_credential_capability() -> None:
     assert "printf '%s\\n' unknown" in script
     assert 'Leaving $service unchanged: credential capability is unknown' in script
     assert 'Restarting active $service while credential capability is unknown' in script
+
+
+@pytest.mark.parametrize(("currently_active", "expected_restart"), [(True, True), (False, False)])
+def test_service_control_active_only_restart_preserves_stopped_services(
+    tmp_path: Path,
+    currently_active: bool,
+    expected_restart: bool,
+) -> None:
+    """PBGui update handlers restart active services without starting stopped services."""
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls_path = tmp_path / "systemctl.calls"
+    fake_systemctl = fake_bin / "systemctl"
+    fake_systemctl.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$FAKE_SYSTEMCTL_CALLS\"\n"
+        "if [[ \"$*\" == *\"is-active\"* ]]; then\n"
+        "  [[ \"${FAKE_SYSTEMD_ACTIVE:-0}\" == \"1\" ]]\n"
+        "  exit\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_systemctl.chmod(0o755)
+    fake_sleep = fake_bin / "sleep"
+    fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_sleep.chmod(0o755)
+    unit_dir = tmp_path / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True)
+    (unit_dir / "pbgui-pbcluster.service").write_text("[Service]\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", "setup/vps_service_control.sh", "restart", "PBCluster"],
+        cwd=Path(__file__).resolve().parents[1],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(tmp_path),
+            "PBGUI_DIR": str(tmp_path / "pbgui"),
+            "PBGUI_RESTART_ACTIVE_ONLY": "1",
+            "FAKE_SYSTEMCTL_CALLS": str(calls_path),
+            "FAKE_SYSTEMD_ACTIVE": "1" if currently_active else "0",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = calls_path.read_text(encoding="utf-8")
+    restarted = "--user restart pbgui-pbcluster.service" in calls
+    assert restarted is expected_restart
+    if not expected_restart:
+        assert "Leaving PBCluster unchanged: service is not running" in result.stdout
 
 
 @pytest.mark.parametrize(("currently_active", "expected_restart"), [(True, True), (False, False)])

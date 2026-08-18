@@ -13,6 +13,7 @@ Environment:
   PBGUI_PYTHON   PBGui virtualenv Python. Default: ../venv_pbgui/bin/python.
   PBGUI_USER     Target service user when executed with become/root.
   PBGUI_CREDENTIAL_ACTIVE  true/false when pool capability is known; empty means preserve state.
+  PBGUI_RESTART_ACTIVE_ONLY  1 skips inactive services during restart.
 EOF
 }
 
@@ -138,6 +139,10 @@ active_services=()
 for service in "${requested_services[@]}"; do
   unit_for "$service" >/dev/null
   capability_state="$(service_capability_state "$service")"
+  if [[ "$action" == "restart" && "${PBGUI_RESTART_ACTIVE_ONLY:-0}" == "1" ]] && ! service_is_running "$service"; then
+    echo "Leaving $service unchanged: service is not running"
+    continue
+  fi
   if [[ "$service" == "PBData" && "$action" == "restart" ]] && ! service_is_running "$service"; then
     echo "Leaving PBData unchanged: service is not running"
     continue

@@ -7,6 +7,7 @@ PYTHON_BIN=""
 ENABLE_SERVICES="vps-monitor,api,pbcluster,pbrun,pbdata,pbcoindata,monitor-agent"
 START_SERVICES=true
 DISABLE_EXCLUDED=true
+PRESERVE_STATE=false
 CHANGED=false
 UNIT_FILES_CHANGED=false
 TEMP_FILES=()
@@ -64,6 +65,7 @@ Options:
   --enable LIST               Comma-separated services to enable. Default: vps-monitor,api,pbcluster,pbrun,pbdata,pbcoindata,monitor-agent.
   --no-start                  Enable services but do not start/restart them now.
   --no-disable-excluded       Do not stop/disable services missing from --enable.
+  --preserve-state            Update unit files without changing enabled or active states.
   -h, --help                  Show help.
 EOF
 }
@@ -76,6 +78,7 @@ while [[ $# -gt 0 ]]; do
     --enable) ENABLE_SERVICES="$2"; shift 2 ;;
     --no-start) START_SERVICES=false; shift ;;
     --no-disable-excluded) DISABLE_EXCLUDED=false; shift ;;
+    --preserve-state) PRESERVE_STATE=true; START_SERVICES=false; DISABLE_EXCLUDED=false; shift ;;
     -h|--help) usage; exit 0 ;;
     *) err "Unknown option: $1"; usage; exit 2 ;;
   esac
@@ -230,7 +233,7 @@ EOF
 
 declare -A unit_changed
 write_unit "pbgui-vps-monitor.service" "PBGui VPS Monitor" "VPSMonitor.py"
-write_unit "pbgui-api.service" "PBGui API Server" "PBApiServer.py" "ExecStartPre=/bin/bash $PBGUI_DIR/setup/stop_legacy_api.sh --pbgui-dir $PBGUI_DIR" "mixed" $'After=pbgui-vps-monitor.service\nWants=pbgui-vps-monitor.service'
+write_unit "pbgui-api.service" "PBGui API Server" "PBApiServer.py" "ExecStartPre=/bin/bash $PBGUI_DIR/setup/stop_legacy_api.sh --pbgui-dir $PBGUI_DIR" "mixed" "After=pbgui-vps-monitor.service"
 write_unit "pbgui-pbcluster.service" "PBGui PBCluster Service" "PBCluster.py"
 write_unit "pbgui-pbrun.service" "PBGui PBRun Service" "PBRun.py" "" "process"
 write_unit "pbgui-pbdata.service" "PBGui PBData Service" "PBData.py"
@@ -344,7 +347,9 @@ remove_obsolete_unit() {
   fi
 }
 
-remove_obsolete_unit "pbgui-pbremote.service"
+if [[ "$PRESERVE_STATE" != true ]]; then
+  remove_obsolete_unit "pbgui-pbremote.service"
+fi
 
 reload_needed="$UNIT_FILES_CHANGED"
 if [[ "$reload_needed" == false ]]; then
@@ -371,40 +376,42 @@ if [[ "$DISABLE_EXCLUDED" == true ]]; then
 fi
 
 verification_failed=false
-for service in "${enabled[@]}"; do
-  service="$(printf '%s' "$service" | tr -d '[:space:]')"
-  [[ -z "$service" ]] && continue
-  unit="pbgui-$service.service"
-  if [[ ! -f "$unit_dir/$unit" ]]; then
-    warn "Skipping unknown service unit: $unit"
-    continue
-  fi
-  enabled_state="$(run_user_systemctl is-enabled "$unit" 2>/dev/null || true)"
-  case "$enabled_state" in
-    enabled|enabled-runtime) ;;
-    *)
-      run_unit_action enable "$unit" || exit 1
-      mark_changed
-      success "Enabled $unit"
-      ;;
-  esac
-  if [[ "$START_SERVICES" == true ]]; then
-    active_state="$(run_user_systemctl show "$unit" --property=ActiveState --value 2>/dev/null || true)"
-    if [[ "${unit_changed[$unit]:-false}" == true ]]; then
-      if [[ "$active_state" == failed ]]; then
-        run_unit_action reset-failed "$unit" || exit 1
-      fi
-      run_unit_action restart "$unit" || exit 1
-      mark_changed
-      success "Restarted changed $unit"
-    elif [[ "$active_state" != active ]]; then
-      run_unit_action reset-failed "$unit" || exit 1
-      run_unit_action start "$unit" || exit 1
-      mark_changed
-      success "Started inactive $unit"
+if [[ "$PRESERVE_STATE" != true ]]; then
+  for service in "${enabled[@]}"; do
+    service="$(printf '%s' "$service" | tr -d '[:space:]')"
+    [[ -z "$service" ]] && continue
+    unit="pbgui-$service.service"
+    if [[ ! -f "$unit_dir/$unit" ]]; then
+      warn "Skipping unknown service unit: $unit"
+      continue
     fi
-  fi
-done
+    enabled_state="$(run_user_systemctl is-enabled "$unit" 2>/dev/null || true)"
+    case "$enabled_state" in
+      enabled|enabled-runtime) ;;
+      *)
+        run_unit_action enable "$unit" || exit 1
+        mark_changed
+        success "Enabled $unit"
+        ;;
+    esac
+    if [[ "$START_SERVICES" == true ]]; then
+      active_state="$(run_user_systemctl show "$unit" --property=ActiveState --value 2>/dev/null || true)"
+      if [[ "${unit_changed[$unit]:-false}" == true ]]; then
+        if [[ "$active_state" == failed ]]; then
+          run_unit_action reset-failed "$unit" || exit 1
+        fi
+        run_unit_action restart "$unit" || exit 1
+        mark_changed
+        success "Restarted changed $unit"
+      elif [[ "$active_state" != active ]]; then
+        run_unit_action reset-failed "$unit" || exit 1
+        run_unit_action start "$unit" || exit 1
+        mark_changed
+        success "Started inactive $unit"
+      fi
+    fi
+  done
+fi
 
 if [[ "$START_SERVICES" == true ]]; then
   declare -A restarts_before

@@ -78,15 +78,12 @@
           - "{{ pbgdir }}"
           - --python
           - "{{ pbgui_python | default(ansible_playbook_python) }}"
-          - --enable
-          - vps-monitor,api,pbcluster,pbcoindata,monitor-agent
-          - --no-disable-excluded
-          - --no-start
+          - --preserve-state
       when: pbgdir != ""
       register: systemd_reconcile_result
       changed_when: "'changed=true' in (systemd_reconcile_result.stdout | default(''))"
 
-    - name: Check whether monitor-agent needs recovery
+    - name: Check whether monitor-agent was active
       command:
         argv:
           - systemctl
@@ -99,14 +96,40 @@
       changed_when: false
       failed_when: false
 
+    - name: Check whether persistent VPS Monitor was active
+      command:
+        argv:
+          - systemctl
+          - --user
+          - is-active
+          - --quiet
+          - pbgui-vps-monitor.service
+      when: pbgdir != ""
+      register: vps_monitor_before
+      changed_when: false
+      failed_when: false
+
+    - name: Check whether PBApiServer was active
+      command:
+        argv:
+          - systemctl
+          - --user
+          - is-active
+          - --quiet
+          - pbgui-api.service
+      when: pbgdir != ""
+      register: api_server_before
+      changed_when: false
+      failed_when: false
+
     - name: Recover and verify monitor-agent without touching PBApiServer
       script: setup/vps_service_control.sh start PBMonitorAgent
       environment:
         PBGUI_DIR: "{{ pbgdir }}"
         PBGUI_PYTHON: "{{ pbgui_python | default(ansible_playbook_python) }}"
-      when: pbgdir != ""
+      when: pbgdir != "" and monitor_agent_before.rc == 0
       register: monitor_agent_recovery
-      changed_when: monitor_agent_before.rc != 0
+      changed_when: false
 
     - name: print pbgui_repo
       debug:
@@ -123,10 +146,7 @@
           - "{{ pbgdir }}"
           - --python
           - "{{ pbgui_python | default(ansible_playbook_python) }}"
-          - --enable
-          - vps-monitor,api,pbcluster,pbcoindata,monitor-agent
-          - --no-disable-excluded
-          - --no-start
+          - --preserve-state
       register: systemd_setup_result
       changed_when: "'changed=true' in (systemd_setup_result.stdout | default(''))"
       listen: "restart pbgui"
@@ -137,6 +157,7 @@
         PBGUI_DIR: "{{ pbgdir }}"
         PBGUI_PYTHON: "{{ pbgui_python | default(ansible_playbook_python) }}"
         PBGUI_REQUIRE_PBCOINDATA: "1"
+        PBGUI_RESTART_ACTIVE_ONLY: "1"
       listen: "restart pbgui"
 
     - name: Restart PBApiServer
@@ -156,7 +177,7 @@
         read -r -a update_stat < "/proc/$update_pid/stat"
         update_start="${update_stat[21]}"
         restart_unit="pbgui-api-restart-$(date +%s%N)"
-        systemd-run --user --unit="$restart_unit" --collect --setenv=PBGUI_DIR="$PBGUI_DIR" --setenv=PBGUI_PYTHON="$PBGUI_PYTHON" --setenv=PBGUI_UPDATE_PID="$update_pid" --setenv=PBGUI_UPDATE_START="$update_start" /bin/bash -c '
+        systemd-run --user --unit="$restart_unit" --collect --setenv=PBGUI_DIR="$PBGUI_DIR" --setenv=PBGUI_PYTHON="$PBGUI_PYTHON" --setenv=PBGUI_UPDATE_PID="$update_pid" --setenv=PBGUI_UPDATE_START="$update_start" --setenv=PBGUI_VPS_MONITOR_WAS_ACTIVE="$PBGUI_VPS_MONITOR_WAS_ACTIVE" /bin/bash -c '
           while [ -r "/proc/$PBGUI_UPDATE_PID/stat" ]; do
             read -r -a current_stat < "/proc/$PBGUI_UPDATE_PID/stat" || break
             [ "${current_stat[21]}" = "$PBGUI_UPDATE_START" ] || break
@@ -165,21 +186,21 @@
           cd "$PBGUI_DIR"
           systemctl --user stop pbgui-api.service >/dev/null 2>&1 || true
           /bin/bash "$PBGUI_DIR/setup/stop_legacy_api.sh" --pbgui-dir "$PBGUI_DIR"
-          systemctl --user enable pbgui-vps-monitor.service
-          systemctl --user restart pbgui-vps-monitor.service
-          monitor_ready=0
-          for _ in $(seq 1 30); do
-            if "$PBGUI_PYTHON" -c "from master.vps_monitor_client import VPSMonitorRPCClient; VPSMonitorRPCClient(timeout=1).call(\"hello\")"; then
-              monitor_ready=1
-              break
+          if [ "$PBGUI_VPS_MONITOR_WAS_ACTIVE" = "1" ]; then
+            systemctl --user restart pbgui-vps-monitor.service
+            monitor_ready=0
+            for _ in $(seq 1 30); do
+              if "$PBGUI_PYTHON" -c "from master.vps_monitor_client import VPSMonitorRPCClient; VPSMonitorRPCClient(timeout=1).call(\"hello\")"; then
+                monitor_ready=1
+                break
+              fi
+              sleep 1
+            done
+            if [ "$monitor_ready" != 1 ]; then
+              systemctl --user status pbgui-vps-monitor.service --no-pager -l
+              exit 1
             fi
-            sleep 1
-          done
-          if [ "$monitor_ready" != 1 ]; then
-            systemctl --user status pbgui-vps-monitor.service --no-pager -l
-            exit 1
           fi
-          systemctl --user enable pbgui-api.service
           if ! systemctl --user start pbgui-api.service; then
             systemctl --user show pbgui-api.service --no-pager --property=ActiveState,SubState,Result,ExecMainStatus,NRestarts
             systemctl --user status pbgui-api.service --no-pager -l
@@ -205,5 +226,7 @@
       environment:
         PBGUI_DIR: "{{ pbgdir }}"
         PBGUI_PYTHON: "{{ pbgui_python | default(ansible_playbook_python) }}"
+        PBGUI_VPS_MONITOR_WAS_ACTIVE: "{{ '1' if (vps_monitor_before.rc | default(1)) == 0 else '0' }}"
       changed_when: true
       listen: "restart pbgui"
+      when: (api_server_before.rc | default(1)) == 0
