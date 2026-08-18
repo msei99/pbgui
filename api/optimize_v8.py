@@ -2755,7 +2755,11 @@ def main_page(request: Request, session: SessionToken = Depends(require_auth)) -
         raise HTTPException(status_code=404, detail="v7_optimize.html not found")
     html = html_path.read_text(encoding="utf-8")
     origin = str(request.base_url).rstrip("/")
-    limits = get_pb8_optimize_metadata().get("limits") or {}
+    try:
+        limits = get_pb8_optimize_metadata().get("limits") or {}
+    except PB8ConfigurationError as exc:
+        _log(SERVICE, f"Rendering PB8 Optimize without unavailable runtime metadata: {exc}", level="WARNING")
+        limits = {}
     replacements = {
         "%%TOKEN%%": "",
         "%%API_BASE%%": origin + "/api/optimize-v8",

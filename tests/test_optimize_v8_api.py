@@ -18,7 +18,7 @@ from starlette.requests import Request
 
 import optimize_autostart
 from api import optimize_v8
-from pb8_config import PB8RuntimeBusyError
+from pb8_config import PB8ConfigurationError, PB8RuntimeBusyError
 
 
 @pytest.fixture
@@ -51,6 +51,32 @@ def optimize_v8_roots(tmp_path, monkeypatch):
         optimize_v8._pareto_list_cache.clear()
         optimize_v8._pareto_warning_cache.clear()
     return configs, queue, logs, results
+
+
+def test_main_page_renders_when_pb8_runtime_metadata_is_unavailable(monkeypatch) -> None:
+    """An incomplete PB8 update should produce a diagnosable page instead of HTTP 500."""
+
+    monkeypatch.setattr(
+        optimize_v8,
+        "get_pb8_optimize_metadata",
+        lambda: (_ for _ in ()).throw(PB8ConfigurationError("PB8 update incomplete")),
+    )
+    warnings = []
+    monkeypatch.setattr(optimize_v8, "_log", lambda service, message, **kwargs: warnings.append((service, message, kwargs)))
+    request = Request({
+        "type": "http",
+        "scheme": "http",
+        "server": ("testserver", 80),
+        "path": "/api/optimize-v8/main_page",
+        "query_string": b"",
+        "headers": [],
+    })
+
+    response = optimize_v8.main_page(request, session=None)
+
+    assert response.status_code == 200
+    assert b"%%LIMITS_META%%" not in response.body
+    assert warnings and warnings[0][2]["level"] == "WARNING"
 
 
 @pytest.fixture
