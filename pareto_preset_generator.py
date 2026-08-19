@@ -979,9 +979,18 @@ def build_optimize_preset(
     preset_config["optimize"] = optimize
     if optimize_version == "v8":
         pbgui = preset_config.get("pbgui")
-        runtime = pbgui.get("optimize_runtime") if isinstance(pbgui, dict) else None
-        if isinstance(runtime, dict) and runtime.get("mode") == "checkpoint_resume":
-            pbgui.pop("optimize_runtime", None)
+        if not isinstance(pbgui, dict):
+            pbgui = {}
+            preset_config["pbgui"] = pbgui
+        pbgui["optimize_runtime"] = {
+            "mode": "pareto_seed",
+            "source": "__self__",
+            "fine_tune_params": [],
+            "polish_percentage": None,
+            "polish_bounds_mode": "clamp",
+        }
+        for key in ("optimize_seed_mode", "optimize_seed_path", "starting_config"):
+            pbgui.pop(key, None)
 
     return {
         "preset_config": preset_config,

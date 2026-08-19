@@ -127,6 +127,7 @@ The preset panel creates an Optimize config for the selected result's PBv7 or PB
 - Keep the generated **Preset name** unless you need a custom name.
 - Keep **Only adjust parameters near optimize bounds** enabled for normal refinement runs.
 - Use **Bounds window (%)** to tighten search bounds around selected values.
+- PB8 refinement presets automatically use the selected candidate as `Starting Seeds = self`. The known candidate is passed to PB8 with `--start` and evaluated inside the narrowed bounds instead of relying on a fresh stochastic population to rediscover it.
 - Use **Risk adjustment** to tighten or relax risk-related bounds and limits.
 - **Create Optimize Preset** saves the config and opens Optimize.
 - **Create & Queue** saves and queues it without opening Optimize.

@@ -388,7 +388,7 @@ def test_pb7_flat_bound_normalization_remains_unchanged() -> None:
 
 
 def test_pb8_preset_restores_nested_bounds_and_uses_runtime_goals(monkeypatch) -> None:
-    """PB8 presets must preserve canonical nesting and avoid stale checkpoint state."""
+    """PB8 refinement must preserve nested bounds and seed from the selected config."""
     _patch_metric_helpers(monkeypatch)
     full_config = {
         "config_version": "v8.0.0",
@@ -422,8 +422,30 @@ def test_pb8_preset_restores_nested_bounds_and_uses_runtime_goals(monkeypatch) -
     preset = payload["preset_config"]
     assert preset["optimize"]["scoring"][0] == {"metric": "drawdown_worst_strategy_eq", "goal": "min"}
     assert preset["optimize"]["bounds"]["long"]["strategy"]["ema_anchor"]["entry"]["ema_dist"] == [-0.11, -0.09]
-    assert "optimize_runtime" not in preset["pbgui"]
+    assert preset["pbgui"]["optimize_runtime"] == {
+        "mode": "pareto_seed",
+        "source": "__self__",
+        "fine_tune_params": [],
+        "polish_percentage": None,
+        "polish_bounds_mode": "clamp",
+    }
     assert preset["pbgui"]["additional_parameters"] == {"keep": True}
+
+
+def test_pb7_refinement_does_not_add_pb8_self_seed_metadata(monkeypatch) -> None:
+    """The PB8 launch metadata fix must not change PB7 preset behavior."""
+    monkeypatch.setattr(generator, "get_optimize_metric_sets", _metric_sets)
+    monkeypatch.setattr(generator, "get_optimize_scoring_default_goals", _default_goals)
+    context, full_config = _base_context()
+
+    payload = generator.build_optimize_preset(
+        config_context=context,
+        full_config_data=full_config,
+        params={"direction": "Balanced (keep run scoring)", "bounds_window_pct": 20},
+    )
+
+    assert context.get("optimize_version", "v7") == "v7"
+    assert "optimize_runtime" not in payload["preset_config"].get("pbgui", {})
 
 
 def test_build_optimize_preset_uses_direction_and_existing_bounds(monkeypatch) -> None:

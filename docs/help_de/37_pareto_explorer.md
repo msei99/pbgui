@@ -127,6 +127,7 @@ Das Preset-Panel erstellt eine Optimize-Config fuer die PBv7- oder PBv8-Generati
 - Den generierten **Preset name** kannst du meistens unverändert lassen.
 - Lasse **Only adjust parameters near optimize bounds** für normale Refinement-Runs aktiviert.
 - Nutze **Bounds window (%)**, um Search-Bounds um selektierte Werte zu verengen.
+- PB8-Refinement-Presets verwenden den ausgewaehlten Kandidaten automatisch als `Starting Seeds = self`. Der bekannte Kandidat wird damit innerhalb der verengten Bounds per `--start` an PB8 uebergeben und muss nicht von einer frischen stochastischen Population erneut gefunden werden.
 - Nutze **Risk adjustment**, um risikorelevante Bounds und Limits enger oder lockerer zu setzen.
 - **Create Optimize Preset** speichert die Config und öffnet Optimize.
 - **Create & Queue** speichert und queued sie ohne Optimize zu öffnen.
