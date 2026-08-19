@@ -1263,7 +1263,15 @@ def create_v8_editor_draft(body: dict = Body(...), session: SessionToken = Depen
     return store_v8_editor_draft(prepared["config"], body.get("override_configs"))
 
 
-def store_v8_editor_draft(config: dict[str, Any], submitted_overrides: Any = None) -> dict[str, Any]:
+def store_v8_editor_draft(
+    config: dict[str, Any],
+    submitted_overrides: Any = None,
+    *,
+    param_status: dict[str, Any] | None = None,
+    migration_report: dict[str, Any] | None = None,
+    migration_review_values: dict[str, Any] | None = None,
+    migration_message: str = "",
+) -> dict[str, Any]:
     """Store an already canonical PB8 config without invoking the PB8 helper again."""
 
     if not isinstance(config, dict):
@@ -1286,9 +1294,13 @@ def store_v8_editor_draft(config: dict[str, Any], submitted_overrides: Any = Non
         raise HTTPException(status_code=422, detail=f"Unreferenced override '{sorted(extras)[0]}'")
     payload = {
         "config": copy.deepcopy(config),
-        "param_status": {},
+        "param_status": copy.deepcopy(param_status or {}),
         "override_configs": override_configs,
     }
+    if migration_report:
+        payload["migration_report"] = copy.deepcopy(migration_report)
+        payload["migration_review_values"] = copy.deepcopy(migration_review_values or {})
+        payload["migration_message"] = str(migration_message or "")
     with _draft_lock:
         _clean_drafts()
         draft_id = secrets.token_urlsafe(16)

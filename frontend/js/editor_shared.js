@@ -585,11 +585,21 @@
       else throw new Error('Prepared config missing');
     }
 
-    return {
+    var normalized = {
       name: typeof data.name === 'string' ? data.name : '',
       config: cfg,
       param_status: paramStatus || {},
     };
+    if (data.migration_report && typeof data.migration_report === 'object' && !Array.isArray(data.migration_report)) {
+      normalized.migration_report = data.migration_report;
+    }
+    if (data.migration_review_values && typeof data.migration_review_values === 'object' && !Array.isArray(data.migration_review_values)) {
+      normalized.migration_review_values = data.migration_review_values;
+    }
+    if (typeof data.migration_message === 'string') {
+      normalized.migration_message = data.migration_message;
+    }
+    return normalized;
   }
 
   async function resolveEditorConfigPayload(resultOrPromise, fallbackConfig) {

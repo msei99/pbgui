@@ -4,6 +4,8 @@ PBv8 Optimize verwaltet Passivbot-V8-Optimizer-Configs, Queue-Jobs, Ergebnisse u
 
 Wenn PB8 nach einer unvollstaendigen Installation oder Aktualisierung nicht verfuegbar ist, erscheint oberhalb der Arbeitsflaeche dauerhaft **PB8 update required** mit dem Runtime-Fehler und einem Link zum VPS Manager. Die Seite bleibt fuer die Diagnose nutzbar, statt den Hinweis nur als kurzlebige Benachrichtigung zu zeigen.
 
+Die Configs-Liste startet parallel zu den langsameren PB8-Settings und -Metadaten. Ihre Tabelle verwendet eine leichte Summary-Anfrage ohne Optimize-Result-Inspektion; das getrennte Results-Panel laedt weiterhin die vollstaendigen Result-Metadaten.
+
 ## Configs
 
 - **New Config** laedt Optimizer-Defaults, Strategien, Bounds, Scoring-Metriken, Limits, Backend-Optionen und Pymoo-Auswahl aus der installierten PB8-Runtime.
@@ -13,7 +15,7 @@ Wenn PB8 nach einer unvollstaendigen Installation oder Aktualisierung nicht verf
 - Haeufig verwendete Optimizer-Controls bleiben in den vorhandenen PBv7-Editorbereichen. PB8-spezifischer RNG Seed, Fine-Tune-Selektoren, Polish Percentage und Polish Bounds Mode sind integriert, ohne einen zweiten Editor zu bauen.
 - Gespeicherte Configs werden durch PB8 validiert und als recoverable Bundles unter `data/opt_v8` abgelegt.
 - Die Configs-Tabelle zeigt die aktive PB8-Strategie und kann nach Strategy sortiert werden.
-- Die offizielle **Convert to V8**-Migration steht fuer PBv7-Optimize-Configs bereit. Die Migration stoppt, wenn PB8 ungeloeste oder manuell zu pruefende Felder meldet.
+- Die offizielle **Convert to V8**-Migration steht fuer PBv7-Optimize-Configs bereit. Die vollstaendige Config wird an PB8 uebergeben; blockierend sind nur Befunde aus `optimize`, `backtest` und `bot`, die eine Optimize-Auswertung beeinflussen koennen. Reine Run-`live`-Befunde blockieren diesen Kontext nicht. PBGui-Metadaten und der redundante Legacy-Default `max_pending_starting_evals_per_cpu=1` werden vor der Migration entfernt. Echte Fehler zeigen eine begrenzte Liste von Feldern und Verhaltenswarnungen statt des vollstaendigen Migrationsreports.
 - PBv7-Pareto-Kandidaten bieten dieselbe offizielle Migration und werden nur aus verwalteten PB7-Resultverzeichnissen akzeptiert.
 
 Der PB8-Editor zeigt alle installierten HSL-Modi und Optimizer-Overrides in getrennten Long- und Short-Karten. **HSL enabled** bestimmt, ob das Hard-Stop-Verhalten an den Optimizer-Auswertungen teilnimmt. **Restart after RED** ist eine feste Auswahl aus `always`, `threshold` und `never`; `always` ist PB8s Optimize-Default, damit Auswertungen nach dem Cooldown fortgesetzt werden, statt wegen persistentem Drawdown dauerhaft zu enden. `polish_percentage` erscheint als normaler Prozentwert, wird aber in PB8s Bruchwert fuer `--polish-pct` umgerechnet; `20` bedeutet also `0.20`. Pymoo behaelt PB8s native automatische Groessen: NSGA-II verwendet `250`, waehrend NSGA-III seine Reference Directions aus einem Budget von `500` ableitet.

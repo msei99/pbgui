@@ -906,6 +906,40 @@ function addInstance() {
   window.location.href = url;
 }
 
+function v8RunMigrationError(payload, status) {
+  var detail = payload && payload.detail;
+  var message = typeof detail === 'string'
+    ? detail
+    : (detail && typeof detail.message === 'string' && detail.message.trim()) || ('HTTP ' + status);
+  var error = new Error(message);
+  error.detail = detail;
+  return error;
+}
+
+function v8RunMigrationDetail(error) {
+  var detail = error && error.detail;
+  var report = detail && typeof detail === 'object' && detail.report && typeof detail.report === 'object'
+    ? detail.report
+    : null;
+  var fields = [];
+  if (report) {
+    [report.manual_review_fields, report.dropped_unsupported_fields].forEach(function(items) {
+      if (!Array.isArray(items)) return;
+      items.forEach(function(item) {
+        var value = String(item || '').trim();
+        if (value && fields.indexOf(value) < 0) fields.push(value);
+      });
+    });
+  }
+  var lines = ['The V7 run config was not changed and no runnable V8 config was published.'];
+  if (fields.length) {
+    lines.push('', 'Fields requiring manual review:');
+    fields.slice(0, 20).forEach(function(field) { lines.push('- ' + field); });
+    if (fields.length > 20) lines.push('- … and ' + (fields.length - 20) + ' more');
+  }
+  return lines.join('\n');
+}
+
 async function convertInstanceToV8(name) {
   var targetName = String(name || '').replace(/[\\/\x00-\x1f]/g, '_').slice(0, 120) + '_v8';
   try {
@@ -913,27 +947,39 @@ async function convertInstanceToV8(name) {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source_type: 'run_config', source_name: name, target_name: targetName })
+      body: JSON.stringify({
+        source_type: 'run_config',
+        source_name: name,
+        target_name: targetName,
+        allow_manual_review_output: true
+      })
     });
     var payload = await response.json().catch(function() { return {}; });
     if (response.status === 409) {
+      var existingMessage = typeof payload.detail === 'string'
+        ? payload.detail
+        : (payload.detail && payload.detail.message) || ('Config "' + targetName + '" already exists.');
       await window.PBGuiDialogs.alert({
         title: 'V8 config already exists',
-        message: payload.detail || ('Config "' + targetName + '" already exists.'),
+        message: existingMessage,
         detail: 'The existing V8 config will be opened without overwriting it.',
         confirmText: 'Open'
       });
       window.location.href = window.location.origin + '/api/backtest-v8/main_page?config=' + encodeURIComponent(targetName);
       return;
     }
-    if (!response.ok) throw new Error(payload.detail || ('HTTP ' + response.status));
+    if (!response.ok) throw v8RunMigrationError(payload, response.status);
+    if (payload.editor === 'run' && payload.draft_id) {
+      window.location.href = window.location.origin + '/api/v8/edit_page?new=1&draft_id=' + encodeURIComponent(payload.draft_id);
+      return;
+    }
     window.location.href = window.location.origin + '/api/backtest-v8/main_page?config=' + encodeURIComponent(payload.name || targetName);
   } catch (error) {
     toast('V8 conversion failed: ' + error.message, 'err');
     await window.PBGuiDialogs.alert({
       title: 'V8 conversion failed',
       message: error.message,
-      detail: 'The V7 run config was not changed and no runnable V8 config was published.',
+      detail: v8RunMigrationDetail(error),
       confirmText: 'OK'
     });
   }

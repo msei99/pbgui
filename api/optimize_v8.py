@@ -41,6 +41,11 @@ from file_lock import advisory_file_lock
 from logging_helpers import append_managed_transcript_line, human_log as _log, rotate_managed_log_before_open
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
 from optimize_autostart import claim_autostart, publish_autostart_process, release_autostart
+from api.v8_migration_context import (
+    apply_legacy_churn_gate,
+    extract_legacy_churn_gate,
+    sanitize_optimize_migration_source,
+)
 from pb8_config import (
     PB8ConfigurationError,
     cache_prepared_pb8_config,
@@ -2910,10 +2915,15 @@ def prepare_config(body: dict, session: SessionToken = Depends(require_auth)) ->
 
 
 @router.get("/configs")
-def list_configs(session: SessionToken = Depends(require_auth)) -> dict:
+def list_configs(
+    session: SessionToken = Depends(require_auth),
+    include_result_summary: bool = True,
+) -> dict:
     configs = []
-    with _result_lock():
-        result_summaries = _list_results()
+    result_summaries = []
+    if include_result_summary:
+        with _result_lock():
+            result_summaries = _list_results()
     latest_result_by_name = {}
     for result in result_summaries:
         latest_result_by_name.setdefault(result["name"], result)
@@ -3017,6 +3027,20 @@ def delete_config(name: str, session: SessionToken = Depends(require_auth)) -> d
     return {"ok": True}
 
 
+def _optimize_migration_review_report(report: dict) -> dict:
+    """Keep only migration findings that can affect an Optimize evaluation."""
+    contextual = copy.deepcopy(report)
+    for key in ("manual_review_fields", "dropped_unsupported_fields"):
+        if key not in report:
+            continue
+        contextual[key] = [
+            item
+            for item in report.get(key) or []
+            if not str(item or "").strip().startswith("live.")
+        ]
+    return contextual
+
+
 @router.post("/migrate-v7")
 def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dict:
     source_path = str((body or {}).get("source_path") or "").strip()
@@ -3035,11 +3059,29 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
         stage = _safe_path(_configs_dir() / f".migrate-{uuid.uuid4().hex}", _configs_dir())
         ensure_private_directory(stage)
         try:
-            result = migrate_pb7_config(source, stage / _CONFIG_FILENAME)
-            report = result.get("report") if isinstance(result.get("report"), dict) else {}
+            try:
+                migration_payload, source_adjustments = sanitize_optimize_migration_source(_read_json(source))
+                migration_payload, legacy_churn_plan, churn_adjustments = extract_legacy_churn_gate(migration_payload)
+                source_adjustments.extend(churn_adjustments)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            migration_source = stage / ".source-v7.json"
+            _write_json(migration_source, migration_payload)
+            result = migrate_pb7_config(
+                migration_source,
+                stage / _CONFIG_FILENAME,
+                allow_manual_review_output=True,
+            )
+            official_report = result.get("report") if isinstance(result.get("report"), dict) else {}
+            official_report = copy.deepcopy(official_report)
+            if source_adjustments:
+                official_report["pbgui_source_adjustments"] = source_adjustments
+            report = _optimize_migration_review_report(official_report)
             config = result.get("config")
+            if isinstance(config, dict) and legacy_churn_plan is not None:
+                config = prepare_pb8_config(apply_legacy_churn_gate(config, legacy_churn_plan))
             unresolved = report.get("manual_review_fields") or report.get("dropped_unsupported_fields")
-            if not report.get("output_written") or not isinstance(config, dict) or unresolved:
+            if not official_report.get("output_written") or not isinstance(config, dict) or unresolved:
                 fields = report.get("manual_review_fields") or report.get("dropped_unsupported_fields") or []
                 message = "Migration requires manual review"
                 if fields:
@@ -3052,7 +3094,7 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
                 target_name,
                 config,
                 create_only=True,
-                migration_report=report,
+                migration_report=official_report,
             )
             return {"ok": True, "name": target_name, "config": prepared, "report": report}
         finally:

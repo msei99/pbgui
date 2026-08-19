@@ -1371,6 +1371,24 @@ def test_config_metadata_seed_backtests_and_result_mode(optimize_v8_roots) -> No
     assert result_rows["owned"]["strategy"] == "ema_anchor"
 
 
+def test_config_list_fast_mode_skips_expensive_result_summaries(optimize_v8_roots, monkeypatch) -> None:
+    """The visual config table should not wait for optimize-result inspection it does not display."""
+    configs, _queue, _logs, _results = optimize_v8_roots
+    config_dir = configs / "fast"
+    config_dir.mkdir()
+    (config_dir / "optimize.json").write_text(json.dumps(_full_pb8_config()), encoding="utf-8")
+    monkeypatch.setattr(
+        optimize_v8,
+        "_list_results",
+        lambda: (_ for _ in ()).throw(AssertionError("result summaries must be skipped")),
+    )
+
+    rows = optimize_v8.list_configs(session=None, include_result_summary=False)["configs"]
+
+    assert [row["name"] for row in rows] == ["fast"]
+    assert rows[0]["result_mode"] == "unknown"
+
+
 def test_pareto_seed_validation_rejects_empty_and_unrelated_sources(optimize_v8_roots) -> None:
     """Only confined native PB8 seed files and non-empty managed seed directories are accepted."""
     _configs, _queue, _logs, results = optimize_v8_roots
@@ -2213,6 +2231,153 @@ def test_migrate_v7_returns_official_manual_review_report(optimize_v8_roots, mon
 
     assert error.value.status_code == 422
     assert error.value.detail["report"] == report
+    assert not optimize_v8._config_dir("rejected").exists()
+
+
+def test_migrate_v7_filters_run_only_review_from_optimize_context(optimize_v8_roots, monkeypatch) -> None:
+    """Live execution findings must not block a complete Optimize migration."""
+    source = optimize_v8._v7_configs_dir() / "legacy.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("{}", encoding="utf-8")
+    report = {
+        "output_written": True,
+        "manual_review_fields": ["live.execution_delay_seconds"],
+        "dropped_unsupported_fields": [],
+    }
+    calls = {}
+
+    def fake_migrate(*_args, **kwargs):
+        calls.update(kwargs)
+        return {"report": report, "config": {"backtest": {}, "bot": {}, "optimize": {}}}
+
+    monkeypatch.setattr(optimize_v8, "migrate_pb7_config", fake_migrate)
+
+    response = optimize_v8.migrate_v7({"source_name": "legacy", "target_name": "migrated"}, None)
+
+    assert calls["allow_manual_review_output"] is True
+    assert response["report"]["manual_review_fields"] == []
+    assert optimize_v8._read_json(
+        optimize_v8._config_dir("migrated") / "migration_report.json"
+    )["manual_review_fields"] == ["live.execution_delay_seconds"]
+
+
+def test_migrate_v7_optimize_uses_pb8_canonical_churn_migration(optimize_v8_roots, monkeypatch) -> None:
+    """Optimize migration must preserve legacy live behavior without reviewing retired names."""
+    source = optimize_v8._v7_configs_dir() / "legacy.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        json.dumps(
+            {
+                "live": {"initial_entry_exec_max_market_dist_pct": 0.006},
+                "backtest": {},
+                "bot": {},
+                "optimize": {"max_pending_starting_evals_per_cpu": 1},
+                "pbgui": {"note": "metadata"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    prepared_inputs = []
+
+    def fake_migrate(source_path, _output_path, **_kwargs):
+        migrated_source = optimize_v8._read_json(Path(source_path))
+        assert "initial_entry_exec_max_market_dist_pct" not in migrated_source["live"]
+        assert "pbgui" not in migrated_source
+        assert "max_pending_starting_evals_per_cpu" not in migrated_source["optimize"]
+        return {
+            "report": {"output_written": True, "manual_review_fields": []},
+            "config": {
+                "live": {
+                    "order_replacement_churn_gate_activation_count": 10,
+                    "order_replacement_churn_gate_market_dist_pct": 0.005,
+                    "order_replacement_churn_gate_stability_minutes": 2.0,
+                    "order_replacement_churn_gate_window_minutes": 10.0,
+                },
+                "backtest": {},
+                "bot": {},
+                "optimize": {},
+            },
+        }
+
+    def fake_prepare(config, **_kwargs):
+        prepared_inputs.append(copy.deepcopy(config))
+        prepared = copy.deepcopy(config)
+        live = prepared.setdefault("live", {})
+        if "initial_entry_exec_max_market_dist_pct" in live:
+            value = live.pop("initial_entry_exec_max_market_dist_pct")
+            live["order_replacement_churn_gate_activation_count"] = 10
+            live["order_replacement_churn_gate_market_dist_pct"] = value
+            live["order_replacement_churn_gate_stability_minutes"] = 2.0
+            live["order_replacement_churn_gate_window_minutes"] = 10.0
+        return prepared
+
+    monkeypatch.setattr(optimize_v8, "migrate_pb7_config", fake_migrate)
+    monkeypatch.setattr(optimize_v8, "prepare_pb8_config", fake_prepare)
+
+    response = optimize_v8.migrate_v7({"source_name": "legacy", "target_name": "migrated"}, None)
+    saved = optimize_v8._read_json(optimize_v8._config_file("migrated"))
+
+    first_live = prepared_inputs[0]["live"]
+    assert first_live["initial_entry_exec_max_market_dist_pct"] == 0.006
+    assert "order_replacement_churn_gate_market_dist_pct" not in first_live
+    assert saved["live"]["order_replacement_churn_gate_market_dist_pct"] == 0.006
+    assert "initial_entry_exec_max_market_dist_pct" not in saved["live"]
+    assert response["report"]["manual_review_fields"] == []
+    assert response["report"]["pbgui_source_adjustments"] == [
+        "pbgui",
+        "optimize.max_pending_starting_evals_per_cpu (retired default 1)",
+        "live.initial_entry_exec_max_market_dist_pct -> PB8 canonical churn-gate migration",
+    ]
+
+
+def test_optimize_migration_keeps_nondefault_pending_eval_limit_for_review() -> None:
+    """A nondefault legacy concurrency limit must not be discarded as redundant."""
+    payload, adjustments = optimize_v8.sanitize_optimize_migration_source(
+        {
+            "pbgui": {"note": "metadata"},
+            "optimize": {"max_pending_starting_evals_per_cpu": 2},
+        }
+    )
+
+    assert "pbgui" not in payload
+    assert payload["optimize"]["max_pending_starting_evals_per_cpu"] == 2
+    assert adjustments == ["pbgui"]
+
+
+def test_migrate_v7_optimize_review_keeps_backtest_bot_and_optimize_fields(
+    optimize_v8_roots, monkeypatch
+) -> None:
+    """Every field that changes an Optimize evaluation must remain reviewable."""
+    source = optimize_v8._v7_configs_dir() / "legacy.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("{}", encoding="utf-8")
+    report = {
+        "output_written": True,
+        "manual_review_fields": [
+            "live.execution_delay_seconds",
+            "backtest.suite",
+            "bot.long.example",
+            "optimize.bounds.example",
+        ],
+        "dropped_unsupported_fields": [],
+    }
+    monkeypatch.setattr(
+        optimize_v8,
+        "migrate_pb7_config",
+        lambda *_args, **_kwargs: {
+            "report": report,
+            "config": {"backtest": {}, "bot": {}, "optimize": {}},
+        },
+    )
+
+    with pytest.raises(HTTPException) as error:
+        optimize_v8.migrate_v7({"source_name": "legacy", "target_name": "rejected"}, None)
+
+    assert error.value.detail["report"]["manual_review_fields"] == [
+        "backtest.suite",
+        "bot.long.example",
+        "optimize.bounds.example",
+    ]
     assert not optimize_v8._config_dir("rejected").exists()
 
 

@@ -56,6 +56,19 @@ body {
 #main-content {
   flex: 1; overflow-y: auto; padding: var(--sp-lg);
 }
+.migration-review-notice {
+  margin-bottom: var(--sp-md);
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 140, 0, .5);
+  border-left: 4px solid var(--orange);
+  border-radius: 6px;
+  background: rgba(255, 140, 0, .10);
+  color: #ffd29a;
+  line-height: 1.45;
+}
+.migration-review-notice strong { display: block; margin-bottom: 4px; color: #ffb454; }
+.migration-review-notice ul { margin: 8px 0 0 20px; }
+.migration-review-notice code { color: #ffe1ba; }
 
 /* ─── Form grid ────────────────────────────────────────────── */
 .form-row {
@@ -1212,7 +1225,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=13"></script>
+<script src="/app/js/editor_shared.js?v=14"></script>
 <script src="/app/js/pbgui_dialogs.js?v=5"></script>
 <script src="/app/js/run_editor_adapter.js?v=9"></script>
 <script src="/app/js/log_viewer_panel.js?v=29"></script>
@@ -1327,6 +1340,47 @@ function toast(msg, type) {
     el.style.opacity = '0';
     setTimeout(function() { el.style.display = 'none'; }, 300);
   }, 8000);
+}
+
+function showRunMigrationReview(draft) {
+  var report = draft && draft.migration_report;
+  if (!report || typeof report !== 'object') return;
+  var existing = document.getElementById('migration-review-notice');
+  if (existing) existing.remove();
+  var fields = [];
+  [report.manual_review_fields, report.dropped_unsupported_fields].forEach(function(items) {
+    if (!Array.isArray(items)) return;
+    items.forEach(function(item) {
+      var value = String(item || '').trim();
+      if (value && fields.indexOf(value) < 0) fields.push(value);
+    });
+  });
+  var notice = document.createElement('div');
+  notice.id = 'migration-review-notice';
+  notice.className = 'migration-review-notice';
+  var title = document.createElement('strong');
+  title.textContent = 'Manual V7 → V8 review required';
+  notice.appendChild(title);
+  var message = document.createElement('div');
+  message.textContent = draft.migration_message || 'Review the marked PB8 fields before saving this draft.';
+  notice.appendChild(message);
+  var values = draft.migration_review_values && typeof draft.migration_review_values === 'object'
+    ? draft.migration_review_values
+    : {};
+  if (fields.length) {
+    var list = document.createElement('ul');
+    fields.forEach(function(field) {
+      var item = document.createElement('li');
+      var code = document.createElement('code');
+      var suffix = Object.prototype.hasOwnProperty.call(values, field) ? ' = ' + JSON.stringify(values[field]) : '';
+      code.textContent = field + suffix;
+      item.appendChild(code);
+      list.appendChild(item);
+    });
+    notice.appendChild(list);
+  }
+  var main = document.getElementById('main-content');
+  if (main) main.prepend(notice);
 }
 
 function toggleExpander(id) {
@@ -1827,6 +1881,7 @@ async function init() {
       coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: true, preserveMarketIdentifiers: true, context: { hslSignalMode: (cfg.live || {}).hsl_signal_mode, strategyKind: (cfg.live || {}).strategy_kind } });
       coinOvSetConfigName('');
       populateForm();
+      showRunMigrationReview(draftResp);
       if (typeof coinOvSetOverrideConfigs === 'function') {
         coinOvSetOverrideConfigs(draftOverrideConfigs, { markPending: true });
       } else {
@@ -3651,7 +3706,7 @@ function _applyBotJsonHighlight(ta, sideStatus) {
       var styles = ['display:block'];
       if (status === 'neutralized') {
         styles.push('background:color-mix(in srgb,#f0a500 16%,transparent)', 'border-radius:2px');
-      } else if (status === 'pb_default') {
+      } else if (status === 'pb_default' || status === 'review') {
         styles.push('background:color-mix(in srgb,#e05252 16%,transparent)', 'border-radius:2px');
       }
       if (validationErrorLine === index + 1) {

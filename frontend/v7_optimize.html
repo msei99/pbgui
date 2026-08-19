@@ -2580,7 +2580,7 @@ textarea.json-invalid:focus {
 <div id="toast-stack"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=13"></script>
+<script src="/app/js/editor_shared.js?v=14"></script>
 <script src="/app/js/suite_editor.js?v=10"></script>
 <script src="/app/js/log_viewer_panel.js?v=29"></script>
 <script src="/app/js/pbgui_dialogs.js?v=5"></script>
@@ -11999,7 +11999,8 @@ async function loadSettings() {
 }
 
 async function loadConfigs() {
-  var data = await apiFetch('/configs');
+  var path = '/configs' + (optimizeEditorAdapter.isV8 ? '?include_result_summary=false' : '');
+  var data = await apiFetch(path);
   state.configs = data.configs || [];
   renderConfigs();
 }
@@ -12166,14 +12167,34 @@ async function migrateParetoConfigToV8(path, name) {
 
 async function showOptimizeMigrationError(error) {
   var report = error && error.detail && typeof error.detail === 'object' ? error.detail.report : null;
-  var detail = report
-    ? 'Official PB8 migration report:\n\n' + JSON.stringify(report, null, 2) +
-      '\n\nThe V7 source was not changed and no runnable PB8 config was published.'
-    : 'The V7 source was not changed and no runnable PB8 config was published.';
+  var lines = ['The V7 source was not changed and no runnable PB8 config was published.'];
+  if (report) {
+    var fields = [];
+    [report.manual_review_fields, report.dropped_unsupported_fields].forEach(function(items) {
+      if (!Array.isArray(items)) return;
+      items.forEach(function(item) {
+        var value = String(item || '').trim();
+        if (value && fields.indexOf(value) < 0) fields.push(value);
+      });
+    });
+    if (fields.length) {
+      lines.push('', 'Fields requiring manual review:');
+      fields.slice(0, 20).forEach(function(field) { lines.push('- ' + field); });
+      if (fields.length > 20) lines.push('- ... and ' + (fields.length - 20) + ' more');
+    }
+    var warnings = Array.isArray(report.behavior_change_warnings)
+      ? report.behavior_change_warnings
+      : (Array.isArray(report.warnings) ? report.warnings : []);
+    if (warnings.length) {
+      lines.push('', 'Behavior warnings:');
+      warnings.slice(0, 5).forEach(function(warning) { lines.push('- ' + String(warning)); });
+      if (warnings.length > 5) lines.push('- ... and ' + (warnings.length - 5) + ' more');
+    }
+  }
   await window.PBGuiDialogs.alert({
     title: 'PB8 migration failed',
     message: error && error.message ? error.message : 'PB8 migration failed',
-    detail: detail,
+    detail: lines.join('\n'),
     confirmText: 'OK'
   });
 }
@@ -13048,9 +13069,11 @@ async function init() {
     var initialPanel = location.hash.replace('#', '');
     if (PANEL_META[initialPanel]) setPanel(initialPanel);
     connectWS();
-    await loadSettings();
-    await loadOptimizeMetadata();
-    await Promise.all([loadConfigs(), loadQueue(), loadResults()]);
+    var settingsAndMetadata = (async function() {
+      await loadSettings();
+      await loadOptimizeMetadata();
+    })();
+    await Promise.all([settingsAndMetadata, loadConfigs(), loadQueue(), loadResults()]);
     await handleIncomingDraft();
     await handleOpenConfigParam();
   } finally {

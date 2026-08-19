@@ -150,6 +150,184 @@ def test_v7_run_rows_offer_v8_conversion() -> None:
     assert "window.PBGuiDialogs.alert" in source
 
 
+def test_v7_run_conversion_renders_structured_manual_review_error() -> None:
+    """Run conversion must show actionable fields instead of stringifying detail objects."""
+    source = (ROOT / "frontend" / "v7_run.html").read_text(encoding="utf-8")
+    functions = "\n\n".join(
+        _extract_function(source, name) for name in ("v8RunMigrationError", "v8RunMigrationDetail")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        {functions}
+        const error = v8RunMigrationError({{
+          detail: {{
+            code: 'migration_manual_review',
+            message: 'Migration requires manual review: bot.long.example',
+            report: {{
+              manual_review_fields: ['bot.long.example'],
+              dropped_unsupported_fields: ['bot.short.legacy'],
+              mapped_fields: Array.from({{length: 100}}, (_, index) => 'mapped.' + index)
+            }}
+          }}
+        }}, 422);
+        assert.equal(error.message, 'Migration requires manual review: bot.long.example');
+        assert.notEqual(error.message, '[object Object]');
+        const detail = v8RunMigrationDetail(error);
+        assert.match(detail, /bot\\.long\\.example/);
+        assert.match(detail, /bot\\.short\\.legacy/);
+        assert.doesNotMatch(detail, /mapped\\.99/);
+        """
+    )
+
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_v7_run_manual_review_conversion_opens_unsaved_pb8_editor_draft() -> None:
+    """Reviewable official migration output must navigate to the PB8 editor without publishing."""
+    source = (ROOT / "frontend" / "v7_run.html").read_text(encoding="utf-8")
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in ("v8RunMigrationError", "v8RunMigrationDetail", "convertInstanceToV8")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let requestBody = null;
+        const window = {{
+          location: {{origin: 'https://example.test', href: ''}},
+          PBGuiDialogs: {{alert() {{ throw new Error('alert must not open for a review draft'); }}}}
+        }};
+        async function fetch(_url, options) {{
+          requestBody = JSON.parse(options.body);
+          return {{
+            status: 200,
+            ok: true,
+            async json() {{ return {{review_required: true, draft_id: 'review-draft', name: 'demo_v8', editor: 'run'}}; }}
+          }};
+        }}
+        function toast() {{}}
+        {functions}
+        convertInstanceToV8('demo').then(() => {{
+          assert.equal(requestBody.allow_manual_review_output, true);
+          assert.equal(
+            window.location.href,
+            'https://example.test/api/v8/edit_page?new=1&draft_id=review-draft'
+          );
+        }}).catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    run_editor_source = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+    assert "showRunMigrationReview(draftResp)" in run_editor_source
+    assert "status === 'pb_default' || status === 'review'" in run_editor_source
+    assert "field === 'live.initial_entry_exec_max_market_dist_pct'" not in run_editor_source
+
+
+def test_shared_editor_payload_preserves_migration_review_metadata() -> None:
+    """Shared config normalization must not discard migration review details."""
+    source = (ROOT / "frontend" / "js" / "editor_shared.js").read_text(encoding="utf-8")
+    normalize = _extract_function(source, "normalizeEditorConfigPayload")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        {normalize}
+        const report = {{manual_review_fields: ['live.price_distance_threshold']}};
+        const values = {{'live.price_distance_threshold': 0.01}};
+        const normalized = normalizeEditorConfigPayload({{
+          config: {{live: {{}}}},
+          param_status: {{}},
+          migration_report: report,
+          migration_review_values: values,
+          migration_message: 'Migration requires manual review'
+        }});
+        assert.deepEqual(normalized.migration_report, report);
+        assert.deepEqual(normalized.migration_review_values, values);
+        assert.equal(normalized.migration_message, 'Migration requires manual review');
+        """
+    )
+
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_v7_backtest_manual_review_conversion_opens_unsaved_pb8_editor_draft() -> None:
+    """Backtest config/result conversion must use the same manual-review draft handoff."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in ("v8MigrationError", "v8MigrationReportText", "migrateV7SourceToV8")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let requestBody = null;
+        const window = {{
+          location: {{origin: 'https://example.test', href: ''}},
+          PBGuiDialogs: {{alert() {{ throw new Error('alert must not open for a review draft'); }}}}
+        }};
+        async function fetch(_url, options) {{
+          requestBody = JSON.parse(options.body);
+          return {{
+            status: 200,
+            ok: true,
+            async json() {{ return {{review_required: true, draft_id: 'review-draft', name: 'demo_v8'}}; }}
+          }};
+        }}
+        function toast() {{}}
+        {functions}
+        migrateV7SourceToV8({{source_type: 'backtest_result', source_name: 'demo', target_name: 'demo_v8'}}).then(() => {{
+          assert.equal(requestBody.allow_manual_review_output, true);
+          assert.equal(
+            window.location.href,
+            'https://example.test/api/backtest-v8/main_page?opt_draft_id=review-draft&draft_name=demo_v8'
+          );
+        }}).catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "_pendingMigrationReviewDraft = draft && draft.migration_report ? draft : null" in source
+    assert "showMigrationReviewNotice(_pendingMigrationReviewDraft)" in source
+    assert "migration-review-notice" in source
+
+
+def test_v7_backtest_existing_v8_config_opens_without_redundant_dialog() -> None:
+    """An existing migration target should open directly because there is no decision to make."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in ("v8MigrationError", "v8MigrationReportText", "migrateV7SourceToV8")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const window = {{
+          location: {{origin: 'https://example.test', href: ''}},
+          PBGuiDialogs: {{alert() {{ throw new Error('existing-config dialog must not open'); }}}}
+        }};
+        async function fetch() {{
+          return {{status: 409, ok: false, async json() {{ return {{detail: 'already exists'}}; }}}};
+        }}
+        function toast() {{ throw new Error('409 must not show an error toast'); }}
+        {functions}
+        migrateV7SourceToV8({{source_type: 'backtest_config', source_name: 'demo', target_name: 'demo_v8'}}).then(() => {{
+          assert.equal(
+            window.location.href,
+            'https://example.test/api/backtest-v8/main_page?config=demo_v8'
+          );
+        }}).catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_v7_and_v8_share_the_same_backtest_shell() -> None:
     """The one backtest template must consume the shared shell and version adapter."""
     v7_source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")

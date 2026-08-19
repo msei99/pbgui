@@ -87,6 +87,26 @@ a:hover { text-decoration: underline; }
 #configs-list, #queue-list { flex: 1; min-height: 0; overflow-y: auto; }
 /* Config editor replaces list — also needs flex scroll */
 #configs-editor { flex: 1; min-height: 0; overflow-y: auto; padding-right: var(--sp-md); }
+.migration-review-notice {
+  margin: 0 0 var(--sp-md);
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 140, 0, .5);
+  border-left: 4px solid var(--orange);
+  border-radius: 6px;
+  background: rgba(255, 140, 0, .10);
+  color: #ffd29a;
+  line-height: 1.45;
+}
+.migration-review-notice strong { display: block; margin-bottom: 4px; color: #ffb454; }
+.migration-review-notice ul { margin: 8px 0 0 20px; }
+.migration-review-notice code { color: #ffe1ba; overflow-wrap: anywhere; }
+.migration-review-hint { color: var(--text-dim); }
+.migration-review-mark {
+  outline: 1px solid rgba(224, 82, 82, .85);
+  outline-offset: 2px;
+  border-radius: 4px;
+  background: rgba(224, 82, 82, .08);
+}
 /* ── Tables ────────────────────────────────────── */
 .tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--fs-base); user-select: none; }
 .tbl th { position: sticky; top: 0; z-index: 2; background: var(--bg2); font-size: var(--fs-sm);
@@ -1002,7 +1022,7 @@ textarea.json-invalid:focus {
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=13"></script>
+<script src="/app/js/editor_shared.js?v=14"></script>
 <script src="/app/js/json_panel.js?v=1"></script>
 <script src="/app/js/optimize_preset_builder.js?v=3"></script>
 <script src="/app/js/pbgui_dialogs.js?v=5"></script>
@@ -1047,6 +1067,7 @@ var settingsLoadPromise = null;
 var settingsModalDirty = false;
 var currentPanel = 'configs';
 var _pendingResultFilter = '';  /* config name to pre-filter when next loadResults runs */
+var _pendingMigrationReviewDraft = null;
 var sortCol     = 'modified';  // current sort column
 var sortAsc     = false;       // sort direction
 var editingConfig = null;      // name of config being edited, or null
@@ -1769,11 +1790,20 @@ function v8MigrationReportText(error) {
   if (!detail || typeof detail !== 'object' || !detail.report) {
     return 'The V7 source was not changed and no runnable V8 config was published.';
   }
-  return 'Official PB8 migration report:\n\n' + JSON.stringify(detail.report, null, 2) +
-    '\n\nThe V7 source was not changed and no runnable V8 config was published.';
+  var fields = [];
+  [detail.report.manual_review_fields, detail.report.dropped_unsupported_fields].forEach(function(items) {
+    if (!Array.isArray(items)) return;
+    items.forEach(function(item) {
+      var value = String(item || '').trim();
+      if (value && fields.indexOf(value) < 0) fields.push(value);
+    });
+  });
+  return 'The V7 source was not changed and no runnable V8 config was published.'
+    + (fields.length ? '\n\nFields requiring manual review:\n- ' + fields.slice(0, 20).join('\n- ') : '');
 }
 
 async function migrateV7SourceToV8(requestBody) {
+  requestBody = Object.assign({}, requestBody, { allow_manual_review_output: true });
   var targetName = requestBody.target_name;
   try {
     var response = await fetch(window.location.origin + '/api/backtest-v8/migrate-v7', {
@@ -1784,16 +1814,15 @@ async function migrateV7SourceToV8(requestBody) {
     });
     var payload = await response.json().catch(function() { return {}; });
     if (response.status === 409) {
-      await window.PBGuiDialogs.alert({
-        title: 'V8 config already exists',
-        message: payload.detail || ('Config "' + targetName + '" already exists.'),
-        detail: 'The existing V8 config will be opened without overwriting it.',
-        confirmText: 'Open'
-      });
       window.location.href = window.location.origin + '/api/backtest-v8/main_page?config=' + encodeURIComponent(targetName);
       return;
     }
     if (!response.ok) throw v8MigrationError(payload, response.status);
+    if (payload.review_required && payload.draft_id) {
+      window.location.href = window.location.origin + '/api/backtest-v8/main_page?opt_draft_id=' + encodeURIComponent(payload.draft_id)
+        + '&draft_name=' + encodeURIComponent(payload.name || targetName);
+      return;
+    }
     window.location.href = window.location.origin + '/api/backtest-v8/main_page?config=' + encodeURIComponent(payload.name || targetName);
   } catch (error) {
     toast('V8 conversion failed: ' + error.message, 'err');
@@ -2044,6 +2073,7 @@ async function openInitialBacktestDraftFromUrl() {
     var raw = JSON.stringify((prepared && prepared.config) || {}, null, 2);
     editingConfig = '__new__';
     selectPanel('configs');
+    _pendingMigrationReviewDraft = draft && draft.migration_report ? draft : null;
     showConfigEditor(name, prepared.config, raw, prepared.param_status || draft.param_status || {});
     clearInitialBacktestUrlParams(url, runDraftId ? ['draft_id', 'draft_name'] : ['opt_draft_id', 'draft_name']);
     return true;
@@ -2051,6 +2081,66 @@ async function openInitialBacktestDraftFromUrl() {
     toast((runDraftId ? 'Failed to open run draft: ' : 'Failed to open optimizer draft: ') + e.message, 'err');
     return true;
   }
+}
+
+function showMigrationReviewNotice(draft) {
+  var report = draft && draft.migration_report;
+  if (!report || typeof report !== 'object') return;
+  var editor = document.getElementById('configs-editor');
+  if (!editor) return;
+  var fields = [];
+  [report.manual_review_fields, report.dropped_unsupported_fields].forEach(function(items) {
+    if (!Array.isArray(items)) return;
+    items.forEach(function(item) {
+      var value = String(item || '').trim();
+      if (value && fields.indexOf(value) < 0) fields.push(value);
+    });
+  });
+  var notice = document.createElement('div');
+  notice.className = 'migration-review-notice';
+  var title = document.createElement('strong');
+  title.textContent = 'Manual V7 → V8 review required';
+  notice.appendChild(title);
+  var message = document.createElement('div');
+  message.textContent = (draft && draft.migration_message)
+    || 'The official migrator produced a canonical review draft but did not publish a runnable config. Review the fields below before saving.';
+  notice.appendChild(message);
+  if (fields.length) {
+    var values = draft.migration_review_values && typeof draft.migration_review_values === 'object'
+      ? draft.migration_review_values
+      : {};
+    var hints = {
+      'live.initial_entry_exec_max_market_dist_pct': 'Review PB8 live.order_replacement_churn_gate_* settings; the retired V7 gate is not behavior-identical.',
+      'backtest.aggregate': 'Review backtest.reducer; aggregate is a legacy reduction alias.'
+    };
+    var list = document.createElement('ul');
+    fields.forEach(function(field) {
+      var item = document.createElement('li');
+      var code = document.createElement('code');
+      var suffix = Object.prototype.hasOwnProperty.call(values, field)
+        ? ' = ' + JSON.stringify(values[field])
+        : '';
+      code.textContent = field + suffix;
+      item.appendChild(code);
+      if (hints[field]) {
+        var hint = document.createElement('span');
+        hint.className = 'migration-review-hint';
+        hint.textContent = ' — ' + hints[field];
+        item.appendChild(hint);
+      }
+      list.appendChild(item);
+    });
+    notice.appendChild(list);
+  }
+  editor.prepend(notice);
+  fields.forEach(function(field) {
+    var control = null;
+    if (field.indexOf('backtest.') === 0 && field.split('.').length === 2) {
+      control = document.getElementById('extra-bt-' + field.split('.')[1]);
+    }
+    var group = control && control.closest ? control.closest('.form-group') : null;
+    if (group) group.classList.add('migration-review-mark');
+  });
 }
 
 function showInitialBacktestQueueDraftModal(items) {
@@ -2886,6 +2976,10 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   '</div>';
 
   ed.innerHTML = html;
+  if (_pendingMigrationReviewDraft) {
+    showMigrationReviewNotice(_pendingMigrationReviewDraft);
+    _pendingMigrationReviewDraft = null;
+  }
   autoResizeTa(document.getElementById('cfg-bot-long'));
   autoResizeTa(document.getElementById('cfg-bot-short'));
   _applyBotJsonHighlight(document.getElementById('cfg-bot-long'), paramStatus.long);
@@ -4550,7 +4644,7 @@ function _applyBotJsonHighlight(ta, sideStatus) {
       var styles = ['display:block'];
       if (status === 'neutralized') {
         styles.push('background:color-mix(in srgb,#f0a500 16%,transparent)', 'border-radius:2px');
-      } else if (status === 'pb_default') {
+      } else if (status === 'pb_default' || status === 'review') {
         styles.push('background:color-mix(in srgb,#e05252 16%,transparent)', 'border-radius:2px');
       }
       if (validationErrorLine === index + 1) {
