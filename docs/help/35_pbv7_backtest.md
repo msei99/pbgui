@@ -169,6 +169,8 @@ Browse all completed backtest results.
 
 Completed queue jobs now invalidate the cached Results list immediately. If you are already on the Results panel when a backtest finishes, PBGui refreshes the table automatically so the new result appears without having to leave and reopen the panel.
 
+Switching from the Config editor to Results, Queue, Archive, Legacy, or Refine always restores the normal panel action sidebar immediately; a stale editor sidebar cannot remain attached to another panel.
+
 ### Toolbar actions
 
 | Button | Action |

@@ -56,6 +56,8 @@ PB8 may download historical data when a backtest starts. Review the config, exch
 
 The Results toolbar includes a persistent **Columns** picker. **Defaults** restores the established result table, while **All** also exposes available Final Equity and Equity/Balance Difference values. This browser-local selection is independent from Archive.
 
+Panel navigation synchronously closes the Config editor sidebar before showing Results, Queue, Archive, or Refine actions, so delayed editor state cannot leave the wrong sidebar attached to the active panel.
+
 ## Archive
 
 Archive Backtests have their own persistent **Columns** selection, so an archive-specific layout does not alter local Results.

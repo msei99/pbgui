@@ -391,6 +391,47 @@ def test_delayed_config_load_does_not_replace_results_sidebar() -> None:
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
+def test_panel_navigation_closes_config_editor_sidebar_outside_configs() -> None:
+    """Every non-Config panel must synchronously restore the normal action sidebar."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "selectPanel")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let hidden = 0;
+        let selected = [];
+        const window = {{PBGuiEditorShared: {{clearFixedValidationStatus() {{}}}}}};
+        const document = {{getElementById() {{ return {{style: {{}}}}; }}}};
+        const backtestShell = {{selectPanel(id) {{ selected.push(id); }}}};
+        let currentPanel = 'configs';
+        let _resultsEmptyRetryTimer = null, _resultsEmptyRetryCount = 0;
+        let configs = [{{}}], results = [{{}}], archives = [{{}}], legacyResults = [{{}}];
+        let selectedArchiveName = '';
+        function hideEditorSidebar() {{ hidden += 1; }}
+        function persistBacktestViewState() {{}}
+        function renderConfigs() {{}}
+        function renderResults() {{}}
+        function renderLegacyResults() {{}}
+        function loadConfigs() {{}}
+        function loadResults() {{}}
+        function loadArchives() {{}}
+        function loadLegacyResults() {{}}
+        function viewArchive() {{}}
+        {function}
+        selectPanel('results', {{persist: false, deferResultsLoad: true}});
+        assert.equal(hidden, 1);
+        assert.equal(currentPanel, 'results');
+        assert.deepEqual(selected, ['results']);
+        selectPanel('configs', {{persist: false}});
+        assert.equal(hidden, 1);
+        assert.equal(currentPanel, 'configs');
+        """
+    )
+
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_editor_results_button_opens_the_unfiltered_results_panel() -> None:
     """The editor sidebar must always provide access to all backtest results."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")

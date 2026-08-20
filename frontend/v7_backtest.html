@@ -1644,6 +1644,7 @@ function persistBacktestViewState() {
 function selectPanel(id, opts) {
   opts = opts || {};
   window.PBGuiEditorShared.clearFixedValidationStatus();
+  if (id !== 'configs') hideEditorSidebar();
   /* If leaving archive while results are open, hide archive-results sidebar */
   if (id !== 'archive') {
     document.getElementById('ctx-archive-results').style.display = 'none';

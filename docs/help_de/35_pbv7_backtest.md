@@ -169,6 +169,8 @@ Alle abgeschlossenen Backtest-Ergebnisse durchsuchen.
 
 Abgeschlossene Queue-Jobs invalidieren jetzt sofort den gecachten Results-Stand. Wenn du bereits im Results-Panel bist, lädt PBGui die Tabelle automatisch neu, sodass der neue Eintrag ohne Panel-Wechsel erscheint.
 
+Beim Wechsel vom Config-Editor zu Results, Queue, Archive, Legacy oder Refine wird die normale Panel-Aktionssidebar sofort wiederhergestellt; eine veraltete Editor-Sidebar kann nicht an einem anderen Panel haengen bleiben.
+
 ### Toolbar-Aktionen
 
 | Schaltfläche | Aktion |

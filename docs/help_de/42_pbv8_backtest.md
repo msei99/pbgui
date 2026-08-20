@@ -56,6 +56,8 @@ PB8 kann beim Backtest historische Daten herunterladen. Config, Exchanges, Coin-
 
 Die Results-Toolbar besitzt einen persistenten **Columns**-Picker. **Defaults** stellt die bisherige Result-Tabelle wieder her; **All** zeigt zusaetzlich verfuegbare Werte fuer Final Equity und Equity/Balance Difference. Diese browserlokale Auswahl ist vom Archiv getrennt.
 
+Die Panel-Navigation schliesst die Config-Editor-Sidebar synchron, bevor Results-, Queue-, Archive- oder Refine-Aktionen angezeigt werden. Verzoegerter Editor-Zustand kann dadurch keine falsche Sidebar am aktiven Panel hinterlassen.
+
 ## Archive
 
 Archiv-Backtests besitzen eine eigene persistente **Columns**-Auswahl, damit ein Archivlayout die lokalen Results nicht veraendert.
