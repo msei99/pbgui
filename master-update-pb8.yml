@@ -387,6 +387,16 @@
           - "import passivbot_rust; from config.schema import CONFIG_SCHEMA_VERSION; assert str(CONFIG_SCHEMA_VERSION).startswith('v8.'), CONFIG_SCHEMA_VERSION; print(CONFIG_SCHEMA_VERSION)"
       changed_when: false
 
+    - name: Stamp and validate PB8 Rust source fingerprint
+      command:
+        argv:
+          - "{{ pb8venv }}/bin/python"
+          - -c
+          - "from rust_utils import check_and_maybe_compile, source_fingerprint, stamp_compiled_extensions; stamp_compiled_extensions(source_fingerprint()); check_and_maybe_compile(fail_on_stale=True); import passivbot_rust"
+      args:
+        chdir: "{{ pb8dir }}"
+      changed_when: false
+
     - name: Save PB8 runtime paths after validation
       command:
         argv:

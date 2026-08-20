@@ -156,6 +156,12 @@ def test_pb8_playbooks_gate_role_validate_and_leave_processes_running(playbook_p
     assert "Save PB8 runtime paths after validation" in source
     assert source.index("Mark PB8 runtime unavailable") < checkout_index
     assert source.index("Mark validated PB8 runtime available") > source.index("Validate PB8 Rust module")
+    stamp_task = source.split("- name: Stamp and validate PB8 Rust source fingerprint", 1)[1]
+    stamp_task = stamp_task.split("\n    - name:", 1)[0]
+    assert "stamp_compiled_extensions(source_fingerprint())" in stamp_task
+    assert "check_and_maybe_compile(fail_on_stale=True)" in stamp_task
+    assert "\n      when:" not in stamp_task
+    assert source.index("Stamp and validate PB8 Rust source fingerprint") < source.index("Mark validated PB8 runtime available")
     assert "pb8-runtime-invalid" in source
     assert "Acquire PB8 update writer ownership" in source
     assert "Release PB8 update writer ownership" in source
@@ -168,9 +174,6 @@ def test_pb8_playbooks_gate_role_validate_and_leave_processes_running(playbook_p
         assert "Install PB8 live profile" in source
         assert 'pip install --no-cache-dir --upgrade -e "{{ pb8dir }}"' in source
         assert "Remove PB8 Rust build artifacts on live-only runners" in source
-        assert "Validate PB8 live runtime after build cleanup" in source
-        assert "stamp_compiled_extensions(source_fingerprint())" in source
-        assert "check_and_maybe_compile(fail_on_stale=True)" in source
         assert "Measure PB8 disk state before changes" in source
         assert "Measure PB8 disk state after validation" in source
         assert "pb8_min_free_bytes | default(3221225472)" in source

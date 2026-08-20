@@ -448,7 +448,7 @@
         state: absent
       when: pb8_install_profile == 'live'
 
-    - name: Validate PB8 live runtime after build cleanup
+    - name: Stamp and validate PB8 Rust source fingerprint
       command:
         argv:
           - "{{ pb8venv }}/bin/python"
@@ -457,7 +457,6 @@
       args:
         chdir: "{{ pb8dir }}"
       changed_when: false
-      when: pb8_install_profile == 'live'
 
     - name: Save PB8 runtime paths after validation
       command:
