@@ -829,6 +829,11 @@ def _validate_monitor_agent_payload(filename: str, payload: Any, *, now: float |
                 _monitor_agent_require_type(payload, field, str)
             if type(payload.get("pb8ready")) is not bool:
                 raise MonitorAgentPayloadError("invalid type for pb8ready")
+        for field in ("pb8installed", "pb8blocked"):
+            if field in payload and type(payload.get(field)) is not bool:
+                raise MonitorAgentPayloadError(f"invalid type for {field}")
+        if "pb8reason" in payload and (not isinstance(payload.get("pb8reason"), str) or len(payload["pb8reason"]) > 500):
+            raise MonitorAgentPayloadError("invalid pb8reason")
         _monitor_agent_require_number(payload, "boot", minimum=0.0)
         if type(payload.get("reboot")) is not bool:
             raise MonitorAgentPayloadError("invalid type for reboot")
@@ -3653,7 +3658,10 @@ result = {
     'pb8c': '',
     'pb8b': 'unknown',
     'pb8py': 'N/A',
+    'pb8installed': False,
     'pb8ready': False,
+    'pb8blocked': False,
+    'pb8reason': '',
     **credentials,
     'firewall_settings_present': firewall_settings_present,
     'firewall': firewall_enabled,
@@ -3712,13 +3720,18 @@ if pb7_python:
 pb8_python = python_version(pb8venv)
 if pb8_python:
     result['pb8py'] = pb8_python
-result['pb8ready'] = bool(
+result['pb8installed'] = bool(
     result['pb8v'].startswith('v8.')
     and result['pb8_config_schema'].startswith('v8.')
     and result['pb8c']
     and pb8_python
     and Path(pb8venv).parent.joinpath('passivbot').is_file()
 )
+pb8_invalid_marker = Path(PBGDIR) / 'data' / 'locks' / 'pb8-runtime-invalid'
+result['pb8blocked'] = pb8_invalid_marker.exists() or pb8_invalid_marker.is_symlink()
+if result['pb8blocked']:
+    result['pb8reason'] = 'PB8 installation or update did not complete; run Update PB8.'
+result['pb8ready'] = result['pb8installed'] and not result['pb8blocked']
 
 available = []
 logs_dir = os.path.join(PBGDIR, 'data', 'logs')

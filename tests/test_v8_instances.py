@@ -704,6 +704,41 @@ def test_instance_list_reports_active_pb8_strategy(monkeypatch: pytest.MonkeyPat
     assert rows[0]["strategy"] == "trailing_martingale"
 
 
+@pytest.mark.parametrize("runtime_ready", (False, True))
+def test_instance_list_distinguishes_runtime_failure_from_config_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    runtime_ready: bool,
+) -> None:
+    """Run rows classify global PB8 readiness separately from one invalid config."""
+    _configure_root(monkeypatch, tmp_path)
+    config_dir = tmp_path / "data" / "run_v8" / "alice"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.json").write_text(json.dumps({
+        "live": {"user": "alice"},
+        "bot": {},
+        "pbgui": {"enabled_on": "disabled", "version": 1},
+    }), encoding="utf-8")
+    reason = "PB8 Rust extension has no source fingerprint stamp; rerun the PB8 update on this host."
+    monkeypatch.setattr(
+        v8_instances.pbgui_purefunc,
+        "pb8_runtime_status",
+        lambda: {"ready": runtime_ready, "errors": [] if runtime_ready else [reason]},
+    )
+    monkeypatch.setattr(
+        v8_instances,
+        "load_pb8_config",
+        lambda _path: (_ for _ in ()).throw(RuntimeError("invalid live.user" if runtime_ready else reason)),
+    )
+    monkeypatch.setattr(v8_instances, "_desired_pb8_state", lambda: ({}, {}, {}))
+
+    rows = v8_instances._list_instances()
+
+    assert rows[0]["status"] == "config_error"
+    assert rows[0]["load_error"] == ("invalid live.user" if runtime_ready else reason)
+    assert rows[0]["runtime_error"] == ("" if runtime_ready else reason)
+
+
 def test_instance_list_surfaces_remote_pb8_runtime_blocker(monkeypatch: pytest.MonkeyPatch) -> None:
     """An observed PB8 launch failure is shown as blocked rather than generic sync needed."""
 

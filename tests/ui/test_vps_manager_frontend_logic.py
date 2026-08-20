@@ -117,6 +117,31 @@ class TestVpsManagerFrontendLogic:
         assert "st.pb7_installed ? 'sb-btn ok' : 'sb-btn install'" in sidebar_source
         assert "st.pb7_installed ? 'Update PB7' : 'Install PB7'" in sidebar_source
 
+    def test_pb8_runtime_blocker_is_visible_and_emphasizes_repair_action(self) -> None:
+        """Failed PB8 updates remain visible in overview, detail, and sidebar repair controls."""
+        source = HTML_PATH.read_text(encoding="utf-8")
+        banner_source = _extract_function(source, "renderPb8RuntimeBanner")
+        header_model_source = _extract_function(source, "getSystemHeaderModel")
+        header_source = _extract_function(source, "renderSystemHeader")
+        sync_header_source = _extract_function(source, "syncSystemHeader")
+        sidebar_source = _extract_function(source, "renderSidebarActions")
+        signature_source = _extract_function(source, "getSidebarActionsSignature")
+        overview_source = _extract_function(source, "renderOverviewTable")
+
+        assert "PB8 Update Required" in banner_source
+        assert "esc(reason)" in banner_source
+        assert "pb8-runtime-banner" in banner_source
+        assert "const pb8Tone = pb8Blocked ? 'error'" in header_model_source
+        assert "runtime-error" in header_source
+        assert "model.pb8Reason" in header_source
+        assert "'system-metric' + (model.pb8Blocked ? ' runtime-error' : '')" in sync_header_source
+        assert "masterPb8RuntimeBlocked || st.pb8_update_available" in sidebar_source
+        assert "pb8RuntimeBlocked || st.pb8_update_available" in sidebar_source
+        assert "pb8_runtime_reason" in sidebar_source
+        assert "pb8_blocked: !!st.pb8_runtime_blocked" in signature_source
+        assert "row.pb8_runtime_blocked, row.pb8_runtime_reason" in overview_source
+        assert ".system-metric.runtime-error" in source
+
     def test_pb7_install_is_disabled_when_backend_disk_gate_blocks_it(self) -> None:
         """A low-disk PB8-only VPS exposes the PB7 reason without allowing a click."""
         source = HTML_PATH.read_text(encoding="utf-8")

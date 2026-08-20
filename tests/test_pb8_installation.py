@@ -46,11 +46,31 @@ def test_local_master_restart_waits_for_imported_pb8_update() -> None:
     handler = source.split("Restart PBApiServer", 1)[1]
 
     assert 'ansible-playboo*) update_pid="$ancestor"' in handler
+    assert "--expand-environment=no" in handler
     assert '--setenv=PBGUI_UPDATE_PID="$update_pid"' in handler
     assert '--setenv=PBGUI_UPDATE_START="$update_start"' in handler
     assert 'while [ -r "/proc/$PBGUI_UPDATE_PID/stat" ]' in handler
     assert '[ "${current_stat[21]}" = "$PBGUI_UPDATE_START" ]' in handler
     assert "sleep 1\n          cd \"$PBGUI_DIR\"" not in handler
+
+
+@pytest.mark.parametrize(
+    "playbook_path",
+    [
+        "master-update-pbgui.yml",
+        "master-update-pb.yml",
+        "master-switch-pbgui-branch.yml",
+        "vps-update-pbgui.yml",
+        "vps-update-pb.yml",
+        "vps-switch-pbgui-branch.yml",
+    ],
+)
+def test_delayed_api_restart_disables_systemd_environment_expansion(playbook_path: str) -> None:
+    """systemd must pass Bash variables through instead of expanding restart scripts itself."""
+    source = Path(playbook_path).read_text(encoding="utf-8")
+
+    assert "systemd-run --user" in source
+    assert "--expand-environment=no" in source
 
 
 @pytest.mark.parametrize(
@@ -180,6 +200,34 @@ def test_pb8_runtime_info_requires_source_schema_interpreter_and_cli(tmp_path: P
     assert partial["installed"] is False
     assert ready["installed"] is True
     assert ready["config_version"] == "v8.0.0"
+
+
+def test_pb8_runtime_info_keeps_installed_runtime_visible_when_update_marker_blocks_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed update remains an installed PB8 runtime with an explicit repair blocker."""
+    repo = tmp_path / "pb8"
+    schema = repo / "src" / "config" / "schema.py"
+    schema.parent.mkdir(parents=True)
+    schema.write_text('CONFIG_SCHEMA_VERSION = "v8.0.0"\n', encoding="utf-8")
+    python_path = tmp_path / "venv_pb8" / "bin" / "python"
+    python_path.parent.mkdir(parents=True)
+    python_path.symlink_to(Path(service_mod.sys.executable))
+    (python_path.parent / "passivbot").write_text("#!/bin/sh\n", encoding="utf-8")
+    pbgui_dir = tmp_path / "pbgui"
+    marker = pbgui_dir / "data" / "locks" / "pb8-runtime-invalid"
+    marker.parent.mkdir(parents=True)
+    marker.touch()
+    monkeypatch.setattr(service_mod, "get_current_pb7_status", lambda _repo: ("master", "a" * 40))
+    monkeypatch.setattr(service_mod, "read_local_pb7_version", lambda _repo: "v8.0.0")
+
+    blocked = service_mod._pb8_runtime_info(str(repo), str(python_path), pbgui_dir=pbgui_dir)
+
+    assert blocked["installed"] is True
+    assert blocked["runtime_ready"] is False
+    assert blocked["runtime_blocked"] is True
+    assert blocked["runtime_reason"] == "PB8 installation or update did not complete; run Update PB8."
 
 
 def test_verified_detached_pb8_upstream_is_labelled_master() -> None:

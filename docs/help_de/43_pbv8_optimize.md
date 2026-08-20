@@ -30,6 +30,8 @@ PB8.1-Scoring-Objectives koennen das globale **Objective Scenario** erben, ausdr
 
 Die PB8-Marktauswahl verwendet den offiziellen Resolver fuer das vollstaendige Exchange-Set. Eindeutige Maerkte bleiben in der Config kurz; echte Multiplikator- oder Venue-Kollisionen verwenden exakte Scoped-Identifier, waehrend der Editor kompakte Labels beibehaelt. Importierte exakte IDs bleiben in Coin-Listen, Coin Sources, Suite-Szenarien und Raw JSON unveraendert.
 
+Nach Aenderungen an Market Cap, Volumenverhaeltnis, Tags, CPT oder Notices muss **Apply Filters** verwendet werden. Die Aktion filtert jede gewaehlte Exchange, projiziert das Ergebnis durch PB8s Marktresolver und schreibt die vereinigten Werte in beide Long-/Short-Listen fuer Approved und Ignored. Speichern ohne Apply erhaelt nur die Filtermetadaten und veraendert explizite Coin-Listen nicht.
+
 ## Queue
 
 Queue-Eintraege enthalten unveraenderliche PB8-Config-Snapshots. Eine spaetere Aenderung der gespeicherten Config veraendert keinen bestehenden Queue-Eintrag.

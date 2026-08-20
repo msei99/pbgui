@@ -142,6 +142,16 @@ tbody tr { cursor: pointer; }
 .st-conflicted,
 .st-tombstoned,
 .st-config_error    { color: var(--red); font-weight: 600; }
+.status-reason {
+  max-width: 420px;
+  margin-top: 2px;
+  color: #fca5a5;
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 tr.row-inactive td  { opacity: 0.45; }
 
 /* Inline buttons */
@@ -546,7 +556,7 @@ tr.row-inactive td  { opacity: 0.45; }
   <!-- Main content -->
   <div id="main-content">
     <div id="pb8-update-warning" class="pb8-update-warning" role="status" hidden>
-      <div><strong>PBRun cannot start PB8.</strong> <span id="pb8-update-warning-hosts"></span></div>
+      <div><strong>PB8 runtime unavailable.</strong> <span id="pb8-update-warning-hosts"></span></div>
       <a href="/api/vps-manager/main_page">Open VPS Manager -&gt; Update PB8</a>
     </div>
     <div class="tbl-wrap">
@@ -695,7 +705,13 @@ var rowMap = {};  /* name -> { tr, cells: string[] } */
 function buildCells(r) {
   var stClass = 'st-' + String(r.status || 'disabled').replace(/[^a-z_]/g, '');
   var stLabel = STATUS_LABELS[r.status] || r.status || '\u2013';
-  var stTitle = r.blocked_reason ? ' title="' + esc(r.blocked_reason) + '"' : '';
+  var runtimeError = String(r.runtime_error || '').trim();
+  var statusReason = runtimeError || String(r.load_error || '').trim() || String(r.blocked_reason || '').trim();
+  if (runtimeError) stLabel = 'PB8 update required';
+  var stTitle = statusReason ? ' title="' + esc(statusReason) + '"' : '';
+  var statusDetail = r.status === 'config_error' && statusReason
+    ? '<div class="status-reason">' + esc(statusReason) + '</div>'
+    : '';
   var runOn = (r.running_on || []).join(', ') || '\u2013';
   if ((!r.running_on || !r.running_on.length) && r.blocked_on && r.blocked_on.length) {
     runOn = 'blocked on ' + r.blocked_on.join(', ');
@@ -707,7 +723,7 @@ function buildCells(r) {
   if (runListAdapter.isV8) cells.push(esc(r.strategy || '\u2013'));
   return cells.concat([
     esc(r.enabled_on || '\u2013'),
-    '<span class="' + stClass + '"' + stTitle + '>' + esc(stLabel) + '</span>',
+    '<span class="' + stClass + '"' + stTitle + '>' + esc(stLabel) + '</span>' + statusDetail,
     (r.version != null ? String(r.version) : '\u2013'),
     (r.running_version != null ? String(r.running_version) : '\u2013'),
     esc(r.twe || '\u2013'),
@@ -771,8 +787,11 @@ function renderPb8UpdateWarning(rows) {
   var hostText = document.getElementById('pb8-update-warning-hosts');
   if (!warning || !hostText) return;
   var hosts = [];
+  var runtimeErrors = [];
   if (runListAdapter.isV8) {
     (rows || []).forEach(function(row) {
+      var runtimeError = String(row.runtime_error || '').trim();
+      if (runtimeError && runtimeErrors.indexOf(runtimeError) === -1) runtimeErrors.push(runtimeError);
       (row.pb8_update_required_on || []).forEach(function(host) {
         host = String(host || '').trim();
         if (host && hosts.indexOf(host) === -1) hosts.push(host);
@@ -780,10 +799,10 @@ function renderPb8UpdateWarning(rows) {
     });
   }
   hosts.sort();
-  warning.hidden = hosts.length === 0;
-  hostText.textContent = hosts.length
-    ? 'The validated PB8 runtime is not ready on ' + hosts.join(', ') + '.'
-    : '';
+  var details = runtimeErrors.slice();
+  if (hosts.length) details.push('The validated PB8 runtime is not ready on ' + hosts.join(', ') + '.');
+  warning.hidden = details.length === 0;
+  hostText.textContent = details.join(' ');
 }
 
 function render() {

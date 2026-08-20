@@ -244,7 +244,7 @@ def _pb8_remote_action_status(host_state: dict[str, Any] | None, *, telemetry_fr
     meta = state.get("meta") if isinstance(state.get("meta"), dict) else {}
     system = state.get("system") if isinstance(state.get("system"), dict) else {}
     role = str(meta.get("role") or "").strip().lower()
-    installed = bool(meta.get("pb8ready"))
+    installed = bool(meta.get("pb8installed", meta.get("pb8ready")))
     free_bytes = max(_safe_int(system.get("disk_free")), 0)
     profile = "full" if role == "master" else "live"
     result = {
@@ -306,7 +306,7 @@ def _pb7_remote_action_status(host_state: dict[str, Any] | None, *, telemetry_fr
     return result
 
 
-def _pb8_runtime_info(repo_dir: str, python_path: str) -> dict[str, Any]:
+def _pb8_runtime_info(repo_dir: str, python_path: str, *, pbgui_dir: Path | None = None) -> dict[str, Any]:
     """Return static PB8 readiness details without importing PB8 into PBGui."""
     branch, commit = get_current_pb7_status(repo_dir)
     version = read_local_pb7_version(repo_dir)
@@ -329,8 +329,14 @@ def _pb8_runtime_info(repo_dir: str, python_path: str) -> dict[str, Any]:
         and cli_path
         and cli_path.is_file()
     )
+    invalid_marker = Path(pbgui_dir or PBGDIR) / "data" / "locks" / "pb8-runtime-invalid"
+    runtime_blocked = invalid_marker.exists() or invalid_marker.is_symlink()
+    runtime_reason = "PB8 installation or update did not complete; run Update PB8." if runtime_blocked else ""
     return {
         "installed": ready,
+        "runtime_ready": ready and not runtime_blocked,
+        "runtime_blocked": runtime_blocked,
+        "runtime_reason": runtime_reason,
         "version": version,
         "config_version": schema,
         "branch": branch,
@@ -3637,6 +3643,9 @@ class VPSManagerService:
             "pb8_branch": f"{master_pb8_branch} ({_short_commit(pb8_info.get('commit'))})",
             "pb8_github": master_pb8_github,
             "pb8_installed": bool(pb8_info.get("installed")),
+            "pb8_runtime_ready": bool(pb8_info.get("runtime_ready")),
+            "pb8_runtime_blocked": bool(pb8_info.get("runtime_blocked")),
+            "pb8_runtime_reason": str(pb8_info.get("runtime_reason") or ""),
         }
 
     def _build_vps_overview_row(self,
@@ -3699,6 +3708,8 @@ class VPSManagerService:
             and str(meta.get("pb7c") or "")
             and str(meta.get("pb7py") or "") not in {"", "N/A"}
         )
+        pb8_installed = bool(meta.get("pb8installed", meta.get("pb8ready")))
+        pb8_runtime_blocked = bool(meta.get("pb8blocked"))
         row = {
             "name": hostname,
             "hostname": hostname,
@@ -3731,7 +3742,10 @@ class VPSManagerService:
             "pb8": f"{meta.get('pb8v', 'N/A')}{'' if meta.get('pb8py', 'N/A') in (None, '', 'N/A') else ' /' + str(meta.get('pb8py'))}",
             "pb8_branch": f"{remote_pb8_branch} ({_short_commit(meta.get('pb8c'))})",
             "pb8_github": remote_pb8_github,
-            "pb8_installed": bool(meta.get("pb8ready")),
+            "pb8_installed": pb8_installed,
+            "pb8_runtime_ready": bool(meta.get("pb8ready")) and not pb8_runtime_blocked,
+            "pb8_runtime_blocked": pb8_runtime_blocked,
+            "pb8_runtime_reason": str(meta.get("pb8reason") or ""),
             "runtime_profile": str(getattr(vps, "runtime_profile", "pb7") or "pb7") if vps else "pb7",
             "rtd": min(self._build_remote_rtd(host_state), 9999),
             "task_command": str(getattr(vps, "command", "") or "") if vps else "",
@@ -3860,8 +3874,11 @@ class VPSManagerService:
             "pb7_update_available": pb7_github.startswith("❌"),
             "pb7_installed": bool(summary_row.get("pb7_installed")),
             "pb8_installed": bool(summary_row.get("pb8_installed")),
-            "pb8_update_available": pb8_github.startswith("❌"),
+            "pb8_update_available": pb8_github.startswith("❌") or bool(summary_row.get("pb8_runtime_blocked")),
             "pb8_action_allowed": load_ini("main", "role").strip().lower() == "master",
+            "pb8_runtime_ready": bool(summary_row.get("pb8_runtime_ready")),
+            "pb8_runtime_blocked": bool(summary_row.get("pb8_runtime_blocked")),
+            "pb8_runtime_reason": str(summary_row.get("pb8_runtime_reason") or ""),
             **self._local_credential_capability_metadata(),
         }
 
@@ -3930,12 +3947,15 @@ class VPSManagerService:
             "pb7_free_disk_bytes": int(pb7_action["free_disk_bytes"]),
             "pb7_required_free_disk_bytes": int(pb7_action["required_free_disk_bytes"]),
             "pb8_installed": bool(summary_row.get("pb8_installed")),
-            "pb8_update_available": pb8_github.startswith("\u274c"),
+            "pb8_update_available": pb8_github.startswith("\u274c") or bool(summary_row.get("pb8_runtime_blocked")),
             "pb8_action_allowed": bool(pb8_action["allowed"]),
             "pb8_action_reason": str(pb8_action["reason"]),
             "pb8_install_profile": str(pb8_action["profile"]),
             "pb8_free_disk_bytes": int(pb8_action["free_disk_bytes"]),
             "pb8_required_free_disk_bytes": int(pb8_action["required_free_disk_bytes"]),
+            "pb8_runtime_ready": bool(summary_row.get("pb8_runtime_ready")),
+            "pb8_runtime_blocked": bool(summary_row.get("pb8_runtime_blocked")),
+            "pb8_runtime_reason": str(summary_row.get("pb8_runtime_reason") or ""),
             "runtime_profile": str(getattr(vps, "runtime_profile", "pb7") or "pb7"),
             "server_metrics": self._build_remote_server_metrics(vps.hostname, host_state),
             "systemd_migration": self._get_vps_systemd_migration_status(vps, host_state, quick=quick),

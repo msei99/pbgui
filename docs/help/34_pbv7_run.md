@@ -80,9 +80,10 @@ Key settings in the edit form:
 
 The Import dialog's **User** field is searchable. Type part of a configured exchange-user name and select the matching suggestion; arbitrary unknown names are rejected.
 | **Filters** | CoinMarketCap-based symbol filter for this instance |
+| **Apply Filters** | Rebuild both Long/Short approved and ignored lists immediately from Market Cap, volume ratio, tags, CPT, and notice settings |
 | **Approved / Ignored coins** | The approved coin pickers now use Passivbot's canonical `all` handling directly. The old `empty_means_all_approved` toggle is no longer shown or written back on save |
 | **Coin Overrides** | Per-coin parameter overrides (bot params, live mode, separate config files). Allowed inline parameters load from the installed PB7 runtime; an already open editor refreshes when metadata arrives and shows an explicit error instead of empty sections if loading fails |
-| **Dynamic Ignore** | Preview of symbols automatically ignored based on filter settings |
+| **Dynamic Ignore** | PB7-only runtime watcher that continuously rebuilds coin lists. PB8 shows this disabled because its supervisor currently uses explicit lists produced by Apply Filters. |
 
 ### Dynamic Ignore and the CMC pool
 

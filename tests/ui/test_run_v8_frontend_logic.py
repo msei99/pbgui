@@ -24,6 +24,37 @@ def _page_function(page: str, name: str) -> str:
     return page[start:end].rstrip()
 
 
+def _exact_page_function(page: str, name: str) -> str:
+    """Extract exactly one function body, including an optional async prefix."""
+    marker = f"function {name}("
+    start = page.index(marker)
+    if page[max(0, start - 6) : start] == "async ":
+        start -= 6
+    brace_start = page.index("{", start)
+    depth = 0
+    quote = None
+    escaped = False
+    for index in range(brace_start, len(page)):
+        char = page[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ("'", '"', "`"):
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return page[start : index + 1]
+    raise AssertionError(f"Could not extract function {name}")
+
+
 def _run_node(script: str) -> None:
     """Run one isolated Node contract and surface assertion output."""
 
@@ -150,6 +181,98 @@ def test_pb8_update_warning_only_uses_runtime_not_ready_hosts() -> None:
         runListAdapter = {{isV8: false}};
         renderPb8UpdateWarning([{{pb8_update_required_on: ['vps-a']}}]);
         assert.equal(nodes['pb8-update-warning'].hidden, true);
+        """
+    )
+    _run_node(script)
+
+
+def test_pb8_runtime_and_config_errors_show_actionable_causes() -> None:
+    """Run rows expose exact causes while only runtime failures request a PB8 update."""
+    page = (ROOT / "frontend" / "v7_run.html").read_text(encoding="utf-8")
+    build_cells = _page_function(page, "buildCells")
+    render_warning = _page_function(page, "renderPb8UpdateWarning")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const nodes = {{
+          'pb8-update-warning': {{hidden: true}},
+          'pb8-update-warning-hosts': {{textContent: ''}}
+        }};
+        const document = {{getElementById: (id) => nodes[id] || null}};
+        const STATUS_LABELS = {{config_error: 'config error'}};
+        const esc = (value) => String(value == null ? '' : value)
+          .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+        let runListAdapter = {{isV8: true, supportsForcedModes: false, supportsConversion: false}};
+        {build_cells}
+        {render_warning}
+
+        const reason = 'PB8 Rust extension has no source fingerprint stamp; rerun the PB8 update on this host.';
+        const runtimeRow = {{name: 'runtime', user: 'alice', status: 'config_error', runtime_error: reason, load_error: reason}};
+        const runtimeCells = buildCells(runtimeRow);
+        assert.match(runtimeCells[4], /PB8 update required/);
+        assert.match(runtimeCells[4], /status-reason/);
+        assert.match(runtimeCells[4], /source fingerprint stamp/);
+
+        const configRow = {{name: 'config', user: 'bob', status: 'config_error', load_error: 'invalid live.user'}};
+        const configCells = buildCells(configRow);
+        assert.match(configCells[4], /config error/);
+        assert.match(configCells[4], /invalid live.user/);
+        assert.doesNotMatch(configCells[4], /PB8 update required/);
+
+        renderPb8UpdateWarning([runtimeRow, runtimeRow]);
+        assert.equal(nodes['pb8-update-warning'].hidden, false);
+        assert.equal(nodes['pb8-update-warning-hosts'].textContent, reason);
+
+        renderPb8UpdateWarning([configRow]);
+        assert.equal(nodes['pb8-update-warning'].hidden, true);
+        assert.equal(nodes['pb8-update-warning-hosts'].textContent, '');
+        """
+    )
+    _run_node(script)
+
+
+def test_run_apply_filters_is_a_button_and_pb8_dynamic_ignore_is_explicitly_unsupported() -> None:
+    """Run filters use an action button while PB8 does not persist unsupported dynamic_ignore."""
+    page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+    function = _exact_page_function(page, "applyRunFilters")
+    assert 'id="btn-apply-filters"' in page
+    assert 'id="f-apply-filters"' not in page
+    assert "PB7-only runtime feature. PB8 uses the explicit lists produced by Apply Filters." in page
+    assert "dynamicIgnoreControl.disabled = runEditorAdapter.isV8" in page
+    assert "delete result.pbgui.dynamic_ignore" in page
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const button = {{disabled: false}};
+        const document = {{getElementById(id) {{ return id === 'btn-apply-filters' ? button : null; }}}};
+        const allUsers = [{{name: 'user-a', exchange: 'bybit'}}];
+        const applied = {{}};
+        const messages = [];
+        const runEditorAdapter = {{isV8: true}};
+        function getVal() {{ return 'user-a'; }}
+        function getInt() {{ return 5000; }}
+        function getNum() {{ return 10; }}
+        function getChk(id) {{ return id === 'f-only-cpt'; }}
+        function getMultiselectValues() {{ return ['layer-1']; }}
+        function setMultiselectValues(id, values) {{ applied[id] = values; }}
+        function toast(message, level) {{ messages.push({{message, level}}); }}
+        async function apiFetch(url) {{
+          assert.match(url, /market_cap=5000/);
+          assert.match(url, /only_cpt=true/);
+          assert.match(url, /tags=layer-1/);
+          const payload = {{approved: ['BTC'], ignored: ['DOGE'], unresolved: ['OLD']}};
+          return {{ok: true, json: async () => payload}};
+        }}
+        {function}
+        applyRunFilters().then(() => {{
+          assert.deepEqual(applied['ms-approved-long'], ['BTC']);
+          assert.deepEqual(applied['ms-approved-short'], ['BTC']);
+          assert.deepEqual(applied['ms-ignored-long'], ['DOGE']);
+          assert.deepEqual(applied['ms-ignored-short'], ['DOGE']);
+          assert.equal(messages.at(-1).level, 'info');
+          assert.equal(button.disabled, false);
+        }}).catch(error => {{ console.error(error); process.exit(1); }});
         """
     )
     _run_node(script)

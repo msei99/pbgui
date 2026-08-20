@@ -2273,6 +2273,7 @@ textarea.json-invalid:focus {
         <button class="sb-btn info" onclick="saveAndQueue()" title="Save config and queue it">▶ Save &amp; Queue</button>
         <hr class="sb-sep">
         <button class="sb-btn" id="opted-sidebar-ohlcv-preflight-btn" title="Check PB7 OHLCV readiness for the current config" aria-expanded="false">🧭 OHLCV Readiness</button>
+        <button class="sb-btn" id="opted-sidebar-apply-filters-btn" onclick="applyOptimizeFilters()" title="Apply market cap, volume, tag, CPT, and notice filters to approved/ignored coins">🔎 Apply Filters</button>
       </div>
     </div>
     <div id="sidebar-resize"></div>
@@ -8148,6 +8149,63 @@ function optSelectAllMs(id) {
 
 function optGetMs(id) {
   return _optMsController.getValues(id);
+}
+
+function optSetMs(id, values) {
+  _optMsController.setValues(id, values);
+}
+
+async function applyOptimizeFilters() {
+  var exchanges = optGetMs('ms-opt-exchanges');
+  if (!exchanges.length) {
+    toast('Select at least one exchange', 'err');
+    return;
+  }
+  var button = el('opted-sidebar-apply-filters-btn');
+  if (button) button.disabled = true;
+  var marketCap = parseFloat(el('opted-market-cap').value) || 0;
+  var volMcap = parseFloat(el('opted-vol-mcap').value);
+  if (!isFinite(volMcap)) volMcap = 10;
+  var onlyCpt = !!el('opted-only-cpt').checked;
+  var noticesIgnore = !!el('opted-notices-ignore').checked;
+  var tags = optGetMs('ms-opt-tags');
+  var approved = new Set();
+  var ignored = new Set();
+  var unresolved = new Set();
+  try {
+    for (var index = 0; index < exchanges.length; index++) {
+      var exchange = String(exchanges[index] || '').trim().toLowerCase();
+      if (!exchange || exchange === 'combined') continue;
+      var url = optimizeEditorAdapter.metadataApiBase() + '/coins/filter?exchange=' + encodeURIComponent(exchange)
+        + '&market_cap=' + encodeURIComponent(marketCap)
+        + '&vol_mcap=' + encodeURIComponent(volMcap)
+        + '&only_cpt=' + encodeURIComponent(onlyCpt)
+        + '&notices_ignore=' + encodeURIComponent(noticesIgnore);
+      if (tags.length) url += '&tags=' + encodeURIComponent(tags.join(','));
+      var data = await authFetch(url);
+      (data.approved || []).forEach(function(coin) { approved.add(coin); });
+      (data.ignored || []).forEach(function(coin) { ignored.add(coin); });
+      if (optimizeEditorAdapter.isV8 && Array.isArray(data.unresolved)) {
+        data.unresolved.forEach(function(coin) { unresolved.add(coin); });
+      }
+    }
+    approved.forEach(function(coin) { ignored.delete(coin); });
+    var approvedCoins = Array.from(approved).sort();
+    var ignoredCoins = Array.from(ignored).sort();
+    optSetMs('ms-opt-app-long', approvedCoins);
+    optSetMs('ms-opt-app-short', approvedCoins);
+    optSetMs('ms-opt-ign-long', ignoredCoins);
+    optSetMs('ms-opt-ign-short', ignoredCoins);
+    var unresolvedSuffix = unresolved.size ? '; ' + unresolved.size + ' unavailable PB8 symbols skipped' : '';
+    toast(
+      'Filters applied: ' + approvedCoins.length + ' approved, ' + ignoredCoins.length + ' ignored' + unresolvedSuffix,
+      unresolved.size ? 'info' : 'ok'
+    );
+  } catch (error) {
+    toast('Filter error: ' + error.message, 'err');
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function normalizeOptimizeCoinSources(backtestCoinSources, legacyCoinSources) {

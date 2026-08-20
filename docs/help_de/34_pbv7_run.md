@@ -80,9 +80,10 @@ Wichtige Einstellungen im Bearbeitungsformular:
 
 Das **User**-Feld im Import-Dialog ist durchsuchbar. Einen Teil des konfigurierten Exchange-User-Namens eingeben und den passenden Vorschlag waehlen; unbekannte freie Namen werden abgewiesen.
 | **Filters** | CoinMarketCap-basierter Symbol-Filter für diese Instanz |
+| **Apply Filters** | Baut beide Long-/Short-Listen fuer Approved und Ignored sofort aus Market Cap, Volumenverhaeltnis, Tags, CPT und Notice-Einstellungen neu auf |
 | **Approved / Ignored coins** | Die Approved-Coin-Picker verwenden jetzt direkt Passivbots kanonisches `all`-Verhalten. Der alte Schalter `empty_means_all_approved` wird nicht mehr angezeigt und beim Speichern auch nicht mehr zurückgeschrieben |
 | **Coin Overrides** | Coin-spezifische Parameterüberschreibungen (Bot-Parameter, Live-Modus, separate Config-Dateien). Erlaubte Inline-Parameter werden aus der installierten PB7-Runtime geladen; ein bereits geöffneter Editor aktualisiert sich nach Eintreffen der Metadaten und zeigt bei einem Ladefehler eine klare Meldung statt leerer Bereiche |
-| **Dynamic Ignore** | Vorschau der automatisch ignorierten Symbole basierend auf den Filter-Einstellungen |
+| **Dynamic Ignore** | PB7-only Runtime-Watcher, der Coin-Listen kontinuierlich neu aufbaut. PB8 zeigt ihn deaktiviert, weil der Supervisor derzeit die expliziten Listen aus Apply Filters verwendet. |
 
 ### Dynamic Ignore und der CMC-Pool
 

@@ -537,6 +537,70 @@ def test_legacy_response_fields_keep_boolean_and_readiness_semantics() -> None:
     assert vps_status["package_status"]["reboot_required"] is None
 
 
+def test_pb8_runtime_blocker_propagates_to_master_and_vps_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed PB8 update forces repair emphasis without hiding the installed runtime."""
+    reason = "PB8 installation or update did not complete; run Update PB8."
+    summary = {
+        "online": True,
+        "updates": "0",
+        "reboot_required": False,
+        "package_status": _normalize_package_status(None),
+        "monitor_agent": {},
+        "pbgui_github": "",
+        "pb7_github": "",
+        "pb8_github": "✅",
+        "pb8_installed": True,
+        "pb8_runtime_ready": False,
+        "pb8_runtime_blocked": True,
+        "pb8_runtime_reason": reason,
+    }
+    service = object.__new__(VPSManagerService)
+    service.vpsmanager = SimpleNamespace(update_status="", command_text="", last_update="")
+    service._build_master_overview_row = lambda: dict(summary)
+    service._local_credential_capability_metadata = lambda: {}
+    monkeypatch.setattr(service_mod, "load_ini", lambda _section, _parameter: "master")
+    monkeypatch.setattr(service_mod, "_local_no_new_privileges", lambda: False)
+
+    master_status = service._build_master_status(False)
+
+    assert master_status["pb8_installed"] is True
+    assert master_status["pb8_runtime_ready"] is False
+    assert master_status["pb8_runtime_blocked"] is True
+    assert master_status["pb8_runtime_reason"] == reason
+    assert master_status["pb8_update_available"] is True
+
+    vps = SimpleNamespace(
+        hostname="vps-1", user_pw="available", init_status="", setup_status="", update_status="",
+        command_text="", last_update="", last_setup="", last_init="", user="user",
+        remote_pbgui_dir="/home/user/pbgui", runtime_profile="pb8",
+        is_vps_in_hosts=lambda: True,
+    )
+    service._build_vps_overview_row = lambda *_args, **_kwargs: dict(summary)
+    service._cluster_node_status = lambda _host: {}
+    service._build_remote_pbgui_github_status = lambda _state: ""
+    service._build_remote_pb7_github_status = lambda _state: ""
+    service._host_online = lambda _state: True
+    service._host_telemetry_fresh = lambda _state: True
+    service._host_telemetry_age = lambda _state: 0.0
+    service._host_meta = lambda state: state.get("meta", {})
+    service._credential_capability_metadata = lambda *_args: {}
+    service._build_remote_server_metrics = lambda *_args: {}
+    service._get_vps_systemd_migration_status = lambda *_args, **_kwargs: {}
+    service._vps_ssh_ok_cache = {}
+    host_state = {
+        "meta": {"role": "vps", "pb8installed": True, "pb8ready": False, "pb8blocked": True},
+        "system": {"disk_free": 1024**3},
+    }
+
+    vps_status = service._build_vps_status(vps, host_state, quick=True)
+
+    assert vps_status["pb8_installed"] is True
+    assert vps_status["pb8_runtime_ready"] is False
+    assert vps_status["pb8_runtime_blocked"] is True
+    assert vps_status["pb8_runtime_reason"] == reason
+    assert vps_status["pb8_update_available"] is True
+
+
 def test_unknown_credential_capability_remains_none_in_playbook_vars() -> None:
     """Deployment serialization must not coerce unknown credential state to false."""
 

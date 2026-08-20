@@ -1013,6 +1013,15 @@ def _list_instances() -> list[dict[str, Any]]:
     """Load canonical local PB8 configs and merge desired deployment state."""
 
     desired, tombstones, nodes = _desired_pb8_state()
+    try:
+        local_runtime = pbgui_purefunc.pb8_runtime_status()
+    except Exception:
+        local_runtime = {}
+    runtime_error = ""
+    if local_runtime.get("ready") is False:
+        runtime_error = "; ".join(
+            str(error).strip() for error in (local_runtime.get("errors") or []) if str(error).strip()
+        ) or "The local PB8 runtime is not ready; run Update PB8."
     root = _run_root()
     if not root.is_dir() or root.is_symlink():
         return []
@@ -1080,6 +1089,7 @@ def _list_instances() -> list[dict[str, Any]]:
                 "assigned_hostname": str(node.get("pbname") or node.get("hostname") or ""),
                 "conflicted": record.get("conflicted") is True,
                 "load_error": load_error,
+                "runtime_error": runtime_error if load_error else "",
                 "twe": " | ".join(exposure_parts),
             })
     return _enrich_v8_runtime(result)

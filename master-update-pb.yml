@@ -340,7 +340,7 @@
       shell: |
         set -euo pipefail
         restart_unit="pbgui-api-restart-$(date +%s%N)"
-        systemd-run --user --unit="$restart_unit" --collect --setenv=PBGUI_DIR="$PBGUI_DIR" --setenv=PBGUI_PYTHON="$PBGUI_PYTHON" --setenv=PBGUI_VPS_MONITOR_WAS_ACTIVE="$PBGUI_VPS_MONITOR_WAS_ACTIVE" /bin/bash -c '
+        systemd-run --user --unit="$restart_unit" --collect --expand-environment=no --setenv=PBGUI_DIR="$PBGUI_DIR" --setenv=PBGUI_PYTHON="$PBGUI_PYTHON" --setenv=PBGUI_VPS_MONITOR_WAS_ACTIVE="$PBGUI_VPS_MONITOR_WAS_ACTIVE" /bin/bash -c '
           sleep 5
           cd "$PBGUI_DIR"
           systemctl --user stop pbgui-api.service >/dev/null 2>&1 || true

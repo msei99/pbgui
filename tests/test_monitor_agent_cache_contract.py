@@ -202,6 +202,41 @@ def test_host_meta_accepts_complete_optional_pb8_contract_and_rejects_partial_da
         monitor_mod._validate_monitor_agent_payload("host_meta.json", payload, now=1001.0)
 
 
+def test_host_meta_accepts_pb8_installation_blocker_contract() -> None:
+    """PB8 install state and its bounded repair reason survive host-meta validation."""
+    payload = _valid_payloads(1000.0)["host_meta.json"]
+    payload.update({
+        "pb8v": "v8.1.0",
+        "pb8_config_schema": "v8.1.0",
+        "pb8c": "abc",
+        "pb8b": "master",
+        "pb8py": "3.12",
+        "pb8installed": True,
+        "pb8ready": False,
+        "pb8blocked": True,
+        "pb8reason": "PB8 installation or update did not complete; run Update PB8.",
+    })
+
+    monitor_mod._validate_monitor_agent_payload("host_meta.json", payload, now=1001.0)
+
+    assert "result['pb8installed'] = bool(" in monitor_mod.HOST_META_SCRIPT
+    assert "result['pb8ready'] = result['pb8installed'] and not result['pb8blocked']" in monitor_mod.HOST_META_SCRIPT
+    assert "pb8-runtime-invalid" in monitor_mod.HOST_META_SCRIPT
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("pb8installed", "yes"), ("pb8blocked", 1), ("pb8reason", "x" * 501)),
+)
+def test_host_meta_rejects_malformed_pb8_blocker_fields(field: str, value: object) -> None:
+    """Present PB8 blocker extensions remain strict during rolling upgrades."""
+    payload = _valid_payloads(1000.0)["host_meta.json"]
+    payload[field] = value
+
+    with pytest.raises(MonitorAgentPayloadError, match=field):
+        monitor_mod._validate_monitor_agent_payload("host_meta.json", payload, now=1001.0)
+
+
 def test_instance_snapshot_accepts_pre_v8_agent_payload() -> None:
     """A new master keeps V7 telemetry from schema-v1 agents without V8 support."""
 

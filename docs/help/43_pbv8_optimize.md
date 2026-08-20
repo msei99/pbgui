@@ -30,6 +30,8 @@ PB8.1 scoring objectives can inherit the global **Objective Scenario**, explicit
 
 PB8 market selection uses the official resolver across the complete exchange set. Unique markets remain short in the config; real multiplier or venue collisions use exact scoped identifiers while the editor keeps compact labels. Exact imported IDs remain unchanged in coin lists, Coin Sources, Suite scenarios, and Raw JSON.
 
+Use **Apply Filters** after changing Market Cap, volume ratio, tags, CPT, or notice settings. The action filters every selected exchange, projects results through PB8's market resolver, and writes the combined result to both Long and Short approved/ignored lists. Saving without applying keeps the filter metadata but does not change explicit coin lists.
+
 ## Queue
 
 Queue entries contain immutable PB8 configuration snapshots. Editing a saved configuration after queueing does not alter an existing queue item.
