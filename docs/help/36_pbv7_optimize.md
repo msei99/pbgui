@@ -243,13 +243,14 @@ Toolbar controls:
 | **Mode chip** | Shows whether the selected result is a regular result, a suite result, or a legacy pareto format |
 | **Scenario** | For suite results, switches the summary between **Aggregated** and one concrete scenario label |
 | **Statistic** | For aggregated suite view and regular single-result paretos, switches the summary stat between `mean`, `min`, `max`, `std`, and `median` |
+| **Columns** | Chooses which available scoring and comparison metrics are shown. **Defaults** restores Gain, configured objectives, and Drawdown; **All** shows every compact metric supplied by the backend. The selection is remembered separately for PB7 and PB8. |
 
 Table columns:
 
 | Column | Description |
 |--------|-------------|
 | **Name** | Pareto filename |
-| **Summary** | Quick metric badges extracted from the file when available |
+| **Metric columns** | Sortable columns selected with **Columns**; available comparison metrics include Gain, Drawdown, ADG, Sharpe, Sortino, Omega, loss/profit ratio, and equity/balance divergence when persisted by the result |
 | **Modified** | File modification time |
 | **Actions** | Compact icon actions for raw JSON view or using one pareto file directly as the starting seed for a new optimize draft |
 

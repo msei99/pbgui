@@ -164,6 +164,7 @@ Browse all completed backtest results.
 - **Version** dropdown — show PBv7 results, PBv8 results, or both; PBv7 is selected by default on this page
 - **Config** dropdown — filter by config name (exact match)
 - **Search** text field — free-text filter on any column
+- **Columns** — choose visible result columns. **Defaults** restores the established table, while **All** also enables available optional values such as Final Equity and Equity/Balance Difference. Local Results and Archive keep independent browser-local selections.
 - Click any column header to sort; click again to reverse
 
 Completed queue jobs now invalidate the cached Results list immediately. If you are already on the Results panel when a backtest finishes, PBGui refreshes the table automatically so the new result appears without having to leave and reopen the panel.
@@ -243,6 +244,8 @@ When **My Archive** is clean, PBGui migrates a bounded batch of legacy results w
 ### Archive content view
 
 The view has **Backtests**, **Optimize Settings**, and, for **My Archive**, **Schedules** tabs.
+
+The **Backtests** tab has its own **Columns** picker. Its selection is stored separately from the local Results panel, so compact archive comparisons do not change the normal Results table.
 
 | Button | Action |
 |--------|--------|

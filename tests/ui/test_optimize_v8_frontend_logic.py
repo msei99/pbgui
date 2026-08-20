@@ -1141,26 +1141,41 @@ def test_pareto_contract_enables_backend_advertised_median_and_scenario() -> Non
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
     functions = "\n".join(
         _page_function(page, name)
-        for name in ("normalizeParetoStatistic", "normalizeParetoScenario", "applyParetoMeta")
+        for name in (
+            "normalizeParetoStatistic",
+            "normalizeParetoScenario",
+            "orderParetoMetrics",
+            "readStoredParetoColumns",
+            "persistParetoColumns",
+            "setParetoMetricColumns",
+            "applyParetoMeta",
+        )
     )
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
         const PARETO_STAT_OPTIONS = ['mean', 'min', 'max', 'std'];
+        const PARETO_SUMMARY_ORDER = ['adg', 'gain', 'drawdown_worst'];
+        const PARETO_COLUMNS_STORAGE_KEY = 'test';
         const state = {{
           paretoStatisticOptions: [], paretoStatistic: 'median', paretoScenario: 'bear',
-          paretoScenarioLabels: [], paretoMode: 'none', paretoStatisticEnabled: true
+          paretoScenarioLabels: [], paretoMode: 'none', paretoStatisticEnabled: true,
+          paretos: [], paretoAvailableMetrics: [], paretoDefaultMetrics: [], paretoMetricColumns: [],
+          paretoMetricColumnsLoaded: false, paretoSortKey: 'name', paretoSortDir: 'asc'
         }};
         {functions}
         applyParetoMeta({{
           mode: 'suite', scenario_labels: ['bull', 'bear'], selected_scenario: 'bear',
-          selected_statistic: 'median', available_statistics: ['mean', 'median'], statistic_enabled: false
+          selected_statistic: 'median', available_statistics: ['mean', 'median'], statistic_enabled: false,
+          available_metrics: ['quality', 'gain', 'drawdown_worst'],
+          default_metrics: ['gain', 'quality', 'drawdown_worst']
         }});
         assert.equal(state.paretoMode, 'suite');
         assert.deepEqual(state.paretoScenarioLabels, ['bull', 'bear']);
         assert.equal(state.paretoScenario, 'bear');
         assert.equal(state.paretoStatistic, 'median');
         assert.equal(state.paretoStatisticEnabled, false);
+        assert.deepEqual(state.paretoMetricColumns, ['gain', 'drawdown_worst', 'quality']);
         """
     )
     _run_node(script)
@@ -1201,6 +1216,41 @@ def test_pareto_gain_order_and_numeric_sort_are_stable() -> None:
         assert.deepEqual(sortParetos(rows, ['gain']).map((row) => row.name), ['alpha', 'bravo', 'charlie', 'missing']);
         state.paretoSortDir = 'asc';
         assert.deepEqual(sortParetos(rows, ['gain']).map((row) => row.name), ['charlie', 'alpha', 'bravo', 'missing']);
+        """
+    )
+    _run_node(script)
+
+
+def test_pareto_metric_columns_are_configurable_and_never_empty() -> None:
+    """The column picker filters visible metrics, restores defaults, and keeps one column selected."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _page_function(page, name)
+        for name in ("orderParetoMetrics", "persistParetoColumns", "setParetoMetricColumns", "getParetoSummaryKeys")
+    )
+    assert 'id="pareto-columns-picker"' in page
+    assert 'id="pareto-columns-defaults"' in page
+    assert 'id="pareto-columns-all"' in page
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const PARETO_SUMMARY_ORDER = ['adg', 'gain', 'drawdown_worst', 'sharpe_ratio'];
+        const PARETO_COLUMNS_STORAGE_KEY = 'test';
+        const state = {{
+          paretoAvailableMetrics: ['gain', 'drawdown_worst', 'sharpe_ratio'],
+          paretoDefaultMetrics: ['gain', 'drawdown_worst'],
+          paretoMetricColumns: ['gain', 'drawdown_worst'],
+          paretoSortKey: 'summary:drawdown_worst',
+          paretoSortDir: 'desc'
+        }};
+        {functions}
+        const rows = [{{summary: {{gain: 37, drawdown_worst: 0.12, sharpe_ratio: 0.14}}}}];
+        assert.deepEqual(getParetoSummaryKeys(rows), ['gain', 'drawdown_worst']);
+        setParetoMetricColumns(['sharpe_ratio'], false);
+        assert.deepEqual(getParetoSummaryKeys(rows), ['sharpe_ratio']);
+        assert.equal(state.paretoSortKey, 'name');
+        setParetoMetricColumns([], false);
+        assert.deepEqual(state.paretoMetricColumns, ['gain', 'drawdown_worst']);
         """
     )
     _run_node(script)

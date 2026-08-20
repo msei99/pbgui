@@ -1110,12 +1110,17 @@ def test_pareto_stats_projection_prefers_stats_and_adds_canonical_gain(
     pareto.mkdir(parents=True)
     values = {"aggregated": 101.0, "mean": 1.0, "min": 2.0, "max": 3.0, "std": 4.0, "median": 5.0}
     gain_values = {name: value + 10.0 for name, value in values.items()}
+    drawdown_values = {name: value / 10.0 for name, value in values.items()}
     (pareto / "candidate.json").write_text(
         json.dumps(
             {
                 "optimize": {"scoring": [{"metric": "quality", "goal": "max"}, {"metric": "risk", "goal": "min"}]},
                 "metrics": {
-                    "stats": {"quality": values, "gain_usd": gain_values},
+                    "stats": {
+                        "quality": values,
+                        "gain_usd": gain_values,
+                        "drawdown_worst_strategy_eq": drawdown_values,
+                    },
                     "objectives": {"quality": 99.0, "risk": 0.25, "gain_usd": 999.0, "gain_strategy_eq": 888.0},
                 },
             }
@@ -1125,9 +1130,16 @@ def test_pareto_stats_projection_prefers_stats_and_adds_canonical_gain(
 
     payload = optimize_v8.list_paretos(str(result), "Aggregated", statistic, None)
 
-    assert payload["paretos"][0]["summary"] == {"quality": quality, "risk": 0.25, "gain": quality + 10.0}
+    assert payload["paretos"][0]["summary"] == {
+        "quality": quality,
+        "risk": 0.25,
+        "gain": quality + 10.0,
+        "drawdown_worst": quality / 10.0,
+    }
     assert payload["meta"]["selected_statistic"] == statistic
     assert [spec["metric"] for spec in payload["meta"]["objectives"]] == ["quality", "risk"]
+    assert payload["meta"]["available_metrics"] == ["gain", "drawdown_worst", "quality", "risk"]
+    assert payload["meta"]["default_metrics"] == ["gain", "quality", "risk", "drawdown_worst"]
 
 
 def test_suite_pareto_projection_excludes_unrelated_metrics(optimize_v8_roots) -> None:
@@ -1139,6 +1151,7 @@ def test_suite_pareto_projection_excludes_unrelated_metrics(optimize_v8_roots) -
     metrics = {
         "quality": {"stats": {"median": 1.5}, "scenarios": {"bear": 1.1}},
         "gain_strategy_eq": {"stats": {"median": 2.5}, "scenarios": {"bear": 2.1}},
+        "drawdown_worst_strategy_eq": {"stats": {"median": 0.25}, "scenarios": {"bear": 0.3}},
     }
     metrics.update({f"unrelated_{index}": {"stats": {"median": float(index)}} for index in range(150)})
     (pareto / "suite.json").write_text(
@@ -1154,8 +1167,16 @@ def test_suite_pareto_projection_excludes_unrelated_metrics(optimize_v8_roots) -
     aggregated = optimize_v8.list_paretos(str(result), "Aggregated", "median", None)
     scenario = optimize_v8.list_paretos(str(result), "bear", "median", None)
 
-    assert aggregated["paretos"][0]["summary"] == {"quality": 1.5, "gain": 2.5}
-    assert scenario["paretos"][0]["summary"] == {"quality": 1.1, "gain": 2.1}
+    assert aggregated["paretos"][0]["summary"] == {
+        "quality": 1.5,
+        "gain": 2.5,
+        "drawdown_worst": 0.25,
+    }
+    assert scenario["paretos"][0]["summary"] == {
+        "quality": 1.1,
+        "gain": 2.1,
+        "drawdown_worst": 0.3,
+    }
     assert aggregated["meta"]["mode"] == "suite"
     assert aggregated["meta"]["scenario_labels"] == ["bear"]
     assert "unrelated_149" not in json.dumps(aggregated)

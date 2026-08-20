@@ -54,6 +54,10 @@ The editor sidebar's **Results** button is always available and opens the comple
 
 PB8 may download historical data when a backtest starts. Review the config, exchanges, coin selection, dates, and PB8 migration report before running a large backtest.
 
+The Results toolbar includes a persistent **Columns** picker. **Defaults** restores the established result table, while **All** also exposes available Final Equity and Equity/Balance Difference values. This browser-local selection is independent from Archive.
+
 ## Archive
+
+Archive Backtests have their own persistent **Columns** selection, so an archive-specific layout does not alter local Results.
 
 PBv8 uses the same Archive panel and configured Git archives as PBv7. Results are stored below `pbgui/configs/<config_version>/backtests`, so V7 and V8 files cannot overwrite each other. Mixed archive lists show the owning version and the active PB8 strategy, with a sortable Strategy column whenever V8 rows are visible, and route charts, files, comparisons, deletion, rebacktest, and Retest & Replace through the matching backend. **Add to Run** on one PB8 archive result creates an unsaved PB8 Run draft for explicit review and saving. V8 retests use immutable `data/bt_v8_queue` snapshots.

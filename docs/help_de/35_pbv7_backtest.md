@@ -164,6 +164,7 @@ Alle abgeschlossenen Backtest-Ergebnisse durchsuchen.
 - **Version**-Dropdown — PBv7-Ergebnisse, PBv8-Ergebnisse oder beide anzeigen; auf dieser Seite ist PBv7 vorausgewählt
 - **Config**-Dropdown — nach Config-Name filtern (exakte Übereinstimmung)
 - **Suchfeld** — Freitext-Filter über alle Spalten
+- **Columns** — sichtbare Result-Spalten waehlen. **Defaults** stellt die bisherige Tabelle wieder her; **All** aktiviert zusaetzlich verfuegbare optionale Werte wie Final Equity und Equity/Balance Difference. Lokale Results und Archive speichern ihre Auswahl getrennt im Browser.
 - Spaltenheader anklicken zum Sortieren; erneut klicken für umgekehrte Reihenfolge
 
 Abgeschlossene Queue-Jobs invalidieren jetzt sofort den gecachten Results-Stand. Wenn du bereits im Results-Panel bist, lädt PBGui die Tabelle automatisch neu, sodass der neue Eintrag ohne Panel-Wechsel erscheint.
@@ -243,6 +244,8 @@ Wenn **My Archive** sauber ist, migriert PBGui beim Öffnen des Panels einen beg
 ### Archiv-Inhaltsansicht
 
 Die Ansicht enthält die Tabs **Backtests**, **Optimize Settings** und nur für **My Archive** **Schedules**.
+
+Der Tab **Backtests** besitzt einen eigenen **Columns**-Picker. Seine Auswahl wird getrennt vom lokalen Results-Panel gespeichert, damit eine kompakte Archivansicht die normale Results-Tabelle nicht veraendert.
 
 | Schaltfläche | Aktion |
 |--------|--------|

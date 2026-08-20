@@ -66,6 +66,22 @@ _CONFIG_FILENAME = "optimize.json"
 _CONFIG_SECTIONS = ("backtest", "bot", "live", "optimize", "coin_overrides", "pbgui")
 _QUEUE_SETTINGS_SECTION = "optimize_v7"
 _PARETO_STATISTICS = ("mean", "min", "max", "std", "median")
+_PARETO_COMPARISON_METRICS = (
+    ("adg", ("adg_strategy_eq_w", "adg_strategy_eq", "adg_w_usd", "adg_usd", "adg")),
+    ("gain", ("gain_usd", "gain_strategy_eq", "gain")),
+    (
+        "drawdown_worst",
+        ("drawdown_worst_strategy_eq", "drawdown_worst_w_usd", "drawdown_worst_usd", "drawdown_worst"),
+    ),
+    ("sharpe_ratio", ("sharpe_ratio_strategy_eq", "sharpe_ratio_w_usd", "sharpe_ratio_usd", "sharpe_ratio")),
+    ("loss_profit_ratio", ("loss_profit_ratio",)),
+    ("sortino_ratio", ("sortino_ratio_strategy_eq", "sortino_ratio_w_usd", "sortino_ratio_usd", "sortino_ratio")),
+    ("omega_ratio", ("omega_ratio_strategy_eq", "omega_ratio_w_usd", "omega_ratio_usd", "omega_ratio")),
+    (
+        "equity_balance_diff_neg_max",
+        ("equity_balance_diff_neg_max_strategy_eq", "equity_balance_diff_neg_max_usd", "equity_balance_diff_neg_max"),
+    ),
+)
 _LAUNCH_MODES = {"fresh", "pareto_seed", "checkpoint_resume"}
 _RESULT_PROGRESS_CACHE_TTL_SECONDS = 15 * 60
 _RESULT_PROGRESS_CACHE_MAX_ENTRIES = 64
@@ -1835,7 +1851,8 @@ def _compact_pareto_data(data: dict) -> dict:
     contract = _pareto_contract(data)
     specs = _pareto_list_objective_specs(data)
     names = [spec["metric"] for spec in specs]
-    metric_names = list(dict.fromkeys([*names, "gain_usd", "gain_strategy_eq", "gain"]))
+    comparison_names = [name for _summary_name, aliases in _PARETO_COMPARISON_METRICS for name in aliases]
+    metric_names = list(dict.fromkeys([*names, *comparison_names]))
     suite_metrics, labels = _suite_metric_payload(data)
     metrics = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
     stats_root = metrics.get("stats") if isinstance(metrics.get("stats"), dict) else {}
@@ -1902,11 +1919,12 @@ def _project_compact_pareto(compact: dict, statistic: str, scenario: str) -> dic
         value = value_for(name)
         if value is not None:
             summary[name] = value
-    for alias in ("gain_usd", "gain_strategy_eq", "gain"):
-        value = value_for(alias)
-        if value is not None:
-            summary["gain"] = value
-            break
+    for summary_name, aliases in _PARETO_COMPARISON_METRICS:
+        for alias in aliases:
+            value = value_for(alias)
+            if value is not None:
+                summary[summary_name] = value
+                break
     return summary
 
 
@@ -4139,6 +4157,19 @@ def list_paretos(
             }
             for path, compact, stat_result in candidates
         ]
+        available_set = {
+            str(metric)
+            for item in paretos
+            for metric in (item.get("summary") or {})
+        }
+        comparison_order = [name for name, _aliases in _PARETO_COMPARISON_METRICS]
+        available_metrics = [name for name in comparison_order if name in available_set]
+        available_metrics.extend(sorted(available_set - set(available_metrics)))
+        objective_names = [str(item.get("metric") or "").strip() for item in contract["objectives"]]
+        default_metrics = []
+        for name in ["gain", *objective_names, "drawdown_worst"]:
+            if name in available_set and name not in default_metrics:
+                default_metrics.append(name)
     return {
         "paretos": paretos,
         "meta": {
@@ -4147,6 +4178,8 @@ def list_paretos(
             "scenario_count": contract["scenario_count"],
             "scenario_labels": contract["scenario_labels"],
             "objectives": contract["objectives"],
+            "available_metrics": available_metrics,
+            "default_metrics": default_metrics or available_metrics[:1],
             "available_statistics": list(_PARETO_STATISTICS),
             "selected_scenario": selected_scenario,
             "selected_statistic": selected_statistic,

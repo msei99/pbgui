@@ -335,7 +335,7 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
     adapter_source = (ROOT / "frontend" / "js" / "backtest_editor_adapter.js").read_text(encoding="utf-8")
 
     assert '/app/css/backtest_shell.css?v=3' in v7_source
-    assert '/app/js/backtest_shell.js?v=4' in v7_source
+    assert '/app/js/backtest_shell.js?v=5' in v7_source
     assert '/app/js/backtest_editor_adapter.js?v=10' in v7_source
     assert "PBGuiBacktestShell.upgradeLegacy" in v7_source
     assert "PBGuiBacktestEditorAdapter.create(BACKTEST_VERSION)" in v7_source
@@ -714,7 +714,7 @@ def test_v8_archive_results_can_open_the_pb8_run_editor() -> None:
     assert "'addResultToArchive'" not in adapter.split("var unsupported =", 1)[1].split("];", 1)[0]
     assert "backtest_version: selectedResult.backtest_version || backtestEditorAdapter.version" in page
     assert "archiveResultApiFetch" in page
-    assert "{ showVersion: true, showStrategy: true }" in page
+    assert "{ showVersion: true, showStrategy: true, columnContext: 'archive' }" in page
     assert "Add to Run is available only for PB7 archive results." not in page
 
 
@@ -1438,8 +1438,58 @@ def test_backtest_archive_enables_strategy_for_v8_rows() -> None:
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
     function = _extract_function(source, "renderArchiveResults")
 
-    assert "{ showVersion: true, showStrategy: true }" in function
+    assert "{ showVersion: true, showStrategy: true, columnContext: 'archive' }" in function
     assert "(r.strategy || '')" in function
+
+
+def test_backtest_and_archive_result_columns_are_independently_configurable() -> None:
+    """Local and archive result tables keep separate non-empty column selections."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    shell = (ROOT / "frontend" / "js" / "backtest_shell.js").read_text(encoding="utf-8")
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in ("orderedResultColumns", "availableResultColumns", "setResultColumns")
+    )
+    assert 'id="results-columns-picker"' in shell
+    assert 'id="archive-results-columns-picker"' in source
+    assert 'id="results-columns-picker" class="result-columns-picker" hidden' not in shell
+    assert 'id="archive-results-columns-picker" class="result-columns-picker" hidden' not in source
+    assert "columnContext: 'results'" in source
+    assert "columnContext: 'archive'" in source
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const BACKTEST_RESULT_COLUMN_DEFINITIONS = [
+          {{key: 'backtest_version', conditional: 'version', default: true}},
+          {{key: 'strategy', conditional: 'strategy', default: true}},
+          {{key: 'coins_text', conditional: 'coins', default: true}},
+          {{key: 'gain', default: true}},
+          {{key: 'drawdown_worst', default: true}},
+          {{key: 'final_equity', optional: true, default: false}}
+        ];
+        const _resultColumnPreferences = {{
+          results: {{available: ['backtest_version', 'strategy', 'coins_text', 'gain', 'drawdown_worst', 'final_equity'], defaults: ['backtest_version', 'strategy', 'coins_text', 'gain', 'drawdown_worst'], selected: [], loaded: true}},
+          archive: {{available: ['backtest_version', 'gain', 'drawdown_worst'], defaults: ['backtest_version', 'gain', 'drawdown_worst'], selected: [], loaded: true}}
+        }};
+        let _resSort = 'gain', _resSortAsc = false;
+        let _archResSort = 'drawdown_worst', _archResSortAsc = false;
+        {functions}
+        const available = availableResultColumns([
+          {{backtest_version: 'v8', strategy: 'ema_anchor', coins_text: 'BTC', final_equity: 1200}}
+        ], {{showVersion: true, showStrategy: true}});
+        assert.deepEqual(available, ['backtest_version', 'strategy', 'coins_text', 'gain', 'drawdown_worst', 'final_equity']);
+        setResultColumns('results', ['gain', 'final_equity'], false);
+        setResultColumns('archive', ['drawdown_worst'], false);
+        assert.deepEqual(_resultColumnPreferences.results.selected, ['gain', 'final_equity']);
+        assert.deepEqual(_resultColumnPreferences.archive.selected, ['drawdown_worst']);
+        setResultColumns('results', [], false);
+        assert.deepEqual(_resultColumnPreferences.results.selected, ['backtest_version', 'strategy', 'coins_text', 'gain', 'drawdown_worst']);
+        assert.equal(_archResSort, 'drawdown_worst');
+        """
+    )
+
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 def test_backtest_v8_configs_render_sortable_strategy_without_changing_v7_rows() -> None:

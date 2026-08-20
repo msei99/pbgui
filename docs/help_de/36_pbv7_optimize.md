@@ -243,13 +243,14 @@ Toolbar-Steuerungen:
 | **Mode-Chip** | Zeigt, ob das ausgewählte Ergebnis ein normales Result, ein Suite-Result oder ein Legacy-Pareto-Format ist |
 | **Scenario** | Schaltet bei Suite-Results die Summary zwischen **Aggregated** und einem konkreten Szenario um |
 | **Statistic** | Schaltet für aggregierte Suite-Ansicht und normale Single-Result-Paretos zwischen `mean`, `min`, `max`, `std` und `median` um |
+| **Columns** | Waehlt die sichtbaren Scoring- und Vergleichsmetriken. **Defaults** stellt Gain, konfigurierte Objectives und Drawdown wieder her; **All** zeigt alle kompakten Metriken des Backends. Die Auswahl wird fuer PB7 und PB8 getrennt gespeichert. |
 
 Tabellenspalten:
 
 | Spalte | Beschreibung |
 |--------|-------------|
 | **Name** | Dateiname der Pareto-Datei |
-| **Summary** | Kurze Metric-Badges, soweit aus der Datei ableitbar |
+| **Metrikspalten** | Ueber **Columns** gewaehlte sortierbare Spalten; verfuegbare Vergleichsmetriken umfassen Gain, Drawdown, ADG, Sharpe, Sortino, Omega, Loss/Profit Ratio und Equity/Balance Divergence, sofern sie im Result gespeichert sind |
 | **Modified** | Änderungszeitpunkt der Datei |
 | **Actions** | Kompakte Icon-Aktionen für Roh-JSON oder die direkte Verwendung einer Pareto-Datei als Start-Seed für einen neuen Optimize-Draft |
 

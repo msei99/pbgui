@@ -1529,6 +1529,54 @@ textarea.json-invalid:focus {
   color: var(--text-dim);
 }
 
+.pareto-columns-picker {
+  position: relative;
+}
+
+.pareto-columns-picker > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.pareto-columns-picker > summary::-webkit-details-marker { display: none; }
+
+.pareto-columns-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 80;
+  width: min(360px, calc(100vw - 32px));
+  max-height: 360px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg2);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .35);
+}
+
+.pareto-columns-options {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.pareto-columns-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 7px;
+  border-radius: 5px;
+  color: var(--text);
+  font-size: var(--fs-xs);
+}
+
+.pareto-columns-option:hover { background: rgba(77, 166, 255, .10); }
+.pareto-columns-option input { accent-color: var(--accent); }
+.pareto-columns-option span { overflow-wrap: anywhere; }
+.pareto-columns-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
 .modal-backdrop,
 .modal {
   opacity: 0;
@@ -2314,6 +2362,17 @@ textarea.json-invalid:focus {
           <label for="pareto-stat-select"><span data-tip="Aggregated suite view and single-result paretos can switch the summary statistic.">Statistic</span></label>
           <select id="pareto-stat-select" class="panel-input pareto-toolbar-select"></select>
         </div>
+        <details id="pareto-columns-picker" class="pareto-columns-picker" hidden>
+          <summary id="pareto-columns-summary" class="act-btn">Columns</summary>
+          <div class="pareto-columns-menu">
+            <div id="pareto-columns-options" class="pareto-columns-options"></div>
+            <div class="pareto-columns-actions">
+              <button id="pareto-columns-defaults" class="act-btn" type="button">Defaults</button>
+              <button id="pareto-columns-all" class="act-btn" type="button">All</button>
+              <button id="pareto-columns-done" class="act-btn" type="button">Done</button>
+            </div>
+          </div>
+        </details>
         <span id="pareto-filter-summary" class="muted-line"></span>
         <span id="pareto-count-chip" class="sb-count">0 paretos</span>
         <span id="pareto-selection-summary" class="muted-line">No paretos selected.</span>
@@ -2659,6 +2718,10 @@ var state = {
   paretoScenario: 'Aggregated',
   paretoStatistic: 'mean',
   paretoStatisticEnabled: true,
+  paretoAvailableMetrics: [],
+  paretoDefaultMetrics: [],
+  paretoMetricColumns: [],
+  paretoMetricColumnsLoaded: false,
   paretoLoadSeq: 0,
   paretoSortKey: 'name',
   paretoSortDir: 'asc',
@@ -2749,6 +2812,7 @@ var METRIC_PILL_LABELS = {
   equity_balance_diff_neg_max: 'eq diff'
 };
 var PARETO_SUMMARY_ORDER = Object.keys(METRIC_PILL_LABELS);
+var PARETO_COLUMNS_STORAGE_KEY = 'pbgui.optimize.' + optimizeEditorAdapter.version + '.pareto_columns';
 
 function el(id) {
   return document.getElementById(id);
@@ -2774,6 +2838,97 @@ function clearParetoMeta(options) {
   if (!keepStatistic) state.paretoStatistic = 'mean';
   state.paretoStatisticEnabled = true;
   state.paretoStatisticOptions = [];
+  state.paretoAvailableMetrics = [];
+  state.paretoDefaultMetrics = [];
+}
+
+function orderParetoMetrics(metrics) {
+  var seen = {};
+  (metrics || []).forEach(function(metric) {
+    var normalized = String(metric || '').trim();
+    if (normalized) seen[normalized] = true;
+  });
+  var ordered = PARETO_SUMMARY_ORDER.filter(function(metric) { return !!seen[metric]; });
+  Object.keys(seen).sort().forEach(function(metric) {
+    if (ordered.indexOf(metric) < 0) ordered.push(metric);
+  });
+  return ordered;
+}
+
+function readStoredParetoColumns() {
+  if (typeof window === 'undefined' || !window.localStorage) return [];
+  try {
+    var stored = JSON.parse(window.localStorage.getItem(PARETO_COLUMNS_STORAGE_KEY) || '[]');
+    return Array.isArray(stored) ? stored.map(function(metric) { return String(metric || '').trim(); }).filter(Boolean) : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function persistParetoColumns() {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(PARETO_COLUMNS_STORAGE_KEY, JSON.stringify(state.paretoMetricColumns));
+  } catch (_error) {}
+}
+
+function setParetoMetricColumns(metrics, persist) {
+  var available = state.paretoAvailableMetrics || [];
+  var selected = orderParetoMetrics(metrics).filter(function(metric) { return available.indexOf(metric) >= 0; });
+  if (!selected.length) selected = (state.paretoDefaultMetrics.length ? state.paretoDefaultMetrics : available.slice(0, 1)).slice();
+  state.paretoMetricColumns = selected;
+  if (persist) persistParetoColumns();
+  if (state.paretoSortKey.indexOf('summary:') === 0 && selected.indexOf(state.paretoSortKey.slice(8)) < 0) {
+    state.paretoSortKey = 'name';
+    state.paretoSortDir = 'asc';
+  }
+}
+
+function toggleParetoMetricColumn(metric, enabled) {
+  var selected = state.paretoMetricColumns.slice();
+  var index = selected.indexOf(metric);
+  if (enabled && index < 0) selected.push(metric);
+  if (!enabled && index >= 0 && selected.length > 1) selected.splice(index, 1);
+  setParetoMetricColumns(selected, true);
+  renderParetos();
+}
+
+function renderParetoColumnPicker() {
+  var picker = el('pareto-columns-picker');
+  var summary = el('pareto-columns-summary');
+  var options = el('pareto-columns-options');
+  if (!picker || !summary || !options) return;
+  picker.hidden = !state.selectedResultPath || !state.paretoAvailableMetrics.length;
+  summary.textContent = 'Columns (' + String(state.paretoMetricColumns.length) + ')';
+  options.textContent = '';
+  state.paretoAvailableMetrics.forEach(function(metric) {
+    var label = document.createElement('label');
+    label.className = 'pareto-columns-option';
+    var input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = state.paretoMetricColumns.indexOf(metric) >= 0;
+    input.addEventListener('change', function() {
+      toggleParetoMetricColumn(metric, input.checked);
+    });
+    var text = document.createElement('span');
+    var shortLabel = METRIC_PILL_LABELS[metric];
+    text.textContent = shortLabel && shortLabel !== metric ? shortLabel + ' (' + metric + ')' : metric;
+    label.appendChild(input);
+    label.appendChild(text);
+    options.appendChild(label);
+  });
+  var defaults = el('pareto-columns-defaults');
+  var all = el('pareto-columns-all');
+  var done = el('pareto-columns-done');
+  defaults.onclick = function() {
+    setParetoMetricColumns(state.paretoDefaultMetrics, true);
+    renderParetos();
+  };
+  all.onclick = function() {
+    setParetoMetricColumns(state.paretoAvailableMetrics, true);
+    renderParetos();
+  };
+  done.onclick = function() { picker.open = false; };
 }
 
 function applyParetoMeta(meta) {
@@ -2795,6 +2950,27 @@ function applyParetoMeta(meta) {
   state.paretoStatisticEnabled = meta && typeof meta.statistic_enabled === 'boolean'
     ? !!meta.statistic_enabled
     : !(nextMode === 'suite' && state.paretoScenario !== 'Aggregated');
+  var available = Array.isArray(meta && meta.available_metrics) ? meta.available_metrics : [];
+  if (!available.length) {
+    (state.paretos || []).forEach(function(item) {
+      Object.keys(item && item.summary || {}).forEach(function(metric) { available.push(metric); });
+    });
+  }
+  state.paretoAvailableMetrics = orderParetoMetrics(available);
+  var defaults = Array.isArray(meta && meta.default_metrics) ? meta.default_metrics : state.paretoAvailableMetrics;
+  state.paretoDefaultMetrics = orderParetoMetrics(defaults).filter(function(metric) {
+    return state.paretoAvailableMetrics.indexOf(metric) >= 0;
+  });
+  if (!state.paretoDefaultMetrics.length) state.paretoDefaultMetrics = state.paretoAvailableMetrics.slice(0, 1);
+  if (!state.paretoMetricColumnsLoaded) {
+    var stored = readStoredParetoColumns().filter(function(metric) {
+      return state.paretoAvailableMetrics.indexOf(metric) >= 0;
+    });
+    setParetoMetricColumns(stored.length ? stored : state.paretoDefaultMetrics, false);
+    state.paretoMetricColumnsLoaded = true;
+  } else {
+    setParetoMetricColumns(state.paretoMetricColumns, false);
+  }
 }
 
 function fillSelectOptions(selectId, options, selectedValue) {
@@ -2817,6 +2993,7 @@ function renderParetoToolbar() {
   var filterSummary = el('pareto-filter-summary');
   var statSelect = el('pareto-stat-select');
   if (!modeChip || !scenarioWrap || !statWrap || !filterSummary || !statSelect) return;
+  renderParetoColumnPicker();
 
   if (!state.selectedResultPath) {
     modeChip.className = 'status-chip';
@@ -10646,6 +10823,9 @@ function getParetoSummaryKeys(items) {
   Object.keys(seen).sort().forEach(function(key) {
     if (keys.indexOf(key) < 0) keys.push(key);
   });
+  if (Array.isArray(state.paretoMetricColumns) && state.paretoMetricColumns.length) {
+    keys = keys.filter(function(key) { return state.paretoMetricColumns.indexOf(key) >= 0; });
+  }
   return keys;
 }
 

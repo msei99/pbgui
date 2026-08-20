@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
-<script src="/app/js/backtest_shell.js?v=4"></script>
+<script src="/app/js/backtest_shell.js?v=5"></script>
 <script src="/app/js/backtest_editor_adapter.js?v=10"></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
 <style>
@@ -107,6 +107,24 @@ a:hover { text-decoration: underline; }
   border-radius: 4px;
   background: rgba(224, 82, 82, .08);
 }
+.result-columns-picker { position: relative; }
+.result-columns-picker > summary { list-style: none; cursor: pointer; }
+.result-columns-picker > summary::-webkit-details-marker { display: none; }
+.result-columns-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 80;
+  width: min(360px, calc(100vw - 32px)); max-height: 360px; overflow: auto;
+  padding: 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg2); box-shadow: 0 12px 28px rgba(0,0,0,.35);
+}
+.result-columns-options { display: grid; gap: 4px; margin-bottom: 8px; }
+.result-columns-option {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  padding: 5px 7px; border-radius: 5px; color: var(--text); font-size: var(--fs-xs);
+}
+.result-columns-option:hover { background: rgba(77,166,255,.10); }
+.result-columns-option input { accent-color: var(--accent); }
+.result-columns-option span { overflow-wrap: anywhere; }
+.result-columns-actions { display: flex; justify-content: flex-end; gap: 6px; }
 /* ── Tables ────────────────────────────────────── */
 .tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--fs-base); user-select: none; }
 .tbl th { position: sticky; top: 0; z-index: 2; background: var(--bg2); font-size: var(--fs-sm);
@@ -913,6 +931,17 @@ textarea.json-invalid:focus {
             </select>
             <input type="text" id="arc-results-filter" class="sb-input" style="max-width:200px" placeholder="Search name…" oninput="renderArchiveResults(selectedArchiveName)">
             <span id="archive-results-count-label" class="results-count-label"></span>
+            <details id="archive-results-columns-picker" class="result-columns-picker">
+              <summary id="archive-results-columns-summary" class="act-btn">Columns</summary>
+              <div class="result-columns-menu">
+                <div id="archive-results-columns-options" class="result-columns-options"></div>
+                <div class="result-columns-actions">
+                  <button id="archive-results-columns-defaults" class="act-btn" type="button">Defaults</button>
+                  <button id="archive-results-columns-all" class="act-btn" type="button">All</button>
+                  <button id="archive-results-columns-done" class="act-btn" type="button">Done</button>
+                </div>
+              </div>
+            </details>
             <span style="flex:1"></span>
             <button id="arc-btn-select-all" class="act-btn" onclick="selectAllArchiveResults()" title="Select all visible rows">Select All</button>
             <button id="arc-btn-deselect" class="act-btn" onclick="deselectAllArchiveResults()" title="Deselect all">Deselect</button>
@@ -1094,9 +1123,30 @@ var BACKTEST_SORT_DEFAULTS = {
 };
 var BACKTEST_SORT_COLUMNS = {
   configs: ['name', 'exchanges', 'strategy', 'coins', 'twe_long', 'start_date', 'end_date', 'results', 'modified'],
-  results: ['backtest_version', 'config_name', 'strategy', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
-  archive: ['backtest_version', 'config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance'],
+  results: ['backtest_version', 'config_name', 'strategy', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance', 'final_equity', 'balance_equity_diff'],
+  archive: ['backtest_version', 'config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance', 'final_equity', 'balance_equity_diff'],
   legacy: ['config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance']
+};
+var BACKTEST_RESULT_COLUMN_DEFINITIONS = [
+  { key: 'backtest_version', label: 'Version', conditional: 'version', default: true },
+  { key: 'strategy', label: 'Strategy', conditional: 'strategy', default: true },
+  { key: 'coins_text', label: 'Coins', conditional: 'coins', default: true },
+  { key: 'exchange_dir', label: 'Exch.', default: true },
+  { key: 'modified', label: 'Result Time', default: true },
+  { key: 'adg', label: 'ADG', default: true },
+  { key: 'gain', label: 'Gain', default: true },
+  { key: 'drawdown_worst', label: 'Worst DD', default: true },
+  { key: 'sharpe_ratio', label: 'Sharpe', default: true },
+  { key: 'starting_balance', label: 'Start B.', default: true },
+  { key: 'final_balance', label: 'Final B.', default: true },
+  { key: 'final_equity', label: 'Final Eq.', optional: true, default: false },
+  { key: 'balance_equity_diff', label: 'Eq/Balance Diff', optional: true, default: false },
+  { key: 'twe', label: 'TWE', sortable: false, default: true },
+  { key: 'pos', label: 'POS', sortable: false, default: true }
+];
+var _resultColumnPreferences = {
+  results: { available: [], defaults: [], selected: [], loaded: false },
+  archive: { available: [], defaults: [], selected: [], loaded: false }
 };
 var _archivesRefreshTimer = null;
 var _archivesRefreshInFlight = false;
@@ -1140,6 +1190,146 @@ var EXTRA_BT_META = {
 };
 var wsReconnectTimer = null;
 var wsReconnectDelay = 1000;
+
+function resultColumnStorageKey(context) {
+  return BACKTEST_VIEW_STATE_KEY + ':' + context + '_columns';
+}
+
+function orderedResultColumns(columns) {
+  var requested = Array.isArray(columns) ? columns : [];
+  return BACKTEST_RESULT_COLUMN_DEFINITIONS.map(function(definition) { return definition.key; }).filter(function(key) {
+    return requested.indexOf(key) >= 0;
+  });
+}
+
+function readStoredResultColumns(context) {
+  if (typeof window === 'undefined' || !window.localStorage) return [];
+  try {
+    var stored = JSON.parse(window.localStorage.getItem(resultColumnStorageKey(context)) || '[]');
+    return Array.isArray(stored) ? stored.map(function(key) { return String(key || '').trim(); }).filter(Boolean) : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function persistResultColumns(context) {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(
+      resultColumnStorageKey(context),
+      JSON.stringify((_resultColumnPreferences[context] || {}).selected || [])
+    );
+  } catch (_error) {}
+}
+
+function availableResultColumns(data, options) {
+  options = options || {};
+  data = Array.isArray(data) ? data : [];
+  return BACKTEST_RESULT_COLUMN_DEFINITIONS.filter(function(definition) {
+    if (definition.conditional === 'version') return !!options.showVersion;
+    if (definition.conditional === 'strategy') {
+      return !!options.showStrategy && data.some(function(item) {
+        return String(item && item.backtest_version || '').toLowerCase() === 'v8';
+      });
+    }
+    if (definition.conditional === 'coins') {
+      return data.some(function(item) {
+        return !!((item && item.coins_text) || (item && Array.isArray(item.coins) && item.coins.length));
+      });
+    }
+    if (definition.optional) {
+      return data.some(function(item) {
+        var value = item && item[definition.key];
+        return value !== undefined && value !== null && value !== '';
+      });
+    }
+    return true;
+  }).map(function(definition) { return definition.key; });
+}
+
+function setResultColumns(context, columns, persist) {
+  var preference = _resultColumnPreferences[context];
+  if (!preference) return;
+  var selected = orderedResultColumns(columns).filter(function(key) { return preference.available.indexOf(key) >= 0; });
+  if (!selected.length) selected = (preference.defaults.length ? preference.defaults : preference.available.slice(0, 1)).slice();
+  preference.selected = selected;
+  if (persist) persistResultColumns(context);
+  if (context === 'results' && selected.indexOf(_resSort) < 0 && _resSort !== 'config_name') {
+    _resSort = 'config_name';
+    _resSortAsc = true;
+  }
+  if (context === 'archive' && selected.indexOf(_archResSort) < 0 && _archResSort !== 'config_name') {
+    _archResSort = 'config_name';
+    _archResSortAsc = true;
+  }
+}
+
+function prepareResultColumns(context, data, options) {
+  var preference = _resultColumnPreferences[context];
+  if (!preference) return null;
+  preference.available = availableResultColumns(data, options);
+  preference.defaults = BACKTEST_RESULT_COLUMN_DEFINITIONS.filter(function(definition) {
+    return definition.default && preference.available.indexOf(definition.key) >= 0;
+  }).map(function(definition) { return definition.key; });
+  if (!preference.loaded) {
+    var stored = readStoredResultColumns(context).filter(function(key) { return preference.available.indexOf(key) >= 0; });
+    setResultColumns(context, stored.length ? stored : preference.defaults, false);
+    preference.loaded = true;
+  } else {
+    setResultColumns(context, preference.selected, false);
+  }
+  renderResultColumnPicker(context);
+  return preference.selected.slice();
+}
+
+function toggleResultColumn(context, key, enabled) {
+  var preference = _resultColumnPreferences[context];
+  if (!preference) return;
+  var selected = preference.selected.slice();
+  var index = selected.indexOf(key);
+  if (enabled && index < 0) selected.push(key);
+  if (!enabled && index >= 0 && selected.length > 1) selected.splice(index, 1);
+  setResultColumns(context, selected, true);
+  if (context === 'results') renderResults();
+  if (context === 'archive' && selectedArchiveName) renderArchiveResults(selectedArchiveName);
+}
+
+function renderResultColumnPicker(context) {
+  var preference = _resultColumnPreferences[context];
+  var prefix = context === 'archive' ? 'archive-results' : 'results';
+  var picker = document.getElementById(prefix + '-columns-picker');
+  var summary = document.getElementById(prefix + '-columns-summary');
+  var options = document.getElementById(prefix + '-columns-options');
+  if (!preference || !picker || !summary || !options) return;
+  picker.hidden = !preference.available.length || (context === 'archive' && archiveResultsMode !== 'backtests');
+  summary.textContent = 'Columns (' + preference.selected.length + ')';
+  options.textContent = '';
+  BACKTEST_RESULT_COLUMN_DEFINITIONS.forEach(function(definition) {
+    if (preference.available.indexOf(definition.key) < 0) return;
+    var label = document.createElement('label');
+    label.className = 'result-columns-option';
+    var input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = preference.selected.indexOf(definition.key) >= 0;
+    input.addEventListener('change', function() { toggleResultColumn(context, definition.key, input.checked); });
+    var text = document.createElement('span');
+    text.textContent = definition.label;
+    label.appendChild(input);
+    label.appendChild(text);
+    options.appendChild(label);
+  });
+  document.getElementById(prefix + '-columns-defaults').onclick = function() {
+    setResultColumns(context, preference.defaults, true);
+    if (context === 'results') renderResults();
+    if (context === 'archive' && selectedArchiveName) renderArchiveResults(selectedArchiveName);
+  };
+  document.getElementById(prefix + '-columns-all').onclick = function() {
+    setResultColumns(context, preference.available, true);
+    if (context === 'results') renderResults();
+    if (context === 'archive' && selectedArchiveName) renderArchiveResults(selectedArchiveName);
+  };
+  document.getElementById(prefix + '-columns-done').onclick = function() { picker.open = false; };
+}
 
 /* ════════════════════════════════════════════════
    API HELPERS
@@ -5676,10 +5866,6 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
   data = Array.isArray(data) ? data : [];
   _activeResultsCtx = { data: data, chartsEl: chartsEl };
   window._filteredResults = data;
-  if (!data.length) {
-    el.innerHTML = '\x3Cdiv class="empty-state">\x3Cdiv class="empty-icon">📊\x3C/div>No results found.\x3C/div>';
-    return;
-  }
   var showCoins = data.some(function(r) {
     return !!((r && r.coins_text) || (r && Array.isArray(r.coins) && r.coins.length));
   });
@@ -5687,13 +5873,36 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
   var showStrategy = !!options.showStrategy && data.some(function(r) {
     return String(r && r.backtest_version || '').toLowerCase() === 'v8';
   });
+  var selectedColumns = options.columnContext
+    ? prepareResultColumns(options.columnContext, data, options)
+    : null;
+  function hasColumn(key) {
+    if (!selectedColumns) return ['final_equity', 'balance_equity_diff'].indexOf(key) < 0;
+    return selectedColumns.indexOf(key) >= 0;
+  }
+  if (!data.length) {
+    el.innerHTML = '\x3Cdiv class="empty-state">\x3Cdiv class="empty-icon">📊\x3C/div>No results found.\x3C/div>';
+    return;
+  }
 
   /* Columns: Version (main Results only) | Backtest Name | Strategy (V8) | Exch. | Result Time | ADG | Gain | Worst DD | Sharpe | Start B. | Final B. | TWE | POS | Actions */
   var html = '\x3Ctable class="tbl">\x3Cthead>\x3Ctr>' +
-    (showVersion ? rthFn('Version', 'backtest_version') : '') + rthFn('Backtest Name', 'config_name') + (showStrategy ? rthFn('Strategy', 'strategy') : '') + (showCoins ? rthFn('Coins', 'coins_text') : '') + rthFn('Exch.', 'exchange_dir') + rthFn('Result Time', 'modified') +
-    rthFn('ADG', 'adg') + rthFn('Gain', 'gain') + rthFn('Worst DD', 'drawdown_worst') + rthFn('Sharpe', 'sharpe_ratio') +
-    rthFn('Start B.', 'starting_balance') + rthFn('Final B.', 'final_balance') +
-    '\x3Cth>TWE\x3C/th>\x3Cth>POS\x3C/th>' +
+    (showVersion && hasColumn('backtest_version') ? rthFn('Version', 'backtest_version') : '') +
+    rthFn('Backtest Name', 'config_name') +
+    (showStrategy && hasColumn('strategy') ? rthFn('Strategy', 'strategy') : '') +
+    (showCoins && hasColumn('coins_text') ? rthFn('Coins', 'coins_text') : '') +
+    (hasColumn('exchange_dir') ? rthFn('Exch.', 'exchange_dir') : '') +
+    (hasColumn('modified') ? rthFn('Result Time', 'modified') : '') +
+    (hasColumn('adg') ? rthFn('ADG', 'adg') : '') +
+    (hasColumn('gain') ? rthFn('Gain', 'gain') : '') +
+    (hasColumn('drawdown_worst') ? rthFn('Worst DD', 'drawdown_worst') : '') +
+    (hasColumn('sharpe_ratio') ? rthFn('Sharpe', 'sharpe_ratio') : '') +
+    (hasColumn('starting_balance') ? rthFn('Start B.', 'starting_balance') : '') +
+    (hasColumn('final_balance') ? rthFn('Final B.', 'final_balance') : '') +
+    (hasColumn('final_equity') ? rthFn('Final Eq.', 'final_equity') : '') +
+    (hasColumn('balance_equity_diff') ? rthFn('Eq/Balance Diff', 'balance_equity_diff') : '') +
+    (hasColumn('twe') ? '\x3Cth>TWE\x3C/th>' : '') +
+    (hasColumn('pos') ? '\x3Cth>POS\x3C/th>' : '') +
     '\x3Cth style="text-align:center">Actions\x3C/th>' +
     '\x3C/tr>\x3C/thead>\x3Ctbody>';
 
@@ -5707,20 +5916,22 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
       ? '\x3Cbutton class="icon-btn" onclick="convertResultToV8(' + i + ')" title="Convert this V7 result config to V8">V8\x3C/button>'
       : '';
     html += '\x3Ctr data-idx="' + i + '" data-path="' + esc(r.path) + '"' + liqStyle + '>' +
-      (showVersion ? '\x3Ctd>PB' + esc((r.backtest_version || '').toUpperCase()) + '\x3C/td>' : '') +
+      (showVersion && hasColumn('backtest_version') ? '\x3Ctd>PB' + esc((r.backtest_version || '').toUpperCase()) + '\x3C/td>' : '') +
       '\x3Ctd title="' + esc(btName) + esc(liqTitle) + '" style="max-width:250px">' + (r.liquidated ? '\x3Cspan style="color:var(--red)" title="Liquidated">\u26a0\ufe0f\x3C/span> ' : '') + esc(btName) + '\x3C/td>' +
-      (showStrategy ? '\x3Ctd class="mono">' + esc(r.strategy || '-') + '\x3C/td>' : '') +
-      (showCoins ? '\x3Ctd title="' + esc(coinsText) + '" style="max-width:140px">' + esc(coinsText) + '\x3C/td>' : '') +
-      '\x3Ctd>' + esc(Array.isArray(r.exchanges) ? r.exchanges.join(', ') : '') + '\x3C/td>' +
-      '\x3Ctd>' + fmtDate(r.modified) + '\x3C/td>' +
-      '\x3Ctd>' + fmt(r.adg, 4) + '\x3C/td>' +
-      '\x3Ctd>' + fmt(r.gain, 2) + '\x3C/td>' +
-      '\x3Ctd>' + fmt(r.drawdown_worst, 4) + '\x3C/td>' +
-      '\x3Ctd>' + fmt(r.sharpe_ratio, 4) + '\x3C/td>' +
-      '\x3Ctd>' + fmt(r.starting_balance, 0) + '\x3C/td>' +
-      '\x3Ctd>' + fmt(r.final_balance, 0) + '\x3C/td>' +
-      '\x3Ctd>' + fmt(r.twe_long, 2) + ' / ' + fmt(r.twe_short, 2) + '\x3C/td>' +
-      '\x3Ctd>' + fmt(r.pos_long, 0) + ' / ' + fmt(r.pos_short, 0) + '\x3C/td>' +
+      (showStrategy && hasColumn('strategy') ? '\x3Ctd class="mono">' + esc(r.strategy || '-') + '\x3C/td>' : '') +
+      (showCoins && hasColumn('coins_text') ? '\x3Ctd title="' + esc(coinsText) + '" style="max-width:140px">' + esc(coinsText) + '\x3C/td>' : '') +
+      (hasColumn('exchange_dir') ? '\x3Ctd>' + esc(Array.isArray(r.exchanges) ? r.exchanges.join(', ') : '') + '\x3C/td>' : '') +
+      (hasColumn('modified') ? '\x3Ctd>' + fmtDate(r.modified) + '\x3C/td>' : '') +
+      (hasColumn('adg') ? '\x3Ctd>' + fmt(r.adg, 4) + '\x3C/td>' : '') +
+      (hasColumn('gain') ? '\x3Ctd>' + fmt(r.gain, 2) + '\x3C/td>' : '') +
+      (hasColumn('drawdown_worst') ? '\x3Ctd>' + fmt(r.drawdown_worst, 4) + '\x3C/td>' : '') +
+      (hasColumn('sharpe_ratio') ? '\x3Ctd>' + fmt(r.sharpe_ratio, 4) + '\x3C/td>' : '') +
+      (hasColumn('starting_balance') ? '\x3Ctd>' + fmt(r.starting_balance, 0) + '\x3C/td>' : '') +
+      (hasColumn('final_balance') ? '\x3Ctd>' + fmt(r.final_balance, 0) + '\x3C/td>' : '') +
+      (hasColumn('final_equity') ? '\x3Ctd>' + fmt(r.final_equity, 0) + '\x3C/td>' : '') +
+      (hasColumn('balance_equity_diff') ? '\x3Ctd>' + fmt(r.balance_equity_diff, 4) + '\x3C/td>' : '') +
+      (hasColumn('twe') ? '\x3Ctd>' + fmt(r.twe_long, 2) + ' / ' + fmt(r.twe_short, 2) + '\x3C/td>' : '') +
+      (hasColumn('pos') ? '\x3Ctd>' + fmt(r.pos_long, 0) + ' / ' + fmt(r.pos_short, 0) + '\x3C/td>' : '') +
       '\x3Ctd class="actions-cell" onclick="event.stopPropagation()">' +
         '\x3Cbutton class="icon-btn" data-action="view" data-idx="' + i + '" onclick="toggleResultAction(this)" title="Balance &amp; Equity, PnL, Drawdown, WE charts">👁\x3C/button>' +
         '\x3Cbutton class="icon-btn" data-action="analysis" data-idx="' + i + '" onclick="toggleResultAction(this)" title="Analysis JSON">🔬\x3C/button>' +
@@ -5768,7 +5979,7 @@ function renderResults() {
       return 0;
     });
 
-    _renderResultsTableInto(el, filtered, chartsEl, rth, { showVersion: true, showStrategy: true, allowV8Convert: !backtestEditorAdapter.isV8 });
+    _renderResultsTableInto(el, filtered, chartsEl, rth, { showVersion: true, showStrategy: true, allowV8Convert: !backtestEditorAdapter.isV8, columnContext: 'results' });
   } catch (e) {
     if (el) el.innerHTML = '\x3Cdiv class="empty-state">Failed to render results: ' + esc(e.message || e) + '\x3C/div>';
     toast('Render results failed: ' + (e.message || e), 'err');
@@ -9209,11 +9420,13 @@ function renderArchiveResults(name) {
   var coinLabelNode = document.getElementById('arc-results-coin-label');
   var coinSelNode = document.getElementById('arc-results-coin-filter');
   var textFilterNode = document.getElementById('arc-results-filter');
+  var columnsPicker = document.getElementById('archive-results-columns-picker');
   if (cfgLabel) cfgLabel.style.display = archiveResultsMode === 'backtests' ? '' : 'none';
   if (cfgSelNode) cfgSelNode.style.display = archiveResultsMode === 'backtests' ? '' : 'none';
   if (coinLabelNode) coinLabelNode.style.display = archiveResultsMode === 'backtests' ? '' : 'none';
   if (coinSelNode) coinSelNode.style.display = archiveResultsMode === 'backtests' ? '' : 'none';
   if (textFilterNode) textFilterNode.placeholder = archiveResultsMode === 'backtests' ? 'Search name…' : (archiveResultsMode === 'schedules' ? 'Search schedule…' : 'Search optimize…');
+  if (columnsPicker) columnsPicker.hidden = archiveResultsMode !== 'backtests';
   setArchiveResultsModeButtons();
 
   if (archiveResultsMode === 'schedules') {
@@ -9283,7 +9496,7 @@ function renderArchiveResults(name) {
     return 0;
   });
 
-  _renderResultsTableInto(tableEl, sorted, chartsEl, _rthA, { showVersion: true, showStrategy: true });
+  _renderResultsTableInto(tableEl, sorted, chartsEl, _rthA, { showVersion: true, showStrategy: true, columnContext: 'archive' });
   setSelectedArchiveResults(selectedPaths);
 }
 
