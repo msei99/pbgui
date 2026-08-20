@@ -2,7 +2,7 @@
 # Update pbgui and pb7 on localhost
 # Steps:
 # 1. Clone pbgui repository
-# 2. Sync PBGui systemd units and restart PBCluster/PBData/PBCoinData/PBMonitorAgent if pbgui repository was updated
+# 2. Sync PBGui systemd units and restart PBCluster/PBRun/PBData/PBCoinData/PBMonitorAgent if pbgui repository was updated
 # 3. Clone passivbot repository for pb7
 # 4. Restart all pb7 bots if pb7 repository was updated
 
@@ -252,8 +252,8 @@
       changed_when: "'changed=true' in (systemd_setup_result.stdout | default(''))"
       listen: "restart pbgui"
 
-    - name: Restart PBCluster, PBData, PBCoinData and PBMonitorAgent
-      script: setup/vps_service_control.sh restart PBCluster PBData PBCoinData PBMonitorAgent
+    - name: Restart PBCluster, PBRun, PBData, PBCoinData and PBMonitorAgent
+      script: setup/vps_service_control.sh restart PBCluster PBRun PBData PBCoinData PBMonitorAgent
       environment:
         PBGUI_DIR: "{{ pbgdir }}"
         PBGUI_PYTHON: "{{ pbgui_python | default(ansible_playbook_python) }}"

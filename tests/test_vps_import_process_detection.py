@@ -3380,13 +3380,14 @@ def test_service_control_restarts_only_active_pbdata(
 
 @pytest.mark.parametrize("playbook_path", ["master-update-pbgui.yml", "master-update-pb.yml"])
 def test_master_update_playbooks_restart_active_pbdata(playbook_path: str) -> None:
-    """Master PBGui updates include PBData before handing off the API restart."""
+    """Master PBGui updates refresh active PBRun and PBData before the API handoff."""
 
     playbook = Path(playbook_path).read_text(encoding="utf-8")
-    restart_index = playbook.index("restart PBCluster PBData PBCoinData PBMonitorAgent")
+    restart_index = playbook.index("restart PBCluster PBRun PBData PBCoinData PBMonitorAgent")
     api_restart_index = playbook.index("systemctl --user start pbgui-api.service")
 
     assert restart_index < api_restart_index
+    assert 'PBGUI_RESTART_ACTIVE_ONLY: "1"' in playbook
 
 
 def test_local_master_metrics_are_recorded_in_host_history(monkeypatch: pytest.MonkeyPatch) -> None:

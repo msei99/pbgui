@@ -98,6 +98,7 @@ Auch eine erste Remote-PB7-Installation verlangt mindestens 3 GiB freien Speiche
 
 Bulk-Updates in der Overview beruecksichtigen das Runtime-Profil jedes Hosts. **Update Runtime by Profile** und **Update PBGui and Runtime by Profile** senden PB7-only-Hosts an PB7-Playbooks, PB8-only-Hosts an PB8-Playbooks und kombinierte Hosts an geordnete PB7+PB8-Playbooks. Gemischte Selektionen behalten damit einen gemeinsamen parallelen oder sequenziellen Rollout, ohne PB7-Tasks auf PB8-only-Hosts anzuwenden.
 Kombinierte lokale Master-PBGui-/Runtime-Updates verschieben den API-Neustart, bis alle importierten Runtime-Updates und Validierungsschritte abgeschlossen sind. Das Command Log bleibt waehrenddessen offen und erhaelt seinen Endstatus, bevor die API neu startet.
+Erfolgreiche Master-PBGui-Updates starten auch einen aktiven PBRun-Controller neu, damit er die neue Code-Serial automatisch uebernimmt; bewusst gestoppte PBRun-Dienste bleiben gestoppt.
 Wenn PB8 nicht installiert ist, wird **Install PB8** als gefüllte blaue Aktion hervorgehoben und bleibt dadurch klar von routinemäßigen Update-Schaltflächen unterscheidbar.
 
 ---

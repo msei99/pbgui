@@ -18,6 +18,8 @@ Die Hauptspalte **Status** kombiniert den veroeffentlichten Sollzustand mit exak
 
 Die getrennte Spalte **Desired** zeigt weiterhin die veroeffentlichte Cluster-Anforderung. Der authentifizierte WebSocket aktualisiert beide Ansichten; veraltete REST-Antworten koennen neueren Socket-Status nicht ueberschreiben.
 
+Die Zeilenaktionen **P**, **G** und **T** setzen nach einer expliziten Bestaetigung global `panic`, `graceful_stop` oder `tp_only` fuer Long- und Short-PB8-Positionen. Jede Aktion verwendet die normale PB8-Bundle-Pipeline: Sie erstellt ein vollstaendiges Backup, erhoeht die Config-Version, validiert Config und Sparse Overrides durch PB8, veroeffentlicht die Cluster-Operation und versucht die sofortige Aktivierung auf dem Zielhost.
+
 ## Erstellen Oder Bearbeiten
 
 Der Editor bietet denselben Arbeitsablauf wie PBv7 Run:

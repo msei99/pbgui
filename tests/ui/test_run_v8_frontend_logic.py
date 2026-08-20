@@ -304,6 +304,35 @@ def test_run_list_adds_strategy_only_for_pb8() -> None:
     _run_node(script)
 
 
+def test_pb8_run_adapter_enables_existing_forced_mode_actions() -> None:
+    """PB8 Run renders P/G/T and posts them to its versioned forced-mode endpoint."""
+    adapter = (ROOT / "frontend" / "js" / "run_list_adapter.js").read_text(encoding="utf-8")
+    page = (ROOT / "frontend" / "v7_run.html").read_text(encoding="utf-8")
+    build_cells = _page_function(page, "buildCells")
+    execute = _page_function(page, "executeForcedMode")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const window = {{}};
+        const document = {{querySelectorAll: () => [], getElementById: () => null}};
+        {adapter}
+        const runListAdapter = window.PBGuiRunListAdapter.create('v8');
+        const STATUS_LABELS = {{synced: 'synced'}};
+        const esc = (value) => String(value == null ? '' : value);
+        {build_cells}
+        const cells = buildCells({{name: 'alice', user: 'alice', strategy: 'ema_anchor', status: 'synced'}});
+        assert.equal(runListAdapter.supportsForcedModes, true);
+        assert.match(cells.at(-1), /data-forced-mode="panic"/);
+        assert.match(cells.at(-1), /data-forced-mode="graceful_stop"/);
+        assert.match(cells.at(-1), /data-forced-mode="tp_only"/);
+        """
+    )
+    _run_node(script)
+    assert "'/instances/' + encodeURIComponent(name) + '/forced-mode'" in execute
+    assert 'body: JSON.stringify({ mode: mode })' in execute
+    assert '/app/js/run_list_adapter.js?v=3' in page
+
+
 def test_run_editor_preserves_configured_target_when_capability_is_unconfirmed() -> None:
     """A stale capability response must not make a configured target look disabled."""
 

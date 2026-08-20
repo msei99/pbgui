@@ -11,7 +11,7 @@
       navCurrent: isV8 ? 'v8_run' : 'v7_run',
       websocketPath: isV8 ? '/api/v8/ws/v8' : '/api/v7/ws/v7',
       supportsBackups: true,
-      supportsForcedModes: !isV8,
+      supportsForcedModes: true,
       supportsConversion: !isV8,
       configureUi: function () {
         document.title = (isV8 ? 'PBv8' : 'PBv7') + ' Run';

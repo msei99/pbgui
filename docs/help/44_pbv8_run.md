@@ -18,6 +18,8 @@ The main **Status** column combines published desired state with exact PB8 proce
 
 The separate **Desired** column remains the published Cluster request. The authenticated WebSocket refreshes both views and stale REST responses cannot overwrite newer socket state.
 
+The row actions **P**, **G**, and **T** set global `panic`, `graceful_stop`, or `tp_only` for both long and short PB8 positions after explicit confirmation. Each action uses the normal PB8 bundle pipeline: it creates a complete backup, increments the config version, validates the config and sparse overrides through PB8, publishes the Cluster operation, and attempts immediate target activation.
+
 ## Create Or Edit
 
 The editor provides the same workflow as PBv7 Run:

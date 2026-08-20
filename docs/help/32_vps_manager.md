@@ -98,6 +98,7 @@ A first remote PB7 installation also requires at least 3 GiB free. The VPS Manag
 
 Overview bulk updates are runtime-profile aware. **Update Runtime by Profile** and **Update PBGui and Runtime by Profile** dispatch PB7-only hosts to PB7 playbooks, PB8-only hosts to PB8 playbooks, and combined hosts to ordered PB7+PB8 playbooks. Mixed selections therefore retain one parallel or sequential rollout without applying PB7 tasks to PB8-only hosts.
 Combined local-master PBGui/runtime updates defer the API restart until every imported runtime update and validation step has finished. The command log remains open during this work and receives its terminal status before the API restarts.
+Successful Master PBGui updates also restart an active PBRun controller so it adopts the new code serial automatically; intentionally stopped PBRun services remain stopped.
 When PB8 is not installed, **Install PB8** is shown as a filled blue action so it remains distinct from routine update buttons.
 
 ---

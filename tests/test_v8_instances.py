@@ -290,6 +290,50 @@ def test_save_publishes_canonical_pb8_manifest_and_explicit_upsert(
     assert desired["instances"] == {}
 
 
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    (("panic", "panic"), ("graceful_stop", "graceful_stop"), ("tp_only", "tp_only")),
+)
+def test_pb8_forced_mode_uses_versioned_bundle_save_and_preserves_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    requested: str,
+    expected: str,
+) -> None:
+    """PB8 P/G/T actions back up, version, validate, publish, and retain sparse files."""
+    _configure_root(monkeypatch, tmp_path)
+    _install_test_pipeline(monkeypatch)
+    payload = _payload()
+    payload["config"]["coin_overrides"] = {"BTC": {"override_config_path": "BTC.json"}}
+    payload["override_configs"] = {"BTC.json": {"bot": {"long": {"risk": {"n_positions": 1}}}}}
+    asyncio.run(v8_instances.save_v8_instance_config("alice", payload, True, session=None))
+
+    result = asyncio.run(v8_instances.set_v8_instance_forced_mode(
+        "alice", {"mode": requested}, session=None,
+    ))
+
+    bundle = tmp_path / "data" / "run_v8" / "alice"
+    saved = json.loads((bundle / "config.json").read_text(encoding="utf-8"))
+    desired = json.loads((tmp_path / "data" / "cluster" / "desired_state.json").read_text(encoding="utf-8"))
+    assert saved["live"]["forced_mode_long"] == expected
+    assert saved["live"]["forced_mode_short"] == expected
+    assert saved["pbgui"]["version"] == 2
+    assert (bundle / "BTC.json").is_file()
+    assert (tmp_path / "data" / "backup" / "v8" / "alice" / "1" / "config.json").is_file()
+    assert desired["pb8_instances"]["alice"]["version"] == "2"
+    assert result["forced_mode"] == expected
+    assert result["version"] == 2
+    assert result["backup_id"] == "1"
+
+
+def test_pb8_forced_mode_rejects_unknown_mode() -> None:
+    """PB8 forced-mode actions reject values outside the three exposed controls."""
+    with pytest.raises(v8_instances.HTTPException, match="mode must be") as error:
+        asyncio.run(v8_instances.set_v8_instance_forced_mode("alice", {"mode": "manual"}, session=None))
+
+    assert error.value.status_code == 400
+
+
 def test_fast_pb8_activation_has_three_second_transport_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     """A PB8 save reserves time for PBRun to react within the five-second target."""
 
