@@ -66,6 +66,8 @@ _CONFIG_FILENAME = "optimize.json"
 _CONFIG_SECTIONS = ("backtest", "bot", "live", "optimize", "coin_overrides", "pbgui")
 _QUEUE_SETTINGS_SECTION = "optimize_v7"
 _PARETO_STATISTICS = ("mean", "min", "max", "std", "median")
+_PARETO_METRIC_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_PARETO_MAX_REQUESTED_METRICS = 256
 _PARETO_COMPARISON_METRICS = (
     ("adg", ("adg_strategy_eq_w", "adg_strategy_eq", "adg_w_usd", "adg_usd", "adg")),
     ("gain", ("gain_usd", "gain_strategy_eq", "gain")),
@@ -1826,6 +1828,55 @@ def _compact_metric_value(value):
     return compact or None
 
 
+def _requested_pareto_metrics(value) -> list[str]:
+    """Return one bounded, validated list of metric projections requested by the browser."""
+    if not isinstance(value, str) or not value.strip():
+        return []
+    result = []
+    for item in value.split(","):
+        metric = item.strip()
+        if not metric or metric in result:
+            continue
+        if not _PARETO_METRIC_NAME_RE.fullmatch(metric):
+            raise HTTPException(status_code=422, detail=f"Invalid Pareto metric: {metric[:128]}")
+        result.append(metric)
+        if len(result) > _PARETO_MAX_REQUESTED_METRICS:
+            raise HTTPException(status_code=422, detail="Too many Pareto metrics requested")
+    return result
+
+
+def _pareto_metric_catalog(data: dict) -> list[str]:
+    """Return all numeric metric names advertised by one result's stable metric schema."""
+    suite_metrics, _labels = _suite_metric_payload(data)
+    metrics = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
+    stats_root = metrics.get("stats") if isinstance(metrics.get("stats"), dict) else {}
+    roots = [suite_metrics, stats_root]
+    roots.extend(
+        root
+        for root in (
+            data.get("objectives"),
+            (data.get("result") or {}).get("objectives") if isinstance(data.get("result"), dict) else None,
+            metrics.get("objectives"),
+        )
+        if isinstance(root, dict)
+    )
+    raw_names = []
+    for root in roots:
+        if not isinstance(root, dict):
+            continue
+        for name, value in root.items():
+            normalized = str(name).strip()
+            if normalized and normalized not in raw_names and _compact_metric_value(value) is not None:
+                raw_names.append(normalized)
+    raw_set = set(raw_names)
+    canonical = [
+        summary_name
+        for summary_name, aliases in _PARETO_COMPARISON_METRICS
+        if any(alias in raw_set for alias in aliases)
+    ]
+    return list(dict.fromkeys([*canonical, *sorted(raw_names)]))
+
+
 def _pareto_list_objective_specs(data: dict) -> list[dict]:
     specs = _pareto_objective_specs(data)
     if specs:
@@ -1847,12 +1898,23 @@ def _pareto_list_objective_specs(data: dict) -> list[dict]:
     return [{"metric": name, "goal": "max"} for name in names]
 
 
-def _compact_pareto_data(data: dict) -> dict:
+def _compact_pareto_data(
+    data: dict,
+    requested_metrics: tuple[str, ...] = (),
+    *,
+    include_catalog: bool = False,
+) -> dict:
     contract = _pareto_contract(data)
     specs = _pareto_list_objective_specs(data)
     names = [spec["metric"] for spec in specs]
-    comparison_names = [name for _summary_name, aliases in _PARETO_COMPARISON_METRICS for name in aliases]
-    metric_names = list(dict.fromkeys([*names, *comparison_names]))
+    default_projection_names = list(dict.fromkeys(["gain", *names, "drawdown_worst"]))
+    projection_names = list(dict.fromkeys([*default_projection_names, *requested_metrics]))
+    comparison_by_name = dict(_PARETO_COMPARISON_METRICS)
+    metric_names = []
+    for name in projection_names:
+        for source_name in comparison_by_name.get(name, (name,)):
+            if source_name not in metric_names:
+                metric_names.append(source_name)
     suite_metrics, labels = _suite_metric_payload(data)
     metrics = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
     stats_root = metrics.get("stats") if isinstance(metrics.get("stats"), dict) else {}
@@ -1876,6 +1938,8 @@ def _compact_pareto_data(data: dict) -> dict:
         "scenario_labels": labels if suite_metrics else contract["scenario_labels"],
         "objectives": specs,
         "objective_names": names,
+        "default_projection_names": default_projection_names,
+        "available_metric_names": _pareto_metric_catalog(data) if include_catalog else [],
         "suite_values": {
             name: compact
             for name in metric_names
@@ -1890,7 +1954,12 @@ def _compact_pareto_data(data: dict) -> dict:
     }
 
 
-def _project_compact_pareto(compact: dict, statistic: str, scenario: str) -> dict:
+def _project_compact_pareto(
+    compact: dict,
+    statistic: str,
+    scenario: str,
+    requested_metrics: tuple[str, ...] = (),
+) -> dict:
     suite_values = compact["suite_values"]
     stats_values = compact["stats_values"]
     objective_values = compact["objective_values"]
@@ -1915,15 +1984,19 @@ def _project_compact_pareto(compact: dict, statistic: str, scenario: str) -> dic
         return _metric_value(objective_values.get(name), statistic, scenario)
 
     summary = {}
-    for name in compact["objective_names"]:
-        value = value_for(name)
-        if value is not None:
-            summary[name] = value
-    for summary_name, aliases in _PARETO_COMPARISON_METRICS:
+    comparison_by_name = dict(_PARETO_COMPARISON_METRICS)
+    projection_names = list(dict.fromkeys([*compact["default_projection_names"], *requested_metrics]))
+    for name in projection_names:
+        aliases = comparison_by_name.get(name)
+        if aliases is None:
+            value = value_for(name)
+            if value is not None:
+                summary[name] = value
+            continue
         for alias in aliases:
             value = value_for(alias)
             if value is not None:
-                summary[summary_name] = value
+                summary[name] = value
                 break
     return summary
 
@@ -1939,27 +2012,59 @@ def _pareto_file_signature(path: Path) -> tuple[tuple[str, int | None, int, int]
     return (resolved, inode, int(stat_result.st_mtime_ns), int(stat_result.st_size)), stat_result
 
 
-def _load_compact_pareto(path: Path) -> tuple[dict, os.stat_result]:
-    signature, stat_result = _pareto_file_signature(path)
-    now = time.monotonic()
+def _prune_pareto_list_cache(now: float | None = None) -> None:
+    """Expire compact projections once per list request instead of once per candidate."""
+    cutoff = time.monotonic() if now is None else now
     with _pareto_list_cache_lock:
         for key, entry in list(_pareto_list_cache.items()):
-            if now - entry["loaded_at"] > _PARETO_LIST_CACHE_TTL_SECONDS:
+            if cutoff - entry["loaded_at"] > _PARETO_LIST_CACHE_TTL_SECONDS:
                 _pareto_list_cache.pop(key, None)
+
+
+def _load_compact_pareto(
+    path: Path,
+    requested_metrics: tuple[str, ...] = (),
+    *,
+    include_catalog: bool = False,
+) -> tuple[dict, os.stat_result]:
+    signature, stat_result = _pareto_file_signature(path)
+    now = time.monotonic()
+    requested_set = set(requested_metrics)
+    cached = None
+    with _pareto_list_cache_lock:
         cached = _pareto_list_cache.get(signature)
-        if cached is not None:
+        if cached is not None and now - cached["loaded_at"] > _PARETO_LIST_CACHE_TTL_SECONDS:
+            _pareto_list_cache.pop(signature, None)
+            cached = None
+        if (
+            cached is not None
+            and requested_set.issubset(cached.get("loaded_metrics") or set())
+            and (not include_catalog or bool(cached["compact"].get("available_metric_names")))
+        ):
             _pareto_list_cache.move_to_end(signature)
             return cached["compact"], stat_result
-        data = _read_json(path)
-        final_signature, final_stat = _pareto_file_signature(path)
-        if final_signature != signature:
-            raise RuntimeError(f"{path.name} changed while being read")
-        compact = _compact_pareto_data(data)
+    loaded_metrics = set(cached.get("loaded_metrics") or set()) if cached is not None else set()
+    loaded_metrics.update(requested_set)
+    keep_catalog = include_catalog or bool((cached or {}).get("compact", {}).get("available_metric_names"))
+    data = _read_json(path)
+    final_signature, final_stat = _pareto_file_signature(path)
+    if final_signature != signature:
+        raise RuntimeError(f"{path.name} changed while being read")
+    compact = _compact_pareto_data(
+        data,
+        tuple(sorted(loaded_metrics)),
+        include_catalog=keep_catalog,
+    )
+    with _pareto_list_cache_lock:
         resolved = signature[0]
         for key in list(_pareto_list_cache):
             if key[0] == resolved and key != signature:
                 _pareto_list_cache.pop(key, None)
-        _pareto_list_cache[signature] = {"loaded_at": now, "compact": compact}
+        _pareto_list_cache[signature] = {
+            "loaded_at": now,
+            "compact": compact,
+            "loaded_metrics": loaded_metrics,
+        }
         _pareto_list_cache.move_to_end(signature)
         while len(_pareto_list_cache) > _PARETO_LIST_CACHE_MAX_ENTRIES:
             _pareto_list_cache.popitem(last=False)
@@ -4120,10 +4225,12 @@ def list_paretos(
     scenario: str = Query("Aggregated"),
     statistic: str = Query("mean"),
     session: SessionToken = Depends(require_auth),
+    metrics: str = Query(""),
 ) -> dict:
     with _result_lock():
         result_dir = _resolve_result_path(result_path)
         selected_statistic = statistic if statistic in _PARETO_STATISTICS else "mean"
+        requested_metrics = tuple(_requested_pareto_metrics(metrics))
         pareto_dir = result_dir / "pareto"
         try:
             paths = sorted(pareto_dir.glob("*.json")) if pareto_dir.is_dir() and not pareto_dir.is_symlink() else []
@@ -4132,10 +4239,20 @@ def list_paretos(
             _log_pareto_skips(result_dir, 1, str(exc))
         candidates = []
         errors = []
+        metric_catalog = []
+        catalog_loaded = False
+        _prune_pareto_list_cache()
         for path in paths:
             try:
-                compact, stat_result = _load_compact_pareto(path)
+                compact, stat_result = _load_compact_pareto(
+                    path,
+                    requested_metrics,
+                    include_catalog=not catalog_loaded,
+                )
                 candidates.append((path, compact, stat_result))
+                if not catalog_loaded:
+                    metric_catalog = list(compact.get("available_metric_names") or [])
+                    catalog_loaded = True
             except (OSError, RuntimeError) as exc:
                 errors.append(f"{path.name}: {exc}")
                 continue
@@ -4153,15 +4270,24 @@ def list_paretos(
                 "path": str(path),
                 "name": path.stem,
                 "modified": datetime.datetime.fromtimestamp(stat_result.st_mtime).isoformat(),
-                "summary": _project_compact_pareto(compact, selected_statistic, selected_scenario),
+                "summary": _project_compact_pareto(
+                    compact,
+                    selected_statistic,
+                    selected_scenario,
+                    requested_metrics,
+                ),
             }
             for path, compact, stat_result in candidates
         ]
         available_set = {
             str(metric)
+            for metric in metric_catalog
+        }
+        available_set.update(
+            str(metric)
             for item in paretos
             for metric in (item.get("summary") or {})
-        }
+        )
         comparison_order = [name for name, _aliases in _PARETO_COMPARISON_METRICS]
         available_metrics = [name for name in comparison_order if name in available_set]
         available_metrics.extend(sorted(available_set - set(available_metrics)))

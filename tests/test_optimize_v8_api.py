@@ -1138,12 +1138,20 @@ def test_pareto_stats_projection_prefers_stats_and_adds_canonical_gain(
     }
     assert payload["meta"]["selected_statistic"] == statistic
     assert [spec["metric"] for spec in payload["meta"]["objectives"]] == ["quality", "risk"]
-    assert payload["meta"]["available_metrics"] == ["gain", "drawdown_worst", "quality", "risk"]
+    assert set(payload["meta"]["available_metrics"]) == {
+        "gain",
+        "drawdown_worst",
+        "drawdown_worst_strategy_eq",
+        "gain_strategy_eq",
+        "gain_usd",
+        "quality",
+        "risk",
+    }
     assert payload["meta"]["default_metrics"] == ["gain", "quality", "risk", "drawdown_worst"]
 
 
-def test_suite_pareto_projection_excludes_unrelated_metrics(optimize_v8_roots) -> None:
-    """Suite list rows contain configured objectives and canonical gain, not the complete metric suite."""
+def test_suite_pareto_projection_catalogs_all_metrics_but_loads_only_selected_values(optimize_v8_roots) -> None:
+    """The picker sees every metric while list rows retain only defaults and requested values."""
     _configs, _queue, _logs, results = optimize_v8_roots
     result = results / "large-suite"
     pareto = result / "pareto"
@@ -1179,7 +1187,26 @@ def test_suite_pareto_projection_excludes_unrelated_metrics(optimize_v8_roots) -
     }
     assert aggregated["meta"]["mode"] == "suite"
     assert aggregated["meta"]["scenario_labels"] == ["bear"]
-    assert "unrelated_149" not in json.dumps(aggregated)
+    assert "unrelated_149" not in aggregated["paretos"][0]["summary"]
+    assert "unrelated_149" in aggregated["meta"]["available_metrics"]
+
+    selected = optimize_v8.list_paretos(
+        str(result), "Aggregated", "median", None, "unrelated_149",
+    )
+    assert selected["paretos"][0]["summary"]["unrelated_149"] == 149.0
+
+
+@pytest.mark.parametrize("metrics", ("bad metric", "metric/path", "x" * 129))
+def test_pareto_metric_projection_rejects_invalid_names(optimize_v8_roots, metrics: str) -> None:
+    """Dynamic projection accepts only bounded metric identifiers from the advertised catalog."""
+    _configs, _queue, _logs, results = optimize_v8_roots
+    result = results / "invalid-projection"
+    (result / "pareto").mkdir(parents=True)
+
+    with pytest.raises(HTTPException) as error:
+        optimize_v8.list_paretos(str(result), "Aggregated", "mean", None, metrics)
+
+    assert error.value.status_code == 422
 
 
 def test_compact_pareto_cache_reuses_touches_prunes_and_clears(optimize_v8_roots, monkeypatch) -> None:
@@ -1190,7 +1217,10 @@ def test_compact_pareto_cache_reuses_touches_prunes_and_clears(optimize_v8_roots
     pareto.mkdir(parents=True)
     payload = {
         "optimize": {"scoring": [{"metric": "quality", "goal": "max"}]},
-        "metrics": {"stats": {"quality": {"mean": 1.0}}, "objectives": {"quality": 0.0}},
+        "metrics": {
+            "stats": {"quality": {"mean": 1.0}, "extra": {"mean": 2.0, "median": 3.0}},
+            "objectives": {"quality": 0.0},
+        },
     }
     paths = []
     for index in range(3):
@@ -1212,16 +1242,22 @@ def test_compact_pareto_cache_reuses_touches_prunes_and_clears(optimize_v8_roots
     assert len(optimize_v8.list_paretos(str(result), "Aggregated", "median", None)["paretos"]) == 3
     assert len(reads) == 3
 
+    projected = optimize_v8.list_paretos(str(result), "Aggregated", "mean", None, "extra")
+    assert all(row["summary"]["extra"] == 2.0 for row in projected["paretos"])
+    assert len(reads) == 6
+    optimize_v8.list_paretos(str(result), "Aggregated", "median", None, "extra")
+    assert len(reads) == 6
+
     touched_payload = copy.deepcopy(payload)
     touched_payload["unrelated_size_change"] = "force a new cache signature"
     paths[1].write_text(json.dumps(touched_payload), encoding="utf-8")
     optimize_v8.list_paretos(str(result), "Aggregated", "mean", None)
-    assert reads.count(paths[1].name) == 2
-    assert len(reads) == 4
+    assert reads.count(paths[1].name) == 3
+    assert len(reads) == 7
 
     paths[2].unlink()
     assert len(optimize_v8.list_paretos(str(result), "Aggregated", "mean", None)["paretos"]) == 2
-    assert len(reads) == 4
+    assert len(reads) == 7
 
     monkeypatch.setattr(optimize_v8, "_assert_result_deletable", lambda _path: None)
     optimize_v8.delete_result(str(result), None)
@@ -1242,6 +1278,29 @@ def test_compact_pareto_cache_has_bounded_lru_eviction(optimize_v8_roots, monkey
     optimize_v8.list_paretos(str(result), "Aggregated", "mean", None)
 
     assert len(optimize_v8._pareto_list_cache) == 2
+
+
+def test_pareto_cache_expiration_is_pruned_once_per_list_request(optimize_v8_roots, monkeypatch) -> None:
+    """Large fronts avoid the former per-candidate full-cache expiration scan."""
+    _configs, _queue, _logs, results = optimize_v8_roots
+    result = results / "single-prune"
+    pareto = result / "pareto"
+    pareto.mkdir(parents=True)
+    payload = {"metrics": {"stats": {"quality": {"mean": 1.0}}}}
+    for index in range(5):
+        (pareto / f"candidate-{index}.json").write_text(json.dumps(payload), encoding="utf-8")
+    original_prune = optimize_v8._prune_pareto_list_cache
+    calls = []
+
+    def counted_prune(now=None) -> None:
+        calls.append(now)
+        original_prune(now)
+
+    monkeypatch.setattr(optimize_v8, "_prune_pareto_list_cache", counted_prune)
+
+    optimize_v8.list_paretos(str(result), "Aggregated", "mean", None)
+
+    assert calls == [None]
 
 
 def test_pareto_list_skips_active_file_churn_and_malformed_json(optimize_v8_roots, monkeypatch) -> None:
@@ -1298,7 +1357,11 @@ def test_thousand_pareto_candidates_keep_structural_payload_bounded(optimize_v8_
         payload = {
             "optimize": {"scoring": [{"metric": "quality", "goal": "max"}]},
             "metrics": {
-                "stats": {"quality": {"mean": float(index)}, "gain_usd": {"mean": float(index + 1)}},
+                "stats": {
+                    "quality": {"mean": float(index)},
+                    "gain_usd": {"mean": float(index + 1)},
+                    "available_but_unselected": {"mean": float(index + 2)},
+                },
                 "objectives": {"unrelated": 999.0},
             },
         }
@@ -1308,6 +1371,7 @@ def test_thousand_pareto_candidates_keep_structural_payload_bounded(optimize_v8_
 
     assert len(response["paretos"]) == 1000
     assert all(set(row["summary"]) == {"quality", "gain"} for row in response["paretos"])
+    assert "available_but_unselected" in response["meta"]["available_metrics"]
     assert len(json.dumps(response)) < 500_000
 
 

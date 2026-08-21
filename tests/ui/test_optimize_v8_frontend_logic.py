@@ -1057,6 +1057,9 @@ def test_switching_result_sets_clears_stale_paretos_before_loading() -> None:
           paretoMode: 'normal',
           paretoScenario: 'Aggregated',
           paretoStatistic: 'mean',
+          paretoMetricReloadTimer: null,
+          paretoMetricColumnsLoaded: true,
+          paretoMetricColumns: [],
           selectedResultPath: '/old',
           selectedResultName: 'old',
           paretos: [{{path: '/old/pareto.json'}}],
@@ -1254,6 +1257,22 @@ def test_pareto_metric_columns_are_configurable_and_never_empty() -> None:
         """
     )
     _run_node(script)
+
+
+def test_pareto_metric_catalog_is_lazy_batched_and_dom_cached() -> None:
+    """All metric names are selectable without rebuilding the picker or eagerly loading values."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    picker = _page_function(page, "renderParetoColumnPicker")
+    scheduler = _page_function(page, "scheduleParetoMetricReload")
+    loader = _page_function(page, "loadParetos")
+
+    assert "options._paretoCatalogSignature !== catalogSignature" in picker
+    assert "document.createDocumentFragment()" in picker
+    assert "options.querySelectorAll('input[data-pareto-metric]')" in picker
+    assert "}, 250);" in scheduler
+    assert "requestedMetrics.join(',')" in loader
+    assert "metrics=" in loader
+    assert '>All (slower)</button>' in page
 
 
 def test_pareto_fallback_statistics_include_median_and_render_commits_once() -> None:

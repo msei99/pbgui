@@ -2369,7 +2369,7 @@ textarea.json-invalid:focus {
             <div id="pareto-columns-options" class="pareto-columns-options"></div>
             <div class="pareto-columns-actions">
               <button id="pareto-columns-defaults" class="act-btn" type="button">Defaults</button>
-              <button id="pareto-columns-all" class="act-btn" type="button">All</button>
+              <button id="pareto-columns-all" class="act-btn" type="button" title="Selecting every metric creates a much wider and slower table.">All (slower)</button>
               <button id="pareto-columns-done" class="act-btn" type="button">Done</button>
             </div>
           </div>
@@ -2723,6 +2723,7 @@ var state = {
   paretoDefaultMetrics: [],
   paretoMetricColumns: [],
   paretoMetricColumnsLoaded: false,
+  paretoMetricReloadTimer: null,
   paretoLoadSeq: 0,
   paretoSortKey: 'name',
   paretoSortDir: 'asc',
@@ -2891,7 +2892,20 @@ function toggleParetoMetricColumn(metric, enabled) {
   if (enabled && index < 0) selected.push(metric);
   if (!enabled && index >= 0 && selected.length > 1) selected.splice(index, 1);
   setParetoMetricColumns(selected, true);
-  renderParetos();
+  if (enabled) {
+    renderParetoColumnPicker();
+    scheduleParetoMetricReload();
+  } else {
+    renderParetos();
+  }
+}
+
+function scheduleParetoMetricReload() {
+  if (state.paretoMetricReloadTimer) clearTimeout(state.paretoMetricReloadTimer);
+  state.paretoMetricReloadTimer = setTimeout(function() {
+    state.paretoMetricReloadTimer = null;
+    loadParetos().catch(handleError);
+  }, 250);
 }
 
 function renderParetoColumnPicker() {
@@ -2901,23 +2915,34 @@ function renderParetoColumnPicker() {
   if (!picker || !summary || !options) return;
   picker.hidden = !state.selectedResultPath || !state.paretoAvailableMetrics.length;
   summary.textContent = 'Columns (' + String(state.paretoMetricColumns.length) + ')';
-  options.textContent = '';
-  state.paretoAvailableMetrics.forEach(function(metric) {
-    var label = document.createElement('label');
-    label.className = 'pareto-columns-option';
-    var input = document.createElement('input');
-    input.type = 'checkbox';
-    input.checked = state.paretoMetricColumns.indexOf(metric) >= 0;
-    input.addEventListener('change', function() {
-      toggleParetoMetricColumn(metric, input.checked);
+  var catalogSignature = state.paretoAvailableMetrics.join('\u001f');
+  if (options._paretoCatalogSignature !== catalogSignature) {
+    options.textContent = '';
+    var fragment = document.createDocumentFragment();
+    state.paretoAvailableMetrics.forEach(function(metric) {
+      var label = document.createElement('label');
+      label.className = 'pareto-columns-option';
+      var input = document.createElement('input');
+      input.type = 'checkbox';
+      input.setAttribute('data-pareto-metric', metric);
+      input.checked = state.paretoMetricColumns.indexOf(metric) >= 0;
+      input.addEventListener('change', function() {
+        toggleParetoMetricColumn(metric, input.checked);
+      });
+      var text = document.createElement('span');
+      var shortLabel = METRIC_PILL_LABELS[metric];
+      text.textContent = shortLabel && shortLabel !== metric ? shortLabel + ' (' + metric + ')' : metric;
+      label.appendChild(input);
+      label.appendChild(text);
+      fragment.appendChild(label);
     });
-    var text = document.createElement('span');
-    var shortLabel = METRIC_PILL_LABELS[metric];
-    text.textContent = shortLabel && shortLabel !== metric ? shortLabel + ' (' + metric + ')' : metric;
-    label.appendChild(input);
-    label.appendChild(text);
-    options.appendChild(label);
-  });
+    options.appendChild(fragment);
+    options._paretoCatalogSignature = catalogSignature;
+  } else {
+    options.querySelectorAll('input[data-pareto-metric]').forEach(function(input) {
+      input.checked = state.paretoMetricColumns.indexOf(input.getAttribute('data-pareto-metric')) >= 0;
+    });
+  }
   var defaults = el('pareto-columns-defaults');
   var all = el('pareto-columns-all');
   var done = el('pareto-columns-done');
@@ -2927,7 +2952,8 @@ function renderParetoColumnPicker() {
   };
   all.onclick = function() {
     setParetoMetricColumns(state.paretoAvailableMetrics, true);
-    renderParetos();
+    renderParetoColumnPicker();
+    scheduleParetoMetricReload();
   };
   done.onclick = function() { picker.open = false; };
 }
@@ -12316,6 +12342,10 @@ function refreshOptimizePageOnReturn() {
 }
 
 async function loadParetos(path, name) {
+  if (state.paretoMetricReloadTimer) {
+    clearTimeout(state.paretoMetricReloadTimer);
+    state.paretoMetricReloadTimer = null;
+  }
   var loadSeq = ++state.paretoLoadSeq;
   if (path) {
     state.paretos = [];
@@ -12344,6 +12374,12 @@ async function loadParetos(path, name) {
   ];
   if (state.paretoMode === 'suite' || requestScenario !== 'Aggregated') {
     query.push('scenario=' + encodeURIComponent(requestScenario));
+  }
+  var requestedMetrics = state.paretoMetricColumnsLoaded
+    ? state.paretoMetricColumns
+    : readStoredParetoColumns();
+  if (requestedMetrics.length) {
+    query.push('metrics=' + encodeURIComponent(requestedMetrics.join(',')));
   }
   var data = await apiFetch(optimizeEditorAdapter.paretosPath(query.join('&')));
   if (loadSeq !== state.paretoLoadSeq || requestPath !== state.selectedResultPath) return;
