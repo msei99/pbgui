@@ -56,6 +56,8 @@ PB8 may download historical data when a backtest starts. Review the config, exch
 
 **Calc Balance** supports both trailing-strategy `entry.initial_qty_pct` and EMA Anchor `base_qty_pct`, so PB8 result configs produce the same recommendation inline as on the standalone Balance Calculator page.
 
+**Add to Run** opens a disabled PB8 draft. If its selected exchange user already owns a Run config, Save first loads that config's current version and requires an explicit **Replace and Save** confirmation. The existing bundle is backed up and the result draft is then saved through the normal optimistic version increment and Cluster sync instead of being rejected as a duplicate new instance.
+
 Exchange lists in Backtest/Rebacktest dialogs use modifier-free toggle selection: clicking an unselected exchange adds it without clearing existing choices, while clicking a selected exchange removes only that exchange.
 
 The Results toolbar includes a persistent **Columns** picker. **Defaults** restores the established result table, while **All** also exposes available Final Equity and Equity/Balance Difference values. This browser-local selection is independent from Archive.

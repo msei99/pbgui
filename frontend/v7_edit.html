@@ -3035,6 +3035,34 @@ function collectConfig() {
 }
 
 /* ─── Save ─────────────────────────────────────────────────── */
+async function resolveRunSaveTarget(name, wasNew, expectedVersion, config) {
+  if (!runEditorAdapter.isV8 || !wasNew) {
+    return { createOnly: wasNew, expectedVersion: expectedVersion };
+  }
+  var existingResponse = await apiFetch('/instances/' + encodeURIComponent(name) + '/config');
+  if (existingResponse.status === 404) {
+    return { createOnly: true, expectedVersion: expectedVersion };
+  }
+  var existingPayload = await existingResponse.json();
+  if (!existingResponse.ok) {
+    throw new Error(existingPayload.detail || ('Could not inspect existing PB8 instance: HTTP ' + existingResponse.status));
+  }
+  var existingConfig = existingPayload.config && typeof existingPayload.config === 'object'
+    ? existingPayload.config
+    : {};
+  var currentVersion = Number(((existingConfig.pbgui || {}).version) || 0);
+  var enabledOn = String(((config.pbgui || {}).enabled_on) || 'disabled');
+  var confirmed = await window.PBGuiDialogs.confirm({
+    title: 'Replace existing PB8 instance?',
+    message: 'PB8 instance "' + name + '" already exists as v' + currentVersion
+      + '. Saving this draft will back up that config, create the next version, and sync it to "' + enabledOn + '".',
+    confirmText: 'Replace and Save'
+  });
+  if (!confirmed) return null;
+  setVal('f-version', currentVersion);
+  return { createOnly: false, expectedVersion: currentVersion };
+}
+
 async function saveConfig() {
   var btnSave = document.getElementById('btn-save');
   btnSave.disabled = true;
@@ -3055,10 +3083,12 @@ async function saveConfig() {
     var overrideSnapshot = runEditorAdapter.isV8 && typeof coinOvSnapshotPendingFiles === 'function'
       ? coinOvSnapshotPendingFiles()
       : {};
+    var saveTarget = await resolveRunSaveTarget(name, wasNew, getInt('f-version'), config);
+    if (!saveTarget) return;
 
-    var resp = await apiFetch('/instances/' + encodeURIComponent(name) + '/config' + runEditorAdapter.saveQuery(wasNew), {
+    var resp = await apiFetch('/instances/' + encodeURIComponent(name) + '/config' + runEditorAdapter.saveQuery(saveTarget.createOnly), {
       method: 'PUT',
-      body: JSON.stringify(runEditorAdapter.saveBody(config, overrideSnapshot, getInt('f-version'))),
+      body: JSON.stringify(runEditorAdapter.saveBody(config, overrideSnapshot, saveTarget.expectedVersion)),
     });
     var data = await resp.json();
     if (!resp.ok) {

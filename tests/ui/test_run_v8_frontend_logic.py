@@ -500,6 +500,55 @@ def test_save_waits_for_editor_initialization_before_validating_raw_json() -> No
     assert init_wait < symbols_wait < validation
 
 
+def test_new_pb8_draft_replaces_existing_user_with_versioned_confirmation() -> None:
+    """Backtest-to-Run drafts update an existing user only after an explicit versioned confirmation."""
+    page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+    resolver = _exact_page_function(page, "resolveRunSaveTarget")
+    save_source = _exact_page_function(page, "saveConfig")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const runEditorAdapter = {{isV8: true}};
+        let mode = 'existing';
+        let confirmed = true;
+        let confirmation = null;
+        let shownVersion = null;
+        const window = {{PBGuiDialogs: {{async confirm(options) {{ confirmation = options; return confirmed; }}}}}};
+        function setVal(id, value) {{ assert.equal(id, 'f-version'); shownVersion = value; }}
+        async function apiFetch(path) {{
+          assert.equal(path, '/instances/hl_HYPErQuantum/config');
+          if (mode === 'missing') return {{status: 404, ok: false, async json() {{ return {{detail: 'not found'}}; }}}};
+          return {{status: 200, ok: true, async json() {{ return {{config: {{pbgui: {{version: 5}}}}}}; }}}};
+        }}
+        {resolver}
+        (async () => {{
+          const config = {{pbgui: {{enabled_on: 'manibot50'}}}};
+          const replacement = await resolveRunSaveTarget('hl_HYPErQuantum', true, 0, config);
+          assert.deepEqual(replacement, {{createOnly: false, expectedVersion: 5}});
+          assert.equal(shownVersion, 5);
+          assert.match(confirmation.message, /v5/);
+          assert.match(confirmation.message, /manibot50/);
+          assert.equal(confirmation.confirmText, 'Replace and Save');
+
+          mode = 'missing';
+          confirmation = null;
+          assert.deepEqual(
+            await resolveRunSaveTarget('hl_HYPErQuantum', true, 0, config),
+            {{createOnly: true, expectedVersion: 0}}
+          );
+          assert.equal(confirmation, null);
+
+          mode = 'existing';
+          confirmed = false;
+          assert.equal(await resolveRunSaveTarget('hl_HYPErQuantum', true, 0, config), null);
+        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    _run_node(script)
+    assert "runEditorAdapter.saveQuery(saveTarget.createOnly)" in save_source
+    assert "saveTarget.expectedVersion" in save_source
+
+
 def test_pb8_handoff_draft_renders_before_runtime_metadata() -> None:
     """A canonical PB8 handoff draft must not wait for cold PB8 metadata subprocesses."""
 
