@@ -679,6 +679,40 @@ def test_large_result_listing_defers_full_stream_scan(optimize_v8_roots, monkeyp
     assert [item["name"] for item in listed_configs] == ["visible-config"]
 
 
+def test_result_listing_never_cold_decodes_streams_and_scans_each_pareto_dir_once(
+    optimize_v8_roots,
+    monkeypatch,
+) -> None:
+    """Cold Results metadata stays bounded for Pareto and checkpoint-only result sets."""
+    _configs, _queue, _logs, results = optimize_v8_roots
+    config = _full_pb8_config()
+    with_pareto = _make_resumable_result(results / "with-pareto", config)
+    pareto_dir = with_pareto / "pareto"
+    pareto_dir.mkdir()
+    (pareto_dir / "candidate.json").write_text(json.dumps(config), encoding="utf-8")
+    _make_resumable_result(results / "checkpoint-only", config)
+    original_listing = optimize_v8._pareto_files_for_listing
+    scans = []
+
+    def counted_listing(result_dir: Path):
+        scans.append(result_dir.name)
+        return original_listing(result_dir)
+
+    monkeypatch.setattr(optimize_v8, "_pareto_files_for_listing", counted_listing)
+    monkeypatch.setattr(
+        optimize_v8,
+        "_scan_all_results",
+        lambda _path: pytest.fail("Results listing must not fully decode all_results.bin"),
+    )
+
+    listed = optimize_v8.list_results(None)["results"]
+
+    assert {item["result"] for item in listed} == {"with-pareto", "checkpoint-only"}
+    assert all(item["progress"]["scan_deferred"] is True for item in listed)
+    assert all(item["has_config"] is True for item in listed)
+    assert sorted(scans) == ["checkpoint-only", "with-pareto"]
+
+
 def test_resume_compatibility_rejects_before_queue_mutation(optimize_v8_roots, monkeypatch) -> None:
     """A native-prepared incompatible checkpoint must not stop or alter the existing queue item."""
     _configs, _queue, _logs, results = optimize_v8_roots

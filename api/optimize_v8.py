@@ -969,7 +969,13 @@ def _result_override_payloads(result_dir: Path, config: dict) -> dict[str, dict]
     return _load_override_payloads(config, result_dir)
 
 
-def _checkpoint_resume_readiness(result_dir: Path, *, for_listing: bool = False) -> dict:
+def _checkpoint_resume_readiness(
+    result_dir: Path,
+    *,
+    for_listing: bool = False,
+    progress_hint: dict | None = None,
+    config_hint: dict | None = None,
+) -> dict:
     checkpoint = _safe_path(result_dir / "checkpoint.pkl", _results_root())
     all_results = _safe_path(result_dir / "all_results.bin", _results_root())
     reasons = []
@@ -983,7 +989,11 @@ def _checkpoint_resume_readiness(result_dir: Path, *, for_listing: bool = False)
     except OSError as exc:
         reasons.append(f"checkpoint.pkl is unreadable: {exc}")
 
-    progress = _all_results_progress_for_listing(all_results) if for_listing else _all_results_progress(all_results)
+    progress = (
+        progress_hint
+        if for_listing and isinstance(progress_hint, dict)
+        else _all_results_progress_for_listing(all_results) if for_listing else _all_results_progress(all_results)
+    )
     if not all_results.is_file() or all_results.is_symlink() or progress.get("bytes", 0) <= 0:
         reasons.append("all_results.bin is missing or empty")
     elif progress.get("error"):
@@ -993,7 +1003,9 @@ def _checkpoint_resume_readiness(result_dir: Path, *, for_listing: bool = False)
     ):
         reasons.append("all_results.bin does not strictly decode to complete result records")
 
-    config = _recover_result_config(result_dir)
+    config = _extract_result_config(config_hint)
+    if config is None:
+        config = _recover_result_config(result_dir)
     if config is None:
         reasons.append("base result config could not be recovered from native result artifacts")
     elif (config.get("optimize") or {}).get("write_all_results") is not True:
@@ -1419,6 +1431,23 @@ def _first_pareto_file(result_dir: Path) -> Path | None:
     return next((path for path in sorted(pareto_dir.glob("*.json")) if path.is_file() and not path.is_symlink()), None)
 
 
+def _pareto_files_for_listing(result_dir: Path) -> tuple[Path, list[Path]]:
+    """Enumerate regular Pareto JSON files once without per-file pathlib stat calls."""
+    pareto_dir = result_dir / "pareto"
+    if not pareto_dir.is_dir() or pareto_dir.is_symlink():
+        return pareto_dir, []
+    try:
+        with os.scandir(pareto_dir) as entries:
+            names = sorted(
+                entry.name
+                for entry in entries
+                if entry.name.endswith(".json") and entry.is_file(follow_symlinks=False)
+            )
+    except OSError:
+        return pareto_dir, []
+    return pareto_dir, [pareto_dir / name for name in names]
+
+
 def _apply_result_diff(base: dict, diff: dict) -> dict:
     result = {}
     for key in base.keys() | diff.keys():
@@ -1457,8 +1486,6 @@ def _all_results_progress_for_listing(path: Path) -> dict:
             raise OSError("not a regular file")
     except OSError:
         return {"evaluations": 0, "bytes": 0, "trailing_partial_entry": False, "latest": {}}
-    if stat_result.st_size <= _RESULT_LIST_SCAN_LIMIT_BYTES:
-        return _all_results_progress(path)
     key = str(path.resolve(strict=False))
     with _result_progress_cache_lock:
         cached = _result_progress_cache.get(key)
@@ -1603,19 +1630,53 @@ def _scan_all_results(path: Path) -> dict:
 
 
 def _all_results_first(path: Path) -> dict | None:
-    return _scan_all_results(path).get("first")
+    """Decode only the first bounded MessagePack record needed for result metadata."""
+    try:
+        stat_result = path.stat()
+        if path.is_symlink() or not path.is_file() or stat_result.st_size <= 0:
+            return None
+    except OSError:
+        return None
+    key = str(path.resolve(strict=False))
+    with _result_progress_cache_lock:
+        cached = _result_progress_cache.get(key)
+        if (
+            cached
+            and cached.get("device") == stat_result.st_dev
+            and cached.get("inode") == stat_result.st_ino
+            and cached.get("size") == stat_result.st_size
+            and cached.get("mtime_ns") == stat_result.st_mtime_ns
+            and isinstance(cached.get("first"), dict)
+        ):
+            return copy.deepcopy(cached["first"])
+    unpacker = msgpack.Unpacker(raw=False, strict_map_key=False, max_buffer_size=64 * 1024 * 1024)
+    remaining = min(stat_result.st_size, _RESULT_LIST_SCAN_LIMIT_BYTES)
+    try:
+        with path.open("rb") as handle:
+            while remaining > 0:
+                chunk = handle.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                unpacker.feed(chunk)
+                for entry in unpacker:
+                    return copy.deepcopy(entry) if isinstance(entry, dict) else None
+    except (OSError, ValueError, msgpack.UnpackException):
+        return None
+    return None
 
 
-def _result_name(result_dir: Path) -> str:
-    first = _first_pareto_file(result_dir)
-    data = None
-    if first:
-        try:
-            data = _read_json(first)
-        except (RuntimeError, AttributeError):
-            pass
+def _result_name(result_dir: Path, data_hint: dict | None = None) -> str:
+    data = data_hint if isinstance(data_hint, dict) else None
     if data is None:
-        data = _all_results_first(result_dir / "all_results.bin")
+        first = _first_pareto_file(result_dir)
+        if first:
+            try:
+                data = _read_json(first)
+            except (RuntimeError, AttributeError):
+                pass
+        if data is None:
+            data = _all_results_first(result_dir / "all_results.bin")
     if isinstance(data, dict):
         base_dir = str((data.get("backtest") or {}).get("base_dir") or "")
         if base_dir:
@@ -1637,10 +1698,9 @@ def _latest_existing_mtime(paths: list[Path]) -> float | None:
 def _list_results() -> list[dict]:
     results = []
     for directory in _result_dirs() or []:
-        pareto_dir = directory / "pareto"
-        paretos = [path for path in pareto_dir.glob("*.json") if path.is_file() and not path.is_symlink()] if pareto_dir.is_dir() and not pareto_dir.is_symlink() else []
+        pareto_dir, paretos = _pareto_files_for_listing(directory)
         artifacts = [path for path in (directory / "all_results.bin", directory / "checkpoint.pkl") if path.is_file()]
-        modified_paths = [*paretos, *artifacts] or [directory]
+        modified_paths = [pareto_dir, *artifacts] if paretos else [*artifacts, directory]
         progress = _all_results_progress_for_listing(directory / "all_results.bin")
         first_data = None
         if paretos:
@@ -1651,7 +1711,12 @@ def _list_results() -> list[dict]:
         if first_data is None:
             first_data = _all_results_first(directory / "all_results.bin")
         contract = _pareto_contract(first_data or {})
-        readiness = _checkpoint_resume_readiness(directory, for_listing=True)
+        readiness = _checkpoint_resume_readiness(
+            directory,
+            for_listing=True,
+            progress_hint=progress,
+            config_hint=first_data,
+        )
         result_config = first_data if isinstance(first_data, dict) else {}
         recovered_config = readiness.get("config") if isinstance(readiness.get("config"), dict) else {}
         result_live = result_config.get("live") if isinstance(result_config.get("live"), dict) else {}
@@ -1672,7 +1737,7 @@ def _list_results() -> list[dict]:
             {
                 "path": str(directory),
                 "result": directory.name,
-                "name": _result_name(directory),
+                "name": _result_name(directory, first_data),
                 "pareto_count": len(paretos),
                 "has_pareto": has_pareto,
                 "checkpoint": checkpoint_present,

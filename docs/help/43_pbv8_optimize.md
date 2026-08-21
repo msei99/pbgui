@@ -66,6 +66,8 @@ Results are read only from `<pb8dir>/optimize_results`. The Results table shows 
 
 Switching Optimize result sets clears previous Pareto rows, metadata, and selections immediately before loading the new result. A late response from the earlier result cannot restore stale rows.
 
+The Results list uses bounded cold-start metadata: it enumerates each Pareto directory once, uses directory timestamps instead of stat-ing every candidate, and decodes only the first MessagePack record when no Pareto config exists. Full `all_results.bin` validation remains mandatory for Resume/Continue actions but never blocks the visual Results list after an API restart.
+
 PB8 result actions distinguish three different workflows:
 
 - Opening a Pareto candidate as a PB8 Backtest draft performs a standalone backtest.

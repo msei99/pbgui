@@ -66,6 +66,8 @@ Ergebnisse werden nur aus `<pb8dir>/optimize_results` gelesen. Die Results-Tabel
 
 Ein Wechsel des Optimize-Results leert vorherige Pareto-Zeilen, Metadaten und Auswahl sofort, bevor das neue Result geladen wird. Eine spaete Antwort des vorherigen Results kann keine veralteten Zeilen wiederherstellen.
 
+Die Results-Liste verwendet begrenzte Cold-Start-Metadaten: Jedes Pareto-Verzeichnis wird einmal aufgelistet, Verzeichnis-Zeitstempel ersetzen einzelne Stats aller Kandidaten und ohne Pareto-Config wird nur der erste MessagePack-Record gelesen. Die vollstaendige Validierung von `all_results.bin` bleibt fuer Resume/Continue verpflichtend, blockiert nach einem API-Neustart aber niemals die sichtbare Results-Liste.
+
 PB8 unterscheidet drei Workflows:
 
 - Ein Pareto-Kandidat als PB8-Backtest-Draft startet einen eigenstaendigen Backtest.
