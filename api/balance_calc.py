@@ -172,12 +172,17 @@ def _extract_bot_params(config: dict) -> dict:
             strategy = next(iter(strategies.values()))
         strategy = strategy if isinstance(strategy, dict) else {}
         entry = strategy.get("entry", {}) if isinstance(strategy.get("entry"), dict) else {}
+        initial_qty_pct = entry.get("initial_qty_pct")
+        if initial_qty_pct is None:
+            initial_qty_pct = strategy.get("base_qty_pct")
+        if initial_qty_pct is None:
+            initial_qty_pct = s.get("entry_initial_qty_pct", 0)
         result[side] = {
             "n_positions": float(risk.get("n_positions", s.get("n_positions", 0)) or 0),
             "total_wallet_exposure_limit": float(
                 risk.get("total_wallet_exposure_limit", s.get("total_wallet_exposure_limit", 0)) or 0
             ),
-            "entry_initial_qty_pct": float(entry.get("initial_qty_pct", s.get("entry_initial_qty_pct", 0)) or 0),
+            "entry_initial_qty_pct": float(initial_qty_pct or 0),
         }
     return result
 

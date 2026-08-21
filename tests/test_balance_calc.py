@@ -173,6 +173,47 @@ def test_calculate_supports_pb8_config(monkeypatch) -> None:
     assert result["recommendation"]["recommended_balance"] == 880
 
 
+def test_calculate_supports_pb8_ema_anchor_base_qty(monkeypatch) -> None:
+    """EMA Anchor's root base_qty_pct must produce an inline and standalone recommendation."""
+    config = {
+        "config_version": "v8.2.0",
+        "live": {
+            "strategy_kind": "ema_anchor",
+            "approved_coins": {"long": ["HYPE"], "short": []},
+        },
+        "bot": {
+            "long": {
+                "risk": {"n_positions": 1, "total_wallet_exposure_limit": 6.0},
+                "strategy": {"ema_anchor": {"base_qty_pct": 0.0478}},
+            },
+            "short": {},
+        },
+    }
+    monkeypatch.setattr(
+        balance_calc,
+        "_load_mapping",
+        lambda _exchange: [
+            {
+                "coin": "HYPE",
+                "quote": "USDC",
+                "price_last": 76.23,
+                "contract_size": 1,
+                "min_amount": 0.01,
+                "min_cost": 10,
+                "active": True,
+                "swap": True,
+                "linear": True,
+            }
+        ],
+    )
+
+    result = balance_calc._calculate(config, "hyperliquid")
+
+    assert result["bot_params"]["long"]["entry_initial_qty_pct"] == 0.0478
+    assert result["balance_long"] == [{"coin": "HYPE", "balance": 34.87}]
+    assert result["recommendation"]["recommended_balance"] == 40
+
+
 def test_pb8_all_expands_only_eligible_mapped_swaps_and_applies_ignored_coins(monkeypatch) -> None:
     """PB8's all sentinel must not become a literal ALL token or include ineligible markets."""
     config = {

@@ -2742,6 +2742,25 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     closeAllUsersDropdowns();
   });
 
+  function deferDashboardCellRefreshWhileInteracting(cellEl, type, rebuild) {
+    var active = document.activeElement;
+    if (!active || !cellEl.contains(active) || ['SELECT', 'INPUT', 'TEXTAREA', 'BUTTON'].indexOf(active.tagName) < 0) {
+      return false;
+    }
+    active._dashboardDeferredTypes = active._dashboardDeferredTypes || [];
+    if (active._dashboardDeferredTypes.indexOf(type) < 0) active._dashboardDeferredTypes.push(type);
+    if (!active._dashboardRefreshOnBlur) {
+      active._dashboardRefreshOnBlur = true;
+      active.addEventListener('blur', function () {
+        var deferredTypes = (active._dashboardDeferredTypes || []).slice();
+        active._dashboardDeferredTypes = [];
+        active._dashboardRefreshOnBlur = false;
+        setTimeout(function () { if (deferredTypes.length) rebuild(deferredTypes); }, 0);
+      }, { once: true });
+    }
+    return true;
+  }
+
   /* ── Live updates via WebSocket ─────────────────────────────────────────
      Connects to /ws/dashboard and reloads affected widgets whenever
      income_updated or balance_updated events are broadcast by PBApiServer.
@@ -2761,9 +2780,10 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
         for (var c = 1; c <= cols; c++) {
           var type = state['dashboard_type_' + r + '_' + c] || 'NONE';
           if (types.indexOf(type) === -1) continue;
-          var cellEl = gridEl.querySelector('[data-row="' + r + '"][data-col="' + c + '"]');
-          if (!cellEl) continue;
-          var ipDiv = cellEl.querySelector('.cell-inline-preview');
+           var cellEl = gridEl.querySelector('[data-row="' + r + '"][data-col="' + c + '"]');
+           if (!cellEl) continue;
+           if (deferDashboardCellRefreshWhileInteracting(cellEl, type, _rebuildCellsOfTypes)) continue;
+           var ipDiv = cellEl.querySelector('.cell-inline-preview');
           if (!ipDiv) continue;
           if      (type === 'INCOME')    buildIncomeInline(ipDiv, r, c);
           else if (type === 'TOP')       buildTopInline(ipDiv, r, c);

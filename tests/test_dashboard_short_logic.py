@@ -349,6 +349,51 @@ def test_dashboard_editor_does_not_rebuild_live_positions_on_balance_updates() -
     assert "if (!liveState || !liveState.timer) buildPositionsInline" in ws_source
 
 
+def test_dashboard_editor_defers_widget_refresh_while_a_control_is_active() -> None:
+    """Live updates must not replace an open native select and resume once on blur."""
+    source = (ROOT / "frontend" / "dashboard_editor.html").read_text(encoding="utf-8")
+    start = source.index("function deferDashboardCellRefreshWhileInteracting(")
+    end = source.index("/* ── Live updates via WebSocket", start)
+    function = source[start:end]
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let blurHandler = null;
+        const active = {{
+          tagName: 'SELECT',
+          addEventListener(type, handler, options) {{
+            assert.equal(type, 'blur');
+            assert.equal(options.once, true);
+            blurHandler = handler;
+          }}
+        }};
+        const document = {{activeElement: active}};
+        const cell = {{contains(node) {{ return node === active; }}}};
+        const rebuilds = [];
+        function rebuild(types) {{ rebuilds.push(types); }}
+        {function}
+
+        assert.equal(deferDashboardCellRefreshWhileInteracting(cell, 'INCOME', rebuild), true);
+        assert.equal(deferDashboardCellRefreshWhileInteracting(cell, 'PNL', rebuild), true);
+        assert.deepEqual(rebuilds, []);
+        assert.ok(blurHandler);
+        blurHandler();
+        setTimeout(function () {{
+          assert.deepEqual(rebuilds, [['INCOME', 'PNL']]);
+        }}, 5);
+        """
+    )
+    result = subprocess.run(
+        ["node", "-e", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "deferDashboardCellRefreshWhileInteracting(cellEl, type, _rebuildCellsOfTypes)" in source
+
+
 def test_dashboard_editor_live_positions_renders_backend_db_fallback() -> None:
     """The live poller must render the endpoint's DB fallback when live retrieval fails."""
     source = (ROOT / "frontend" / "dashboard_editor.html").read_text(encoding="utf-8")

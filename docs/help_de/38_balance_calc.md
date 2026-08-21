@@ -15,6 +15,8 @@ Beide Backtest-Seiten bieten zusätzlich **Calc Balance** für eine schnelle Inl
 
 Bei PBv8 wird ein exakter `approved_coins`-Wert `all` anhand des lokalen Mappings der gewählten Exchange erweitert. Berücksichtigt werden nur aktive lineare Swap-Märkte mit PB8s Standard-Quote; seitenspezifisch ignorierte Coins werden vor der Berechnung entfernt.
 
+Die PB8-Initialgroesse folgt dem aktiven Strategie-Schema: Trailing-Strategien verwenden `strategy.entry.initial_qty_pct`, EMA Anchor dagegen `strategy.base_qty_pct` auf Strategie-Ebene. Inline-Calc-Balance-Aktionen und die eigenstaendige Seite liefern dadurch fuer PB8-Backtest-Results dieselbe Empfehlung.
+
 ## Aufbau
 
 | Bereich | Inhalt |

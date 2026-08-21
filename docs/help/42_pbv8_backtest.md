@@ -54,6 +54,8 @@ The editor sidebar's **Results** button is always available and opens the comple
 
 PB8 may download historical data when a backtest starts. Review the config, exchanges, coin selection, dates, and PB8 migration report before running a large backtest.
 
+**Calc Balance** supports both trailing-strategy `entry.initial_qty_pct` and EMA Anchor `base_qty_pct`, so PB8 result configs produce the same recommendation inline as on the standalone Balance Calculator page.
+
 Exchange lists in Backtest/Rebacktest dialogs use modifier-free toggle selection: clicking an unselected exchange adds it without clearing existing choices, while clicking a selected exchange removes only that exchange.
 
 The Results toolbar includes a persistent **Columns** picker. **Defaults** restores the established result table, while **All** also exposes available Final Equity and Equity/Balance Difference values. This browser-local selection is independent from Archive.

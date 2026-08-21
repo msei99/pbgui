@@ -15,6 +15,8 @@ Both Backtest pages also offer **Calc Balance** for a quick inline calculation w
 
 For PBv8, an exact `approved_coins` value of `all` is expanded from the selected exchange's local mapping. Only active linear swap markets with PB8's default quote are considered, and side-specific ignored coins are removed before calculation.
 
+PB8 initial sizing follows the active strategy schema: trailing strategies use `strategy.entry.initial_qty_pct`, while EMA Anchor uses its root `strategy.base_qty_pct`. Inline Calc Balance actions and the standalone page therefore produce the same recommendation for PB8 Backtest results.
+
 ## Layout
 
 | Area | Content |
