@@ -2364,7 +2364,7 @@ function showInitialBacktestQueueDraftModal(items) {
           '<button class="act-btn" style="width:28px;padding:0" onclick="document.getElementById(\'rbt-balance\').value=parseFloat(document.getElementById(\'rbt-balance\').value)+100">+</button>' +
         '</div></div>' +
       '<div style="flex:1;display:flex;flex-direction:column;min-height:60px"><div class="sb-label">Exchanges</div>' +
-        '<select id="rbt-exchanges" class="sb-input" multiple style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '</select></div>' +
+        '<select id="rbt-exchanges" class="sb-input" multiple data-toggle-multiselect style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '</select></div>' +
       '<div style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
         '<input type="checkbox" id="rbt-pbgui-data"' + pbguiMarketDataDefaultCheckedAttr() + ' style="width:auto;margin:0">' +
         '<label for="rbt-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data</label>' +
@@ -8276,7 +8276,7 @@ function rebacktestSelected() {
             '<button class="act-btn" style="width:28px;padding:0" onclick="document.getElementById(\'rbt-balance\').value=parseFloat(document.getElementById(\'rbt-balance\').value)+100">+</button>' +
           '</div></div>' +
         '<div style="flex:1;display:flex;flex-direction:column;min-height:60px"><div class="sb-label">Exchanges</div>' +
-          '<select id="rbt-exchanges" class="sb-input" multiple style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '</select></div>' +
+          '<select id="rbt-exchanges" class="sb-input" multiple data-toggle-multiselect style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '</select></div>' +
         '<div style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
           '<input type="checkbox" id="rbt-pbgui-data"' + pbguiMarketDataDefaultCheckedAttr() + ' style="width:auto;margin:0">' +
           '<label for="rbt-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data</label>' +
@@ -8370,7 +8370,7 @@ function rebacktestSelectedArchive() {
             '\x3Cbutton class="act-btn" style="width:28px;padding:0" onclick="document.getElementById(\'rbt-balance\').value=parseFloat(document.getElementById(\'rbt-balance\').value)+100">+\x3C/button>' +
           '\x3C/div>\x3C/div>' +
         '\x3Cdiv style="flex:1;display:flex;flex-direction:column;min-height:60px">\x3Cdiv class="sb-label">Exchanges\x3C/div>' +
-          '\x3Cselect id="rbt-exchanges" class="sb-input" multiple style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '\x3C/select>\x3C/div>' +
+          '\x3Cselect id="rbt-exchanges" class="sb-input" multiple data-toggle-multiselect style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '\x3C/select>\x3C/div>' +
         '\x3Cdiv style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
           '\x3Cinput type="checkbox" id="rbt-pbgui-data"' + (usePbguiMarketData ? ' checked' : '') + ' style="width:auto;margin:0">' +
           '\x3Clabel for="rbt-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data\x3C/label>' +
@@ -8477,7 +8477,7 @@ function retestReplaceSelectedArchive() {
         '\x3Cdiv style="flex-shrink:0">\x3Cdiv class="sb-label">Starting Balance\x3C/div>' +
           '\x3Cinput id="arr-balance" class="sb-input" style="width:100%;text-align:right" type="number" min="1" step="100" value="' + defBalance + '">\x3C/div>' +
         '\x3Cdiv style="flex:1;display:flex;flex-direction:column;min-height:60px">\x3Cdiv class="sb-label">Exchanges\x3C/div>' +
-          '\x3Cselect id="arr-exchanges" class="sb-input" multiple style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '\x3C/select>\x3C/div>' +
+          '\x3Cselect id="arr-exchanges" class="sb-input" multiple data-toggle-multiselect style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '\x3C/select>\x3C/div>' +
         '\x3Cdiv style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
           '\x3Cinput type="checkbox" id="arr-pbgui-data"' + pbguiMarketDataDefaultCheckedAttr() + ' style="width:auto;margin:0">' +
           '\x3Clabel for="arr-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data\x3C/label>\x3C/div>' +
@@ -8573,7 +8573,7 @@ function rebacktestSelectedLegacy() {
             '\x3Cbutton class="act-btn" style="width:28px;padding:0" onclick="document.getElementById(\'rbt-balance\').value=parseFloat(document.getElementById(\'rbt-balance\').value)+100">+\x3C/button>' +
           '\x3C/div>\x3C/div>' +
         '\x3Cdiv style="flex:1;display:flex;flex-direction:column;min-height:60px">\x3Cdiv class="sb-label">Exchanges\x3C/div>' +
-          '\x3Cselect id="rbt-exchanges" class="sb-input" multiple style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '\x3C/select>\x3C/div>' +
+          '\x3Cselect id="rbt-exchanges" class="sb-input" multiple data-toggle-multiselect style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '\x3C/select>\x3C/div>' +
         '\x3Cdiv style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
           '\x3Cinput type="checkbox" id="rbt-pbgui-data"' + pbguiMarketDataDefaultCheckedAttr() + ' style="width:auto;margin:0">' +
           '\x3Clabel for="rbt-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data\x3C/label>' +
@@ -10240,6 +10240,20 @@ function makeDraggable(el, handle) {
   });
 }
 
+function enableToggleMultiSelect(select) {
+  if (!select || select.dataset.toggleMultiselectReady === '1') return;
+  select.dataset.toggleMultiselectReady = '1';
+  select.addEventListener('mousedown', function(event) {
+    if (event.button !== 0 || !event.target || event.target.tagName !== 'OPTION') return;
+    event.preventDefault();
+    var scrollTop = select.scrollTop;
+    event.target.selected = !event.target.selected;
+    try { select.focus({ preventScroll: true }); } catch (_error) { select.focus(); }
+    select.scrollTop = scrollTop;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
 function showModal(title, bodyHtml, buttons, opts) {
   var root = document.getElementById('modal-root');
   var box  = document.getElementById('modal-box');
@@ -10255,6 +10269,7 @@ function showModal(title, bodyHtml, buttons, opts) {
   });
   html += '</div>';
   box.innerHTML = html;
+  box.querySelectorAll('select[data-toggle-multiselect]').forEach(enableToggleMultiSelect);
   root.classList.add('open');
   document.getElementById('modal-close-btn').onclick = closeModal;
   buttons.forEach(function(b, i) {

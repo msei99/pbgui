@@ -182,6 +182,8 @@ Switching from the Config editor to Results, Queue, Archive, Legacy, or Refine a
 | **🧬 Optimize from Result** | Open the Optimize editor directly with the selected result as draft and `Starting Seeds = self` |
 | **🗑 Delete Selected** | Delete selected results from disk |
 
+Exchange lists in Backtest/Rebacktest dialogs use modifier-free toggle selection: clicking an unselected exchange adds it without clearing existing choices, while clicking a selected exchange removes only that exchange.
+
 ### Per-row actions
 
 | Icon | Action |

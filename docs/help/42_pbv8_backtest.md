@@ -54,6 +54,8 @@ The editor sidebar's **Results** button is always available and opens the comple
 
 PB8 may download historical data when a backtest starts. Review the config, exchanges, coin selection, dates, and PB8 migration report before running a large backtest.
 
+Exchange lists in Backtest/Rebacktest dialogs use modifier-free toggle selection: clicking an unselected exchange adds it without clearing existing choices, while clicking a selected exchange removes only that exchange.
+
 The Results toolbar includes a persistent **Columns** picker. **Defaults** restores the established result table, while **All** also exposes available Final Equity and Equity/Balance Difference values. This browser-local selection is independent from Archive.
 
 Panel navigation synchronously closes the Config editor sidebar before showing Results, Queue, Archive, or Refine actions, so delayed editor state cannot leave the wrong sidebar attached to the active panel.

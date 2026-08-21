@@ -52,6 +52,47 @@ def test_v8_route_renders_the_v7_backtest_template() -> None:
     assert '"%%BACKTEST_NAV_CURRENT%%": "v8_backtest"' in api_source
 
 
+def test_exchange_multiselect_clicks_toggle_only_the_target_option() -> None:
+    """Exchange dialogs add or remove one option per click without clearing peers."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "enableToggleMultiSelect")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        class Event {{ constructor(type, options) {{ this.type = type; this.bubbles = !!options.bubbles; }} }}
+        let handler = null;
+        let changes = 0;
+        const select = {{
+          dataset: {{}}, scrollTop: 37,
+          addEventListener(type, callback) {{ assert.equal(type, 'mousedown'); handler = callback; }},
+          focus() {{}},
+          dispatchEvent(event) {{ assert.equal(event.type, 'change'); changes += 1; }}
+        }};
+        const binance = {{tagName: 'OPTION', selected: false}};
+        const bybit = {{tagName: 'OPTION', selected: true}};
+        {function}
+        enableToggleMultiSelect(select);
+        enableToggleMultiSelect(select);
+
+        let prevented = 0;
+        handler({{button: 0, target: binance, preventDefault() {{ prevented += 1; }}}});
+        assert.equal(binance.selected, true);
+        assert.equal(bybit.selected, true);
+        assert.equal(select.scrollTop, 37);
+
+        handler({{button: 0, target: binance, preventDefault() {{ prevented += 1; }}}});
+        assert.equal(binance.selected, false);
+        assert.equal(bybit.selected, true);
+        assert.equal(prevented, 2);
+        assert.equal(changes, 2);
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert source.count("multiple data-toggle-multiselect") == 5
+    assert "box.querySelectorAll('select[data-toggle-multiselect]').forEach(enableToggleMultiSelect)" in source
+
+
 def test_v8_optimize_result_draft_opens_without_repreparing() -> None:
     """A complete PB8 Pareto config must enter the Backtest editor unchanged."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")

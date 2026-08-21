@@ -182,6 +182,8 @@ Beim Wechsel vom Config-Editor zu Results, Queue, Archive, Legacy oder Refine wi
 | **🧬 Optimize from Result** | Den Optimize-Editor direkt mit dem ausgewählten Ergebnis als Draft und `Starting Seeds = self` öffnen |
 | **🗑 Delete Selected** | Ausgewählte Ergebnisse von Disk löschen |
 
+Exchange-Listen in Backtest-/Rebacktest-Dialogen verwenden eine modifier-freie Toggle-Auswahl: Ein Klick auf eine nicht ausgewaehlte Exchange fuegt sie hinzu, ohne bestehende Auswahlen zu leeren; ein Klick auf eine ausgewaehlte Exchange entfernt nur diese Exchange.
+
 ### Aktionsschaltflächen pro Zeile
 
 | Symbol | Aktion |
