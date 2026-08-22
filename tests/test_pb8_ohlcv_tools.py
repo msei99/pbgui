@@ -98,8 +98,9 @@ def test_preflight_uses_pb8_python_cwd_and_never_pb7(pb8_runtime, monkeypatch) -
 
     assert result["summary"]["overall_status"] == "ready"
     assert captured["command"][0] == str(python)
+    assert captured["command"][1] == "-I"
     assert captured["kwargs"]["cwd"] == str(pb8_dir)
-    assert captured["command"][1].endswith("pb8_ohlcv_runtime_helper.py")
+    assert captured["command"][2].endswith("pb8_ohlcv_runtime_helper.py")
     assert "pb7" not in " ".join(captured["command"]).lower()
     assert json.loads(captured["kwargs"]["input"])["pb8_dir"] == str(pb8_dir)
 

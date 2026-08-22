@@ -150,7 +150,7 @@ def _run_preflight_helper(raw_config: dict[str, Any]) -> dict[str, Any]:
         request = {"pb8_dir": status["pb8dir"], "config": config}
         try:
             proc = subprocess.run(
-                [status["pb8venv"], str(helper)],
+                [status["pb8venv"], "-I", str(helper)],
                 cwd=status["pb8dir"],
                 input=json.dumps(request),
                 text=True,
