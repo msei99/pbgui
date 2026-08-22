@@ -58,6 +58,8 @@ Laufende PB8-Optimizer-Jobs ueberstehen einen API-Neustart. Unter Linux laeuft j
 
 Permanente Vorbereitungsfehler setzen nur ihre Queue-Zeile auf einen handlungsfaehigen Fehlerstatus; Update- oder Runtime-Lock-Konflikte bleiben fuer einen erneuten Versuch gequeued. Beim Start gleicht PBGui Queue-Snapshots, Launch-Verzeichnisse sowie PID-, Ready- und State-Dateien ab, ohne unverifizierte Prozesse zu signalisieren. Der PB8-Controller erscheint im **Services Monitor** und bleibt nach unerwarteten Worker-Loop-Fehlern aktiv.
 
+Strategiespezifische Optimizer-Overrides werden beim Strategiewechsel entfernt und vor Save, Queue und Launch ueber die installierte PB8-Runtime validiert.
+
 **OHLCV Readiness** und Preload laufen ueber PB8s eigenes Virtualenv, Planner, Cache-Pfade und den nativen Befehl `passivbot download`. Explizite Read-only-Quellen ausserhalb der freigegebenen PB8- oder PBGui-Market-Data-Roots werden abgelehnt, statt auf PB7 zurueckzufallen.
 
 ## Results Und Paretos

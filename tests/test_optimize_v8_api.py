@@ -43,6 +43,7 @@ def optimize_v8_roots(tmp_path, monkeypatch):
     monkeypatch.setattr(optimize_v8, "prepare_pb8_config", lambda config, **kwargs: copy.deepcopy(config))
     monkeypatch.setattr(optimize_v8, "load_pb8_config", lambda path: json.loads(Path(path).read_text(encoding="utf-8")))
     monkeypatch.setattr(optimize_v8, "validate_pb8_override_bundle", lambda _path: None)
+    monkeypatch.setattr(optimize_v8, "validate_pb8_optimizer_overrides", lambda _config, **_kwargs: None)
     with optimize_v8._result_progress_cache_lock:
         optimize_v8._result_progress_cache.clear()
     with optimize_v8._backtest_count_cache_lock:
@@ -209,6 +210,50 @@ def test_config_bundle_round_trips_all_strategies_and_optimizer_options(optimize
     assert loaded["optimize"]["pymoo"]["algorithms"]["nsga3"]["ref_dirs"]["n_partitions"] == 8
     assert loaded["optimize"]["fixed_runtime_overrides"] == {"bot.short.risk.n_positions": 2}
     assert loaded["pbgui"]["additional_parameters"]["future_runtime_option"]["enabled"] is True
+
+
+def test_save_and_queue_reject_strategy_incompatible_optimizer_overrides(
+    optimize_v8_roots, monkeypatch
+) -> None:
+    """Invalid native optimizer helpers must fail before persistence or detached launch."""
+    config = _full_pb8_config()
+    config["optimize"]["enable_overrides"] = ["forward_tp_grid"]
+
+    def reject(candidate, **_kwargs):
+        if "forward_tp_grid" in candidate.get("optimize", {}).get("enable_overrides", []):
+            raise PB8ConfigurationError(
+                "optimizer override requires live.strategy_kind = 'trailing_grid_v7'; got 'ema_anchor'"
+            )
+
+    monkeypatch.setattr(optimize_v8, "validate_pb8_optimizer_overrides", reject)
+
+    with pytest.raises(HTTPException) as save_error:
+        optimize_v8.save_config("invalid-override", config, session=None)
+    assert save_error.value.status_code == 422
+    assert "trailing_grid_v7" in str(save_error.value.detail)
+
+    config_dir = optimize_v8._config_dir("legacy-invalid-override")
+    config_dir.mkdir(parents=True)
+    optimize_v8._write_json(config_dir / optimize_v8._CONFIG_FILENAME, config)
+    with pytest.raises(HTTPException) as queue_error:
+        optimize_v8.add_to_queue({"name": "legacy-invalid-override"}, session=None)
+    assert queue_error.value.status_code == 422
+    assert "trailing_grid_v7" in str(queue_error.value.detail)
+
+    monkeypatch.setattr(optimize_v8, "validate_pb8_optimizer_overrides", lambda _config, **_kwargs: None)
+    filename = optimize_v8.add_to_queue({"name": "legacy-invalid-override"}, session=None)["filename"]
+    released = []
+    monkeypatch.setattr(optimize_v8, "validate_pb8_optimizer_overrides", reject)
+    monkeypatch.setattr(
+        optimize_v8,
+        "acquire_master_runtime_lock",
+        lambda _root: SimpleNamespace(release=lambda: released.append(True)),
+    )
+    with pytest.raises(HTTPException) as launch_error:
+        optimize_v8._worker.launch(filename)
+    assert launch_error.value.status_code == 422
+    assert "trailing_grid_v7" in str(launch_error.value.detail)
+    assert released == [True]
 
 
 def test_pb81_scenario_bases_survive_config_and_queue_round_trip(optimize_v8_roots) -> None:

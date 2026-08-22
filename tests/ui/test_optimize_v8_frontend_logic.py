@@ -825,6 +825,10 @@ def test_multi_strategy_dom_switching_and_save_preserve_every_custom_block() -> 
         _page_function(page, name)
         for name in (
             "normalizeOptimizeEnableOverrides",
+            "optimizeOverrideRequiredStrategy",
+            "filterOptimizeEnableOverridesForStrategy",
+            "getOptimizeTpGridDirection",
+            "syncOptimizeOverrideStrategyCompatibility",
             "normalizeOptimizeFixedParamKeys",
             "getOptimizeStrategyOptions",
             "getOptimizeStrategyBotDefault",
@@ -1115,6 +1119,30 @@ def test_installed_override_helpers_and_backend_result_flags_are_visible() -> No
           assert.match(html, new RegExp('data-pb8-enable-override="' + helper + '"'));
         }
         assert.match(html, /mirror_short_from_long" checked/);
+        """
+    )
+    _run_node(script)
+
+
+def test_optimizer_overrides_are_filtered_for_the_active_strategy() -> None:
+    """Strategy changes must remove stale native optimizer overrides before save or queue."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _page_function(page, name)
+        for name in (
+            "normalizeOptimizeEnableOverrides",
+            "optimizeOverrideRequiredStrategy",
+            "filterOptimizeEnableOverridesForStrategy",
+        )
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        {functions}
+        const overrides = ['lossless_close_trailing', 'forward_tp_grid', 'mirror_short_from_long'];
+        assert.deepEqual(filterOptimizeEnableOverridesForStrategy(overrides, 'ema_anchor'), ['mirror_short_from_long']);
+        assert.deepEqual(filterOptimizeEnableOverridesForStrategy(overrides, 'trailing_martingale'), ['lossless_close_trailing', 'mirror_short_from_long']);
+        assert.deepEqual(filterOptimizeEnableOverridesForStrategy(overrides, 'trailing_grid_v7'), ['forward_tp_grid', 'mirror_short_from_long']);
         """
     )
     _run_node(script)

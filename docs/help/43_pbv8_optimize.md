@@ -58,6 +58,8 @@ Running PB8 optimizer jobs survive an API restart. On Linux, each optimizer runs
 
 Permanent preparation errors move only their queue row to an actionable error state, while update or runtime-lock contention stays queued for retry. Startup reconciles queue snapshots, launch directories, PID, ready, and state records without signalling unverified processes. The PB8 controller is shown in **Services Monitor** and survives unexpected worker-loop errors.
 
+Strategy-specific optimizer overrides are removed when switching strategies and validated through the installed PB8 runtime before save, queue, and launch.
+
 **OHLCV Readiness** and preload run through PB8's own virtualenv, planner, cache paths, and native `passivbot download` command. Explicit read-only sources outside the approved PB8 or PBGui market-data roots are rejected instead of falling back to PB7.
 
 ## Results And Paretos

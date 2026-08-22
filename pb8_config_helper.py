@@ -53,7 +53,7 @@ def _load_pb8_modules(pb8_dir: Path):
     from config_utils import sanitize_prepared_config_for_dump
     from optimization.backends import BACKEND_RUNNERS
     from optimization.backends.pymoo_backend import SUPPORTED_PYMOO_ALGORITHMS, SUPPORTED_REF_DIR_METHODS
-    from optimizer_overrides import KNOWN_OPTIMIZER_OVERRIDES
+    from optimizer_overrides import KNOWN_OPTIMIZER_OVERRIDES, optimizer_overrides
     from passivbot_version import __version__
 
     try:
@@ -91,6 +91,7 @@ def _load_pb8_modules(pb8_dir: Path):
         "limit_basis_field": optimize_basis["limit_basis_field"],
         "scoring_basis_field": optimize_basis["scoring_basis_field"],
         "optimizer_overrides": sorted(KNOWN_OPTIMIZER_OVERRIDES),
+        "apply_optimizer_overrides": optimizer_overrides,
         "migrate_v7": migrate_v7_trailing_grid_file,
         "result_metrics": sorted(
             set(ANALYSIS_SHARED_KEYS)
@@ -563,6 +564,15 @@ def _prepare(modules: dict, config: dict, base_config_path: str = "") -> dict:
     return sanitized
 
 
+def _validate_optimizer_overrides(modules: dict, config: dict, base_config_path: str = "") -> None:
+    """Exercise PB8's native override application for every optimizer side."""
+    prepared = _prepare(modules, config, base_config_path)
+    overrides = prepared.get("optimize", {}).get("enable_overrides", [])
+    candidate = modules["apply_optimizer_overrides"](overrides, copy.deepcopy(prepared), None)
+    for pside in sorted(candidate.get("bot", {})):
+        candidate = modules["apply_optimizer_overrides"](overrides, candidate, pside)
+
+
 def handle(payload: dict) -> dict:
     """Dispatch one JSON request and return a JSON-compatible result."""
     pb8_dir = Path(str(payload.get("pb8_dir") or "")).resolve()
@@ -597,6 +607,16 @@ def handle(payload: dict) -> dict:
             log_info=False,
         )
         modules["parse_overrides"](prepared, verbose=False)
+        return {"valid": True}
+    if operation == "validate_optimizer_overrides":
+        config = payload.get("config")
+        if not isinstance(config, dict):
+            raise TypeError("config must be an object")
+        _validate_optimizer_overrides(
+            modules,
+            config,
+            str(payload.get("base_config_path") or ""),
+        )
         return {"valid": True}
     if operation == "market_identifiers":
         return asyncio.run(_market_identifiers(_load_pb8_market_modules(), payload))

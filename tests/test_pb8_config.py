@@ -48,6 +48,26 @@ def test_prepare_pb8_config_delegates_to_isolated_helper(monkeypatch) -> None:
     ]
 
 
+def test_optimizer_override_validation_delegates_to_isolated_helper(monkeypatch) -> None:
+    """Strategy-dependent optimizer overrides must be checked inside PB8's runtime."""
+    calls = []
+    monkeypatch.setattr(
+        pb8_config,
+        "_call_helper",
+        lambda operation, **payload: calls.append((operation, payload)) or {"valid": True},
+    )
+    config = {"live": {"strategy_kind": "ema_anchor"}, "optimize": {"enable_overrides": []}}
+
+    pb8_config.validate_pb8_optimizer_overrides(config, base_config_path="/tmp/optimize.json")
+
+    assert calls == [
+        (
+            "validate_optimizer_overrides",
+            {"config": config, "base_config_path": "/tmp/optimize.json"},
+        )
+    ]
+
+
 def test_market_identifier_client_preserves_exact_helper_contract(monkeypatch) -> None:
     """The PBGui client must delegate exact IDs without local normalization."""
     calls = []
@@ -408,6 +428,33 @@ def test_helper_prepare_preserves_pbgui_metadata_outside_pb8_payload() -> None:
 
     assert "pbgui" not in received
     assert result["pbgui"] == metadata
+
+
+def test_helper_optimizer_override_validation_exercises_every_side() -> None:
+    """PB8's native override application must validate global, long, and short contexts."""
+    calls = []
+
+    def apply(overrides, config, pside):
+        calls.append((list(overrides), pside))
+        return config
+
+    modules = {
+        "prepare_config": lambda config, **_kwargs: config,
+        "sanitize": lambda value: value,
+        "apply_optimizer_overrides": apply,
+    }
+    config = {
+        "bot": {"long": {}, "short": {}},
+        "optimize": {"enable_overrides": ["mirror_short_from_long"]},
+    }
+
+    pb8_config_helper._validate_optimizer_overrides(modules, config)
+
+    assert calls == [
+        (["mirror_short_from_long"], None),
+        (["mirror_short_from_long"], "long"),
+        (["mirror_short_from_long"], "short"),
+    ]
 
 
 def test_helper_load_restores_nested_pbgui_metadata(tmp_path, monkeypatch) -> None:

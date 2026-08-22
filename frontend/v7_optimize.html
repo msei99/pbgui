@@ -5078,6 +5078,7 @@ function changeOptimizeStrategyKind(nextStrategy) {
   editorConfig.live = editorConfig.live && typeof editorConfig.live === 'object' ? editorConfig.live : {};
   editorConfig.bot = editorConfig.bot && typeof editorConfig.bot === 'object' ? editorConfig.bot : {};
   editorConfig.live.strategy_kind = cleanNext;
+  syncOptimizeOverrideStrategyCompatibility(editorConfig, cleanNext);
   ['long', 'short'].forEach(function(side) {
     var node = el('opted-bot-' + side);
     var sideConfig = {};
@@ -5673,6 +5674,46 @@ function normalizeOptimizeEnableOverrides(value) {
     seen[item] = true;
     return true;
   });
+}
+
+function optimizeOverrideRequiredStrategy(value) {
+  var requirements = {
+    lossless_close_trailing: 'trailing_martingale',
+    forward_tp_grid: 'trailing_grid_v7',
+    backward_tp_grid: 'trailing_grid_v7'
+  };
+  return requirements[String(value || '')] || '';
+}
+
+function filterOptimizeEnableOverridesForStrategy(value, strategyKind) {
+  var strategy = String(strategyKind || '').trim();
+  return normalizeOptimizeEnableOverrides(value).filter(function(item) {
+    var required = optimizeOverrideRequiredStrategy(item);
+    return !required || required === strategy;
+  });
+}
+
+function syncOptimizeOverrideStrategyCompatibility(config, strategyKind) {
+  var optimize = config && config.optimize && typeof config.optimize === 'object' ? config.optimize : {};
+  var enabled = filterOptimizeEnableOverridesForStrategy(optimize.enable_overrides, strategyKind);
+  optimize.enable_overrides = enabled;
+  if (config) config.optimize = optimize;
+  var lossless = enabled.indexOf('lossless_close_trailing') >= 0;
+  var tpDirection = getOptimizeTpGridDirection(enabled);
+  ['opted-enable-lossless-close-trailing', 'opted-runtime-lossless-close-trailing'].forEach(function(id) {
+    var node = el(id);
+    if (node) node.checked = lossless;
+  });
+  ['opted-enable-tp-grid-direction', 'opted-runtime-tp-grid-direction'].forEach(function(id) {
+    var node = el(id);
+    if (node) node.value = tpDirection;
+  });
+  if (typeof document !== 'undefined') {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-pb8-enable-override]'), function(node) {
+      var value = String(node.getAttribute('data-pb8-enable-override') || '').trim();
+      node.checked = enabled.indexOf(value) >= 0;
+    });
+  }
 }
 
 function getOptimizeUnknownEnableOverrides(value) {
@@ -8830,7 +8871,8 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
       pymooRefDirs.n_partitions
     )
     : optimize.population_size;
-  var enableOverrides = normalizeOptimizeEnableOverrides(optimize.enable_overrides);
+  var enableOverrides = filterOptimizeEnableOverridesForStrategy(optimize.enable_overrides, live.strategy_kind);
+  optimize.enable_overrides = enableOverrides;
   var strategyOptions = getOptimizeStrategyOptions(live.strategy_kind);
   var endDate = resolveOptimizeEditorEndDateValue(backtest.end_date);
   return '<div class="editor-shell">'
@@ -9161,7 +9203,8 @@ function populateOptimizeEditor(config, opts) {
   el('opted-vol-mcap').value = pbgui.vol_mcap == null ? '' : String(pbgui.vol_mcap);
   el('opted-min-coin-age').value = live.minimum_coin_age_days == null ? '' : String(live.minimum_coin_age_days);
   el('opted-hsl-signal-mode').value = normalizeOptimizeHslSignalModeValue(live.hsl_signal_mode);
-  var enableOverrides = normalizeOptimizeEnableOverrides(optimize.enable_overrides);
+  var enableOverrides = filterOptimizeEnableOverridesForStrategy(optimize.enable_overrides, live.strategy_kind);
+  optimize.enable_overrides = enableOverrides;
   el('opted-enable-lossless-close-trailing').checked = enableOverrides.indexOf('lossless_close_trailing') >= 0;
   el('opted-enable-tp-grid-direction').value = getOptimizeTpGridDirection(enableOverrides);
   el('opted-compress-results').checked = optimize.compress_results_file == null
@@ -9486,6 +9529,7 @@ function collectEditorConfig(baseConfig, opts) {
   }
   applyOptimizeSeedConfig(cfg, seedMode, seedPath);
   optimizeEditorAdapter.collectVersionRunSettings(cfg, el, strict);
+  optimize.enable_overrides = filterOptimizeEnableOverridesForStrategy(optimize.enable_overrides, live.strategy_kind);
   applyOptimizeExtraParamValues(cfg);
   return { name: name, config: cfg };
 }

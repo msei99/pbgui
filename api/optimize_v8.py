@@ -55,6 +55,7 @@ from pb8_config import (
     migrate_pb7_config,
     prepare_pb8_config,
     validate_pb8_override_bundle,
+    validate_pb8_optimizer_overrides,
 )
 from pbgui_purefunc import PBGDIR, PBGUI_SERIAL, PBGUI_VERSION, load_ini_section, pb7dir, pb8_runtime_status, save_ini_section
 from secure_files import atomic_write_private_text, ensure_private_directory, ensure_private_directory_tree
@@ -331,6 +332,14 @@ def _configuration_error(operation: str, exc: Exception, status_code: int = 422)
     return HTTPException(status_code=int(getattr(exc, "status_code", status_code)), detail=str(exc))
 
 
+def _validate_optimizer_overrides(config: dict, *, base_config_path: str) -> None:
+    """Convert PB8-native optimizer override failures into an actionable API response."""
+    try:
+        validate_pb8_optimizer_overrides(config, base_config_path=base_config_path)
+    except PB8ConfigurationError as exc:
+        raise _configuration_error("Validating PB8 optimizer overrides", exc) from exc
+
+
 def _normalize_config(config: dict, name: str) -> dict:
     candidate = copy.deepcopy(config)
     backtest = candidate.setdefault("backtest", {})
@@ -602,6 +611,7 @@ def _save_config_bundle(
         resolved_overrides = _resolve_override_payloads(normalized, override_payloads, source_dir)
         _write_override_payloads(stage, resolved_overrides)
         prepared = prepare_pb8_config(normalized, base_config_path=str(stage / _CONFIG_FILENAME))
+        _validate_optimizer_overrides(prepared, base_config_path=str(stage / _CONFIG_FILENAME))
         if _override_filenames(prepared) != set(resolved_overrides):
             raise HTTPException(status_code=422, detail="PB8 preparation changed override-file references")
         _validate_forager_optimize_search_space(prepared)
@@ -2813,6 +2823,7 @@ class OptimizeV8Worker:
                     pbgui_data_path=pbgui_data_path,
                 )
                 prepared = prepare_pb8_config(launch_config, base_config_path=str(snapshot))
+                _validate_optimizer_overrides(prepared, base_config_path=str(snapshot))
                 _validate_forager_optimize_search_space(prepared)
                 runtime = pb8_runtime_status()
                 if not runtime.get("ready"):
@@ -3331,6 +3342,7 @@ def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)) -> d
                 if not path.is_file() or path.is_symlink():
                     raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
                 prepared = load_pb8_config(path)
+            _validate_optimizer_overrides(prepared, base_config_path=str(_config_file(name)))
             overrides = _load_override_payloads(prepared, _config_dir(name))
         options = _validate_launch_options((body or {}).get("launch_options") or _runtime_options_from_config(prepared))
     except PB8ConfigurationError as exc:

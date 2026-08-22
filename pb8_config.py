@@ -270,6 +270,17 @@ def validate_pb8_override_bundle(config_path: Path | str) -> None:
         raise PB8ConfigurationError("PB8 config helper did not validate coin overrides")
 
 
+def validate_pb8_optimizer_overrides(config: dict, *, base_config_path: str = "") -> None:
+    """Validate strategy-dependent optimizer overrides through PB8's native runtime."""
+    result = _call_helper(
+        "validate_optimizer_overrides",
+        config=config,
+        base_config_path=base_config_path,
+    )
+    if result.get("valid") is not True:
+        raise PB8ConfigurationError("PB8 config helper did not validate optimizer overrides")
+
+
 def get_pb8_exchange_metadata() -> dict:
     """Return PB8's vetted live and historical exchange capabilities."""
     global _exchange_metadata_cache
