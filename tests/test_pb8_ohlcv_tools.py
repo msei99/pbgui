@@ -104,6 +104,22 @@ def test_preflight_uses_pb8_python_cwd_and_never_pb7(pb8_runtime, monkeypatch) -
     assert json.loads(captured["kwargs"]["input"])["pb8_dir"] == str(pb8_dir)
 
 
+def test_runtime_preserves_symlinked_virtualenv_python(pb8_runtime, tmp_path) -> None:
+    """A venv Python symlink must not move the expected CLI directory to the system bin path."""
+    _status, _pb8_dir, python, cli, _market_root = pb8_runtime
+    system_python = tmp_path / "system" / "python3.12"
+    system_python.parent.mkdir()
+    system_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    system_python.chmod(0o700)
+    python.unlink()
+    python.symlink_to(system_python)
+
+    runtime = pb8_ohlcv_tools._runtime()
+
+    assert runtime["pb8venv"] == str(python.absolute())
+    assert runtime["cli_file"] == str(cli.resolve())
+
+
 def test_v8_routes_do_not_import_pb7_ohlcv_runtime() -> None:
     """Both PB8 editors must remain disconnected from the PB7 OHLCV helper."""
     api_dir = Path(pb8_ohlcv_tools.__file__).resolve().parent

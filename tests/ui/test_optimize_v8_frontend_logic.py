@@ -49,6 +49,15 @@ def test_v7_and_v8_use_one_optimize_template() -> None:
         assert feature in page
 
 
+def test_optimize_log_waits_for_first_evaluation_when_target_is_known() -> None:
+    """A configured iteration target must not format a missing evaluation count."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    renderer = _page_function(page, "renderOptimizeLogDashboard")
+
+    assert "if (progress.target_iters != null && progress.eval != null)" in renderer
+    assert "progress.eval == null ? 'Waiting for evaluations...'" in renderer
+
+
 def test_adapter_preserves_v7_and_round_trips_nested_v8_paths() -> None:
     """The adapter must leave PB7 flat values alone and map PB8 nested bot and bound paths."""
     script = textwrap.dedent(

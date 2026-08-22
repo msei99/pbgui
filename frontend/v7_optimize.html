@@ -5451,7 +5451,7 @@ function renderOptimizeLogDashboard(status) {
   var percent = progress.percent == null || !isFinite(Number(progress.percent)) ? null : Number(progress.percent);
   el('optlog-progress-fill').style.width = percent == null ? '0%' : Math.max(0, Math.min(100, percent)) + '%';
   var progressText = progress.eval == null ? 'Waiting for evaluations...' : progress.eval.toLocaleString() + ' evals';
-  if (progress.target_iters != null) {
+  if (progress.target_iters != null && progress.eval != null) {
     progressText = progress.eval.toLocaleString() + ' / ' + progress.target_iters.toLocaleString() + ' evals';
     if (percent != null) progressText += ' (' + percent.toFixed(1) + '%)';
   }

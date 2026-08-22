@@ -71,9 +71,10 @@ def _runtime() -> dict[str, Any]:
         detail = "; ".join(status.get("errors") or []) or "PB8 runtime is not ready"
         raise PB8OhlcvUnavailableError(detail)
     pb8_dir = Path(str(status.get("pb8dir") or "")).resolve(strict=False)
-    pb8_python = Path(str(status.get("pb8venv") or "")).resolve(strict=False)
+    pb8_python = Path(str(status.get("pb8venv") or "")).expanduser().absolute()
+    pb8_bin_dir = pb8_python.parent.resolve(strict=False)
     cli_file = Path(str(status.get("cli_file") or pb8_python.parent / "passivbot")).resolve(strict=False)
-    if cli_file.parent != pb8_python.parent or not cli_file.is_file() or not os.access(cli_file, os.X_OK):
+    if cli_file.parent != pb8_bin_dir or not cli_file.is_file() or not os.access(cli_file, os.X_OK):
         raise PB8OhlcvUnavailableError(
             f"PB8 native downloader is not executable in the configured virtualenv: {cli_file}"
         )
