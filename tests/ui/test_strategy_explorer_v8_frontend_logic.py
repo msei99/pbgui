@@ -263,6 +263,12 @@ def test_pareto_detail_and_baseline_state_is_result_bound() -> None:
     pin = _extract_function(source, "pinSelectedStrategyBaseline")
 
     assert "renderDetail(null);" in detail_loader
+    selected_pos = detail_loader.index("state.selectedConfigIndex = configIndex;")
+    highlight_pos = detail_loader.index("renderChampions(state.commandCenter);")
+    clear_pos = detail_loader.index("renderDetail(null);")
+    request_pos = detail_loader.index("return apiFetch('/config-detail'")
+    assert selected_pos < highlight_pos < clear_pos < request_pos
+    assert "el('detail-title').textContent = 'Loading #' + String(configIndex) + '...';" in detail_loader
     assert "resultPath !== state.resultPath" in detail_loader
     assert "detail.config_index !== state.selectedConfigIndex" in handoff
     assert "state.strategyCompareBaseline.result_path === state.resultPath" in handoff

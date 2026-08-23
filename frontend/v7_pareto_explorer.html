@@ -4083,7 +4083,9 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     var resultPath = state.resultPath;
     var contextGeneration = state.resultContextGeneration;
     state.selectedConfigIndex = configIndex;
+    renderChampions(state.commandCenter);
     renderDetail(null);
+    el('detail-title').textContent = 'Loading #' + String(configIndex) + '...';
     return apiFetch('/config-detail', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
