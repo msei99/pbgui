@@ -449,6 +449,33 @@ async def approve_proposal(
         result = await get_ai_capability_service().approve(
             _owner(session), proposal_id, body.payload_digest, body.conversation_id
         )
+        if result.get("status") == "executed":
+            continuation_result = {
+                key: result.get(key)
+                for key in ("proposal_id", "status", "action", "name", "queued_count", "template")
+                if result.get(key) is not None
+            }
+            continuation_message = (
+                "An approved PBGui action completed successfully. Continue the user's existing "
+                "requested workflow now. If no requested step remains, briefly confirm completion "
+                "without creating another proposal. Approved action result:\n"
+                + json.dumps(continuation_result, allow_nan=False, separators=(",", ":"))
+            )
+            try:
+                continuation = await get_ai_chat_service().start_turn(
+                    _owner(session),
+                    body.conversation_id,
+                    continuation_message,
+                    None,
+                    None,
+                    None,
+                    None,
+                    True,
+                )
+                result["continuation"] = continuation
+            except AIChatError as exc:
+                _log(SERVICE, f"Approved action continuation was not started: {type(exc).__name__}", level="WARNING")
+                result["continuation"] = {"status": "not_started"}
         return _json(result)
     except Exception as exc:
         raise _provider_error("approve_proposal", exc) from exc

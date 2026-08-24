@@ -759,6 +759,46 @@ def test_detached_turn_completes_without_request_owned_task(tmp_path: Path, monk
     asyncio.run(scenario())
 
 
+def test_internal_approval_continuation_is_hidden_from_browser_history(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Automatic workflow continuation should reach the model without impersonating the user."""
+    async def scenario() -> None:
+        owner = "a" * 32
+        service = AIChatService(tmp_path / "ai")
+        service.credentials.save_go_key(owner, "sk-test-0123456789abcdef")
+        conversation = await service._conversation(owner, "opencode-go", "model", None)
+        conversation.messages = [
+            {"role": "user", "content": "Create two proposals", "display_content": "Create two proposals"},
+            {"role": "assistant", "content": "Approve the first proposal."},
+        ]
+        captured = []
+
+        async def fake_go_chat(owner_arg, model, messages, provider, conversation_id, effort):
+            captured.extend(messages)
+            return "Second proposal prepared."
+
+        monkeypatch.setattr(service, "_go_chat", fake_go_chat)
+        await service.start_turn(
+            owner,
+            conversation.id,
+            "Approved action completed. Continue the workflow.",
+            internal=True,
+        )
+        await service.active_tasks[conversation.id]
+        snapshot = await service.get_conversation(owner, conversation.id)
+
+        assert captured[-1]["content"].startswith("Approved action completed")
+        assert snapshot["messages"] == [
+            {"role": "user", "content": "Create two proposals"},
+            {"role": "assistant", "content": "Approve the first proposal."},
+            {"role": "assistant", "content": "Second proposal prepared."},
+        ]
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_detached_turn_can_change_effort_without_losing_history(tmp_path: Path, monkeypatch) -> None:
     """Reasoning effort is a per-turn option and must not fork the conversation."""
     async def scenario() -> None:

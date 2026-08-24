@@ -154,12 +154,13 @@ def test_persistent_history_and_detached_turn_routes_are_owner_scoped(monkeypatc
             assert len(owner) == 32 and conversation_id == "a" * 32
             return {"conversation_id": conversation_id, "messages": []}
 
-        async def start_turn(self, owner, conversation_id, message, context, effort, model, provider):
+        async def start_turn(self, owner, conversation_id, message, context, effort, model, provider, internal=False):
             assert len(owner) == 32 and conversation_id == "a" * 32 and message == "Hello"
             assert context is None
             assert effort is None
             assert model is None
             assert provider is None
+            assert internal is False
             return {"conversation_id": conversation_id, "turn_id": "b" * 32, "status": "queued"}
 
         async def acknowledge_ui_action(self, owner, conversation_id, action_id):
@@ -278,7 +279,19 @@ def test_proposal_approval_is_owner_scoped_and_no_store(monkeypatch) -> None:
             assert conversation_id == "c" * 32
             return {"status": "executed", "action": "save"}
 
+    class FakeChat:
+        """Record the hidden API-owned continuation turn."""
+
+        async def start_turn(self, owner, conversation_id, message, context, effort, model, provider, internal):
+            assert len(owner) == 32
+            assert conversation_id == "c" * 32
+            assert "approved PBGui action completed" in message
+            assert context is None and effort is None and model is None and provider is None
+            assert internal is True
+            return {"conversation_id": conversation_id, "turn_id": "d" * 32, "status": "queued"}
+
     monkeypatch.setattr(ai_api, "get_ai_capability_service", lambda: FakeCapabilities())
+    monkeypatch.setattr(ai_api, "get_ai_chat_service", lambda: FakeChat())
     response = asyncio_run(
         ai_api.approve_proposal(
             "a" * 32,
@@ -291,7 +304,11 @@ def test_proposal_approval_is_owner_scoped_and_no_store(monkeypatch) -> None:
     )
 
     assert response.headers["cache-control"] == "no-store"
-    assert json_body(response) == {"status": "executed", "action": "save"}
+    assert json_body(response) == {
+        "status": "executed",
+        "action": "save",
+        "continuation": {"conversation_id": "c" * 32, "turn_id": "d" * 32, "status": "queued"},
+    }
 
 
 def test_provider_errors_are_generic_for_unexpected_failures(monkeypatch) -> None:

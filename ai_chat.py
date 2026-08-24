@@ -1205,6 +1205,8 @@ class AIChatService:
                     raise AIChatError("Unsupported AI provider")
                 if len(reply) > _MAX_REPLY_CHARS:
                     raise AIChatError("AI provider response is too large")
+                if pending_user is not None and pending_user.get("hidden"):
+                    conversation.messages.remove(pending_user)
                 conversation.messages.extend(
                     [
                         *(
@@ -1564,6 +1566,7 @@ class AIChatService:
         effort: str | None = None,
         model: str | None = None,
         provider: str | None = None,
+        internal: bool = False,
     ) -> dict[str, Any]:
         """Start one API-owned turn that survives browser navigation."""
         if not self.accepting_turns:
@@ -1608,6 +1611,7 @@ class AIChatService:
                     "content": clean_message + self._context_prompt_suffix(conversation.context),
                     "display_content": clean_message,
                     "pending": True,
+                    **({"hidden": True} if internal else {}),
                 }
             )
             self._trim_history(conversation.messages, _MAX_HISTORY_MESSAGES)
@@ -1651,10 +1655,13 @@ class AIChatService:
         except AIChatError as exc:
             async with self.state_lock:
                 if self.conversations.get(conversation.id) is conversation:
-                    if not conversation.messages or not (
+                    current_user = bool(conversation.messages) and (
                         conversation.messages[-1].get("role") == "user"
                         and conversation.messages[-1].get("display_content", conversation.messages[-1].get("content")) == message
-                    ):
+                    )
+                    if current_user and conversation.messages[-1].get("hidden"):
+                        conversation.messages.pop()
+                    elif not current_user:
                         conversation.messages.append(
                             {
                                 "role": "user",
@@ -1673,6 +1680,8 @@ class AIChatService:
             _log(SERVICE, "Detached AI turn failed", level="ERROR")
             async with self.state_lock:
                 if self.conversations.get(conversation.id) is conversation:
+                    if conversation.messages and conversation.messages[-1].get("hidden"):
+                        conversation.messages.pop()
                     conversation.last_error = "AI provider operation failed"
                     conversation.busy = False
                     conversation.active_turn_id = ""
@@ -1767,7 +1776,7 @@ class AIChatService:
                     **({"failed": True} if item.get("failed") else {}),
                 }
                 for item in conversation.messages
-                if item.get("role") in {"user", "assistant"}
+                if item.get("role") in {"user", "assistant"} and not item.get("hidden")
             ]
             failed_prompts = [
                 item.get("display_content", item.get("content", ""))
