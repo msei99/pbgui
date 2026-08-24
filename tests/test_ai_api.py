@@ -163,6 +163,11 @@ def test_persistent_history_and_detached_turn_routes_are_owner_scoped(monkeypatc
             assert internal is False
             return {"conversation_id": conversation_id, "turn_id": "b" * 32, "status": "queued"}
 
+        async def record_local_action(self, owner, conversation_id, message, context):
+            assert len(owner) == 32 and conversation_id == "a" * 32
+            assert message == "Close log" and context is None
+            return {"conversation_id": conversation_id, "messages": [{"role": "assistant", "content": "completed"}]}
+
         async def acknowledge_ui_action(self, owner, conversation_id, action_id):
             assert len(owner) == 32
             assert conversation_id == "a" * 32
@@ -174,12 +179,18 @@ def test_persistent_history_and_detached_turn_routes_are_owner_scoped(monkeypatc
     listed = asyncio_run(ai_api.list_conversations(session))
     detail = asyncio_run(ai_api.get_conversation("a" * 32, session))
     started = asyncio_run(ai_api.start_turn("a" * 32, ai_api.TurnCreateRequest(message="Hello"), session))
+    local = asyncio_run(
+        ai_api.record_local_action(
+            "a" * 32, ai_api.LocalActionRequest(message="Close log"), session
+        )
+    )
     acknowledged = asyncio_run(ai_api.acknowledge_ui_action("a" * 32, "c" * 32, session))
 
     assert json_body(listed)["conversations"][0]["title"] == "History"
     assert json_body(detail)["messages"] == []
     assert started.status_code == 202
     assert json_body(started)["status"] == "queued"
+    assert json_body(local)["messages"][0]["content"] == "completed"
     assert json_body(acknowledged) == {"status": "acknowledged"}
 
 

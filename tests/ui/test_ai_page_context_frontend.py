@@ -24,6 +24,19 @@ def test_shared_context_boundary_projects_only_the_backend_schema() -> None:
     assert "continuePageAction" in NAV
     assert "FASTAPI_PAGES[String(target.page_key || '')]" in NAV
     assert "pbgui_ai_action" in NAV
+    assert "collectAIControls" in NAV
+    assert "entity_kind: 'ui_control'" in NAV
+    assert "id: 'activate'" in NAV
+    assert "id: 'set_value'" in NAV
+    assert "aiControlSensitive" in NAV
+    assert "type === 'password' || type === 'file'" in NAV
+    assert "element.placeholder || element.name || element.id" in NAV
+    assert "element.placeholder || element.value" not in NAV
+    assert "tryLocalCommand" in NAV
+    assert "descriptor.context ? 0 : 1" in NAV
+    assert "JSON.stringify(context).length > 40 * 1024" in NAV
+    assert "delete|remove|loesch" in NAV
+    assert "confirm|bestaetig" in NAV
     assert "focusedField" in NAV
     assert "querySelectorAll('input" not in NAV
     assert "FormData" not in NAV

@@ -756,6 +756,29 @@ def test_generic_page_ui_action_is_captured_and_restored(tmp_path: Path) -> None
     asyncio.run(scenario())
 
 
+def test_local_browser_action_is_persisted_without_provider_turn(tmp_path: Path) -> None:
+    """A browser-completed action should add one durable turn without becoming busy."""
+    async def scenario() -> None:
+        owner = "a" * 32
+        service = AIChatService(tmp_path / "ai")
+        conversation = await service._conversation(owner, "opencode-go", "model", None)
+
+        snapshot = await service.record_local_action(
+            owner,
+            conversation.id,
+            "Close the log window",
+            {"schema_version": 1, "page_key": "v8_optimize"},
+        )
+
+        assert snapshot["busy"] is False
+        assert snapshot["messages"][-2] == {"role": "user", "content": "Close the log window"}
+        assert snapshot["messages"][-1]["content"] == "PBGui completed the requested interface action locally."
+        assert conversation.id not in service.active_tasks
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_detached_turn_completes_without_request_owned_task(tmp_path: Path, monkeypatch) -> None:
     """A server-owned turn should persist its result independently of the start request."""
     async def scenario() -> None:
@@ -1059,6 +1082,16 @@ def test_page_context_is_bounded_and_marked_untrusted() -> None:
             "section": "Scoring",
             "entities": [{"kind": "optimizer_config", "version": "v8", "name": "demo"}],
             "actions": [{"id": "show_log", "entity_kind": "optimizer_queue_item"}],
+            "controls": [
+                {
+                    "id": "control_1",
+                    "role": "button",
+                    "label": "Close",
+                    "context": "Optimize log",
+                    "operations": ["activate"],
+                    "options": [],
+                }
+            ],
         }
     )
 
@@ -1067,6 +1100,7 @@ def test_page_context_is_bounded_and_marked_untrusted() -> None:
     assert "Untrusted PBGui page context" in suffix
     assert '"guide_topic":"43_pbv8_optimize"' in suffix
     assert context["actions"] == [{"id": "show_log", "entity_kind": "optimizer_queue_item"}]
+    assert context["controls"][0]["label"] == "Close"
     with pytest.raises(AIChatError, match="Invalid page context"):
         AIChatService._validate_page_context({"secret": "value"})
 

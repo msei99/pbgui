@@ -12,7 +12,7 @@ CSS = (ROOT / "frontend" / "css" / "ai_drawer.css").read_text(encoding="utf-8")
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=25" in NAV
+    assert "/app/js/ai_drawer.js?v=26" in NAV
     assert "/app/css/ai_drawer.css?v=11" in NAV
     assert "registerPageContext" in NAV
     assert "collectAIContext" in NAV
@@ -60,6 +60,9 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "/ui-actions/" in DRAWER
     assert "pendingPageAction" in DRAWER
     assert "conversation.busy || pendingPageAction" in DRAWER
+    assert "tryLocalCommand" in DRAWER
+    assert "'/local-action'" in DRAWER
+    assert "PBGui completed the action, but could not record it" in DRAWER
     assert "chat.quick_replies" in DRAWER
     assert "renderQuickReplies" in DRAWER
     assert "proposalReviewText" in DRAWER

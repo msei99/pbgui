@@ -69,6 +69,13 @@ class TurnCreateRequest(BaseModel):
     provider: str | None = Field(default=None, min_length=1, max_length=32)
 
 
+class LocalActionRequest(BaseModel):
+    """One UI action already completed by the authenticated browser."""
+
+    message: str = Field(min_length=1, max_length=12_000)
+    context: dict | None = None
+
+
 class AIPreferencesRequest(BaseModel):
     """Bounded owner-scoped AI drawer preferences."""
 
@@ -327,6 +334,22 @@ async def start_turn(
         return _json(result, status_code=202)
     except Exception as exc:
         raise _provider_error("start_turn", exc) from exc
+
+
+@router.post("/conversations/{conversation_id}/local-action")
+async def record_local_action(
+    conversation_id: str,
+    body: LocalActionRequest,
+    session: SessionToken = Depends(require_auth),
+) -> JSONResponse:
+    """Record an already completed reversible browser action without invoking AI."""
+    try:
+        result = await get_ai_chat_service().record_local_action(
+            _owner(session), conversation_id, body.message, body.context
+        )
+        return _json(result)
+    except Exception as exc:
+        raise _provider_error("record_local_action", exc) from exc
 
 
 @router.post("/conversations/{conversation_id}/ui-actions/{action_id}/ack")

@@ -913,6 +913,7 @@ class AICapabilityService:
         action = str(args.get("action") or "").strip()
         entity_kind = str(args.get("entity_kind") or "").strip()
         entity_name = str(args.get("entity_name") or "").strip()
+        value = args.get("value")
         if (
             not page_key
             or len(page_key) > 128
@@ -922,18 +923,29 @@ class AICapabilityService:
             or not entity_name
             or len(entity_name) > 128
             or any(ord(char) < 32 or ord(char) == 127 for char in entity_name)
+            or (
+                value is not None
+                and (
+                    not isinstance(value, str)
+                    or len(value) > 1000
+                    or any(ord(char) < 32 and char not in "\t\n" for char in value)
+                )
+            )
         ):
             raise AICapabilityError("Invalid page action")
+        payload = {
+            "action": action,
+            "entity": {"kind": entity_kind, "name": entity_name},
+        }
+        if value is not None:
+            payload["value"] = value
         return {
             "status": "queued_for_browser",
             "action": action,
             "ui_action": {
                 "type": "page.perform_action",
                 "target": {"page_key": page_key},
-                "payload": {
-                    "action": action,
-                    "entity": {"kind": entity_kind, "name": entity_name},
-                },
+                "payload": payload,
             },
         }
 
@@ -3572,6 +3584,7 @@ class AICapabilityService:
                         "action": {"type": "string", "maxLength": 64},
                         "entity_kind": {"type": "string", "maxLength": 128},
                         "entity_name": {"type": "string", "maxLength": 128},
+                        "value": {"type": "string", "maxLength": 1000},
                     },
                     ["page_key", "action", "entity_kind", "entity_name"],
                 ),

@@ -199,6 +199,16 @@ def test_generic_page_capability_returns_exact_browser_action() -> None:
                 "entity_name": "optimize_123",
             }
         )
+    value_result = AICapabilityService._perform_page_action(
+        {
+            "page_key": "v8_optimize",
+            "action": "set_value",
+            "entity_kind": "ui_control",
+            "entity_name": "control_12",
+            "value": "running",
+        }
+    )
+    assert value_result["ui_action"]["payload"]["value"] == "running"
 
 
 def test_proposal_diff_only_includes_changed_array_entries() -> None:

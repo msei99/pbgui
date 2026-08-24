@@ -800,9 +800,31 @@
     var conversationId = state.current;
     state.retryMessages[conversationId] = message;
     if (override == null) prompt.value = '';
-    setBusy(true);
     var turnContext = root.querySelector('#pai-context-toggle').checked ? collectContext() : null;
     renderContext(turnContext || {});
+    var localResult = window.PBGuiAI && typeof window.PBGuiAI.tryLocalCommand === 'function'
+      ? window.PBGuiAI.tryLocalCommand(message)
+      : { handled: false };
+    if (localResult.handled) {
+      setBusy(true);
+      setStatus(localResult.message || 'PBGui action completed.', false);
+      try {
+        await api('/conversations/' + encodeURIComponent(conversationId) + '/local-action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: message, context: turnContext })
+        });
+        delete state.retryMessages[conversationId];
+        if (conversationId === state.current) await loadConversation(conversationId);
+      } catch (error) {
+        if (conversationId === state.current) {
+          setBusy(false);
+          setStatus('PBGui completed the action, but could not record it: ' + error.message, true);
+        }
+      }
+      return;
+    }
+    setBusy(true);
     setStatus('Starting model...', false);
     try {
       await api('/conversations/' + encodeURIComponent(conversationId) + '/turns', {

@@ -1649,6 +1649,44 @@ class AIChatService:
             "revision": conversation.revision,
         }
 
+    async def record_local_action(
+        self,
+        owner: str,
+        conversation_id: str,
+        message: str,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Persist one browser-completed UI action without contacting a provider."""
+        await self._ensure_owner_loaded(owner)
+        clean_message = self._validate_message(message)
+        async with self.state_lock:
+            conversation = self._owned_conversation(owner, conversation_id)
+            if conversation.busy or conversation.id in self.active_tasks:
+                raise AIChatError("Conversation is busy")
+            if context is not None:
+                conversation.context = self._validate_page_context(context)
+            conversation.messages.extend(
+                [
+                    {
+                        "role": "user",
+                        "content": clean_message + self._context_prompt_suffix(conversation.context),
+                        "display_content": clean_message,
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "PBGui completed the requested interface action locally.",
+                    },
+                ]
+            )
+            self._trim_history(conversation.messages, _MAX_HISTORY_MESSAGES)
+            conversation.last_error = ""
+            conversation.reasoning_summary = ""
+            conversation.activity = ""
+            conversation.updated_at = time.time()
+            conversation.revision += 1
+            self._persist_conversation(conversation)
+            return self._conversation_projection(conversation, include_messages=True)
+
     async def _run_detached_turn(
         self, conversation: Conversation, message: str, turn_id: str
     ) -> None:
@@ -1714,6 +1752,7 @@ class AIChatService:
             "section",
             "entities",
             "actions",
+            "controls",
             "focused_field",
         }
         if set(context) - allowed:
@@ -1754,6 +1793,65 @@ class AIChatService:
             safe_actions.append({"id": action_id, "entity_kind": entity_kind})
         if safe_actions:
             result["actions"] = safe_actions
+        controls = context.get("controls") or []
+        if not isinstance(controls, list) or len(controls) > 96:
+            raise AIChatError("Invalid page context")
+        safe_controls = []
+        for item in controls:
+            if not isinstance(item, dict) or set(item) - {
+                "id",
+                "role",
+                "label",
+                "context",
+                "operations",
+                "options",
+            }:
+                raise AIChatError("Invalid page context")
+            control_id = str(item.get("id") or "").strip()
+            role = str(item.get("role") or "").strip()
+            label = str(item.get("label") or "").strip()
+            control_context = str(item.get("context") or "").strip()
+            operations = item.get("operations") or []
+            options = item.get("options") or []
+            if (
+                not re.fullmatch(r"control_[0-9]{1,12}", control_id)
+                or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", role)
+                or not label
+                or len(label) > 160
+                or len(control_context) > 160
+                or any(ord(char) < 32 for char in label + control_context)
+                or not isinstance(operations, list)
+                or not operations
+                or len(operations) > 2
+                or any(operation not in {"activate", "set_value"} for operation in operations)
+                or not isinstance(options, list)
+                or len(options) > 32
+            ):
+                raise AIChatError("Invalid page context")
+            safe_options = []
+            for option in options:
+                if not isinstance(option, dict) or set(option) - {"value", "label"}:
+                    raise AIChatError("Invalid page context")
+                option_value = str(option.get("value") or "")
+                option_label = str(option.get("label") or "").strip()
+                if len(option_value) > 160 or not option_label or len(option_label) > 160 or any(
+                    ord(char) < 32 for char in option_value + option_label
+                ):
+                    raise AIChatError("Invalid page context")
+                safe_options.append({"value": option_value, "label": option_label})
+            safe_control = {
+                "id": control_id,
+                "role": role,
+                "label": label,
+                "operations": list(dict.fromkeys(operations)),
+            }
+            if control_context:
+                safe_control["context"] = control_context
+            if safe_options:
+                safe_control["options"] = safe_options
+            safe_controls.append(safe_control)
+        if safe_controls:
+            result["controls"] = safe_controls
         focused = context.get("focused_field")
         if focused:
             if not isinstance(focused, dict) or set(focused) - {"path", "label", "value", "validation"}:
@@ -1767,7 +1865,7 @@ class AIChatService:
                     safe_focused[key] = value
             if safe_focused:
                 result["focused_field"] = safe_focused
-        if len(json.dumps(result, allow_nan=False).encode("utf-8")) > 8192:
+        if len(json.dumps(result, allow_nan=False).encode("utf-8")) > 48 * 1024:
             raise AIChatError("Page context is too large")
         return result
 

@@ -28,6 +28,9 @@
   var _aiContextProviders = {};
   var _aiPageActions = {};
   var _aiActionNavigationTarget = '';
+  var _aiControlIds = new WeakMap();
+  var _aiControlElements = {};
+  var _aiControlSequence = 0;
 
   function aiContextText(value, limit) {
     var text = String(value == null ? '' : value).trim().replace(/[\x00-\x1f\x7f]/g, ' ');
@@ -92,8 +95,138 @@
     return false;
   }
 
+  function aiControlVisible(element) {
+    if (!element || !element.isConnected || element.disabled || element.hidden) return false;
+    if (element.closest('#pbgui-ai-drawer,[aria-hidden="true"]')) return false;
+    var style = window.getComputedStyle(element);
+    if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    var rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.right >= 0 && rect.top <= window.innerHeight && rect.left <= window.innerWidth;
+  }
+
+  function aiControlSensitive(element, label) {
+    var type = String(element.type || '').toLowerCase();
+    if (type === 'password' || type === 'file') return true;
+    var identity = [element.id, element.name, element.autocomplete, label].join(' ');
+    return /password|passwd|secret|token|api[_ -]?key|private[_ -]?key|credential|session|cookie/i.test(identity);
+  }
+
+  function aiControlLabel(element) {
+    var label = element.getAttribute('aria-label') || element.getAttribute('title') || '';
+    if (!label && element.labels && element.labels.length) label = element.labels[0].textContent;
+    if (!label && element.tagName === 'INPUT') {
+      var buttonType = ['button', 'submit', 'reset'].indexOf(String(element.type || '').toLowerCase()) >= 0;
+      label = (buttonType ? element.value : element.placeholder) || element.name || element.id || '';
+    }
+    if (!label && (element.tagName === 'TEXTAREA' || element.tagName === 'SELECT' || element.isContentEditable)) {
+      label = element.placeholder || element.name || element.id || element.tagName;
+    }
+    if (!label) label = element.textContent || element.name || element.id || element.tagName;
+    return aiContextText(label, 160).replace(/\s+/g, ' ');
+  }
+
+  function aiControlContext(element) {
+    var shell = element.closest('[role="dialog"],[aria-modal="true"],.modal.open,.visible');
+    if (!shell || shell.id === 'pbgui-ai-drawer') return '';
+    var heading = shell.querySelector('h1,h2,h3,[id$="-title"],.modal-title,.floating-preview-title');
+    return aiContextText(heading ? heading.textContent : shell.id, 160).replace(/\s+/g, ' ');
+  }
+
+  function aiControlId(element) {
+    var id = _aiControlIds.get(element);
+    if (!id) {
+      _aiControlSequence += 1;
+      id = 'control_' + _aiControlSequence;
+      _aiControlIds.set(element, id);
+    }
+    return id;
+  }
+
+  function aiControlDescriptor(element) {
+    var tag = String(element.tagName || '').toLowerCase();
+    var type = String(element.type || '').toLowerCase();
+    var role = String(element.getAttribute('role') || '').toLowerCase();
+    var operations = [];
+    if (tag === 'button' || tag === 'a' || role === 'button' || ['button', 'submit', 'reset', 'checkbox', 'radio'].indexOf(type) >= 0) {
+      operations.push('activate');
+    }
+    if (tag === 'select' || tag === 'textarea' || element.isContentEditable || (tag === 'input' && operations.indexOf('activate') < 0)) {
+      operations.push('set_value');
+    }
+    if (!operations.length) return null;
+    if (tag === 'a') {
+      try {
+        if (new URL(element.href, window.location.href).origin !== window.location.origin) return null;
+      } catch (_) { return null; }
+    }
+    var label = aiControlLabel(element);
+    if (!label || aiControlSensitive(element, label)) return null;
+    var descriptor = {
+      id: aiControlId(element),
+      role: tag === 'input' ? (type || 'input') : (role || tag),
+      label: label,
+      operations: operations
+    };
+    var controlContext = aiControlContext(element);
+    if (controlContext) descriptor.context = controlContext;
+    if (tag === 'select') {
+      descriptor.options = Array.from(element.options).slice(0, 32).map(function (option) {
+        return { value: aiContextText(option.value, 160), label: aiContextText(option.textContent, 160) };
+      }).filter(function (option) { return !!option.label; });
+    }
+    return descriptor;
+  }
+
+  function collectAIControls() {
+    _aiControlElements = {};
+    var candidates = [];
+    var selector = 'button,a[href],input,select,textarea,[role="button"],[contenteditable="true"]';
+    Array.from(document.querySelectorAll(selector)).forEach(function (element, index) {
+      if (!aiControlVisible(element)) return;
+      var descriptor = aiControlDescriptor(element);
+      if (!descriptor) return;
+      candidates.push({ element: element, descriptor: descriptor, index: index, priority: descriptor.context ? 0 : 1 });
+    });
+    candidates.sort(function (left, right) { return left.priority - right.priority || left.index - right.index; });
+    return candidates.slice(0, 96).map(function (candidate) {
+      _aiControlElements[candidate.descriptor.id] = { element: candidate.element, descriptor: candidate.descriptor };
+      return candidate.descriptor;
+    });
+  }
+
+  function resolveAIControl(controlId, operation) {
+    collectAIControls();
+    var entry = _aiControlElements[String(controlId || '')];
+    if (!entry || entry.descriptor.operations.indexOf(operation) < 0) throw new Error('PBGui control is no longer available');
+    return entry.element;
+  }
+
+  registerPageAction({
+    id: 'activate',
+    entity_kind: 'ui_control',
+    run: function(controlId) {
+      resolveAIControl(controlId, 'activate').click();
+    }
+  });
+  registerPageAction({
+    id: 'set_value',
+    entity_kind: 'ui_control',
+    run: function(controlId, entity, payload) {
+      var element = resolveAIControl(controlId, 'set_value');
+      var value = String((payload || {}).value == null ? '' : payload.value);
+      if (element.tagName === 'SELECT' && !Array.from(element.options).some(function (option) { return option.value === value; })) {
+        throw new Error('PBGui select option is no longer available');
+      }
+      if (element.isContentEditable) element.textContent = value;
+      else element.value = value;
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+
   function collectAIContext() {
     var c = cfg();
+    var controls = collectAIControls();
     var context = {
       schema_version: 1,
       page_key: String(c.current || '').slice(0, 128),
@@ -102,7 +235,8 @@
       entities: [],
       actions: Object.keys(_aiPageActions).sort().slice(0, 16).map(function (key) {
         return { id: _aiPageActions[key].id, entity_kind: _aiPageActions[key].entity_kind };
-      })
+      }),
+      controls: controls
     };
     Object.keys(_aiContextProviders).sort().forEach(function (id) {
       try {
@@ -119,6 +253,7 @@
       } catch (_) {}
     });
     context.entities = context.entities.slice(0, 8);
+    while (context.controls.length && JSON.stringify(context).length > 40 * 1024) context.controls.pop();
     return context;
   }
 
@@ -162,12 +297,16 @@
     var registration = _aiPageActions[key];
     if (!registration) return;
     var context = collectAIContext();
-    var exposed = context.entities.some(function (item) {
-      return item.kind === entity.kind && item.name === entity.name;
-    });
+    var exposed = entity.kind === 'ui_control'
+      ? context.controls.some(function (control) {
+          return control.id === entity.name && control.operations.indexOf(payload.action) >= 0;
+        })
+      : context.entities.some(function (item) {
+          return item.kind === entity.kind && item.name === entity.name;
+        });
     if (!exposed) return;
     try {
-      var result = registration.run(entity.name, entity);
+      var result = registration.run(entity.name, entity, payload);
       if (result === false) return;
       event.preventDefault();
       if (result && typeof result.catch === 'function') {
@@ -178,6 +317,59 @@
       console.error('PBGui page action failed:', error);
     }
   });
+
+  function executeLocalPageAction(actionId, entity) {
+    var registration = _aiPageActions[actionId + ':' + entity.kind];
+    if (!registration) return false;
+    return registration.run(entity.name, entity, { action: actionId, entity: entity }) !== false;
+  }
+
+  function tryLocalCommand(message) {
+    var text = String(message || '').trim().toLowerCase();
+    if (!text) return { handled: false };
+    var context = collectAIContext();
+    var logIntent = /\blog(?:fenster| window| panel)?\b/.test(text);
+    var showIntent = /anzeigen|zeigen|oeffnen|öffnen|aufmachen|\bopen\b|\bshow\b/.test(text);
+    if (logIntent && showIntent) {
+      var logKinds = context.actions.filter(function (action) { return action.id === 'show_log'; }).map(function (action) { return action.entity_kind; });
+      var logEntities = context.entities.filter(function (entity) { return logKinds.indexOf(entity.kind) >= 0; });
+      if (logEntities.length === 1 && executeLocalPageAction('show_log', logEntities[0])) {
+        return { handled: true, message: 'PBGui opened the requested log.' };
+      }
+    }
+    var closeIntent = /schlie(?:ss|ß)en|schliess|schließ|zumachen|\bclose\b|\bhide\b/.test(text);
+    if (closeIntent) {
+      var closeControls = context.controls.filter(function (control) {
+        if (control.operations.indexOf('activate') < 0) return false;
+        var label = control.label.toLowerCase();
+        return /close|schlie|×|✕|^x$/.test(label);
+      });
+      if (logIntent) {
+        var logCloseControls = closeControls.filter(function (control) {
+          return /log/.test((control.context || '').toLowerCase() + ' ' + control.label.toLowerCase());
+        });
+        if (logCloseControls.length) closeControls = logCloseControls;
+      }
+      if (closeControls.length === 1 && executeLocalPageAction('activate', { kind: 'ui_control', name: closeControls[0].id })) {
+        return { handled: true, message: 'PBGui closed the requested window.' };
+      }
+    }
+    var clickMatch = text.match(/^(?:bitte\s+)?(?:klick(?:e)?|click|drueck(?:e)?|drück(?:e)?|press)\s+(?:auf\s+)?(.+?)\s*[.!]?$/);
+    if (clickMatch) {
+      var requested = clickMatch[1].trim();
+      if (/delete|remove|loesch|lösch|start|stop|restart|save|speicher|apply|approve|reject|confirm|bestaetig|bestätig|submit|queue|deploy|update|install|execute|panic|kill|clear finished|\brun\b/.test(requested)) {
+        return { handled: false };
+      }
+      var controls = context.controls.filter(function (control) {
+        return control.operations.indexOf('activate') >= 0 && control.label.toLowerCase() === requested;
+      });
+      if (controls.length === 1 && executeLocalPageAction('activate', { kind: 'ui_control', name: controls[0].id })) {
+        return { handled: true, message: 'PBGui activated ' + controls[0].label + '.' };
+      }
+    }
+    return { handled: false };
+  }
+  window.PBGuiAI.tryLocalCommand = tryLocalCommand;
 
   /* ── config (read at runtime so global vars are already set) ── */
   function cfg() {
@@ -1426,7 +1618,7 @@
       link.href = '/app/css/ai_drawer.css?v=11';
       document.head.appendChild(link);
       var script = document.createElement('script');
-      script.src = '/app/js/ai_drawer.js?v=25';
+      script.src = '/app/js/ai_drawer.js?v=26';
       script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
       script.onerror = function () { _aiDrawerLoading = false; };
       document.head.appendChild(script);
