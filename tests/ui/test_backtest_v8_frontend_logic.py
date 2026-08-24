@@ -52,6 +52,37 @@ def test_v8_route_renders_the_v7_backtest_template() -> None:
     assert '"%%BACKTEST_NAV_CURRENT%%": "v8_backtest"' in api_source
 
 
+def test_backtest_page_can_open_the_queue_panel_from_ai_navigation() -> None:
+    """Completed AI queue actions should land directly on the created jobs."""
+    page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    initialize = _extract_function(page, "initializeBacktestPageFromUrl")
+
+    assert "url.searchParams.get('panel') === 'queue'" in initialize
+    assert "selectPanel('queue')" in initialize
+
+
+def test_shared_editors_emit_only_the_generation_specific_suite_reducer_alias() -> None:
+    """PB8 must emit reducer while PB7 keeps aggregate without retaining the other alias."""
+    backtest = _extract_function(
+        (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8"),
+        "collectConfig",
+    )
+    optimize = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    optimize_start = optimize.index("function collectEditorConfig(")
+    optimize_end = optimize.index("\nfunction ", optimize_start + 1)
+    optimize = optimize[optimize_start:optimize_end]
+
+    for function, adapter in (
+        (backtest, "backtestEditorAdapter"),
+        (optimize, "optimizeEditorAdapter"),
+    ):
+        assert f"if ({adapter}.isV8)" in function
+        assert "cfg.backtest.reducer =" in function
+        assert "cfg.backtest.aggregate =" in function
+        assert function.count("delete cfg.backtest.aggregate;") == 2
+        assert function.count("delete cfg.backtest.reducer;") == 2
+
+
 def test_exchange_multiselect_clicks_toggle_only_the_target_option() -> None:
     """Exchange dialogs add or remove one option per click without clearing peers."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
@@ -1229,6 +1260,31 @@ def test_suite_exchange_options_are_injected_for_pb8_and_reset_for_pb7() -> None
 
         suiteInit('suite', {version: 'v7'});
         assert.deepEqual(_suiteState.exchanges, ['binance','bybit','bitget','okx','hyperliquid','kucoin']);
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_suite_load_prefers_the_pb8_reducer_without_mutating_it() -> None:
+    """Suite loading must retain PB8 metric reducers and prefer them over the legacy alias."""
+    script = textwrap.dedent(
+        """
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
+        _suiteRender = () => {};
+        const reducer = {
+          default: 'mean', adg_strategy_eq_w: 'min', drawdown_worst_strategy_eq: 'max'
+        };
+
+        suiteLoad({backtest: {
+          suite_enabled: true,
+          reducer,
+          aggregate: {default: 'median'}
+        }});
+        assert.deepEqual(_suiteState.aggregate, reducer);
+        assert.notEqual(_suiteState.aggregate, reducer);
         """
     )
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)

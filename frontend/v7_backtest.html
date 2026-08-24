@@ -1054,7 +1054,7 @@ textarea.json-invalid:focus {
 <script src="/app/js/editor_shared.js?v=14"></script>
 <script src="/app/js/json_panel.js?v=1"></script>
 <script src="/app/js/optimize_preset_builder.js?v=3"></script>
-<script src="/app/js/pbgui_dialogs.js?v=5"></script>
+<script src="/app/js/pbgui_dialogs.js?v=8"></script>
 <script>
 /* ════════════════════════════════════════════════
    GLOBALS (injected by server)
@@ -2436,7 +2436,12 @@ async function openInitialBacktestQueueDraftFromUrl() {
 }
 
 async function initializeBacktestPageFromUrl() {
-  var requestedConfig = new URL(window.location.href).searchParams.get('config');
+  var url = new URL(window.location.href);
+  if (url.searchParams.get('panel') === 'queue') {
+    selectPanel('queue');
+    return;
+  }
+  var requestedConfig = url.searchParams.get('config');
   if (requestedConfig) {
     selectPanel('configs');
     editConfig(requestedConfig);
@@ -5049,10 +5054,17 @@ function collectConfig() {
   cfg.backtest.suite_enabled = suite.suite_enabled;
   if (suite.suite_enabled) {
     cfg.backtest.scenarios = suite.scenarios;
-    cfg.backtest.aggregate = suite.aggregate;
+    if (backtestEditorAdapter.isV8) {
+      cfg.backtest.reducer = suite.aggregate;
+      delete cfg.backtest.aggregate;
+    } else {
+      cfg.backtest.aggregate = suite.aggregate;
+      delete cfg.backtest.reducer;
+    }
   } else {
     delete cfg.backtest.scenarios;
     delete cfg.backtest.aggregate;
+    delete cfg.backtest.reducer;
     delete cfg.backtest.suite_enabled;
   }
 
@@ -10422,8 +10434,22 @@ window.PBGUI_NAV_CONFIG = {
   version:  PBGUI_VERSION,
   serial:   PBGUI_SERIAL
 };
+window.PBGUI_AI_PAGE_CONTEXT = function () {
+  var entities = [];
+  if (editingConfig && editingConfig !== '__new__') entities.push({ kind: 'backtest_config', version: backtestEditorAdapter.version, name: editingConfig });
+  if (currentPanel === 'archive' && selectedArchiveName) entities.push({ kind: 'backtest_archive', version: backtestEditorAdapter.version, name: selectedArchiveName });
+  return {
+    section: currentPanel,
+    entities: entities,
+    focused_field: window.PBGuiAI.focusedField({
+      'configs-filter': { path: 'backtest.configs.filter', label: 'Config filter' },
+      'results-filter': { path: 'backtest.results.filter', label: 'Result filter' },
+      'cfg-name': { path: 'backtest.config.name', label: 'Config name' }
+    })
+  };
+};
 </script>
-<script src="/app/js/suite_editor.js?v=10"></script>
+<script src="/app/js/suite_editor.js?v=11"></script>
 <script src="/app/js/coin_overrides_editor.js?v=25"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */

@@ -57,6 +57,12 @@ from api.auth import (
     shutdown as auth_shutdown,
     unauthenticated_page_redirect,
 )
+from api.ai import router as ai_router
+from ai_chat import shutdown as ai_chat_shutdown
+from ai_capabilities import (
+    restart_block_reason as ai_restart_block_reason,
+    startup as ai_capabilities_startup,
+)
 from api.api_keys import router as api_keys_router
 from api.dashboard import router as dashboard_router, shutdown as dashboard_shutdown
 from api.dashboards import router as dashboards_router
@@ -272,6 +278,7 @@ async def _restart_block_state() -> tuple[bool, str]:
             cluster_restart_block_reason(),
             coin_data_restart_block_reason(),
             pareto_restart_block_reason(),
+            ai_restart_block_reason(),
             credential_migration_restart_block_reason(Path(PBGDIR)),
         )
         if reason
@@ -798,6 +805,7 @@ async def _lifespan(app: FastAPI):
         vps_manager_startup()
         market_data_startup()
         strategy_explorer_v8_startup()
+        await ai_capabilities_startup()
 
         lifecycle_tasks = [
             asyncio.create_task(_deferred_startup(), name="deferred-startup"),
@@ -814,6 +822,7 @@ async def _lifespan(app: FastAPI):
 
         shutdown_steps = (
             ("auth", auth_shutdown),
+            ("ai-chat", ai_chat_shutdown),
             ("live", live_shutdown),
             ("dashboard", dashboard_shutdown),
             ("heatmap", heatmap_shutdown),
@@ -938,6 +947,7 @@ async def redirect_unauthenticated_page(request: Request, call_next):
         return response
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(ai_router, prefix="/api/ai", tags=["ai"])
 app.include_router(api_keys_router, prefix="/api/api-keys", tags=["api-keys"])
 app.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(dashboards_router, prefix="/api/dashboards", tags=["dashboards"])

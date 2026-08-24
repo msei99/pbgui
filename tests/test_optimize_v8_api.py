@@ -420,6 +420,33 @@ def test_queue_snapshot_is_immutable_after_config_save(optimize_v8_roots) -> Non
     assert snapshot_after["optimize"]["seed"] == 12345
 
 
+def test_queue_operation_id_is_persistently_idempotent(optimize_v8_roots) -> None:
+    """Retrying one approved AI queue operation must return the original record."""
+    _configs, queue, _logs, _results = optimize_v8_roots
+    config = _full_pb8_config()
+    operation_id = "a" * 32
+
+    first = optimize_v8._create_queue_record(
+        "idempotent",
+        config,
+        {"mode": "fresh", "source": ""},
+        {},
+        operation_id=operation_id,
+    )
+    second = optimize_v8._create_queue_record(
+        "idempotent",
+        config,
+        {"mode": "fresh", "source": ""},
+        {},
+        operation_id=operation_id,
+    )
+
+    assert second == {"ok": True, "filename": first["filename"], "idempotent": True}
+    records = list(queue.glob("*.json"))
+    assert len(records) == 1
+    assert json.loads(records[0].read_text(encoding="utf-8"))["operation_id"] == operation_id
+
+
 def test_config_lock_recovers_interrupted_bundle_swap(optimize_v8_roots) -> None:
     """A bundle backup left between atomic renames must become the authoritative config again."""
     configs, _queue, _logs, _results = optimize_v8_roots
@@ -756,6 +783,25 @@ def test_result_listing_never_cold_decodes_streams_and_scans_each_pareto_dir_onc
     assert all(item["progress"]["scan_deferred"] is True for item in listed)
     assert all(item["has_config"] is True for item in listed)
     assert sorted(scans) == ["checkpoint-only", "with-pareto"]
+
+
+def test_result_listing_resolves_the_runtime_root_only_once(optimize_v8_roots, monkeypatch) -> None:
+    """A result listing must reuse one runtime-root snapshot across all result checks."""
+    _configs, _queue, _logs, results = optimize_v8_roots
+    config = _full_pb8_config()
+    _make_resumable_result(results / "first", config)
+    _make_resumable_result(results / "second", config)
+    calls = 0
+
+    def counted_results_root() -> Path:
+        nonlocal calls
+        calls += 1
+        return results
+
+    monkeypatch.setattr(optimize_v8, "_results_root", counted_results_root)
+
+    assert len(optimize_v8._list_results()) == 2
+    assert calls == 1
 
 
 def test_resume_compatibility_rejects_before_queue_mutation(optimize_v8_roots, monkeypatch) -> None:

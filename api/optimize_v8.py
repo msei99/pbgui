@@ -985,9 +985,11 @@ def _checkpoint_resume_readiness(
     for_listing: bool = False,
     progress_hint: dict | None = None,
     config_hint: dict | None = None,
+    results_root: Path | None = None,
 ) -> dict:
-    checkpoint = _safe_path(result_dir / "checkpoint.pkl", _results_root())
-    all_results = _safe_path(result_dir / "all_results.bin", _results_root())
+    root = results_root if results_root is not None else _results_root()
+    checkpoint = _safe_path(result_dir / "checkpoint.pkl", root)
+    all_results = _safe_path(result_dir / "all_results.bin", root)
     reasons = []
     try:
         if checkpoint.is_symlink() or not checkpoint.is_file() or checkpoint.stat().st_size <= 0:
@@ -1423,8 +1425,8 @@ def _runtime_commit(pb8_dir: Path) -> str:
         return ""
 
 
-def _result_dirs():
-    root = _results_root()
+def _result_dirs(root: Path | None = None):
+    root = root if root is not None else _results_root()
     if not root.is_dir() or root.is_symlink():
         return
     for directory in sorted(root.iterdir()):
@@ -1707,7 +1709,8 @@ def _latest_existing_mtime(paths: list[Path]) -> float | None:
 
 def _list_results() -> list[dict]:
     results = []
-    for directory in _result_dirs() or []:
+    results_root = _results_root()
+    for directory in _result_dirs(results_root) or []:
         pareto_dir, paretos = _pareto_files_for_listing(directory)
         artifacts = [path for path in (directory / "all_results.bin", directory / "checkpoint.pkl") if path.is_file()]
         modified_paths = [pareto_dir, *artifacts] if paretos else [*artifacts, directory]
@@ -1726,6 +1729,7 @@ def _list_results() -> list[dict]:
             for_listing=True,
             progress_hint=progress,
             config_hint=first_data,
+            results_root=results_root,
         )
         result_config = first_data if isinstance(first_data, dict) else {}
         recovered_config = readiness.get("config") if isinstance(readiness.get("config"), dict) else {}
@@ -3350,13 +3354,34 @@ def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)) -> d
     return _create_queue_record(name, prepared, options, overrides)
 
 
+def _queue_record_for_operation_unlocked(operation_id: str) -> dict | None:
+    """Return an existing queue result for one persistent idempotency key."""
+    if not operation_id:
+        return None
+    for path in _queue_dir().glob("*.json"):
+        try:
+            data = _read_json(path)
+        except RuntimeError:
+            continue
+        if data.get("operation_id") == operation_id:
+            return {"ok": True, "filename": str(data.get("filename") or path.stem), "idempotent": True}
+    return None
+
+
 def _create_queue_record(
     name: str,
     prepared: dict,
     options: dict,
     override_payloads: dict[str, dict] | None = None,
+    operation_id: str | None = None,
 ) -> dict:
     """Publish one queue record and remove partial artifacts if persistence fails."""
+    if operation_id is not None:
+        operation_id = _validate_name(operation_id)
+        with _queue_lock():
+            existing = _queue_record_for_operation_unlocked(operation_id)
+            if existing is not None:
+                return existing
     filename = str(uuid.uuid4())
     stage = None
     try:
@@ -3365,6 +3390,12 @@ def _create_queue_record(
                 override_payloads = _load_override_payloads(prepared, _config_dir(name))
         stage = _stage_snapshot_bundle(filename, prepared, override_payloads)
         with _queue_lock():
+            if operation_id:
+                existing = _queue_record_for_operation_unlocked(operation_id)
+                if existing is not None:
+                    rmtree(stage, ignore_errors=True)
+                    stage = None
+                    return existing
             _publish_snapshot_bundle(stage, _snapshot_dir(filename))
             stage = None
             current = _load_queue()
@@ -3379,6 +3410,8 @@ def _create_queue_record(
                 "launch_options": options,
                 "order": order,
             }
+            if operation_id:
+                data["operation_id"] = operation_id
             _write_json(_queue_file(filename), data)
     except Exception:
         if stage is not None:

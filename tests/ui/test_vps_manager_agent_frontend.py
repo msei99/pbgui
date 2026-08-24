@@ -129,7 +129,7 @@ def test_pb8_versions_render_in_overview_and_host_details() -> None:
     for key, label in (("pb8", "PB8"), ("pb8_branch", "PB8 Branch"), ("pb8_github", "PB8 GitHub")):
         assert f"key: '{key}', label: '{label}'" in source
     overview = _extract_function(source, "renderOverviewTable")
-    assert "renderOverviewVersionCell(row.pb8, row.pb8_github)" in overview
+    assert "renderOverviewVersionCell(row.pb8, row.pb8_github, row.pb8_runtime_blocked, row.pb8_runtime_reason)" in overview
     assert "esc(row.pb8_branch || '-')" in overview
     assert "renderOverviewGithubCell(row.pb8_github)" in overview
 

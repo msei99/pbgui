@@ -13273,6 +13273,14 @@
     document.addEventListener('change', handleVpsManagerFieldEvent);
     document.addEventListener('click', handleCpuHistoryInteraction, true);
 
+    window.PBGUI_AI_PAGE_CONTEXT = function () {
+      var hosts = (store.selectedOverviewHosts || []).slice(0, 8);
+      if (!hosts.length && store.hostname) hosts = [store.hostname];
+      return {
+        section: store.view,
+        entities: hosts.map(function (hostname) { return { kind: 'vps_host', name: hostname }; })
+      };
+    };
     loadOverviewPrefs();
     restoreViewFromHash();
     renderUi({ forceSidebarActions: true, forceSidebarList: true, forceView: true });

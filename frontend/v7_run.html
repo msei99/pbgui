@@ -6,7 +6,7 @@
 <title>PBv7 Run</title>
 <link rel="stylesheet" href="/app/css/sidebar.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
-<script src="/app/js/pbgui_dialogs.js?v=5"></script>
+<script src="/app/js/pbgui_dialogs.js?v=8"></script>
 <script src="/app/js/run_list_adapter.js?v=3"></script>
 <style>
 /* ─── Reset & Base ─────────────────────────────────────────── */
@@ -1517,6 +1517,16 @@ window.addEventListener('beforeunload', function() {
   if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
   if (ws) ws.close();
 });
+
+window.PBGUI_AI_PAGE_CONTEXT = function () {
+  return {
+    section: 'Instances',
+    entities: [],
+    focused_field: window.PBGuiAI.focusedField({
+      'f-search': { path: 'run.instances.filter', label: 'Instance filter' }
+    })
+  };
+};
 
 /* ─── Sidebar resize ─────────────────────────────────────── */
 window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });

@@ -1230,6 +1230,18 @@
       if (!panel || !panel.classList.contains('active')) return;
       loadSyncJobs(true);
     }, 10000);
+    window.PBGuiAI.registerPageContext({
+      id: 'db-tools',
+      getContext: function () {
+        var active = document.querySelector('.sb-btn[data-panel].active');
+        return {
+          section: active ? active.getAttribute('data-panel') : 'cleanup',
+          focused_field: window.PBGuiAI.focusedField({
+            'sync-name': { path: 'db_tools.sync_job.name', label: 'Sync job name' }
+          })
+        };
+      }
+    });
   })();
   </script>
 </body>

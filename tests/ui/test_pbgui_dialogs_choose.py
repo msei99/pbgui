@@ -99,5 +99,12 @@ def test_choose_renders_text_safely_and_requires_explicit_closure() -> None:
     assert "button.addEventListener('click'" in open_function
     assert "close({ __pbguiDialogChoice: true, value: action.value })" in open_function
     assert "overlay.addEventListener('click'" not in ensure_overlay
+    assert "event.key === 'Tab'" in ensure_overlay
+    assert "box.contains(event.target)" in ensure_overlay
+    assert "event.target !== acceptBtn" in ensure_overlay
     assert ".pbgui-dialog-btn.danger" in source
+    assert "overflow-wrap:anywhere" in source
+    assert "width:min(480px,100%)" in source
+    assert "#pbgui-dialog-actions{box-sizing:border-box" in source
+    assert "#pbgui-dialog-body{box-sizing:border-box" in source
     assert "currentMode !== 'choose'" in ensure_overlay

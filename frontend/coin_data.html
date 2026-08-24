@@ -3177,6 +3177,20 @@
     initNumberSteppers();
     bindControls();
     loadState();
+    window.PBGUI_AI_PAGE_CONTEXT = function () {
+      var selected = selectedRowData();
+      var name = selected ? String(selected.symbol || selected.coin || selected.name || '') : '';
+      return {
+        section: uiState.selectedTable === 'hip3' ? 'HIP-3' : 'Coin data',
+        entities: name ? [{ kind: 'coin', name: name }] : [],
+        focused_field: window.PBGuiAI.focusedField({
+          'filter-exchange': { path: 'coin_data.filters.exchange', label: 'Exchange' },
+          'filter-market-cap': { path: 'coin_data.filters.market_cap', label: 'Market cap filter' },
+          'filter-vol-mcap': { path: 'coin_data.filters.volume_market_cap', label: 'Volume/market cap filter' },
+          'filter-hip3-dex': { path: 'coin_data.filters.hip3_dex', label: 'HIP-3 DEX' }
+        })
+      };
+    };
   </script>
 
   <script>

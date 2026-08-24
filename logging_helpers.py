@@ -57,6 +57,7 @@ LOG_GROUPS: dict[str, str] = {
     'Auth':            'PBGui',
     'LiveSession':     'PBGui',
     'ApiKeyState':     'PBGui',
+    'AIChat':          'PBGui',
     'User':            'PBGui',
 }
 

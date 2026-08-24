@@ -3260,6 +3260,13 @@ document.addEventListener('fullscreenchange', function() {
   });
 })();
 configureVersionUi({});
+window.PBGUI_AI_PAGE_CONTEXT = function () {
+  var controls = refreshCacheControls();
+  var entities = [];
+  if (controls.exchange) entities.push({ kind: 'exchange', version: IS_V8 ? 'v8' : 'v7', name: controls.exchange });
+  if (controls.coin) entities.push({ kind: 'coin', version: IS_V8 ? 'v8' : 'v7', name: controls.coin });
+  return { section: controls.stage, entities: entities };
+};
 window.PBGUI_NAV_CONFIG = { subtitle: IS_V8 ? 'PBv8 Strategy Explorer' : 'Strategy Explorer', current: IS_V8 ? 'v8_strategy_explorer' : 'v7_strategy_explorer', apiBase: API_BASE, version: PBGUI_VERSION, serial: PBGUI_SERIAL };
 syncMovieDurationOptions();
 var initialRefreshState = readStrategyRefreshState();

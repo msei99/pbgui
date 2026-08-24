@@ -39,3 +39,4 @@ python-multipart==0.0.12
 asyncssh>=2.13.0,<2.24.0
 aiohttp==3.13.1
 cryptography>=42.0.0,<47.0.0
+openai-codex-cli-bin==0.147.0 ; python_version >= "3.10"

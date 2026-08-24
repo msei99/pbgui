@@ -2769,6 +2769,14 @@ initMetricTooltipHandlers();
     window.PBGuiSharedHelp.open('vps_monitor');
   };
   window.PBGUI_HELP_OPENER = window._openVpsHelp;
+  window.PBGUI_AI_PAGE_CONTEXT = function () {
+    return {
+      section: activeTab(),
+      entities: activeTab() === 'instances' && instFilterServer !== 'All'
+        ? [{ kind: 'vps_host', name: instFilterServer }]
+        : []
+    };
+  };
 }());
 </script>
 

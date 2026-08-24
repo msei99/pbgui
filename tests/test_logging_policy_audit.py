@@ -8,7 +8,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXCLUDED_PARTS = {"tests", "pb7", "upstream", "vendor", "generated", ".git", ".venv", "venv"}
+EXCLUDED_PARTS = {"tests", "data", "pb7", "upstream", "vendor", "generated", ".git", ".venv", "venv"}
 DOCUMENTED_SCRIPT_DIRS = {
     "scripts": "One-off maintenance and diagnostic scripts are human-facing CLIs.",
     "tools": "Developer audit and comparison tools intentionally report to stdout.",
@@ -71,6 +71,7 @@ HUMAN_LOG_SERVICE_MODULES = {
     "hyperliquid_aws.py", "tradfi_sync.py", "api/live.py",
 }
 TIER_3_SERVICES = {
+    "AIChat",
     "ApiKeyState", "ApiKeys", "ApiLogging", "Auth", "BacktestQueueAPI",
     "BalanceCalc", "Cluster", "CoinDataUI", "Config", "Dashboard", "DbTools",
     "HyperliquidAWS", "LiveSession", "MarketDataAPI", "PB7OhlcvAPI", "PBV7UI",

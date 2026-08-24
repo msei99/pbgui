@@ -227,4 +227,4 @@ def test_dialog_cache_version_is_bumped_for_all_consumers() -> None:
         "welcome.html",
     }
     for filename in expected_consumers:
-        assert "pbgui_dialogs.js?v=5" in html_sources[filename]
+        assert "pbgui_dialogs.js?v=8" in html_sources[filename]

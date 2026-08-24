@@ -2246,9 +2246,20 @@ async def ws_backtest(websocket: WebSocket) -> None:
 @router.post("/queue")
 def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)) -> dict:
     name = _validate_name(str(body.get("name") or ""))
+    operation_id = str(body.get("operation_id") or "").strip()
+    if operation_id:
+        operation_id = _validate_name(operation_id)
     config_path = _config_file(name)
     filename = str(uuid.uuid4())
     with _queue_lock():
+        if operation_id:
+            for path in _queue_dir().glob("*.json"):
+                try:
+                    existing = _read_json(path)
+                except RuntimeError:
+                    continue
+                if existing.get("operation_id") == operation_id:
+                    return {"ok": True, "filename": str(existing.get("filename") or path.stem), "idempotent": True}
         with _config_lock():
             try:
                 provided = body.get("config") if isinstance(body, dict) else None
@@ -2270,6 +2281,8 @@ def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)) -> d
                     "config_snapshot": config,
                     "created_at": time.time(),
                 }
+                if operation_id:
+                    payload["operation_id"] = operation_id
                 if isinstance(body.get("use_pbgui_market_data"), bool):
                     payload["use_pbgui_market_data"] = body["use_pbgui_market_data"]
                 _queue_dir().mkdir(parents=True, exist_ok=True)

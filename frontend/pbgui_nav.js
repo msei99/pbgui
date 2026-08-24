@@ -24,6 +24,92 @@
   var _restartRetryTimer = null;
   var _restartPollTimer = null;
   var _restartStatus = {};
+  var _aiDrawerLoading = false;
+  var _aiContextProviders = {};
+
+  function aiContextText(value, limit) {
+    var text = String(value == null ? '' : value).trim().replace(/[\x00-\x1f\x7f]/g, ' ');
+    return text.slice(0, limit);
+  }
+
+  function aiContextSensitiveName(value) {
+    return /(^|[._\s-])(password|passwd|secret|token|api[_ -]?key|private[_ -]?key|credential|session|cookie|log|ssh)([._\s-]|$)/i.test(String(value || ''));
+  }
+
+  function aiContextEntity(value) {
+    if (!value || typeof value !== 'object') return null;
+    var entity = {
+      kind: aiContextText(value.kind, 128),
+      version: aiContextText(value.version, 128),
+      name: aiContextText(value.name, 128)
+    };
+    if (!entity.kind || !entity.name || aiContextSensitiveName(entity.kind)) return null;
+    return entity;
+  }
+
+  function aiContextFocusedField(value) {
+    if (!value || typeof value !== 'object') return null;
+    var path = aiContextText(value.path, 256);
+    var label = aiContextText(value.label, 256);
+    if (!path || aiContextSensitiveName(path) || aiContextSensitiveName(label)) return null;
+    var field = { path: path };
+    if (label) field.label = label;
+    var fieldValue = aiContextText(value.value, 256);
+    var validation = aiContextText(value.validation, 256);
+    if (fieldValue) field.value = fieldValue;
+    if (validation) field.validation = validation;
+    return field;
+  }
+
+  function collectAIContext() {
+    var c = cfg();
+    var context = {
+      schema_version: 1,
+      page_key: String(c.current || '').slice(0, 128),
+      title: String(c.subtitle || '').slice(0, 128),
+      guide_topic: String(GUIDE_TOPICS[c.current] || '').slice(0, 128),
+      entities: []
+    };
+    Object.keys(_aiContextProviders).sort().forEach(function (id) {
+      try {
+        var value = _aiContextProviders[id]();
+        if (!value || typeof value !== 'object') return;
+        if (value.section && !context.section) context.section = aiContextText(value.section, 128);
+        if (Array.isArray(value.entities)) {
+          value.entities.slice(0, 8).forEach(function (entity) {
+            var projected = aiContextEntity(entity);
+            if (projected) context.entities.push(projected);
+          });
+        }
+        if (value.focused_field && !context.focused_field) context.focused_field = aiContextFocusedField(value.focused_field);
+      } catch (_) {}
+    });
+    context.entities = context.entities.slice(0, 8);
+    return context;
+  }
+
+  window.PBGuiAI = window.PBGuiAI || {};
+  window.PBGuiAI.registerPageContext = function (registration) {
+    if (!registration || typeof registration.id !== 'string' || typeof registration.getContext !== 'function') return function () {};
+    var id = registration.id.slice(0, 64);
+    _aiContextProviders[id] = registration.getContext;
+    return function () { delete _aiContextProviders[id]; };
+  };
+  window.PBGuiAI.collectContext = collectAIContext;
+  window.PBGuiAI.focusedField = function (allowlist) {
+    var active = document.activeElement;
+    var descriptor = active && allowlist && allowlist[active.id];
+    if (!descriptor || active.type === 'password') return null;
+    return aiContextFocusedField({
+      path: descriptor.path,
+      label: descriptor.label,
+      value: active.value,
+      validation: descriptor.validation
+    });
+  };
+  if (typeof window.PBGUI_AI_PAGE_CONTEXT === 'function') {
+    window.PBGuiAI.registerPageContext({ id: 'productive-page', getContext: window.PBGUI_AI_PAGE_CONTEXT });
+  }
 
   /* ── config (read at runtime so global vars are already set) ── */
   function cfg() {
@@ -67,6 +153,7 @@
       { page: 'info_coin_data',       icon: '&#129689;', label: 'Coin Data'         },
       { page: 'info_market_data_fastapi', icon: '&#128187;', label: 'Market Data' },
       { page: 'info_balance_calc',    icon: '&#128176;', label: 'Balance Calculator'},
+      { page: 'info_ai_chat',         icon: '&#10024;',  label: 'AI Chat'           },
       { page: 'help',                 icon: '&#10067;',  label: 'Help'              }
     ]},
     { id: 'pbv7', label: 'PBv7', items: [
@@ -146,7 +233,7 @@
     'font-size:var(--fs-xs);font-weight:800;letter-spacing:.05em;white-space:nowrap;}',
     '#pbgui-auth-mode-pill.visible{display:inline-flex;}',
     '@media(max-width:920px){#pbgui-master-pill{display:none!important;}}',
-    '@media(max-width:760px){#nav-logo{width:42px;padding-right:5px;overflow:hidden;}button.nav-group-btn{width:32px;padding:.3rem .2rem;font-size:0;justify-content:center;}button.nav-group-btn[data-group="system"]::before{content:"S";}button.nav-group-btn[data-group="information"]::before{content:"I";}button.nav-group-btn[data-group="pbv7"]::before{content:"7";}button.nav-group-btn[data-group="pbv8"]::before{content:"8";}button.nav-group-btn::before{font-size:12px;font-weight:700;}#nav-right{padding-right:0;gap:2px;}#nav-right .nav-divider{display:none!important;}#pbgui-restart-btn,#pbgui-notify-btn,#pbgui-alert-btn,#pbgui-guide-btn,#pbgui-about-btn{width:26px;min-width:26px;padding:0;justify-content:center;font-size:0;}#pbgui-restart-btn .nav-restart-dot,#pbgui-alert-badge{display:none;}#pbgui-restart-btn::after{content:"R";}#pbgui-notify-btn::after{content:"N";}#pbgui-alert-btn::after{content:"A";}#pbgui-guide-btn::after{content:"G";}#pbgui-about-btn::after{content:"i";}#pbgui-restart-btn::after,#pbgui-notify-btn::after,#pbgui-alert-btn::after,#pbgui-guide-btn::after,#pbgui-about-btn::after{font-size:12px;font-weight:700;}.nav-dropdown{position:fixed;top:53px;left:8px;right:8px;min-width:0;}}',
+    '@media(max-width:760px){#nav-logo{width:42px;padding-right:5px;overflow:hidden;}button.nav-group-btn{width:32px;padding:.3rem .2rem;font-size:0;justify-content:center;}button.nav-group-btn[data-group="system"]::before{content:"S";}button.nav-group-btn[data-group="information"]::before{content:"I";}button.nav-group-btn[data-group="pbv7"]::before{content:"7";}button.nav-group-btn[data-group="pbv8"]::before{content:"8";}button.nav-group-btn::before{font-size:12px;font-weight:700;}#nav-right{padding-right:0;gap:2px;}#nav-right .nav-divider{display:none!important;}#pbgui-restart-btn,#pbgui-notify-btn,#pbgui-alert-btn,#pbgui-ai-btn,#pbgui-guide-btn,#pbgui-about-btn{width:26px;min-width:26px;padding:0;justify-content:center;font-size:0;}#pbgui-restart-btn .nav-restart-dot,#pbgui-alert-badge{display:none;}#pbgui-restart-btn::after{content:"R";}#pbgui-notify-btn::after{content:"N";}#pbgui-alert-btn::after{content:"A";}#pbgui-ai-btn::after{content:"AI";}#pbgui-guide-btn::after{content:"G";}#pbgui-about-btn::after{content:"i";}#pbgui-restart-btn::after,#pbgui-notify-btn::after,#pbgui-alert-btn::after,#pbgui-ai-btn::after,#pbgui-guide-btn::after,#pbgui-about-btn::after{font-size:12px;font-weight:700;}.nav-dropdown{position:fixed;top:53px;left:8px;right:8px;min-width:0;}}',
     '.nav-action-btn{display:flex;align-items:center;gap:0.35rem;padding:0.3rem 0.75rem;',
     'border-radius:6px;background:transparent;border:1px solid transparent;',
     'color:#64748b;font-size:var(--fs-sm);font-weight:500;cursor:pointer;',
@@ -352,8 +439,9 @@
           + '<button class="nav-action-btn restart" id="pbgui-restart-btn"><span class="nav-restart-dot"></span>Restart</button>'
           + '<button class="nav-action-btn notify" id="pbgui-notify-btn" title="Notification log">&#128276;</button>'
           + '<span class="nav-divider" aria-hidden="true"></span>'
-          + '<button class="nav-action-btn alerts" id="pbgui-alert-btn" title="VPSMonitor alerts">&#128737; <span class="nav-badge" id="pbgui-alert-badge">0/0</span></button>'
-          + '<button class="nav-action-btn accent" id="pbgui-guide-btn">&#128218; Guide</button>'
+           + '<button class="nav-action-btn alerts" id="pbgui-alert-btn" title="VPSMonitor alerts">&#128737; <span class="nav-badge" id="pbgui-alert-badge">0/0</span></button>'
+           + '<button class="nav-action-btn accent" id="pbgui-ai-btn" title="Open AI assistant" aria-label="Open AI assistant" aria-expanded="false" aria-controls="pbgui-ai-drawer" style="display:none">&#10024; AI</button>'
+           + '<button class="nav-action-btn accent" id="pbgui-guide-btn">&#128218; Guide</button>'
           + '<button class="nav-action-btn" id="pbgui-about-btn">&#x2139;&#xFE0F; About</button>'
           + '<button class="nav-action-btn icon-only logout" id="pbgui-logout-btn" title="Logout" aria-label="Logout">'
           +   '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">'
@@ -987,6 +1075,7 @@
     'dashboards':        '/api/dashboard/main_page',
     'info_coin_data':    '/api/coin-data/main_page',
     'info_market_data_fastapi': '/api/market-data/main_page',
+    'info_ai_chat':      '/api/ai/main_page',
     'system_api_keys':   '/api/api-keys/main_page',
     'system_cluster':    '/api/cluster/main_page',
     'system_vps_manager_fastapi': '/api/vps-manager/main_page',
@@ -1014,6 +1103,7 @@
     'dashboards':                  '33_dashboard',
     'info_coin_data':              '27_coin_data',
     'info_market_data_fastapi':    '26_market_data',
+    'info_ai_chat':                 '45_ai_chat',
     'system_api_keys':             '20_api_keys',
     'system_cluster':              '39_cluster_sync',
     'system_vps_manager_fastapi':  '32_vps_manager',
@@ -1254,6 +1344,25 @@
     if (alertBtn) alertBtn.addEventListener('click', function () { openAlertOverlay(); });
     fetchAlerts();
     scheduleAlerts();
+
+    var aiBtn = document.getElementById('pbgui-ai-btn');
+    if (aiBtn) aiBtn.addEventListener('click', function () {
+      if (window.PBGuiAI && typeof window.PBGuiAI.toggle === 'function') {
+        window.PBGuiAI.toggle();
+        return;
+      }
+      if (_aiDrawerLoading) return;
+      _aiDrawerLoading = true;
+      var link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = '/app/css/ai_drawer.css?v=11';
+      document.head.appendChild(link);
+      var script = document.createElement('script');
+      script.src = '/app/js/ai_drawer.js?v=24';
+      script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
+      script.onerror = function () { _aiDrawerLoading = false; };
+      document.head.appendChild(script);
+    });
 
     /* About button → show overlay */
     var aboutBtn = document.getElementById('pbgui-about-btn');
@@ -1612,7 +1721,8 @@
       if (_authRedirecting) return;
       _origFetch(tokenRefreshUrl(), authOptions(c.token, { method: 'POST' }))
         .then(function (r) {
-          if (r.status === 401) { redirectToLogin(); }
+          if (r.status === 401) { redirectToLogin(); return; }
+          if (r.ok) { var ai = document.getElementById('pbgui-ai-btn'); if (ai) ai.style.display = 'inline-flex'; }
         })
         .catch(function () { /* network error — ignore, will retry next cycle */ });
     }

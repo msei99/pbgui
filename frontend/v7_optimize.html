@@ -2641,9 +2641,9 @@ textarea.json-invalid:focus {
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=14"></script>
-<script src="/app/js/suite_editor.js?v=10"></script>
+<script src="/app/js/suite_editor.js?v=11"></script>
 <script src="/app/js/log_viewer_panel.js?v=29"></script>
-<script src="/app/js/pbgui_dialogs.js?v=5"></script>
+<script src="/app/js/pbgui_dialogs.js?v=8"></script>
 <script>
 var TOKEN = "%%TOKEN%%";
 var API_BASE = "%%API_BASE%%";
@@ -9492,10 +9492,18 @@ function collectEditorConfig(baseConfig, opts) {
   cfg.backtest.suite_enabled = !!suite.suite_enabled;
   if (suite.suite_enabled) {
     cfg.backtest.scenarios = Array.isArray(suite.scenarios) ? suite.scenarios : [];
-    cfg.backtest.aggregate = suite.aggregate && typeof suite.aggregate === 'object' ? suite.aggregate : { default: 'mean' };
+    var suiteReducer = suite.aggregate && typeof suite.aggregate === 'object' ? suite.aggregate : { default: 'mean' };
+    if (optimizeEditorAdapter.isV8) {
+      cfg.backtest.reducer = suiteReducer;
+      delete cfg.backtest.aggregate;
+    } else {
+      cfg.backtest.aggregate = suiteReducer;
+      delete cfg.backtest.reducer;
+    }
   } else {
     delete cfg.backtest.scenarios;
     delete cfg.backtest.aggregate;
+    delete cfg.backtest.reducer;
     delete cfg.backtest.suite_enabled;
   }
   live.approved_coins = collectApprovedCoinsFromMs();
@@ -11331,6 +11339,53 @@ async function openConfigEditor(name) {
   var data = await apiFetch('/configs/' + encodeURIComponent(name));
   openEditorWithConfig(data, name, name);
 }
+
+var aiConfigRefreshGeneration = 0;
+window.addEventListener('pbgui:ai-action-completed', function(event) {
+  var result = event && event.detail && typeof event.detail === 'object' ? event.detail : {};
+  if (optimizeEditorAdapter.isV8 && result.action === 'queue_backtests') {
+    window.location.assign(buildBacktestMainPageUrl({ panel: 'queue' }));
+    return;
+  }
+  if (!optimizeEditorAdapter.isV8 || (result.action !== 'save' && result.action !== 'save_and_queue')) return;
+  var name = String(result.name || '').trim();
+  if (!name) return;
+  loadConfigs().catch(function(error) {
+    console.error('Could not refresh Optimize configs after PBGui AI action:', error);
+  });
+  if (!editorVisible() || state.editingConfig !== name) return;
+  var generation = ++aiConfigRefreshGeneration;
+  apiFetch('/configs/' + encodeURIComponent(name)).then(function(data) {
+    if (generation !== aiConfigRefreshGeneration || !editorVisible() || state.editingConfig !== name) return;
+    openEditorWithConfig(data, name, name);
+    setPageEditorStatus('Reloaded the config saved by PBGui AI.', 'ok');
+  }).catch(function(error) {
+    if (generation !== aiConfigRefreshGeneration) return;
+    setPageEditorStatus('PBGui AI saved the config, but the editor could not refresh: ' + error.message, 'err');
+  });
+});
+
+window.addEventListener('pbgui:ai-ui-action', function(event) {
+  var action = event && event.detail && typeof event.detail === 'object' ? event.detail : {};
+  if (action.type !== 'optimize.select_paretos' || !optimizeEditorAdapter.isV8) return;
+  var target = action.target && typeof action.target === 'object' ? action.target : {};
+  var payload = action.payload && typeof action.payload === 'object' ? action.payload : {};
+  if (target.version !== optimizeEditorAdapter.version || state.panel !== 'paretos') return;
+  if (target.run_name && target.run_name !== state.selectedResultName) return;
+  var names = Array.isArray(payload.candidate_names) ? payload.candidate_names.map(String) : [];
+  if (!names.length) return;
+  var pathsByName = new Map(state.paretos.map(function(item) { return [String(item.name || ''), item.path]; }));
+  var missing = names.filter(function(name) { return !pathsByName.has(name); });
+  event.preventDefault();
+  if (missing.length) {
+    toast('PBGui AI selection could not find ' + missing.length + ' Pareto candidate(s) in this result.', 'warn');
+    return;
+  }
+  if (payload.mode !== 'add') state.selectedParetos.clear();
+  names.forEach(function(name) { state.selectedParetos.add(pathsByName.get(name)); });
+  renderParetos();
+  toast('PBGui AI selected ' + names.length + ' Pareto candidate' + (names.length === 1 ? '' : 's') + '.', 'ok');
+});
 
 function normalizeOptimizeImportName(value) {
   var raw = String(value == null ? '' : value).trim().replace(/\.json$/i, '');
@@ -13758,6 +13813,43 @@ init().catch(handleError);
   };
   window.PBGUI_HELP_OPENER = window._openOptimizeHelp;
 }());
+
+window.PBGUI_AI_PAGE_CONTEXT = function () {
+  var editorNameInput = document.getElementById('editor-name');
+  var editorName = String((editorNameInput && editorNameInput.value) || state.editingConfig || '').trim();
+  var names = editorName && editorName !== '__new__'
+    ? [editorName]
+    : Array.from(state.selectedConfigs || []).slice(0, 8);
+  var entities = (state.panel === 'results' || state.panel === 'paretos' ? [] : names).map(function (name) {
+    return { kind: 'optimizer_config', version: optimizeEditorAdapter.version, name: name };
+  });
+  if (state.selectedResultName && (state.panel === 'results' || state.panel === 'paretos')) {
+    var selectedRun = (state.results || []).find(function (item) {
+      return item.path === state.selectedResultPath;
+    }) || {};
+    var runIdentity = String(state.selectedResultName);
+    if (selectedRun.pareto_count != null) runIdentity += ' | paretos=' + String(selectedRun.pareto_count);
+    if (selectedRun.modified) runIdentity += ' | modified=' + String(selectedRun.modified);
+    entities.push({ kind: 'optimizer_run', version: optimizeEditorAdapter.version, name: runIdentity });
+  }
+  if (state.panel === 'paretos' && state.selectedParetos && state.selectedParetos.size) {
+    Array.from(state.selectedParetos).slice(0, Math.max(0, 8 - entities.length)).forEach(function (path) {
+      var candidate = (state.paretos || []).find(function (item) { return item.path === path; });
+      if (candidate && candidate.name) {
+        entities.push({ kind: 'pareto_candidate', version: optimizeEditorAdapter.version, name: String(candidate.name) });
+      }
+    });
+  }
+  return {
+    section: editorName ? 'editor' : state.panel,
+    entities: entities,
+    focused_field: window.PBGuiAI.focusedField({
+      'config-search': { path: 'optimizer.configs.filter', label: 'Config filter' },
+      'result-search': { path: 'optimizer.results.filter', label: 'Result filter' },
+      'editor-name': { path: 'optimizer.config.name', label: 'Config name' }
+    })
+  };
+};
 
 window.PBGUI_NAV_CONFIG = {
   subtitle: optimizeEditorAdapter.navSubtitle,

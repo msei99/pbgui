@@ -49,6 +49,28 @@ def test_v7_and_v8_use_one_optimize_template() -> None:
         assert feature in page
 
 
+def test_pb8_editor_refreshes_an_ai_saved_open_config() -> None:
+    """An approved AI save should reload the matching config already open in the editor."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+
+    assert "pbgui:ai-action-completed" in page
+    assert "result.action !== 'save' && result.action !== 'save_and_queue'" in page
+    assert "state.editingConfig !== name" in page
+    assert "Reloaded the config saved by PBGui AI." in page
+    assert "result.action === 'queue_backtests'" in page
+    assert "buildBacktestMainPageUrl({ panel: 'queue' })" in page
+
+
+def test_pb8_pareto_page_applies_typed_ai_selection_actions() -> None:
+    """The AI may select exact visible Pareto candidates without executing arbitrary script."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+
+    assert "pbgui:ai-ui-action" in page
+    assert "action.type !== 'optimize.select_paretos'" in page
+    assert "state.selectedParetos.add(pathsByName.get(name))" in page
+    assert "event.preventDefault()" in page
+
+
 def test_optimize_log_waits_for_first_evaluation_when_target_is_known() -> None:
     """A configured iteration target must not format a missing evaluation count."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")

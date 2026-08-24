@@ -273,6 +273,15 @@ body {
   var configEditor = document.getElementById('config-editor');
   var resultsPanel = document.getElementById('results-panel');
   var calcStatus   = document.getElementById('calc-status');
+  window.PBGuiAI.registerPageContext({
+    id: 'balance-calculator',
+    getContext: function () {
+      var entities = [];
+      if (selInstance.value) entities.push({ kind: 'run_config', version: INIT_VERSION || 'v7', name: selInstance.value });
+      if (selExchange.value) entities.push({ kind: 'exchange', name: selExchange.value });
+      return { section: 'Calculator', entities: entities };
+    }
+  });
 
   // ── Populate exchanges ──────────────────────────────────
   EXCHANGES.forEach(function(ex) {

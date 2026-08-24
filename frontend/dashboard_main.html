@@ -784,7 +784,7 @@ html, body {
   <iframe id="tpl-iframe" src=""></iframe>
 </div>
 
-<script src="/app/js/pbgui_dialogs.js?v=5"></script>
+<script src="/app/js/pbgui_dialogs.js?v=8"></script>
 <script>
 (function () {
   'use strict';
@@ -1532,6 +1532,16 @@ html, body {
       window.PBGuiSharedHelp.open('dashboard');
     };
     window.PBGUI_HELP_OPENER = window._openDashboardHelp;
+    window.PBGUI_AI_PAGE_CONTEXT = function () {
+      var names = selectedDashboards.length ? selectedDashboards : (currentDash ? [currentDash] : []);
+      return {
+        section: 'Dashboards',
+        entities: names.slice(0, 8).map(function (name) { return { kind: 'dashboard', name: name }; }),
+        focused_field: window.PBGuiAI.focusedField({
+          'sidebar-search': { path: 'dashboard.filter', label: 'Dashboard filter' }
+        })
+      };
+    };
   }());
 
 }());

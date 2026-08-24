@@ -877,6 +877,28 @@ def test_add_to_queue_accepts_shared_editor_inline_result_config(tmp_path, monke
     assert saved["config_snapshot"]["backtest"]["base_dir"] == "backtests/pbgui/result-retest"
 
 
+def test_add_to_queue_is_idempotent_for_ai_operation_id(tmp_path, monkeypatch) -> None:
+    """Approval recovery must not duplicate an already published PB8 backtest job."""
+    _configs, _v7_configs, queue, _logs = _patch_roots(tmp_path, monkeypatch)
+    config = {"config_version": "v8.0.0", "backtest": {"exchanges": ["bybit"]}}
+    monkeypatch.setattr(backtest_v8, "prepare_pb8_config", lambda value, **_kwargs: value)
+    monkeypatch.setattr(
+        backtest_v8,
+        "save_prepared_pb8_config",
+        lambda value, path: Path(path).write_text(json.dumps(value), encoding="utf-8") or value,
+    )
+
+    first = backtest_v8.add_to_queue(
+        {"name": "ai-retest", "config": config, "operation_id": "a" * 32 + "_0_0"}, session=None
+    )
+    second = backtest_v8.add_to_queue(
+        {"name": "ai-retest", "config": config, "operation_id": "a" * 32 + "_0_0"}, session=None
+    )
+
+    assert second == {"ok": True, "filename": first["filename"], "idempotent": True}
+    assert len(list(queue.glob("*.json"))) == 1
+
+
 def test_worker_launches_pb8_cli_with_queue_snapshot(tmp_path, monkeypatch) -> None:
     """The worker must launch the PB8 CLI from PB8 cwd using its isolated snapshot."""
     _configs, _v7_configs, queue, _logs = _patch_roots(tmp_path, monkeypatch)

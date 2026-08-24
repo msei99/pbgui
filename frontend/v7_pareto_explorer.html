@@ -4727,6 +4727,16 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   }
 
   window.PBGUI_HELP_OPENER = openGuide;
+  window.PBGUI_AI_PAGE_CONTEXT = function () {
+    return {
+      section: state.stage,
+      entities: state.selectedConfigIndex == null ? [] : [{
+        kind: 'pareto_config',
+        version: optimizeVersion(),
+        name: 'config #' + String(state.selectedConfigIndex)
+      }]
+    };
+  };
 
   window.PBGUI_NAV_CONFIG = {
     subtitle: 'PB' + String(window.OPTIMIZE_VERSION || 'v7') + ' PARETO EXPLORER',

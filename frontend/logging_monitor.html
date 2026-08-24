@@ -378,7 +378,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
   var PBGUI_SERIAL   = "%%SERIAL%%";
 </script>
 <script src="/app/js/log_viewer_panel.js?v=29"></script>
-<script src="/app/js/pbgui_dialogs.js?v=5"></script>
+<script src="/app/js/pbgui_dialogs.js?v=8"></script>
 <script src="/app/js/shared_help_overlay.js?v=6"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
@@ -388,6 +388,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxyge
 <script>
 /* ── Nav config ─────────────────────────────────────────── */
 window.PBGUI_NAV_CONFIG = { subtitle: 'Logging', current: 'system_logging', apiBase: API_BASE, version: PBGUI_VERSION, serial: PBGUI_SERIAL };
+window.PBGuiAI.registerPageContext({
+  id: 'logging',
+  getContext: function () { return { section: 'Logging' }; }
+});
 
 
 /* ── HTTP helpers ────────────────────────────────────────── */

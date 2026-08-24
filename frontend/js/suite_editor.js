@@ -136,7 +136,8 @@ function suiteLoad(cfg, opts) {
   var nextScenarios = Array.isArray(bt.scenarios) ? JSON.parse(JSON.stringify(bt.scenarios)) : [];
   _suiteState.enabled = !!bt.suite_enabled;
   _suiteState.scenarios = nextScenarios;
-  _suiteState.aggregate = bt.aggregate ? JSON.parse(JSON.stringify(bt.aggregate)) : { default: 'mean' };
+  var reducer = bt.reducer || bt.aggregate;
+  _suiteState.aggregate = reducer ? JSON.parse(JSON.stringify(reducer)) : { default: 'mean' };
   if (opts.preserveEdit && _suiteState.enabled && prevEditIdx >= 0) {
     var nextEditIdx = -1;
     if (prevLabel) {

@@ -918,7 +918,7 @@
         </div>
     </div>
 
-    <script src="/app/js/pbgui_dialogs.js?v=5"></script>
+    <script src="/app/js/pbgui_dialogs.js?v=8"></script>
     <script>
         var TOKEN = "%%TOKEN%%";
         var API_ORIGIN = "%%API_ORIGIN%%";
@@ -1577,6 +1577,9 @@
             });
         }());
 
+        window.PBGUI_AI_PAGE_CONTEXT = function () {
+            return { section: state.activeSection === 'password' ? 'Authentication settings' : state.activeSection };
+        };
         loadBootstrap();
     </script>
     <script>

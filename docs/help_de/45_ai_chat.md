@@ -1,0 +1,115 @@
+# AI Chat
+
+## Zweck
+
+AI Chat ist die erste produktive PBGui-AI-Integration. Sie verbindet Provider-Chat mit kontrollierten PBGui-Capabilities.
+
+Der Agent kann PB7/PB8-Optimizer-Configs, Optimizer-Run-Summaries, Backtest-Summaries und dynamische Optimizer-Metadaten auflisten und lesen. Logs, Zugangsdaten, beliebige Dateien, Checkpoints und rohe Result-Artefakte bleiben unzugaenglich.
+
+Der Agent kann ausserdem eine normale Python-Analyse ueber begrenzte JSON-Daten vorschlagen, die der Unterhaltung bereits zur Verfuegung stehen. PBGui entfernt Felder mit Secret- oder Host-Pfad-Namen, zeigt vor der Freigabe das exakte Skript und das bereinigte JSON und startet erst nach einer expliziten owner-, conversation- und digest-gebundenen Freigabe.
+
+Bei Passivbot-Fragen kann der Agent Dokumentation und Source-Dateien aus dem exakt installierten PB7/PB8-Checkout durchsuchen. Ergebnisse enthalten installierten Git-Commit, relativen Pfad, Zeilenbereich und bei Verwendung des offiziellen Passivbot-Repositories einen commit-gepinnten GitHub-Link. Source-Inspektion ist rein textuell; PBGui fuehrt den gelesenen Code niemals aus, importiert oder veraendert ihn nicht.
+
+Fuer PB8 kann er eine vollstaendige Optimizer-Config validieren und Speichern, Speichern plus Queueing einer neuen Config oder Queueing einer bestehenden Config vorschlagen. Diese Tools erzeugen nur ein Proposal. PBGui zeigt die exakte Aktion und verlangt vor der Ausfuehrung eine explizite Freigabe. PB7-Mutationen bleiben deaktiviert, weil die aktuellen Queue-Snapshots noch nicht die erforderlichen Immutabilitaets- und Concurrency-Garantien besitzen.
+
+Die ChatGPT-Runtime startet in einem privaten leeren Workspace. Lokale Ausfuehrung, Websuche, Memory, Multi-Agent und MCP sind deaktiviert. Nur der PBGui-Dynamic-Capability-Namespace ist verfuegbar. Command- oder Datei-Aenderungsanfragen werden abgelehnt.
+
+Freigegebene Python-Analyse ist eine separate Fail-closed-Capability. Sie laeuft mit Bubblewrap in einem leeren temporaeren Workspace, mit read-only Python-Runtime und installierten Bibliotheken wie NumPy/Pandas, soweit vorhanden. Sie besitzt einen isolierten Netzwerk-Namespace, keinen Zugriff auf Host-Home, PBGui-Daten, Zugangsdaten oder andere Host-Dateien, eine bereinigte Umgebung, JSON ueber Standard Input, begrenztes Standard Output/Error, Resource-Limits und einen kurzen Timeout. Wenn Bubblewrap oder Resource-Limiting fehlt, gibt es keinen unsandboxed Fallback.
+
+## ChatGPT
+
+ChatGPT verwendet den offiziellen, mit PBGui installierten Codex-Login.
+
+1. **Browser login** waehlen, wenn PBGui und Browser auf demselben Rechner laufen.
+2. Die angezeigte HTTPS-Adresse oeffnen.
+3. Die normale ChatGPT-Browserautorisierung abschliessen.
+4. Warten, bis PBGui ChatGPT als verbunden meldet.
+5. Ein fuer das Konto sichtbares Modell waehlen und eine Nachricht senden.
+
+Fuer einen entfernten oder headless PBGui-Host stattdessen **Device code** waehlen. Device Login erfordert aktivierte Geraetecode-Autorisierung in den ChatGPT-Sicherheitseinstellungen und die Eingabe des angezeigten Einmalcodes.
+
+PBGui verwendet fuer diese Verbindung keinen OpenAI-Platform-API-Key. Verfuegbare Modelle und Limits haengen vom verbundenen ChatGPT-Konto ab.
+Der Modell-Picker wird dynamisch aus Codex `model/list` geladen; PBGui pflegt keine feste ChatGPT-Modellliste.
+
+## OpenCode Zen und Go
+
+OpenCode Zen und OpenCode Go verwenden denselben OpenCode-Workspace-Key. Zen enthaelt wechselnde Gratis- und Pay-go-Modelle; Go ergaenzt Abo-Modelle und inkludierte Nutzung.
+
+Die OpenCode-Provider-Karte enthaelt **Get OpenCode Go**. Der Button oeffnet die Abo-Seite ueber einen PBGui-Referral-Link. Dies ist ein Affiliate-aehnlicher Referral: Nach dem aktuellen OpenCode-Programm koennen Einladender und neuer Abonnent ein Account-Guthaben erhalten. Abo-Bedingungen und Referral-Praemien werden von OpenCode kontrolliert und koennen sich aendern.
+
+1. Den Key in der OpenCode-Account-Konsole erzeugen oder kopieren.
+2. In der OpenCode-Karte eingeben und **Connect** waehlen.
+3. PBGui prueft den Key und speichert ihn serverseitig in einer owner-only Datei.
+4. Ein verfuegbares Modell waehlen und eine Nachricht senden.
+
+PBGui unterstuetzt beide Kataloge ueber Responses-, Chat-Completions- und Messages-Endpunkte. Verfuegbare IDs kommen aus den Live-Zen-/Go-Katalogen; Namen, Protokoll, Kosten und Limits aus OpenCodes Live-Modellmetadaten. Gratis-Modelle werden aus Nullkosten erkannt, zuerst angezeigt und mit **Free** markiert. Neue Modelle erscheinen automatisch, wenn sie ein unterstuetztes Protokoll verwenden; entfernte Modelle verschwinden. Contributor-Modelle, die Prompts und Antworten fuer Training verwenden koennen, sind deutlich markiert.
+
+**Check free models** stellt eine serielle Verfuegbarkeitspruefung im Hintergrund ein. Der letzte owner-spezifische Status wird beim Modell angezeigt, ohne manuelle Wiederholungen zu sperren. Modelle mit Training-Opt-in werden niemals automatisch geprueft.
+
+PBGui-Capability-Tools werden ueber OpenCode Chat Completions, OpenAI Responses und Anthropic Messages mit dem jeweils nativen Tool-Call-Vertrag unterstuetzt. PBGui aktiviert sie nur, wenn die Live-Modellmetadaten Tool-Calls anbieten. Tool-faehige Auswahlen tragen das Label **PBGui tools**; Modelle ohne diese Faehigkeit bleiben als **Chat only** markiert.
+
+Modelle mit angebotenen Reasoning-Varianten zeigen eine **Effort**-Auswahl. **Standard** sendet keinen Override und behaelt den Provider-Default. Alle weiteren Optionen kommen in Provider-Reihenfolge vom ausgewaehlten Modell. Deshalb koennen Namen wie `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` oder providerspezifische Werte erscheinen. PBGui ergaenzt keine feste Variantenliste.
+
+Mit **Chat only** markierte Modelle koennen installierte Passivbot-Dokumentation, Source oder aktuelle PBGui-Daten nicht einsehen. Sie erhalten keine Capability-Regeln oder Tool-Namen und antworten direkt aus allgemeinem Wissen. Fuer Antworten mit lokalen oder installierten Runtime-Belegen ein Modell mit **PBGui tools** waehlen. Responses- und Messages-Modelle koennen nun installierte Versionen, Dokumentation und Source ueber ihre nativen Function-Result-Formate verarbeiten, ohne unbeschraenkten Dateisystemzugriff zu erhalten.
+
+## Aktionsfreigabe
+
+PBGui trennt reversible Browseraktionen von persistenten Aktionen. Eine ausdrueckliche Aufforderung zur Auswahl von Pareto-Kandidaten kann die exakten, an den Run gebundenen Zeilen direkt in der offenen Optimize-Seite markieren. Dabei wird weder modellgeneriertes JavaScript noch ein beliebiger DOM-Selektor ausgefuehrt. Die Aktion bleibt ueber Navigation hinweg offen, bis die passende Seite sie verarbeitet und bestaetigt.
+
+"Stabil" besitzt fuer die Optimizer-Auswahl eine kanonische Bedeutung: eine glatte steigende Strategy-Equity-Kurve mit niedriger Choppiness und geringem Exponential-Fit-Fehler, flachen Drawdowns, kurzen Underwater-/Recovery-Phasen und starkem Sharpe/Sortino. "Stabil mit gutem Gewinn" verwendet ohne Rueckfrage das Balanced-Preset mit 60% Stabilitaet und 40% Profit. Wenn ein wirklich widerspruechliches Ziel, ein fehlendes hartes Limit oder eine nicht aufloesbare Resource eine Klaerung erfordert, zeigt PBGui 2-5 klickbare Quick Replies statt eines Fragebogens. Null strikte Treffer erlauben keine automatische Lockerung: Alternativen aus dem Vollscan werden getrennt geliefert und muessen vor Auswahl oder Queueing ueber eine solche Auswahl bestaetigt werden.
+
+Wenn der Agent eine PB8-Save-/Queue-Aktion, eine Backtest-Matrix aus Pareto-Kandidaten und Exchanges, Dashboard-Erstellung oder -Bearbeitung oder eine Python-Analyse vorschlaegt, zeigt PBGui die Approval-Karte sowohl auf der vollstaendigen Seite als auch im Drawer. Fuer Python zeigt die Karte exakten Code, bereinigte Eingabe, Input-Summary und Payload-Digest. Backtest-Proposals zeigen alle Kandidaten, Exchanges, die gesamte Jobanzahl und ob Queue-Autostart sofort beginnen kann. Dashboard-Proposals koennen ein Template oder ein freies semantisches Layout mit 1-10 Reihen, 1-2 Spalten, Widget-Positionen, Usern, Perioden, Chart-Modi, Widget-Optionen, Hoehen und Orders-zu-Positions-Verknuepfungen verwenden. Bestehende Dashboards koennen zellenweise gelesen und geaendert werden, waehrend andere Einstellungen erhalten bleiben; bei einer Aenderung nach dem Review schlaegt die Freigabe fehl. **Review & approve** oeffnet den gemeinsamen PBGui-Bestaetigungsdialog; nur dieses exakte owner-, conversation- und digest-gebundene Payload darf laufen. Ablehnen oder Schliessen veraendert nichts. PBGui laedt offene Proposals beim Wiederherstellen einer Unterhaltung und nach jeder Freigabe oder Ablehnung erneut vom Server. Eine abgelaufene oder bereits erledigte Karte gilt dadurch nicht als aktuell.
+
+Nachdem eine Pareto-Backtest-Matrix aus Optimize freigegeben und gequeued wurde, navigiert PBGui direkt zur PB8-Backtest-Queue. Dort sind die neu erstellten Jobs und deren aktueller Status ohne weiteren manuellen Seitenwechsel sichtbar.
+
+Offene Reviews bleiben sieben Tage verfuegbar und ueberleben API-Restarts. Beim Approve wird der aktuelle Config-Digest weiterhin erneut geprueft, sodass ein altes Proposal keine zwischenzeitlich geaenderte Config ueberschreiben kann.
+
+Python-stdout wird wenn moeglich als striktes JSON, sonst als begrenzter Text zurueckgegeben. Begrenztes stderr, Exit-Status, Timeout-Status und Truncation werden mit dem Resultat angezeigt. Fuer eigene Berechnungen ueber einen ganzen Optimizer-Run kann der Agent Python direkt an eine Optimizer-Run-Resource binden: PBGui loest alle Pareto-Kandidaten und deren bereinigte Metriken serverseitig in Sandbox-stdin auf, ohne den kompletten Datensatz durch Modell-Toolargumente zu senden. Das Review zeigt den exakten Code sowie Resource, Kandidatenzahl, Bytemenge und Dataset-Digest. Gewoehnliche gewichtete Min-/Max-Rankings koennen das native Complete-Run-Ranking verwenden, das ebenfalls alle Kandidaten scannt und keine Gesamtaussage aus einem auf 200 Zeilen begrenzten Preview ableitet.
+
+Nach ausdruecklicher Freigabe kann Python ausserdem Read-only-Mounts unter `/workspace/pbgui_data`, `/workspace/pb7` und `/workspace/pb8` erhalten. Normale Dateien, Datensaetze, Datenbanken, Configs, Optimizer-/Backtest-Artefakte, Source und Dateien unter `data/logs` sind direkt lesbar, ohne sie in Modellargumente zu kopieren. Credential-/API-Key-/Token-/Passwort-/Session-/Cookie-/SSH-/Private-Key-/Zertifikatspfade, `.env`, Git-Metadaten, virtuelle Environments und alle symbolischen Links werden immer maskiert. Die Roots sind nicht beschreibbar und die Sandbox besitzt weiterhin keinen Netzwerkzugriff. Proposal-Entscheidungen und Resultate verwenden die vorhandene owner-only durable Action-History. Python-Analyse ist kein Restart-Blocker: Graceful Shutdown bricht sie ab und wartet auf das Prozessende; ein hart unterbrochener Lauf wird als interrupted gespeichert und niemals erneut ausgefuehrt.
+
+Der Key wird nach dem Verbindungsversuch im Browser geleert. PBGui zeigt einen gespeicherten Key niemals an.
+
+## Unterhaltungen
+
+Unterhaltungen und abgeschlossene Nachrichten werden serverseitig in einer owner-only History gespeichert. Die vollstaendige AI-Chat-Seite und der globale Drawer verwenden dieselbe Conversation-Liste. Die Auswahl eines History-Eintrags stellt Nachrichten, zuletzt verwendeten Provider, Modell, Reasoning-Aufwand, laufenden Zustand, Fehler und offene Proposals wieder her. Provider, Modell und Reasoning-Aufwand koennen zwischen Turns frei gewechselt werden, ohne eine neue Conversation zu erzeugen. Wenn dafuer ein neuer zustandsbehafteter Provider-Thread erforderlich ist, uebergibt PBGui ein begrenztes Transcript, damit das ausgewaehlte Modell im bestehenden Kontext fortfahren kann. **New chat** bereitet ausdruecklich eine weitere Unterhaltung vor, ohne alte History zu loeschen. **Delete** verwendet einen expliziten PBGui-Dialog und entfernt nur die ausgewaehlte Unterhaltung. Der globale AI-Button in der oberen Navigation oeffnet auf jeder authentifizierten PBGui-Hauptseite einen einklappbaren Drawer von rechts; die vollstaendige Seite bleibt fuer Provider-Setup und groessere Sitzungen erhalten.
+
+Auf dem Desktop laesst sich die Breite am linken Rand vom kompakten bedienbaren Minimum bis zur gesamten Browserbreite ziehen. PBGui speichert sie als owner-only serverseitige Einstellung und stellt sie auf anderen Seiten und in spaeteren Sitzungen wieder her. Ein kleineres Browserfenster begrenzt den gespeicherten Wert nur temporaer auf den verfuegbaren Viewport. Auf Mobilgeraeten bleibt der Drawer unabhaengig davon vollbreit.
+
+In beiden Oberflaechen gestartete Turns gehoeren dem API-Prozess und nicht dem Browserrequest. Ein Wechsel auf eine andere PBGui-Seite, das Schliessen der vollstaendigen Seite, der Wechsel der Unterhaltung, **New chat** oder das Einklappen des Drawers beendet den Turn nicht. Beide Oberflaechen verbinden sich ueber den persistenten Conversation-Snapshot erneut; nur **Stop** bricht aktive Arbeit ab. Bei einem API-Restart wird unfertige Arbeit als unterbrochen markiert und niemals automatisch erneut ausgefuehrt.
+
+Jede Nachricht bietet **Copy**. User-Nachrichten bieten zusaetzlich **Rewind**. Rewind entfernt diese Nachricht und alle folgenden Antworten persistent, verwirft offene Proposals des entfernten Zweigs, setzt den Provider-Kontext zurueck und stellt den Prompt zum Bearbeiten oder erneuten Senden wieder her.
+
+Proposal-Reviews zeigen einen rot/gruenen Feld-Diff statt rohem JSON. Entfernte Werte beginnen mit `-`, neue Werte mit `+`, darueber steht der geaenderte Config-Pfad. Review- und Raw-JSON-Bereich sind vertikal vergroesserbar; Reject und Review & approve bleiben in einem Sticky-Footer sichtbar.
+
+Wenn ein Turn fehlschlaegt und sein Prompt in der aktuellen Browserseite noch vorhanden ist, sendet **Retry** exakt diesen Prompt erneut. PBGui speichert fehlgeschlagene Prompts absichtlich nicht separat. Eine spaeter wiederhergestellte Seite zeigt deshalb den Fehler, rät aber keinen frueheren Prompt und bietet keinen unsicheren Retry an, der eine abgeschlossene Anfrage duplizieren koennte.
+
+Der Drawer kann einen kleinen strukturierten Seitenkontext mitsenden: Page-Key, passendes Help-Topic, aktuellen Abschnitt, explizit registrierte Ressourcenreferenzen und optional das fokussierte Feld. Der Optimize-Pareto-Kontext identifiziert den aktuell offenen Run ueber Name, Pareto-Anzahl und Modified-Zeit und enthaelt bis zu den aktuell markierten Kandidatennamen. Dadurch behaelt eine Folgeanweisung wie „backteste diese drei“ die sichtbare Auswahl. Context-Chips zeigen, was angehaengt wird. Der Kontext wird als nicht vertrauenswuerdige Bezeichner behandelt und gewaehrt niemals weitere Rechte. Produktive Seiten registrieren ausgewaehlte Configs, Dashboards, Coins, Exchanges, Hosts, Abschnitte und explizit freigegebene nicht-sensitive Fokusfelder ueber `PBGuiAI.registerPageContext()`.
+
+PBGui durchsucht keine Seitentexte, Tabellen, Formulare, URLs oder Browser-Storage. Die gemeinsame Context-Grenze verwirft Credential-, Passwort-, Token-, API-Key-, Private-Key-, Session-, Cookie-, SSH-, Secret- und Log-Felder. API Keys und Logging liefern nur eine nicht-sensitive Benutzeridentitaet beziehungsweise den Abschnitt; Credential- oder Log-Werte werden nie aufgenommen.
+
+Fuer kontextbezogene Hilfe kann der Agent die kanonischen englischen/deutschen PBGui-Guides lesen oder durchsuchen und bei Implementierungsdetails anschliessend die vorhandenen Tools fuer installierte Passivbot-Dokumentation und Source verwenden.
+
+Waerend eine Antwort laeuft, zeigt die Statuszeile Laufzeit und sichere Aktivitaetsangaben wie Dokumentationssuche oder Source-Lesen. Tool-Argumente, Provider-Reasoning, Prompts und Resultate werden dort nicht offengelegt. **Stop** bricht den aktiven Provider-Request ab.
+
+Activity und Retry stehen unten im Chat beim Composer. Wenn ein OpenAI-Responses-Modell eine ausdrueckliche Reasoning-Summary liefert, speichert und zeigt PBGui sie eingeklappt unter **Reasoning summary**. Verborgene oder verschluesselte Gedankengaenge werden niemals offengelegt.
+
+Reasoning-Varianten wie `high`, `xhigh`, `max` oder `ultra` koennen nach einem Tool-Resultat mehrere Minuten weiterarbeiten, bevor Antworttext erscheint. Nach Abschluss einer PBGui-Capability wechselt der Status deshalb von der Tool-Aktion zu **model is processing results**, damit eine langsame Reasoning-Phase nicht wie eine haengende lokale Suche wirkt. PBGui beendet einen Turn, der den begrenzten Zeitrahmen ueberschreitet, mit einem normalen Timeout-Fehler.
+
+## Datenschutz
+
+Nachrichten und aktivierter Seitenkontext werden an den ausgewaehlten externen Anbieter gesendet. PBGui speichert die Conversation-History privat, schreibt Prompts und Antworten aber nicht in operative Logs. Vor dem Senden sensibler Informationen sollten die aktuellen Datenschutz-, Aufbewahrungs- und Abobedingungen des Anbieters geprueft werden.
+
+## Fehlerbehebung
+
+- **Runtime missing:** Die PBGui-Abhaengigkeiten inklusive `openai-codex-cli-bin` installieren und den API-Service neu starten.
+- **Browser-Login-Callback schlaegt fehl:** Browser Login setzt voraus, dass Browser und PBGui API auf demselben Rechner laufen; fuer einen entfernten Host Device code verwenden.
+- **Device login unavailable:** Falls erforderlich, Device-Code-Login in den Sicherheitseinstellungen des ChatGPT-Kontos aktivieren.
+- **Authentication failed:** Den Anbieter erneut verbinden und Abo beziehungsweise Key pruefen.
+- **Usage limit reached:** Auf das Zuruecksetzen des Anbieterlimits warten oder einen anderen verbundenen Anbieter waehlen.
+- **Selected model is currently unavailable:** Das Modell wird angeboten, besitzt aktuell aber keine gesunde Upstream-Kapazitaet; ein anderes Modell waehlen und spaeter erneut versuchen.
+- **Eine Tool-faehige Antwort benoetigt mehrere Requests:** Jedes Capability-Resultat muss an das zustandslose Modell zurueckgesendet werden. PBGui begrenzt dies auf drei Capability-Runden und fordert danach eine finale Antwort aus den gesammelten Resultaten an.
+- **Python analysis sandbox is unavailable:** Bubblewrap und `prlimit` auf dem PBGui-Host installieren. PBGui bietet absichtlich keinen unsandboxed Fallback.
+- **Python-Analyse hat einen Timeout oder gekuerzte Ausgabe:** Kleinere Eingabedaten, eine einfachere Berechnung oder ein kompakteres JSON-Resultat anfordern.
+- **ChatGPT bleibt bei model is processing results:** Hoeherer Reasoning-Aufwand kann nach Abschluss des lokalen Tools deutlich laenger dauern. Falls sich das Warten nicht mehr lohnt, **Stop** waehlen oder einen neuen Chat mit Standard beziehungsweise einer niedrigeren vom Modell angebotenen Variante starten.
+- **No supported models:** Nach dem Verbinden aktualisieren und pruefen, ob das OpenCode-Konto aktuell Modelle im Zen- oder Go-Live-Katalog bereitstellt.

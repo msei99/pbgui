@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Chat - PBGui</title>
+<style>
+:root {
+  --bg: #0a1019;
+  --panel: #111a28;
+  --panel2: #162235;
+  --border: #26364d;
+  --text: #e5edf7;
+  --muted: #8291a8;
+  --accent: #60a5fa;
+  --green: #34d399;
+  --red: #f87171;
+  --amber: #fbbf24;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; overflow: hidden; }
+body { display: flex; flex-direction: column; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+button, input, select, textarea { font: inherit; }
+#page-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(260px, 330px) 1fr; }
+#providers { min-height: 0; overflow-y: auto; padding: 18px; border-right: 1px solid var(--border); background: #0d1521; }
+.eyebrow { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+h1 { margin: 4px 0 3px; font-size: 24px; }
+.subtitle { margin: 0 0 16px; color: var(--muted); }
+.notice { margin-bottom: 16px; padding: 10px 12px; border: 1px solid rgba(251,191,36,.32); border-radius: 8px; background: rgba(251,191,36,.07); color: #fcd97a; font-size: 12px; }
+.provider-card { margin-bottom: 12px; padding: 13px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.provider-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+.provider-name { font-weight: 750; }
+.status { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; }
+.status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #64748b; }
+.status.connected { color: var(--green); }
+.status.connected::before { background: var(--green); box-shadow: 0 0 8px rgba(52,211,153,.5); }
+.status.error { color: var(--red); }
+.status.error::before { background: var(--red); }
+.provider-help { margin-bottom: 10px; color: var(--muted); font-size: 12px; }
+.conversation-card { display: flex; min-height: 180px; flex-direction: column; }
+.conversation-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+#conversation-list { display: grid; gap: 6px; min-height: 0; overflow-y: auto; }
+.conversation-item { height: auto; min-height: 42px; padding: 7px 9px; text-align: left; }
+.conversation-item.selected { border-color: var(--accent); background: rgba(96,165,250,.12); }
+.conversation-item small { display: block; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row { display: flex; gap: 7px; }
+.row > input { min-width: 0; flex: 1; }
+.button-link { display: inline-flex; align-items: center; justify-content: center; height: 34px; padding: 0 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel2); color: var(--text); text-decoration: none; white-space: nowrap; }
+.button-link:hover { border-color: var(--accent); }
+input, select, textarea { border: 1px solid var(--border); border-radius: 7px; background: #0b1320; color: var(--text); outline: none; }
+input, select { height: 34px; padding: 0 9px; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+button { height: 34px; padding: 0 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel2); color: var(--text); cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #07111f; font-weight: 750; }
+button.danger { color: #fecaca; border-color: rgba(248,113,113,.35); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+.login-box { display: none; margin-top: 10px; padding: 10px; border-radius: 8px; background: #0b1320; border: 1px solid var(--border); }
+.login-box.visible { display: block; }
+.login-code { margin: 7px 0; font: 700 20px/1.2 ui-monospace,SFMono-Regular,monospace; letter-spacing: .08em; color: #bfdbfe; }
+.login-link { color: var(--accent); word-break: break-all; }
+#chat-shell { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+#chat-toolbar { display: flex; align-items: center; gap: 9px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: rgba(17,26,40,.92); }
+#chat-toolbar label { color: var(--muted); font-size: 12px; }
+#provider-select { width: 145px; }
+#model-select { min-width: 180px; max-width: 330px; }
+#effort-select { width: 105px; }
+#toolbar-spacer { flex: 1; }
+#chat-status-row { display: flex; align-items: center; gap: 8px; min-height: 29px; padding: 5px 16px 0; }
+#chat-status { min-width: 0; flex: 1; color: var(--muted); font-size: 12px; }
+#chat-status.error { color: var(--red); }
+#chat-status.working::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 7px; border: 2px solid rgba(96,165,250,.3); border-top-color: var(--accent); border-radius: 50%; animation: activity-spin .8s linear infinite; }
+@keyframes activity-spin { to { transform: rotate(360deg); } }
+#proposal-list { display: grid; gap: 8px; min-height: 120px; max-height: min(65dvh, 720px); resize: vertical; overflow-y: auto; padding: 7px 16px 0; }
+.proposal { display: flex; align-items: flex-start; gap: 10px; padding: 9px 11px; border: 1px solid rgba(251,191,36,.4); border-radius: 8px; background: rgba(251,191,36,.07); }
+.proposal-main { min-width: 0; flex: 1; }
+.proposal-title { color: #fde68a; font-weight: 750; }
+.proposal-detail { color: var(--muted); font-size: 12px; }
+.proposal-actions { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; background: rgba(27,33,31,.96); }
+.proposal-review { margin-top: 6px; color: var(--muted); font-size: 12px; }
+.proposal-review summary { cursor: pointer; color: #bfdbfe; }
+.proposal-review pre { min-height: 140px; height: 240px; max-height: none; resize: vertical; overflow: auto; padding: 7px; border-radius: 6px; background: #08101b; color: #cbd5e1; white-space: pre-wrap; }
+.proposal-diff { display: grid; gap: 6px; min-height: 140px; height: 240px; resize: vertical; overflow: auto; margin-top: 6px; padding: 8px; border-radius: 6px; background: #08101b; font: 11px/1.4 ui-monospace,SFMono-Regular,monospace; }
+.proposal-diff-path { color: #93c5fd; font-weight: 700; }.proposal-diff-old,.proposal-diff-new { padding: 4px 7px; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }.proposal-diff-old { color: #fecaca; background: rgba(239,68,68,.12); }.proposal-diff-new { color: #bbf7d0; background: rgba(34,197,94,.12); }
+#messages { flex: 1; min-height: 0; overflow-y: auto; padding: 22px max(18px, calc((100% - 920px)/2)); }
+.empty { display: grid; place-items: center; min-height: 100%; color: var(--muted); text-align: center; }
+.empty strong { display: block; margin-bottom: 4px; color: var(--text); font-size: 17px; }
+.message { display: flex; align-items: flex-start; gap: 5px; margin-bottom: 15px; }
+.message.user { justify-content: flex-end; }
+.bubble { max-width: min(760px, 88%); padding: 11px 13px; border: 1px solid var(--border); border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.assistant .bubble { background: var(--panel); border-top-left-radius: 3px; }
+.user .bubble { background: rgba(37,99,235,.2); border-color: rgba(96,165,250,.4); border-top-right-radius: 3px; }
+.message-actions { display: flex; gap: 3px; opacity: .35; }.message:hover .message-actions,.message-actions:focus-within { opacity: 1; }.message-actions button { height: 26px; padding: 0 6px; font-size: 11px; }
+#reasoning-summary,#activity-history { margin: 4px 16px; padding: 7px 10px; border: 1px solid #26364d; border-radius: 7px; background: #0b1320; color: #bfdbfe; } #reasoning-summary summary,#activity-history summary { cursor: pointer; } #reasoning-summary pre,#activity-history pre { max-height: 180px; overflow: auto; white-space: pre-wrap; color: #94a3b8; }
+#composer { display: grid; grid-template-columns: 1fr auto; gap: 9px; padding: 12px max(18px, calc((100% - 920px)/2)) 17px; border-top: 1px solid var(--border); background: #0d1521; }
+#prompt { min-height: 46px; max-height: 150px; resize: vertical; padding: 11px; }
+#send, #stop { height: 46px; min-width: 82px; }
+#stop { background: rgba(127,29,29,.35); }
+@media (max-width: 780px) {
+  #page-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  #providers { max-height: min(220px, 35dvh); border-right: 0; border-bottom: 1px solid var(--border); }
+  #chat-toolbar { flex-wrap: wrap; }
+  #toolbar-spacer { display: none; }
+  .proposal { flex-direction: column; }
+  .proposal-actions { width: 100%; flex-wrap: wrap; }
+  .proposal-actions button { flex: 1; }
+}
+@media (max-width: 780px) and (max-height: 500px) {
+  #providers { max-height: 120px; padding: 10px 14px; }
+}
+</style>
+</head>
+<body>
+<nav id="topnav"></nav>
+<div id="page-body">
+  <aside id="providers">
+    <div class="eyebrow">Connection Test</div>
+    <h1>AI Chat</h1>
+    <p class="subtitle">Chat with PBGui using controlled capabilities.</p>
+    <div class="notice">The agent may read optimizer data and propose sandboxed Python analysis. Python analysis and PB8 save or queue actions always require your explicit approval. PB7 mutations remain disabled.</div>
+
+    <section class="provider-card">
+      <div class="provider-head">
+        <span class="provider-name">ChatGPT</span>
+        <span id="chatgpt-status" class="status">Checking</span>
+      </div>
+      <div class="provider-help">Browser login works when PBGui runs on this computer. Use Device code for a remote or headless PBGui host.</div>
+      <div class="row">
+        <button id="chatgpt-connect" class="primary">Browser login</button>
+        <button id="chatgpt-device-connect">Device code</button>
+        <button id="chatgpt-disconnect" class="danger" hidden>Disconnect</button>
+      </div>
+      <div id="login-box" class="login-box">
+        <div id="login-instructions">Open this address:</div>
+        <a id="login-link" class="login-link" target="_blank" rel="noopener noreferrer"></a>
+        <div id="login-code" class="login-code"></div>
+        <button id="login-cancel">Cancel login</button>
+      </div>
+    </section>
+
+    <section class="provider-card">
+      <div class="provider-head">
+        <span class="provider-name">OpenCode</span>
+        <span id="go-status" class="status">Checking</span>
+      </div>
+      <div class="provider-help">One OpenCode key enables Zen free/pay-go models and the models included with a Go subscription. The key is stored server-side only.</div>
+      <div id="go-connect-row" class="row">
+        <input id="go-key" type="password" autocomplete="new-password" placeholder="OpenCode Go API key" aria-label="OpenCode Go API key">
+        <button id="go-connect" class="primary">Connect</button>
+      </div>
+      <div class="row" style="margin-top:7px">
+        <a class="button-link" href="/api/ai/providers/opencode-go/subscribe" target="_blank" rel="noopener noreferrer">Get OpenCode Go</a>
+      </div>
+      <button id="go-disconnect" class="danger" hidden>Disconnect</button>
+    </section>
+
+    <section class="provider-card conversation-card">
+      <div class="conversation-head"><span class="provider-name">Conversations</span><span id="conversation-count" class="status"></span></div>
+      <div id="conversation-list"></div>
+    </section>
+  </aside>
+
+  <main id="chat-shell">
+    <div id="chat-toolbar">
+      <label for="provider-select">Provider</label>
+      <select id="provider-select" disabled></select>
+      <label for="model-select">Model</label>
+      <select id="model-select" disabled></select>
+      <label id="effort-label" for="effort-select" hidden>Effort</label>
+      <select id="effort-select" hidden disabled></select>
+      <span id="toolbar-spacer"></span>
+      <button id="refresh-health">Check free models</button>
+      <button id="clear-chat">New chat</button>
+      <button id="delete-chat" class="danger" disabled>Delete</button>
+    </div>
+    <div id="messages">
+      <div id="empty-state" class="empty"><div><strong>PBGui agent chat</strong>Ask about optimizer configs, runs, or backtests.</div></div>
+    </div>
+    <div id="proposal-list"></div>
+    <details id="reasoning-summary" hidden><summary>Reasoning summary</summary><pre id="reasoning-summary-text"></pre></details>
+    <details id="activity-history" hidden><summary>Activity</summary><pre id="activity-history-text"></pre></details>
+    <div id="chat-status-row"><div id="chat-status" aria-live="polite"></div><button id="retry-turn" class="danger" hidden>Retry</button></div>
+    <div id="composer">
+      <textarea id="prompt" maxlength="12000" placeholder="Type a message..." disabled></textarea>
+      <button id="send" class="primary" disabled>Send</button>
+      <button id="stop" class="danger" hidden>Stop</button>
+    </div>
+  </main>
+</div>
+
+<script>
+window.API_BASE = "%%API_BASE%%";
+window.PBGUI_VERSION = "%%VERSION%%";
+window.PBGUI_SERIAL = "%%SERIAL%%";
+window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authenticated: true };
+</script>
+<script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+<script src="/app/js/pbgui_dialogs.js?v=8"></script>
+<script>
+(function () {
+  'use strict';
+  var state = {
+    providers: {},
+    modelsById: {},
+    conversations: [],
+    conversationId: '',
+    requestGeneration: 0,
+    listGeneration: 0,
+    proposalGeneration: 0,
+    loginTimer: null,
+    activityTimer: null,
+    activityStartedAt: 0,
+    loginDeadline: 0,
+    loginGeneration: 0,
+    goGeneration: 0,
+    statusGeneration: 0,
+    chatGeneration: 0,
+    transitioning: false,
+    busy: false,
+    pendingMessage: '',
+    retryMessages: {}
+  };
+  var $ = function (id) { return document.getElementById(id); };
+  window.PBGuiAI.registerPageContext({
+    id: 'ai-chat',
+    getContext: function () { return { section: 'Conversations' }; }
+  });
+
+  async function api(path, options) {
+    var response = await fetch(window.API_BASE + path, Object.assign({ credentials: 'same-origin' }, options || {}));
+    var data = {};
+    try { data = await response.json(); } catch (_) {}
+    if (!response.ok) throw new Error(data.detail || 'Request failed');
+    return data;
+  }
+
+  function setNotice(message, error, working) {
+    $('chat-status').textContent = message || '';
+    $('chat-status').classList.toggle('error', !!error);
+    $('chat-status').classList.toggle('working', !!working);
+  }
+
+  function stopActivityPolling() {
+    if (state.activityTimer) clearTimeout(state.activityTimer);
+    state.activityTimer = null;
+    state.activityStartedAt = 0;
+  }
+
+  function startActivityPolling(generation, conversationId, providerLabel) {
+    stopActivityPolling();
+    state.activityStartedAt = Date.now();
+    async function poll() {
+      if (generation !== state.chatGeneration || !state.busy || conversationId !== state.conversationId) return;
+      try {
+        var result = await api('/conversations/' + encodeURIComponent(conversationId));
+        if (generation !== state.chatGeneration || !state.busy || conversationId !== state.conversationId) return;
+        applyConversationSnapshot(result);
+        var elapsed = Math.max(1, Math.round((Date.now() - state.activityStartedAt) / 1000));
+        var effort = $('effort-select').value;
+        var slowEffort = ['high', 'xhigh', 'max', 'ultra'].indexOf(effort) >= 0;
+        var timingHint = slowEffort && elapsed >= 60 ? ' · selected effort may take several minutes' : '';
+        if (result.busy) setNotice(String(result.activity || ('Waiting for ' + providerLabel)) + ' · ' + elapsed + 's' + timingHint, false, true);
+        else return;
+      } catch (_) {}
+      if (generation === state.chatGeneration && state.busy && conversationId === state.conversationId) {
+        state.activityTimer = setTimeout(poll, 700);
+      }
+    }
+    poll();
+  }
+
+  function setProviderStatus(id, connected, text, error) {
+    var element = $(id + '-status');
+    element.textContent = text;
+    element.classList.toggle('connected', connected);
+    element.classList.toggle('error', !!error);
+  }
+
+  async function refreshStatus() {
+    var generation = ++state.statusGeneration;
+    try {
+      var result = await api('/status');
+      if (generation !== state.statusGeneration) return;
+      state.providers = result.providers || {};
+      var chatgpt = state.providers.chatgpt || {};
+      var go = state.providers['opencode-go'] || {};
+      setProviderStatus('chatgpt', !!chatgpt.connected, chatgpt.connected ? ('Connected' + (chatgpt.plan ? ' · ' + chatgpt.plan : '')) : (chatgpt.available ? 'Not connected' : 'Runtime missing'), !chatgpt.available);
+      setProviderStatus('go', !!go.connected, go.connected ? 'Connected' : 'Not connected', false);
+      $('chatgpt-connect').hidden = !!chatgpt.connected || !chatgpt.available;
+      $('chatgpt-device-connect').hidden = !!chatgpt.connected || !chatgpt.available;
+      $('chatgpt-disconnect').hidden = !chatgpt.connected;
+      $('go-connect-row').hidden = !!go.connected;
+      $('go-disconnect').hidden = !go.connected;
+      await rebuildProviders();
+      if ($('login-box').classList.contains('visible') && chatgpt.connected) {
+        stopLoginPolling();
+        hideLoginBox();
+        setNotice('ChatGPT connected.', false);
+      }
+    } catch (error) {
+      if (generation === state.statusGeneration) setNotice(error.message, true);
+    }
+  }
+
+  async function rebuildProviders() {
+    var select = $('provider-select');
+    var current = select.value;
+    select.textContent = '';
+    [['chatgpt', 'ChatGPT'], ['opencode-zen', 'OpenCode Zen'], ['opencode-go', 'OpenCode Go']].forEach(function (entry) {
+      var info = state.providers[entry[0]] || {};
+      if (!info.connected) return;
+      var option = document.createElement('option');
+      option.value = entry[0];
+      option.textContent = entry[1];
+      select.appendChild(option);
+    });
+    select.disabled = state.transitioning || !select.options.length;
+    if (current && Array.from(select.options).some(function (option) { return option.value === current; })) select.value = current;
+    await loadModels();
+  }
+
+  async function loadModels(preferredModel) {
+    var provider = $('provider-select').value;
+    var generation = ++state.requestGeneration;
+    var select = $('model-select');
+    var current = preferredModel || select.value;
+    select.textContent = '';
+    state.modelsById = {};
+    select.disabled = true;
+    updateComposer();
+    if (!provider) return;
+    try {
+      var result = await api('/models?provider=' + encodeURIComponent(provider));
+      if (generation !== state.requestGeneration) return;
+      var freeGroup = null;
+      var standardGroup = null;
+      (result.models || []).forEach(function (model) {
+        state.modelsById[model.id] = model;
+        var option = document.createElement('option');
+        option.value = model.id;
+        var health = model.health && model.health.status ? ' · ' + String(model.health.status).replace(/_/g, ' ') : '';
+        option.textContent = model.name + (model.free ? ' · Free' : '') + (model.tools ? ' · PBGui tools' : ' · Chat only') + (model.training ? ' · training enabled' : '') + health;
+        option.dataset.training = model.training ? 'true' : 'false';
+        option.dataset.free = model.free ? 'true' : 'false';
+        option.title = model.retention ? ('Data retention: ' + model.retention) : '';
+        if (model.default) option.selected = true;
+        if (model.free) {
+          if (!freeGroup) { freeGroup = document.createElement('optgroup'); freeGroup.label = 'Free'; select.appendChild(freeGroup); }
+          freeGroup.appendChild(option);
+        } else {
+          if (!standardGroup) { standardGroup = document.createElement('optgroup'); standardGroup.label = 'Models'; select.appendChild(standardGroup); }
+          standardGroup.appendChild(option);
+        }
+      });
+      if (current && Array.from(select.options).some(function (option) { return option.value === current; })) select.value = current;
+      select.disabled = state.transitioning || !select.options.length;
+      rebuildEffortOptions();
+      updateEffortControl();
+      updateComposer();
+      if (!select.options.length) setNotice('No supported models are currently available.', true);
+      else showSelectedModelNotice();
+    } catch (error) {
+      if (generation === state.requestGeneration) setNotice(error.message, true);
+    }
+  }
+
+  function updateComposer() {
+    var enabled = !!$('provider-select').value && !!$('model-select').value && !state.busy && !state.transitioning;
+    $('provider-select').disabled = state.busy || state.transitioning || !$('provider-select').options.length;
+    $('model-select').disabled = state.busy || state.transitioning || !$('model-select').options.length;
+    $('prompt').disabled = !enabled;
+    $('send').disabled = !enabled;
+    $('send').hidden = state.busy;
+    $('stop').hidden = !state.busy;
+    $('stop').disabled = !state.busy;
+    updateEffortControl();
+  }
+
+  function updateEffortControl() {
+    var supported = $('effort-select').options.length > 1;
+    $('effort-label').hidden = !supported;
+    $('effort-select').hidden = !supported;
+    $('effort-select').disabled = !supported || state.busy || state.transitioning;
+    if (!supported) $('effort-select').value = '';
+  }
+
+  function rebuildEffortOptions() {
+    var select = $('effort-select');
+    var current = select.value;
+    var model = state.modelsById[$('model-select').value] || {};
+    var variants = Array.isArray(model.reasoning_variants) ? model.reasoning_variants : [];
+    select.textContent = '';
+    var standard = document.createElement('option');
+    standard.value = '';
+    standard.textContent = 'Standard' + (model.default_effort ? ' · default: ' + String(model.default_effort) : '');
+    select.appendChild(standard);
+    variants.forEach(function (variant) {
+      if (!variant || typeof variant.id !== 'string' || !variant.id) return;
+      var option = document.createElement('option');
+      option.value = variant.id;
+      option.textContent = String(variant.label || variant.id);
+      option.title = String(variant.description || '');
+      select.appendChild(option);
+    });
+    if (current && Array.from(select.options).some(function (option) { return option.value === current; })) select.value = current;
+    updateEffortControl();
+  }
+
+  function showSelectedModelNotice() {
+    var selected = $('model-select').selectedOptions[0];
+    var model = selected ? state.modelsById[selected.value] : null;
+    if (selected && selected.dataset.training === 'true') {
+      setNotice('This contributor model may use prompts and responses for model training.', true);
+    } else if (model && !model.tools) {
+      setNotice('Chat-only model: it cannot inspect installed Passivbot documentation or current PBGui data.', false);
+    } else {
+      setNotice('', false);
+    }
+  }
+
+  function setTransitioning(value) {
+    state.transitioning = !!value;
+    $('provider-select').disabled = state.transitioning || !$('provider-select').options.length;
+    $('model-select').disabled = state.transitioning || !$('model-select').options.length;
+    $('clear-chat').disabled = state.transitioning;
+    $('delete-chat').disabled = state.transitioning || !state.conversationId;
+    $('chatgpt-connect').disabled = state.transitioning || state.loginDeadline > 0 || $('login-box').classList.contains('visible');
+    $('chatgpt-device-connect').disabled = state.transitioning || state.loginDeadline > 0 || $('login-box').classList.contains('visible');
+    $('chatgpt-disconnect').disabled = state.transitioning;
+    $('go-connect').disabled = state.transitioning;
+    $('go-disconnect').disabled = state.transitioning;
+    updateComposer();
+  }
+
+  function addMessage(role, text, messageIndex) {
+    $('empty-state').hidden = true;
+    var row = document.createElement('div');
+    row.className = 'message ' + role;
+    var bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = text;
+    if (role !== 'user') appendDetectedQuickReplies(bubble, text);
+    row.appendChild(bubble);
+    var actions = document.createElement('div');
+    actions.className = 'message-actions';
+    var copy = document.createElement('button'); copy.type = 'button'; copy.textContent = 'Copy'; copy.addEventListener('click', function () { copyChatMessage(text); }); actions.appendChild(copy);
+    if (role === 'user' && Number.isInteger(messageIndex)) {
+      var rewind = document.createElement('button'); rewind.type = 'button'; rewind.textContent = 'Rewind'; rewind.addEventListener('click', function () { rewindChatMessage(messageIndex); }); actions.appendChild(rewind);
+    }
+    row.appendChild(actions);
+    $('messages').appendChild(row);
+    $('messages').scrollTop = $('messages').scrollHeight;
+  }
+
+  function detectedQuickReplies(text) {
+    var value = String(text || '');
+    if (!/(soll ich|möchtest du|welche option|choose|should i|would you like)/i.test(value)) return [];
+    var choices = [];
+    value.split('\n').forEach(function (line) {
+      var match = line.match(/^\s*\d+[.)]\s*(?:\*\*)?(.+?)(?:\*\*)?\s*$/);
+      if (!match) return;
+      var choice = match[1].replace(/\*\*/g, '').trim();
+      if (choice && choices.length < 5) choices.push(choice);
+    });
+    return choices.length >= 2 ? choices : [];
+  }
+
+  function appendDetectedQuickReplies(bubble, text) {
+    var choices = detectedQuickReplies(text);
+    if (!choices.length) return;
+    var options = document.createElement('div'); options.className = 'message-actions inline-choices'; options.style.opacity = '1'; options.style.marginTop = '8px';
+    choices.forEach(function (choice) {
+      var button = document.createElement('button'); button.type = 'button'; button.textContent = choice.length > 80 ? choice.slice(0, 77) + '...' : choice; button.title = choice;
+      button.addEventListener('click', function () { sendMessage(choice); }); options.appendChild(button);
+    });
+    bubble.appendChild(options);
+  }
+
+  function renderConversationMessages(messages) {
+    Array.from($('messages').querySelectorAll('.message')).forEach(function (node) { node.remove(); });
+    var rows = Array.isArray(messages) ? messages : [];
+    rows.forEach(function (message, index) { addMessage(message.role === 'user' ? 'user' : 'assistant', message.content || '', index); });
+    if (state.busy && state.pendingMessage && (!rows.length || rows[rows.length - 1].content !== state.pendingMessage)) {
+      addMessage('user', state.pendingMessage);
+    }
+    $('empty-state').hidden = rows.length > 0 || !!state.pendingMessage;
+  }
+
+  async function copyChatMessage(text) {
+    try { await navigator.clipboard.writeText(String(text || '')); setNotice('Message copied.', false); }
+    catch (_) { setNotice('Clipboard access was denied by the browser.', true); }
+  }
+
+  async function rewindChatMessage(messageIndex) {
+    if (!state.conversationId || state.busy) return;
+    var confirmed = await window.PBGuiDialogs.confirm({ title: 'Rewind AI chat', message: 'Remove this message and every response after it?', confirmText: 'Rewind' });
+    if (!confirmed) return;
+    try {
+      var result = await api('/conversations/' + encodeURIComponent(state.conversationId) + '/rewind', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message_index: messageIndex }) });
+      $('prompt').value = String(result.restored_prompt || '');
+      applyConversationSnapshot(result);
+      setNotice('Chat rewound. Edit or resend the restored prompt.', false);
+    } catch (error) { setNotice(error.message, true); }
+  }
+
+  function renderConversationList() {
+    var list = $('conversation-list');
+    list.textContent = '';
+    $('conversation-count').textContent = String(state.conversations.length);
+    state.conversations.forEach(function (conversation) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'conversation-item' + (conversation.conversation_id === state.conversationId ? ' selected' : '');
+      var title = document.createElement('span');
+      title.textContent = conversation.title || 'New chat';
+      var meta = document.createElement('small');
+      meta.textContent = String(conversation.model || '') + (conversation.busy ? ' · working' : conversation.last_error ? ' · needs attention' : '');
+      button.appendChild(title);
+      button.appendChild(meta);
+      button.addEventListener('click', function () { loadConversation(conversation.conversation_id); });
+      list.appendChild(button);
+    });
+  }
+
+  function applyConversationSnapshot(conversation) {
+    if (!conversation || conversation.conversation_id !== state.conversationId) return;
+    state.busy = !!conversation.busy;
+    if (!state.busy) { state.pendingMessage = ''; stopActivityPolling(); }
+    renderConversationMessages(conversation.messages || []);
+    renderUiActions(conversation.conversation_id, conversation.ui_actions || []);
+    $('reasoning-summary-text').textContent = String(conversation.reasoning_summary || '');
+    $('reasoning-summary').hidden = !$('reasoning-summary-text').textContent;
+    $('activity-history-text').textContent = (conversation.activity_history || []).map(function (item) { return String(item.message || ''); }).filter(Boolean).join('\n');
+    $('activity-history').hidden = !$('activity-history-text').textContent;
+    if (conversation.retry_message) state.retryMessages[conversation.conversation_id] = conversation.retry_message;
+    $('delete-chat').disabled = !state.conversationId || state.transitioning;
+    $('retry-turn').hidden = !conversation.last_error || !state.retryMessages[conversation.conversation_id] || state.busy;
+    if (conversation.busy) setNotice(conversation.activity || 'Model is working...', false, true);
+    else setNotice(conversation.last_error || '', !!conversation.last_error, false);
+    updateComposer();
+    var summary = state.conversations.find(function (item) { return item.conversation_id === conversation.conversation_id; });
+    if (summary) Object.assign(summary, conversation);
+    renderConversationList();
+    reconcileProposals(conversation.conversation_id);
+    if (!conversation.busy && !conversation.last_error) delete state.retryMessages[conversation.conversation_id];
+  }
+
+  function renderUiActions(conversationId, actions) {
+    var action = (actions || []).find(function (item) { return item && item.type === 'chat.quick_replies'; });
+    if (!action || !action.payload || !Array.isArray(action.payload.choices)) return;
+    Array.from($('messages').querySelectorAll('.inline-choices')).forEach(function (item) { item.remove(); });
+    var row = document.createElement('div'); row.className = 'message assistant quick-replies';
+    var bubble = document.createElement('div'); bubble.className = 'bubble';
+    var question = document.createElement('div'); question.textContent = String(action.payload.question || 'Choose an option:'); bubble.appendChild(question);
+    var options = document.createElement('div'); options.className = 'message-actions'; options.style.opacity = '1'; options.style.marginTop = '8px';
+    action.payload.choices.forEach(function (choice) {
+      var button = document.createElement('button'); button.type = 'button'; button.textContent = String((choice || {}).label || '');
+      button.addEventListener('click', function () {
+        var value = String((choice || {}).value || '').trim();
+        if (!value) return;
+        Array.from(options.querySelectorAll('button')).forEach(function (item) { item.disabled = true; });
+        api('/conversations/' + encodeURIComponent(conversationId) + '/ui-actions/' + encodeURIComponent(action.action_id) + '/ack', { method: 'POST' })
+          .then(function () { row.remove(); sendMessage(value); })
+          .catch(function (error) { setNotice(error.message, true); Array.from(options.querySelectorAll('button')).forEach(function (item) { item.disabled = false; }); });
+      });
+      options.appendChild(button);
+    });
+    bubble.appendChild(options); row.appendChild(bubble); $('messages').appendChild(row); $('messages').scrollTop = $('messages').scrollHeight;
+  }
+
+  async function loadConversation(conversationId) {
+    if (!conversationId) return;
+    var generation = ++state.chatGeneration;
+    stopActivityPolling();
+    state.conversationId = conversationId;
+    state.pendingMessage = '';
+    renderConversationList();
+    setTransitioning(true);
+    try {
+      var conversation = await api('/conversations/' + encodeURIComponent(conversationId));
+      if (generation !== state.chatGeneration || conversationId !== state.conversationId) return;
+      if (Array.from($('provider-select').options).some(function (option) { return option.value === conversation.provider; })) {
+        $('provider-select').value = conversation.provider;
+        await loadModels(conversation.model);
+      }
+      if (generation !== state.chatGeneration || conversationId !== state.conversationId) return;
+      rebuildEffortOptions();
+      if (Array.from($('effort-select').options).some(function (option) { return option.value === conversation.effort; })) $('effort-select').value = conversation.effort || '';
+      applyConversationSnapshot(conversation);
+      if (conversation.busy) {
+        var selected = $('provider-select').selectedOptions[0];
+        startActivityPolling(generation, conversationId, selected ? selected.textContent : 'the provider');
+      }
+    } catch (error) {
+      if (generation === state.chatGeneration) setNotice(error.message, true);
+    } finally {
+      if (generation === state.chatGeneration) setTransitioning(false);
+    }
+  }
+
+  async function loadConversations(preferredId) {
+    var generation = ++state.listGeneration;
+    try {
+      var result = await api('/conversations');
+      if (generation !== state.listGeneration) return;
+      state.conversations = result.conversations || [];
+      var selectedId = preferredId || state.conversationId;
+      if (!state.conversations.some(function (item) { return item.conversation_id === selectedId; })) {
+        selectedId = state.conversations.length ? state.conversations[0].conversation_id : '';
+      }
+      renderConversationList();
+      if (selectedId) await loadConversation(selectedId);
+      else await newChat();
+    } catch (error) { setNotice(error.message, true); }
+  }
+
+  async function reconcileProposals(conversationId) {
+    if (!conversationId || conversationId !== state.conversationId) { renderProposals([]); return; }
+    var generation = ++state.proposalGeneration;
+    try {
+      var pending = await api('/proposals?conversation_id=' + encodeURIComponent(conversationId));
+      if (generation === state.proposalGeneration && conversationId === state.conversationId) renderProposals(pending.proposals || []);
+    } catch (error) {
+      if (conversationId === state.conversationId) setNotice(error.message, true);
+    }
+  }
+
+  function renderProposals(proposals) {
+    var list = $('proposal-list');
+    list.textContent = '';
+    (proposals || []).forEach(function (proposal) {
+      var preview = proposal.preview || {};
+      var card = document.createElement('div');
+      card.className = 'proposal';
+      var main = document.createElement('div');
+      main.className = 'proposal-main';
+      var title = document.createElement('div');
+      title.className = 'proposal-title';
+      title.textContent = proposalActionLabel(preview.action) + (preview.name ? ': ' + String(preview.name) : '');
+      var detail = document.createElement('div');
+      detail.className = 'proposal-detail';
+      detail.textContent = proposalDetail(preview);
+      main.appendChild(title);
+      main.appendChild(detail);
+      var review = document.createElement('details');
+      review.className = 'proposal-review';
+      var summary = document.createElement('summary');
+      summary.textContent = preview.action === 'python_analysis' ? 'Review exact code and input' : 'Review exact changes';
+      review.appendChild(summary);
+      if (preview.action === 'python_analysis') {
+        var pre = document.createElement('pre'); pre.textContent = proposalReviewText(proposal); review.appendChild(pre);
+      } else {
+        review.appendChild(buildProposalDiff(preview));
+        var raw = document.createElement('details');
+        var rawSummary = document.createElement('summary'); rawSummary.textContent = 'Raw JSON'; raw.appendChild(rawSummary);
+        var rawPre = document.createElement('pre'); rawPre.textContent = proposalReviewText(proposal); raw.appendChild(rawPre); review.appendChild(raw);
+      }
+      main.appendChild(review);
+      var actions = document.createElement('div');
+      actions.className = 'proposal-actions';
+      var reject = document.createElement('button');
+      reject.textContent = 'Reject';
+      reject.addEventListener('click', function () { resolveProposal(proposal, false, card); });
+      var approve = document.createElement('button');
+      approve.className = 'primary';
+      approve.textContent = 'Review & approve';
+      approve.addEventListener('click', function () { resolveProposal(proposal, true, card); });
+      actions.appendChild(reject);
+      actions.appendChild(approve);
+      card.appendChild(main);
+      card.appendChild(actions);
+      list.appendChild(card);
+    });
+  }
+
+  function proposalActionLabel(action) {
+    if (action === 'save') return 'Save PB8 optimizer config';
+    if (action === 'save_and_queue') return 'Save PB8 config and add to queue';
+    if (action === 'queue') return 'Add PB8 config to optimizer queue';
+    if (action === 'queue_backtests') return 'Queue PB8 Pareto backtests';
+    if (action === 'create_dashboard') return 'Create PBGui dashboard';
+    if (action === 'save_dashboard_layout') return 'Save PBGui dashboard layout';
+    if (action === 'python_analysis') return 'Run sandboxed Python analysis';
+    return 'PBGui action';
+  }
+
+  function proposalDetail(preview) {
+    if (preview.action === 'python_analysis') {
+      return String(preview.code_bytes || 0) + ' bytes of code · ' + String((preview.input_summary || {}).bytes || 0) + ' bytes of sanitized JSON input';
+    }
+    if (preview.action === 'queue_backtests') return String(preview.job_count || 0) + ' backtest jobs across ' + String((preview.exchanges || []).length) + ' exchanges' + (preview.may_start_immediately ? ' · may start immediately' : '');
+    if (preview.action === 'create_dashboard') return 'Create from template ' + String(preview.template || '');
+    if (preview.action === 'save_dashboard_layout') return String((preview.layout || {}).rows || 0) + ' rows x ' + String((preview.layout || {}).columns || 0) + ' columns · ' + String(preview.changed_count || 0) + ' changes';
+    return String(preview.changed_count || 0) + ' changed fields' + (preview.may_start_immediately ? ' · may start immediately' : '');
+  }
+
+  function proposalReviewText(proposal) {
+    var preview = proposal.preview || {};
+    if (preview.action === 'python_analysis') {
+      var inputReview = preview.input_resource
+        ? 'Bound PBGui input resource:\n' + JSON.stringify(preview.input_resource, null, 2)
+        : 'Sanitized JSON input:\n' + JSON.stringify(preview.input_data, null, 2);
+      return 'Code:\n' + String(preview.code || '') + '\n\nInput summary:\n' + JSON.stringify(preview.input_summary || {}, null, 2) + '\n\n' + inputReview + '\n\nPayload digest:\n' + String(proposal.payload_digest || '');
+    }
+    return JSON.stringify({ preview: preview, payload_digest: proposal.payload_digest || '' }, null, 2);
+  }
+
+  function proposalDiffValue(value) {
+    if (value === undefined) return '(missing)';
+    if (typeof value === 'string') return value;
+    try { return JSON.stringify(value, null, 2); } catch (_) { return String(value); }
+  }
+
+  function buildProposalDiff(preview) {
+    var diff = document.createElement('div'); diff.className = 'proposal-diff';
+    (preview.changes || []).forEach(function (change) {
+      var path = document.createElement('div'); path.className = 'proposal-diff-path'; path.textContent = String(change.path || '(root)'); diff.appendChild(path);
+      var oldValue = document.createElement('div'); oldValue.className = 'proposal-diff-old'; oldValue.textContent = '- ' + proposalDiffValue(change.before); diff.appendChild(oldValue);
+      var newValue = document.createElement('div'); newValue.className = 'proposal-diff-new'; newValue.textContent = '+ ' + proposalDiffValue(change.after); diff.appendChild(newValue);
+    });
+    return diff;
+  }
+
+  function analysisResultText(result) {
+    var output = result.output || {};
+    var rendered = output.format === 'json' ? JSON.stringify(output.value, null, 2) : String(output.text || '');
+    var stderr = String(result.stderr || '');
+    return 'Python analysis ' + String(result.analysis_status || 'completed') + ' (exit ' + String(result.exit_code) + ').\n\n' + rendered + (stderr ? '\n\nstderr:\n' + stderr : '') + ((result.stdout_truncated || result.stderr_truncated) ? '\n\nOutput was truncated by PBGui limits.' : '');
+  }
+
+  async function resolveProposal(proposal, approve, card) {
+    var preview = proposal.preview || {};
+    var generation = state.chatGeneration;
+    var conversationId = state.conversationId;
+    var buttons = Array.from(card.querySelectorAll('button'));
+    buttons.forEach(function (button) { button.disabled = true; });
+    if (approve) {
+      var approvalDetail = preview.action === 'python_analysis'
+        ? 'The reviewed code and sanitized input will run without network or host-data access. Proposal integrity is verified before execution.'
+        : 'Apply the reviewed action. ' + (preview.may_start_immediately ? 'Queue autostart is enabled; jobs may start immediately. ' : '') + 'Proposal integrity is verified before execution.';
+      var confirmed = await window.PBGuiDialogs.confirm({
+        title: 'Approve PBGui action',
+        message: proposalActionLabel(preview.action) + ' ' + String(preview.name || ''),
+        detail: approvalDetail,
+        confirmText: 'Approve'
+      });
+      if (!confirmed) { buttons.forEach(function (button) { button.disabled = false; }); return; }
+    }
+    if (generation !== state.chatGeneration || conversationId !== state.conversationId) return;
+    try {
+      var suffix = approve ? '/approve' : '/reject';
+      var result = await api('/proposals/' + encodeURIComponent(proposal.proposal_id) + suffix, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payload_digest: proposal.payload_digest, conversation_id: conversationId })
+      });
+      var executed = result.status === 'executed';
+      if (executed && result.action === 'python_analysis') addMessage('assistant', analysisResultText(result));
+      setNotice(executed ? ('Action completed: ' + String(result.action || 'approved')) : ('Proposal status: ' + String(result.status || 'rejected')), false);
+    } catch (error) {
+      setNotice(error.message, true);
+      buttons.forEach(function (button) { button.disabled = false; });
+    } finally {
+      if (conversationId === state.conversationId) await reconcileProposals(conversationId);
+    }
+  }
+
+  async function sendMessage(retryMessage) {
+    var message = String(retryMessage == null ? $('prompt').value : retryMessage).trim();
+    if (!message || state.busy) return;
+    var provider = $('provider-select').value;
+    var model = $('model-select').value;
+    var effort = $('effort-select').value;
+    var generation = state.chatGeneration;
+    var retryKey = state.conversationId || '__new__';
+    state.busy = true;
+    state.pendingMessage = message;
+    state.retryMessages[retryKey] = message;
+    if (retryMessage == null) $('prompt').value = '';
+    setNotice('Starting conversation...', false, true);
+    updateComposer();
+    try {
+      if (!state.conversationId) {
+        var created = await api('/conversations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: provider, model: model, effort: effort })
+        });
+        if (generation !== state.chatGeneration) return;
+        state.conversationId = created.conversation_id;
+        state.retryMessages[state.conversationId] = state.retryMessages[retryKey];
+        if (retryKey === '__new__') delete state.retryMessages[retryKey];
+        await loadConversationSummary();
+      }
+      state.retryMessages[state.conversationId] = message;
+      if (generation !== state.chatGeneration) return;
+      renderConversationMessages([]);
+      var providerLabel = $('provider-select').selectedOptions[0].textContent;
+      setNotice('Waiting for ' + providerLabel + '...', false, true);
+      await api('/conversations/' + encodeURIComponent(state.conversationId) + '/turns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: message,
+          effort: $('effort-select').value,
+          model: $('model-select').value,
+          provider: $('provider-select').value,
+          context: window.PBGuiAI && typeof window.PBGuiAI.collectContext === 'function'
+            ? window.PBGuiAI.collectContext()
+            : null
+        })
+      });
+      if (generation !== state.chatGeneration) return;
+      startActivityPolling(generation, state.conversationId, providerLabel);
+    } catch (error) {
+      if (generation === state.chatGeneration) {
+        stopActivityPolling();
+        state.busy = false;
+        state.pendingMessage = '';
+        $('retry-turn').hidden = false;
+        setNotice(error.message, true);
+        updateComposer();
+      }
+    }
+  }
+
+  async function loadConversationSummary() {
+    var generation = ++state.listGeneration;
+    var result = await api('/conversations');
+    if (generation !== state.listGeneration) return;
+    state.conversations = result.conversations || [];
+    renderConversationList();
+  }
+
+  async function newChat(keepTransition) {
+    setTransitioning(true);
+    ++state.chatGeneration;
+    stopActivityPolling();
+    state.conversationId = '';
+    state.busy = false;
+    state.pendingMessage = '';
+    delete state.retryMessages.__new__;
+    Array.from($('messages').querySelectorAll('.message')).forEach(function (node) { node.remove(); });
+    $('empty-state').hidden = false;
+    renderProposals([]);
+    renderConversationList();
+    $('delete-chat').disabled = true;
+    $('retry-turn').hidden = true;
+    setNotice('', false);
+    if (!keepTransition) setTransitioning(false);
+    updateComposer();
+  }
+
+  async function stopCurrentTurn() {
+    if (!state.busy) return;
+    var conversationId = state.conversationId;
+    setNotice('Stopping current response...', false);
+    $('stop').disabled = true;
+    if (conversationId) {
+      try {
+        await api('/conversations/' + encodeURIComponent(conversationId) + '/cancel', { method: 'POST' });
+        await loadConversation(conversationId);
+      } catch (error) {
+        setNotice(error.message, true);
+      }
+    }
+  }
+
+  async function deleteCurrentConversation() {
+    if (!state.conversationId) return;
+    var confirmed = await window.PBGuiDialogs.confirm({
+      title: 'Delete AI chat',
+      message: 'Delete this conversation and its history?',
+      confirmText: 'Delete'
+    });
+    if (!confirmed) return;
+    var conversationId = state.conversationId;
+    setTransitioning(true);
+    try {
+      await api('/conversations/' + encodeURIComponent(conversationId), { method: 'DELETE' });
+      delete state.retryMessages[conversationId];
+      state.conversationId = '';
+      await loadConversations();
+    } catch (error) { setNotice(error.message, true); }
+    finally { setTransitioning(false); }
+  }
+
+  function stopLoginPolling() {
+    if (state.loginTimer) clearInterval(state.loginTimer);
+    state.loginTimer = null;
+    state.loginDeadline = 0;
+    ++state.statusGeneration;
+  }
+
+  function hideLoginBox() {
+    $('login-box').classList.remove('visible');
+    $('login-link').removeAttribute('href');
+    $('login-link').textContent = '';
+    $('login-code').textContent = '';
+    $('login-code').hidden = false;
+  }
+
+  function scheduleLoginPoll() {
+    if (!$('login-box').classList.contains('visible')) return;
+    if (Date.now() >= state.loginDeadline) {
+      stopLoginPolling();
+      hideLoginBox();
+      $('chatgpt-connect').disabled = state.transitioning;
+      $('chatgpt-device-connect').disabled = state.transitioning;
+      setNotice('ChatGPT login timed out. Start it again.', true);
+      return;
+    }
+    state.loginTimer = setTimeout(async function () {
+      await refreshStatus();
+      if (state.loginDeadline) scheduleLoginPoll();
+    }, 2000);
+  }
+
+  async function startChatgptLogin(mode) {
+    var generation = ++state.loginGeneration;
+    $('chatgpt-connect').disabled = true;
+    $('chatgpt-device-connect').disabled = true;
+    try {
+      var path = mode === 'device' ? '/providers/chatgpt/device-login' : '/providers/chatgpt/browser-login';
+      var login = await api(path, { method: 'POST' });
+      if (generation !== state.loginGeneration) return;
+      var loginUrl = mode === 'device' ? login.verification_url : login.auth_url;
+      $('login-instructions').textContent = mode === 'device' ? 'Open this address and enter the code:' : 'Open this address to sign in:';
+      $('login-link').href = loginUrl;
+      $('login-link').textContent = loginUrl;
+      $('login-code').textContent = mode === 'device' ? login.user_code : '';
+      $('login-code').hidden = mode !== 'device';
+      $('login-box').classList.add('visible');
+      stopLoginPolling();
+      state.loginDeadline = Date.now() + 10 * 60 * 1000;
+      scheduleLoginPoll();
+    } catch (error) {
+      if (generation === state.loginGeneration) setNotice(error.message, true);
+    } finally {
+      if (generation === state.loginGeneration && !state.transitioning && !$('login-box').classList.contains('visible')) {
+        $('chatgpt-connect').disabled = false;
+        $('chatgpt-device-connect').disabled = false;
+      }
+    }
+  }
+
+  $('chatgpt-connect').addEventListener('click', function () {
+    startChatgptLogin('browser');
+  });
+
+  $('chatgpt-device-connect').addEventListener('click', function () {
+    startChatgptLogin('device');
+  });
+
+  $('login-cancel').addEventListener('click', async function () {
+    ++state.loginGeneration;
+    stopLoginPolling();
+    hideLoginBox();
+    try { await api('/providers/chatgpt/login-cancel', { method: 'POST' }); } catch (_) {}
+    $('chatgpt-connect').disabled = state.transitioning;
+    $('chatgpt-device-connect').disabled = state.transitioning;
+  });
+
+  $('chatgpt-disconnect').addEventListener('click', async function () {
+    setTransitioning(true);
+    try { await newChat(true); await api('/providers/chatgpt/connection', { method: 'DELETE' }); await refreshStatus(); }
+    catch (error) { setNotice(error.message, true); }
+    finally { setTransitioning(false); }
+  });
+
+  $('go-connect').addEventListener('click', async function () {
+    var key = $('go-key').value.trim();
+    if (!key) { setNotice('Enter an OpenCode Go API key.', true); return; }
+    var generation = ++state.goGeneration;
+    setTransitioning(true);
+    try {
+      await api('/providers/opencode-go/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_key: key }) });
+      if (generation !== state.goGeneration) return;
+      $('go-key').value = '';
+      setNotice('OpenCode Go connected.', false);
+      await refreshStatus();
+    } catch (error) {
+      if (generation === state.goGeneration) { $('go-key').value = ''; setNotice(error.message, true); }
+    } finally {
+      if (generation === state.goGeneration) setTransitioning(false);
+    }
+  });
+
+  $('go-disconnect').addEventListener('click', async function () {
+    ++state.goGeneration;
+    setTransitioning(true);
+    try { await newChat(true); await api('/providers/opencode-go/connection', { method: 'DELETE' }); await refreshStatus(); }
+    catch (error) { setNotice(error.message, true); }
+    finally { setTransitioning(false); }
+  });
+
+  $('provider-select').addEventListener('change', async function () {
+    setTransitioning(true);
+    try { await loadModels(); }
+    finally { setTransitioning(false); }
+  });
+  $('model-select').addEventListener('change', async function () {
+    rebuildEffortOptions();
+    updateEffortControl();
+    showSelectedModelNotice();
+  });
+  $('effort-select').addEventListener('change', updateComposer);
+  $('send').addEventListener('click', function () { sendMessage(); });
+  $('stop').addEventListener('click', stopCurrentTurn);
+  $('clear-chat').addEventListener('click', function () { newChat(false); });
+  $('delete-chat').addEventListener('click', deleteCurrentConversation);
+  $('retry-turn').addEventListener('click', function () {
+    var message = state.retryMessages[state.conversationId || '__new__'];
+    if (message) sendMessage(message);
+  });
+  $('refresh-health').addEventListener('click', async function () {
+    try { await api('/models/health-refresh', { method: 'POST' }); setNotice('Free-model health refresh queued.', false); }
+    catch (error) { setNotice(error.message, true); }
+  });
+  $('prompt').addEventListener('keydown', function (event) {
+    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); }
+  });
+  window.addEventListener('pagehide', function () {
+    stopLoginPolling();
+    stopActivityPolling();
+    hideLoginBox();
+    $('go-key').value = '';
+  });
+
+  async function initialize() {
+    await refreshStatus();
+    await loadConversations();
+  }
+  initialize();
+}());
+</script>
+</body>
+</html>

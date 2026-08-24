@@ -31,23 +31,23 @@
       ':root{--fs-xs:11px;--fs-sm:13px;--fs-base:14px;--fs-md:15px;--fs-lg:18px;--sp-xs:4px;--sp-sm:8px;--sp-md:12px;--sp-lg:20px;--input-h:32px;--btn-h:32px;}',
       '#' + OVERLAY_ID + '{display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:20000;align-items:center;justify-content:center;backdrop-filter:blur(2px);padding:var(--sp-lg);}',
       '#' + OVERLAY_ID + '.visible{display:flex;}',
-      '#pbgui-dialog-box{background:#131b2b;border:1px solid #2d3748;border-radius:14px;box-shadow:0 20px 70px rgba(0,0,0,.9);overflow:hidden;width:min(480px,92vw);max-width:92vw;}',
+      '#pbgui-dialog-box{box-sizing:border-box;min-width:0;background:#131b2b;border:1px solid #2d3748;border-radius:14px;box-shadow:0 20px 70px rgba(0,0,0,.9);overflow:hidden;width:min(480px,100%);max-width:100%;}',
       '#pbgui-dialog-header{display:flex;justify-content:space-between;align-items:center;gap:var(--sp-sm);padding:.85rem 1.1rem;border-bottom:1px solid #1e2736;background:#111827;}',
       '#pbgui-dialog-title{font-size:var(--fs-md);font-weight:700;color:#e2e8f0;}',
       '#pbgui-dialog-close{background:transparent;border:none;color:#64748b;font-size:var(--fs-lg);cursor:pointer;padding:.2rem .35rem;border-radius:5px;line-height:1;}',
       '#pbgui-dialog-close:hover{color:#e2e8f0;background:rgba(255,255,255,.06);}',
-      '#pbgui-dialog-body{display:grid;gap:var(--sp-md);padding:var(--sp-lg);}',
-      '#pbgui-dialog-message{font-size:var(--fs-base);line-height:1.5;color:#e2e8f0;white-space:pre-wrap;}',
-      '#pbgui-dialog-detail{font-size:var(--fs-sm);line-height:1.45;color:#94a3b8;white-space:pre-wrap;}',
+      '#pbgui-dialog-body{box-sizing:border-box;display:grid;width:100%;max-width:100%;min-width:0;gap:var(--sp-md);padding:var(--sp-lg);overflow:hidden;}',
+      '#pbgui-dialog-message{min-width:0;font-size:var(--fs-base);line-height:1.5;color:#e2e8f0;white-space:pre-wrap;overflow-wrap:anywhere;}',
+      '#pbgui-dialog-detail{min-width:0;max-width:100%;font-size:var(--fs-sm);line-height:1.45;color:#94a3b8;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}',
       '#pbgui-dialog-detail[hidden],#pbgui-dialog-field[hidden],#pbgui-dialog-cancel[hidden]{display:none!important;}',
       '#pbgui-dialog-field{display:grid;gap:var(--sp-xs);}',
       '#pbgui-dialog-field label{font-size:var(--fs-sm);font-weight:600;color:#cbd5e1;}',
       '#pbgui-dialog-input{width:100%;height:var(--input-h);padding:0 var(--sp-sm);border-radius:8px;border:1px solid #2d3748;background:#0f172a;color:#e2e8f0;font-size:var(--fs-base);outline:none;}',
       '#pbgui-dialog-input:focus{border-color:#63b3ed;box-shadow:0 0 0 1px rgba(99,179,237,.4);}',
-      '#pbgui-dialog-actions{display:flex;justify-content:flex-end;gap:var(--sp-sm);flex-wrap:wrap;}',
+      '#pbgui-dialog-actions{box-sizing:border-box;display:flex;width:100%;max-width:100%;min-width:0;justify-content:flex-end;gap:var(--sp-sm);padding:0;overflow:visible;flex-wrap:wrap;}',
       '#pbgui-dialog-choices{display:flex;justify-content:flex-end;gap:var(--sp-sm);flex-wrap:wrap;}',
       '#pbgui-dialog-choices[hidden]{display:none!important;}',
-      '.pbgui-dialog-btn{display:inline-flex;align-items:center;justify-content:center;height:var(--btn-h);padding:0 var(--sp-md);border-radius:8px;border:1px solid transparent;font-size:var(--fs-base);font-weight:600;cursor:pointer;transition:background .15s,border-color .15s,color .15s;}',
+      '.pbgui-dialog-btn{display:inline-flex;flex:0 0 auto;max-width:100%;align-items:center;justify-content:center;height:var(--btn-h);padding:0 var(--sp-md);border-radius:8px;border:1px solid transparent;font-size:var(--fs-base);font-weight:600;cursor:pointer;transition:background .15s,border-color .15s,color .15s;}',
       '.pbgui-dialog-btn.secondary{background:rgba(99,179,237,.08);border-color:rgba(99,179,237,.25);color:#e2e8f0;}',
       '.pbgui-dialog-btn.secondary:hover{background:rgba(99,179,237,.16);border-color:#63b3ed;}',
       '.pbgui-dialog-btn.primary{background:#63b3ed;border-color:#63b3ed;color:#0b1220;}',
@@ -104,11 +104,28 @@
     document.addEventListener('keydown', function (event) {
       var visible = overlay.classList.contains('visible');
       if (!visible) return;
+      var box = document.getElementById('pbgui-dialog-box');
+      if (event.key === 'Tab' && box) {
+        var focusable = Array.from(box.querySelectorAll('button:not([disabled]):not([hidden]),input:not([disabled]):not([hidden])'));
+        if (focusable.length) {
+          var first = focusable[0];
+          var last = focusable[focusable.length - 1];
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
+        return;
+      }
       if (event.key === 'Escape') {
         event.preventDefault();
         close(false);
       } else if (event.key === 'Enter' && currentMode !== 'prompt' && currentMode !== 'choose') {
-        if (event.target && event.target.id === 'pbgui-dialog-cancel') return;
+        if (!box || !box.contains(event.target)) return;
+        if (event.target !== acceptBtn) return;
         event.preventDefault();
         close(true);
       }

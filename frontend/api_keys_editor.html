@@ -1074,7 +1074,7 @@
         <div id="diffContent" style="flex:1; overflow:auto;"></div>
     </div>
 
-    <script src="/app/js/pbgui_dialogs.js?v=5"></script>
+    <script src="/app/js/pbgui_dialogs.js?v=8"></script>
     <script>
     // ── Config ──────────────────────────────────────────────
     // Browser authentication uses the same-origin HttpOnly session cookie.
@@ -3753,6 +3753,12 @@
         window.PBGuiSharedHelp.open('api_keys');
       };
             window.PBGUI_HELP_OPENER = window._openApiKeysHelp;
+            window.PBGUI_AI_PAGE_CONTEXT = function () {
+                return {
+                    section: 'Credential management',
+                    entities: editingName ? [{ kind: 'pbgui_user', name: editingName }] : []
+                };
+            };
     }());
     </script>
 
