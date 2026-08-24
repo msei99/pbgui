@@ -1615,10 +1615,10 @@
       _aiDrawerLoading = true;
       var link = document.createElement('link');
       link.rel = 'stylesheet';
-      link.href = '/app/css/ai_drawer.css?v=11';
+      link.href = '/app/css/ai_drawer.css?v=12';
       document.head.appendChild(link);
       var script = document.createElement('script');
-      script.src = '/app/js/ai_drawer.js?v=26';
+      script.src = '/app/js/ai_drawer.js?v=27';
       script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
       script.onerror = function () { _aiDrawerLoading = false; };
       document.head.appendChild(script);
@@ -1629,6 +1629,20 @@
       cleanUrl.searchParams.delete('pbgui_ai_action');
       window.history.replaceState(window.history.state, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
       aiBtn.click();
+    } else if (aiBtn) {
+      var aiUserInteracted = false;
+      aiBtn.addEventListener('click', function (event) {
+        if (event.isTrusted) aiUserInteracted = true;
+      });
+      fetch(_getApiOrigin() + '/api/ai/preferences', {
+        credentials: 'same-origin',
+        cache: 'no-store'
+      }).then(function (response) {
+        if (!response.ok) return null;
+        return response.json();
+      }).then(function (preferences) {
+        if (preferences && preferences.drawer_open === true && !aiUserInteracted) aiBtn.click();
+      }).catch(function () {});
     }
 
     /* About button → show overlay */

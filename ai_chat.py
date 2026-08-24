@@ -1480,31 +1480,58 @@ class AIChatService:
     def get_preferences(self, owner: str) -> dict[str, Any]:
         """Return bounded owner-scoped AI UI preferences."""
         path = self._preference_path(owner)
-        if not path.is_file() or path.is_symlink():
-            return {"drawer_width": 460}
         with advisory_file_lock(self.preference_lock_target):
-            try:
-                raw = read_regular_file_nofollow(path, self.preference_root)
-                if len(raw) > 16 * 1024:
-                    raise AIChatError("AI preferences are invalid")
-                payload = json.loads(raw.decode("utf-8"))
-                width = int(payload.get("drawer_width") or 460)
-            except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
-                width = 460
-        return {"drawer_width": max(180, min(100_000, width))}
+            return self._read_preferences_unlocked(path)
 
-    def save_preferences(self, owner: str, drawer_width: int) -> dict[str, Any]:
-        """Atomically save bounded owner-scoped AI UI preferences."""
+    def _read_preferences_unlocked(self, path: Path) -> dict[str, Any]:
+        """Read one preference file while the cross-process lock is held."""
+        if not path.is_file() or path.is_symlink():
+            return {"drawer_width": 460, "drawer_open": False}
         try:
-            width = int(drawer_width)
-        except (TypeError, ValueError) as exc:
-            raise AIChatError("Invalid AI drawer width") from exc
-        if width < 180 or width > 100_000:
-            raise AIChatError("AI drawer width is outside the supported browser range")
-        payload = {"drawer_width": width}
+            raw = read_regular_file_nofollow(path, self.preference_root)
+            if len(raw) > 16 * 1024:
+                raise AIChatError("AI preferences are invalid")
+            stored = json.loads(raw.decode("utf-8"))
+            if not isinstance(stored, dict):
+                raise AIChatError("AI preferences are invalid")
+            width = int(stored.get("drawer_width") or 460)
+            drawer_open = stored.get("drawer_open") is True
+        except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+            width = 460
+            drawer_open = False
+        return {
+            "drawer_width": max(180, min(100_000, width)),
+            "drawer_open": drawer_open,
+        }
+
+    def save_preferences(
+        self,
+        owner: str,
+        drawer_width: int | None = None,
+        drawer_open: bool | None = None,
+    ) -> dict[str, Any]:
+        """Atomically save bounded owner-scoped AI UI preferences."""
+        if drawer_width is None and drawer_open is None:
+            raise AIChatError("No AI preferences supplied")
+        width = None
+        if drawer_width is not None:
+            try:
+                width = int(drawer_width)
+            except (TypeError, ValueError) as exc:
+                raise AIChatError("Invalid AI drawer width") from exc
+            if width < 180 or width > 100_000:
+                raise AIChatError("AI drawer width is outside the supported browser range")
+        if drawer_open is not None and not isinstance(drawer_open, bool):
+            raise AIChatError("Invalid AI drawer state")
+        path = self._preference_path(owner)
         with advisory_file_lock(self.preference_lock_target):
+            payload = self._read_preferences_unlocked(path)
+            if width is not None:
+                payload["drawer_width"] = width
+            if drawer_open is not None:
+                payload["drawer_open"] = drawer_open
             atomic_write_private_text(
-                self._preference_path(owner), json.dumps(payload, indent=4, allow_nan=False) + "\n"
+                path, json.dumps(payload, indent=4, allow_nan=False) + "\n"
             )
         return payload
 

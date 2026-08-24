@@ -79,7 +79,8 @@ class LocalActionRequest(BaseModel):
 class AIPreferencesRequest(BaseModel):
     """Bounded owner-scoped AI drawer preferences."""
 
-    drawer_width: int = Field(ge=180, le=100_000)
+    drawer_width: int | None = Field(default=None, ge=180, le=100_000)
+    drawer_open: bool | None = None
 
 
 class ConversationRewindRequest(BaseModel):
@@ -175,7 +176,9 @@ async def save_preferences(
     """Persist owner-scoped AI UI preferences."""
     try:
         return _json(
-            get_ai_chat_service().save_preferences(_owner(session), body.drawer_width)
+            get_ai_chat_service().save_preferences(
+                _owner(session), body.drawer_width, body.drawer_open
+            )
         )
     except Exception as exc:
         raise _provider_error("save_preferences", exc) from exc

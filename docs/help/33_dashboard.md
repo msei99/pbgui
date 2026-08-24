@@ -1,5 +1,7 @@
 # Dashboards
 
+After an approved PBGui AI dashboard creation or layout change, the open Dashboard page refreshes its list and reloads the affected dashboard immediately. The reload is generation-safe: a manual dashboard switch made while the refresh is in flight is never overwritten by the delayed AI completion.
+
 The **Dashboards** page provides a fully customisable portfolio overview for your live Passivbot instances.
 You can build multi-widget layouts, combine data from multiple users, and rearrange everything freely.
 

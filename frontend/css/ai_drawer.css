@@ -1,7 +1,7 @@
 #pbgui-ai-drawer{position:fixed;top:52px;right:0;bottom:0;width:min(460px,100vw);min-width:180px;max-width:100vw;z-index:2400;display:flex;flex-direction:column;background:#0d1521;border-left:1px solid #26364d;box-shadow:-18px 0 50px rgba(0,0,0,.45);color:#e5edf7;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;transform:translateX(100%);transition:transform .18s ease}
 #pbgui-ai-drawer.open{transform:translateX(0)}
 #pbgui-ai-drawer[aria-hidden="true"]{pointer-events:none}
-.pai-resize{position:absolute;left:-5px;top:0;bottom:0;width:10px;cursor:ew-resize;z-index:2}.pai-resize:hover,.pai-resize.active{background:rgba(96,165,250,.2)}
+.pai-resize{position:absolute;left:-8px;top:0;bottom:0;width:16px;cursor:ew-resize;touch-action:none;z-index:2}.pai-resize:hover,.pai-resize.active{background:rgba(96,165,250,.2)}
 .pai-head{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #26364d;background:#111a28}
 .pai-title{font-weight:750;flex:1}.pai-head button,.pai-toolbar button,.pai-compose button,.pai-history button{height:32px;border:1px solid #26364d;border-radius:7px;background:#162235;color:#e5edf7;cursor:pointer;padding:0 10px}
 .pai-head button:hover,.pai-toolbar button:hover,.pai-compose button:hover,.pai-history button:hover{border-color:#60a5fa}

@@ -63,6 +63,18 @@ def test_dashboard_pages_use_cookie_auth_without_rendering_session_token() -> No
         assert response.headers["cache-control"] == "no-store"
 
 
+def test_dashboard_refreshes_generation_safe_after_approved_ai_layout() -> None:
+    """An approved AI dashboard save should reload its iframe without overriding later navigation."""
+    source = (ROOT / "frontend" / "dashboard_main.html").read_text(encoding="utf-8")
+
+    assert "pbgui:ai-action-completed" in source
+    assert "result.action !== 'create_dashboard' && result.action !== 'save_dashboard_layout'" in source
+    assert "var previousDashboard = currentDash" in source
+    assert "generation !== aiDashboardRefreshGeneration || currentDash !== previousDashboard" in source
+    assert "loadView(name, true)" in source
+    assert "if (forceReload) url += '&refresh=' + Date.now()" in source
+
+
 @pytest.mark.parametrize("filename", DASHBOARD_WS_FRAGMENTS)
 def test_dashboard_websocket_fragments_reject_stale_generations(filename: str) -> None:
     """Every rerenderable dashboard fragment must retire stale socket callbacks."""

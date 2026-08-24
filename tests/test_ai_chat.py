@@ -1105,17 +1105,21 @@ def test_page_context_is_bounded_and_marked_untrusted() -> None:
         AIChatService._validate_page_context({"secret": "value"})
 
 
-def test_ai_drawer_width_preferences_are_private_persistent_and_bounded(tmp_path: Path) -> None:
-    """Drawer width should persist server-side without browser storage."""
+def test_ai_drawer_preferences_are_private_persistent_merged_and_bounded(tmp_path: Path) -> None:
+    """Drawer width and open state should merge server-side without browser storage."""
     service = AIChatService(tmp_path / "ai")
     owner = "a" * 32
 
-    assert service.get_preferences(owner) == {"drawer_width": 460}
-    assert service.save_preferences(owner, 612) == {"drawer_width": 612}
-    assert AIChatService(tmp_path / "ai").get_preferences(owner) == {"drawer_width": 612}
-    assert service.save_preferences(owner, 4000) == {"drawer_width": 4000}
+    assert service.get_preferences(owner) == {"drawer_width": 460, "drawer_open": False}
+    assert service.save_preferences(owner, 612) == {"drawer_width": 612, "drawer_open": False}
+    assert service.save_preferences(owner, drawer_open=True) == {"drawer_width": 612, "drawer_open": True}
+    assert AIChatService(tmp_path / "ai").get_preferences(owner) == {"drawer_width": 612, "drawer_open": True}
+    assert service.save_preferences(owner, 4000) == {"drawer_width": 4000, "drawer_open": True}
+    assert service.save_preferences(owner, drawer_open=False) == {"drawer_width": 4000, "drawer_open": False}
     with pytest.raises(AIChatError, match="browser range"):
         service.save_preferences(owner, 100_001)
+    with pytest.raises(AIChatError, match="No AI preferences"):
+        service.save_preferences(owner)
     if os.name == "posix":
         assert (service.preference_root / f"{owner}.json").stat().st_mode & 0o777 == 0o600
 

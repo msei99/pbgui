@@ -218,29 +218,31 @@ def test_opencode_go_subscription_redirect_uses_public_referral_link() -> None:
     assert response.headers["cache-control"] == "no-store"
 
 
-def test_ai_preferences_are_owner_scoped_and_no_store(monkeypatch) -> None:
-    """Drawer width preferences should use authenticated server-side persistence."""
+def test_ai_preferences_are_owner_scoped_merged_and_no_store(monkeypatch) -> None:
+    """Drawer width and open-state preferences should use authenticated persistence."""
     class FakeService:
         """Return and record one drawer width."""
 
         def get_preferences(self, owner):
             assert len(owner) == 32
-            return {"drawer_width": 540}
+            return {"drawer_width": 540, "drawer_open": True}
 
-        def save_preferences(self, owner, width):
-            assert len(owner) == 32 and width == 620
-            return {"drawer_width": width}
+        def save_preferences(self, owner, width, drawer_open):
+            assert len(owner) == 32 and width == 620 and drawer_open is False
+            return {"drawer_width": width, "drawer_open": drawer_open}
 
     monkeypatch.setattr(ai_api, "get_ai_chat_service", lambda: FakeService())
     session = SimpleNamespace(user_id="owner")
     loaded = asyncio_run(ai_api.get_preferences(session))
     saved = asyncio_run(
-        ai_api.save_preferences(ai_api.AIPreferencesRequest(drawer_width=620), session)
+        ai_api.save_preferences(
+            ai_api.AIPreferencesRequest(drawer_width=620, drawer_open=False), session
+        )
     )
 
     assert loaded.headers["cache-control"] == "no-store"
-    assert json_body(loaded) == {"drawer_width": 540}
-    assert json_body(saved) == {"drawer_width": 620}
+    assert json_body(loaded) == {"drawer_width": 540, "drawer_open": True}
+    assert json_body(saved) == {"drawer_width": 620, "drawer_open": False}
 
 
 def test_rewind_route_is_owner_scoped_and_restores_prompt(monkeypatch) -> None:

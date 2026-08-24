@@ -1,5 +1,7 @@
 # Dashboards
 
+Nach einer freigegebenen PBGui-AI-Erstellung oder Layout-Aenderung aktualisiert die offene Dashboard-Seite ihre Liste und laedt das betroffene Dashboard sofort neu. Der Reload ist generation-sicher: Ein manueller Dashboard-Wechsel waehrend des laufenden Refreshs wird niemals durch den verspaeteten AI-Abschluss ueberschrieben.
+
 Die **Dashboards**-Seite bietet eine vollständig anpassbare Portfolio-Übersicht für deine aktiven Passivbot-Instanzen.
 Du kannst mehrspaltige Widget-Layouts erstellen, Daten mehrerer Benutzerkonten kombinieren und alles frei verschieben.
 

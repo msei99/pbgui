@@ -823,7 +823,7 @@ html, body {
   }
 
   /* ── Load the view iframe for a dashboard ── */
-  function loadView(name) {
+  function loadView(name, forceReload) {
     if (!name) return;
     currentDash = name;
     if (selectedDashboards.length <= 1) selectedDashboards = [name];
@@ -837,6 +837,7 @@ html, body {
       + '?name='      + encodeURIComponent(name)
       + '&api_base='  + encodeURIComponent(API_BASE)
       + '&view_only=1';
+    if (forceReload) url += '&refresh=' + Date.now();
     contentFrame.src = url;
     contentFrame.onload = function () {
       contentLoading.style.display = 'none';
@@ -1165,6 +1166,21 @@ html, body {
     } else if (t === 'pbgui_dashboard_created') {
       refreshList(function () { loadView(e.data.name || currentDash); });
     }
+  });
+
+  var aiDashboardRefreshGeneration = 0;
+  window.addEventListener('pbgui:ai-action-completed', function (event) {
+    var result = event && event.detail && typeof event.detail === 'object' ? event.detail : {};
+    if (result.action !== 'create_dashboard' && result.action !== 'save_dashboard_layout') return;
+    var name = String(result.name || '').trim();
+    if (!name) return;
+    var previousDashboard = currentDash;
+    var generation = ++aiDashboardRefreshGeneration;
+    refreshList(function () {
+      if (generation !== aiDashboardRefreshGeneration || currentDash !== previousDashboard) return;
+      selectedDashboards = [name];
+      loadView(name, true);
+    });
   });
 
   /* ── New dashboard dialog ── */
