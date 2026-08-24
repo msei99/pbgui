@@ -17,6 +17,13 @@ def test_shared_context_boundary_projects_only_the_backend_schema() -> None:
     for sensitive in ("password", "secret", "token", "api[_ -]?key", "credential", "session", "cookie", "log", "ssh"):
         assert sensitive in NAV
     assert "PBGUI_AI_PAGE_CONTEXT" in NAV
+    assert "PBGUI_AI_PAGE_ACTIONS" in NAV
+    assert "registerPageAction" in NAV
+    assert "request.type !== 'page.perform_action'" in NAV
+    assert "context.entities.some" in NAV
+    assert "continuePageAction" in NAV
+    assert "FASTAPI_PAGES[String(target.page_key || '')]" in NAV
+    assert "pbgui_ai_action" in NAV
     assert "focusedField" in NAV
     assert "querySelectorAll('input" not in NAV
     assert "FormData" not in NAV
@@ -78,7 +85,26 @@ def test_optimize_context_prefers_the_live_open_editor_config() -> None:
     assert "selectedRun.pareto_count" in adapter
     assert "selectedRun.modified" in adapter
     assert "kind: 'optimizer_run'" in adapter
-    assert "state.panel === 'results' || state.panel === 'paretos' ? [] : names" in adapter
+    assert "showConfigEntities" in adapter
+    assert "state.panel === 'queue' && state.selectedQueue" in adapter
+    assert "kind: 'optimizer_queue_item'" in adapter
+    assert "name: String(queueItem.filename)" in adapter
+    assert "id: 'show_log'" in adapter
+    assert "openLogPanel(queueItem.filename, queueItem.name || queueItem.filename)" in adapter
+    assert "item.status === 'running' || item.status === 'optimizing'" in adapter
     assert "state.selectedParetos" in adapter
     assert "8 - entities.length" in adapter
     assert "kind: 'pareto_candidate'" in adapter
+
+
+def test_log_pages_register_one_generic_action_over_existing_viewers() -> None:
+    """Optimize, Backtest, and bot editors should reuse their existing log functions."""
+    backtest = (FRONTEND / "v7_backtest.html").read_text(encoding="utf-8")
+    run_editor = (FRONTEND / "v7_edit.html").read_text(encoding="utf-8")
+
+    assert "kind: 'backtest_queue_item'" in backtest
+    assert "entity_kind: 'backtest_queue_item'" in backtest
+    assert "showLog(queueItem.filename)" in backtest
+    assert "item.status === 'running' || item.status === 'backtesting'" in backtest
+    assert "entity_kind: 'run_config'" in run_editor
+    assert "return openLogPanel()" in run_editor

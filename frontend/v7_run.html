@@ -1519,14 +1519,27 @@ window.addEventListener('beforeunload', function() {
 });
 
 window.PBGUI_AI_PAGE_CONTEXT = function () {
+  var entities = instances.filter(function(instance) {
+    return instance.status !== 'disabled' || (instance.running_on || []).length > 0;
+  }).slice(0, 8).map(function(instance) {
+    return { kind: 'run_config', version: runListAdapter.version, name: String(instance.name) };
+  });
   return {
     section: 'Instances',
-    entities: [],
+    entities: entities,
     focused_field: window.PBGuiAI.focusedField({
       'f-search': { path: 'run.instances.filter', label: 'Instance filter' }
     })
   };
 };
+window.PBGUI_AI_PAGE_ACTIONS = [{
+  id: 'show_log',
+  entity_kind: 'run_config',
+  run: function(name) {
+    if (!instances.some(function(instance) { return instance.name === name; })) return;
+    return window.PBGuiAI.continuePageAction(API_BASE + '/edit_page?name=' + encodeURIComponent(name));
+  }
+}];
 
 /* ─── Sidebar resize ─────────────────────────────────────── */
 window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 140, maxWidth: 300 });

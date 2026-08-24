@@ -10,6 +10,26 @@ import textwrap
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_run_editor_registers_existing_bot_log_function_as_page_action() -> None:
+    """The bot editor should expose its existing live-log panel through the generic bridge."""
+    page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+
+    assert "kind: 'run_config'" in page
+    assert "entity_kind: 'run_config'" in page
+    assert "id: 'show_log'" in page
+    assert "return openLogPanel()" in page
+
+
+def test_run_list_continues_bot_log_action_in_the_existing_editor() -> None:
+    """An active bot action should navigate to its editor without acknowledging early."""
+    page = (ROOT / "frontend" / "v7_run.html").read_text(encoding="utf-8")
+
+    assert "instance.status !== 'disabled' || (instance.running_on || []).length > 0" in page
+    assert "entity_kind: 'run_config'" in page
+    assert "window.PBGuiAI.continuePageAction" in page
+    assert "'/edit_page?name=' + encodeURIComponent(name)" in page
+
+
 def _page_function(page: str, name: str) -> str:
     """Extract one top-level function declaration from the inline page script."""
 

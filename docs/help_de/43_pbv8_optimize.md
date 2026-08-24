@@ -46,6 +46,8 @@ Der Editor merkt sich ausserdem seinen Navigationsursprung: **Home** oder **Save
 - **Continue from Pareto** verwendet verwaltete Pareto-Dateien als `--start`-Seeds.
 - **Resume Checkpoint** setzt mit `--resume` den exakten verwalteten Optimizer-Zustand fort.
 
+Fuer einen exakt ausgewaehlten oder laufenden Queue-Eintrag kann PBGui AI die von der Seite angebotene Aktion `show_log` aus jedem Optimize-Panel ausfuehren. Seitenuebergreifende Aktionen navigieren zu PB8 Optimize, warten auf die Queue-Daten und rufen danach dieselbe vorhandene Log-Panel-Funktion wie die Zeilenaktion auf.
+
 Checkpoint Resume akzeptiert nur lokale, von PBGui verwaltete PB8-Ergebnisse. Beliebige Checkpoint-Dateien werden abgelehnt, weil Python-Pickle-Checkpoints als vertrauenswuerdige ausfuehrbare Daten behandelt werden muessen.
 
 PBGui bietet exaktes Resume nur an, wenn Checkpoint und `all_results.bin` lesbar sind, `write_all_results` aktiv war, eine Config wiederhergestellt werden kann und PB8 die Kompatibilitaet bestaetigt. Config und Queue-Eintrag werden danach in einer Transaktion erzeugt. Reine Checkpoint-Resultverzeichnisse benoetigen keine separate Pareto-JSON-Config.

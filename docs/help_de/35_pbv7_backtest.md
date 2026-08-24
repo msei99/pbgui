@@ -123,6 +123,8 @@ Zeigt alle ausstehenden, laufenden und abgeschlossenen Backtest-Jobs mit Echtzei
 | 📜 | immer | Log — schwebendes Log-Panel für die Log-Datei dieses Jobs öffnen |
 | 🗑 | immer | Entfernen — Queue-Eintrag löschen (stoppt falls läuft) |
 
+Wenn genau eine Queue-Zeile ausgewaehlt ist oder ausserhalb des Queue-Panels ein laufender Backtest verfuegbar ist, kann PBGui AI die von der Seite angebotene Aktion `show_log` ausfuehren. Sie ruft dieselbe vorhandene `showLog`-Funktion wie der Log-Button der Zeile auf. Seitenuebergreifende Aktionen navigieren zu Backtest und warten vor der Ausfuehrung auf dessen Queue-Daten.
+
 ### Sidebar-Aktionen
 
 | Schaltfläche | Aktion |

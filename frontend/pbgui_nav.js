@@ -26,6 +26,8 @@
   var _restartStatus = {};
   var _aiDrawerLoading = false;
   var _aiContextProviders = {};
+  var _aiPageActions = {};
+  var _aiActionNavigationTarget = '';
 
   function aiContextText(value, limit) {
     var text = String(value == null ? '' : value).trim().replace(/[\x00-\x1f\x7f]/g, ' ');
@@ -61,6 +63,35 @@
     return field;
   }
 
+  function aiPageAction(value) {
+    if (!value || typeof value !== 'object' || typeof value.run !== 'function') return null;
+    var id = aiContextText(value.id, 64);
+    var entityKind = aiContextText(value.entity_kind, 128);
+    if (!/^[a-z][a-z0-9_.-]{0,63}$/.test(id) || !/^[A-Za-z0-9_.-]{1,128}$/.test(entityKind)) return null;
+    return { id: id, entity_kind: entityKind, run: value.run };
+  }
+
+  function registerPageAction(registration) {
+    var action = aiPageAction(registration);
+    if (!action) return function () {};
+    var key = action.id + ':' + action.entity_kind;
+    _aiPageActions[key] = action;
+    return function () { delete _aiPageActions[key]; };
+  }
+
+  function continuePageAction(url) {
+    try {
+      var target = new URL(String(url || ''), window.location.href);
+      var apiOrigin = _getApiOrigin();
+      if (target.origin !== window.location.origin && target.origin !== apiOrigin) return false;
+      target.searchParams.set('pbgui_ai_action', '1');
+      if (_aiActionNavigationTarget === target.href) return false;
+      _aiActionNavigationTarget = target.href;
+      window.location.assign(target.href);
+    } catch (_) {}
+    return false;
+  }
+
   function collectAIContext() {
     var c = cfg();
     var context = {
@@ -68,7 +99,10 @@
       page_key: String(c.current || '').slice(0, 128),
       title: String(c.subtitle || '').slice(0, 128),
       guide_topic: String(GUIDE_TOPICS[c.current] || '').slice(0, 128),
-      entities: []
+      entities: [],
+      actions: Object.keys(_aiPageActions).sort().slice(0, 16).map(function (key) {
+        return { id: _aiPageActions[key].id, entity_kind: _aiPageActions[key].entity_kind };
+      })
     };
     Object.keys(_aiContextProviders).sort().forEach(function (id) {
       try {
@@ -95,6 +129,8 @@
     _aiContextProviders[id] = registration.getContext;
     return function () { delete _aiContextProviders[id]; };
   };
+  window.PBGuiAI.registerPageAction = registerPageAction;
+  window.PBGuiAI.continuePageAction = continuePageAction;
   window.PBGuiAI.collectContext = collectAIContext;
   window.PBGuiAI.focusedField = function (allowlist) {
     var active = document.activeElement;
@@ -110,6 +146,38 @@
   if (typeof window.PBGUI_AI_PAGE_CONTEXT === 'function') {
     window.PBGuiAI.registerPageContext({ id: 'productive-page', getContext: window.PBGUI_AI_PAGE_CONTEXT });
   }
+  (Array.isArray(window.PBGUI_AI_PAGE_ACTIONS) ? window.PBGUI_AI_PAGE_ACTIONS : []).forEach(registerPageAction);
+  window.addEventListener('pbgui:ai-ui-action', function (event) {
+    var request = event && event.detail && typeof event.detail === 'object' ? event.detail : {};
+    if (request.type !== 'page.perform_action') return;
+    var target = request.target && typeof request.target === 'object' ? request.target : {};
+    var payload = request.payload && typeof request.payload === 'object' ? request.payload : {};
+    var entity = payload.entity && typeof payload.entity === 'object' ? payload.entity : {};
+    if (String(target.page_key || '') !== String(cfg().current || '')) {
+      var route = FASTAPI_PAGES[String(target.page_key || '')];
+      if (route) continuePageAction(_getApiOrigin() + route);
+      return;
+    }
+    var key = String(payload.action || '') + ':' + String(entity.kind || '');
+    var registration = _aiPageActions[key];
+    if (!registration) return;
+    var context = collectAIContext();
+    var exposed = context.entities.some(function (item) {
+      return item.kind === entity.kind && item.name === entity.name;
+    });
+    if (!exposed) return;
+    try {
+      var result = registration.run(entity.name, entity);
+      if (result === false) return;
+      event.preventDefault();
+      if (result && typeof result.catch === 'function') {
+        result.catch(function (error) { console.error('PBGui page action failed:', error); });
+      }
+    } catch (error) {
+      event.preventDefault();
+      console.error('PBGui page action failed:', error);
+    }
+  });
 
   /* ── config (read at runtime so global vars are already set) ── */
   function cfg() {
@@ -1358,11 +1426,18 @@
       link.href = '/app/css/ai_drawer.css?v=11';
       document.head.appendChild(link);
       var script = document.createElement('script');
-      script.src = '/app/js/ai_drawer.js?v=24';
+      script.src = '/app/js/ai_drawer.js?v=25';
       script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
       script.onerror = function () { _aiDrawerLoading = false; };
       document.head.appendChild(script);
     });
+    var pendingAIAction = new URL(window.location.href).searchParams.get('pbgui_ai_action') === '1';
+    if (aiBtn && pendingAIAction) {
+      var cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete('pbgui_ai_action');
+      window.history.replaceState(window.history.state, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+      aiBtn.click();
+    }
 
     /* About button → show overlay */
     var aboutBtn = document.getElementById('pbgui-about-btn');

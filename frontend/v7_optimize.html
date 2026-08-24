@@ -11353,12 +11353,13 @@ window.addEventListener('pbgui:ai-action-completed', function(event) {
   loadConfigs().catch(function(error) {
     console.error('Could not refresh Optimize configs after PBGui AI action:', error);
   });
-  if (!editorVisible() || state.editingConfig !== name) return;
+  if (!editorVisible()) return;
+  var previousName = state.editingConfig;
   var generation = ++aiConfigRefreshGeneration;
   apiFetch('/configs/' + encodeURIComponent(name)).then(function(data) {
-    if (generation !== aiConfigRefreshGeneration || !editorVisible() || state.editingConfig !== name) return;
+    if (generation !== aiConfigRefreshGeneration || !editorVisible() || state.editingConfig !== previousName) return;
     openEditorWithConfig(data, name, name);
-    setPageEditorStatus('Reloaded the config saved by PBGui AI.', 'ok');
+    setPageEditorStatus(previousName === name ? 'Reloaded the config saved by PBGui AI.' : 'Opened the new config saved by PBGui AI.', 'ok');
   }).catch(function(error) {
     if (generation !== aiConfigRefreshGeneration) return;
     setPageEditorStatus('PBGui AI saved the config, but the editor could not refresh: ' + error.message, 'err');
@@ -13820,9 +13821,17 @@ window.PBGUI_AI_PAGE_CONTEXT = function () {
   var names = editorName && editorName !== '__new__'
     ? [editorName]
     : Array.from(state.selectedConfigs || []).slice(0, 8);
-  var entities = (state.panel === 'results' || state.panel === 'paretos' ? [] : names).map(function (name) {
+  var showConfigEntities = !!editorName || ['queue', 'results', 'paretos'].indexOf(state.panel) < 0;
+  var entities = (showConfigEntities ? names : []).map(function (name) {
     return { kind: 'optimizer_config', version: optimizeEditorAdapter.version, name: name };
   });
+  if (!editorName && state.panel === 'queue' && state.selectedQueue && state.selectedQueue.size) {
+    Array.from(state.selectedQueue).slice(0, 8).forEach(function (filename) {
+      var queueItem = (state.queue || []).find(function (item) { return item.filename === filename; });
+      if (!queueItem) return;
+      entities.push({ kind: 'optimizer_queue_item', version: optimizeEditorAdapter.version, name: String(queueItem.filename) });
+    });
+  }
   if (state.selectedResultName && (state.panel === 'results' || state.panel === 'paretos')) {
     var selectedRun = (state.results || []).find(function (item) {
       return item.path === state.selectedResultPath;
@@ -13840,6 +13849,16 @@ window.PBGUI_AI_PAGE_CONTEXT = function () {
       }
     });
   }
+  if (!editorName && entities.length < 8) {
+    (state.queue || []).filter(function(item) {
+      return item.status === 'running' || item.status === 'optimizing';
+    }).slice(0, 8 - entities.length).forEach(function(item) {
+      var exists = entities.some(function(entity) {
+        return entity.kind === 'optimizer_queue_item' && entity.name === String(item.filename);
+      });
+      if (!exists) entities.push({ kind: 'optimizer_queue_item', version: optimizeEditorAdapter.version, name: String(item.filename) });
+    });
+  }
   return {
     section: editorName ? 'editor' : state.panel,
     entities: entities,
@@ -13850,6 +13869,19 @@ window.PBGUI_AI_PAGE_CONTEXT = function () {
     })
   };
 };
+
+window.PBGUI_AI_PAGE_ACTIONS = [{
+  id: 'show_log',
+  entity_kind: 'optimizer_queue_item',
+  run: function(filename) {
+    var queueItem = state.queue.find(function(item) { return item.filename === filename; });
+    if (!queueItem) {
+      toast('The selected Optimize queue item is no longer available.', 'warn');
+      return;
+    }
+    openLogPanel(queueItem.filename, queueItem.name || queueItem.filename);
+  }
+}];
 
 window.PBGUI_NAV_CONFIG = {
   subtitle: optimizeEditorAdapter.navSubtitle,

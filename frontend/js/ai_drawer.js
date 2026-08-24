@@ -360,7 +360,8 @@
       renderMessages(conversation.messages || []);
       renderReasoningSummary(conversation.reasoning_summary || '');
       renderActivityHistory(conversation.activity_history || []);
-      dispatchUiActions(id, conversation.ui_actions || []);
+      var uiActions = conversation.ui_actions || [];
+      dispatchUiActions(id, uiActions);
       if (conversation.retry_message) state.retryMessages[id] = conversation.retry_message;
       renderContext(conversation.context && Object.keys(conversation.context).length ? conversation.context : collectContext());
       setBusy(!!conversation.busy);
@@ -376,7 +377,10 @@
       if (id !== state.current || generation !== state.requestGeneration) return;
       rebuildEfforts(conversation.effort || '');
       await reconcileProposals(id, generation);
-      if (conversation.busy) schedulePoll(id); else stopPoll();
+      var pendingPageAction = uiActions.some(function (action) {
+        return action && action.type === 'page.perform_action';
+      });
+      if (conversation.busy || pendingPageAction) schedulePoll(id); else stopPoll();
       if (!conversation.busy && !conversation.last_error) delete state.retryMessages[id];
       var summary = state.conversations.find(function (item) { return item.conversation_id === id; });
       if (summary) Object.assign(summary, conversation);

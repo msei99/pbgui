@@ -36,6 +36,7 @@ def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
         "rank_optimizer_run_candidates",
         "get_pareto_candidate",
         "select_pareto_candidates",
+        "perform_page_action",
         "present_user_choices",
         "get_backtest_projection",
         "list_dashboard_templates",
@@ -164,6 +165,40 @@ def test_quick_reply_capability_returns_typed_clickable_choices() -> None:
     assert result["status"] == "waiting_for_user_choice"
     assert result["ui_action"]["type"] == "chat.quick_replies"
     assert result["ui_action"]["payload"]["choices"][0]["label"] == "Balanced"
+
+
+def test_generic_page_capability_returns_exact_browser_action() -> None:
+    """Page actions should transport only an advertised action and exact visible entity."""
+    result = AICapabilityService._perform_page_action(
+        {
+            "page_key": "v8_optimize",
+            "action": "show_log",
+            "entity_kind": "optimizer_queue_item",
+            "entity_name": "optimize_123",
+        }
+    )
+
+    assert result == {
+        "status": "queued_for_browser",
+        "action": "show_log",
+        "ui_action": {
+            "type": "page.perform_action",
+            "target": {"page_key": "v8_optimize"},
+            "payload": {
+                "action": "show_log",
+                "entity": {"kind": "optimizer_queue_item", "name": "optimize_123"},
+            },
+        },
+    }
+    with pytest.raises(AICapabilityError, match="Invalid page action"):
+        AICapabilityService._perform_page_action(
+            {
+                "page_key": "v8_optimize",
+                "action": "show log",
+                "entity_kind": "optimizer_queue_item",
+                "entity_name": "optimize_123",
+            }
+        )
 
 
 def test_proposal_diff_only_includes_changed_array_entries() -> None:

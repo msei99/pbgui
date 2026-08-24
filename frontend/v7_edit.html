@@ -4098,6 +4098,14 @@ window.PBGUI_AI_PAGE_CONTEXT = function () {
     entities: INSTANCE_NAME ? [{ kind: 'run_config', version: runEditorAdapter.version, name: INSTANCE_NAME }] : []
   };
 };
+window.PBGUI_AI_PAGE_ACTIONS = [{
+  id: 'show_log',
+  entity_kind: 'run_config',
+  run: function(name) {
+    if (name !== INSTANCE_NAME) return;
+    return openLogPanel();
+  }
+}];
 </script>
 
 <!-- ── Shared nav bar ── -->

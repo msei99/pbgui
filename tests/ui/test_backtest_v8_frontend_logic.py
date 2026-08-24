@@ -61,6 +61,16 @@ def test_backtest_page_can_open_the_queue_panel_from_ai_navigation() -> None:
     assert "selectPanel('queue')" in initialize
 
 
+def test_backtest_page_registers_existing_queue_log_function_as_page_action() -> None:
+    """Selected Backtest jobs should expose the existing log viewer through the generic bridge."""
+    page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+
+    assert "kind: 'backtest_queue_item'" in page
+    assert "entity_kind: 'backtest_queue_item'" in page
+    assert "showLog(queueItem.filename)" in page
+    assert "item.status === 'running' || item.status === 'backtesting'" in page
+
+
 def test_shared_editors_emit_only_the_generation_specific_suite_reducer_alias() -> None:
     """PB8 must emit reducer while PB7 keeps aggregate without retaining the other alias."""
     backtest = _extract_function(

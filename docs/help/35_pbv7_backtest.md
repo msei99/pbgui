@@ -123,6 +123,8 @@ Use the **Select All** / **Deselect** toolbar above the table.
 | 📜 | always | Log — open a floating log panel for this job's log file |
 | 🗑 | always | Remove — delete this queue entry (stops if running) |
 
+When exactly one queue row is selected, or one running Backtest is available outside the Queue panel, PBGui AI can invoke the page-advertised `show_log` action. It calls the same existing `showLog` function as the row's Log button. Cross-page actions navigate to Backtest and wait for its queue data before execution.
+
 ### Sidebar actions
 
 | Button | Action |

@@ -46,6 +46,8 @@ The editor also keeps its navigation origin: **Home** or **Save** returns a queu
 - **Continue from Pareto** uses managed Pareto files as `--start` seeds.
 - **Resume Checkpoint** resumes the exact managed optimizer state with `--resume`.
 
+For an exact selected or running queue item, PBGui AI can invoke the page-advertised `show_log` action from any Optimize panel. Cross-page actions navigate to PB8 Optimize, wait for queue data, and then call the same existing log-panel function as the row action.
+
 Checkpoint resume accepts only local PB8 results managed by PBGui. Arbitrary checkpoint files are rejected because Python pickle checkpoints must be treated as trusted executable data.
 
 PBGui advertises exact resume only when the checkpoint and `all_results.bin` are readable, `write_all_results` was enabled, a config is recoverable, and PB8 confirms compatibility. Config and queue creation then happen as one transaction. Checkpoint-only result directories do not require a separate Pareto JSON config.

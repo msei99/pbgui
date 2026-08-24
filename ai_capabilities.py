@@ -273,6 +273,7 @@ class AICapabilityService:
             "rank_optimizer_run_candidates": self._rank_optimizer_run_candidates,
             "get_pareto_candidate": self._get_pareto_candidate,
             "select_pareto_candidates": self._select_pareto_candidates,
+            "perform_page_action": self._perform_page_action,
             "present_user_choices": self._present_user_choices,
             "list_dashboard_templates": self._list_dashboard_templates,
             "get_dashboard_layout": self._get_dashboard_layout,
@@ -902,6 +903,37 @@ class AICapabilityService:
                 "type": "optimize.select_paretos",
                 "target": {"page_key": f"{version}_optimize", "version": version, "run_name": run_name},
                 "payload": {"candidate_names": names, "mode": mode},
+            },
+        }
+
+    @staticmethod
+    def _perform_page_action(args: dict[str, Any]) -> dict[str, Any]:
+        """Create one reversible action advertised by the current PBGui page."""
+        page_key = str(args.get("page_key") or "").strip()
+        action = str(args.get("action") or "").strip()
+        entity_kind = str(args.get("entity_kind") or "").strip()
+        entity_name = str(args.get("entity_name") or "").strip()
+        if (
+            not page_key
+            or len(page_key) > 128
+            or any(ord(char) < 32 or ord(char) == 127 for char in page_key)
+            or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", action)
+            or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", entity_kind)
+            or not entity_name
+            or len(entity_name) > 128
+            or any(ord(char) < 32 or ord(char) == 127 for char in entity_name)
+        ):
+            raise AICapabilityError("Invalid page action")
+        return {
+            "status": "queued_for_browser",
+            "action": action,
+            "ui_action": {
+                "type": "page.perform_action",
+                "target": {"page_key": page_key},
+                "payload": {
+                    "action": action,
+                    "entity": {"kind": entity_kind, "name": entity_name},
+                },
             },
         }
 
@@ -3530,6 +3562,20 @@ class AICapabilityService:
                 ),
                 "effect": "ui",
                 "resources": ["pbgui://optimizer-run/{version}/{opaque-id}", "pbgui://pareto/{version}/{opaque-id}"],
+            },
+            {
+                "name": "perform_page_action",
+                "description": "Run one reversible action explicitly advertised in the current PBGui page context for an exact visible entity. Use the page_key, action id, entity_kind, and entity_name exactly as advertised. This only controls existing PBGui UI functions; it cannot execute arbitrary JavaScript or read data for the model.",
+                "schema": self._object_schema(
+                    {
+                        "page_key": {"type": "string", "maxLength": 128},
+                        "action": {"type": "string", "maxLength": 64},
+                        "entity_kind": {"type": "string", "maxLength": 128},
+                        "entity_name": {"type": "string", "maxLength": 128},
+                    },
+                    ["page_key", "action", "entity_kind", "entity_name"],
+                ),
+                "effect": "ui",
             },
             {
                 "name": "present_user_choices",

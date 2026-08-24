@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import time
 from typing import Any, Awaitable, Callable
@@ -122,6 +123,7 @@ _CAPABILITY_ACTIVITY = {
     "present_user_choices": "Preparing clarification choices",
     "list_backtests": "Reading backtest summaries",
     "select_pareto_candidates": "Selecting Pareto candidates in PBGui",
+    "perform_page_action": "Controlling the current PBGui page",
     "list_dashboard_templates": "Listing dashboard templates",
     "get_dashboard_layout": "Reading dashboard layout",
     "propose_pb8_optimizer_config": "Preparing a PB8 configuration proposal",
@@ -149,6 +151,7 @@ _CAPABILITY_RESULT_ACTIVITY = {
     "present_user_choices": "Clarification choices ready",
     "list_backtests": "Backtest summaries loaded; model is processing results",
     "select_pareto_candidates": "Pareto selection sent to the open PBGui page",
+    "perform_page_action": "Page action sent to the open PBGui page",
     "list_dashboard_templates": "Dashboard templates loaded; model is processing results",
     "get_dashboard_layout": "Dashboard layout loaded; model is processing results",
     "propose_pb8_optimizer_config": "PB8 proposal prepared; model is processing results",
@@ -1332,7 +1335,11 @@ class AIChatService:
             return []
         restored = []
         for item in value[-20:]:
-            if not isinstance(item, dict) or item.get("type") not in {"optimize.select_paretos", "chat.quick_replies"}:
+            if not isinstance(item, dict) or item.get("type") not in {
+                "optimize.select_paretos",
+                "page.perform_action",
+                "chat.quick_replies",
+            }:
                 continue
             action_id = str(item.get("action_id") or "")
             if len(action_id) != 32 or any(char not in "0123456789abcdef" for char in action_id):
@@ -1535,7 +1542,11 @@ class AIChatService:
     ) -> None:
         """Persist one typed browser action emitted by a trusted capability handler."""
         action = result.get("ui_action") if isinstance(result, dict) else None
-        if not isinstance(action, dict) or action.get("type") not in {"optimize.select_paretos", "chat.quick_replies"}:
+        if not isinstance(action, dict) or action.get("type") not in {
+            "optimize.select_paretos",
+            "page.perform_action",
+            "chat.quick_replies",
+        }:
             return
         target = action.get("target")
         payload = action.get("payload")
@@ -1695,7 +1706,16 @@ class AIChatService:
             return {}
         if not isinstance(context, dict):
             raise AIChatError("Invalid page context")
-        allowed = {"schema_version", "page_key", "title", "guide_topic", "section", "entities", "focused_field"}
+        allowed = {
+            "schema_version",
+            "page_key",
+            "title",
+            "guide_topic",
+            "section",
+            "entities",
+            "actions",
+            "focused_field",
+        }
         if set(context) - allowed:
             raise AIChatError("Invalid page context")
         result: dict[str, Any] = {"schema_version": 1}
@@ -1718,6 +1738,22 @@ class AIChatService:
             safe_entities.append(projected)
         if safe_entities:
             result["entities"] = safe_entities
+        actions = context.get("actions") or []
+        if not isinstance(actions, list) or len(actions) > 16:
+            raise AIChatError("Invalid page context")
+        safe_actions = []
+        for item in actions:
+            if not isinstance(item, dict) or set(item) - {"id", "entity_kind"}:
+                raise AIChatError("Invalid page context")
+            action_id = str(item.get("id") or "").strip()
+            entity_kind = str(item.get("entity_kind") or "").strip()
+            if not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", action_id) or not re.fullmatch(
+                r"[A-Za-z0-9_.-]{1,128}", entity_kind
+            ):
+                raise AIChatError("Invalid page context")
+            safe_actions.append({"id": action_id, "entity_kind": entity_kind})
+        if safe_actions:
+            result["actions"] = safe_actions
         focused = context.get("focused_field")
         if focused:
             if not isinstance(focused, dict) or set(focused) - {"path", "label", "value", "validation"}:

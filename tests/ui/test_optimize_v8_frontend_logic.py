@@ -55,8 +55,10 @@ def test_pb8_editor_refreshes_an_ai_saved_open_config() -> None:
 
     assert "pbgui:ai-action-completed" in page
     assert "result.action !== 'save' && result.action !== 'save_and_queue'" in page
-    assert "state.editingConfig !== name" in page
     assert "Reloaded the config saved by PBGui AI." in page
+    assert "var previousName = state.editingConfig" in page
+    assert "state.editingConfig !== previousName" in page
+    assert "Opened the new config saved by PBGui AI." in page
     assert "result.action === 'queue_backtests'" in page
     assert "buildBacktestMainPageUrl({ panel: 'queue' })" in page
 
@@ -69,6 +71,17 @@ def test_pb8_pareto_page_applies_typed_ai_selection_actions() -> None:
     assert "action.type !== 'optimize.select_paretos'" in page
     assert "state.selectedParetos.add(pathsByName.get(name))" in page
     assert "event.preventDefault()" in page
+
+
+def test_optimize_page_registers_existing_queue_log_function_as_page_action() -> None:
+    """The generic page action should resolve a selected item and reuse its log viewer."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+
+    assert "window.PBGUI_AI_PAGE_ACTIONS" in page
+    assert "id: 'show_log'" in page
+    assert "entity_kind: 'optimizer_queue_item'" in page
+    assert "openLogPanel(queueItem.filename, queueItem.name || queueItem.filename)" in page
+    assert "item.status === 'running' || item.status === 'optimizing'" in page
 
 
 def test_optimize_log_waits_for_first_evaluation_when_target_is_known() -> None:

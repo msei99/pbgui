@@ -10438,6 +10438,23 @@ window.PBGUI_AI_PAGE_CONTEXT = function () {
   var entities = [];
   if (editingConfig && editingConfig !== '__new__') entities.push({ kind: 'backtest_config', version: backtestEditorAdapter.version, name: editingConfig });
   if (currentPanel === 'archive' && selectedArchiveName) entities.push({ kind: 'backtest_archive', version: backtestEditorAdapter.version, name: selectedArchiveName });
+  if (currentPanel === 'queue') {
+    getSelectedQueue().slice(0, 8).forEach(function(filename) {
+      if (queueItems.some(function(item) { return item.filename === filename; })) {
+        entities.push({ kind: 'backtest_queue_item', version: backtestEditorAdapter.version, name: filename });
+      }
+    });
+  }
+  if (entities.length < 8) {
+    queueItems.filter(function(item) {
+      return item.status === 'running' || item.status === 'backtesting';
+    }).slice(0, 8 - entities.length).forEach(function(item) {
+      var exists = entities.some(function(entity) {
+        return entity.kind === 'backtest_queue_item' && entity.name === String(item.filename);
+      });
+      if (!exists) entities.push({ kind: 'backtest_queue_item', version: backtestEditorAdapter.version, name: String(item.filename) });
+    });
+  }
   return {
     section: currentPanel,
     entities: entities,
@@ -10448,6 +10465,18 @@ window.PBGUI_AI_PAGE_CONTEXT = function () {
     })
   };
 };
+window.PBGUI_AI_PAGE_ACTIONS = [{
+  id: 'show_log',
+  entity_kind: 'backtest_queue_item',
+  run: function(filename) {
+    var queueItem = queueItems.find(function(item) { return item.filename === filename; });
+    if (!queueItem) {
+      toast('The selected Backtest queue item is no longer available.', 'err');
+      return;
+    }
+    showLog(queueItem.filename);
+  }
+}];
 </script>
 <script src="/app/js/suite_editor.js?v=11"></script>
 <script src="/app/js/coin_overrides_editor.js?v=25"></script>

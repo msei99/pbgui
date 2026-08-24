@@ -168,6 +168,7 @@ For PB8, permanent launch errors move only the affected row to an actionable err
 
 Each queue row has a **Log** action.
 It opens the shared floating log viewer and streams the local file from `data/logs/optimizes/`.
+For an exact selected queue row or a currently running optimizer visible from another Optimize panel, PBGui AI can invoke the page-advertised `show_log` action, which calls that same existing `openLogPanel` function. A cross-page request navigates to Optimize automatically and remains pending until the queue data is loaded.
 The **Edit** action opens the actual config file referenced by that queue row, even if the row label differs from the stored config filename.
 If an older queue row still points to a deleted config path but PBGui finds matching configs, the matching-config modal can now repair that existing queue entry in place. Choose the correct candidate and PBGui updates the queue row to the selected config path plus a fresh embedded snapshot, so you do not have to delete the row and queue it again manually.
 Newer queue items also keep an embedded config snapshot. If the original config file is later deleted, PBGui can still reopen or start that queued job from its stored snapshot instead of failing on the stale path. Saving an edited config under a different `config_name` now creates a new config and leaves existing queue rows for the old config untouched.
