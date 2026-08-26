@@ -1802,7 +1802,7 @@ class AIChatService:
             page_key = str(item.get("key") or "").strip()
             page_title = str(item.get("title") or "").strip()
             if (
-                not re.fullmatch(r"[a-z][a-z0-9_.-]{0,127}", page_key)
+                page_key != "/" and not re.fullmatch(r"[a-z][a-z0-9_.-]{0,127}", page_key)
                 or not page_title
                 or len(page_title) > 128
                 or any(ord(char) < 32 for char in page_title)

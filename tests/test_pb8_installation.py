@@ -31,6 +31,28 @@ def test_bulk_runtime_update_resolves_each_host_profile(logical_command: str, pr
     assert service_mod._profile_aware_vps_update_command(logical_command, profile) == expected
 
 
+@pytest.mark.parametrize(
+    ("pb7_installed", "pb8_installed", "expected"),
+    [
+        (True, True, "vps-update-pb7-pb8"),
+        (True, False, "vps-update-pb7"),
+        (False, True, "vps-update-pb8"),
+    ],
+)
+def test_bulk_runtime_update_prefers_confirmed_installs_over_stale_profile(
+    pb7_installed: bool,
+    pb8_installed: bool,
+    expected: str,
+) -> None:
+    """Legacy PB7 profiles must not suppress a confirmed installed PB8 runtime."""
+    assert service_mod._profile_aware_vps_update_command(
+        "vps-update-runtime",
+        "pb7",
+        pb7_installed=pb7_installed,
+        pb8_installed=pb8_installed,
+    ) == expected
+
+
 def test_combined_runtime_playbooks_compose_existing_safe_updates() -> None:
     """Dual-runtime updates reuse the reviewed PB7 and PB8 playbooks in order."""
     runtime_only = Path("vps-update-pb7-pb8.yml").read_text(encoding="utf-8")

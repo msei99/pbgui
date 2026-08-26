@@ -425,8 +425,8 @@ VPS_DEPLOY_ACTION_TEXT = {
     COMMAND_VPS_UPDATE_PBGUI_PB8: "Update PBGui and PB8",
     COMMAND_VPS_UPDATE_PB7_PB8: "Update PB7 and PB8",
     COMMAND_VPS_UPDATE_PBGUI_PB7_PB8: "Update PBGui, PB7 and PB8",
-    COMMAND_VPS_UPDATE_RUNTIME: "Update Runtime by Profile",
-    COMMAND_VPS_UPDATE_PBGUI_RUNTIME: "Update PBGui and Runtime by Profile",
+    COMMAND_VPS_UPDATE_RUNTIME: "Update Passivbot (PB7/PB8)",
+    COMMAND_VPS_UPDATE_PBGUI_RUNTIME: "Update PBGui + Passivbot (PB7/PB8)",
     COMMAND_VPS_CLEANUP: "Cleanup VPS",
 }
 VPS_DEPLOY_ACTIONS = tuple(VPS_DEPLOY_ACTION_TEXT.keys())
@@ -1571,12 +1571,25 @@ def _vps_deploy_requires_user_password(command: Any) -> bool:
     return normalized in {COMMAND_VPS_UPDATE, COMMAND_VPS_CLEANUP}
 
 
-def _profile_aware_vps_update_command(command: str, runtime_profile: str) -> str:
-    """Resolve one logical bulk update to the host's configured runtime profile."""
+def _profile_aware_vps_update_command(
+    command: str,
+    runtime_profile: str,
+    *,
+    pb7_installed: bool | None = None,
+    pb8_installed: bool | None = None,
+) -> str:
+    """Resolve one logical bulk update from confirmed installs, then saved profile."""
     normalized = _normalize_vps_deploy_command(command)
     profile = str(runtime_profile or "pb7").strip().lower()
     if profile not in VPS_RUNTIME_PROFILES:
         profile = "pb7"
+    if pb7_installed is True or pb8_installed is True:
+        if pb7_installed is True and pb8_installed is True:
+            profile = "pb7_pb8"
+        elif pb8_installed is True:
+            profile = "pb8"
+        else:
+            profile = "pb7"
     if normalized == COMMAND_VPS_UPDATE_RUNTIME:
         return {
             "pb7": COMMAND_VPS_UPDATE_PB7,
@@ -3325,7 +3338,6 @@ class VPSManagerService:
             return []
         latest_entry = deploy_history[0]
         latest_command = str(latest_entry.get("command") or "vps-deploy-logging")
-        latest_command_text = str(latest_entry.get("command_text") or _vps_deploy_command_text(latest_command))
         latest_started_at = str(latest_entry.get("started_at") or "")
         latest_host_logs = latest_entry.get("host_logs") if isinstance(latest_entry.get("host_logs"), dict) else {}
         deploy_hosts = [str(host).strip() for host in latest_entry.get("hostnames") or [] if str(host).strip()]
@@ -3342,6 +3354,10 @@ class VPSManagerService:
         for hostname in deploy_hosts:
             base_row = dict(by_hostname.get(hostname) or {"hostname": hostname, "name": hostname})
             host_log_meta = latest_host_logs.get(hostname) if isinstance(latest_host_logs.get(hostname), dict) else {}
+            host_command = _normalize_vps_deploy_command(host_log_meta.get("command") or latest_command)
+            host_command_text = str(
+                host_log_meta.get("command_text") or _vps_deploy_command_text(host_command)
+            )
             expected_started_at = str(host_log_meta.get("started_at") or latest_started_at or "").strip()
             expected_run_id = str(host_log_meta.get("run_id") or "").strip()
             file_alias = str(host_log_meta.get("file_alias") or "").strip()
@@ -3353,8 +3369,8 @@ class VPSManagerService:
                 progress_rows.append(
                     {
                         **base_row,
-                        "task_command": latest_command,
-                        "task_command_text": latest_command_text,
+                        "task_command": host_command,
+                        "task_command_text": host_command_text,
                         "task_status": "skipped",
                         "task_started": expected_started_at or latest_started_at,
                         "task_step": "",
@@ -3375,7 +3391,7 @@ class VPSManagerService:
             parsed_status = ""
             if filename:
                 log_path = Path(PBGDIR) / "data" / "logs" / "vps-manager" / "hosts" / hostname / filename
-                cache_key = (hostname, filename, latest_command)
+                cache_key = (hostname, filename, host_command)
                 active_cache_keys.add(cache_key)
                 with self._deploy_progress_cache_lock:
                     cache_entry = dict(self._deploy_progress_cache.get(cache_key) or {}) or None
@@ -3391,7 +3407,7 @@ class VPSManagerService:
                 elif stat_signature is not None:
                     log_text = _read_text_tail(log_path)
                     if log_text:
-                        parsed_progress = _parse_ansible_task_progress(hostname, log_text, command=latest_command)
+                        parsed_progress = _parse_ansible_task_progress(hostname, log_text, command=host_command)
                         parsed_started_at = str(parsed_progress.get("started_at") or "").strip()
                         if not parsed_started_at:
                             parsed_started_at = _read_playbook_run_started_at(log_path)
@@ -3399,7 +3415,7 @@ class VPSManagerService:
                                 parsed_progress["started_at"] = parsed_started_at
                         run_log_matches = bool(
                             expected_run_id
-                            and filename == f"{latest_command}--{expected_run_id}.log"
+                            and filename == f"{host_command}--{expected_run_id}.log"
                         )
                         if parsed_started_at and (
                             run_log_matches
@@ -3426,7 +3442,7 @@ class VPSManagerService:
             live_command = str(base_row.get("task_command") or "").strip()
             live_run_id = str(base_row.get("task_run_id") or "").strip()
             live_status = str(base_row.get("task_status") or "").strip().lower()
-            live_matches_latest_run = bool(live_command == latest_command and expected_run_id and live_run_id == expected_run_id)
+            live_matches_latest_run = bool(live_command == host_command and expected_run_id and live_run_id == expected_run_id)
             live_is_terminal = live_status in {"successful", "failed", "error", "timeout", "canceled", "cancelled", "unreachable"}
 
             if parsed_progress is not None:
@@ -3434,8 +3450,8 @@ class VPSManagerService:
                 total_steps = int(parsed_progress.get("total_steps") or 0)
                 row = {
                     **base_row,
-                    "task_command": latest_command,
-                    "task_command_text": latest_command_text,
+                    "task_command": host_command,
+                    "task_command_text": host_command_text,
                     "task_status": parsed_status,
                     "task_started": str(parsed_progress.get("started_at") or expected_started_at or latest_started_at),
                     "task_step": str(parsed_progress.get("step") or ""),
@@ -3458,8 +3474,8 @@ class VPSManagerService:
                 total_steps = int(base_row.get("task_total_steps") or 0)
                 row = {
                     **base_row,
-                    "task_command": latest_command,
-                    "task_command_text": latest_command_text,
+                    "task_command": host_command,
+                    "task_command_text": host_command_text,
                     "task_status": safe_live_status,
                     "task_started": str(base_row.get("task_started") or expected_started_at or latest_started_at),
                     "task_step": str(base_row.get("task_step") or ""),
@@ -3479,8 +3495,8 @@ class VPSManagerService:
             progress_rows.append(
                 {
                     **base_row,
-                    "task_command": latest_command,
-                    "task_command_text": latest_command_text,
+                    "task_command": host_command,
+                    "task_command_text": host_command_text,
                     "task_status": "",
                     "task_started": expected_started_at or latest_started_at,
                     "task_step": "",
@@ -5070,28 +5086,31 @@ class VPSManagerService:
             if self._deploy_shutdown_requested():
                 raise ValueError("VPS deployment controller is shutting down.")
             vps = self._require_vps(hostname)
-            normalized_command = _profile_aware_vps_update_command(
-                requested_command,
-                str(getattr(vps, "runtime_profile", "pb7") or "pb7"),
-            )
-            command_text = _vps_deploy_command_text(normalized_command)
             self._apply_session_secrets_to_vps(token, vps)
-            if _vps_deploy_requires_user_password(normalized_command) and not getattr(vps, "user_pw", None):
+            requested_text = _vps_deploy_command_text(requested_command)
+            if _vps_deploy_requires_user_password(requested_command) and not getattr(vps, "user_pw", None):
                 raise ValueError(f"VPS user password missing for {hostname}.")
-            self._raise_if_vps_task_active(vps, command_text)
-            vps.command = normalized_command
-            vps.command_text = command_text
-            command_extra_vars = dict(extra_vars or {})
+            self._raise_if_vps_task_active(vps, requested_text)
             monitor_state = self._get_monitor_state()
             host_state = self._get_host_telemetry(monitor_state, hostname)
             telemetry_fresh = self._host_telemetry_fresh(host_state)
+            pb7_action = _pb7_remote_action_status(host_state, telemetry_fresh=telemetry_fresh)
+            pb8_action = _pb8_remote_action_status(host_state, telemetry_fresh=telemetry_fresh)
+            normalized_command = _profile_aware_vps_update_command(
+                requested_command,
+                str(getattr(vps, "runtime_profile", "pb7") or "pb7"),
+                pb7_installed=pb7_action["installed"] if telemetry_fresh else None,
+                pb8_installed=pb8_action["installed"] if telemetry_fresh else None,
+            )
+            command_text = _vps_deploy_command_text(normalized_command)
+            vps.command = normalized_command
+            vps.command_text = command_text
+            command_extra_vars = dict(extra_vars or {})
             if normalized_command in PB7_UPDATE_COMMANDS:
-                pb7_action = _pb7_remote_action_status(host_state, telemetry_fresh=telemetry_fresh)
                 if not pb7_action["allowed"]:
                     raise ValueError(str(pb7_action["reason"]))
                 command_extra_vars["pb7_min_free_bytes"] = int(pb7_action["required_free_disk_bytes"])
             if normalized_command in PB8_UPDATE_COMMANDS:
-                pb8_action = _pb8_remote_action_status(host_state, telemetry_fresh=telemetry_fresh)
                 if not pb8_action["allowed"]:
                     raise ValueError(str(pb8_action["reason"]))
                 command_extra_vars["pb8_min_free_bytes"] = int(pb8_action["required_free_disk_bytes"])

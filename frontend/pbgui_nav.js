@@ -296,9 +296,10 @@
     }
   });
 
-  function collectAIContext() {
+  function collectAIContext(options) {
+    options = options || {};
     var c = cfg();
-    var controls = collectAIControls();
+    var controls = options.include_controls === false ? [] : collectAIControls();
     var context = {
       schema_version: 1,
       page_key: String(c.current || '').slice(0, 128),
@@ -1697,7 +1698,7 @@
       link.href = '/app/css/ai_drawer.css?v=12';
       document.head.appendChild(link);
       var script = document.createElement('script');
-      script.src = '/app/js/ai_drawer.js?v=27';
+      script.src = '/app/js/ai_drawer.js?v=28';
       script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
       script.onerror = function () { _aiDrawerLoading = false; };
       document.head.appendChild(script);

@@ -408,8 +408,9 @@ class TestVpsManagerFrontendLogic:
         source = HTML_PATH.read_text(encoding="utf-8")
         sidebar_source = _extract_function(source, "renderSidebarActions")
 
-        assert 'deploySelectedVpsAction("vps-update-runtime", "Update Runtime by Profile")' in sidebar_source
-        assert 'deploySelectedVpsAction("vps-update-pbgui-runtime", "Update PBGui and Runtime by Profile")' in sidebar_source
+        assert 'deploySelectedVpsAction("vps-update-runtime", "Update Passivbot (PB7/PB8)")' in sidebar_source
+        assert 'deploySelectedVpsAction("vps-update-pbgui-runtime", "Update PBGui + Passivbot (PB7/PB8)")' in sidebar_source
+        assert "Updates PB7, PB8, or both according to what is installed on each selected VPS." in sidebar_source
         assert 'deploySelectedVpsAction("vps-update-pb7", "Update PB7")' not in sidebar_source
 
     def test_vps_monitor_combines_pb7_and_pb8_runtime_rows(self) -> None:

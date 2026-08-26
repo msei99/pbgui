@@ -25,6 +25,7 @@ def test_shared_context_boundary_projects_only_the_backend_schema() -> None:
     assert "FASTAPI_PAGES[String(target.page_key || '')]" in NAV
     assert "pbgui_ai_action" in NAV
     assert "collectAIControls" in NAV
+    assert "options.include_controls === false ? [] : collectAIControls()" in NAV
     assert "entity_kind: 'ui_control'" in NAV
     assert "entity_kind: 'ui_control_label'" in NAV
     assert "id: 'activate'" in NAV

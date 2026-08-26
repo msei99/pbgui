@@ -151,12 +151,16 @@
     root.appendChild(body);
     document.body.appendChild(root);
     document.body.appendChild(buildReviewOverlay());
-    renderContext(collectContext());
+    renderContext(collectDisplayContext());
     refreshAll();
   }
 
-  function collectContext() {
-    return window.PBGuiAI && typeof window.PBGuiAI.collectContext === 'function' ? window.PBGuiAI.collectContext() : {};
+  function collectContext(options) {
+    return window.PBGuiAI && typeof window.PBGuiAI.collectContext === 'function' ? window.PBGuiAI.collectContext(options) : {};
+  }
+
+  function collectDisplayContext() {
+    return collectContext({ include_controls: false });
   }
 
   function renderContext(context) {
@@ -176,7 +180,7 @@
   }
 
   function refreshLiveContext() {
-    var context = collectContext();
+    var context = collectDisplayContext();
     var signature = '';
     try { signature = JSON.stringify(context); } catch (_) {}
     if (signature === state.contextSignature) return;
@@ -349,7 +353,7 @@
         renderReasoningSummary('');
         renderActivityHistory([]);
         renderProposals([]);
-        renderContext(collectContext());
+        renderContext(collectDisplayContext());
         setBusy(false);
         setStatus('', false);
       }
@@ -387,7 +391,7 @@
       var uiActions = conversation.ui_actions || [];
       dispatchUiActions(id, uiActions);
       if (conversation.retry_message) state.retryMessages[id] = conversation.retry_message;
-      renderContext(conversation.context && Object.keys(conversation.context).length ? conversation.context : collectContext());
+      renderContext(conversation.context && Object.keys(conversation.context).length ? conversation.context : collectDisplayContext());
       setBusy(!!conversation.busy);
       var retry = root.querySelector('.pai-retry');
       retry.hidden = !conversation.last_error || !state.retryMessages[id] || conversation.busy;
@@ -932,7 +936,7 @@
     state.open = true;
     root.classList.add('open');
     root.setAttribute('aria-hidden', 'false');
-    renderContext(collectContext());
+    renderContext(collectDisplayContext());
     startContextWatch();
     var button = document.getElementById('pbgui-ai-btn');
     if (button) button.setAttribute('aria-expanded', 'true');

@@ -1420,6 +1420,57 @@ def test_start_vps_deploy_host_passes_remote_role_to_playbook() -> None:
     assert result["run_id"] == "run-123"
 
 
+def test_start_vps_deploy_host_updates_all_confirmed_passivbot_installs() -> None:
+    """Fresh PB7+PB8 telemetry must override a stale persisted PB7-only profile."""
+    captured: dict[str, object] = {}
+    service = object.__new__(VPSManagerService)
+    vps = SimpleNamespace(
+        command="",
+        command_text="",
+        command_run_id="run-456",
+        runtime_profile="pb7",
+        user_pw=None,
+        _task_log_path=lambda *_args: Path("vps-update-pb7-pb8--run-456.log"),
+    )
+    host_state = {
+        "meta": {
+            "role": "slave",
+            "pb7v": "v7.12.0",
+            "pb7c": "a" * 40,
+            "pb7py": "3.12",
+            "pb8installed": True,
+        }
+    }
+    service._host_task_start_lock = lambda _hostname: nullcontext()
+    service._deploy_shutdown_requested = lambda: False
+    service._require_vps = lambda _hostname: vps
+    service._apply_session_secrets_to_vps = lambda *_args: None
+    service._raise_if_vps_task_active = lambda *_args: None
+    service._get_monitor_state = lambda: {}
+    service._get_host_telemetry = lambda _state, _hostname: host_state
+    service._host_telemetry_fresh = lambda _state: True
+    service._credential_playbook_vars = lambda _hostname, _state: {}
+    service.vpsmanager = SimpleNamespace(
+        update_vps=lambda _vps, **kwargs: captured.update(kwargs),
+    )
+
+    result = service._start_vps_deploy_host(
+        "token",
+        hostname="legacy-combined",
+        command="vps-update-runtime",
+        debug=False,
+        extra_vars=None,
+    )
+
+    assert result["command"] == "vps-update-pb7-pb8"
+    assert result["command_text"] == "Update PB7 and PB8"
+    assert vps.command == "vps-update-pb7-pb8"
+    assert captured["extra_vars"] == {
+        "pb7_min_free_bytes": 0,
+        "pb8_min_free_bytes": 0,
+    }
+
+
 def test_deploy_progress_reads_completed_run_from_canonical_log_root(tmp_path, monkeypatch) -> None:
     """A run-specific transcript remains valid across a start-time second boundary."""
     hostname = "test-vps"
@@ -1462,6 +1513,50 @@ def test_deploy_progress_reads_completed_run_from_canonical_log_root(tmp_path, m
         "rescued": 0,
         "ignored": 0,
     }
+
+
+def test_deploy_progress_shows_each_resolved_passivbot_command(tmp_path, monkeypatch) -> None:
+    """Logical bulk actions must display the PB7/PB8 playbook actually run per host."""
+    hostname = "combined-vps"
+    filename = "vps-update-pb7-pb8--run-456.log"
+    log_path = tmp_path / "data" / "logs" / "vps-manager" / "hosts" / hostname / filename
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text(
+        "=== PLAYBOOK RUN START 2026-08-26 19:14:00 ===\n"
+        "PLAY RECAP ***************************************************************\n"
+        f"{hostname} : ok=22 changed=3 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service_mod, "PBGDIR", tmp_path)
+    service = object.__new__(VPSManagerService)
+    service._deploy_progress_cache = {}
+    service._deploy_progress_cache_lock = threading.Lock()
+
+    rows = service._build_deploy_progress_rows(
+        [{
+            "hostname": hostname,
+            "task_command": "vps-update-pb7-pb8",
+            "task_run_id": "run-456",
+            "task_status": "successful",
+        }],
+        [{
+            "command": "vps-update-runtime",
+            "command_text": "Update Passivbot (PB7/PB8)",
+            "started_at": "2026-08-26 19:14:00",
+            "hostnames": [hostname],
+            "host_logs": {hostname: {
+                "command": "vps-update-pb7-pb8",
+                "command_text": "Update PB7 and PB8",
+                "started_at": "2026-08-26 19:14:00",
+                "run_id": "run-456",
+                "filename": filename,
+            }},
+        }],
+    )
+
+    assert rows[0]["task_command"] == "vps-update-pb7-pb8"
+    assert rows[0]["task_command_text"] == "Update PB7 and PB8"
+    assert rows[0]["task_status"] == "successful"
 
 
 def test_validate_and_stage_vps_deploy_host_skips_active_host() -> None:

@@ -1081,6 +1081,7 @@ def test_page_context_is_bounded_and_marked_untrusted() -> None:
             "guide_topic": "43_pbv8_optimize",
             "section": "Scoring",
             "pages": [
+                {"key": "/", "title": "Welcome"},
                 {"key": "v7_backtest", "title": "Backtest"},
                 {"key": "v8_optimize", "title": "Optimize"},
             ],
@@ -1104,11 +1105,13 @@ def test_page_context_is_bounded_and_marked_untrusted() -> None:
 
     assert "Untrusted PBGui page context" in suffix
     assert '"guide_topic":"43_pbv8_optimize"' in suffix
-    assert context["pages"][0] == {"key": "v7_backtest", "title": "Backtest"}
+    assert context["pages"][0] == {"key": "/", "title": "Welcome"}
     assert context["actions"] == [{"id": "show_log", "entity_kind": "optimizer_queue_item"}]
     assert context["controls"][0]["label"] == "Close"
     with pytest.raises(AIChatError, match="Invalid page context"):
         AIChatService._validate_page_context({"secret": "value"})
+    with pytest.raises(AIChatError, match="Invalid page context"):
+        AIChatService._validate_page_context({"pages": [{"key": "/evil", "title": "Invalid"}]})
 
 
 def test_ai_drawer_preferences_are_private_persistent_merged_and_bounded(tmp_path: Path) -> None:

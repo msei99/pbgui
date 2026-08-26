@@ -10861,8 +10861,8 @@
           </div>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update", "Update Linux")'>Update Linux</button>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pbgui", "Update PBGui")'>Update PBGui</button>
-          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-runtime", "Update Runtime by Profile")'>Update Runtime by Profile</button>
-          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pbgui-runtime", "Update PBGui and Runtime by Profile")'>Update PBGui and Runtime by Profile</button>
+          <button class='sb-btn ok' type='button' title='Updates PB7, PB8, or both according to what is installed on each selected VPS.' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-runtime", "Update Passivbot (PB7/PB8)")'>Update Passivbot (PB7/PB8)</button>
+          <button class='sb-btn ok' type='button' title='Updates PBGui plus PB7, PB8, or both according to what is installed on each selected VPS.' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pbgui-runtime", "Update PBGui + Passivbot (PB7/PB8)")'>Update PBGui + Passivbot (PB7/PB8)</button>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>`;
       } else {
         html = '';
