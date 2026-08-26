@@ -434,14 +434,6 @@
           - --help
       changed_when: false
 
-    - name: Validate PB8 Rust module and config schema
-      command:
-        argv:
-          - "{{ pb8venv }}/bin/python"
-          - -c
-          - "import passivbot_rust; from config.schema import CONFIG_SCHEMA_VERSION; assert str(CONFIG_SCHEMA_VERSION).startswith('v8.'), CONFIG_SCHEMA_VERSION; print(CONFIG_SCHEMA_VERSION)"
-      changed_when: false
-
     - name: Remove PB8 Rust build artifacts on live-only runners
       file:
         path: "{{ pb8dir }}/passivbot-rust/target"
@@ -470,6 +462,19 @@
         chdir: "{{ pbgdir }}"
       register: save_pb8_paths
       changed_when: "'changed=true' in save_pb8_paths.stdout"
+
+    - name: Mark validated PB8 runtime available
+      file:
+        path: "{{ pbgdir }}/data/locks/pb8-runtime-invalid"
+        state: absent
+
+    - name: Restart managed PB8 live bots after successful update
+      script:
+        cmd: "pb8_live_stop.py {{ pbgdir | quote }} {{ pb8dir | quote }} {{ (pb8venv ~ '/bin/python') | quote }}"
+        executable: "{{ pbgui_python }}"
+      register: pb8_live_restart
+      changed_when: "'stopped_processes=0' not in pb8_live_restart.stdout"
+      when: pb8_git.stat.exists
 
     - name: Detect configured PB7 runtime for shared PBRun supervision
       command:
@@ -560,11 +565,6 @@
         - pb8_install_profile == 'live'
         - (pb8_pb7_runtime_probe.stdout | trim | lower) != 'true'
         - pb8_pbrun_compatibility_probe.rc != 0
-
-    - name: Mark validated PB8 runtime available
-      file:
-        path: "{{ pbgdir }}/data/locks/pb8-runtime-invalid"
-        state: absent
 
     - name: Measure PB8 disk state after validation
       command:

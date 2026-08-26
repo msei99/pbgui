@@ -35,7 +35,7 @@ from master.async_store import VPSStore, SystemMetrics
 
 SERVICE = "VPSMonitor"
 
-_PB8_REMOTE_STOP_SCRIPT = r'''import os, signal, sys
+_PB8_REMOTE_STOP_SCRIPT = r'''import os, signal, sys, time
 
 config_arg, cwd_arg, python_arg = sys.argv[1:]
 
@@ -85,18 +85,39 @@ for raw_pid in os.listdir("/proc"):
             pidfd = os.pidfd_open(pid, 0)
             if snapshot(pid) != identity:
                 continue
-            signal.pidfd_send_signal(pidfd, signal.SIGINT)
-        else:
-            if snapshot(pid) != identity:
-                continue
-            os.kill(pid, signal.SIGINT)
+
+        def still_running():
+            return snapshot(pid) == identity
+
+        def send(sig):
+            if not still_running():
+                return False
+            if pidfd is not None:
+                signal.pidfd_send_signal(pidfd, sig)
+            else:
+                if not still_running():
+                    return False
+                os.kill(pid, sig)
+            return True
+
+        def wait_stopped(timeout):
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if not still_running():
+                    return True
+                time.sleep(0.1)
+            return not still_running()
+
+        for sig, timeout in ((signal.SIGINT, 5), (signal.SIGTERM, 3), (signal.SIGKILL, 2)):
+            if not still_running() or (send(sig) and wait_stopped(timeout)):
+                print(pid)
+                raise SystemExit(0)
     except (OSError, ProcessLookupError, PermissionError):
-        continue
+        pass
     finally:
         if pidfd is not None:
             os.close(pidfd)
-    print(pid)
-    raise SystemExit(0)
+    raise SystemExit(2)
 raise SystemExit(1)
 '''
 

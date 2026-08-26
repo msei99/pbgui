@@ -26,15 +26,32 @@ def test_shared_context_boundary_projects_only_the_backend_schema() -> None:
     assert "pbgui_ai_action" in NAV
     assert "collectAIControls" in NAV
     assert "entity_kind: 'ui_control'" in NAV
+    assert "entity_kind: 'ui_control_label'" in NAV
     assert "id: 'activate'" in NAV
     assert "id: 'set_value'" in NAV
+    assert "id: 'activate_by_label'" in NAV
+    assert "id: 'set_value_by_label'" in NAV
+    assert "resolveAIControlByName" in NAV
+    assert "pages: collectAIPages()" in NAV
     assert "aiControlSensitive" in NAV
     assert "type === 'password' || type === 'file'" in NAV
     assert "element.placeholder || element.name || element.id" in NAV
     assert "element.placeholder || element.value" not in NAV
     assert "tryLocalCommand" in NAV
     assert "descriptor.context ? 0 : 1" in NAV
-    assert "JSON.stringify(context).length > 40 * 1024" in NAV
+    assert "candidates.slice(0, 2048)" in NAV
+    assert "JSON.stringify(context).length > 256 * 1024" in NAV
+    assert "rect.bottom >= 0" not in NAV
+    assert "descriptor.name = controlContext ? controlContext + ' :: ' + label : label" in NAV
+    assert "var selector = 'body *'" in NAV
+    assert "element.hasAttribute('onclick')" in NAV
+    assert "typeof element.onclick === 'function'" in NAV
+    assert "style.cursor === 'pointer'" in NAV
+    assert "aiSelectOptionAvailable" in NAV
+    assert "!option.disabled && !option.hidden" in NAV
+    assert "option.value === value && aiSelectOptionAvailable(option)" in NAV
+    assert "#pbgui-dialog-ovl,#pbgui-confirm-ovl,#confirm-ovl" in NAV
+    assert "key === '/'" not in NAV
     assert "delete|remove|loesch" in NAV
     assert "confirm|bestaetig" in NAV
     assert "focusedField" in NAV

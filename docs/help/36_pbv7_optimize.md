@@ -40,7 +40,7 @@ When you open an existing optimize config and change `config_name` before saving
 
 Use the search field to filter by config name. Config rows support the same click-and-drag multi-selection pattern as Backtest, and the actions on the right are compact icon buttons.
 
-Each PBv7 config row also offers **V8**. It runs PB8's official Optimize config migration, stores the migration report with the new PB8 bundle, and opens the result in the shared PBv8 Optimize editor. Migration stops instead of guessing when PB8 reports unresolved fields.
+Each PBv7 config row also offers **V8**. It runs PB8's official Optimize config migration and opens the result as a short-lived unsaved preview in the shared PBv8 Optimize editor. Conversion itself creates or replaces no PB8 bundle. The migration report remains attached to the preview and is persisted only when the user explicitly saves it; unresolved PB8 fields still stop migration instead of being guessed.
 
 PBv7 Pareto rows provide the same **V8** action for individual candidate configs. Only Pareto JSON files inside the managed PB7 result root are accepted.
 

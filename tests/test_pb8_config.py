@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -196,6 +197,45 @@ def test_coin_override_metadata_cache_is_contextual_and_returns_copies(monkeypat
 
     assert "mutated" not in cached["params"]["live"]
     assert len(calls) == 2
+
+
+def test_coin_override_metadata_uses_selected_strategy_defaults() -> None:
+    """Inactive strategy metadata must not depend on the template's active strategy."""
+    side_policy = {
+        "strategy": {"ema_anchor": {"base_qty_pct": True}},
+    }
+    modules = {
+        "normalize_hsl_signal_mode": lambda value: value,
+        "normalize_strategy_kind": lambda value: value,
+        "get_allowed_modifications": lambda **_kwargs: {
+            "bot": {"long": side_policy, "short": side_policy},
+            "live": {},
+        },
+        "get_template_config": lambda: {
+            "bot": {
+                "long": {"strategy": {"trailing_martingale": {}}},
+                "short": {"strategy": {"trailing_martingale": {}}},
+            },
+            "live": {},
+        },
+        "get_all_strategy_defaults": lambda: {
+            "long": {"ema_anchor": {"base_qty_pct": 0.04}},
+            "short": {"ema_anchor": {"base_qty_pct": 0.03}},
+        },
+        "prepare_config": lambda config, **_kwargs: config,
+        "sanitize": lambda config: config,
+    }
+
+    metadata = pb8_config_helper._coin_override_metadata(
+        modules,
+        {"hsl_signal_mode": "coin", "strategy_kind": "ema_anchor"},
+    )
+
+    assert metadata["params"]["bot"]["long"]["strategy.ema_anchor.base_qty_pct"] == {
+        "type": "number",
+        "default": 0.04,
+    }
+    assert metadata["params"]["bot"]["short"]["strategy.ema_anchor.base_qty_pct"]["default"] == 0.03
 
 
 def test_validate_override_bundle_delegates_staged_path(monkeypatch, tmp_path: Path) -> None:
@@ -400,7 +440,7 @@ def test_migrate_pb7_config_passes_distinct_absolute_paths(tmp_path, monkeypatch
         captured.update({"operation": operation, **payload})
         return {"report": {"output_written": True}, "config": {}}
 
-    monkeypatch.setattr(pb8_config, "_call_helper", fake_call)
+    monkeypatch.setattr(pb8_config, "_call_migration_helper", fake_call)
 
     result = pb8_config.migrate_pb7_config(source, output)
 
@@ -411,6 +451,79 @@ def test_migrate_pb7_config_passes_distinct_absolute_paths(tmp_path, monkeypatch
         "output_path": str(output.resolve()),
         "allow_manual_review_output": False,
     }
+
+
+def test_persistent_helper_reuses_optimizer_metadata(monkeypatch, tmp_path) -> None:
+    """Persistent migration requests must not rebuild immutable PB8 editor metadata."""
+    calls = []
+    monkeypatch.setattr(pb8_config_helper, "_OPTIMIZE_METADATA_CACHE", {})
+    monkeypatch.setattr(
+        pb8_config_helper,
+        "_optimize_metadata",
+        lambda _modules: calls.append(True) or {"strategies": ["trailing_grid_v7"]},
+    )
+
+    first = pb8_config_helper._cached_optimize_metadata({}, tmp_path)
+    first["strategies"].append("changed")
+    second = pb8_config_helper._cached_optimize_metadata({}, tmp_path)
+
+    assert calls == [True]
+    assert second == {"strategies": ["trailing_grid_v7"]}
+
+
+def test_helper_serve_handles_multiple_requests_without_exit(monkeypatch) -> None:
+    """The JSON-line helper protocol should answer multiple requests in one process."""
+    monkeypatch.setattr(pb8_config_helper, "handle", lambda payload: {"value": payload["value"]})
+    stdin = io.StringIO('{"value":1}\n{"value":2}\n')
+    stdout = io.StringIO()
+    monkeypatch.setattr(pb8_config_helper.sys, "stdin", stdin)
+    monkeypatch.setattr(pb8_config_helper.sys, "stdout", stdout)
+
+    assert pb8_config_helper.serve() == 0
+
+    responses = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    assert responses == [
+        {"ok": True, "result": {"value": 1}},
+        {"ok": True, "result": {"value": 2}},
+    ]
+
+
+def test_migration_helper_interrupt_wakes_shutdown_without_io_lock(monkeypatch) -> None:
+    """Shutdown must terminate a blocked helper without waiting for its request timeout."""
+    terminated = []
+    proc = SimpleNamespace(poll=lambda: None, terminate=lambda: terminated.append(True))
+    monkeypatch.setattr(pb8_config, "_migration_helper_process", proc)
+
+    pb8_config.interrupt_pb8_migration_helper()
+
+    assert terminated == [True]
+
+
+def test_migration_helper_shutdown_gate_blocks_late_warmup(monkeypatch, tmp_path) -> None:
+    """A warmup thread scheduled before shutdown must not create a process afterward."""
+    monkeypatch.setattr(pb8_config, "_migration_helper_process", None)
+    monkeypatch.setattr(pb8_config, "_migration_helper_fingerprint", None)
+    monkeypatch.setattr(pb8_config, "_migration_helper_responses", None)
+    monkeypatch.setattr(pb8_config, "_migration_helper_reader_thread", None)
+    monkeypatch.setattr(
+        pb8_config.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("late helper start")),
+    )
+    pb8_config._migration_helper_shutdown.set()
+    status = {
+        "pb8dir": str(tmp_path),
+        "pb8venv": "/tmp/python",
+        "version": "v8",
+        "config_schema": "v8",
+    }
+
+    with pytest.raises(pb8_config.PB8ConfigurationError, match="shutting down"):
+        with pb8_config._migration_helper_lock:
+            pb8_config._ensure_migration_helper_locked(status)
+
+    pb8_config.prepare_pb8_migration_helper_startup()
+    assert pb8_config._migration_helper_shutdown.is_set() is False
 
 
 def test_helper_prepare_preserves_pbgui_metadata_outside_pb8_payload() -> None:

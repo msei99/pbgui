@@ -40,7 +40,7 @@ Wenn du eine bestehende Optimize-Config öffnest und vor dem Speichern `config_n
 
 Mit dem Suchfeld lässt sich nach Config-Namen filtern. Die Config-Zeilen unterstützen jetzt dieselbe Click-and-Drag-Mehrfachauswahl wie Backtest, und rechts werden kompakte Icon-Aktionen statt Textbuttons verwendet.
 
-Jede PBv7-Config-Zeile bietet ausserdem **V8**. Die Aktion verwendet PB8s offizielle Optimize-Config-Migration, speichert den Migrationsreport beim neuen PB8-Bundle und oeffnet das Ergebnis im gemeinsamen PBv8-Optimize-Editor. Wenn PB8 ungeloeste Felder meldet, stoppt die Migration, statt Werte zu erraten.
+Jede PBv7-Config-Zeile bietet ausserdem **V8**. Die Aktion verwendet PB8s offizielle Optimize-Config-Migration und oeffnet das Ergebnis als kurzlebige ungespeicherte Vorschau im gemeinsamen PBv8-Optimize-Editor. Die Konvertierung selbst erstellt oder ersetzt kein PB8-Bundle. Der Migrationsreport bleibt an der Vorschau und wird erst beim ausdruecklichen Speichern persistiert; bei ungeloesten PB8-Feldern stoppt die Migration weiterhin, statt Werte zu erraten.
 
 PBv7-Pareto-Zeilen bieten dieselbe **V8**-Aktion fuer einzelne Kandidaten-Configs. Akzeptiert werden nur Pareto-JSON-Dateien innerhalb des verwalteten PB7-Resultroots.
 

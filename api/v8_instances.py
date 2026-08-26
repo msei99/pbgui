@@ -921,12 +921,20 @@ def _highest_cluster_version(name: str) -> int:
     return highest
 
 
-def _record_upsert(name: str, instance_dir: Path, config: dict[str, Any], parent_version: int, is_new: bool) -> dict[str, Any]:
+def _record_upsert(
+    name: str,
+    instance_dir: Path,
+    config: dict[str, Any],
+    parent_version: int,
+    is_new: bool,
+    validated_identity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Publish one immutable PB8 config manifest and explicit upsert operation."""
 
     root = _cluster_root()
-    identity = ensure_local_identity(root, role="master", pbname=_master_hostname())
-    _ensure_pb8_cluster_rollout_ready(identity)
+    identity = validated_identity or ensure_local_identity(root, role="master", pbname=_master_hostname())
+    if validated_identity is None:
+        _ensure_pb8_cluster_rollout_ready(identity)
     pbgui = config["pbgui"]
     enabled_on = str(pbgui["enabled_on"])
     assigned_id, assigned_name, assigned_role = _assigned_cluster_node(enabled_on, identity)
@@ -1585,6 +1593,16 @@ async def save_v8_instance_config(
             shutil.rmtree(stage_dir, ignore_errors=True)
             _log(SERVICE, f"Staging PB8 instance '{name}' failed: {exc}", level="ERROR")
             raise HTTPException(status_code=500, detail="PB8 config could not be staged") from exc
+        try:
+            identity = ensure_local_identity(_cluster_root(), role="master", pbname=_master_hostname())
+            _ensure_pb8_cluster_rollout_ready(identity)
+        except HTTPException:
+            shutil.rmtree(stage_dir, ignore_errors=True)
+            raise
+        except Exception as exc:
+            shutil.rmtree(stage_dir, ignore_errors=True)
+            _log(SERVICE, f"Checking PB8 Cluster rollout for '{name}' failed: {exc}", level="ERROR")
+            raise HTTPException(status_code=500, detail="PB8 Cluster rollout could not be verified") from exc
         backup_id = None
         if existed:
             try:
@@ -1597,7 +1615,14 @@ async def save_v8_instance_config(
                 _log(SERVICE, f"Backing up PB8 instance '{name}' failed: {exc}", level="ERROR")
                 raise HTTPException(status_code=500, detail="PB8 config was not saved because its backup failed") from exc
         try:
-            operation = _record_upsert(name, stage_dir, saved, parent_version, not existed)
+            operation = _record_upsert(
+                name,
+                stage_dir,
+                saved,
+                parent_version,
+                not existed,
+                validated_identity=identity,
+            )
         except HTTPException:
             shutil.rmtree(stage_dir, ignore_errors=True)
             raise

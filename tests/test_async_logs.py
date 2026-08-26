@@ -400,7 +400,7 @@ def test_kill_instance_uses_only_parsed_numeric_pid():
 
 
 def test_kill_pb8_instance_uses_one_exact_pidfd_capable_remote_helper():
-    """Remote PB8 stop performs discovery, validation, and SIGINT in one helper."""
+    """Remote PB8 stop validates identity and escalates until the process exits."""
 
     class PB8Pool(FakeMonitorPool):
         """Return cached PB8 runtime paths and process metadata."""
@@ -432,6 +432,11 @@ def test_kill_pb8_instance_uses_one_exact_pidfd_capable_remote_helper():
     assert "pidfd_send_signal" in arguments[2]
     assert 'argv not in expected_commands' in arguments[2]
     assert 'cwd != expected_cwd' in arguments[2]
+    assert "snapshot(pid) == identity" in arguments[2]
+    assert "signal.SIGINT, 5" in arguments[2]
+    assert "signal.SIGTERM, 3" in arguments[2]
+    assert "signal.SIGKILL, 2" in arguments[2]
+    assert "wait_stopped(timeout)" in arguments[2]
 
 
 def test_kill_pb8_instance_reports_remote_exact_match_rejection():

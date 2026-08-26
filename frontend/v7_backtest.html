@@ -101,11 +101,40 @@ a:hover { text-decoration: underline; }
 .migration-review-notice ul { margin: 8px 0 0 20px; }
 .migration-review-notice code { color: #ffe1ba; overflow-wrap: anywhere; }
 .migration-review-hint { color: var(--text-dim); }
+.migration-review-decision {
+  display: block;
+  width: min(620px, 100%);
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg2);
+  color: var(--text);
+}
+.migration-review-decision.unresolved { border-color: rgba(224, 82, 82, .85); }
 .migration-review-mark {
   outline: 1px solid rgba(224, 82, 82, .85);
   outline-offset: 2px;
   border-radius: 4px;
   background: rgba(224, 82, 82, .08);
+}
+.v8-conversion-status {
+  position: fixed;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2200;
+  min-width: min(520px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  padding: 10px 16px;
+  border: 1px solid rgba(77, 166, 255, .55);
+  border-radius: 6px;
+  background: rgba(20, 45, 75, .96);
+  color: #dbeeff;
+  text-align: center;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
 }
 .result-columns-picker { position: relative; }
 .result-columns-picker > summary { list-style: none; cursor: pointer; }
@@ -1097,6 +1126,7 @@ var settingsModalDirty = false;
 var currentPanel = 'configs';
 var _pendingResultFilter = '';  /* config name to pre-filter when next loadResults runs */
 var _pendingMigrationReviewDraft = null;
+var _pendingMigrationReport = null;
 var sortCol     = 'modified';  // current sort column
 var sortAsc     = false;       // sort direction
 var editingConfig = null;      // name of config being edited, or null
@@ -1123,8 +1153,8 @@ var BACKTEST_SORT_DEFAULTS = {
 };
 var BACKTEST_SORT_COLUMNS = {
   configs: ['name', 'exchanges', 'strategy', 'coins', 'twe_long', 'start_date', 'end_date', 'results', 'modified'],
-  results: ['backtest_version', 'config_name', 'strategy', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance', 'final_equity', 'balance_equity_diff'],
-  archive: ['backtest_version', 'config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance', 'final_equity', 'balance_equity_diff'],
+  results: ['backtest_version', 'config_name', 'strategy', 'coins_text', 'exchange_dir', 'modified', 'adg', 'adg_w_usd', 'gain', 'drawdown_worst', 'drawdown_worst_w_usd', 'sharpe_ratio', 'sharpe_ratio_w_usd', 'starting_balance', 'final_balance', 'final_equity', 'balance_equity_diff'],
+  archive: ['backtest_version', 'config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'adg_w_usd', 'gain', 'drawdown_worst', 'drawdown_worst_w_usd', 'sharpe_ratio', 'sharpe_ratio_w_usd', 'starting_balance', 'final_balance', 'final_equity', 'balance_equity_diff'],
   legacy: ['config_name', 'coins_text', 'exchange_dir', 'modified', 'adg', 'gain', 'drawdown_worst', 'sharpe_ratio', 'starting_balance', 'final_balance']
 };
 var BACKTEST_RESULT_COLUMN_DEFINITIONS = [
@@ -1133,10 +1163,13 @@ var BACKTEST_RESULT_COLUMN_DEFINITIONS = [
   { key: 'coins_text', label: 'Coins', conditional: 'coins', default: true },
   { key: 'exchange_dir', label: 'Exch.', default: true },
   { key: 'modified', label: 'Result Time', default: true },
-  { key: 'adg', label: 'ADG', default: true },
+  { key: 'adg', label: 'ADG USD', default: true },
+  { key: 'adg_w_usd', label: 'ADG W USD', optional: true, default: false },
   { key: 'gain', label: 'Gain', default: true },
-  { key: 'drawdown_worst', label: 'Worst DD', default: true },
-  { key: 'sharpe_ratio', label: 'Sharpe', default: true },
+  { key: 'drawdown_worst', label: 'Worst DD USD', default: true },
+  { key: 'drawdown_worst_w_usd', label: 'Worst DD W USD', optional: true, default: false },
+  { key: 'sharpe_ratio', label: 'Sharpe USD', default: true },
+  { key: 'sharpe_ratio_w_usd', label: 'Sharpe W USD', optional: true, default: false },
   { key: 'starting_balance', label: 'Start B.', default: true },
   { key: 'final_balance', label: 'Final B.', default: true },
   { key: 'final_equity', label: 'Final Eq.', optional: true, default: false },
@@ -1993,9 +2026,27 @@ function v8MigrationReportText(error) {
     + (fields.length ? '\n\nFields requiring manual review:\n- ' + fields.slice(0, 20).join('\n- ') : '');
 }
 
+function setV8ConversionStatus(message) {
+  var status = document.getElementById('v8-conversion-status');
+  if (!message) {
+    if (status) status.remove();
+    return;
+  }
+  if (!status) {
+    status = document.createElement('div');
+    status.id = 'v8-conversion-status';
+    status.className = 'v8-conversion-status';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    document.body.appendChild(status);
+  }
+  status.textContent = message;
+}
+
 async function migrateV7SourceToV8(requestBody) {
   requestBody = Object.assign({}, requestBody, { allow_manual_review_output: true });
   var targetName = requestBody.target_name;
+  setV8ConversionStatus('Converting V7 config with PB8...');
   try {
     var response = await fetch(window.location.origin + '/api/backtest-v8/migrate-v7', {
       method: 'POST',
@@ -2004,18 +2055,16 @@ async function migrateV7SourceToV8(requestBody) {
       body: JSON.stringify(requestBody)
     });
     var payload = await response.json().catch(function() { return {}; });
-    if (response.status === 409) {
-      window.location.href = window.location.origin + '/api/backtest-v8/main_page?config=' + encodeURIComponent(targetName);
-      return;
-    }
     if (!response.ok) throw v8MigrationError(payload, response.status);
-    if (payload.review_required && payload.draft_id) {
+    if (payload.editor === 'backtest' && payload.draft_id) {
+      setV8ConversionStatus('Opening unsaved PB8 Backtest preview...');
       window.location.href = window.location.origin + '/api/backtest-v8/main_page?opt_draft_id=' + encodeURIComponent(payload.draft_id)
         + '&draft_name=' + encodeURIComponent(payload.name || targetName);
       return;
     }
     window.location.href = window.location.origin + '/api/backtest-v8/main_page?config=' + encodeURIComponent(payload.name || targetName);
   } catch (error) {
+    setV8ConversionStatus('');
     toast('V8 conversion failed: ' + error.message, 'err');
     await window.PBGuiDialogs.alert({
       title: 'V8 conversion failed',
@@ -2265,6 +2314,7 @@ async function openInitialBacktestDraftFromUrl() {
     editingConfig = '__new__';
     selectPanel('configs');
     _pendingMigrationReviewDraft = draft && draft.migration_report ? draft : null;
+    _pendingMigrationReport = draft && draft.migration_report ? draft.migration_report : null;
     showConfigEditor(name, prepared.config, raw, prepared.param_status || draft.param_status || {});
     clearInitialBacktestUrlParams(url, runDraftId ? ['draft_id', 'draft_name'] : ['opt_draft_id', 'draft_name']);
     return true;
@@ -2274,12 +2324,111 @@ async function openInitialBacktestDraftFromUrl() {
   }
 }
 
+function applyMigrationReviewDecision(index, select) {
+  var report = _pendingMigrationReport;
+  var decisions = report && Array.isArray(report.pbgui_review_decisions)
+    ? report.pbgui_review_decisions
+    : [];
+  var decision = decisions[index];
+  var value = String(select && select.value || '').trim();
+  if (!decision) return;
+  var decisionCode = String(decision.code || '');
+  var selectedValue = value;
+  var changedControl = null;
+  if (decisionCode === 'we_excess_allowance_mode') {
+    if (['legacy_raw', 'bounded'].indexOf(value) < 0) return;
+    var side = String(decision.side || '').trim();
+    var textarea = document.getElementById('cfg-bot-' + side);
+    if (!textarea) return;
+    try {
+      var sideConfig = JSON.parse(textarea.value);
+      if (!sideConfig.risk || typeof sideConfig.risk !== 'object' || Array.isArray(sideConfig.risk)) {
+        sideConfig.risk = {};
+      }
+      sideConfig.risk.we_excess_allowance_mode = value;
+      textarea.value = JSON.stringify(sideConfig, null, 2);
+      botSyncFromJson(side);
+    } catch (error) {
+      toast('Could not apply migration decision: ' + error.message, 'err');
+      return;
+    }
+    changedControl = textarea;
+  } else if (decisionCode === 'minimum_coin_age_days') {
+    if (['pb7_coverage', 'pb8_age_gate'].indexOf(value) < 0) return;
+    var ageInput = document.getElementById('cfg-min-coin-age');
+    if (!ageInput) return;
+    selectedValue = value === 'pb7_coverage' ? 0 : Number(decision.pb8_age_gate_value);
+    ageInput.value = String(selectedValue);
+    changedControl = ageInput;
+  } else {
+    return;
+  }
+  try {
+    scheduleStructuredEditorSync();
+  } catch (error) {
+    toast('Could not apply migration decision: ' + error.message, 'err');
+    return;
+  }
+  decision.selected_option = value;
+  decision.selected_value = selectedValue;
+  decision.resolved = true;
+  if (!Array.isArray(report.pbgui_post_migration_adjustments)) {
+    report.pbgui_post_migration_adjustments = [];
+  }
+  report.pbgui_post_migration_adjustments.push({
+    code: 'resolve_' + decisionCode,
+    path: String(decision.path || ''),
+    detail: 'user selected ' + value + ' in the unsaved Backtest migration draft'
+  });
+  if (select.classList) select.classList.remove('unresolved');
+  var group = changedControl && changedControl.closest ? changedControl.closest('.form-group') : null;
+  var sameControlPending = decisionCode === 'we_excess_allowance_mode'
+    ? decisions.some(function(item) { return item.side === decision.side && !item.resolved; })
+    : false;
+  if (group && !sameControlPending) {
+    group.classList.remove('migration-review-mark');
+  }
+  var decisionPaths = decisions.map(function(item) { return String(item.path || ''); });
+  if (!decisions.some(function(item) { return !item.resolved; })) {
+    report.manual_review_fields = (report.manual_review_fields || []).filter(function(path) {
+      return decisionPaths.indexOf(String(path || '')) < 0;
+    });
+    report.pbgui_post_migration_review_fields = (report.pbgui_post_migration_review_fields || []).filter(function(path) {
+      return decisionPaths.indexOf(String(path || '')) < 0;
+    });
+    report.manual_review_required = !!(
+      (report.manual_review_fields && report.manual_review_fields.length)
+      || (report.dropped_unsupported_fields && report.dropped_unsupported_fields.length)
+    );
+    if (!report.manual_review_required) {
+      report.status = report.pbgui_post_migration_adjustments && report.pbgui_post_migration_adjustments.length
+        ? 'ok_with_adjustments'
+        : 'ok';
+    }
+  }
+}
+
+function ensureMigrationReviewDecisionsResolvedForSave() {
+  var pending = Array.prototype.filter.call(
+    document.querySelectorAll('select[data-pbgui-migration-decision]'),
+    function(select) { return !String(select.value || '').trim(); }
+  );
+  if (!pending.length) return true;
+  pending.forEach(function(select) {
+    if (select.classList) select.classList.add('unresolved');
+  });
+  if (pending[0].focus) pending[0].focus();
+  toast('Resolve every marked V7 → V8 migration choice before saving.', 'err');
+  return false;
+}
+
 function showMigrationReviewNotice(draft) {
   var report = draft && draft.migration_report;
   if (!report || typeof report !== 'object') return;
   var editor = document.getElementById('configs-editor');
   if (!editor) return;
   var fields = [];
+  var decisions = Array.isArray(report.pbgui_review_decisions) ? report.pbgui_review_decisions : [];
   [report.manual_review_fields, report.dropped_unsupported_fields].forEach(function(items) {
     if (!Array.isArray(items)) return;
     items.forEach(function(item) {
@@ -2319,6 +2468,43 @@ function showMigrationReviewNotice(draft) {
         hint.textContent = ' — ' + hints[field];
         item.appendChild(hint);
       }
+      var decisionIndex = decisions.findIndex(function(decision) {
+        return String(decision && decision.path || '') === field;
+      });
+      if (decisionIndex >= 0) {
+        var decision = decisions[decisionIndex];
+        var decisionHint = document.createElement('span');
+        decisionHint.className = 'migration-review-hint';
+        var optionData;
+        if (decision.code === 'minimum_coin_age_days') {
+          decisionHint.textContent = ' — PB7 uses global coin age; PB8 uses exchange-specific market age.';
+          optionData = [
+            ['', 'Choose behavior before saving...'],
+            ['pb7_coverage', '0 days — match PB7 backtest data coverage'],
+            ['pb8_age_gate', String(decision.pb8_age_gate_value) + ' days — keep PB8 exchange age gate']
+          ];
+        } else {
+          decisionHint.textContent = ' — V7 allowed WEL ' + Number(decision.raw_allowed_wel).toFixed(6)
+            + ' above side TWEL ' + Number(decision.side_twel).toFixed(6) + '.';
+          optionData = [
+            ['', 'Choose behavior before saving...'],
+            ['legacy_raw', 'legacy_raw — match V7 position sizing'],
+            ['bounded', 'bounded — keep PB8 safety cap']
+          ];
+        }
+        item.appendChild(decisionHint);
+        var select = document.createElement('select');
+        select.className = 'migration-review-decision unresolved';
+        select.setAttribute('data-pbgui-migration-decision', String(decisionIndex));
+        optionData.forEach(function(optionData) {
+          var option = document.createElement('option');
+          option.value = optionData[0];
+          option.textContent = optionData[1];
+          select.appendChild(option);
+        });
+        select.onchange = function() { applyMigrationReviewDecision(decisionIndex, select); };
+        item.appendChild(select);
+      }
       list.appendChild(item);
     });
     notice.appendChild(list);
@@ -2328,6 +2514,12 @@ function showMigrationReviewNotice(draft) {
     var control = null;
     if (field.indexOf('backtest.') === 0 && field.split('.').length === 2) {
       control = document.getElementById('extra-bt-' + field.split('.')[1]);
+    } else if (field.indexOf('bot.long.') === 0) {
+      control = document.getElementById('cfg-bot-long');
+    } else if (field.indexOf('bot.short.') === 0) {
+      control = document.getElementById('cfg-bot-short');
+    } else if (field === 'live.minimum_coin_age_days') {
+      control = document.getElementById('cfg-min-coin-age');
     }
     var group = control && control.closest ? control.closest('.form-group') : null;
     if (group) group.classList.add('migration-review-mark');
@@ -5053,7 +5245,24 @@ function collectConfig() {
   var suite = suiteCollect();
   cfg.backtest.suite_enabled = suite.suite_enabled;
   if (suite.suite_enabled) {
-    cfg.backtest.scenarios = suite.scenarios;
+    var selectedExchangeMap = {};
+    (cfg.backtest.exchanges || []).forEach(function(exchange) {
+      selectedExchangeMap[String(exchange || '').trim().toLowerCase()] = String(exchange || '').trim();
+    });
+    cfg.backtest.scenarios = (suite.scenarios || []).map(function(scenario) {
+      if (!scenario || typeof scenario !== 'object' || !Array.isArray(scenario.exchanges) || !scenario.exchanges.length) {
+        return scenario;
+      }
+      var retained = [];
+      scenario.exchanges.forEach(function(exchange) {
+        var canonical = selectedExchangeMap[String(exchange || '').trim().toLowerCase()];
+        if (canonical && retained.indexOf(canonical) < 0) retained.push(canonical);
+      });
+      if (!retained.length) return null;
+      var normalized = JSON.parse(JSON.stringify(scenario));
+      normalized.exchanges = retained;
+      return normalized;
+    }).filter(Boolean);
     if (backtestEditorAdapter.isV8) {
       cfg.backtest.reducer = suite.aggregate;
       delete cfg.backtest.aggregate;
@@ -5123,7 +5332,8 @@ function putEditorConfig(name, cfg, oldName, overrideSnapshot) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(backtestEditorAdapter.isV8 ? {
       config: cfg,
-      override_configs: (overrideSnapshot && overrideSnapshot.files) || {}
+      override_configs: (overrideSnapshot && overrideSnapshot.files) || {},
+      migration_report: _pendingMigrationReport
     } : cfg)
   };
   return apiFetch(path, options).catch(function(error) {
@@ -5146,6 +5356,7 @@ function putEditorConfig(name, cfg, oldName, overrideSnapshot) {
 function saveEditor() {
   var name = document.getElementById('cfg-name').value.trim();
   if (!name) { toast('Config name is required', 'err'); return; }
+  if (!ensureMigrationReviewDecisionsResolvedForSave()) return;
   if (!ensureRawJsonValidForSave()) return;
   if (!ensureStructuredJsonFieldsValidForSave()) return;
   var cfg;
@@ -5192,6 +5403,7 @@ function saveEditor() {
 function saveAndQueue() {
   var name = document.getElementById('cfg-name').value.trim();
   if (!name) { toast('Config name is required', 'err'); return; }
+  if (!ensureMigrationReviewDecisionsResolvedForSave()) return;
   if (!ensureRawJsonValidForSave()) return;
   if (!ensureStructuredJsonFieldsValidForSave()) return;
   var cfg;
@@ -5251,6 +5463,7 @@ function saveAndQueue() {
 function closeEditor() {
   window.PBGuiEditorShared.clearFixedValidationStatus();
   editingConfig = null;
+  _pendingMigrationReport = null;
   _cfgEditorCfg = null;
   resetBacktestEditorUiState();
   document.getElementById('configs-editor').style.display = 'none';
@@ -5890,7 +6103,10 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
     ? prepareResultColumns(options.columnContext, data, options)
     : null;
   function hasColumn(key) {
-    if (!selectedColumns) return ['final_equity', 'balance_equity_diff'].indexOf(key) < 0;
+    if (!selectedColumns) {
+      var definition = BACKTEST_RESULT_COLUMN_DEFINITIONS.find(function(item) { return item.key === key; });
+      return !definition || !definition.optional;
+    }
     return selectedColumns.indexOf(key) >= 0;
   }
   if (!data.length) {
@@ -5898,7 +6114,7 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
     return;
   }
 
-  /* Columns: Version (main Results only) | Backtest Name | Strategy (V8) | Exch. | Result Time | ADG | Gain | Worst DD | Sharpe | Start B. | Final B. | TWE | POS | Actions */
+  /* Columns: Version | Backtest Name | Strategy | Exch. | Result Time | exact metrics | balances | TWE | POS | Actions */
   var html = '\x3Ctable class="tbl">\x3Cthead>\x3Ctr>' +
     (showVersion && hasColumn('backtest_version') ? rthFn('Version', 'backtest_version') : '') +
     rthFn('Backtest Name', 'config_name') +
@@ -5906,10 +6122,13 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
     (showCoins && hasColumn('coins_text') ? rthFn('Coins', 'coins_text') : '') +
     (hasColumn('exchange_dir') ? rthFn('Exch.', 'exchange_dir') : '') +
     (hasColumn('modified') ? rthFn('Result Time', 'modified') : '') +
-    (hasColumn('adg') ? rthFn('ADG', 'adg') : '') +
+    (hasColumn('adg') ? rthFn('ADG USD', 'adg') : '') +
+    (hasColumn('adg_w_usd') ? rthFn('ADG W USD', 'adg_w_usd') : '') +
     (hasColumn('gain') ? rthFn('Gain', 'gain') : '') +
-    (hasColumn('drawdown_worst') ? rthFn('Worst DD', 'drawdown_worst') : '') +
-    (hasColumn('sharpe_ratio') ? rthFn('Sharpe', 'sharpe_ratio') : '') +
+    (hasColumn('drawdown_worst') ? rthFn('Worst DD USD', 'drawdown_worst') : '') +
+    (hasColumn('drawdown_worst_w_usd') ? rthFn('Worst DD W USD', 'drawdown_worst_w_usd') : '') +
+    (hasColumn('sharpe_ratio') ? rthFn('Sharpe USD', 'sharpe_ratio') : '') +
+    (hasColumn('sharpe_ratio_w_usd') ? rthFn('Sharpe W USD', 'sharpe_ratio_w_usd') : '') +
     (hasColumn('starting_balance') ? rthFn('Start B.', 'starting_balance') : '') +
     (hasColumn('final_balance') ? rthFn('Final B.', 'final_balance') : '') +
     (hasColumn('final_equity') ? rthFn('Final Eq.', 'final_equity') : '') +
@@ -5936,9 +6155,12 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
       (hasColumn('exchange_dir') ? '\x3Ctd>' + esc(Array.isArray(r.exchanges) ? r.exchanges.join(', ') : '') + '\x3C/td>' : '') +
       (hasColumn('modified') ? '\x3Ctd>' + fmtDate(r.modified) + '\x3C/td>' : '') +
       (hasColumn('adg') ? '\x3Ctd>' + fmt(r.adg, 4) + '\x3C/td>' : '') +
+      (hasColumn('adg_w_usd') ? '\x3Ctd>' + fmt(r.adg_w_usd, 4) + '\x3C/td>' : '') +
       (hasColumn('gain') ? '\x3Ctd>' + fmt(r.gain, 2) + '\x3C/td>' : '') +
       (hasColumn('drawdown_worst') ? '\x3Ctd>' + fmt(r.drawdown_worst, 4) + '\x3C/td>' : '') +
+      (hasColumn('drawdown_worst_w_usd') ? '\x3Ctd>' + fmt(r.drawdown_worst_w_usd, 4) + '\x3C/td>' : '') +
       (hasColumn('sharpe_ratio') ? '\x3Ctd>' + fmt(r.sharpe_ratio, 4) + '\x3C/td>' : '') +
+      (hasColumn('sharpe_ratio_w_usd') ? '\x3Ctd>' + fmt(r.sharpe_ratio_w_usd, 4) + '\x3C/td>' : '') +
       (hasColumn('starting_balance') ? '\x3Ctd>' + fmt(r.starting_balance, 0) + '\x3C/td>' : '') +
       (hasColumn('final_balance') ? '\x3Ctd>' + fmt(r.final_balance, 0) + '\x3C/td>' : '') +
       (hasColumn('final_equity') ? '\x3Ctd>' + fmt(r.final_equity, 0) + '\x3C/td>' : '') +

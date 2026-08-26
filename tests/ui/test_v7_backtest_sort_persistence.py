@@ -99,7 +99,15 @@ def test_backtest_sort_state_validates_restores_and_persists() -> None:
     shared_result_header_keys = [
         key
         for key in result_header_keys
-        if key not in {"backtest_version", "strategy", "final_equity", "balance_equity_diff"}
+        if key not in {
+            "backtest_version",
+            "strategy",
+            "adg_w_usd",
+            "drawdown_worst_w_usd",
+            "sharpe_ratio_w_usd",
+            "final_equity",
+            "balance_equity_diff",
+        }
     ]
     assert config_header_keys
     assert result_header_keys

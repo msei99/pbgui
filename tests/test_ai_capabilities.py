@@ -209,6 +209,22 @@ def test_generic_page_capability_returns_exact_browser_action() -> None:
         }
     )
     assert value_result["ui_action"]["payload"]["value"] == "running"
+    cross_page = AICapabilityService._perform_page_action(
+        {
+            "page_key": "v8_backtest",
+            "action": "activate_by_label",
+            "entity_kind": "ui_control_label",
+            "entity_name": "Git Push",
+        }
+    )
+    assert cross_page["ui_action"] == {
+        "type": "page.perform_action",
+        "target": {"page_key": "v8_backtest"},
+        "payload": {
+            "action": "activate_by_label",
+            "entity": {"kind": "ui_control_label", "name": "Git Push"},
+        },
+    }
 
 
 def test_proposal_diff_only_includes_changed_array_entries() -> None:

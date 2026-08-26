@@ -51,7 +51,11 @@ from pareto_preset_generator import (
     _flatten_dotted_bounds,
     build_optimize_preset,
 )
-from api.v8_migration_context import apply_legacy_churn_gate, extract_legacy_churn_gate
+from api.v8_migration_context import (
+    apply_legacy_churn_gate,
+    extract_legacy_churn_gate,
+    postprocess_v7_migration,
+)
 from pb8_config import (
     PB8ConfigurationError,
     cache_prepared_pb8_config,
@@ -64,6 +68,7 @@ from pb8_config import (
     migrate_pb7_config,
     prepare_pb8_config,
     validate_pb8_override_bundle,
+    validate_pb8_optimizer_overrides,
     save_prepared_pb8_config,
 )
 from pbgui_purefunc import (
@@ -168,6 +173,37 @@ def _normalize_config(config: dict, name: str) -> dict:
     if not isinstance(backtest, dict):
         raise HTTPException(status_code=422, detail="backtest must be an object")
     backtest["base_dir"] = _managed_base_dir(name)
+    exchanges = backtest.get("exchanges")
+    scenarios = backtest.get("scenarios")
+    if backtest.get("suite_enabled") and isinstance(exchanges, list) and isinstance(scenarios, list):
+        canonical_exchanges = {
+            exchange.strip().lower(): exchange.strip()
+            for exchange in exchanges
+            if isinstance(exchange, str) and exchange.strip()
+        }
+        filtered_scenarios = []
+        for scenario in scenarios:
+            if not isinstance(scenario, dict):
+                filtered_scenarios.append(copy.deepcopy(scenario))
+                continue
+            scenario_exchanges = scenario.get("exchanges")
+            if not isinstance(scenario_exchanges, list) or not scenario_exchanges:
+                filtered_scenarios.append(copy.deepcopy(scenario))
+                continue
+            retained = []
+            for exchange in scenario_exchanges:
+                if not isinstance(exchange, str) or not exchange.strip():
+                    retained.append(copy.deepcopy(exchange))
+                    continue
+                key = exchange.strip().lower()
+                if key in canonical_exchanges and canonical_exchanges[key] not in retained:
+                    retained.append(canonical_exchanges[key])
+            if not retained:
+                continue
+            normalized_scenario = copy.deepcopy(scenario)
+            normalized_scenario["exchanges"] = retained
+            filtered_scenarios.append(normalized_scenario)
+        backtest["scenarios"] = filtered_scenarios
     return candidate
 
 
@@ -268,25 +304,44 @@ def _migration_review_payload(report: dict, source: dict, source_type: str = "")
             return not field.startswith(("live.", "optimize."))
         return True
 
+    pbgui_fields = [
+        str(item or "").strip()
+        for item in report.get("pbgui_post_migration_review_fields") or []
+        if str(item or "").strip()
+    ]
     fields = []
     for key in ("manual_review_fields", "dropped_unsupported_fields"):
         for item in report.get(key) or []:
             value = str(item or "").strip()
-            if value and relevant(value) and value not in fields:
+            if value and (relevant(value) or value in pbgui_fields) and value not in fields:
                 fields.append(value)
+    manual_review_fields = [
+        item
+        for item in report.get("manual_review_fields") or []
+        if relevant(str(item or "").strip()) or str(item or "").strip() in pbgui_fields
+    ]
+    dropped_unsupported_fields = [
+        item
+        for item in report.get("dropped_unsupported_fields") or []
+        if relevant(str(item or "").strip())
+    ]
     compact = {
         "source_version": report.get("source_version"),
         "destination_strategy_kind": report.get("destination_strategy_kind"),
-        "manual_review_fields": [
-            item for item in report.get("manual_review_fields") or [] if relevant(str(item or "").strip())
-        ],
-        "dropped_unsupported_fields": [
-            item for item in report.get("dropped_unsupported_fields") or [] if relevant(str(item or "").strip())
-        ],
+        "status": report.get("status"),
+        "manual_review_required": bool(manual_review_fields or dropped_unsupported_fields),
+        "manual_review_fields": manual_review_fields,
+        "dropped_unsupported_fields": dropped_unsupported_fields,
         "inserted_v8_defaults": list(report.get("inserted_v8_defaults") or []),
         "warnings": list(report.get("warnings") or []),
         "behavior_change_warnings": list(report.get("behavior_change_warnings") or []),
         "canonical_validation": copy.deepcopy(report.get("canonical_validation") or {}),
+        "pbgui_post_migration_adjustments": copy.deepcopy(
+            report.get("pbgui_post_migration_adjustments") or []
+        ),
+        "pbgui_post_migration_review_fields": pbgui_fields,
+        "pbgui_review_decisions": copy.deepcopy(report.get("pbgui_review_decisions") or []),
+        "review_recommended": bool(report.get("review_recommended")),
     }
     values = {}
     for field in fields:
@@ -300,6 +355,29 @@ def _migration_review_payload(report: dict, source: dict, source_type: str = "")
             continue
         values[field] = copy.deepcopy(current)
     return compact, values
+
+
+def _successful_migration_report(report: dict, review_report: dict) -> dict:
+    """Return one context-consistent report while retaining filtered official findings."""
+    contextual = copy.deepcopy(report)
+    official_findings = {
+        "status": report.get("status"),
+        "manual_review_fields": list(report.get("manual_review_fields") or []),
+        "dropped_unsupported_fields": list(report.get("dropped_unsupported_fields") or []),
+    }
+    contextual["manual_review_fields"] = list(review_report.get("manual_review_fields") or [])
+    contextual["dropped_unsupported_fields"] = list(review_report.get("dropped_unsupported_fields") or [])
+    contextual["manual_review_required"] = False
+    if (
+        contextual["manual_review_fields"] != official_findings["manual_review_fields"]
+        or contextual["dropped_unsupported_fields"] != official_findings["dropped_unsupported_fields"]
+    ):
+        contextual["official_review"] = official_findings
+    if contextual.get("pbgui_post_migration_adjustments"):
+        contextual["status"] = "ok_with_adjustments"
+    elif contextual.get("status") in {"manual_review_required", "unsafe_manual_review_output_written"}:
+        contextual["status"] = "ok"
+    return contextual
 
 
 def _migration_review_config(config: dict, values: dict) -> tuple[dict, dict]:
@@ -433,6 +511,7 @@ def _save_config_bundle_locked(
     create_only: bool,
     source_name: str | None,
     inherit_existing_overrides: bool,
+    migration_report: dict | None = None,
 ) -> dict:
     """Stage, validate, and publish one complete PB8 config bundle under the config lock."""
     root = _configs_dir()
@@ -466,7 +545,9 @@ def _save_config_bundle_locked(
                 raise HTTPException(status_code=422, detail=f"Override config not found: {filename}")
             shutil.copy2(source, destination)
 
-        if source_dir is not None:
+        if migration_report is not None:
+            atomic_write_json(stage_dir / "migration_report.json", migration_report)
+        elif source_dir is not None:
             report = _safe_path(source_dir / "migration_report.json", root)
             if report.is_file() and not report.is_symlink():
                 shutil.copy2(report, stage_dir / report.name)
@@ -1358,6 +1439,27 @@ def _list_results(analysis_paths: Optional[list[Path]] = None) -> list[dict]:
                 "final_equity_strategy_eq",
                 default=terminal_balances.get("usd_total_equity", 0),
             )
+            adg_usd = _analysis_value(analysis, "adg_usd", "adg_strategy_eq", "adg")
+            adg_w_usd = _analysis_value(analysis, "adg_strategy_eq_w", "adg_w_usd", default=None)
+            drawdown_worst_usd = _analysis_value(
+                analysis,
+                "drawdown_worst_usd",
+                "drawdown_worst_strategy_eq",
+                "drawdown_worst",
+            )
+            drawdown_worst_w_usd = _analysis_value(analysis, "drawdown_worst_w_usd", default=None)
+            sharpe_ratio_usd = _analysis_value(
+                analysis,
+                "sharpe_ratio_usd",
+                "sharpe_ratio_strategy_eq",
+                "sharpe_ratio",
+            )
+            sharpe_ratio_w_usd = _analysis_value(
+                analysis,
+                "sharpe_ratio_strategy_eq_w",
+                "sharpe_ratio_w_usd",
+                default=None,
+            )
             results.append(
                 {
                     "config_name": parts[0] if parts else "",
@@ -1372,10 +1474,16 @@ def _list_results(analysis_paths: Optional[list[Path]] = None) -> list[dict]:
                     "strategy": str(live.get("strategy_kind") or "").strip(),
                     "modified": datetime.datetime.fromtimestamp(resolved.stat().st_mtime).isoformat(),
                     "metrics": metrics,
-                    "adg": _analysis_value(analysis, "adg_w_usd", "adg_usd", "adg_strategy_eq", "adg"),
+                    "adg": adg_usd,
+                    "adg_usd": adg_usd,
+                    "adg_w_usd": adg_w_usd,
                     "gain": gain,
-                    "drawdown_worst": _analysis_value(analysis, "drawdown_worst_w_usd", "drawdown_worst_usd", "drawdown_worst_strategy_eq", "drawdown_worst"),
-                    "sharpe_ratio": _analysis_value(analysis, "sharpe_ratio_w_usd", "sharpe_ratio_usd", "sharpe_ratio_strategy_eq", "sharpe_ratio"),
+                    "drawdown_worst": drawdown_worst_usd,
+                    "drawdown_worst_usd": drawdown_worst_usd,
+                    "drawdown_worst_w_usd": drawdown_worst_w_usd,
+                    "sharpe_ratio": sharpe_ratio_usd,
+                    "sharpe_ratio_usd": sharpe_ratio_usd,
+                    "sharpe_ratio_w_usd": sharpe_ratio_w_usd,
                     "starting_balance": starting_balance,
                     "final_balance": final_balance,
                     "final_equity": final_equity,
@@ -2032,8 +2140,11 @@ def save_config(
     bundle_request = "override_configs" in body
     config = body.get("config") if bundle_request else body
     override_payloads = body.get("override_configs") if bundle_request else {}
+    migration_report = body.get("migration_report") if bundle_request else None
     if not isinstance(config, dict):
         raise HTTPException(status_code=400, detail="config must be an object")
+    if migration_report is not None and not isinstance(migration_report, dict):
+        raise HTTPException(status_code=422, detail="migration_report must be an object")
     try:
         with _config_lock():
             prepared = _save_config_bundle_locked(
@@ -2043,6 +2154,7 @@ def save_config(
                 create_only=create_only,
                 source_name=source_name,
                 inherit_existing_overrides=inherit_existing_overrides,
+                migration_report=migration_report,
             )
         return {"ok": True, "name": name, "config": prepared}
     except PB8ConfigurationError as exc:
@@ -2072,12 +2184,9 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
     allow_manual_review = body.get("allow_manual_review_output", False)
     if type(allow_manual_review) is not bool:
         raise HTTPException(status_code=422, detail="allow_manual_review_output must be a boolean")
-    target_dir = _safe_path(_configs_dir() / target_name, _configs_dir())
     stage_dir = _safe_path(_configs_dir() / f".migrate-{uuid.uuid4().hex}", _configs_dir())
     try:
         with _config_lock():
-            if source_type != "run_config" and target_dir.exists():
-                raise HTTPException(status_code=409, detail=f"V8 config '{target_name}' already exists")
             stage_dir.mkdir(parents=True)
             output = stage_dir / "backtest.json"
             source_payload = _read_json(source)
@@ -2115,6 +2224,17 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
             config = result.get("config")
             if isinstance(config, dict) and legacy_churn_plan is not None:
                 config = prepare_pb8_config(apply_legacy_churn_gate(config, legacy_churn_plan))
+            if isinstance(config, dict):
+                config, report = postprocess_v7_migration(
+                    migration_payload,
+                    config,
+                    report,
+                    require_v7_excess_review=source_type in {"backtest_config", "backtest_result"},
+                    require_minimum_coin_age_review=source_type in {"backtest_config", "backtest_result"},
+                )
+                enable_overrides = (config.get("optimize") or {}).get("enable_overrides")
+                if enable_overrides:
+                    validate_pb8_optimizer_overrides(config, base_config_path=str(output.resolve()))
             review_report, review_values = _migration_review_payload(report, migration_payload, source_type)
             unresolved = review_report.get("manual_review_fields") or review_report.get("dropped_unsupported_fields")
             if not report.get("output_written") or not isinstance(config, dict) or unresolved:
@@ -2125,7 +2245,10 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
                 if allow_manual_review and report.get("output_written") and isinstance(config, dict):
                     migration_source.unlink(missing_ok=True)
                     override_payloads = _load_override_payloads(config, stage_dir)
-                    review_config, param_status = _migration_review_config(config, review_values)
+                    review_config, param_status = _migration_review_config(
+                        _normalize_config(config, target_name),
+                        review_values,
+                    )
                     if source_type == "run_config":
                         draft = store_v8_editor_draft(
                             review_config,
@@ -2167,10 +2290,15 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
                     status_code=422,
                     detail={"code": "migration_manual_review", "message": message, "report": review_report},
                 )
+            report = _successful_migration_report(report, review_report)
             migration_source.unlink(missing_ok=True)
             if source_type == "run_config":
                 override_payloads = _load_override_payloads(config, stage_dir)
-                draft = store_v8_editor_draft(config, override_payloads)
+                draft = store_v8_editor_draft(
+                    config,
+                    override_payloads,
+                    migration_report=report,
+                )
                 rmtree(stage_dir, ignore_errors=True)
                 return {
                     "ok": True,
@@ -2180,12 +2308,28 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
                     "editor": "run",
                     "report": report,
                 }
-            prepared = save_prepared_pb8_config(_normalize_config(config, target_name), output)
-            atomic_write_json(stage_dir / "migration_report.json", report)
-            os.replace(stage_dir, target_dir)
-            cache_prepared_pb8_config(prepared, target_dir / "backtest.json")
-        _log(SERVICE, f"Migrated V7 {source_type} {source_name} to V8 config {target_name}", level="INFO")
-        return {"ok": True, "name": target_name, "config": prepared, "report": report}
+            override_payloads = _load_override_payloads(config, stage_dir)
+            with _DRAFT_LOCK:
+                _clean_drafts(reserve_slot=True)
+                draft_id = secrets.token_urlsafe(16)
+                _opt_draft_store[draft_id] = (
+                    time.time(),
+                    {
+                        "config": _normalize_config(config, target_name),
+                        "override_configs": override_payloads,
+                        "migration_report": report,
+                    },
+                )
+            rmtree(stage_dir, ignore_errors=True)
+        _log(SERVICE, f"Prepared V8 Backtest draft from V7 {source_type} {source_name}", level="INFO")
+        return {
+            "ok": True,
+            "review_required": False,
+            "draft_id": draft_id,
+            "name": target_name,
+            "editor": "backtest",
+            "report": report,
+        }
     except HTTPException:
         rmtree(stage_dir, ignore_errors=True)
         raise
@@ -2271,7 +2415,7 @@ def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)) -> d
                 else:
                     if not config_path.is_file() or config_path.is_symlink():
                         raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
-                    config = load_pb8_config(config_path)
+                    config = _normalize_config(load_pb8_config(config_path), name)
                     supplied_overrides = {}
                 backtest = config.get("backtest") if isinstance(config.get("backtest"), dict) else {}
                 payload = {

@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+_OPTIMIZE_METADATA_CACHE: dict[str, dict] = {}
+
 
 def _optimize_basis_contract(limits_module, scoring_fields, reducers_module=None) -> dict:
     """Describe the installed PB8 optimizer's canonical suite-reduction fields."""
@@ -27,6 +29,14 @@ def _optimize_basis_contract(limits_module, scoring_fields, reducers_module=None
         "limit_basis_field": limit_basis_field,
         "scoring_basis_field": scoring_basis_field,
     }
+
+
+def _cached_optimize_metadata(modules: dict, pb8_dir: Path) -> dict:
+    """Reuse immutable optimizer metadata inside the persistent helper process."""
+    key = str(pb8_dir)
+    if key not in _OPTIMIZE_METADATA_CACHE:
+        _OPTIMIZE_METADATA_CACHE[key] = _optimize_metadata(modules)
+    return copy.deepcopy(_OPTIMIZE_METADATA_CACHE[key])
 
 
 def _load_pb8_modules(pb8_dir: Path):
@@ -407,6 +417,7 @@ def _coin_override_metadata(modules: dict, payload: dict) -> dict:
     strategy_kind = modules["normalize_strategy_kind"](payload.get("strategy_kind"))
     policy = modules["get_allowed_modifications"](hsl_signal_mode=hsl_signal_mode)
     template = _prepare(modules, modules["get_template_config"]())
+    strategy_defaults = modules["get_all_strategy_defaults"]()
     params = {"bot": {"long": {}, "short": {}}, "live": {}}
     for side in ("long", "short"):
         side_policy = policy["bot"][side]
@@ -420,7 +431,10 @@ def _coin_override_metadata(modules: dict, payload: dict) -> dict:
         for path, allowed in _iter_policy_leaves(canonical):
             if allowed is not True:
                 continue
-            default = _nested_value(template["bot"][side], path)
+            if len(path) >= 2 and path[:2] == ("strategy", strategy_kind):
+                default = _nested_value(strategy_defaults[side][strategy_kind], path[2:])
+            else:
+                default = _nested_value(template["bot"][side], path)
             params["bot"][side][".".join(path)] = _override_leaf_metadata(default)
     for key, allowed in policy["live"].items():
         if allowed is True:
@@ -589,7 +603,7 @@ def handle(payload: dict) -> dict:
     if operation == "result_metrics":
         return {"metrics": modules["result_metrics"]}
     if operation == "optimize_metadata":
-        return _optimize_metadata(modules)
+        return _cached_optimize_metadata(modules, pb8_dir)
     if operation == "coin_override_metadata":
         return _coin_override_metadata(modules, payload)
     if operation == "exchange_metadata":
@@ -661,7 +675,8 @@ def handle(payload: dict) -> dict:
         )
         result = {"report": report}
         if report.get("output_written") and isinstance(migrated, dict):
-            result["config"] = _prepare(modules, migrated, str(output_path))
+            result["config"] = migrated
+            result["optimize_metadata"] = _cached_optimize_metadata(modules, pb8_dir)
         return result
     raise ValueError(f"Unsupported operation: {operation}")
 
@@ -670,19 +685,42 @@ def main() -> int:
     """Read one request from stdin and write one response to stdout."""
     try:
         payload = json.load(sys.stdin)
-        if not isinstance(payload, dict):
-            raise TypeError("request must be an object")
-        response = {"ok": True, "result": handle(payload)}
     except Exception as exc:
-        response = {
-            "ok": False,
-            "error": type(exc).__name__,
-            "detail": str(exc),
-        }
+        response = {"ok": False, "error": type(exc).__name__, "detail": str(exc)}
+    else:
+        response = _response(payload)
     json.dump(response, sys.stdout, separators=(",", ":"))
     sys.stdout.write("\n")
     return 0 if response["ok"] else 1
 
 
+def _response(payload) -> dict:
+    """Return one protocol response without terminating a persistent helper."""
+    try:
+        if not isinstance(payload, dict):
+            raise TypeError("request must be an object")
+        return {"ok": True, "result": handle(payload)}
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": type(exc).__name__,
+            "detail": str(exc),
+        }
+
+
+def serve() -> int:
+    """Serve newline-delimited requests while retaining imported PB8 modules."""
+    for line in sys.stdin:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as exc:
+            response = {"ok": False, "error": type(exc).__name__, "detail": str(exc)}
+        else:
+            response = _response(payload)
+        sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
+        sys.stdout.flush()
+    return 0
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(serve() if "--serve" in sys.argv[1:] else main())

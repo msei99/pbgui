@@ -1777,6 +1777,7 @@ class AIChatService:
             "title",
             "guide_topic",
             "section",
+            "pages",
             "entities",
             "actions",
             "controls",
@@ -1791,6 +1792,25 @@ class AIChatService:
                 raise AIChatError("Invalid page context")
             if value:
                 result[key] = value
+        pages = context.get("pages") or []
+        if not isinstance(pages, list) or len(pages) > 64:
+            raise AIChatError("Invalid page context")
+        safe_pages = []
+        for item in pages:
+            if not isinstance(item, dict) or set(item) - {"key", "title"}:
+                raise AIChatError("Invalid page context")
+            page_key = str(item.get("key") or "").strip()
+            page_title = str(item.get("title") or "").strip()
+            if (
+                not re.fullmatch(r"[a-z][a-z0-9_.-]{0,127}", page_key)
+                or not page_title
+                or len(page_title) > 128
+                or any(ord(char) < 32 for char in page_title)
+            ):
+                raise AIChatError("Invalid page context")
+            safe_pages.append({"key": page_key, "title": page_title})
+        if safe_pages:
+            result["pages"] = safe_pages
         entities = context.get("entities") or []
         if not isinstance(entities, list) or len(entities) > 8:
             raise AIChatError("Invalid page context")
@@ -1821,13 +1841,14 @@ class AIChatService:
         if safe_actions:
             result["actions"] = safe_actions
         controls = context.get("controls") or []
-        if not isinstance(controls, list) or len(controls) > 96:
+        if not isinstance(controls, list) or len(controls) > 2048:
             raise AIChatError("Invalid page context")
         safe_controls = []
         for item in controls:
             if not isinstance(item, dict) or set(item) - {
                 "id",
                 "role",
+                "name",
                 "label",
                 "context",
                 "operations",
@@ -1836,6 +1857,7 @@ class AIChatService:
                 raise AIChatError("Invalid page context")
             control_id = str(item.get("id") or "").strip()
             role = str(item.get("role") or "").strip()
+            control_name = str(item.get("name") or "").strip()
             label = str(item.get("label") or "").strip()
             control_context = str(item.get("context") or "").strip()
             operations = item.get("operations") or []
@@ -1844,15 +1866,17 @@ class AIChatService:
                 not re.fullmatch(r"control_[0-9]{1,12}", control_id)
                 or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", role)
                 or not label
+                or not control_name
+                or len(control_name) > 320
                 or len(label) > 160
                 or len(control_context) > 160
-                or any(ord(char) < 32 for char in label + control_context)
+                or any(ord(char) < 32 for char in control_name + label + control_context)
                 or not isinstance(operations, list)
                 or not operations
                 or len(operations) > 2
                 or any(operation not in {"activate", "set_value"} for operation in operations)
                 or not isinstance(options, list)
-                or len(options) > 32
+                or len(options) > 128
             ):
                 raise AIChatError("Invalid page context")
             safe_options = []
@@ -1869,6 +1893,7 @@ class AIChatService:
             safe_control = {
                 "id": control_id,
                 "role": role,
+                "name": control_name,
                 "label": label,
                 "operations": list(dict.fromkeys(operations)),
             }
@@ -1892,7 +1917,7 @@ class AIChatService:
                     safe_focused[key] = value
             if safe_focused:
                 result["focused_field"] = safe_focused
-        if len(json.dumps(result, allow_nan=False).encode("utf-8")) > 48 * 1024:
+        if len(json.dumps(result, allow_nan=False).encode("utf-8")) > 300 * 1024:
             raise AIChatError("Page context is too large")
         return result
 

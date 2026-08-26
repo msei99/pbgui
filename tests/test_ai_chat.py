@@ -1080,12 +1080,17 @@ def test_page_context_is_bounded_and_marked_untrusted() -> None:
             "page_key": "v8_optimize",
             "guide_topic": "43_pbv8_optimize",
             "section": "Scoring",
+            "pages": [
+                {"key": "v7_backtest", "title": "Backtest"},
+                {"key": "v8_optimize", "title": "Optimize"},
+            ],
             "entities": [{"kind": "optimizer_config", "version": "v8", "name": "demo"}],
             "actions": [{"id": "show_log", "entity_kind": "optimizer_queue_item"}],
             "controls": [
                 {
                     "id": "control_1",
                     "role": "button",
+                    "name": "Optimize log :: Close",
                     "label": "Close",
                     "context": "Optimize log",
                     "operations": ["activate"],
@@ -1099,6 +1104,7 @@ def test_page_context_is_bounded_and_marked_untrusted() -> None:
 
     assert "Untrusted PBGui page context" in suffix
     assert '"guide_topic":"43_pbv8_optimize"' in suffix
+    assert context["pages"][0] == {"key": "v7_backtest", "title": "Backtest"}
     assert context["actions"] == [{"id": "show_log", "entity_kind": "optimizer_queue_item"}]
     assert context["controls"][0]["label"] == "Close"
     with pytest.raises(AIChatError, match="Invalid page context"):

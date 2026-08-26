@@ -2736,6 +2736,7 @@ var state = {
   editorBackendHint: '',
   editorLastConfig: null,
   editorOverrideConfigs: {},
+  editorMigrationReport: null,
   importConfigSource: 'local',
   importArchives: [],
   importArchiveConfigs: [],
@@ -5228,15 +5229,7 @@ async function apiFetch(path, opts) {
   }
 }
 
-async function loadOptimizeMetadata() {
-  if (!optimizeEditorAdapter.metadataPath) return;
-  var payload;
-  try {
-    payload = await apiFetch(optimizeEditorAdapter.metadataPath);
-  } catch (error) {
-    if (handlePb8RuntimeUnavailable(error)) return;
-    throw error;
-  }
+function applyOptimizeMetadata(payload) {
   setPb8RuntimeWarning(null);
   var metadata = optimizeEditorAdapter.normalizeMetadata(payload || {});
   if (metadata.optimizeDefaults && Object.keys(metadata.optimizeDefaults).length) {
@@ -5262,6 +5255,18 @@ async function loadOptimizeMetadata() {
     });
   }
   if (Array.isArray(metadata.runtimeOverrides)) OPT_FIXED_RUNTIME_OVERRIDE_FIELDS = metadata.runtimeOverrides.slice();
+}
+
+async function loadOptimizeMetadata() {
+  if (!optimizeEditorAdapter.metadataPath) return;
+  var payload;
+  try {
+    payload = await apiFetch(optimizeEditorAdapter.metadataPath);
+  } catch (error) {
+    if (handlePb8RuntimeUnavailable(error)) return;
+    throw error;
+  }
+  applyOptimizeMetadata(payload);
 }
 
 async function authFetch(url, opts) {
@@ -10089,6 +10094,7 @@ function closeEditor() {
   state.editorBackendHint = '';
   state.editorLastConfig = null;
   state.editorOverrideConfigs = {};
+  state.editorMigrationReport = null;
   resetOptimizeEditorUiState();
   setOptBotParamStatus({});
   setPanel(returnPanel);
@@ -11332,11 +11338,13 @@ function openEditorWithConfig(configOrPayload, name, sourceName) {
 
 async function openNewConfig() {
   var data = await apiFetch('/configs/new-config');
+  state.editorMigrationReport = null;
   openEditorWithConfig(data, '', '');
 }
 
 async function openConfigEditor(name) {
   var data = await apiFetch('/configs/' + encodeURIComponent(name));
+  state.editorMigrationReport = null;
   openEditorWithConfig(data, name, name);
 }
 
@@ -12043,7 +12051,11 @@ async function saveEditor(andQueue) {
   }
   isNewName = !!(state.editorSourceName && state.editorSourceName !== name);
   var savePayload = optimizeEditorAdapter.isV8
-    ? { config: configPayload, override_configs: state.editorOverrideConfigs || {} }
+    ? {
+        config: configPayload,
+        override_configs: state.editorOverrideConfigs || {},
+        migration_report: state.editorMigrationReport
+      }
     : configPayload;
   await apiFetch('/configs/' + encodeURIComponent(name), {
     method: 'PUT',
@@ -12508,35 +12520,49 @@ async function queueConfig(name) {
 async function migrateOptimizeConfigToV8(name) {
   var targetName = (String(name || '').trim() + '_v8').slice(0, 120);
   var response;
+  showMigrationDraftLoadingState(true);
   try {
     response = await authFetch(window.location.origin + '/api/optimize-v8/migrate-v7', {
       method: 'POST',
       body: JSON.stringify({ source_name: name, target_name: targetName })
     });
   } catch (error) {
+    closeEditor();
     await showOptimizeMigrationError(error);
     return;
   }
   var migratedName = response && response.name ? response.name : targetName;
-  toast('Converted Optimize config to PB8: ' + migratedName, 'ok');
-  window.location.href = window.location.origin + '/api/optimize-v8/main_page?open_config=' + encodeURIComponent(migratedName);
+  if (!response || !response.draft_id) {
+    closeEditor();
+    await showOptimizeMigrationError(new Error('PB8 migration did not return an editor preview.'));
+    return;
+  }
+  window.location.href = window.location.origin + '/api/optimize-v8/main_page?migration_draft_id=' + encodeURIComponent(response.draft_id)
+    + '&draft_name=' + encodeURIComponent(migratedName);
 }
 
 async function migrateParetoConfigToV8(path, name) {
   var targetName = (String(name || 'pareto').trim() + '_v8').slice(0, 120);
   var response;
+  showMigrationDraftLoadingState(true);
   try {
     response = await authFetch(window.location.origin + '/api/optimize-v8/migrate-v7', {
       method: 'POST',
       body: JSON.stringify({ source_path: path, target_name: targetName })
     });
   } catch (error) {
+    closeEditor();
     await showOptimizeMigrationError(error);
     return;
   }
   var migratedName = response && response.name ? response.name : targetName;
-  toast('Converted Pareto config to PB8: ' + migratedName, 'ok');
-  window.location.href = window.location.origin + '/api/optimize-v8/main_page?open_config=' + encodeURIComponent(migratedName);
+  if (!response || !response.draft_id) {
+    closeEditor();
+    await showOptimizeMigrationError(new Error('PB8 migration did not return an editor preview.'));
+    return;
+  }
+  window.location.href = window.location.origin + '/api/optimize-v8/main_page?migration_draft_id=' + encodeURIComponent(response.draft_id)
+    + '&draft_name=' + encodeURIComponent(migratedName);
 }
 
 async function showOptimizeMigrationError(error) {
@@ -13364,6 +13390,48 @@ async function handleIncomingDraft() {
   }
 }
 
+function showMigrationDraftLoadingState(isConverting) {
+  var editor = el('configs-editor');
+  if (el('configs-toolbar')) el('configs-toolbar').style.display = 'none';
+  if (el('configs-list-wrap')) el('configs-list-wrap').style.display = 'none';
+  if (editor) {
+    editor.style.display = 'block';
+    editor.innerHTML = '<div class="empty-state">'
+      + (isConverting ? 'Converting V7 config with PB8...' : 'Loading converted PB8 Optimize preview...')
+      + '</div>';
+  }
+  if (el('sidebar-inner')) el('sidebar-inner').style.display = 'none';
+  if (el('sidebar-editor')) el('sidebar-editor').style.display = '';
+}
+
+async function handleMigrationDraft(draftPromise) {
+  var url = new URL(window.location.href);
+  var draftId = url.searchParams.get('migration_draft_id');
+  if (!draftId) return;
+  var draftName = url.searchParams.get('draft_name') || '';
+  try {
+    var draft = draftPromise
+      ? await draftPromise
+      : await apiFetch('/migration-draft/' + encodeURIComponent(draftId));
+    var payload = normalizeOptimizeEditorPayload({
+      config: draft.config || {},
+      override_configs: draft.override_configs || {},
+      param_status: draft.param_status || {}
+    });
+    openEditorWithConfig(payload, draftName, '');
+    state.editorMigrationReport = draft.migration_report && typeof draft.migration_report === 'object'
+      ? draft.migration_report
+      : null;
+    setPageEditorStatus('Loaded unsaved V7 → V8 Optimize preview. Review and save explicitly.', 'info');
+    url.searchParams.delete('migration_draft_id');
+    url.searchParams.delete('draft_name');
+    var remainingSearch = url.searchParams.toString();
+    history.replaceState({}, '', url.pathname + (remainingSearch ? '?' + remainingSearch : '') + url.hash);
+  } catch (error) {
+    handleError(error);
+  }
+}
+
 async function handleOpenConfigParam() {
   var url = new URL(window.location.href);
   var configName = (url.searchParams.get('open_config') || '').trim();
@@ -13442,13 +13510,31 @@ async function init() {
     initOptimizeOhlcvPreflightController();
     var initialPanel = location.hash.replace('#', '');
     if (PANEL_META[initialPanel]) setPanel(initialPanel);
+    var initialUrl = new URL(window.location.href);
+    var migrationDraftId = initialUrl.searchParams.get('migration_draft_id');
+    var migrationDraftPromise = null;
+    if (migrationDraftId) {
+      showMigrationDraftLoadingState(false);
+      migrationDraftPromise = apiFetch('/migration-draft/' + encodeURIComponent(migrationDraftId));
+    }
     connectWS();
-    var settingsAndMetadata = (async function() {
-      await loadSettings();
-      await loadOptimizeMetadata();
-    })();
-    await Promise.all([settingsAndMetadata, loadConfigs(), loadQueue(), loadResults()]);
-    await handleIncomingDraft();
+    var metadataPromise = migrationDraftPromise
+      ? migrationDraftPromise.then(function(draft) {
+          if (draft && draft.optimize_metadata) {
+            applyOptimizeMetadata(draft.optimize_metadata);
+            return;
+          }
+          return loadOptimizeMetadata();
+        })
+      : loadOptimizeMetadata();
+    var settingsAndMetadata = Promise.all([loadSettings(), metadataPromise]);
+    var backgroundData = Promise.all([loadConfigs(), loadQueue(), loadResults()]);
+    await settingsAndMetadata;
+    if (migrationDraftPromise) {
+      await handleMigrationDraft(migrationDraftPromise);
+    }
+    await backgroundData;
+    if (!migrationDraftPromise) await handleIncomingDraft();
     await handleOpenConfigParam();
   } finally {
     state.initialLoadPending = false;

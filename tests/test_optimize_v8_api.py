@@ -51,6 +51,8 @@ def optimize_v8_roots(tmp_path, monkeypatch):
     with optimize_v8._pareto_list_cache_lock:
         optimize_v8._pareto_list_cache.clear()
         optimize_v8._pareto_warning_cache.clear()
+    with optimize_v8._migration_draft_lock:
+        optimize_v8._migration_drafts.clear()
     return configs, queue, logs, results
 
 
@@ -2410,8 +2412,8 @@ def test_optimize_override_payload_limits_preserve_existing_bundle(optimize_v8_r
     assert optimize_v8._read_json(optimize_v8._config_file("bounded")) == before
 
 
-def test_migrate_v7_publishes_config_and_report_as_one_bundle(optimize_v8_roots, monkeypatch) -> None:
-    """Successful migration publishes its official report in the same atomic config bundle."""
+def test_migrate_v7_opens_unsaved_preview_and_report_persists_on_manual_save(optimize_v8_roots, monkeypatch) -> None:
+    """Conversion must publish nothing until the preview is explicitly saved with its report."""
     source = optimize_v8._v7_configs_dir() / "legacy.json"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("{}", encoding="utf-8")
@@ -2419,13 +2421,86 @@ def test_migrate_v7_publishes_config_and_report_as_one_bundle(optimize_v8_roots,
     monkeypatch.setattr(
         optimize_v8,
         "migrate_pb7_config",
-        lambda *_args, **_kwargs: {"report": report, "config": {"backtest": {}, "optimize": {}}},
+        lambda *_args, **_kwargs: {
+            "report": report,
+            "config": {"backtest": {}, "optimize": {}},
+            "optimize_metadata": {"strategies": ["trailing_grid_v7"]},
+        },
     )
 
     response = optimize_v8.migrate_v7({"source_name": "legacy", "target_name": "migrated"}, None)
 
-    assert response["report"] == report
-    assert optimize_v8._read_json(optimize_v8._config_dir("migrated") / "migration_report.json") == report
+    expected = {**report, "dropped_unsupported_fields": [], "manual_review_required": False}
+    assert response["report"] == expected
+    assert response["editor"] == "optimize"
+    assert response["draft_id"]
+    assert not optimize_v8._config_dir("migrated").exists()
+    draft = optimize_v8.get_migration_draft(response["draft_id"], None)
+    assert draft["migration_report"] == expected
+    assert draft["optimize_metadata"] == {"strategies": ["trailing_grid_v7"]}
+
+    optimize_v8.save_config(
+        "migrated",
+        {
+            "config": draft["config"],
+            "override_configs": draft["override_configs"],
+            "migration_report": draft["migration_report"],
+        },
+        create_only=True,
+        session=None,
+    )
+
+    assert optimize_v8._read_json(optimize_v8._config_dir("migrated") / "migration_report.json") == expected
+
+
+def test_migrate_v7_optimize_uses_shared_postprocessing(optimize_v8_roots, monkeypatch) -> None:
+    """Optimize conversion must apply the same deterministic override and side safety rules."""
+    source = optimize_v8._v7_configs_dir() / "legacy.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("{}", encoding="utf-8")
+    migrated = {
+        "backtest": {},
+        "live": {"strategy_kind": "trailing_grid_v7"},
+        "bot": {
+            "long": {
+                "risk": {"n_positions": 4, "total_wallet_exposure_limit": 1.0},
+                "hsl": {"no_restart_drawdown_threshold": 0.5},
+            },
+            "short": {
+                "risk": {"n_positions": 0, "total_wallet_exposure_limit": 0.0},
+                "hsl": {"no_restart_drawdown_threshold": 0.5},
+            },
+        },
+        "optimize": {
+            "enable_overrides": ["lossless_close_trailing", "forward_tp_grid"],
+            "fixed_params": [],
+            "fixed_runtime_overrides": {
+                "bot.long.hsl_no_restart_drawdown_threshold": 1,
+            },
+            "bounds": {},
+        },
+    }
+    monkeypatch.setattr(
+        optimize_v8,
+        "migrate_pb7_config",
+        lambda *_args, **_kwargs: {
+            "report": {"output_written": True, "manual_review_fields": [], "status": "ok"},
+            "config": migrated,
+        },
+    )
+
+    response = optimize_v8.migrate_v7({"source_name": "legacy", "target_name": "migrated"}, None)
+    draft = optimize_v8.get_migration_draft(response["draft_id"], None)
+    saved = draft["config"]
+
+    assert saved["optimize"]["enable_overrides"] == ["forward_tp_grid"]
+    assert saved["optimize"]["fixed_params"] == ["bot.short"]
+    assert saved["optimize"]["fixed_runtime_overrides"] == {
+        "bot.long.hsl.no_restart_drawdown_threshold": 1,
+    }
+    assert saved["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] == 0.5
+    assert response["report"]["status"] == "ok_with_adjustments"
+    assert not optimize_v8._config_dir("migrated").exists()
 
 
 def test_migrate_v7_returns_official_manual_review_report(optimize_v8_roots, monkeypatch) -> None:
@@ -2440,7 +2515,12 @@ def test_migrate_v7_returns_official_manual_review_report(optimize_v8_roots, mon
         optimize_v8.migrate_v7({"source_name": "legacy", "target_name": "rejected"}, None)
 
     assert error.value.status_code == 422
-    assert error.value.detail["report"] == report
+    assert error.value.detail["report"] == {
+        **report,
+        "dropped_unsupported_fields": [],
+        "manual_review_required": True,
+        "status": "manual_review_required",
+    }
     assert not optimize_v8._config_dir("rejected").exists()
 
 
@@ -2466,9 +2546,15 @@ def test_migrate_v7_filters_run_only_review_from_optimize_context(optimize_v8_ro
 
     assert calls["allow_manual_review_output"] is True
     assert response["report"]["manual_review_fields"] == []
-    assert optimize_v8._read_json(
-        optimize_v8._config_dir("migrated") / "migration_report.json"
-    )["manual_review_fields"] == ["live.execution_delay_seconds"]
+    assert response["report"]["manual_review_required"] is False
+    assert response["report"]["status"] == "ok"
+    draft = optimize_v8.get_migration_draft(response["draft_id"], None)
+    draft_report = draft["migration_report"]
+    assert draft_report["manual_review_fields"] == []
+    assert draft_report["manual_review_required"] is False
+    assert draft_report["status"] == "ok"
+    assert draft_report["official_review"]["manual_review_fields"] == ["live.execution_delay_seconds"]
+    assert not optimize_v8._config_dir("migrated").exists()
 
 
 def test_migrate_v7_optimize_uses_pb8_canonical_churn_migration(optimize_v8_roots, monkeypatch) -> None:
@@ -2525,13 +2611,15 @@ def test_migrate_v7_optimize_uses_pb8_canonical_churn_migration(optimize_v8_root
     monkeypatch.setattr(optimize_v8, "prepare_pb8_config", fake_prepare)
 
     response = optimize_v8.migrate_v7({"source_name": "legacy", "target_name": "migrated"}, None)
-    saved = optimize_v8._read_json(optimize_v8._config_file("migrated"))
+    draft = optimize_v8.get_migration_draft(response["draft_id"], None)
+    saved = draft["config"]
 
     first_live = prepared_inputs[0]["live"]
     assert first_live["initial_entry_exec_max_market_dist_pct"] == 0.006
     assert "order_replacement_churn_gate_market_dist_pct" not in first_live
     assert saved["live"]["order_replacement_churn_gate_market_dist_pct"] == 0.006
     assert "initial_entry_exec_max_market_dist_pct" not in saved["live"]
+    assert not optimize_v8._config_dir("migrated").exists()
     assert response["report"]["manual_review_fields"] == []
     assert response["report"]["pbgui_source_adjustments"] == [
         "pbgui",

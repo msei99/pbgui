@@ -211,8 +211,8 @@ def test_ohlcv_preload_logs_and_transforms_validation_failure(monkeypatch) -> No
     assert any("OHLCV preload failed" in message for _service, message, _kwargs in messages)
 
 
-def test_migrate_v7_keeps_source_and_persists_report(tmp_path, monkeypatch) -> None:
-    """Successful conversion must never modify the saved PB7 source config."""
+def test_migrate_v7_keeps_source_and_opens_unsaved_draft(tmp_path, monkeypatch) -> None:
+    """Successful conversion must leave PB7 unchanged and publish nothing before manual Save."""
     configs, v7_configs, _queue, _logs = _patch_roots(tmp_path, monkeypatch)
     source = v7_configs / "demo" / "backtest.json"
     source.parent.mkdir(parents=True)
@@ -236,12 +236,12 @@ def test_migrate_v7_keeps_source_and_persists_report(tmp_path, monkeypatch) -> N
         Path(output_path).write_text(json.dumps(migrated), encoding="utf-8")
         return {"report": report, "config": migrated}
 
-    def fake_save(config, path):
-        Path(path).write_text(json.dumps(config), encoding="utf-8")
-        return config
-
     monkeypatch.setattr(backtest_v8, "migrate_pb7_config", fake_migrate)
-    monkeypatch.setattr(backtest_v8, "save_prepared_pb8_config", fake_save)
+    monkeypatch.setattr(
+        backtest_v8,
+        "save_prepared_pb8_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Convert must not save")),
+    )
     monkeypatch.setattr(backtest_v8, "_log", lambda *_args, **_kwargs: None)
 
     response = backtest_v8.migrate_v7(
@@ -250,12 +250,113 @@ def test_migrate_v7_keeps_source_and_persists_report(tmp_path, monkeypatch) -> N
     )
 
     assert response["name"] == "demo_v8"
+    assert response["editor"] == "backtest"
+    assert response["draft_id"]
     assert json.loads(source.read_text(encoding="utf-8")) == source_payload
-    target = configs / "demo_v8"
-    saved_report = json.loads((target / "migration_report.json").read_text(encoding="utf-8"))
-    assert saved_report["status"] == "ok"
-    assert saved_report["pbgui_source_adjustments"] == ["pbgui", "live.base_config_path"]
-    assert json.loads((target / "backtest.json").read_text(encoding="utf-8"))["backtest"]["base_dir"] == "backtests/pbgui/demo_v8"
+    draft = backtest_v8.get_optimize_draft(response["draft_id"], session=None)
+    assert draft["migration_report"]["status"] == "ok"
+    assert draft["migration_report"]["pbgui_source_adjustments"] == ["pbgui", "live.base_config_path"]
+    assert draft["config"]["backtest"]["base_dir"] == "backtests/pbgui/demo_v8"
+    assert not (configs / "demo_v8").exists()
+
+
+def test_migrate_v7_postprocesses_optimizer_safety_before_publish(tmp_path, monkeypatch) -> None:
+    """Backtest conversion must publish the same optimizer-safe shape as the Optimize editor."""
+    configs, v7_configs, _queue, _logs = _patch_roots(tmp_path, monkeypatch)
+    source = v7_configs / "demo" / "backtest.json"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        json.dumps(
+            {
+                "bot": {
+                    "long": {
+                        "risk_wel_enforcer_threshold": 0.938,
+                        "risk_twel_enforcer_threshold": 1.01,
+                    },
+                    "short": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    migrated = {
+        "config_version": "v8.0.0",
+        "backtest": {},
+        "live": {"strategy_kind": "trailing_grid_v7"},
+        "bot": {
+            "long": {
+                "risk": {
+                    "n_positions": 4,
+                    "total_wallet_exposure_limit": 1.6,
+                    "position_exposure_enforcer_enabled": False,
+                    "position_exposure_enforcer_threshold": 0.938,
+                    "total_exposure_enforcer_enabled": False,
+                    "total_exposure_enforcer_threshold": 1.01,
+                },
+                "hsl": {"no_restart_drawdown_threshold": 0.5},
+            },
+            "short": {
+                "risk": {"n_positions": 0, "total_wallet_exposure_limit": 0.0},
+                "hsl": {"no_restart_drawdown_threshold": 0.5},
+            },
+        },
+        "optimize": {
+            "enable_overrides": ["lossless_close_trailing", "forward_tp_grid"],
+            "fixed_params": [],
+            "fixed_runtime_overrides": {
+                "bot.long.hsl_no_restart_drawdown_threshold": 1,
+                "bot.short.hsl_no_restart_drawdown_threshold": 1,
+            },
+            "bounds": {},
+            "scoring": [],
+            "limits": [],
+        },
+    }
+
+    def fake_migrate(_source_path, output_path, **_kwargs):
+        Path(output_path).write_text(json.dumps(migrated), encoding="utf-8")
+        return {
+            "report": {"output_written": True, "status": "ok", "manual_review_fields": []},
+            "config": migrated,
+        }
+
+    def fake_save(config, path):
+        Path(path).write_text(json.dumps(config), encoding="utf-8")
+        return config
+
+    validated = []
+    monkeypatch.setattr(backtest_v8, "migrate_pb7_config", fake_migrate)
+    monkeypatch.setattr(backtest_v8, "save_prepared_pb8_config", fake_save)
+    monkeypatch.setattr(
+        backtest_v8,
+        "validate_pb8_optimizer_overrides",
+        lambda config, **_kwargs: validated.append(copy.deepcopy(config)),
+    )
+    monkeypatch.setattr(backtest_v8, "_log", lambda *_args, **_kwargs: None)
+
+    response = backtest_v8.migrate_v7(
+        {"source_name": "demo", "target_name": "demo_v8"},
+        session=None,
+    )
+
+    draft = backtest_v8.get_optimize_draft(response["draft_id"], session=None)
+    saved = draft["config"]
+    assert saved["optimize"]["enable_overrides"] == ["forward_tp_grid"]
+    assert saved["optimize"]["fixed_runtime_overrides"] == {
+        "bot.long.hsl.no_restart_drawdown_threshold": 1,
+        "bot.short.hsl.no_restart_drawdown_threshold": 1,
+    }
+    assert saved["optimize"]["fixed_params"] == ["bot.short"]
+    assert saved["bot"]["long"]["risk"]["position_exposure_enforcer_enabled"] is True
+    assert saved["bot"]["long"]["risk"]["total_exposure_enforcer_enabled"] is True
+    assert validated[0]["optimize"]["enable_overrides"] == ["forward_tp_grid"]
+    assert response["report"]["status"] == "ok_with_adjustments"
+    assert response["report"]["manual_review_required"] is False
+    assert any(
+        "lossless_close_trailing" in item["detail"]
+        for item in response["report"]["pbgui_post_migration_adjustments"]
+    )
+    assert not (configs / "demo_v8").exists()
 
 
 def test_migration_sanitizer_resolves_context_safe_legacy_fields() -> None:
@@ -305,6 +406,51 @@ def test_migration_sanitizer_resolves_context_safe_legacy_fields() -> None:
     assert "backtest.aggregate -> backtest.reducer" in adjustments
 
 
+def test_normalize_config_filters_suite_scenarios_to_selected_exchanges() -> None:
+    """Removing a base exchange must remove or narrow stale PB8 suite scenarios."""
+    config = {
+        "backtest": {
+            "exchanges": ["hyperliquid"],
+            "suite_enabled": True,
+            "scenarios": [
+                {"label": "hyperliquid", "exchanges": ["hyperliquid"]},
+                {"label": "bybit", "exchanges": ["bybit"]},
+                {"label": "mixed", "exchanges": ["bybit", "hyperliquid"]},
+                {"label": "inherits-base"},
+            ],
+        }
+    }
+
+    normalized = backtest_v8._normalize_config(config, "suite")
+
+    assert normalized["backtest"]["scenarios"] == [
+        {"label": "hyperliquid", "exchanges": ["hyperliquid"]},
+        {"label": "mixed", "exchanges": ["hyperliquid"]},
+        {"label": "inherits-base"},
+    ]
+    assert config["backtest"]["scenarios"][1]["exchanges"] == ["bybit"]
+
+
+def test_normalize_config_preserves_malformed_suite_exchanges_for_pb8_validation() -> None:
+    """PBGui must not hide malformed exchange values while removing stale valid names."""
+    config = {
+        "backtest": {
+            "exchanges": ["hyperliquid", 42, ""],
+            "suite_enabled": True,
+            "scenarios": [
+                {"label": "invalid", "exchanges": ["bybit", 42, ""]},
+            ],
+        }
+    }
+
+    normalized = backtest_v8._normalize_config(config, "suite")
+
+    assert normalized["backtest"]["exchanges"] == ["hyperliquid", 42, ""]
+    assert normalized["backtest"]["scenarios"] == [
+        {"label": "invalid", "exchanges": [42, ""]},
+    ]
+
+
 def test_migration_review_marks_only_existing_canonical_fields() -> None:
     """Review metadata must never recreate retired V7 paths in a V8 draft."""
     config = {"bot": {"long": {"example": 1}, "short": {}}, "live": {}}
@@ -317,6 +463,44 @@ def test_migration_review_marks_only_existing_canonical_fields() -> None:
     assert review["bot"]["long"]["example"] == 1
     assert "retired_parameter" not in review["live"]
     assert param_status == {"long": {"example": "review"}, "short": {}}
+
+
+def test_postprocess_review_fields_block_even_when_optimize_findings_are_context_filtered() -> None:
+    """PBGui safety conflicts must block a Backtest bundle that could later crash Optimize."""
+    field = "optimize.fixed_runtime_overrides.bot.long.hsl_no_restart_drawdown_threshold"
+    review, _values = backtest_v8._migration_review_payload(
+        {
+            "status": "manual_review_required",
+            "manual_review_fields": [field],
+            "pbgui_post_migration_review_fields": [field],
+        },
+        {},
+        "backtest_config",
+    )
+
+    assert review["manual_review_required"] is True
+    assert review["manual_review_fields"] == [field]
+
+
+def test_success_report_keeps_filtered_official_findings_separate() -> None:
+    """Published context status must agree with its fields without discarding official provenance."""
+    report = {
+        "status": "unsafe_manual_review_output_written",
+        "manual_review_required": True,
+        "manual_review_fields": ["live.execution_delay_seconds"],
+        "dropped_unsupported_fields": [],
+    }
+    review = {
+        "manual_review_fields": [],
+        "dropped_unsupported_fields": [],
+    }
+
+    contextual = backtest_v8._successful_migration_report(report, review)
+
+    assert contextual["status"] == "ok"
+    assert contextual["manual_review_required"] is False
+    assert contextual["manual_review_fields"] == []
+    assert contextual["official_review"]["manual_review_fields"] == ["live.execution_delay_seconds"]
 
 
 def test_legacy_churn_alias_conflict_is_rejected_before_migration() -> None:
@@ -357,7 +541,11 @@ def test_migrate_v7_accepts_managed_run_and_result_sources(
         return {"report": {"output_written": True, "manual_review_fields": []}, "config": migrated}
 
     monkeypatch.setattr(backtest_v8, "migrate_pb7_config", fake_migrate)
-    monkeypatch.setattr(backtest_v8, "save_prepared_pb8_config", lambda config, _path: config)
+    monkeypatch.setattr(
+        backtest_v8,
+        "save_prepared_pb8_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Convert must not save")),
+    )
     monkeypatch.setattr(backtest_v8, "_log", lambda *_args, **_kwargs: None)
     body = {"source_type": source_type, "source_name": "demo", "target_name": f"{source_type}_v8"}
     if source_type == "backtest_result":
@@ -371,7 +559,9 @@ def test_migrate_v7_accepts_managed_run_and_result_sources(
         assert response["draft_id"]
         assert not (configs / f"{source_type}_v8").exists()
     else:
-        assert (configs / f"{source_type}_v8").is_dir()
+        assert response["editor"] == "backtest"
+        assert response["draft_id"]
+        assert not (configs / f"{source_type}_v8").exists()
 
 
 def test_migrate_v7_result_uses_effective_fees_recorded_in_fills(tmp_path, monkeypatch) -> None:
@@ -418,7 +608,11 @@ def test_migrate_v7_result_uses_effective_fees_recorded_in_fills(tmp_path, monke
         }
 
     monkeypatch.setattr(backtest_v8, "migrate_pb7_config", fake_migrate)
-    monkeypatch.setattr(backtest_v8, "save_prepared_pb8_config", lambda config, _path: config)
+    monkeypatch.setattr(
+        backtest_v8,
+        "save_prepared_pb8_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Convert must not save")),
+    )
     monkeypatch.setattr(backtest_v8, "_log", lambda *_args, **_kwargs: None)
 
     response = backtest_v8.migrate_v7(
@@ -449,9 +643,9 @@ def test_migrate_v7_result_uses_effective_fees_recorded_in_fills(tmp_path, monke
             "evidence": "fills.csv",
         },
     ]
-    saved_report = json.loads((configs / "demo_v8" / "migration_report.json").read_text(encoding="utf-8"))
-    assert saved_report["pbgui_result_fee_adjustments"] == response["report"]["pbgui_result_fee_adjustments"]
-    assert (configs / "demo_v8").is_dir()
+    draft = backtest_v8.get_optimize_draft(response["draft_id"], session=None)
+    assert draft["migration_report"]["pbgui_result_fee_adjustments"] == response["report"]["pbgui_result_fee_adjustments"]
+    assert not (configs / "demo_v8").exists()
 
 
 def test_migrate_v7_rejects_result_path_outside_pb7_root(tmp_path, monkeypatch) -> None:
@@ -478,21 +672,34 @@ def test_migrate_v7_rejects_result_path_outside_pb7_root(tmp_path, monkeypatch) 
     assert error.value.status_code == 400
 
 
-def test_migrate_v7_rejects_existing_target_with_409(tmp_path, monkeypatch) -> None:
-    """Conversion must not overwrite an existing V8 config."""
+def test_migrate_v7_existing_target_still_opens_unsaved_draft(tmp_path, monkeypatch) -> None:
+    """Convert must not open or overwrite an existing target before the user reviews the draft."""
     configs, v7_configs, _queue, _logs = _patch_roots(tmp_path, monkeypatch)
     source = v7_configs / "demo" / "backtest.json"
     source.parent.mkdir(parents=True)
     source.write_text("{}", encoding="utf-8")
-    (configs / "demo_v8").mkdir(parents=True)
+    target = configs / "demo_v8"
+    target.mkdir(parents=True)
+    (target / "backtest.json").write_text('{"existing": true}', encoding="utf-8")
+    migrated = {"config_version": "v8.0.0", "backtest": {}}
+    monkeypatch.setattr(
+        backtest_v8,
+        "migrate_pb7_config",
+        lambda *_args, **_kwargs: {
+            "report": {"output_written": True, "status": "ok", "manual_review_fields": []},
+            "config": migrated,
+        },
+    )
+    monkeypatch.setattr(backtest_v8, "_log", lambda *_args, **_kwargs: None)
 
-    with pytest.raises(HTTPException) as error:
-        backtest_v8.migrate_v7(
-            {"source_name": "demo", "target_name": "demo_v8"},
-            session=None,
-        )
+    response = backtest_v8.migrate_v7(
+        {"source_name": "demo", "target_name": "demo_v8"},
+        session=None,
+    )
 
-    assert error.value.status_code == 409
+    assert response["editor"] == "backtest"
+    assert response["draft_id"]
+    assert (target / "backtest.json").read_text(encoding="utf-8") == '{"existing": true}'
 
 
 def test_failed_migration_publishes_no_v8_config(tmp_path, monkeypatch) -> None:
@@ -676,7 +883,9 @@ def test_run_legacy_churn_gate_is_canonicalized_by_pb8_without_review(tmp_path, 
     assert "order_replacement_churn_gate_market_dist_pct" not in captured
     assert draft["config"]["live"]["order_replacement_churn_gate_market_dist_pct"] == 0.006
     assert "initial_entry_exec_max_market_dist_pct" not in draft["config"]["live"]
-    assert "migration_report" not in draft
+    assert draft["migration_report"]["manual_review_fields"] == []
+    assert draft["migration_report"]["manual_review_required"] is False
+    assert draft["migration_report"]["official_review"]["manual_review_fields"] == ["backtest.suite"]
     assert not (configs / "demo_v8").exists()
 
 
@@ -722,6 +931,33 @@ def test_bundle_save_publishes_new_sparse_override_with_config(tmp_path, monkeyp
     assert result["ok"] is True
     assert json.loads((configs / "demo" / "HYPE.json").read_text(encoding="utf-8")) == sparse
     assert json.loads((configs / "demo" / "backtest.json").read_text(encoding="utf-8"))["coin_overrides"] == config["coin_overrides"]
+
+
+def test_manual_draft_save_persists_migration_report_with_bundle(tmp_path, monkeypatch) -> None:
+    """The migration report should reach disk only when the user explicitly saves the draft."""
+    configs, _v7_configs, _queue, _logs = _patch_roots(tmp_path, monkeypatch)
+    monkeypatch.setattr(backtest_v8, "prepare_pb8_config", lambda config, **_kwargs: config)
+    monkeypatch.setattr(backtest_v8, "cache_prepared_pb8_config", lambda *_args: None)
+    monkeypatch.setattr(backtest_v8, "validate_pb8_override_bundle", lambda *_args: None)
+    report = {
+        "status": "ok_with_adjustments",
+        "manual_review_required": False,
+        "pbgui_post_migration_adjustments": [{"code": "freeze_disabled_side"}],
+    }
+
+    backtest_v8.save_config(
+        "converted",
+        {
+            "config": {"config_version": "v8.0.0", "backtest": {}},
+            "override_configs": {},
+            "migration_report": report,
+        },
+        create_only=True,
+        inherit_existing_overrides=False,
+        session=None,
+    )
+
+    assert json.loads((configs / "converted" / "migration_report.json").read_text(encoding="utf-8")) == report
 
 
 def test_confirmed_fresh_replacement_does_not_inherit_target_overrides(tmp_path, monkeypatch) -> None:
@@ -853,6 +1089,39 @@ def test_add_to_queue_captures_v8_config_snapshot(tmp_path, monkeypatch) -> None
     assert queue_payload["exchange"] == ["bybit"]
     assert (queue / "configs" / response["filename"] / "HYPE.json").read_text(encoding="utf-8") == '{"live": {}}'
     assert not (tmp_path / "data" / "bt_v7_queue").exists()
+
+
+def test_add_named_config_to_queue_normalizes_stale_suite_scenarios(tmp_path, monkeypatch) -> None:
+    """Named queue requests must apply the same suite filtering as inline drafts."""
+    configs, _v7_configs, queue, _logs = _patch_roots(tmp_path, monkeypatch)
+    config_path = configs / "suite" / "backtest.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("{}", encoding="utf-8")
+    snapshot = {
+        "config_version": "v8.0.0",
+        "backtest": {
+            "exchanges": ["hyperliquid"],
+            "suite_enabled": True,
+            "scenarios": [
+                {"label": "hyperliquid", "exchanges": ["hyperliquid"]},
+                {"label": "bybit", "exchanges": ["bybit"]},
+            ],
+        },
+    }
+    monkeypatch.setattr(backtest_v8, "load_pb8_config", lambda _path: snapshot)
+    monkeypatch.setattr(
+        backtest_v8,
+        "save_prepared_pb8_config",
+        lambda config, path: Path(path).write_text(json.dumps(config), encoding="utf-8") or config,
+    )
+
+    response = backtest_v8.add_to_queue({"name": "suite"}, session=None)
+    queued = json.loads((queue / f"{response['filename']}.json").read_text(encoding="utf-8"))
+
+    assert queued["config_snapshot"]["backtest"]["scenarios"] == [
+        {"label": "hyperliquid", "exchanges": ["hyperliquid"]},
+    ]
+    assert snapshot["backtest"]["scenarios"][1]["exchanges"] == ["bybit"]
 
 
 def test_add_to_queue_accepts_shared_editor_inline_result_config(tmp_path, monkeypatch) -> None:
@@ -1072,10 +1341,14 @@ def test_results_are_read_only_from_pb8_root(tmp_path, monkeypatch) -> None:
         json.dumps(
             {
                 "adg_w_usd": 0.02,
+                "adg_strategy_eq_w": 0.03,
                 "adg": 0.01,
                 "gain_usd": 1.25,
                 "drawdown_worst_usd": 0.12,
+                "drawdown_worst_w_usd": 0.18,
                 "sharpe_ratio_usd": 1.8,
+                "sharpe_ratio_w_usd": 2.4,
+                "sharpe_ratio_strategy_eq_w": 2.8,
                 "final_equity_usd": 6300,
                 "equity_balance_diff_neg_max": 0.04,
             }
@@ -1105,10 +1378,14 @@ def test_results_are_read_only_from_pb8_root(tmp_path, monkeypatch) -> None:
     assert len(results) == 1
     assert results[0]["config_name"] == "demo"
     assert results[0]["metrics"]["adg_w_usd"] == 0.02
-    assert results[0]["adg"] == 0.02
+    assert results[0]["adg"] == 0.01
+    assert results[0]["adg_usd"] == 0.01
+    assert results[0]["adg_w_usd"] == 0.03
     assert results[0]["gain"] == 1.25
     assert results[0]["drawdown_worst"] == 0.12
+    assert results[0]["drawdown_worst_w_usd"] == 0.18
     assert results[0]["sharpe_ratio"] == 1.8
+    assert results[0]["sharpe_ratio_w_usd"] == 2.8
     assert results[0]["starting_balance"] == 5000
     assert results[0]["final_balance"] == 6250
     assert results[0]["final_equity"] == 6300

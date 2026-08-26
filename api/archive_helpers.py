@@ -857,9 +857,18 @@ def summarize_backtest_result(result_dir: Path, archive_root: Path) -> dict:
     backtest = config.get("backtest", {}) if isinstance(config, dict) else {}
     bot = config.get("bot", {}) if isinstance(config, dict) else {}
     live = config.get("live", {}) if isinstance(config, dict) else {}
-    adg = analysis.get("adg_usd", analysis.get("adg", 0))
-    drawdown = analysis.get("drawdown_worst_usd", analysis.get("drawdown_worst", 0))
-    sharpe = analysis.get("sharpe_ratio_usd", analysis.get("sharpe_ratio", 0))
+    adg = analysis.get("adg_usd", analysis.get("adg_strategy_eq", analysis.get("adg", 0)))
+    adg_w = analysis.get("adg_strategy_eq_w", analysis.get("adg_w_usd"))
+    drawdown = analysis.get(
+        "drawdown_worst_usd",
+        analysis.get("drawdown_worst_strategy_eq", analysis.get("drawdown_worst", 0)),
+    )
+    drawdown_w = analysis.get("drawdown_worst_w_usd")
+    sharpe = analysis.get(
+        "sharpe_ratio_usd",
+        analysis.get("sharpe_ratio_strategy_eq", analysis.get("sharpe_ratio", 0)),
+    )
+    sharpe_w = analysis.get("sharpe_ratio_strategy_eq_w", analysis.get("sharpe_ratio_w_usd"))
     eqbal_diff = analysis.get("equity_balance_diff_neg_max_usd", analysis.get("equity_balance_diff_neg_max", 0))
     gain = analysis.get("gain_usd", analysis.get("gain", 0))
     starting_balance = backtest.get("starting_balance", 0)
@@ -885,8 +894,14 @@ def summarize_backtest_result(result_dir: Path, archive_root: Path) -> dict:
         "pbgui_version": version["pbgui_version"],
         "layout": "current" if is_new_backtest_result_path(result_dir, archive_root) else "legacy",
         "adg": adg,
+        "adg_usd": adg,
+        "adg_w_usd": adg_w,
         "drawdown_worst": drawdown,
+        "drawdown_worst_usd": drawdown,
+        "drawdown_worst_w_usd": drawdown_w,
         "sharpe_ratio": sharpe,
+        "sharpe_ratio_usd": sharpe,
+        "sharpe_ratio_w_usd": sharpe_w,
         "equity_balance_diff_neg_max": eqbal_diff,
         "gain": gain,
         "starting_balance": starting_balance,

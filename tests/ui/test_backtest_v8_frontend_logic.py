@@ -230,6 +230,11 @@ def test_v7_run_rows_offer_v8_conversion() -> None:
     assert "source_type: 'run_config'" in source
     assert "/api/backtest-v8/migrate-v7" in source
     assert "window.PBGuiDialogs.alert" in source
+    assert "showV8RunMigrationReviewWarnings" not in source
+    assert "Converting V7 Run config with PB8..." in source
+    assert "Opening unsaved PB8 Run preview..." in source
+    assert "function setV8RunConversionStatus(message)" in source
+    assert "className = 'v8-conversion-status'" in source
 
 
 def test_v7_run_conversion_renders_structured_manual_review_error() -> None:
@@ -271,7 +276,11 @@ def test_v7_run_manual_review_conversion_opens_unsaved_pb8_editor_draft() -> Non
     source = (ROOT / "frontend" / "v7_run.html").read_text(encoding="utf-8")
     functions = "\n\n".join(
         _extract_function(source, name)
-        for name in ("v8RunMigrationError", "v8RunMigrationDetail", "convertInstanceToV8")
+        for name in (
+            "v8RunMigrationError",
+            "v8RunMigrationDetail",
+            "convertInstanceToV8",
+        )
     )
     script = textwrap.dedent(
         f"""
@@ -290,6 +299,7 @@ def test_v7_run_manual_review_conversion_opens_unsaved_pb8_editor_draft() -> Non
           }};
         }}
         function toast() {{}}
+        function setV8RunConversionStatus() {{}}
         {functions}
         convertInstanceToV8('demo').then(() => {{
           assert.equal(requestBody.allow_manual_review_output, true);
@@ -305,8 +315,152 @@ def test_v7_run_manual_review_conversion_opens_unsaved_pb8_editor_draft() -> Non
     assert completed.returncode == 0, completed.stderr or completed.stdout
     run_editor_source = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
     assert "showRunMigrationReview(draftResp)" in run_editor_source
+    assert "No manual field review is required." in run_editor_source
+    assert "var manualRequired = report.manual_review_required === true || fields.length > 0;" in run_editor_source
     assert "status === 'pb_default' || status === 'review'" in run_editor_source
     assert "field === 'live.initial_entry_exec_max_market_dist_pct'" not in run_editor_source
+
+
+def test_v8_run_editor_distinguishes_adjustments_from_manual_review() -> None:
+    """A successful adjusted Run draft must not claim that unmarked fields require review."""
+    source = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "showRunMigrationReview")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const main = {{notice: null, prepend(node) {{ this.notice = node; }}}};
+        const document = {{
+          getElementById(id) {{ return id === 'main-content' ? main : null; }},
+          createElement(tag) {{
+            return {{
+              tag,
+              children: [],
+              className: '',
+              id: '',
+              textContent: '',
+              appendChild(node) {{ this.children.push(node); }},
+              remove() {{}}
+            }};
+          }}
+        }};
+        {function}
+        showRunMigrationReview({{
+          migration_report: {{
+            status: 'ok_with_adjustments',
+            manual_review_required: false,
+            manual_review_fields: [],
+            dropped_unsupported_fields: [],
+            pbgui_post_migration_adjustments: [{{code: 'freeze_disabled_side'}}]
+          }}
+        }});
+        assert.match(main.notice.className, /migration-conversion-notice/);
+        assert.equal(main.notice.children[0].textContent, 'V7 → V8 conversion completed');
+        assert.match(main.notice.children[1].textContent, /No manual field review is required/);
+
+        showRunMigrationReview({{
+          migration_message: 'Review one field.',
+          migration_report: {{
+            manual_review_required: true,
+            manual_review_fields: ['bot.long.risk.n_positions'],
+            dropped_unsupported_fields: []
+          }}
+        }});
+        assert.doesNotMatch(main.notice.className, /migration-conversion-notice/);
+        assert.equal(main.notice.children[0].textContent, 'Manual V7 → V8 review required');
+        """
+    )
+
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_backtest_migration_excess_choice_updates_config_and_blocks_unresolved_save() -> None:
+    """The WEL parity decision must be explicit, applied to JSON, and required before Save."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in ("applyMigrationReviewDecision", "ensureMigrationReviewDecisionsResolvedForSave")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const path = 'bot.long.risk.we_excess_allowance_mode';
+        const group = {{classList: {{remove() {{}}}}}};
+        const textarea = {{
+          value: JSON.stringify({{risk: {{we_excess_allowance_mode: 'bounded'}}}}),
+          closest() {{ return group; }}
+        }};
+        const ageInput = {{value: '30', closest() {{ return group; }}}};
+        const select = {{
+          value: '',
+          focused: false,
+          classList: {{add() {{}}, remove() {{}}}},
+          focus() {{ this.focused = true; }}
+        }};
+        const document = {{
+          getElementById(id) {{
+            if (id === 'cfg-bot-long') return textarea;
+            if (id === 'cfg-min-coin-age') return ageInput;
+            return null;
+          }},
+          querySelectorAll() {{ return [select]; }}
+        }};
+        let toastMessage = '';
+        function toast(message) {{ toastMessage = message; }}
+        function botSyncFromJson() {{}}
+        function scheduleStructuredEditorSync() {{}}
+        let _pendingMigrationReport = {{
+          manual_review_required: true,
+          manual_review_fields: [path],
+          dropped_unsupported_fields: [],
+          pbgui_post_migration_review_fields: [path],
+          pbgui_post_migration_adjustments: [],
+          pbgui_review_decisions: [{{code: 'we_excess_allowance_mode', side: 'long', path, resolved: false}}]
+        }};
+        {functions}
+        assert.equal(ensureMigrationReviewDecisionsResolvedForSave(), false);
+        assert.equal(select.focused, true);
+        assert.match(toastMessage, /before saving/);
+
+        select.value = 'legacy_raw';
+        applyMigrationReviewDecision(0, select);
+        assert.equal(JSON.parse(textarea.value).risk.we_excess_allowance_mode, 'legacy_raw');
+        assert.equal(_pendingMigrationReport.pbgui_review_decisions[0].resolved, true);
+        assert.equal(_pendingMigrationReport.manual_review_required, false);
+        assert.deepEqual(_pendingMigrationReport.manual_review_fields, []);
+        assert.equal(_pendingMigrationReport.status, 'ok_with_adjustments');
+        assert.equal(ensureMigrationReviewDecisionsResolvedForSave(), true);
+
+        const agePath = 'live.minimum_coin_age_days';
+        _pendingMigrationReport = {{
+          manual_review_required: true,
+          manual_review_fields: [agePath],
+          dropped_unsupported_fields: [],
+          pbgui_post_migration_review_fields: [agePath],
+          pbgui_post_migration_adjustments: [],
+          pbgui_review_decisions: [{{
+            code: 'minimum_coin_age_days',
+            path: agePath,
+            pb8_age_gate_value: 30,
+            resolved: false
+          }}]
+        }};
+        select.value = 'pb7_coverage';
+        applyMigrationReviewDecision(0, select);
+        assert.equal(ageInput.value, '0');
+        assert.equal(_pendingMigrationReport.pbgui_review_decisions[0].selected_value, 0);
+        assert.equal(_pendingMigrationReport.manual_review_required, false);
+        """
+    )
+
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "legacy_raw — match V7 position sizing" in source
+    assert "bounded — keep PB8 safety cap" in source
+    assert "0 days — match PB7 backtest data coverage" in source
+    assert "days — keep PB8 exchange age gate" in source
+    assert "control = document.getElementById('cfg-bot-long');" in source
+    assert "control = document.getElementById('cfg-min-coin-age');" in source
 
 
 def test_shared_editor_payload_preserves_migration_review_metadata() -> None:
@@ -341,7 +495,11 @@ def test_v7_backtest_manual_review_conversion_opens_unsaved_pb8_editor_draft() -
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
     functions = "\n\n".join(
         _extract_function(source, name)
-        for name in ("v8MigrationError", "v8MigrationReportText", "migrateV7SourceToV8")
+        for name in (
+            "v8MigrationError",
+            "v8MigrationReportText",
+            "migrateV7SourceToV8",
+        )
     )
     script = textwrap.dedent(
         f"""
@@ -356,10 +514,11 @@ def test_v7_backtest_manual_review_conversion_opens_unsaved_pb8_editor_draft() -
           return {{
             status: 200,
             ok: true,
-            async json() {{ return {{review_required: true, draft_id: 'review-draft', name: 'demo_v8'}}; }}
+            async json() {{ return {{review_required: true, draft_id: 'review-draft', name: 'demo_v8', editor: 'backtest'}}; }}
           }};
         }}
         function toast() {{}}
+        function setV8ConversionStatus() {{}}
         {functions}
         migrateV7SourceToV8({{source_type: 'backtest_result', source_name: 'demo', target_name: 'demo_v8'}}).then(() => {{
           assert.equal(requestBody.allow_manual_review_output, true);
@@ -376,31 +535,46 @@ def test_v7_backtest_manual_review_conversion_opens_unsaved_pb8_editor_draft() -
     assert "_pendingMigrationReviewDraft = draft && draft.migration_report ? draft : null" in source
     assert "showMigrationReviewNotice(_pendingMigrationReviewDraft)" in source
     assert "migration-review-notice" in source
+    assert "Converting V7 config with PB8..." in source
+    assert "Opening unsaved PB8 Backtest preview..." in source
+    assert "function setV8ConversionStatus(message)" in source
+    assert "left: 50%" in source
 
 
-def test_v7_backtest_existing_v8_config_opens_without_redundant_dialog() -> None:
-    """An existing migration target should open directly because there is no decision to make."""
+def test_v7_backtest_successful_conversion_always_opens_unsaved_draft() -> None:
+    """Even a clean migration must enter the editor without publishing a V8 config."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
     functions = "\n\n".join(
         _extract_function(source, name)
-        for name in ("v8MigrationError", "v8MigrationReportText", "migrateV7SourceToV8")
+        for name in (
+            "v8MigrationError",
+            "v8MigrationReportText",
+            "migrateV7SourceToV8",
+        )
     )
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
         const window = {{
           location: {{origin: 'https://example.test', href: ''}},
-          PBGuiDialogs: {{alert() {{ throw new Error('existing-config dialog must not open'); }}}}
+          PBGuiDialogs: {{alert() {{ throw new Error('success dialog must not open'); }}}}
         }};
         async function fetch() {{
-          return {{status: 409, ok: false, async json() {{ return {{detail: 'already exists'}}; }}}};
+          return {{
+            status: 200,
+            ok: true,
+            async json() {{
+              return {{review_required: false, draft_id: 'clean-draft', name: 'demo_v8', editor: 'backtest'}};
+            }}
+          }};
         }}
-        function toast() {{ throw new Error('409 must not show an error toast'); }}
+        function toast() {{}}
+        function setV8ConversionStatus() {{}}
         {functions}
         migrateV7SourceToV8({{source_type: 'backtest_config', source_name: 'demo', target_name: 'demo_v8'}}).then(() => {{
           assert.equal(
             window.location.href,
-            'https://example.test/api/backtest-v8/main_page?config=demo_v8'
+            'https://example.test/api/backtest-v8/main_page?opt_draft_id=clean-draft&draft_name=demo_v8'
           );
         }}).catch(error => {{ console.error(error); process.exit(1); }});
         """
@@ -408,6 +582,8 @@ def test_v7_backtest_existing_v8_config_opens_without_redundant_dialog() -> None
 
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "migration_report: _pendingMigrationReport" in source
+    assert "_pendingMigrationReport = draft && draft.migration_report ? draft.migration_report : null;" in source
 
 
 def test_v7_and_v8_share_the_same_backtest_shell() -> None:
@@ -1555,6 +1731,13 @@ def test_backtest_v8_results_render_strategy_without_changing_v7_rows() -> None:
         const esc = (value) => String(value == null ? '' : value);
         const fmt = (value) => String(value == null ? '' : value);
         const fmtDate = (value) => String(value || '');
+        const BACKTEST_RESULT_COLUMN_DEFINITIONS = [
+          {{key: 'adg_w_usd', optional: true}},
+          {{key: 'drawdown_worst_w_usd', optional: true}},
+          {{key: 'sharpe_ratio_w_usd', optional: true}},
+          {{key: 'final_equity', optional: true}},
+          {{key: 'balance_equity_diff', optional: true}}
+        ];
         function toggleResultAction() {{}}
         {function}
         const rth = (label, key) => '<th data-key="' + key + '">' + label + '</th>';
@@ -1638,6 +1821,36 @@ def test_backtest_and_archive_result_columns_are_independently_configurable() ->
 
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_backtest_result_metrics_label_weighted_and_unweighted_values_explicitly() -> None:
+    """Mixed-generation result tables must not hide different metric definitions behind one label."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+
+    assert "{ key: 'adg', label: 'ADG USD', default: true }" in source
+    assert "{ key: 'adg_w_usd', label: 'ADG W USD', optional: true, default: false }" in source
+    assert "{ key: 'sharpe_ratio', label: 'Sharpe USD', default: true }" in source
+    assert "{ key: 'sharpe_ratio_w_usd', label: 'Sharpe W USD', optional: true, default: false }" in source
+    assert "fmt(r.adg_w_usd, 4)" in source
+    assert "fmt(r.sharpe_ratio_w_usd, 4)" in source
+
+
+def test_suite_scenarios_are_constrained_to_selected_exchanges_before_save() -> None:
+    """The editor must not preserve suite runs for exchanges removed from the base config."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+
+    assert "var selectedExchangeMap = {};" in source
+    assert "scenario.exchanges.forEach(function(exchange)" in source
+    assert "if (!retained.length) return null;" in source
+    assert "normalized.exchanges = retained;" in source
+
+
+def test_backtest_conversion_does_not_review_optimize_policy_after_publish() -> None:
+    """Backtest conversion must not request review for unrelated Optimize policy after saving."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+
+    assert "showV8MigrationReviewWarnings" not in source
+    assert "V8 conversion review recommended" not in source
 
 
 def test_backtest_v8_configs_render_sortable_strategy_without_changing_v7_rows() -> None:

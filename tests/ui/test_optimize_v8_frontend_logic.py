@@ -320,6 +320,7 @@ def test_initial_configs_load_does_not_wait_for_settings_metadata() -> None:
         const optimizeEditorAdapter = {{configureUi() {{}}}};
         const state = {{initialLoadPending: true}};
         const location = {{hash: ''}};
+        const window = {{location: {{href: 'https://example.test/api/optimize-v8/main_page'}}}};
         const PANEL_META = {{}};
         function attachEventHandlers() {{}}
         function initSelections() {{}}
@@ -333,21 +334,50 @@ def test_initial_configs_load_does_not_wait_for_settings_metadata() -> None:
         function loadConfigs() {{ calls.push('configs'); return Promise.resolve(); }}
         function loadQueue() {{ calls.push('queue'); return Promise.resolve(); }}
         function loadResults() {{ calls.push('results'); return Promise.resolve(); }}
+        function handleMigrationDraft() {{ calls.push('migration-draft'); return Promise.resolve(); }}
         function handleIncomingDraft() {{ calls.push('draft'); return Promise.resolve(); }}
         function handleOpenConfigParam() {{ calls.push('open'); return Promise.resolve(); }}
         {init_function}
         (async () => {{
           const pending = init();
           await new Promise(resolve => setImmediate(resolve));
-          assert.deepEqual(calls, ['settings', 'configs', 'queue', 'results']);
+          assert.deepEqual(calls, ['metadata', 'settings', 'configs', 'queue', 'results']);
           resolveSettings();
           await pending;
-          assert.deepEqual(calls, ['settings', 'configs', 'queue', 'results', 'metadata', 'draft', 'open']);
+          assert.deepEqual(calls, ['metadata', 'settings', 'configs', 'queue', 'results', 'draft', 'open']);
         }})().catch(error => {{ console.error(error); process.exit(1); }});
         """
     )
 
     assert "?include_result_summary=false" in page
+    _run_node(script)
+
+
+def test_migration_preview_hides_config_list_while_metadata_loads() -> None:
+    """The destination page should show a preview loader instead of flashing the Configs list."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    function = _page_function(page, "showMigrationDraftLoadingState")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const nodes = {{
+          'configs-editor': {{style: {{}}, innerHTML: ''}},
+          'configs-toolbar': {{style: {{}}}},
+          'configs-list-wrap': {{style: {{}}}},
+          'sidebar-inner': {{style: {{}}}},
+          'sidebar-editor': {{style: {{}}}}
+        }};
+        function el(id) {{ return nodes[id] || null; }}
+        {function}
+        showMigrationDraftLoadingState();
+        assert.equal(nodes['configs-toolbar'].style.display, 'none');
+        assert.equal(nodes['configs-list-wrap'].style.display, 'none');
+        assert.equal(nodes['configs-editor'].style.display, 'block');
+        assert.match(nodes['configs-editor'].innerHTML, /Loading converted PB8 Optimize preview/);
+        assert.equal(nodes['sidebar-inner'].style.display, 'none');
+        """
+    )
+
     _run_node(script)
 
 
@@ -584,7 +614,7 @@ def test_pb8_metadata_drives_bounds_limits_and_runtime_options() -> None:
     adapter = (ROOT / "frontend" / "js" / "optimize_editor_adapter.js").read_text(encoding="utf-8")
 
     assert "metadataPath: isV8 ? '/metadata' : ''" in adapter
-    assert "await loadOptimizeMetadata()" in page
+    assert "Promise.all([loadSettings(), metadataPromise])" in page
     assert "metadata.optimizeDefaults" in page
     assert "metadata.limitsMeta" in page
     assert "metadata.boundsMeta" in page
@@ -608,7 +638,9 @@ def test_pb8_metadata_drives_bounds_limits_and_runtime_options() -> None:
 def test_pb8_runtime_metadata_preserves_hsl_enable_controls() -> None:
     """Runtime-provided overrides must extend rather than remove required HSL switches."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
-    load_metadata = _page_function(page, "loadOptimizeMetadata")
+    load_metadata = "\n\n".join(
+        _page_function(page, name) for name in ("applyOptimizeMetadata", "loadOptimizeMetadata")
+    )
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
@@ -804,8 +836,23 @@ def test_cookie_auth_and_v7_migration_are_available_from_the_shared_page() -> No
     assert "pareto-migrate-v8" in page
     assert "migrateOptimizeConfigToV8" in page
     assert "migrateParetoConfigToV8" in page
+    assert "migration_draft_id=" in page
+    assert "async function handleMigrationDraft(draftPromise)" in page
+    assert "await handleMigrationDraft(migrationDraftPromise);" in page
+    assert "showMigrationDraftLoadingState(true);" in page
+    assert "showMigrationDraftLoadingState(false);" in page
+    assert "applyOptimizeMetadata(draft.optimize_metadata);" in page
+    assert "migration_report: state.editorMigrationReport" in page
+    assert "Loaded unsaved V7 → V8 Optimize preview" in page
+    assert "showOptimizeMigrationReviewWarnings" not in page
+    assert "V8 conversion review recommended" not in page
     assert "/api/optimize-v8/migrate-v7" in page
     assert "json.dumps(\"\")" in api_v7
+
+    optimize_migration = _page_function(page, "migrateOptimizeConfigToV8")
+    pareto_migration = _page_function(page, "migrateParetoConfigToV8")
+    assert "open_config=" not in optimize_migration
+    assert "open_config=" not in pareto_migration
 
 
 def test_optimize_migration_error_is_compact_and_actionable() -> None:

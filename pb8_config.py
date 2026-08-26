@@ -6,6 +6,7 @@ from collections import OrderedDict
 import copy
 import json
 import os
+import queue
 import subprocess
 import tempfile
 import threading
@@ -52,6 +53,13 @@ _coin_override_metadata_cache: OrderedDict[tuple, tuple[float, tuple, dict]] = O
 _exchange_metadata_cache: tuple[float, tuple, dict] | None = None
 _market_catalog_cache: OrderedDict[tuple, tuple[float, tuple, dict]] = OrderedDict()
 _config_cache: OrderedDict[str, tuple[float, tuple[int, int], tuple, dict]] = OrderedDict()
+_migration_helper_lock = threading.RLock()
+_migration_helper_state_lock = threading.RLock()
+_migration_helper_shutdown = threading.Event()
+_migration_helper_process: subprocess.Popen[str] | None = None
+_migration_helper_fingerprint: tuple | None = None
+_migration_helper_responses: queue.Queue[str | None] | None = None
+_migration_helper_reader_thread: threading.Thread | None = None
 
 
 def _file_signature(path: Path) -> tuple[int, int]:
@@ -141,6 +149,159 @@ def _runtime() -> dict:
         detail = "; ".join(status.get("errors") or []) or "PB8 runtime is not ready"
         raise PB8ConfigurationError(detail)
     return status
+
+
+def _stop_migration_helper_locked() -> None:
+    """Stop and reap the persistent migration helper while holding its lock."""
+    global _migration_helper_process, _migration_helper_fingerprint
+    global _migration_helper_responses, _migration_helper_reader_thread
+    with _migration_helper_state_lock:
+        proc = _migration_helper_process
+        reader = _migration_helper_reader_thread
+        _migration_helper_process = None
+        _migration_helper_fingerprint = None
+        _migration_helper_responses = None
+        _migration_helper_reader_thread = None
+    if proc is not None:
+        try:
+            if proc.stdin is not None:
+                proc.stdin.close()
+        except OSError:
+            pass
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=2)
+        if proc.stdout is not None:
+            proc.stdout.close()
+    if reader is not None and reader.is_alive():
+        reader.join(timeout=2)
+
+
+def shutdown_pb8_migration_helper() -> None:
+    """Idempotently stop the API-owned persistent PB8 migration helper."""
+    with _migration_helper_lock:
+        _stop_migration_helper_locked()
+
+
+def prepare_pb8_migration_helper_startup() -> None:
+    """Allow helper creation for a new API lifespan before scheduling prewarm."""
+    _migration_helper_shutdown.clear()
+
+
+def interrupt_pb8_migration_helper() -> None:
+    """Wake a blocked helper request during API shutdown without waiting for its I/O lock."""
+    _migration_helper_shutdown.set()
+    with _migration_helper_state_lock:
+        proc = _migration_helper_process
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+
+
+def _migration_helper_reader(proc: subprocess.Popen[str], responses: queue.Queue[str | None]) -> None:
+    """Forward helper response lines to the bounded synchronous request path."""
+    try:
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                responses.put(line)
+    finally:
+        responses.put(None)
+
+
+def _ensure_migration_helper_locked(status: dict) -> None:
+    """Start or replace the persistent helper for the current PB8 runtime fingerprint."""
+    global _migration_helper_process, _migration_helper_fingerprint
+    global _migration_helper_responses, _migration_helper_reader_thread
+    fingerprint = _runtime_fingerprint(status)
+    if (
+        _migration_helper_process is not None
+        and _migration_helper_process.poll() is None
+        and _migration_helper_fingerprint == fingerprint
+    ):
+        return
+    _stop_migration_helper_locked()
+    helper = Path(__file__).resolve().with_name("pb8_config_helper.py")
+    with _migration_helper_state_lock:
+        if _migration_helper_shutdown.is_set():
+            raise PB8ConfigurationError("PB8 migration helper is shutting down")
+        proc = subprocess.Popen(
+            [status["pb8venv"], str(helper), "--serve"],
+            cwd=status["pb8dir"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+            close_fds=True,
+        )
+        responses: queue.Queue[str | None] = queue.Queue()
+        reader = threading.Thread(
+            target=_migration_helper_reader,
+            args=(proc, responses),
+            name="pb8-migration-helper-reader",
+            daemon=True,
+        )
+        reader.start()
+        _migration_helper_process = proc
+        _migration_helper_fingerprint = fingerprint
+        _migration_helper_responses = responses
+        _migration_helper_reader_thread = reader
+
+
+def _call_migration_helper(operation: str, **payload) -> dict:
+    """Call the persistent PB8 helper with one serialized bounded request."""
+    runtime_lease = None
+    try:
+        runtime_lease = acquire_master_runtime_lock(Path(PBGDIR))
+        status = _runtime()
+        with _migration_helper_lock:
+            _ensure_migration_helper_locked(status)
+            proc = _migration_helper_process
+            responses = _migration_helper_responses
+            if proc is None or proc.stdin is None or responses is None:
+                raise PB8ConfigurationError("PB8 migration helper is unavailable")
+            request = {"operation": operation, "pb8_dir": status["pb8dir"], **payload}
+            proc.stdin.write(json.dumps(request, separators=(",", ":"), allow_nan=False) + "\n")
+            proc.stdin.flush()
+            try:
+                line = responses.get(timeout=120)
+            except queue.Empty as exc:
+                _stop_migration_helper_locked()
+                raise PB8ConfigurationError("PB8 migration helper timed out") from exc
+            if line is None:
+                _stop_migration_helper_locked()
+                raise PB8ConfigurationError("PB8 migration helper exited unexpectedly")
+            try:
+                response = json.loads(line)
+            except json.JSONDecodeError as exc:
+                _stop_migration_helper_locked()
+                raise PB8ConfigurationError("PB8 migration helper returned invalid JSON") from exc
+            if not response.get("ok"):
+                detail = str(response.get("detail") or "PB8 migration operation failed").strip()
+                raise PB8ConfigurationError(detail[-2000:])
+            result = response.get("result")
+            if not isinstance(result, dict):
+                raise PB8ConfigurationError("PB8 migration helper returned no result")
+    except MasterUpdateBusyError as exc:
+        raise PB8RuntimeBusyError(
+            "PB8 is being installed or updated. Retry this configuration operation when the update finishes."
+        ) from exc
+    except (OSError, BrokenPipeError) as exc:
+        with _migration_helper_lock:
+            _stop_migration_helper_locked()
+        raise PB8ConfigurationError(f"PB8 migration helper failed: {exc}") from exc
+    finally:
+        if runtime_lease is not None:
+            runtime_lease.release()
+    return result
+
+
+def start_pb8_migration_helper() -> None:
+    """Prewarm the persistent helper so UI-triggered migrations avoid cold imports."""
+    _call_migration_helper("optimize_metadata")
 
 
 def _call_helper(operation: str, **payload) -> dict:
@@ -445,7 +606,7 @@ def migrate_pb7_config(
     allow_manual_review_output: bool = False,
 ) -> dict:
     """Run PB8's official V7 migration and return config plus report."""
-    return _call_helper(
+    return _call_migration_helper(
         "migrate_v7",
         source_path=str(Path(source_path).resolve()),
         output_path=str(Path(output_path).resolve()),

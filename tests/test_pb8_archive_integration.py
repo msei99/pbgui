@@ -82,6 +82,17 @@ def test_generic_archive_metadata_preserves_pb7_aliases_and_nested_v8_risk(tmp_p
         archive / "pbgui/configs/v8.0.0/backtests/demo/bybit",
         _v8_config(),
     )
+    _write_json(
+        result / "analysis.json",
+        {
+            "adg_strategy_eq": 0.01,
+            "adg_strategy_eq_w": 0.02,
+            "gain": 1.2,
+            "drawdown_worst_strategy_eq": 0.2,
+            "sharpe_ratio_strategy_eq": 1.1,
+            "sharpe_ratio_strategy_eq_w": 1.4,
+        },
+    )
     summary = archive_helpers.summarize_backtest_result(result, archive)
 
     assert summary["config_version"] == "v8.0.0"
@@ -91,6 +102,9 @@ def test_generic_archive_metadata_preserves_pb7_aliases_and_nested_v8_risk(tmp_p
     assert summary["twe_short"] == 0.75
     assert summary["pos_long"] == 5
     assert summary["pos_short"] == 3
+    assert summary["adg"] == summary["adg_usd"] == 0.01
+    assert summary["adg_w_usd"] == 0.02
+    assert summary["sharpe_ratio_w_usd"] == 1.4
 
 
 def test_v8_add_result_accepts_only_its_managed_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

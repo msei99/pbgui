@@ -69,6 +69,11 @@ body {
 .migration-review-notice strong { display: block; margin-bottom: 4px; color: #ffb454; }
 .migration-review-notice ul { margin: 8px 0 0 20px; }
 .migration-review-notice code { color: #ffe1ba; }
+.migration-review-notice.migration-conversion-notice {
+  border-color: rgba(77,166,255,.45);
+  background: rgba(77,166,255,.08);
+}
+.migration-review-notice.migration-conversion-notice strong { color: var(--accent); }
 
 /* ─── Form grid ────────────────────────────────────────────── */
 .form-row {
@@ -1348,19 +1353,30 @@ function showRunMigrationReview(draft) {
       if (value && fields.indexOf(value) < 0) fields.push(value);
     });
   });
+  var manualRequired = report.manual_review_required === true || fields.length > 0;
+  var adjustments = Array.isArray(report.pbgui_post_migration_adjustments)
+    ? report.pbgui_post_migration_adjustments
+    : [];
+  if (!manualRequired && !adjustments.length) return;
   var notice = document.createElement('div');
   notice.id = 'migration-review-notice';
-  notice.className = 'migration-review-notice';
+  notice.className = manualRequired
+    ? 'migration-review-notice'
+    : 'migration-review-notice migration-conversion-notice';
   var title = document.createElement('strong');
-  title.textContent = 'Manual V7 → V8 review required';
+  title.textContent = manualRequired
+    ? 'Manual V7 → V8 review required'
+    : 'V7 → V8 conversion completed';
   notice.appendChild(title);
   var message = document.createElement('div');
-  message.textContent = draft.migration_message || 'Review the marked PB8 fields before saving this draft.';
+  message.textContent = manualRequired
+    ? (draft.migration_message || 'Review the marked PB8 fields before saving this draft.')
+    : 'PBGui applied automatic compatibility adjustments. No manual field review is required.';
   notice.appendChild(message);
   var values = draft.migration_review_values && typeof draft.migration_review_values === 'object'
     ? draft.migration_review_values
     : {};
-  if (fields.length) {
+  if (manualRequired && fields.length) {
     var list = document.createElement('ul');
     fields.forEach(function(field) {
       var item = document.createElement('li');

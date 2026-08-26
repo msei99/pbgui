@@ -10,6 +10,7 @@ import multiprocessing
 import os
 import platform
 import re
+import secrets
 import signal
 import socket
 import subprocess
@@ -44,6 +45,7 @@ from optimize_autostart import claim_autostart, publish_autostart_process, relea
 from api.v8_migration_context import (
     apply_legacy_churn_gate,
     extract_legacy_churn_gate,
+    postprocess_v7_migration,
     sanitize_optimize_migration_source,
 )
 from pb8_config import (
@@ -51,9 +53,13 @@ from pb8_config import (
     cache_prepared_pb8_config,
     get_pb8_optimize_metadata,
     get_pb8_exchange_metadata,
+    interrupt_pb8_migration_helper,
     load_pb8_config,
     migrate_pb7_config,
+    prepare_pb8_migration_helper_startup,
     prepare_pb8_config,
+    shutdown_pb8_migration_helper,
+    start_pb8_migration_helper,
     validate_pb8_override_bundle,
     validate_pb8_optimizer_overrides,
 )
@@ -125,6 +131,11 @@ _backtest_count_cache_lock = threading.RLock()
 _pareto_list_cache: OrderedDict[tuple[str, int | None, int, int], dict] = OrderedDict()
 _pareto_list_cache_lock = threading.RLock()
 _pareto_warning_cache: OrderedDict[str, float] = OrderedDict()
+_migration_drafts: dict[str, tuple[float, dict]] = {}
+_migration_draft_lock = threading.RLock()
+_MIGRATION_DRAFT_TTL_SECONDS = 600
+_MIGRATION_DRAFT_MAX_ENTRIES = 100
+_migration_helper_warmup_task: asyncio.Task | None = None
 
 _OPT_LOG_LINE_RE = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s+(?:(?P<level>[A-Z]+)\s+)?(?P<msg>.*)$"
@@ -182,6 +193,19 @@ def _backtests_root() -> Path:
     runtime = pb8_runtime_status()
     pb8_dir = str(runtime.get("pb8dir") or "")
     return Path(pb8_dir) / "backtests" / "pbgui" if pb8_dir else _data_dir() / ".pb8-unavailable"
+
+
+def _clean_migration_drafts(*, reserve_slot: bool = False) -> None:
+    """Expire and bound unsaved V7-to-V8 Optimize previews under the draft lock."""
+    now = time.time()
+    for draft_id, (created_at, _payload) in list(_migration_drafts.items()):
+        if now - created_at > _MIGRATION_DRAFT_TTL_SECONDS:
+            _migration_drafts.pop(draft_id, None)
+    excess = len(_migration_drafts) - _MIGRATION_DRAFT_MAX_ENTRIES + (1 if reserve_slot else 0)
+    if excess > 0:
+        oldest = sorted(_migration_drafts.items(), key=lambda item: item[1][0])[:excess]
+        for draft_id, _entry in oldest:
+            _migration_drafts.pop(draft_id, None)
 
 
 def _validate_name(name: str) -> str:
@@ -340,7 +364,12 @@ def _validate_optimizer_overrides(config: dict, *, base_config_path: str) -> Non
         raise _configuration_error("Validating PB8 optimizer overrides", exc) from exc
 
 
-def _normalize_config(config: dict, name: str) -> dict:
+def _normalize_config(
+    config: dict,
+    name: str,
+    *,
+    preserve_hsl_runtime_overrides: bool = False,
+) -> dict:
     candidate = copy.deepcopy(config)
     backtest = candidate.setdefault("backtest", {})
     if not isinstance(backtest, dict):
@@ -348,7 +377,7 @@ def _normalize_config(config: dict, name: str) -> dict:
     backtest["base_dir"] = f"backtests/pbgui/{name}"
     optimize = candidate.get("optimize")
     overrides = optimize.get("fixed_runtime_overrides") if isinstance(optimize, dict) else None
-    if isinstance(overrides, dict):
+    if isinstance(overrides, dict) and not preserve_hsl_runtime_overrides:
         bot = candidate.setdefault("bot", {})
         if not isinstance(bot, dict):
             raise HTTPException(status_code=422, detail="bot must be an object")
@@ -597,6 +626,7 @@ def _save_config_bundle(
     override_payloads: object = None,
     source_dir: Path | None = None,
     migration_report: dict | None = None,
+    preserve_hsl_runtime_overrides: bool = False,
 ) -> dict:
     root = ensure_private_directory(_configs_dir())
     target = _config_dir(name)
@@ -607,7 +637,11 @@ def _save_config_bundle(
     try:
         if source_dir is None and target.is_dir() and not target.is_symlink():
             source_dir = target
-        normalized = _normalize_config(config, name)
+        normalized = _normalize_config(
+            config,
+            name,
+            preserve_hsl_runtime_overrides=preserve_hsl_runtime_overrides,
+        )
         resolved_overrides = _resolve_override_payloads(normalized, override_payloads, source_dir)
         _write_override_payloads(stage, resolved_overrides)
         prepared = prepare_pb8_config(normalized, base_config_path=str(stage / _CONFIG_FILENAME))
@@ -620,7 +654,7 @@ def _save_config_bundle(
             _write_json(stage / "migration_report.json", migration_report)
         validate_pb8_override_bundle(stage / _CONFIG_FILENAME)
         current_report = target / "migration_report.json"
-        if current_report.is_file() and not current_report.is_symlink():
+        if migration_report is None and current_report.is_file() and not current_report.is_symlink():
             copy2(current_report, stage / current_report.name)
         _publish_bundle(stage, target)
         cache_prepared_pb8_config(prepared, target / _CONFIG_FILENAME)
@@ -2911,7 +2945,7 @@ _ws_clients: set[WebSocket] = set()
 
 def startup() -> None:
     """Start only the API-owned PB8 optimize controller."""
-    global _dash_admission_open
+    global _dash_admission_open, _migration_helper_warmup_task
     with _dash_lock:
         _dash_admission_open = False
     _recover_dash_registry()
@@ -2919,15 +2953,33 @@ def startup() -> None:
         _dash_admission_open = True
     _reconcile_queue_artifacts()
     _worker.start()
+    prepare_pb8_migration_helper_startup()
+
+    async def warm_migration_helper() -> None:
+        try:
+            await asyncio.to_thread(start_pb8_migration_helper)
+        except PB8ConfigurationError as exc:
+            _log(SERVICE, f"PB8 migration helper prewarm unavailable: {exc}", level="WARNING")
+
+    if _migration_helper_warmup_task is None or _migration_helper_warmup_task.done():
+        _migration_helper_warmup_task = asyncio.create_task(
+            warm_migration_helper(),
+            name="pb8-migration-helper-warmup",
+        )
 
 
 async def shutdown() -> None:
     """Stop the controller without terminating detached optimize jobs."""
-    global _dash_admission_open
+    global _dash_admission_open, _migration_helper_warmup_task
     with _dash_lock:
         _dash_admission_open = False
     await _worker.stop()
     await asyncio.to_thread(_stop_all_dash_sessions)
+    await asyncio.to_thread(interrupt_pb8_migration_helper)
+    if _migration_helper_warmup_task is not None:
+        await asyncio.gather(_migration_helper_warmup_task, return_exceptions=True)
+        _migration_helper_warmup_task = None
+    await asyncio.to_thread(shutdown_pb8_migration_helper)
 
 
 @router.websocket("/ws/opt8")
@@ -3184,8 +3236,11 @@ def save_config(name: str, body: dict, create_only: bool = False, session: Sessi
     name = _validate_name(name)
     config = body.get("config") if isinstance(body, dict) and "config" in body else body
     override_payloads = body.get("override_configs") if isinstance(body, dict) and "config" in body else None
+    migration_report = body.get("migration_report") if isinstance(body, dict) and "config" in body else None
     if not isinstance(config, dict):
         raise HTTPException(status_code=400, detail="config must be an object")
+    if migration_report is not None and not isinstance(migration_report, dict):
+        raise HTTPException(status_code=422, detail="migration_report must be an object")
     try:
         with _config_lock():
             prepared = _save_config_bundle(
@@ -3193,6 +3248,8 @@ def save_config(name: str, body: dict, create_only: bool = False, session: Sessi
                 config,
                 create_only=create_only,
                 override_payloads=override_payloads,
+                migration_report=migration_report,
+                preserve_hsl_runtime_overrides=migration_report is not None,
             )
         return {
             "ok": True,
@@ -3230,17 +3287,47 @@ def delete_config(name: str, session: SessionToken = Depends(require_auth)) -> d
     return {"ok": True}
 
 
+@router.get("/migration-draft/{draft_id}")
+def get_migration_draft(draft_id: str, session: SessionToken = Depends(require_auth)) -> dict:
+    """Return one unexpired unsaved V7-to-V8 Optimize preview."""
+    with _migration_draft_lock:
+        _clean_migration_drafts()
+        entry = _migration_drafts.get(str(draft_id or ""))
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Migration draft not found or expired")
+        return copy.deepcopy(entry[1])
+
+
 def _optimize_migration_review_report(report: dict) -> dict:
     """Keep only migration findings that can affect an Optimize evaluation."""
     contextual = copy.deepcopy(report)
+    official_findings = {
+        "status": report.get("status"),
+        "manual_review_fields": list(report.get("manual_review_fields") or []),
+        "dropped_unsupported_fields": list(report.get("dropped_unsupported_fields") or []),
+    }
     for key in ("manual_review_fields", "dropped_unsupported_fields"):
-        if key not in report:
-            continue
         contextual[key] = [
             item
             for item in report.get(key) or []
             if not str(item or "").strip().startswith("live.")
         ]
+    unresolved = bool(
+        contextual.get("manual_review_fields")
+        or contextual.get("dropped_unsupported_fields")
+    )
+    contextual["manual_review_required"] = unresolved
+    if unresolved:
+        contextual["status"] = "manual_review_required"
+    elif contextual.get("pbgui_post_migration_adjustments"):
+        contextual["status"] = "ok_with_adjustments"
+    elif contextual.get("status") in {"manual_review_required", "unsafe_manual_review_output_written"}:
+        contextual["status"] = "ok"
+    if (
+        contextual.get("manual_review_fields") != official_findings["manual_review_fields"]
+        or contextual.get("dropped_unsupported_fields") != official_findings["dropped_unsupported_fields"]
+    ):
+        contextual["official_review"] = official_findings
     return contextual
 
 
@@ -3257,8 +3344,6 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
             raise HTTPException(status_code=404, detail=f"V7 optimize config '{source_name}' not found")
     target_name = _validate_name(str((body or {}).get("target_name") or f"{source_name}_v8"))
     with _config_lock():
-        if _config_dir(target_name).exists():
-            raise HTTPException(status_code=409, detail=f"Config '{target_name}' already exists")
         stage = _safe_path(_configs_dir() / f".migrate-{uuid.uuid4().hex}", _configs_dir())
         ensure_private_directory(stage)
         try:
@@ -3276,6 +3361,7 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
                 allow_manual_review_output=True,
             )
             official_report = result.get("report") if isinstance(result.get("report"), dict) else {}
+            optimize_metadata = result.get("optimize_metadata") if isinstance(result.get("optimize_metadata"), dict) else None
             official_report = copy.deepcopy(official_report)
             if source_adjustments:
                 official_report["pbgui_source_adjustments"] = source_adjustments
@@ -3283,6 +3369,13 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
             config = result.get("config")
             if isinstance(config, dict) and legacy_churn_plan is not None:
                 config = prepare_pb8_config(apply_legacy_churn_gate(config, legacy_churn_plan))
+            if isinstance(config, dict):
+                config, official_report = postprocess_v7_migration(
+                    migration_payload,
+                    config,
+                    official_report,
+                )
+                report = _optimize_migration_review_report(official_report)
             unresolved = report.get("manual_review_fields") or report.get("dropped_unsupported_fields")
             if not official_report.get("output_written") or not isinstance(config, dict) or unresolved:
                 fields = report.get("manual_review_fields") or report.get("dropped_unsupported_fields") or []
@@ -3293,13 +3386,34 @@ def migrate_v7(body: dict, session: SessionToken = Depends(require_auth)) -> dic
                     status_code=422,
                     detail={"code": "migration_manual_review", "message": message, "report": report},
                 )
-            prepared = _save_config_bundle(
-                target_name,
+            normalized = _normalize_config(
                 config,
-                create_only=True,
-                migration_report=official_report,
+                target_name,
+                preserve_hsl_runtime_overrides=True,
             )
-            return {"ok": True, "name": target_name, "config": prepared, "report": report}
+            enable_overrides = (normalized.get("optimize") or {}).get("enable_overrides")
+            if enable_overrides:
+                _validate_optimizer_overrides(normalized, base_config_path=str(stage / _CONFIG_FILENAME))
+            _validate_forager_optimize_search_space(normalized)
+            with _migration_draft_lock:
+                _clean_migration_drafts(reserve_slot=True)
+                draft_id = secrets.token_urlsafe(16)
+                _migration_drafts[draft_id] = (
+                    time.time(),
+                    {
+                        "config": copy.deepcopy(normalized),
+                        "override_configs": {},
+                        "migration_report": copy.deepcopy(report),
+                        "optimize_metadata": copy.deepcopy(optimize_metadata),
+                    },
+                )
+            return {
+                "ok": True,
+                "name": target_name,
+                "draft_id": draft_id,
+                "editor": "optimize",
+                "report": report,
+            }
         finally:
             rmtree(stage, ignore_errors=True)
 

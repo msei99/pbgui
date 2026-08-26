@@ -397,6 +397,35 @@ def test_failed_operation_publication_restores_previous_config(
     assert config_path.read_bytes() == previous
 
 
+def test_cluster_rollout_blocker_prevents_backup_before_save(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A rollout HTTP 409 must leave backup history untouched."""
+    _configure_root(monkeypatch, tmp_path)
+    _install_test_pipeline(monkeypatch)
+    asyncio.run(v8_instances.save_v8_instance_config("alice", _payload(note="stable"), True, session=None))
+    backups: list[str] = []
+    monkeypatch.setattr(
+        v8_instances,
+        "_snapshot_v8_bundle",
+        lambda *_args, **_kwargs: backups.append("created") or "1",
+    )
+    monkeypatch.setattr(
+        v8_instances,
+        "_ensure_pb8_cluster_rollout_ready",
+        lambda _identity: (_ for _ in ()).throw(
+            v8_instances.HTTPException(status_code=409, detail="PB8 Cluster rollout is not ready")
+        ),
+    )
+
+    with pytest.raises(v8_instances.HTTPException) as blocked:
+        asyncio.run(v8_instances.save_v8_instance_config("alice", _payload(note="blocked"), False, session=None))
+
+    assert blocked.value.status_code == 409
+    assert backups == []
+
+
 def test_save_publishes_exact_override_bundle_and_removes_stale_files(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
