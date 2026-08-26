@@ -48,6 +48,7 @@ _ACTION_RETENTION_SECONDS = 30 * 24 * 60 * 60
 _MAX_SOURCE_FILE_BYTES = 1024 * 1024
 _MAX_SOURCE_SCAN_BYTES = 32 * 1024 * 1024
 _MAX_SOURCE_FILES = 5000
+_SOURCE_SEARCH_TIMEOUT_SECONDS = 5
 _MAX_ANALYSIS_CODE_BYTES = 32 * 1024
 _MAX_ANALYSIS_INPUT_BYTES = 1024 * 1024
 _MAX_ANALYSIS_STDOUT_BYTES = 128 * 1024
@@ -1178,59 +1179,80 @@ class AICapabilityService:
             raise AICapabilityError("Search query must contain 2 to 128 characters")
         limit = self._limit(args, maximum=50)
         root = self._passivbot_root(version)
+        deadline = time.monotonic() + _SOURCE_SEARCH_TIMEOUT_SECONDS
         commit, repository = self._passivbot_git_info(root)
         checkout_clean = self._checkout_is_clean(root)
         needle = query.casefold()
         matches: list[dict[str, Any]] = []
         scanned_bytes = 0
         scanned_files = 0
-        for path in sorted(root.rglob("*")):
-            if len(matches) >= limit or scanned_files >= _MAX_SOURCE_FILES:
+        stop_scan = False
+        timed_out = False
+        for current, directories, filenames in os.walk(root, topdown=True, followlinks=False):
+            if time.monotonic() >= deadline:
+                timed_out = True
                 break
-            try:
-                relative = path.relative_to(root)
-            except ValueError:
-                continue
-            if any(part in _SOURCE_EXCLUDED_PARTS or part.startswith(".") for part in relative.parts):
-                continue
-            if path.is_symlink() or not path.is_file() or path.suffix.lower() not in _SOURCE_EXTENSIONS:
-                continue
-            if docs_only and not (
-                path.suffix.lower() == ".md"
-                or "docs" in {part.lower() for part in relative.parts}
-                or path.name.lower().startswith("readme")
-            ):
-                continue
-            try:
-                size = path.stat().st_size
-            except OSError:
-                continue
-            if size > _MAX_SOURCE_FILE_BYTES or scanned_bytes + size > _MAX_SOURCE_SCAN_BYTES:
-                continue
-            scanned_files += 1
-            scanned_bytes += size
-            try:
-                raw = read_regular_file_nofollow(path, root)
-                if len(raw) > _MAX_SOURCE_FILE_BYTES:
-                    continue
-                text = raw.decode("utf-8")
-            except (OSError, RuntimeError, UnicodeDecodeError):
-                continue
-            for line_number, line in enumerate(text.splitlines(), start=1):
-                if needle not in line.casefold():
-                    continue
-                matches.append(
-                    {
-                        "path": relative.as_posix(),
-                        "line": line_number,
-                        "excerpt": line.strip()[:1000],
-                        "source_url": self._source_url(repository, commit, relative)
-                        if self._source_is_clean(root, relative)
-                        else "",
-                    }
-                )
-                if len(matches) >= limit:
+            current_path = Path(current)
+            directories[:] = sorted(
+                name
+                for name in directories
+                if name not in _SOURCE_EXCLUDED_PARTS
+                and not name.startswith(".")
+                and not (current_path / name).is_symlink()
+            )
+            for filename in sorted(filenames):
+                if time.monotonic() >= deadline:
+                    timed_out = True
+                    stop_scan = True
                     break
+                if len(matches) >= limit or scanned_files >= _MAX_SOURCE_FILES:
+                    stop_scan = True
+                    break
+                path = current_path / filename
+                try:
+                    relative = path.relative_to(root)
+                except ValueError:
+                    continue
+                if path.is_symlink() or not path.is_file() or path.suffix.lower() not in _SOURCE_EXTENSIONS:
+                    continue
+                if docs_only and not (
+                    path.suffix.lower() == ".md"
+                    or "docs" in {part.lower() for part in relative.parts}
+                    or path.name.lower().startswith("readme")
+                ):
+                    continue
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                if size > _MAX_SOURCE_FILE_BYTES or scanned_bytes + size > _MAX_SOURCE_SCAN_BYTES:
+                    continue
+                scanned_files += 1
+                scanned_bytes += size
+                try:
+                    raw = read_regular_file_nofollow(path, root)
+                    if len(raw) > _MAX_SOURCE_FILE_BYTES:
+                        continue
+                    text = raw.decode("utf-8")
+                except (OSError, RuntimeError, UnicodeDecodeError):
+                    continue
+                for line_number, line in enumerate(text.splitlines(), start=1):
+                    if needle not in line.casefold():
+                        continue
+                    matches.append(
+                        {
+                            "path": relative.as_posix(),
+                            "line": line_number,
+                            "excerpt": line.strip()[:1000],
+                            "source_url": self._source_url(repository, commit, relative)
+                            if checkout_clean
+                            else "",
+                        }
+                    )
+                    if len(matches) >= limit:
+                        break
+            if stop_scan:
+                break
         return {
             "version": version,
             "commit": commit,
@@ -1238,7 +1260,7 @@ class AICapabilityService:
             "source_state": "clean" if checkout_clean else "dirty",
             "matches": matches,
             "returned": len(matches),
-            "truncated": len(matches) >= limit or scanned_files >= _MAX_SOURCE_FILES,
+            "truncated": timed_out or len(matches) >= limit or scanned_files >= _MAX_SOURCE_FILES,
         }
 
     def _read_passivbot_source(self, args: dict[str, Any]) -> dict[str, Any]:

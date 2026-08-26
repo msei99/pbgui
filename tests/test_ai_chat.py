@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ from ai_chat import (
     AIChatService,
     _GO_FALLBACK_MODELS,
     _MAX_CAPABILITY_ROUNDS,
+    _go_instructions,
     owner_key,
 )
 
@@ -74,6 +76,21 @@ def test_response_text_extracts_openai_responses_payload(tmp_path: Path) -> None
     }
 
     assert service._response_text(payload) == "Hello"
+
+
+def test_response_text_uses_only_last_structured_message(tmp_path: Path) -> None:
+    """Responses planning messages must not be concatenated into the visible final answer."""
+    service = AIChatService(tmp_path / "ai")
+    payload = {
+        "output_text": "Planning retry\nFinal answer",
+        "output": [
+            {"type": "message", "content": [{"type": "output_text", "text": "Planning retry"}]},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Private plan"}]},
+            {"type": "message", "content": [{"type": "output_text", "text": "Final answer"}]},
+        ],
+    }
+
+    assert service._response_text(payload) == "Final answer"
 
 
 def test_go_fallback_catalog_covers_all_documented_subscription_models() -> None:
@@ -578,6 +595,89 @@ def test_responses_agent_executes_native_tools_and_replays_results(
         result = next(item for item in replay if item.get("type") == "function_call_output")
         assert result["call_id"] == "call-1"
         assert json.loads(result["output"])["success"] is True
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_responses_agent_turns_excess_parallel_calls_into_final_answer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Grok-style parallel calls beyond the budget must not abort the whole turn."""
+    class ResponseContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def post(self, url, **kwargs):
+            self.requests.append(copy.deepcopy(kwargs["json"]))
+            return ResponseContext()
+
+    class FakeCapabilities:
+        def __init__(self) -> None:
+            self.calls = []
+
+        @staticmethod
+        def responses_tools():
+            return [{"type": "function", "name": "search_passivbot_docs", "parameters": {}}]
+
+        async def dispatch(self, owner, conversation_id, name, arguments):
+            self.calls.append(arguments["query"])
+            return {"matches": []}
+
+    async def scenario() -> None:
+        service = AIChatService(tmp_path / "ai")
+        capabilities = FakeCapabilities()
+        service.capabilities = capabilities
+        session = FakeSession()
+        calls = [
+            {
+                "type": "function_call",
+                "call_id": f"call-{index}",
+                "name": "search_passivbot_docs",
+                "arguments": json.dumps({"version": "v8", "query": f"query-{index}"}),
+            }
+            for index in range(18)
+        ]
+        payloads = [
+            {"output": calls},
+            {"output": [{"type": "message", "content": [{"type": "output_text", "text": "Final answer"}]}]},
+        ]
+
+        async def fake_http_session():
+            return session
+
+        async def fake_read_response(response, **kwargs):
+            return payloads.pop(0)
+
+        monkeypatch.setattr(service, "_http_session", fake_http_session)
+        monkeypatch.setattr(service, "_read_json_response", fake_read_response)
+        conversation = await service._conversation("a" * 32, "opencode-go", "grok-4.6", None)
+
+        reply = await service._go_responses_agent_inner(
+            "a" * 32,
+            conversation.id,
+            "https://example.test/v1",
+            "grok-4.6",
+            "sk-test",
+            [{"role": "user", "content": "Compare strategies"}],
+            None,
+        )
+
+        assert reply == "Final answer"
+        assert len(capabilities.calls) == 16
+        assert "tools" in session.requests[0]
+        assert "tools" not in session.requests[1]
+        outputs = [item for item in session.requests[1]["input"] if item.get("type") == "function_call_output"]
+        assert len(outputs) == 18
+        assert all(json.loads(item["output"])["success"] is False for item in outputs[-2:])
+        assert all("budget exhausted" in json.loads(item["output"])["error"] for item in outputs[-2:])
         await service.shutdown()
 
     asyncio.run(scenario())
@@ -1205,7 +1305,10 @@ def test_action_requests_receive_extended_bounded_capability_rounds() -> None:
     ) == 10
     assert AIChatService._capability_round_limit(
         [{"role": "user", "content": "Erkläre mir diese Metrik"}]
-    ) == 6
+    ) == 4
+    assert "do not repeat searches with minor query variations" in _go_instructions(
+        "kimi-k3", tools_enabled=True
+    )
 
 
 @pytest.mark.parametrize(

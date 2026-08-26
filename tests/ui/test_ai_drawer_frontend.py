@@ -12,7 +12,7 @@ CSS = (ROOT / "frontend" / "css" / "ai_drawer.css").read_text(encoding="utf-8")
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=28" in NAV
+    assert "/app/js/ai_drawer.js?v=29" in NAV
     assert "/app/css/ai_drawer.css?v=12" in NAV
     assert "registerPageContext" in NAV
     assert "collectAIContext" in NAV
@@ -40,7 +40,13 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "var context = collectDisplayContext();" in DRAWER
     assert "checked ? collectContext() : null" in DRAWER
     assert "prepareNewSelection" not in DRAWER
-    assert "model.addEventListener('change', function () { rebuildEfforts(); })" in DRAWER
+    assert "state.selectionDirty = true; loadModels();" in DRAWER
+    assert "state.selectionDirty = true; rebuildEfforts();" in DRAWER
+    assert "if (!state.selectionDirty)" in DRAWER
+    assert "await rebuildProviders(conversation.provider, conversation.model)" in DRAWER
+    assert "Loading models..." in DRAWER
+    assert "Models unavailable" in DRAWER
+    assert "state.modelsLoading" in DRAWER
     assert "model: root.querySelector('#pai-model').value" in DRAWER
     assert "effort: root.querySelector('#pai-effort').value" in DRAWER
     assert "provider: root.querySelector('#pai-provider').value" in DRAWER

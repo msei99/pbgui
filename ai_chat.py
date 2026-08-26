@@ -96,8 +96,9 @@ _MAX_MESSAGE_CHARS = 12_000
 _MAX_HISTORY_MESSAGES = 24
 _MAX_HISTORY_CHARS = 80_000
 _MAX_REPLY_CHARS = 40_000
-_MAX_CAPABILITY_ROUNDS = 6
+_MAX_CAPABILITY_ROUNDS = 4
 _MAX_ACTION_CAPABILITY_ROUNDS = 10
+_MAX_CAPABILITY_CALLS = 16
 _MAX_REASONING_VARIANTS = 16
 _CONVERSATION_TTL_SECONDS = 2 * 60 * 60
 _MAX_CONVERSATIONS_PER_OWNER = 20
@@ -193,7 +194,8 @@ def _go_instructions(model: str, *, tools_enabled: bool = False) -> str:
         capability_text = (
             " PBGui capability tools are available. Use them for PBGui data. Mutation tools create "
             "approval proposals only; ask the user to approve and never claim execution before an "
-            "approved result."
+            "approved result. For read-only questions, use the fewest capabilities needed, do not "
+            "repeat searches with minor query variations, and answer as soon as the evidence is sufficient."
         )
         rules = _agent_rules()
     else:
@@ -2406,7 +2408,7 @@ class AIChatService:
         seen_requests: set[str] = set()
         round_limit = self._capability_round_limit(history)
         for round_index in range(round_limit + 1):
-            final_round = round_index == round_limit
+            final_round = round_index == round_limit or total_calls >= _MAX_CAPABILITY_CALLS
             instructions = _go_instructions(model, tools_enabled=True)
             if final_round:
                 instructions += (
@@ -2469,8 +2471,6 @@ class AIChatService:
                 return text
             if final_round:
                 raise AIChatError("OpenCode Responses agent could not produce a final answer")
-            if total_calls + len(calls) > 16:
-                raise AIChatError("OpenCode Responses agent requested too many PBGui capabilities")
             input_items.extend(
                 copy.deepcopy(
                     [
@@ -2497,9 +2497,15 @@ class AIChatService:
                     arguments = json.loads(raw_arguments)
                 except json.JSONDecodeError:
                     arguments = {}
-                output = await self._agent_capability_result(
-                    owner, conversation_id, name, arguments, seen_requests
-                )
+                if total_calls >= _MAX_CAPABILITY_CALLS:
+                    output = {
+                        "success": False,
+                        "error": "PBGui capability budget exhausted; answer using the results already provided.",
+                    }
+                else:
+                    output = await self._agent_capability_result(
+                        owner, conversation_id, name, arguments, seen_requests
+                    )
                 output_text = json.dumps(output, allow_nan=False, separators=(",", ":"))
                 total_result_bytes += len(output_text.encode("utf-8"))
                 if total_result_bytes > 1024 * 1024:
@@ -2561,7 +2567,7 @@ class AIChatService:
         seen_requests: set[str] = set()
         round_limit = self._capability_round_limit(history)
         for round_index in range(round_limit + 1):
-            final_round = round_index == round_limit
+            final_round = round_index == round_limit or total_calls >= _MAX_CAPABILITY_CALLS
             system = _go_instructions(model, tools_enabled=True)
             if final_round:
                 system += (
@@ -2614,8 +2620,6 @@ class AIChatService:
                 return text
             if final_round:
                 raise AIChatError("OpenCode Messages agent could not produce a final answer")
-            if total_calls + len(calls) > 16:
-                raise AIChatError("OpenCode Messages agent requested too many PBGui capabilities")
             messages.append({"role": "assistant", "content": copy.deepcopy(content)})
             tool_results = []
             for call in calls:
@@ -2639,9 +2643,15 @@ class AIChatService:
                 ):
                     raise AIChatError("OpenCode Messages agent returned an invalid capability call")
                 seen_calls.add(call_id)
-                output = await self._agent_capability_result(
-                    owner, conversation_id, name, arguments, seen_requests
-                )
+                if total_calls >= _MAX_CAPABILITY_CALLS:
+                    output = {
+                        "success": False,
+                        "error": "PBGui capability budget exhausted; answer using the results already provided.",
+                    }
+                else:
+                    output = await self._agent_capability_result(
+                        owner, conversation_id, name, arguments, seen_requests
+                    )
                 output_text = json.dumps(output, allow_nan=False, separators=(",", ":"))
                 total_result_bytes += len(output_text.encode("utf-8"))
                 if total_result_bytes > 1024 * 1024:
@@ -2708,7 +2718,7 @@ class AIChatService:
         seen_requests: set[str] = set()
         round_limit = self._capability_round_limit(history)
         for round_index in range(round_limit + 1):
-            final_round = round_index == round_limit
+            final_round = round_index == round_limit or total_calls >= _MAX_CAPABILITY_CALLS
             if final_round:
                 messages.append(
                     {
@@ -2763,8 +2773,6 @@ class AIChatService:
                 return text
             if final_round:
                 raise AIChatError("OpenCode agent could not produce a final answer")
-            if total_calls + len(calls) > 16:
-                raise AIChatError("OpenCode agent requested too many PBGui capabilities")
             assistant_message: dict[str, Any] = {
                 "role": "assistant",
                 "content": assistant.get("content"),
@@ -2803,7 +2811,12 @@ class AIChatService:
                     sort_keys=True,
                     separators=(",", ":"),
                 )
-                if request_key in seen_requests:
+                if total_calls >= _MAX_CAPABILITY_CALLS:
+                    output = {
+                        "success": False,
+                        "error": "PBGui capability budget exhausted; answer using the results already provided.",
+                    }
+                elif request_key in seen_requests:
                     output = {
                         "success": False,
                         "error": "This capability request was already completed; use its previous result.",
@@ -3665,19 +3678,23 @@ class AIChatService:
         """Extract plain assistant text from an OpenAI Responses payload."""
         if not isinstance(payload, dict):
             return ""
-        direct = payload.get("output_text")
-        if isinstance(direct, str):
-            return direct.strip()
-        chunks = []
+        messages = []
         for item in payload.get("output") or []:
             if not isinstance(item, dict) or item.get("type") != "message":
                 continue
+            chunks = []
             for content in item.get("content") or []:
                 if isinstance(content, dict) and content.get("type") == "output_text":
                     text = content.get("text")
                     if isinstance(text, str):
                         chunks.append(text)
-        return "\n".join(chunks).strip()
+            message = "\n".join(chunks).strip()
+            if message:
+                messages.append(message)
+        if messages:
+            return messages[-1]
+        direct = payload.get("output_text")
+        return direct.strip() if isinstance(direct, str) else ""
 
     @staticmethod
     def _response_reasoning_summary(payload: Any) -> str:

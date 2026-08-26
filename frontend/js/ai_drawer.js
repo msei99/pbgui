@@ -11,6 +11,8 @@
     pollGeneration: 0,
     requestGeneration: 0,
     modelGeneration: 0,
+    modelsLoading: false,
+    selectionDirty: false,
     listGeneration: 0,
     proposalGeneration: 0,
     history: false,
@@ -79,14 +81,15 @@
     var toolbar = el('div', 'pai-toolbar');
     var provider = el('select');
     provider.id = 'pai-provider';
-    provider.addEventListener('change', function () { loadModels(); });
+    provider.addEventListener('change', function () { state.selectionDirty = true; loadModels(); });
     toolbar.appendChild(provider);
     var model = el('select');
     model.id = 'pai-model';
-    model.addEventListener('change', function () { rebuildEfforts(); });
+    model.addEventListener('change', function () { state.selectionDirty = true; rebuildEfforts(); });
     toolbar.appendChild(model);
     var effort = el('select');
     effort.id = 'pai-effort';
+    effort.addEventListener('change', function () { state.selectionDirty = true; });
     toolbar.appendChild(effort);
     var fresh = el('button', 'pai-new', 'New');
     fresh.type = 'button';
@@ -212,8 +215,8 @@
     root.querySelector('textarea').disabled = busy;
     root.querySelector('.pai-retry').disabled = busy;
     root.querySelector('#pai-provider').disabled = busy || !root.querySelector('#pai-provider').options.length;
-    root.querySelector('#pai-model').disabled = busy || !root.querySelector('#pai-model').options.length;
-    root.querySelector('#pai-effort').disabled = busy || root.querySelector('#pai-effort').hidden;
+    root.querySelector('#pai-model').disabled = busy || state.modelsLoading || !Object.keys(state.models).length;
+    root.querySelector('#pai-effort').disabled = busy || state.modelsLoading || root.querySelector('#pai-effort').hidden;
     root.querySelector('.pai-new').disabled = busy;
   }
 
@@ -223,7 +226,7 @@
       if (!state.resizing) applyWidth(preferences.drawer_width);
       var status = await api('/status');
       state.providers = status.providers || {};
-      rebuildProviders();
+      await rebuildProviders();
       await loadConversations();
     } catch (error) { setStatus(error.message, true); }
   }
@@ -280,7 +283,7 @@
     });
   }
 
-  function rebuildProviders(preferred) {
+  function rebuildProviders(preferred, preferredModel) {
     var select = root.querySelector('#pai-provider');
     var current = preferred || select.value;
     select.textContent = '';
@@ -291,7 +294,7 @@
       select.appendChild(option);
     });
     if (current && Array.from(select.options).some(function (option) { return option.value === current; })) select.value = current;
-    loadModels();
+    return loadModels(preferredModel);
   }
 
   async function loadModels(preferred) {
@@ -299,12 +302,26 @@
     var select = root.querySelector('#pai-model');
     var current = preferred || select.value;
     var generation = ++state.modelGeneration;
+    var effort = root.querySelector('#pai-effort');
+    state.modelsLoading = true;
+    state.models = {};
     select.textContent = '';
-    if (!provider) return;
+    var loading = el('option', '', 'Loading models...');
+    loading.value = '';
+    loading.disabled = true;
+    loading.selected = true;
+    select.appendChild(loading);
+    select.disabled = true;
+    effort.disabled = true;
+    if (!provider) {
+      state.modelsLoading = false;
+      setBusy(state.busy);
+      return;
+    }
     try {
       var data = await api('/models?provider=' + encodeURIComponent(provider));
       if (generation !== state.modelGeneration || provider !== root.querySelector('#pai-provider').value) return;
-      state.models = {};
+      select.textContent = '';
       (data.models || []).forEach(function (model) {
         state.models[model.id] = model;
         var healthStatus = model.health && model.health.status ? ' - ' + String(model.health.status).replace(/_/g, ' ') : '';
@@ -313,9 +330,28 @@
         if (model.default) option.selected = true;
         select.appendChild(option);
       });
+      if (!select.options.length) {
+        var empty = el('option', '', 'No models available');
+        empty.value = '';
+        empty.disabled = true;
+        select.appendChild(empty);
+      }
       if (current && Array.from(select.options).some(function (option) { return option.value === current; })) select.value = current;
       rebuildEfforts();
-    } catch (error) { setStatus(error.message, true); }
+      state.modelsLoading = false;
+      setBusy(state.busy);
+    } catch (error) {
+      if (generation !== state.modelGeneration || provider !== root.querySelector('#pai-provider').value) return;
+      state.models = {};
+      select.textContent = '';
+      var unavailable = el('option', '', 'Models unavailable');
+      unavailable.value = '';
+      unavailable.disabled = true;
+      select.appendChild(unavailable);
+      state.modelsLoading = false;
+      setBusy(state.busy);
+      setStatus(error.message, true);
+    }
   }
 
   function rebuildEfforts(preferred) {
@@ -372,6 +408,7 @@
       else if (conversation.last_error) meta += ' - needs attention';
       button.appendChild(el('small', '', meta));
       button.addEventListener('click', function () {
+        state.selectionDirty = false;
         state.current = conversation.conversation_id;
         renderHistory();
         loadConversation(state.current);
@@ -396,14 +433,15 @@
       var retry = root.querySelector('.pai-retry');
       retry.hidden = !conversation.last_error || !state.retryMessages[id] || conversation.busy;
       setStatus(conversation.busy ? (conversation.activity || 'Model is working...') : (conversation.last_error || ''), !!conversation.last_error);
-      if (root.querySelector('#pai-provider').value !== conversation.provider) {
-        rebuildProviders(conversation.provider);
-        await loadModels(conversation.model);
-      } else if (root.querySelector('#pai-model').value !== conversation.model) {
-        await loadModels(conversation.model);
+      if (!state.selectionDirty) {
+        if (root.querySelector('#pai-provider').value !== conversation.provider) {
+          await rebuildProviders(conversation.provider, conversation.model);
+        } else if (root.querySelector('#pai-model').value !== conversation.model) {
+          await loadModels(conversation.model);
+        }
       }
       if (id !== state.current || generation !== state.requestGeneration) return;
-      rebuildEfforts(conversation.effort || '');
+      if (!state.selectionDirty) rebuildEfforts(conversation.effort || '');
       await reconcileProposals(id, generation);
       var pendingPageAction = uiActions.some(function (action) {
         return action && action.type === 'page.perform_action';
@@ -813,6 +851,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: provider, model: model, effort: root.querySelector('#pai-effort').value, context: context })
       });
+      state.selectionDirty = false;
       state.current = data.conversation_id;
       await loadConversations(state.current);
       root.querySelector('textarea').focus();
@@ -866,6 +905,7 @@
           provider: root.querySelector('#pai-provider').value
         })
       });
+      state.selectionDirty = false;
       if (conversationId === state.current) {
         schedulePoll(conversationId);
         await loadConversation(conversationId);
