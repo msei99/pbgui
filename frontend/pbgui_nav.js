@@ -1698,7 +1698,7 @@
       link.href = '/app/css/ai_drawer.css?v=12';
       document.head.appendChild(link);
       var script = document.createElement('script');
-      script.src = '/app/js/ai_drawer.js?v=29';
+      script.src = '/app/js/ai_drawer.js?v=30';
       script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
       script.onerror = function () { _aiDrawerLoading = false; };
       document.head.appendChild(script);

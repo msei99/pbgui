@@ -94,9 +94,10 @@ _MAX_MODEL_CATALOG_BYTES = 8 * 1024 * 1024
 _MODEL_CATALOG_TTL_SECONDS = 5 * 60
 _MAX_MESSAGE_CHARS = 12_000
 _MAX_HISTORY_MESSAGES = 24
-_MAX_HISTORY_CHARS = 80_000
+_MAX_HISTORY_CHARS = 512_000
+_MAX_PROVIDER_HANDOFF_CHARS = 256_000
 _MAX_REPLY_CHARS = 40_000
-_MAX_CAPABILITY_ROUNDS = 4
+_MAX_CAPABILITY_ROUNDS = 3
 _MAX_ACTION_CAPABILITY_ROUNDS = 10
 _MAX_CAPABILITY_CALLS = 16
 _MAX_REASONING_VARIANTS = 16
@@ -110,6 +111,8 @@ _MODEL_HEALTH_INTERVAL_SECONDS = 6 * 60 * 60
 _MODEL_HEALTH_INITIAL_DELAY_SECONDS = 10
 _CODEX_STREAM_LIMIT = 4 * 1024 * 1024
 _CHAT_TIMEOUT_SECONDS = 180
+_OPENCODE_REQUEST_TIMEOUT_SECONDS = 60
+_OPENCODE_REQUEST_ATTEMPTS = 2
 _GO_INSTRUCTIONS = (
     "You are the PBGui AI assistant. Reply conversationally in the "
     "user's language. Never claim direct filesystem, shell, credential, or unrestricted PBGui "
@@ -120,6 +123,7 @@ _CAPABILITY_ACTIVITY = {
     "get_optimizer_config": "Reading an optimizer configuration",
     "get_optimizer_metadata": "Reading optimizer metadata",
     "list_optimizer_runs": "Reading optimizer runs",
+    "list_pb8_optimizer_queue": "Reading the PB8 optimizer queue",
     "rank_optimizer_run_candidates": "Scanning all Pareto candidates",
     "present_user_choices": "Preparing clarification choices",
     "list_backtests": "Reading backtest summaries",
@@ -129,6 +133,7 @@ _CAPABILITY_ACTIVITY = {
     "get_dashboard_layout": "Reading dashboard layout",
     "propose_pb8_optimizer_config": "Preparing a PB8 configuration proposal",
     "propose_queue_pb8_config": "Preparing a PB8 queue proposal",
+    "propose_start_pb8_optimizer_queue": "Preparing a PB8 optimizer start proposal",
     "propose_pareto_backtests": "Preparing a Pareto backtest proposal",
     "propose_dashboard_from_template": "Preparing a dashboard proposal",
     "propose_dashboard_layout": "Preparing a dashboard layout proposal",
@@ -148,6 +153,7 @@ _CAPABILITY_RESULT_ACTIVITY = {
     "get_optimizer_config": "Optimizer configuration loaded; model is processing results",
     "get_optimizer_metadata": "Optimizer metadata loaded; model is processing results",
     "list_optimizer_runs": "Optimizer runs loaded; model is processing results",
+    "list_pb8_optimizer_queue": "PB8 optimizer queue loaded; model is processing results",
     "rank_optimizer_run_candidates": "Complete Pareto ranking loaded; model is processing results",
     "present_user_choices": "Clarification choices ready",
     "list_backtests": "Backtest summaries loaded; model is processing results",
@@ -157,6 +163,7 @@ _CAPABILITY_RESULT_ACTIVITY = {
     "get_dashboard_layout": "Dashboard layout loaded; model is processing results",
     "propose_pb8_optimizer_config": "PB8 proposal prepared; model is processing results",
     "propose_queue_pb8_config": "PB8 queue proposal prepared; model is processing results",
+    "propose_start_pb8_optimizer_queue": "PB8 optimizer start proposal prepared; model is processing results",
     "propose_pareto_backtests": "Backtest queue proposal prepared; model is processing results",
     "propose_dashboard_from_template": "Dashboard proposal prepared; model is processing results",
     "propose_dashboard_layout": "Dashboard layout proposal prepared; model is processing results",
@@ -171,6 +178,23 @@ _CAPABILITY_RESULT_ACTIVITY = {
     "search_passivbot_source": "Source search complete; model is processing results",
     "read_passivbot_source": "Source section loaded; model is processing results",
 }
+_COMPARE_KEEP_SOURCE_RISK = (
+    "Use the same coin universe, dates, exchange, fees, and starting balance, "
+    "but keep each source config's current risk settings."
+)
+_COMPARE_NORMALIZE_RISK = (
+    "Use the same coin universe, dates, exchange, fees, and starting balance, "
+    "and normalize n_positions and total_wallet_exposure_limit across both configs."
+)
+_COMPARE_PB7_TRAILING_VS_PB8_MARTINGALE = (
+    "Set up a real cross-version comparison: an actual PB7 trailing config and optimizer run "
+    "against a separate PB8 trailing_martingale config and optimizer run. Do not substitute "
+    "PB8 trailing_grid_v7 for the PB7 side."
+)
+_COMPARE_PB8_MARTINGALE_VS_GRID = (
+    "Set up a PB8-only strategy comparison between trailing_martingale and the PB8 "
+    "trailing_grid_v7 compatibility strategy."
+)
 
 
 def _codex_instructions(model: str) -> str:
@@ -1311,14 +1335,14 @@ class AIChatService:
             if not content:
                 continue
             entry = ("User" if role == "user" else "Assistant") + ": " + content
-            remaining = 48_000 - retained_chars
+            remaining = _MAX_PROVIDER_HANDOFF_CHARS - retained_chars
             if remaining <= 0:
                 break
             if len(entry) > remaining:
                 entry = entry[-remaining:] if remaining <= 3 else "..." + entry[-(remaining - 3):]
             retained.append(entry)
             retained_chars += len(entry)
-            if retained_chars >= 48_000:
+            if retained_chars >= _MAX_PROVIDER_HANDOFF_CHARS:
                 break
         if not retained:
             return ""
@@ -2243,10 +2267,74 @@ class AIChatService:
         if model not in available:
             raise AIChatError("Selected OpenCode Go model is unavailable")
         variant = self._selected_reasoning_variant(available[model], effort)
-        key = self.credentials.load_go_key(owner)
         history = messages[-_MAX_HISTORY_MESSAGES:]
         if sum(len(item["content"]) for item in history) > _MAX_HISTORY_CHARS:
-            raise AIChatError("Conversation is too large for the MVP")
+            raise AIChatError("Conversation context exceeds the supported provider payload")
+        clarification = self._comparison_setup_clarification(history)
+        if conversation_id and available[model].get("tools") and clarification:
+            result = await self.capabilities.dispatch(
+                owner,
+                conversation_id,
+                "present_user_choices",
+                clarification,
+            )
+            await self._capture_ui_action(owner, conversation_id, result)
+            await self._set_activity(owner, conversation_id, "Waiting for comparison setup details")
+            return clarification["question"]
+        risk_clarification = self._comparison_risk_clarification(history)
+        if conversation_id and available[model].get("tools") and risk_clarification:
+            result = await self.capabilities.dispatch(
+                owner,
+                conversation_id,
+                "present_user_choices",
+                risk_clarification,
+            )
+            await self._capture_ui_action(owner, conversation_id, result)
+            await self._set_activity(owner, conversation_id, "Waiting for comparison risk alignment")
+            return risk_clarification["question"]
+        base_clarification = self._comparison_base_config_clarification(history)
+        if conversation_id and available[model].get("tools") and base_clarification:
+            listed = await self.capabilities.dispatch(
+                owner,
+                conversation_id,
+                "list_optimizer_configs",
+                {"version": base_clarification["version"], "limit": 5},
+            )
+            configs = listed.get("configs") if isinstance(listed, dict) else []
+            choices = []
+            for item in configs[:4] if isinstance(configs, list) else []:
+                name = str((item or {}).get("name") or (item or {}).get("config_name") or "").strip()
+                if not name:
+                    continue
+                choices.append(
+                    {
+                        "label": name[:80],
+                        "value": (
+                            base_clarification["selection_instruction"].format(name=name)
+                            + "; "
+                            f"{base_clarification['risk_instruction']}"
+                        ),
+                    }
+                )
+            choices.append(
+                {
+                    "label": "Choose another config",
+                    "value": base_clarification["custom_instruction"],
+                }
+            )
+            if len(choices) < 2:
+                return base_clarification["empty_message"]
+            question = base_clarification["question"]
+            result = await self.capabilities.dispatch(
+                owner,
+                conversation_id,
+                "present_user_choices",
+                {"question": question, "choices": choices},
+            )
+            await self._capture_ui_action(owner, conversation_id, result)
+            await self._set_activity(owner, conversation_id, "Waiting for comparison base config")
+            return question
+        key = self.credentials.load_go_key(owner)
         selected_protocol = str(available[model]["protocol"])
         if conversation_id and available[model].get("tools"):
             if selected_protocol == "chat":
@@ -2437,23 +2525,38 @@ class AIChatService:
                 request_body["prompt_cache_key"] = conversation_id
             if not final_round:
                 request_body["tools"] = tools
-            try:
-                async with session.post(
-                    f"{base_url}/responses",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json=request_body,
-                    allow_redirects=False,
-                ) as response:
-                    payload = await self._read_json_response(response, expected_status=200)
+            payload = None
+            for attempt in range(_OPENCODE_REQUEST_ATTEMPTS):
+                try:
+                    async with asyncio.timeout(_OPENCODE_REQUEST_TIMEOUT_SECONDS):
+                        async with session.post(
+                            f"{base_url}/responses",
+                            headers={"Authorization": f"Bearer {api_key}"},
+                            json=request_body,
+                            allow_redirects=False,
+                        ) as response:
+                            payload = await self._read_json_response(response, expected_status=200)
                     reasoning_summary = self._response_reasoning_summary(payload)
                     if reasoning_summary:
                         await self._set_reasoning_summary(
                             owner, conversation_id, reasoning_summary
                         )
-            except AIChatError:
-                raise
-            except Exception as exc:
-                raise AIChatError("OpenCode Responses agent request failed") from exc
+                    break
+                except AIChatError:
+                    raise
+                except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+                    if attempt + 1 >= _OPENCODE_REQUEST_ATTEMPTS:
+                        raise AIChatError("OpenCode Responses agent request failed") from exc
+                    await self._set_activity(
+                        owner,
+                        conversation_id,
+                        "OpenCode connection interrupted; retrying model request",
+                    )
+                    await asyncio.sleep(0.5)
+                except Exception as exc:
+                    raise AIChatError("OpenCode Responses agent request failed") from exc
+            if payload is None:
+                raise AIChatError("OpenCode Responses agent request failed")
             output_items = payload.get("output") if isinstance(payload, dict) else None
             if not isinstance(output_items, list):
                 raise AIChatError("OpenCode Responses agent returned invalid data")
@@ -3552,7 +3655,7 @@ class AIChatService:
         """Trim complete oldest turns until both history limits are satisfied."""
         while len(messages) > max_messages or sum(len(item["content"]) for item in messages) > _MAX_HISTORY_CHARS:
             if len(messages) <= 2:
-                raise AIChatError("Conversation is too large for the MVP")
+                raise AIChatError("Conversation context exceeds the supported provider payload")
             del messages[:2]
 
     async def _http_session(self) -> aiohttp.ClientSession:
@@ -3787,12 +3890,124 @@ class AIChatService:
             "remove ",
             " add ",
             "queue ",
+            "start ",
+            "starten",
+            "starte",
         )
         return (
             _MAX_ACTION_CAPABILITY_ROUNDS
             if any(term in text for term in action_terms)
             else _MAX_CAPABILITY_ROUNDS
         )
+
+    @staticmethod
+    def _comparison_setup_clarification(
+        history: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Return safe quick replies for one vague comparison-setup confirmation."""
+        text = ""
+        for item in reversed(history):
+            if isinstance(item, dict) and item.get("role") == "user":
+                text = str(item.get("content") or "").split("\n\n[Untrusted PBGui page context", 1)[0]
+                break
+        normalized = " ".join(text.strip().lower().split())
+        patterns = (
+            r"^(?:(?:yes|yes please|ok|okay|sure|please)\s+)?(?:set up|setup|prepare)\s+(?:the\s+)?(?:compare|comparison)[.!]?$",
+            r"^(?:(?:ja|ja bitte|ok|okay|bitte)\s+)?(?:(?:den\s+)?vergleich\s+(?:einrichten|aufsetzen|vorbereiten|erstellen))[.!]?$",
+        )
+        if not normalized or len(normalized) > 160 or not any(
+            re.fullmatch(pattern, normalized) for pattern in patterns
+        ):
+            return None
+        question = "Which comparison should PBGui set up? PB7 and PB8 remain separate runtimes."
+        return {
+            "question": question,
+            "choices": [
+                {
+                    "label": "PB7 trailing vs PB8 martingale",
+                    "value": _COMPARE_PB7_TRAILING_VS_PB8_MARTINGALE,
+                },
+                {
+                    "label": "PB8 martingale vs PB8 grid",
+                    "value": _COMPARE_PB8_MARTINGALE_VS_GRID,
+                },
+                {
+                    "label": "Custom comparison",
+                    "value": "Ask me which exact PB7/PB8 generations, strategies, and source configs to compare without converting between generations.",
+                },
+            ],
+        }
+
+    @staticmethod
+    def _comparison_risk_clarification(
+        history: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Ask risk alignment only after the user selects an explicit comparison scope."""
+        text = ""
+        for item in reversed(history):
+            if isinstance(item, dict) and item.get("role") == "user":
+                text = str(item.get("content") or "").split("\n\n[Untrusted PBGui page context", 1)[0].strip()
+                break
+        if text == _COMPARE_PB7_TRAILING_VS_PB8_MARTINGALE:
+            question = "For the real PB7 trailing vs PB8 trailing_martingale comparison, how should PBGui align risk and the test universe?"
+        elif text == _COMPARE_PB8_MARTINGALE_VS_GRID:
+            question = "For the PB8 trailing_martingale vs PB8 trailing_grid_v7 comparison, how should PBGui align risk and the test universe?"
+        else:
+            return None
+        return {
+            "question": question,
+            "choices": [
+                {"label": "Keep source risk", "value": _COMPARE_KEEP_SOURCE_RISK},
+                {"label": "Normalize risk", "value": _COMPARE_NORMALIZE_RISK},
+                {
+                    "label": "Custom values",
+                    "value": "Ask me for custom source configs, coins, dates, fees, and risk values while preserving the selected PB generations.",
+                },
+            ],
+        }
+
+    @staticmethod
+    def _comparison_base_config_clarification(
+        history: list[dict[str, Any]],
+    ) -> dict[str, str] | None:
+        """Resolve one generated risk-choice reply before asking for a concrete base config."""
+        text = ""
+        user_messages = []
+        for item in reversed(history):
+            if isinstance(item, dict) and item.get("role") == "user":
+                value = str(item.get("content") or "").split("\n\n[Untrusted PBGui page context", 1)[0].strip()
+                user_messages.append(value)
+                if not text:
+                    text = value
+        if text == _COMPARE_KEEP_SOURCE_RISK:
+            risk_instruction = "keep each source config's current risk settings"
+        elif text == _COMPARE_NORMALIZE_RISK:
+            risk_instruction = "normalize n_positions and total_wallet_exposure_limit across both sides"
+        else:
+            return None
+        if _COMPARE_PB7_TRAILING_VS_PB8_MARTINGALE in user_messages:
+            return {
+                "version": "v7",
+                "risk_instruction": risk_instruction,
+                "selection_instruction": (
+                    "Use PB7 optimizer config '{name}' as the real PB7 trailing source and compare it "
+                    "against a separate PB8 trailing_martingale config; never convert it to PB8 trailing_grid_v7. "
+                    "PB7 mutation, queueing, and starting remain manual because AI PB7 mutations are unavailable"
+                ),
+                "custom_instruction": "Ask me for the exact real PB7 optimizer config name to use as the V7 comparison source.",
+                "empty_message": "No PB7 optimizer source config is available. Create or import the real PB7 trailing config before setting up this cross-version comparison.",
+                "question": "Which PB7 optimizer config should PBGui use as the real V7 trailing source?",
+            }
+        if _COMPARE_PB8_MARTINGALE_VS_GRID in user_messages:
+            return {
+                "version": "v8",
+                "risk_instruction": risk_instruction,
+                "selection_instruction": "Use PB8 optimizer config '{name}' as the base for both PB8 strategy variants",
+                "custom_instruction": "Ask me for the exact PB8 optimizer config name to use as the PB8-only comparison base.",
+                "empty_message": "No PB8 optimizer base config is available. Create or import one before setting up the PB8-only comparison.",
+                "question": "Which PB8 optimizer config should PBGui use as the PB8-only comparison base?",
+            }
+        return None
 
     @staticmethod
     def _validate_effort(value: object) -> str:

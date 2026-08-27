@@ -360,6 +360,56 @@ class TestVpsManagerFrontendLogic:
             assertions=assertions,
         )
 
+    def test_pb8_branch_select_handler_survives_html_attribute_parsing(self) -> None:
+        """Rendered PB8 onchange code must remain complete and update the selected branch."""
+        bootstrap = """
+        const calls = [];
+        const branchState = {
+          current_branch: 'master',
+          current_commit: 'current',
+          branches: {
+            master: [{ full: 'current' }],
+            'codex/gpu-tma-market-foundation': [{ full: 'gpu-head' }]
+          },
+          known_remotes: ['origin'],
+          remote_urls: { origin: 'https://example.test/passivbot.git' },
+          branch_tracking_remotes: {},
+          default_remote_name: 'origin'
+        };
+        const store = {
+          master: {
+            pb8Branch: 'master', pb8Commit: 'HEAD', pb8ManualBranch: '', pb8ManualCommit: '',
+            pb8RemoteName: 'origin', pb8RemoteUrl: 'https://example.test/passivbot.git',
+            pb8RemoteBranches: [], pb8RemoteCommits: {}
+          },
+          detail: { kind: 'master', branches: { pb8: branchState } }
+        };
+        function ensureVpsUi() { throw new Error('not expected'); }
+        function js(value) { return JSON.stringify(value == null ? '' : String(value)); }
+        function esc(value) { return String(value == null ? '' : value); }
+        function escAttr(value) { return esc(value); }
+        function shortHash(value) { return String(value || '').slice(0, 8); }
+        function syncBranchViewPanel() {}
+        function renderBranchMessage() { return ''; }
+        function renderMissingCommitsPanel() { return ''; }
+        function renderCommitDetails() { return ''; }
+        function setPb7LocalBranch(scope, value, runtime) { calls.push({ scope, value, runtime }); }
+        """
+        assertions = """
+        const html = renderPb7BranchPanel('master', branchState, 'pb8');
+        const handlers = Array.from(html.matchAll(/onchange='([^']*)'/g), match => match[1]);
+        const handler = handlers.find(value => value.includes('setPb7LocalBranch'));
+        assert.ok(handler, 'complete local branch onchange handler is present');
+        const run = new Function('store', 'setPb7LocalBranch', 'syncBranchViewPanel', handler);
+        run.call({ value: 'codex/gpu-tma-market-foundation' }, store, setPb7LocalBranch, syncBranchViewPanel);
+        assert.deepEqual(calls, [{ scope: 'master', value: 'codex/gpu-tma-market-foundation', runtime: 'pb8' }]);
+        """
+        _run_node_assertions(
+            ["runtimeBranchKeys", "branchModel", "pb7BranchModel", "renderPb7BranchPanel"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
     def test_pb8_branch_selects_hold_live_rerenders_and_guides_match(self) -> None:
         """PB8 selectors resist live replacement and both guides document explicit tracking."""
         source = HTML_PATH.read_text(encoding="utf-8")

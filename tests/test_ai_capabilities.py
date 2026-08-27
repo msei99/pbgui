@@ -31,6 +31,7 @@ def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
         "get_optimizer_config",
         "get_optimizer_metadata",
         "list_optimizer_runs",
+        "list_pb8_optimizer_queue",
         "list_backtests",
         "get_optimizer_run_analysis",
         "rank_optimizer_run_candidates",
@@ -48,6 +49,7 @@ def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
         "propose_pb8_optimizer_config",
         "propose_pb8_config_patch",
         "propose_queue_pb8_config",
+        "propose_start_pb8_optimizer_queue",
         "propose_pareto_backtests",
         "propose_dashboard_from_template",
         "propose_dashboard_layout",
@@ -561,6 +563,108 @@ def test_save_and_queue_proposal_is_new_config_only(tmp_path: Path, monkeypatch)
     asyncio.run(scenario())
 
 
+def test_pb8_queue_start_is_exact_approval_gated_and_idempotent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Exact queued IDs should start only after approval and not restart on replay."""
+    from api import optimize_v8
+
+    async def scenario() -> None:
+        owner = "a" * 32
+        conversation = "c" * 32
+        now = time.time()
+        items = [
+            {
+                "filename": "1" * 36,
+                "name": "martingale_compare",
+                "status": "queued",
+                "exchange": ["binance", "bybit"],
+                "created": "2026-08-27T19:00:00",
+                "started_at": None,
+            },
+            {
+                "filename": "2" * 36,
+                "name": "grid_compare",
+                "status": "queued",
+                "exchange": ["binance", "bybit"],
+                "created": "2026-08-27T19:01:00",
+                "started_at": None,
+            },
+        ]
+        starts = []
+
+        monkeypatch.setattr(optimize_v8, "get_queue", lambda session: {"items": copy.deepcopy(items)})
+        monkeypatch.setattr(ai_capabilities, "load_ini_section", lambda section: {"autostart": "False"})
+
+        def start_queue_item(filename, body, session):
+            starts.append(filename)
+            item = next(item for item in items if item["filename"] == filename)
+            item["status"] = "running"
+            item["started_at"] = now + 1
+            return {"ok": True, "pid": 1000 + len(starts)}
+
+        monkeypatch.setattr(optimize_v8, "start_queue_item", start_queue_item)
+        service = AICapabilityService(tmp_path / "capabilities")
+
+        listed = service._list_pb8_optimizer_queue({"limit": 10})
+        created = await service._propose_start_pb8_optimizer_queue(
+            owner,
+            conversation,
+            {"queue_ids": [items[0]["filename"], items[1]["filename"]]},
+        )
+
+        assert listed["autostart"] is False
+        assert [item["queue_id"] for item in listed["items"]] == [items[0]["filename"], items[1]["filename"]]
+        assert created["preview"]["job_count"] == 2
+        assert starts == []
+        proposal = service.proposals[created["proposal_id"]]
+        result = await service.approve(owner, proposal.id, proposal.payload_digest, conversation)
+        replay = await service.approve(owner, proposal.id, proposal.payload_digest, conversation)
+
+        assert starts == [items[0]["filename"], items[1]["filename"]]
+        assert result["action"] == "start_optimize_queue"
+        assert result["started_count"] == 2
+        assert replay == result
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_pb8_queue_start_revalidates_status_before_any_launch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A reviewed queue batch must fail before launching if any exact item changed."""
+    from api import optimize_v8
+
+    async def scenario() -> None:
+        owner = "a" * 32
+        conversation = "c" * 32
+        items = [
+            {"filename": "1" * 36, "name": "first", "status": "queued", "started_at": None},
+            {"filename": "2" * 36, "name": "second", "status": "queued", "started_at": None},
+        ]
+        starts = []
+        monkeypatch.setattr(optimize_v8, "get_queue", lambda session: {"items": copy.deepcopy(items)})
+        monkeypatch.setattr(optimize_v8, "start_queue_item", lambda filename, body, session: starts.append(filename))
+        service = AICapabilityService(tmp_path / "capabilities")
+        created = await service._propose_start_pb8_optimizer_queue(
+            owner,
+            conversation,
+            {"queue_ids": [items[0]["filename"], items[1]["filename"]]},
+        )
+        items[1]["status"] = "error"
+        items[1]["started_at"] = time.time() + 1
+        proposal = service.proposals[created["proposal_id"]]
+
+        with pytest.raises(AICapabilityError, match="queue changed"):
+            await service.approve(owner, proposal.id, proposal.payload_digest, conversation)
+
+        assert starts == []
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_passivbot_source_search_and_read_are_root_confined(tmp_path: Path, monkeypatch) -> None:
     """Source tools should return bounded exact-version excerpts and skip runtime data."""
     root = tmp_path / "passivbot"
@@ -662,6 +766,7 @@ def test_registry_exposes_effects_resources_fingerprints_and_global_limits(
     assert effects["propose_pb8_optimizer_config"] == "write"
     assert effects["propose_pb8_config_patch"] == "write"
     assert effects["propose_queue_pb8_config"] == "execute"
+    assert effects["propose_start_pb8_optimizer_queue"] == "execute"
     assert effects["select_pareto_candidates"] == "ui"
     assert effects["present_user_choices"] == "ui"
     assert effects["propose_pareto_backtests"] == "execute"

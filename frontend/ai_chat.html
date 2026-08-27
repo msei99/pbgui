@@ -618,9 +618,10 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
   async function reconcileProposals(conversationId) {
     if (!conversationId || conversationId !== state.conversationId) { renderProposals([]); return; }
     var generation = ++state.proposalGeneration;
+    if (state.busy) { renderProposals([]); return; }
     try {
       var pending = await api('/proposals?conversation_id=' + encodeURIComponent(conversationId));
-      if (generation === state.proposalGeneration && conversationId === state.conversationId) renderProposals(pending.proposals || []);
+      if (generation === state.proposalGeneration && conversationId === state.conversationId && !state.busy) renderProposals(pending.proposals || []);
     } catch (error) {
       if (conversationId === state.conversationId) setNotice(error.message, true);
     }
@@ -678,6 +679,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     if (action === 'save') return 'Save PB8 optimizer config';
     if (action === 'save_and_queue') return 'Save PB8 config and add to queue';
     if (action === 'queue') return 'Add PB8 config to optimizer queue';
+    if (action === 'start_optimize_queue') return 'Start PB8 optimizer queue jobs';
     if (action === 'queue_backtests') return 'Queue PB8 Pareto backtests';
     if (action === 'create_dashboard') return 'Create PBGui dashboard';
     if (action === 'save_dashboard_layout') return 'Save PBGui dashboard layout';
@@ -690,6 +692,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       return String(preview.code_bytes || 0) + ' bytes of code · ' + String((preview.input_summary || {}).bytes || 0) + ' bytes of sanitized JSON input';
     }
     if (preview.action === 'queue_backtests') return String(preview.job_count || 0) + ' backtest jobs across ' + String((preview.exchanges || []).length) + ' exchanges' + (preview.may_start_immediately ? ' · may start immediately' : '');
+    if (preview.action === 'start_optimize_queue') return String(preview.job_count || 0) + ' exact queued PB8 optimizer jobs · starts immediately';
     if (preview.action === 'create_dashboard') return 'Create from template ' + String(preview.template || '');
     if (preview.action === 'save_dashboard_layout') return String((preview.layout || {}).rows || 0) + ' rows x ' + String((preview.layout || {}).columns || 0) + ' columns · ' + String(preview.changed_count || 0) + ' changes';
     return String(preview.changed_count || 0) + ' changed fields' + (preview.may_start_immediately ? ' · may start immediately' : '');
@@ -738,6 +741,8 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     if (approve) {
       var approvalDetail = preview.action === 'python_analysis'
         ? 'The reviewed code and sanitized input will run without network or host-data access. Proposal integrity is verified before execution.'
+        : preview.action === 'start_optimize_queue'
+          ? 'Start ' + String(preview.job_count || 0) + ' exact reviewed PB8 optimizer queue jobs immediately. Proposal integrity and current queued status are verified before execution.'
         : 'Apply the reviewed action. ' + (preview.may_start_immediately ? 'Queue autostart is enabled; jobs may start immediately. ' : '') + 'Proposal integrity is verified before execution.';
       var confirmed = await window.PBGuiDialogs.confirm({
         title: 'Approve PBGui action',
@@ -757,7 +762,15 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       });
       var executed = result.status === 'executed';
       if (executed && result.action === 'python_analysis') addMessage('assistant', analysisResultText(result));
-      setNotice(executed ? ('Action completed: ' + String(result.action || 'approved')) : ('Proposal status: ' + String(result.status || 'rejected')), false);
+      var continuationStatus = String((result.continuation || {}).status || '');
+      if (continuationStatus === 'queued' || continuationStatus === 'running') {
+        setNotice('Action completed. Continuing requested workflow...', false, true);
+        await loadConversation(conversationId);
+      } else if (continuationStatus === 'not_started') {
+        setNotice('Action completed, but the AI continuation could not start.', true);
+      } else {
+        setNotice(executed ? ('Action completed: ' + String(result.action || 'approved')) : ('Proposal status: ' + String(result.status || 'rejected')), false);
+      }
     } catch (error) {
       setNotice(error.message, true);
       buttons.forEach(function (button) { button.disabled = false; });

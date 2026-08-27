@@ -67,6 +67,8 @@ def test_ai_chat_requires_shared_dialog_approval_for_proposals() -> None:
     assert "preview.input_data" in HTML
     assert "preview.input_resource" in HTML
     assert "analysisResultText" in HTML
+    assert "Start PB8 optimizer queue jobs" in HTML
+    assert "exact reviewed PB8 optimizer queue jobs immediately" in HTML
 
 
 def test_ai_chat_uses_persistent_history_and_detached_turn_polling() -> None:
@@ -87,6 +89,12 @@ def test_ai_chat_uses_persistent_history_and_detached_turn_polling() -> None:
     assert "detectedQuickReplies" in HTML
     assert "appendDetectedQuickReplies" in HTML
     assert "reconcileProposals" in HTML
+    reconcile = HTML.split("async function reconcileProposals", 1)[1].split("function renderProposals", 1)[0]
+    assert "if (state.busy) { renderProposals([]); return; }" in reconcile
+    assert "conversationId === state.conversationId && !state.busy" in reconcile
+    assert "result.continuation" in HTML
+    assert "await loadConversation(conversationId)" in HTML
+    assert "the AI continuation could not start" in HTML
     assert "selected effort may take several minutes" in HTML
     assert "stopCurrentTurn" in HTML
     assert 'id="reasoning-summary"' in HTML

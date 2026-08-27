@@ -10405,11 +10405,11 @@
       const sourceRef = selectedRemoteName && sourceBranch ? (selectedRemoteName + '/' + sourceBranch) : sourceBranch;
       const targetRef = effectiveBranch ? ('local ' + effectiveBranch) : 'local branch';
       const sourceMissing = model.sourceBranchKnown && !model.sourceBranchExists;
-      const remoteCommitSetter = isMaster ? `setMasterField('${keys.manualCommit}', this.value); syncBranchViewPanel();` : `setVpsUiField(${js(scope)}, '${keys.manualCommit}', this.value); syncBranchViewPanel();`;
-      const branchFieldSetter = `setPb7LocalBranch(${js(scope)}, this.value, '${keys.repo}')`;
-      const remoteNameSetter = `setPb7RemoteName(${js(scope)}, this.value, '${keys.repo}')`;
-      const remoteUrlSetter = `setPb7RemoteUrl(${js(scope)}, this.value, '${keys.repo}')`;
-      const manualBranchSetter = `setPb7ManualBranch(${js(scope)}, this.value, '${keys.repo}')`;
+      const remoteCommitSetter = isMaster ? `setMasterField(${js(keys.manualCommit)}, this.value); syncBranchViewPanel();` : `setVpsUiField(${js(scope)}, ${js(keys.manualCommit)}, this.value); syncBranchViewPanel();`;
+      const branchFieldSetter = `setPb7LocalBranch(${js(scope)}, this.value, ${js(keys.repo)})`;
+      const remoteNameSetter = `setPb7RemoteName(${js(scope)}, this.value, ${js(keys.repo)})`;
+      const remoteUrlSetter = `setPb7RemoteUrl(${js(scope)}, this.value, ${js(keys.repo)})`;
+      const manualBranchSetter = `setPb7ManualBranch(${js(scope)}, this.value, ${js(keys.repo)})`;
       const interactionField = keys.repo + 'BranchSelectInteracting';
       return `
         <div class='panel'>

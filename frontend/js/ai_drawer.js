@@ -594,6 +594,7 @@
       var result = await api('/conversations/' + encodeURIComponent(state.current) + '/rewind', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message_index: messageIndex }) });
       root.querySelector('textarea').value = String(result.restored_prompt || '');
       delete state.retryMessages[state.current];
+      state.selectionDirty = true;
       await loadConversation(state.current);
       setStatus('Chat rewound. Edit or resend the restored prompt.', false);
     } catch (error) { setStatus(error.message, true); }
@@ -601,9 +602,10 @@
 
   async function reconcileProposals(conversationId, generation) {
     var proposalGeneration = ++state.proposalGeneration;
+    if (state.busy) { renderProposals([]); return; }
     try {
       var data = await api('/proposals?conversation_id=' + encodeURIComponent(conversationId));
-      if (proposalGeneration !== state.proposalGeneration || conversationId !== state.current || (generation != null && generation !== state.requestGeneration)) return;
+      if (proposalGeneration !== state.proposalGeneration || conversationId !== state.current || state.busy || (generation != null && generation !== state.requestGeneration)) return;
       renderProposals(data.proposals || []);
     } catch (error) {
       if (conversationId === state.current) setStatus(error.message, true);
@@ -614,6 +616,7 @@
     if (action === 'save') return 'Save PB8 optimizer config';
     if (action === 'save_and_queue') return 'Save PB8 config and add to queue';
     if (action === 'queue') return 'Add PB8 config to optimizer queue';
+    if (action === 'start_optimize_queue') return 'Start PB8 optimizer queue jobs';
     if (action === 'queue_backtests') return 'Queue PB8 Pareto backtests';
     if (action === 'create_dashboard') return 'Create PBGui dashboard';
     if (action === 'save_dashboard_layout') return 'Save PBGui dashboard layout';
@@ -624,6 +627,7 @@
   function proposalDetail(preview) {
     if (preview.action === 'python_analysis') return String(preview.code_bytes || 0) + ' bytes of code - ' + String((preview.input_summary || {}).bytes || 0) + ' bytes of sanitized JSON input';
     if (preview.action === 'queue_backtests') return String(preview.job_count || 0) + ' backtest jobs across ' + String((preview.exchanges || []).length) + ' exchanges' + (preview.may_start_immediately ? ' - may start immediately' : '');
+    if (preview.action === 'start_optimize_queue') return String(preview.job_count || 0) + ' exact queued PB8 optimizer jobs - starts immediately';
     if (preview.action === 'create_dashboard') return 'Create from template ' + String(preview.template || '');
     if (preview.action === 'save_dashboard_layout') return String((preview.layout || {}).rows || 0) + ' rows x ' + String((preview.layout || {}).columns || 0) + ' columns - ' + String(preview.changed_count || 0) + ' changes';
     return String(preview.changed_count || 0) + ' changes' + (preview.may_start_immediately ? ' - may start immediately' : '');
@@ -815,6 +819,8 @@
     if (approve) {
       var approvalDetail = preview.action === 'python_analysis'
         ? 'The reviewed code and sanitized input will run without network or host-data access. Proposal integrity is verified before execution.'
+        : preview.action === 'start_optimize_queue'
+          ? 'Start ' + String(preview.job_count || 0) + ' exact reviewed PB8 optimizer queue jobs immediately. Proposal integrity and current queued status are verified before execution.'
         : 'Apply ' + String(preview.changed_count || 0) + ' reviewed changes. ' + (preview.may_start_immediately ? 'Queue autostart is enabled; this may start immediately. ' : '') + 'Proposal integrity is verified before execution.';
       var confirmed = typeof window.PBGuiConfirm === 'function' && await window.PBGuiConfirm({
         title: 'Approve PBGui action',
@@ -835,7 +841,15 @@
       if (result.status === 'executed') {
         window.dispatchEvent(new CustomEvent('pbgui:ai-action-completed', { detail: result }));
       }
-      setStatus(result.status === 'executed' ? 'Approved action completed.' : 'Proposal ' + String(result.status || 'resolved') + '.', false);
+      var continuationStatus = String((result.continuation || {}).status || '');
+      if (continuationStatus === 'queued' || continuationStatus === 'running') {
+        setStatus('Approved action completed. Continuing requested workflow...', false);
+        await loadConversation(conversationId);
+      } else if (continuationStatus === 'not_started') {
+        setStatus('Approved action completed, but the AI continuation could not start.', true);
+      } else {
+        setStatus(result.status === 'executed' ? 'Approved action completed.' : 'Proposal ' + String(result.status || 'resolved') + '.', false);
+      }
     } catch (error) { setStatus(error.message, true); }
     finally { await reconcileProposals(conversationId); }
   }

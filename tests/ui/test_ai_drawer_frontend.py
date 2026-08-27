@@ -12,7 +12,7 @@ CSS = (ROOT / "frontend" / "css" / "ai_drawer.css").read_text(encoding="utf-8")
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=29" in NAV
+    assert "/app/js/ai_drawer.js?v=30" in NAV
     assert "/app/css/ai_drawer.css?v=12" in NAV
     assert "registerPageContext" in NAV
     assert "collectAIContext" in NAV
@@ -26,6 +26,8 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "models/health-refresh" in DRAWER
     assert "navigator.clipboard.writeText" in DRAWER
     assert "'/rewind'" in DRAWER
+    rewind = DRAWER.split("async function rewindMessage", 1)[1].split("async function", 1)[0]
+    assert rewind.index("state.selectionDirty = true") < rewind.index("await loadConversation(state.current)")
     assert "buildProposalDiff" in DRAWER
     assert "Reasoning summary" in DRAWER
     assert "renderReasoningSummary" in DRAWER
@@ -61,6 +63,9 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "document.cookie" not in DRAWER
     assert "retryMessages" in DRAWER
     assert "reconcileProposals" in DRAWER
+    reconcile = DRAWER.split("async function reconcileProposals", 1)[1].split("function proposalActionLabel", 1)[0]
+    assert "if (state.busy) { renderProposals([]); return; }" in reconcile
+    assert "conversationId !== state.current || state.busy" in reconcile
     assert "Review changes" in DRAWER
     assert "Review proposed changes" in DRAWER
     assert "window.PBGuiConfirm" in DRAWER
@@ -90,6 +95,11 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "preview.input_data" in DRAWER
     assert "preview.input_resource" in DRAWER
     assert "appendAnalysisResult" in DRAWER
+    assert "Start PB8 optimizer queue jobs" in DRAWER
+    assert "exact reviewed PB8 optimizer queue jobs immediately" in DRAWER
+    assert "result.continuation" in DRAWER
+    assert "await loadConversation(conversationId)" in DRAWER
+    assert "the AI continuation could not start" in DRAWER
 
 
 def test_drawer_context_is_structured_and_never_scrapes_the_page() -> None:
