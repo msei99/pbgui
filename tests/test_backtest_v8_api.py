@@ -62,6 +62,67 @@ def test_optimize_and_queue_drafts_round_trip_isolated_copies() -> None:
     assert error.value.status_code == 422
 
 
+def test_pb8_legacy_results_are_read_only_safe_and_exclude_managed_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """PB8 should discover valid legacy artifacts without widening managed deletion."""
+    backtests = tmp_path / "pb8" / "backtests"
+    legacy_result = backtests / "combined" / "2026-08-27T01_00_00"
+    managed_result = backtests / "pbgui" / "managed" / "combined" / "2026-08-27T02_00_00"
+    invalid_result = backtests / "binance" / "invalid"
+    for result_dir in (legacy_result, managed_result, invalid_result):
+        result_dir.mkdir(parents=True)
+        (result_dir / "analysis.json").write_text(json.dumps({"gain_usd": 1.2}), encoding="utf-8")
+    config = {
+        "config_version": "v8.0.0",
+        "backtest": {
+            "base_dir": "backtests",
+            "exchanges": ["binance", "bybit"],
+            "starting_balance": 1000,
+        },
+        "live": {
+            "strategy_kind": "trailing_martingale",
+            "approved_coins": {"long": ["LTC"], "short": []},
+        },
+        "bot": {
+            "long": {"risk": {"n_positions": 1, "total_wallet_exposure_limit": 1.0}},
+            "short": {"risk": {"n_positions": 0, "total_wallet_exposure_limit": 0.0}},
+        },
+    }
+    for result_dir in (legacy_result, managed_result):
+        (result_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    (invalid_result / "config.json").write_text(
+        json.dumps({"config_version": "v7.0.0", "backtest": {}}), encoding="utf-8"
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "analysis.json").write_text("{}", encoding="utf-8")
+    try:
+        (backtests / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pass
+    monkeypatch.setattr(backtest_v8, "_backtests_root", lambda: backtests)
+
+    payload = backtest_v8.list_legacy_results(session=None)
+
+    assert payload["read_only"] is True
+    assert len(payload["results"]) == 1
+    result = payload["results"][0]
+    assert result["path"] == str(legacy_result)
+    assert result["config_name"] == "Legacy combined"
+    assert result["exchange_dir"] == "combined"
+    assert result["backtest_version"] == "v8"
+    assert result["strategy"] == "trailing_martingale"
+    assert backtest_v8.get_result_analysis(str(legacy_result), session=None)["gain_usd"] == 1.2
+    with pytest.raises(HTTPException) as delete_error:
+        backtest_v8.delete_result(str(legacy_result), session=None)
+    assert delete_error.value.status_code == 400
+    with pytest.raises(HTTPException) as draft_error:
+        backtest_v8.create_result_run_draft({"path": str(legacy_result)}, session=None)
+    assert draft_error.value.status_code == 400
+    assert legacy_result.is_dir()
+
+
 def test_build_optimize_preset_from_pb8_backtest_result(tmp_path: Path, monkeypatch) -> None:
     """PB8 backtest results generate nested PB8 optimize bounds and scoring."""
     result_dir = tmp_path / "demo" / "result-1"
@@ -81,7 +142,7 @@ def test_build_optimize_preset_from_pb8_backtest_result(tmp_path: Path, monkeypa
     }
     (result_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
     (result_dir / "analysis.json").write_text(json.dumps({"adg": 0.02}), encoding="utf-8")
-    monkeypatch.setattr(backtest_v8, "_resolve_result_dir", lambda _path: result_dir)
+    monkeypatch.setattr(backtest_v8, "_resolve_result_dir", lambda _path, **_kwargs: result_dir)
     monkeypatch.setattr(
         backtest_v8,
         "get_pb8_optimize_metadata",
@@ -116,7 +177,7 @@ def test_result_run_draft_reuses_canonical_result_without_pb8_prepare(
     result_dir.mkdir()
     config = {"live": {"user": "alice"}, "pbgui": {"enabled_on": "old-host"}}
     (result_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
-    monkeypatch.setattr(backtest_v8, "_resolve_result_dir", lambda _path: result_dir)
+    monkeypatch.setattr(backtest_v8, "_resolve_result_dir", lambda _path, **_kwargs: result_dir)
     captured = {}
 
     def store(candidate: dict) -> dict:

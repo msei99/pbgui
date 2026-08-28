@@ -52,6 +52,21 @@ def test_v8_route_renders_the_v7_backtest_template() -> None:
     assert '"%%BACKTEST_NAV_CURRENT%%": "v8_backtest"' in api_source
 
 
+def test_pb8_exposes_read_only_legacy_results_panel() -> None:
+    """PB8 should reuse Legacy browsing and Compare while hiding unsafe write actions."""
+    page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    adapter = (ROOT / "frontend" / "js" / "backtest_editor_adapter.js").read_text(encoding="utf-8")
+
+    assert "/app/js/backtest_editor_adapter.js?v=11" in page
+    assert "items.push({ panel: 'legacy'" in adapter
+    assert "initialPanels: ['configs', 'queue', 'results', 'archive', 'legacy']" in adapter
+    assert "rebacktestSelectedLegacy" in adapter
+    assert "addToRunFromLegacy" in adapter
+    assert "deleteSelectedLegacyResults" in adapter
+    assert "#ctx-legacy button[onclick]" in adapter
+    assert "No legacy results found under ' + (backtestEditorAdapter.isV8 ? 'pb8' : 'pb7')" in page
+
+
 def test_backtest_page_can_open_the_queue_panel_from_ai_navigation() -> None:
     """Completed AI queue actions should land directly on the created jobs."""
     page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
@@ -594,7 +609,7 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
 
     assert '/app/css/backtest_shell.css?v=3' in v7_source
     assert '/app/js/backtest_shell.js?v=5' in v7_source
-    assert '/app/js/backtest_editor_adapter.js?v=10' in v7_source
+    assert '/app/js/backtest_editor_adapter.js?v=11' in v7_source
     assert "PBGuiBacktestShell.upgradeLegacy" in v7_source
     assert "PBGuiBacktestEditorAdapter.create(BACKTEST_VERSION)" in v7_source
     assert "sideConfig.risk" in adapter_source
@@ -1073,7 +1088,7 @@ def test_v8_backtest_result_can_open_pb8_optimize() -> None:
     assert "'/api/optimize-v8/main_page?opt_draft_id='" in adapter
     unsupported = adapter.split("var unsupported =", 1)[1].split("];", 1)[0]
     assert "'optimizeFromResult'" not in unsupported
-    assert "/app/js/backtest_editor_adapter.js?v=10" in page
+    assert "/app/js/backtest_editor_adapter.js?v=11" in page
 
 
 def test_v8_result_add_to_run_uses_direct_canonical_draft() -> None:
@@ -1580,7 +1595,7 @@ def test_editor_adapter_preserves_v7_paths_and_writes_v8_risk_paths() -> None:
         assert.equal(v8.docsApiBase('https://example.test/api/backtest-v8'), 'https://example.test/api');
         assert.equal(v8.getHslValue({ hsl: { enabled: true } }, 'enabled', false), true);
         assert.equal(v7.getHslValue({ hsl_enabled: true }, 'enabled', false), true);
-        assert.deepEqual(v8.initialPanels, ['configs', 'queue', 'results', 'archive']);
+        assert.deepEqual(v8.initialPanels, ['configs', 'queue', 'results', 'archive', 'legacy']);
         assert.equal(v8.archiveApiBase('https://example.test/api/backtest-v8'), 'https://example.test/api/backtest-v7');
         """
     )

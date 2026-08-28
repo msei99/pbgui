@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
 <script src="/app/js/backtest_shell.js?v=5"></script>
-<script src="/app/js/backtest_editor_adapter.js?v=10"></script>
+<script src="/app/js/backtest_editor_adapter.js?v=11"></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
 <style>
 /* ── Design Tokens ─────────────────────────────── */
@@ -10051,7 +10051,7 @@ function renderLegacyResults() {
   });
 
   if (!filtered.length) {
-    tableEl.innerHTML = '\x3Cdiv class="empty-state">No legacy results found under pb7/backtests.\x3C/div>';
+    tableEl.innerHTML = '\x3Cdiv class="empty-state">No legacy results found under ' + (backtestEditorAdapter.isV8 ? 'pb8' : 'pb7') + '/backtests.\x3C/div>';
     return;
   }
 

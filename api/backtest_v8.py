@@ -146,9 +146,68 @@ def _log_dir() -> Path:
 
 
 def _results_root() -> Path:
+    return _backtests_root() / "pbgui"
+
+
+def _backtests_root() -> Path:
+    """Return the installed PB8 backtest root without broadening managed writes."""
     status = pb8_runtime_status()
     pb8_dir = str(status.get("pb8dir") or "")
-    return Path(pb8_dir) / "backtests" / "pbgui" if pb8_dir else _data_dir() / ".pb8-unavailable"
+    return Path(pb8_dir) / "backtests" if pb8_dir else _data_dir() / ".pb8-unavailable"
+
+
+def _legacy_results_roots() -> list[Path]:
+    """List direct regular PB8 result roots outside PBGui's managed namespace."""
+    root = _backtests_root()
+    if not root.is_dir() or root.is_symlink():
+        return []
+    resolved_root = root.resolve()
+    roots = []
+    for entry in sorted(root.iterdir()):
+        if entry.name == "pbgui" or entry.is_symlink() or not entry.is_dir():
+            continue
+        try:
+            resolved = entry.resolve()
+            resolved.relative_to(resolved_root)
+        except (OSError, ValueError):
+            continue
+        roots.append(resolved)
+    return roots
+
+
+def _legacy_result_analysis_paths() -> list[Path]:
+    """Discover bounded valid PB8 legacy artifacts without following symlinks."""
+    indexed = []
+    scanned = 0
+    for source_root in _legacy_results_roots():
+        for current, directories, filenames in os.walk(source_root, followlinks=False):
+            current_path = Path(current)
+            directories[:] = [
+                name
+                for name in directories
+                if not (current_path / name).is_symlink()
+            ]
+            scanned += 1
+            if scanned > 10_000:
+                break
+            if "analysis.json" not in filenames:
+                continue
+            analysis_path = current_path / "analysis.json"
+            if analysis_path.is_symlink() or not analysis_path.is_file():
+                continue
+            config = _result_config(current_path)
+            try:
+                if not config or config_version_info(config)["backtest_version"] != "v8":
+                    continue
+                resolved = analysis_path.resolve()
+                resolved.relative_to(source_root)
+                indexed.append((resolved.stat().st_mtime, str(resolved), resolved))
+            except (KeyError, OSError, TypeError, ValueError):
+                continue
+        if scanned > 10_000:
+            break
+    indexed.sort(reverse=True)
+    return [item[2] for item in indexed[:5000]]
 
 
 def _validate_name(name: str) -> str:
@@ -1228,18 +1287,25 @@ def _pb8_result_near_bounds(config: dict, *, tolerance: float) -> dict[str, obje
     return {"at_lower": at_lower, "at_upper": at_upper, "within_range": within_range}
 
 
-def _resolve_result_dir(path: str, *, allow_archives: bool = True) -> Path:
+def _resolve_result_dir(
+    path: str,
+    *,
+    allow_archives: bool = True,
+    allow_legacy: bool = True,
+) -> Path:
     """Resolve a PB8 result below its local root or a read-only archive root."""
     local_root = _results_root().resolve()
     archive_root = (_data_dir() / "archives").resolve()
     result_dir = Path(str(path or "")).resolve()
     selected_root: Path | None = None
-    for root in [local_root, *([archive_root] if allow_archives else [])]:
+    legacy_roots = _legacy_results_roots() if allow_legacy else []
+    for root in [local_root, *legacy_roots, *([archive_root] if allow_archives else [])]:
         try:
+            result_dir = _safe_path(Path(path), root)
             result_dir.relative_to(root)
             selected_root = root
             break
-        except ValueError:
+        except (RuntimeError, ValueError):
             continue
     if selected_root is None:
         raise HTTPException(status_code=400, detail="Invalid result path")
@@ -1250,6 +1316,13 @@ def _resolve_result_dir(path: str, *, allow_archives: bool = True) -> Path:
     analysis_path = result_dir / "analysis.json"
     if not analysis_path.is_file() or analysis_path.is_symlink():
         raise HTTPException(status_code=400, detail="Path is not a PB8 result directory")
+    if selected_root in legacy_roots:
+        config = _result_config(result_dir)
+        try:
+            if not config or config_version_info(config)["backtest_version"] != "v8":
+                raise HTTPException(status_code=400, detail="Legacy result does not belong to PB8")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid PB8 legacy result config") from exc
     if selected_root == archive_root:
         try:
             config = _read_json_object_nofollow(result_dir / "config.json", archive_root, required=True)
@@ -1372,8 +1445,13 @@ def _result_analysis_paths(name: Optional[str] = None) -> list[Path]:
     return [item[2] for item in indexed_paths]
 
 
-def _list_results(analysis_paths: Optional[list[Path]] = None) -> list[dict]:
-    root = _results_root()
+def _list_results(
+    analysis_paths: Optional[list[Path]] = None,
+    *,
+    result_root: Optional[Path] = None,
+    legacy: bool = False,
+) -> list[dict]:
+    root = result_root or _results_root()
     if not root.is_dir():
         return []
     if analysis_paths is None:
@@ -1392,7 +1470,8 @@ def _list_results(analysis_paths: Optional[list[Path]] = None) -> list[dict]:
             approved = live.get("approved_coins") if isinstance(live.get("approved_coins"), dict) else {}
             coins = sorted(set((approved.get("long") or []) + (approved.get("short") or [])))
             metrics = _scalar_metrics(analysis)
-            exchange = parts[1] if len(parts) > 1 else ""
+            source_name = parts[0] if parts else ""
+            exchange = source_name if legacy else (parts[1] if len(parts) > 1 else "")
             configured_exchanges = backtest.get("exchanges") or []
             if isinstance(configured_exchanges, str):
                 configured_exchanges = [configured_exchanges]
@@ -1462,11 +1541,21 @@ def _list_results(analysis_paths: Optional[list[Path]] = None) -> list[dict]:
             )
             results.append(
                 {
-                    "config_name": parts[0] if parts else "",
+                    "config_name": (
+                        Path(str(backtest.get("base_dir") or "")).name
+                        if legacy and Path(str(backtest.get("base_dir") or "")).name not in {"", "backtests", "pbgui"}
+                        else (f"Legacy {source_name}" if legacy else source_name)
+                    ),
+                    "display_name": str(result_dir.relative_to(root)),
+                    "backtest_version": "v8",
                     "exchange": exchange,
                     "exchange_dir": exchange,
                     "exchanges": result_exchanges,
-                    "run": "/".join(parts[2:-1]) if len(parts) > 3 else (parts[-2] if len(parts) > 1 else ""),
+                    "run": (
+                        "/".join(parts[1:-1])
+                        if legacy
+                        else ("/".join(parts[2:-1]) if len(parts) > 3 else (parts[-2] if len(parts) > 1 else ""))
+                    ),
                     "result_name": result_dir.name,
                     "path": str(result_dir),
                     "coins": coins,
@@ -2573,6 +2662,16 @@ def get_results(
     }
 
 
+@router.get("/legacy/results")
+def list_legacy_results(session: SessionToken = Depends(require_auth)) -> dict:
+    """List valid read-only PB8 artifacts outside the managed pbgui result root."""
+    paths = _legacy_result_analysis_paths()
+    return {
+        "results": _list_results(paths, result_root=_backtests_root(), legacy=True),
+        "read_only": True,
+    }
+
+
 @router.get("/results/analysis")
 def get_result_analysis(path: str, session: SessionToken = Depends(require_auth)) -> dict:
     """Return analysis JSON for the shared result details panel."""
@@ -2602,7 +2701,7 @@ def create_result_run_draft(body: dict = Body(...), session: SessionToken = Depe
     path = str(body.get("path") or "").strip() if isinstance(body, dict) else ""
     if not path:
         raise HTTPException(status_code=400, detail="Missing result path")
-    result_dir = _resolve_result_dir(path)
+    result_dir = _resolve_result_dir(path, allow_legacy=False)
     config = _result_config(result_dir)
     if not config:
         raise HTTPException(status_code=404, detail="Result config not found")
@@ -2765,6 +2864,6 @@ def get_result_file(filename: str, path: str, session: SessionToken = Depends(re
 @router.delete("/results")
 def delete_result(path: str, session: SessionToken = Depends(require_auth)) -> dict:
     """Delete one explicitly selected PB8 result directory."""
-    result_dir = _resolve_result_dir(path, allow_archives=False)
+    result_dir = _resolve_result_dir(path, allow_archives=False, allow_legacy=False)
     rmtree(result_dir)
     return {"ok": True}

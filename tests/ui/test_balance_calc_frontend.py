@@ -41,7 +41,7 @@ def test_pb8_backtest_handoffs_use_shared_balance_calculator() -> None:
         assert f"'{action}'" not in adapter
     assert "openBalanceCalculatorWithConfig(cfg" in page
     assert "/app/js/editor_shared.js?v=14" in page
-    assert "/app/js/backtest_editor_adapter.js?v=10" in page
+    assert "/app/js/backtest_editor_adapter.js?v=11" in page
 
 
 def test_pb8_run_sidebar_uses_shared_balance_calculator() -> None:

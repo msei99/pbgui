@@ -150,19 +150,20 @@
           { panel: 'results', icon: '📊', label: 'Results' }
         ];
         items.push({ panel: 'archive', icon: '🗄️', label: 'Archive' });
-        if (!isV8) {
-          items.push({ panel: 'legacy', icon: '🧭', label: 'Legacy' });
-        }
+        items.push({ panel: 'legacy', icon: '🧭', label: 'Legacy' });
         return items;
       },
-      initialPanels: isV8 ? ['configs', 'queue', 'results', 'archive'] : ['configs', 'queue', 'results', 'archive', 'legacy'],
+      initialPanels: ['configs', 'queue', 'results', 'archive', 'legacy'],
       configureUi: function () {
         if (!isV8) return;
         installRunHandoff();
         var unsupported = [
-          'optimizePresetFromResult'
+          'optimizePresetFromResult',
+          'rebacktestSelectedLegacy',
+          'addToRunFromLegacy',
+          'deleteSelectedLegacyResults'
         ];
-        document.querySelectorAll('#sidebar-editor button[onclick], #ctx-results button[onclick]').forEach(function (button) {
+        document.querySelectorAll('#sidebar-editor button[onclick], #ctx-results button[onclick], #ctx-legacy button[onclick]').forEach(function (button) {
           var handler = String(button.getAttribute('onclick') || '');
           if (unsupported.some(function (name) { return handler.indexOf(name + '(') >= 0; })) button.remove();
         });
