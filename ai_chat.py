@@ -111,6 +111,11 @@ _MODEL_HEALTH_INTERVAL_SECONDS = 6 * 60 * 60
 _MODEL_HEALTH_INITIAL_DELAY_SECONDS = 10
 _CODEX_STREAM_LIMIT = 4 * 1024 * 1024
 _CHAT_TIMEOUT_SECONDS = 180
+_CODEX_HIGH_EFFORT_TIMEOUT_SECONDS = 300
+_CODEX_TOOL_SOFT_LIMIT = 32
+_CODEX_TOOL_HARD_LIMIT = 64
+_CODEX_STALL_CALLS = 4
+_MAX_CODEX_CACHED_REPLAYS = 2
 _OPENCODE_REQUEST_TIMEOUT_SECONDS = 60
 _OPENCODE_REQUEST_ATTEMPTS = 2
 _GO_INSTRUCTIONS = (
@@ -128,6 +133,7 @@ _CAPABILITY_ACTIVITY = {
     "present_user_choices": "Preparing clarification choices",
     "list_backtests": "Reading backtest summaries",
     "select_pareto_candidates": "Selecting Pareto candidates in PBGui",
+    "select_backtest_results": "Opening selected Backtest results in Compare",
     "perform_page_action": "Controlling the current PBGui page",
     "list_dashboard_templates": "Listing dashboard templates",
     "get_dashboard_layout": "Reading dashboard layout",
@@ -158,6 +164,7 @@ _CAPABILITY_RESULT_ACTIVITY = {
     "present_user_choices": "Clarification choices ready",
     "list_backtests": "Backtest summaries loaded; model is processing results",
     "select_pareto_candidates": "Pareto selection sent to the open PBGui page",
+    "select_backtest_results": "Backtest result comparison sent to the open PBGui page",
     "perform_page_action": "Page action sent to the open PBGui page",
     "list_dashboard_templates": "Dashboard templates loaded; model is processing results",
     "get_dashboard_layout": "Dashboard layout loaded; model is processing results",
@@ -365,6 +372,11 @@ class CodexRuntime:
         self.closing = False
         self.tool_handler = tool_handler
         self.tool_results: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self.active_tool_calls = 0
+        self.active_tool_signatures: dict[tuple[str, str], int] = {}
+        self.active_tool_cache: dict[tuple[str, str], dict[str, Any]] = {}
+        self.active_tool_result_digests: set[str] = set()
+        self.active_tool_no_progress_calls = 0
 
     @staticmethod
     def available() -> bool:
@@ -679,9 +691,19 @@ class CodexRuntime:
             if not turn_id:
                 raise AIChatError("ChatGPT turn did not start")
             self.active_turn_id = turn_id
+            self.active_tool_calls = 0
+            self.active_tool_signatures = {}
+            self.active_tool_cache = {}
+            self.active_tool_result_digests = set()
+            self.active_tool_no_progress_calls = 0
             chunks: list[str] = []
             completed_messages: list[str] = []
-            deadline = asyncio.get_running_loop().time() + _CHAT_TIMEOUT_SECONDS
+            timeout_seconds = (
+                _CODEX_HIGH_EFFORT_TIMEOUT_SECONDS
+                if effort.lower() in {"high", "xhigh", "ultra"}
+                else _CHAT_TIMEOUT_SECONDS
+            )
+            deadline = asyncio.get_running_loop().time() + timeout_seconds
             try:
                 while True:
                     remaining = deadline - asyncio.get_running_loop().time()
@@ -726,6 +748,11 @@ class CodexRuntime:
                 raise
             finally:
                 self.active_turn_id = None
+                self.active_tool_calls = 0
+                self.active_tool_signatures = {}
+                self.active_tool_cache = {}
+                self.active_tool_result_digests = set()
+                self.active_tool_no_progress_calls = 0
 
     async def interrupt(self, thread_id: str) -> None:
         """Interrupt the currently active turn for a conversation."""
@@ -1597,6 +1624,7 @@ class AIChatService:
         action = result.get("ui_action") if isinstance(result, dict) else None
         if not isinstance(action, dict) or action.get("type") not in {
             "optimize.select_paretos",
+            "backtest.compare_results",
             "page.perform_action",
             "chat.quick_replies",
         }:
@@ -3299,6 +3327,70 @@ class AIChatService:
                 ],
                 "success": False,
             }
+        try:
+            arguments_key = json.dumps(
+                params.get("arguments"), allow_nan=False, sort_keys=True, separators=(",", ":")
+            )
+        except (TypeError, ValueError):
+            arguments_key = "<invalid>"
+        signature = (tool, arguments_key)
+        runtime.active_tool_calls += 1
+        runtime.active_tool_signatures[signature] = runtime.active_tool_signatures.get(signature, 0) + 1
+        if runtime.active_tool_calls > _CODEX_TOOL_HARD_LIMIT:
+            await self._set_activity(
+                owner, conversation.id, "PBGui hard capability limit reached; model must answer now"
+            )
+            text = json.dumps(
+                {
+                    "error": (
+                        "PBGui hard capability limit reached. Stop calling tools and answer now using "
+                        "the results already loaded. State any remaining uncertainty."
+                    )
+                },
+                separators=(",", ":"),
+            )
+            return {"contentItems": [{"type": "inputText", "text": text}], "success": False}
+        cached = runtime.active_tool_cache.get(signature)
+        if cached is not None:
+            runtime.active_tool_no_progress_calls += 1
+            if (
+                runtime.active_tool_calls > _CODEX_TOOL_SOFT_LIMIT
+                and runtime.active_tool_no_progress_calls >= _CODEX_STALL_CALLS
+            ):
+                await self._set_activity(
+                    owner, conversation.id, "PBGui analysis stalled; model must answer from loaded results"
+                )
+                text = json.dumps(
+                    {
+                        "error": (
+                            "No new PBGui information was produced by the recent capability requests. "
+                            "Stop calling tools and answer now from the results already loaded, stating "
+                            "any remaining uncertainty."
+                        )
+                    },
+                    separators=(",", ":"),
+                )
+                return {"contentItems": [{"type": "inputText", "text": text}], "success": False}
+            if runtime.active_tool_signatures[signature] <= _MAX_CODEX_CACHED_REPLAYS:
+                await self._set_activity(
+                    owner, conversation.id, "Reusing cached PBGui capability result"
+                )
+                return copy.deepcopy(cached)
+            await self._set_activity(
+                owner, conversation.id, "Repeated PBGui capability already loaded; model is processing results"
+            )
+            text = json.dumps(
+                {
+                    "cached": True,
+                    "result_already_loaded": True,
+                    "instruction": (
+                        "This identical PBGui capability result is already in the turn context. Continue "
+                        "with the loaded result instead of requesting it again."
+                    ),
+                },
+                separators=(",", ":"),
+            )
+            return {"contentItems": [{"type": "inputText", "text": text}], "success": True}
         await self._set_activity(
             owner,
             conversation.id,
@@ -3318,7 +3410,36 @@ class AIChatService:
                 _CAPABILITY_RESULT_ACTIVITY.get(tool, "PBGui results loaded; model is processing them"),
             )
             text = json.dumps(result, allow_nan=False, separators=(",", ":"))
-            return {"contentItems": [{"type": "inputText", "text": text}], "success": True}
+            response = {"contentItems": [{"type": "inputText", "text": text}], "success": True}
+            runtime.active_tool_cache[signature] = copy.deepcopy(response)
+            result_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            if result_digest in runtime.active_tool_result_digests:
+                runtime.active_tool_no_progress_calls += 1
+            else:
+                runtime.active_tool_result_digests.add(result_digest)
+                runtime.active_tool_no_progress_calls = 0
+            if (
+                runtime.active_tool_calls > _CODEX_TOOL_SOFT_LIMIT
+                and runtime.active_tool_no_progress_calls >= _CODEX_STALL_CALLS
+            ):
+                await self._set_activity(
+                    owner, conversation.id, "PBGui analysis stalled; model must answer from loaded results"
+                )
+                stalled_text = json.dumps(
+                    {
+                        "error": (
+                            "Recent distinct PBGui capability requests produced no new result content. "
+                            "Stop calling tools and answer now from the results already loaded, stating "
+                            "any remaining uncertainty."
+                        )
+                    },
+                    separators=(",", ":"),
+                )
+                return {
+                    "contentItems": [{"type": "inputText", "text": stalled_text}],
+                    "success": False,
+                }
+            return response
         except AICapabilityError as exc:
             await self._set_activity(
                 owner, conversation.id, "PBGui capability failed; model is processing the error"

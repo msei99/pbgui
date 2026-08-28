@@ -69,6 +69,10 @@ def test_ai_chat_requires_shared_dialog_approval_for_proposals() -> None:
     assert "analysisResultText" in HTML
     assert "Start PB8 optimizer queue jobs" in HTML
     assert "exact reviewed PB8 optimizer queue jobs immediately" in HTML
+    resolve = HTML.split("async function resolveProposal", 1)[1].split("async function sendMessage", 1)[0]
+    assert resolve.index("card.hidden = true") < resolve.index("await api('/proposals/")
+    assert "Applying approved action..." in resolve
+    assert "card.hidden = false" in resolve
 
 
 def test_ai_chat_uses_persistent_history_and_detached_turn_polling() -> None:

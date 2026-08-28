@@ -37,6 +37,7 @@ def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
         "rank_optimizer_run_candidates",
         "get_pareto_candidate",
         "select_pareto_candidates",
+        "select_backtest_results",
         "perform_page_action",
         "present_user_choices",
         "get_backtest_projection",
@@ -167,6 +168,42 @@ def test_quick_reply_capability_returns_typed_clickable_choices() -> None:
     assert result["status"] == "waiting_for_user_choice"
     assert result["ui_action"]["type"] == "chat.quick_replies"
     assert result["ui_action"]["payload"]["choices"][0]["label"] == "Balanced"
+
+
+def test_backtest_compare_capability_resolves_exact_resources_without_paths(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Backtest Compare should emit exact safe selectors and never browser-visible host paths."""
+    service = AICapabilityService(tmp_path / "capabilities")
+    resources = [f"pbgui://backtest/v8/{value * 32}" for value in ("a", "b")]
+    items = {
+        resources[0]: {
+            "path": "/private/result-a",
+            "config_name": "grid",
+            "result_name": "candidate-a",
+            "exchange_dir": "binance",
+            "modified": "2026-08-28T10:00:00",
+        },
+        resources[1]: {
+            "path": "/private/result-b",
+            "config_name": "martingale",
+            "result_name": "candidate-b",
+            "exchange_dir": "bybit",
+            "modified": "2026-08-28T10:01:00",
+        },
+    }
+    monkeypatch.setattr(service, "_resolve_listed_resource", lambda kind, version, resource: items[resource])
+
+    result = service._select_backtest_results({"version": "v8", "resources": resources})
+
+    assert result["status"] == "queued_for_browser"
+    assert result["selected"] == 2
+    assert result["ui_action"]["type"] == "backtest.compare_results"
+    assert result["ui_action"]["target"] == {"page_key": "v8_backtest", "version": "v8"}
+    assert "private" not in json.dumps(result)
+    assert result["ui_action"]["payload"]["selectors"][0]["config_name"] == "grid"
+    with pytest.raises(AICapabilityError, match="duplicates"):
+        service._select_backtest_results({"version": "v8", "resources": [resources[0], resources[0]]})
 
 
 def test_generic_page_capability_returns_exact_browser_action() -> None:
@@ -768,6 +805,7 @@ def test_registry_exposes_effects_resources_fingerprints_and_global_limits(
     assert effects["propose_queue_pb8_config"] == "execute"
     assert effects["propose_start_pb8_optimizer_queue"] == "execute"
     assert effects["select_pareto_candidates"] == "ui"
+    assert effects["select_backtest_results"] == "ui"
     assert effects["present_user_choices"] == "ui"
     assert effects["propose_pareto_backtests"] == "execute"
     assert effects["propose_dashboard_from_template"] == "write"

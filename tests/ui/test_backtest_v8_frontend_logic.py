@@ -991,6 +991,53 @@ def test_shared_results_compare_routes_each_version_to_its_own_api() -> None:
     assert "'PB' + item.version.toUpperCase()" in page_source
 
 
+def test_ai_backtest_compare_selects_exact_results_and_opens_existing_chart() -> None:
+    """The typed AI action should load, select, and compare exact managed result rows."""
+    page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _extract_function(page, name)
+        for name in ("aiBacktestSelectorMatches", "openAIBacktestCompare")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const backtestEditorAdapter = {{ version: 'v8' }};
+        const versionFilter = {{ value: 'both' }};
+        const compareEl = {{ scrollIntoView: options => {{ compareEl.scrolled = options; }} }};
+        const document = {{ getElementById: id => id === 'results-version-filter' ? versionFilter : id === 'compare-chart-area' ? compareEl : null }};
+        const results = [
+          {{backtest_version:'v8', config_name:'grid', result_name:'a', exchange_dir:'binance', modified:'one', path:'path-a'}},
+          {{backtest_version:'v8', config_name:'martingale', result_name:'b', exchange_dir:'bybit', modified:'two', path:'path-b'}}
+        ];
+        let panel = '', selected = [], compared = [], toastMessage = '';
+        function _clearResultsFilters() {{}}
+        function selectPanel(value, options) {{ panel = value; assert.equal(options.deferResultsLoad, true); }}
+        async function loadResults() {{ return results; }}
+        function setSelectedResults(paths) {{ selected = paths; }}
+        async function _compareResultPaths(paths) {{ compared = paths; }}
+        function toast(message) {{ toastMessage = message; }}
+        {functions}
+        (async () => {{
+          await openAIBacktestCompare({{
+            target: {{version:'v8'}},
+            payload: {{selectors:[
+              {{config_name:'grid', result_name:'a', exchange_dir:'binance', modified:'one'}},
+              {{config_name:'martingale', result_name:'b', exchange_dir:'bybit', modified:'two'}}
+            ]}}
+          }});
+          assert.equal(versionFilter.value, 'v8');
+          assert.equal(panel, 'results');
+          assert.deepEqual(selected, ['path-a', 'path-b']);
+          assert.deepEqual(compared, selected);
+          assert.deepEqual(compareEl.scrolled, {{block:'start'}});
+          assert.match(toastMessage, /opened Results Compare for 2 backtests/);
+        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_shared_results_delete_routes_each_version_to_its_own_api() -> None:
     """Mixed PB7/PB8 deletion must remain enabled and use each result's backend."""
     page_source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")

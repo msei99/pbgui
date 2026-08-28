@@ -1712,6 +1712,7 @@ def test_codex_turn_timeout_returns_safe_ai_error(tmp_path: Path, monkeypatch) -
         monkeypatch.setattr(runtime, "request", fake_request)
         monkeypatch.setattr(runtime, "_interrupt_turn_and_wait", fake_interrupt)
         monkeypatch.setattr("ai_chat._CHAT_TIMEOUT_SECONDS", 0.001)
+        monkeypatch.setattr("ai_chat._CODEX_HIGH_EFFORT_TIMEOUT_SECONDS", 0.001)
 
         with pytest.raises(AIChatError, match="ChatGPT response timed out"):
             await runtime.chat("thread-1", "Hello", "gpt-test", "high")
@@ -1754,6 +1755,164 @@ def test_codex_tool_updates_activity_after_local_result(tmp_path: Path) -> None:
 
         assert result["success"] is True
         assert conversation.activity == "Documentation search complete; model is processing results"
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_codex_tool_budget_caches_repeats_and_stops_only_stalled_analysis(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Codex should cache repeats while allowing unique calls beyond the soft budget."""
+    from ai_chat import CodexRuntime
+
+    class FakeCapabilities:
+        """Count only capability calls that pass the Codex turn budget."""
+
+        calls = []
+
+        @classmethod
+        async def dispatch(cls, owner, conversation_id, tool, arguments):
+            cls.calls.append((tool, arguments))
+            return {"tool": tool, "arguments": arguments}
+
+    async def scenario() -> None:
+        service = AIChatService(tmp_path / "ai")
+        service.capabilities = FakeCapabilities()
+        runtime = CodexRuntime("a" * 32, tmp_path / "codex")
+        runtime.active_turn_id = "turn-1"
+        conversation = await service._conversation("a" * 32, "chatgpt", "gpt-test", None)
+        conversation.codex_thread_id = "thread-1"
+        conversation.codex_runtime = runtime
+        conversation.busy = True
+        base = {
+            "namespace": "pbgui",
+            "tool": "rank_optimizer_run_candidates",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "arguments": {"version": "v8", "resource": "run-1"},
+        }
+
+        monkeypatch.setattr("ai_chat._CODEX_TOOL_SOFT_LIMIT", 2)
+        monkeypatch.setattr("ai_chat._CODEX_STALL_CALLS", 3)
+        first = await service._handle_codex_tool("a" * 32, runtime, base)
+        cached = await service._handle_codex_tool("a" * 32, runtime, base)
+        compact_cached = await service._handle_codex_tool("a" * 32, runtime, base)
+        unique = await service._handle_codex_tool(
+            "a" * 32,
+            runtime,
+            {**base, "tool": "list_optimizer_runs", "arguments": {"version": "v8"}},
+        )
+        await service._handle_codex_tool("a" * 32, runtime, base)
+        await service._handle_codex_tool("a" * 32, runtime, base)
+        stalled = await service._handle_codex_tool("a" * 32, runtime, base)
+
+        assert first["success"] is True
+        assert cached == first
+        assert compact_cached["success"] is True
+        assert "result_already_loaded" in compact_cached["contentItems"][0]["text"]
+        assert unique["success"] is True
+        assert stalled["success"] is False
+        assert "No new PBGui information" in stalled["contentItems"][0]["text"]
+        assert len(FakeCapabilities.calls) == 2
+        assert conversation.activity == "PBGui analysis stalled; model must answer from loaded results"
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_codex_tool_hard_limit_stops_unique_endless_calls(tmp_path: Path, monkeypatch) -> None:
+    """Even continuously unique calls must stop at the high end-loop safety limit."""
+    from ai_chat import CodexRuntime
+
+    class FakeCapabilities:
+        """Return a distinct result for each accepted call."""
+
+        calls = []
+
+        @classmethod
+        async def dispatch(cls, owner, conversation_id, tool, arguments):
+            cls.calls.append(arguments)
+            return {"value": arguments["value"]}
+
+    async def scenario() -> None:
+        monkeypatch.setattr("ai_chat._CODEX_TOOL_HARD_LIMIT", 3)
+        service = AIChatService(tmp_path / "ai")
+        service.capabilities = FakeCapabilities()
+        runtime = CodexRuntime("a" * 32, tmp_path / "codex")
+        runtime.active_turn_id = "turn-1"
+        conversation = await service._conversation("a" * 32, "chatgpt", "gpt-test", None)
+        conversation.codex_thread_id = "thread-1"
+        conversation.codex_runtime = runtime
+        conversation.busy = True
+
+        results = []
+        for value in range(4):
+            results.append(
+                await service._handle_codex_tool(
+                    "a" * 32,
+                    runtime,
+                    {
+                        "namespace": "pbgui",
+                        "tool": "get_optimizer_run_analysis",
+                        "threadId": "thread-1",
+                        "turnId": "turn-1",
+                        "arguments": {"value": value},
+                    },
+                )
+            )
+
+        assert [item["success"] for item in results] == [True, True, True, False]
+        assert "hard capability limit" in results[-1]["contentItems"][0]["text"]
+        assert len(FakeCapabilities.calls) == 3
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_codex_soft_limit_detects_distinct_calls_with_identical_results(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Different tool arguments must still count as stalled when result content never changes."""
+    from ai_chat import CodexRuntime
+
+    class FakeCapabilities:
+        """Return the same bounded result for every distinct request."""
+
+        @staticmethod
+        async def dispatch(owner, conversation_id, tool, arguments):
+            return {"matches": [], "returned": 0}
+
+    async def scenario() -> None:
+        monkeypatch.setattr("ai_chat._CODEX_TOOL_SOFT_LIMIT", 2)
+        monkeypatch.setattr("ai_chat._CODEX_STALL_CALLS", 2)
+        service = AIChatService(tmp_path / "ai")
+        service.capabilities = FakeCapabilities()
+        runtime = CodexRuntime("a" * 32, tmp_path / "codex")
+        runtime.active_turn_id = "turn-1"
+        conversation = await service._conversation("a" * 32, "chatgpt", "gpt-test", None)
+        conversation.codex_thread_id = "thread-1"
+        conversation.codex_runtime = runtime
+        conversation.busy = True
+
+        results = []
+        for query in ("first", "second", "third"):
+            results.append(
+                await service._handle_codex_tool(
+                    "a" * 32,
+                    runtime,
+                    {
+                        "namespace": "pbgui",
+                        "tool": "search_pbgui_help",
+                        "threadId": "thread-1",
+                        "turnId": "turn-1",
+                        "arguments": {"query": query},
+                    },
+                )
+            )
+
+        assert [item["success"] for item in results] == [True, True, False]
+        assert "no new result content" in results[-1]["contentItems"][0]["text"]
         await service.shutdown()
 
     asyncio.run(scenario())

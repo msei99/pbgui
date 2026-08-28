@@ -831,6 +831,8 @@
       if (!confirmed) { buttons.forEach(function (button) { button.disabled = false; }); return; }
     }
     if (!conversationId || conversationId !== state.current) return;
+    card.hidden = true;
+    setStatus(approve ? 'Applying approved action...' : 'Rejecting proposal...', false);
     try {
       var result = await api('/proposals/' + encodeURIComponent(proposal.proposal_id) + (approve ? '/approve' : '/reject'), {
         method: 'POST',
@@ -850,7 +852,13 @@
       } else {
         setStatus(result.status === 'executed' ? 'Approved action completed.' : 'Proposal ' + String(result.status || 'resolved') + '.', false);
       }
-    } catch (error) { setStatus(error.message, true); }
+    } catch (error) {
+      if (conversationId === state.current) {
+        card.hidden = false;
+        buttons.forEach(function (button) { button.disabled = false; });
+        setStatus(error.message, true);
+      }
+    }
     finally { await reconcileProposals(conversationId); }
   }
 

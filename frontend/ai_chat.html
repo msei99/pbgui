@@ -753,6 +753,8 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       if (!confirmed) { buttons.forEach(function (button) { button.disabled = false; }); return; }
     }
     if (generation !== state.chatGeneration || conversationId !== state.conversationId) return;
+    card.hidden = true;
+    setNotice(approve ? 'Applying approved action...' : 'Rejecting proposal...', false, true);
     try {
       var suffix = approve ? '/approve' : '/reject';
       var result = await api('/proposals/' + encodeURIComponent(proposal.proposal_id) + suffix, {
@@ -773,6 +775,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       }
     } catch (error) {
       setNotice(error.message, true);
+      card.hidden = false;
       buttons.forEach(function (button) { button.disabled = false; });
     } finally {
       if (conversationId === state.conversationId) await reconcileProposals(conversationId);

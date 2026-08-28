@@ -276,6 +276,7 @@ class AICapabilityService:
             "rank_optimizer_run_candidates": self._rank_optimizer_run_candidates,
             "get_pareto_candidate": self._get_pareto_candidate,
             "select_pareto_candidates": self._select_pareto_candidates,
+            "select_backtest_results": self._select_backtest_results,
             "perform_page_action": self._perform_page_action,
             "present_user_choices": self._present_user_choices,
             "list_dashboard_templates": self._list_dashboard_templates,
@@ -907,6 +908,36 @@ class AICapabilityService:
                 "type": "optimize.select_paretos",
                 "target": {"page_key": f"{version}_optimize", "version": version, "run_name": run_name},
                 "payload": {"candidate_names": names, "mode": mode},
+            },
+        }
+
+    def _select_backtest_results(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Select exact managed backtests and open the existing browser compare view."""
+        version = self._version(args)
+        requested = args.get("resources")
+        if not isinstance(requested, list) or not 2 <= len(requested) <= 20:
+            raise AICapabilityError("Select between 2 and 20 backtest resources")
+        resources = [self._resource_uri(item, "backtest", version) for item in requested]
+        if len(set(resources)) != len(resources):
+            raise AICapabilityError("Backtest result selection contains duplicates")
+        selectors = []
+        for resource in resources:
+            raw = self._resolve_listed_resource("backtest", version, resource)
+            selector = {
+                key: raw.get(key)
+                for key in ("config_name", "result_name", "exchange_dir", "modified")
+                if raw.get(key) is not None
+            }
+            if not selector.get("config_name") or not selector.get("result_name"):
+                raise AICapabilityError("Backtest result cannot be selected safely in the browser")
+            selectors.append(selector)
+        return {
+            "status": "queued_for_browser",
+            "selected": len(selectors),
+            "ui_action": {
+                "type": "backtest.compare_results",
+                "target": {"page_key": f"{version}_backtest", "version": version},
+                "payload": {"selectors": selectors},
             },
         }
 
@@ -3754,6 +3785,24 @@ class AICapabilityService:
                 ),
                 "effect": "ui",
                 "resources": ["pbgui://optimizer-run/{version}/{opaque-id}", "pbgui://pareto/{version}/{opaque-id}"],
+            },
+            {
+                "name": "select_backtest_results",
+                "description": "Select 2-20 exact managed backtest result resources in the currently open matching PB7/PB8 Backtest page and open its existing Results Compare chart. Use this instead of generic control clicks.",
+                "schema": self._object_schema(
+                    {
+                        "version": version_schema,
+                        "resources": {
+                            "type": "array",
+                            "minItems": 2,
+                            "maxItems": 20,
+                            "items": {"type": "string", "maxLength": 128},
+                        },
+                    },
+                    ["version", "resources"],
+                ),
+                "effect": "ui",
+                "resources": ["pbgui://backtest/{version}/{opaque-id}"],
             },
             {
                 "name": "perform_page_action",

@@ -10656,6 +10656,46 @@ window.PBGUI_NAV_CONFIG = {
   version:  PBGUI_VERSION,
   serial:   PBGUI_SERIAL
 };
+function aiBacktestSelectorMatches(result, selector, version) {
+  if (!result || !selector || String(result.backtest_version || '') !== String(version || '')) return false;
+  return ['config_name', 'result_name', 'exchange_dir', 'modified'].every(function(key) {
+    return !Object.prototype.hasOwnProperty.call(selector, key)
+      || String(result[key] == null ? '' : result[key]) === String(selector[key] == null ? '' : selector[key]);
+  });
+}
+async function openAIBacktestCompare(action) {
+  var target = action && action.target && typeof action.target === 'object' ? action.target : {};
+  var payload = action && action.payload && typeof action.payload === 'object' ? action.payload : {};
+  var version = String(target.version || '');
+  var selectors = Array.isArray(payload.selectors) ? payload.selectors : [];
+  if (version !== backtestEditorAdapter.version || selectors.length < 2) throw new Error('AI Backtest comparison target is invalid');
+  var versionFilter = document.getElementById('results-version-filter');
+  if (versionFilter) versionFilter.value = version;
+  _clearResultsFilters();
+  selectPanel('results', { deferResultsLoad: true });
+  await loadResults('');
+  var paths = selectors.map(function(selector) {
+    var matches = results.filter(function(result) { return aiBacktestSelectorMatches(result, selector, version); });
+    if (matches.length !== 1) throw new Error('An exact Backtest result is unavailable or ambiguous');
+    return matches[0].path;
+  });
+  if (new Set(paths).size !== paths.length) throw new Error('AI Backtest comparison resolved duplicate results');
+  setSelectedResults(paths);
+  var compareEl = document.getElementById('compare-chart-area');
+  await _compareResultPaths(paths, results, compareEl, 'compare-chart-div');
+  if (compareEl && typeof compareEl.scrollIntoView === 'function') compareEl.scrollIntoView({ block: 'start' });
+  toast('PBGui AI opened Results Compare for ' + paths.length + ' backtests.', 'ok');
+}
+window.addEventListener('pbgui:ai-ui-action', function(event) {
+  var action = event && event.detail && typeof event.detail === 'object' ? event.detail : {};
+  if (action.type !== 'backtest.compare_results') return;
+  var target = action.target && typeof action.target === 'object' ? action.target : {};
+  if (target.version !== backtestEditorAdapter.version) return;
+  event.preventDefault();
+  openAIBacktestCompare(action).catch(function(error) {
+    toast('PBGui AI could not open Results Compare: ' + error.message, 'err');
+  });
+});
 window.PBGUI_AI_PAGE_CONTEXT = function () {
   var entities = [];
   if (editingConfig && editingConfig !== '__new__') entities.push({ kind: 'backtest_config', version: backtestEditorAdapter.version, name: editingConfig });
