@@ -12,6 +12,9 @@ def test_shared_context_boundary_projects_only_the_backend_schema() -> None:
     """The navigation collector should sanitize every page-provided context value."""
     assert "aiContextEntity" in NAV
     assert "aiContextFocusedField" in NAV
+    assert "aiContextEvidence" in NAV
+    assert "redactAIEvidenceText" in NAV
+    assert ".replace(/([\"'])(authorization|password|passwd|secret|token|api[_ -]?key" in NAV
     assert "aiContextSensitiveName" in NAV
     assert "active.type === 'password'" in NAV
     for sensitive in ("password", "secret", "token", "api[_ -]?key", "credential", "session", "cookie", "log", "ssh"):
@@ -25,6 +28,14 @@ def test_shared_context_boundary_projects_only_the_backend_schema() -> None:
     assert "FASTAPI_PAGES[String(target.page_key || '')]" in NAV
     assert "pbgui_ai_action" in NAV
     assert "collectAIControls" in NAV
+    assert "previousByIdentity" not in NAV
+    assert "current[0].descriptor.id = previous[0].descriptor.id" not in NAV
+    assert "entry.identity !== identity" in NAV
+    assert "entry = { id: 'control_' + _aiControlSequence, identity: identity }" in NAV
+    assert "aiControlPageIdentity" in NAV
+    assert "aiControlResourceIdentity" in NAV
+    assert "aiControlStateIdentity" in NAV
+    assert "pageIdentity," in NAV
     assert "options.include_controls === false ? [] : collectAIControls()" in NAV
     assert "entity_kind: 'ui_control'" in NAV
     assert "entity_kind: 'ui_control_label'" in NAV
@@ -56,6 +67,11 @@ def test_shared_context_boundary_projects_only_the_backend_schema() -> None:
     assert "delete|remove|loesch" in NAV
     assert "confirm|bestaetig" in NAV
     assert "focusedField" in NAV
+    assert "context.evidence" in NAV
+    page_action_handler = NAV.split("window.addEventListener('pbgui:ai-ui-action'", 1)[1].split("function executeLocalPageAction", 1)[0]
+    failed_handler = page_action_handler.split("} catch (error) {", 1)[1]
+    assert "request.browser_error = error" in failed_handler
+    assert "event.preventDefault()" not in failed_handler
     assert "querySelectorAll('input" not in NAV
     assert "FormData" not in NAV
 
@@ -103,6 +119,16 @@ def test_sensitive_pages_never_register_sensitive_values() -> None:
     assert "LogViewer" not in log_adapter
 
 
+def test_services_context_binds_cmc_toolbar_controls_to_selected_key() -> None:
+    """Changing the selected CMC key must invalidate delayed toolbar control IDs."""
+
+    services = (FRONTEND / "services_monitor.html").read_text(encoding="utf-8")
+    adapter = services.split("window.PBGuiAI.registerPageContext({", 1)[1]
+
+    assert "_currentPanelId === 'pbcoindata' && _selectedCmcKeyId" in adapter
+    assert "{ kind: 'cmc_key', name: _selectedCmcKeyId }" in adapter
+
+
 def test_optimize_context_prefers_the_live_open_editor_config() -> None:
     """Opening or renaming a config after the drawer opens must update turn context."""
     source = (FRONTEND / "v7_optimize.html").read_text(encoding="utf-8")
@@ -136,6 +162,12 @@ def test_log_pages_register_one_generic_action_over_existing_viewers() -> None:
     assert "kind: 'backtest_queue_item'" in backtest
     assert "entity_kind: 'backtest_queue_item'" in backtest
     assert "showLog(queueItem.filename)" in backtest
+    assert "kind: 'log_excerpt'" in run_editor
+    assert "visibleRunLogLines(120)" in run_editor
+    assert "terminal.children" in run_editor
+    assert "line.classList.contains('lvp-hidden')" in run_editor
+    assert "rect.bottom > viewportTop && rect.top < viewportBottom" in run_editor
+    assert "_runLogViewer._lines.slice" not in run_editor
     assert "item.status === 'running' || item.status === 'backtesting'" in backtest
     assert "entity_kind: 'run_config'" in run_editor
     assert "return openLogPanel()" in run_editor

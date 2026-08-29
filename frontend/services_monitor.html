@@ -3532,11 +3532,16 @@ window.PBGUI_NAV_CONFIG = {
   window.PBGuiAI.registerPageContext({
     id: 'services',
     getContext: function () {
+      var entities = [];
+      if (_currentPanelId === 'workers' && _selectedWorkerId) {
+        entities.push({ kind: 'service_worker', name: _selectedWorkerId });
+      }
+      if (_currentPanelId === 'pbcoindata' && _selectedCmcKeyId) {
+        entities.push({ kind: 'cmc_key', name: _selectedCmcKeyId });
+      }
       return {
         section: _currentPanelId,
-        entities: _currentPanelId === 'workers' && _selectedWorkerId
-          ? [{ kind: 'service_worker', name: _selectedWorkerId }]
-          : []
+        entities: entities
       };
     }
   });

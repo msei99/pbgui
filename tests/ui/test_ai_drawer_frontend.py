@@ -12,7 +12,7 @@ CSS = (ROOT / "frontend" / "css" / "ai_drawer.css").read_text(encoding="utf-8")
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=31" in NAV
+    assert "/app/js/ai_drawer.js?v=33" in NAV
     assert "/app/css/ai_drawer.css?v=12" in NAV
     assert "registerPageContext" in NAV
     assert "collectAIContext" in NAV
@@ -38,6 +38,8 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "startContextWatch" in DRAWER
     assert "setInterval(refreshLiveContext, 500)" in DRAWER
     assert "collectDisplayContext" in DRAWER
+    assert "context.evidence" in DRAWER
+    assert "lineCount" in DRAWER
     assert "collectContext({ include_controls: false })" in DRAWER
     assert "var context = collectDisplayContext();" in DRAWER
     assert "checked ? collectContext() : null" in DRAWER
@@ -73,6 +75,8 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "pbgui:ai-action-completed" in DRAWER
     assert "pbgui:ai-ui-action" in DRAWER
     assert "/ui-actions/" in DRAWER
+    assert "Promise.resolve(action.browser_completion).then" in DRAWER
+    assert "if (action.browser_error) setStatus" in DRAWER
     assert "pendingPageAction" in DRAWER
     assert "conversation.busy || pendingPageAction" in DRAWER
     assert "tryLocalCommand" in DRAWER

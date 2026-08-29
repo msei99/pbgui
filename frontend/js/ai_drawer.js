@@ -177,6 +177,10 @@
     (context.entities || []).slice(0, 4).forEach(function (entity) {
       values.push(String(entity.kind || 'item') + ': ' + String(entity.name || ''));
     });
+    (context.evidence || []).slice(0, 2).forEach(function (item) {
+      var lineCount = String(item.content || '').split('\n').filter(Boolean).length;
+      values.push(String(item.title || 'Visible evidence') + ': ' + lineCount + ' lines');
+    });
     if (context.focused_field) values.push('Field: ' + String(context.focused_field.label || context.focused_field.path || ''));
     if (!values.length) values.push('Current page');
     values.forEach(function (value) { chips.appendChild(el('span', 'pai-context-chip', value)); });
@@ -469,12 +473,18 @@
         detail: action
       });
       window.dispatchEvent(event);
-      if (!event.defaultPrevented) return;
+      if (!event.defaultPrevented) {
+        if (action.browser_error) setStatus(action.browser_error.message || 'PBGui page action failed.', true);
+        return;
+      }
       state.uiActionIds.add(actionId);
-      api('/conversations/' + encodeURIComponent(conversationId) + '/ui-actions/' + encodeURIComponent(actionId) + '/ack', {
-        method: 'POST'
-      }).catch(function () {
+      Promise.resolve(action.browser_completion).then(function () {
+        return api('/conversations/' + encodeURIComponent(conversationId) + '/ui-actions/' + encodeURIComponent(actionId) + '/ack', {
+          method: 'POST'
+        });
+      }).catch(function (error) {
         state.uiActionIds.delete(actionId);
+        setStatus(error && error.message ? error.message : 'PBGui page action failed.', true);
       });
     });
   }

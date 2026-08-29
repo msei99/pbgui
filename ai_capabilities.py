@@ -445,8 +445,10 @@ class AICapabilityService:
             return {"proposal_id": proposal.id, "status": proposal.status}
 
     async def reject_conversation(self, owner: str, conversation_id: str) -> None:
-        """Reject all still-pending proposals when their conversation is deleted."""
+        """Reject all durable pending proposals when their conversation branch advances."""
         async with self.state_lock:
+            self._load_proposals_for_owner(owner)
+            self._cleanup_proposals_unlocked()
             for proposal in self.proposals.values():
                 if (
                     proposal.owner == owner
@@ -2443,16 +2445,11 @@ class AICapabilityService:
             )
             timed_out = False
             try:
-                assert process.stdin is not None
-                process.stdin.write(stdin)
-                await process.stdin.drain()
-                process.stdin.close()
+                await self._write_python_analysis_stdin(process, stdin)
                 await asyncio.wait_for(process.wait(), timeout=_ANALYSIS_TIMEOUT_SECONDS)
             except asyncio.TimeoutError:
                 timed_out = True
                 await self._kill_process_group(process)
-            except (BrokenPipeError, ConnectionResetError):
-                await process.wait()
             except asyncio.CancelledError:
                 await self._kill_process_group(process)
                 await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
@@ -2481,6 +2478,28 @@ class AICapabilityService:
             "stdout_truncated": stdout_truncated,
             "stderr_truncated": stderr_truncated,
         }
+
+    @staticmethod
+    async def _write_python_analysis_stdin(process: Any, payload: bytes) -> bool:
+        """Feed sandbox input while treating an already exited child as a normal failed run."""
+        if process.stdin is None:
+            return False
+        delivered = True
+        try:
+            process.stdin.write(payload)
+            await process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            delivered = False
+        except RuntimeError as exc:
+            if "closed" not in str(exc).lower():
+                raise
+            delivered = False
+        finally:
+            try:
+                process.stdin.close()
+            except (BrokenPipeError, ConnectionResetError, RuntimeError):
+                pass
+        return delivered
 
     @staticmethod
     def _resolve_python_workspace_roots(root_ids: object) -> dict[str, Path]:

@@ -66,6 +66,30 @@
     return field;
   }
 
+  function redactAIEvidenceText(value) {
+    return String(value == null ? '' : value)
+      .replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '')
+      .replace(/(["'])(authorization|password|passwd|secret|token|api[_ -]?key|private[_ -]?key|session|cookie)\1(\s*:\s*)"(?:\\.|[^"\\])*"/gi, '$1$2$1$3"[REDACTED]"')
+      .replace(/(["'])(authorization|password|passwd|secret|token|api[_ -]?key|private[_ -]?key|session|cookie)\1(\s*:\s*)'(?:\\.|[^'\\])*'/gi, "$1$2$1$3'[REDACTED]'")
+      .replace(/(["'])(authorization|password|passwd|secret|token|api[_ -]?key|private[_ -]?key|session|cookie)\1(\s*:\s*)"(?!\[REDACTED\]")[\s\S]*$/gi, '$1$2$1$3"[REDACTED]')
+      .replace(/(["'])(authorization|password|passwd|secret|token|api[_ -]?key|private[_ -]?key|session|cookie)\1(\s*:\s*)'(?!\[REDACTED\]')[\s\S]*$/gi, "$1$2$1$3'[REDACTED]")
+      .replace(/\b(authorization)\s*[:=]\s*[^\r\n]+/gi, '$1: [REDACTED]')
+      .replace(/\b(password|passwd|secret|token|api[_ -]?key|private[_ -]?key|session|cookie)\b(\s*[:=]\s*)[^\s,;]+/gi, '$1$2[REDACTED]')
+      .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+\/=-]{8,}/gi, '$1 [REDACTED]')
+      .replace(/([?&](?:token|access_token|api_key|apikey|key|secret|session)=)[^&\s]+/gi, '$1[REDACTED]')
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ' ')
+      .trim()
+      .slice(-12000);
+  }
+
+  function aiContextEvidence(value) {
+    if (!value || typeof value !== 'object' || value.kind !== 'log_excerpt') return null;
+    var title = aiContextText(value.title, 160);
+    var content = redactAIEvidenceText(value.content);
+    if (!title || !content) return null;
+    return { kind: 'log_excerpt', title: title, content: content };
+  }
+
   function aiPageAction(value) {
     if (!value || typeof value !== 'object' || typeof value.run !== 'function') return null;
     var id = aiContextText(value.id, 64);
@@ -142,17 +166,60 @@
     return aiContextText(heading ? heading.textContent : shell.id, 160).replace(/\s+/g, ' ');
   }
 
-  function aiControlId(element) {
-    var id = _aiControlIds.get(element);
-    if (!id) {
-      _aiControlSequence += 1;
-      id = 'control_' + _aiControlSequence;
-      _aiControlIds.set(element, id);
-    }
-    return id;
+  function aiControlPageIdentity() {
+    var state = { page_key: String(cfg().current || ''), sections: [], entities: [] };
+    Object.keys(_aiContextProviders).sort().forEach(function (id) {
+      try {
+        var value = _aiContextProviders[id]();
+        if (!value || typeof value !== 'object') return;
+        if (value.section) state.sections.push(aiContextText(value.section, 128));
+        (Array.isArray(value.entities) ? value.entities : []).slice(0, 8).forEach(function (entity) {
+          var projected = aiContextEntity(entity);
+          if (projected) state.entities.push(projected);
+        });
+      } catch (_) {}
+    });
+    return JSON.stringify(state);
   }
 
-  function aiControlDescriptor(element) {
+  function aiControlResourceIdentity(element) {
+    var scope = element.closest('[data-id],[data-key],[data-name],[data-user],[data-config],tr,li');
+    if (!scope) return '';
+    var attributes = ['data-id', 'data-key', 'data-name', 'data-user', 'data-config'].map(function (name) {
+      return scope.hasAttribute(name) ? name + '=' + String(scope.getAttribute(name) || '') : '';
+    }).filter(Boolean);
+    if (attributes.length) return attributes.join('|');
+    var label = scope.matches('tr') ? scope.querySelector('th,td') : scope;
+    return aiContextText(label ? label.textContent : '', 160).replace(/\s+/g, ' ');
+  }
+
+  function aiControlStateIdentity(element) {
+    var type = String(element.type || '').toLowerCase();
+    var value = '';
+    if (element.tagName === 'SELECT' || element.tagName === 'TEXTAREA' || element.isContentEditable) {
+      value = element.isContentEditable ? element.textContent : element.value;
+    } else if (element.tagName === 'INPUT' && ['button', 'submit', 'reset'].indexOf(type) < 0) {
+      value = element.value;
+    }
+    return JSON.stringify({
+      disabled: !!element.disabled,
+      checked: !!element.checked,
+      value: String(value == null ? '' : value),
+      resource: aiControlResourceIdentity(element)
+    });
+  }
+
+  function aiControlId(element, identity) {
+    var entry = _aiControlIds.get(element);
+    if (!entry || entry.identity !== identity) {
+      _aiControlSequence += 1;
+      entry = { id: 'control_' + _aiControlSequence, identity: identity };
+      _aiControlIds.set(element, entry);
+    }
+    return entry.id;
+  }
+
+  function aiControlDescriptor(element, pageIdentity) {
     var tag = String(element.tagName || '').toLowerCase();
     var type = String(element.type || '').toLowerCase();
     var role = String(element.getAttribute('role') || '').toLowerCase();
@@ -178,7 +245,6 @@
     var label = aiControlLabel(element);
     if (!label || aiControlSensitive(element, label)) return null;
     var descriptor = {
-      id: aiControlId(element),
       role: tag === 'input' ? (type || 'input') : (role || tag),
       label: label,
       operations: operations
@@ -191,21 +257,31 @@
         return { value: aiContextText(option.value, 160), label: aiContextText(option.textContent, 160) };
       }).filter(function (option) { return !!option.label; });
     }
+    descriptor.id = aiControlId(element, JSON.stringify([
+      pageIdentity,
+      descriptor.role,
+      descriptor.name,
+      descriptor.operations,
+      descriptor.options || [],
+      aiControlStateIdentity(element)
+    ]));
     return descriptor;
   }
 
   function collectAIControls() {
     _aiControlElements = {};
     var candidates = [];
+    var pageIdentity = aiControlPageIdentity();
     var selector = 'body *';
     Array.from(document.querySelectorAll(selector)).forEach(function (element, index) {
       if (!aiControlVisible(element)) return;
-      var descriptor = aiControlDescriptor(element);
+      var descriptor = aiControlDescriptor(element, pageIdentity);
       if (!descriptor) return;
       candidates.push({ element: element, descriptor: descriptor, index: index, priority: descriptor.context ? 0 : 1 });
     });
     candidates.sort(function (left, right) { return left.priority - right.priority || left.index - right.index; });
-    return candidates.slice(0, 2048).map(function (candidate) {
+    var selected = candidates.slice(0, 2048);
+    return selected.map(function (candidate) {
       _aiControlElements[candidate.descriptor.id] = { element: candidate.element, descriptor: candidate.descriptor };
       return candidate.descriptor;
     });
@@ -307,6 +383,7 @@
       guide_topic: String(GUIDE_TOPICS[c.current] || '').slice(0, 128),
       pages: collectAIPages(),
       entities: [],
+      evidence: [],
       actions: Object.keys(_aiPageActions).sort().slice(0, 16).map(function (key) {
         return { id: _aiPageActions[key].id, entity_kind: _aiPageActions[key].entity_kind };
       }),
@@ -323,11 +400,18 @@
             if (projected) context.entities.push(projected);
           });
         }
+        if (Array.isArray(value.evidence)) {
+          value.evidence.slice(0, 2).forEach(function (item) {
+            var projectedEvidence = aiContextEvidence(item);
+            if (projectedEvidence) context.evidence.push(projectedEvidence);
+          });
+        }
         if (value.focused_field && !context.focused_field) context.focused_field = aiContextFocusedField(value.focused_field);
       } catch (_) {}
     });
     context.entities = context.entities.slice(0, 8);
     while (context.controls.length && JSON.stringify(context).length > 256 * 1024) context.controls.pop();
+    while (context.evidence.length && JSON.stringify(context).length > 256 * 1024) context.evidence.shift();
     return context;
   }
 
@@ -388,12 +472,10 @@
     try {
       var result = registration.run(entity.name, entity, payload);
       if (result === false) return;
+      if (result && typeof result.then === 'function') request.browser_completion = Promise.resolve(result);
       event.preventDefault();
-      if (result && typeof result.catch === 'function') {
-        result.catch(function (error) { console.error('PBGui page action failed:', error); });
-      }
     } catch (error) {
-      event.preventDefault();
+      request.browser_error = error;
       console.error('PBGui page action failed:', error);
     }
   });
@@ -481,6 +563,7 @@
     { id: 'system', label: 'System', items: [
       { page: '/',                    icon: '&#128682;', label: 'Welcome'           },
       { page: 'system_api_keys',      icon: '&#128273;', label: 'API-Keys'          },
+      { page: 'system_profit_sweep',  icon: '&#128176;', label: 'Profit Sweep'      },
       { page: 'system_cluster',       icon: '&#128260;', label: 'Cluster Sync'      },
       { page: 'system_services',      icon: '&#128295;', label: 'PBGUI Services'    },
       { page: 'system_db_tools',      icon: '&#128736;', label: 'DB Tools'          },
@@ -1417,6 +1500,7 @@
     'info_market_data_fastapi': '/api/market-data/main_page',
     'info_ai_chat':      '/api/ai/main_page',
     'system_api_keys':   '/api/api-keys/main_page',
+    'system_profit_sweep': '/api/profit-sweep/main_page',
     'system_cluster':    '/api/cluster/main_page',
     'system_vps_manager_fastapi': '/api/vps-manager/main_page',
     'system_logging':     '/api/logging/main_page',
@@ -1445,6 +1529,7 @@
     'info_market_data_fastapi':    '26_market_data',
     'info_ai_chat':                 '45_ai_chat',
     'system_api_keys':             '20_api_keys',
+    'system_profit_sweep':          '46_profit_sweep',
     'system_cluster':              '39_cluster_sync',
     'system_vps_manager_fastapi':  '32_vps_manager',
     'system_logging':              '31_logging',
@@ -1698,7 +1783,7 @@
       link.href = '/app/css/ai_drawer.css?v=12';
       document.head.appendChild(link);
       var script = document.createElement('script');
-      script.src = '/app/js/ai_drawer.js?v=31';
+      script.src = '/app/js/ai_drawer.js?v=33';
       script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
       script.onerror = function () { _aiDrawerLoading = false; };
       document.head.appendChild(script);

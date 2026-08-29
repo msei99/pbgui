@@ -1,0 +1,1673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Profit Sweep - PBGui</title>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
+  <script src="/app/js/sidebar_resize.js?v=1"></script>
+  <style>
+    :root {
+      --bg: #0e1117; --bg2: #131b2b; --bg3: #182234; --field: #0b1320;
+      --border: #253248; --text: #e2e8f0; --muted: #94a3b8; --dim: #64748b;
+      --accent: #4da6ff; --ok: #4ade80; --warn: #f6c453; --danger: #f87171;
+      --fs-xs: 11px; --fs-sm: 13px; --fs-base: 14px; --fs-lg: 18px; --fs-xl: 25px;
+      --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 20px; --nav-height: 52px;
+      --font: "Segoe UI", system-ui, sans-serif; --input-h: 32px; --btn-h: 32px;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: var(--fs-base)/1.45 "Segoe UI", system-ui, sans-serif; }
+    button, input, select { font: inherit; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    #page-body { display: flex; height: calc(100vh - var(--nav-height)); min-height: 540px; overflow: hidden; }
+    #sidebar { width: 320px; min-width: 220px; max-width: 520px; }
+    #sidebar-inner { min-height: 0; padding: 0.25rem 0.35rem; }
+    .eyebrow { color: var(--accent); font-size: var(--fs-xs); font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
+    .sidebar-title { margin-top: 2px; font-size: var(--fs-lg); font-weight: 800; }
+    #account-list { min-height: 0; display: flex; flex-direction: column; gap: 5px; }
+    .account-button { width: 100%; min-height: 62px; display: block; padding: 8px 9px 8px 12px; border: 1px solid transparent; border-left: 3px solid transparent; border-radius: 7px; background: transparent; color: var(--text); cursor: pointer; text-align: left; }
+    .account-button:hover { background: rgba(255,255,255,.035); }
+    .account-button.selected { background: rgba(77,166,255,.12); border-color: rgba(77,166,255,.2); border-left-color: var(--accent); }
+    .account-name { display: block; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.25; font-weight: 800; }
+    .account-detail-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 5px; }
+    .account-meta { color: var(--muted); font-size: var(--fs-xs); }
+    .account-policy { display: block; margin-top: 3px; color: var(--dim); font-size: var(--fs-xs); }
+    .mode-badge, .decision-badge, .intent-badge { display: inline-flex; align-items: center; width: fit-content; padding: 2px 7px; border: 1px solid var(--border); border-radius: 999px; font-size: var(--fs-xs); font-weight: 900; letter-spacing: .03em; text-transform: uppercase; }
+    .mode-badge.dry, .decision-badge.would { color: var(--warn); border-color: rgba(246,196,83,.4); background: rgba(246,196,83,.09); }
+    .mode-badge.disabled { color: var(--muted); background: rgba(148,163,184,.08); }
+    .mode-badge.live, .intent-badge.confirmed { color: var(--ok); border-color: rgba(74,222,128,.38); background: rgba(74,222,128,.09); }
+    .mode-badge.paused, .intent-badge.unknown, .intent-badge.failed { color: var(--danger); border-color: rgba(248,113,113,.4); background: rgba(248,113,113,.09); }
+    .intent-badge.prepared, .intent-badge.submitting { color: var(--warn); border-color: rgba(246,196,83,.4); background: rgba(246,196,83,.09); }
+    #main-content { min-width: 0; flex: 1; overflow-y: auto; padding: var(--sp-lg); }
+    .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-md); margin-bottom: var(--sp-md); }
+    h1 { margin: 2px 0 3px; font-size: var(--fs-xl); line-height: 1.15; }
+    .subtitle { color: var(--muted); font-size: var(--fs-sm); }
+    .head-actions { display: flex; gap: var(--sp-sm); flex-wrap: wrap; justify-content: flex-end; }
+    .btn { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg3); color: var(--text); cursor: pointer; font-weight: 750; }
+    .btn:hover:not(:disabled) { border-color: var(--accent); }
+    .btn.primary { border-color: var(--accent); background: var(--accent); color: #07111f; }
+    .btn.warning { border-color: #8a641d; background: #563d0b; color: #ffe9a8; }
+    .btn.danger { border-color: #7f2d38; background: #4b1d27; color: #fecdd3; }
+    .btn:disabled { opacity: .42; cursor: not-allowed; }
+    #status-cards { display: grid; grid-template-columns: repeat(4, minmax(135px, 1fr)); gap: var(--sp-sm); margin-bottom: var(--sp-md); }
+    .status-card { min-width: 0; padding: 11px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg2); }
+    .status-label { color: var(--dim); font-size: var(--fs-xs); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+    .status-value { min-width: 0; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 800; }
+    .tabs { position: sticky; top: -20px; z-index: 8; display: flex; gap: 3px; padding: 7px; border: 1px solid var(--border); border-radius: 10px; background: rgba(14,17,23,.96); overflow-x: auto; }
+    .tab-button { min-height: 34px; flex: 1 0 auto; padding: 0 13px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font-weight: 800; }
+    .tab-button.selected { background: rgba(77,166,255,.14); color: var(--text); }
+    .tab-panel { display: none; margin-top: var(--sp-md); }
+    .tab-panel.selected { display: block; }
+    .panel { margin-bottom: var(--sp-md); border: 1px solid var(--border); border-radius: 11px; background: var(--bg2); overflow: hidden; }
+    .panel-head { padding: 13px 15px; border-bottom: 1px solid var(--border); background: #111a29; }
+    .panel-title { font-size: var(--fs-lg); font-weight: 850; }
+    .panel-desc { margin-top: 2px; color: var(--muted); font-size: var(--fs-sm); }
+    .panel-body { padding: 15px; }
+    .field-grid { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: var(--sp-md); }
+    .field { min-width: 0; display: grid; align-content: start; gap: 5px; }
+    .field label { color: #cbd5e1; font-size: var(--fs-sm); font-weight: 750; }
+    [data-tip] { cursor: help; border-bottom: none; text-decoration-line: underline; text-decoration-style: dotted; text-decoration-color: #64748b; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+    #data-tip-tooltip { display: none; position: fixed; z-index: 9999; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 5px; font-size: var(--fs-xs); font-weight: normal; padding: 6px 10px; white-space: pre-wrap; max-width: 480px; line-height: 1.5; box-shadow: 0 4px 12px rgba(0,0,0,.5); pointer-events: none; }
+    .field input:not([type="checkbox"]), .field select { width: 100%; height: 35px; padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--field); color: var(--text); }
+    .check-field { min-height: 35px; display: flex; align-items: center; gap: 8px; padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--field); }
+    .check-field input { width: 16px; height: 16px; accent-color: var(--accent); }
+    .overview-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(260px, .6fr); gap: var(--sp-md); }
+    .key-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--border); }
+    .key-value { min-width: 0; padding: 10px 11px; background: var(--field); }
+    .key-value dt { color: var(--dim); font-size: var(--fs-xs); font-weight: 800; text-transform: uppercase; }
+    .key-value dd { margin: 3px 0 0; overflow-wrap: anywhere; font-weight: 700; }
+    .preview { min-height: 176px; padding: 12px; border: 1px solid rgba(246,196,83,.3); border-radius: 8px; background: #151407; }
+    .preview-title { color: var(--warn); font-weight: 900; }
+    .preview-note { margin-top: 5px; color: var(--muted); font-size: var(--fs-sm); }
+    .preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+    .preview-item { padding: 7px; border-radius: 6px; background: rgba(255,255,255,.035); }
+    .preview-item span:first-child { display: block; color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; }
+    .preview-item span:last-child { display: block; margin-top: 2px; font-weight: 800; overflow-wrap: anywhere; }
+    .baseline-row { display: grid; grid-template-columns: minmax(150px, 1fr) auto; gap: var(--sp-sm); align-items: end; }
+    .notice { padding: 11px 12px; border: 1px solid rgba(77,166,255,.28); border-radius: 8px; background: rgba(77,166,255,.07); color: #bfdfff; font-size: var(--fs-sm); }
+    .advanced-settings { margin-top: var(--sp-lg); border-top: 1px solid var(--border); padding-top: var(--sp-md); }
+    .advanced-settings summary { width: fit-content; cursor: pointer; color: var(--muted); font-size: var(--fs-sm); font-weight: 800; user-select: none; }
+    .advanced-settings[open] summary { margin-bottom: var(--sp-md); color: var(--text); }
+    .journal-wrap { overflow-x: auto; }
+    .journal-table { width: 100%; min-width: 820px; border-collapse: collapse; }
+    .journal-table th { position: sticky; top: 0; padding: 9px 10px; border-bottom: 2px solid var(--border); background: var(--bg2); color: var(--muted); font-size: var(--fs-xs); letter-spacing: .04em; text-align: left; text-transform: uppercase; }
+    .journal-table td { padding: 10px; border-bottom: 1px solid var(--border); color: #cbd5e1; }
+    .journal-table tr:last-child td { border-bottom: 0; }
+    .journal-empty { padding: 28px 12px; color: var(--muted); text-align: center; }
+    .test-transfer-toolbar { display: flex; align-items: center; gap: var(--sp-sm); margin-top: var(--sp-md); }
+    .balance-grid { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: var(--sp-sm); margin: var(--sp-md) 0; }
+    .balance-card { min-width: 0; padding: 10px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--field); }
+    .balance-label { color: var(--dim); font-size: var(--fs-xs); font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+    .balance-value { margin-top: 3px; overflow-wrap: anywhere; font-weight: 800; }
+    .balance-detail { margin-top: 2px; color: var(--muted); font-size: var(--fs-xs); }
+    #action-bar { position: sticky; right: 0; bottom: calc(-1 * var(--sp-lg)); left: 0; z-index: 15; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-md); margin: var(--sp-lg) calc(-1 * var(--sp-lg)) calc(-1 * var(--sp-lg)); padding: 10px var(--sp-lg); border-top: 1px solid var(--border); background: rgba(10,16,26,.96); backdrop-filter: blur(8px); }
+    #action-message { min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--fs-sm); text-overflow: ellipsis; white-space: nowrap; }
+    #action-message.ok { color: var(--ok); }
+    #action-message.error { color: var(--danger); }
+    .action-buttons { display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; }
+    .empty-state { padding: 30px 12px; color: var(--muted); text-align: center; }
+    @media (max-width: 1040px) {
+      #status-cards { grid-template-columns: repeat(2, minmax(135px, 1fr)); }
+      .field-grid { grid-template-columns: repeat(2, minmax(170px, 1fr)); }
+    }
+    @media (max-width: 720px) {
+      body.profit-sweep-page { overflow-y: auto; }
+      #page-body { display: flex; height: auto; min-height: calc(100vh - var(--nav-height)); flex-direction: column; overflow: visible; }
+      #sidebar { width: 100% !important; max-width: none; max-height: 260px; border-right: 0; border-bottom: 1px solid var(--border); }
+      #sidebar-resize { display: none; }
+      #account-list { min-height: 80px; }
+      #main-content { padding: var(--sp-md); overflow: visible; }
+      .page-head { flex-direction: column; }
+      .head-actions { justify-content: flex-start; }
+      #status-cards, .field-grid, .overview-grid, .key-values, .preview-grid, .balance-grid { grid-template-columns: 1fr; }
+      .tabs { top: 0; }
+      #action-bar { bottom: calc(-1 * var(--sp-md)); margin: var(--sp-md) calc(-1 * var(--sp-md)) calc(-1 * var(--sp-md)); align-items: stretch; flex-direction: column; padding: 8px 12px; }
+      #action-message { min-height: 19px; white-space: normal; }
+      .action-buttons { display: grid; grid-template-columns: repeat(3, 1fr); }
+      .action-buttons .btn { padding: 0 7px; }
+    }
+  </style>
+</head>
+<body class="profit-sweep-page">
+  <nav id="topnav"></nav>
+  <div id="page-body">
+    <aside id="sidebar" aria-label="Profit Sweep accounts">
+      <div id="sidebar-sticky">
+        <div id="sidebar-header">
+          <span class="sb-title">Exchange Accounts</span>
+          <span class="sb-count" id="account-count">0</span>
+        </div>
+        <div id="sidebar-toolbar">
+          <label for="account-search" class="sb-label">Search accounts</label>
+          <input id="account-search" class="sb-input" type="search" autocomplete="off" placeholder="Name or exchange">
+        </div>
+      </div>
+      <div id="sidebar-inner"><div id="account-list" role="listbox" aria-label="Exchange accounts"></div></div>
+      <div id="sidebar-resize"></div>
+    </aside>
+
+    <main id="main-content">
+      <div class="page-head">
+        <div>
+          <div class="eyebrow">System / Profit Sweep</div>
+          <h1 id="account-heading">Profit Sweep</h1>
+          <div id="account-subtitle" class="subtitle">Select an exchange account to configure a read-only simulation.</div>
+        </div>
+        <div class="head-actions">
+          <button type="button" class="btn" id="refresh-accounts">Refresh accounts</button>
+          <button type="button" class="btn" id="open-logs">Logs</button>
+        </div>
+      </div>
+
+      <section id="status-cards" aria-label="Always visible account status">
+        <div class="status-card"><div class="status-label">Mode</div><div class="status-value" id="status-mode">Disabled</div></div>
+        <div class="status-card"><div class="status-label">Sweep due</div><div class="status-value" id="status-due">-</div></div>
+        <div class="status-card"><div class="status-label">Last decision</div><div class="status-value" id="status-decision">-</div></div>
+        <div class="status-card"><div class="status-label">Next evaluation</div><div class="status-value" id="status-next">-</div></div>
+        <div class="status-card"><div class="status-label">Net PnL</div><div class="status-value" id="status-pnl">-</div></div>
+        <div class="status-card"><div class="status-label">Reference capital</div><div class="status-value" id="status-reference">-</div></div>
+        <div class="status-card"><div class="status-label">High-water mark</div><div class="status-value" id="status-hwm">-</div></div>
+        <div class="status-card"><div class="status-label">Max transferable</div><div class="status-value" id="status-cap">-</div></div>
+      </section>
+
+      <div class="tabs" role="tablist" aria-label="Profit Sweep account sections">
+        <button type="button" class="tab-button selected" id="tab-overview" data-tab="overview" role="tab" aria-selected="true">Overview</button>
+        <button type="button" class="tab-button" id="tab-policy" data-tab="policy" role="tab" aria-selected="false">Policy</button>
+        <button type="button" class="tab-button" id="tab-schedule" data-tab="schedule" role="tab" aria-selected="false">Schedule</button>
+        <button type="button" class="tab-button" id="tab-exchange" data-tab="exchange" role="tab" aria-selected="false">Exchange / Vault</button>
+        <button type="button" class="tab-button" id="tab-journal" data-tab="journal" role="tab" aria-selected="false">Journal</button>
+      </div>
+
+      <section class="tab-panel selected" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+        <div class="overview-grid">
+          <div class="panel">
+            <div class="panel-head"><div class="panel-title">Account State</div><div class="panel-desc">Secret-free policy, scheduler, and exchange capability status.</div></div>
+            <div class="panel-body"><dl class="key-values" id="overview-values"></dl></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><div class="panel-title">Evaluate Now</div><div class="panel-desc">Read-only preview. It never writes a journal entry or creates a transfer.</div></div>
+            <div class="panel-body">
+              <div class="preview" id="evaluation-preview"><div class="preview-title">DRY PREVIEW</div><div class="preview-note">Run an evaluation to preview the current decision.</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Baseline</div><div class="panel-desc">Reset simulation generations to an explicit cumulative net PnL after confirmation.</div></div>
+          <div class="panel-body">
+            <div class="baseline-row">
+              <div class="field"><label for="baseline-value" data-tip="Exact cumulative net PnL used as the new baseline for this policy generation. Resetting it clears the current simulation HWM and due state.">Cumulative net PnL</label><input id="baseline-value" type="number" step="any" inputmode="decimal" value="0"></div>
+              <button type="button" class="btn danger account-action" id="reset-baseline">Reset baseline</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="panel-policy" role="tabpanel" aria-labelledby="tab-policy">
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Sweep Policy</div><div class="panel-desc">Capital, trigger, sweep share, minimums, reserves, and transfer limits.</div></div>
+          <div class="panel-body">
+            <div class="notice">Keep trading capital sets Trigger percent to 0 and Sweep percent to 100. It does not enable the policy.</div>
+            <div style="height:12px"></div>
+            <button type="button" class="btn" id="keep-capital-preset">Keep trading capital</button>
+            <div style="height:15px"></div>
+            <div class="field-grid" id="policy-fields"></div>
+            <details class="advanced-settings"><summary>Advanced limits and reserve</summary><div class="field-grid" id="policy-advanced-fields"></div></details>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="panel-schedule" role="tabpanel" aria-labelledby="tab-schedule">
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Schedule and Freshness</div><div class="panel-desc">Evaluation cadence, settlement windows, cooldowns, history, and preflight age.</div></div>
+          <div class="panel-body"><div class="field-grid" id="schedule-fields"></div><details class="advanced-settings"><summary>Advanced timing and freshness</summary><div class="field-grid" id="schedule-advanced-fields"></div></details></div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="panel-exchange" role="tabpanel" aria-labelledby="tab-exchange">
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Exchange</div><div class="panel-desc" id="exchange-description">Settlement asset and fixed internal transfer route for this exchange account.</div></div>
+          <div class="panel-body">
+            <div class="notice" id="exchange-note">Select an exchange account to inspect its Live route.</div>
+            <div class="balance-grid" id="exchange-balances" hidden>
+              <div class="balance-card"><div class="balance-label" id="source-balance-label">Source balance</div><div class="balance-value" id="source-balance-value">-</div><div class="balance-detail" id="source-balance-detail"></div></div>
+              <div class="balance-card"><div class="balance-label" id="destination-balance-label">Destination balance</div><div class="balance-value" id="destination-balance-value">-</div><div class="balance-detail" id="destination-balance-detail"></div></div>
+              <div class="balance-card"><div class="balance-label">Available to transfer</div><div class="balance-value" id="transferable-balance-value">-</div><div class="balance-detail">Fresh exchange snapshot</div></div>
+            </div>
+            <div style="height:12px"></div>
+            <div class="field-grid">
+              <div class="field" id="asset-field"><label for="policy-asset" data-tip="Settlement currency used for PnL, limits, reserves, and Live internal transfers. Available assets are constrained by the selected exchange adapter.">Settlement asset</label><select id="policy-asset" data-policy-field="asset"></select></div>
+            </div>
+          </div>
+        </div>
+        <div class="panel" id="test-transfer-panel">
+          <div class="panel-head"><div class="panel-title">Test Transfers</div><div class="panel-desc">Verify the fixed internal route with a small real transfer and an explicit return action.</div></div>
+          <div class="panel-body">
+            <div class="notice" id="test-transfer-note">Select a supported standard account to inspect test-transfer availability.</div>
+            <div class="test-transfer-toolbar"><button type="button" class="btn warning" id="test-transfer" hidden>Test transfer</button></div>
+            <div style="height:12px"></div>
+            <div class="journal-wrap" id="test-transfers-content"></div>
+          </div>
+        </div>
+        <div class="panel" id="live-activation-panel">
+          <div class="panel-head"><div class="panel-title">Live Activation</div><div class="panel-desc">Choose the baseline and optional first-transfer catch-up cap before the one-time confirmation.</div></div>
+          <div class="panel-body">
+            <div class="field-grid">
+              <div class="field"><label for="policy-live_activation_baseline_mode" data-tip="Fresh starts Live from the activation snapshot. Include Dry Period recomputes entitlement from the current Dry-generation baseline.">Live baseline</label><select id="policy-live_activation_baseline_mode" data-policy-field="live_activation_baseline_mode"><option value="fresh">Fresh</option><option value="include_dry_period">Include Dry Period</option></select></div>
+            </div>
+            <details class="advanced-settings"><summary>Advanced first-live catch-up</summary><div class="field-grid">
+              <div class="field"><label for="policy-first_live_catchup_limit_enabled" data-tip="Apply a separate cap to the first Live catch-up transfer. Remaining due is retained for later cycles.">First-live catch-up cap</label><label class="check-field"><input id="policy-first_live_catchup_limit_enabled" data-policy-field="first_live_catchup_limit_enabled" type="checkbox"><span>Enabled</span></label></div>
+              <div class="field"><label for="policy-first_live_catchup_limit" data-tip="Maximum amount for the first Live catch-up transfer when the catch-up cap is enabled.">Catch-up limit</label><input id="policy-first_live_catchup_limit" data-policy-field="first_live_catchup_limit" type="number" step="any" inputmode="decimal" min="0"></div>
+            </div></details>
+          </div>
+        </div>
+        <div class="panel" id="vault-panel">
+          <div class="panel-head"><div class="panel-title">Hyperliquid Vault</div><div class="panel-desc">Leader retention, share buffer, reserve, destination, and withdrawal safety controls.</div></div>
+          <div class="panel-body"><div class="field-grid" id="vault-fields"></div><details class="advanced-settings"><summary>Advanced Vault safety</summary><div class="field-grid" id="vault-advanced-fields"></div></details></div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="panel-journal" role="tabpanel" aria-labelledby="tab-journal">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title">Dry Decision Journal</div>
+            <div class="panel-desc">Simulation outcomes are labeled WOULD TRANSFER and remain separate from Live transfer intents.</div>
+          </div>
+          <div class="panel-body">
+            <button type="button" class="btn account-action" id="refresh-journal">Refresh journal</button>
+            <div style="height:12px"></div>
+            <div class="journal-wrap" id="journal-content"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title">Live Transfer Intents</div>
+            <div class="panel-desc">Durable prepared, submitting, confirmed, failed, and unknown states. Unknown intents pause Live until reconciled.</div>
+          </div>
+          <div class="panel-body">
+            <button type="button" class="btn account-action" id="refresh-intents">Refresh intents</button>
+            <div style="height:12px"></div>
+            <div class="journal-wrap" id="intents-content"></div>
+          </div>
+        </div>
+      </section>
+
+      <div id="action-bar">
+        <div id="action-message" aria-live="polite">Select an account to begin.</div>
+        <div class="action-buttons">
+          <button type="button" class="btn account-action" id="save-policy" hidden>Save changes</button>
+          <button type="button" class="btn warning account-action" id="enable-dry">Enable Dry</button>
+          <button type="button" class="btn account-action" id="disable-policy">Disable</button>
+          <button type="button" class="btn primary account-action" id="evaluate-now">Evaluate now</button>
+          <button type="button" class="btn danger account-action" id="delete-policy">Delete</button>
+          <button type="button" class="btn danger account-action" id="enable-live">Enable Live</button>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <div id="data-tip-tooltip"></div>
+
+  <script>
+    window.API_BASE = "%%API_BASE%%";
+    window.PBGUI_VERSION = "%%VERSION%%";
+    window.PBGUI_SERIAL = "%%SERIAL%%";
+    window.PBGUI_NAV_CONFIG = {
+      subtitle: 'PROFIT SWEEP',
+      current: 'system_profit_sweep',
+      apiBase: window.API_BASE,
+      version: window.PBGUI_VERSION,
+      serial: window.PBGUI_SERIAL,
+      authenticated: true
+    };
+  </script>
+  <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+  <script src="/app/js/pbgui_dialogs.js?v=8"></script>
+  <script>
+  (function () {
+    'use strict';
+
+    var INTEGER_FIELDS = new Set([
+      'periodic_interval', 'settlement_debounce', 'quiet_period', 'stabilization_interval',
+      'successful_transfer_cooldown', 'vault_transfer_cooldown', 'maximum_history_age',
+      'maximum_preflight_age'
+    ]);
+    var HIDDEN_POLICY_FIELDS = new Set([
+      'operating_mode', 'asset', 'simulation_minimum_transfer_amount', 'live_minimum_transfer_amount',
+      'live_activation_baseline_mode',
+      'first_live_catchup_limit_enabled', 'first_live_catchup_limit',
+      'vault_conditional_cost_policy'
+    ]);
+    var ADVANCED_POLICY_FIELDS = new Set([
+      'safety_reserve_mode', 'safety_reserve_percent',
+      'daily_transfer_limit_enabled', 'daily_transfer_limit',
+      'single_transfer_limit_enabled', 'single_transfer_limit',
+      'settlement_debounce', 'quiet_period', 'stabilization_interval', 'successful_transfer_cooldown',
+      'vault_transfer_cooldown', 'schedule_jitter_percent', 'maximum_history_age',
+      'maximum_preflight_age', 'share_safety_buffer', 'vault_safety_reserve_mode',
+      'vault_safety_reserve_percent', 'main_destination_activity_policy'
+    ]);
+    var GROUP_FIELDS = {
+      policy: [
+        'baseline_mode', 'reference_capital', 'trigger_percent', 'sweep_percent',
+        'minimum_transfer_amount',
+        'safety_reserve_mode', 'safety_reserve_amount', 'safety_reserve_percent',
+        'daily_transfer_limit_enabled', 'daily_transfer_limit', 'single_transfer_limit_enabled',
+        'single_transfer_limit'
+      ],
+      schedule: [
+        'trigger_mode', 'periodic_interval', 'settlement_debounce', 'quiet_period',
+        'stabilization_interval', 'successful_transfer_cooldown', 'vault_transfer_cooldown',
+        'schedule_jitter_percent', 'maximum_history_age', 'maximum_preflight_age'
+      ],
+      vault: [
+        'vault_withdraw_mode', 'vault_destination', 'vault_minimum_transfer_amount',
+        'retained_leader_equity', 'share_safety_buffer', 'vault_safety_reserve_mode',
+        'vault_safety_reserve_amount', 'vault_safety_reserve_percent', 'main_destination_activity_policy'
+      ]
+    };
+    var FIELD_META = {
+      operating_mode: { label: 'Operating mode', help: 'Disabled keeps the policy inactive. Dry runs read-only scheduled simulations and never submits a transfer.' },
+      asset: { label: 'Settlement asset', options: ['USDC', 'USDT'], help: 'Settlement currency used for PnL, limits, reserves, and the simulated transfer amount.' },
+      reference_capital: { label: 'Reference capital', help: 'Capital retained before profit sweeps.' },
+      baseline_mode: { label: 'Baseline mode', help: 'From Enable measures profit from activation. Lifetime starts from zero and includes available historical account PnL.' },
+      trigger_percent: { label: 'Trigger percent', help: 'Profit threshold as percent of reference capital. Zero removes the initial hurdle but keeps loss recovery active.', min: '0', max: '100' },
+      sweep_percent: { label: 'Sweep percent', help: 'Share of each new high-water-mark profit assigned to the sweep.', min: '0', max: '100' },
+      minimum_transfer_amount: { label: 'Minimum transfer amount', help: 'Due profit accumulates until it reaches this amount. The same minimum is used for Dry simulation and future Live transfers.' },
+      simulation_minimum_transfer_amount: { label: 'Dry minimum amount', help: 'Dry decisions accumulate due profit until the simulated amount reaches this minimum.' },
+      live_minimum_transfer_amount: { label: 'Live minimum amount', help: 'Minimum amount for a real internal transfer.' },
+      safety_reserve_mode: { label: 'Safety reserve mode', help: 'Fixed uses the amount, Percent uses reference capital, and Max of Both keeps whichever reserve is larger.' },
+      safety_reserve_amount: { label: 'Safety reserve amount', help: 'Fixed settlement-currency amount withheld from the exchange-reported transferable balance.' },
+      safety_reserve_percent: { label: 'Safety reserve percent', help: 'Percentage of reference capital withheld as reserve.', min: '0', max: '100' },
+      daily_transfer_limit_enabled: { label: 'Enable daily limit', help: 'Enable a UTC-day cap for the sum of simulated or later confirmed sweeps.' },
+      daily_transfer_limit: { label: 'Daily transfer limit', help: 'Maximum settlement-currency amount swept in one UTC day when enabled.' },
+      single_transfer_limit_enabled: { label: 'Enable single-transfer limit', help: 'Enable a maximum amount for one simulated or later live transfer.' },
+      single_transfer_limit: { label: 'Single-transfer limit', help: 'Maximum settlement-currency amount for one transfer when enabled.' },
+      trigger_mode: { label: 'Trigger mode', help: 'Hybrid reacts to PBData income hints and retains a periodic fallback. Interval uses only the periodic schedule.' },
+      periodic_interval: { label: 'Periodic interval', help: 'Seconds between fallback scheduled evaluations.', min: '60' },
+      settlement_debounce: { label: 'Settlement debounce', help: 'Seconds to wait after an income hint so fills, fees, rebates, and funding can settle.', min: '0' },
+      quiet_period: { label: 'Quiet period', help: 'Required seconds without a newer account event before a scheduled decision may commit.', min: '0' },
+      stabilization_interval: { label: 'Stabilization interval', help: 'Seconds between the first read-only preview and the second committed Dry scan.', min: '0' },
+      successful_transfer_cooldown: { label: 'Transfer cooldown', help: 'Minimum delay after a successful normal-account transfer.', min: '0' },
+      vault_transfer_cooldown: { label: 'Vault cooldown', help: 'Minimum delay after a Vault sweep operation.', min: '0' },
+      schedule_jitter_percent: { label: 'Schedule jitter percent', help: 'Stable per-account spread applied to scheduled evaluations to avoid synchronized API bursts.', min: '0', max: '50' },
+      maximum_history_age: { label: 'Maximum history age', help: 'Maximum seconds of ledger history accepted for one evaluation window.', min: '60' },
+      maximum_preflight_age: { label: 'Maximum preflight age', help: 'Maximum age in seconds of the final account and transferable-balance snapshot.', min: '1' },
+      live_activation_baseline_mode: { label: 'Live baseline', options: ['fresh', 'include_dry_period'], help: 'Fresh starts Live at activation. Include Dry Period recomputes Dry-period entitlement from raw ledger events.' },
+      first_live_catchup_limit_enabled: { label: 'Enable first-live catch-up limit', help: 'Enable a separate cap for the first Live catch-up transfer.' },
+      first_live_catchup_limit: { label: 'First-live catch-up limit', help: 'Maximum first Live catch-up amount; remaining due is retained for later cycles.' },
+      vault_withdraw_mode: { label: 'Vault withdraw mode', help: 'Flat Only requires no positions or orders. Margin Buffered permits active trading within withdrawable balance and reserve.' },
+      vault_destination: { label: 'Vault destination', help: 'Main Perps stops after the Vault withdrawal. Main Spot forwards the reconciled received amount to leader Spot.' },
+      vault_minimum_transfer_amount: { label: 'Vault minimum amount', help: 'Minimum simulated Vault withdrawal amount before a Vault sweep becomes eligible.' },
+      retained_leader_equity: { label: 'Retained leader equity', help: 'Minimum leader-owned Vault equity retained after a sweep. Hyperliquid currently requires at least 100 USDC.', min: '100' },
+      share_safety_buffer: { label: 'Leader share safety buffer', help: 'Additional fractional ownership retained above Hyperliquid\'s mandatory 5% leader share.', min: '0', max: '0.45' },
+      vault_safety_reserve_mode: { label: 'Vault reserve mode', options: ['fixed', 'percent', 'max_of_both'], help: 'How shared Vault margin reserve is calculated before determining the simulated cap.' },
+      vault_safety_reserve_amount: { label: 'Vault reserve amount', help: 'Fixed USDC amount retained as shared Vault margin reserve.' },
+      vault_safety_reserve_percent: { label: 'Vault reserve percent', help: 'Percentage of total Vault equity retained as shared margin reserve.', min: '0', max: '100' },
+      vault_conditional_cost_policy: { label: 'Conditional cost policy', options: ['pause_on_cost_or_forced_close'], help: 'Live behavior when a Vault withdrawal reports closing cost, order cancellation, or forced position reduction.' },
+      main_destination_activity_policy: { label: 'Main destination activity', help: 'Warn or pause future Vault sweeps if positions or orders appear in the selected Main-account destination.' }
+    };
+    var state = {
+      schema: null,
+      health: null,
+      users: [],
+      selectedUser: '',
+      record: null,
+      journal: [],
+      intents: [],
+      testOperations: [],
+      testActionPending: false,
+      pendingTestOperationId: '',
+      preview: null,
+      snapshot: null,
+      writeCapability: null,
+      policyBaseline: '',
+      announcedWalletProviders: [],
+      hasEip6963Providers: false,
+      accountGeneration: 0,
+      accountController: null,
+      usersGeneration: 0,
+      usersController: null
+    };
+
+    function byId(id) { return document.getElementById(id); }
+    function text(value, fallback) {
+      if (value === null || value === undefined || value === '') return fallback === undefined ? '-' : fallback;
+      return String(value);
+    }
+    function titleCase(value) {
+      return String(value || '').replace(/_/g, ' ').replace(/\b\w/g, function (letter) { return letter.toUpperCase(); });
+    }
+    function modeClass(mode) {
+      return mode === 'live' ? 'live' : mode === 'paused_unknown' ? 'paused' : mode === 'dry' ? 'dry' : 'disabled';
+    }
+    function isCurrentAccount(userName, generation) {
+      return state.selectedUser === userName && state.accountGeneration === generation;
+    }
+    function formatTime(value) {
+      if (value === null || value === undefined || value === '') return '-';
+      var numeric = Number(value);
+      var date = new Date(Number.isFinite(numeric) ? numeric * 1000 : value);
+      return Number.isNaN(date.getTime()) ? text(value) : date.toLocaleString();
+    }
+    function setMessage(message, tone) {
+      var node = byId('action-message');
+      node.textContent = String(message || '');
+      node.className = tone || '';
+    }
+    function setAccountActionsEnabled(enabled) {
+      document.querySelectorAll('.account-action').forEach(function (button) { button.disabled = !enabled; });
+    }
+    async function requestJson(path, options) {
+      var requestOptions = Object.assign({ credentials: 'same-origin', cache: 'no-store' }, options || {});
+      requestOptions.headers = Object.assign({}, requestOptions.headers || {});
+      if (requestOptions.body && !requestOptions.headers['Content-Type']) requestOptions.headers['Content-Type'] = 'application/json';
+      var response = await fetch(window.API_BASE + path, requestOptions);
+      var payload = await response.json().catch(function () { return {}; });
+      if (!response.ok) {
+        var error = new Error(text(payload.detail, 'Request failed with HTTP ' + response.status));
+        error.status = response.status;
+        throw error;
+      }
+      return payload;
+    }
+    function appendText(parent, tag, value, className) {
+      var node = document.createElement(tag);
+      if (className) node.className = className;
+      node.textContent = text(value);
+      parent.appendChild(node);
+      return node;
+    }
+    function rememberWalletProvider(provider, label) {
+      if (!provider || typeof provider.request !== 'function') return;
+      if (state.announcedWalletProviders.some(function (item) { return item.provider === provider; })) return;
+      var displayLabel = String(label || 'Browser wallet');
+      var normalized = displayLabel.toLowerCase();
+      var family = normalized.includes('okx') || normalized.includes('okex') ? 'okx' : normalized.includes('metamask') ? 'metamask' : normalized.includes('rabby') ? 'rabby' : normalized.includes('coinbase') ? 'coinbase' : '';
+      if (family && state.announcedWalletProviders.some(function (item) { return item.family === family; })) return;
+      state.announcedWalletProviders.push({ provider: provider, label: displayLabel, family: family });
+    }
+    window.addEventListener('eip6963:announceProvider', function (event) {
+      var detail = event && event.detail;
+      if (!detail || !detail.provider) return;
+      state.hasEip6963Providers = true;
+      rememberWalletProvider(detail.provider, detail.info && detail.info.name ? detail.info.name : 'EIP-6963 wallet');
+    });
+    function discoverWalletProviders() {
+      rememberWalletProvider(window.okxwallet, 'OKX Wallet');
+      if (state.hasEip6963Providers) return state.announcedWalletProviders.slice();
+      var ethereum = window.ethereum;
+      if (ethereum && Array.isArray(ethereum.providers)) {
+        ethereum.providers.forEach(function (provider, index) {
+          var flags;
+          try { flags = Object.assign({}, provider); } catch (_error) { flags = {}; }
+          var label = flags.isOkxWallet || flags.isOKExWallet ? 'OKX Wallet' : provider.isRabby ? 'Rabby' : provider.isCoinbaseWallet ? 'Coinbase Wallet' : provider.isMetaMask ? 'MetaMask' : 'Browser wallet ' + (index + 1);
+          rememberWalletProvider(provider, label);
+        });
+      }
+      if (ethereum) {
+        var ethereumFlags;
+        try { ethereumFlags = Object.assign({}, ethereum); } catch (_error) { ethereumFlags = {}; }
+        var ethereumLabel = ethereum === window.okxwallet || ethereumFlags.isOkxWallet || ethereumFlags.isOKExWallet ? 'OKX Wallet' : ethereum.isRabby ? 'Rabby' : ethereum.isCoinbaseWallet ? 'Coinbase Wallet' : ethereum.isMetaMask ? 'MetaMask' : 'Legacy browser wallet';
+        rememberWalletProvider(ethereum, ethereumLabel);
+      }
+      return state.announcedWalletProviders.slice();
+    }
+    async function selectWalletProvider() {
+      try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch (_error) {}
+      await new Promise(function (resolve) { window.setTimeout(resolve, 100); });
+      var providers = discoverWalletProviders();
+      if (!providers.length) throw new Error('A supported EVM browser wallet is required for Hyperliquid Vault transfers.');
+      if (providers.length === 1) return providers[0].provider;
+      var actions = providers.map(function (item, index) {
+        return { label: item.label, value: String(index), primary: index === 0 };
+      });
+      actions.push({ label: 'Cancel', value: 'cancel' });
+      var selected = await window.PBGuiDialogs.choose({
+        title: 'Choose Leader wallet',
+        message: 'Select the browser wallet that controls the configured Hyperliquid Vault Leader.',
+        actions: actions
+      });
+      if (selected === 'cancel' || selected === null || selected === undefined) throw new Error('Vault wallet selection was cancelled.');
+      var selectedIndex = Number.parseInt(String(selected), 10);
+      if (!Number.isInteger(selectedIndex) || !providers[selectedIndex]) throw new Error('The selected browser wallet is unavailable.');
+      return providers[selectedIndex].provider;
+    }
+
+    function renderAccounts() {
+      var list = byId('account-list');
+      var query = byId('account-search').value.trim().toLowerCase();
+      var visible = state.users.filter(function (user) {
+        return !query || String(user.name || '').toLowerCase().includes(query) || String(user.exchange || '').toLowerCase().includes(query);
+      });
+      list.replaceChildren();
+      visible.forEach(function (user) {
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'account-button' + (user.name === state.selectedUser ? ' selected' : '');
+        button.dataset.user = String(user.name || '');
+        button.setAttribute('role', 'option');
+        button.setAttribute('aria-selected', user.name === state.selectedUser ? 'true' : 'false');
+        appendText(button, 'span', user.name, 'account-name');
+        var detailRow = document.createElement('span');
+        detailRow.className = 'account-detail-row';
+        appendText(detailRow, 'span', text(user.exchange, 'Unknown') + (user.is_vault ? ' / Vault' : ' / Standard'), 'account-meta');
+        var badge = appendText(detailRow, 'span', user.operating_mode || 'disabled', 'mode-badge ' + modeClass(user.operating_mode));
+        badge.setAttribute('aria-label', 'Mode ' + text(user.operating_mode, 'disabled'));
+        button.appendChild(detailRow);
+        appendText(button, 'span', user.has_policy ? 'Due ' + text(user.due, '0') : 'No policy', 'account-policy');
+        button.addEventListener('click', function () { selectAccount(String(user.name || '')); });
+        list.appendChild(button);
+      });
+      if (!visible.length) appendText(list, 'div', query ? 'No matching accounts.' : 'No exchange accounts found.', 'empty-state');
+      byId('account-count').textContent = visible.length + ' of ' + state.users.length + ' accounts';
+    }
+
+    function moveAccountFocus(current, direction) {
+      var buttons = Array.from(byId('account-list').querySelectorAll('.account-button'));
+      if (!buttons.length) return;
+      var index = buttons.indexOf(current);
+      var nextIndex = direction === 'home' ? 0 : direction === 'end' ? buttons.length - 1 : (index + direction + buttons.length) % buttons.length;
+      buttons[nextIndex].focus();
+      buttons[nextIndex].click();
+    }
+
+    function fieldGroup(fieldName) {
+      var groups = Object.keys(GROUP_FIELDS);
+      for (var index = 0; index < groups.length; index += 1) {
+        if (GROUP_FIELDS[groups[index]].includes(fieldName)) {
+          return groups[index] + (ADVANCED_POLICY_FIELDS.has(fieldName) ? '-advanced' : '');
+        }
+      }
+      return '';
+    }
+    function schemaOptions(fieldName) {
+      var options = state.schema && state.schema.options && state.schema.options[fieldName];
+      if (Array.isArray(options)) return options;
+      return FIELD_META[fieldName] && Array.isArray(FIELD_META[fieldName].options) ? FIELD_META[fieldName].options : [];
+    }
+    function createPolicyField(fieldName, defaultValue) {
+      var meta = FIELD_META[fieldName] || { label: titleCase(fieldName) };
+      var field = document.createElement('div');
+      field.className = 'field';
+      var label = document.createElement('label');
+      label.htmlFor = 'policy-' + fieldName;
+      label.textContent = meta.label || titleCase(fieldName);
+      label.dataset.tip = meta.help || ('Configure ' + (meta.label || titleCase(fieldName)) + '.');
+      field.appendChild(label);
+      var input;
+      var options = schemaOptions(fieldName);
+      if (typeof defaultValue === 'boolean') {
+        var check = document.createElement('label');
+        check.className = 'check-field';
+        input = document.createElement('input');
+        input.type = 'checkbox';
+        appendText(check, 'span', 'Enabled');
+        check.prepend(input);
+        field.appendChild(check);
+      } else if (options.length) {
+        input = document.createElement('select');
+        options.forEach(function (value) {
+          var option = document.createElement('option');
+          option.value = String(value);
+          option.textContent = titleCase(value);
+          input.appendChild(option);
+        });
+        field.appendChild(input);
+      } else {
+        input = document.createElement('input');
+        input.type = typeof defaultValue === 'number' || /^-?\d+(\.\d+)?$/.test(String(defaultValue)) ? 'number' : 'text';
+        if (input.type === 'number') {
+          input.step = INTEGER_FIELDS.has(fieldName) ? '1' : 'any';
+          input.inputMode = INTEGER_FIELDS.has(fieldName) ? 'numeric' : 'decimal';
+          if (meta.min !== undefined) input.min = String(meta.min);
+          if (meta.max !== undefined) input.max = String(meta.max);
+        }
+        field.appendChild(input);
+      }
+      input.id = 'policy-' + fieldName;
+      input.dataset.policyField = fieldName;
+      return field;
+    }
+    function renderPolicyForm() {
+      var defaults = state.schema && state.schema.defaults ? state.schema.defaults : {};
+      ['policy', 'policy-advanced', 'schedule', 'schedule-advanced', 'vault', 'vault-advanced'].forEach(function (group) { byId(group + '-fields').replaceChildren(); });
+      Object.keys(defaults).forEach(function (fieldName) {
+        if (HIDDEN_POLICY_FIELDS.has(fieldName)) return;
+        var group = fieldGroup(fieldName);
+        if (!group) return;
+        byId(group + '-fields').appendChild(createPolicyField(fieldName, defaults[fieldName]));
+      });
+      fillPolicyForm(defaults);
+    }
+    function fillPolicyForm(policy) {
+      var defaults = state.schema && state.schema.defaults ? state.schema.defaults : {};
+      Object.keys(defaults).forEach(function (fieldName) {
+        var input = byId('policy-' + fieldName);
+        if (!input) return;
+        var value = policy && policy[fieldName] !== undefined ? policy[fieldName] : defaults[fieldName];
+        if (input.type === 'checkbox') input.checked = Boolean(value);
+        else input.value = String(value === undefined || value === null ? '' : value);
+      });
+    }
+    function collectPolicy() {
+      var defaults = state.schema && state.schema.defaults ? state.schema.defaults : {};
+      var policy = {};
+      Object.keys(defaults).forEach(function (fieldName) {
+        var input = byId('policy-' + fieldName);
+        if (!input) return;
+        if (input.type === 'checkbox') {
+          policy[fieldName] = input.checked;
+        } else if (INTEGER_FIELDS.has(fieldName)) {
+          var integer = Number.parseInt(input.value, 10);
+          if (!Number.isInteger(integer) || String(integer) !== input.value.trim()) throw new Error((FIELD_META[fieldName] || {}).label + ' must be a whole number.');
+          policy[fieldName] = integer;
+        } else if (input.type === 'number') {
+          var decimal = input.value.trim();
+          if (!decimal || !/^-?(?:\d+\.?\d*|\.\d+)$/.test(decimal)) throw new Error((FIELD_META[fieldName] || {}).label + ' must be a decimal number.');
+          policy[fieldName] = decimal;
+        } else {
+          policy[fieldName] = input.value;
+        }
+      });
+      if (policy.minimum_transfer_amount !== undefined) {
+        policy.simulation_minimum_transfer_amount = policy.minimum_transfer_amount;
+        policy.live_minimum_transfer_amount = policy.minimum_transfer_amount;
+      }
+      return policy;
+    }
+    function policyFingerprint() {
+      return JSON.stringify(collectPolicy());
+    }
+    function updatePolicyDirty() {
+      var dirty = false;
+      try {
+        dirty = policyFingerprint() !== state.policyBaseline;
+      } catch (_error) {
+        dirty = true;
+      }
+      byId('save-policy').hidden = !dirty || !state.selectedUser;
+    }
+    function capturePolicyBaseline() {
+      try {
+        state.policyBaseline = policyFingerprint();
+      } catch (_error) {
+        state.policyBaseline = '';
+      }
+      updatePolicyDirty();
+    }
+
+    function statusState() {
+      if (!state.record) return {};
+      var mode = state.record.policy && state.record.policy.operating_mode;
+      return mode === 'live' || mode === 'paused_unknown' ? state.record.live_state || {} : state.record.simulation_state || {};
+    }
+    function setStatusCard(id, value) { byId(id).textContent = text(value); }
+    function renderStatusCards() {
+      var policy = state.record && state.record.policy ? state.record.policy : {};
+      var simulation = statusState();
+      var previewDecision = state.preview && state.preview.decision ? state.preview.decision : {};
+      var mode = policy.operating_mode || 'disabled';
+      var modeStatus = byId('status-mode');
+      modeStatus.replaceChildren();
+      appendText(modeStatus, 'span', titleCase(mode), 'mode-badge ' + modeClass(mode));
+      setStatusCard('status-due', simulation.sweep_due);
+      setStatusCard('status-decision', simulation.last_decision || '-');
+      setStatusCard('status-next', formatTime(simulation.next_run_at));
+      setStatusCard('status-pnl', previewDecision.net_pnl || simulation.last_net_pnl);
+      setStatusCard('status-reference', policy.reference_capital);
+      setStatusCard('status-hwm', previewDecision.high_watermark || simulation.high_watermark);
+      setStatusCard('status-cap', previewDecision.effective_cap);
+    }
+    function addKeyValue(parent, label, value) {
+      var wrapper = document.createElement('div');
+      wrapper.className = 'key-value';
+      appendText(wrapper, 'dt', label);
+      appendText(wrapper, 'dd', value);
+      parent.appendChild(wrapper);
+    }
+    function renderOverview(user) {
+      var values = byId('overview-values');
+      var capability = user && user.capability ? user.capability : {};
+      var simulation = statusState();
+      values.replaceChildren();
+      addKeyValue(values, 'Exchange', user ? user.exchange : '-');
+      addKeyValue(values, 'Account type', user && user.is_vault ? 'Vault' : 'Standard');
+      addKeyValue(values, 'Read data', capability.supported === false ? 'Unavailable' : 'Available');
+      var writeCapability = state.writeCapability;
+      var writeAvailable = writeCapability && writeCapability.writes_available === true;
+      var operatingMode = state.record && state.record.policy ? state.record.policy.operating_mode : 'disabled';
+      addKeyValue(values, 'Transfer capability', writeAvailable || operatingMode === 'live' || operatingMode === 'paused_unknown' ? 'Available' : writeCapability ? 'Unavailable' : 'Not checked');
+      addKeyValue(values, 'Transfer route', capabilityRoute(user, writeCapability));
+      var unsupportedReason = writeCapability && writeCapability.reason ? writeCapability.reason : capability.reason;
+      if (unsupportedReason) addKeyValue(values, 'Unavailable reason', unsupportedReason);
+      addKeyValue(values, 'Last successful scan', formatTime(simulation.last_successful_scan_at));
+      addKeyValue(values, 'Last account event', formatTime(simulation.last_event_at));
+      byId('vault-panel').hidden = Boolean(user && !user.is_vault);
+    }
+    function capabilityRoute(user, capability) {
+      if (!user) return '-';
+      var exchange = String(user.exchange || '').toLowerCase();
+      if (exchange === 'hyperliquid') {
+        var policy = state.record && state.record.policy ? state.record.policy : {};
+        var destination = byId('policy-vault_destination') ? byId('policy-vault_destination').value : policy.vault_destination;
+        return user.is_vault ? 'vault_to_main_perps' + (destination === 'main_spot' ? ' + main_perps_to_spot' : '') : 'perp_to_spot';
+      }
+      if (exchange === 'bybit') return 'unified_to_fund';
+      if (exchange === 'binance') return 'umfuture_to_funding';
+      if (exchange === 'bitget') return capability && Array.isArray(capability.routes) && capability.routes.length ? capability.routes.join(' + ') : 'usdt_futures_to_spot or uta_to_spot (server resolved)';
+      return 'Unsupported';
+    }
+    function replaceSelectOptions(select, values, selected) {
+      select.replaceChildren();
+      values.forEach(function (value) {
+        var option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        option.selected = value === selected;
+        select.appendChild(option);
+      });
+    }
+    function renderExchangeContext(user) {
+      var exchange = String(user && user.exchange || '').toLowerCase();
+      var assets = exchange === 'hyperliquid' ? ['USDC'] : exchange === 'bitget' ? ['USDT'] : ['USDT', 'USDC'];
+      var policy = state.record && state.record.policy ? state.record.policy : state.schema && state.schema.defaults ? state.schema.defaults : {};
+      var selectedAsset = assets.includes(policy.asset) ? policy.asset : assets[0];
+      replaceSelectOptions(byId('policy-asset'), assets, selectedAsset);
+      byId('asset-field').hidden = !user;
+      byId('live-activation-panel').hidden = !user;
+      byId('exchange-description').textContent = user ? titleCase(exchange) + ' settlement asset and fixed internal transfer route.' : 'Settlement asset and fixed internal transfer route for this exchange account.';
+      byId('exchange-note').textContent = user ? 'Live route: ' + capabilityRoute(user, state.writeCapability) + '. The server rechecks credentials, account mode, history, and snapshot freshness before activation.' : 'Select an exchange account to inspect its Live route.';
+      byId('policy-first_live_catchup_limit').disabled = !byId('policy-first_live_catchup_limit_enabled').checked;
+    }
+    function balanceText(balance) {
+      if (!balance || balance.available !== true || balance.balance === null || balance.balance === undefined) return 'Unavailable';
+      return text(balance.balance) + (balance.asset ? ' ' + balance.asset : '');
+    }
+    function renderAccountBalances(user) {
+      var container = byId('exchange-balances');
+      var balances = state.snapshot && state.snapshot.account_balances;
+      var transferPermissions = state.snapshot && state.snapshot.transfer_permissions;
+      var permissionReason = transferPermissions && (transferPermissions.internal_transfer === false || transferPermissions.destination_read === false) ? text(transferPermissions.reason, 'Destination account read permission is unavailable.') : '';
+      container.hidden = !user;
+      if (!user) return;
+      var source = balances && balances.source;
+      var destination = balances && balances.destination;
+      if (user.is_vault && destination) {
+        var selectedDestination = byId('policy-vault_destination') ? byId('policy-vault_destination').value : 'main_perps';
+        destination = destination[selectedDestination];
+      }
+      byId('source-balance-label').textContent = source && source.label ? source.label : 'Source balance';
+      byId('source-balance-value').textContent = balances ? balanceText(source) : 'Run Evaluate now';
+      byId('source-balance-detail').textContent = source && source.withdrawable !== null && source.withdrawable !== undefined ? 'Exchange withdrawable: ' + source.withdrawable + (source.asset ? ' ' + source.asset : '') : '';
+      byId('destination-balance-label').textContent = destination && destination.label ? destination.label : 'Destination balance';
+      byId('destination-balance-value').textContent = balances ? balanceText(destination) : 'Run Evaluate now';
+      byId('destination-balance-detail').textContent = permissionReason || (user.is_vault ? 'Configured Vault destination' : 'Internal transfer destination');
+      byId('transferable-balance-value').textContent = balances && balances.max_transferable !== null && balances.max_transferable !== undefined ? text(balances.max_transferable) + (source && source.asset ? ' ' + source.asset : '') : balances ? 'Unavailable' : 'Run Evaluate now';
+    }
+    function testTransferEndpoints(user) {
+      var exchange = String(user && user.exchange || '').toLowerCase();
+      if (exchange === 'hyperliquid' && user && user.is_vault) {
+        var leaderMode = state.snapshot && state.snapshot.leader ? String(state.snapshot.leader.account_mode || '') : '';
+        return { source: 'Hyperliquid Vault', destination: ['unified', 'portfolio_margin'].includes(leaderMode) ? 'Leader Main (Unified)' : 'Leader Main Perps' };
+      }
+      if (exchange === 'hyperliquid') return { source: 'Hyperliquid Perps', destination: 'Hyperliquid Spot' };
+      if (exchange === 'bybit') return { source: 'Bybit Unified Trading', destination: 'Bybit Funding' };
+      if (exchange === 'binance') return { source: 'Binance USD-M Futures', destination: 'Binance Funding' };
+      if (exchange === 'bitget') return { source: 'Bitget USDT Futures or UTA', destination: 'Bitget Spot' };
+      return { source: 'Trading account', destination: 'Internal destination account' };
+    }
+    function testOperationDetail(operation) {
+      if (!operation) return '-';
+      if (!operation.error) return text(operation.transfer_back_reason, '-');
+      if (typeof operation.error === 'string') return operation.error;
+      return operation.error.reason || operation.error.message || operation.transfer_back_reason || '-';
+    }
+    function renderTestTransfers(user) {
+      var note = byId('test-transfer-note');
+      var action = byId('test-transfer');
+      var container = byId('test-transfers-content');
+      var capability = user && user.capability ? user.capability : {};
+      var transferPermissions = state.snapshot && state.snapshot.transfer_permissions;
+      var permissionBlocked = Boolean(transferPermissions && transferPermissions.internal_transfer === false);
+      var supported = Boolean(user && capability.supported === true && !permissionBlocked);
+      var endpoints = testTransferEndpoints(user);
+      action.hidden = !supported;
+      action.disabled = !supported || state.testActionPending;
+      if (!user) note.textContent = 'Select a supported standard account to inspect test-transfer availability.';
+      else if (permissionBlocked) note.textContent = text(transferPermissions.reason, 'Internal account transfer permission is unavailable.');
+      else if (!supported) note.textContent = text(capability.reason, 'Test transfers are unavailable because this exchange has no supported Profit Sweep adapter.');
+      else if (user.is_vault) note.textContent = 'Real-funds Vault test (default 5 USDC): smaller withdrawals are allowed, but Transfer back requires at least 5 USDC for the Vault deposit.';
+      else note.textContent = 'Real-funds route: ' + endpoints.source + ' to ' + endpoints.destination + '. Every submission requires a separate confirmation.';
+
+      container.replaceChildren();
+      if (!state.testOperations.length) {
+        appendText(container, 'div', 'No test-transfer operations have been recorded for this account.', 'journal-empty');
+        return;
+      }
+      var table = document.createElement('table');
+      table.className = 'journal-table';
+      var head = document.createElement('thead');
+      var headRow = document.createElement('tr');
+      ['Operation', 'Direction', 'Status', 'Requested', 'Actual', 'Prepared', 'Resolved', 'Detail', 'Action'].forEach(function (label) { appendText(headRow, 'th', label); });
+      head.appendChild(headRow);
+      table.appendChild(head);
+      var body = document.createElement('tbody');
+      var latestForward = state.testOperations.slice().reverse().find(function (operation) {
+        return operation.direction === 'forward' && operation.status === 'confirmed' && operation.can_transfer_back === true;
+      });
+      state.testOperations.forEach(function (operation) {
+        var row = document.createElement('tr');
+        appendText(row, 'td', operation.operation_id);
+        appendText(row, 'td', titleCase(operation.direction));
+        var statusCell = document.createElement('td');
+        appendText(statusCell, 'span', titleCase(operation.status), 'intent-badge ' + String(operation.status || 'unknown'));
+        row.appendChild(statusCell);
+        [operation.requested_amount, operation.actual_amount, formatTime(operation.prepared_at), formatTime(operation.resolved_at), testOperationDetail(operation)].forEach(function (value) { appendText(row, 'td', value); });
+        var actionCell = document.createElement('td');
+        if (operation === latestForward && operation.status === 'confirmed' && operation.can_transfer_back === true) {
+          var backButton = appendText(actionCell, 'button', 'Transfer back', 'btn warning');
+          backButton.type = 'button';
+          backButton.disabled = state.testActionPending;
+          backButton.addEventListener('click', function () { transferTestBack(operation); });
+        } else {
+          appendText(actionCell, 'span', '-');
+        }
+        row.appendChild(actionCell);
+        body.appendChild(row);
+      });
+      table.appendChild(body);
+      container.appendChild(table);
+    }
+    function renderPreview() {
+      var container = byId('evaluation-preview');
+      container.replaceChildren();
+      var decision = state.preview && state.preview.decision;
+      var title = appendText(container, 'div', decision && decision.would_transfer ? 'WOULD TRANSFER' : 'DRY PREVIEW', 'preview-title');
+      if (decision && decision.would_transfer) title.className += ' decision-badge would';
+      appendText(container, 'div', 'Read-only simulation. This is not a submitted or confirmed transfer.', 'preview-note');
+      if (!decision) return;
+      var grid = document.createElement('div');
+      grid.className = 'preview-grid';
+      [['Amount', decision.amount], ['Reason', titleCase(decision.reason)], ['Net PnL', decision.net_pnl], ['Trigger', decision.trigger_amount], ['High-water mark', decision.high_watermark], ['Sweep due', decision.sweep_due], ['Safety reserve', decision.safety_reserve], ['Effective cap', decision.effective_cap]].forEach(function (item) {
+        var box = document.createElement('div');
+        box.className = 'preview-item';
+        appendText(box, 'span', item[0]);
+        appendText(box, 'span', item[1]);
+        grid.appendChild(box);
+      });
+      container.appendChild(grid);
+    }
+    function renderJournal() {
+      var container = byId('journal-content');
+      container.replaceChildren();
+      if (!state.journal.length) {
+        appendText(container, 'div', 'No Dry decisions have been journaled for this policy.', 'journal-empty');
+        return;
+      }
+      var table = document.createElement('table');
+      table.className = 'journal-table';
+      var head = document.createElement('thead');
+      var headRow = document.createElement('tr');
+      ['Time', 'Decision', 'Amount', 'Net PnL', 'HWM', 'Due before', 'Due after', 'Reserve', 'Cap'].forEach(function (label) { appendText(headRow, 'th', label); });
+      head.appendChild(headRow);
+      table.appendChild(head);
+      var body = document.createElement('tbody');
+      state.journal.forEach(function (entry) {
+        var row = document.createElement('tr');
+        appendText(row, 'td', formatTime(entry.created_at));
+        var decisionCell = document.createElement('td');
+        var wouldTransfer = entry.reason === 'would_transfer' || Number(entry.amount) > 0;
+        appendText(decisionCell, 'span', wouldTransfer ? 'WOULD TRANSFER' : titleCase(entry.reason), wouldTransfer ? 'decision-badge would' : 'decision-badge');
+        row.appendChild(decisionCell);
+        [entry.amount, entry.net_pnl, entry.high_watermark, entry.due_before, entry.due_after, entry.safety_reserve, entry.effective_cap].forEach(function (value) { appendText(row, 'td', value); });
+        body.appendChild(row);
+      });
+      table.appendChild(body);
+      container.appendChild(table);
+    }
+    function intentDetail(intent) {
+      if (intent.error && intent.error.reason) return intent.error.reason;
+      var reconciliation = intent.reconciliation;
+      return reconciliation && reconciliation.reason ? reconciliation.reason : '-';
+    }
+    function renderIntents() {
+      var container = byId('intents-content');
+      container.replaceChildren();
+      if (!state.intents.length) {
+        appendText(container, 'div', 'No Live transfer intents exist for this policy.', 'journal-empty');
+        return;
+      }
+      var table = document.createElement('table');
+      table.className = 'journal-table';
+      var head = document.createElement('thead');
+      var headRow = document.createElement('tr');
+      ['Operation', 'State', 'Route', 'Amount', 'Leg', 'Prepared', 'Updated', 'Detail', 'Action'].forEach(function (label) { appendText(headRow, 'th', label); });
+      head.appendChild(headRow);
+      table.appendChild(head);
+      var body = document.createElement('tbody');
+      state.intents.forEach(function (intent) {
+        var row = document.createElement('tr');
+        appendText(row, 'td', intent.operation_id);
+        var stateCell = document.createElement('td');
+        appendText(stateCell, 'span', titleCase(intent.state), 'intent-badge ' + String(intent.state || 'unknown'));
+        row.appendChild(stateCell);
+        [intent.route, intent.reserved_amount, intent.leg, formatTime(intent.prepared_at), formatTime(intent.updated_at), intentDetail(intent)].forEach(function (value) { appendText(row, 'td', value); });
+        var actionCell = document.createElement('td');
+        if (intent.can_reconcile === true) {
+          var button = appendText(actionCell, 'button', 'Reconcile', 'btn warning');
+          button.type = 'button';
+          button.addEventListener('click', function () { reconcileIntent(String(intent.operation_id || '')); });
+        } else {
+          appendText(actionCell, 'span', '-');
+        }
+        row.appendChild(actionCell);
+        body.appendChild(row);
+      });
+      table.appendChild(body);
+      container.appendChild(table);
+    }
+    function renderSelectedAccount() {
+      var user = state.users.find(function (item) { return item.name === state.selectedUser; }) || null;
+      byId('account-heading').textContent = user ? text(user.name) : 'Profit Sweep';
+      byId('account-subtitle').textContent = user ? text(user.exchange, 'Unknown exchange') + (user.is_vault ? ' Vault account' : ' standard account') : 'Select an exchange account to configure a read-only simulation.';
+      fillPolicyForm(state.record && state.record.policy ? state.record.policy : state.schema.defaults);
+      renderExchangeContext(user);
+      renderAccounts();
+      renderStatusCards();
+      renderOverview(user);
+      renderAccountBalances(user);
+      renderPreview();
+      renderJournal();
+      renderIntents();
+      renderTestTransfers(user);
+      setAccountActionsEnabled(Boolean(user));
+      var mode = state.record && state.record.policy ? state.record.policy.operating_mode : 'disabled';
+      byId('enable-live').disabled = !user || !state.schema || state.schema.live_available !== true || !['disabled', 'dry'].includes(mode);
+      capturePolicyBaseline();
+    }
+
+    async function loadJournalForAccount(userName, generation, signal) {
+      try {
+        var data = await requestJson('/journal/' + encodeURIComponent(userName) + '?limit=100', { signal: signal });
+        if (isCurrentAccount(userName, generation)) state.journal = Array.isArray(data.journal) ? data.journal : [];
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        if (error.status === 404) {
+          if (isCurrentAccount(userName, generation)) state.journal = [];
+          return;
+        }
+        throw error;
+      }
+    }
+    async function loadPolicyForAccount(userName, generation, signal) {
+      try {
+        var data = await requestJson('/policies/' + encodeURIComponent(userName), { signal: signal });
+        if (isCurrentAccount(userName, generation)) state.record = data;
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        if (error.status === 404) {
+          if (isCurrentAccount(userName, generation)) state.record = null;
+          return;
+        }
+        throw error;
+      }
+    }
+    async function loadIntentsForAccount(userName, generation, signal) {
+      try {
+        var data = await requestJson('/intents/' + encodeURIComponent(userName), { signal: signal });
+        if (isCurrentAccount(userName, generation)) state.intents = Array.isArray(data.intents) ? data.intents : [];
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        if (error.status === 404) {
+          if (isCurrentAccount(userName, generation)) state.intents = [];
+          return;
+        }
+        throw error;
+      }
+    }
+    async function loadTestTransfersForAccount(userName, generation, signal) {
+      try {
+        var data = await requestJson('/test-transfers/' + encodeURIComponent(userName), { signal: signal });
+        if (isCurrentAccount(userName, generation)) state.testOperations = Array.isArray(data.operations) ? data.operations : [];
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        if (error.status === 404) {
+          if (isCurrentAccount(userName, generation)) state.testOperations = [];
+          return;
+        }
+        throw error;
+      }
+    }
+    async function refreshPolicyAndIntents(userName, generation, signal) {
+      await Promise.all([
+        loadPolicyForAccount(userName, generation, signal),
+        loadIntentsForAccount(userName, generation, signal)
+      ]);
+    }
+    function syncSelectedUserSummary() {
+      if (!state.record) return;
+      var user = state.users.find(function (item) { return item.name === state.selectedUser; });
+      if (!user) return;
+      var current = statusState();
+      user.has_policy = true;
+      user.operating_mode = state.record.policy.operating_mode;
+      user.due = current.sweep_due;
+    }
+    async function selectAccount(userName) {
+      if (!state.users.some(function (user) { return user.name === userName; })) return;
+      state.accountGeneration += 1;
+      var generation = state.accountGeneration;
+      if (state.accountController) state.accountController.abort();
+      state.accountController = new AbortController();
+      var signal = state.accountController.signal;
+      state.selectedUser = userName;
+      state.record = null;
+      state.journal = [];
+      state.intents = [];
+      state.testOperations = [];
+      state.testActionPending = false;
+      state.pendingTestOperationId = '';
+      state.preview = null;
+      state.snapshot = null;
+      state.writeCapability = null;
+      renderSelectedAccount();
+      setMessage('Loading ' + userName + '...');
+      try {
+        await Promise.all([
+          loadPolicyForAccount(userName, generation, signal),
+          loadJournalForAccount(userName, generation, signal),
+          loadIntentsForAccount(userName, generation, signal),
+          loadTestTransfersForAccount(userName, generation, signal)
+        ]);
+        if (!isCurrentAccount(userName, generation)) return;
+        renderSelectedAccount();
+        setMessage(state.record ? 'Policy loaded.' : 'No saved policy. Schema defaults are ready.', 'ok');
+      } catch (error) {
+        if (error.name === 'AbortError' || !isCurrentAccount(userName, generation)) return;
+        setMessage(error.message, 'error');
+      }
+    }
+
+    async function loadUsers(preferredUser) {
+      state.usersGeneration += 1;
+      var generation = state.usersGeneration;
+      if (state.usersController) state.usersController.abort();
+      state.usersController = new AbortController();
+      try {
+        var data = await requestJson('/users', { signal: state.usersController.signal });
+        if (generation !== state.usersGeneration) return;
+        state.users = Array.isArray(data.users) ? data.users : [];
+        renderAccounts();
+        var nextUser = preferredUser && state.users.some(function (user) { return user.name === preferredUser; }) ? preferredUser : state.users.length ? String(state.users[0].name || '') : '';
+        if (nextUser) await selectAccount(nextUser);
+        else {
+          state.selectedUser = '';
+          state.record = null;
+          state.journal = [];
+          state.intents = [];
+          state.testOperations = [];
+          state.snapshot = null;
+          renderSelectedAccount();
+          setMessage('No exchange accounts available.');
+        }
+      } catch (error) {
+        if (error.name === 'AbortError' || generation !== state.usersGeneration) return;
+        setMessage(error.message, 'error');
+      }
+    }
+
+    async function savePolicyWithMode(mode) {
+      var userName = state.selectedUser;
+      var generation = state.accountGeneration;
+      if (!userName) return;
+      try {
+        var policy = collectPolicy();
+        if (mode) policy.operating_mode = mode;
+        var currentMode = state.record && state.record.policy ? state.record.policy.operating_mode : 'disabled';
+        var confirmedLiveUpdate = false;
+        if (!mode && currentMode === 'live') {
+          var changed = Object.keys(policy).filter(function (field) {
+            return state.record.policy[field] !== policy[field];
+          }).map(function (field) { return FIELD_META[field] ? FIELD_META[field].label : field; });
+          if (changed.length) {
+            confirmedLiveUpdate = await window.PBGuiDialogs.confirm({
+              title: 'Change Live Profit Sweep',
+              message: 'Apply settings that affect future real transfers for ' + userName + '?',
+              detail: 'Changed: ' + changed.join(', ') + '. The scheduler will use these values on its next evaluation.',
+              confirmText: 'Apply Live changes'
+            });
+            if (!confirmedLiveUpdate || !isCurrentAccount(userName, generation)) return;
+          }
+        }
+        setMessage(mode === 'dry' ? 'Enabling Dry simulation...' : mode === 'disabled' ? 'Disabling policy...' : 'Saving policy...');
+        await requestJson('/policies/' + encodeURIComponent(userName), {
+          method: 'PUT',
+          signal: state.accountController ? state.accountController.signal : undefined,
+          body: JSON.stringify({
+            policy: policy,
+            expected_generation: state.record ? state.record.generation : null,
+            expected_policy_fingerprint: state.record ? state.record.policy_fingerprint : null,
+            confirmed_live_update: confirmedLiveUpdate
+          })
+        });
+        if (!isCurrentAccount(userName, generation)) return;
+        await refreshPolicyAndIntents(userName, generation, state.accountController.signal);
+        if (!isCurrentAccount(userName, generation)) return;
+        syncSelectedUserSummary();
+        renderSelectedAccount();
+        setMessage(mode === 'dry' ? 'Dry simulation enabled.' : mode === 'disabled' ? 'Policy disabled.' : 'Policy saved.', 'ok');
+      } catch (error) {
+        if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
+      }
+    }
+
+    async function enableLive() {
+      var userName = state.selectedUser;
+      var generation = state.accountGeneration;
+      if (!userName) return;
+      var policy;
+      try {
+        policy = collectPolicy();
+      } catch (error) {
+        setMessage(error.message, 'error');
+        return;
+      }
+      var currentMode = state.record && state.record.policy ? state.record.policy.operating_mode : 'disabled';
+      if (!['disabled', 'dry'].includes(currentMode)) return;
+      policy.operating_mode = currentMode;
+      var baseline = policy.live_activation_baseline_mode === 'include_dry_period' ? 'Include Dry Period' : 'Fresh';
+      var catchup = policy.first_live_catchup_limit_enabled ? ' First transfer cap: ' + policy.first_live_catchup_limit + '.' : ' No separate first-transfer cap.';
+      var accepted = await window.PBGuiDialogs.confirm({
+        title: 'Enable Live Profit Sweep',
+        message: 'Enable scheduled real internal transfers for ' + userName + '?',
+        detail: 'Baseline: ' + baseline + '. Settlement asset: ' + policy.asset + '.' + catchup + ' The server will fail closed unless its fresh preflight confirms write capability and route.',
+        confirmText: 'Enable Live'
+      });
+      if (!accepted || !isCurrentAccount(userName, generation)) return;
+      setMessage('Saving Live settings and running server preflight...');
+      try {
+        var saved = await requestJson('/policies/' + encodeURIComponent(userName), {
+          method: 'PUT',
+          signal: state.accountController ? state.accountController.signal : undefined,
+          body: JSON.stringify({
+            policy: policy,
+            expected_generation: state.record ? state.record.generation : null,
+            expected_policy_fingerprint: state.record ? state.record.policy_fingerprint : null,
+            confirmed_live_update: false
+          })
+        });
+        if (!isCurrentAccount(userName, generation)) return;
+        var result = await requestJson('/live/' + encodeURIComponent(userName), {
+          method: 'POST',
+          signal: state.accountController ? state.accountController.signal : undefined,
+          body: JSON.stringify({ expected_policy_fingerprint: saved.policy_fingerprint })
+        });
+        if (!isCurrentAccount(userName, generation)) return;
+        state.writeCapability = result.capability || null;
+        state.snapshot = result.snapshot || null;
+        await refreshPolicyAndIntents(userName, generation, state.accountController.signal);
+        if (!isCurrentAccount(userName, generation)) return;
+        syncSelectedUserSummary();
+        renderSelectedAccount();
+        setMessage('Live enabled. Future due sweeps may submit real internal transfers.', 'ok');
+      } catch (error) {
+        if (error.name === 'AbortError' || !isCurrentAccount(userName, generation)) return;
+        state.writeCapability = { writes_available: false, routes: [], reason: error.message };
+        try {
+          await refreshPolicyAndIntents(userName, generation, state.accountController.signal);
+        } catch (refreshError) {
+          if (refreshError.name === 'AbortError') return;
+        }
+        if (!isCurrentAccount(userName, generation)) return;
+        syncSelectedUserSummary();
+        renderSelectedAccount();
+        setMessage(error.message, 'error');
+      }
+    }
+
+    async function reconcileIntent(operationId) {
+      var userName = state.selectedUser;
+      var generation = state.accountGeneration;
+      if (!userName || !operationId) return;
+      setMessage('Reconciling Live intent ' + operationId + '...');
+      try {
+        await requestJson('/reconcile/' + encodeURIComponent(userName) + '/' + encodeURIComponent(operationId), {
+          method: 'POST', signal: state.accountController ? state.accountController.signal : undefined
+        });
+        if (!isCurrentAccount(userName, generation)) return;
+        await refreshPolicyAndIntents(userName, generation, state.accountController.signal);
+        if (!isCurrentAccount(userName, generation)) return;
+        syncSelectedUserSummary();
+        renderSelectedAccount();
+        setMessage('Intent reconciliation refreshed.', 'ok');
+      } catch (error) {
+        if (error.name === 'AbortError' || !isCurrentAccount(userName, generation)) return;
+        try {
+          await refreshPolicyAndIntents(userName, generation, state.accountController.signal);
+        } catch (refreshError) {
+          if (refreshError.name === 'AbortError') return;
+        }
+        if (!isCurrentAccount(userName, generation)) return;
+        syncSelectedUserSummary();
+        renderSelectedAccount();
+        setMessage(error.message, 'error');
+      }
+    }
+
+    async function refreshTestTransfersAfterAction(userName, generation) {
+      await loadTestTransfersForAccount(userName, generation, state.accountController ? state.accountController.signal : undefined);
+      if (!isCurrentAccount(userName, generation)) return;
+      var user = state.users.find(function (item) { return item.name === userName; }) || null;
+      renderTestTransfers(user);
+    }
+    async function refreshAccountSnapshot(userName, generation) {
+      var result = await requestJson('/evaluate/' + encodeURIComponent(userName), {
+        method: 'POST',
+        signal: state.accountController ? state.accountController.signal : undefined,
+        body: JSON.stringify({ policy: collectPolicy() })
+      });
+      if (!isCurrentAccount(userName, generation)) return;
+      state.snapshot = result.snapshot || null;
+      var user = state.users.find(function (item) { return item.name === userName; }) || null;
+      renderAccountBalances(user);
+      renderTestTransfers(user);
+    }
+    async function submitPreparedWalletSignature(userName, generation, prepared) {
+      if (!prepared || prepared.requires_wallet_signature !== true || !prepared.operation || !prepared.signing) return prepared;
+      var walletProvider = await selectWalletProvider();
+      var expected = String(prepared.signing.account || '').toLowerCase();
+      var typedData = prepared.signing.typed_data;
+      if (!/^0x[0-9a-f]{40}$/.test(expected) || !typedData || typeof typedData !== 'object') {
+        throw new Error('The server returned an invalid Vault Leader signing request.');
+      }
+      setMessage('Connect the Vault Leader wallet and confirm the Hyperliquid signature...');
+      var accounts = await walletProvider.request({ method: 'eth_requestAccounts' });
+      if (!Array.isArray(accounts) || !accounts.length) throw new Error('The browser wallet returned no account.');
+      var selected = String(accounts[0] || '').toLowerCase();
+      if (selected !== expected) {
+        throw new Error('Switch the browser wallet to the configured Vault Leader account ' + expected + '.');
+      }
+      var signature;
+      try {
+        signature = await walletProvider.request({
+          method: 'eth_signTypedData_v4',
+          params: [selected, JSON.stringify(typedData)]
+        });
+      } catch (error) {
+        if (error && (error.code === 4001 || error.code === 'ACTION_REJECTED')) {
+          throw new Error('Vault Leader wallet signature was rejected.');
+        }
+        throw error;
+      }
+      if (!isCurrentAccount(userName, generation)) return prepared;
+      if (typeof signature !== 'string' || !/^0x[0-9a-fA-F]{130}$/.test(signature)) {
+        throw new Error('The browser wallet returned an invalid signature.');
+      }
+      setMessage('Submitting the signed Hyperliquid Vault transfer...');
+      return requestJson(
+        '/test-transfer/' + encodeURIComponent(userName) + '/' + encodeURIComponent(String(prepared.operation.operation_id || '')) + '/signature',
+        {
+          method: 'POST',
+          signal: state.accountController ? state.accountController.signal : undefined,
+          body: JSON.stringify({ signature: signature })
+        }
+      );
+    }
+    async function runTestTransferRequest(userName, generation, path, options, pendingMessage, resultLabel) {
+      setMessage(pendingMessage);
+      try {
+        var result = await requestJson(path, options);
+        if (!isCurrentAccount(userName, generation)) return;
+        result = await submitPreparedWalletSignature(userName, generation, result);
+        if (!isCurrentAccount(userName, generation)) return;
+        await refreshTestTransfersAfterAction(userName, generation);
+        if (!isCurrentAccount(userName, generation)) return;
+        state.pendingTestOperationId = '';
+        var balanceRefreshFailed = false;
+        try {
+          await refreshAccountSnapshot(userName, generation);
+        } catch (balanceError) {
+          if (balanceError.name === 'AbortError') throw balanceError;
+          balanceRefreshFailed = true;
+          state.snapshot = null;
+          renderAccountBalances(state.users.find(function (item) { return item.name === userName; }) || null);
+        }
+        if (!isCurrentAccount(userName, generation)) return;
+        var status = String(result.status || 'unknown');
+        var balanceNote = balanceRefreshFailed ? ' Balance refresh failed; run Evaluate now to retry.' : '';
+        setMessage(resultLabel + ': ' + titleCase(status) + '.' + balanceNote, status === 'confirmed' && !balanceRefreshFailed ? 'ok' : ['failed', 'unknown'].includes(status) ? 'error' : '');
+      } catch (error) {
+        if (error.name === 'AbortError' || !isCurrentAccount(userName, generation)) return;
+        try {
+          await refreshTestTransfersAfterAction(userName, generation);
+        } catch (refreshError) {
+          if (refreshError.name === 'AbortError') return;
+        }
+        if (state.testOperations.some(function (operation) {
+          return operation.operation_id === state.pendingTestOperationId;
+        })) state.pendingTestOperationId = '';
+        if (isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
+      }
+    }
+    async function testTransfer() {
+      var userName = state.selectedUser;
+      var generation = state.accountGeneration;
+      var user = state.users.find(function (item) { return item.name === userName; }) || null;
+      if (!user || state.testActionPending || !user.capability || user.capability.supported !== true) return;
+      var enteredAmount = await window.PBGuiDialogs.prompt({
+        title: 'Test internal transfer',
+        message: 'Enter the small amount to move through the exchange internal route.',
+        label: 'Amount',
+        defaultValue: user.is_vault ? '5' : '1',
+        confirmText: 'Continue'
+      });
+      if (enteredAmount === null || !isCurrentAccount(userName, generation)) return;
+      var amount = enteredAmount.trim();
+      if (!/^(?:\d+\.?\d*|\.\d+)$/.test(amount) || !/[1-9]/.test(amount)) {
+        setMessage('Test transfer amount must be a positive decimal number.', 'error');
+        return;
+      }
+      var endpoints = testTransferEndpoints(user);
+      var asset = byId('policy-asset').value || 'settlement asset';
+      if (!window.crypto || typeof window.crypto.randomUUID !== 'function') {
+        setMessage('This browser cannot create a secure transfer request ID.', 'error');
+        return;
+      }
+      var operationId = state.pendingTestOperationId || window.crypto.randomUUID();
+      var accepted = await window.PBGuiDialogs.confirm({
+        title: 'Confirm real test transfer',
+        message: 'Move ' + amount + ' ' + asset + ' from ' + endpoints.source + ' to ' + endpoints.destination + '?',
+        detail: 'This action moves real funds. It is separate from Dry evaluation and will be submitted once through the server-owned route.',
+        confirmText: 'Move real funds'
+      });
+      if (!accepted || !isCurrentAccount(userName, generation)) return;
+      state.pendingTestOperationId = operationId;
+      state.testActionPending = true;
+      renderTestTransfers(user);
+      try {
+        await runTestTransferRequest(
+          userName,
+          generation,
+          '/test-transfer/' + encodeURIComponent(userName),
+          {
+            method: 'POST',
+            signal: state.accountController ? state.accountController.signal : undefined,
+            body: JSON.stringify({ amount: amount, asset: asset, operation_id: operationId })
+          },
+          'Submitting real test transfer...',
+          'Test transfer status'
+        );
+      } finally {
+        if (isCurrentAccount(userName, generation)) {
+          state.testActionPending = false;
+          renderTestTransfers(user);
+        }
+      }
+    }
+    async function transferTestBack(operation) {
+      var userName = state.selectedUser;
+      var generation = state.accountGeneration;
+      var user = state.users.find(function (item) { return item.name === userName; }) || null;
+      if (!user || state.testActionPending || !operation || operation.status !== 'confirmed' || operation.can_transfer_back !== true) return;
+      var endpoints = testTransferEndpoints(user);
+      var asset = operation.asset || 'settlement asset';
+      var amount = text(operation.actual_amount || operation.requested_amount);
+      var accepted = await window.PBGuiDialogs.confirm({
+        title: 'Transfer test funds back',
+        message: 'Move ' + amount + ' ' + asset + ' from ' + endpoints.destination + ' back to ' + endpoints.source + '?',
+        detail: 'This action moves real funds through the fixed reverse route. The confirmed forward operation will not be submitted again.',
+        confirmText: 'Transfer back'
+      });
+      if (!accepted || !isCurrentAccount(userName, generation)) return;
+      state.testActionPending = true;
+      renderTestTransfers(user);
+      try {
+        await runTestTransferRequest(
+          userName,
+          generation,
+          '/test-transfer/' + encodeURIComponent(userName) + '/' + encodeURIComponent(String(operation.operation_id || '')) + '/back',
+          { method: 'POST', signal: state.accountController ? state.accountController.signal : undefined },
+          'Submitting real transfer back...',
+          'Transfer-back status'
+        );
+      } finally {
+        if (isCurrentAccount(userName, generation)) {
+          state.testActionPending = false;
+          renderTestTransfers(user);
+        }
+      }
+    }
+
+    async function evaluateNow() {
+      var userName = state.selectedUser;
+      var generation = state.accountGeneration;
+      if (!userName) return;
+      setMessage('Running read-only evaluation...');
+      try {
+        var policy = collectPolicy();
+        var result = await requestJson('/evaluate/' + encodeURIComponent(userName), {
+          method: 'POST',
+          signal: state.accountController ? state.accountController.signal : undefined,
+          body: JSON.stringify({ policy: policy })
+        });
+        if (!isCurrentAccount(userName, generation)) return;
+        state.preview = result;
+        state.snapshot = result.snapshot || null;
+        renderPreview();
+        var user = state.users.find(function (item) { return item.name === userName; }) || null;
+        renderAccountBalances(user);
+        renderTestTransfers(user);
+        renderStatusCards();
+        setMessage(result.decision && result.decision.would_transfer ? 'Preview result: WOULD TRANSFER. Nothing was submitted.' : 'Dry preview complete. Nothing was submitted.', 'ok');
+      } catch (error) {
+        if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
+      }
+    }
+
+    async function resetBaseline() {
+      var userName = state.selectedUser;
+      var generation = state.accountGeneration;
+      if (!userName) return;
+      var cumulative = byId('baseline-value').value.trim();
+      if (!/^-?(?:\d+\.?\d*|\.\d+)$/.test(cumulative)) {
+        setMessage('Cumulative net PnL must be a decimal number.', 'error');
+        return;
+      }
+      var accepted = await window.PBGuiDialogs.confirm({
+        title: 'Reset Profit Sweep baseline',
+        message: 'Reset Dry and Live accounting baselines for ' + userName + '?',
+        detail: 'Cumulative net PnL will be set to ' + cumulative + '. This clears accumulated due, high-water marks, and daily totals in both state generations. Disable Live first.',
+        confirmText: 'Reset baseline'
+      });
+      if (!accepted || !isCurrentAccount(userName, generation)) return;
+      try {
+        var record = await requestJson('/baseline/' + encodeURIComponent(userName), {
+          method: 'POST',
+          signal: state.accountController ? state.accountController.signal : undefined,
+          body: JSON.stringify({
+            cumulative_net_pnl: cumulative,
+            expected_policy_fingerprint: state.record.policy_fingerprint
+          })
+        });
+        if (!isCurrentAccount(userName, generation)) return;
+        state.record = record;
+        state.preview = null;
+        state.snapshot = null;
+        await Promise.all([
+          loadJournalForAccount(userName, generation, state.accountController.signal),
+          loadIntentsForAccount(userName, generation, state.accountController.signal)
+        ]);
+        if (!isCurrentAccount(userName, generation)) return;
+        renderSelectedAccount();
+        setMessage('Baseline reset. No transfer was submitted.', 'ok');
+      } catch (error) {
+        if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
+      }
+    }
+
+    async function deletePolicy() {
+      var userName = state.selectedUser;
+      var generation = state.accountGeneration;
+      if (!userName || !state.record) return;
+      var accepted = await window.PBGuiDialogs.confirm({
+        title: 'Delete Profit Sweep policy',
+        message: 'Delete the local policy and all Profit Sweep accounting history for ' + userName + '?',
+        detail: 'This removes Dry journals, Live state, ledger events, and resolved intents. It does not reverse exchange transfers. Disable Live first.',
+        confirmText: 'Delete policy'
+      });
+      if (!accepted || !isCurrentAccount(userName, generation)) return;
+      try {
+        await requestJson('/policies/' + encodeURIComponent(userName), {
+          method: 'DELETE',
+          signal: state.accountController ? state.accountController.signal : undefined,
+          body: JSON.stringify({ expected_policy_fingerprint: state.record.policy_fingerprint })
+        });
+        if (!isCurrentAccount(userName, generation)) return;
+        state.record = null;
+        state.journal = [];
+        state.intents = [];
+        state.preview = null;
+        var user = state.users.find(function (item) { return item.name === userName; });
+        if (user) { user.has_policy = false; user.operating_mode = 'disabled'; user.due = '0'; }
+        renderSelectedAccount();
+        setMessage('Policy and Profit Sweep accounting history deleted.', 'ok');
+      } catch (error) {
+        if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
+      }
+    }
+
+    async function refreshJournal() {
+      var userName = state.selectedUser;
+      var generation = state.accountGeneration;
+      if (!userName) return;
+      try {
+        await loadJournalForAccount(userName, generation, state.accountController.signal);
+        if (!isCurrentAccount(userName, generation)) return;
+        renderJournal();
+        setMessage('Journal refreshed.', 'ok');
+      } catch (error) {
+        if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
+      }
+    }
+    async function refreshIntents() {
+      var userName = state.selectedUser;
+      var generation = state.accountGeneration;
+      if (!userName) return;
+      try {
+        await refreshPolicyAndIntents(userName, generation, state.accountController.signal);
+        if (!isCurrentAccount(userName, generation)) return;
+        syncSelectedUserSummary();
+        renderSelectedAccount();
+        setMessage('Policy and Live intents refreshed.', 'ok');
+      } catch (error) {
+        if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
+      }
+    }
+
+    function showTab(tabName) {
+      document.querySelectorAll('.tab-button').forEach(function (button) {
+        var selected = button.dataset.tab === tabName;
+        button.classList.toggle('selected', selected);
+        button.setAttribute('aria-selected', selected ? 'true' : 'false');
+      });
+      document.querySelectorAll('.tab-panel').forEach(function (panel) { panel.classList.toggle('selected', panel.id === 'panel-' + tabName); });
+    }
+    function openLogs() {
+      var sharedLogButton = document.getElementById('pbgui-notify-btn');
+      if (sharedLogButton) sharedLogButton.click();
+    }
+
+    /* ── data-tip Fixed Tooltip ── */
+    (function() {
+      var tip = document.getElementById('data-tip-tooltip');
+      if (!tip) return;
+      document.addEventListener('mouseover', function(event) {
+        var target = event.target.closest ? event.target.closest('[data-tip]') : null;
+        if (!target) return;
+        var tooltipText = target.getAttribute('data-tip');
+        if (!tooltipText) return;
+        tip.textContent = tooltipText;
+        tip.style.display = 'block';
+      });
+      document.addEventListener('mousemove', function(event) {
+        if (tip.style.display === 'none') return;
+        var x = event.clientX + 14;
+        var y = event.clientY + 14;
+        var tipWidth = tip.offsetWidth;
+        var tipHeight = tip.offsetHeight;
+        if (x + tipWidth > window.innerWidth - 8) x = event.clientX - tipWidth - 10;
+        if (y + tipHeight > window.innerHeight - 8) y = event.clientY - tipHeight - 10;
+        tip.style.left = x + 'px';
+        tip.style.top = y + 'px';
+      });
+      document.addEventListener('mouseout', function(event) {
+        var target = event.target.closest ? event.target.closest('[data-tip]') : null;
+        if (target) tip.style.display = 'none';
+      });
+    }());
+
+    async function initialize() {
+      setAccountActionsEnabled(false);
+      try {
+        var results = await Promise.all([requestJson('/schema'), requestJson('/health')]);
+        state.schema = results[0];
+        state.health = results[1];
+        renderPolicyForm();
+        await loadUsers('');
+      } catch (error) {
+        setMessage(error.message, 'error');
+      }
+    }
+
+    byId('account-search').addEventListener('input', renderAccounts);
+    byId('account-list').addEventListener('keydown', function (event) {
+      if (!event.target.classList.contains('account-button')) return;
+      if (event.key === 'ArrowDown') { event.preventDefault(); moveAccountFocus(event.target, 1); }
+      else if (event.key === 'ArrowUp') { event.preventDefault(); moveAccountFocus(event.target, -1); }
+      else if (event.key === 'Home') { event.preventDefault(); moveAccountFocus(event.target, 'home'); }
+      else if (event.key === 'End') { event.preventDefault(); moveAccountFocus(event.target, 'end'); }
+    });
+    document.querySelectorAll('.tab-button').forEach(function (button) { button.addEventListener('click', function () { showTab(button.dataset.tab); }); });
+    byId('refresh-accounts').addEventListener('click', function () { loadUsers(state.selectedUser); });
+    byId('save-policy').addEventListener('click', function () { savePolicyWithMode(''); });
+    byId('enable-dry').addEventListener('click', function () { savePolicyWithMode('dry'); });
+    byId('disable-policy').addEventListener('click', function () { savePolicyWithMode('disabled'); });
+    byId('evaluate-now').addEventListener('click', evaluateNow);
+    byId('reset-baseline').addEventListener('click', resetBaseline);
+    byId('delete-policy').addEventListener('click', deletePolicy);
+    byId('refresh-journal').addEventListener('click', refreshJournal);
+    byId('refresh-intents').addEventListener('click', refreshIntents);
+    byId('enable-live').addEventListener('click', enableLive);
+    byId('test-transfer').addEventListener('click', testTransfer);
+    byId('policy-first_live_catchup_limit_enabled').addEventListener('change', function (event) {
+      byId('policy-first_live_catchup_limit').disabled = !event.target.checked;
+    });
+    document.addEventListener('input', function (event) {
+      if (event.target && event.target.matches('[data-policy-field]')) updatePolicyDirty();
+    });
+    document.addEventListener('change', function (event) {
+      if (event.target && event.target.matches('[data-policy-field]')) updatePolicyDirty();
+      if (event.target && event.target.id === 'policy-vault_destination') renderAccountBalances(state.users.find(function (item) { return item.name === state.selectedUser; }) || null);
+    });
+    byId('keep-capital-preset').addEventListener('click', function () {
+      byId('policy-trigger_percent').value = '0';
+      byId('policy-sweep_percent').value = '100';
+      updatePolicyDirty();
+      setMessage('Keep trading capital preset applied. Save or Enable Dry to persist it.');
+    });
+    byId('open-logs').addEventListener('click', openLogs);
+    window.addEventListener('beforeunload', function () {
+      if (state.accountController) state.accountController.abort();
+      if (state.usersController) state.usersController.abort();
+    });
+
+    if (window.PBGuiSidebarResize && typeof window.PBGuiSidebarResize.init === 'function') {
+      window.PBGuiSidebarResize.init({ sidebarId: 'sidebar', handleId: 'sidebar-resize', minWidth: 220, maxWidth: 520 });
+    }
+    initialize();
+  }());
+  </script>
+</body>
+</html>

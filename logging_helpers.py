@@ -49,6 +49,7 @@ LOG_GROUPS: dict[str, str] = {
     'VPSManagerApi':   'PBGui',
     'Config':          'PBGui',
     'ParetoDataLoader':'PBGui',
+    'ProfitSweep':     'PBGui',
     'Status':          'PBGui',
     'HyperliquidAWS':  'PBGui',
     'BacktestQueueAPI': 'PBGui',

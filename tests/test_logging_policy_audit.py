@@ -75,7 +75,7 @@ TIER_3_SERVICES = {
     "ApiKeyState", "ApiKeys", "ApiLogging", "Auth", "BacktestQueueAPI",
     "BalanceCalc", "Cluster", "CoinDataUI", "Config", "Dashboard", "DbTools",
     "HyperliquidAWS", "LiveSession", "MarketDataAPI", "PB7OhlcvAPI", "PBV7UI",
-    "ParetoDataLoader", "Services", "Status", "User", "V7Instances", "V8Instances", "VPSManager",
+    "ParetoDataLoader", "ProfitSweep", "Services", "Status", "User", "V7Instances", "V8Instances", "VPSManager",
     "VPSManagerApi",
 }
 DEDICATED_SERVICES = {

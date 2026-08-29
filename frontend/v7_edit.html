@@ -4108,10 +4108,35 @@ async function calculateBalance() {
 /* ─── Init ─────────────────────────────────────────────────── */
 bindStructuredEditorSync();
 _editorInitPromise = init();
+function visibleRunLogLines(limit) {
+  if (!_logPanelOpen || !_runLogViewer || typeof _runLogViewer._q !== 'function') return [];
+  var terminal = _runLogViewer._q('terminal');
+  if (!terminal) return [];
+  var terminalRect = terminal.getBoundingClientRect();
+  var viewportTop = Math.max(0, terminalRect.top);
+  var viewportBottom = Math.min(window.innerHeight, terminalRect.bottom);
+  return Array.from(terminal.children).filter(function (line) {
+    if (line.classList.contains('lvp-hidden') || line.classList.contains('lvp-level-hidden')) return false;
+    var rect = line.getBoundingClientRect();
+    return rect.bottom > viewportTop && rect.top < viewportBottom;
+  }).map(function (line) {
+    return String(line.dataset.text || line.textContent || '');
+  }).filter(Boolean).slice(-limit);
+}
 window.PBGUI_AI_PAGE_CONTEXT = function () {
+  var visibleLogEvidence = [];
+  var visibleLines = visibleRunLogLines(120);
+  if (visibleLines.length) {
+    visibleLogEvidence.push({
+      kind: 'log_excerpt',
+      title: 'Visible Passivbot output on ' + String(_runLogViewer._host || 'local'),
+      content: visibleLines.join('\n')
+    });
+  }
   return {
     section: 'Run config editor',
-    entities: INSTANCE_NAME ? [{ kind: 'run_config', version: runEditorAdapter.version, name: INSTANCE_NAME }] : []
+    entities: INSTANCE_NAME ? [{ kind: 'run_config', version: runEditorAdapter.version, name: INSTANCE_NAME }] : [],
+    evidence: visibleLogEvidence
   };
 };
 window.PBGUI_AI_PAGE_ACTIONS = [{

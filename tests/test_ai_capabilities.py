@@ -518,6 +518,41 @@ def test_recent_auto_expired_proposal_revives_after_restart(tmp_path: Path, monk
     asyncio.run(scenario())
 
 
+def test_reject_conversation_loads_pending_proposals_after_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Advancing a conversation must reject durable proposals before they are listed."""
+
+    async def scenario() -> None:
+        owner = "a" * 32
+        conversation = "b" * 32
+        first = AICapabilityService(tmp_path / "capabilities")
+        monkeypatch.setattr(first, "_current_pb8_bundle", lambda name: (None, {}, None))
+        created = await first._create_proposal(
+            owner,
+            conversation,
+            "save",
+            "demo",
+            {"optimize": {}},
+        )
+
+        second = AICapabilityService(tmp_path / "capabilities")
+        monkeypatch.setattr(second, "_current_pb8_bundle", lambda name: (None, {}, None))
+        await second.reject_conversation(owner, conversation)
+
+        assert await second.list_proposals(owner, conversation) == []
+        persisted = second._read_private_json(
+            second._owner_path(second.proposal_root, owner, created["proposal_id"]),
+            second.proposal_root,
+        )
+        assert persisted["status"] == "rejected"
+        await first.shutdown()
+        await second.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_pending_proposal_migrates_old_redacted_path_side_effects(tmp_path: Path, monkeypatch) -> None:
     """Restart loading should repair protected path normalization in still-current proposals."""
     async def scenario() -> None:
@@ -1256,6 +1291,35 @@ def test_python_analysis_diagnostics_redact_host_paths(tmp_path: Path) -> None:
     assert str(Path.home()) not in redacted
     assert str(Path(ai_capabilities.PBGDIR)) not in redacted
     assert "/analysis.py" in redacted
+
+
+def test_python_analysis_treats_closed_stdin_as_child_failure() -> None:
+    """An early sandbox exit must preserve stderr/exit handling instead of raising RuntimeError."""
+    class ClosedStdin:
+        """Simulate asyncio's closed subprocess transport."""
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        def write(self, _payload: bytes) -> None:
+            raise RuntimeError("unable to perform operation; the handler is closed")
+
+        async def drain(self) -> None:
+            raise AssertionError("drain should not run after write failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    async def scenario() -> None:
+        stdin = ClosedStdin()
+        delivered = await AICapabilityService._write_python_analysis_stdin(
+            type("Process", (), {"stdin": stdin})(), b"{}\n"
+        )
+
+        assert delivered is False
+        assert stdin.closed is True
+
+    asyncio.run(scenario())
 
 
 def test_startup_records_interrupted_python_analysis_without_restart_blocking(

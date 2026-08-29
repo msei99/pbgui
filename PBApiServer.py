@@ -70,6 +70,13 @@ from api.db_tools import init as db_tools_init, shutdown as db_tools_shutdown
 from api.db_tools import router as db_tools_router
 from api.jobs import router as jobs_router
 from api.logging import router as logging_router
+from api.profit_sweep import (
+    notify_income as profit_sweep_notify_income,
+    restart_block_reason as profit_sweep_restart_block_reason,
+    router as profit_sweep_router,
+    shutdown as profit_sweep_shutdown,
+    startup as profit_sweep_startup,
+)
 from api.market_data import router as market_data_router, shutdown as market_data_shutdown, startup as market_data_startup
 from api.heatmap import router as heatmap_router, shutdown as heatmap_shutdown
 from api.vps import router as vps_router
@@ -278,6 +285,7 @@ async def _restart_block_state() -> tuple[bool, str]:
             cluster_restart_block_reason(),
             coin_data_restart_block_reason(),
             pareto_restart_block_reason(),
+            profit_sweep_restart_block_reason(),
             ai_restart_block_reason(),
             credential_migration_restart_block_reason(Path(PBGDIR)),
         )
@@ -805,6 +813,7 @@ async def _lifespan(app: FastAPI):
         vps_manager_startup()
         market_data_startup()
         strategy_explorer_v8_startup()
+        profit_sweep_startup()
         await ai_capabilities_startup()
 
         lifecycle_tasks = [
@@ -830,6 +839,7 @@ async def _lifespan(app: FastAPI):
             ("strategy-explorer-v8", strategy_explorer_v8_shutdown),
             ("coin-data", coin_data_shutdown),
             ("market-data", market_data_shutdown),
+            ("profit-sweep", profit_sweep_shutdown),
             ("vps-manager", vps_manager_shutdown),
             ("cluster", cluster_shutdown),
             ("db-tools", db_tools_shutdown),
@@ -954,6 +964,7 @@ app.include_router(dashboards_router, prefix="/api/dashboards", tags=["dashboard
 app.include_router(db_tools_router, prefix="/api/db-tools", tags=["db-tools"])
 app.include_router(jobs_router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(logging_router, prefix="/api/logging", tags=["logging"])
+app.include_router(profit_sweep_router, prefix="/api/profit-sweep", tags=["profit-sweep"])
 app.include_router(market_data_router, prefix="/api", tags=["market-data"])
 app.include_router(heatmap_router, prefix="/api/heatmap", tags=["heatmap"])
 app.include_router(vps_router, tags=["vps"])
@@ -1258,6 +1269,7 @@ async def internal_notify_income(request: Request):
         user_name = body.get("user", "") if isinstance(body, dict) else ""
     except Exception:
         user_name = ""
+    await profit_sweep_notify_income(user_name)
     dead: set[WebSocket] = set()
     for ws in list(dashboard_ws_clients):
         try:

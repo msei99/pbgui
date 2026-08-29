@@ -924,12 +924,23 @@ def test_generic_page_ui_action_is_captured_and_restored(tmp_path: Path) -> None
     asyncio.run(scenario())
 
 
-def test_local_browser_action_is_persisted_without_provider_turn(tmp_path: Path) -> None:
+def test_local_browser_action_is_persisted_without_provider_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A browser-completed action should add one durable turn without becoming busy."""
     async def scenario() -> None:
         owner = "a" * 32
         service = AIChatService(tmp_path / "ai")
         conversation = await service._conversation(owner, "opencode-go", "model", None)
+        rejected = []
+
+        async def reject_conversation(owner_arg, conversation_id_arg):
+            """Capture stale-proposal rejection before the local branch advances."""
+
+            rejected.append((owner_arg, conversation_id_arg))
+
+        monkeypatch.setattr(service.capabilities, "reject_conversation", reject_conversation)
 
         snapshot = await service.record_local_action(
             owner,
@@ -942,6 +953,7 @@ def test_local_browser_action_is_persisted_without_provider_turn(tmp_path: Path)
         assert snapshot["messages"][-2] == {"role": "user", "content": "Close the log window"}
         assert snapshot["messages"][-1]["content"] == "PBGui completed the requested interface action locally."
         assert conversation.id not in service.active_tasks
+        assert rejected == [(owner, conversation.id)]
         await service.shutdown()
 
     asyncio.run(scenario())
@@ -1254,6 +1266,21 @@ def test_page_context_is_bounded_and_marked_untrusted() -> None:
                 {"key": "v8_optimize", "title": "Optimize"},
             ],
             "entities": [{"kind": "optimizer_config", "version": "v8", "name": "demo"}],
+            "evidence": [
+                {
+                    "kind": "log_excerpt",
+                    "title": "Visible Passivbot output",
+                    "content": (
+                        "INFO healthy\nAuthorization: Bearer must-not-leak\n"
+                        "token=must-not-leak either\n"
+                        'settings={"api_key": "quoted-must-not-leak"}\n'
+                        "metadata={'token': 'al\"so-must-not-leak'}\n"
+                        "json={\"password\":\"pa'ssword\"}\n"
+                        r'escaped={"api_key":"abc\"LEAK"}' + "\n"
+                        'truncated={"password":"unterminated\nSECRET-BODY\nEND'
+                    ),
+                }
+            ],
             "actions": [{"id": "show_log", "entity_kind": "optimizer_queue_item"}],
             "controls": [
                 {
@@ -1272,14 +1299,89 @@ def test_page_context_is_bounded_and_marked_untrusted() -> None:
     suffix = AIChatService._context_prompt_suffix(context)
 
     assert "Untrusted PBGui page context" in suffix
+    assert "identifiers and evidence" in suffix
     assert '"guide_topic":"43_pbv8_optimize"' in suffix
     assert context["pages"][0] == {"key": "/", "title": "Welcome"}
     assert context["actions"] == [{"id": "show_log", "entity_kind": "optimizer_queue_item"}]
     assert context["controls"][0]["label"] == "Close"
+    assert context["evidence"] == [
+        {
+            "kind": "log_excerpt",
+            "title": "Visible Passivbot output",
+            "content": (
+                "INFO healthy\nAuthorization: [REDACTED]\n"
+                "token=[REDACTED] either\n"
+                'settings={"api_key": "[REDACTED]"}\n'
+                "metadata={'token': '[REDACTED]'}\n"
+                'json={"password":"[REDACTED]"}\n'
+                'escaped={"api_key":"[REDACTED]"}\n'
+                'truncated={"password":"[REDACTED]'
+            ),
+        }
+    ]
     with pytest.raises(AIChatError, match="Invalid page context"):
         AIChatService._validate_page_context({"secret": "value"})
     with pytest.raises(AIChatError, match="Invalid page context"):
         AIChatService._validate_page_context({"pages": [{"key": "/evil", "title": "Invalid"}]})
+
+
+def test_new_user_turn_supersedes_pending_proposals(tmp_path: Path, monkeypatch) -> None:
+    """A later user request must invalidate approval cards from the earlier branch."""
+    async def scenario() -> None:
+        owner = "a" * 32
+        service = AIChatService(tmp_path / "ai")
+        service.credentials.save_go_key(owner, "sk-test-0123456789abcdef")
+        conversation = await service._conversation(owner, "opencode-go", "model", None)
+        rejected = []
+
+        async def reject_conversation(owner_arg, conversation_id_arg):
+            rejected.append((owner_arg, conversation_id_arg))
+
+        async def fake_go_chat(*_args, **_kwargs):
+            return "Current answer"
+
+        monkeypatch.setattr(service.capabilities, "reject_conversation", reject_conversation)
+        monkeypatch.setattr(service, "_go_chat", fake_go_chat)
+
+        await service.start_turn(owner, conversation.id, "A newer question")
+        await service.active_tasks[conversation.id]
+
+        assert rejected == [(owner, conversation.id)]
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_failed_internal_continuation_preserves_successful_action_status(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A provider timeout after approval must be labelled as a follow-up failure."""
+    async def scenario() -> None:
+        owner = "a" * 32
+        service = AIChatService(tmp_path / "ai")
+        service.credentials.save_go_key(owner, "sk-test-0123456789abcdef")
+        conversation = await service._conversation(owner, "opencode-go", "model", None)
+
+        async def failing_go_chat(*_args, **_kwargs):
+            raise AIChatError("ChatGPT response timed out")
+
+        monkeypatch.setattr(service, "_go_chat", failing_go_chat)
+        await service.start_turn(
+            owner,
+            conversation.id,
+            "Approved action completed. Continue.",
+            internal=True,
+        )
+        await service.active_tasks[conversation.id]
+        snapshot = await service.get_conversation(owner, conversation.id)
+
+        assert snapshot["messages"] == []
+        assert snapshot["last_error"] == (
+            "Approved action completed, but AI follow-up failed: ChatGPT response timed out"
+        )
+        await service.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_ai_drawer_preferences_are_private_persistent_merged_and_bounded(tmp_path: Path) -> None:
@@ -1378,6 +1480,9 @@ def test_action_requests_receive_extended_bounded_capability_rounds() -> None:
         [{"role": "user", "content": "Erkläre mir diese Metrik"}]
     ) == 3
     assert "do not repeat searches with minor query variations" in _go_instructions(
+        "kimi-k3", tools_enabled=True
+    )
+    assert "Never propose workspace Python merely because a routine status question" in _go_instructions(
         "kimi-k3", tools_enabled=True
     )
 
