@@ -41,11 +41,12 @@ def test_private_database_permissions_settings_and_decimal_storage(tmp_path: Pat
     assert stat.S_IMODE(store.db_path.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(store.db_path.stat().st_mode) == 0o600
     assert settings == {
-        "schema_version": 4,
+        "schema_version": 5,
         "journal_mode": "wal",
         "synchronous": 2,
         "busy_timeout_ms": 5_000,
     }
+    assert store.get_policy("alice")["live_state"]["active_baseline_mode"] == "legacy_unknown"
 
     store.upsert_ledger_event(
         user_name="alice",
@@ -316,6 +317,144 @@ def test_baseline_modes_and_generation_reset_rules(tmp_path: Path) -> None:
     assert reset["simulation_state"]["baseline_pnl"] == "125"
     assert lifetime["generation"] == 3
     assert lifetime["simulation_state"]["baseline_pnl"] == "0"
+
+
+def test_full_unchanged_policy_save_does_not_reset_accounting_generation(tmp_path: Path) -> None:
+    """Saving a complete unchanged form must preserve HWM, due, and both state generations."""
+
+    store = _store(
+        tmp_path,
+        {"trigger_percent": "0", "sweep_percent": "50", "minimum_transfer_amount": "0"},
+        baseline="100",
+    )
+    store.evaluate_dry("alice", cumulative_net_pnl="125", max_transferable="1000", now=1)
+    before = store.get_policy("alice")
+
+    saved = store.update_policy("alice", before["policy"])
+
+    assert saved["generation"] == before["generation"]
+    assert saved["simulation_state"] == before["simulation_state"]
+    assert saved["live_state"] == before["live_state"]
+
+
+def test_active_live_can_rebaseline_to_include_dry_before_any_transfer(tmp_path: Path) -> None:
+    """Switching Fresh to Include Dry Period retroactively restores Dry-period entitlement."""
+
+    store = _store(
+        tmp_path,
+        {"trigger_percent": "0", "sweep_percent": "50", "minimum_transfer_amount": "0"},
+        baseline="100",
+    )
+    store.evaluate_dry("alice", cumulative_net_pnl="125", max_transferable="1000", now=1)
+    activated = store.activate_live("alice", "125", baseline_mode="fresh")
+
+    assert activated["live_state"]["baseline_pnl"] == "125"
+    assert activated["live_state"]["active_baseline_mode"] == "fresh"
+    current = store.get_policy("alice")
+    changes = {**current["policy"], "live_activation_baseline_mode": "include_dry_period"}
+    rebaselined = store.rebaseline_live(
+        "alice",
+        "125",
+        "include_dry_period",
+        changes,
+        expected_policy_fingerprint=_policy_fingerprint(current["policy"]),
+    )
+    preview = store.evaluate_live(
+        "alice", cumulative_net_pnl="125", max_transferable="1000", now=2, commit=False
+    )
+
+    assert rebaselined["live_state"]["baseline_pnl"] == "100"
+    assert rebaselined["live_state"]["active_baseline_mode"] == "include_dry_period"
+    assert preview["net_pnl"] == "25"
+    assert preview["amount"] == "12.5"
+
+
+def test_retroactive_live_rebaseline_is_blocked_after_confirmed_transfer(tmp_path: Path) -> None:
+    """Previously moved funds make retroactive entitlement unsafe to recompute."""
+
+    store = _live_store(tmp_path)
+    _create_intent(store, "already-confirmed", amount="25")
+    store.transition_live_intent(
+        "already-confirmed",
+        "submitting",
+        submission={"status": "submitted"},
+        claim=True,
+        now=2,
+    )
+    store.reconcile_live_intent("already-confirmed", {"status": "confirmed"}, now=3)
+    current = store.get_policy("alice")
+
+    with pytest.raises(ValueError, match="confirmed Live transfers"):
+        store.rebaseline_live(
+            "alice",
+            "100",
+            "include_dry_period",
+            {**current["policy"], "live_activation_baseline_mode": "include_dry_period"},
+            expected_policy_fingerprint=_policy_fingerprint(current["policy"]),
+        )
+
+
+def test_legacy_empty_live_state_recovers_previous_dry_baseline_on_explicit_switch(
+    tmp_path: Path,
+) -> None:
+    """An explicit Include Dry switch repairs the known v2.0 full-save reset pattern."""
+
+    store = _store(
+        tmp_path,
+        {"trigger_percent": "0", "sweep_percent": "50", "minimum_transfer_amount": "0"},
+        baseline="100",
+    )
+    store.evaluate_dry("alice", cumulative_net_pnl="125", max_transferable="1000", now=1)
+    store.update_policy("alice", {"reference_capital": "2000"})
+    store.activate_live("alice", "125", baseline_mode="fresh")
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            "UPDATE live_state SET active_baseline_mode = 'legacy_unknown' WHERE user_name = 'alice'"
+        )
+    current = store.get_policy("alice")
+
+    repaired = store.rebaseline_live(
+        "alice",
+        "125",
+        "include_dry_period",
+        {**current["policy"], "live_activation_baseline_mode": "include_dry_period"},
+        expected_policy_fingerprint=_policy_fingerprint(current["policy"]),
+        recover_legacy_dry_generation=True,
+    )
+
+    assert repaired["live_state"]["baseline_pnl"] == "100"
+
+
+def test_legacy_dry_recovery_never_creates_negative_lifetime_baseline(tmp_path: Path) -> None:
+    """Lifetime accounting remains anchored at zero even when a legacy journal exists."""
+
+    store = _store(
+        tmp_path,
+        {
+            "baseline_mode": "lifetime",
+            "trigger_percent": "0",
+            "sweep_percent": "50",
+            "minimum_transfer_amount": "0",
+        },
+    )
+    store.evaluate_dry("alice", cumulative_net_pnl="125", max_transferable="1000", now=1)
+    store.update_policy("alice", {"reference_capital": "2000"})
+    store.activate_live("alice", "125", baseline_mode="fresh")
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            "UPDATE live_state SET active_baseline_mode = 'legacy_unknown' WHERE user_name = 'alice'"
+        )
+    current = store.get_policy("alice")
+
+    with pytest.raises(ValueError, match="cannot be recovered"):
+        store.rebaseline_live(
+            "alice",
+            "125",
+            "include_dry_period",
+            {**current["policy"], "live_activation_baseline_mode": "include_dry_period"},
+            expected_policy_fingerprint=_policy_fingerprint(current["policy"]),
+            recover_legacy_dry_generation=True,
+        )
 
 
 def test_policy_asset_change_starts_new_generation_from_supplied_baseline(tmp_path: Path) -> None:
@@ -613,7 +752,7 @@ def test_schema_v3_migration_collapses_only_exact_event_duplicates(tmp_path: Pat
 
     migrated = ProfitSweepStore(db_path)
 
-    assert migrated.database_settings()["schema_version"] == 4
+    assert migrated.database_settings()["schema_version"] == 5
     assert len(migrated.list_ledger_events("alice", "hyperliquid")) == 2
     assert migrated.ledger_net_pnl("alice", "hyperliquid", "USDT") == "11.9"
     repeated = migrated.upsert_ledger_event(
@@ -665,7 +804,7 @@ def test_schema_v3_migration_rejects_conflicting_event_identities(tmp_path: Path
         assert connection.execute("SELECT COUNT(*) FROM ledger_events").fetchone()[0] == 2
 
 
-def test_schema_v1_migrates_to_v4_without_losing_policy_or_dry_state(tmp_path: Path) -> None:
+def test_schema_v1_migrates_to_v5_without_losing_policy_or_dry_state(tmp_path: Path) -> None:
     """Opening a version-one database adds later schemas without rewriting state."""
 
     db_path = tmp_path / "migration" / "state.sqlite3"
@@ -690,7 +829,7 @@ def test_schema_v1_migrates_to_v4_without_losing_policy_or_dry_state(tmp_path: P
 
     migrated = ProfitSweepStore(db_path)
 
-    assert migrated.database_settings()["schema_version"] == 4
+    assert migrated.database_settings()["schema_version"] == 5
     assert migrated.get_policy("alice") == before
     assert migrated.list_live_intents("alice") == []
     assert migrated.list_test_operations("alice") == []
@@ -713,7 +852,7 @@ def test_schema_v2_adds_isolated_test_operations(tmp_path: Path) -> None:
 
     migrated = ProfitSweepStore(db_path)
 
-    assert migrated.database_settings()["schema_version"] == 4
+    assert migrated.database_settings()["schema_version"] == 5
     assert migrated.get_policy("alice")["simulation_state"]["sweep_due"] == "0"
     assert migrated.list_test_operations("alice") == []
 

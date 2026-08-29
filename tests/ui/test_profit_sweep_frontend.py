@@ -279,6 +279,21 @@ def test_profit_sweep_live_activation_uses_shared_confirmation_and_saved_setting
     assert "Apply settings that affect future real transfers" in source
     assert "Reset Dry and Live accounting baselines" in source
     assert "all Profit Sweep accounting history" in source
+    assert "var liveActive = mode === 'live' || mode === 'paused_unknown'" in source
+    assert "state.record.live_state.active_baseline_mode" in source
+    assert "title: 'Recalculate Live baseline'" in source
+    assert "Previous Dry-period profit may become immediately due" in source
+    assert "recalculate_live_baseline: recalculateLiveBaseline" in source
+    assert "recover_legacy_dry_generation: recoverLegacyDryGeneration" in source
+    assert 'id="apply-live-baseline" hidden>Apply baseline to active Live</button>' in source
+    assert "state.baselineRecalculationRequested = true" in source
+    assert "recalculateLiveBaseline = state.baselineRecalculationRequested === true" in source
+    assert "policy.baseline_mode === 'from_enable'" in source
+    assert "Number(entry.generation) < Number(simulation.generation)" in source
+    assert "simulation.last_evaluation_at === null" in source
+    assert "activeBaseline === selectedBaseline" in source
+    assert "previewDecision.sweep_due !== undefined" in source
+    assert "decision.state_kind === 'live' ? 'LIVE PREVIEW' : 'DRY PREVIEW'" in source
 
 
 def test_profit_sweep_renders_live_capability_modes_and_intents_safely() -> None:
@@ -323,6 +338,12 @@ def test_profit_sweep_renders_live_capability_modes_and_intents_safely() -> None
     assert 'id="source-balance-value"' in source
     assert 'id="destination-balance-value"' in source
     assert 'id="transferable-balance-value"' in source
+    assert 'id="vault-tvl-value"' in source
+    assert 'id="vault-share-value"' in source
+    assert "user.is_vault ? 'Your Vault Equity'" in source
+    assert "vaultBalances.account_value" in source
+    assert "vault.leader_fraction" in source
+    assert "function vaultShareText(value)" in source
     assert "state.snapshot = result.snapshot || null" in source
     assert "byId('vault-panel').hidden" in source
 
@@ -365,4 +386,4 @@ def test_profit_sweep_sidebar_and_mobile_contracts() -> None:
     assert "@media (max-width: 720px)" in source
     assert "body.profit-sweep-page { overflow-y: auto; }" in source
     assert '<body class="profit-sweep-page">' in source
-    assert "#status-cards, .field-grid, .overview-grid, .key-values, .preview-grid, .balance-grid { grid-template-columns: 1fr; }" in source
+    assert "#status-cards, .field-grid, .overview-grid, .key-values, .preview-grid, .balance-grid, .vault-ownership-grid { grid-template-columns: 1fr; }" in source

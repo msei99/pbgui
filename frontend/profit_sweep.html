@@ -101,6 +101,7 @@
     .balance-label { color: var(--dim); font-size: var(--fs-xs); font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
     .balance-value { margin-top: 3px; overflow-wrap: anywhere; font-weight: 800; }
     .balance-detail { margin-top: 2px; color: var(--muted); font-size: var(--fs-xs); }
+    .vault-ownership-grid { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: var(--sp-sm); margin-bottom: var(--sp-md); }
     #action-bar { position: sticky; right: 0; bottom: calc(-1 * var(--sp-lg)); left: 0; z-index: 15; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-md); margin: var(--sp-lg) calc(-1 * var(--sp-lg)) calc(-1 * var(--sp-lg)); padding: 10px var(--sp-lg); border-top: 1px solid var(--border); background: rgba(10,16,26,.96); backdrop-filter: blur(8px); }
     #action-message { min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--fs-sm); text-overflow: ellipsis; white-space: nowrap; }
     #action-message.ok { color: var(--ok); }
@@ -120,7 +121,7 @@
       #main-content { padding: var(--sp-md); overflow: visible; }
       .page-head { flex-direction: column; }
       .head-actions { justify-content: flex-start; }
-      #status-cards, .field-grid, .overview-grid, .key-values, .preview-grid, .balance-grid { grid-template-columns: 1fr; }
+      #status-cards, .field-grid, .overview-grid, .key-values, .preview-grid, .balance-grid, .vault-ownership-grid { grid-template-columns: 1fr; }
       .tabs { top: 0; }
       #action-bar { bottom: calc(-1 * var(--sp-md)); margin: var(--sp-md) calc(-1 * var(--sp-md)) calc(-1 * var(--sp-md)); align-items: stretch; flex-direction: column; padding: 8px 12px; }
       #action-message { min-height: 19px; white-space: normal; }
@@ -250,7 +251,7 @@
           </div>
         </div>
         <div class="panel" id="live-activation-panel">
-          <div class="panel-head"><div class="panel-title">Live Activation</div><div class="panel-desc">Choose the baseline and optional first-transfer catch-up cap before the one-time confirmation.</div></div>
+          <div class="panel-head"><div class="panel-title">Live Activation</div><div class="panel-desc" id="live-activation-description">Choose the baseline and optional first-transfer catch-up cap before the one-time confirmation.</div></div>
           <div class="panel-body">
             <div class="field-grid">
               <div class="field"><label for="policy-live_activation_baseline_mode" data-tip="Fresh starts Live from the activation snapshot. Include Dry Period recomputes entitlement from the current Dry-generation baseline.">Live baseline</label><select id="policy-live_activation_baseline_mode" data-policy-field="live_activation_baseline_mode"><option value="fresh">Fresh</option><option value="include_dry_period">Include Dry Period</option></select></div>
@@ -259,11 +260,18 @@
               <div class="field"><label for="policy-first_live_catchup_limit_enabled" data-tip="Apply a separate cap to the first Live catch-up transfer. Remaining due is retained for later cycles.">First-live catch-up cap</label><label class="check-field"><input id="policy-first_live_catchup_limit_enabled" data-policy-field="first_live_catchup_limit_enabled" type="checkbox"><span>Enabled</span></label></div>
               <div class="field"><label for="policy-first_live_catchup_limit" data-tip="Maximum amount for the first Live catch-up transfer when the catch-up cap is enabled.">Catch-up limit</label><input id="policy-first_live_catchup_limit" data-policy-field="first_live_catchup_limit" type="number" step="any" inputmode="decimal" min="0"></div>
             </div></details>
+            <div class="test-transfer-toolbar"><button type="button" class="btn warning" id="apply-live-baseline" hidden>Apply baseline to active Live</button></div>
           </div>
         </div>
         <div class="panel" id="vault-panel">
           <div class="panel-head"><div class="panel-title">Hyperliquid Vault</div><div class="panel-desc">Leader retention, share buffer, reserve, destination, and withdrawal safety controls.</div></div>
-          <div class="panel-body"><div class="field-grid" id="vault-fields"></div><details class="advanced-settings"><summary>Advanced Vault safety</summary><div class="field-grid" id="vault-advanced-fields"></div></details></div>
+          <div class="panel-body">
+            <div class="vault-ownership-grid" id="vault-ownership">
+              <div class="balance-card"><div class="balance-label">Vault TVL</div><div class="balance-value" id="vault-tvl-value">Run Evaluate now</div><div class="balance-detail">Total equity across all Vault depositors</div></div>
+              <div class="balance-card"><div class="balance-label">Your Share</div><div class="balance-value" id="vault-share-value">Run Evaluate now</div><div class="balance-detail">Your current equity as a percentage of TVL</div></div>
+            </div>
+            <div class="field-grid" id="vault-fields"></div><details class="advanced-settings"><summary>Advanced Vault safety</summary><div class="field-grid" id="vault-advanced-fields"></div></details>
+          </div>
         </div>
       </section>
 
@@ -419,6 +427,7 @@
       testOperations: [],
       testActionPending: false,
       pendingTestOperationId: '',
+      baselineRecalculationRequested: false,
       preview: null,
       snapshot: null,
       writeCapability: null,
@@ -688,6 +697,14 @@
         dirty = true;
       }
       byId('save-policy').hidden = !dirty || !state.selectedUser;
+      updateLiveBaselineAction();
+    }
+    function updateLiveBaselineAction() {
+      var button = byId('apply-live-baseline');
+      var mode = state.record && state.record.policy ? state.record.policy.operating_mode : '';
+      var activeBaseline = state.record && state.record.live_state ? state.record.live_state.active_baseline_mode : '';
+      var selectedBaseline = byId('policy-live_activation_baseline_mode') ? byId('policy-live_activation_baseline_mode').value : '';
+      button.hidden = mode !== 'live' || !activeBaseline || activeBaseline === selectedBaseline;
     }
     function capturePolicyBaseline() {
       try {
@@ -712,8 +729,8 @@
       var modeStatus = byId('status-mode');
       modeStatus.replaceChildren();
       appendText(modeStatus, 'span', titleCase(mode), 'mode-badge ' + modeClass(mode));
-      setStatusCard('status-due', simulation.sweep_due);
-      setStatusCard('status-decision', simulation.last_decision || '-');
+      setStatusCard('status-due', previewDecision.sweep_due !== undefined ? previewDecision.sweep_due : simulation.sweep_due);
+      setStatusCard('status-decision', previewDecision.reason || simulation.last_decision || '-');
       setStatusCard('status-next', formatTime(simulation.next_run_at));
       setStatusCard('status-pnl', previewDecision.net_pnl || simulation.last_net_pnl);
       setStatusCard('status-reference', policy.reference_capital);
@@ -785,6 +802,11 @@
       if (!balance || balance.available !== true || balance.balance === null || balance.balance === undefined) return 'Unavailable';
       return text(balance.balance) + (balance.asset ? ' ' + balance.asset : '');
     }
+    function vaultShareText(value) {
+      var fraction = Number(value);
+      if (!Number.isFinite(fraction) || fraction < 0) return 'Unavailable';
+      return (fraction * 100).toLocaleString(undefined, { maximumFractionDigits: 4 }) + '%';
+    }
     function renderAccountBalances(user) {
       var container = byId('exchange-balances');
       var balances = state.snapshot && state.snapshot.account_balances;
@@ -798,13 +820,20 @@
         var selectedDestination = byId('policy-vault_destination') ? byId('policy-vault_destination').value : 'main_perps';
         destination = destination[selectedDestination];
       }
-      byId('source-balance-label').textContent = source && source.label ? source.label : 'Source balance';
+      byId('source-balance-label').textContent = user.is_vault ? 'Your Vault Equity' : source && source.label ? source.label : 'Source balance';
       byId('source-balance-value').textContent = balances ? balanceText(source) : 'Run Evaluate now';
       byId('source-balance-detail').textContent = source && source.withdrawable !== null && source.withdrawable !== undefined ? 'Exchange withdrawable: ' + source.withdrawable + (source.asset ? ' ' + source.asset : '') : '';
       byId('destination-balance-label').textContent = destination && destination.label ? destination.label : 'Destination balance';
       byId('destination-balance-value').textContent = balances ? balanceText(destination) : 'Run Evaluate now';
       byId('destination-balance-detail').textContent = permissionReason || (user.is_vault ? 'Configured Vault destination' : 'Internal transfer destination');
       byId('transferable-balance-value').textContent = balances && balances.max_transferable !== null && balances.max_transferable !== undefined ? text(balances.max_transferable) + (source && source.asset ? ' ' + source.asset : '') : balances ? 'Unavailable' : 'Run Evaluate now';
+      if (user.is_vault) {
+        var vault = state.snapshot && state.snapshot.vault;
+        var vaultBalances = vault && vault.balances;
+        var tvl = vaultBalances && vaultBalances.account_value;
+        byId('vault-tvl-value').textContent = tvl !== null && tvl !== undefined ? text(tvl) + ' USDC' : state.snapshot ? 'Unavailable' : 'Run Evaluate now';
+        byId('vault-share-value').textContent = vault && vault.leader_fraction !== null && vault.leader_fraction !== undefined ? vaultShareText(vault.leader_fraction) : state.snapshot ? 'Unavailable' : 'Run Evaluate now';
+      }
     }
     function testTransferEndpoints(user) {
       var exchange = String(user && user.exchange || '').toLowerCase();
@@ -884,9 +913,10 @@
       var container = byId('evaluation-preview');
       container.replaceChildren();
       var decision = state.preview && state.preview.decision;
-      var title = appendText(container, 'div', decision && decision.would_transfer ? 'WOULD TRANSFER' : 'DRY PREVIEW', 'preview-title');
+      var previewKind = decision && decision.state_kind === 'live' ? 'LIVE PREVIEW' : 'DRY PREVIEW';
+      var title = appendText(container, 'div', decision && decision.would_transfer ? 'WOULD TRANSFER' : previewKind, 'preview-title');
       if (decision && decision.would_transfer) title.className += ' decision-badge would';
-      appendText(container, 'div', 'Read-only simulation. This is not a submitted or confirmed transfer.', 'preview-note');
+      appendText(container, 'div', 'Read-only ' + (previewKind === 'LIVE PREVIEW' ? 'Live' : 'Dry') + ' simulation. This is not a submitted or confirmed transfer.', 'preview-note');
       if (!decision) return;
       var grid = document.createElement('div');
       grid.className = 'preview-grid';
@@ -984,6 +1014,13 @@
       renderTestTransfers(user);
       setAccountActionsEnabled(Boolean(user));
       var mode = state.record && state.record.policy ? state.record.policy.operating_mode : 'disabled';
+      var liveActive = mode === 'live' || mode === 'paused_unknown';
+      var activeBaseline = state.record && state.record.live_state ? state.record.live_state.active_baseline_mode : '';
+      byId('policy-live_activation_baseline_mode').disabled = mode === 'paused_unknown';
+      byId('policy-first_live_catchup_limit').disabled = !byId('policy-first_live_catchup_limit_enabled').checked;
+      byId('live-activation-description').textContent = liveActive
+        ? 'Active baseline: ' + titleCase(activeBaseline || 'unknown') + '. Changing it recalculates Live entitlement and is blocked after a confirmed transfer.'
+        : 'Choose the baseline and optional first-transfer catch-up cap before the one-time confirmation.';
       byId('enable-live').disabled = !user || !state.schema || state.schema.live_available !== true || !['disabled', 'dry'].includes(mode);
       capturePolicyBaseline();
     }
@@ -1069,6 +1106,7 @@
       state.testOperations = [];
       state.testActionPending = false;
       state.pendingTestOperationId = '';
+      state.baselineRecalculationRequested = false;
       state.preview = null;
       state.snapshot = null;
       state.writeCapability = null;
@@ -1127,11 +1165,38 @@
         if (mode) policy.operating_mode = mode;
         var currentMode = state.record && state.record.policy ? state.record.policy.operating_mode : 'disabled';
         var confirmedLiveUpdate = false;
+        var recalculateLiveBaseline = state.baselineRecalculationRequested === true;
+        var recoverLegacyDryGeneration = false;
         if (!mode && currentMode === 'live') {
           var changed = Object.keys(policy).filter(function (field) {
             return state.record.policy[field] !== policy[field];
           }).map(function (field) { return FIELD_META[field] ? FIELD_META[field].label : field; });
-          if (changed.length) {
+          var activeBaseline = state.record && state.record.live_state ? state.record.live_state.active_baseline_mode : '';
+          var baselineRecalculation = recalculateLiveBaseline && activeBaseline !== policy.live_activation_baseline_mode;
+          if (baselineRecalculation) {
+            var simulation = state.record && state.record.simulation_state ? state.record.simulation_state : {};
+            var previousDryGeneration = state.journal.some(function (entry) {
+              return Number(entry.generation) < Number(simulation.generation);
+            });
+            recoverLegacyDryGeneration = activeBaseline === 'legacy_unknown'
+              && policy.live_activation_baseline_mode === 'include_dry_period'
+              && policy.baseline_mode === 'from_enable'
+              && simulation.last_evaluation_at === null
+              && Number(simulation.net_pnl || 0) === 0
+              && Number(simulation.high_watermark || 0) === 0
+              && Number(simulation.sweep_due || 0) === 0
+              && previousDryGeneration;
+            confirmedLiveUpdate = await window.PBGuiDialogs.confirm({
+              title: 'Recalculate Live baseline',
+              message: 'Apply ' + titleCase(policy.live_activation_baseline_mode) + ' retroactively for ' + userName + '?',
+              detail: (recoverLegacyDryGeneration ? 'The previous Dry generation will be explicitly recovered from the legacy v2.0 state. ' : '') + 'Previous Dry-period profit may become immediately due and can move real funds on the next scheduler evaluation. This is allowed only before any Live transfer is confirmed and while no intent is unresolved.',
+              confirmText: 'Recalculate Live baseline'
+            });
+            if (!confirmedLiveUpdate || !isCurrentAccount(userName, generation)) {
+              state.baselineRecalculationRequested = false;
+              return;
+            }
+          } else if (changed.length) {
             confirmedLiveUpdate = await window.PBGuiDialogs.confirm({
               title: 'Change Live Profit Sweep',
               message: 'Apply settings that affect future real transfers for ' + userName + '?',
@@ -1149,16 +1214,20 @@
             policy: policy,
             expected_generation: state.record ? state.record.generation : null,
             expected_policy_fingerprint: state.record ? state.record.policy_fingerprint : null,
-            confirmed_live_update: confirmedLiveUpdate
+            confirmed_live_update: confirmedLiveUpdate,
+            recalculate_live_baseline: recalculateLiveBaseline,
+            recover_legacy_dry_generation: recoverLegacyDryGeneration
           })
         });
         if (!isCurrentAccount(userName, generation)) return;
+        state.baselineRecalculationRequested = false;
         await refreshPolicyAndIntents(userName, generation, state.accountController.signal);
         if (!isCurrentAccount(userName, generation)) return;
         syncSelectedUserSummary();
         renderSelectedAccount();
         setMessage(mode === 'dry' ? 'Dry simulation enabled.' : mode === 'disabled' ? 'Policy disabled.' : 'Policy saved.', 'ok');
       } catch (error) {
+        state.baselineRecalculationRequested = false;
         if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
       }
     }
@@ -1640,6 +1709,10 @@
     byId('refresh-journal').addEventListener('click', refreshJournal);
     byId('refresh-intents').addEventListener('click', refreshIntents);
     byId('enable-live').addEventListener('click', enableLive);
+    byId('apply-live-baseline').addEventListener('click', function () {
+      state.baselineRecalculationRequested = true;
+      savePolicyWithMode('');
+    });
     byId('test-transfer').addEventListener('click', testTransfer);
     byId('policy-first_live_catchup_limit_enabled').addEventListener('change', function (event) {
       byId('policy-first_live_catchup_limit').disabled = !event.target.checked;

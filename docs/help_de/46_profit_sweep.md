@@ -39,7 +39,7 @@ Vault Advanced steuert Withdrawal Mode, retained Leader Equity, Leader-Share Saf
 
 **Enable Dry** startet geplante read-only Entscheidungen. **Evaluate now** ist immer ein nicht commitendes Preview: Die Aktion erzeugt keinen Intent, veraendert keine bestaetigten Summen, signiert keinen Request und bewegt kein Guthaben. Berechtigte Dry-Ergebnisse erscheinen als `WOULD TRANSFER` im Dry Decision Journal.
 
-**Evaluate now** aktualisiert ausserdem unter Exchange / Vault die Saldo-Karten fuer Quelle, konfiguriertes internes Ziel und aktuell transferierbaren Betrag. Eine erfolgreiche Live-Aktivierung oder Test-Transfer-Aktion aktualisiert dieselben Karten. Bei Vaults wechselt eine Aenderung des Ziels die Anzeige zwischen Main Perps und Main Spot. Ein bestaetigt leeres Binance Funding Wallet wird als Null angezeigt; fehlgeschlagene oder nicht unterstuetzte Exchange-Saldo-Reads erscheinen als unavailable.
+**Evaluate now** aktualisiert ausserdem unter Exchange / Vault die Saldo-Karten fuer Quelle, konfiguriertes internes Ziel und aktuell transferierbaren Betrag. Bei Vault-Accounts ist **Your Vault Equity** die aktuelle leader-eigene Equity, **Vault TVL** die gesamte Equity aller Depositors und **Your Share** der Leader-Anteil an dieser TVL. Eine erfolgreiche Live-Aktivierung oder Test-Transfer-Aktion aktualisiert dieselben Karten. Bei Vaults wechselt eine Aenderung des Ziels die Anzeige zwischen Main Perps und Main Spot. Ein bestaetigt leeres Binance Funding Wallet wird als Null angezeigt; fehlgeschlagene oder nicht unterstuetzte Exchange-Saldo-Reads erscheinen als unavailable.
 
 Bei einem Hyperliquid-Leader im Unified- oder Portfolio-Margin-Modus zeigt PBGui **Main Unified** aus dem gemeinsamen USDC-Spot-Clearing-Saldo. Hyperliquid bezeichnet separate Perp-`marginSummary`-Werte in diesen Modi als nicht aussagekraeftig; sie sind oft Null. Standard/Manual-Leader behalten getrennte Main-Perps- und Main-Spot-Salden.
 
@@ -49,6 +49,8 @@ Vor **Enable Live** die Live-Baseline waehlen:
 
 - **Fresh** startet die Berechtigung beim Activation Snapshot und schliesst vorherige Dry-Berechtigung aus.
 - **Include Dry Period** berechnet die Berechtigung ab der aktuellen Dry-Generation-Baseline neu.
+
+Der aktive Baseline-Modus wird getrennt von der ausgewaehlten Einstellung gespeichert. Solange noch kein Live-Transfer bestaetigt wurde, bei einer aktiven **Fresh**-Policy **Include Dry Period** waehlen und **Apply baseline to active Live** mit der ausdruecklichen Real-Funds-Bestaetigung verwenden. PBGui berechnet die Live-Baseline dann rueckwirkend aus der Dry-Periode und plant eine frische Live-Auswertung; vorheriger Dry-Gewinn kann dadurch sofort Due werden. Normales Speichern der Policy startet diese Neuberechnung niemals. Nach einem bestaetigten Live-Transfer oder waehrend eines offenen Intents wird die Aktion blockiert, damit keine Berechtigung doppelt entsteht.
 
 Das optionale First-Live-Catch-up-Limit begrenzt nur den ersten Catch-up; der Rest bleibt Due. Live erfordert eine gemeinsame Bestaetigung, speichert die gewaehlten Werte und startet die serverseitige Preflight-Pruefung. Danach wertet Live aus, persistiert vor Exchange-I/O einen dauerhaften Intent, sendet hoechstens einmal und reconciliert das Ergebnis. **Disable** verhindert kuenftige geplante Submissions, ohne Transfer-History zu loeschen.
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 import hashlib
 import json
@@ -58,6 +59,8 @@ class PolicyRequest(BaseModel):
     expected_generation: int | None = None
     expected_policy_fingerprint: StrictStr | None = None
     confirmed_live_update: bool = False
+    recalculate_live_baseline: bool = False
+    recover_legacy_dry_generation: bool = False
 
 
 class BaselineRequest(BaseModel):
@@ -1283,9 +1286,14 @@ def _preview_sync(user_name: str, policy_overrides: dict[str, Any] | None = None
     except KeyError:
         saved = None
     policy = {**(saved["policy"] if saved is not None else default_policy()), **(policy_overrides or {})}
+    preview_state_kind = (
+        "live"
+        if saved is not None and policy.get("operating_mode") in {"live", "paused_unknown"}
+        else "simulation"
+    )
     now_ms = int(time.time() * 1000)
     if saved is not None:
-        since_ms, until_ms = _history_window(saved, now_ms)
+        since_ms, until_ms = _history_window(saved, now_ms, state_kind=preview_state_kind)
     else:
         lookback = int(policy.get("maximum_history_age") or 86_400)
         since_ms, until_ms = max(0, now_ms - lookback * 1000), now_ms
@@ -1294,6 +1302,8 @@ def _preview_sync(user_name: str, policy_overrides: dict[str, Any] | None = None
         messages = ", ".join(str(item.get("code") or "read_error") for item in snapshot.get("errors", []))
         raise RuntimeError(f"Exchange snapshot incomplete: {messages or 'unknown'}")
     asset_changed = saved is not None and policy["asset"] != saved["policy"]["asset"]
+    transferred_today = "0"
+    confirmed_total = "0"
     if saved is None or asset_changed:
         cumulative_pnl, max_transferable = _transient_snapshot_pnl_and_cap(policy, snapshot)
         baseline = cumulative_pnl if policy.get("baseline_mode") == "from_enable" else "0"
@@ -1304,13 +1314,21 @@ def _preview_sync(user_name: str, policy_overrides: dict[str, Any] | None = None
         cumulative_pnl, max_transferable = _snapshot_pnl_and_cap(
             store, saved, snapshot, cap_policy=policy
         )
-        state = saved["simulation_state"]
+        state = saved[f"{preview_state_kind}_state"]
         baseline = state["baseline_pnl"]
-        if state.get("last_successful_scan_at") is None and policy.get("baseline_mode") == "from_enable":
+        if (
+            preview_state_kind == "simulation"
+            and state.get("last_successful_scan_at") is None
+            and policy.get("baseline_mode") == "from_enable"
+        ):
             baseline = cumulative_pnl
         high_watermark = state["high_watermark"]
         sweep_due = state["sweep_due"]
         generation = state["generation"]
+        if preview_state_kind == "live":
+            today = datetime.now(timezone.utc).date().isoformat()
+            transferred_today = state["daily_total"] if state.get("daily_date") == today else "0"
+            confirmed_total = state.get("confirmed_total") or "0"
     if _decimal(policy.get("reference_capital") or "0", "reference capital") == 0:
         if snapshot.get("account_kind") == "vault":
             policy["reference_capital"] = str(snapshot.get("vault", {}).get("vault_equity") or "0")
@@ -1324,9 +1342,35 @@ def _preview_sync(user_name: str, policy_overrides: dict[str, Any] | None = None
         high_watermark=high_watermark,
         sweep_due=sweep_due,
         max_transferable=max_transferable,
-        state_kind="simulation",
+        transferred_today=transferred_today,
+        state_kind=preview_state_kind,
         minimum_transfer_override=minimum_override,
     )
+    if preview_state_kind == "live":
+        amount = Decimal(decision["amount"])
+        if (
+            amount > 0
+            and policy["first_live_catchup_limit_enabled"]
+            and Decimal(confirmed_total) == 0
+        ):
+            amount = min(amount, Decimal(policy["first_live_catchup_limit"]))
+        minimum = (
+            _decimal(minimum_override, "minimum_override")
+            if minimum_override is not None
+            else Decimal(policy["live_minimum_transfer_amount"])
+        )
+        if amount < minimum:
+            amount = Decimal("0")
+        decision = {
+            **decision,
+            "amount": _decimal_text(amount),
+            "would_transfer": amount > 0,
+            "reason": (
+                "below_minimum_or_cap"
+                if amount == 0 and Decimal(decision["amount"]) > 0
+                else decision["reason"]
+            ),
+        }
     return {
         "policy": {
             "user_name": user_name,
@@ -1334,7 +1378,7 @@ def _preview_sync(user_name: str, policy_overrides: dict[str, Any] | None = None
             "generation": generation,
             "policy": policy,
         },
-        "decision": {**decision, "committed": False},
+        "decision": {**decision, "state_kind": preview_state_kind, "committed": False},
         "snapshot": snapshot,
         "read_only": True,
         "saved_policy": saved is not None,
@@ -1818,37 +1862,65 @@ def save_policy(
                 for key, value in body.policy.items()
                 if existing["policy"].get(key) != value
             }
+            merged_policy = {**existing["policy"], **body.policy}
+            requested_live_baseline = str(merged_policy.get("live_activation_baseline_mode") or "")
+            active_live_baseline = str(existing["live_state"].get("active_baseline_mode") or "")
+            rebaseline_requested = (
+                current_mode == "live"
+                and body.recalculate_live_baseline
+                and requested_live_baseline in {"fresh", "include_dry_period"}
+            )
+            if body.recover_legacy_dry_generation and not rebaseline_requested:
+                raise ValueError("Legacy Dry recovery requires an explicit Live baseline recalculation")
             baseline_fields = {"asset", "reference_capital", "baseline_mode"}
             if current_mode in {"live", "paused_unknown"} and changed_fields & baseline_fields:
                 raise ValueError("Disable Live before changing settlement asset or baseline accounting")
             if (
                 current_mode == "live"
                 and requested_mode in {None, "live"}
-                and changed_fields
+                and (changed_fields or rebaseline_requested)
                 and not body.confirmed_live_update
             ):
                 raise ValueError("Live policy changes require explicit confirmation")
             baseline_net_pnl = None
             if "asset" in changed_fields:
-                merged = {**existing["policy"], **body.policy}
                 now_ms = int(time.time() * 1000)
-                lookback = int(merged.get("maximum_history_age") or 86_400)
+                lookback = int(merged_policy.get("maximum_history_age") or 86_400)
                 snapshot = collect_readonly_snapshot(
                     user,
                     max(0, now_ms - lookback * 1000),
                     now_ms,
                     30.0,
-                    merged["asset"],
+                    merged_policy["asset"],
                 )
                 if not snapshot.get("complete"):
                     raise RuntimeError("New settlement-asset snapshot is incomplete")
-                baseline_net_pnl, _cap = _transient_snapshot_pnl_and_cap(merged, snapshot)
-            result = _store().update_policy(
-                user_name,
-                body.policy,
-                baseline_net_pnl=baseline_net_pnl,
-                expected_policy_fingerprint=body.expected_policy_fingerprint,
-            )
+                baseline_net_pnl, _cap = _transient_snapshot_pnl_and_cap(merged_policy, snapshot)
+            if rebaseline_requested:
+                now_ms = int(time.time() * 1000)
+                since_ms, until_ms = _history_window(existing, now_ms, state_kind="live")
+                snapshot = collect_readonly_snapshot(
+                    user, since_ms, until_ms, 30.0, merged_policy["asset"]
+                )
+                _require_live_snapshot(merged_policy, snapshot)
+                cumulative_pnl, _max_transferable = _snapshot_pnl_and_cap(
+                    _store(), existing, snapshot, cap_policy=merged_policy
+                )
+                result = _store().rebaseline_live(
+                    user_name,
+                    cumulative_pnl,
+                    requested_live_baseline,
+                    body.policy,
+                    expected_policy_fingerprint=body.expected_policy_fingerprint,
+                    recover_legacy_dry_generation=body.recover_legacy_dry_generation,
+                )
+            else:
+                result = _store().update_policy(
+                    user_name,
+                    body.policy,
+                    baseline_net_pnl=baseline_net_pnl,
+                    expected_policy_fingerprint=body.expected_policy_fingerprint,
+                )
     except HTTPException:
         raise
     except (ValueError, KeyError) as exc:

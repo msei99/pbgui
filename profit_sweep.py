@@ -18,7 +18,7 @@ from file_lock import advisory_file_lock
 
 
 SERVICE = "ProfitSweep"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 BUSY_TIMEOUT_MS = 5_000
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "state" / "profit_sweep" / "profit_sweep.sqlite3"
 
@@ -399,7 +399,7 @@ class ProfitSweepStore:
                 }
                 if version == 0 and tables:
                     raise RuntimeError("unversioned profit sweep schema is not supported")
-                if version not in {0, 1, 2, 3, SCHEMA_VERSION}:
+                if version not in {0, 1, 2, 3, 4, SCHEMA_VERSION}:
                     raise RuntimeError(f"unsupported profit sweep schema version: {version}")
                 if version == 0:
                     self._create_schema(connection)
@@ -408,13 +408,19 @@ class ProfitSweepStore:
                     self._migrate_v1_to_v2(connection)
                     self._migrate_v2_to_v3(connection)
                     self._migrate_v3_to_v4(connection)
+                    self._migrate_v4_to_v5(connection)
                     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 elif version == 2:
                     self._migrate_v2_to_v3(connection)
                     self._migrate_v3_to_v4(connection)
+                    self._migrate_v4_to_v5(connection)
                     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 elif version == 3:
                     self._migrate_v3_to_v4(connection)
+                    self._migrate_v4_to_v5(connection)
+                    connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                elif version == 4:
+                    self._migrate_v4_to_v5(connection)
                     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 connection.commit()
             except Exception:
@@ -465,7 +471,8 @@ class ProfitSweepStore:
                 next_run_at INTEGER,
                 last_event_at INTEGER,
                 last_successful_scan_at INTEGER,
-                last_decision TEXT
+                last_decision TEXT,
+                active_baseline_mode TEXT NOT NULL DEFAULT 'legacy_unknown'
             )""",
             """CREATE TABLE ledger_events (
                 user_name TEXT NOT NULL REFERENCES policies(user_name) ON DELETE CASCADE,
@@ -650,6 +657,19 @@ class ProfitSweepStore:
             "CREATE INDEX ledger_events_user_time ON ledger_events(user_name, exchange, event_time_ms)"
         )
 
+    @staticmethod
+    def _migrate_v4_to_v5(connection: sqlite3.Connection) -> None:
+        """Track the baseline mode actually applied to the current Live state."""
+
+        columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(live_state)").fetchall()
+        }
+        if "active_baseline_mode" in columns:
+            return
+        connection.execute(
+            "ALTER TABLE live_state ADD COLUMN active_baseline_mode TEXT NOT NULL DEFAULT 'legacy_unknown'"
+        )
+
     def _write(self, callback: Any) -> Any:
         """Run one callback under an advisory process lock and BEGIN IMMEDIATE."""
         with advisory_file_lock(self.db_path):
@@ -685,7 +705,7 @@ class ProfitSweepStore:
     def _state_dict(self, row: sqlite3.Row, state_kind: str) -> dict[str, Any]:
         """Convert one simulation or live state row to a JSON-safe dictionary."""
         total_column = _STATE_TOTAL_COLUMNS[state_kind]
-        return {
+        result = {
             "state_kind": state_kind,
             "generation": row["generation"],
             "baseline_pnl": row["baseline_pnl"],
@@ -701,6 +721,9 @@ class ProfitSweepStore:
             "last_successful_scan_at": row["last_successful_scan_at"],
             "last_decision": row["last_decision"],
         }
+        if state_kind == "live":
+            result["active_baseline_mode"] = row["active_baseline_mode"]
+        return result
 
     def _intent_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         """Convert one persisted live intent to a JSON-safe public record."""
@@ -853,6 +876,9 @@ class ProfitSweepStore:
             ):
                 raise ValueError("policy changed before update")
             normalized = _normalize_policy(changes, current)
+            changed_fields = {
+                key for key in changes if normalized.get(key) != current.get(key)
+            }
             unresolved = connection.execute(
                 """SELECT operation_id FROM live_intents WHERE user_name = ?
                    AND state IN ('prepared', 'submitting', 'unknown')""",
@@ -860,7 +886,7 @@ class ProfitSweepStore:
             ).fetchone()
             if unresolved is not None and normalized["operating_mode"] != current["operating_mode"]:
                 raise ValueError("an unresolved live intent blocks operating mode changes")
-            baseline_edit = bool({"asset", "reference_capital", "baseline_mode"} & set(changes))
+            baseline_edit = bool({"asset", "reference_capital", "baseline_mode"} & changed_fields)
             if unresolved is not None and baseline_edit:
                 raise ValueError("an unresolved live intent blocks baseline changes")
             generation = int(row["generation"])
@@ -967,8 +993,10 @@ class ProfitSweepStore:
             baseline = cumulative if mode == "fresh" else Decimal(simulation["baseline_pnl"])
             connection.execute("DELETE FROM live_state WHERE user_name = ?", (user,))
             connection.execute(
-                "INSERT INTO live_state (user_name, generation, baseline_pnl) VALUES (?, ?, ?)",
-                (user, row["generation"], _decimal_text(baseline)),
+                """INSERT INTO live_state (
+                    user_name, generation, baseline_pnl, active_baseline_mode
+                ) VALUES (?, ?, ?, ?)""",
+                (user, row["generation"], _decimal_text(baseline), mode),
             )
             policy["operating_mode"] = "live"
             connection.execute(
@@ -978,6 +1006,95 @@ class ProfitSweepStore:
             return self._policy_dict(connection, self._policy_row(connection, user))
 
         return self._write(activate)
+
+    def rebaseline_live(
+        self,
+        user_name: str,
+        cumulative_net_pnl: str | Decimal,
+        baseline_mode: str,
+        policy_changes: Mapping[str, Any],
+        *,
+        expected_policy_fingerprint: str,
+        recover_legacy_dry_generation: bool = False,
+    ) -> dict[str, Any]:
+        """Recalculate an active Live baseline before any Live transfer has completed."""
+
+        user = _validate_identifier(user_name, "user_name")
+        cumulative = _decimal(cumulative_net_pnl, "cumulative_net_pnl")
+        if baseline_mode not in {"fresh", "include_dry_period"}:
+            raise ValueError("unsupported live baseline mode")
+
+        def rebaseline(connection: sqlite3.Connection) -> dict[str, Any]:
+            """Validate and replace the untouched Live accounting state atomically."""
+
+            row = self._policy_row(connection, user)
+            policy = json.loads(row["config_json"])
+            if _policy_fingerprint(policy) != expected_policy_fingerprint:
+                raise ValueError("policy changed before Live baseline recalculation")
+            if policy["operating_mode"] != "live":
+                raise ValueError("Live baseline recalculation requires operating_mode=live")
+            unresolved = connection.execute(
+                """SELECT 1 FROM live_intents WHERE user_name = ?
+                   AND state IN ('prepared', 'submitting', 'unknown')""",
+                (user,),
+            ).fetchone()
+            if unresolved is not None:
+                raise ValueError("an unresolved Live intent blocks baseline recalculation")
+            confirmed_intent = connection.execute(
+                "SELECT 1 FROM live_intents WHERE user_name = ? AND state = 'confirmed'",
+                (user,),
+            ).fetchone()
+            live = connection.execute(
+                "SELECT * FROM live_state WHERE user_name = ?", (user,)
+            ).fetchone()
+            if Decimal(live["confirmed_total"]) != 0 or confirmed_intent is not None:
+                raise ValueError("confirmed Live transfers block retroactive baseline recalculation")
+
+            normalized = _normalize_policy(policy_changes, policy)
+            normalized["operating_mode"] = "live"
+            normalized["live_activation_baseline_mode"] = baseline_mode
+            baseline = cumulative
+            if baseline_mode == "include_dry_period":
+                simulation = connection.execute(
+                    "SELECT * FROM simulation_state WHERE user_name = ?", (user,)
+                ).fetchone()
+                baseline = Decimal(simulation["baseline_pnl"])
+                legacy_empty_state = (
+                    live["active_baseline_mode"] == "legacy_unknown"
+                    and simulation["last_evaluation_at"] is None
+                    and Decimal(simulation["net_pnl"]) == 0
+                    and Decimal(simulation["high_watermark"]) == 0
+                    and Decimal(simulation["sweep_due"]) == 0
+                )
+                if recover_legacy_dry_generation:
+                    if policy["baseline_mode"] != "from_enable" or not legacy_empty_state:
+                        raise ValueError("previous Dry generation cannot be recovered from this Live state")
+                    previous = connection.execute(
+                        """SELECT generation, net_pnl FROM simulation_journal
+                           WHERE user_name = ? AND generation < ?
+                           ORDER BY sequence DESC LIMIT 1""",
+                        (user, simulation["generation"]),
+                    ).fetchone()
+                    if previous is None:
+                        raise ValueError("no previous Dry generation is available for recovery")
+                    baseline -= Decimal(previous["net_pnl"])
+
+            timestamp = int(time.time())
+            connection.execute(
+                """UPDATE live_state SET baseline_pnl = ?, net_pnl = '0', high_watermark = '0',
+                   sweep_due = '0', confirmed_total = '0', daily_date = NULL, daily_total = '0',
+                   last_evaluation_at = NULL, next_run_at = ?, last_event_at = NULL,
+                   last_successful_scan_at = NULL, last_decision = 'baseline_recalculated',
+                   active_baseline_mode = ? WHERE user_name = ?""",
+                (_decimal_text(baseline), timestamp, baseline_mode, user),
+            )
+            connection.execute(
+                "UPDATE policies SET config_json = ?, updated_at = ? WHERE user_name = ?",
+                (_canonical_json(normalized), timestamp, user),
+            )
+            return self._policy_dict(connection, self._policy_row(connection, user))
+
+        return self._write(rebaseline)
 
     def delete_policy(
         self,

@@ -39,7 +39,7 @@ Vault Advanced fields control withdrawal mode, retained leader equity, leader-sh
 
 **Enable Dry** runs scheduled read-only decisions. **Evaluate now** is always a non-committing preview: it does not create an intent, change confirmed totals, sign a request, or move funds. Eligible Dry results are labeled `WOULD TRANSFER` in the Dry Decision Journal.
 
-**Evaluate now** also refreshes the Exchange / Vault balance cards for the source, configured internal destination, and currently transferable amount. A successful Live activation or test-transfer action refreshes the same cards. Vault destination changes switch the displayed destination between Main Perps and Main Spot. A confirmed empty Binance Funding Wallet is shown as zero; failed or unsupported exchange balance reads are shown as unavailable.
+**Evaluate now** also refreshes the Exchange / Vault balance cards for the source, configured internal destination, and currently transferable amount. For Vault accounts, **Your Vault Equity** is the leader-owned current equity, **Vault TVL** is the total equity across all depositors, and **Your Share** is the leader fraction of that TVL. A successful Live activation or test-transfer action refreshes the same cards. Vault destination changes switch the displayed destination between Main Perps and Main Spot. A confirmed empty Binance Funding Wallet is shown as zero; failed or unsupported exchange balance reads are shown as unavailable.
 
 For a Hyperliquid Leader in Unified or Portfolio Margin mode, PBGui shows **Main Unified** from the shared USDC spot-clearing balance. Hyperliquid reports separate perp `marginSummary` values as meaningless in those modes, often zero. Standard/Manual Leaders continue to show separate Main Perps and Main Spot balances.
 
@@ -49,6 +49,8 @@ Before **Enable Live**, choose the Live baseline:
 
 - **Fresh** starts entitlement at the activation snapshot and excludes prior Dry entitlement.
 - **Include Dry Period** recomputes entitlement from the current Dry-generation baseline.
+
+The active baseline mode is stored separately from the selected setting. Before any Live transfer has been confirmed, select **Include Dry Period** on an active **Fresh** policy and use **Apply baseline to active Live** with the explicit real-funds confirmation. PBGui then recalculates the Live baseline retroactively from the Dry period and schedules a fresh Live evaluation; previous Dry profit may become immediately due. Ordinary policy saves never trigger this recalculation. The action is blocked after a confirmed Live transfer or while an intent is unresolved, preventing duplicate entitlement.
 
 The optional first-Live catch-up cap limits only the first catch-up; any remainder stays due. Enabling Live requires a shared confirmation, saves the selected settings, and runs server-owned preflight. Live then evaluates, prepares a durable intent before exchange I/O, submits at most once, and reconciles the result. **Disable** prevents future scheduled submissions without deleting transfer history.
 

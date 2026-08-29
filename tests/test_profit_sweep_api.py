@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import sqlite3
 from types import SimpleNamespace
 from typing import Any
 import uuid
@@ -759,6 +760,97 @@ def test_live_activation_rejects_policy_changed_after_confirmation(
         ))
 
     assert isolated_api.store.get_policy("alice")["policy"]["operating_mode"] == "dry"
+
+
+def test_active_fresh_policy_can_rebaseline_to_include_dry_retroactively(
+    isolated_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A confirmed Live-policy edit may include Dry history before any transfer completes."""
+
+    isolated_api.store.create_policy(
+        "alice",
+        "hyperliquid",
+        {
+            "operating_mode": "dry",
+            "asset": "USDC",
+            "baseline_mode": "from_enable",
+            "live_activation_baseline_mode": "fresh",
+            "trigger_percent": "0",
+            "sweep_percent": "50",
+            "minimum_transfer_amount": "0",
+            "live_minimum_transfer_amount": "0",
+            "first_live_catchup_limit_enabled": True,
+            "first_live_catchup_limit": "3",
+        },
+        baseline_net_pnl="100",
+    )
+    isolated_api.store.evaluate_dry(
+        "alice", cumulative_net_pnl="125", max_transferable="1000", now=1
+    )
+    isolated_api.store.activate_live("alice", "125", baseline_mode="fresh")
+    snapshot = _normal_snapshot()
+    snapshot["fills"]["events"][0]["closed_pnl"] = "125"
+    monkeypatch.setattr(profit_sweep_api, "collect_readonly_snapshot", lambda *_args: snapshot)
+    current = profit_sweep_api.get_policy("alice", object())
+    policy = {**current["policy"], "live_activation_baseline_mode": "include_dry_period"}
+
+    saved = profit_sweep_api.save_policy(
+        "alice",
+        profit_sweep_api.PolicyRequest(
+            policy=policy,
+            expected_generation=current["generation"],
+            expected_policy_fingerprint=current["policy_fingerprint"],
+            confirmed_live_update=True,
+            recalculate_live_baseline=True,
+        ),
+        object(),
+    )
+    preview = profit_sweep_api._preview_sync("alice")
+
+    assert saved["live_state"]["active_baseline_mode"] == "include_dry_period"
+    assert saved["live_state"]["baseline_pnl"] == "100"
+    assert preview["decision"]["state_kind"] == "live"
+    assert preview["decision"]["net_pnl"] == "25"
+    assert preview["decision"]["sweep_due"] == "12.5"
+    assert preview["decision"]["amount"] == "3"
+
+
+def test_live_preview_applies_existing_utc_daily_limit(
+    isolated_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Evaluate now must not advertise a transfer after the Live daily cap is exhausted."""
+
+    isolated_api.store.create_policy(
+        "alice",
+        "hyperliquid",
+        {
+            "operating_mode": "dry",
+            "asset": "USDC",
+            "baseline_mode": "lifetime",
+            "trigger_percent": "0",
+            "sweep_percent": "100",
+            "live_minimum_transfer_amount": "0",
+            "daily_transfer_limit_enabled": True,
+            "daily_transfer_limit": "5",
+        },
+    )
+    isolated_api.store.activate_live("alice", "0", baseline_mode="include_dry_period")
+    today = profit_sweep_api.datetime.now(profit_sweep_api.timezone.utc).date().isoformat()
+    with sqlite3.connect(isolated_api.store.db_path) as connection:
+        connection.execute(
+            "UPDATE live_state SET daily_date = ?, daily_total = '5' WHERE user_name = 'alice'",
+            (today,),
+        )
+    snapshot = _normal_snapshot()
+    monkeypatch.setattr(profit_sweep_api, "collect_readonly_snapshot", lambda *_args: snapshot)
+
+    preview = profit_sweep_api._preview_sync("alice")
+
+    assert preview["decision"]["state_kind"] == "live"
+    assert preview["decision"]["sweep_due"] == "100"
+    assert preview["decision"]["amount"] == "0"
 
 
 def test_live_policy_updates_require_confirmation_and_current_generation(
@@ -1749,7 +1841,7 @@ def test_health_is_secret_free_and_non_mutating(isolated_api: SimpleNamespace) -
     assert health["feature_status"] == "live"
     assert health["read_only"] is False
     assert health["scheduler_running"] is False
-    assert health["database"]["schema_version"] == 4
+    assert health["database"]["schema_version"] == 5
     assert isolated_api.store.list_policies() == policies_before
     assert isolated_api.store.list_simulation_journal("alice") == journal_before
 
