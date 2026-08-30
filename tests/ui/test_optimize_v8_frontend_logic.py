@@ -73,6 +73,50 @@ def test_pb8_pareto_page_applies_typed_ai_selection_actions() -> None:
     assert "event.preventDefault()" in page
 
 
+def test_pareto_backtests_keep_the_scenario_selected_for_each_candidate() -> None:
+    """Suite selections made on different scenario views must not become an exchange matrix."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _page_function(page, name)
+        for name in ("syncSelectedParetoScenarios", "applyParetoBacktestScenario")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const state = {{
+          selectedParetos: new Set(['/a.json']),
+          selectedParetoScenarios: new Map(),
+          paretoScenario: 'bybit'
+        }};
+        function deepClone(value) {{ return JSON.parse(JSON.stringify(value)); }}
+        {functions}
+        syncSelectedParetoScenarios();
+        state.paretoScenario = 'hyperliquid';
+        state.selectedParetos.add('/b.json');
+        syncSelectedParetoScenarios();
+        assert.deepEqual(Array.from(state.selectedParetoScenarios), [
+          ['/a.json', 'bybit'], ['/b.json', 'hyperliquid']
+        ]);
+
+        const original = {{backtest: {{
+          exchanges: ['binance', 'bybit', 'hyperliquid'], suite_enabled: true,
+          scenarios: [
+            {{label: 'binance', exchanges: ['binance']}},
+            {{label: 'bybit', exchanges: ['bybit'], starting_balance: 2000}},
+            {{label: 'hyperliquid', exchanges: ['hyperliquid']}}
+          ]
+        }}}};
+        const prepared = applyParetoBacktestScenario(original, 'bybit');
+        assert.deepEqual(prepared.backtest.exchanges, ['bybit']);
+        assert.deepEqual(prepared.backtest.scenarios, [
+          {{label: 'bybit', exchanges: ['bybit'], starting_balance: 2000}}
+        ]);
+        assert.equal(original.backtest.scenarios.length, 3);
+        """
+    )
+    _run_node(script)
+
+
 def test_optimize_page_registers_existing_queue_log_function_as_page_action() -> None:
     """The generic page action should resolve a selected item and reuse its log viewer."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
@@ -1135,7 +1179,10 @@ def test_request_generations_reject_stale_http_and_settings_merge_metadata() -> 
 def test_switching_result_sets_clears_stale_paretos_before_loading() -> None:
     """Selecting another optimize result must clear old Pareto rows before its request completes."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
-    function = _page_function(page, "loadParetos")
+    functions = "\n".join(
+        _page_function(page, name)
+        for name in ("clearParetoSelection", "loadParetos")
+    )
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
@@ -1158,9 +1205,10 @@ def test_switching_result_sets_clears_stale_paretos_before_loading() -> None:
           selectedResultPath: '/old',
           selectedResultName: 'old',
           paretos: [{{path: '/old/pareto.json'}}],
-          selectedParetos: new Set(['/old/pareto.json'])
+          selectedParetos: new Set(['/old/pareto.json']),
+          selectedParetoScenarios: new Map([['/old/pareto.json', 'Aggregated']])
         }};
-        {function}
+        {functions}
         (async () => {{
           const firstLoad = loadParetos('/new-a', 'new-a');
           assert.deepEqual(state.paretos, []);

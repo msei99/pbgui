@@ -62,6 +62,30 @@ def test_optimize_and_queue_drafts_round_trip_isolated_copies() -> None:
     assert error.value.status_code == 422
 
 
+@pytest.mark.parametrize(
+    ("started_at", "expected"),
+    [
+        (None, "queued"),
+        (99.0, "running"),
+        (95.0, "error"),
+        (90.0, "error"),
+        ("invalid", "error"),
+    ],
+)
+def test_queue_status_does_not_flash_error_while_runner_publishes_pid(
+    monkeypatch, started_at, expected: str
+) -> None:
+    """Only a freshly started queue item remains running during the bounded PID publication gap."""
+    monkeypatch.setattr(backtest_v8, "_read_process_record", lambda _filename: None)
+    monkeypatch.setattr(backtest_v8, "_read_runner_state", lambda _filename: None)
+    monkeypatch.setattr(backtest_v8.time, "time", lambda: 100.0)
+
+    data = {"filename": "job"}
+    if started_at is not None:
+        data["started_at"] = started_at
+    assert backtest_v8._queue_status(data) == (expected, None)
+
+
 def test_pb8_legacy_results_are_read_only_safe_and_exclude_managed_root(
     tmp_path: Path, monkeypatch
 ) -> None:

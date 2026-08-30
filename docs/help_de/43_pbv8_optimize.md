@@ -75,6 +75,7 @@ Die Results-Liste verwendet begrenzte Cold-Start-Metadaten: Jedes Pareto-Verzeic
 PB8 unterscheidet drei Workflows:
 
 - Ein Pareto-Kandidat als PB8-Backtest-Draft startet einen eigenstaendigen Backtest.
+- Pareto-Kandidaten, die in verschiedenen benannten Suite-Szenarien ausgewaehlt wurden, behalten dieses Szenario. Der Backtest-Handoff queued jeden Kandidaten nur fuer die Exchanges seines Szenarios statt eine Kandidat-mal-Exchange-Matrix zu erzeugen.
 - Ein neuer PB8-Optimize-Draft verwendet einen oder mehrere Pareto-Kandidaten als Seeds.
 - Checkpoint Resume setzt den bestehenden Backend-Zustand und Resultstream fort.
 

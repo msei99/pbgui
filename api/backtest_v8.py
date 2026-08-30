@@ -94,6 +94,7 @@ _queue_draft_store: dict[str, tuple[float, list[dict]]] = {}
 _DRAFT_TTL_SECONDS = 600
 _MAX_DRAFTS = 100
 _DRAFT_LOCK = threading.RLock()
+_QUEUE_STARTING_GRACE_SECONDS = 5.0
 
 
 def _clean_drafts(*, reserve_slot: bool = False) -> None:
@@ -1006,7 +1007,14 @@ def _queue_status(data: dict) -> tuple[str, Optional[int]]:
         return ("complete" if state["returncode"] == 0 else "error"), int(record["pid"]) if record else None
     if record and psutil.pid_exists(int(record["pid"])):
         return "unknown", int(record["pid"])
-    return ("error" if data.get("started_at") else "queued"), int(record["pid"]) if record else None
+    if data.get("started_at") is not None:
+        try:
+            starting_age = time.time() - float(data["started_at"])
+        except (TypeError, ValueError):
+            starting_age = _QUEUE_STARTING_GRACE_SECONDS
+        if 0 <= starting_age < _QUEUE_STARTING_GRACE_SECONDS:
+            return "running", None
+    return ("error" if data.get("started_at") is not None else "queued"), int(record["pid"]) if record else None
 
 
 def _queue_item(path: Path) -> dict:

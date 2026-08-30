@@ -75,6 +75,7 @@ The Results list uses bounded cold-start metadata: it enumerates each Pareto dir
 PB8 result actions distinguish three different workflows:
 
 - Opening a Pareto candidate as a PB8 Backtest draft performs a standalone backtest.
+- Pareto candidates selected in different named Suite scenario views retain that scenario. The Backtest handoff queues each candidate only for its bound scenario exchanges instead of creating a candidate-by-exchange matrix.
 - Starting a new PB8 Optimize draft uses one or more Pareto candidates as seeds.
 - Resuming a checkpoint continues the existing backend state and result stream.
 

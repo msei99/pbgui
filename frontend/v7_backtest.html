@@ -2526,6 +2526,18 @@ function showMigrationReviewNotice(draft) {
   });
 }
 
+function getQueueDraftItemExchanges(item, selectedExchanges) {
+  var configured = Array.isArray(selectedExchanges) ? selectedExchanges.slice() : [];
+  var backtest = item && item.config && item.config.backtest;
+  var scenarios = backtest && Array.isArray(backtest.scenarios) ? backtest.scenarios : [];
+  if (!backtest || backtest.suite_enabled !== true || scenarios.length !== 1) return configured;
+  var scenarioExchanges = Array.isArray(scenarios[0] && scenarios[0].exchanges) ? scenarios[0].exchanges : [];
+  scenarioExchanges = scenarioExchanges.map(function(exchange) { return String(exchange || '').trim(); }).filter(Boolean);
+  return scenarioExchanges.filter(function(exchange, index) {
+    return scenarioExchanges.indexOf(exchange) === index && configured.indexOf(exchange) >= 0;
+  });
+}
+
 function showInitialBacktestQueueDraftModal(items) {
   if (!Array.isArray(items) || !items.length) {
     toast('No backtests available in draft', 'err');
@@ -2535,7 +2547,15 @@ function showInitialBacktestQueueDraftModal(items) {
   var firstCfg = (items[0] && items[0].config) || {};
   var today = new Date().toISOString().slice(0, 10);
   var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'kucoin', 'combined'];
-  var defExchanges = (firstCfg.backtest && firstCfg.backtest.exchanges) || ['bybit'];
+  var defExchanges = [];
+  items.forEach(function(item) {
+    var itemBacktest = item && item.config && item.config.backtest;
+    var itemExchanges = itemBacktest && Array.isArray(itemBacktest.exchanges) ? itemBacktest.exchanges : [];
+    itemExchanges.forEach(function(exchange) {
+      if (allExchanges.indexOf(exchange) >= 0 && defExchanges.indexOf(exchange) < 0) defExchanges.push(exchange);
+    });
+  });
+  if (!defExchanges.length) defExchanges = ['bybit'];
   var defStart = (firstCfg.backtest && firstCfg.backtest.start_date) || '2020-01-01';
   var defBalance = (firstCfg.backtest && firstCfg.backtest.starting_balance) || 1000;
 
@@ -2579,7 +2599,7 @@ function showInitialBacktestQueueDraftModal(items) {
       (usePbguiData ? apiFetch('/pbgui_data_path').then(function(d) { return d.path || ''; }) : Promise.resolve('')).then(function(pbguiPath) {
         var promises = [];
         items.forEach(function(item) {
-          exchanges.forEach(function(exchange) {
+          getQueueDraftItemExchanges(item, exchanges).forEach(function(exchange) {
             var cfg = JSON.parse(JSON.stringify((item && item.config) || {}));
             if (!cfg.backtest) cfg.backtest = {};
             cfg.backtest.start_date = start;
@@ -2598,6 +2618,10 @@ function showInitialBacktestQueueDraftModal(items) {
             }));
           });
         });
+        if (!promises.length) {
+          toast('No selected exchange matches the queued scenarios', 'err');
+          return;
+        }
         Promise.all(promises)
           .then(function() {
             toast('Queued ' + promises.length + ' backtests', 'ok');

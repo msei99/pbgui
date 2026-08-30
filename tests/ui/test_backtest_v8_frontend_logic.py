@@ -149,6 +149,33 @@ def test_exchange_multiselect_clicks_toggle_only_the_target_option() -> None:
     assert "box.querySelectorAll('select[data-toggle-multiselect]').forEach(enableToggleMultiSelect)" in source
 
 
+def test_suite_pareto_queue_draft_uses_each_candidates_bound_exchange() -> None:
+    """Three scenario-bound candidates should create three jobs, not a 3x3 exchange matrix."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "getQueueDraftItemExchanges")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        {function}
+        const selected = ['binance', 'bybit', 'hyperliquid'];
+        const items = selected.map(exchange => ({{config: {{backtest: {{
+          suite_enabled: true,
+          exchanges: [exchange],
+          scenarios: [{{label: exchange, exchanges: [exchange]}}]
+        }}}}}}));
+        assert.deepEqual(items.flatMap(item => getQueueDraftItemExchanges(item, selected)), selected);
+        assert.deepEqual(getQueueDraftItemExchanges({{config: {{backtest: {{
+          suite_enabled: true,
+          scenarios: selected.map(exchange => ({{label: exchange, exchanges: [exchange]}}))
+        }}}}}}, selected), selected);
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    modal = _extract_function(source, "showInitialBacktestQueueDraftModal")
+    assert "getQueueDraftItemExchanges(item, exchanges).forEach" in modal
+
+
 def test_v8_optimize_result_draft_opens_without_repreparing() -> None:
     """A complete PB8 Pareto config must enter the Backtest editor unchanged."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")

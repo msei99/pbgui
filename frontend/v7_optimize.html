@@ -2706,6 +2706,7 @@ var state = {
   selectedQueue: new Set(),
   selectedResults: new Set(),
   selectedParetos: new Set(),
+  selectedParetoScenarios: new Map(),
   selectedResultPath: '',
   selectedResultName: '',
   configSortKey: 'modified',
@@ -11218,7 +11219,7 @@ function renderParetos() {
   el('pareto-result-chip').textContent = state.selectedResultName || 'No result selected';
   renderParetoToolbar();
   if (!state.selectedResultPath) {
-    state.selectedParetos.clear();
+    clearParetoSelection();
     renderEmpty('paretos-tbody', 3 + (summaryKeys.length || 1), 'Choose a result set first.', '', '');
     updateParetoSelectionUi();
     updateMetaCounts();
@@ -11256,6 +11257,7 @@ function renderParetos() {
 
 function updateParetoSelectionUi() {
   pruneSelectionSet('selectedParetos', state.paretos.map(function(item) { return item.path; }));
+  syncSelectedParetoScenarios();
   var selectedCount = state.selectedParetos.size;
   el('pareto-selection-summary').textContent = selectedCount
     ? selectedCount + ' pareto' + (selectedCount === 1 ? '' : 's') + ' selected.'
@@ -11264,6 +11266,22 @@ function updateParetoSelectionUi() {
   el('btn-backtest-selected-paretos').disabled = selectedCount === 0;
   el('btn-seed-selected-paretos').disabled = selectedCount === 0;
   el('btn-seed-whole-result').disabled = !state.selectedResultPath;
+}
+
+function clearParetoSelection() {
+  state.selectedParetos.clear();
+  state.selectedParetoScenarios.clear();
+}
+
+function syncSelectedParetoScenarios() {
+  state.selectedParetoScenarios.forEach(function(_scenario, path) {
+    if (!state.selectedParetos.has(path)) state.selectedParetoScenarios.delete(path);
+  });
+  state.selectedParetos.forEach(function(path) {
+    if (!state.selectedParetoScenarios.has(path)) {
+      state.selectedParetoScenarios.set(path, state.paretoScenario || 'Aggregated');
+    }
+  });
 }
 
 function openBackdrop() {
@@ -11390,7 +11408,7 @@ window.addEventListener('pbgui:ai-ui-action', function(event) {
     toast('PBGui AI selection could not find ' + missing.length + ' Pareto candidate(s) in this result.', 'warn');
     return;
   }
-  if (payload.mode !== 'add') state.selectedParetos.clear();
+  if (payload.mode !== 'add') clearParetoSelection();
   names.forEach(function(name) { state.selectedParetos.add(pathsByName.get(name)); });
   renderParetos();
   toast('PBGui AI selected ' + names.length + ' Pareto candidate' + (names.length === 1 ? '' : 's') + '.', 'ok');
@@ -11890,6 +11908,24 @@ function normalizeParetoBacktestPayload(payload) {
   return { config: payload || {}, override_configs: {} };
 }
 
+function applyParetoBacktestScenario(config, scenarioLabel) {
+  var prepared = deepClone(config || {});
+  var backtest = prepared.backtest;
+  if (!scenarioLabel || scenarioLabel === 'Aggregated' || !backtest || !Array.isArray(backtest.scenarios)) return prepared;
+  var scenario = backtest.scenarios.find(function(item) {
+    return item && String(item.label || '') === String(scenarioLabel);
+  });
+  if (!scenario) throw new Error('Selected Pareto scenario is no longer available: ' + scenarioLabel);
+  var exchanges = Array.isArray(scenario.exchanges)
+    ? scenario.exchanges.map(function(exchange) { return String(exchange || '').trim(); }).filter(Boolean)
+    : [];
+  exchanges = exchanges.filter(function(exchange, index) { return exchanges.indexOf(exchange) === index; });
+  if (!exchanges.length) throw new Error('Selected Pareto scenario has no exchanges: ' + scenarioLabel);
+  backtest.exchanges = exchanges;
+  backtest.scenarios = [deepClone(scenario)];
+  return prepared;
+}
+
 async function openBacktestDraft(config, draftName, overrideConfigs) {
   var draft = await authFetch(optimizeEditorAdapter.backtestApiBase() + '/optimize-draft', {
     method: 'POST',
@@ -11918,18 +11954,23 @@ async function backtestSelectedParetos(paths) {
   var selectedPaths = Array.isArray(paths) ? paths.slice() : Array.from(state.selectedParetos);
   if (!selectedPaths.length) throw new Error('No paretos selected.');
   var selectedItems = selectedPaths.map(function(path) {
-    return state.paretos.find(function(item) {
-      return item.path === path;
+    var item = state.paretos.find(function(candidate) {
+      return candidate.path === path;
     }) || {
       path: path,
       name: String(path || '').split('/').slice(-1)[0].replace(/\.json$/i, '') || 'pareto_backtest'
+    };
+    return {
+      path: item.path,
+      name: item.name,
+      scenario: state.selectedParetoScenarios.get(path) || 'Aggregated'
     };
   });
   if (selectedItems.length === 1) {
     var singleData = await apiFetch(optimizeEditorAdapter.paretoFilePath(selectedItems[0].path));
     var singlePayload = normalizeParetoBacktestPayload(singleData);
     return openBacktestDraft(
-      singlePayload.config,
+      applyParetoBacktestScenario(singlePayload.config, selectedItems[0].scenario),
       selectedItems[0].name || state.selectedResultName || 'pareto_backtest',
       singlePayload.override_configs
     );
@@ -11937,9 +11978,10 @@ async function backtestSelectedParetos(paths) {
   var queueItems = await Promise.all(selectedItems.map(function(item) {
     return apiFetch(optimizeEditorAdapter.paretoFilePath(item.path)).then(function(data) {
       var payload = normalizeParetoBacktestPayload(data);
+      var config = applyParetoBacktestScenario(payload.config, item.scenario);
       return {
         name: item.name || 'pareto_backtest',
-        config: extractConfigSections(payload.config),
+        config: extractConfigSections(config),
         override_configs: payload.override_configs
       };
     });
@@ -12433,7 +12475,7 @@ function removeResultsFromState(paths) {
       state.selectedResultPath = '';
       state.selectedResultName = '';
       state.paretos = [];
-      state.selectedParetos.clear();
+      clearParetoSelection();
       clearParetoMeta({ keepStatistic: true });
     }
   });
@@ -12461,7 +12503,7 @@ async function loadParetos(path, name) {
   var loadSeq = ++state.paretoLoadSeq;
   if (path) {
     state.paretos = [];
-    state.selectedParetos.clear();
+    clearParetoSelection();
     clearParetoMeta({ keepStatistic: true });
     if (path !== state.selectedResultPath) {
       state.paretoScenario = 'Aggregated';
@@ -12472,7 +12514,7 @@ async function loadParetos(path, name) {
   }
   if (!state.selectedResultPath) {
     state.paretos = [];
-    state.selectedParetos.clear();
+    clearParetoSelection();
     clearParetoMeta({ keepStatistic: true });
     renderParetos();
     return;
