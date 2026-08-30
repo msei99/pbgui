@@ -86,6 +86,48 @@ def test_backtest_page_registers_existing_queue_log_function_as_page_action() ->
     assert "item.status === 'running' || item.status === 'backtesting'" in page
 
 
+def test_result_archive_export_batches_selection_without_long_sidebar_labels() -> None:
+    """Multi-result archive exports should update once and keep progress text compact."""
+    page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(page, "addResultToArchive")
+
+    assert "results: sel.map(function(path)" in function
+    assert "Adding ' + sel.length + ' result(s)..." in function
+    assert "for (var i = 0; i < sel.length; i++)" not in function
+    assert "setArchiveProgress('🗄 Adding ' + (i + 1)" not in function
+
+
+def test_results_sidebar_shows_archive_push_only_for_pending_own_archive() -> None:
+    """Results should reuse Git Push only while My Archive has local changes."""
+    page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    pending = _extract_function(page, "ownArchiveHasPendingChanges")
+    add_result = _extract_function(page, "addResultToArchive")
+    load_archives = _extract_function(page, "loadArchives")
+    push_archive = _extract_function(page, "pushArchive")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let archives = [];
+        {pending}
+        assert.equal(ownArchiveHasPendingChanges(), false);
+        archives = [{{is_own: false, migration_status: {{git: {{dirty: true}}}}}}];
+        assert.equal(ownArchiveHasPendingChanges(), false);
+        archives = [{{is_own: true, migration_status: {{git: {{dirty: false}}}}}}];
+        assert.equal(ownArchiveHasPendingChanges(), false);
+        archives = [{{is_own: true, migration_status: {{git: {{dirty: true}}}}}}];
+        assert.equal(ownArchiveHasPendingChanges(), true);
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert 'id="btn-result-push-archive"' in page
+    assert 'data-cross-version-action onclick="pushArchive()" style="display:none"' in page
+    assert "await loadArchives();" in add_result
+    assert "updateResultArchivePushVisibility();" in load_archives
+    assert "loadArchives();" in push_archive
+
+
 def test_shared_editors_emit_only_the_generation_specific_suite_reducer_alias() -> None:
     """PB8 must emit reducer while PB7 keeps aggregate without retaining the other alias."""
     backtest = _extract_function(

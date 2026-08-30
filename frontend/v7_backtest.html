@@ -805,6 +805,7 @@ textarea.json-invalid:focus {
         <button class="sb-btn" onclick="optimizeFromResult()">🧬 Optimize from Result</button>
         <button class="sb-btn" onclick="optimizePresetFromResult()">Refine Optimize Preset</button>
         <button class="sb-btn" id="btn-result-add-archive" onclick="addResultToArchive()">🗄 Add to Archive</button>
+        <button class="sb-btn accent" id="btn-result-push-archive" data-cross-version-action onclick="pushArchive()" style="display:none">⬆ Git Push</button>
         <button class="sb-btn danger" data-cross-version-action onclick="deleteSelectedResults()">🗑 Delete Selected</button>
       </div>
       <div id="ctx-optimize-preset" class="ctx-actions" style="display:none">
@@ -1701,6 +1702,7 @@ function selectPanel(id, opts) {
     } else {
       loadResults('', { keepVisible: results.length > 0 });
     }
+    loadArchives();
   }
   if (id === 'archive' && archives.length === 0) loadArchives();
   if (id === 'legacy') { if (legacyResults.length === 0) loadLegacyResults(); else renderLegacyResults(); }
@@ -9417,20 +9419,21 @@ async function addResultToArchive() {
     var s = await apiFetch('/archives/settings');
     var archName = s.my_archive || '';
     if (!archName) { toast('No own archive configured. Go to Archive \u2192 Settings.', 'err'); return; }
-    for (var i = 0; i < sel.length; i++) {
-      var label = archiveResultLabel(sel[i]);
-      var selectedResult = results.find(function(item) { return item.path === sel[i]; }) || {};
-      setArchiveProgress('🗄 Adding ' + (i + 1) + '/' + sel.length + ': ' + label);
-      await apiFetch('/archives/' + encodeURIComponent(archName) + '/add-config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_path: sel[i],
-          backtest_version: selectedResult.backtest_version || backtestEditorAdapter.version
+    setArchiveProgress('🗄 Adding ' + sel.length + ' result(s)...');
+    await apiFetch('/archives/' + encodeURIComponent(archName) + '/add-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        results: sel.map(function(path) {
+          var selectedResult = results.find(function(item) { return item.path === path; }) || {};
+          return {
+            source_path: path,
+            backtest_version: selectedResult.backtest_version || backtestEditorAdapter.version
+          };
         })
-      });
-      toast('Added ' + (i + 1) + '/' + sel.length + ' to archive: ' + label, 'ok');
-    }
+      })
+    });
+    await loadArchives();
     toast('Added ' + sel.length + ' result(s) to archive \u201c' + archName + '\u201d', 'ok');
     /* If already viewing this archive, refresh results immediately */
     if (currentPanel === 'archive' && selectedArchiveName === archName) loadArchiveResults();
@@ -9451,11 +9454,25 @@ async function addResultToArchive() {
 var selectedArchiveName = '';
 var ownArchiveName = '';
 
+function ownArchiveHasPendingChanges() {
+  var own = archives.find(function(archive) { return archive && archive.is_own; });
+  return !!(own && own.migration_status && own.migration_status.git && own.migration_status.git.dirty);
+}
+
+function updateResultArchivePushVisibility() {
+  var button = document.getElementById('btn-result-push-archive');
+  if (!button) return;
+  var pending = ownArchiveHasPendingChanges();
+  button.style.display = pending ? '' : 'none';
+  button.title = pending ? 'Push pending changes from My Archive' : '';
+}
+
 function loadArchives() {
   return apiFetch('/archives').then(function(d) {
     archives = d.archives || [];
     var own = archives.find(function(a) { return a && a.is_own; });
     ownArchiveName = own ? own.name : ownArchiveName;
+    updateResultArchivePushVisibility();
     renderArchiveList();
     if (currentPanel === 'archive' && selectedArchiveName) {
       updateArchiveStatusLine();
@@ -10289,6 +10306,7 @@ function pushArchive() {
       body: JSON.stringify(body)
     })
     .then(function(d) {
+      loadArchives();
       showModal('Git Push — ' + esc(myArchive),
         '<pre style="font-size:var(--fs-xs);max-height:360px;overflow-y:auto;white-space:pre-wrap;margin:0">' + esc(d.output || 'ok') + '</pre>',
         [{ text: 'Close', cls: '' }]

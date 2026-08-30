@@ -53,6 +53,8 @@ Die normale Aktion **Update PB8** setzt PB8 absichtlich auf einen Detached Check
 
 Die Seite haelt eine Live-WebSocket-Verbindung fuer Uebersicht, Fortschritt und Branch-Status offen. Der persistente VPSMonitor-Dienst prueft die Upstream-Branch-Heads fuer PBGui, PB7 und PB8 alle 60 Sekunden im Hintergrund, behaelt den letzten gueltigen Stand ueber API-Neustarts hinweg und kennzeichnet ihn bei einem temporaeren Git-Fehler als stale. Die Update-Farben fuer Master und VPS benoetigen deshalb weder eine geoeffnete Seite noch die manuelle Refresh-Aktion. PB7s verifizierter gepinnter Commit gilt weiterhin als aktuell, auch wenn Upstream `master` weiterlaeuft. Vollstaendige Branch-Historien und Custom-Remote-/Fork-Commits werden nur bei einer entsprechenden Branch-Management-Anfrage geladen. Die Browser-Authentifizierung verwendet ausschliesslich das Cookie; PBGui rendert den Session-Token weder in diese Seite noch sendet es einen Browser-Bearer-Header.
 
+Nach einem manuellen PBGui-Codeupdate kann ein noch laufender aelterer VPSMonitor den Release-Cache zunaechst nicht bereitstellen. Die Versionskarten bleiben orange, statt ein Update zu behaupten, und die Runtime-Updatebuttons bleiben neutral, bis ein verifizierter Upstream-Vergleich vorliegt. Der gemeinsame **Restart**-Hinweis in der oberen Navigation erkennt diesen Capability-Unterschied und laedt VPSMonitor vor dem API-Neustart neu.
+
 Die Live-Updates schließen die **VPS**-Auswahl in der Sidebar beim Umschalten zwischen Hosts nicht mehr.
 
 Live-Aktualisierungen erneuern jetzt nur noch die tatsächlich geänderten Statusbereiche. Beim Tippen in Add-/Edit-Formularen bleibt der Cursor daher im Feld, und geöffnete Passwort-Augen bleiben offen, während neue Monitor- oder Fortschrittsdaten eintreffen.

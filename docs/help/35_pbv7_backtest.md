@@ -180,6 +180,8 @@ Switching from the Config editor to Results, Queue, Archive, Legacy, or Refine a
 | **🔄 Backtest** | Re-run selected results as new backtests (opens date/balance/exchange modal) |
 | **▶ Add to Run** | Create a live run from the selected config |
 | **📈 Compare** | Add selected results to the comparison view |
+| **🗄 Add to Archive** | Export selected results to **My Archive**; PBGui copies the batch and updates only its manifest entries instead of rescanning the complete archive |
+| **⬆ Git Push** | Appears after **My Archive** has local unpushed changes, so newly archived results can be pushed without opening the Archive panel |
 | **🔍 Strategy Explorer** | Open exactly one selected result in its owning PB7 or PB8 Strategy Explorer; PB8 uses an authenticated opaque draft and retains local stored-fill provenance for Compare |
 | **🧬 Optimize from Result** | Open the Optimize editor directly with the selected result as draft and `Starting Seeds = self` |
 | **🗑 Delete Selected** | Delete selected results from disk |

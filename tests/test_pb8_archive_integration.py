@@ -121,7 +121,7 @@ def test_v8_add_result_accepts_only_its_managed_root(tmp_path: Path, monkeypatch
     monkeypatch.setattr(backtest_v8, "_results_root", lambda: results_root)
     monkeypatch.setattr(backtest_v7, "maybe_migrate_own_archive", lambda *_args, **_kwargs: {"status": {"status": "current"}})
     monkeypatch.setattr(backtest_v7, "copy_backtest_result_to_archive", lambda source, _root: copied.append(source) or {"ok": True, "relative_path": "v8"})
-    monkeypatch.setattr(backtest_v7, "rebuild_archive_manifest", lambda _root: {"schema_version": 1, "items": []})
+    monkeypatch.setattr(backtest_v7, "update_archive_manifest_results", lambda _root, _copied: {"schema_version": 1, "items": []})
     monkeypatch.setattr(backtest_v7, "_log", lambda *_args, **_kwargs: None)
 
     response = backtest_v7._add_config_to_archive_sync("mine", str(result), "v8")

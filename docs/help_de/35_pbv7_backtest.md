@@ -180,6 +180,8 @@ Beim Wechsel vom Config-Editor zu Results, Queue, Archive, Legacy oder Refine wi
 | **🔄 Backtest** | Ausgewählte Ergebnisse als neue Backtests neu ausführen (öffnet Datums-/Balance-/Exchange-Modal) |
 | **▶ Add to Run** | Live-Run aus der ausgewählten Config erstellen |
 | **📈 Compare** | Ausgewählte Ergebnisse zur Vergleichsansicht hinzufügen |
+| **🗄 Add to Archive** | Ausgewaehlte Ergebnisse nach **My Archive** exportieren; PBGui kopiert den Batch und aktualisiert nur dessen Manifest-Eintraege, statt das komplette Archiv erneut zu scannen |
+| **⬆ Git Push** | Erscheint bei lokalen, noch nicht gepushten Aenderungen in **My Archive**, damit neue Archiv-Results ohne Wechsel ins Archive-Panel gepusht werden koennen |
 | **🔍 Strategy Explorer** | Genau ein ausgewaehltes Result im zugehoerigen PB7- oder PB8-Strategy-Explorer oeffnen; PB8 verwendet einen authentifizierten opaken Draft und behaelt lokale Stored-Fill-Provenance fuer Compare |
 | **🧬 Optimize from Result** | Den Optimize-Editor direkt mit dem ausgewählten Ergebnis als Draft und `Starting Seeds = self` öffnen |
 | **🗑 Delete Selected** | Ausgewählte Ergebnisse von Disk löschen |

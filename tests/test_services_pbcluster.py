@@ -249,6 +249,7 @@ def test_root_restart_orders_stale_daemons_before_api(monkeypatch) -> None:
 
     monkeypatch.setattr(PBApiServer.subprocess, "run", fake_run)
     ok, output = PBApiServer._queue_current_api_systemd_restart([
+        "pbgui-vps-monitor.service",
         "pbgui-pbrun.service",
         "pbgui-pbdata.service",
     ])
@@ -256,6 +257,7 @@ def test_root_restart_orders_stale_daemons_before_api(monkeypatch) -> None:
     assert ok is True
     assert output == "queued"
     script = calls[0][-1]
+    assert script.index("restart pbgui-vps-monitor.service") < script.index("restart pbgui-pbrun.service")
     assert script.index("restart pbgui-pbrun.service") < script.index("restart pbgui-pbdata.service")
     assert script.index("restart pbgui-pbdata.service") < script.index("restart pbgui-api.service")
 

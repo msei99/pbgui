@@ -110,6 +110,32 @@ def test_manifest_rejects_non_dict_items_and_symlinks(tmp_path: Path) -> None:
     assert helpers.load_archive_manifest(archive) is None
 
 
+def test_manifest_result_update_avoids_full_archive_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Adding one result should preserve existing entries without rescanning their directories."""
+    archive = tmp_path / "archive"
+    existing_source = make_result(tmp_path / "existing-source", "existing")
+    existing = helpers.copy_backtest_result_to_archive(existing_source, archive)
+    manifest = helpers.rebuild_archive_manifest(archive)
+    manifest["items"][0]["score"] = {"version": 2, "value": 7.5}
+    helpers.write_archive_json(helpers.archive_manifest_path(archive), manifest, archive)
+    new_source = make_result(tmp_path / "new-source", "new")
+    copied = helpers.copy_backtest_result_to_archive(new_source, archive)
+
+    monkeypatch.setattr(
+        helpers,
+        "list_archive_backtest_results",
+        lambda _root: (_ for _ in ()).throw(AssertionError("full result scan must not run")),
+    )
+    updated = helpers.update_archive_manifest_results(archive, [copied])
+
+    backtests = [item for item in updated["items"] if item.get("type") == "backtest_result"]
+    assert len(backtests) == 2
+    by_path = {item["path"]: item for item in backtests}
+    assert by_path[existing["relative_path"]]["score"] == {"version": 2, "value": 7.5}
+    assert by_path[copied["relative_path"]]["fingerprint"] == copied["meta"]["fingerprint"]
+    assert by_path[copied["relative_path"]]["score"] == {}
+
+
 @pytest.mark.parametrize("kind", ["root", "file", "directory"])
 def test_copy_rejects_all_source_symlinks(kind: str, tmp_path: Path) -> None:
     """Backtest copying rejects source roots, files, and nested directory symlinks."""

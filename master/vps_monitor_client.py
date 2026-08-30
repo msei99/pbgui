@@ -282,6 +282,7 @@ class VPSMonitorProxy:
         self.revision = 0
         self.available = False
         self.upstream_releases: dict[str, Any] = {}
+        self.upstream_release_capability: bool | None = None
         self._alert_settings: dict[str, Any] = {}
         self._alerts_cache = {"items": [], "history": [], "summary": self._empty_alert_summary()}
         self._debug_logging_value = False
@@ -347,6 +348,7 @@ class VPSMonitorProxy:
             self.available = True
             self.pool.set_available(True)
             self.store.monitor_available = True
+            self.upstream_release_capability = "upstream_releases" in state
             if not changed:
                 return True
             store = state.get("store")

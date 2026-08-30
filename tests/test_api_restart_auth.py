@@ -2,6 +2,7 @@
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -81,6 +82,7 @@ def test_runtime_service_restart_state_detects_only_active_stale_daemons(monkeyp
         {"pid": 12, "create_time": 3.0, "service": "Market Data worker"},
     ]
     monkeypatch.setattr(PBApiServer, "_read_serial", lambda: 2052)
+    monkeypatch.setattr(PBApiServer, "_vps_monitor", None)
     monkeypatch.setattr(credential_process_registry, "running_relevant_processes", lambda _root: processes)
     monkeypatch.setattr(
         credential_process_registry,
@@ -163,12 +165,39 @@ def test_shared_nav_restarts_all_reported_services_and_waits_for_serials() -> No
     assert "fetch(apiBase + '/api/server-status'" in source
 
 
-def test_ordinary_api_restart_never_targets_persistent_vps_monitor() -> None:
-    """The monitor daemon has an explicit lifecycle separate from API restart."""
+def test_persistent_vps_monitor_is_an_allowlisted_managed_restart_target() -> None:
+    """A version-skewed monitor can join a coordinated restart without broad unit access."""
 
     units = {str(item["unit"]) for item in PBApiServer._RUNTIME_SYSTEMD_SERVICES}
 
-    assert "pbgui-vps-monitor.service" not in units
+    assert "pbgui-vps-monitor.service" in units
+
+
+def test_missing_release_capability_marks_only_persistent_monitor_stale(monkeypatch) -> None:
+    """An old daemon is restartable after Git pull while an unpolled proxy remains neutral."""
+    monkeypatch.setattr(PBApiServer, "_read_serial", lambda: 2052)
+    monkeypatch.setattr(credential_process_registry, "running_relevant_processes", lambda _root: [])
+    monkeypatch.setattr(
+        credential_process_registry,
+        "process_barrier_readiness",
+        lambda _root, processes: {"services": []},
+    )
+    monkeypatch.setattr(
+        PBApiServer,
+        "_vps_monitor",
+        SimpleNamespace(upstream_release_capability=False),
+    )
+
+    stale = PBApiServer._runtime_service_restart_state()["stale_services"]
+
+    assert stale == [{
+        "service": "VPSMonitor",
+        "label": "VPS Monitor",
+        "unit": "pbgui-vps-monitor.service",
+        "running_serial": "legacy",
+        "current_serial": "2052",
+        "reason": "upstream release capability missing",
+    }]
 
 
 def test_blocked_restart_releases_master_update_reservation(monkeypatch) -> None:

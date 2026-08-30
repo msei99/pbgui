@@ -70,6 +70,7 @@ from api.archive_helpers import (
     score_archive_results,
     update_archive_readme,
     update_archive_scores_and_readme,
+    update_archive_manifest_results,
     utc_now_iso,
     write_archive_json,
     write_optimize_meta,
@@ -4506,6 +4507,23 @@ async def add_config_to_archive(name: str, body: dict,
                                 session: SessionToken = Depends(require_auth)):
     """Copy a result directory into an archive using the versioned layout."""
     _require_own_archive(name, "Adding backtest results")
+    batch = (body or {}).get("results")
+    if batch is not None:
+        if not isinstance(batch, list) or not batch or len(batch) > 100:
+            raise HTTPException(422, "results must contain between 1 and 100 items")
+        sources: list[tuple[str, str | None]] = []
+        for item in batch:
+            if not isinstance(item, dict):
+                raise HTTPException(422, "Each result must be an object")
+            source_path = str(item.get("source_path") or "").strip()
+            if not source_path:
+                raise HTTPException(400, "source_path is required for every result")
+            declared_version = _normalize_archive_version(
+                item.get("backtest_version") or item.get("version")
+            )
+            sources.append((source_path, declared_version))
+        return await asyncio.to_thread(_add_configs_to_archive_sync, name, sources)
+
     source_path = body.get("source_path", "")
     if not source_path:
         raise HTTPException(400, "source_path is required")
@@ -4523,20 +4541,48 @@ def _add_config_to_archive_sync(
     declared_version: str | None = None,
 ) -> dict[str, Any]:
     """Synchronous result archive copy used from a worker thread."""
+    batch = _add_configs_to_archive_sync(name, [(source_path, declared_version)])
+    copied = batch["results"][0]
+    copied["migration_status"] = batch["migration_status"]
+    copied["manifest"] = batch["manifest"]
+    return copied
+
+
+def _add_configs_to_archive_sync(
+    name: str,
+    sources: list[tuple[str, str | None]],
+) -> dict[str, Any]:
+    """Copy multiple results with one migration check and incremental manifest update."""
     _validate_name(name)
     candidate = _archives_dir() / name
     with archive_transaction(candidate):
         archive_dir = _require_own_archive(name, "Adding backtest results")
-        src, backtest_version = _resolve_managed_backtest_result(source_path, declared_version)
-        _log(SERVICE, f"Archiving backtest result {src} to archive {name}", level="INFO")
-        migration = maybe_migrate_own_archive(name, archive_dir, _own_archive_name())
-        copied = copy_backtest_result_to_archive(src, archive_dir)
-        copied["backtest_version"] = backtest_version
-        copied["migration_status"] = migration.get("status") or archive_migration_status(archive_dir)
+        if load_archive_manifest(archive_dir) is None:
+            migration = maybe_migrate_own_archive(name, archive_dir, _own_archive_name())
+        else:
+            migration = {
+                "ran": False,
+                "reason": "valid_manifest",
+                "status": archive_migration_status(archive_dir, fast=True),
+            }
+        copied_results = []
+        for source_path, declared_version in sources:
+            src, backtest_version = _resolve_managed_backtest_result(source_path, declared_version)
+            _log(SERVICE, f"Archiving backtest result {src} to archive {name}", level="INFO")
+            copied = copy_backtest_result_to_archive(src, archive_dir)
+            copied["backtest_version"] = backtest_version
+            copied_results.append(copied)
+            _log(SERVICE, f"Archived backtest result to archive {name}: {copied.get('relative_path', '')}", level="INFO")
+        migration_status = migration.get("status") or archive_migration_status(archive_dir)
         _invalidate_archive_cache(name)
-        copied["manifest"] = rebuild_archive_manifest(archive_dir)
-        _log(SERVICE, f"Archived backtest result to archive {name}: {copied.get('relative_path', '')}", level="INFO")
-        return copied
+        manifest = update_archive_manifest_results(archive_dir, copied_results)
+        return {
+            "ok": True,
+            "count": len(copied_results),
+            "results": copied_results,
+            "migration_status": migration_status,
+            "manifest": manifest,
+        }
 
 
 @router.post("/archives/{name}/migrate")

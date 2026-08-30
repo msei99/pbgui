@@ -300,13 +300,51 @@ def test_add_config_to_archive_uses_worker_thread(tmp_path, monkeypatch):
     assert calls == [(backtest_v7._add_config_to_archive_sync, ("demo_archive", "/tmp/result"))]
 
 
+def test_add_configs_to_archive_batches_worker_and_manifest_work(tmp_path, monkeypatch):
+    """Multiple selected results should share one worker call and one manifest update."""
+
+    calls = []
+
+    async def fake_to_thread(fn, *args):
+        calls.append((fn, args))
+        return {"ok": True, "count": 2, "results": []}
+
+    archives_root = tmp_path / "archives"
+    (archives_root / "demo_archive").mkdir(parents=True)
+    monkeypatch.setattr(backtest_v7, "_archives_dir", lambda: archives_root)
+    monkeypatch.setattr(backtest_v7, "_own_archive_name", lambda: "demo_archive")
+    monkeypatch.setattr(backtest_v7.asyncio, "to_thread", fake_to_thread)
+
+    result = asyncio.run(
+        backtest_v7.add_config_to_archive(
+            "demo_archive",
+            {
+                "results": [
+                    {"source_path": "/tmp/first", "backtest_version": "v8"},
+                    {"source_path": "/tmp/second", "backtest_version": "v7"},
+                ]
+            },
+            session=None,
+        )
+    )
+
+    assert result["count"] == 2
+    assert calls == [
+        (
+            backtest_v7._add_configs_to_archive_sync,
+            ("demo_archive", [("/tmp/first", "v8"), ("/tmp/second", "v7")]),
+        )
+    ]
+
+
 def test_add_config_archive_workflow_holds_one_outer_transaction(tmp_path, monkeypatch):
     """Migration, copy, status, and manifest generation share one archive transaction."""
     archive = tmp_path / "archives" / "mine"
-    source = tmp_path / "results" / "run"
+    sources = [tmp_path / "results" / "run-1", tmp_path / "results" / "run-2"]
     archive.mkdir(parents=True)
-    source.mkdir(parents=True)
-    state = {"active": False, "entries": 0}
+    for source in sources:
+        source.mkdir(parents=True)
+    state = {"active": False, "entries": 0, "copies": 0, "manifests": 0, "migrations": 0}
 
     class Transaction:
         """Track the outer archive transaction used by the workflow."""
@@ -323,6 +361,22 @@ def test_add_config_archive_workflow_holds_one_outer_transaction(tmp_path, monke
         assert state["active"] is True
         return value
 
+    def migrate(*_args, **_kwargs):
+        """Count the one shared migration check."""
+        state["migrations"] += 1
+        return require_active({"status": {"status": "current"}})
+
+    def copy_result(*_args):
+        """Count each result copied under the shared transaction."""
+        state["copies"] += 1
+        return require_active({"ok": True, "relative_path": f"result-{state['copies']}"})
+
+    def update_manifest(_root, copied_results):
+        """Count the one shared incremental manifest update."""
+        state["manifests"] += 1
+        assert len(copied_results) == 2
+        return require_active({"items": []})
+
     monkeypatch.setattr(backtest_v7, "_require_own_archive", lambda *_args: archive)
     monkeypatch.setattr(
         backtest_v7,
@@ -333,22 +387,28 @@ def test_add_config_archive_workflow_holds_one_outer_transaction(tmp_path, monke
     monkeypatch.setattr(
         backtest_v7,
         "maybe_migrate_own_archive",
-        lambda *_args, **_kwargs: require_active({"status": {"status": "current"}}),
+        migrate,
     )
-    monkeypatch.setattr(
-        backtest_v7,
-        "copy_backtest_result_to_archive",
-        lambda *_args: require_active({"ok": True, "relative_path": "result"}),
-    )
+    monkeypatch.setattr(backtest_v7, "copy_backtest_result_to_archive", copy_result)
     monkeypatch.setattr(backtest_v7, "archive_migration_status", lambda _root: require_active({"status": "current"}))
-    monkeypatch.setattr(backtest_v7, "rebuild_archive_manifest", lambda _root: require_active({"items": []}))
+    monkeypatch.setattr(backtest_v7, "update_archive_manifest_results", update_manifest)
     monkeypatch.setattr(backtest_v7, "_invalidate_archive_cache", lambda _name: require_active(None))
     monkeypatch.setattr(backtest_v7, "_log", lambda *_args, **_kwargs: None)
 
-    response = backtest_v7._add_config_to_archive_sync("mine", str(source))
+    response = backtest_v7._add_configs_to_archive_sync(
+        "mine",
+        [(str(sources[0]), "v8"), (str(sources[1]), "v8")],
+    )
 
+    assert response["count"] == 2
     assert response["manifest"] == {"items": []}
-    assert state == {"active": False, "entries": 1}
+    assert state == {
+        "active": False,
+        "entries": 1,
+        "copies": 2,
+        "manifests": 1,
+        "migrations": 1,
+    }
 
 
 def test_delete_archive_waits_for_archive_transaction(tmp_path, monkeypatch):

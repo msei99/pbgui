@@ -141,6 +141,7 @@ _API_SYSTEMD_UNIT = "pbgui-api.service"
 _VPS_MONITOR_SYSTEMD_UNIT = "pbgui-vps-monitor.service"
 _SYSTEMD_RESTART_WATCHDOG_SECONDS = 300
 _RUNTIME_SYSTEMD_SERVICES = (
+    {"service": "VPSMonitor", "label": "VPS Monitor", "unit": _VPS_MONITOR_SYSTEMD_UNIT},
     {"service": "PBCluster", "label": "PBCluster", "unit": "pbgui-pbcluster.service"},
     {"service": "PBRun", "label": "PBRun", "unit": "pbgui-pbrun.service"},
     {"service": "PBData", "label": "PBData", "unit": "pbgui-pbdata.service"},
@@ -191,6 +192,8 @@ def _runtime_service_restart_state() -> dict:
     stale_services = []
     for configured in _RUNTIME_SYSTEMD_SERVICES:
         service = str(configured["service"])
+        if service == "VPSMonitor":
+            continue
         if service not in active_services:
             continue
         record = ready_services.get(service) or {}
@@ -202,6 +205,18 @@ def _runtime_service_restart_state() -> dict:
             "running_serial": running_serial,
             "current_serial": current_serial,
             "reason": "code serial not reported" if not running_serial else "outdated code serial",
+        })
+    monitor = _vps_monitor
+    if (
+        getattr(monitor, "upstream_release_capability", None) is False
+        and not any(item.get("service") == "VPSMonitor" for item in stale_services)
+    ):
+        configured = _RUNTIME_SYSTEMD_SERVICES[0]
+        stale_services.insert(0, {
+            **configured,
+            "running_serial": "legacy",
+            "current_serial": current_serial,
+            "reason": "upstream release capability missing",
         })
     return {
         "current_serial": current_serial,

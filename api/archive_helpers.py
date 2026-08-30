@@ -1945,22 +1945,7 @@ def build_archive_manifest(archive_root: Path, scored_results: list[dict] | None
     items = []
     results = scored_results if scored_results is not None else score_archive_results(list_archive_backtest_results(archive_root))
     for result in results:
-        result_path = Path(str(result.get("path") or ""))
-        items.append({
-            "type": "backtest_result",
-            "name": result.get("config_name", ""),
-            "config_version": result.get("config_version", result.get("pb7_config_version", "")),
-            "config_family": result.get("config_family", "pb7"),
-            "backtest_version": result.get("backtest_version", "v7"),
-            "pb7_config_version": result.get("pb7_config_version", ""),
-            "pbgui_version": result.get("pbgui_version", ""),
-            "path": result.get("display_name", ""),
-            "fingerprint": directory_fingerprint(result_path) if result_path.exists() else "",
-            "modified": result.get("modified", ""),
-            "result_name": result.get("result_name", ""),
-            "exchange_dir": result.get("exchange_dir", ""),
-            "score": result.get("pbgui_score", {}),
-        })
+        items.append(_backtest_manifest_item(result))
     for config in list_archive_optimize_configs(archive_root):
         items.append({
             "type": "optimize_config",
@@ -1979,12 +1964,84 @@ def build_archive_manifest(archive_root: Path, scored_results: list[dict] | None
     return {"schema_version": 1, "generated_at": utc_now_iso(), "items": items}
 
 
+def _backtest_manifest_item(
+    result: dict,
+    *,
+    fingerprint: str | None = None,
+    score: dict | None = None,
+) -> dict:
+    """Build one backtest manifest entry from a validated result summary."""
+    result_path = Path(str(result.get("path") or ""))
+    return {
+        "type": "backtest_result",
+        "name": result.get("config_name", ""),
+        "config_version": result.get("config_version", result.get("pb7_config_version", "")),
+        "config_family": result.get("config_family", "pb7"),
+        "backtest_version": result.get("backtest_version", "v7"),
+        "pb7_config_version": result.get("pb7_config_version", ""),
+        "pbgui_version": result.get("pbgui_version", ""),
+        "path": result.get("display_name", ""),
+        "fingerprint": (
+            fingerprint
+            if fingerprint is not None
+            else directory_fingerprint(result_path) if result_path.exists() else ""
+        ),
+        "modified": result.get("modified", ""),
+        "result_name": result.get("result_name", ""),
+        "exchange_dir": result.get("exchange_dir", ""),
+        "score": result.get("pbgui_score", {}) if score is None else score,
+    }
+
+
 def rebuild_archive_manifest(archive_root: Path) -> dict:
     """Rebuild and atomically write the archive manifest."""
     with archive_transaction(archive_root):
         manifest = build_archive_manifest(archive_root)
         _atomic_write_archive_json(archive_manifest_path(archive_root), manifest, archive_root)
         return manifest
+
+
+def update_archive_manifest_results(archive_root: Path, copied_results: list[dict]) -> dict:
+    """Update copied backtest entries without rescanning an otherwise valid archive."""
+    with archive_transaction(archive_root):
+        manifest = load_archive_manifest(archive_root)
+        if manifest is None:
+            return rebuild_archive_manifest(archive_root)
+
+        items = [dict(item) for item in manifest["items"]]
+        positions = {
+            (str(item.get("type") or ""), str(item.get("path") or "")): index
+            for index, item in enumerate(items)
+        }
+        for copied in copied_results:
+            result_path = _validate_archive_path(
+                Path(str(copied.get("path") or "")),
+                archive_root,
+                require_exists=True,
+            )
+            summary = summarize_backtest_result(result_path, archive_root)
+            relative_path = str(summary.get("display_name") or "")
+            key = ("backtest_result", relative_path)
+            previous = items[positions[key]] if key in positions else {}
+            fingerprint = str(((copied.get("meta") or {}).get("fingerprint") or ""))
+            if not re.fullmatch(r"[0-9a-f]{8}", fingerprint):
+                fingerprint = directory_fingerprint(result_path)
+            previous_score = (
+                previous.get("score", {})
+                if previous.get("fingerprint") == fingerprint and isinstance(previous.get("score"), dict)
+                else {}
+            )
+            item = _backtest_manifest_item(summary, fingerprint=fingerprint, score=previous_score)
+            if key in positions:
+                items[positions[key]] = item
+            else:
+                positions[key] = len(items)
+                items.append(item)
+
+        items.sort(key=lambda item: (str(item.get("type") or ""), str(item.get("path") or "")))
+        updated = {"schema_version": 1, "generated_at": utc_now_iso(), "items": items}
+        _atomic_write_archive_json(archive_manifest_path(archive_root), updated, archive_root)
+        return updated
 
 
 def update_archive_scores_and_readme(archive_root: Path) -> dict:

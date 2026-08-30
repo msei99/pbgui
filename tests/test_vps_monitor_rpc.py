@@ -369,6 +369,7 @@ def test_proxy_hydrates_system_metrics_only_for_new_revision() -> None:
         assert proxy.enabled_hosts == {"vps-1"}
         assert proxy._debug_logging is True
         assert proxy.get_upstream_release_status()["repositories"]["pb7"]["target_commit"] == "b" * 40
+        assert proxy.upstream_release_capability is True
         proxy.store.changed.clear()
         state["store"]["system"]["vps-1"]["cpu"] = 99.0
         assert await proxy._poll_once() is True
@@ -380,6 +381,23 @@ def test_proxy_hydrates_system_metrics_only_for_new_revision() -> None:
         assert proxy.store.changed.is_set() is True
 
     asyncio.run(scenario())
+
+
+def test_proxy_marks_legacy_daemon_without_release_snapshot_capability() -> None:
+    """A valid old daemon state is distinguishable from a temporary RPC outage."""
+    state = {
+        "boot_id": "legacy-boot",
+        "revision": 1,
+        "enabled_hosts": [],
+        "alert_settings": {},
+        "pool": {},
+        "store": {},
+    }
+    proxy = VPSMonitorProxy(client=StateClient(state))
+
+    assert asyncio.run(proxy._poll_once()) is True
+    assert proxy.available is True
+    assert proxy.upstream_release_capability is False
 
 
 def test_daemon_exposes_and_refreshes_upstream_release_snapshot() -> None:
