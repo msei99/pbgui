@@ -304,6 +304,8 @@ def test_pb8_runtime_info_keeps_installed_runtime_visible_when_update_marker_blo
 def test_verified_detached_pb8_upstream_is_labelled_master() -> None:
     """The hardened detached checkout should not be presented as an unknown branch."""
     assert service_mod._pb8_branch_label("unknown", "✅") == "master"
+    assert service_mod._pb8_branch_label("HEAD", "✅") == "master"
+    assert service_mod._pb8_branch_label("HEAD", "❌ abcdef0") == "unknown"
     assert service_mod._pb8_branch_label("unknown", "❌ v8.1.0 (abcdef0)") == "unknown"
     assert service_mod._pb8_branch_label("feature", "✅") == "feature"
 
@@ -313,6 +315,7 @@ def test_master_pb8_branch_state_exposes_runtime_remotes_and_history(monkeypatch
     service = object.__new__(VPSManagerService)
     service._pb8_branches = {"feature": [{"full": "b" * 40}]}
     service._build_pb8_github_status = lambda _commit: "❌ different"
+    service._get_local_host_meta = lambda: {"pb8b": "feature", "pb8c": "a" * 40}
     monkeypatch.setattr(service_mod, "configured_pb8dir", lambda: "/runtime/pb8")
     monkeypatch.setattr(service_mod, "configured_pb8venv", lambda: "/runtime/venv_pb8/bin/python")
     monkeypatch.setattr(

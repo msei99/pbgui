@@ -41,9 +41,9 @@ from master.cluster_state import ClusterStateError, credential_lifecycle_status,
 from MonitorConfig import MonitorConfig
 from PBCoinData import CoinData
 from pb7_guard import PB7_PINNED_COMMIT
-from pb7_release import build_local_pb7_release_info, get_current_pb7_status, load_more_pb7_commits, load_pb7_branch_history, read_local_pb7_version
-from pbgui_release import build_local_pbgui_release_info, load_more_pbgui_commits, load_pbgui_remote_branch_commit
-from pbgui_purefunc import get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, load_ini_section, pb7dir as configured_pb7dir, pb8dir as configured_pb8dir, pb8venv as configured_pb8venv, save_ini, save_ini_section
+from pb7_release import get_current_pb7_status, load_more_pb7_commits, read_local_pb7_version
+from pbgui_release import load_more_pbgui_commits
+from pbgui_purefunc import PBGUI_VERSION, get_git_branch_remote, get_git_branch_remotes, get_git_remote_url, list_git_remotes, list_remote_git_branch_commits, list_remote_git_branches, load_ini, load_ini_section, pb7dir as configured_pb7dir, pb8dir as configured_pb8dir, pb8venv as configured_pb8venv, save_ini, save_ini_section
 from vps_manager_core import PBGDIR, VPS, VPSManager, _install_dir_from_remote_pbgui_dir, _strict_ssh_client, _validate_vps_hostname, strip_ansi
 from vps_inventory_store import delete_inventory_path
 
@@ -71,8 +71,6 @@ SWAP_OPTIONS = ["0", "1G", "1.5G", "2G", "2.5G", "3G", "4G", "5G", "6G", "8G"]
 INIT_METHODS = ["root", "password", "private_key"]
 SESSION_SECRET_TTL_SECONDS = 15 * 60
 CLUSTER_IMPORT_JOB_TTL_SECONDS = 30 * 60
-LOCAL_RELEASE_REFRESH_SECONDS = 60 * 60
-PBGUI_RELEASE_HEAD_CHECK_SECONDS = 60
 MONITOR_AGENT_SCHEMA_VERSION = 1
 MONITOR_AGENT_LIVE_STALE_SECONDS = 15.0
 MONITOR_AGENT_COLLECTOR_STALE_SECONDS = 30.0
@@ -132,6 +130,8 @@ def _pb7_branch_label(branch: Any, commit: Any) -> str:
 def _pb8_branch_label(branch: Any, github_status: Any) -> str:
     """Label the verified detached PB8 upstream checkout as master."""
     value = str(branch or "unknown")
+    if value == "HEAD":
+        value = "unknown"
     if value == "unknown" and str(github_status or "").startswith("✅"):
         return "master"
     return value
@@ -1825,14 +1825,9 @@ class VPSManagerService:
         self.vpsmanager = VPSManager()
         self.coindata: CoinData | None = None
         self.monitor_config = MonitorConfig()
-        self._first_refresh_done = False
         self._pbgui_release: dict[str, Any] = {}
-        self._pbgui_release_ts = 0
-        self._pbgui_release_head_check_ts = 0
         self._pb7_release: dict[str, Any] = {}
-        self._pb7_release_ts = 0
         self._pb8_branches: dict[str, list[dict[str, Any]]] = {}
-        self._pb8_branches_ts = 0
         self._refresh_lock = threading.Lock()
         # Quick detail is pushed every second. Any status that requires a slower
         # validation step must reuse the last full-detail result instead of
@@ -2111,31 +2106,56 @@ class VPSManagerService:
     def _get_pbgui_release(self) -> dict[str, Any]:
         return self._pbgui_release or {}
 
-    def _refresh_pbgui_release(self) -> None:
-        self._pbgui_release = build_local_pbgui_release_info()
-        self._pbgui_release_ts = _now_ts()
-
-    def _refresh_pbgui_release_if_changed(self) -> None:
-        """Refresh full PBGui release metadata only when the tracked remote head changes."""
-        try:
-            release = self._get_pbgui_release()
-            branch = str(release.get("current_branch") or "")
-            remote_commit = load_pbgui_remote_branch_commit(branch)
-            if remote_commit and remote_commit != str(release.get("origin_commit") or ""):
-                self._refresh_pbgui_release()
-        finally:
-            self._pbgui_release_head_check_ts = _now_ts()
-
     def _get_pb7_release(self) -> dict[str, Any]:
         return self._pb7_release or {}
 
-    def _refresh_pb7_release(self, repo_dir: str | None) -> None:
-        self._pb7_release = build_local_pb7_release_info(repo_dir)
-        self._pb7_release_ts = _now_ts()
+    def _get_upstream_release_snapshot(self) -> dict[str, Any]:
+        """Return the VPSMonitor-owned release cache without probing Git."""
+        monitor = get_monitor()
+        if monitor is None or not hasattr(monitor, "get_upstream_release_status"):
+            return {}
+        try:
+            payload = monitor.get_upstream_release_status()
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
 
-    def _refresh_pb8_branches(self, repo_dir: str | None) -> None:
-        self._pb8_branches = load_pb7_branch_history(repo_dir)
-        self._pb8_branches_ts = _now_ts()
+    def _get_upstream_repository(self, name: str) -> dict[str, Any]:
+        repositories = self._get_upstream_release_snapshot().get("repositories")
+        if not isinstance(repositories, dict):
+            return {}
+        payload = repositories.get(name)
+        return payload if isinstance(payload, dict) else {}
+
+    def _build_cached_github_status(
+        self,
+        repository: str,
+        current_commit: str,
+        *,
+        current_branch: str = "",
+    ) -> str:
+        """Compare one installed checkout with the monitor's last-known heads."""
+        commit = str(current_commit or "").strip().lower()
+        if not commit:
+            return ""
+        release = self._get_upstream_repository(repository)
+        heads = release.get("heads") if isinstance(release.get("heads"), dict) else {}
+        branch = str(current_branch or "").strip()
+        default_branch = str(release.get("default_branch") or "").strip()
+        fallback_target = str(release.get("target_commit") or "").strip().lower()
+        if not fallback_target:
+            return "⚠️ upstream unavailable"
+        if (
+            branch not in {"", "unknown", "HEAD"}
+            and branch not in heads
+            and branch != default_branch
+        ):
+            return "⚠️ untracked branch"
+        target = str(heads.get(branch) or fallback_target).strip().lower()
+        state = str(release.get("state") or "").strip().lower()
+        if commit == target:
+            return "✅" if state == "ok" else "⚠️ upstream stale"
+        return f"❌ {_short_commit(target)}"
 
     def _read_local_agent_json(self, filename: str) -> tuple[dict[str, Any] | None, str]:
         """Read one local monitor-agent cache without executing system commands."""
@@ -2217,6 +2237,17 @@ class VPSManagerService:
 
     def _get_local_package_status(self) -> dict[str, Any]:
         return self._get_local_agent_contract()[0]
+
+    def _get_local_host_meta(self) -> dict[str, Any]:
+        """Return validated local host facts from the monitor-agent cache."""
+        payload, _error = self._read_local_agent_json("host_meta.json")
+        if not isinstance(payload, dict):
+            return {}
+        try:
+            _validate_monitor_agent_payload("host_meta.json", payload, now=time.time())
+        except MonitorAgentPayloadError:
+            return {}
+        return payload
 
     def _get_remote_agent_contract(self, host_state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         """Return normalized remote status from the monitor snapshot only."""
@@ -2398,35 +2429,10 @@ class VPSManagerService:
         try:
             self._sync_vps_inventory()
             self._refresh_completed_linux_updates()
-            now = _now_ts()
-            release_stale = (
-                now - min(
-                    int(self._pbgui_release_ts or 0),
-                    int(self._pb7_release_ts or 0),
-                    int(self._pb8_branches_ts or 0),
-                )
-            ) > LOCAL_RELEASE_REFRESH_SECONDS
-            if force or release_stale or not self._first_refresh_done:
-                try:
-                    self._refresh_pbgui_release()
-                    self._pbgui_release_head_check_ts = now
-                except Exception as exc:
-                    _log(SERVICE, f"refresh git origin failed: {exc}", level="WARNING")
-                try:
-                    self._refresh_pb7_release(_configured_pb7dir())
-                except Exception as exc:
-                    _log(SERVICE, f"refresh local commit data failed: {exc}", level="WARNING")
-                try:
-                    self._refresh_pb8_branches(configured_pb8dir())
-                except Exception as exc:
-                    _log(SERVICE, f"refresh PB8 branch data failed: {exc}", level="WARNING")
-            elif now - int(getattr(self, "_pbgui_release_head_check_ts", 0) or 0) > PBGUI_RELEASE_HEAD_CHECK_SECONDS:
-                try:
-                    self._refresh_pbgui_release_if_changed()
-                except Exception as exc:
-                    _log(SERVICE, f"checking PBGui update failed: {exc}", level="WARNING")
-
-            self._first_refresh_done = True
+            if force:
+                monitor = get_monitor()
+                if monitor is not None and hasattr(monitor, "request_upstream_release_refresh"):
+                    monitor.request_upstream_release_refresh()
         finally:
             lock.release()
 
@@ -3529,8 +3535,8 @@ class VPSManagerService:
             "status": self._build_master_status(coindata_ok),
             "branches": {
                 "pbgui": self._build_master_pbgui_branch_state(),
-                "pb7": self._build_master_pb7_branch_state(),
-                "pb8": self._build_master_pb8_branch_state(),
+                "pb7": self._build_master_pb7_branch_state(include_remote_details=True),
+                "pb8": self._build_master_pb8_branch_state(include_remote_details=True),
             },
             "monitor": master_monitor,
             "progress": self._build_master_progress(include_log=True),
@@ -3544,8 +3550,8 @@ class VPSManagerService:
             "status": self._build_master_status(self._master_coindata_ok_cache),
             "branches": {
                 "pbgui": self._build_master_pbgui_branch_state(),
-                "pb7": self._build_master_pb7_branch_state(),
-                "pb8": self._build_master_pb8_branch_state(),
+                "pb7": self._build_master_pb7_branch_state(include_remote_details=False),
+                "pb8": self._build_master_pb8_branch_state(include_remote_details=False),
             },
             "monitor": self._build_local_master_monitor_payload(refresh=False),
             "progress": self._build_master_progress(include_log=True),
@@ -3574,7 +3580,7 @@ class VPSManagerService:
             "config": self._build_vps_config(token, vps),
             "branches": {
                 "pbgui": self._build_vps_pbgui_branch_state(host_state),
-                "pb7": self._build_vps_pb7_branch_state(host_state, hostname),
+                "pb7": self._build_vps_pb7_branch_state(host_state, hostname, include_remote_details=not quick),
                 "pb8": self._build_vps_pb8_branch_state(host_state, hostname),
             },
             "monitor": monitor_payload,
@@ -3614,23 +3620,18 @@ class VPSManagerService:
         return rows
 
     def _build_master_overview_row(self) -> dict[str, Any]:
-        pbgui_release = self._get_pbgui_release()
-        pb7_release = dict(self._get_pb7_release())
-        pb8_info = _pb8_runtime_info(configured_pb8dir(), configured_pb8venv())
-        live_pb7_branch, live_pb7_commit = get_current_pb7_status(_configured_pb7dir())
-        if live_pb7_commit:
-            pb7_release["current_branch"] = live_pb7_branch
-            pb7_release["current_commit"] = live_pb7_commit
+        local_meta = self._get_local_host_meta()
         local_package_status, monitor_agent = self._get_local_agent_contract()
-        local_pbgui_python = f"{sys.version_info.major}.{sys.version_info.minor}"
-        local_pb7_python = _python_major_minor(load_ini("main", "pb7venv"))
+        local_pbgui_python = str(local_meta.get("pbgpy") or f"{sys.version_info.major}.{sys.version_info.minor}")
+        local_pb7_python = str(local_meta.get("pb7py") or "N/A")
         master_name = _local_master_name()
-        master_branch = str(pbgui_release.get("current_branch") or "unknown")
-        master_commit = str(pbgui_release.get("current_commit") or "")
-        master_pb7_branch = _pb7_branch_label(pb7_release.get("current_branch"), pb7_release.get("current_commit"))
-        master_pb7_commit = str(pb7_release.get("current_commit") or "")
-        master_pb8_github = self._build_pb8_github_status(str(pb8_info.get("commit") or ""))
-        master_pb8_branch = _pb8_branch_label(pb8_info.get("branch"), master_pb8_github)
+        master_branch = str(local_meta.get("pbgb") or "unknown")
+        master_commit = str(local_meta.get("pbgc") or "")
+        master_pb7_commit = str(local_meta.get("pb7c") or "")
+        master_pb7_branch = _pb7_branch_label(local_meta.get("pb7b"), master_pb7_commit)
+        master_pb8_commit = str(local_meta.get("pb8c") or "")
+        master_pb8_github = self._build_pb8_github_status(master_pb8_commit)
+        master_pb8_branch = _pb8_branch_label(local_meta.get("pb8b"), master_pb8_github)
         boot_ts = int(psutil.boot_time() or 0)
         return {
             "name": f"{master_name} (local)",
@@ -3648,20 +3649,20 @@ class VPSManagerService:
             "package_status": local_package_status,
             "monitor_agent": monitor_agent,
             "running_bots": "-",
-            "pbgui": f"{str(pbgui_release.get('version') or 'N/A')}{'' if local_pbgui_python in (None, '', 'N/A') else ' /' + str(local_pbgui_python)}",
+            "pbgui": f"{str(local_meta.get('pbgv') or PBGUI_VERSION)}{'' if local_pbgui_python in (None, '', 'N/A') else ' /' + str(local_pbgui_python)}",
             "pbgui_branch": f"{master_branch} ({_short_commit(master_commit)})",
             "pbgui_github": self._build_master_pbgui_github_status(master_branch, master_commit),
-            "pb7": f"{str(pb7_release.get('version') or 'N/A')}{'' if local_pb7_python in (None, '', 'N/A') else ' /' + str(local_pb7_python)}",
+            "pb7": f"{str(local_meta.get('pb7v') or 'N/A')}{'' if local_pb7_python in (None, '', 'N/A') else ' /' + str(local_pb7_python)}",
             "pb7_branch": f"{master_pb7_branch} ({_short_commit(master_pb7_commit)})",
             "pb7_github": self._build_master_pb7_github_status(master_pb7_branch, master_pb7_commit),
-            "pb7_installed": bool(live_pb7_commit and local_pb7_python not in (None, "", "N/A")),
-            "pb8": f"{str(pb8_info.get('version') or 'N/A')}{'' if pb8_info.get('python_version') in (None, '', 'N/A') else ' /' + str(pb8_info.get('python_version'))}",
-            "pb8_branch": f"{master_pb8_branch} ({_short_commit(pb8_info.get('commit'))})",
+            "pb7_installed": bool(master_pb7_commit and local_pb7_python not in (None, "", "N/A")),
+            "pb8": f"{str(local_meta.get('pb8v') or 'N/A')}{'' if local_meta.get('pb8py') in (None, '', 'N/A') else ' /' + str(local_meta.get('pb8py'))}",
+            "pb8_branch": f"{master_pb8_branch} ({_short_commit(master_pb8_commit)})",
             "pb8_github": master_pb8_github,
-            "pb8_installed": bool(pb8_info.get("installed")),
-            "pb8_runtime_ready": bool(pb8_info.get("runtime_ready")),
-            "pb8_runtime_blocked": bool(pb8_info.get("runtime_blocked")),
-            "pb8_runtime_reason": str(pb8_info.get("runtime_reason") or ""),
+            "pb8_installed": bool(local_meta.get("pb8installed", local_meta.get("pb8ready"))),
+            "pb8_runtime_ready": bool(local_meta.get("pb8ready")) and not bool(local_meta.get("pb8blocked")),
+            "pb8_runtime_blocked": bool(local_meta.get("pb8blocked")),
+            "pb8_runtime_reason": str(local_meta.get("pb8reason") or ""),
         }
 
     def _build_vps_overview_row(self,
@@ -3781,86 +3782,38 @@ class VPSManagerService:
         return row
 
     def _build_master_pbgui_github_status(self, current_branch: str, current_commit: str) -> str:
-        release_info = self._get_pbgui_release()
-        branches = release_info.get("branches") or {}
-        if current_branch != "unknown" and current_branch in branches and branches[current_branch]:
-            origin_commit = branches[current_branch][0]["full"]
-            if current_commit == origin_commit:
-                return "✅"
-            return f"❌ {str(release_info.get('version') or 'N/A')} ({_short_commit(origin_commit)})"
-        if current_branch == "main":
-            if str(release_info.get("version") or "N/A") == str(release_info.get("origin_version") or "N/A") and current_commit == str(release_info.get("origin_commit") or ""):
-                return "✅"
-            return f"❌ {str(release_info.get('origin_version') or 'N/A')} ({_short_commit(str(release_info.get('origin_commit') or ''))})"
-        return f"⚠️ {str(release_info.get('version') or 'N/A')}"
+        return self._build_cached_github_status(
+            "pbgui", current_commit, current_branch=current_branch
+        )
 
     def _build_master_pb7_github_status(self, current_branch: str, current_commit: str) -> str:
         if current_commit == PB7_PINNED_COMMIT:
             return "✅"
-        release_info = self._get_pb7_release()
-        branches = release_info.get("branches") or {}
-        if current_branch in branches and branches[current_branch]:
-            origin_commit = branches[current_branch][0]["full"]
-            if current_commit == origin_commit:
-                return "✅"
-            return f"❌ {str(release_info.get('version') or 'N/A')} ({_short_commit(origin_commit)})"
-        if current_branch == "master":
-            if str(release_info.get("version") or "N/A") == str(release_info.get("origin_version") or "N/A") and current_commit == str(release_info.get("origin_commit") or ""):
-                return "✅"
-            return f"❌ {str(release_info.get('origin_version') or 'N/A')} ({_short_commit(str(release_info.get('origin_commit') or ''))})"
-        return "⚠️ version"
+        return self._build_cached_github_status(
+            "pb7", current_commit, current_branch=current_branch
+        )
 
     def _build_remote_pbgui_github_status(self, host_state: dict[str, Any]) -> str:
         meta = self._host_meta(host_state)
         server_branch = str(meta.get("pbgb") or "unknown")
         server_commit = str(meta.get("pbgc") or "")
-        server_version = str(meta.get("pbgv") or "N/A")
-        release_info = self._get_pbgui_release()
-        branches = release_info.get("branches") or {}
-        if server_branch != "unknown" and server_branch in branches and branches[server_branch]:
-            origin_commit = branches[server_branch][0]["full"]
-            if server_commit == origin_commit:
-                return "✅"
-            target_version = str(release_info.get("origin_version") or release_info.get("version") or "N/A")
-            return f"❌ {target_version} ({_short_commit(origin_commit)})"
-        if server_branch == "main":
-            if server_version == str(release_info.get("origin_version") or "N/A") and server_commit == str(release_info.get("origin_commit") or ""):
-                return "✅"
-            return f"❌ {str(release_info.get('origin_version') or 'N/A')} ({_short_commit(str(release_info.get('origin_commit') or ''))})"
-        return f"⚠️ {server_version}"
+        return self._build_cached_github_status(
+            "pbgui", server_commit, current_branch=server_branch
+        )
 
     def _build_remote_pb7_github_status(self, host_state: dict[str, Any]) -> str:
         meta = self._host_meta(host_state)
         server_branch = str(meta.get("pb7b") or "unknown")
         server_commit = str(meta.get("pb7c") or "")
-        server_version = str(meta.get("pb7v") or "N/A")
         if server_commit == PB7_PINNED_COMMIT:
             return "✅"
-        release_info = self._get_pb7_release()
-        branches = release_info.get("branches") or {}
-        if server_branch != "unknown" and server_branch in branches and branches[server_branch]:
-            origin_commit = branches[server_branch][0]["full"]
-            if server_commit == origin_commit:
-                return "✅"
-            target_version = str(release_info.get("origin_version") or release_info.get("version") or "N/A")
-            return f"❌ {target_version} ({_short_commit(origin_commit)})"
-        if server_branch == "master":
-            if server_version == str(release_info.get("origin_version") or "N/A") and server_commit == str(release_info.get("origin_commit") or ""):
-                return "✅"
-            return f"❌ {str(release_info.get('origin_version') or 'N/A')} ({_short_commit(str(release_info.get('origin_commit') or ''))})"
-        return f"⚠️ {server_version}"
+        return self._build_cached_github_status(
+            "pb7", server_commit, current_branch=server_branch
+        )
 
     def _build_pb8_github_status(self, current_commit: str) -> str:
         """Compare one PB8 checkout with the latest upstream master commit."""
-        if not current_commit:
-            return ""
-        release_info = self._get_pb7_release()
-        origin_commit = str(release_info.get("origin_commit") or "")
-        if not origin_commit:
-            return "⚠️ upstream unavailable"
-        if current_commit == origin_commit:
-            return "✅"
-        return f"❌ {str(release_info.get('origin_version') or 'v8')} ({_short_commit(origin_commit)})"
+        return self._build_cached_github_status("pb8", current_commit, current_branch="master")
 
     def _build_master_status(self, coindata_ok: bool) -> dict[str, Any]:
         summary_row = self._build_master_overview_row()
@@ -4643,32 +4596,42 @@ class VPSManagerService:
         return payload
 
     def _build_master_pbgui_branch_state(self) -> dict[str, Any]:
+        local_meta = self._get_local_host_meta()
         release_info = self._get_pbgui_release()
-        current_branch = str(release_info.get("current_branch") or "unknown")
-        current_commit = str(release_info.get("current_commit") or "")
+        current_branch = str(local_meta.get("pbgb") or "unknown")
+        current_commit = str(local_meta.get("pbgc") or "")
         return {
             "current_branch": current_branch,
             "current_commit": current_commit,
             "branches": release_info.get("branches") or {},
         }
 
-    def _build_master_pb7_branch_state(self) -> dict[str, Any]:
+    def _build_master_pb7_branch_state(self, *, include_remote_details: bool = True) -> dict[str, Any]:
         repo_dir = _configured_pb7dir()
         release_info = self._get_pb7_release()
-        current_branch, current_commit = get_current_pb7_status(repo_dir)
-        if not current_commit:
-            current_branch = str(release_info.get("current_branch") or "unknown")
-            current_commit = str(release_info.get("current_commit") or "")
+        local_meta = self._get_local_host_meta()
+        current_branch = str(local_meta.get("pb7b") or "unknown")
+        current_commit = str(local_meta.get("pb7c") or "")
         current_branch = _pb7_branch_label(current_branch, current_commit)
         branches = release_info.get("branches") or {}
-        known_remotes = list_git_remotes(repo_dir) if repo_dir else []
+        known_remotes = list_git_remotes(repo_dir) if repo_dir and include_remote_details else []
         for opt in ("origin", "fork"):
             if opt not in known_remotes:
                 known_remotes.append(opt)
-        remote_urls = {name: _public_git_remote_url(repo_dir, name) for name in known_remotes if repo_dir}
-        tracking_remote_name = get_git_branch_remote(repo_dir, current_branch or "") if repo_dir else ""
-        branch_tracking_remotes = get_git_branch_remotes(repo_dir, list(branches.keys())) if repo_dir else {}
-        default_remote_name = tracking_remote_name if tracking_remote_name in known_remotes else ("fork" if "fork" in known_remotes else ("origin" if "origin" in known_remotes else (known_remotes[0] if known_remotes else "")))
+        remote_urls = {name: _public_git_remote_url(repo_dir, name) for name in known_remotes if repo_dir and include_remote_details}
+        remote_urls.setdefault(PB7_UPSTREAM_REMOTE_NAME, PB7_UPSTREAM_REMOTE_URL)
+        tracking_remote_name = get_git_branch_remote(repo_dir, current_branch or "") if repo_dir and include_remote_details else ""
+        branch_tracking_remotes = get_git_branch_remotes(repo_dir, list(branches.keys())) if repo_dir and include_remote_details else {}
+        if tracking_remote_name in known_remotes:
+            default_remote_name = tracking_remote_name
+        elif not include_remote_details and "origin" in known_remotes:
+            default_remote_name = "origin"
+        elif "fork" in known_remotes:
+            default_remote_name = "fork"
+        elif "origin" in known_remotes:
+            default_remote_name = "origin"
+        else:
+            default_remote_name = known_remotes[0] if known_remotes else ""
         return {
             "current_branch": current_branch,
             "current_commit": current_commit,
@@ -4681,22 +4644,23 @@ class VPSManagerService:
             "upstream_remote_url": PB7_UPSTREAM_REMOTE_URL,
         }
 
-    def _build_master_pb8_branch_state(self) -> dict[str, Any]:
+    def _build_master_pb8_branch_state(self, *, include_remote_details: bool = True) -> dict[str, Any]:
         repo_dir = configured_pb8dir()
-        pb8_info = _pb8_runtime_info(repo_dir, configured_pb8venv())
-        current_commit = str(pb8_info.get("commit") or "")
+        local_meta = self._get_local_host_meta()
+        current_commit = str(local_meta.get("pb8c") or "")
         current_branch = _pb8_branch_label(
-            pb8_info.get("branch"),
+            local_meta.get("pb8b"),
             self._build_pb8_github_status(current_commit),
         )
         branches = dict(self._pb8_branches or {})
-        known_remotes = list_git_remotes(repo_dir) if repo_dir else []
+        known_remotes = list_git_remotes(repo_dir) if repo_dir and include_remote_details else []
         for opt in ("origin", "fork"):
             if opt not in known_remotes:
                 known_remotes.append(opt)
-        remote_urls = {name: _public_git_remote_url(repo_dir, name) for name in known_remotes if repo_dir}
-        tracking_remote_name = get_git_branch_remote(repo_dir, current_branch or "") if repo_dir else ""
-        branch_tracking_remotes = get_git_branch_remotes(repo_dir, list(branches.keys())) if repo_dir else {}
+        remote_urls = {name: _public_git_remote_url(repo_dir, name) for name in known_remotes if repo_dir and include_remote_details}
+        remote_urls.setdefault(PB8_UPSTREAM_REMOTE_NAME, PB8_UPSTREAM_REMOTE_URL)
+        tracking_remote_name = get_git_branch_remote(repo_dir, current_branch or "") if repo_dir and include_remote_details else ""
+        branch_tracking_remotes = get_git_branch_remotes(repo_dir, list(branches.keys())) if repo_dir and include_remote_details else {}
         default_remote_name = tracking_remote_name if tracking_remote_name in known_remotes else ("origin" if "origin" in known_remotes else (known_remotes[0] if known_remotes else ""))
         return {
             "current_branch": current_branch,
@@ -4720,19 +4684,22 @@ class VPSManagerService:
 
     def _build_vps_pb7_branch_state(self,
                                     host_state: dict[str, Any],
-                                    hostname: str) -> dict[str, Any]:
+                                    hostname: str,
+                                    *,
+                                    include_remote_details: bool = True) -> dict[str, Any]:
         meta = self._host_meta(host_state)
         repo_dir = _configured_pb7dir()
         branches = self._get_pb7_release().get("branches") or {}
-        known_remotes = list_git_remotes(repo_dir) if repo_dir else []
+        known_remotes = list_git_remotes(repo_dir) if repo_dir and include_remote_details else []
         for opt in ("origin", "fork"):
             if opt not in known_remotes:
                 known_remotes.append(opt)
-        remote_urls = {name: _public_git_remote_url(repo_dir, name) for name in known_remotes if repo_dir}
+        remote_urls = {name: _public_git_remote_url(repo_dir, name) for name in known_remotes if repo_dir and include_remote_details}
+        remote_urls.setdefault(PB7_UPSTREAM_REMOTE_NAME, PB7_UPSTREAM_REMOTE_URL)
         current_commit = str(meta.get("pb7c") or "")
         current_branch = _pb7_branch_label(meta.get("pb7b"), current_commit)
-        tracking_remote_name = get_git_branch_remote(repo_dir, current_branch or "") if repo_dir else ""
-        branch_tracking_remotes = get_git_branch_remotes(repo_dir, list(branches.keys())) if repo_dir else {}
+        tracking_remote_name = get_git_branch_remote(repo_dir, current_branch or "") if repo_dir and include_remote_details else ""
+        branch_tracking_remotes = get_git_branch_remotes(repo_dir, list(branches.keys())) if repo_dir and include_remote_details else {}
         default_remote_name = tracking_remote_name if tracking_remote_name in known_remotes else ("origin" if "origin" in known_remotes else (known_remotes[0] if known_remotes else ""))
         return {
             "hostname": hostname,

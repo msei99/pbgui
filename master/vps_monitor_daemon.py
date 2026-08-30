@@ -210,6 +210,11 @@ class VPSMonitorRPCDaemon:
             "pool": pool,
             "enabled_hosts": sorted(self.monitor.enabled_hosts),
             "alert_settings": alert_settings,
+            "upstream_releases": (
+                self.monitor.get_upstream_release_status()
+                if hasattr(self.monitor, "get_upstream_release_status")
+                else {}
+            ),
             "boot_id": self.boot_id,
         }
         encoded = json.dumps(stable, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
@@ -260,6 +265,10 @@ class VPSMonitorRPCDaemon:
             return True
         if method == "host.refresh_package":
             return await self.monitor.refresh_package_status(require_string(params, "hostname"))
+        if method == "releases.refresh":
+            if hasattr(self.monitor, "request_upstream_release_refresh"):
+                self.monitor.request_upstream_release_refresh()
+            return True
         if method == "service.restart":
             return await self.monitor._restart_service(
                 require_string(params, "hostname"), require_string(params, "service")

@@ -1229,18 +1229,26 @@ def test_vps_status_reports_unknown_credential_capability_explicitly() -> None:
 
 
 def test_master_overview_row_is_online_without_remote_helper(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The local master overview row reflects the responding local API."""
+    """The local master overview uses monitor-agent facts without subprocess probes."""
     service = object.__new__(VPSManagerService)
-    service._get_pbgui_release = lambda: {"version": "v1.0", "current_branch": "main", "current_commit": "abcdef123"}
-    service._get_pb7_release = lambda: {"version": "v7.0", "current_branch": "master", "current_commit": "123abcdef"}
-    service._get_local_package_status = lambda: {"reboot": False, "upgrades": "0"}
+    service._get_local_host_meta = lambda: {
+        "pbgv": "v2.0", "pbgpy": "3.12", "pbgb": "main", "pbgc": "a" * 40,
+        "pb7v": "v7.0", "pb7py": "3.10", "pb7b": "master", "pb7c": "b" * 40,
+        "pb8v": "v8.1", "pb8py": "3.12", "pb8b": "HEAD", "pb8c": "c" * 40,
+        "pb8installed": True, "pb8ready": True, "pb8blocked": False,
+    }
+    service._get_local_agent_contract = lambda: ({"reboot_required": False, "available": True, "upgrades": 0}, {})
     service._build_master_pbgui_github_status = lambda branch, commit: ""
     service._build_master_pb7_github_status = lambda branch, commit: ""
+    service._build_pb8_github_status = lambda commit: ""
     monkeypatch.setattr(service_mod, "load_ini", lambda section, parameter: "")
+    monkeypatch.setattr(service_mod.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("master overview ran a subprocess"))
 
     row = service._build_master_overview_row()
 
     assert row["online"] is True
+    assert row["pb8"].startswith("v8.1")
+    assert row["pb7_installed"] is True
 
 
 def test_pinned_pb7_checkout_is_current_for_master_and_vps_status() -> None:
@@ -2660,24 +2668,18 @@ def test_vps_manager_quick_master_detail_never_runs_deep_monitor_collectors(monk
     assert payload["v7"] == []
 
 
-def test_vps_manager_refresh_throttles_release_refresh_without_package_probe() -> None:
-    """Repeated state pushes avoid direct probes while checking completed update runs."""
+def test_vps_manager_refresh_uses_cached_releases_without_git_probes() -> None:
+    """Repeated state pushes perform inventory work without release-network probes."""
     calls: list[str] = []
     service = object.__new__(VPSManagerService)
     service._refresh_lock = threading.Lock()
-    service._first_refresh_done = False
-    service._pbgui_release_ts = 0
-    service._pb7_release_ts = 0
-    service._pb8_branches_ts = 0
     service._sync_vps_inventory = lambda: calls.append("inventory")
-    service._refresh_pbgui_release = lambda: (calls.append("pbgui"), setattr(service, "_pbgui_release_ts", int(time.time())))
-    service._refresh_pb7_release = lambda repo: (calls.append("pb7"), setattr(service, "_pb7_release_ts", int(time.time())))
-    service._refresh_pb8_branches = lambda repo: (calls.append("pb8"), setattr(service, "_pb8_branches_ts", int(time.time())))
+    service._refresh_completed_linux_updates = lambda: calls.append("linux-cache")
 
     service.refresh()
     service.refresh()
 
-    assert calls == ["inventory", "pbgui", "pb7", "pb8", "inventory"]
+    assert calls == ["inventory", "linux-cache", "inventory", "linux-cache"]
     assert not hasattr(service, "_local_package_status_ts")
     assert not hasattr(service, "_refresh_local_package_status")
     source = Path("vps_manager_service.py").read_text(encoding="utf-8")
@@ -2686,24 +2688,21 @@ def test_vps_manager_refresh_throttles_release_refresh_without_package_probe() -
     assert "subprocess" not in refresh_body
 
 
-def test_vps_manager_refresh_checks_pbgui_remote_head_automatically() -> None:
-    """Live state refresh checks PBGui upstream between slower full release refreshes."""
+def test_forced_vps_manager_refresh_wakes_monitor_release_collector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manual refresh wakes the monitor owner without executing Git in the API."""
     calls: list[str] = []
-    now = int(time.time())
     service = object.__new__(VPSManagerService)
     service._refresh_lock = threading.Lock()
-    service._first_refresh_done = True
-    service._pbgui_release_ts = now
-    service._pb7_release_ts = now
-    service._pb8_branches_ts = now
-    service._pbgui_release_head_check_ts = 0
     service._sync_vps_inventory = lambda: calls.append("inventory")
     service._refresh_completed_linux_updates = lambda: None
-    service._refresh_pbgui_release_if_changed = lambda: calls.append("pbgui-head")
+    monitor = SimpleNamespace(request_upstream_release_refresh=lambda: calls.append("release-refresh"))
+    monkeypatch.setattr(service_mod, "get_monitor", lambda: monitor)
 
-    service.refresh()
+    service.refresh(force=True)
 
-    assert calls == ["inventory", "pbgui-head"]
+    assert calls == ["inventory", "release-refresh"]
 
 
 def test_completed_linux_update_forces_one_fresh_package_cache_read() -> None:

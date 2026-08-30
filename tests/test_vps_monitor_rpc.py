@@ -69,6 +69,10 @@ class FakeMonitor:
         self.started = 0
         self.stopped = 0
         self.calls: list[tuple[str, Any]] = []
+        self.release_status = {
+            "schema_version": 1,
+            "repositories": {"pb8": {"state": "ok", "target_commit": "a" * 40}},
+        }
 
     async def start(self) -> None:
         """Capture daemon startup."""
@@ -129,6 +133,14 @@ class FakeMonitor:
         """Capture package refresh."""
         self.calls.append(("package", hostname))
         return True
+
+    def get_upstream_release_status(self) -> dict[str, Any]:
+        """Return fake daemon-owned release state."""
+        return self.release_status
+
+    def request_upstream_release_refresh(self) -> None:
+        """Capture a release refresh request."""
+        self.calls.append(("release-refresh", None))
 
     async def _restart_service(self, hostname: str, service: str) -> bool:
         """Capture service restart."""
@@ -338,6 +350,7 @@ def test_proxy_hydrates_system_metrics_only_for_new_revision() -> None:
         "revision": 4,
         "enabled_hosts": ["vps-1"],
         "alert_settings": {"offline_gui": True},
+        "upstream_releases": {"repositories": {"pb7": {"target_commit": "b" * 40}}},
         "pool": {"total": 1, "connected": 1, "connections": {"vps-1": {"status": "connected"}}},
         "store": {
             "system": {"vps-1": {"timestamp": 10.0, "cpu": 22.5, "mem_total": 100}},
@@ -355,6 +368,7 @@ def test_proxy_hydrates_system_metrics_only_for_new_revision() -> None:
         assert proxy.store.system["vps-1"].cpu == 22.5
         assert proxy.enabled_hosts == {"vps-1"}
         assert proxy._debug_logging is True
+        assert proxy.get_upstream_release_status()["repositories"]["pb7"]["target_commit"] == "b" * 40
         proxy.store.changed.clear()
         state["store"]["system"]["vps-1"]["cpu"] = 99.0
         assert await proxy._poll_once() is True
@@ -366,6 +380,19 @@ def test_proxy_hydrates_system_metrics_only_for_new_revision() -> None:
         assert proxy.store.changed.is_set() is True
 
     asyncio.run(scenario())
+
+
+def test_daemon_exposes_and_refreshes_upstream_release_snapshot() -> None:
+    """Release state survives behind the daemon RPC contract and has an explicit wake action."""
+    monitor = FakeMonitor()
+    daemon = VPSMonitorRPCDaemon(monitor=monitor, streamer=FakeStreamer())
+
+    state = daemon._state_snapshot()
+    refreshed = asyncio.run(daemon.dispatch("releases.refresh", {}))
+
+    assert state["upstream_releases"] == monitor.release_status
+    assert refreshed is True
+    assert ("release-refresh", None) in monitor.calls
 
 
 def test_api_proxy_stop_never_requests_daemon_shutdown() -> None:

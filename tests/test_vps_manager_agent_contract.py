@@ -537,6 +537,43 @@ def test_legacy_response_fields_keep_boolean_and_readiness_semantics() -> None:
     assert vps_status["package_status"]["reboot_required"] is None
 
 
+def test_cached_release_status_is_shared_by_master_and_vps_with_pb7_pin_preserved() -> None:
+    """PBGui, PB7, and PB8 comparisons use independent monitor-owned heads."""
+    service = object.__new__(VPSManagerService)
+    service._get_upstream_release_snapshot = lambda: {
+        "repositories": {
+            "pbgui": {"state": "ok", "target_commit": "1" * 40, "heads": {"main": "1" * 40}},
+            "pb7": {"state": "ok", "target_commit": "2" * 40, "heads": {"master": "2" * 40}},
+            "pb8": {"state": "ok", "target_commit": "3" * 40, "heads": {"master": "3" * 40}},
+        }
+    }
+    service._host_meta = lambda value: value
+
+    assert service._build_master_pbgui_github_status("main", "1" * 40) == "✅"
+    assert service._build_remote_pbgui_github_status({"pbgb": "main", "pbgc": "0" * 40}).startswith("❌")
+    assert service._build_master_pb7_github_status("master", "2" * 40) == "✅"
+    assert service._build_remote_pb7_github_status({
+        "pb7b": "unknown", "pb7c": service_mod.PB7_PINNED_COMMIT,
+    }) == "✅"
+    assert service._build_pb8_github_status("3" * 40) == "✅"
+    assert service._build_pb8_github_status("4" * 40).startswith("❌")
+
+
+def test_cached_release_failure_keeps_last_known_update_signal() -> None:
+    """A stale last-known target remains actionable while an unknown target stays a warning."""
+    service = object.__new__(VPSManagerService)
+    service._get_upstream_release_snapshot = lambda: {
+        "repositories": {
+            "pb8": {"state": "stale", "target_commit": "3" * 40, "heads": {"master": "3" * 40}},
+            "pb7": {"state": "error", "target_commit": "", "heads": {}},
+        }
+    }
+
+    assert service._build_pb8_github_status("4" * 40).startswith("❌")
+    assert service._build_pb8_github_status("3" * 40) == "⚠️ upstream stale"
+    assert service._build_master_pb7_github_status("master", "5" * 40) == "⚠️ upstream unavailable"
+
+
 def test_pb8_runtime_blocker_propagates_to_master_and_vps_status(monkeypatch: pytest.MonkeyPatch) -> None:
     """A failed PB8 update forces repair emphasis without hiding the installed runtime."""
     reason = "PB8 installation or update did not complete; run Update PB8."

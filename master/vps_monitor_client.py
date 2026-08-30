@@ -281,6 +281,7 @@ class VPSMonitorProxy:
         self.boot_id = ""
         self.revision = 0
         self.available = False
+        self.upstream_releases: dict[str, Any] = {}
         self._alert_settings: dict[str, Any] = {}
         self._alerts_cache = {"items": [], "history": [], "summary": self._empty_alert_summary()}
         self._debug_logging_value = False
@@ -356,6 +357,8 @@ class VPSMonitorProxy:
             self.enabled_hosts = {str(item) for item in enabled} if isinstance(enabled, list) else set()
             settings = state.get("alert_settings")
             self._alert_settings = dict(settings) if isinstance(settings, dict) else {}
+            releases = state.get("upstream_releases")
+            self.upstream_releases = dict(releases) if isinstance(releases, dict) else {}
             self._debug_logging_value = str(self.store._ui_settings.get("debug_logging", "false")).lower() == "true"
             self.boot_id = boot_id
             self.revision = revision
@@ -510,6 +513,17 @@ class VPSMonitorProxy:
             return bool(await self._rpc_async("host.refresh_package", {"hostname": hostname}))
         except RuntimeError:
             return False
+
+    def get_upstream_release_status(self) -> dict[str, Any]:
+        """Return the latest daemon-owned upstream snapshot."""
+        return copy.deepcopy(self.upstream_releases)
+
+    def request_upstream_release_refresh(self) -> None:
+        """Ask the daemon to refresh release heads without waiting for Git."""
+        try:
+            self._rpc_sync("releases.refresh")
+        except RuntimeError:
+            return
 
     async def _restart_service(self, hostname: str, service_name: str) -> bool:
         """Restart a monitored remote service through the daemon."""

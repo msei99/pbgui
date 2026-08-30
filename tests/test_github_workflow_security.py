@@ -47,7 +47,9 @@ def test_telegram_commit_feed_has_no_external_action() -> None:
     source = _workflow_source()
 
     assert "uses:" not in source
-    assert "permissions: {}" in source
+    permissions = source.split("permissions:", 1)[1].split("\njobs:", 1)[0]
+    assert "contents: read" in permissions
+    assert "write" not in permissions
     assert "toJSON(github)" not in source
     assert "EverythingSuckz/github-telegram-notify" not in source
     assert "branches:\n      - '**'" in source

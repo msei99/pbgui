@@ -32,6 +32,7 @@ from logging_helpers import human_log as _log
 from ini_watcher import IniWatcher
 from master.async_pool import AsyncSSHPool, ConnectionStatus, remote_path_join, remote_shell_path
 from master.async_store import VPSStore, SystemMetrics
+from master.upstream_releases import UpstreamReleaseCollector
 
 SERVICE = "VPSMonitor"
 
@@ -3928,6 +3929,7 @@ class VPSMonitor:
     def __init__(self):
         self.pool = AsyncSSHPool()
         self.store = VPSStore()
+        self.upstream_releases = UpstreamReleaseCollector()
         self.loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Config
@@ -4744,6 +4746,7 @@ class VPSMonitor:
         for store in self._bot_count_history.values():
             store.load()
         self._bot_pnl_history.load()
+        await self.upstream_releases.start()
 
         enabled = self.enabled_hosts
         if not enabled:
@@ -4818,9 +4821,23 @@ class VPSMonitor:
         for store in self._bot_count_history.values():
             store.maybe_flush(force=True)
         self._bot_pnl_history.maybe_flush(force=True)
+        release_collector = getattr(self, "upstream_releases", None)
+        if release_collector is not None:
+            await release_collector.stop()
         await self.pool.disconnect_all()
         self.loop = None
         _log(SERVICE, "VPS monitor stopped")
+
+    def get_upstream_release_status(self) -> dict[str, Any]:
+        """Return the monitor-owned PBGui/PB7/PB8 upstream snapshot."""
+        collector = getattr(self, "upstream_releases", None)
+        return collector.snapshot() if collector is not None else {}
+
+    def request_upstream_release_refresh(self) -> None:
+        """Schedule an immediate upstream refresh without blocking the caller."""
+        collector = getattr(self, "upstream_releases", None)
+        if collector is not None:
+            collector.request_refresh()
 
     # ── Main loop ───────────────────────────────────────────
 
