@@ -1895,7 +1895,9 @@
                 throw new Error(detail);
               });
             }
-            showRestartOverlay(origin2, c2.token);
+            return resp.json().catch(function () { return {}; });
+          }).then(function(data) {
+            showRestartOverlay(origin2, c2.token, data && Array.isArray(data.restart_services) ? data.restart_services : []);
           }).catch(function(err) {
             restartBtn.disabled = false;
             restartBtn.classList.remove('disabled');
@@ -1927,7 +1929,7 @@
     });
   }
 
-  function showRestartOverlay(origin, token) {
+  function showRestartOverlay(origin, token, requestedServices) {
     /* Remove any existing overlay first */
     var existing = document.getElementById('pbgui-restart-overlay');
     if (existing) existing.remove();
@@ -1942,6 +1944,12 @@
 
     var attempts = 0;
     var maxAttempts = 60;
+    var remainingRestartRequested = false;
+    var requestedRestartServices = {};
+    (requestedServices || []).forEach(function (item) {
+      var label = typeof item === 'string' ? item : String((item || {}).label || (item || {}).service || '');
+      if (label) requestedRestartServices[label] = true;
+    });
     var statusEl = document.getElementById('pbgui-restart-status');
     var apiBase = (origin || window.location.origin);
 
@@ -1955,6 +1963,35 @@
         })
         .then(function (data) {
           if (!data || data.needs_restart) {
+            var newlyDiscovered = data && Array.isArray(data.restart_services)
+              ? data.restart_services.filter(function (item) {
+                  var label = String((item || {}).label || (item || {}).service || '');
+                  return label && !requestedRestartServices[label];
+                })
+              : [];
+            if (data && !remainingRestartRequested && data.service_restart_required && !data.api_restart_required && newlyDiscovered.length) {
+              remainingRestartRequested = true;
+              newlyDiscovered.forEach(function (item) {
+                var label = String((item || {}).label || (item || {}).service || '');
+                if (label) requestedRestartServices[label] = true;
+              });
+              if (statusEl) statusEl.textContent = 'Restarting remaining outdated services...';
+              fetch(apiBase + '/api/server-restart', authOptions(token, {
+                method: 'POST',
+                credentials: 'same-origin'
+              })).then(function (response) {
+                if (response.ok) return;
+                return response.json().catch(function () { return {}; }).then(function (payload) {
+                  throw new Error((payload && payload.detail) ? String(payload.detail) : 'remaining service restart failed');
+                });
+              }).then(function () {
+                attempts = 0;
+                setTimeout(probe, 2000);
+              }).catch(function (error) {
+                _overlayFail('Could not restart remaining services: ' + (error && error.message ? error.message : 'unknown error'));
+              });
+              return;
+            }
             if (attempts < maxAttempts) setTimeout(probe, 2000); else _overlayFail();
             return;
           }
@@ -1965,8 +2002,17 @@
         });
     }
 
-    function _overlayFail() {
-      if (statusEl) statusEl.textContent = 'Services did not become current \u2014 please refresh and inspect service status.';
+    function _overlayFail(message) {
+      if (statusEl) statusEl.textContent = message || 'Services did not become current \u2014 please refresh and inspect service status.';
+      if (!document.getElementById('pbgui-restart-reload')) {
+        var reloadButton = document.createElement('button');
+        reloadButton.id = 'pbgui-restart-reload';
+        reloadButton.type = 'button';
+        reloadButton.textContent = 'Reload page';
+        reloadButton.style.cssText = 'border:1px solid #334155;border-radius:6px;background:#172033;color:#e2e8f0;padding:.55rem .9rem;cursor:pointer;';
+        reloadButton.addEventListener('click', function () { window.location.reload(); });
+        ov.appendChild(reloadButton);
+      }
     }
 
     /* First probe after PBGUI_RESTART_DELAY (3s) + a small buffer */

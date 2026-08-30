@@ -102,6 +102,28 @@ jobs:
               return chunks
 
 
+          def release_markdown_html(markdown: str) -> str:
+              def inline(value: str) -> str:
+                  rendered = escaped(value)
+                  rendered = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", rendered)
+                  rendered = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", rendered)
+                  return rendered
+
+              lines = []
+              for raw_line in markdown.splitlines():
+                  heading = re.match(r"^#{1,6}\s+(.+)$", raw_line.strip())
+                  bullet = re.match(r"^\s*[-*]\s+(.+)$", raw_line)
+                  if heading:
+                      lines.append(f"<b>{inline(heading.group(1))}</b>")
+                  elif bullet:
+                      lines.append(f"• {inline(bullet.group(1))}")
+                  elif raw_line.startswith("Release notes "):
+                      lines.append(f"<b>{inline(raw_line)}</b>")
+                  else:
+                      lines.append(inline(raw_line))
+              return "\n".join(lines)
+
+
           def release_notes(version: str, commit_sha: str) -> tuple[str, str]:
               github_token = os.environ.get("GITHUB_TOKEN", "").strip()
               if not github_token:
@@ -222,5 +244,7 @@ jobs:
               if notes_body:
                   text += f"\n\n{notes_body}"
               for chunk in split_message(text):
-                  send_message(telegram_payload(chunk))
+                  payload = telegram_payload(release_markdown_html(chunk))
+                  payload["parse_mode"] = "HTML"
+                  send_message(payload)
           PY

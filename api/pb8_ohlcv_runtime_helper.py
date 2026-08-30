@@ -89,6 +89,71 @@ def _collect_coin_sides(approved: Any) -> dict[str, list[str]]:
     return result
 
 
+def _gpu_suite_exchange_requirements(config: dict, base_exchanges: list[str]) -> dict[str, list[str]]:
+    """Map every strict GPU suite exchange dataset to its scenario labels."""
+    backtest = config.get("backtest") if isinstance(config.get("backtest"), dict) else {}
+    optimize = config.get("optimize") if isinstance(config.get("optimize"), dict) else {}
+    scenarios = backtest.get("scenarios") if isinstance(backtest.get("scenarios"), list) else []
+    if (
+        str(optimize.get("backend") or "").strip().lower() != "gpu"
+        or not bool(backtest.get("suite_enabled"))
+        or not scenarios
+    ):
+        return {}
+    requirements: dict[str, list[str]] = {}
+    for index, scenario in enumerate(scenarios):
+        if not isinstance(scenario, dict):
+            continue
+        label = str(scenario.get("label") or f"scenario_{index + 1:02d}")
+        scenario_exchanges = scenario.get("exchanges")
+        selected = scenario_exchanges if isinstance(scenario_exchanges, list) and scenario_exchanges else base_exchanges
+        for exchange in selected:
+            value = str(exchange or "").strip()
+            if value:
+                requirements.setdefault(value, []).append(label)
+    return requirements
+
+
+def _gpu_suite_dataset_requirements(
+    config: dict,
+    base_exchanges: list[str],
+    default_coins: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Return strict exchange datasets with their effective scenario coin unions."""
+    labels = _gpu_suite_exchange_requirements(config, base_exchanges)
+    if not labels:
+        return {}
+    scenarios = ((config.get("backtest") or {}).get("scenarios") or [])
+    requirements = {
+        exchange: {"labels": list(dict.fromkeys(exchange_labels)), "coins": set()}
+        for exchange, exchange_labels in labels.items()
+    }
+    for index, scenario in enumerate(scenarios):
+        if not isinstance(scenario, dict):
+            continue
+        label = str(scenario.get("label") or f"scenario_{index + 1:02d}")
+        scenario_exchanges = scenario.get("exchanges")
+        selected_exchanges = scenario_exchanges if isinstance(scenario_exchanges, list) and scenario_exchanges else base_exchanges
+        scenario_coins = scenario.get("coins")
+        selected_coins = (
+            [str(coin).strip() for coin in scenario_coins if str(coin).strip()]
+            if isinstance(scenario_coins, list) and scenario_coins
+            else list(default_coins)
+        )
+        ignored = scenario.get("ignored_coins")
+        ignored_set = {str(coin).strip() for coin in ignored if str(coin).strip()} if isinstance(ignored, list) else set()
+        selected_coins = [coin for coin in selected_coins if coin not in ignored_set]
+        for raw_exchange in selected_exchanges:
+            exchange = str(raw_exchange or "").strip()
+            if exchange in requirements and label in requirements[exchange]["labels"]:
+                requirements[exchange]["coins"].update(selected_coins)
+    for requirement in requirements.values():
+        if not requirement["coins"]:
+            requirement["coins"].update(default_coins)
+        requirement["coins"] = sorted(requirement["coins"])
+    return requirements
+
+
 def _market_start_ts(market: dict[str, Any] | None) -> int | None:
     """Extract the earliest known market inception timestamp."""
     if not isinstance(market, dict):
@@ -226,6 +291,12 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
     exchanges = list(require_config_value(config, "backtest.exchanges") or [])
     if not exchanges:
         raise ValueError("backtest.exchanges is empty")
+    base_exchanges = list(exchanges)
+    required_exchange_labels = _gpu_suite_exchange_requirements(config, base_exchanges)
+    gpu_suite = bool(required_exchange_labels)
+    for exchange in required_exchange_labels:
+        if exchange not in exchanges:
+            exchanges.append(exchange)
     requested_start_date = str(require_config_value(config, "backtest.start_date"))
     end_date = modules["format_end_date"](require_config_value(config, "backtest.end_date"))
     requested_start_ts = int(modules["date_to_ts"](requested_start_date))
@@ -253,6 +324,7 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
     approved = require_live_value(config, "approved_coins")
     coin_sides = _collect_coin_sides(approved)
     coins = sorted(coin_sides)
+    dataset_requirements = _gpu_suite_dataset_requirements(config, base_exchanges, coins)
     request = {
         "requested_start_date": requested_start_date,
         "effective_start_date": modules["ts_to_date"](effective_start_ts),
@@ -406,25 +478,66 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
 
     best_entries = []
     best_counts = _counts()
-    for coin in coins:
-        entries = entries_by_coin.get(coin, [])
-        if not entries:
-            continue
-        best = min(entries, key=lambda item: (STATUS_RANK.get(str(item.get("status")), 999), item.get("exchange") or ""))
-        best_entries.append(best)
-        best_counts[best["status"]] += 1
+    requirements = []
+    if gpu_suite:
+        entries_by_pair = {
+            (str(entry.get("coin") or ""), str(entry.get("requested_exchange") or "")): entry
+            for entries in entries_by_coin.values()
+            for entry in entries
+        }
+        for exchange, requirement in dataset_requirements.items():
+            labels = requirement["labels"]
+            required_coins = requirement["coins"]
+            requirements.append({
+                "dataset": exchange,
+                "exchange": exchange,
+                "scenarios": list(dict.fromkeys(labels)),
+                "coin_count": len(required_coins),
+            })
+            for coin in required_coins:
+                entry = entries_by_pair.get((coin, exchange))
+                if entry is None:
+                    entry = {
+                        "coin": coin,
+                        "exchange": exchange,
+                        "requested_exchange": exchange,
+                        "sides": list(coin_sides.get(coin, [])),
+                        "status": "missing_market",
+                        "status_label": STATUS_LABELS["missing_market"],
+                        "note": "Required GPU suite dataset was not prepared by the readiness check.",
+                    }
+                best_entries.append(entry)
+                best_counts[entry["status"]] += 1
+    else:
+        for coin in coins:
+            entries = entries_by_coin.get(coin, [])
+            if not entries:
+                continue
+            best = min(entries, key=lambda item: (STATUS_RANK.get(str(item.get("status")), 999), item.get("exchange") or ""))
+            best_entries.append(best)
+            best_counts[best["status"]] += 1
     notes = [
         "Preflight is read-only and runs PB8's installed planner modules in the configured PB8 virtualenv.",
         "Approved coins are resolved from both long and short lists.",
     ]
     if source_dir:
         notes.append(f"PB8 explicit source checked read-only: {source_dir}")
+    summary = _summary(best_counts, len(best_entries), explicit_source=bool(source_dir))
+    scenario_only_exchanges = set(required_exchange_labels) - set(base_exchanges)
+    if gpu_suite and scenario_only_exchanges and summary.get("preload_supported"):
+        summary.update(
+            preload_supported=False,
+            preload_label="Suite preload requires separate datasets",
+            preload_detail="The current single PB8 download command does not include scenario-only exchanges; preload each required dataset explicitly.",
+        )
     return {
-        "summary": _summary(best_counts, len(best_entries), explicit_source=bool(source_dir)),
+        "summary": summary,
         "request": request,
         "universe": universe,
         "best_samples": _group_samples(best_entries),
         "exchanges": exchange_payloads,
+        "aggregation_mode": "required_datasets" if gpu_suite else "best_per_coin",
+        "requirements": requirements,
         "notes": notes,
     }
 

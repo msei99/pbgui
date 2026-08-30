@@ -132,7 +132,8 @@ def test_websetup_installs_pb7_pin_and_latest_pb8() -> None:
 
     assert "revision=PB7_PINNED_COMMIT" in local_source
     assert 'branch="master"' in local_source
-    assert 'f"{pb8_dir}[full]"' in local_source
+    assert 'f"{pb8_dir}[full,gpu-mps]"' in local_source
+    assert "pb8[full,gpu-mps]" in remote_source
     assert "_validate_pb8_install(pb8_dir, pb8_venv, log)" in local_source
     assert "git clone --no-checkout" in remote_source
     assert "--ref refs/remotes/pbgui-pb7-pin/master --expected-major 8 --fetch-url" in remote_source
@@ -142,6 +143,15 @@ def test_websetup_installs_pb7_pin_and_latest_pb8() -> None:
     assert "PBGui/PB7/PB8" in web_source
     assert "pb8-runtime-invalid" in local_source
     assert "wait_for_master_update_barrier(pbgui_dir)" in local_source
+
+
+@pytest.mark.parametrize("playbook", ["master-update-pb8.yml", "vps-update-pb8.yml"])
+def test_pb8_full_updates_request_platform_gated_gpu_dependencies(playbook: str) -> None:
+    """Full PB8 update paths should install Apple MPS dependencies only where markers allow."""
+    source = Path(playbook).read_text(encoding="utf-8")
+
+    assert "[full,gpu-mps]" in source
+    assert "[full]" not in source
 
 
 @pytest.mark.parametrize("playbook_path", ["master-update-pbgui.yml", "master-update-pb.yml"])

@@ -156,7 +156,9 @@ def test_telegram_release_feed_retries_rate_limited_notes(
     github_response = MagicMock()
     github_response.__enter__.return_value = github_response
     github_response.read.return_value = json.dumps({
-        "content": base64.b64encode(b"# v2.0.3\n\n## Fixed\n\n- Release notes delivered.\n").decode(),
+        "content": base64.b64encode(
+            b"# v2.0.3\n\n## Fixed\n\n- Release **notes <unsafe> &** for `v2` delivered.\n"
+        ).decode(),
     }).encode()
 
     def fake_urlopen(request: urllib.request.Request, timeout: int) -> MagicMock:
@@ -183,8 +185,12 @@ def test_telegram_release_feed_retries_rate_limited_notes(
     assert len(requests) == 3
     assert requests[1].data == requests[2].data
     notes_payload = json.loads(requests[2].data)
-    assert "Release notes v2.0.3" in notes_payload["text"]
-    assert "- Release notes delivered." in notes_payload["text"]
+    assert notes_payload["parse_mode"] == "HTML"
+    assert "<b>Release notes v2.0.3</b>" in notes_payload["text"]
+    assert "<b>Fixed</b>" in notes_payload["text"]
+    assert "• Release <b>notes &lt;unsafe&gt; &amp;</b> for <code>v2</code> delivered." in notes_payload["text"]
+    assert "##" not in notes_payload["text"]
+    assert "**" not in notes_payload["text"]
 
 
 def test_telegram_release_feed_can_replay_notes(
@@ -233,6 +239,8 @@ def test_telegram_release_feed_can_replay_notes(
 
     assert len(requests) == 1
     payload = json.loads(requests[0].data)
-    assert payload["text"].startswith("Release notes v2.0.3\n")
-    assert "- Replayed." in payload["text"]
+    assert payload["parse_mode"] == "HTML"
+    assert payload["text"].startswith("<b>Release notes v2.0.3</b>\n")
+    assert "<b>Fixed</b>" in payload["text"]
+    assert "• Replayed." in payload["text"]
     assert "new commit(s)" not in payload["text"]

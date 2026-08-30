@@ -386,6 +386,7 @@
           hslSignalModes: Array.isArray(source.hsl_signal_modes) ? source.hsl_signal_modes.slice() : (isV8 ? ['coin', 'pside', 'unified'] : []),
           enableOverrides: enableOverrideOptions.slice(),
           backendOptions: source.backend_options || source.backends || null,
+          backendContract: source.backend_contract || null,
           backendDefault: source.backend_default || optimize.backend || null,
           pymooAlgorithmOptions: source.pymoo_algorithm_options || object(source.pymoo).algorithms || null,
           pymooRefDirMethodOptions: source.pymoo_ref_dir_method_options || object(source.pymoo).ref_dir_methods || null

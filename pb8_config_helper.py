@@ -4,11 +4,192 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import importlib.util
 import json
+import platform
 import sys
 from pathlib import Path
 
 _OPTIMIZE_METADATA_CACHE: dict[str, dict] = {}
+
+
+def _gpu_runtime_contract(backends: list[str]) -> dict:
+    """Describe whether PB8's registered Apple MPS backend can run here."""
+    registered = "gpu" in backends
+    runtime = {
+        "accelerator": "apple_mps",
+        "platform": platform.system(),
+        "machine": platform.machine(),
+        "dependency": "torch",
+        "dependency_installed": False,
+        "backend_built": False,
+        "device_available": False,
+        "reason_code": "backend_not_registered",
+        "reason": "The installed PB8 runtime does not register the GPU backend.",
+    }
+    if not registered:
+        return runtime
+    if runtime["platform"] != "Darwin" or runtime["machine"] != "arm64":
+        runtime.update(
+            reason_code="unsupported_platform",
+            reason="PB8 GPU optimization requires Apple Silicon and Apple MPS.",
+        )
+        return runtime
+    if importlib.util.find_spec("torch") is None:
+        runtime.update(
+            reason_code="torch_not_installed",
+            reason="PB8 GPU optimization requires the optional gpu-mps dependencies.",
+        )
+        return runtime
+    runtime["dependency_installed"] = True
+    try:
+        import torch
+
+        mps = getattr(getattr(torch, "backends", None), "mps", None)
+        runtime["backend_built"] = bool(mps and (not hasattr(mps, "is_built") or mps.is_built()))
+        runtime["device_available"] = bool(mps and mps.is_available())
+    except Exception as exc:
+        runtime.update(
+            reason_code="torch_import_failed",
+            reason=f"The PB8 PyTorch runtime could not be loaded: {type(exc).__name__}",
+        )
+        return runtime
+    if not runtime["backend_built"]:
+        runtime.update(reason_code="mps_not_built", reason="The installed PyTorch build has no Apple MPS backend.")
+    elif not runtime["device_available"]:
+        runtime.update(reason_code="mps_unavailable", reason="Apple MPS is unavailable in the PB8 process.")
+    else:
+        runtime.update(reason_code="available", reason="Apple MPS is available.")
+    return runtime
+
+
+def _gpu_effective_defaults() -> dict:
+    """Read PB8's effective GPU defaults without importing optional Torch."""
+    try:
+        from optimization.backends.gpu_backend import GPU_DEFAULTS
+
+        return copy.deepcopy(GPU_DEFAULTS)
+    except (ImportError, ModuleNotFoundError):
+        return {}
+
+
+def _optimizer_backend_contract(backends: list[str], metrics: list[str]) -> dict:
+    """Return an additive versioned backend capability and metric contract."""
+    runtime = _gpu_runtime_contract(backends)
+    gpu_supported = None
+    gpu_exact_only: list[str] = []
+    try:
+        from optimization.gpu.metric_registry import GPU_EXACT_ONLY_METRICS
+
+        gpu_exact_only = sorted(str(value) for value in GPU_EXACT_ONLY_METRICS)
+    except (ImportError, ModuleNotFoundError):
+        pass
+    if runtime["device_available"]:
+        try:
+            from optimization.gpu.metrics import SUPPORTED_METRICS
+
+            gpu_supported = sorted(str(value) for value in SUPPORTED_METRICS)
+        except (ImportError, ModuleNotFoundError):
+            gpu_supported = None
+    items = {
+        backend: {
+            "recognized": True,
+            "available": True,
+            "metric_set": "cpu",
+            "reason_code": "available",
+            "reason": "",
+        }
+        for backend in backends
+    }
+    if "gpu" in items:
+        items["gpu"].update(
+            available=bool(runtime["device_available"]),
+            metric_set="gpu_proxy",
+            metric_eligibility_known=gpu_supported is not None,
+            reason_code=runtime["reason_code"],
+            reason=runtime["reason"],
+            runtime=runtime,
+            exact_only_metrics=gpu_exact_only,
+            effective_defaults=_gpu_effective_defaults(),
+        )
+    return {
+        "contract_version": 1,
+        "metric_sets": {"cpu": list(metrics), "gpu_proxy": gpu_supported},
+        "items": items,
+    }
+
+
+def _configured_optimize_metrics(config: dict) -> list[str]:
+    """Collect enabled objective and limit metric names from a prepared config."""
+    optimize = config.get("optimize") if isinstance(config.get("optimize"), dict) else {}
+    result = []
+    for item in optimize.get("scoring") or []:
+        if isinstance(item, dict) and item.get("metric"):
+            result.append(str(item["metric"]))
+    for item in optimize.get("limits") or []:
+        if isinstance(item, dict) and item.get("enabled", True) is not False and item.get("metric"):
+            result.append(str(item["metric"]))
+    return result
+
+
+def _optimize_preflight(modules: dict, config: dict, base_config_path: str = "") -> dict:
+    """Run PB8-native static validation before a GPU queue item can launch."""
+    prepared = copy.deepcopy(config)
+    optimize = prepared.get("optimize") if isinstance(prepared.get("optimize"), dict) else {}
+    backend = str(optimize.get("backend") or "pymoo").strip().lower()
+    if backend != "gpu":
+        return {
+            "contract_version": 1,
+            "backend": backend,
+            "valid": True,
+            "stage": "not_required",
+            "native_contract": None,
+        }
+
+    runtime = _gpu_runtime_contract(modules["backends"])
+    if not runtime["device_available"]:
+        raise RuntimeError(runtime["reason"])
+
+    from optimization.backends import gpu_backend
+    from optimization.gpu import metrics as gpu_metrics
+    from suite_runner import extract_suite_config
+
+    materialize = getattr(gpu_backend, "materialize_gpu_preparation_config", None)
+    native_contract = "validate_gpu_preparation_scope"
+    if callable(materialize):
+        effective = materialize(prepared)
+    else:
+        materialize = getattr(gpu_backend, "_materialize_gpu_override_template")
+        effective = materialize(prepared, optimize.get("enable_overrides") or [])
+        native_contract = "legacy_static_fallback"
+    metric_names = _configured_optimize_metrics(effective)
+    validate_metrics = getattr(gpu_metrics, "validate_gpu_metric_names", None)
+    if callable(validate_metrics):
+        validate_metrics(metric_names)
+    else:
+        supported = set(getattr(gpu_metrics, "SUPPORTED_METRICS", ()))
+        unsupported = sorted(set(metric_names) - supported)
+        if unsupported:
+            raise ValueError(f"GPU optimizer does not support metrics {unsupported}")
+    validate_scope = getattr(gpu_backend, "validate_gpu_preparation_scope", None)
+    if callable(validate_scope):
+        validate_scope(effective, extract_suite_config(effective, None))
+    else:
+        strategy = str((effective.get("live") or {}).get("strategy_kind") or "").strip().lower()
+        supported_strategies = set(getattr(gpu_backend, "GPU_STRATEGY_BOUND_MAPS", {}))
+        if strategy not in supported_strategies:
+            raise ValueError(f"GPU optimizer does not support strategy_kind={strategy!r}")
+        getattr(gpu_backend, "_validate_gpu_optimizer_overrides")(
+            optimize.get("enable_overrides") or [], strategy
+        )
+    return {
+        "contract_version": 1,
+        "backend": backend,
+        "valid": True,
+        "stage": "complete",
+        "native_contract": native_contract,
+        "runtime": runtime,
+    }
 
 
 def _optimize_basis_contract(limits_module, scoring_fields, reducers_module=None) -> dict:
@@ -513,6 +694,7 @@ def _optimize_metadata(modules: dict) -> dict:
         "optimize_parameters": _leaf_metadata(optimize, "optimize"),
         "bot_parameter_paths": [entry["path"] for entry in _leaf_metadata(template.get("bot") or {}, "bot")],
         "backends": modules["backends"],
+        "backend_contract": _optimizer_backend_contract(modules["backends"], metrics),
         "pymoo": {
             "algorithms": modules["pymoo_algorithms"],
             "ref_dir_methods": modules["pymoo_ref_dir_methods"],
@@ -604,6 +786,15 @@ def handle(payload: dict) -> dict:
         return {"metrics": modules["result_metrics"]}
     if operation == "optimize_metadata":
         return _cached_optimize_metadata(modules, pb8_dir)
+    if operation == "optimize_preflight":
+        config = payload.get("config")
+        if not isinstance(config, dict):
+            raise TypeError("config must be an object")
+        return _optimize_preflight(
+            modules,
+            config,
+            str(payload.get("base_config_path") or ""),
+        )
     if operation == "coin_override_metadata":
         return _coin_override_metadata(modules, payload)
     if operation == "exchange_metadata":

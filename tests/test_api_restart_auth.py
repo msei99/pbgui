@@ -165,6 +165,22 @@ def test_shared_nav_restarts_all_reported_services_and_waits_for_serials() -> No
     assert "fetch(apiBase + '/api/server-status'" in source
 
 
+def test_restart_overlay_follows_up_once_for_services_discovered_by_new_api() -> None:
+    """An upgrade restart should finish daemons unknown to the pre-update API process."""
+    source = Path("frontend/pbgui_nav.js").read_text(encoding="utf-8")
+
+    assert "var remainingRestartRequested = false;" in source
+    assert "data && Array.isArray(data.restart_services) ? data.restart_services : []" in source
+    assert "var requestedRestartServices = {};" in source
+    assert "!requestedRestartServices[label]" in source
+    assert "data.service_restart_required && !data.api_restart_required" in source
+    assert "newlyDiscovered.length" in source
+    assert "remainingRestartRequested = true;" in source
+    assert "fetch(apiBase + '/api/server-restart'" in source
+    assert "attempts = 0;" in source
+    assert "reloadButton.id = 'pbgui-restart-reload';" in source
+
+
 def test_persistent_vps_monitor_is_an_allowlisted_managed_restart_target() -> None:
     """A version-skewed monitor can join a coordinated restart without broad unit access."""
 

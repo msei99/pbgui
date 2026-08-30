@@ -1273,7 +1273,7 @@ def _run_local_master_install_impl(config: LocalMasterConfig, log: LogCallback, 
             + " && "
             + shlex.quote(str(pb8_venv / "bin" / "python"))
             + " -m pip install --upgrade -e "
-            + shlex.quote(f"{pb8_dir}[full]"),
+            + shlex.quote(f"{pb8_dir}[full,gpu-mps]"),
         ],
         log,
         timeout=1800,

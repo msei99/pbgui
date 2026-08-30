@@ -1211,7 +1211,7 @@ class AIChatService:
                 if provider == "chatgpt":
                     self._ensure_reaper()
                     await self._close_idle_codex_runtimes()
-                    runtime = self._codex_runtime(owner)
+                    runtime = conversation.codex_runtime or self._codex_runtime(owner)
                     if conversation.codex_thread_id is None:
                         handoff = self._provider_handoff_prompt(conversation.messages, pending_user)
                         if handoff:
@@ -1298,17 +1298,20 @@ class AIChatService:
             except asyncio.CancelledError as exc:
                 raise AIChatError("AI response was cancelled") from exc
             except AIChatError:
-                if runtime is not None and runtime.process is None:
-                    async with self.state_lock:
-                        conversation.closed = True
-                        self.conversations.pop(conversation.id, None)
                 raise
             finally:
                 self.active_tasks.pop(conversation.id, None)
+                runtime_stopped = runtime is not None and (
+                    runtime.process is None
+                    or getattr(runtime.process, "returncode", None) is not None
+                )
+                if runtime_stopped:
+                    if self.codex.get(owner) is runtime:
+                        self.codex.pop(owner, None)
+                    if not runtime.closing:
+                        await runtime.close()
+                    await self._invalidate_runtime_conversations(runtime)
                 async with self.state_lock:
-                    if runtime is not None and runtime.process is None:
-                        conversation.closed = True
-                        self.conversations.pop(conversation.id, None)
                     conversation.busy = False
                     conversation.activity = ""
                     conversation.activity_step += 1
@@ -1806,6 +1809,9 @@ class AIChatService:
                     if internal_failure:
                         if current_user and conversation.messages[-1].get("hidden"):
                             conversation.messages.pop()
+                    elif current_user:
+                        conversation.messages[-1].pop("pending", None)
+                        conversation.messages[-1]["failed"] = True
                     elif not current_user:
                         conversation.messages.append(
                             {
@@ -3532,22 +3538,25 @@ class AIChatService:
             for owner, runtime in list(self.codex.items()):
                 if runtime.last_used >= cutoff or runtime.active_turn_id is not None or runtime.closing:
                     continue
-                runtime.closing = True
-                if self.codex.get(owner) is runtime:
-                    self.codex.pop(owner, None)
-                    stale.append((owner, runtime))
-            for owner, runtime in stale:
                 async with self.state_lock:
                     selected = [
                         conversation
                         for conversation in self.conversations.values()
                         if conversation.owner == owner and conversation.codex_runtime is runtime
                     ]
+                    if any(
+                        conversation.busy or conversation.id in self.active_tasks
+                        for conversation in selected
+                    ):
+                        continue
+                    runtime.closing = True
+                    if self.codex.get(owner) is runtime:
+                        self.codex.pop(owner, None)
+                        stale.append((owner, runtime))
                     for conversation in selected:
-                        conversation.closed = True
-                        self.conversations.pop(conversation.id, None)
-                for conversation in selected:
-                    await self._release_codex_thread(conversation, runtime)
+                        conversation.codex_thread_id = None
+                        conversation.codex_runtime = None
+            for _owner, runtime in stale:
                 await runtime.close()
 
     def _ensure_reaper(self) -> None:
@@ -3800,14 +3809,12 @@ class AIChatService:
         conversation.codex_runtime = None
 
     async def _invalidate_runtime_conversations(self, runtime: CodexRuntime) -> None:
-        """Close all conversations whose ephemeral threads belonged to a failed runtime."""
+        """Detach ephemeral threads from a failed runtime while retaining persistent history."""
         async with self.state_lock:
-            for conversation_id, conversation in list(self.conversations.items()):
+            for conversation in self.conversations.values():
                 if conversation.codex_runtime is runtime:
-                    conversation.closed = True
                     conversation.codex_thread_id = None
                     conversation.codex_runtime = None
-                    self.conversations.pop(conversation_id, None)
 
     def _provider_lock(self, owner: str, provider: str) -> asyncio.Lock:
         """Return the process-local lock for one owner/provider state boundary."""

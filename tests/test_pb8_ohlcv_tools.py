@@ -382,3 +382,28 @@ def test_explicit_source_gaps_disable_remote_preload() -> None:
     assert "read-only" in explicit["preload_detail"]
     assert default["overall_status"] == "preload"
     assert default["preload_supported"] is True
+
+
+def test_gpu_suite_readiness_requires_every_scenario_exchange() -> None:
+    """GPU suite readiness must retain strict scenario-only exchange datasets."""
+    config = {
+        "optimize": {"backend": "gpu"},
+        "backtest": {
+            "suite_enabled": True,
+            "scenarios": [
+                {"label": "base"},
+                {"label": "bybit_only", "exchanges": ["bybit"], "coins": ["ETH"]},
+            ],
+        },
+    }
+
+    requirements = pb8_ohlcv_runtime_helper._gpu_suite_exchange_requirements(config, ["binance"])
+
+    assert requirements == {"binance": ["base"], "bybit": ["bybit_only"]}
+    datasets = pb8_ohlcv_runtime_helper._gpu_suite_dataset_requirements(config, ["binance"], ["BTC", "ETH"])
+    assert datasets == {
+        "binance": {"labels": ["base"], "coins": ["BTC", "ETH"]},
+        "bybit": {"labels": ["bybit_only"], "coins": ["ETH"]},
+    }
+    config["optimize"]["backend"] = "pymoo"
+    assert pb8_ohlcv_runtime_helper._gpu_suite_exchange_requirements(config, ["binance"]) == {}

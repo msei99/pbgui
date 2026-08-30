@@ -20,6 +20,10 @@ The Configs list starts loading in parallel with slower PB8 settings and metadat
 
 The PB8 editor exposes all installed HSL modes and optimizer overrides in separate Long and Short cards. **HSL enabled** controls whether hard-stop behavior participates in optimizer evaluations. **Restart after RED** is an explicit `always`, `threshold`, or `never` selection; `always` is PB8's optimize default so evaluations resume after cooldown instead of terminating on persistent drawdown. `polish_percentage` is displayed as a normal percentage but converted to PB8's fractional `--polish-pct` value, so `20` means `0.20`. Pymoo keeps PB8's native automatic sizing: NSGA-II uses `250`, while NSGA-III derives its reference directions from a budget of `500`.
 
+PB8's `gpu` backend means experimental **Apple MPS**, not CUDA. PBGui distinguishes a backend registered by PB8 from one available on the current host. GPU remains selectable on unsupported hosts as an explicit editor preview, so all fields can be tested and the portable config can be saved without silently replacing its backend. Queue and Start still fail before creating snapshots or processes with PB8's exact runtime reason. PBGui installation and PB8 update workflows request the optional `gpu-mps` profile; its platform marker installs PyTorch only on Apple Silicon.
+
+When GPU is selected, the editor exposes PB8's runtime-provided nullable population, batch, and candidate-bar sizing, M3 lean auto-parallelism, exact-worker and drift controls, checkpoint interval, and Successive Halving policy. Controls are grouped as **Automatic sizing**, **Exact validation & checkpointing**, **Drift safety**, and **Successive halving**. They use the editor's standard responsive eight-column grid: 8×1 fields on wide screens, 4×2 on medium screens, and 2×4 on small screens. Blank sizing fields retain PB8's automatic defaults and display the effective runtime value as an `auto (…)` placeholder; typing a number intentionally disables automatic sizing for that field. **Reset GPU defaults** restores the installed runtime defaults without deleting unknown future GPU keys. New scoring and limit choices use PB8's GPU proxy allowlist; existing incompatible entries remain visible for repair and PB8's native preflight blocks them before queue or launch.
+
 PB8's default optimize bounds are initial search ranges, not hard slider limits. The editor therefore uses parameter range metadata for the slider and allows values below PB8's defaults, such as `n_positions = 1`.
 
 Forager volume and volatility EMA span sliders have a minimum of `1`. To exclude these parameters from optimization, keep a valid positive bot value and use the row's **Fixed** checkbox instead of setting the span to zero. Backend validation still accepts imported zero spans only when the corresponding Forager signals are guaranteed to remain disabled.
@@ -60,9 +64,11 @@ Running PB8 optimizer jobs survive an API restart. On Linux, each optimizer runs
 
 Permanent preparation errors move only their queue row to an actionable error state, while update or runtime-lock contention stays queued for retry. Startup reconciles queue snapshots, launch directories, PID, ready, and state records without signalling unverified processes. The PB8 controller is shown in **Services Monitor** and survives unexpected worker-loop errors.
 
+GPU log status reports the exact-validation budget separately from proxy work: the dashboard shows exact evaluations and percentage, generation, proxy evaluations, inflight exact jobs, dispatch chunks, and Successive Halving activity. Checkpoint resume compares GPU policy, Pymoo proposal settings, reducer and execution inputs, enabled sides, and approved/ignored coins before deferring final checkpoint-signature authority to PB8.
+
 Strategy-specific optimizer overrides are removed when switching strategies and validated through the installed PB8 runtime before save, queue, and launch.
 
-**OHLCV Readiness** and preload run through PB8's own virtualenv, planner, cache paths, and native `passivbot download` command. Explicit read-only sources outside the approved PB8 or PBGui market-data roots are rejected instead of falling back to PB7.
+**OHLCV Readiness** and preload run through PB8's own virtualenv, planner, cache paths, and native `passivbot download` command. Explicit read-only sources outside the approved PB8 or PBGui market-data roots are rejected instead of falling back to PB7. GPU Suites require every scenario-specific exchange dataset instead of accepting the best exchange per coin; a scenario-only missing exchange disables the single-config preload action with an explanation.
 
 ## Results And Paretos
 

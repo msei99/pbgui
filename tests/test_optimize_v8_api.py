@@ -258,6 +258,69 @@ def test_save_and_queue_reject_strategy_incompatible_optimizer_overrides(
     assert released == [True]
 
 
+def test_gpu_queue_rejects_unavailable_runtime_before_snapshot(optimize_v8_roots, monkeypatch) -> None:
+    """An unavailable GPU backend must fail before queue artifacts are created."""
+    _configs, queue, _logs, _results = optimize_v8_roots
+    config = _full_pb8_config()
+    config["optimize"]["backend"] = "gpu"
+    optimize_v8.save_config("gpu-unavailable", config, session=None)
+    monkeypatch.setattr(
+        optimize_v8,
+        "validate_pb8_optimize_preflight",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            PB8ConfigurationError("PB8 GPU optimization requires Apple Silicon and Apple MPS.")
+        ),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        optimize_v8.add_to_queue({"name": "gpu-unavailable"}, session=None)
+
+    assert error.value.status_code == 422
+    assert "Apple MPS" in str(error.value.detail)
+    assert list(queue.glob("*.json")) == []
+    assert not (queue / "snapshots").exists()
+
+
+def test_gpu_log_status_parses_exact_dispatch_halving_and_completion() -> None:
+    """Current PB8 GPU human logs must populate the structured progress contract."""
+    parsed = optimize_v8._parse_optimize_log_status(
+        "2026-08-29T10:00:00Z INFO Selected optimizer backend: gpu\n"
+        "2026-08-29T10:00:01Z INFO GPU proxy dispatch progress | strategy=trailing_martingale chunks=2/8 candidates=1024/4096 elapsed=3.5s eta=10.5s\n"
+        "2026-08-29T10:00:02Z INFO GPU successive halving | gen=9 rungs=25%:4096,50%:2048,100%:1024 full_history=1024/4096\n"
+        "2026-08-29T10:00:03Z INFO GPU optimize | gen=10 proxy=7168 (2048.0/s) exact=80 inflight=8\n"
+        "2026-08-29T10:00:04Z INFO GPU optimization complete | generations=11 proxy=8192 exact=100 wall=5.0s\n"
+    )
+
+    assert parsed["backend"] == "gpu"
+    assert parsed["algorithm"] == "nsga2"
+    assert parsed["phase"] == "complete"
+    assert parsed["generation"] == 11
+    assert parsed["proxy_evaluations"] == 8192
+    assert parsed["exact_evaluations"] == parsed["evaluations"] == 100
+    assert parsed["exact_inflight"] == 0
+    assert parsed["dispatch"]["chunks_total"] == 8
+    assert parsed["halving"]["full_history"] == 1024
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value", "expected_field"),
+    [
+        ("optimize", "gpu", {"successive_halving": {"enabled": True}}, "optimize.gpu"),
+        ("backtest", "reducer", {"default": "median"}, "backtest.reducer"),
+    ],
+)
+def test_resume_compatibility_includes_gpu_checkpoint_identity(section, key, value, expected_field) -> None:
+    """GPU and canonical reducer changes must be visible before native resume starts."""
+    original = _full_pb8_config()
+    changed = copy.deepcopy(original)
+    changed.setdefault(section, {})[key] = value
+
+    fields = optimize_v8._resume_compatibility_fields(changed)
+
+    assert fields[expected_field] == value
+    assert fields[expected_field] != optimize_v8._resume_compatibility_fields(original)[expected_field]
+
+
 def test_pb81_scenario_bases_survive_config_and_queue_round_trip(optimize_v8_roots) -> None:
     """PB8.1 objective, scoring, and limit scenario selection must remain structurally exact."""
     config = _full_pb8_config()

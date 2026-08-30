@@ -173,6 +173,48 @@ def test_result_metrics_use_bounded_helper_cache(monkeypatch) -> None:
     assert calls == [("result_metrics", {})]
 
 
+def test_gpu_backend_contract_separates_registration_from_host_availability(monkeypatch) -> None:
+    """A registered Apple MPS backend must remain unavailable on Linux without importing Torch."""
+    monkeypatch.setattr(pb8_config_helper.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(pb8_config_helper.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(
+        pb8_config_helper,
+        "_gpu_effective_defaults",
+        lambda: {"population_size": 1024, "batch_size": 4096},
+    )
+
+    contract = pb8_config_helper._optimizer_backend_contract(["deap", "gpu", "pymoo"], ["adg"])
+
+    assert contract["contract_version"] == 1
+    assert contract["items"]["pymoo"]["available"] is True
+    assert contract["items"]["gpu"]["recognized"] is True
+    assert contract["items"]["gpu"]["available"] is False
+    assert contract["items"]["gpu"]["reason_code"] == "unsupported_platform"
+    assert contract["items"]["gpu"]["effective_defaults"] == {"population_size": 1024, "batch_size": 4096}
+    assert contract["metric_sets"] == {"cpu": ["adg"], "gpu_proxy": None}
+
+
+def test_optimize_preflight_client_delegates_complete_config(monkeypatch) -> None:
+    """Queue validation must delegate the exact prepared config to the PB8 helper."""
+    calls = []
+    monkeypatch.setattr(
+        pb8_config,
+        "_call_helper",
+        lambda operation, **payload: calls.append((operation, payload)) or {
+            "contract_version": 1,
+            "backend": "gpu",
+            "valid": True,
+            "stage": "complete",
+        },
+    )
+    config = {"optimize": {"backend": "gpu"}}
+
+    result = pb8_config.validate_pb8_optimize_preflight(config, base_config_path="/tmp/optimize.json")
+
+    assert result["backend"] == "gpu"
+    assert calls == [("optimize_preflight", {"config": config, "base_config_path": "/tmp/optimize.json"})]
+
+
 def test_coin_override_metadata_cache_is_contextual_and_returns_copies(monkeypatch) -> None:
     """Override policy caches must remain isolated by HSL mode and strategy."""
     _reset_cache(monkeypatch)

@@ -368,7 +368,7 @@
         if [ -f "$HOME/.cargo/env" ]; then
           source "$HOME/.cargo/env"
         fi
-        "{{ pb8venv }}/bin/python" -m pip install --upgrade -e "{{ pb8dir }}[full]"
+        "{{ pb8venv }}/bin/python" -m pip install --upgrade -e "{{ pb8dir }}[full,gpu-mps]"
       args:
         executable: /bin/bash
 

@@ -40,7 +40,7 @@ def test_v7_and_v8_use_one_optimize_template() -> None:
     assert '"%%OPTIMIZE_VERSION%%": "v8"' in api_v8
     assert '"%%OPTIMIZE_NAV_CURRENT%%": "v8_optimize"' in api_v8
     assert not (ROOT / "frontend" / "v8_optimize.html").exists()
-    assert '/app/js/optimize_editor_adapter.js?v=11' in page
+    assert '/app/js/optimize_editor_adapter.js?v=12' in page
     assert "PBGuiOptimizeEditorAdapter.create(OPTIMIZE_VERSION" in page
     assert 'backtestVersion: BACKTEST_VERSION' in page
     for panel in ("panel-configs", "panel-queue", "panel-results", "panel-paretos"):
@@ -60,6 +60,91 @@ def test_pb8_editor_refreshes_an_ai_saved_open_config() -> None:
     assert "state.editingConfig !== previousName" in page
     assert "Opened the new config saved by PBGui AI." in page
     assert "result.action === 'queue_backtests'" in page
+
+
+def test_pb8_gpu_backend_and_typed_settings_are_preserved() -> None:
+    """GPU must be explicit, capability-aware, and own its nested runtime settings."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    adapter = (ROOT / "frontend" / "js" / "optimize_editor_adapter.js").read_text(encoding="utf-8")
+
+    assert "return !!normalized;" in page
+    assert "optimize_backend_contract" in page
+    assert "backendContract: source.backend_contract" in adapter
+    assert "unavailable on this host" in page
+    assert "Editor preview and Save remain available; Queue and Start are blocked" in page
+    assert "disabled: unavailable" not in page
+    assert 'id="optimize-gpu-section"' in page
+    for field in (
+        "opted-gpu-auto-lean",
+        "opted-gpu-population-size",
+        "opted-gpu-batch-size",
+        "opted-gpu-max-dispatch-bars",
+        "opted-gpu-halving-enabled",
+        "opted-gpu-halving-fractions",
+    ):
+        assert field in page
+    assert "collectOptimizeGpuSettings(optimize, strict);" in page
+    assert "optimizeGpuAutoPlaceholder('population_size')" in page
+    assert "optimizeGpuAutoPlaceholder('batch_size')" in page
+    assert "optimizeGpuAutoPlaceholder('max_dispatch_candidate_bars')" in page
+    assert "effective_defaults" in page
+    assert "GPU population is owned by optimize.gpu.population_size" in page
+    assert "options = options.filter(metricAvailableForCurrentBackend);" in page
+
+
+def test_pb8_gpu_editor_uses_the_standard_eight_column_responsive_grid() -> None:
+    """GPU settings should follow the editor's 8x1, 4x2, and 2x4 responsive grid."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    section = page.split("id=\"optimize-gpu-section\"", 1)[1].split("id=\"optimize-pymoo-section\"", 1)[0]
+
+    for heading in (
+        "Automatic sizing",
+        "Exact validation &amp; checkpointing",
+        "Drift safety",
+        "Successive halving",
+    ):
+        assert heading in section
+    assert "justify-content:space-between" not in section
+    assert section.count("form-row cols-8") == 4
+    assert section.count("gpu-desktop-headings") == 2
+    assert section.count("gpu-mobile-heading") == 4
+    assert "gpu-settings-grid" not in section
+    assert "fieldNumber2('opted-gpu-max-dispatch-bars', 'max_dispatch_candidate_bars'" in section
+    assert ".cols-8 { grid-template-columns: repeat(8, minmax(0, 1fr)); }" in page
+    assert "@media (max-width: 1400px)" in page
+    assert ".cols-8 { grid-template-columns: repeat(4, minmax(0, 1fr)); }" in page
+    assert "@media (max-width: 700px)" in page
+    assert ".cols-8 { grid-template-columns: repeat(2, minmax(0, 1fr)); }" in page
+    for field in (
+        "opted-gpu-population-size",
+        "opted-gpu-batch-size",
+        "opted-gpu-max-dispatch-bars",
+        "opted-gpu-exact-workers",
+        "opted-gpu-max-pending-exact",
+        "opted-gpu-validate-generation",
+        "opted-gpu-checkpoint-seconds",
+        "opted-gpu-drift-probes",
+        "opted-gpu-drift-window",
+        "opted-gpu-drift-min-samples",
+        "opted-gpu-drift-halt",
+        "opted-gpu-halving-fractions",
+        "opted-gpu-halving-survival",
+        "opted-gpu-halving-min-survivors",
+    ):
+        call = section.split("'" + field + "'", 1)[1].split("\n", 1)[0]
+        assert call.rstrip().endswith(", 1)") or ", 1, optimizeGpuAutoPlaceholder(" in call
+
+
+def test_pb8_gpu_dashboard_uses_exact_budget_and_log_activity() -> None:
+    """GPU progress should use exact validations and the API log section."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+
+    assert "progress.exact_evaluations" in page
+    assert "progress.target_exact_evaluations" in page
+    assert "progress.proxy_evaluations" in page
+    assert "progress.exact_inflight" in page
+    assert "el('optlog-activity').textContent = log.last_line" in page
+    assert "el('optlog-error').textContent = log.last_error" in page
     assert "buildBacktestMainPageUrl({ panel: 'queue' })" in page
 
 

@@ -62,6 +62,7 @@ from pb8_config import (
     start_pb8_migration_helper,
     validate_pb8_override_bundle,
     validate_pb8_optimizer_overrides,
+    validate_pb8_optimize_preflight,
 )
 from pbgui_purefunc import PBGDIR, PBGUI_SERIAL, PBGUI_VERSION, load_ini_section, pb7dir, pb8_runtime_status, save_ini_section
 from secure_files import atomic_write_private_text, ensure_private_directory, ensure_private_directory_tree
@@ -148,6 +149,26 @@ _OPT_LOG_PYMOO_RE = re.compile(
 _OPT_LOG_ITER_RE = re.compile(r"Iter:\s*(?P<iter>\d+).*?size:(?P<size>\d+)(?:\s*\|\s*(?P<ranges>.*))?$", re.IGNORECASE)
 _OPT_LOG_EVAL_RE = re.compile(r"(?:Pareto update\s*\|\s*)?eval(?:uations)?\s*[=:]\s*(?P<eval>\d+)", re.IGNORECASE)
 _OPT_LOG_RANGE_RE = re.compile(r"(?P<name>[a-zA-Z0-9_.-]+):\((?P<min>[^,]+),(?P<max>[^)]+)\)")
+_OPT_LOG_GPU_RE = re.compile(
+    r"GPU optimize\s*\|\s*gen=(?P<generation>\d+)\s+proxy=(?P<proxy>\d+)\s+\((?P<rate>[0-9.]+)/s\)\s+exact=(?P<exact>\d+)\s+inflight=(?P<inflight>\d+)",
+    re.IGNORECASE,
+)
+_OPT_LOG_GPU_DISPATCH_RE = re.compile(
+    r"GPU proxy dispatch progress\s*\|\s*strategy=(?P<strategy>\S+)\s+chunks=(?P<chunks_done>\d+)/(?P<chunks_total>\d+)\s+candidates=(?P<candidates_done>\d+)/(?P<candidates_total>\d+)\s+elapsed=(?P<elapsed>[0-9.]+)s\s+eta=(?P<eta>[0-9.]+)s",
+    re.IGNORECASE,
+)
+_OPT_LOG_GPU_HALVING_RE = re.compile(
+    r"GPU successive halving\s*\|\s*gen=(?P<generation>\d+)\s+rungs=(?P<rungs>\S+)\s+full_history=(?P<full_done>\d+)/(?P<full_total>\d+)",
+    re.IGNORECASE,
+)
+_OPT_LOG_GPU_RESUME_RE = re.compile(
+    r"Resumed GPU optimizer at generation\s+(?P<generation>\d+)\s+with\s+(?P<exact>\d+)\s+exact evaluations",
+    re.IGNORECASE,
+)
+_OPT_LOG_GPU_COMPLETE_RE = re.compile(
+    r"GPU optimization complete\s*\|\s*generations=(?P<generation>\d+)\s+proxy=(?P<proxy>\d+)\s+exact=(?P<exact>\d+)",
+    re.IGNORECASE,
+)
 
 
 def _data_dir() -> Path:
@@ -362,6 +383,18 @@ def _validate_optimizer_overrides(config: dict, *, base_config_path: str) -> Non
         validate_pb8_optimizer_overrides(config, base_config_path=base_config_path)
     except PB8ConfigurationError as exc:
         raise _configuration_error("Validating PB8 optimizer overrides", exc) from exc
+
+
+def _validate_optimize_backend(config: dict, *, base_config_path: str) -> dict:
+    """Fail closed on unavailable or unsupported PB8 optimizer backends."""
+    optimize = config.get("optimize") if isinstance(config.get("optimize"), dict) else {}
+    backend = str(optimize.get("backend") or "pymoo").strip().lower()
+    if backend != "gpu":
+        return {"contract_version": 1, "backend": backend, "valid": True, "stage": "not_required"}
+    try:
+        return validate_pb8_optimize_preflight(config, base_config_path=base_config_path)
+    except PB8ConfigurationError as exc:
+        raise _configuration_error("Validating PB8 optimize backend", exc) from exc
 
 
 def _normalize_config(
@@ -1071,6 +1104,17 @@ def _resume_compatibility_fields(config: dict) -> dict:
     return {
         "config_version": config.get("config_version"),
         "optimize.backend": optimize.get("backend"),
+        "optimize.gpu": optimize.get("gpu"),
+        "optimize.pymoo": optimize.get("pymoo"),
+        "optimize.population_size": optimize.get("population_size"),
+        "optimize.offspring_multiplier": optimize.get("offspring_multiplier"),
+        "optimize.crossover_probability": optimize.get("crossover_probability"),
+        "optimize.mutation_probability": optimize.get("mutation_probability"),
+        "optimize.mutation_indpb": optimize.get("mutation_indpb"),
+        "optimize.crossover_eta": optimize.get("crossover_eta"),
+        "optimize.mutation_eta": optimize.get("mutation_eta"),
+        "optimize.compress_results_file": optimize.get("compress_results_file"),
+        "optimize.round_to_n_significant_digits": optimize.get("round_to_n_significant_digits"),
         "optimize.objective_scenario": optimize.get("objective_scenario"),
         "optimize.scoring": optimize.get("scoring"),
         "optimize.limits": optimize.get("limits"),
@@ -1080,12 +1124,30 @@ def _resume_compatibility_fields(config: dict) -> dict:
         "optimize.enable_overrides": optimize.get("enable_overrides"),
         "live.strategy_kind": live.get("strategy_kind"),
         "backtest.exchanges": backtest.get("exchanges"),
+        "backtest.coins": backtest.get("coins"),
         "backtest.start_date": backtest.get("start_date"),
         "backtest.end_date": backtest.get("end_date"),
+        "backtest.reducer": backtest.get("reducer"),
+        "backtest.balance_sample_divider": backtest.get("balance_sample_divider"),
+        "backtest.btc_collateral_cap": backtest.get("btc_collateral_cap"),
+        "backtest.btc_collateral_ltv_cap": backtest.get("btc_collateral_ltv_cap"),
+        "backtest.candle_interval_minutes": backtest.get("candle_interval_minutes"),
+        "backtest.dynamic_wel_by_tradability": backtest.get("dynamic_wel_by_tradability"),
+        "backtest.filter_by_min_effective_cost": backtest.get("filter_by_min_effective_cost"),
+        "backtest.liquidation_threshold": backtest.get("liquidation_threshold"),
+        "backtest.maker_fee_override": backtest.get("maker_fee_override"),
+        "backtest.market_order_slippage_pct": backtest.get("market_order_slippage_pct"),
+        "backtest.starting_balance": backtest.get("starting_balance"),
+        "backtest.taker_fee_override": backtest.get("taker_fee_override"),
+        "backtest.volume_normalization": backtest.get("volume_normalization"),
         "backtest.suite_enabled": backtest.get("suite_enabled"),
         "backtest.scenarios": backtest.get("scenarios"),
         "backtest.aggregate": backtest.get("aggregate"),
         "backtest.suite": backtest.get("suite"),
+        "bot.long.enabled": ((config.get("bot") or {}).get("long") or {}).get("enabled", True),
+        "bot.short.enabled": ((config.get("bot") or {}).get("short") or {}).get("enabled", True),
+        "live.approved_coins": live.get("approved_coins"),
+        "live.ignored_coins": live.get("ignored_coins"),
     }
 
 
@@ -2863,6 +2925,7 @@ class OptimizeV8Worker:
                 prepared = prepare_pb8_config(launch_config, base_config_path=str(snapshot))
                 _validate_optimizer_overrides(prepared, base_config_path=str(snapshot))
                 _validate_forager_optimize_search_space(prepared)
+                _validate_optimize_backend(prepared, base_config_path=str(snapshot))
                 runtime = pb8_runtime_status()
                 if not runtime.get("ready"):
                     raise HTTPException(status_code=503, detail="PB8 runtime is not ready")
@@ -3461,6 +3524,7 @@ def add_to_queue(body: dict, session: SessionToken = Depends(require_auth)) -> d
                     raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
                 prepared = load_pb8_config(path)
             _validate_optimizer_overrides(prepared, base_config_path=str(_config_file(name)))
+            _validate_optimize_backend(prepared, base_config_path=str(_config_file(name)))
             overrides = _load_override_payloads(prepared, _config_dir(name))
         options = _validate_launch_options((body or {}).get("launch_options") or _runtime_options_from_config(prepared))
     except PB8ConfigurationError as exc:
@@ -3794,6 +3858,14 @@ def _parse_optimize_log_status(text: str) -> dict:
         "last_log_at": None,
         "last_line": "",
         "last_error": None,
+        "stage": None,
+        "generation": None,
+        "proxy_evaluations": None,
+        "proxy_rate": None,
+        "exact_evaluations": None,
+        "exact_inflight": None,
+        "dispatch": {},
+        "halving": {},
     }
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -3832,6 +3904,77 @@ def _parse_optimize_log_status(text: str) -> dict:
         if evaluation:
             summary["evaluations"] = int(evaluation.group("eval"))
             summary["phase"] = "optimizing"
+        gpu = _OPT_LOG_GPU_RE.search(message)
+        if gpu:
+            summary.update(
+                backend="gpu",
+                algorithm="nsga2",
+                phase="optimizing",
+                stage="exact_validation",
+                generation=int(gpu.group("generation")),
+                proxy_evaluations=int(gpu.group("proxy")),
+                proxy_rate=float(gpu.group("rate")),
+                exact_evaluations=int(gpu.group("exact")),
+                exact_inflight=int(gpu.group("inflight")),
+                evaluations=int(gpu.group("exact")),
+            )
+        dispatch = _OPT_LOG_GPU_DISPATCH_RE.search(message)
+        if dispatch:
+            summary.update(backend="gpu", algorithm="nsga2", phase="optimizing", stage="proxy_dispatch")
+            summary["dispatch"] = {
+                "strategy": dispatch.group("strategy"),
+                "chunks_completed": int(dispatch.group("chunks_done")),
+                "chunks_total": int(dispatch.group("chunks_total")),
+                "candidates_completed": int(dispatch.group("candidates_done")),
+                "candidates_total": int(dispatch.group("candidates_total")),
+                "elapsed_seconds": float(dispatch.group("elapsed")),
+                "eta_seconds": float(dispatch.group("eta")),
+            }
+        halving = _OPT_LOG_GPU_HALVING_RE.search(message)
+        if halving:
+            rungs = []
+            for item in halving.group("rungs").split(","):
+                fraction, separator, count = item.partition(":")
+                if separator and count.isdigit():
+                    rungs.append({"history_fraction": fraction, "candidates": int(count)})
+            summary.update(
+                backend="gpu",
+                algorithm="nsga2",
+                phase="optimizing",
+                stage="successive_halving",
+                generation=int(halving.group("generation")),
+            )
+            summary["halving"] = {
+                "rungs": rungs,
+                "full_history": int(halving.group("full_done")),
+                "population": int(halving.group("full_total")),
+            }
+        resumed = _OPT_LOG_GPU_RESUME_RE.search(message)
+        if resumed:
+            exact = int(resumed.group("exact"))
+            summary.update(
+                backend="gpu",
+                algorithm="nsga2",
+                phase="optimizing",
+                stage="resumed",
+                generation=int(resumed.group("generation")),
+                exact_evaluations=exact,
+                evaluations=exact,
+            )
+        completed = _OPT_LOG_GPU_COMPLETE_RE.search(message)
+        if completed:
+            exact = int(completed.group("exact"))
+            summary.update(
+                backend="gpu",
+                algorithm="nsga2",
+                phase="complete",
+                stage="complete",
+                generation=int(completed.group("generation")),
+                proxy_evaluations=int(completed.group("proxy")),
+                exact_evaluations=exact,
+                exact_inflight=0,
+                evaluations=exact,
+            )
         objective_block = re.search(r"objectives=\[([^\]]*)\]", message, re.IGNORECASE)
         if objective_block:
             for raw_objective in objective_block.group(1).split(","):
@@ -3984,6 +4127,7 @@ def get_queue_status(filename: str, session: SessionToken = Depends(require_auth
         phase = item["status"]
     elif item["status"] == "running" and phase == "queued":
         phase = "running"
+    backend = log_summary["backend"] or optimize.get("backend")
     return {
         **item,
         "phase": phase,
@@ -3995,11 +4139,20 @@ def get_queue_status(filename: str, session: SessionToken = Depends(require_auth
             "target_evaluations": target,
             "percent": percent,
             "front": log_summary["front"],
+            "generation": log_summary["generation"],
+            "proxy_evaluations": log_summary["proxy_evaluations"],
+            "proxy_rate": log_summary["proxy_rate"],
+            "exact_evaluations": log_summary["exact_evaluations"],
+            "target_exact_evaluations": target if backend == "gpu" else None,
+            "exact_inflight": log_summary["exact_inflight"],
+            "dispatch": log_summary["dispatch"],
+            "halving": log_summary["halving"],
         },
         "runtime": {
             "launch_mode": item["launch_mode"],
-            "backend": log_summary["backend"] or optimize.get("backend"),
-            "algorithm": log_summary["algorithm"] or pymoo.get("algorithm"),
+            "backend": backend,
+            "algorithm": log_summary["algorithm"] or ("nsga2" if backend == "gpu" else pymoo.get("algorithm")),
+            "stage": log_summary["stage"],
             "objective_count": log_summary["objective_count"] or (len(specs) if specs else None),
             "objectives": specs,
             "config_n_cpus": optimize.get("n_cpus"),

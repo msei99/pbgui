@@ -993,6 +993,134 @@ def test_detached_turn_completes_without_request_owned_task(tmp_path: Path, monk
     asyncio.run(scenario())
 
 
+def test_chatgpt_conversation_reuses_runtime_for_later_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Later ChatGPT turns must use the conversation's existing runtime and thread."""
+    async def scenario() -> None:
+        owner = "a" * 32
+        service = AIChatService(tmp_path / "ai")
+        conversation = await service._conversation(owner, "chatgpt", "model", None)
+        calls = []
+
+        class FakeRuntime:
+            """Minimal live runtime retaining one ephemeral thread."""
+
+            process = object()
+            closing = False
+
+            async def start_thread(self, model, tools):
+                calls.append(("start", model))
+                return "thread-1"
+
+            async def chat(self, thread_id, message, model, effort):
+                calls.append(("chat", thread_id, message))
+                return "answer"
+
+        runtime = FakeRuntime()
+        monkeypatch.setattr(service, "_codex_runtime", lambda owner_arg: runtime)
+        monkeypatch.setattr(service, "_ensure_reaper", lambda: None)
+        monkeypatch.setattr(service, "_close_idle_codex_runtimes", lambda: asyncio.sleep(0))
+
+        await service.chat(owner, "chatgpt", "model", "First", conversation.id)
+        await service.chat(owner, "chatgpt", "model", "Second", conversation.id)
+
+        assert calls == [
+            ("start", "model"),
+            ("chat", "thread-1", "First"),
+            ("chat", "thread-1", "Second"),
+        ]
+        assert (await service.get_conversation(owner, conversation.id))["messages"][-1] == {
+            "role": "assistant",
+            "content": "answer",
+        }
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_idle_codex_runtime_keeps_persistent_conversations(
+    tmp_path: Path,
+) -> None:
+    """Closing an idle app-server must detach threads without hiding chat history."""
+    async def scenario() -> None:
+        owner = "a" * 32
+        service = AIChatService(tmp_path / "ai")
+        conversation = await service._conversation(owner, "chatgpt", "model", None)
+        conversation.messages = [{"role": "assistant", "content": "Retained answer"}]
+
+        class FakeRuntime:
+            """Idle runtime whose process can be closed deterministically."""
+
+            last_used = 0.0
+            active_turn_id = None
+            closing = False
+            closed = False
+
+            async def close(self):
+                self.closed = True
+
+        runtime = FakeRuntime()
+        conversation.codex_thread_id = "thread-1"
+        conversation.codex_runtime = runtime
+        service.codex[owner] = runtime
+
+        await service._close_idle_codex_runtimes()
+        snapshot = await service.get_conversation(owner, conversation.id)
+
+        assert runtime.closed is True
+        assert conversation.id in service.conversations
+        assert conversation.closed is False
+        assert conversation.codex_thread_id is None
+        assert conversation.codex_runtime is None
+        assert snapshot["messages"] == [{"role": "assistant", "content": "Retained answer"}]
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_stopped_codex_runtime_keeps_failed_turn_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crashed app-server must leave the conversation visible with a retryable error."""
+    async def scenario() -> None:
+        owner = "a" * 32
+        service = AIChatService(tmp_path / "ai")
+        conversation = await service._conversation(owner, "chatgpt", "model", None)
+
+        class FakeRuntime:
+            """Runtime that stops while processing its existing thread."""
+
+            process = object()
+            closing = False
+
+            async def chat(self, thread_id, message, model, effort):
+                self.process = None
+                self.closing = True
+                raise AIChatError("ChatGPT runtime stopped")
+
+        runtime = FakeRuntime()
+        conversation.codex_thread_id = "thread-1"
+        conversation.codex_runtime = runtime
+        service.codex[owner] = runtime
+        monkeypatch.setattr(service, "_ensure_reaper", lambda: None)
+        monkeypatch.setattr(service, "_close_idle_codex_runtimes", lambda: asyncio.sleep(0))
+
+        await service.start_turn(owner, conversation.id, "Retry me")
+        await service.active_tasks[conversation.id]
+        snapshot = await service.get_conversation(owner, conversation.id)
+
+        assert conversation.id in service.conversations
+        assert snapshot["busy"] is False
+        assert snapshot["last_error"] == "ChatGPT runtime stopped"
+        assert snapshot["retry_message"] == "Retry me"
+        assert conversation.codex_thread_id is None
+        assert conversation.codex_runtime is None
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_internal_approval_continuation_is_hidden_from_browser_history(
     tmp_path: Path, monkeypatch
 ) -> None:

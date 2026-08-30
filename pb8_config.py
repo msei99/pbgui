@@ -442,6 +442,18 @@ def validate_pb8_optimizer_overrides(config: dict, *, base_config_path: str = ""
         raise PB8ConfigurationError("PB8 config helper did not validate optimizer overrides")
 
 
+def validate_pb8_optimize_preflight(config: dict, *, base_config_path: str = "") -> dict:
+    """Run the installed PB8 backend's static preflight before queue/start."""
+    result = _call_helper(
+        "optimize_preflight",
+        config=config,
+        base_config_path=base_config_path,
+    )
+    if result.get("contract_version") != 1 or result.get("valid") is not True:
+        raise PB8ConfigurationError("PB8 optimize preflight returned an invalid result")
+    return result
+
+
 def get_pb8_exchange_metadata() -> dict:
     """Return PB8's vetted live and historical exchange capabilities."""
     global _exchange_metadata_cache

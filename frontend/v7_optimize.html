@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/app/css/sidebar.css?v=4">
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=1">
 <script src="/app/js/sidebar_resize.js?v=1"></script>
-<script src="/app/js/optimize_editor_adapter.js?v=11"></script>
+<script src="/app/js/optimize_editor_adapter.js?v=12"></script>
 <style>
 :root {
   --bg: #0e1117;
@@ -375,6 +375,7 @@ body.pb8-runtime-warning-visible #page-body { height: calc(100vh - 94px); }
 .span-2 { grid-column: span 2; }
 .span-3 { grid-column: span 3; }
 .span-4 { grid-column: span 4; }
+.gpu-mobile-heading { display: none; }
 
 .form-group { display: flex; flex-direction: column; min-width: 0; }
 .form-group label {
@@ -1486,6 +1487,8 @@ textarea.json-invalid:focus {
 
 @media (max-width: 1400px) {
   .cols-8 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .gpu-desktop-headings { display: none; }
+  .gpu-mobile-heading { display: block; grid-column: 1 / -1; }
 }
 
 @media (max-width: 700px) {
@@ -2675,6 +2678,7 @@ var state = {
     hsl_signal_modes: [],
     exchange_options: [],
     optimize_backend_options: [],
+    optimize_backend_contract: null,
     optimize_backend_default: 'pymoo',
     pymoo_algorithm_options: [],
     pymoo_ref_dir_method_options: [],
@@ -3192,6 +3196,7 @@ function limitMetricOptions(metricType, currentBaseMetric) {
   var meta = currentLimitsMeta();
   var key = metricType && Array.isArray(meta.metrics_by_group[metricType]) ? metricType : 'all';
   var options = Array.isArray(meta.metrics_by_group[key]) ? meta.metrics_by_group[key].slice() : [];
+  options = options.filter(metricAvailableForCurrentBackend);
   if (currentBaseMetric && options.indexOf(currentBaseMetric) < 0) options.unshift(currentBaseMetric);
   return uniqStrings(options);
 }
@@ -4853,12 +4858,12 @@ function fieldNumber(id, label, value, step, tip) {
     '</div>', tip);
 }
 
-function fieldNumber2(id, label, value, step, tip, span) {
+function fieldNumber2(id, label, value, step, tip, span, placeholder) {
   var rendered = esc(String(value == null ? '' : value));
   return fmtGroupSpan(id, label,
     '<div class="num-stepper">' +
     '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'' + id + '\');i.value=+(+i.value-' + step + ').toFixed(10)">−</button>' +
-    '<input type="number" id="' + id + '" value="' + rendered + '" step="' + step + '">' +
+    '<input type="number" id="' + id + '" value="' + rendered + '" step="' + step + '"' + (placeholder ? ' placeholder="' + esc(placeholder) + '"' : '') + '>' +
     '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'' + id + '\');i.value=+(+i.value+' + step + ').toFixed(10)">+</button>' +
     '</div>', tip, span || 1);
 }
@@ -4908,7 +4913,8 @@ function buildSelectHtml(id, options, selected, multi) {
     var optionValue = option && typeof option === 'object' ? String(option.value) : String(option);
     var optionLabel = option && typeof option === 'object' ? String(option.label) : String(option);
     var isSelected = selectedValues.indexOf(optionValue) >= 0;
-    inner += '<option value="' + esc(optionValue) + '"' + (isSelected ? ' selected' : '') + '>' + esc(optionLabel) + '</option>';
+    var isDisabled = !!(option && typeof option === 'object' && option.disabled) && !isSelected;
+    inner += '<option value="' + esc(optionValue) + '"' + (isSelected ? ' selected' : '') + (isDisabled ? ' disabled' : '') + '>' + esc(optionLabel) + '</option>';
   });
   inner += '</select>';
   return inner;
@@ -5238,6 +5244,7 @@ function applyOptimizeMetadata(payload) {
   }
   if (metadata.limitsMeta) state.limitsMeta = normalizeLimitsMeta(metadata.limitsMeta);
   if (Array.isArray(metadata.backendOptions)) state.settings.optimize_backend_options = metadata.backendOptions.slice();
+  if (metadata.backendContract && typeof metadata.backendContract === 'object') state.settings.optimize_backend_contract = deepClone(metadata.backendContract);
   if (metadata.backendDefault) state.settings.optimize_backend_default = metadata.backendDefault;
   if (Array.isArray(metadata.pymooAlgorithmOptions)) state.settings.pymoo_algorithm_options = metadata.pymooAlgorithmOptions.slice();
   if (Array.isArray(metadata.pymooRefDirMethodOptions)) state.settings.pymoo_ref_dir_method_options = metadata.pymooRefDirMethodOptions.slice();
@@ -5458,7 +5465,14 @@ function renderOptimizeLogDashboard(status) {
   var percent = progress.percent == null || !isFinite(Number(progress.percent)) ? null : Number(progress.percent);
   el('optlog-progress-fill').style.width = percent == null ? '0%' : Math.max(0, Math.min(100, percent)) + '%';
   var progressText = progress.eval == null ? 'Waiting for evaluations...' : progress.eval.toLocaleString() + ' evals';
-  if (progress.target_iters != null && progress.eval != null) {
+  if (runtime.backend === 'gpu' && progress.exact_evaluations != null) {
+    var gpuBits = [progress.exact_evaluations.toLocaleString() + (progress.target_exact_evaluations != null ? ' / ' + progress.target_exact_evaluations.toLocaleString() : '') + ' exact'];
+    if (progress.generation != null) gpuBits.push('gen ' + progress.generation.toLocaleString());
+    if (progress.proxy_evaluations != null) gpuBits.push(progress.proxy_evaluations.toLocaleString() + ' proxy');
+    if (progress.exact_inflight != null) gpuBits.push(progress.exact_inflight.toLocaleString() + ' inflight');
+    progressText = gpuBits.join(' · ');
+    if (percent != null) progressText += ' (' + percent.toFixed(1) + '%)';
+  } else if (progress.target_iters != null && progress.eval != null) {
     progressText = progress.eval.toLocaleString() + ' / ' + progress.target_iters.toLocaleString() + ' evals';
     if (percent != null) progressText += ' (' + percent.toFixed(1) + '%)';
   }
@@ -5503,8 +5517,8 @@ function renderOptimizeLogDashboard(status) {
   ].join(' · ');
   el('optlog-objectives').textContent = formatMetricPairs((status.metrics || {}).objectives);
   el('optlog-ranges').textContent = formatRangePairs((status.metrics || {}).ranges);
-  el('optlog-activity').textContent = runtime.last_line || '-';
-  el('optlog-error').textContent = runtime.last_error || '-';
+  el('optlog-activity').textContent = log.last_line || '-';
+  el('optlog-error').textContent = log.last_error || '-';
 }
 
 async function refreshOptimizeLogStatus(filename) {
@@ -7217,7 +7231,7 @@ var KNOWN_OPT_EXTRA_PARAMS = {
     'mutation_eta', 'round_to_n_significant_digits',
     'compress_results_file', 'write_all_results', 'enable_overrides',
     'fixed_params', 'fixed_runtime_overrides',
-    'scoring', 'limits', 'bounds', 'pymoo'
+    'scoring', 'limits', 'bounds', 'pymoo', 'gpu'
   ])
 };
 if (optimizeEditorAdapter.isV8) {
@@ -7486,7 +7500,7 @@ function normalizeOptimizeBackendValue(value) {
     : [];
   var fallback = String((state.settings && state.settings.optimize_backend_default) || 'pymoo').trim().toLowerCase() || 'pymoo';
   var normalized = String(value || '').trim().toLowerCase();
-  if (configured.indexOf(normalized) >= 0) return normalized;
+  if (normalized) return normalized;
   if (configured.indexOf(fallback) >= 0) return fallback;
   return configured[0] || fallback;
 }
@@ -7494,7 +7508,164 @@ function normalizeOptimizeBackendValue(value) {
 function hasExplicitOptimizeBackendValue(optimize) {
   if (!optimize || typeof optimize !== 'object' || Array.isArray(optimize)) return false;
   var normalized = String(optimize.backend || '').trim().toLowerCase();
-  return normalized === 'deap' || normalized === 'pymoo';
+  return !!normalized;
+}
+
+function optimizeBackendContractItem(backend) {
+  var contract = state.settings && state.settings.optimize_backend_contract;
+  var items = contract && contract.items && typeof contract.items === 'object' ? contract.items : {};
+  return items[String(backend || '').trim().toLowerCase()] || null;
+}
+
+function optimizeBackendUnavailableMessage(capability) {
+  if (!capability || capability.available !== false) return '';
+  var reason = String(capability.reason || 'This backend is unavailable on the current host.');
+  return reason + ' Editor preview and Save remain available; Queue and Start are blocked on this host.';
+}
+
+function optimizeGpuDefaults() {
+  var defaults = state.settings && state.settings.optimize_defaults;
+  return deepClone(defaults && defaults.gpu && typeof defaults.gpu === 'object' ? defaults.gpu : {});
+}
+
+function optimizeGpuAutoPlaceholder(key) {
+  var capability = optimizeBackendContractItem('gpu');
+  var defaults = capability && capability.effective_defaults && typeof capability.effective_defaults === 'object'
+    ? capability.effective_defaults
+    : {};
+  var value = defaults[key];
+  return value == null ? 'auto' : 'auto (' + Number(value).toLocaleString() + ')';
+}
+
+function optimizeGpuMetricSet() {
+  var contract = state.settings && state.settings.optimize_backend_contract;
+  var metricSets = contract && contract.metric_sets && typeof contract.metric_sets === 'object' ? contract.metric_sets : {};
+  return Array.isArray(metricSets.gpu_proxy) ? metricSets.gpu_proxy.slice() : null;
+}
+
+function metricAvailableForCurrentBackend(baseMetric) {
+  var backendNode = el('opted-opt-backend');
+  if (!backendNode || normalizeOptimizeBackendValue(backendNode.value) !== 'gpu') return true;
+  var supported = optimizeGpuMetricSet();
+  if (!supported) return true;
+  var base = String(baseMetric || '').trim();
+  return supported.indexOf(base) >= 0 || supported.indexOf(base + '_usd') >= 0 || supported.indexOf(base + '_btc') >= 0;
+}
+
+function parseOptimizeGpuFractions(value, strict) {
+  var raw = String(value || '').trim();
+  var values = raw ? raw.split(',').map(function(item) { return Number(item.trim()); }) : [];
+  var valid = values.length > 0 && values.every(function(item, index) {
+    return isFinite(item) && item > 0 && item <= 1 && (index === 0 || item > values[index - 1]);
+  }) && Math.abs(values[values.length - 1] - 1) <= 1e-12;
+  if (!valid && strict) throw new Error('GPU successive-halving fractions must increase within (0, 1] and end at 1.0.');
+  return valid ? values : [0.25, 0.5, 1.0];
+}
+
+function collectOptimizeGpuSettings(optimize, strict) {
+  if (!optimizeEditorAdapter.isV8 || !el('opted-gpu-auto-lean')) return;
+  var gpu = optimize.gpu && typeof optimize.gpu === 'object' && !Array.isArray(optimize.gpu)
+    ? deepClone(optimize.gpu)
+    : {};
+  var defaults = optimizeGpuDefaults();
+  function supports(key) {
+    return Object.prototype.hasOwnProperty.call(defaults, key) || Object.prototype.hasOwnProperty.call(gpu, key);
+  }
+  function nullablePositiveInteger(id, label) {
+    var value = toNullableNumber(el(id).value);
+    if (value == null) return null;
+    if ((!Number.isInteger(value) || value <= 0) && strict) throw new Error(label + ' must be a positive integer or blank for auto.');
+    return Math.max(1, Math.round(value));
+  }
+  function nonnegativeInteger(id, label) {
+    var value = toNullableNumber(el(id).value);
+    if (value == null) value = 0;
+    if ((!Number.isInteger(value) || value < 0) && strict) throw new Error(label + ' must be a non-negative integer.');
+    return Math.max(0, Math.round(value));
+  }
+  if (supports('auto_lean_parallelism')) gpu.auto_lean_parallelism = !!el('opted-gpu-auto-lean').checked;
+  if (supports('population_size')) gpu.population_size = nullablePositiveInteger('opted-gpu-population-size', 'GPU population_size');
+  if (supports('batch_size')) gpu.batch_size = nullablePositiveInteger('opted-gpu-batch-size', 'GPU batch_size');
+  if (supports('max_dispatch_candidate_bars')) gpu.max_dispatch_candidate_bars = nullablePositiveInteger('opted-gpu-max-dispatch-bars', 'GPU max_dispatch_candidate_bars');
+  if (supports('exact_workers')) gpu.exact_workers = nonnegativeInteger('opted-gpu-exact-workers', 'GPU exact_workers');
+  if (supports('max_pending_exact')) gpu.max_pending_exact = nonnegativeInteger('opted-gpu-max-pending-exact', 'GPU max_pending_exact');
+  if (supports('validate_per_generation')) gpu.validate_per_generation = nullablePositiveInteger('opted-gpu-validate-generation', 'GPU validate_per_generation') || 8;
+  if (supports('checkpoint_interval_seconds')) gpu.checkpoint_interval_seconds = toNumberOr(el('opted-gpu-checkpoint-seconds').value, 5);
+  if (supports('drift_probes')) gpu.drift_probes = nonnegativeInteger('opted-gpu-drift-probes', 'GPU drift_probes');
+  if (supports('drift_window')) gpu.drift_window = nullablePositiveInteger('opted-gpu-drift-window', 'GPU drift_window') || 128;
+  if (supports('drift_min_samples')) gpu.drift_min_samples = nullablePositiveInteger('opted-gpu-drift-min-samples', 'GPU drift_min_samples') || 32;
+  if (supports('drift_halt')) gpu.drift_halt = toNumberOr(el('opted-gpu-drift-halt').value, 0.6);
+  if (strict && (gpu.checkpoint_interval_seconds <= 0 || gpu.drift_halt <= 0 || gpu.drift_halt > 1)) {
+    throw new Error('GPU checkpoint interval must be positive and drift_halt must be within (0, 1].');
+  }
+  var halving = gpu.successive_halving && typeof gpu.successive_halving === 'object' && !Array.isArray(gpu.successive_halving)
+    ? deepClone(gpu.successive_halving)
+    : {};
+  halving.enabled = !!el('opted-gpu-halving-enabled').checked;
+  halving.history_fractions = parseOptimizeGpuFractions(el('opted-gpu-halving-fractions').value, strict);
+  halving.survival_fraction = toNumberOr(el('opted-gpu-halving-survival').value, 0.5);
+  halving.min_survivors = nullablePositiveInteger('opted-gpu-halving-min-survivors', 'GPU min_survivors') || 64;
+  if (strict && (halving.survival_fraction <= 0 || halving.survival_fraction > 1)) {
+    throw new Error('GPU successive-halving survival_fraction must be within (0, 1].');
+  }
+  if (supports('successive_halving')) gpu.successive_halving = halving;
+  optimize.gpu = gpu;
+}
+
+function populateOptimizeGpuSettings(optimize) {
+  if (!optimizeEditorAdapter.isV8 || !el('opted-gpu-auto-lean')) return;
+  var defaults = optimizeGpuDefaults();
+  var gpu = optimize.gpu && typeof optimize.gpu === 'object' && !Array.isArray(optimize.gpu) ? optimize.gpu : defaults;
+  var halvingDefaults = defaults.successive_halving || {};
+  var halving = gpu.successive_halving && typeof gpu.successive_halving === 'object' ? gpu.successive_halving : halvingDefaults;
+  var values = {
+    'opted-gpu-population-size': gpu.population_size,
+    'opted-gpu-batch-size': gpu.batch_size,
+    'opted-gpu-max-dispatch-bars': gpu.max_dispatch_candidate_bars,
+    'opted-gpu-exact-workers': gpu.exact_workers,
+    'opted-gpu-max-pending-exact': gpu.max_pending_exact,
+    'opted-gpu-validate-generation': gpu.validate_per_generation,
+    'opted-gpu-checkpoint-seconds': gpu.checkpoint_interval_seconds,
+    'opted-gpu-drift-probes': gpu.drift_probes,
+    'opted-gpu-drift-window': gpu.drift_window,
+    'opted-gpu-drift-min-samples': gpu.drift_min_samples,
+    'opted-gpu-drift-halt': gpu.drift_halt,
+    'opted-gpu-halving-survival': halving.survival_fraction,
+    'opted-gpu-halving-min-survivors': halving.min_survivors
+  };
+  Object.keys(values).forEach(function(id) {
+    el(id).value = values[id] == null ? '' : String(values[id]);
+  });
+  el('opted-gpu-auto-lean').checked = gpu.auto_lean_parallelism !== false;
+  el('opted-gpu-halving-enabled').checked = !!halving.enabled;
+  el('opted-gpu-halving-fractions').value = (halving.history_fractions || [0.25, 0.5, 1.0]).join(', ');
+}
+
+function resetOptimizeGpuSettings() {
+  var defaults = optimizeGpuDefaults();
+  var halving = defaults.successive_halving || {};
+  var values = {
+    'opted-gpu-population-size': defaults.population_size,
+    'opted-gpu-batch-size': defaults.batch_size,
+    'opted-gpu-max-dispatch-bars': defaults.max_dispatch_candidate_bars,
+    'opted-gpu-exact-workers': defaults.exact_workers,
+    'opted-gpu-max-pending-exact': defaults.max_pending_exact,
+    'opted-gpu-validate-generation': defaults.validate_per_generation,
+    'opted-gpu-checkpoint-seconds': defaults.checkpoint_interval_seconds,
+    'opted-gpu-drift-probes': defaults.drift_probes,
+    'opted-gpu-drift-window': defaults.drift_window,
+    'opted-gpu-drift-min-samples': defaults.drift_min_samples,
+    'opted-gpu-drift-halt': defaults.drift_halt,
+    'opted-gpu-halving-survival': halving.survival_fraction,
+    'opted-gpu-halving-min-survivors': halving.min_survivors
+  };
+  Object.keys(values).forEach(function(id) {
+    if (el(id)) el(id).value = values[id] == null ? '' : String(values[id]);
+  });
+  if (el('opted-gpu-auto-lean')) el('opted-gpu-auto-lean').checked = defaults.auto_lean_parallelism !== false;
+  if (el('opted-gpu-halving-enabled')) el('opted-gpu-halving-enabled').checked = !!halving.enabled;
+  if (el('opted-gpu-halving-fractions')) el('opted-gpu-halving-fractions').value = (halving.history_fractions || [0.25, 0.5, 1.0]).join(', ');
+  scheduleStructuredEditorSync();
 }
 
 function inferOptimizeEditorBackendHint(optimize) {
@@ -7597,8 +7768,14 @@ function getOptimizeBackendOptions(currentValue) {
   var configured = state.settings && Array.isArray(state.settings.optimize_backend_options)
     ? state.settings.optimize_backend_options
     : [];
-  return uniqStrings(configured.concat(currentValue ? [String(currentValue)] : [])).map(function(value) {
-    return { value: value, label: value };
+  var selected = String(currentValue || '').trim().toLowerCase();
+  return uniqStrings(configured.concat(selected ? [selected] : [])).map(function(value) {
+    var capability = optimizeBackendContractItem(value);
+    var unavailable = !!(capability && capability.available === false);
+    return {
+      value: value,
+      label: value + (unavailable ? ' (unavailable on this host)' : '')
+    };
   });
 }
 
@@ -7723,6 +7900,7 @@ function optimizeSectionVisibility() {
     effectiveAlgorithm: effectiveAlgorithm,
     showPymoo: backend === 'pymoo',
     showDeap: backend === 'deap',
+    showGpu: backend === 'gpu',
     showNsga3: backend === 'pymoo' && effectiveAlgorithm === 'nsga3'
   };
 }
@@ -7879,6 +8057,8 @@ function updateOptimizeBackendSections() {
   var visibility = optimizeSectionVisibility();
   var pymooSection = el('optimize-pymoo-section');
   var deapSection = el('optimize-deap-section');
+  var gpuSection = el('optimize-gpu-section');
+  var gpuWarning = el('opted-gpu-runtime-warning');
   var nsga3Section = el('optimize-pymoo-nsga3-section');
   var effectiveLabel = el('opted-pymoo-effective-algorithm');
   var mutationMode = el('opted-pymoo-mutation-prob-mode');
@@ -7894,6 +8074,12 @@ function updateOptimizeBackendSections() {
   var populationValueAdjusted = false;
   if (pymooSection) pymooSection.style.display = visibility.showPymoo ? '' : 'none';
   if (deapSection) deapSection.style.display = visibility.showDeap ? '' : 'none';
+  if (gpuSection) gpuSection.style.display = visibility.showGpu ? '' : 'none';
+  if (gpuWarning) {
+    var capability = optimizeBackendContractItem('gpu');
+    gpuWarning.textContent = optimizeBackendUnavailableMessage(capability);
+    gpuWarning.style.display = visibility.showGpu && capability && capability.available === false ? '' : 'none';
+  }
   if (nsga3Section) nsga3Section.style.display = visibility.showNsga3 ? '' : 'none';
   if (effectiveLabel) effectiveLabel.value = formatOptimizeEffectiveAlgorithmLabel(visibility);
   if (populationMode) {
@@ -7970,6 +8156,8 @@ function bindOptimizeBackendUi() {
         var nextBackend = normalizeOptimizeBackendValue(node.value);
         applyOptimizeBackendMigration(previousBackend, nextBackend);
         node.setAttribute('data-current-backend', nextBackend);
+        setScoringEntries(getScoringEntries(), { suppressSync: true, preserveAddForm: true });
+        setLimitEntries(getLimitEntries(), { suppressSync: true, preserveAddForm: true });
       }
       updateOptimizeBackendSections();
       scheduleStructuredEditorSync();
@@ -8846,6 +9034,12 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
   var pbgui = cfg.pbgui || {};
   var logging = cfg.logging || {};
   var pymoo = ensureOptimizePymooSection(optimize);
+  var gpuDefaults = optimizeGpuDefaults();
+  var gpu = optimize.gpu && typeof optimize.gpu === 'object' && !Array.isArray(optimize.gpu)
+    ? optimize.gpu
+    : gpuDefaults;
+  var gpuHalvingDefaults = gpuDefaults.successive_halving && typeof gpuDefaults.successive_halving === 'object' ? gpuDefaults.successive_halving : {};
+  var gpuHalving = gpu.successive_halving && typeof gpu.successive_halving === 'object' ? gpu.successive_halving : gpuHalvingDefaults;
   var pymooShared = pymoo.shared || {};
   var pymooRefDirs = ((pymoo.algorithms || {}).nsga3 || {}).ref_dirs || {};
   var coinSources = normalizeOptimizeCoinSources(backtest.coin_sources, pbgui.coin_sources);
@@ -8856,6 +9050,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
   }).join('');
   var seedState = getOptimizeSeedState(cfg);
   var backendValue = resolveOptimizeEditorBackendValue(optimize);
+  var gpuCapability = optimizeBackendContractItem('gpu');
   var pymooAlgorithmValue = normalizeOptimizePymooAlgorithmValue(pymoo.algorithm);
   var pymooPopulationMode = normalizeOptimizePymooPopulationMode(optimize.population_size == null ? 'auto' : 'value');
   var pymooMutationProbMode = normalizeOptimizePymooMutationProbMode(pymooShared.mutation_prob_var === 'auto' ? 'auto' : 'value');
@@ -9024,6 +9219,37 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
       + fieldSelect2('opted-opt-backend', 'backend', getOptimizeBackendOptions(optimize.backend), backendValue, false, 'Optimizer backend resolved directly from ' + optimizeEditorAdapter.label + '. Pymoo is the current default backend.', 2)
     + '</div>'
 
+    + '<div id="optimize-gpu-section" style="display:' + (backendValue === 'gpu' ? '' : 'none') + '">'
+      + '<div id="opted-gpu-runtime-warning" class="notice warning" style="display:' + (gpuCapability && gpuCapability.available === false ? '' : 'none') + ';margin-bottom:var(--sp-sm)">' + escapeHtml(optimizeBackendUnavailableMessage(gpuCapability)) + '</div>'
+      + '<div style="display:flex;align-items:center;gap:var(--sp-sm);margin-bottom:var(--sp-sm)"><b>Apple MPS GPU</b><button type="button" class="tiny-btn" onclick="resetOptimizeGpuSettings()">Reset GPU defaults</button></div>'
+      + '<div class="form-row cols-8 gpu-desktop-headings" style="margin-bottom:var(--sp-xs)"><div class="muted-line" style="grid-column:span 4;font-weight:600">Automatic sizing</div><div class="muted-line" style="grid-column:span 4;font-weight:600">Exact validation &amp; checkpointing</div></div>'
+      + '<div class="form-row cols-8">'
+        + '<div class="gpu-mobile-heading muted-line" style="font-weight:600">Automatic sizing</div>'
+        + '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-gpu-auto-lean"' + (gpu.auto_lean_parallelism === false ? '' : ' checked') + '><label for="opted-gpu-auto-lean"><span data-tip="Allow PB8 to select the proven M3 lean-kernel population and dispatch envelope when all sizing fields remain automatic.">auto_lean_parallelism</span></label></div></div>'
+        + fieldNumber2('opted-gpu-population-size', 'population_size', gpu.population_size == null ? '' : gpu.population_size, 1, 'Blank keeps PB8 automatic sizing.', 1, optimizeGpuAutoPlaceholder('population_size'))
+        + fieldNumber2('opted-gpu-batch-size', 'batch_size', gpu.batch_size == null ? '' : gpu.batch_size, 1, 'Blank keeps PB8 automatic dispatch sizing.', 1, optimizeGpuAutoPlaceholder('batch_size'))
+        + fieldNumber2('opted-gpu-max-dispatch-bars', 'max_dispatch_candidate_bars', gpu.max_dispatch_candidate_bars == null ? '' : gpu.max_dispatch_candidate_bars, 1000000, 'Blank keeps PB8 automatic candidate-bar dispatch limits.', 1, optimizeGpuAutoPlaceholder('max_dispatch_candidate_bars'))
+        + '<div class="gpu-mobile-heading muted-line" style="font-weight:600">Exact validation &amp; checkpointing</div>'
+        + fieldNumber2('opted-gpu-exact-workers', 'exact_workers', gpu.exact_workers == null ? 0 : gpu.exact_workers, 1, 'Zero inherits optimize.n_cpus for exact Rust validation.', 1)
+        + fieldNumber2('opted-gpu-max-pending-exact', 'max_pending_exact', gpu.max_pending_exact == null ? 0 : gpu.max_pending_exact, 1, 'Zero lets PB8 derive the pending exact-validation limit.', 1)
+        + fieldNumber2('opted-gpu-validate-generation', 'validate_per_generation', gpu.validate_per_generation == null ? 8 : gpu.validate_per_generation, 1, 'Exact Rust validations submitted per GPU generation.', 1)
+        + fieldNumber2('opted-gpu-checkpoint-seconds', 'checkpoint_interval_seconds', gpu.checkpoint_interval_seconds == null ? 5 : gpu.checkpoint_interval_seconds, 0.5, 'Seconds between durable GPU checkpoints.', 1)
+      + '</div>'
+      + '<div class="form-row cols-8 gpu-desktop-headings" style="margin-bottom:var(--sp-xs)"><div class="muted-line" style="grid-column:span 4;font-weight:600">Drift safety</div><div class="muted-line" style="grid-column:span 4;font-weight:600">Successive halving</div></div>'
+      + '<div class="form-row cols-8">'
+        + '<div class="gpu-mobile-heading muted-line" style="font-weight:600">Drift safety</div>'
+        + fieldNumber2('opted-gpu-drift-probes', 'drift_probes', gpu.drift_probes == null ? 4 : gpu.drift_probes, 1, 'Proxy drift probes per validation batch.', 1)
+        + fieldNumber2('opted-gpu-drift-window', 'drift_window', gpu.drift_window == null ? 128 : gpu.drift_window, 1, 'Rolling proxy drift sample window.', 1)
+        + fieldNumber2('opted-gpu-drift-min-samples', 'drift_min_samples', gpu.drift_min_samples == null ? 32 : gpu.drift_min_samples, 1, 'Minimum samples before drift halt decisions.', 1)
+        + fieldNumber2('opted-gpu-drift-halt', 'drift_halt', gpu.drift_halt == null ? 0.6 : gpu.drift_halt, 0.01, 'Fail-closed proxy drift halt threshold.', 1)
+        + '<div class="gpu-mobile-heading muted-line" style="font-weight:600">Successive halving</div>'
+        + '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-gpu-halving-enabled"' + (gpuHalving.enabled ? ' checked' : '') + '><label for="opted-gpu-halving-enabled"><span data-tip="Only supported for non-suite single-coin Trailing Martingale optimization.">enabled</span></label></div></div>'
+        + fieldText2('opted-gpu-halving-fractions', 'history_fractions', Array.isArray(gpuHalving.history_fractions) ? gpuHalving.history_fractions.join(', ') : '0.25, 0.5, 1.0', true, '0.25, 0.5, 1.0', 'Strictly increasing fractions ending at 1.0.', 1)
+        + fieldNumber2('opted-gpu-halving-survival', 'survival_fraction', gpuHalving.survival_fraction == null ? 0.5 : gpuHalving.survival_fraction, 0.05, 'Candidate share retained at each partial-history rung.', 1)
+        + fieldNumber2('opted-gpu-halving-min-survivors', 'min_survivors', gpuHalving.min_survivors == null ? 64 : gpuHalving.min_survivors, 1, 'Minimum candidates retained for the next rung.', 1)
+      + '</div>'
+    + '</div>'
+
     + '<div id="optimize-pymoo-section" style="display:' + (backendValue === 'pymoo' ? '' : 'none') + '">'
       + '<div class="form-row cols-8">'
         + fieldSelect('opted-pymoo-algorithm', 'pymoo_algorithm', getOptimizePymooAlgorithmOptions(pymoo.algorithm), pymooAlgorithmValue, false, optimizeEditorAdapter.label + ' supports auto, nsga2 and nsga3. Auto resolves from the current objective count.')
@@ -9157,6 +9383,7 @@ function populateOptimizeEditor(config, opts) {
   el('opted-pareto-max-size').value = optimize.pareto_max_size == null ? '' : String(optimize.pareto_max_size);
   el('opted-opt-backend').value = resolveOptimizeEditorBackendValue(optimize);
   el('opted-opt-backend').setAttribute('data-current-backend', resolveOptimizeEditorBackendValue(optimize));
+  populateOptimizeGpuSettings(optimize);
   var maxPendingInput = el('opted-max-pending-starting-evals');
   if (maxPendingInput) {
     maxPendingInput.value = optimize.max_pending_starting_evals_per_cpu == null ? '1' : String(optimize.max_pending_starting_evals_per_cpu);
@@ -9368,6 +9595,7 @@ function collectEditorConfig(baseConfig, opts) {
   optimize.n_cpus = normalizeOptimizeCpuCount(el('opted-n-cpus').value, 1);
   optimize.pareto_max_size = toNumberOr(el('opted-pareto-max-size').value, 100);
   optimize.backend = normalizeOptimizeBackendValue(el('opted-opt-backend').value);
+  collectOptimizeGpuSettings(optimize, strict);
   if (optimizeEditorAdapter.isV8) {
     delete optimize.max_pending_starting_evals_per_cpu;
   } else {
@@ -9417,6 +9645,8 @@ function collectEditorConfig(baseConfig, opts) {
     optimize.population_size = null;
   } else if (optimize.backend === 'deap') {
     optimize.population_size = resolveOptimizeDeapPopulationDisplayValue(el('opted-deap-population-size').value);
+  } else if (optimize.backend === 'gpu') {
+    // GPU population is owned by optimize.gpu.population_size; preserve the outer PB8 field.
   } else {
     var populationSize = normalizeOptimizePositiveInteger(el('opted-pymoo-population-size').value);
     if (populationSize == null) {
