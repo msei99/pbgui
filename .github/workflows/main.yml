@@ -5,7 +5,8 @@ on:
     branches:
       - '**'
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   notification:
@@ -18,11 +19,14 @@ jobs:
           TELEGRAM_BOT_TOKEN: '${{ secrets.BOT_TOKEN }}'
           TELEGRAM_CHAT_ID: '${{ secrets.CHAT_ID }}'
           TELEGRAM_TOPIC_ID: '${{ secrets.TOPIC_ID }}'
+          GITHUB_TOKEN: '${{ github.token }}'
         run: |
           python3 - <<'PY'
+          import base64
           import html
           import json
           import os
+          import re
           from pathlib import Path
           from urllib.error import HTTPError, URLError
           from urllib.parse import quote
@@ -31,6 +35,98 @@ jobs:
 
           def escaped(value: object) -> str:
               return html.escape(str(value or ""), quote=True)
+
+
+          def send_message(payload: dict[str, object]) -> None:
+              request = Request(
+                  f"https://api.telegram.org/bot{token}/sendMessage",
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              try:
+                  with urlopen(request, timeout=15) as response:
+                      result = json.loads(response.read().decode("utf-8"))
+              except HTTPError as exc:
+                  raise SystemExit(f"Telegram notification failed with HTTP {exc.code}") from exc
+              except URLError as exc:
+                  raise SystemExit("Telegram notification failed due to a network error") from exc
+
+              if not result.get("ok"):
+                  raise SystemExit("Telegram rejected the notification")
+
+
+          def telegram_payload(text: str) -> dict[str, object]:
+              payload: dict[str, object] = {
+                  "chat_id": chat_id,
+                  "text": text,
+                  "disable_web_page_preview": True,
+              }
+              if topic_id:
+                  try:
+                      payload["message_thread_id"] = int(topic_id)
+                  except ValueError as exc:
+                      raise SystemExit("Telegram topic ID must be an integer") from exc
+              return payload
+
+
+          def split_message(text: str, limit: int = 3900) -> list[str]:
+              chunks = []
+              remaining = text.strip()
+              while len(remaining) > limit:
+                  split_at = remaining.rfind("\n", 0, limit + 1)
+                  if split_at <= 0:
+                      split_at = limit
+                  chunks.append(remaining[:split_at].rstrip())
+                  remaining = remaining[split_at:].lstrip("\n")
+              if remaining:
+                  chunks.append(remaining)
+              return chunks
+
+
+          def release_notes(version: str, commit_sha: str) -> tuple[str, str]:
+              github_token = os.environ.get("GITHUB_TOKEN", "").strip()
+              if not github_token:
+                  raise SystemExit("GitHub token is not available for loading release notes")
+
+              encoded_path = quote(f"releases/{version}.md", safe="/")
+              api_url = (
+                  f"https://api.github.com/repos/{repository_name}/contents/{encoded_path}"
+                  f"?ref={quote(commit_sha, safe='')}"
+              )
+              request = Request(
+                  api_url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {github_token}",
+                      "User-Agent": "pbgui-release-notifier",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=15) as response:
+                      result = json.loads(response.read().decode("utf-8"))
+              except HTTPError as exc:
+                  raise SystemExit(
+                      f"Could not load release notes for {version} (GitHub HTTP {exc.code})"
+                  ) from exc
+              except URLError as exc:
+                  raise SystemExit(f"Could not load release notes for {version}") from exc
+
+              content = result.get("content")
+              if not isinstance(content, str):
+                  raise SystemExit(f"GitHub returned no release notes for {version}")
+              try:
+                  notes = base64.b64decode(content).decode("utf-8")
+              except (ValueError, UnicodeDecodeError) as exc:
+                  raise SystemExit(f"Could not decode release notes for {version}") from exc
+
+              notes_lines = notes.strip().splitlines()
+              if notes_lines and notes_lines[0].strip() == f"# {version}":
+                  notes_lines = notes_lines[1:]
+              notes_body = "\n".join(notes_lines).strip()
+              notes_url = f"{repository_url}/blob/{commit_sha}/releases/{quote(version)}.md"
+              return notes_body, notes_url
 
 
           token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -46,6 +142,7 @@ jobs:
           repository_name = repository.get("full_name") or os.environ.get("GITHUB_REPOSITORY", "unknown")
           repository_url = repository.get("html_url") or f"https://github.com/{repository_name}"
           branch = str(event.get("ref") or "").removeprefix("refs/heads/")
+          commit_sha = str(event.get("after") or os.environ.get("GITHUB_SHA", ""))
 
           lines = [
               f"<b>🔨 {len(commits)} new commit(s) to</b> "
@@ -77,17 +174,8 @@ jobs:
           if omitted:
               lines.extend(["", f"... and {omitted} more commit(s)"])
 
-          payload = {
-              "chat_id": chat_id,
-              "text": "\n".join(lines),
-              "disable_web_page_preview": True,
-              "parse_mode": "HTML",
-          }
-          if topic_id:
-              try:
-                  payload["message_thread_id"] = int(topic_id)
-              except ValueError as exc:
-                  raise SystemExit("Telegram topic ID must be an integer") from exc
+          payload = telegram_payload("\n".join(lines))
+          payload["parse_mode"] = "HTML"
 
           compare_url = str(event.get("compare") or "").strip()
           if compare_url:
@@ -95,20 +183,19 @@ jobs:
                   "inline_keyboard": [[{"text": "Open Changes", "url": compare_url}]],
               }
 
-          request = Request(
-              f"https://api.telegram.org/bot{token}/sendMessage",
-              data=json.dumps(payload).encode("utf-8"),
-              headers={"Content-Type": "application/json"},
-              method="POST",
-          )
-          try:
-              with urlopen(request, timeout=15) as response:
-                  result = json.loads(response.read().decode("utf-8"))
-          except HTTPError as exc:
-              raise SystemExit(f"Telegram notification failed with HTTP {exc.code}") from exc
-          except URLError as exc:
-              raise SystemExit("Telegram notification failed due to a network error") from exc
+          send_message(payload)
 
-          if not result.get("ok"):
-              raise SystemExit("Telegram rejected the commit notification")
+          release_pattern = re.compile(r"Release (v[0-9]+(?:\.[0-9]+){1,2})")
+          for commit in commits:
+              subject = str(commit.get("message") or "").splitlines()[0].strip()
+              match = release_pattern.fullmatch(subject)
+              if not match:
+                  continue
+              version = match.group(1)
+              notes_body, notes_url = release_notes(version, commit_sha)
+              text = f"Release notes {version}\n{notes_url}"
+              if notes_body:
+                  text += f"\n\n{notes_body}"
+              for chunk in split_message(text):
+                  send_message(telegram_payload(chunk))
           PY
