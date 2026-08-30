@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - '**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version to resend (for example v2.0.3)'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -27,6 +33,7 @@ jobs:
           import json
           import os
           import re
+          import time
           from pathlib import Path
           from urllib.error import HTTPError, URLError
           from urllib.parse import quote
@@ -38,22 +45,33 @@ jobs:
 
 
           def send_message(payload: dict[str, object]) -> None:
-              request = Request(
-                  f"https://api.telegram.org/bot{token}/sendMessage",
-                  data=json.dumps(payload).encode("utf-8"),
-                  headers={"Content-Type": "application/json"},
-                  method="POST",
-              )
-              try:
-                  with urlopen(request, timeout=15) as response:
-                      result = json.loads(response.read().decode("utf-8"))
-              except HTTPError as exc:
-                  raise SystemExit(f"Telegram notification failed with HTTP {exc.code}") from exc
-              except URLError as exc:
-                  raise SystemExit("Telegram notification failed due to a network error") from exc
+              for attempt in range(3):
+                  request = Request(
+                      f"https://api.telegram.org/bot{token}/sendMessage",
+                      data=json.dumps(payload).encode("utf-8"),
+                      headers={"Content-Type": "application/json"},
+                      method="POST",
+                  )
+                  try:
+                      with urlopen(request, timeout=15) as response:
+                          result = json.loads(response.read().decode("utf-8"))
+                  except HTTPError as exc:
+                      if exc.code != 429 or attempt == 2:
+                          raise SystemExit(f"Telegram notification failed with HTTP {exc.code}") from exc
+                      retry_after = 1.0
+                      try:
+                          error = json.loads(exc.read().decode("utf-8"))
+                          retry_after = float((error.get("parameters") or {}).get("retry_after") or 1)
+                      except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+                          pass
+                      time.sleep(min(max(retry_after, 1.0), 30.0))
+                      continue
+                  except URLError as exc:
+                      raise SystemExit("Telegram notification failed due to a network error") from exc
 
-              if not result.get("ok"):
-                  raise SystemExit("Telegram rejected the notification")
+                  if not result.get("ok"):
+                      raise SystemExit("Telegram rejected the notification")
+                  return
 
 
           def telegram_payload(text: str) -> dict[str, object]:
@@ -143,55 +161,62 @@ jobs:
           repository_url = repository.get("html_url") or f"https://github.com/{repository_name}"
           branch = str(event.get("ref") or "").removeprefix("refs/heads/")
           commit_sha = str(event.get("after") or os.environ.get("GITHUB_SHA", ""))
+          version_pattern = re.compile(r"v[0-9]+(?:\.[0-9]+){1,2}")
+          manual_version = str((event.get("inputs") or {}).get("version") or "").strip()
+          if manual_version and not version_pattern.fullmatch(manual_version):
+              raise SystemExit("Manual release version is invalid")
 
-          lines = [
-              f"<b>🔨 {len(commits)} new commit(s) to</b> "
-              f"<a href='{escaped(repository_url)}'>{escaped(repository_name)}</a>"
-              f"[<code>{escaped(branch)}</code>]",
-              "",
-          ]
-          omitted = 0
-          for index, commit in enumerate(commits):
-              commit_url = str(commit.get("url") or repository_url)
-              commit_id = str(commit.get("id") or "unknown")[:7]
-              commit_message = " ".join(str(commit.get("message") or "(no message)").split())
-              if len(commit_message) > 500:
-                  commit_message = commit_message[:497] + "..."
-              author = commit.get("author") or {}
-              author_name = author.get("name") or author.get("username") or "unknown"
-              username = str(author.get("username") or "").strip()
-              author_url = f"https://github.com/{quote(username, safe='')}" if username else commit_url
-              line = (
-                  f"• <a href='{escaped(commit_url)}'>{escaped(commit_id)}</a> - "
-                  f"{escaped(commit_message)} by "
-                  f"<a href='{escaped(author_url)}'>{escaped(author_name)}</a>"
-              )
-              if len("\n".join(lines + [line])) > 3900:
-                  omitted = len(commits) - index
-                  break
-              lines.append(line)
+          if commits:
+              lines = [
+                  f"<b>🔨 {len(commits)} new commit(s) to</b> "
+                  f"<a href='{escaped(repository_url)}'>{escaped(repository_name)}</a>"
+                  f"[<code>{escaped(branch)}</code>]",
+                  "",
+              ]
+              omitted = 0
+              for index, commit in enumerate(commits):
+                  commit_url = str(commit.get("url") or repository_url)
+                  commit_id = str(commit.get("id") or "unknown")[:7]
+                  commit_message = " ".join(str(commit.get("message") or "(no message)").split())
+                  if len(commit_message) > 500:
+                      commit_message = commit_message[:497] + "..."
+                  author = commit.get("author") or {}
+                  author_name = author.get("name") or author.get("username") or "unknown"
+                  username = str(author.get("username") or "").strip()
+                  author_url = f"https://github.com/{quote(username, safe='')}" if username else commit_url
+                  line = (
+                      f"• <a href='{escaped(commit_url)}'>{escaped(commit_id)}</a> - "
+                      f"{escaped(commit_message)} by "
+                      f"<a href='{escaped(author_url)}'>{escaped(author_name)}</a>"
+                  )
+                  if len("\n".join(lines + [line])) > 3900:
+                      omitted = len(commits) - index
+                      break
+                  lines.append(line)
 
-          if omitted:
-              lines.extend(["", f"... and {omitted} more commit(s)"])
+              if omitted:
+                  lines.extend(["", f"... and {omitted} more commit(s)"])
 
-          payload = telegram_payload("\n".join(lines))
-          payload["parse_mode"] = "HTML"
+              payload = telegram_payload("\n".join(lines))
+              payload["parse_mode"] = "HTML"
 
-          compare_url = str(event.get("compare") or "").strip()
-          if compare_url:
-              payload["reply_markup"] = {
-                  "inline_keyboard": [[{"text": "Open Changes", "url": compare_url}]],
-              }
+              compare_url = str(event.get("compare") or "").strip()
+              if compare_url:
+                  payload["reply_markup"] = {
+                      "inline_keyboard": [[{"text": "Open Changes", "url": compare_url}]],
+                  }
 
-          send_message(payload)
+              send_message(payload)
 
-          release_pattern = re.compile(r"Release (v[0-9]+(?:\.[0-9]+){1,2})")
+          release_versions = [manual_version] if manual_version else []
           for commit in commits:
               subject = str(commit.get("message") or "").splitlines()[0].strip()
-              match = release_pattern.fullmatch(subject)
-              if not match:
-                  continue
-              version = match.group(1)
+              if subject.startswith("Release "):
+                  version = subject.removeprefix("Release ")
+                  if version_pattern.fullmatch(version):
+                      release_versions.append(version)
+
+          for version in dict.fromkeys(release_versions):
               notes_body, notes_url = release_notes(version, commit_sha)
               text = f"Release notes {version}\n{notes_url}"
               if notes_body:

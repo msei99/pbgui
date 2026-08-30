@@ -1,9 +1,12 @@
 """Security regression tests for repository GitHub Actions workflows."""
 
 import ast
+import base64
+import io
 import json
 import re
 import textwrap
+import urllib.error
 import urllib.request
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -53,6 +56,7 @@ def test_telegram_commit_feed_has_no_external_action() -> None:
     assert "toJSON(github)" not in source
     assert "EverythingSuckz/github-telegram-notify" not in source
     assert "branches:\n      - '**'" in source
+    assert "workflow_dispatch:" in source
 
 
 def test_telegram_commit_feed_python_is_valid() -> None:
@@ -112,3 +116,123 @@ def test_telegram_commit_feed_builds_safe_push_message(
     assert "Fix &lt;unsafe&gt; &amp; notify" in payload["text"]
     assert "A &lt;B&gt;" in payload["text"]
     assert payload["reply_markup"]["inline_keyboard"][0][0]["text"] == "Open Changes"
+
+
+def test_telegram_release_feed_retries_rate_limited_notes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A transient Telegram rate limit must not drop release notes."""
+    event_path = tmp_path / "release.json"
+    event_path.write_text(
+        json.dumps({
+            "after": "abcdef1234567890",
+            "ref": "refs/heads/main",
+            "repository": {
+                "full_name": "msei99/pbgui",
+                "html_url": "https://github.com/msei99/pbgui",
+            },
+            "commits": [{
+                "id": "abcdef1234567890",
+                "url": "https://github.com/msei99/pbgui/commit/abcdef1234567890",
+                "message": "Release v2.0.3",
+                "author": {"name": "mani", "username": "msei99"},
+            }],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_REPOSITORY", "msei99/pbgui")
+    monkeypatch.setenv("GITHUB_TOKEN", "test-github-token")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-telegram-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "-100123")
+    monkeypatch.delenv("TELEGRAM_TOPIC_ID", raising=False)
+
+    requests = []
+    sleeps = []
+    success = MagicMock()
+    success.__enter__.return_value = success
+    success.read.return_value = b'{"ok": true}'
+    github_response = MagicMock()
+    github_response.__enter__.return_value = github_response
+    github_response.read.return_value = json.dumps({
+        "content": base64.b64encode(b"# v2.0.3\n\n## Fixed\n\n- Release notes delivered.\n").decode(),
+    }).encode()
+
+    def fake_urlopen(request: urllib.request.Request, timeout: int) -> MagicMock:
+        """Rate-limit the first notes request, then accept its retry."""
+        assert timeout == 15
+        if request.full_url.startswith("https://api.github.com/"):
+            return github_response
+        requests.append(request)
+        if len(requests) == 2:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                429,
+                "Too Many Requests",
+                {},
+                io.BytesIO(b'{"parameters":{"retry_after":2}}'),
+            )
+        return success
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    exec(compile(_embedded_client(), "telegram-release-feed", "exec"), {})
+
+    assert sleeps == [2.0]
+    assert len(requests) == 3
+    assert requests[1].data == requests[2].data
+    notes_payload = json.loads(requests[2].data)
+    assert "Release notes v2.0.3" in notes_payload["text"]
+    assert "- Release notes delivered." in notes_payload["text"]
+
+
+def test_telegram_release_feed_can_replay_notes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A manual workflow dispatch must send only the requested release notes."""
+    event_path = tmp_path / "dispatch.json"
+    event_path.write_text(
+        json.dumps({
+            "inputs": {"version": "v2.0.3"},
+            "ref": "refs/heads/main",
+            "repository": {
+                "full_name": "msei99/pbgui",
+                "html_url": "https://github.com/msei99/pbgui",
+            },
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_REPOSITORY", "msei99/pbgui")
+    monkeypatch.setenv("GITHUB_SHA", "abcdef1234567890")
+    monkeypatch.setenv("GITHUB_TOKEN", "test-github-token")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-telegram-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "-100123")
+    monkeypatch.delenv("TELEGRAM_TOPIC_ID", raising=False)
+
+    requests = []
+    response = MagicMock()
+    response.__enter__.return_value = response
+
+    def fake_urlopen(request: urllib.request.Request, timeout: int) -> MagicMock:
+        """Return release notes from GitHub and capture the Telegram replay."""
+        assert timeout == 15
+        if request.full_url.startswith("https://api.github.com/"):
+            response.read.return_value = json.dumps({
+                "content": base64.b64encode(b"# v2.0.3\n\n## Fixed\n\n- Replayed.\n").decode(),
+            }).encode()
+        else:
+            requests.append(request)
+            response.read.return_value = b'{"ok": true}'
+        return response
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    exec(compile(_embedded_client(), "telegram-release-replay", "exec"), {})
+
+    assert len(requests) == 1
+    payload = json.loads(requests[0].data)
+    assert payload["text"].startswith("Release notes v2.0.3\n")
+    assert "- Replayed." in payload["text"]
+    assert "new commit(s)" not in payload["text"]
