@@ -16,6 +16,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
+import backtest_result_index
 from api import backtest_v8
 from master_update_lock import acquire_master_update_lock
 
@@ -1498,6 +1499,7 @@ def test_results_support_newest_first_pagination_and_config_filter(tmp_path, mon
         )
         os.utime(analysis_path, (index, index))
     monkeypatch.setattr(backtest_v8, "_results_root", lambda: root)
+    monkeypatch.setattr(backtest_result_index, "PBGDIR", str(tmp_path))
 
     first_page = backtest_v8.get_results(offset=0, limit=1, session=None)
     filtered = backtest_v8.get_results(name="older", offset=0, limit=20, session=None)
@@ -1513,6 +1515,63 @@ def test_results_support_newest_first_pagination_and_config_filter(tmp_path, mon
     }
     assert [item["config_name"] for item in filtered["results"]] == ["older"]
     assert filtered["pagination"]["has_more"] is False
+
+
+def test_results_reuse_persistent_summary_index(tmp_path, monkeypatch) -> None:
+    """A warm PB8 result request must not parse unchanged analysis and config files again."""
+    root = tmp_path / "pb8" / "backtests" / "pbgui"
+    result_dir = root / "demo" / "bybit" / "run-1"
+    result_dir.mkdir(parents=True)
+    (result_dir / "analysis.json").write_text(json.dumps({"gain_usd": 1.2}), encoding="utf-8")
+    (result_dir / "config.json").write_text(
+        json.dumps({"backtest": {"starting_balance": 1000}, "bot": {}, "live": {}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(backtest_v8, "_results_root", lambda: root)
+    monkeypatch.setattr(backtest_result_index, "PBGDIR", str(tmp_path))
+
+    first = backtest_v8.get_results(offset=0, limit=0, session=None)
+    monkeypatch.setattr(
+        backtest_v8,
+        "_list_results",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("warm cache rebuilt")),
+    )
+    second = backtest_v8.get_results(offset=0, limit=0, session=None)
+
+    assert second == first
+
+
+def test_result_list_uses_analysis_terminal_values_without_opening_large_csv(tmp_path, monkeypatch) -> None:
+    """Modern compact summaries must not stream balance history during list loading."""
+    root = tmp_path / "pb8" / "backtests" / "pbgui"
+    result_dir = root / "demo" / "bybit" / "run-1"
+    result_dir.mkdir(parents=True)
+    (result_dir / "analysis.json").write_text(
+        json.dumps(
+            {
+                "starting_balance_usd": 1000,
+                "final_balance_usd": 1250,
+                "final_equity_usd": 1240,
+                "gain_usd": 1.25,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (result_dir / "config.json").write_text(
+        json.dumps({"backtest": {"starting_balance": 1000}, "live": {"approved_coins": {}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(backtest_v8, "_results_root", lambda: root)
+    monkeypatch.setattr(
+        backtest_v8,
+        "_result_terminal_balances",
+        lambda _path: (_ for _ in ()).throw(AssertionError("large balance CSV opened")),
+    )
+
+    result = backtest_v8._list_results()[0]
+
+    assert result["final_balance"] == 1250
+    assert result["final_equity"] == 1240
 
 
 def test_combined_results_report_configured_exchanges(tmp_path, monkeypatch) -> None:
@@ -1539,8 +1598,8 @@ def test_combined_results_report_configured_exchanges(tmp_path, monkeypatch) -> 
     assert results[0]["coins"] == ["HYPE"]
 
 
-def test_results_use_terminal_balance_and_equity_from_gzip_csv(tmp_path, monkeypatch) -> None:
-    """PB8 result totals must use the last authoritative compressed CSV values."""
+def test_terminal_balance_reader_uses_last_values_from_gzip_csv(tmp_path, monkeypatch) -> None:
+    """Lazy PB8 detail reads retain authoritative compressed CSV support."""
     root = tmp_path / "pb8-results"
     result_dir = root / "demo" / "bybit" / "run-1"
     result_dir.mkdir(parents=True)
@@ -1548,12 +1607,10 @@ def test_results_use_terminal_balance_and_equity_from_gzip_csv(tmp_path, monkeyp
     (result_dir / "config.json").write_text(json.dumps({"backtest": {"starting_balance": 1000}}), encoding="utf-8")
     with gzip.open(result_dir / "balance_and_equity.csv.gz", "wt", encoding="utf-8", newline="") as handle:
         handle.write("minute,usd_total_balance,usd_total_equity\n0,1000,990\n1,1234.5,1201.25\n")
-    monkeypatch.setattr(backtest_v8, "_results_root", lambda: root)
+    result = backtest_v8._result_terminal_balances(result_dir)
 
-    result = backtest_v8._list_results()[0]
-
-    assert result["final_balance"] == 1234.5
-    assert result["final_equity"] == 1201.25
+    assert result["usd_total_balance"] == 1234.5
+    assert result["usd_total_equity"] == 1201.25
 
 
 def test_results_fall_back_to_gzip_when_plain_terminal_csv_is_invalid(tmp_path, monkeypatch) -> None:
@@ -1565,13 +1622,12 @@ def test_results_fall_back_to_gzip_when_plain_terminal_csv_is_invalid(tmp_path, 
     (result_dir / "balance_and_equity.csv").write_bytes(b"\xff\xfeinvalid")
     with gzip.open(result_dir / "balance_and_equity.csv.gz", "wt", encoding="utf-8", newline="") as handle:
         handle.write("usd_total_balance,usd_total_equity\n1500,1400\n")
-    monkeypatch.setattr(backtest_v8, "_results_root", lambda: root)
     monkeypatch.setattr(backtest_v8, "_log", lambda *_args, **_kwargs: None)
 
-    result = backtest_v8._list_results()[0]
+    result = backtest_v8._result_terminal_balances(result_dir)
 
-    assert result["final_balance"] == 1500
-    assert result["final_equity"] == 1400
+    assert result["usd_total_balance"] == 1500
+    assert result["usd_total_equity"] == 1400
 
 
 def test_results_ignore_incomplete_plain_terminal_row_before_gzip_fallback(tmp_path, monkeypatch) -> None:
@@ -1586,12 +1642,10 @@ def test_results_ignore_incomplete_plain_terminal_row_before_gzip_fallback(tmp_p
     )
     with gzip.open(result_dir / "balance_and_equity.csv.gz", "wt", encoding="utf-8", newline="") as handle:
         handle.write("usd_total_balance,usd_total_equity\n1500,1400\n")
-    monkeypatch.setattr(backtest_v8, "_results_root", lambda: root)
+    result = backtest_v8._result_terminal_balances(result_dir)
 
-    result = backtest_v8._list_results()[0]
-
-    assert result["final_balance"] == 1500
-    assert result["final_equity"] == 1400
+    assert result["usd_total_balance"] == 1500
+    assert result["usd_total_equity"] == 1400
 
 
 def test_result_delete_rejects_root_and_intermediate_directories(tmp_path, monkeypatch) -> None:

@@ -1108,8 +1108,9 @@ var queueItems  = [];          // queue items from WS
 var _lastQueueHash = '';       // JSON hash of last queue state (skip re-render if unchanged)
 var results     = [];          // backtest results
 var resultsByVersion = { v7: [], v8: [] };
-var RESULTS_PAGE_SIZE = 5;
+var RESULTS_PAGE_SIZE = 0;
 var _resultsLoadGeneration = 0;
+var _selectedResultPaths = new Set();
 var _resultsEmptyRetryTimer = null;
 var _resultsEmptyRetryCount = 0;
 var archives    = [];          // git archives
@@ -5987,7 +5988,7 @@ function loadResults(filterName, loadOptions) {
     return loadVersionPage(version, 0);
   })).then(function() {
     if (loadGeneration !== _resultsLoadGeneration) return results;
-    var applied = _applyResultsData(resultsByVersion.v7.concat(resultsByVersion.v8), selectedFilter);
+    var applied = results;
     var selectedItems = resultsForSelectedVersion(applied);
     if (currentPanel === 'results' && selectedItems.length === 0 && _resultsEmptyRetryCount < 3) {
       _resultsEmptyRetryCount += 1;
@@ -6173,7 +6174,7 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
     var convertAction = options.allowV8Convert && r.backtest_version === 'v7'
       ? '\x3Cbutton class="icon-btn" onclick="convertResultToV8(' + i + ')" title="Convert this V7 result config to V8">V8\x3C/button>'
       : '';
-    html += '\x3Ctr data-idx="' + i + '" data-path="' + esc(r.path) + '"' + liqStyle + '>' +
+    html += '\x3Ctr data-idx="' + i + '" data-path="' + esc(r.path) + '"' + (_selectedResultPaths.has(r.path) ? ' class="selected"' : '') + liqStyle + '>' +
       (showVersion && hasColumn('backtest_version') ? '\x3Ctd>PB' + esc((r.backtest_version || '').toUpperCase()) + '\x3C/td>' : '') +
       '\x3Ctd title="' + esc(btName) + esc(liqTitle) + '" style="max-width:250px">' + (r.liquidated ? '\x3Cspan style="color:var(--red)" title="Liquidated">\u26a0\ufe0f\x3C/span> ' : '') + esc(btName) + '\x3C/td>' +
       (showStrategy && hasColumn('strategy') ? '\x3Ctd class="mono">' + esc(r.strategy || '-') + '\x3C/td>' : '') +
@@ -6188,7 +6189,7 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
       (hasColumn('sharpe_ratio') ? '\x3Ctd>' + fmt(r.sharpe_ratio, 4) + '\x3C/td>' : '') +
       (hasColumn('sharpe_ratio_w_usd') ? '\x3Ctd>' + fmt(r.sharpe_ratio_w_usd, 4) + '\x3C/td>' : '') +
       (hasColumn('starting_balance') ? '\x3Ctd>' + fmt(r.starting_balance, 0) + '\x3C/td>' : '') +
-      (hasColumn('final_balance') ? '\x3Ctd>' + fmt(r.final_balance, 0) + '\x3C/td>' : '') +
+      (hasColumn('final_balance') ? '\x3Ctd>' + (r.final_balance_estimated ? '~ ' : '') + fmt(r.final_balance, 0) + '\x3C/td>' : '') +
       (hasColumn('final_equity') ? '\x3Ctd>' + fmt(r.final_equity, 0) + '\x3C/td>' : '') +
       (hasColumn('balance_equity_diff') ? '\x3Ctd>' + fmt(r.balance_equity_diff, 4) + '\x3C/td>' : '') +
       (hasColumn('twe') ? '\x3Ctd>' + fmt(r.twe_long, 2) + ' / ' + fmt(r.twe_short, 2) + '\x3C/td>' : '') +
@@ -6360,6 +6361,15 @@ var _cfgDragMode = null;
 }());
 
 /* ── Results row selection: click to toggle, drag to multi-select ── */
+function setResultRowSelection(row, selected) {
+  if (!row) return;
+  row.classList.toggle('selected', !!selected);
+  var path = String(row.dataset.path || '');
+  if (!path) return;
+  if (selected) _selectedResultPaths.add(path);
+  else _selectedResultPaths.delete(path);
+}
+
 (function() {
   function rowsOfRes() {
     return Array.from(document.querySelectorAll('#results-list .tbl tbody tr'));
@@ -6378,8 +6388,7 @@ var _cfgDragMode = null;
     var lo = Math.min(anchor, cur), hi = Math.max(anchor, cur);
     rows.forEach(function(r, i) {
       if (i >= lo && i <= hi) {
-        if (_rowDragMode === 'add') r.classList.add('selected');
-        else r.classList.remove('selected');
+        setResultRowSelection(r, _rowDragMode === 'add');
       }
     });
   }
@@ -6406,7 +6415,7 @@ var _cfgDragMode = null;
   });
   document.addEventListener('mouseup', function() {
     if (_rowDragStart && !_rowDragSelecting) {
-      _rowDragStart.tr.classList.toggle('selected');
+      setResultRowSelection(_rowDragStart.tr, !_rowDragStart.tr.classList.contains('selected'));
     }
     _rowDragStart = null;
     _rowDragSelecting = false;
@@ -6628,11 +6637,12 @@ function deselectAllConfigs() {
 }
 
 function selectAllResults() {
-  document.querySelectorAll('#results-list .tbl tbody tr').forEach(function(tr) { tr.classList.add('selected'); });
+  document.querySelectorAll('#results-list .tbl tbody tr').forEach(function(tr) { setResultRowSelection(tr, true); });
 }
 
 function deselectAllResults() {
-  document.querySelectorAll('#results-list .tbl tbody tr').forEach(function(tr) { tr.classList.remove('selected'); });
+  _selectedResultPaths.clear();
+  document.querySelectorAll('#results-list .tbl tbody tr').forEach(function(tr) { setResultRowSelection(tr, false); });
 }
 
 function getSelectedResults() {
@@ -6642,10 +6652,9 @@ function getSelectedResults() {
 }
 
 function setSelectedResults(paths) {
-  var selected = {};
-  (paths || []).forEach(function(path) { selected[path] = true; });
+  _selectedResultPaths = new Set((paths || []).map(function(path) { return String(path || ''); }).filter(Boolean));
   document.querySelectorAll('#results-list .tbl tbody tr').forEach(function(tr) {
-    tr.classList.toggle('selected', !!selected[tr.dataset.path]);
+    setResultRowSelection(tr, _selectedResultPaths.has(tr.dataset.path));
   });
 }
 

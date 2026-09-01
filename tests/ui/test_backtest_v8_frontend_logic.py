@@ -884,8 +884,8 @@ def test_queue_result_action_applies_filter_before_showing_results() -> None:
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
-def test_results_load_progressively_and_use_server_config_filter() -> None:
-    """Result pages must render incrementally and scope queue requests by config."""
+def test_results_load_in_one_compact_request_and_use_server_config_filter() -> None:
+    """All compact result summaries load in one request while charts remain lazy."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
     function = _extract_function(source, "loadResults")
     script = textwrap.dedent(
@@ -902,7 +902,7 @@ def test_results_load_progressively_and_use_server_config_filter() -> None:
         const window = {{requestAnimationFrame(callback) {{ paintFrames += 1; setImmediate(callback); }}}};
         let results = [];
         let resultsByVersion = {{v7: [], v8: []}};
-        let RESULTS_PAGE_SIZE = 5;
+        let RESULTS_PAGE_SIZE = 0;
         let _pendingResultFilter = '';
         let _resultsLoadGeneration = 0;
         let _resultsEmptyRetryTimer = null;
@@ -921,12 +921,11 @@ def test_results_load_progressively_and_use_server_config_filter() -> None:
         }}
         function apiFetchFrom(base, path) {{
           requests.push(base + path);
-          if (path.includes('offset=0')) return Promise.resolve({{
-            results: [{{path: '/new', config_name: 'target config'}}],
-            pagination: {{total: 2, has_more: true, next_offset: 1}}
-          }});
           return Promise.resolve({{
-            results: [{{path: '/old', config_name: 'target config'}}],
+            results: [
+              {{path: '/new', config_name: 'target config'}},
+              {{path: '/old', config_name: 'target config'}}
+            ],
             pagination: {{total: 2, has_more: false, next_offset: 2}}
           }});
         }}
@@ -934,11 +933,11 @@ def test_results_load_progressively_and_use_server_config_filter() -> None:
         {function}
 
         loadResults('target config').then(() => {{
-          assert.deepEqual(appliedCounts, [1, 2, 2]);
+          assert.deepEqual(appliedCounts, [2]);
           assert.equal(results.length, 2);
-          assert.match(requests[0], /offset=0&limit=5&name=target%20config$/);
-          assert.match(requests[1], /offset=1&limit=5&name=target%20config$/);
-          assert.equal(paintFrames, 2);
+          assert.equal(requests.length, 1);
+          assert.match(requests[0], /offset=0&limit=0&name=target%20config$/);
+          assert.equal(paintFrames, 0);
           assert.equal(nodes['results-count-label'].textContent, '2 results');
         }}).catch(error => {{ console.error(error); process.exit(1); }});
         """
@@ -946,6 +945,43 @@ def test_results_load_progressively_and_use_server_config_filter() -> None:
 
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_progressive_results_render_preserves_selection_by_path() -> None:
+    """Late result pages must restore selected rows from stable result paths."""
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(source, "setResultRowSelection")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let _selectedResultPaths = new Set();
+        function row(path) {{
+          const classes = new Set();
+          return {{
+            dataset: {{path}},
+            classList: {{
+              toggle(name, enabled) {{ if (enabled) classes.add(name); else classes.delete(name); }},
+              contains(name) {{ return classes.has(name); }}
+            }}
+          }};
+        }}
+        {function}
+        const firstRender = row('/result/a');
+        setResultRowSelection(firstRender, true);
+        assert.deepEqual(Array.from(_selectedResultPaths), ['/result/a']);
+
+        const replacementRow = row('/result/a');
+        replacementRow.classList.toggle('selected', _selectedResultPaths.has(replacementRow.dataset.path));
+        assert.equal(replacementRow.classList.contains('selected'), true);
+        setResultRowSelection(replacementRow, false);
+        assert.equal(_selectedResultPaths.size, 0);
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "_selectedResultPaths.has(r.path)" in source
+    assert "_selectedResultPaths.clear()" in source
+    assert "r.final_balance_estimated ? '~ ' : ''" in source
 
 
 def test_delayed_v8_settings_load_does_not_replace_results_sidebar() -> None:
@@ -1858,6 +1894,7 @@ def test_backtest_v8_results_render_strategy_without_changing_v7_rows() -> None:
         const assert = require('node:assert/strict');
         const window = {{}};
         let _activeResultsCtx = null;
+        const _selectedResultPaths = new Set();
         const backtestEditorAdapter = {{version: 'v8'}};
         const esc = (value) => String(value == null ? '' : value);
         const fmt = (value) => String(value == null ? '' : value);

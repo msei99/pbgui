@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import backtest_result_index
 import pbgui_purefunc
 from api import backtest_v7
 
@@ -227,6 +228,7 @@ def test_delete_result_is_idempotent_for_missing_local_result(tmp_path, monkeypa
     results_root = tmp_path / "pb7" / "backtests" / "pbgui"
     stale_result = results_root / "archive_retest_demo_12345678" / "combined" / "2026-06-21T20_34_35"
     monkeypatch.setattr(backtest_v7, "_bt_results_base", lambda: str(results_root))
+    monkeypatch.setattr(backtest_result_index, "PBGDIR", str(tmp_path))
 
     response = backtest_v7.delete_result(str(stale_result), session=None)
 
@@ -247,6 +249,7 @@ def test_results_support_progressive_pages_and_config_filter(tmp_path, monkeypat
         )
         os.utime(analysis_path, (index, index))
     monkeypatch.setattr(backtest_v7, "_bt_results_base", lambda: str(results_root))
+    monkeypatch.setattr(backtest_result_index, "PBGDIR", str(tmp_path))
 
     first_page = backtest_v7.list_results(offset=0, limit=1, session=None)
     filtered = backtest_v7.list_results(name="older", offset=0, limit=20, session=None)
@@ -256,6 +259,30 @@ def test_results_support_progressive_pages_and_config_filter(tmp_path, monkeypat
     assert first_page["pagination"]["has_more"] is True
     assert [item["config_name"] for item in filtered["results"]] == ["older"]
     assert filtered["pagination"]["has_more"] is False
+
+
+def test_results_reuse_persistent_summary_index(tmp_path, monkeypatch):
+    """A warm PB7 result request must not parse unchanged analysis and config files again."""
+    results_root = tmp_path / "pb7" / "backtests" / "pbgui"
+    result_dir = results_root / "demo" / "bybit" / "run-1"
+    result_dir.mkdir(parents=True)
+    (result_dir / "analysis.json").write_text(json.dumps({"gain_usd": 1.2}), encoding="utf-8")
+    (result_dir / "config.json").write_text(
+        json.dumps({"backtest": {"starting_balance": 1000}, "bot": {}, "live": {}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(backtest_v7, "_bt_results_base", lambda: str(results_root))
+    monkeypatch.setattr(backtest_result_index, "PBGDIR", str(tmp_path))
+
+    first = backtest_v7.list_results(offset=0, limit=0, session=None)
+    monkeypatch.setattr(
+        backtest_v7,
+        "_build_result_summaries",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("warm cache rebuilt")),
+    )
+    second = backtest_v7.list_results(offset=0, limit=0, session=None)
+
+    assert second == first
 
 
 def test_add_optimize_config_to_archive_uses_worker_thread(tmp_path, monkeypatch):

@@ -45,6 +45,7 @@ from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log, rotate_managed_log_before_open
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
 from backtest_autostart import claim_backtest_slot, publish_backtest_process, release_backtest_slot
+from backtest_result_index import invalidate_result as invalidate_result_index, load_indexed_results
 from ParetoDataLoader import _flatten_bot_params
 from pareto_preset_generator import (
     OPTIMIZE_PRESET_DIRECTIONS,
@@ -1498,18 +1499,13 @@ def _list_results(
                 default=backtest.get("starting_balance", 0),
             )
             gain = _analysis_value(analysis, "gain_usd", "gain_strategy_eq", "gain")
-            terminal_balances = _result_terminal_balances(result_dir)
             final_balance = _numeric_analysis_value(
                 analysis,
                 "final_balance_usd",
                 "final_balance",
                 "final_balance_strategy_eq",
-                default=terminal_balances.get("usd_total_balance"),
+                default=None,
             )
-            if final_balance is None:
-                start_num = starting_balance if isinstance(starting_balance, (int, float)) and not isinstance(starting_balance, bool) else None
-                gain_num = _numeric_analysis_value(analysis, "gain_usd", "gain", default=None)
-                final_balance = start_num * gain_num if start_num is not None and gain_num is not None else 0
             equity_balance_diff = _analysis_value(
                 analysis,
                 "equity_balance_diff_neg_max_usd",
@@ -1524,8 +1520,14 @@ def _list_results(
                 "final_equity_usd",
                 "final_equity",
                 "final_equity_strategy_eq",
-                default=terminal_balances.get("usd_total_equity", 0),
+                default=None,
             )
+            final_balance_estimated = False
+            if final_balance is None:
+                start_num = starting_balance if isinstance(starting_balance, (int, float)) and not isinstance(starting_balance, bool) else None
+                gain_num = _numeric_analysis_value(analysis, "gain_usd", "gain", default=None)
+                final_balance = start_num * gain_num if start_num is not None and gain_num is not None else None
+                final_balance_estimated = final_balance is not None
             adg_usd = _analysis_value(analysis, "adg_usd", "adg_strategy_eq", "adg")
             adg_w_usd = _analysis_value(analysis, "adg_strategy_eq_w", "adg_w_usd", default=None)
             drawdown_worst_usd = _analysis_value(
@@ -1583,6 +1585,7 @@ def _list_results(
                     "sharpe_ratio_w_usd": sharpe_ratio_w_usd,
                     "starting_balance": starting_balance,
                     "final_balance": final_balance,
+                    "final_balance_estimated": final_balance_estimated,
                     "final_equity": final_equity,
                     "balance_equity_diff": equity_balance_diff,
                     "equity_balance_diff_neg_max": equity_balance_diff,
@@ -2658,7 +2661,12 @@ def get_results(
     page_paths = paths[offset:] if limit == 0 else paths[offset : offset + limit]
     next_offset = offset + len(page_paths)
     return {
-        "results": _list_results(page_paths),
+        "results": load_indexed_results(
+            "v8",
+            page_paths,
+            lambda selected: _list_results(selected),
+            prune_missing=name is None and offset == 0 and limit == 0,
+        ),
         "pagination": {
             "total": len(paths),
             "offset": offset,
@@ -2874,4 +2882,5 @@ def delete_result(path: str, session: SessionToken = Depends(require_auth)) -> d
     """Delete one explicitly selected PB8 result directory."""
     result_dir = _resolve_result_dir(path, allow_archives=False, allow_legacy=False)
     rmtree(result_dir)
+    invalidate_result_index("v8", result_dir)
     return {"ok": True}

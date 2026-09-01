@@ -91,6 +91,7 @@ from api.pb7_ohlcv_tools import (
     stop_ohlcv_preload_job,
 )
 from backtest_autostart import claim_backtest_slot, publish_backtest_process, release_backtest_slot
+from backtest_result_index import invalidate_result as invalidate_result_index, load_indexed_results
 from logging_helpers import human_log as _log
 from pareto_preset_generator import OPTIMIZE_PRESET_DIRECTIONS, build_optimize_preset
 from pb7_config import load_pb7_config, prepare_pb7_config_dict, save_pb7_config
@@ -3583,39 +3584,10 @@ def get_queue_log(filename: str, lines: int = 100,
 
 # ── REST: Results ─────────────────────────────────────────────
 
-@router.get("/results")
-def list_results(
-    name: str = None,
-    offset: int = 0,
-    limit: int = 0,
-    session: SessionToken = Depends(require_auth),
-):
-    """List backtest results. If name given, only for that config."""
-    base = Path(_bt_results_base())
-    if not base.exists():
-        return {"results": [], "pagination": {"total": 0, "offset": 0, "limit": limit, "returned": 0, "has_more": False, "next_offset": 0}}
-    if offset < 0 or limit < 0 or limit > 100:
-        raise HTTPException(status_code=422, detail="offset must be non-negative and limit must be between 0 and 100")
-    if name:
-        _validate_name(name)
-
+def _build_result_summaries(base: Path, analysis_files: list[Path]) -> list[dict]:
+    """Build compact PB7 result summaries from selected analysis files."""
     results = []
-    search_dirs = [base / name] if name else [d for d in base.iterdir() if d.is_dir()]
-    indexed_analysis_files = []
-    for config_dir in search_dirs:
-        if config_dir.exists() and config_dir.is_dir() and not config_dir.is_symlink():
-            for path in config_dir.glob("**/analysis.json"):
-                try:
-                    if path.is_file() and not path.is_symlink():
-                        indexed_analysis_files.append((path.stat().st_mtime, str(path), path))
-                except OSError:
-                    continue
-    indexed_analysis_files.sort(reverse=True)
-    analysis_files = [item[2] for item in indexed_analysis_files]
-    total = len(analysis_files)
-    page_files = analysis_files[offset:] if limit == 0 else analysis_files[offset : offset + limit]
-
-    for analysis_file in page_files:
+    for analysis_file in analysis_files:
         result_dir = analysis_file.parent
         try:
             relative = analysis_file.relative_to(base)
@@ -3641,7 +3613,6 @@ def list_results(
                 if str(coin).strip() and str(coin).strip().lower() != "all"
             })
 
-            # Support old & new analysis key formats
             adg = analysis.get("adg_usd", analysis.get("adg", 0))
             drawdown = analysis.get("drawdown_worst_usd", analysis.get("drawdown_worst", 0))
             sharpe = analysis.get("sharpe_ratio_usd", analysis.get("sharpe_ratio", 0))
@@ -3653,8 +3624,6 @@ def list_results(
             starting_balance = bt.get("starting_balance", 0)
             final_balance = starting_balance * gain if starting_balance else 0
 
-            # Liquidation detection: use passivbot's flag if available,
-            # fall back to heuristic for older results
             liq_threshold = bt.get("liquidation_threshold", 0.05)
             if "liquidated" in analysis:
                 liquidated = bool(analysis["liquidated"])
@@ -3694,13 +3663,50 @@ def list_results(
                 "twe_short": bot.get("short", {}).get("total_wallet_exposure_limit", 0),
                 "pos_long": bot.get("long", {}).get("n_positions", 0),
                 "pos_short": bot.get("short", {}).get("n_positions", 0),
-                "modified": datetime.datetime.fromtimestamp(
-                    analysis_file.stat().st_mtime
-                ).isoformat(),
+                "modified": datetime.datetime.fromtimestamp(analysis_file.stat().st_mtime).isoformat(),
                 "analysis": analysis,
             })
         except Exception as e:
             _log(SERVICE, f"Error reading result {result_dir}: {e}", level="WARNING")
+    return results
+
+@router.get("/results")
+def list_results(
+    name: str = None,
+    offset: int = 0,
+    limit: int = 0,
+    session: SessionToken = Depends(require_auth),
+):
+    """List backtest results. If name given, only for that config."""
+    base = Path(_bt_results_base())
+    if not base.exists():
+        return {"results": [], "pagination": {"total": 0, "offset": 0, "limit": limit, "returned": 0, "has_more": False, "next_offset": 0}}
+    if offset < 0 or limit < 0 or limit > 100:
+        raise HTTPException(status_code=422, detail="offset must be non-negative and limit must be between 0 and 100")
+    if name:
+        _validate_name(name)
+
+    search_dirs = [base / name] if name else [d for d in base.iterdir() if d.is_dir()]
+    indexed_analysis_files = []
+    for config_dir in search_dirs:
+        if config_dir.exists() and config_dir.is_dir() and not config_dir.is_symlink():
+            for path in config_dir.glob("**/analysis.json"):
+                try:
+                    if path.is_file() and not path.is_symlink():
+                        indexed_analysis_files.append((path.stat().st_mtime, str(path), path))
+                except OSError:
+                    continue
+    indexed_analysis_files.sort(reverse=True)
+    analysis_files = [item[2] for item in indexed_analysis_files]
+    total = len(analysis_files)
+    page_files = analysis_files[offset:] if limit == 0 else analysis_files[offset : offset + limit]
+
+    results = load_indexed_results(
+        "v7",
+        page_files,
+        lambda selected: _build_result_summaries(base, selected),
+        prune_missing=name is None and offset == 0 and limit == 0,
+    )
 
     next_offset = offset + len(page_files)
     return {
@@ -3988,8 +3994,10 @@ def delete_result(path: str, session: SessionToken = Depends(require_auth)):
     """Delete a single result directory."""
     result_dir = _resolve_result_dir(path, allow_legacy=False, allow_archives=False)
     if not result_dir.exists():
+        invalidate_result_index("v7", result_dir)
         return {"ok": True, "missing": True}
     rmtree(str(result_dir), ignore_errors=True)
+    invalidate_result_index("v7", result_dir)
     return {"ok": True, "missing": False}
 
 
