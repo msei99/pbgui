@@ -21,6 +21,63 @@ from api import optimize_v8
 from pb8_config import PB8ConfigurationError, PB8RuntimeBusyError
 
 
+def test_scenario_template_preview_uses_shared_deterministic_generator(monkeypatch) -> None:
+    """The authenticated API boundary returns shared generator output unchanged."""
+    expected = {"training_scenarios": [{"label": "train_01"}], "holdout_scenarios": []}
+    calls = []
+    monkeypatch.setattr(optimize_v8, "generate_scenario_template", lambda body: calls.append(body) or expected)
+
+    assert optimize_v8.preview_scenario_template({"template": "rolling_windows"}, session=None) is expected
+    assert calls == [{"template": "rolling_windows"}]
+
+
+def test_scenario_template_discovery_lists_supported_generators() -> None:
+    """The authenticated discovery route exposes the deterministic template IDs."""
+    payload = optimize_v8.get_scenario_templates(session=None)
+
+    assert [item["id"] for item in payload["templates"]] == ["rolling_windows", "walk_forward", "sweep_cycles"]
+
+
+def test_scenario_template_preview_maps_validation_error_to_422(monkeypatch) -> None:
+    """Invalid generator input is logged and exposed as a FastAPI validation response."""
+    warnings = []
+    monkeypatch.setattr(
+        optimize_v8,
+        "generate_scenario_template",
+        lambda _body: (_ for _ in ()).throw(optimize_v8.ScenarioTemplateError("invalid window")),
+    )
+    monkeypatch.setattr(optimize_v8, "_log", lambda service, message, **kwargs: warnings.append((service, message, kwargs)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        optimize_v8.preview_scenario_template({}, session=None)
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail == "invalid window"
+    assert "invalid window" in warnings[0][1]
+
+
+def test_ohlcv_start_date_routes_start_poll_and_stop_owned_job(monkeypatch) -> None:
+    """Authenticated Optimize routes expose the transient lookup lifecycle."""
+    expected = {"job_id": "abc123def456", "status": "queued"}
+    calls = []
+    monkeypatch.setattr(
+        optimize_v8,
+        "start_pb8_ohlcv_start_date_job",
+        lambda config: calls.append(config) or expected,
+    )
+    monkeypatch.setattr(optimize_v8, "get_pb8_ohlcv_start_date_job", lambda job_id: {**expected, "job_id": job_id, "status": "running"})
+    monkeypatch.setattr(optimize_v8, "stop_pb8_ohlcv_start_date_job", lambda job_id: {**expected, "job_id": job_id, "status": "stopping"})
+
+    started = optimize_v8.start_ohlcv_start_date_lookup({"config": {"backtest": {}}}, None)
+    polled = optimize_v8.get_ohlcv_start_date_lookup("abc123def456", None)
+    stopped = optimize_v8.stop_ohlcv_start_date_lookup("abc123def456", None)
+
+    assert started is expected
+    assert calls == [{"backtest": {}}]
+    assert polled["status"] == "running"
+    assert stopped["status"] == "stopping"
+
+
 @pytest.fixture
 def optimize_v8_roots(tmp_path, monkeypatch):
     """Redirect every PB8 optimize managed root to isolated test storage."""
@@ -46,6 +103,8 @@ def optimize_v8_roots(tmp_path, monkeypatch):
     monkeypatch.setattr(optimize_v8, "validate_pb8_optimizer_overrides", lambda _config, **_kwargs: None)
     with optimize_v8._result_progress_cache_lock:
         optimize_v8._result_progress_cache.clear()
+    with optimize_v8._active_eval_count_cache_lock:
+        optimize_v8._active_eval_count_cache.clear()
     with optimize_v8._backtest_count_cache_lock:
         optimize_v8._backtest_count_cache.clear()
     with optimize_v8._pareto_list_cache_lock:
@@ -1386,6 +1445,150 @@ def test_suite_pareto_projection_catalogs_all_metrics_but_loads_only_selected_va
     assert selected["paretos"][0]["summary"]["unrelated_149"] == 149.0
 
 
+def test_sweep_sidecar_adds_real_cashflow_metrics_and_candidate_detail(optimize_v8_roots) -> None:
+    """Immutable sweep plans evaluate Suite gains in Pareto lists and file detail."""
+    _configs, _queue, _logs, results = optimize_v8_roots
+    result = results / "sweep-suite"
+    pareto = result / "pareto"
+    pareto.mkdir(parents=True)
+    config = {
+        "backtest": {
+            "suite_enabled": True,
+            "scenarios": [
+                {"label": "train_01", "start_date": "2020-01-01", "end_date": "2020-03-30"},
+                {"label": "train_02", "start_date": "2020-04-07", "end_date": "2020-07-05"},
+            ]
+        },
+        "pbgui": {
+            "scenario_template": {
+                "template": "sweep_cycles",
+                "parameters": {
+                    "window_days": 90,
+                    "stride_days": 97,
+                    "sweep_policy": {
+                        "starting_balance": 1000,
+                        "balance_multiplier": 2,
+                        "refill_cost": 25,
+                        "cooldown_days": 7,
+                    },
+                },
+                "holdout_scenarios": [{"label": "holdout_01"}],
+            }
+        },
+    }
+    plan = optimize_v8.build_sweep_plan(config)
+    optimize_v8._write_json(result / optimize_v8.SWEEP_PLAN_FILENAME, plan)
+    candidate = {
+        "optimize": {"scoring": [{"metric": "gain_strategy_eq", "goal": "max"}]},
+        "suite_metrics": {
+            "scenario_labels": ["train_01", "train_02"],
+            "metrics": {
+                "gain_strategy_eq": {
+                    "aggregated": 1.5,
+                    "stats": {"mean": 1.5, "min": 1.5, "max": 1.5, "std": 0.0, "median": 1.5},
+                    "scenarios": {"train_01": 1.5, "train_02": 1.5},
+                }
+            },
+        },
+    }
+    candidate_path = pareto / "candidate.json"
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    payload = optimize_v8.list_paretos(str(result), "Aggregated", "mean", None)
+    detail = optimize_v8.get_pareto_file(str(candidate_path), None)
+
+    summary = payload["paretos"][0]["summary"]
+    assert summary["sweep_total_swept"] == 1250.0
+    assert summary["sweep_net_cashflow"] == 1250.0
+    assert summary["sweep_cycles_completed"] == 1.0
+    assert payload["meta"]["sweep_cycles"]["enabled"] is True
+    assert "sweep_net_cashflow" in payload["meta"]["default_metrics"]
+    assert detail["sweep_cycles"]["windows"][1]["action"] == "sweep_reset"
+    assert detail["sweep_cycles"]["holdout_status"] == "pending_separate_validation"
+    assert detail["sweep_cycles"]["holdout_scenarios"] == [
+        {"label": "holdout_01", "start_date": "2020-07-13", "end_date": "2020-10-10"}
+    ]
+
+
+def test_sweep_cycles_requires_durable_all_results_at_save_boundary() -> None:
+    """PBGui must not accept a sweep plan it cannot bind immutably to its result."""
+    config = {
+        "backtest": {
+            "suite_enabled": True,
+            "starting_balance": 1000,
+            "scenarios": [{"label": "train_01", "start_date": "2020-01-01", "end_date": "2020-03-30"}],
+        },
+        "optimize": {"write_all_results": False},
+        "pbgui": {
+            "scenario_template": {
+                "template": "sweep_cycles",
+                "parameters": {
+                    "window_days": 90,
+                    "stride_days": 90,
+                    "sweep_policy": {"starting_balance": 1000, "balance_multiplier": 2, "refill_cost": 0, "cooldown_days": 0},
+                },
+                "holdout_scenarios": [],
+            }
+        },
+    }
+
+    with pytest.raises(HTTPException, match="write_all_results=true"):
+        optimize_v8._validate_sweep_cycles_config(config)
+
+
+def test_sweep_cycles_rejects_base_and_policy_balance_mismatch() -> None:
+    """Saved and launched Sweep configs must use the balance evaluated by PB8."""
+    config = {
+        "backtest": {
+            "suite_enabled": True,
+            "starting_balance": 100_000,
+            "scenarios": [{"label": "train_01", "start_date": "2020-01-01", "end_date": "2020-03-30"}],
+        },
+        "optimize": {"write_all_results": True},
+        "pbgui": {
+            "scenario_template": {
+                "template": "sweep_cycles",
+                "parameters": {
+                    "window_days": 90,
+                    "stride_days": 90,
+                    "sweep_policy": {"starting_balance": 1000, "balance_multiplier": 2, "refill_cost": 0, "cooldown_days": 0},
+                },
+                "holdout_scenarios": [],
+            }
+        },
+    }
+
+    with pytest.raises(HTTPException, match="backtest.starting_balance"):
+        optimize_v8._validate_sweep_cycles_config(config)
+
+
+def test_sweep_cycles_rejects_asymmetric_suite_coin_lists_before_launch() -> None:
+    """PBGui must surface PB8 Suite's symmetric approved-coin contract before starting."""
+    config = {
+        "backtest": {
+            "suite_enabled": True,
+            "starting_balance": 1000,
+            "scenarios": [{"label": "train_01", "start_date": "2020-01-01", "end_date": "2020-03-30"}],
+        },
+        "live": {"approved_coins": {"long": ["HYPE/USDC:USDC"], "short": []}},
+        "optimize": {"write_all_results": True},
+        "pbgui": {
+            "scenario_template": {
+                "template": "sweep_cycles",
+                "parameters": {
+                    "window_days": 90,
+                    "stride_days": 90,
+                    "sweep_policy": {"starting_balance": 1000, "balance_multiplier": 2, "refill_cost": 0, "cooldown_days": 0},
+                },
+                "holdout_scenarios": [],
+            }
+        },
+    }
+
+    with pytest.raises(HTTPException, match="identical live.approved_coins"):
+        optimize_v8._validate_sweep_cycles_config(config)
+
+
 @pytest.mark.parametrize("metrics", ("bad metric", "metric/path", "x" * 129))
 def test_pareto_metric_projection_rejects_invalid_names(optimize_v8_roots, metrics: str) -> None:
     """Dynamic projection accepts only bounded metric identifiers from the advertised catalog."""
@@ -1606,6 +1809,97 @@ def test_queue_status_returns_complete_shared_dashboard_shape(optimize_v8_roots)
     assert status["log"]["exists"] is True
     assert status["queue"]["queued"] == 1
     assert {"cpu_percent", "memory_percent", "swap_percent"} <= status["system"].keys()
+
+
+def test_running_queue_status_prefers_durable_results_over_stale_pareto_log(
+    optimize_v8_roots, monkeypatch
+) -> None:
+    """Rejected Pareto duplicates must not leave running evaluation progress stale."""
+    _write_queue_job("durable-progress", 0)
+    queue_item = next(item for item in optimize_v8._load_queue() if item["filename"] == "durable-progress")
+    queue_item["status"] = "running"
+    monkeypatch.setattr(optimize_v8, "_load_queue", lambda: [copy.deepcopy(queue_item)])
+    launch = optimize_v8._launch_dir("durable-progress")
+    launch.mkdir(parents=True)
+    optimize_v8._write_json(
+        optimize_v8._launch_config_file("durable-progress"),
+        {"optimize": {"backend": "pymoo", "iters": 300_000, "pymoo": {"algorithm": "nsga2"}}},
+    )
+    (optimize_v8._log_dir() / "durable-progress.log").write_text(
+        "2026-08-31T12:00:00Z INFO Pareto update | eval=4429 | front=5\n"
+        "2026-08-31T12:00:01Z INFO Dropping candidate whose obj score is already present with <= violation\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        optimize_v8,
+        "_active_all_results_progress",
+        lambda _filename: {"evaluations": 18_750, "result": "active-run", "trailing_partial_entry": False},
+    )
+
+    status = optimize_v8.get_queue_status("durable-progress", None)
+
+    assert status["progress"]["evaluations"] == 18_750
+    assert status["progress"]["percent"] == 6.25
+    assert status["progress"]["evaluation_source"] == "all_results"
+    assert status["progress"]["result"] == "active-run"
+
+
+def test_active_all_results_progress_uses_verified_open_result_file(
+    optimize_v8_roots, monkeypatch
+) -> None:
+    """Only an immediate PB8 result file opened by the verified process is counted."""
+    _configs, _queue, _logs, results = optimize_v8_roots
+    result_dir = results / "active-result"
+    result_dir.mkdir(parents=True)
+    all_results = result_dir / "all_results.bin"
+    all_results.write_bytes(b"".join(msgpack.packb({"evaluation": index}) for index in range(3)))
+
+    class Process:
+        """Minimal verified process with one durable result file."""
+
+        def children(self, recursive=False):
+            assert recursive is True
+            return []
+
+        def open_files(self):
+            return [SimpleNamespace(path=str(all_results))]
+
+    monkeypatch.setattr(
+        optimize_v8,
+        "_read_process_record",
+        lambda _filename: {"pid": 123, "create_time": 456.0, "owned_results": []},
+    )
+    monkeypatch.setattr(optimize_v8, "_process_matches", lambda _filename, _record: True)
+    monkeypatch.setattr(optimize_v8.psutil, "Process", lambda _pid: Process())
+
+    progress = optimize_v8._active_all_results_progress("active-job")
+
+    assert progress == {
+        "evaluations": 3,
+        "result": "active-result",
+        "trailing_partial_entry": False,
+    }
+
+
+def test_active_evaluation_counter_resumes_after_partial_messagepack_record(
+    optimize_v8_roots,
+) -> None:
+    """A live partial append must not be counted until its MessagePack record is complete."""
+    _configs, _queue, _logs, results = optimize_v8_roots
+    result_dir = results / "partial-active-result"
+    result_dir.mkdir(parents=True)
+    path = result_dir / "all_results.bin"
+    complete = [msgpack.packb({"evaluation": index}) for index in range(2)]
+    pending = msgpack.packb({"evaluation": 2, "payload": "pending"})
+    path.write_bytes(b"".join(complete) + pending[:-1])
+
+    first = optimize_v8._all_results_evaluation_count(path)
+    with path.open("ab") as handle:
+        handle.write(pending[-1:])
+    second = optimize_v8._all_results_evaluation_count(path)
+
+    assert first == {"evaluations": 2, "trailing_partial_entry": True}
+    assert second == {"evaluations": 3, "trailing_partial_entry": False}
 
 
 def test_config_metadata_seed_backtests_and_result_mode(optimize_v8_roots) -> None:

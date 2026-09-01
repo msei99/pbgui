@@ -1,4 +1,4 @@
-"""Run PB8's read-only OHLCV planner inside the configured PB8 runtime."""
+"""Run PB8 OHLCV planning and explicit inception lookup in its configured runtime."""
 
 from __future__ import annotations
 
@@ -27,6 +27,14 @@ STATUS_RANK = {
     "coin_too_young": 4,
     "missing_market": 5,
 }
+MAX_START_DATE_PAIRS = 200
+PROGRESS_PREFIX = "PBGUI_OHLCV_START_PROGRESS "
+
+
+def _emit_progress(**payload: Any) -> None:
+    """Write one machine-readable progress event outside the JSON result stream."""
+    sys.stderr.write(PROGRESS_PREFIX + json.dumps(payload, separators=(",", ":")) + "\n")
+    sys.stderr.flush()
 
 
 def _load_modules(pb8_dir: Path) -> dict[str, Any]:
@@ -266,6 +274,98 @@ def _summary(counts: dict[str, int], coin_count: int, *, explicit_source: bool) 
     }
 
 
+def _build_start_date_options(
+    entries_by_coin: dict[str, list[dict[str, Any]]],
+    coins: list[str],
+    exchanges: list[str],
+    warmup_minutes: int,
+    end_ts: int,
+    ts_to_date,
+) -> dict[str, Any]:
+    """Aggregate earliest-any and common-all start dates from market pairs."""
+    selected_exchanges = {str(exchange) for exchange in exchanges}
+    entries = [
+        entry
+        for coin in coins
+        for entry in entries_by_coin.get(coin, [])
+        if str(entry.get("requested_exchange") or "") in selected_exchanges
+    ]
+    known = []
+    missing = []
+    unknown = []
+    for entry in entries:
+        pair = {
+            "coin": str(entry.get("coin") or ""),
+            "exchange": str(entry.get("requested_exchange") or entry.get("exchange") or ""),
+        }
+        if entry.get("status") == "missing_market":
+            missing.append(pair)
+            continue
+        try:
+            first_ts = int(entry.get("_available_start_ts") or 0)
+        except (TypeError, ValueError):
+            first_ts = 0
+        if first_ts <= 0:
+            unknown.append(pair)
+            continue
+        known.append((pair, first_ts))
+
+    expected_pairs = len(coins) * len(exchanges)
+
+    def date_only(value: int) -> str:
+        rendered = str(ts_to_date(value)).strip()
+        if len(rendered) >= 10 and rendered[4] == "-" and rendered[7] == "-":
+            return rendered[:10]
+        raise ValueError("PB8 returned an invalid OHLCV date")
+
+    def option(first_ts: int | None, *, all_pairs: bool) -> dict[str, Any]:
+        if first_ts is None:
+            return {
+                "available": False,
+                "data_date": None,
+                "start_date": None,
+                "detail": (
+                    "Every selected coin must have a known first OHLCV timestamp on every selected exchange."
+                    if all_pairs
+                    else "No first OHLCV timestamp could be resolved for the selected markets."
+                ),
+            }
+        required_ts = first_ts + max(0, int(warmup_minutes)) * 60_000
+        day_ms = 86_400_000
+        start_ts = ((required_ts + day_ms - 1) // day_ms) * day_ms
+        if start_ts > end_ts:
+            return {
+                "available": False,
+                "data_date": date_only(first_ts),
+                "start_date": None,
+                "detail": "The first usable date including warmup is after the configured end date.",
+            }
+        return {
+            "available": True,
+            "data_date": date_only(first_ts),
+            "start_date": date_only(start_ts),
+            "detail": (
+                "First date with OHLCV coverage for every selected exchange/coin pair, plus warmup."
+                if all_pairs
+                else "Earliest known OHLCV date among the selected markets, plus warmup."
+            ),
+        }
+
+    earliest_ts = min((first_ts for _pair, first_ts in known), default=None)
+    all_known = expected_pairs > 0 and len(known) == expected_pairs and not missing and not unknown
+    all_markets_ts = max((first_ts for _pair, first_ts in known), default=None) if all_known else None
+    return {
+        "earliest": option(earliest_ts, all_pairs=False),
+        "all_markets": option(all_markets_ts, all_pairs=True),
+        "warmup_minutes": max(0, int(warmup_minutes)),
+        "pair_count": expected_pairs,
+        "known_pair_count": len(known),
+        "missing_market_pairs": missing[:20],
+        "unknown_start_pairs": unknown[:20],
+        "truncated_pair_details": len(missing) > 20 or len(unknown) > 20,
+    }
+
+
 async def _build(payload: dict[str, Any]) -> dict[str, Any]:
     """Prepare a config and evaluate its local ranges with PB8 modules."""
     pb8_dir = Path(str(payload.get("pb8_dir") or "")).resolve()
@@ -274,6 +374,7 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(raw_config, dict):
         raise TypeError("config must be an object")
     candidate = copy.deepcopy(raw_config)
+    include_start_date_options = bool(payload.get("include_start_date_options"))
     candidate.pop("pbgui", None)
     config = modules["prepare_config"](
         candidate,
@@ -320,10 +421,31 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
         else None
     )
 
+    uses_all_coins = _uses_all_coins(live.get("approved_coins"))
+    if include_start_date_options:
+        _emit_progress(phase="resolving_universe", completed=0, total=0, message="Resolving approved coins")
     await modules["format_approved_ignored_coins"](config, exchanges)
     approved = require_live_value(config, "approved_coins")
     coin_sides = _collect_coin_sides(approved)
     coins = sorted(coin_sides)
+    coins_mode = "all" if uses_all_coins else "explicit"
+    if include_start_date_options:
+        if coins_mode == "all":
+            raise ValueError("OHLCV start-date lookup requires explicitly selected approved coins")
+        if not coins:
+            raise ValueError("Select at least one approved coin before looking up an OHLCV start date")
+        pair_count = len(coins) * len(base_exchanges)
+        if pair_count > MAX_START_DATE_PAIRS:
+            raise ValueError(
+                f"OHLCV start-date lookup expands to {pair_count} exchange/coin pairs; "
+                f"maximum is {MAX_START_DATE_PAIRS}"
+            )
+        _emit_progress(
+            phase="starting",
+            completed=0,
+            total=pair_count,
+            message=f"Preparing {pair_count} exchange/coin pairs",
+        )
     dataset_requirements = _gpu_suite_dataset_requirements(config, base_exchanges, coins)
     request = {
         "requested_start_date": requested_start_date,
@@ -337,7 +459,7 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
     }
     universe = {
         "coin_count": len(coins),
-        "coins_mode": "all" if _uses_all_coins(live.get("approved_coins")) else "explicit",
+        "coins_mode": coins_mode,
         "exchange_count": len(exchanges),
     }
     if not coins:
@@ -352,6 +474,8 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
 
     entries_by_coin: dict[str, list[dict[str, Any]]] = {coin: [] for coin in coins}
     exchange_payloads = []
+    start_date_pairs_completed = 0
+    start_date_pair_total = len(coins) * len(base_exchanges)
     for raw_exchange in exchanges:
         ccxt_exchange = modules["to_ccxt_exchange_id"](raw_exchange)
         store_exchange = modules["to_standard_exchange_name"](ccxt_exchange)
@@ -372,8 +496,26 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
         exchange_entries = []
         counts = _counts()
         try:
+            if include_start_date_options and str(raw_exchange) in base_exchanges:
+                _emit_progress(
+                    phase="loading_markets",
+                    completed=start_date_pairs_completed,
+                    total=start_date_pair_total,
+                    exchange=str(raw_exchange),
+                    message=f"Loading {raw_exchange} markets",
+                )
             await manager.load_markets()
             for coin in coins:
+                track_start_date_pair = include_start_date_options and str(raw_exchange) in base_exchanges
+                if track_start_date_pair:
+                    _emit_progress(
+                        phase="resolving_pair",
+                        completed=start_date_pairs_completed,
+                        total=start_date_pair_total,
+                        exchange=str(raw_exchange),
+                        coin=coin,
+                        message=f"Resolving {coin} on {raw_exchange}",
+                    )
                 entry: dict[str, Any] = {
                     "coin": coin,
                     "exchange": store_exchange,
@@ -392,6 +534,18 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
                     market = (manager.markets or {}).get(symbol) if isinstance(manager.markets, dict) else None
                     market_start_ts = _market_start_ts(market)
                     first_ts_guess = manager.load_first_timestamp(coin)
+                    if include_start_date_options and str(raw_exchange) in base_exchanges and not first_ts_guess:
+                        first_ts_guess = await manager.get_first_timestamp(coin)
+                    try:
+                        first_available_ts = int(float(first_ts_guess)) if first_ts_guess else None
+                    except (TypeError, ValueError):
+                        first_available_ts = None
+                    if not first_available_ts:
+                        first_available_ts = market_start_ts
+                    if first_available_ts and first_available_ts < 10_000_000_000:
+                        first_available_ts *= 1000
+                    if first_available_ts:
+                        entry["_available_start_ts"] = first_available_ts
                     age_anchor = market_start_ts or (int(float(first_ts_guess)) if first_ts_guess else None)
                     adjusted_start_ts = max(
                         effective_start_ts,
@@ -463,6 +617,16 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
                 counts[entry["status"]] += 1
                 exchange_entries.append(entry)
                 entries_by_coin[coin].append(entry)
+                if track_start_date_pair:
+                    start_date_pairs_completed += 1
+                    _emit_progress(
+                        phase="resolving_pair",
+                        completed=start_date_pairs_completed,
+                        total=start_date_pair_total,
+                        exchange=str(raw_exchange),
+                        coin=coin,
+                        message=f"Resolved {coin} on {raw_exchange}",
+                    )
         finally:
             await manager.aclose()
             if manager.cc:
@@ -517,7 +681,11 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
             best_entries.append(best)
             best_counts[best["status"]] += 1
     notes = [
-        "Preflight is read-only and runs PB8's installed planner modules in the configured PB8 virtualenv.",
+        (
+            "Explicit start-date lookup runs PB8's installed planner and may update its native first-timestamp cache."
+            if include_start_date_options
+            else "Preflight is read-only and runs PB8's installed planner modules in the configured PB8 virtualenv."
+        ),
         "Approved coins are resolved from both long and short lists.",
     ]
     if source_dir:
@@ -530,7 +698,7 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
             preload_label="Suite preload requires separate datasets",
             preload_detail="The current single PB8 download command does not include scenario-only exchanges; preload each required dataset explicitly.",
         )
-    return {
+    result = {
         "summary": summary,
         "request": request,
         "universe": universe,
@@ -540,6 +708,22 @@ async def _build(payload: dict[str, Any]) -> dict[str, Any]:
         "requirements": requirements,
         "notes": notes,
     }
+    if include_start_date_options:
+        result["start_date_options"] = _build_start_date_options(
+            entries_by_coin,
+            coins,
+            base_exchanges,
+            warmup_minutes,
+            end_ts,
+            modules["ts_to_date"],
+        )
+        _emit_progress(
+            phase="complete",
+            completed=start_date_pair_total,
+            total=start_date_pair_total,
+            message="OHLCV start dates resolved",
+        )
+    return result
 
 
 def main() -> int:

@@ -34,8 +34,12 @@ from api.auth import SessionToken, authenticate_websocket, require_auth
 from api.pb8_ohlcv_tools import (
     PB8OhlcvUnavailableError,
     build_pb8_ohlcv_preflight,
+    get_pb8_ohlcv_start_date_job,
     get_pb8_ohlcv_preload_job,
+    shutdown_pb8_ohlcv_start_date_jobs,
+    start_pb8_ohlcv_start_date_job,
     start_pb8_ohlcv_preload_job,
+    stop_pb8_ohlcv_start_date_job,
     stop_pb8_ohlcv_preload_job,
 )
 from file_lock import advisory_file_lock
@@ -65,7 +69,9 @@ from pb8_config import (
     validate_pb8_optimize_preflight,
 )
 from pbgui_purefunc import PBGDIR, PBGUI_SERIAL, PBGUI_VERSION, load_ini_section, pb7dir, pb8_runtime_status, save_ini_section
+from scenario_templates import ScenarioTemplateError, generate_scenario_template, list_scenario_templates
 from secure_files import atomic_write_private_text, ensure_private_directory, ensure_private_directory_tree
+from sweep_cycles import SWEEP_METRIC_NAMES, SWEEP_PLAN_FILENAME, build_sweep_plan, evaluate_sweep_cycles, validate_sweep_plan
 
 SERVICE = "OptimizeV8"
 router = APIRouter()
@@ -127,6 +133,8 @@ _dash_lock = threading.RLock()
 _dash_admission_open = False
 _result_progress_cache: OrderedDict[str, dict] = OrderedDict()
 _result_progress_cache_lock = threading.RLock()
+_active_eval_count_cache: OrderedDict[str, dict] = OrderedDict()
+_active_eval_count_cache_lock = threading.RLock()
 _backtest_count_cache: OrderedDict[str, dict] = OrderedDict()
 _backtest_count_cache_lock = threading.RLock()
 _pareto_list_cache: OrderedDict[tuple[str, int | None, int, int], dict] = OrderedDict()
@@ -675,6 +683,7 @@ def _save_config_bundle(
             name,
             preserve_hsl_runtime_overrides=preserve_hsl_runtime_overrides,
         )
+        _validate_sweep_cycles_config(normalized)
         resolved_overrides = _resolve_override_payloads(normalized, override_payloads, source_dir)
         _write_override_payloads(stage, resolved_overrides)
         prepared = prepare_pb8_config(normalized, base_config_path=str(stage / _CONFIG_FILENAME))
@@ -694,6 +703,59 @@ def _save_config_bundle(
         return prepared
     finally:
         rmtree(stage, ignore_errors=True)
+
+
+def _validate_sweep_cycles_config(config: dict) -> dict | None:
+    """Require a complete attributable result contract for Sweep Cycles."""
+    pbgui = config.get("pbgui") if isinstance(config.get("pbgui"), dict) else {}
+    template = pbgui.get("scenario_template") if isinstance(pbgui.get("scenario_template"), dict) else {}
+    if template.get("template") != "sweep_cycles":
+        return None
+    plan = build_sweep_plan(config)
+    if plan is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Sweep Cycles requires active non-overlapping Suite scenarios, inherited exchanges, and a valid policy",
+        )
+    optimize = config.get("optimize") if isinstance(config.get("optimize"), dict) else {}
+    if optimize.get("write_all_results") is False:
+        raise HTTPException(
+            status_code=422,
+            detail="Sweep Cycles requires optimize.write_all_results=true so PBGui can bind its immutable plan to the result",
+        )
+    backtest = config.get("backtest") if isinstance(config.get("backtest"), dict) else {}
+    try:
+        backtest_balance = float(backtest.get("starting_balance"))
+    except (TypeError, ValueError):
+        backtest_balance = -1.0
+    sweep_balance = float(plan["policy"]["starting_balance"])
+    if abs(backtest_balance - sweep_balance) > max(1e-9, abs(sweep_balance) * 1e-12):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Sweep Cycles requires backtest.starting_balance to equal "
+                "pbgui.scenario_template.parameters.sweep_policy.starting_balance"
+            ),
+        )
+    live = config.get("live") if isinstance(config.get("live"), dict) else {}
+    approved = live.get("approved_coins")
+    if approved == "all":
+        approved_long = approved_short = ["all"]
+    elif isinstance(approved, dict):
+        approved_long = approved.get("long")
+        approved_short = approved.get("short")
+        approved_long = [approved_long] if isinstance(approved_long, str) else approved_long
+        approved_short = [approved_short] if isinstance(approved_short, str) else approved_short
+    else:
+        approved_long = approved_short = approved
+    normalized_long = sorted({str(value).strip() for value in (approved_long or []) if str(value).strip()}) if isinstance(approved_long, list) else []
+    normalized_short = sorted({str(value).strip() for value in (approved_short or []) if str(value).strip()}) if isinstance(approved_short, list) else []
+    if normalized_long != normalized_short:
+        raise HTTPException(
+            status_code=422,
+            detail="Sweep Cycles requires identical live.approved_coins.long and live.approved_coins.short lists for PB8 Suite mode",
+        )
+    return plan
 
 
 def _read_process_record(filename: str) -> dict | None:
@@ -1586,6 +1648,86 @@ def _all_results_progress(path: Path) -> dict:
     return payload
 
 
+def _all_results_evaluation_count(path: Path) -> dict:
+    """Count appended PB8 MessagePack records without reconstructing result configs."""
+    key = str(path.resolve(strict=False))
+    now = time.monotonic()
+    with _active_eval_count_cache_lock:
+        for stale_key, cached in list(_active_eval_count_cache.items()):
+            if now - float(cached.get("accessed_at") or 0) > _RESULT_PROGRESS_CACHE_TTL_SECONDS:
+                _active_eval_count_cache.pop(stale_key, None)
+        try:
+            stat_result = path.stat()
+            if path.is_symlink() or not path.is_file():
+                raise OSError("not a regular file")
+        except OSError:
+            _active_eval_count_cache.pop(key, None)
+            return {"evaluations": 0, "trailing_partial_entry": False, "error": "result file unavailable"}
+
+        cached = _active_eval_count_cache.get(key)
+        same_file = bool(
+            cached
+            and cached.get("device") == stat_result.st_dev
+            and cached.get("inode") == stat_result.st_ino
+            and stat_result.st_size >= int(cached.get("size") or 0)
+            and not (
+                stat_result.st_size == int(cached.get("size") or 0)
+                and stat_result.st_mtime_ns != cached.get("mtime_ns")
+            )
+        )
+        if same_file and stat_result.st_size == cached["size"]:
+            cached["accessed_at"] = now
+            _active_eval_count_cache.move_to_end(key)
+            return {
+                "evaluations": int(cached["evaluations"]),
+                "trailing_partial_entry": int(cached["offset"]) < int(cached["size"]),
+            }
+
+        offset = int(cached["offset"]) if same_file else 0
+        evaluations = int(cached["evaluations"]) if same_file else 0
+        last_complete = offset
+        error = None
+        try:
+            with path.open("rb") as handle:
+                handle.seek(offset)
+                unpacker = msgpack.Unpacker(raw=False, strict_map_key=False, max_buffer_size=64 * 1024 * 1024)
+                remaining = stat_result.st_size - offset
+                while remaining > 0:
+                    chunk = handle.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    unpacker.feed(chunk)
+                    for entry in unpacker:
+                        if not isinstance(entry, dict):
+                            raise ValueError("all_results.bin contains a non-object record")
+                        evaluations += 1
+                        last_complete = offset + unpacker.tell()
+        except (OSError, ValueError, msgpack.UnpackException) as exc:
+            error = str(exc) or exc.__class__.__name__
+
+        state = {
+            "device": stat_result.st_dev,
+            "inode": stat_result.st_ino,
+            "size": stat_result.st_size,
+            "mtime_ns": stat_result.st_mtime_ns,
+            "offset": last_complete,
+            "evaluations": evaluations,
+            "accessed_at": now,
+        }
+        _active_eval_count_cache[key] = state
+        _active_eval_count_cache.move_to_end(key)
+        while len(_active_eval_count_cache) > _RESULT_PROGRESS_CACHE_MAX_ENTRIES:
+            _active_eval_count_cache.popitem(last=False)
+        result = {
+            "evaluations": evaluations,
+            "trailing_partial_entry": last_complete < stat_result.st_size,
+        }
+        if error:
+            result["error"] = error
+        return result
+
+
 def _all_results_progress_for_listing(path: Path) -> dict:
     """Return bounded list metadata without cold-decoding a large result stream."""
     try:
@@ -1882,6 +2024,19 @@ def _metric_value(value, statistic: str, scenario: str = "Aggregated") -> float 
         if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
             return float(candidate)
     return None
+
+
+def _load_sweep_plan(result_dir: Path) -> dict | None:
+    """Load one bounded PBGui sweep sidecar without following links."""
+    path = result_dir / SWEEP_PLAN_FILENAME
+    try:
+        stat_result = path.stat()
+        if path.is_symlink() or not path.is_file() or stat_result.st_size > 256 * 1024:
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    return validate_sweep_plan(payload)
 
 
 def _suite_metric_payload(data: dict) -> tuple[dict, list[str]]:
@@ -2922,6 +3077,7 @@ class OptimizeV8Worker:
                     automatic=automatic,
                     pbgui_data_path=pbgui_data_path,
                 )
+                sweep_plan = _validate_sweep_cycles_config(launch_config)
                 prepared = prepare_pb8_config(launch_config, base_config_path=str(snapshot))
                 _validate_optimizer_overrides(prepared, base_config_path=str(snapshot))
                 _validate_forager_optimize_search_space(prepared)
@@ -2938,7 +3094,10 @@ class OptimizeV8Worker:
                 )
                 _write_json(_launch_config_file(filename), prepared)
                 validate_pb8_override_bundle(_launch_config_file(filename))
-                _write_json(_launch_options_file(filename), options)
+                runner_options = dict(options)
+                if sweep_plan is not None:
+                    runner_options["pbgui_sweep_plan"] = sweep_plan
+                _write_json(_launch_options_file(filename), runner_options)
                 _state_file(filename).unlink(missing_ok=True)
                 _ready_file(filename).unlink(missing_ok=True)
                 data.update(
@@ -3038,6 +3197,7 @@ async def shutdown() -> None:
         _dash_admission_open = False
     await _worker.stop()
     await asyncio.to_thread(_stop_all_dash_sessions)
+    await asyncio.to_thread(shutdown_pb8_ohlcv_start_date_jobs)
     await asyncio.to_thread(interrupt_pb8_migration_helper)
     if _migration_helper_warmup_task is not None:
         await asyncio.gather(_migration_helper_warmup_task, return_exceptions=True)
@@ -3115,6 +3275,22 @@ def get_metadata(session: SessionToken = Depends(require_auth)) -> dict:
         raise _configuration_error("Loading PB8 optimize metadata", exc, 503) from exc
 
 
+@router.get("/scenario-templates")
+def get_scenario_templates(session: SessionToken = Depends(require_auth)) -> dict:
+    """Return deterministic PB8 scenario template descriptors."""
+    return {"templates": list_scenario_templates()}
+
+
+@router.post("/scenario-templates/preview")
+def preview_scenario_template(body: dict, session: SessionToken = Depends(require_auth)) -> dict:
+    """Validate and preview a deterministic PB8 scenario template."""
+    try:
+        return generate_scenario_template(body)
+    except ScenarioTemplateError as exc:
+        _log(SERVICE, f"Rejected PB8 scenario template preview: {exc}", level="WARNING")
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/pbgui_data_path")
 def get_pbgui_data_path(session: SessionToken = Depends(require_auth)) -> dict:
     from market_data import get_market_data_root_dir
@@ -3136,6 +3312,41 @@ async def get_ohlcv_preflight(body: dict, session: SessionToken = Depends(requir
         _log(SERVICE, f"PB8 optimize OHLCV readiness failed: {detail}", level="WARNING", meta={"traceback": traceback.format_exc()})
         status_code = 503 if isinstance(exc, PB8OhlcvUnavailableError) else 422
         raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/ohlcv-start-dates")
+def start_ohlcv_start_date_lookup(body: dict, session: SessionToken = Depends(require_auth)) -> dict:
+    """Start a bounded PB8 OHLCV inception lookup job."""
+    config = body.get("config") if isinstance(body, dict) else None
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail="config must be an object")
+    try:
+        return start_pb8_ohlcv_start_date_job(config)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        detail = str(exc).strip() or exc.__class__.__name__
+        _log(SERVICE, f"PB8 optimize OHLCV start-date lookup failed: {detail}", level="WARNING", meta={"traceback": traceback.format_exc()})
+        status_code = 503 if isinstance(exc, PB8OhlcvUnavailableError) else 422
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/ohlcv-start-dates/{job_id}")
+def get_ohlcv_start_date_lookup(job_id: str, session: SessionToken = Depends(require_auth)) -> dict:
+    """Return progress or the result for one PB8 OHLCV inception lookup."""
+    payload = get_pb8_ohlcv_start_date_job(job_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="OHLCV start-date lookup job not found")
+    return payload
+
+
+@router.delete("/ohlcv-start-dates/{job_id}")
+def stop_ohlcv_start_date_lookup(job_id: str, session: SessionToken = Depends(require_auth)) -> dict:
+    """Stop one API-owned PB8 OHLCV inception lookup."""
+    payload = stop_pb8_ohlcv_start_date_job(job_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="OHLCV start-date lookup job not found")
+    return payload
 
 
 @router.post("/ohlcv-preload")
@@ -4064,6 +4275,47 @@ def _system_stats() -> dict:
     }
 
 
+def _active_all_results_progress(filename: str) -> dict | None:
+    """Return durable evaluation progress for the verified queue process, if available."""
+    record = _read_process_record(filename)
+    if not record or not _process_matches(filename, record):
+        return None
+    results_root = Path(os.path.abspath(_results_root()))
+    try:
+        parent = psutil.Process(int(record["pid"]))
+        processes = [parent, *parent.children(recursive=True)]
+    except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied, OSError, ValueError, TypeError):
+        return None
+
+    for process in processes:
+        try:
+            open_files = process.open_files()
+        except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied, OSError):
+            continue
+        for opened in open_files:
+            try:
+                path = Path(os.path.abspath(str(opened.path)))
+                relative = path.relative_to(results_root)
+            except (AttributeError, OSError, ValueError):
+                continue
+            if len(relative.parts) != 2 or relative.parts[-1] != "all_results.bin":
+                continue
+            if not path.is_file() or path.is_symlink():
+                continue
+            try:
+                progress = _all_results_evaluation_count(path)
+            except RuntimeError:
+                continue
+            if progress.get("error"):
+                continue
+            return {
+                "evaluations": int(progress.get("evaluations") or 0),
+                "result": relative.parts[0],
+                "trailing_partial_entry": bool(progress.get("trailing_partial_entry")),
+            }
+    return None
+
+
 @router.get("/queue/{filename}/status")
 def get_queue_status(filename: str, session: SessionToken = Depends(require_auth)) -> dict:
     item = next((item for item in _load_queue() if item["filename"] == filename), None)
@@ -4092,8 +4344,16 @@ def get_queue_status(filename: str, session: SessionToken = Depends(require_auth
         except (TypeError, ValueError):
             continue
     evaluations = log_summary["evaluations"]
+    evaluation_source = "log" if evaluations is not None else None
+    durable_progress = _active_all_results_progress(filename) if item["status"] == "running" else None
+    if durable_progress is not None:
+        durable_evaluations = int(durable_progress["evaluations"])
+        if evaluations is None or durable_evaluations >= evaluations:
+            evaluations = durable_evaluations
+            evaluation_source = "all_results"
     if evaluations is None and item["status"] == "complete" and target is not None:
         evaluations = target
+        evaluation_source = "complete"
     percent = None
     if evaluations is not None and target and target > 0:
         percent = max(0.0, min(100.0, evaluations / target * 100.0))
@@ -4137,6 +4397,8 @@ def get_queue_status(filename: str, session: SessionToken = Depends(require_auth
             "iter": log_summary["iter"],
             "target_iters": target,
             "target_evaluations": target,
+            "evaluation_source": evaluation_source,
+            "result": durable_progress.get("result") if durable_progress else None,
             "percent": percent,
             "front": log_summary["front"],
             "generation": log_summary["generation"],
@@ -4641,21 +4903,35 @@ def list_paretos(
             "scenario_labels": [],
             "objectives": [],
         }
+        sweep_plan = _load_sweep_plan(result_dir)
         selected_scenario = scenario if scenario in {"Aggregated", *contract["scenario_labels"]} else "Aggregated"
-        paretos = [
-            {
+        paretos = []
+        for path, compact, stat_result in candidates:
+            summary = _project_compact_pareto(
+                compact,
+                selected_statistic,
+                selected_scenario,
+                requested_metrics,
+            )
+            sweep_evaluation = None
+            if sweep_plan is not None and selected_scenario == "Aggregated":
+                sweep_evaluation = evaluate_sweep_cycles(sweep_plan, compact.get("suite_values") or {})
+                if sweep_evaluation.get("available"):
+                    summary.update(sweep_evaluation["summary"])
+            item = {
                 "path": str(path),
                 "name": path.stem,
                 "modified": datetime.datetime.fromtimestamp(stat_result.st_mtime).isoformat(),
-                "summary": _project_compact_pareto(
-                    compact,
-                    selected_statistic,
-                    selected_scenario,
-                    requested_metrics,
-                ),
+                "summary": summary,
             }
-            for path, compact, stat_result in candidates
-        ]
+            if sweep_evaluation is not None:
+                item["sweep_cycles"] = {
+                    "available": bool(sweep_evaluation.get("available")),
+                    "reason": sweep_evaluation.get("reason"),
+                    "gain_metric": sweep_evaluation.get("gain_metric"),
+                    "holdout_status": sweep_evaluation.get("holdout_status"),
+                }
+            paretos.append(item)
         available_set = {
             str(metric)
             for metric in metric_catalog
@@ -4665,12 +4941,18 @@ def list_paretos(
             for item in paretos
             for metric in (item.get("summary") or {})
         )
+        if sweep_plan is not None:
+            available_set.update(SWEEP_METRIC_NAMES)
         comparison_order = [name for name, _aliases in _PARETO_COMPARISON_METRICS]
         available_metrics = [name for name in comparison_order if name in available_set]
         available_metrics.extend(sorted(available_set - set(available_metrics)))
         objective_names = [str(item.get("metric") or "").strip() for item in contract["objectives"]]
         default_metrics = []
-        for name in ["gain", *objective_names, "drawdown_worst"]:
+        default_candidates = ["gain"]
+        if sweep_plan is not None:
+            default_candidates.extend(["sweep_net_cashflow", "sweep_cycles_completed"])
+        default_candidates.extend([*objective_names, "drawdown_worst"])
+        for name in default_candidates:
             if name in available_set and name not in default_metrics:
                 default_metrics.append(name)
     return {
@@ -4687,6 +4969,11 @@ def list_paretos(
             "selected_scenario": selected_scenario,
             "selected_statistic": selected_statistic,
             "statistic_enabled": contract["mode"] != "suite" or selected_scenario == "Aggregated",
+            "sweep_cycles": {
+                "enabled": sweep_plan is not None,
+                "policy": copy.deepcopy(sweep_plan.get("policy")) if sweep_plan else None,
+                "holdout_count": int(sweep_plan.get("holdout_count") or 0) if sweep_plan else 0,
+            },
         },
     }
 
@@ -4698,10 +4985,15 @@ def get_pareto_file(path: str, session: SessionToken = Depends(require_auth)) ->
         if not pareto.is_file() or pareto.parent.name != "pareto":
             raise HTTPException(status_code=400, detail="Path is not a managed PB8 pareto file")
         config = _read_json(pareto)
-        return {
+        response = {
             "config": config,
             "override_configs": _result_override_payloads(pareto.parent.parent, config),
         }
+        sweep_plan = _load_sweep_plan(pareto.parent.parent)
+        if sweep_plan is not None:
+            suite_metrics, _labels = _suite_metric_payload(config)
+            response["sweep_cycles"] = evaluate_sweep_cycles(sweep_plan, suite_metrics)
+        return response
 
 
 @router.post("/paretos/seed-bundle")

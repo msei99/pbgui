@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 import pb8_optimize_runner
+from sweep_cycles import SWEEP_PLAN_FILENAME, build_sweep_plan
 
 
 @pytest.mark.parametrize(
@@ -112,3 +113,38 @@ def test_runner_passes_fine_tune_and_polish_options(tmp_path, monkeypatch) -> No
         "--polish-bounds-mode",
         "override-tunable",
     ]
+
+
+def test_runner_persists_sweep_plan_only_beside_its_open_result(tmp_path, monkeypatch) -> None:
+    """The runner binds immutable PBGui sweep metadata to its own PB8 result stream."""
+    pb8_dir = tmp_path / "pb8"
+    result_dir = pb8_dir / "optimize_results" / "run"
+    result_dir.mkdir(parents=True)
+    all_results = result_dir / "all_results.bin"
+    all_results.write_bytes(b"")
+    config = {
+        "backtest": {"suite_enabled": True, "scenarios": [{"label": "train_01", "start_date": "2020-01-01", "end_date": "2020-03-30"}]},
+        "pbgui": {
+            "scenario_template": {
+                "template": "sweep_cycles",
+                "parameters": {
+                    "window_days": 90,
+                    "stride_days": 97,
+                    "sweep_policy": {"starting_balance": 1000, "balance_multiplier": 2, "refill_cost": 5, "cooldown_days": 7},
+                },
+                "holdout_scenarios": [],
+            }
+        },
+    }
+    plan = build_sweep_plan(config)
+    monkeypatch.setattr(
+        pb8_optimize_runner.psutil,
+        "Process",
+        lambda _pid: SimpleNamespace(open_files=lambda: [SimpleNamespace(path=str(all_results))]),
+    )
+
+    assert pb8_optimize_runner._persist_open_sweep_plan(pb8_dir, plan) is True
+
+    saved = json.loads((result_dir / SWEEP_PLAN_FILENAME).read_text(encoding="utf-8"))
+    assert saved == plan
+    assert oct((result_dir / SWEEP_PLAN_FILENAME).stat().st_mode & 0o777) == "0o600"

@@ -1675,6 +1675,13 @@
       padding: 0 4px;
     }
 
+    .modal-head .close-btn {
+      position: relative;
+      z-index: 2;
+      flex: 0 0 auto;
+      pointer-events: auto;
+    }
+
     .close-btn:hover { color: var(--text); }
 
     .help-toolbar {
@@ -2942,7 +2949,7 @@
         <div>
           <div class='panel-title' id='alertModalTitle'>Notice</div>
         </div>
-        <button class='close-btn' type='button' onclick='closeAlertModal()'>&times;</button>
+        <button class='close-btn' id='alertModalClose' type='button' aria-label='Close'>&times;</button>
       </div>
       <div class='modal-body'>
         <div id='alertModalBody' class='notice'></div>
@@ -6258,10 +6265,20 @@
     function initAlertModalInteractions() {
       const modalBox = document.getElementById('alertModalBox');
       const head = document.getElementById('alertModalHead');
+      const closeButton = document.getElementById('alertModalClose');
       const resizeHandle = document.getElementById('alertModalResizeHandle');
-      if (!modalBox || !head || !resizeHandle) return;
+      if (!modalBox || !head || !closeButton || !resizeHandle) return;
       let drag = null;
       let resize = null;
+
+      closeButton.addEventListener('pointerdown', function (event) {
+        event.stopPropagation();
+      });
+      closeButton.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeAlertModal();
+      });
 
       function releasePointer(target, pointerId) {
         try { target.releasePointerCapture(pointerId); } catch (error) {}

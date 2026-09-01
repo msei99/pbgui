@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 
@@ -52,6 +53,10 @@ def pb8_runtime(tmp_path, monkeypatch):
         pb8_ohlcv_tools._JOBS.clear()
         pb8_ohlcv_tools._REAPERS.clear()
         monkeypatch.setattr(pb8_ohlcv_tools, "_RESTORED", False)
+    with pb8_ohlcv_tools._START_DATE_LOCK:
+        pb8_ohlcv_tools._START_DATE_JOBS.clear()
+        pb8_ohlcv_tools._START_DATE_PROCESSES.clear()
+        pb8_ohlcv_tools._START_DATE_THREADS.clear()
     return status, pb8_dir, python, cli, market_root
 
 
@@ -103,6 +108,188 @@ def test_preflight_uses_pb8_python_cwd_and_never_pb7(pb8_runtime, monkeypatch) -
     assert captured["command"][2].endswith("pb8_ohlcv_runtime_helper.py")
     assert "pb7" not in " ".join(captured["command"]).lower()
     assert json.loads(captured["kwargs"]["input"])["pb8_dir"] == str(pb8_dir)
+    assert json.loads(captured["kwargs"]["input"])["include_start_date_options"] is False
+
+
+def test_start_date_lookup_enables_explicit_runtime_mode(pb8_runtime, monkeypatch) -> None:
+    """The explicit lookup flag and longer timeout are isolated from read-only preflight."""
+    _status, _pb8_dir, _python, _cli, _market_root = pb8_runtime
+    captured = {}
+
+    class Proc:
+        returncode = 0
+        stdout = json.dumps({"ok": True, "result": {"start_date_options": {"earliest": {}}}})
+        stderr = ""
+
+    def fake_run(_command, **kwargs):
+        captured.update(kwargs)
+        return Proc()
+
+    monkeypatch.setattr(pb8_ohlcv_tools.subprocess, "run", fake_run)
+
+    result = asyncio.run(pb8_ohlcv_tools.build_pb8_ohlcv_start_dates({"backtest": {}}))
+
+    request = json.loads(captured["input"])
+    assert request["include_start_date_options"] is True
+    assert captured["timeout"] == 180
+    assert "start_date_options" in result
+
+
+def test_start_date_progress_parser_returns_bounded_pair_progress() -> None:
+    """Only prefixed valid JSON lines become browser-visible progress."""
+    parsed = pb8_ohlcv_tools._parse_start_date_progress_line(
+        pb8_ohlcv_tools._START_DATE_PROGRESS_PREFIX
+        + json.dumps(
+            {
+                "phase": "resolving_pair",
+                "completed": 3,
+                "total": 8,
+                "coin": "HYPE",
+                "exchange": "hyperliquid",
+                "message": "Resolved HYPE on hyperliquid",
+            }
+        )
+    )
+
+    assert parsed == {
+        "phase": "resolving_pair",
+        "completed": 3,
+        "total": 8,
+        "percent": 37.5,
+        "coin": "HYPE",
+        "exchange": "hyperliquid",
+        "message": "Resolved HYPE on hyperliquid",
+    }
+    assert pb8_ohlcv_tools._parse_start_date_progress_line("ordinary PB8 log") is None
+
+
+def test_start_date_job_streams_progress_and_publishes_result(pb8_runtime, monkeypatch) -> None:
+    """The transient worker consumes real helper progress before publishing completion."""
+    status, pb8_dir, python, _cli, _market_root = pb8_runtime
+    del status
+    released = []
+
+    class Input:
+        """Capture the helper request body."""
+
+        def __init__(self):
+            self.value = ""
+
+        def write(self, value):
+            self.value += value
+
+        def close(self):
+            return None
+
+    class Output:
+        """Return one complete helper result."""
+
+        def read(self):
+            return json.dumps(
+                {
+                    "ok": True,
+                    "result": {
+                        "start_date_options": {
+                            "earliest": {"available": True, "start_date": "2021-01-01"}
+                        }
+                    },
+                }
+            )
+
+    class Process:
+        """Minimal completed helper process with two progress events."""
+
+        pid = 4242
+
+        def __init__(self):
+            self.stdin = Input()
+            self.stdout = Output()
+            self.stderr = iter(
+                [
+                    pb8_ohlcv_tools._START_DATE_PROGRESS_PREFIX
+                    + '{"phase":"starting","completed":0,"total":2,"message":"Preparing"}\n',
+                    pb8_ohlcv_tools._START_DATE_PROGRESS_PREFIX
+                    + '{"phase":"resolving_pair","completed":2,"total":2,"coin":"ETH","exchange":"bybit","message":"Resolved ETH"}\n',
+                ]
+            )
+            self.returncode = None
+
+        def wait(self, timeout=None):
+            del timeout
+            self.returncode = 0
+            return 0
+
+        def poll(self):
+            return self.returncode
+
+    process = Process()
+    monkeypatch.setattr(pb8_ohlcv_tools, "_acquire_runtime_lease", lambda: _Lease(released))
+    monkeypatch.setattr(
+        pb8_ohlcv_tools,
+        "_runtime",
+        lambda: {"pb8dir": str(pb8_dir), "pb8venv": str(python)},
+    )
+    monkeypatch.setattr(
+        pb8_ohlcv_tools,
+        "resolve_pb8_ohlcv_paths",
+        lambda config, _status: (config, None, pb8_dir / "catalog.sqlite"),
+    )
+    monkeypatch.setattr(pb8_ohlcv_tools.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    job_id = "a1b2c3d4e5f6"
+    with pb8_ohlcv_tools._START_DATE_LOCK:
+        pb8_ohlcv_tools._START_DATE_JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "created_at": 1,
+            "stop_requested": False,
+            "progress": {},
+        }
+
+    pb8_ohlcv_tools._run_start_date_job(job_id, {"backtest": {}})
+    result = pb8_ohlcv_tools.get_pb8_ohlcv_start_date_job(job_id)
+
+    assert result["status"] == "completed"
+    assert result["progress"]["completed"] == 2
+    assert result["progress"]["percent"] == 100.0
+    assert result["result"]["start_date_options"]["earliest"]["start_date"] == "2021-01-01"
+    assert released == [True]
+
+
+def test_stop_and_shutdown_target_only_registered_start_date_jobs(pb8_runtime, monkeypatch) -> None:
+    """Stop and shutdown control registered lookup processes and join their threads."""
+    stopped = []
+    joined = []
+
+    class Process:
+        """Opaque registered process identity."""
+
+    class Thread:
+        """Track deterministic shutdown joins."""
+
+        def join(self, timeout=None):
+            joined.append(timeout)
+
+    job_id = "abcdef123456"
+    process = Process()
+    with pb8_ohlcv_tools._START_DATE_LOCK:
+        pb8_ohlcv_tools._START_DATE_JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "running",
+            "created_at": 1,
+            "stop_requested": False,
+            "progress": {},
+        }
+        pb8_ohlcv_tools._START_DATE_PROCESSES[job_id] = process
+        pb8_ohlcv_tools._START_DATE_THREADS[job_id] = Thread()
+    monkeypatch.setattr(pb8_ohlcv_tools, "_terminate_start_date_process", lambda target: stopped.append(target))
+
+    response = pb8_ohlcv_tools.stop_pb8_ohlcv_start_date_job(job_id)
+    pb8_ohlcv_tools.shutdown_pb8_ohlcv_start_date_jobs()
+
+    assert response["status"] == "stopping"
+    assert response["stop_requested"] is True
+    assert stopped == [process, process]
+    assert joined == [5]
 
 
 def test_runtime_preserves_symlinked_virtualenv_python(pb8_runtime, tmp_path) -> None:
@@ -382,6 +569,63 @@ def test_explicit_source_gaps_disable_remote_preload() -> None:
     assert "read-only" in explicit["preload_detail"]
     assert default["overall_status"] == "preload"
     assert default["preload_supported"] is True
+
+
+def test_start_date_options_distinguish_earliest_and_all_market_coverage() -> None:
+    """Common coverage starts after the newest inception while earliest uses the oldest."""
+    def timestamp(day: str) -> int:
+        return int(datetime.fromisoformat(day).replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+    def date_string(value: int) -> str:
+        return datetime.fromtimestamp(value / 1000, timezone.utc).strftime("%Y-%m-%d")
+
+    entries = {
+        "BTC": [
+            {"coin": "BTC", "requested_exchange": "binance", "status": "store_complete", "_available_start_ts": timestamp("2020-01-01")},
+            {"coin": "BTC", "requested_exchange": "bybit", "status": "store_complete", "_available_start_ts": timestamp("2020-02-01")},
+        ],
+        "ETH": [
+            {"coin": "ETH", "requested_exchange": "binance", "status": "store_complete", "_available_start_ts": timestamp("2020-03-01")},
+            {"coin": "ETH", "requested_exchange": "bybit", "status": "store_complete", "_available_start_ts": timestamp("2020-04-01")},
+        ],
+    }
+
+    options = pb8_ohlcv_runtime_helper._build_start_date_options(
+        entries,
+        ["BTC", "ETH"],
+        ["binance", "bybit"],
+        1440,
+        timestamp("2021-01-01"),
+        lambda value: date_string(value) + "T00:00:00",
+    )
+
+    assert options["earliest"] == {
+        "available": True,
+        "data_date": "2020-01-01",
+        "start_date": "2020-01-02",
+        "detail": "Earliest known OHLCV date among the selected markets, plus warmup.",
+    }
+    assert options["all_markets"]["data_date"] == "2020-04-01"
+    assert options["all_markets"]["start_date"] == "2020-04-02"
+    assert options["pair_count"] == options["known_pair_count"] == 4
+
+
+def test_all_market_start_date_reports_missing_exchange_pair() -> None:
+    """A coin absent from one selected exchange must block common-all coverage."""
+    entries = {
+        "BTC": [
+            {"coin": "BTC", "requested_exchange": "binance", "status": "store_complete", "_available_start_ts": 86_400_000},
+            {"coin": "BTC", "requested_exchange": "bybit", "status": "missing_market"},
+        ]
+    }
+
+    options = pb8_ohlcv_runtime_helper._build_start_date_options(
+        entries, ["BTC"], ["binance", "bybit"], 0, 864_000_000, lambda _value: "1970-01-02T00:00:00"
+    )
+
+    assert options["earliest"]["available"] is True
+    assert options["all_markets"]["available"] is False
+    assert options["missing_market_pairs"] == [{"coin": "BTC", "exchange": "bybit"}]
 
 
 def test_gpu_suite_readiness_requires_every_scenario_exchange() -> None:

@@ -21,6 +21,16 @@ var _suiteState = {
   apiBase: '',
   exchanges: ['binance','bybit','bitget','okx','hyperliquid','kucoin'],
   preserveMarketIdentifiers: false,
+  scenarioGeneratorEnabled: false,
+  getScenarioContext: null,
+  scenarioPreview: null,
+  scenarioPreviewContext: '',
+  scenarioGeneratorDraft: null,
+  scenarioRequestId: 0,
+  scenarioTemplate: null,
+  applyingGeneratedTemplate: false,
+  expanded: false,
+  onApplyScenarioPreview: null,
 };
 
 /* ── Templates ──────────────────────────────────────────────── */
@@ -85,6 +95,15 @@ function suiteInit(containerId, opts) {
   _suiteState.apiBase = opts.apiBase || '';
   _suiteState.aggregateMetrics = _suiteNormalizeAggMetrics(opts.aggregateMetrics);
   _suiteState.preserveMarketIdentifiers = String(opts.version || '').toLowerCase() === 'v8';
+  _suiteState.scenarioGeneratorEnabled = _suiteState.preserveMarketIdentifiers && opts.scenarioGenerator === true;
+  _suiteState.getScenarioContext = typeof opts.getScenarioContext === 'function' ? opts.getScenarioContext : null;
+  _suiteState.onApplyScenarioPreview = typeof opts.onApplyScenarioPreview === 'function' ? opts.onApplyScenarioPreview : null;
+  _suiteState.scenarioPreview = null;
+  _suiteState.scenarioPreviewContext = '';
+  _suiteState.scenarioGeneratorDraft = null;
+  _suiteState.scenarioRequestId += 1;
+  _suiteState.scenarioTemplate = null;
+  _suiteState.expanded = false;
   if (Array.isArray(opts.exchanges) && opts.exchanges.length) {
     _suiteState.exchanges = opts.exchanges.map(function(value) { return String(value || '').trim(); })
       .filter(function(value, index, values) { return value && values.indexOf(value) === index; });
@@ -135,9 +154,20 @@ function suiteLoad(cfg, opts) {
   }
   var nextScenarios = Array.isArray(bt.scenarios) ? JSON.parse(JSON.stringify(bt.scenarios)) : [];
   _suiteState.enabled = !!bt.suite_enabled;
+  var existingExpander = typeof document !== 'undefined' ? document.getElementById('exp-suite') : null;
+  _suiteState.expanded = existingExpander
+    ? existingExpander.classList.contains('open')
+    : _suiteState.enabled;
   _suiteState.scenarios = nextScenarios;
   var reducer = bt.reducer || bt.aggregate;
   _suiteState.aggregate = reducer ? JSON.parse(JSON.stringify(reducer)) : { default: 'mean' };
+  _suiteState.scenarioPreview = null;
+  _suiteState.scenarioPreviewContext = '';
+  _suiteState.scenarioGeneratorDraft = null;
+  _suiteState.scenarioRequestId += 1;
+  _suiteState.scenarioTemplate = cfg.pbgui && cfg.pbgui.scenario_template
+    ? JSON.parse(JSON.stringify(cfg.pbgui.scenario_template))
+    : null;
   if (opts.preserveEdit && _suiteState.enabled && prevEditIdx >= 0) {
     var nextEditIdx = -1;
     if (prevLabel) {
@@ -167,6 +197,9 @@ function suiteCollect() {
   if (_suiteState.enabled) {
     result.scenarios = JSON.parse(JSON.stringify(_suiteState.scenarios));
     result.aggregate = JSON.parse(JSON.stringify(_suiteState.aggregate));
+    if (_suiteState.scenarioTemplate) {
+      result.scenario_template = JSON.parse(JSON.stringify(_suiteState.scenarioTemplate));
+    }
   }
   return result;
 }
@@ -191,6 +224,7 @@ function _suiteLoadBotParams() {
 
 /* ── Structured editor sync hook ───────────────────────────── */
 function _suiteNotifyStructuredSync() {
+  if (!_suiteState.applyingGeneratedTemplate) _suiteState.scenarioTemplate = null;
   if (typeof scheduleStructuredEditorSync === 'function') {
     scheduleStructuredEditorSync();
   }
@@ -432,10 +466,12 @@ function _suiteShowCoinDd(id, filter) {
 function _suiteRender() {
   var el = document.getElementById(_suiteState.containerId);
   if (!el) return;
+  var existingExpander = document.getElementById('exp-suite');
+  if (existingExpander) _suiteState.expanded = existingExpander.classList.contains('open');
 
   var h = '';
-  h += '\x3Cdiv class="expander' + (_suiteState.enabled ? ' open' : '') + '" id="exp-suite">';
-  h += '\x3Cdiv class="expander-header" onclick="toggleExpander(\'exp-suite\')">';
+  h += '\x3Cdiv class="expander' + (_suiteState.expanded ? ' open' : '') + '" id="exp-suite">';
+  h += '\x3Cdiv class="expander-header" onclick="_suiteToggleExpander()">';
   h += '\x3Cspan class="arrow">\u25B6\x3C/span> Suite Mode';
   if (_suiteState.enabled) {
     h += ' \x3Cspan style="color:var(--green);font-size:var(--fs-xs);margin-left:6px">ENABLED (' +
@@ -450,6 +486,10 @@ function _suiteRender() {
        ' onchange="_suiteToggle(this.checked)">';
   h += '\x3Clabel for="suite-enabled">\x3Cspan data-tip="Run multiple scenarios with different parameters,\ncoin sets, date ranges, or exchanges.\nResults are aggregated for comparison.">Enable Suite Mode\x3C/span>\x3C/label>\x3C/div>';
   h += '\x3C/div>';
+
+  if (_suiteState.scenarioGeneratorEnabled) {
+    h += _suiteRenderScenarioGenerator();
+  }
 
   if (_suiteState.enabled) {
     h += '\x3Cdiv style="display:flex;gap:var(--sp-sm);flex-wrap:wrap;margin-bottom:var(--sp-md)">';
@@ -483,9 +523,218 @@ function _suiteRender() {
   }
 }
 
+function _suiteToggleExpander() {
+  toggleExpander('exp-suite');
+  var expander = document.getElementById('exp-suite');
+  if (expander) _suiteState.expanded = expander.classList.contains('open');
+}
+
+function _suiteScenarioContext() {
+  if (!_suiteState.getScenarioContext) return {};
+  var context = _suiteState.getScenarioContext();
+  return context && typeof context === 'object' ? context : {};
+}
+
+function _suiteRenderScenarioGenerator() {
+  var context = _suiteScenarioContext();
+  var preview = _suiteState.scenarioPreview;
+  var draft = _suiteState.scenarioGeneratorDraft || {
+    template: 'rolling_windows', window_days: 90, stride_days: 30, training_windows: 4,
+    holdout_windows: 1, exchange_mode: 'inherit', balance_multiplier: 2,
+    starting_balance: 1000, refill_cost: 0, cooldown_days: 0,
+  };
+  var isSweep = draft.template === 'sweep_cycles';
+  var h = '\x3Cdiv style="border:1px solid var(--border);border-radius:6px;padding:var(--sp-md);margin-bottom:var(--sp-md);background:rgba(77,166,255,.035)">';
+  h += '\x3Cdiv style="display:flex;align-items:start;justify-content:space-between;gap:var(--sp-md);margin-bottom:var(--sp-sm)">';
+  h += '\x3Cdiv>\x3Cdiv style="font-weight:650">PB8 Scenario Generator\x3C/div>';
+  h += '\x3Cdiv style="font-size:var(--fs-xs);color:var(--text-dim);margin-top:2px">Deterministic preview using base dates ' +
+    esc(context.start_date || 'unset') + ' to ' + esc(context.end_date || 'unset') + '.\x3C/div>\x3C/div>';
+  h += '\x3Cdiv style="display:flex;gap:var(--sp-xs)">';
+  h += '\x3Cbutton type="button" class="act-btn" onclick="_suiteOpenScenarioGeneratorGuide()">Guide\x3C/button>';
+  h += '\x3Cbutton type="button" class="act-btn" onclick="_suiteRecalculateScenarioGenerator()">Recalculate\x3C/button>';
+  h += '\x3Cbutton type="button" class="act-btn" id="suite-generator-preview-btn" onclick="_suitePreviewScenarioTemplate()">Preview\x3C/button>\x3C/div>\x3C/div>';
+  h += '\x3Cdiv style="display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:var(--sp-sm);align-items:end">';
+  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Choose rolling training windows, chronological walk-forward training with untouched holdout windows, or walk-forward windows with sweep evaluation provenance.">Template\x3C/span>\x3C/label>\x3Cselect id="suite-generator-template" onchange="_suiteUpdateGeneratorFields(this.value)">';
+  h += '\x3Coption value="rolling_windows"' + (draft.template === 'rolling_windows' ? ' selected' : '') + '>Rolling Windows\x3C/option>';
+  h += '\x3Coption value="walk_forward"' + (draft.template === 'walk_forward' ? ' selected' : '') + '>Walk-Forward\x3C/option>';
+  h += '\x3Coption value="sweep_cycles"' + (isSweep ? ' selected' : '') + '>Sweep Cycles\x3C/option>\x3C/select>\x3C/div>';
+  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Number of calendar days included in each generated scenario.">Window days\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-window" min="1" max="3650" value="' + esc(draft.window_days) + '" onchange="_suiteAlignSweepStride()">\x3C/div>';
+  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Distance between consecutive window end dates. Sweep Cycles calculates this automatically as Window days plus Cooldown days.">Stride days\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-stride" min="1" max="3650" value="' + esc(draft.stride_days) + '"' + (isSweep ? ' readonly' : '') + '>\x3C/div>';
+  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Windows applied to optimizer training. Sweep Cycles calculates the maximum complete count automatically after reserving holdouts.">Training windows\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-training" min="1" max="48" value="' + esc(draft.training_windows) + '"' + (isSweep ? ' readonly' : '') + '>\x3C/div>';
+  h += '\x3Cdiv class="form-group" id="suite-generator-holdout-wrap" style="' + (draft.template === 'rolling_windows' ? 'display:none' : '') + '">\x3Clabel>\x3Cspan data-tip="Untouched windows shown separately for later validation. Holdout windows are never applied to backtest.scenarios.">Holdout windows\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-holdout" min="0" max="16" value="' + esc(draft.holdout_windows) + '" onchange="_suiteAlignSweepStride()">\x3C/div>';
+  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Inherit base evaluates the selected exchanges together. One per exchange creates a separate scenario for every selected base exchange.">Exchange mode\x3C/span>\x3C/label>\x3Cselect id="suite-generator-exchange-mode">';
+  h += '\x3Coption value="inherit"' + (draft.exchange_mode === 'inherit' ? ' selected' : '') + '>Inherit base\x3C/option>\x3Coption value="per_exchange"' + (draft.exchange_mode === 'per_exchange' ? ' selected' : '') + '>One per exchange\x3C/option>\x3C/select>\x3C/div>';
+  h += '\x3Cdiv class="form-group suite-generator-sweep" style="' + (isSweep ? '' : 'display:none') + '">\x3Clabel>\x3Cspan data-tip="Absolute sweep target equals Starting balance multiplied by this value. When reached at a window end, all balance above Starting balance is swept and the next window resets.">Balance multiplier\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-multiplier" min="1.01" max="100" step="0.01" value="' + esc(draft.balance_multiplier) + '">\x3C/div>';
+  h += '\x3Cdiv class="form-group suite-generator-sweep" style="' + (isSweep ? '' : 'display:none') + '">\x3Clabel>\x3Cspan data-tip="Working capital at the beginning of the first cycle and after every sweep or refill reset.">Starting balance\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-balance" min="1" value="' + esc(draft.starting_balance) + '">\x3C/div>';
+  h += '\x3Cdiv class="form-group suite-generator-sweep" style="' + (isSweep ? '' : 'display:none') + '">\x3Clabel>\x3Cspan data-tip="Additional external cost booked whenever a loss window is refilled back to Starting balance.">Refill cost\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-refill" min="0" value="' + esc(draft.refill_cost) + '">\x3C/div>';
+  h += '\x3Cdiv class="form-group suite-generator-sweep" style="' + (isSweep ? '' : 'display:none') + '">\x3Clabel>\x3Cspan data-tip="Minimum no-trading gap between sweep-cycle windows. Stride must be at least window days plus cooldown days.">Cooldown days\x3C/span>\x3C/label>\x3Cinput type="number" id="suite-generator-cooldown" min="0" max="3650" value="' + esc(draft.cooldown_days) + '" onchange="_suiteAlignSweepStride()">\x3C/div>';
+  h += '\x3C/div>';
+
+  if (preview) {
+    h += '\x3Cdiv style="margin-top:var(--sp-md);padding-top:var(--sp-sm);border-top:1px solid var(--border)">';
+    h += '\x3Cdiv style="display:flex;align-items:center;justify-content:space-between;gap:var(--sp-md);margin-bottom:var(--sp-sm)">';
+    h += '\x3Cspan style="font-size:var(--fs-sm);font-weight:600">Preview: ' + preview.training_scenarios.length +
+      ' training, ' + preview.holdout_scenarios.length + ' holdout\x3C/span>';
+    h += '\x3Cbutton type="button" class="act-btn" onclick="_suiteApplyScenarioPreview()">Apply Training Scenarios\x3C/button>\x3C/div>';
+    h += '\x3Cdiv style="max-height:190px;overflow:auto">\x3Ctable class="tbl" style="font-size:var(--fs-sm)">';
+    h += '\x3Cthead>\x3Ctr>\x3Cth>Use\x3C/th>\x3Cth>Label\x3C/th>\x3Cth>Period\x3C/th>\x3C/tr>\x3C/thead>\x3Ctbody>';
+    preview.training_scenarios.concat(preview.holdout_scenarios).forEach(function(scenario, index) {
+      var training = index < preview.training_scenarios.length;
+      h += '\x3Ctr>\x3Ctd>' + (training ? 'Train' : 'Holdout') + '\x3C/td>\x3Ctd>' + esc(scenario.label) +
+        '\x3C/td>\x3Ctd>' + esc(scenario.start_date) + ' to ' + esc(scenario.end_date) + '\x3C/td>\x3C/tr>';
+    });
+    h += '\x3C/tbody>\x3C/table>\x3C/div>';
+    (preview.warnings || []).forEach(function(warning) {
+      h += '\x3Cdiv style="font-size:var(--fs-sm);line-height:1.45;color:var(--orange);margin-top:4px">' + esc(warning) + '\x3C/div>';
+    });
+    h += '\x3C/div>';
+  }
+  h += '\x3C/div>';
+  return h;
+}
+
+function _suiteUpdateGeneratorFields(template) {
+  var holdout = document.getElementById('suite-generator-holdout-wrap');
+  if (holdout) holdout.style.display = template === 'rolling_windows' ? 'none' : '';
+  document.querySelectorAll('.suite-generator-sweep').forEach(function(field) {
+    field.style.display = template === 'sweep_cycles' ? '' : 'none';
+  });
+  if (template === 'sweep_cycles') _suiteAlignSweepStride();
+}
+
+function _suiteAlignSweepStride() {
+  var template = document.getElementById('suite-generator-template');
+  var windowInput = document.getElementById('suite-generator-window');
+  var strideInput = document.getElementById('suite-generator-stride');
+  var cooldownInput = document.getElementById('suite-generator-cooldown');
+  var trainingInput = document.getElementById('suite-generator-training');
+  var holdoutInput = document.getElementById('suite-generator-holdout');
+  if (!template || template.value !== 'sweep_cycles' || !windowInput || !strideInput || !cooldownInput || !trainingInput || !holdoutInput) return;
+  var minimum = Math.max(1, parseInt(windowInput.value, 10) || 1) + Math.max(0, parseInt(cooldownInput.value, 10) || 0);
+  strideInput.value = String(minimum);
+  var context = _suiteScenarioContext();
+  var startMs = Date.parse(String(context.start_date || '') + 'T00:00:00Z');
+  var endMs = Date.parse(String(context.end_date || '') + 'T00:00:00Z');
+  if (!isFinite(startMs) || !isFinite(endMs) || endMs < startMs) return;
+  var availableDays = Math.floor((endMs - startMs) / 86400000) + 1;
+  var windowDays = Math.max(1, parseInt(windowInput.value, 10) || 1);
+  var totalWindows = availableDays < windowDays ? 0 : 1 + Math.floor((availableDays - windowDays) / minimum);
+  var holdouts = Math.max(0, parseInt(holdoutInput.value, 10) || 0);
+  trainingInput.value = String(Math.max(0, totalWindows - holdouts));
+}
+
+function _suiteGeneratorInteger(id) {
+  var input = document.getElementById(id);
+  return input ? parseInt(input.value, 10) : 0;
+}
+
+function _suiteGeneratorNumber(id) {
+  var input = document.getElementById(id);
+  return input ? Number(input.value) : 0;
+}
+
+function _suiteScenarioContextSignature(context) {
+  return JSON.stringify({
+    start_date: context.start_date || null,
+    end_date: context.end_date || null,
+    exchanges: Array.isArray(context.exchanges) ? context.exchanges : [],
+  });
+}
+
+function _suiteCaptureScenarioGeneratorDraft() {
+  var templateNode = document.getElementById('suite-generator-template');
+  if (!templateNode) return null;
+  var template = templateNode.value;
+  var draft = {
+    template: template,
+    window_days: _suiteGeneratorInteger('suite-generator-window'),
+    stride_days: _suiteGeneratorInteger('suite-generator-stride'),
+    training_windows: _suiteGeneratorInteger('suite-generator-training'),
+    holdout_windows: template === 'rolling_windows' ? 0 : _suiteGeneratorInteger('suite-generator-holdout'),
+    exchange_mode: document.getElementById('suite-generator-exchange-mode').value,
+    auto_windows: template === 'sweep_cycles',
+  };
+  if (template === 'sweep_cycles') {
+    draft.balance_multiplier = _suiteGeneratorNumber('suite-generator-multiplier');
+    draft.starting_balance = _suiteGeneratorNumber('suite-generator-balance');
+    draft.refill_cost = _suiteGeneratorNumber('suite-generator-refill');
+    draft.cooldown_days = _suiteGeneratorInteger('suite-generator-cooldown');
+  }
+  return draft;
+}
+
+function _suiteRecalculateScenarioGenerator() {
+  _suiteAlignSweepStride();
+  var draft = _suiteCaptureScenarioGeneratorDraft();
+  if (!draft) return;
+  _suiteState.scenarioGeneratorDraft = draft;
+  _suiteState.scenarioPreview = null;
+  _suiteState.scenarioPreviewContext = '';
+  _suiteState.scenarioRequestId += 1;
+  _suiteRender();
+  toast('Scenario Generator recalculated from current dates and exchanges', 'ok');
+}
+
+function _suiteOpenScenarioGeneratorGuide() {
+  if (typeof window.PBGUI_SCENARIO_GENERATOR_HELP === 'function') {
+    window.PBGUI_SCENARIO_GENERATOR_HELP();
+    return;
+  }
+  toast('Scenario Generator guide is unavailable', 'err');
+}
+
+function _suitePreviewScenarioTemplate() {
+  _suiteAlignSweepStride();
+  var context = _suiteScenarioContext();
+  var draft = _suiteCaptureScenarioGeneratorDraft();
+  if (!draft) return;
+  var template = draft.template;
+  var payload = Object.assign({}, draft, {
+    start_date: context.start_date,
+    end_date: context.end_date,
+    exchanges: Array.isArray(context.exchanges) ? context.exchanges : [],
+  });
+  _suiteState.scenarioGeneratorDraft = JSON.parse(JSON.stringify(payload));
+  var contextSignature = _suiteScenarioContextSignature(context);
+  var requestId = ++_suiteState.scenarioRequestId;
+  var button = document.getElementById('suite-generator-preview-btn');
+  if (button) { button.disabled = true; button.textContent = 'Generating...'; }
+  apiFetch('/scenario-templates/preview', { method: 'POST', body: JSON.stringify(payload) }).then(function(preview) {
+    if (requestId !== _suiteState.scenarioRequestId) return;
+    _suiteState.scenarioPreview = preview;
+    _suiteState.scenarioPreviewContext = contextSignature;
+    _suiteRender();
+  }).catch(function(error) {
+    if (requestId !== _suiteState.scenarioRequestId) return;
+    toast(error.message || 'Scenario preview failed', 'err');
+    if (button) { button.disabled = false; button.textContent = 'Preview'; }
+  });
+}
+
+function _suiteApplyScenarioPreview() {
+  var preview = _suiteState.scenarioPreview;
+  if (!preview || !Array.isArray(preview.training_scenarios)) return;
+  if (_suiteScenarioContextSignature(_suiteScenarioContext()) !== _suiteState.scenarioPreviewContext) {
+    toast('Base dates or exchanges changed. Preview the scenario template again before applying.', 'err');
+    return;
+  }
+  _suiteState.enabled = true;
+  _suiteState.scenarios = JSON.parse(JSON.stringify(preview.training_scenarios));
+  _suiteState.aggregate = JSON.parse(JSON.stringify(preview.reducer || { default: 'mean' }));
+  _suiteState.scenarioTemplate = JSON.parse(JSON.stringify(preview.provenance || null));
+  _suiteState.editIdx = -1;
+  if (_suiteState.onApplyScenarioPreview) _suiteState.onApplyScenarioPreview(preview);
+  _suiteState.applyingGeneratedTemplate = true;
+  _suiteNotifyStructuredSync();
+  _suiteState.applyingGeneratedTemplate = false;
+  _suiteRender();
+  toast('Applied ' + _suiteState.scenarios.length + ' generated training scenarios', 'ok');
+}
+
 /* ── Toggle enabled ─────────────────────────────────────────── */
 function _suiteToggle(on) {
   _suiteState.enabled = on;
+  if (on) _suiteState.expanded = true;
   if (on && _suiteState.scenarios.length === 0) {
     _suiteState.scenarios.push({ label: 'base' });
   }
@@ -837,6 +1086,22 @@ function _suiteSaveAndClose() {
 }
 
 /* ── Aggregate settings ─────────────────────────────────────── */
+function _suiteAggregateMethods() {
+  return _suiteState.preserveMarketIdentifiers
+    ? ['mean', 'min', 'max', 'std', 'median']
+    : ['mean', 'min', 'max'];
+}
+
+function _suiteAggregateMethodOptions(selected, defaultMethod) {
+  var methods = _suiteAggregateMethods();
+  var h = '';
+  for (var index = 0; index < methods.length; index++) {
+    var method = methods[index];
+    h += '\x3Coption value="' + method + '"' + (method === selected || (!selected && method === defaultMethod) ? ' selected' : '') + '>' + method + '\x3C/option>';
+  }
+  return h;
+}
+
 function _suiteRenderAggregate() {
   var agg = _suiteState.aggregate;
   var h = '\x3Cdiv class="expander" id="exp-suite-agg">';
@@ -847,11 +1112,9 @@ function _suiteRenderAggregate() {
 
   /* Default method */
   h += '\x3Cdiv class="form-row cols-4" style="margin-bottom:var(--sp-sm)">';
-  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Default aggregation method for all metrics.\nmean = average across scenarios.\nmin = lowest value across scenarios.\nmax = highest value across scenarios.">default method\x3C/span>\x3C/label>';
+  h += '\x3Cdiv class="form-group">\x3Clabel>\x3Cspan data-tip="Default aggregation method for all metrics.\nPB8 supports mean, min, max, std, and median.">default method\x3C/span>\x3C/label>';
   h += '\x3Cselect id="suite-agg-default" onchange="_suiteUpdateAggDefault()">';
-  h += '\x3Coption value="mean"' + (agg.default === 'mean' ? ' selected' : '') + '>mean\x3C/option>';
-  h += '\x3Coption value="min"' + (agg.default === 'min' ? ' selected' : '') + '>min\x3C/option>';
-  h += '\x3Coption value="max"' + (agg.default === 'max' ? ' selected' : '') + '>max\x3C/option>';
+  h += _suiteAggregateMethodOptions(agg.default, 'mean');
   h += '\x3C/select>\x3C/div>';
   h += '\x3C/div>';
 
@@ -870,9 +1133,7 @@ function _suiteRenderAggregate() {
       h += '\x3Cdiv style="display:flex;gap:var(--sp-sm);align-items:center;margin-bottom:2px">';
       h += '\x3Cspan style="font-size:var(--fs-xs);flex:1">' + esc(mk) + '\x3C/span>';
       h += '\x3Cselect id="suite-agg-m-' + mi + '" style="' + _suiteInlineSelectStyle + ';width:90px" onchange="_suiteUpdateAggMetric(\'' + mk.replace(/'/g, "\\'") + '\',' + mi + ')">';
-      h += '\x3Coption value="mean"' + (agg[mk] === 'mean' ? ' selected' : '') + '>mean\x3C/option>';
-      h += '\x3Coption value="min"' + (agg[mk] === 'min' ? ' selected' : '') + '>min\x3C/option>';
-      h += '\x3Coption value="max"' + (agg[mk] === 'max' ? ' selected' : '') + '>max\x3C/option>';
+      h += _suiteAggregateMethodOptions(agg[mk], 'mean');
       h += '\x3C/select>';
       h += '\x3Cbutton type="button" class="act-btn act-btn-danger" onclick="_suiteRemoveAggMetric(\'' + mk.replace(/'/g, "\\'") + '\')">\u00d7\x3C/button>';
       h += '\x3C/div>';
@@ -888,7 +1149,7 @@ function _suiteRenderAggregate() {
   }
   h += '\x3C/select>\x3C/div>';
   h += '\x3Cdiv class="form-group">\x3Clabel>Method\x3C/label>\x3Cselect id="suite-agg-method">';
-  h += '\x3Coption value="mean">mean\x3C/option>\x3Coption value="min">min\x3C/option>\x3Coption value="max" selected>max\x3C/option>';
+  h += _suiteAggregateMethodOptions('', 'max');
   h += '\x3C/select>\x3C/div>';
   h += '\x3Cbutton type="button" class="act-btn" onclick="_suiteConfirmAggMetric()" style="height:var(--btn-h)">Add\x3C/button>';
   h += '\x3C/div>\x3C/div>';

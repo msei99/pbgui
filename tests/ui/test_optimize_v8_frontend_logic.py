@@ -8,6 +8,522 @@ import textwrap
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_pb8_optimize_enables_the_shared_scenario_generator_only_for_v8() -> None:
+    """The shared Optimize page exposes deterministic generation only through its PB8 adapter."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+
+    assert "scenarioGenerator: optimizeEditorAdapter.isV8" in page
+    assert "getScenarioContext: function()" in page
+    assert "pbgui.scenario_template = suite.scenario_template" in page
+    assert "onApplyScenarioPreview: function(preview)" in page
+    assert "balanceInput.value = String(policy.starting_balance)" in page
+
+
+def test_sweep_apply_sets_balanced_high_risk_scoring_preset() -> None:
+    """Explicit Sweep Apply replaces scoring, limits, objective basis, and base balance together."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    function_source = _page_function(page, "applyOptimizeSweepPreset")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const nodes = {{
+          'opted-starting-balance': {{value: '100000'}},
+          'opted-objective-scenario-mode': {{value: 'named'}},
+          'opted-objective-scenario-name': {{value: 'old'}}
+        }};
+        const el = id => nodes[id] || null;
+        let scoring = null;
+        let limits = null;
+        let toggled = 0;
+        const setScoringEntries = value => {{ scoring = value; }};
+        const setLimitEntries = value => {{ limits = value; }};
+        const applyOptimizeSweepCoinSymmetry = () => {{}};
+        const applyOptimizeSweepLongBoundsPreset = () => {{}};
+        const toggleOptimizeObjectiveScenarioInput = () => {{ toggled += 1; }};
+        {function_source}
+
+        applyOptimizeSweepPreset({{
+          template: 'sweep_cycles',
+          parameters: {{sweep_policy: {{starting_balance: 1000}}}}
+        }});
+
+        assert.equal(nodes['opted-starting-balance'].value, '1000');
+        assert.deepEqual(scoring, [
+          {{metric: 'gain_strategy_eq', goal: 'max'}},
+          {{metric: 'sortino_ratio_strategy_eq', goal: 'max'}},
+          {{metric: 'drawdown_worst_strategy_eq', goal: 'min'}}
+        ]);
+        assert.deepEqual(limits, [
+          {{metric: 'drawdown_worst_strategy_eq', penalize_if: 'greater_than', value: 0.8}},
+          {{metric: 'backtest_completion_ratio', penalize_if: 'less_than', value: 0.99}}
+        ]);
+        assert.equal(nodes['opted-objective-scenario-mode'].value, 'aggregate');
+        assert.equal(nodes['opted-objective-scenario-name'].value, '');
+        assert.equal(toggled, 1);
+        """
+    )
+    _run_node(script)
+
+
+def test_sweep_apply_sizes_long_positions_to_coins_and_sets_twe_range() -> None:
+    """One explicit Long coin becomes one fixed position while TWE searches 6 through 10."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    function_source = _page_function(page, "applyOptimizeSweepLongBoundsPreset")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const inputs = {{
+          'opted-long-npos': {{value: '7'}},
+          'opted-long-twe': {{value: '1.5'}}
+        }};
+        const state = {{
+          optimizeBounds: [
+            {{key: 'long.risk.n_positions', group: 'long', suffix: 'risk.n_positions', stepValue: 1}},
+            {{key: 'long.risk.total_wallet_exposure_limit', group: 'long', suffix: 'risk.total_wallet_exposure_limit', stepValue: 0.01}},
+            {{key: 'long.forager.score_weights_volume', group: 'long', suffix: 'forager.score_weights_volume', lowValue: 0, highValue: 1}},
+            {{key: 'long.strategy.trailing_martingale.ema_span_0', group: 'long', suffix: 'strategy.trailing_martingale.ema_span_0', lowValue: 100, highValue: 2880}},
+            {{key: 'long.risk.position_exposure_enforcer_threshold', group: 'long', suffix: 'risk.position_exposure_enforcer_threshold', lowValue: 1, highValue: 1}},
+            {{key: 'short.risk.n_positions', lowValue: 5, highValue: 5}}
+          ],
+          optimizeFixedParams: ['long.strategy.trailing_martingale.ema_span_0', 'short.keep.fixed']
+        }};
+        const el = id => inputs[id] || null;
+        const optGetMs = id => id === 'ms-opt-app-long' ? ['HYPE'] : [];
+        const uniqStrings = values => Array.from(new Set(values));
+        const optimizeEditorAdapter = {{canonicalFixedParam: key => 'bot.' + key}};
+        const getOptimizeBoundMeta = (_key, _low, _high, step) => ({{decimals: step === 1 ? 0 : 2}});
+        const formatOptimizeBoundValue = (value, decimals) => Number(value).toFixed(decimals).replace(/\\.00$/, '');
+        const constrainOptimizeBoundEntry = entry => entry;
+        const optimizeBoundNumbersMatch = (left, right) => left === right;
+        const isOptimizeHslAutoFixedBound = () => false;
+        let synced = 0;
+        let rendered = 0;
+        const optBotSyncFromFields = side => {{ assert.equal(side, 'long'); synced += 1; }};
+        const renderOptimizeBoundsEditor = () => {{ rendered += 1; }};
+        const updateOptimizeBoundsHeader = () => {{}};
+        {function_source}
+
+        applyOptimizeSweepLongBoundsPreset();
+
+        assert.deepEqual(
+          state.optimizeBounds.slice(0, 2).map(entry => [entry.lowValue, entry.highValue]),
+          [[1, 1], [6, 10]]
+        );
+        assert.deepEqual(state.optimizeBounds[5], {{key: 'short.risk.n_positions', lowValue: 5, highValue: 5}});
+        assert.deepEqual(state.optimizeFixedParams, [
+          'long.forager.score_weights_volume',
+          'long.risk.n_positions',
+          'long.risk.position_exposure_enforcer_threshold',
+          'short.keep.fixed'
+        ]);
+        assert.equal(inputs['opted-long-npos'].value, '1');
+        assert.equal(inputs['opted-long-twe'].value, '6');
+        assert.equal(synced, 1);
+        assert.equal(rendered, 1);
+        """
+    )
+    _run_node(script)
+
+
+def test_sweep_apply_mirrors_approved_coins_without_enabling_short() -> None:
+    """PB8 Suite receives symmetric coin lists while Short activation remains a TWE concern."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    function_source = _page_function(page, "applyOptimizeSweepCoinSymmetry")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const values = {{
+          'ms-opt-app-long': ['HYPE/USDC:USDC'],
+          'ms-opt-app-short': [],
+          'ms-opt-ign-short': ['HYPE/USDC:USDC', 'DOGE/USDC:USDC']
+        }};
+        const optGetMs = id => (values[id] || []).slice();
+        const optSetMs = (id, next) => {{ values[id] = next.slice(); }};
+        {function_source}
+        applyOptimizeSweepCoinSymmetry();
+        assert.deepEqual(values['ms-opt-app-long'], ['HYPE/USDC:USDC']);
+        assert.deepEqual(values['ms-opt-app-short'], ['HYPE/USDC:USDC']);
+        assert.deepEqual(values['ms-opt-ign-short'], ['DOGE/USDC:USDC']);
+        """
+    )
+    _run_node(script)
+
+
+def test_suite_generator_settings_expose_inline_help_tooltips() -> None:
+    """Every generated-scenario setting must use the standard underlined data-tip help."""
+    source = (ROOT / "frontend" / "js" / "suite_editor.js").read_text(encoding="utf-8")
+
+    labels = (
+        "Template",
+        "Window days",
+        "Stride days",
+        "Training windows",
+        "Holdout windows",
+        "Exchange mode",
+        "Balance multiplier",
+        "Starting balance",
+        "Refill cost",
+        "Cooldown days",
+    )
+    for label in labels:
+        assert f'>{label}\\x3C/span>' in source
+
+
+def test_pb8_scenario_generator_guide_opens_exact_topic_and_anchor() -> None:
+    """PB8 Guide actions must not fall through to the earlier PB7 Optimize topic."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    suite = (ROOT / "frontend" / "js" / "suite_editor.js").read_text(encoding="utf-8")
+
+    assert "optimizeEditorAdapter.isV8 ? '43_pbv8_optimize' : '36_pbv7_optimize'" in page
+    assert "window._openOptimizeHelp('scenario-generator')" in page
+    assert "_suiteOpenScenarioGeneratorGuide()" in suite
+    assert '>Guide\\x3C/button>' in suite
+
+
+def test_pb8_optimize_exposes_bounded_ohlcv_start_date_modes() -> None:
+    """PB8 Optimize must offer compact earliest-any and common-all buttons beside start_date."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+
+    assert 'id="opted-ohlcv-start-mode"' not in page
+    assert "setOptimizeStartDateFromOhlcv(\\'earliest\\',this)" in page
+    assert "setOptimizeStartDateFromOhlcv(\\'all_markets\\',this)" in page
+    assert '>1st</button>' in page
+    assert '>All</button>' in page
+    assert "apiFetch('/ohlcv-start-dates'" in page
+    assert "apiFetch('/ohlcv-start-dates/' + encodeURIComponent(run.jobId))" in page
+    assert "{method: 'DELETE'}" in page
+    assert 'id="opted-ohlcv-start-progress-fill"' in page
+    assert 'id="opted-ohlcv-start-stop"' in page
+    assert "signature !== optimizeOhlcvStartLookupSignature(currentConfig)" in page
+    assert "scenarioGenerator: optimizeEditorAdapter.isV8" in page
+
+
+def test_ohlcv_start_lookup_rejects_last_valid_config_fallback() -> None:
+    """An invalid Raw JSON editor must not query dates for a stale fallback config."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    function_source = _page_function(page, "optimizeOhlcvLookupConfig")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        {function_source}
+        assert.deepEqual(optimizeOhlcvLookupConfig({{backtest: {{start_date: '2020-01-01'}}}}), {{backtest: {{start_date: '2020-01-01'}}}});
+        assert.throws(
+          () => optimizeOhlcvLookupConfig({{config: {{backtest: {{}}}}, note: 'Raw JSON is invalid'}}),
+          /Raw JSON is invalid/
+        );
+        """
+    )
+    _run_node(script)
+
+
+def test_ohlcv_start_progress_renders_real_pair_count() -> None:
+    """The compact progress UI must show backend completed/total values and percentage."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    function_source = _page_function(page, "renderOptimizeStartDateProgress")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const nodes = {{
+          'opted-ohlcv-start-progress': {{style: {{}}}},
+          'opted-ohlcv-start-progress-fill': {{style: {{}}}},
+          'opted-ohlcv-start-progress-label': {{textContent: '', title: ''}},
+          'opted-ohlcv-start-stop': {{disabled: false}}
+        }};
+        const el = id => nodes[id];
+        let _optOhlcvStartDateRun = {{lastProgress: null}};
+        {function_source}
+        renderOptimizeStartDateProgress({{
+          status: 'running',
+          progress: {{completed: 3, total: 8, percent: 37.5, message: 'Resolving HYPE on bybit'}}
+        }});
+        assert.equal(nodes['opted-ohlcv-start-progress-fill'].style.width, '37.5%');
+        assert.equal(nodes['opted-ohlcv-start-progress-label'].textContent, '3/8 · Resolving HYPE on bybit');
+        assert.equal(nodes['opted-ohlcv-start-stop'].disabled, false);
+        assert.equal(_optOhlcvStartDateRun.lastProgress.completed, 3);
+        """
+    )
+    _run_node(script)
+
+
+def test_optimize_start_date_normalization_strips_iso_time() -> None:
+    """PB8 timestamp responses and previously stored values render as date-only strings."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    function_source = _page_function(page, "normalizeOptimizeDateOnlyValue")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        {function_source}
+        assert.equal(normalizeOptimizeDateOnlyValue('2024-12-31T00:00:00'), '2024-12-31');
+        assert.equal(normalizeOptimizeDateOnlyValue('2024-12-31 12:30:00'), '2024-12-31');
+        assert.equal(normalizeOptimizeDateOnlyValue('now'), 'now');
+        """
+    )
+    _run_node(script)
+
+
+def test_late_symbol_load_preserves_first_approved_coin_clear() -> None:
+    """Initial resolver completion must not restore selections cleared while it was pending."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    function_source = _page_function(page, "loadOptSymbols")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        let resolveCoins;
+        const selected = {{
+          'ms-opt-exchanges': ['binance'],
+          'ms-opt-app-long': [],
+          'ms-opt-app-short': [],
+          'ms-opt-ign-long': [],
+          'ms-opt-ign-short': [],
+          'ms-opt-tags': []
+        }};
+        let _optSymbolsLoadSeq = 0;
+        let _optMarketStatusVerified = false;
+        let _optMarketLabels = {{}};
+        const optimizeEditorAdapter = {{isV8: true}};
+        const _optMsController = {{applyCoinStatus: () => {{}}}};
+        const toast = () => {{}};
+        const captureOptimizeRawAnchor = () => null;
+        const restoreOptimizeRawAnchor = () => {{}};
+        const coinSideSelection = (value, side) => (value && value[side] || []).slice();
+        const currentMultiselectValues = (id, fallback) => selected[id] ? selected[id].slice() : fallback.slice();
+        const uniqStrings = values => Array.from(new Set(values.filter(Boolean)));
+        const optRebuildMs = (id, _options, values) => {{ selected[id] = values.slice(); }};
+        const optFetchV7Json = path => {{
+          if (path === '/coins/status') return new Promise(resolve => {{ resolveCoins = resolve; }});
+          return Promise.resolve({{tags: []}});
+        }};
+        {function_source}
+
+        (async () => {{
+          const config = {{
+            backtest: {{exchanges: ['binance']}},
+            live: {{approved_coins: {{long: ['BTC', 'ETH'], short: ['BTC', 'ETH']}}, ignored_coins: {{long: [], short: []}}}},
+            pbgui: {{tags: []}}
+          }};
+          const pending = loadOptSymbols(config, {{preferConfigValues: true}});
+          assert.deepEqual(selected['ms-opt-app-long'], ['BTC', 'ETH']);
+          selected['ms-opt-app-long'] = [];
+          selected['ms-opt-app-short'] = [];
+          resolveCoins({{symbols: ['BTC', 'ETH', 'XRP'], catalog: [], statuses: {{}}}});
+          await pending;
+          assert.deepEqual(selected['ms-opt-app-long'], []);
+          assert.deepEqual(selected['ms-opt-app-short'], []);
+        }})().catch(error => {{ console.error(error); process.exitCode = 1; }});
+        """
+    )
+    _run_node(script)
+
+
+def test_sweep_holdout_button_builds_standalone_backtest_config() -> None:
+    """The sidebar Holdout action must remove training Suite state and set immutable dates."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    function_source = _page_function(page, "buildSweepHoldoutBacktestConfig")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const deepClone = value => JSON.parse(JSON.stringify(value));
+        {function_source}
+        const source = {{
+          backtest: {{
+            suite_enabled: true,
+            scenarios: [{{label: 'train_01'}}],
+            reducer: {{default: 'median'}},
+            start_date: '2025-01-01',
+            end_date: '2025-03-31'
+          }},
+          pbgui: {{scenario_template: {{template: 'sweep_cycles'}}}}
+        }};
+        const result = buildSweepHoldoutBacktestConfig(
+          source,
+          {{label: 'holdout_01', start_date: '2026-06-01', end_date: '2026-08-29'}},
+          'candidate_holdout_01'
+        );
+        assert.equal(result.backtest.start_date, '2026-06-01');
+        assert.equal(result.backtest.end_date, '2026-08-29');
+        assert.equal(result.backtest.base_dir, 'backtests/pbgui/candidate_holdout_01');
+        assert.equal(Object.hasOwn(result.backtest, 'suite_enabled'), false);
+        assert.equal(Object.hasOwn(result.backtest, 'scenarios'), false);
+        assert.equal(Object.hasOwn(result.backtest, 'reducer'), false);
+        assert.equal(Object.hasOwn(result.pbgui, 'scenario_template'), false);
+        assert.equal(source.backtest.suite_enabled, true);
+        """
+    )
+    _run_node(script)
+    assert 'id="btn-holdout-selected-paretos"' in page
+    assert "backtestSelectedSweepHoldouts().catch(handleError)" in page
+
+
+def test_suite_generator_applies_training_only_and_invalidates_stale_provenance() -> None:
+    """Applying a preview excludes holdout windows and later manual edits clear provenance."""
+    script = textwrap.dedent(
+        """
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
+        _suiteRender = () => {};
+        toast = () => {};
+        _suiteState.getScenarioContext = () => ({
+          start_date: '2023-01-01', end_date: '2024-01-31', exchanges: ['binance']
+        });
+        _suiteState.scenarioPreviewContext = _suiteScenarioContextSignature(_suiteScenarioContext());
+        let appliedPreview = null;
+        _suiteState.onApplyScenarioPreview = preview => { appliedPreview = preview; };
+        _suiteState.scenarioPreview = {
+          training_scenarios: [{label: 'train_01'}, {label: 'train_02'}],
+          holdout_scenarios: [{label: 'holdout_01'}],
+          reducer: {default: 'median'},
+          provenance: {template: 'walk_forward', holdout_scenarios: [{label: 'holdout_01'}]}
+        };
+
+        _suiteApplyScenarioPreview();
+        let collected = suiteCollect();
+        assert.deepEqual(collected.scenarios.map(item => item.label), ['train_01', 'train_02']);
+        assert.equal(collected.scenario_template.template, 'walk_forward');
+        assert.deepEqual(collected.scenario_template.holdout_scenarios, [{label: 'holdout_01'}]);
+        assert.equal(appliedPreview.provenance.template, 'walk_forward');
+
+        _suiteNotifyStructuredSync();
+        collected = suiteCollect();
+        assert.equal(Object.hasOwn(collected, 'scenario_template'), false);
+
+        _suiteState.scenarioPreview = {
+          training_scenarios: [{label: 'stale_train'}], holdout_scenarios: [],
+          reducer: {default: 'mean'}, provenance: {template: 'rolling_windows'}
+        };
+        _suiteState.scenarios = [{label: 'keep_current'}];
+        _suiteState.getScenarioContext = () => ({
+          start_date: '2023-02-01', end_date: '2024-01-31', exchanges: ['binance']
+        });
+        _suiteApplyScenarioPreview();
+        assert.deepEqual(_suiteState.scenarios, [{label: 'keep_current'}]);
+        """
+    )
+    _run_node(script)
+
+
+def test_sweep_generator_aligns_stride_with_window_and_cooldown() -> None:
+    """Sweep windows must contain a real no-trading gap before the next cycle."""
+    script = textwrap.dedent(
+        """
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        const fields = {
+          'suite-generator-template': {value: 'sweep_cycles'},
+          'suite-generator-window': {value: '90'},
+          'suite-generator-stride': {value: '30'},
+          'suite-generator-training': {value: '4'},
+          'suite-generator-holdout': {value: '1'},
+          'suite-generator-cooldown': {value: '7'}
+        };
+        global.document = {getElementById: id => fields[id] || null};
+        eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
+        _suiteState.getScenarioContext = () => ({start_date: '2024-12-31', end_date: '2026-08-29'});
+        _suiteAlignSweepStride();
+        assert.equal(fields['suite-generator-stride'].value, '97');
+        assert.equal(fields['suite-generator-training'].value, '5');
+        """
+    )
+    _run_node(script)
+
+
+def test_scenario_generator_recalculate_uses_current_base_dates() -> None:
+    """Recalculate must replace stale counts after an OHLCV start-date change."""
+    script = textwrap.dedent(
+        """
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        const fields = {
+          'suite-generator-template': {value: 'sweep_cycles'},
+          'suite-generator-window': {value: '90'},
+          'suite-generator-stride': {value: '90'},
+          'suite-generator-training': {value: '3'},
+          'suite-generator-holdout': {value: '1'},
+          'suite-generator-exchange-mode': {value: 'inherit'},
+          'suite-generator-multiplier': {value: '2'},
+          'suite-generator-balance': {value: '1000'},
+          'suite-generator-refill': {value: '0'},
+          'suite-generator-cooldown': {value: '0'}
+        };
+        global.document = {getElementById: id => fields[id] || null};
+        eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
+        let context = {start_date: '2025-01-01', end_date: '2025-12-31', exchanges: ['binance']};
+        let renders = 0;
+        global.toast = () => {};
+        _suiteRender = () => { renders += 1; };
+        _suiteState.getScenarioContext = () => context;
+        _suiteState.scenarioPreview = {training_scenarios: [{label: 'stale'}]};
+        _suiteState.scenarioRequestId = 4;
+
+        context = {start_date: '2025-04-01', end_date: '2025-12-31', exchanges: ['doge-exchange']};
+        _suiteRecalculateScenarioGenerator();
+
+        assert.equal(fields['suite-generator-training'].value, '2');
+        assert.equal(_suiteState.scenarioGeneratorDraft.training_windows, 2);
+        assert.equal(_suiteState.scenarioPreview, null);
+        assert.equal(_suiteState.scenarioPreviewContext, '');
+        assert.equal(_suiteState.scenarioRequestId, 5);
+        assert.equal(renders, 1);
+        """
+    )
+    _run_node(script)
+
+
+def test_suite_render_preserves_open_expander_while_disabled() -> None:
+    """Preview and Recalculate renders must not collapse a manually opened generator."""
+    script = textwrap.dedent(
+        """
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        const container = {innerHTML: ''};
+        const existing = {classList: {contains: name => name === 'open'}};
+        global.document = {
+          getElementById: id => id === 'suite' ? container : (id === 'exp-suite' ? existing : null)
+        };
+        eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
+        _suiteState.containerId = 'suite';
+        _suiteState.enabled = false;
+        _suiteState.expanded = false;
+        _suiteRender();
+        assert.equal(_suiteState.expanded, true);
+        assert.match(container.innerHTML, /class="expander open" id="exp-suite"/);
+        """
+    )
+    _run_node(script)
+
+
+def test_scenario_preview_uses_readable_table_and_warning_text_sizes() -> None:
+    """Scenario rows and orange notices must not use the extra-small text token."""
+    source = (ROOT / "frontend" / "js" / "suite_editor.js").read_text(encoding="utf-8")
+
+    assert 'class="tbl" style="font-size:var(--fs-sm)' in source
+    assert 'font-size:var(--fs-sm);line-height:1.45;color:var(--orange)' in source
+
+
+def test_pb8_suite_aggregate_renders_median_and_std_without_changing_pb7() -> None:
+    """The shared reducer UI must display every PB8 method while PB7 stays compatible."""
+    script = textwrap.dedent(
+        """
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
+        global.esc = value => String(value);
+        _suiteState.aggregateMetrics = ['gain_strategy_eq'];
+        _suiteState.aggregate = {default: 'median', gain_strategy_eq: 'std'};
+        _suiteState.preserveMarketIdentifiers = true;
+        const pb8 = _suiteRenderAggregate();
+        assert.match(pb8, /value="median" selected>median/);
+        assert.match(pb8, /value="std" selected>std/);
+
+        _suiteState.preserveMarketIdentifiers = false;
+        const pb7 = _suiteRenderAggregate();
+        assert.doesNotMatch(pb7, /value="median"/);
+        assert.doesNotMatch(pb7, /value="std"/);
+        """
+    )
+    _run_node(script)
+
+
 def _page_function(page: str, name: str) -> str:
     """Extract one top-level function declaration from the inline page script."""
     marker = f"function {name}("

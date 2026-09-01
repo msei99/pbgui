@@ -229,6 +229,18 @@ def test_linux_update_counts_open_escaped_package_details() -> None:
     assert result.returncode == 0, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
+def test_linux_updates_modal_header_close_is_isolated_from_drag_handler() -> None:
+    """The header X must close through an explicit handler without starting a drag."""
+    source = HTML_PATH.read_text(encoding="utf-8")
+
+    assert "id='alertModalClose'" in source
+    assert "const closeButton = document.getElementById('alertModalClose');" in source
+    assert "closeButton.addEventListener('pointerdown'" in source
+    assert "closeButton.addEventListener('click'" in source
+    assert "event.stopPropagation();" in source
+    assert ".modal-head .close-btn" in source
+
+
 def test_vps_manager_page_is_cookie_only() -> None:
     """The browser page must not contain or configure a bearer/session token."""
 

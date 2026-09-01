@@ -3649,7 +3649,7 @@ class VPSManagerService:
             "package_status": local_package_status,
             "monitor_agent": monitor_agent,
             "running_bots": "-",
-            "pbgui": f"{str(local_meta.get('pbgv') or PBGUI_VERSION)}{'' if local_pbgui_python in (None, '', 'N/A') else ' /' + str(local_pbgui_python)}",
+            "pbgui": f"{PBGUI_VERSION}{'' if local_pbgui_python in (None, '', 'N/A') else ' /' + str(local_pbgui_python)}",
             "pbgui_branch": f"{master_branch} ({_short_commit(master_commit)})",
             "pbgui_github": self._build_master_pbgui_github_status(master_branch, master_commit),
             "pb7": f"{str(local_meta.get('pb7v') or 'N/A')}{'' if local_pb7_python in (None, '', 'N/A') else ' /' + str(local_pb7_python)}",

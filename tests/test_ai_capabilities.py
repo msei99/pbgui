@@ -30,6 +30,7 @@ def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
         "list_optimizer_configs",
         "get_optimizer_config",
         "get_optimizer_metadata",
+        "preview_pb8_scenario_template",
         "list_optimizer_runs",
         "list_pb8_optimizer_queue",
         "list_backtests",
@@ -834,6 +835,7 @@ def test_registry_exposes_effects_resources_fingerprints_and_global_limits(
     effects = {item["name"]: item["effect"] for item in registry["capabilities"]}
 
     assert effects["get_backtest_projection"] == "analyze"
+    assert effects["preview_pb8_scenario_template"] == "read"
     assert effects["create_config_draft"] == "draft"
     assert effects["propose_pb8_optimizer_config"] == "write"
     assert effects["propose_pb8_config_patch"] == "write"
@@ -853,6 +855,27 @@ def test_registry_exposes_effects_resources_fingerprints_and_global_limits(
     assert registry["runtime_fingerprints"]["v8"]["dirty"] is True
     assert registry["limits"]["proposals_global"] == 200
     assert all(str(resource).startswith("pbgui://") for resource in registry["virtual_resources"])
+
+
+def test_ai_scenario_preview_uses_deterministic_training_holdout_contract(tmp_path: Path) -> None:
+    """The AI read tool shares generation semantics and cannot apply or persist its preview."""
+    service = AICapabilityService(tmp_path / "capabilities")
+
+    result = service._preview_pb8_scenario_template(
+        {
+            "template": "walk_forward",
+            "start_date": "2023-01-01",
+            "end_date": "2024-01-31",
+            "window_days": 60,
+            "stride_days": 60,
+            "training_windows": 2,
+            "holdout_windows": 1,
+        }
+    )
+
+    assert len(result["training_scenarios"]) == 2
+    assert len(result["holdout_scenarios"]) == 1
+    assert result["provenance"]["holdout_scenarios"] == result["holdout_scenarios"]
 
 
 def test_pb8_json_patch_supports_open_bounded_config_edits() -> None:

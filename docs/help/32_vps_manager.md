@@ -53,6 +53,8 @@ The normal **Update PB8** action intentionally returns PB8 to a detached checkou
 
 The page keeps a live WebSocket connection for overview rows, progress logs, and branch state. The persistent VPSMonitor service checks PBGui, PB7, and PB8 upstream branch heads in the background every 60 seconds, retains the last known result across API restarts, and marks it stale when a transient Git check fails. Master and VPS update colors therefore do not require the page to be open or the manual Refresh action. PB7's verified pinned commit remains current by policy even when upstream `master` advances. Full branch histories and custom remote/fork commits are loaded only when branch management requests them. Browser authentication is cookie-only; PBGui never renders the session token into this page or sends a browser Bearer header.
 
+The local Master row always displays the PBGui version imported by the currently running API process. A stale monitor-agent cache may still supply last-known package or PB7/PB8 details, but it can no longer replace the live local PBGui version with an obsolete value. Update button colors remain commit-based and require a verified cached upstream head; stale cache text alone never claims that an update is available.
+
 After a manual PBGui code update, a still-running older VPSMonitor may not expose the release cache yet. Version cards remain orange instead of claiming an update, and runtime update buttons stay neutral until a verified upstream comparison exists. The shared top-navigation **Restart** prompt detects this capability mismatch and reloads VPSMonitor before restarting the API.
 
 Live updates do not close the **VPS** selector anymore while you are choosing another host from the sidebar.

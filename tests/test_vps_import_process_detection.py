@@ -1242,11 +1242,13 @@ def test_master_overview_row_is_online_without_remote_helper(monkeypatch: pytest
     service._build_master_pb7_github_status = lambda branch, commit: ""
     service._build_pb8_github_status = lambda commit: ""
     monkeypatch.setattr(service_mod, "load_ini", lambda section, parameter: "")
+    monkeypatch.setattr(service_mod, "PBGUI_VERSION", "v-current")
     monkeypatch.setattr(service_mod.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("master overview ran a subprocess"))
 
     row = service._build_master_overview_row()
 
     assert row["online"] is True
+    assert row["pbgui"] == "v-current /3.12"
     assert row["pb8"].startswith("v8.1")
     assert row["pb7_installed"] is True
 

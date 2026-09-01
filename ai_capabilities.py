@@ -269,6 +269,7 @@ class AICapabilityService:
             "list_optimizer_configs": self._list_optimizer_configs,
             "get_optimizer_config": self._get_optimizer_config,
             "get_optimizer_metadata": self._get_optimizer_metadata,
+            "preview_pb8_scenario_template": self._preview_pb8_scenario_template,
             "list_optimizer_runs": self._list_optimizer_runs,
             "list_pb8_optimizer_queue": self._list_pb8_optimizer_queue,
             "list_backtests": self._list_backtests,
@@ -574,6 +575,15 @@ class AICapabilityService:
                 "metric_sets": get_optimize_metric_sets(),
             }
         return {"version": version, "metadata": self._sanitize_config(selected)}
+
+    def _preview_pb8_scenario_template(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Return the same deterministic PB8 scenario preview used by the editor."""
+        from scenario_templates import ScenarioTemplateError, generate_scenario_template
+
+        try:
+            return generate_scenario_template(args)
+        except ScenarioTemplateError as exc:
+            raise AICapabilityError(str(exc)) from exc
 
     def _list_optimizer_runs(self, args: dict[str, Any]) -> dict[str, Any]:
         """List compact optimizer result summaries without filesystem paths."""
@@ -3682,6 +3692,37 @@ class AICapabilityService:
                 "name": "get_optimizer_metadata",
                 "description": "Load current runtime optimizer template, bounds, metrics, and strategies.",
                 "schema": AICapabilityService._object_schema({"version": version_schema}, ["version"]),
+            },
+            {
+                "name": "preview_pb8_scenario_template",
+                "description": "Preview deterministic PB8 rolling-window, walk-forward, or sweep-cycle training and holdout scenarios without saving or queueing anything. Holdout scenarios are never included in the training scenario list.",
+                "schema": self._object_schema(
+                    {
+                        "template": {
+                            "type": "string",
+                            "enum": ["rolling_windows", "walk_forward", "sweep_cycles"],
+                        },
+                        "start_date": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+                        "end_date": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+                        "window_days": {"type": "integer", "minimum": 1, "maximum": 3650},
+                        "stride_days": {"type": "integer", "minimum": 1, "maximum": 3650},
+                        "training_windows": {"type": "integer", "minimum": 1, "maximum": 48},
+                        "holdout_windows": {"type": "integer", "minimum": 0, "maximum": 16},
+                        "exchange_mode": {"type": "string", "enum": ["inherit", "per_exchange"]},
+                        "exchanges": {
+                            "type": "array",
+                            "maxItems": 8,
+                            "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,40}$"},
+                        },
+                        "balance_multiplier": {"type": "number", "minimum": 1.01, "maximum": 100},
+                        "starting_balance": {"type": "number", "minimum": 1, "maximum": 1000000000},
+                        "refill_cost": {"type": "number", "minimum": 0, "maximum": 1000000000},
+                        "cooldown_days": {"type": "integer", "minimum": 0, "maximum": 3650},
+                    },
+                    ["template", "start_date", "end_date", "window_days", "stride_days", "training_windows"],
+                ),
+                "effect": "read",
+                "versions": ["v8"],
             },
             {
                 "name": "list_optimizer_runs",

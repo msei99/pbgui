@@ -2262,6 +2262,7 @@ textarea.json-invalid:focus {
       <div id="ctx-paretos" class="ctx-actions" style="display:none">
         <button class="sb-btn" id="btn-open-pareto-explorer-paretos">🎯 Pareto Explorer</button>
         <button class="sb-btn" id="btn-backtest-selected-paretos">🔄 Backtest</button>
+        <button class="sb-btn" id="btn-holdout-selected-paretos">🧪 Holdout</button>
         <button class="sb-btn" id="btn-seed-selected-paretos">🧬 Seed Selected</button>
         <button class="sb-btn" id="btn-seed-whole-result">📂 Seed Whole Result</button>
       </div>
@@ -2644,7 +2645,7 @@ textarea.json-invalid:focus {
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=14"></script>
-<script src="/app/js/suite_editor.js?v=11"></script>
+<script src="/app/js/suite_editor.js?v=22"></script>
 <script src="/app/js/log_viewer_panel.js?v=29"></script>
 <script src="/app/js/pbgui_dialogs.js?v=8"></script>
 <script>
@@ -2848,6 +2849,7 @@ function clearParetoMeta(options) {
   state.paretoStatisticOptions = [];
   state.paretoAvailableMetrics = [];
   state.paretoDefaultMetrics = [];
+  state.paretoSweepEnabled = false;
 }
 
 function orderParetoMetrics(metrics) {
@@ -2994,6 +2996,7 @@ function applyParetoMeta(meta) {
   state.paretoDefaultMetrics = orderParetoMetrics(defaults).filter(function(metric) {
     return state.paretoAvailableMetrics.indexOf(metric) >= 0;
   });
+  state.paretoSweepEnabled = !!(meta && meta.sweep_cycles && meta.sweep_cycles.enabled);
   if (!state.paretoDefaultMetrics.length) state.paretoDefaultMetrics = state.paretoAvailableMetrics.slice(0, 1);
   if (!state.paretoMetricColumnsLoaded) {
     var stored = readStoredParetoColumns().filter(function(metric) {
@@ -4787,6 +4790,34 @@ function fieldDate2(id, label, value, tip, span) {
     '<input type="text" id="' + id + '" value="' + esc(dateValue) + '" data-prev="' + esc(dateValue) + '" style="width:100%;box-sizing:border-box;padding-right:26px" onchange="this.dataset.prev=this.value">' +
     '<button type="button" data-dp="' + id + '" onclick="window.__dp.show(\'' + id + '\',this)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:transparent;border:none;padding:0 3px;font-size:var(--fs-sm);line-height:1;cursor:pointer" title="Open calendar">📅</button>' +
     '</div>';
+  return fmtGroupSpan(id, label, inputHtml, tip, span || 1);
+}
+
+function normalizeOptimizeDateOnlyValue(value) {
+  var raw = String(value == null ? '' : value).trim();
+  var match = raw.match(/^(\d{4}-\d{2}-\d{2})(?:[T ].*)?$/);
+  return match ? match[1] : raw;
+}
+
+function fieldOptimizeStartDate2(id, label, value, tip, span) {
+  var dateValue = normalizeOptimizeDateOnlyValue(value || '');
+  var inputHtml = '<div>' +
+    '<div style="display:flex;gap:3px;align-items:center">' +
+      '<div style="position:relative;min-width:0;flex:1">' +
+        '<input type="text" id="' + id + '" value="' + esc(dateValue) + '" data-prev="' + esc(dateValue) + '" style="width:100%;box-sizing:border-box;padding-right:26px" onchange="this.dataset.prev=this.value">' +
+        '<button type="button" data-dp="' + id + '" onclick="window.__dp.show(\'' + id + '\',this)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);background:transparent;border:none;padding:0 3px;font-size:var(--fs-sm);line-height:1;cursor:pointer" title="Open calendar">📅</button>' +
+      '</div>' +
+      '<button type="button" class="act-btn opted-ohlcv-start-btn" style="padding:0 5px;white-space:nowrap" onclick="setOptimizeStartDateFromOhlcv(\'earliest\',this)" title="Set to the earliest selected market with OHLCV coverage" aria-label="Set earliest OHLCV start date">1st</button>' +
+      '<button type="button" class="act-btn opted-ohlcv-start-btn" style="padding:0 5px;white-space:nowrap" onclick="setOptimizeStartDateFromOhlcv(\'all_markets\',this)" title="Set to the first date available for every selected exchange and coin" aria-label="Set common OHLCV start date">All</button>' +
+    '</div>' +
+    '<div id="opted-ohlcv-start-progress" style="display:none;margin-top:4px">' +
+      '<div style="display:flex;align-items:center;gap:4px">' +
+        '<div style="height:5px;flex:1;overflow:hidden;border-radius:3px;background:var(--bg3)"><div id="opted-ohlcv-start-progress-fill" style="height:100%;width:0;background:var(--accent);transition:width .2s"></div></div>' +
+        '<button type="button" class="act-btn act-btn-danger" id="opted-ohlcv-start-stop" style="padding:0 5px" onclick="stopOptimizeStartDateLookup(false)">Stop</button>' +
+      '</div>' +
+      '<div id="opted-ohlcv-start-progress-label" style="margin-top:2px;font-size:var(--fs-xs);color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="">Preparing lookup...</div>' +
+    '</div>' +
+  '</div>';
   return fmtGroupSpan(id, label, inputHtml, tip, span || 1);
 }
 
@@ -7151,6 +7182,7 @@ function currentMultiselectValues(id, fallback) {
 }
 
 function resetOptimizeEditorUiState() {
+  resetOptimizeStartDateLookup();
   [
     'ms-opt-exchanges',
     'ms-opt-app-long',
@@ -8783,13 +8815,18 @@ async function loadOptSymbols(cfg, opts) {
     tags = tags.concat(result.value.tags);
   });
   tags = uniqStrings(tags).sort();
+  var loadedApprovedLong = currentMultiselectValues('ms-opt-app-long', approvedLong);
+  var loadedApprovedShort = currentMultiselectValues('ms-opt-app-short', approvedShort);
+  var loadedIgnoredLong = currentMultiselectValues('ms-opt-ign-long', ignoredLong);
+  var loadedIgnoredShort = currentMultiselectValues('ms-opt-ign-short', ignoredShort);
+  var loadedTags = currentMultiselectValues('ms-opt-tags', selectedTags);
   var loadedAnchor = captureOptimizeRawAnchor();
 
-  optRebuildMs('ms-opt-app-long', ['all'].concat(symbols), approvedLong);
-  optRebuildMs('ms-opt-app-short', ['all'].concat(symbols), approvedShort);
-  optRebuildMs('ms-opt-ign-long', symbols, ignoredLong);
-  optRebuildMs('ms-opt-ign-short', symbols, ignoredShort);
-  optRebuildMs('ms-opt-tags', tags, selectedTags);
+  optRebuildMs('ms-opt-app-long', ['all'].concat(symbols), loadedApprovedLong);
+  optRebuildMs('ms-opt-app-short', ['all'].concat(symbols), loadedApprovedShort);
+  optRebuildMs('ms-opt-ign-long', symbols, loadedIgnoredLong);
+  optRebuildMs('ms-opt-ign-short', symbols, loadedIgnoredShort);
+  optRebuildMs('ms-opt-tags', tags, loadedTags);
   if (optimizeEditorAdapter.isV8 && symbolResults[0] && symbolResults[0].status === 'fulfilled') {
     var resolverStatuses = symbolResults[0].value.statuses || {};
     ['ms-opt-app-long', 'ms-opt-app-short', 'ms-opt-ign-long', 'ms-opt-ign-short'].forEach(function(id) {
@@ -9086,7 +9123,9 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
           + '<input class="ms-input" id="ms-opt-exchanges-input" placeholder="Select exchanges..." autocomplete="off">'
           + '<div class="ms-dropdown" id="ms-opt-exchanges-dd"></div>'
         + '</div></div>'
-      + fieldDate2('opted-start-date', 'start_date', backtest.start_date || '2020-01-01', 'Start date of optimize backtests.', 1)
+      + (optimizeEditorAdapter.isV8
+        ? fieldOptimizeStartDate2('opted-start-date', 'start_date', backtest.start_date || '2020-01-01', 'Start date of optimize backtests. Use 1st for the earliest selected market or All for common coverage across every selected exchange and coin.', 1)
+        : fieldDate2('opted-start-date', 'start_date', backtest.start_date || '2020-01-01', 'Start date of optimize backtests.', 1))
       + fieldDate2('opted-end-date', 'end_date', endDate, 'End date of optimize backtests.', 1)
     + '</div>'
 
@@ -9366,7 +9405,7 @@ function populateOptimizeEditor(config, opts) {
     : (backtest.exchange ? [backtest.exchange] : []);
   var exchangeOptions = optimizeExchangeOptions(exchanges);
   optRebuildMs('ms-opt-exchanges', exchangeOptions, exchanges);
-  el('opted-start-date').value = backtest.start_date || '';
+  el('opted-start-date').value = normalizeOptimizeDateOnlyValue(backtest.start_date || '');
   el('opted-end-date').value = resolveOptimizeEditorEndDateValue(backtest.end_date);
   el('opted-starting-balance').value = backtest.starting_balance == null ? '' : String(backtest.starting_balance);
   el('opted-iters').value = optimize.iters == null ? '' : String(optimize.iters);
@@ -9473,7 +9512,24 @@ function populateOptimizeEditor(config, opts) {
     });
   }
   if (typeof suiteInit === 'function') {
-    suiteInit('suite-container', { apiBase: API_BASE, version: optimizeEditorAdapter.version, aggregateMetrics: currentLimitsMeta().all_valid_metrics, exchanges: optimizeExchangeOptions(exchanges) });
+    suiteInit('suite-container', {
+      apiBase: API_BASE,
+      version: optimizeEditorAdapter.version,
+      aggregateMetrics: currentLimitsMeta().all_valid_metrics,
+      exchanges: optimizeExchangeOptions(exchanges),
+      scenarioGenerator: optimizeEditorAdapter.isV8,
+      getScenarioContext: function() {
+        var scenarioEndDate = normalizeOptimizeEndDateValue(el('opted-end-date').value);
+        return {
+          start_date: el('opted-start-date').value || null,
+          end_date: scenarioEndDate === 'now' ? new Date().toISOString().slice(0, 10) : (scenarioEndDate || null),
+          exchanges: optGetMs('ms-opt-exchanges'),
+        };
+      },
+      onApplyScenarioPreview: function(preview) {
+        applyOptimizeSweepPreset(preview);
+      },
+    });
     suiteLoad(cfg, { preserveEdit: false });
   }
   setScoringEntries(optimize.scoring, { suppressSync: true });
@@ -9505,6 +9561,104 @@ function populateOptimizeEditor(config, opts) {
   setRawJsonValidationError(null);
   bindStructuredJsonFieldValidation();
   bindStructuredEditorSync();
+}
+
+function applyOptimizeSweepLongBoundsPreset() {
+  var approvedLong = optGetMs('ms-opt-app-long').filter(function(value) { return value !== 'all'; });
+  approvedLong = uniqStrings(approvedLong);
+  if (!approvedLong.length) return;
+  var positionsKey = 'long.risk.n_positions';
+  var tweKey = 'long.risk.total_wallet_exposure_limit';
+  var positions = (state.optimizeBounds || []).find(function(entry) { return entry.key === positionsKey; });
+  var twe = (state.optimizeBounds || []).find(function(entry) { return entry.key === tweKey; });
+  var fixed = new Set(state.optimizeFixedParams || []);
+
+  function setRange(entry, low, high) {
+    if (!entry) return;
+    entry.lowValue = low;
+    entry.highValue = high;
+    entry.meta = getOptimizeBoundMeta(entry.key, low, high, entry.stepValue);
+    entry.lowText = formatOptimizeBoundValue(low, entry.meta.decimals);
+    entry.highText = formatOptimizeBoundValue(high, entry.meta.decimals);
+    constrainOptimizeBoundEntry(entry);
+  }
+
+  setRange(positions, 1, approvedLong.length);
+  setRange(twe, 6, 10);
+  var oneCoinRankingSuffixes = new Set([
+    'forager.score_weights_ema_readiness',
+    'forager.score_weights_volatility',
+    'forager.score_weights_volume'
+  ]);
+  (state.optimizeBounds || []).forEach(function(entry) {
+    if (entry.group !== 'long') return;
+    var canonical = entry.key;
+    var legacyCanonical = optimizeEditorAdapter.canonicalFixedParam(entry.key);
+    fixed.delete(canonical);
+    fixed.delete(legacyCanonical);
+    if (entry.key === positionsKey) {
+      if (approvedLong.length === 1) fixed.add(canonical);
+      else fixed.delete(canonical);
+      return;
+    }
+    if (entry.key === tweKey) {
+      fixed.delete(canonical);
+      return;
+    }
+    var zeroWidth = optimizeBoundNumbersMatch(entry.lowValue, entry.highValue);
+    var irrelevantRanking = approvedLong.length === 1 && oneCoinRankingSuffixes.has(entry.suffix);
+    if (zeroWidth || isOptimizeHslAutoFixedBound(entry.key) || irrelevantRanking) fixed.add(canonical);
+    else fixed.delete(canonical);
+  });
+  state.optimizeFixedParams = Array.from(fixed).sort();
+
+  var positionsInput = el('opted-long-npos');
+  var tweInput = el('opted-long-twe');
+  if (positionsInput) positionsInput.value = String(approvedLong.length);
+  if (tweInput) tweInput.value = '6';
+  if (positionsInput || tweInput) optBotSyncFromFields('long');
+  renderOptimizeBoundsEditor();
+  updateOptimizeBoundsHeader();
+}
+
+function applyOptimizeSweepCoinSymmetry() {
+  var approvedLong = optGetMs('ms-opt-app-long');
+  var ignoredShort = optGetMs('ms-opt-ign-short');
+  var approvedSet = new Set(approvedLong);
+  optSetMs('ms-opt-ign-short', ignoredShort.filter(function(value) { return !approvedSet.has(value); }));
+  optSetMs('ms-opt-app-short', approvedLong);
+}
+
+function applyOptimizeSweepPreset(preview) {
+  if (!preview || preview.template !== 'sweep_cycles') return;
+  var parameters = preview.parameters || {};
+  var policy = parameters.sweep_policy || {};
+  var balanceInput = el('opted-starting-balance');
+  if (balanceInput && policy.starting_balance != null) {
+    balanceInput.value = String(policy.starting_balance);
+  }
+  setScoringEntries(
+    [
+      {metric: 'gain_strategy_eq', goal: 'max'},
+      {metric: 'sortino_ratio_strategy_eq', goal: 'max'},
+      {metric: 'drawdown_worst_strategy_eq', goal: 'min'}
+    ],
+    {suppressSync: true}
+  );
+  setLimitEntries(
+    [
+      {metric: 'drawdown_worst_strategy_eq', penalize_if: 'greater_than', value: 0.8},
+      {metric: 'backtest_completion_ratio', penalize_if: 'less_than', value: 0.99}
+    ],
+    {suppressSync: true}
+  );
+  applyOptimizeSweepCoinSymmetry();
+  applyOptimizeSweepLongBoundsPreset();
+  var objectiveMode = el('opted-objective-scenario-mode');
+  var objectiveName = el('opted-objective-scenario-name');
+  if (objectiveMode) objectiveMode.value = 'aggregate';
+  if (objectiveName) objectiveName.value = '';
+  toggleOptimizeObjectiveScenarioInput();
 }
 
 function captureOptimizeRawAnchor() {
@@ -9736,11 +9890,14 @@ function collectEditorConfig(baseConfig, opts) {
       cfg.backtest.aggregate = suiteReducer;
       delete cfg.backtest.reducer;
     }
+    if (suite.scenario_template) pbgui.scenario_template = suite.scenario_template;
+    else delete pbgui.scenario_template;
   } else {
     delete cfg.backtest.scenarios;
     delete cfg.backtest.aggregate;
     delete cfg.backtest.reducer;
     delete cfg.backtest.suite_enabled;
+    delete pbgui.scenario_template;
   }
   live.approved_coins = collectApprovedCoinsFromMs();
   live.ignored_coins = {
@@ -10238,6 +10395,9 @@ function bindStructuredEditorSync() {
 }
 
 var _optOhlcvPreflightController = null;
+var _optOhlcvStartDateRequestId = 0;
+var _optOhlcvStartDateRun = null;
+var _optOhlcvStartDatePollTimer = null;
 
 function getOptimizeOhlcvPreflightPayload() {
   var fallbackConfig = state.editorLastConfig ? deepClone(state.editorLastConfig) : {};
@@ -10251,6 +10411,208 @@ function getOptimizeOhlcvPreflightPayload() {
       };
     }
     throw error;
+  }
+}
+
+function optimizeOhlcvLookupConfig(payload) {
+  if (payload && payload.config && !payload.backtest) {
+    if (payload.note) throw new Error(payload.note);
+    return payload.config;
+  }
+  return payload;
+}
+
+function optimizeOhlcvStartLookupSignature(config) {
+  return JSON.stringify(config || {});
+}
+
+function setOptimizeStartDateControlsRunning(running) {
+  var buttons = Array.from(document.querySelectorAll('.opted-ohlcv-start-btn'));
+  buttons.forEach(function(button) { button.disabled = !!running; });
+}
+
+function renderOptimizeStartDateProgress(payload) {
+  var container = el('opted-ohlcv-start-progress');
+  var fill = el('opted-ohlcv-start-progress-fill');
+  var label = el('opted-ohlcv-start-progress-label');
+  var stopButton = el('opted-ohlcv-start-stop');
+  if (!container || !fill || !label || !stopButton) return;
+  var progress = payload && payload.progress || {};
+  var percent = Math.max(0, Math.min(100, Number(progress.percent) || 0));
+  var count = progress.total ? progress.completed + '/' + progress.total + ' · ' : '';
+  var detail = progress.message || (payload && payload.status === 'stopping' ? 'Stopping...' : 'Working...');
+  container.style.display = '';
+  fill.style.width = percent + '%';
+  label.textContent = count + detail;
+  label.title = label.textContent;
+  stopButton.disabled = !_optOhlcvStartDateRun || !!(payload && (payload.status === 'stopping' || payload.stop_requested));
+  if (_optOhlcvStartDateRun) _optOhlcvStartDateRun.lastProgress = progress;
+}
+
+function clearOptimizeStartDateProgress() {
+  if (_optOhlcvStartDatePollTimer) {
+    window.clearTimeout(_optOhlcvStartDatePollTimer);
+    _optOhlcvStartDatePollTimer = null;
+  }
+  _optOhlcvStartDateRun = null;
+  setOptimizeStartDateControlsRunning(false);
+  var container = el('opted-ohlcv-start-progress');
+  if (container) container.style.display = 'none';
+}
+
+function resetOptimizeStartDateLookup() {
+  _optOhlcvStartDateRequestId += 1;
+  var run = _optOhlcvStartDateRun;
+  clearOptimizeStartDateProgress();
+  if (run && run.jobId) {
+    apiFetch('/ohlcv-start-dates/' + encodeURIComponent(run.jobId), {method: 'DELETE'}).catch(function() {});
+  }
+}
+
+function applyOptimizeStartDateResult(run, response) {
+  var currentConfig = optimizeOhlcvLookupConfig(getOptimizeOhlcvPreflightPayload());
+  if (run.signature !== optimizeOhlcvStartLookupSignature(currentConfig)) {
+    toast('OHLCV selection changed during lookup. Retry before setting start_date.', 'warn');
+    return;
+  }
+  var options = response && response.result && response.result.start_date_options;
+  var selected = options && options[run.mode];
+  if (!selected || !selected.available || !selected.start_date) {
+    var pair = options && ((options.missing_market_pairs || [])[0] || (options.unknown_start_pairs || [])[0]);
+    var pairText = pair ? ' First unresolved pair: ' + pair.coin + ' @ ' + pair.exchange + '.' : '';
+    toast(((selected && selected.detail) || 'No matching OHLCV start date is available.') + pairText, 'err');
+    return;
+  }
+  var startInput = el('opted-start-date');
+  if (!startInput) return;
+  startInput.value = selected.start_date;
+  startInput.dataset.prev = selected.start_date;
+  cfgEnsureDateOrder('opted-start-date', 'opted-end-date', 'start', false);
+  scheduleStructuredEditorSync();
+  if (_optOhlcvPreflightController && _optOhlcvPreflightController.isOpen()) {
+    _optOhlcvPreflightController.markStale();
+  }
+  var warmup = options.warmup_minutes ? ' including ' + options.warmup_minutes.toLocaleString() + ' warmup minutes' : '';
+  var coverage = run.mode === 'earliest' && options.known_pair_count < options.pair_count
+    ? '; based on ' + options.known_pair_count + ' of ' + options.pair_count + ' resolved market pairs'
+    : '';
+  toast('start_date set to ' + selected.start_date + ' (first data ' + selected.data_date + warmup + coverage + ')', 'ok');
+}
+
+function scheduleOptimizeStartDatePoll(delayMs) {
+  if (_optOhlcvStartDatePollTimer) window.clearTimeout(_optOhlcvStartDatePollTimer);
+  _optOhlcvStartDatePollTimer = window.setTimeout(refreshOptimizeStartDateLookup, Math.max(100, delayMs || 500));
+}
+
+async function refreshOptimizeStartDateLookup() {
+  var run = _optOhlcvStartDateRun;
+  if (!run) return;
+  try {
+    var response = await apiFetch('/ohlcv-start-dates/' + encodeURIComponent(run.jobId));
+    if (!_optOhlcvStartDateRun || _optOhlcvStartDateRun.jobId !== run.jobId) return;
+    if (run.stopping) {
+      if (response.status === 'completed' || response.status === 'error' || response.status === 'stopped') {
+        if (!run.silentStop) toast('OHLCV start-date lookup stopped.', 'warn');
+        clearOptimizeStartDateProgress();
+      } else {
+        renderOptimizeStartDateProgress({
+          status: 'stopping',
+          stop_requested: true,
+          progress: Object.assign({}, run.lastProgress || {}, {message: 'Stopping PB8 lookup...'})
+        });
+        scheduleOptimizeStartDatePoll(250);
+      }
+      return;
+    }
+    renderOptimizeStartDateProgress(response);
+    if (response.status === 'completed') {
+      applyOptimizeStartDateResult(run, response);
+      clearOptimizeStartDateProgress();
+      return;
+    }
+    if (response.status === 'error') {
+      toast(response.error || 'OHLCV start-date lookup failed.', 'err');
+      clearOptimizeStartDateProgress();
+      return;
+    }
+    if (response.status === 'stopped') {
+      if (!run.silentStop) toast('OHLCV start-date lookup stopped.', 'warn');
+      clearOptimizeStartDateProgress();
+      return;
+    }
+    scheduleOptimizeStartDatePoll(500);
+  } catch (error) {
+    if (!_optOhlcvStartDateRun || _optOhlcvStartDateRun.jobId !== run.jobId) return;
+    toast(error && error.message ? error.message : 'OHLCV start-date lookup failed.', 'err');
+    clearOptimizeStartDateProgress();
+  }
+}
+
+async function setOptimizeStartDateFromOhlcv(mode, triggerButton) {
+  if (!optimizeEditorAdapter.isV8 || _optOhlcvStartDateRun) return;
+  if (mode !== 'earliest' && mode !== 'all_markets') return;
+  if (!triggerButton) return;
+  var requestId = ++_optOhlcvStartDateRequestId;
+  setOptimizeStartDateControlsRunning(true);
+  renderOptimizeStartDateProgress({status: 'queued', progress: {percent: 0, message: 'Starting PB8 lookup...'}});
+  try {
+    var config = optimizeOhlcvLookupConfig(getOptimizeOhlcvPreflightPayload());
+    var signature = optimizeOhlcvStartLookupSignature(config);
+    var response = await apiFetch('/ohlcv-start-dates', {
+      method: 'POST',
+      body: JSON.stringify({ config: config })
+    });
+    if (requestId !== _optOhlcvStartDateRequestId || !editorVisible()) {
+      if (response && response.job_id) {
+        apiFetch('/ohlcv-start-dates/' + encodeURIComponent(response.job_id), {method: 'DELETE'}).catch(function() {});
+      }
+      return;
+    }
+    if (!response || !response.job_id) throw new Error('OHLCV start-date lookup returned no job ID');
+    _optOhlcvStartDateRun = {
+      jobId: response.job_id,
+      mode: mode,
+      signature: signature,
+      requestId: requestId,
+      silentStop: false
+    };
+    renderOptimizeStartDateProgress(response);
+    scheduleOptimizeStartDatePoll(100);
+  } catch (error) {
+    if (requestId !== _optOhlcvStartDateRequestId) return;
+    toast(error && error.message ? error.message : 'OHLCV start-date lookup failed.', 'err');
+    clearOptimizeStartDateProgress();
+  }
+}
+
+async function stopOptimizeStartDateLookup(silent) {
+  var run = _optOhlcvStartDateRun;
+  if (!run) return;
+  run.silentStop = !!silent;
+  run.stopping = true;
+  if (_optOhlcvStartDatePollTimer) {
+    window.clearTimeout(_optOhlcvStartDatePollTimer);
+    _optOhlcvStartDatePollTimer = null;
+  }
+  renderOptimizeStartDateProgress({
+    status: 'stopping',
+    stop_requested: true,
+    progress: Object.assign({}, run.lastProgress || {}, {message: 'Stopping PB8 lookup...'})
+  });
+  try {
+    var response = await apiFetch('/ohlcv-start-dates/' + encodeURIComponent(run.jobId), {method: 'DELETE'});
+    if (!_optOhlcvStartDateRun || _optOhlcvStartDateRun.jobId !== run.jobId) return;
+    renderOptimizeStartDateProgress(response);
+    if (response.status === 'completed' || response.status === 'error' || response.status === 'stopped') {
+      if (!run.silentStop) toast('OHLCV start-date lookup stopped.', 'warn');
+      clearOptimizeStartDateProgress();
+    } else {
+      scheduleOptimizeStartDatePoll(250);
+    }
+  } catch (error) {
+    if (!_optOhlcvStartDateRun || _optOhlcvStartDateRun.jobId !== run.jobId) return;
+    if (!run.silentStop) toast(error && error.message ? error.message : 'Could not stop OHLCV lookup.', 'err');
+    clearOptimizeStartDateProgress();
   }
 }
 
@@ -11494,6 +11856,7 @@ function updateParetoSelectionUi() {
     : 'No paretos selected.';
   el('btn-open-pareto-explorer-paretos').disabled = !state.selectedResultPath;
   el('btn-backtest-selected-paretos').disabled = selectedCount === 0;
+  el('btn-holdout-selected-paretos').disabled = selectedCount === 0 || !state.paretoSweepEnabled;
   el('btn-seed-selected-paretos').disabled = selectedCount === 0;
   el('btn-seed-whole-result').disabled = !state.selectedResultPath;
 }
@@ -12216,6 +12579,48 @@ async function backtestSelectedParetos(paths) {
       };
     });
   }));
+  return openBacktestQueueDraft(queueItems);
+}
+
+function buildSweepHoldoutBacktestConfig(config, holdout, draftName) {
+  var candidate = deepClone(config || {});
+  var backtest = candidate.backtest && typeof candidate.backtest === 'object' ? candidate.backtest : {};
+  candidate.backtest = backtest;
+  backtest.start_date = holdout.start_date;
+  backtest.end_date = holdout.end_date;
+  backtest.base_dir = 'backtests/pbgui/' + String(draftName || 'sweep_holdout');
+  delete backtest.suite_enabled;
+  delete backtest.scenarios;
+  delete backtest.reducer;
+  delete backtest.aggregate;
+  if (candidate.pbgui && typeof candidate.pbgui === 'object') delete candidate.pbgui.scenario_template;
+  return candidate;
+}
+
+async function backtestSelectedSweepHoldouts() {
+  var selectedPaths = Array.from(state.selectedParetos);
+  if (!selectedPaths.length) throw new Error('Select at least one Pareto candidate.');
+  if (!state.paretoSweepEnabled) throw new Error('The selected result has no Sweep Holdout plan.');
+  var queueItems = [];
+  for (var index = 0; index < selectedPaths.length; index++) {
+    var path = selectedPaths[index];
+    var item = state.paretos.find(function(candidate) { return candidate.path === path; }) || {};
+    var data = await apiFetch(optimizeEditorAdapter.paretoFilePath(path));
+    var payload = normalizeParetoBacktestPayload(data);
+    var sweep = data && data.sweep_cycles || {};
+    var holdouts = Array.isArray(sweep.holdout_scenarios) ? sweep.holdout_scenarios : [];
+    if (!holdouts.length) throw new Error('Sweep Holdout dates are unavailable for ' + (item.name || 'candidate') + '.');
+    for (var holdoutIndex = 0; holdoutIndex < holdouts.length; holdoutIndex++) {
+      var holdout = holdouts[holdoutIndex];
+      var holdoutLabel = String(holdout.label || ('holdout_' + (holdoutIndex + 1))).replace(/[^A-Za-z0-9_.-]/g, '_');
+      var draftName = String(item.name || 'pareto') + '_' + holdoutLabel;
+      queueItems.push({
+        name: draftName,
+        config: extractConfigSections(buildSweepHoldoutBacktestConfig(payload.config, holdout, draftName)),
+        override_configs: payload.override_configs
+      });
+    }
+  }
   return openBacktestQueueDraft(queueItems);
 }
 
@@ -13255,6 +13660,9 @@ function attachEventHandlers() {
   el('btn-backtest-selected-paretos').addEventListener('click', function() {
     backtestSelectedParetos().catch(handleError);
   });
+  el('btn-holdout-selected-paretos').addEventListener('click', function() {
+    backtestSelectedSweepHoldouts().catch(handleError);
+  });
   el('btn-seed-selected-paretos').addEventListener('click', function() {
     useSelectedParetosAsSeeds().catch(handleError);
   });
@@ -14166,9 +14574,13 @@ init().catch(handleError);
     });
   }());
 
-  window._openOptimizeHelp = function() {
+  window._openOptimizeHelp = function(anchor) {
     if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
-    window.PBGuiSharedHelp.open('optimize', { token: TOKEN });
+    var topic = optimizeEditorAdapter.isV8 ? '43_pbv8_optimize' : '36_pbv7_optimize';
+    window.PBGuiSharedHelp.open(topic, { token: TOKEN, anchor: anchor || '' });
+  };
+  window.PBGUI_SCENARIO_GENERATOR_HELP = function() {
+    window._openOptimizeHelp('scenario-generator');
   };
   window.PBGUI_HELP_OPENER = window._openOptimizeHelp;
 }());
