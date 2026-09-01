@@ -5495,7 +5495,7 @@ function renderOptimizeLogDashboard(status) {
   var log = status.log || {};
   var percent = progress.percent == null || !isFinite(Number(progress.percent)) ? null : Number(progress.percent);
   el('optlog-progress-fill').style.width = percent == null ? '0%' : Math.max(0, Math.min(100, percent)) + '%';
-  var progressText = progress.eval == null ? 'Waiting for evaluations...' : progress.eval.toLocaleString() + ' evals';
+  var progressText = progress.eval == null ? 'Waiting for evaluations...' : (progress.estimated ? '≥ ' : '') + progress.eval.toLocaleString() + ' evals';
   if (runtime.backend === 'gpu' && progress.exact_evaluations != null) {
     var gpuBits = [progress.exact_evaluations.toLocaleString() + (progress.target_exact_evaluations != null ? ' / ' + progress.target_exact_evaluations.toLocaleString() : '') + ' exact'];
     if (progress.generation != null) gpuBits.push('gen ' + progress.generation.toLocaleString());
@@ -5504,7 +5504,7 @@ function renderOptimizeLogDashboard(status) {
     progressText = gpuBits.join(' · ');
     if (percent != null) progressText += ' (' + percent.toFixed(1) + '%)';
   } else if (progress.target_iters != null && progress.eval != null) {
-    progressText = progress.eval.toLocaleString() + ' / ' + progress.target_iters.toLocaleString() + ' evals';
+    progressText = (progress.estimated ? '≥ ' : '') + progress.eval.toLocaleString() + ' / ' + progress.target_iters.toLocaleString() + ' evals';
     if (percent != null) progressText += ' (' + percent.toFixed(1) + '%)';
   }
   if (progress.evaluation_scan && !progress.evaluation_scan.complete) {

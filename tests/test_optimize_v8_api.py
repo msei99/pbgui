@@ -1840,7 +1840,8 @@ def test_running_queue_status_prefers_durable_results_over_stale_pareto_log(
 
     assert status["progress"]["evaluations"] == 18_750
     assert status["progress"]["percent"] == 6.25
-    assert status["progress"]["evaluation_source"] == "all_results"
+    assert status["progress"]["evaluation_source"] == "fallback_scan"
+    assert status["progress"]["estimated"] is True
     assert status["progress"]["result"] == "active-run"
 
 
@@ -1853,6 +1854,10 @@ def test_active_all_results_progress_uses_verified_open_result_file(
     result_dir.mkdir(parents=True)
     all_results = result_dir / "all_results.bin"
     all_results.write_bytes(b"".join(msgpack.packb({"evaluation": index}) for index in range(3)))
+    (result_dir / optimize_v8._EVALUATION_PROGRESS_FILENAME).write_text(
+        json.dumps({"contract_version": 1, "evaluations": 3, "all_results_size": all_results.stat().st_size}),
+        encoding="utf-8",
+    )
 
     class Process:
         """Minimal verified process with one durable result file."""
@@ -1882,6 +1887,7 @@ def test_active_all_results_progress_uses_verified_open_result_file(
         "bytes_scanned": all_results.stat().st_size,
         "total_bytes": all_results.stat().st_size,
         "scan_percent": 100.0,
+        "source": "runner",
     }
 
 
@@ -1949,6 +1955,19 @@ def test_active_evaluation_counter_obeys_wall_clock_budget(
     assert first["evaluations"] == 1
     assert first["scan_complete"] is False
     assert first["bytes_scanned"] < first["total_bytes"]
+
+
+def test_log_evaluation_estimate_adds_visible_drops_after_latest_iter(tmp_path) -> None:
+    """Legacy runs get an immediate labeled lower bound before exact history scanning finishes."""
+    path = tmp_path / "optimize.log"
+    path.write_text(
+        "INFO Iter: 120 | Pareto up | size:4\n"
+        "INFO Dropping candidate whose obj score is already present\n"
+        "INFO Dropping candidate whose obj score is already present\n",
+        encoding="utf-8",
+    )
+
+    assert optimize_v8._estimate_log_evaluations(path) == 122
 
 
 def test_config_metadata_seed_backtests_and_result_mode(optimize_v8_roots) -> None:

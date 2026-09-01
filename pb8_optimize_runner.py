@@ -18,6 +18,59 @@ from secure_files import atomic_write_private_text
 from sweep_cycles import SWEEP_PLAN_FILENAME, validate_sweep_plan
 
 
+EVALUATION_PROGRESS_FILENAME = ".pbgui_optimize_progress.json"
+
+
+def _install_evaluation_progress_publisher(optimize_module):
+    """Publish PB8's exact in-memory evaluation count without changing PB8 source."""
+    recorder_class = getattr(optimize_module, "ResultRecorder", None)
+    if recorder_class is None or getattr(recorder_class, "_pbgui_progress_patched", False):
+        return lambda: None
+    instances = []
+    original_init = recorder_class.__init__
+    original_record = recorder_class.record
+
+    def publish(instance, force=False):
+        now = time.monotonic()
+        if not force and now - float(getattr(instance, "_pbgui_progress_at", 0.0)) < 1.0:
+            return
+        store = getattr(instance, "store", None)
+        result_dir = Path(str(getattr(store, "directory", "")))
+        evaluations = int(getattr(store, "n_iters", 0) or 0)
+        if not result_dir.is_dir() or evaluations < 0:
+            return
+        payload = {
+            "contract_version": 1,
+            "evaluations": evaluations,
+            "updated_at": time.time(),
+        }
+        results_file = getattr(instance, "results_file", None)
+        try:
+            if results_file is not None:
+                payload["all_results_size"] = int(results_file.tell())
+            atomic_write_private_text(
+                result_dir / EVALUATION_PROGRESS_FILENAME,
+                json.dumps(payload, indent=4) + "\n",
+            )
+            instance._pbgui_progress_at = now
+        except (OSError, ValueError):
+            return
+
+    def patched_init(instance, *args, **kwargs):
+        original_init(instance, *args, **kwargs)
+        instances.append(instance)
+
+    def patched_record(instance, data):
+        result = original_record(instance, data)
+        publish(instance)
+        return result
+
+    recorder_class.__init__ = patched_init
+    recorder_class.record = patched_record
+    recorder_class._pbgui_progress_patched = True
+    return lambda: [publish(instance, force=True) for instance in instances]
+
+
 def _persist_open_sweep_plan(pb8_dir: Path, plan: dict) -> bool:
     """Persist a validated plan beside this runner's open PB8 result stream."""
     results_root = (pb8_dir / "optimize_results").resolve(strict=False)
@@ -87,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     sweep_thread = None
     sweep_plan = None
     runtime_pb8_dir = None
+    publish_final_progress = lambda: None
     try:
         ownership = {"pid": os.getpid(), "create_time": psutil.Process(os.getpid()).create_time()}
         atomic_write_private_text(Path(ownership_path), json.dumps(ownership, indent=4) + "\n")
@@ -110,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
             runtime_pb8_dir = Path(pb8_dir).resolve(strict=False)
             sys.argv = _optimizer_argv(cli_path, config_path, options)
             optimize_module = importlib.import_module("optimize")
+            publish_final_progress = _install_evaluation_progress_publisher(optimize_module)
             atomic_write_private_text(Path(ready_path), f"{os.getpid()}\n")
         finally:
             runtime_lease.release()
@@ -132,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
     finally:
+        publish_final_progress()
         sweep_stop.set()
         if sweep_thread is not None:
             sweep_thread.join(timeout=2)
