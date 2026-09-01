@@ -736,6 +736,7 @@ def test_optimize_log_waits_for_first_evaluation_when_target_is_known() -> None:
 
     assert "if (progress.target_iters != null && progress.eval != null)" in renderer
     assert "progress.eval == null ? 'Waiting for evaluations...'" in renderer
+    assert "counting history " in renderer
 
 
 def test_adapter_preserves_v7_and_round_trips_nested_v8_paths() -> None:

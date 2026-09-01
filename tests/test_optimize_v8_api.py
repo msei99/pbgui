@@ -1878,6 +1878,10 @@ def test_active_all_results_progress_uses_verified_open_result_file(
         "evaluations": 3,
         "result": "active-result",
         "trailing_partial_entry": False,
+        "scan_complete": True,
+        "bytes_scanned": all_results.stat().st_size,
+        "total_bytes": all_results.stat().st_size,
+        "scan_percent": 100.0,
     }
 
 
@@ -1898,8 +1902,53 @@ def test_active_evaluation_counter_resumes_after_partial_messagepack_record(
         handle.write(pending[-1:])
     second = optimize_v8._all_results_evaluation_count(path)
 
-    assert first == {"evaluations": 2, "trailing_partial_entry": True}
-    assert second == {"evaluations": 3, "trailing_partial_entry": False}
+    assert first["evaluations"] == 2
+    assert first["trailing_partial_entry"] is True
+    assert second["evaluations"] == 3
+    assert second["trailing_partial_entry"] is False
+    assert second["scan_complete"] is True
+
+
+def test_active_evaluation_counter_spreads_cold_scan_across_requests(
+    optimize_v8_roots, monkeypatch
+) -> None:
+    """Large histories advance by a bounded byte budget instead of blocking one status request."""
+    _configs, _queue, _logs, results = optimize_v8_roots
+    path = results / "budgeted-result" / "all_results.bin"
+    path.parent.mkdir(parents=True)
+    records = [msgpack.packb({"evaluation": index, "padding": "x" * 32}) for index in range(4)]
+    path.write_bytes(b"".join(records))
+    monkeypatch.setattr(optimize_v8, "_ACTIVE_EVAL_SCAN_BUDGET_BYTES", len(records[0]) + len(records[1]))
+    monkeypatch.setattr(optimize_v8, "_ACTIVE_EVAL_SCAN_BUDGET_SECONDS", 60.0)
+
+    first = optimize_v8._all_results_evaluation_count(path)
+    second = optimize_v8._all_results_evaluation_count(path)
+
+    assert first["evaluations"] == 2
+    assert first["scan_complete"] is False
+    assert first["scan_percent"] == 50.0
+    assert second["evaluations"] == 4
+    assert second["scan_complete"] is True
+    assert second["scan_percent"] == 100.0
+
+
+def test_active_evaluation_counter_obeys_wall_clock_budget(
+    optimize_v8_roots, monkeypatch
+) -> None:
+    """Dense small records cannot monopolize a status request beyond its time slice."""
+    _configs, _queue, _logs, results = optimize_v8_roots
+    path = results / "timed-result" / "all_results.bin"
+    path.parent.mkdir(parents=True)
+    records = [msgpack.packb({"evaluation": index}) for index in range(5)]
+    path.write_bytes(b"".join(records))
+    monkeypatch.setattr(optimize_v8, "_ACTIVE_EVAL_SCAN_BUDGET_BYTES", 1024 * 1024)
+    monkeypatch.setattr(optimize_v8, "_ACTIVE_EVAL_SCAN_BUDGET_SECONDS", 0.0)
+
+    first = optimize_v8._all_results_evaluation_count(path)
+
+    assert first["evaluations"] == 1
+    assert first["scan_complete"] is False
+    assert first["bytes_scanned"] < first["total_bytes"]
 
 
 def test_config_metadata_seed_backtests_and_result_mode(optimize_v8_roots) -> None:

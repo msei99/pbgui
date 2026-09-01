@@ -73,8 +73,14 @@ def _write_manifest(root: Path, files: dict[str, bytes]) -> str:
     return f"sha256:{digest}"
 
 
-def _project_pb8_exchange_keys(monkeypatch, tmp_path: Path, root: Path) -> Path:
-    """Configure a cloned PB8 runtime and materialize its exchange-key projection."""
+def _project_pb8_exchange_keys(
+    monkeypatch,
+    tmp_path: Path,
+    root: Path,
+    *,
+    materialize: bool = True,
+) -> tuple[Path, dict]:
+    """Publish exchange keys for a cloned PB8 runtime and optionally project them."""
 
     pbgui = tmp_path / "pbgui"
     pb7 = tmp_path / "pb7"
@@ -85,18 +91,30 @@ def _project_pb8_exchange_keys(monkeypatch, tmp_path: Path, root: Path) -> Path:
     monkeypatch.setattr(cluster_sync_command, "PBGDIR", str(pbgui))
     monkeypatch.setattr(cluster_sync_command, "pb7dir", lambda: str(pb7))
     monkeypatch.setattr(cluster_sync_command, "pb8dir", lambda: str(pb8))
-    raw_secret = b'{"_api_serial":3,"pb8-user":{"exchange":"bybit","secret":"s"}}'
+    raw_secret = (
+        b'{"_api_serial":3,"pb8-user":{"exchange":"hyperliquid","private_key":"s",'
+        b'"wallet_address":"0x1","is_vault":false}}'
+    )
     secret_hash = "sha256:" + hashlib.sha256(raw_secret).hexdigest()
     secret_path = root / "secret_blobs" / "sha256" / secret_hash[7:9] / f"{secret_hash[7:]}.json"
     secret_path.parent.mkdir(parents=True, exist_ok=True)
     secret_path.write_bytes(raw_secret)
-    append_operation(root, "UPSERT_API_KEYS", {
+    raw_payload = (
+        b'{"pb8-user":{"exchange":"hyperliquid","private_key":"<redacted>",'
+        b'"wallet_address":"0x1","is_vault":false}}'
+    )
+    payload_hash = "sha256:" + hashlib.sha256(raw_payload).hexdigest()
+    payload_path = root / "config_blobs" / "sha256" / payload_hash[7:9] / f"{payload_hash[7:]}.json"
+    payload_path.parent.mkdir(parents=True, exist_ok=True)
+    payload_path.write_bytes(raw_payload)
+    operation = append_operation(root, "UPSERT_API_KEYS", {
         "api_serial": 3,
-        "payload_hash": HASH_A,
+        "payload_hash": payload_hash,
         "secret_blob_hash": secret_hash,
     })
-    run_command(root, NODE_A, "materialize-api-keys")
-    return pb8
+    if materialize:
+        run_command(root, NODE_A, "materialize-api-keys")
+    return pb8, operation
 
 
 def _append_pb8_config(root: Path, raw: bytes, *, version: str = "1", parent_version: str = "0") -> str:
@@ -226,10 +244,10 @@ def test_materialize_v8_exactly_reconciles_json_and_backs_up_removals(
 
 
 def test_apply_bundle_materializes_targeted_pb8_config(monkeypatch, tmp_path: Path) -> None:
-    """The single-command fast path writes its PB8 config before returning."""
+    """The fast path projects bundled exchange keys before writing its PB8 config."""
 
     root = _cluster(tmp_path)
-    _project_pb8_exchange_keys(monkeypatch, tmp_path, root)
+    pb8, api_operation = _project_pb8_exchange_keys(monkeypatch, tmp_path, root, materialize=False)
     config_raw = b'{"live":{"user":"pb8"}}'
     _append_pb8_config(root, config_raw)
     operation = max(
@@ -242,10 +260,10 @@ def test_apply_bundle_materializes_targeted_pb8_config(monkeypatch, tmp_path: Pa
     )
     config_blobs, secret_blobs, sealed_blobs = cluster_sync_worker._collect_local_blobs_for_operations(
         root,
-        [operation],
+        [api_operation, operation],
     )
     payload = cluster_sync_worker._apply_bundle_payload(
-        [operation],
+        [api_operation, operation],
         config_blobs,
         secret_blobs,
         sealed_blobs,
@@ -253,8 +271,12 @@ def test_apply_bundle_materializes_targeted_pb8_config(monkeypatch, tmp_path: Pa
 
     result = run_command(root, NODE_A, "apply-bundle", payload)
 
+    assert result["api_key_materialization"]["status"] == "written"
     assert result["pb8_materialization"]["counts"]["written_instances"] == 1
     assert result["materialization"] == result["pb8_materialization"]
+    projected_user = json.loads((pb8 / "api-keys.json").read_text(encoding="utf-8"))["pb8-user"]
+    assert projected_user["private_key"] == "s"
+    assert projected_user["is_vault"] is False
     assert (root.parent / "run_v8" / "pb8_bot" / "config.json").read_bytes() == config_raw
 
 
@@ -262,6 +284,7 @@ def test_push_pb8_activation_uses_one_bounded_apply_bundle(monkeypatch, tmp_path
     """PB8 fast activation skips a full peer pass and targets only its assigned VPS."""
 
     root = _cluster(tmp_path)
+    _pb8, api_operation = _project_pb8_exchange_keys(monkeypatch, tmp_path, root, materialize=False)
     append_node_placeholder(root, {
         "node_id": NODE_B,
         "role": "vps",
@@ -297,7 +320,8 @@ def test_push_pb8_activation_uses_one_bounded_apply_bundle(monkeypatch, tmp_path
 
     assert settings == [(4, 2, root)]
     assert [command for command, _payload in calls] == ["apply-bundle"]
-    assert calls[0][1]["operations"] == [operation]
+    assert calls[0][1]["operations"] == [api_operation, operation]
+    assert len(calls[0][1]["secret_blobs"]) == 1
     assert result["status"] == "activated"
     assert result["pbname"] == "runner-b"
 

@@ -157,8 +157,22 @@ def _push_config_activation(
     if not str(peer.get("ssh_host") or "").strip():
         raise ClusterSyncWorkerError("assigned cluster node has no ssh_host")
 
-    config_blobs, secret_blobs, sealed_blobs = _collect_local_blobs_for_operations(root, [operation])
-    payload = _apply_bundle_payload([operation], config_blobs, secret_blobs, sealed_blobs)
+    bundle_operations = [operation]
+    if expected_operation == "UPSERT_PB8_CONFIG":
+        desired_api_keys = (materialized.get("desired_state") or {}).get("api_keys")
+        if isinstance(desired_api_keys, dict):
+            for candidate in reversed(load_operations(root, expected_cluster_id=cluster_id)):
+                if (
+                    str(candidate.get("op") or "") == "UPSERT_API_KEYS"
+                    and int(candidate.get("api_serial") or 0) == int(desired_api_keys.get("serial") or 0)
+                    and str(candidate.get("payload_hash") or "") == str(desired_api_keys.get("payload_hash") or "")
+                    and str(candidate.get("secret_blob_hash") or "") == str(desired_api_keys.get("secret_blob_hash") or "")
+                ):
+                    bundle_operations.insert(0, candidate)
+                    break
+
+    config_blobs, secret_blobs, sealed_blobs = _collect_local_blobs_for_operations(root, bundle_operations)
+    payload = _apply_bundle_payload(bundle_operations, config_blobs, secret_blobs, sealed_blobs)
     if len(payload.encode("utf-8")) > APPLY_BUNDLE_TARGET_BYTES:
         raise ClusterSyncWorkerError("fast activation bundle exceeds the transport limit")
     client = SshClusterPeerClient(

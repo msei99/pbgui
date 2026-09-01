@@ -3378,6 +3378,14 @@ def _apply_bundle(
         written_ops.append({"op_id": str(operation["op_id"]), "actor": str(operation["actor"]), "seq": int(operation["seq"])})
 
     materialized = _safe_state_call(lambda: rebuild_materialized_state(cluster_root))
+    api_key_materialization = {"status": "delegated_to_pbcluster"}
+    if any(str(operation.get("op") or "") == "UPSERT_API_KEYS" for operation in operations):
+        api_key_preview = _materialize_api_keys(cluster_root, write=False)
+        api_key_materialization = (
+            _materialize_api_keys(cluster_root, write=True)
+            if api_key_preview.get("can_apply")
+            else api_key_preview
+        )
     v7_instances = {
         str(operation.get("instance") or "")
         for operation in operations
@@ -3415,6 +3423,7 @@ def _apply_bundle(
         "sealed_blobs": len(written_sealed),
         "generation": int(((materialized.get("cluster_nodes") or {}).get("generation") or 0)),
         "materialization": materialization,
+        "api_key_materialization": api_key_materialization,
         "v7_materialization": v7_materialization,
         "pb8_materialization": pb8_materialization,
     }

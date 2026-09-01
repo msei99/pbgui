@@ -5507,6 +5507,9 @@ function renderOptimizeLogDashboard(status) {
     progressText = progress.eval.toLocaleString() + ' / ' + progress.target_iters.toLocaleString() + ' evals';
     if (percent != null) progressText += ' (' + percent.toFixed(1) + '%)';
   }
+  if (progress.evaluation_scan && !progress.evaluation_scan.complete) {
+    progressText += ' · counting history ' + Number(progress.evaluation_scan.percent || 0).toFixed(1) + '%';
+  }
   el('optlog-progress-label').textContent = progressText;
   el('optlog-updated-label').textContent = formatRelativeTime(log.updated_at || runtime.last_log_at);
   el('optlog-phase').textContent = optimizePhaseLabel(status.phase || status.status);

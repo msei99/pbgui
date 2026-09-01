@@ -101,6 +101,8 @@ _PARETO_COMPARISON_METRICS = (
 _LAUNCH_MODES = {"fresh", "pareto_seed", "checkpoint_resume"}
 _RESULT_PROGRESS_CACHE_TTL_SECONDS = 15 * 60
 _RESULT_PROGRESS_CACHE_MAX_ENTRIES = 64
+_ACTIVE_EVAL_SCAN_BUDGET_BYTES = 32 * 1024 * 1024
+_ACTIVE_EVAL_SCAN_BUDGET_SECONDS = 0.2
 _RESULT_LIST_SCAN_LIMIT_BYTES = 8 * 1024 * 1024
 _MAX_OVERRIDE_BYTES = 1024 * 1024
 _MAX_OVERRIDE_BUNDLE_BYTES = 8 * 1024 * 1024
@@ -1675,23 +1677,31 @@ def _all_results_evaluation_count(path: Path) -> dict:
                 and stat_result.st_mtime_ns != cached.get("mtime_ns")
             )
         )
-        if same_file and stat_result.st_size == cached["size"]:
+        if same_file and stat_result.st_size == cached["size"] and int(cached["offset"]) >= int(cached["size"]):
             cached["accessed_at"] = now
             _active_eval_count_cache.move_to_end(key)
             return {
                 "evaluations": int(cached["evaluations"]),
-                "trailing_partial_entry": int(cached["offset"]) < int(cached["size"]),
+                "trailing_partial_entry": False,
+                "scan_complete": True,
+                "bytes_scanned": int(cached["offset"]),
+                "total_bytes": int(cached["size"]),
+                "scan_percent": 100.0,
             }
 
         offset = int(cached["offset"]) if same_file else 0
         evaluations = int(cached["evaluations"]) if same_file else 0
         last_complete = offset
         error = None
+        scan_reaches_eof = False
+        scan_deadline = time.monotonic() + _ACTIVE_EVAL_SCAN_BUDGET_SECONDS
+        scan_budget_exhausted = False
         try:
             with path.open("rb") as handle:
                 handle.seek(offset)
                 unpacker = msgpack.Unpacker(raw=False, strict_map_key=False, max_buffer_size=64 * 1024 * 1024)
-                remaining = stat_result.st_size - offset
+                remaining = min(stat_result.st_size - offset, _ACTIVE_EVAL_SCAN_BUDGET_BYTES)
+                scan_reaches_eof = offset + remaining >= stat_result.st_size
                 while remaining > 0:
                     chunk = handle.read(min(1024 * 1024, remaining))
                     if not chunk:
@@ -1703,6 +1713,11 @@ def _all_results_evaluation_count(path: Path) -> dict:
                             raise ValueError("all_results.bin contains a non-object record")
                         evaluations += 1
                         last_complete = offset + unpacker.tell()
+                        if time.monotonic() >= scan_deadline:
+                            scan_budget_exhausted = True
+                            break
+                    if scan_budget_exhausted:
+                        break
         except (OSError, ValueError, msgpack.UnpackException) as exc:
             error = str(exc) or exc.__class__.__name__
 
@@ -1721,7 +1736,11 @@ def _all_results_evaluation_count(path: Path) -> dict:
             _active_eval_count_cache.popitem(last=False)
         result = {
             "evaluations": evaluations,
-            "trailing_partial_entry": last_complete < stat_result.st_size,
+            "trailing_partial_entry": bool(scan_reaches_eof and not scan_budget_exhausted and last_complete < stat_result.st_size and not error),
+            "scan_complete": last_complete >= stat_result.st_size,
+            "bytes_scanned": last_complete,
+            "total_bytes": stat_result.st_size,
+            "scan_percent": round(last_complete / stat_result.st_size * 100.0, 1) if stat_result.st_size else 100.0,
         }
         if error:
             result["error"] = error
@@ -4312,6 +4331,10 @@ def _active_all_results_progress(filename: str) -> dict | None:
                 "evaluations": int(progress.get("evaluations") or 0),
                 "result": relative.parts[0],
                 "trailing_partial_entry": bool(progress.get("trailing_partial_entry")),
+                "scan_complete": bool(progress.get("scan_complete")),
+                "bytes_scanned": int(progress.get("bytes_scanned") or 0),
+                "total_bytes": int(progress.get("total_bytes") or 0),
+                "scan_percent": float(progress.get("scan_percent") or 0.0),
             }
     return None
 
@@ -4399,6 +4422,12 @@ def get_queue_status(filename: str, session: SessionToken = Depends(require_auth
             "target_evaluations": target,
             "evaluation_source": evaluation_source,
             "result": durable_progress.get("result") if durable_progress else None,
+            "evaluation_scan": {
+                "complete": bool(durable_progress.get("scan_complete")),
+                "bytes_scanned": int(durable_progress.get("bytes_scanned") or 0),
+                "total_bytes": int(durable_progress.get("total_bytes") or 0),
+                "percent": float(durable_progress.get("scan_percent") or 0.0),
+            } if durable_progress else None,
             "percent": percent,
             "front": log_summary["front"],
             "generation": log_summary["generation"],
