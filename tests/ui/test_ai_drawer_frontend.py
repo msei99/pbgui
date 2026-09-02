@@ -12,7 +12,7 @@ CSS = (ROOT / "frontend" / "css" / "ai_drawer.css").read_text(encoding="utf-8")
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=35" in NAV
+    assert "/app/js/ai_drawer.js?v=36" in NAV
     assert "/app/css/ai_drawer.css?v=12" in NAV
     assert "registerPageContext" in NAV
     assert "collectAIContext" in NAV
@@ -107,6 +107,12 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "card.hidden = false" in resolve
     assert "result.continuation" in DRAWER
     assert "await loadConversation(conversationId)" in DRAWER
+    assert "messageSnapshots" in DRAWER
+    assert "conversation.busy && !messages.length" in DRAWER
+    assert "state.messageSnapshots[id]" in DRAWER
+    assert "resolvingProposalIds" in DRAWER
+    assert "state.resolvingProposalIds.add(proposalId)" in DRAWER
+    assert "state.resolvingProposalIds.has(String(proposal.proposal_id || ''))" in DRAWER
     assert "the AI continuation could not start" in DRAWER
 
 

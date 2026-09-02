@@ -20,6 +20,8 @@
     resizing: false,
     drawerWidth: 460,
     retryMessages: {},
+    messageSnapshots: {},
+    resolvingProposalIds: new Set(),
     uiActionIds: new Set(),
     contextTimer: null,
     contextSignature: ''
@@ -426,7 +428,13 @@
     try {
       var conversation = await api('/conversations/' + encodeURIComponent(id));
       if (id !== state.current || generation !== state.requestGeneration) return;
-      renderMessages(conversation.messages || []);
+      var messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+      if (conversation.busy && !messages.length && Array.isArray(state.messageSnapshots[id])) {
+        messages = state.messageSnapshots[id];
+      } else if (messages.length || !conversation.busy) {
+        state.messageSnapshots[id] = messages.slice();
+      }
+      renderMessages(messages);
       renderReasoningSummary(conversation.reasoning_summary || '');
       renderActivityHistory(conversation.activity_history || []);
       var uiActions = conversation.ui_actions || [];
@@ -809,6 +817,7 @@
     var list = root.querySelector('.pai-proposals');
     list.textContent = '';
     (proposals || []).forEach(function (proposal) {
+      if (state.resolvingProposalIds.has(String(proposal.proposal_id || ''))) return;
       var preview = proposal.preview || {};
       var card = el('div', 'pai-proposal');
       var main = el('div', 'pai-proposal-main');
@@ -849,6 +858,8 @@
       if (!confirmed) { buttons.forEach(function (button) { button.disabled = false; }); return; }
     }
     if (!conversationId || conversationId !== state.current) return;
+    var proposalId = String(proposal.proposal_id || '');
+    state.resolvingProposalIds.add(proposalId);
     card.hidden = true;
     setStatus(approve ? 'Applying approved action...' : 'Rejecting proposal...', false);
     try {
@@ -871,13 +882,17 @@
         setStatus(result.status === 'executed' ? 'Approved action completed.' : 'Proposal ' + String(result.status || 'resolved') + '.', false);
       }
     } catch (error) {
+      state.resolvingProposalIds.delete(proposalId);
       if (conversationId === state.current) {
         card.hidden = false;
         buttons.forEach(function (button) { button.disabled = false; });
         setStatus(error.message, true);
       }
     }
-    finally { await reconcileProposals(conversationId); }
+    finally {
+      await reconcileProposals(conversationId);
+      state.resolvingProposalIds.delete(proposalId);
+    }
   }
 
   async function newConversation() {

@@ -64,6 +64,8 @@ PBGui also inventories currently visible non-sensitive controls such as buttons,
 
 After the user confirms approval or rejection, the proposal card disappears immediately while PBGui executes the server-side decision. A visible applying/rejecting status replaces it; if the request fails, the card returns with its controls enabled so the action can be reviewed or retried safely.
 
+The drawer keeps the confirmed visible message snapshot while a turn or approved-action continuation is busy. Large page context is sent only with the active provider request and is not retained inside durable user-message text, so history trimming cannot remove the visible question and proposal answer during a follow-up. A proposal being approved is hidden by its ID until the final server state arrives and cannot reappear as a second clickable Review card because of a stale poll.
+
 Unambiguous reversible commands such as showing the only available log, closing a visible log window, or explicitly clicking one uniquely named visible control use a local browser fast path. PBGui performs the action immediately, records the user request and completion in the owner-bound conversation, and does not contact the selected AI provider. Ambiguous, analytical, or mutating requests continue through the normal model and approval flow.
 
 The global drawer keeps both its width and open/closed state in owner-scoped server preferences. It therefore reopens automatically after ordinary PBGui page navigation when it was open before navigation, while an explicit collapse remains closed. Width dragging uses a temporary browser-wide shield so Dashboard iframe widgets cannot steal mouse events, and a delayed initial preference response cannot reset a drag already in progress.

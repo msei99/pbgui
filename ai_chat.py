@@ -1244,7 +1244,7 @@ class AIChatService:
             else None
         )
         if pending_user is not None:
-            pending_user["content"] = provider_message
+            pending_user["content"] = clean_message
             pending_user["display_content"] = clean_message
             pending_user.pop("pending", None)
         if conversation_id is None:
@@ -1330,17 +1330,20 @@ class AIChatService:
                                     ui_action=new_ui_action,
                                 )
                 elif provider in _OPENCODE_PROVIDERS:
+                    current_user = pending_user
                     if pending_user is None:
-                        conversation.messages.append(
-                            {
-                                "role": "user",
-                                "content": provider_message,
-                                "display_content": clean_message,
-                            }
-                        )
+                        current_user = {
+                            "role": "user",
+                            "content": clean_message,
+                            "display_content": clean_message,
+                        }
+                        conversation.messages.append(current_user)
                     self._trim_history(conversation.messages, _MAX_HISTORY_MESSAGES - 1)
                     provider_history = [
-                        {"role": item.get("role", ""), "content": item.get("content", "")}
+                        {
+                            "role": item.get("role", ""),
+                            "content": provider_message if item is current_user else item.get("content", ""),
+                        }
                         for item in conversation.messages
                         if not item.get("failed") and item.get("role") in {"user", "assistant"}
                     ]
@@ -1376,7 +1379,7 @@ class AIChatService:
                             else [
                                 {
                                     "role": "user",
-                                    "content": provider_message,
+                                    "content": clean_message,
                                     "display_content": clean_message,
                                 }
                             ]
@@ -1814,10 +1817,11 @@ class AIChatService:
                 conversation.model = selected_model_id
             if clean_effort is not None:
                 conversation.effort = clean_effort
+            self._compact_persisted_user_messages(conversation.messages)
             conversation.messages.append(
                 {
                     "role": "user",
-                    "content": clean_message + self._context_prompt_suffix(conversation.context),
+                    "content": clean_message,
                     "display_content": clean_message,
                     "pending": True,
                     **({"hidden": True} if internal else {}),
@@ -2306,6 +2310,7 @@ class AIChatService:
                             activity_history=list(data.get("activity_history") or [])[-20:],
                             ui_actions=self._restore_ui_actions(data.get("ui_actions")),
                         )
+                        self._compact_persisted_user_messages(conversation.messages)
                         if conversation.id + ".json" != path.name:
                             continue
                         if data.get("busy") or data.get("active_turn_id"):
@@ -3976,6 +3981,16 @@ class AIChatService:
             if sum(1 for item in self.conversations.values() if item.busy) >= _MAX_ACTIVE_TURNS:
                 raise AIChatError("AI turn capacity reached")
             conversation.busy = True
+
+    @staticmethod
+    def _compact_persisted_user_messages(messages: list[dict[str, str]]) -> None:
+        """Keep request-only page context out of durable and browser-visible chat history."""
+        for item in messages:
+            if item.get("role") != "user":
+                continue
+            display = str(item.get("display_content") or "").strip()
+            content = str(item.get("content") or "")
+            item["content"] = display or content.split("\n\n[Untrusted PBGui page context", 1)[0].strip()
 
     @staticmethod
     def _trim_history(messages: list[dict[str, str]], max_messages: int) -> None:

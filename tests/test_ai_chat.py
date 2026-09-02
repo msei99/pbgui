@@ -1582,6 +1582,48 @@ def test_failed_internal_continuation_preserves_successful_action_status(
     asyncio.run(scenario())
 
 
+def test_internal_continuation_keeps_large_context_turn_visible(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Approval follow-ups must not trim the visible turn just because its old context was large."""
+    async def scenario() -> None:
+        owner = "a" * 32
+        service = AIChatService(tmp_path / "ai")
+        service.credentials.save_go_key(owner, "sk-test-0123456789abcdef")
+        conversation = await service._conversation(owner, "opencode-go", "model", None)
+        conversation.messages = [
+            {
+                "role": "user",
+                "content": "Visible question\n\n[Untrusted PBGui page context" + "x" * 100_000,
+                "display_content": "Visible question",
+            },
+            {"role": "assistant", "content": "Visible proposal answer"},
+        ]
+
+        async def failing_go_chat(*_args, **_kwargs):
+            raise AIChatError("provider timeout")
+
+        monkeypatch.setattr(service, "_go_chat", failing_go_chat)
+        await service.start_turn(
+            owner,
+            conversation.id,
+            "Approved action completed. Continue.",
+            internal=True,
+        )
+        await service.active_tasks[conversation.id]
+        snapshot = await service.get_conversation(owner, conversation.id)
+
+        assert snapshot["messages"][:2] == [
+            {"role": "user", "content": "Visible question"},
+            {"role": "assistant", "content": "Visible proposal answer"},
+        ]
+        assert "No approved action was rolled back" in snapshot["messages"][2]["content"]
+        assert conversation.messages[0]["content"] == "Visible question"
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_ai_drawer_preferences_are_private_persistent_merged_and_bounded(tmp_path: Path) -> None:
     """Drawer width and open state should merge server-side without browser storage."""
     service = AIChatService(tmp_path / "ai")
