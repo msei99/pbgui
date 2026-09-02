@@ -78,6 +78,150 @@ def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
     assert python_tool["strict"] is False
     assert not any(name.startswith(("save_", "queue_", "delete_", "start_")) for name in names)
 
+    pareto_backtests = next(
+        item for item in service.responses_tools() if item["name"] == "propose_pareto_backtests"
+    )
+    assert pareto_backtests["parameters"]["properties"]["validation_mode"]["enum"] == [
+        "configured",
+        "holdout",
+        "full_timerange",
+        "holdout_and_full_timerange",
+    ]
+    assert "exchanges" not in pareto_backtests["parameters"]["required"]
+
+
+def test_ai_executes_holdout_and_full_timerange_as_standalone_jobs(monkeypatch) -> None:
+    """Approved combined validation queues immutable Holdout and continuous full-range jobs."""
+    from api import backtest_v8
+
+    queued = []
+
+    def add_to_queue(body, session):
+        queued.append(copy.deepcopy(body))
+        return {"filename": f"job-{len(queued)}"}
+
+    monkeypatch.setattr(backtest_v8, "add_to_queue", add_to_queue)
+    source = {
+        "backtest": {
+            "start_date": "2024-01-01",
+            "end_date": "2026-08-30",
+            "exchanges": ["hyperliquid"],
+            "suite_enabled": True,
+            "scenarios": [{"label": "train_01"}],
+            "reducer": {"default": "median"},
+        },
+        "pbgui": {"scenario_template": {"template": "sweep_cycles"}},
+        "bot": {"long": {"risk": {"n_positions": 1}}},
+    }
+    proposal = ai_capabilities.ActionProposal(
+        id="proposal",
+        owner="a" * 32,
+        conversation_id="b" * 32,
+        action="queue_backtests",
+        name="candidate",
+        config={
+            "validation_mode": "holdout_and_full_timerange",
+            "candidates": [{
+                "name": "candidate",
+                "config": source,
+                "override_configs": {"HYPE.json": {"bot": {}}},
+                "validation_periods": [
+                    {"label": "holdout_01", "start_date": "2026-06-01", "end_date": "2026-08-30"},
+                    {"label": "full_timerange", "start_date": "2024-01-01", "end_date": "2026-08-30"},
+                ],
+            }],
+            "exchanges": [],
+        },
+        expected_digest=None,
+        create_only=False,
+        preview={},
+        payload_digest="digest",
+    )
+
+    result = AICapabilityService._execute_pareto_backtests(proposal)
+
+    assert result["queued_count"] == 2
+    assert [item["name"] for item in queued] == ["candidate_holdout_01", "candidate_full_timerange"]
+    assert queued[0]["config"]["backtest"]["start_date"] == "2026-06-01"
+    assert queued[1]["config"]["backtest"]["start_date"] == "2024-01-01"
+    assert all("suite_enabled" not in item["config"]["backtest"] for item in queued)
+    assert all("scenarios" not in item["config"]["backtest"] for item in queued)
+    assert all("scenario_template" not in item["config"]["pbgui"] for item in queued)
+    assert source["backtest"]["suite_enabled"] is True
+
+
+def test_ai_proposes_holdout_and_full_timerange_from_sweep_sidecar(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Combined validation proposals bind Holdout dates and original candidate dates before approval."""
+    from api import backtest_v8, optimize_v8
+
+    service = AICapabilityService(tmp_path / "capabilities")
+    captured = {}
+    candidate_path = str(tmp_path / "result" / "pareto" / "candidate.json")
+    monkeypatch.setattr(service, "_resource_uri", lambda value, kind, version: str(value))
+    monkeypatch.setattr(
+        service,
+        "_resolve_listed_resource",
+        lambda kind, version, resource: {"path": str(tmp_path / "result"), "name": "run"},
+    )
+    monkeypatch.setattr(service, "_virtual_uri", lambda kind, version, path: "candidate-resource")
+    monkeypatch.setattr(
+        optimize_v8,
+        "list_paretos",
+        lambda *args, **kwargs: {"paretos": [{"path": candidate_path, "name": "candidate"}]},
+    )
+    monkeypatch.setattr(
+        optimize_v8,
+        "get_pareto_file",
+        lambda *args, **kwargs: {
+            "config": {
+                "backtest": {
+                    "start_date": "2024-01-01",
+                    "end_date": "2026-08-30",
+                    "exchanges": ["hyperliquid"],
+                }
+            },
+            "override_configs": {},
+            "sweep_cycles": {
+                "holdout_scenarios": [{
+                    "label": "holdout_01",
+                    "start_date": "2026-06-01",
+                    "end_date": "2026-08-30",
+                }]
+            },
+        },
+    )
+    monkeypatch.setattr(backtest_v8, "get_settings", lambda session: {"exchange_options": ["hyperliquid"], "autostart": False})
+
+    async def create_proposal(owner, conversation_id, action, name, payload, preview):
+        captured.update(payload=payload, preview=preview)
+        return {"proposal_id": "proposal", "status": "awaiting_approval", "preview": preview}
+
+    monkeypatch.setattr(service, "_create_custom_proposal", create_proposal)
+
+    result = asyncio.run(service._propose_pareto_backtests(
+        "a" * 32,
+        "b" * 32,
+        {
+            "version": "v8",
+            "run_resource": "run-resource",
+            "candidate_resources": ["candidate-resource"],
+            "validation_mode": "holdout_and_full_timerange",
+        },
+    ))
+
+    periods = captured["payload"]["candidates"][0]["validation_periods"]
+    assert [period["label"] for period in periods] == ["holdout_01", "full_timerange"]
+    assert periods[1] == {
+        "label": "full_timerange",
+        "start_date": "2024-01-01",
+        "end_date": "2026-08-30",
+    }
+    assert captured["preview"]["job_count"] == 2
+    assert captured["preview"]["validation_mode"] == "holdout_and_full_timerange"
+    assert result["status"] == "awaiting_approval"
+
 
 def test_passivbot_installations_return_exact_commits_without_local_paths(
     tmp_path: Path, monkeypatch

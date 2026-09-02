@@ -2262,6 +2262,10 @@ textarea.json-invalid:focus {
       <div id="ctx-paretos" class="ctx-actions" style="display:none">
         <button class="sb-btn" id="btn-open-pareto-explorer-paretos">🎯 Pareto Explorer</button>
         <button class="sb-btn" id="btn-backtest-selected-paretos">🔄 Backtest</button>
+        <select class="sb-input" id="holdout-validation-mode" title="Choose whether Holdout also queues one continuous full-timerange validation per candidate">
+          <option value="holdout_only">Holdout only</option>
+          <option value="holdout_and_full_timerange">Holdout + Full timerange</option>
+        </select>
         <button class="sb-btn" id="btn-holdout-selected-paretos">🧪 Holdout</button>
         <button class="sb-btn" id="btn-seed-selected-paretos">🧬 Seed Selected</button>
         <button class="sb-btn" id="btn-seed-whole-result">📂 Seed Whole Result</button>
@@ -11870,6 +11874,7 @@ function updateParetoSelectionUi() {
   el('btn-open-pareto-explorer-paretos').disabled = !state.selectedResultPath;
   el('btn-backtest-selected-paretos').disabled = selectedCount === 0;
   el('btn-holdout-selected-paretos').disabled = selectedCount === 0 || !state.paretoSweepEnabled;
+  el('holdout-validation-mode').disabled = selectedCount === 0 || !state.paretoSweepEnabled;
   el('btn-seed-selected-paretos').disabled = selectedCount === 0;
   el('btn-seed-whole-result').disabled = !state.selectedResultPath;
 }
@@ -12610,10 +12615,26 @@ function buildSweepHoldoutBacktestConfig(config, holdout, draftName) {
   return candidate;
 }
 
+function buildSweepFullTimerangeBacktestConfig(config, draftName) {
+  var candidate = deepClone(config || {});
+  var backtest = candidate.backtest && typeof candidate.backtest === 'object' ? candidate.backtest : {};
+  candidate.backtest = backtest;
+  if (!backtest.start_date || !backtest.end_date) throw new Error('Full timerange dates are unavailable.');
+  backtest.base_dir = 'backtests/pbgui/' + String(draftName || 'sweep_full_timerange');
+  delete backtest.suite_enabled;
+  delete backtest.scenarios;
+  delete backtest.reducer;
+  delete backtest.aggregate;
+  if (candidate.pbgui && typeof candidate.pbgui === 'object') delete candidate.pbgui.scenario_template;
+  return candidate;
+}
+
 async function backtestSelectedSweepHoldouts() {
   var selectedPaths = Array.from(state.selectedParetos);
   if (!selectedPaths.length) throw new Error('Select at least one Pareto candidate.');
   if (!state.paretoSweepEnabled) throw new Error('The selected result has no Sweep Holdout plan.');
+  var validationMode = el('holdout-validation-mode').value;
+  var includeFullTimerange = validationMode === 'holdout_and_full_timerange';
   var queueItems = [];
   for (var index = 0; index < selectedPaths.length; index++) {
     var path = selectedPaths[index];
@@ -12630,6 +12651,14 @@ async function backtestSelectedSweepHoldouts() {
       queueItems.push({
         name: draftName,
         config: extractConfigSections(buildSweepHoldoutBacktestConfig(payload.config, holdout, draftName)),
+        override_configs: payload.override_configs
+      });
+    }
+    if (includeFullTimerange) {
+      var fullRangeName = String(item.name || 'pareto') + '_full_timerange';
+      queueItems.push({
+        name: fullRangeName,
+        config: extractConfigSections(buildSweepFullTimerangeBacktestConfig(payload.config, fullRangeName)),
         override_configs: payload.override_configs
       });
     }

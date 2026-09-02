@@ -1549,7 +1549,7 @@ def test_new_user_turn_supersedes_pending_proposals(tmp_path: Path, monkeypatch)
 def test_failed_internal_continuation_preserves_successful_action_status(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """A provider timeout after approval must be labelled as a follow-up failure."""
+    """A provider timeout after approval must remain a successful action result."""
     async def scenario() -> None:
         owner = "a" * 32
         service = AIChatService(tmp_path / "ai")
@@ -1569,10 +1569,14 @@ def test_failed_internal_continuation_preserves_successful_action_status(
         await service.active_tasks[conversation.id]
         snapshot = await service.get_conversation(owner, conversation.id)
 
-        assert snapshot["messages"] == []
-        assert snapshot["last_error"] == (
-            "Approved action completed, but AI follow-up failed: ChatGPT response timed out"
-        )
+        assert snapshot["last_error"] == ""
+        assert snapshot["messages"] == [{
+            "role": "assistant",
+            "content": (
+                "The approved PBGui action completed successfully. Its optional AI follow-up did not complete: "
+                "ChatGPT response timed out. No approved action was rolled back."
+            ),
+        }]
         await service.shutdown()
 
     asyncio.run(scenario())

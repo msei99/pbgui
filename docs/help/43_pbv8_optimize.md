@@ -109,7 +109,7 @@ Example: for three non-overlapping quarterly training periods and one untouched 
 
 PB8 Gain values are terminal multipliers, not additive returns: `1.0` is break-even, `2.0` doubles the opening balance, and `0.8` loses 20%. Sweep evaluation therefore calculates each window as `ending_balance = opening_balance × gain_strategy_eq`.
 
-To run the validation without manual editing, select one or more candidates in the Paretos table and click **Holdout** in the sidebar. PBGui reads immutable holdout dates from the result sidecar, creates one standalone PB8 Backtest item per candidate and holdout, disables Suite Mode in those drafts, preserves candidate settings, coins, exchanges, balance, and overrides, and opens the Backtest queue draft ready for submission.
+To run the validation without manual editing, select one or more candidates in the Paretos table, choose **Holdout only** or **Holdout + Full timerange**, and click **Holdout** in the sidebar. PBGui reads immutable holdout dates from the result sidecar, creates one standalone PB8 Backtest item per candidate and holdout, and optionally adds one continuous Backtest over the candidate's original base `start_date` through `end_date`. Every generated draft disables Suite Mode while preserving candidate settings, coins, exchanges, balance, and overrides. The continuous run is a path-dependence and compounding diagnostic that includes training data; it does not replace the untouched Holdout as the out-of-sample validation.
 
 Applying a Sweep Cycles preview also sets the main PB8 `backtest.starting_balance` to the generator's **Starting balance**. Save and Queue reject a later mismatch because PB8 must calculate gains at the same capital size used by the cash-flow model.
 

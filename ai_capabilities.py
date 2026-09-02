@@ -6,6 +6,7 @@ import asyncio
 import copy
 import csv
 from dataclasses import dataclass, field
+from datetime import date
 import gzip
 import hashlib
 import hmac
@@ -89,6 +90,32 @@ _PATH_KEYS = {
 
 class AICapabilityError(RuntimeError):
     """Safe capability or proposal error."""
+
+
+def _standalone_validation_config(config: dict[str, Any], period: dict[str, Any], name: str) -> dict[str, Any]:
+    """Build one non-Suite validation config for an immutable date period."""
+    candidate = copy.deepcopy(config)
+    backtest = candidate.get("backtest") if isinstance(candidate.get("backtest"), dict) else {}
+    candidate["backtest"] = backtest
+    start_date = str(period.get("start_date") or "")
+    end_date = str(period.get("end_date") or "")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", start_date) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", end_date):
+        raise AICapabilityError("Validation period has no usable date range")
+    try:
+        if date.fromisoformat(start_date) > date.fromisoformat(end_date):
+            raise AICapabilityError("Validation period starts after it ends")
+    except ValueError as exc:
+        raise AICapabilityError("Validation period has no usable date range") from exc
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name or "validation")).strip("._") or "validation"
+    backtest["start_date"] = start_date
+    backtest["end_date"] = end_date
+    backtest["base_dir"] = f"backtests/pbgui/{safe_name}"
+    for key in ("suite_enabled", "scenarios", "reducer", "aggregate"):
+        backtest.pop(key, None)
+    pbgui = candidate.get("pbgui")
+    if isinstance(pbgui, dict):
+        pbgui.pop("scenario_template", None)
+    return candidate
 
 
 @dataclass
@@ -2147,12 +2174,16 @@ class AICapabilityService:
         raw = self._resolve_listed_resource("optimizer-run", version, run_resource)
         resources = args.get("candidate_resources")
         exchanges = args.get("exchanges")
+        validation_mode = str(args.get("validation_mode") or "configured")
+        allowed_modes = {"configured", "holdout", "full_timerange", "holdout_and_full_timerange"}
+        if validation_mode not in allowed_modes:
+            raise AICapabilityError("Invalid Pareto backtest validation mode")
         if not isinstance(resources, list) or not 1 <= len(resources) <= 10:
             raise AICapabilityError("Select between 1 and 10 Pareto candidates")
-        if not isinstance(exchanges, list) or not 1 <= len(exchanges) <= 5:
+        if validation_mode == "configured" and (not isinstance(exchanges, list) or not 1 <= len(exchanges) <= 5):
             raise AICapabilityError("Select between 1 and 5 backtest exchanges")
         candidate_resources = [self._resource_uri(item, "pareto", version) for item in resources]
-        selected_exchanges = [str(item or "").strip().lower() for item in exchanges]
+        selected_exchanges = [str(item or "").strip().lower() for item in exchanges] if isinstance(exchanges, list) else []
         if len(set(candidate_resources)) != len(candidate_resources) or len(set(selected_exchanges)) != len(selected_exchanges):
             raise AICapabilityError("Backtest proposal contains duplicates")
         from api import backtest_v8, optimize_v8
@@ -2175,22 +2206,70 @@ class AICapabilityService:
             if item is None:
                 raise AICapabilityError("One or more Pareto candidates are unavailable for this optimizer run")
             bundle = optimize_v8.get_pareto_file(str(item.get("path") or ""), session=object())
-            candidates.append({
+            candidate = {
                 "resource": resource,
                 "name": str(item.get("name") or "pareto_backtest")[:128],
                 "config": bundle.get("config") or {},
                 "override_configs": bundle.get("override_configs") or {},
-            })
-        payload = {"run_resource": run_resource, "candidates": candidates, "exchanges": selected_exchanges}
+            }
+            if validation_mode != "configured":
+                config = candidate["config"]
+                backtest = config.get("backtest") if isinstance(config.get("backtest"), dict) else {}
+                periods = []
+                if validation_mode in {"holdout", "holdout_and_full_timerange"}:
+                    sweep = bundle.get("sweep_cycles") if isinstance(bundle.get("sweep_cycles"), dict) else {}
+                    holdouts = sweep.get("holdout_scenarios") if isinstance(sweep.get("holdout_scenarios"), list) else []
+                    for index, holdout in enumerate(holdouts):
+                        if not isinstance(holdout, dict):
+                            continue
+                        periods.append({
+                            "label": str(holdout.get("label") or f"holdout_{index + 1:02d}"),
+                            "start_date": holdout.get("start_date"),
+                            "end_date": holdout.get("end_date"),
+                        })
+                    if not periods:
+                        raise AICapabilityError("Sweep Holdout dates are unavailable for one or more candidates")
+                if validation_mode in {"full_timerange", "holdout_and_full_timerange"}:
+                    periods.append({
+                        "label": "full_timerange",
+                        "start_date": backtest.get("start_date"),
+                        "end_date": backtest.get("end_date"),
+                    })
+                for period in periods:
+                    _standalone_validation_config(config, period, f"{candidate['name']}_{period.get('label') or 'validation'}")
+                candidate["validation_periods"] = periods
+            candidates.append(candidate)
+        if validation_mode == "configured":
+            job_count = len(candidates) * len(selected_exchanges)
+        else:
+            job_count = sum(len(item.get("validation_periods") or []) for item in candidates)
+            if job_count > 100:
+                raise AICapabilityError("Pareto validation proposal exceeds 100 backtest jobs")
+        payload = {
+            "run_resource": run_resource,
+            "candidates": candidates,
+            "exchanges": selected_exchanges,
+            "validation_mode": validation_mode,
+        }
         preview = {
             "action": "queue_backtests",
             "name": str(raw.get("name") or raw.get("result") or "Pareto candidates")[:128],
             "candidates": [{"resource": item["resource"], "name": item["name"]} for item in candidates],
             "exchanges": selected_exchanges,
-            "job_count": len(candidates) * len(selected_exchanges),
-            "changed_count": len(candidates) * len(selected_exchanges),
+            "validation_mode": validation_mode,
+            "job_count": job_count,
+            "changed_count": job_count,
             "changes": [
-                {"path": "backtests", "kind": "added", "item": item["name"], "after": {"exchanges": selected_exchanges}}
+                {
+                    "path": "backtests",
+                    "kind": "added",
+                    "item": item["name"],
+                    "after": {
+                        "exchanges": selected_exchanges,
+                        "validation_mode": validation_mode,
+                        "periods": len(item.get("validation_periods") or []),
+                    },
+                }
                 for item in candidates
             ],
             "may_start_immediately": bool(backtest_v8.get_settings(session=object()).get("autostart")),
@@ -2996,10 +3075,35 @@ class AICapabilityService:
         payload = proposal.config or {}
         candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
         exchanges = payload.get("exchanges") if isinstance(payload.get("exchanges"), list) else []
+        validation_mode = str(payload.get("validation_mode") or "configured")
         queued = []
         for candidate_index, candidate in enumerate(candidates):
             if not isinstance(candidate, dict):
                 raise AICapabilityError("Backtest proposal candidate is invalid")
+            if validation_mode != "configured":
+                periods = candidate.get("validation_periods") if isinstance(candidate.get("validation_periods"), list) else []
+                for period_index, period in enumerate(periods):
+                    if not isinstance(period, dict):
+                        raise AICapabilityError("Backtest validation period is invalid")
+                    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(period.get("label") or "validation")).strip("._")
+                    name = f"{str(candidate.get('name') or 'pareto_backtest')}_{label or 'validation'}"
+                    config = _standalone_validation_config(candidate.get("config") or {}, period, name)
+                    operation_id = f"{proposal.id}_{candidate_index}_{period_index}"
+                    response = backtest_v8.add_to_queue(
+                        {
+                            "name": name,
+                            "config": config,
+                            "override_configs": candidate.get("override_configs") or {},
+                            "operation_id": operation_id,
+                        },
+                        session=object(),
+                    )
+                    queued.append({
+                        "candidate": candidate.get("name"),
+                        "validation": label,
+                        "filename": response["filename"],
+                    })
+                continue
             for exchange_index, exchange in enumerate(exchanges):
                 config = copy.deepcopy(candidate.get("config") or {})
                 backtest = config.setdefault("backtest", {})
@@ -4046,7 +4150,7 @@ class AICapabilityService:
             },
             {
                 "name": "propose_pareto_backtests",
-                "description": "Propose queueing the exact Cartesian matrix of PB8 Pareto candidates and exchanges. Never queues or starts jobs without user approval.",
+                "description": "Propose PB8 Pareto backtests either as the configured candidate-by-exchange matrix or as standalone Sweep Holdout, continuous full-timerange, or combined Holdout plus full-timerange validation. Validation modes preserve each candidate's configured exchanges. Never queues or starts jobs without user approval.",
                 "schema": self._object_schema(
                     {
                         "version": {"type": "string", "enum": ["v8"]},
@@ -4059,8 +4163,12 @@ class AICapabilityService:
                             "type": "array", "minItems": 1, "maxItems": 5,
                             "items": {"type": "string", "maxLength": 32},
                         },
+                        "validation_mode": {
+                            "type": "string",
+                            "enum": ["configured", "holdout", "full_timerange", "holdout_and_full_timerange"],
+                        },
                     },
-                    ["version", "run_resource", "candidate_resources", "exchanges"],
+                    ["version", "run_resource", "candidate_resources"],
                 ),
                 "effect": "execute",
                 "versions": ["v8"],

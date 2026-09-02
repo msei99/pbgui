@@ -1929,8 +1929,17 @@ class AIChatService:
                         )
                     detail = str(exc)
                     if internal_failure:
-                        detail = f"Approved action completed, but AI follow-up failed: {detail}"
-                    conversation.last_error = detail[:500]
+                        conversation.messages.append({
+                            "role": "assistant",
+                            "content": (
+                                "The approved PBGui action completed successfully. Its optional AI follow-up "
+                                f"did not complete: {detail}. No approved action was rolled back."
+                            )[:2000],
+                        })
+                        self._trim_history(conversation.messages, _MAX_HISTORY_MESSAGES)
+                        conversation.last_error = ""
+                    else:
+                        conversation.last_error = detail[:500]
                     conversation.busy = False
                     conversation.active_turn_id = ""
                     conversation.activity = ""
@@ -1942,11 +1951,18 @@ class AIChatService:
                 if self.conversations.get(conversation.id) is conversation:
                     if conversation.messages and conversation.messages[-1].get("hidden"):
                         conversation.messages.pop()
-                    conversation.last_error = (
-                        "Approved action completed, but AI follow-up failed: AI provider operation failed"
-                        if internal
-                        else "AI provider operation failed"
-                    )
+                    if internal:
+                        conversation.messages.append({
+                            "role": "assistant",
+                            "content": (
+                                "The approved PBGui action completed successfully. Its optional AI follow-up "
+                                "did not complete because the provider operation failed. No approved action was rolled back."
+                            ),
+                        })
+                        self._trim_history(conversation.messages, _MAX_HISTORY_MESSAGES)
+                        conversation.last_error = ""
+                    else:
+                        conversation.last_error = "AI provider operation failed"
                     conversation.busy = False
                     conversation.active_turn_id = ""
                     conversation.revision += 1

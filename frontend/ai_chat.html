@@ -691,7 +691,11 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     if (preview.action === 'python_analysis') {
       return String(preview.code_bytes || 0) + ' bytes of code · ' + String((preview.input_summary || {}).bytes || 0) + ' bytes of sanitized JSON input';
     }
-    if (preview.action === 'queue_backtests') return String(preview.job_count || 0) + ' backtest jobs across ' + String((preview.exchanges || []).length) + ' exchanges' + (preview.may_start_immediately ? ' · may start immediately' : '');
+    if (preview.action === 'queue_backtests') {
+      var validationMode = String(preview.validation_mode || 'configured');
+      if (validationMode !== 'configured') return String(preview.job_count || 0) + ' ' + validationMode.replace(/_/g, ' ') + ' validation jobs' + (preview.may_start_immediately ? ' · may start immediately' : '');
+      return String(preview.job_count || 0) + ' backtest jobs across ' + String((preview.exchanges || []).length) + ' exchanges' + (preview.may_start_immediately ? ' · may start immediately' : '');
+    }
     if (preview.action === 'start_optimize_queue') return String(preview.job_count || 0) + ' exact queued PB8 optimizer jobs · starts immediately';
     if (preview.action === 'create_dashboard') return 'Create from template ' + String(preview.template || '');
     if (preview.action === 'save_dashboard_layout') return String((preview.layout || {}).rows || 0) + ' rows x ' + String((preview.layout || {}).columns || 0) + ' columns · ' + String(preview.changed_count || 0) + ' changes';
