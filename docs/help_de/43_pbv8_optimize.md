@@ -60,7 +60,7 @@ Der Scenario Generator macht aus einer PB8-Optimize-Config eine reproduzierbare 
 | **Training windows** | Szenarien, die PB8 waehrend der Optimierung auswertet; bei Sweep automatisch |
 | **Holdout windows** | Unberuehrte Zeitraeume fuer abschliessende Out-of-Sample-Backtests |
 | **Exchange mode** | Kombinierte Basis-Exchanges erben oder, sofern unterstuetzt, getrennte Exchange-Szenarien erzeugen |
-| **Starting balance** | PB8-Simulationskapital und Sweep-Reset-Kapital nach Apply |
+| **Starting balance** | PB8-Simulationskapital und Sweep-Reset-Kapital nach Apply; verwendet standardmaessig die aktuelle Basis-Starting-Balance |
 | **Balance multiplier** | Sweep-Ziel: Starting balance multipliziert mit diesem Wert |
 | **Refill cost** | Zusaetzliche externe Kosten beim Auffuellen eines Verlustfensters |
 | **Cooldown days** | Handelsfreie Luecke zwischen Sweep-Fenstern; automatisch im Stride enthalten |

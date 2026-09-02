@@ -60,7 +60,7 @@ The Scenario Generator turns one PB8 Optimize config into a reproducible group o
 | **Training windows** | Scenarios PB8 evaluates during optimization; automatic for Sweep |
 | **Holdout windows** | Untouched periods reserved for final out-of-sample Backtests |
 | **Exchange mode** | Inherit the combined base exchanges or expand separate exchange scenarios where supported |
-| **Starting balance** | PB8 simulation capital and Sweep reset capital after Apply |
+| **Starting balance** | PB8 simulation capital and Sweep reset capital after Apply; defaults to the current base Starting balance |
 | **Balance multiplier** | Sweep target: Starting balance multiplied by this value |
 | **Refill cost** | Additional external cost booked when a loss window is refilled |
 | **Cooldown days** | No-trading gap between Sweep windows; included automatically in Stride |

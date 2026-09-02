@@ -2645,7 +2645,7 @@ textarea.json-invalid:focus {
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=14"></script>
-<script src="/app/js/suite_editor.js?v=22"></script>
+<script src="/app/js/suite_editor.js?v=23"></script>
 <script src="/app/js/log_viewer_panel.js?v=29"></script>
 <script src="/app/js/pbgui_dialogs.js?v=8"></script>
 <script>
@@ -9527,6 +9527,7 @@ function populateOptimizeEditor(config, opts) {
           start_date: el('opted-start-date').value || null,
           end_date: scenarioEndDate === 'now' ? new Date().toISOString().slice(0, 10) : (scenarioEndDate || null),
           exchanges: optGetMs('ms-opt-exchanges'),
+          starting_balance: Number(el('opted-starting-balance').value) || null,
         };
       },
       onApplyScenarioPreview: function(preview) {

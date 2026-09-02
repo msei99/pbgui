@@ -538,11 +538,21 @@ function _suiteScenarioContext() {
 function _suiteRenderScenarioGenerator() {
   var context = _suiteScenarioContext();
   var preview = _suiteState.scenarioPreview;
-  var draft = _suiteState.scenarioGeneratorDraft || {
+  var contextBalance = Number(context.starting_balance);
+  var defaultBalance = isFinite(contextBalance) && contextBalance >= 1 ? contextBalance : 1000;
+  var draft = Object.assign({
     template: 'rolling_windows', window_days: 90, stride_days: 30, training_windows: 4,
     holdout_windows: 1, exchange_mode: 'inherit', balance_multiplier: 2,
-    starting_balance: 1000, refill_cost: 0, cooldown_days: 0,
-  };
+    starting_balance: defaultBalance, refill_cost: 0, cooldown_days: 0,
+  }, _suiteState.scenarioGeneratorDraft || {});
+  var multiplier = Number(draft.balance_multiplier);
+  if (!isFinite(multiplier) || multiplier < 1.01 || multiplier > 100) draft.balance_multiplier = 2;
+  var startingBalance = Number(draft.starting_balance);
+  if (!isFinite(startingBalance) || startingBalance < 1) draft.starting_balance = defaultBalance;
+  var refillCost = Number(draft.refill_cost);
+  if (!isFinite(refillCost) || refillCost < 0) draft.refill_cost = 0;
+  var cooldownDays = Number(draft.cooldown_days);
+  if (!isFinite(cooldownDays) || cooldownDays < 0) draft.cooldown_days = 0;
   var isSweep = draft.template === 'sweep_cycles';
   var h = '\x3Cdiv style="border:1px solid var(--border);border-radius:6px;padding:var(--sp-md);margin-bottom:var(--sp-md);background:rgba(77,166,255,.035)">';
   h += '\x3Cdiv style="display:flex;align-items:start;justify-content:space-between;gap:var(--sp-md);margin-bottom:var(--sp-sm)">';

@@ -14,6 +14,7 @@ def test_pb8_optimize_enables_the_shared_scenario_generator_only_for_v8() -> Non
 
     assert "scenarioGenerator: optimizeEditorAdapter.isV8" in page
     assert "getScenarioContext: function()" in page
+    assert "starting_balance: Number(el('opted-starting-balance').value) || null" in page
     assert "pbgui.scenario_template = suite.scenario_template" in page
     assert "onApplyScenarioPreview: function(preview)" in page
     assert "balanceInput.value = String(policy.starting_balance)" in page
@@ -464,6 +465,40 @@ def test_scenario_generator_recalculate_uses_current_base_dates() -> None:
         assert.equal(_suiteState.scenarioPreviewContext, '');
         assert.equal(_suiteState.scenarioRequestId, 5);
         assert.equal(renders, 1);
+        """
+    )
+    _run_node(script)
+
+
+def test_sweep_generator_repairs_missing_or_invalid_template_specific_defaults() -> None:
+    """Switching from another template must not submit empty Sweep fields as numeric zero."""
+    script = textwrap.dedent(
+        """
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        global.esc = value => String(value == null ? '' : value);
+        eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
+        _suiteState.getScenarioContext = () => ({
+          start_date: '2024-12-31',
+          end_date: '2026-08-30',
+          exchanges: ['hyperliquid'],
+          starting_balance: 100000
+        });
+        _suiteState.scenarioGeneratorDraft = {
+          template: 'sweep_cycles',
+          window_days: 90,
+          stride_days: 90,
+          training_windows: 6,
+          holdout_windows: 0,
+          exchange_mode: 'inherit',
+          balance_multiplier: 0,
+          starting_balance: 0
+        };
+
+        const html = _suiteRenderScenarioGenerator();
+
+        assert.match(html, /id="suite-generator-multiplier"[^>]*value="2"/);
+        assert.match(html, /id="suite-generator-balance"[^>]*value="100000"/);
         """
     )
     _run_node(script)
