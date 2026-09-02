@@ -1081,6 +1081,8 @@ def test_manual_vault_test_transfer_roundtrip_uses_withdraw_then_deposit(
 
     snapshot = _vault_snapshot()
     snapshot["vault"]["always_close_on_withdraw"] = True
+    snapshot["vault"]["positions"] = [{"coin": "BTC", "size": "0.01"}]
+    snapshot["vault"]["orders"] = [{"order_id": "1"}, {"order_id": "2"}]
     monkeypatch.setattr(profit_sweep_api, "collect_readonly_snapshot", lambda *_args: snapshot)
     submitted: list[dict[str, Any]] = []
     reconcile_attempts: dict[str, int] = {}
@@ -1201,32 +1203,19 @@ def test_vault_transferable_keeps_strictly_more_than_retained_floor() -> None:
     assert profit_sweep_api._vault_transferable(profit_sweep_api.default_policy(), snapshot) == "0"
 
 
-def test_manual_vault_test_explains_active_always_close_risk(
-    isolated_api: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Reject a risky Vault test with exact activity counts and remediation."""
-
+def test_vault_activity_modes_use_positions_without_blocking_on_resting_orders() -> None:
+    """Margin Buffered permits activity while Flat Only blocks only non-zero positions."""
     snapshot = _vault_snapshot()
     snapshot["vault"]["always_close_on_withdraw"] = True
     snapshot["vault"]["positions"] = [{"coin": "BTC"}]
     snapshot["vault"]["orders"] = [{"order_id": "1"}, {"order_id": "2"}]
-    monkeypatch.setattr(profit_sweep_api, "collect_readonly_snapshot", lambda *_args: snapshot)
+    margin_policy = {**profit_sweep_api.default_policy(), "vault_withdraw_mode": "margin_buffered"}
 
-    with pytest.raises(HTTPException) as blocked:
-        asyncio.run(
-            profit_sweep_api.test_transfer(
-                "vault", _test_request(amount="5"), object()
-            )
-        )
+    assert profit_sweep_api._vault_transferable(margin_policy, snapshot) == "200"
+    assert profit_sweep_api._vault_transferable(profit_sweep_api.default_policy(), snapshot) == "0"
 
-    assert blocked.value.status_code == 409
-    detail = str(blocked.value.detail)
-    assert "alwaysCloseOnWithdraw" in detail
-    assert "1 open position(s)" in detail
-    assert "2 open order(s)" in detail
-    assert "flatten the Vault" in detail
-    assert isolated_api.store.list_test_operations("vault") == []
+    snapshot["vault"]["positions"] = []
+    assert profit_sweep_api._vault_transferable(profit_sweep_api.default_policy(), snapshot) == "200"
 
 
 def test_manual_test_transfer_timeout_stays_unknown_without_blind_retry(

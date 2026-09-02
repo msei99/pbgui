@@ -2786,6 +2786,7 @@ var state = {
   queueLoadSeq: 0,
   queuePushSeq: 0,
   resultsLoadSeq: 0,
+  resultsLoading: false,
   navigationSeq: 0,
   paretoStatisticOptions: []
 };
@@ -11008,7 +11009,9 @@ function updateMetaCounts() {
   el('nav-result-count').textContent = String(state.results.length);
   el('nav-pareto-count').textContent = String(state.paretos.length);
   el('config-count-chip').textContent = filteredConfigs.length + ' configs';
-  el('result-count-chip').textContent = filteredResults.length + ' result sets';
+  el('result-count-chip').textContent = state.resultsLoading
+    ? (filteredResults.length ? filteredResults.length + ' result sets · Refreshing...' : 'Loading result sets...')
+    : filteredResults.length + ' result sets';
   el('pareto-count-chip').textContent = state.paretos.length + ' paretos';
 }
 
@@ -11752,7 +11755,13 @@ function renderResults() {
   renderResultsTableHead();
   tbody.innerHTML = '';
   if (!results.length) {
-    renderEmpty('results-tbody', optimizeEditorAdapter.isV8 ? 7 : 6, 'No optimize results found.', '', '');
+    renderEmpty(
+      'results-tbody',
+      optimizeEditorAdapter.isV8 ? 7 : 6,
+      state.resultsLoading ? 'Loading optimize results...' : 'No optimize results found.',
+      state.resultsLoading ? 'Scanning compact result metadata. Large optimizer histories remain lazy.' : '',
+      ''
+    );
     updateResultSelectionUi(results);
     updateMetaCounts();
     return;
@@ -13096,9 +13105,20 @@ function removeQueueItemsFromState(filenames) {
 
 async function loadResults() {
   var requestSeq = ++state.resultsLoadSeq;
-  var navigationSeq = state.navigationSeq;
-  var data = await apiFetch(optimizeEditorAdapter.resultsPath);
-  if (requestSeq !== state.resultsLoadSeq || navigationSeq !== state.navigationSeq) return;
+  state.resultsLoading = true;
+  renderResults();
+  var data;
+  try {
+    data = await apiFetch(optimizeEditorAdapter.resultsPath);
+  } catch (error) {
+    if (requestSeq === state.resultsLoadSeq) {
+      state.resultsLoading = false;
+      renderResults();
+    }
+    throw error;
+  }
+  if (requestSeq !== state.resultsLoadSeq) return;
+  state.resultsLoading = false;
   state.results = data.results || [];
   renderResults();
 }

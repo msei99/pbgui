@@ -1749,8 +1749,8 @@ def test_seed_runtime_unknown_overrides_and_pymoo_auto_execute_page_logic() -> N
     _run_node(script)
 
 
-def test_request_generations_reject_stale_http_and_settings_merge_metadata() -> None:
-    """Late HTTP responses cannot replace websocket state, newer requests, or metadata-rich settings."""
+def test_request_generations_reject_stale_http_without_discarding_results_after_navigation() -> None:
+    """Late HTTP responses stay isolated while panel navigation cannot discard a valid Results load."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
     functions = "\n".join(_page_function(page, name) for name in ("loadSettings", "loadQueue", "loadResults"))
     script = textwrap.dedent(
@@ -1767,7 +1767,7 @@ def test_request_generations_reject_stale_http_and_settings_merge_metadata() -> 
         const state = {{
           settings: {{strategy_bounds: {{custom: true}}, runtime_options: {{future: true}}}},
           queue: [{{filename: 'ws'}}], results: [], settingsLoadSeq: 0, settingsPushSeq: 0,
-          queueLoadSeq: 0, queuePushSeq: 0, resultsLoadSeq: 0, navigationSeq: 0
+          queueLoadSeq: 0, queuePushSeq: 0, resultsLoadSeq: 0, resultsLoading: false, navigationSeq: 0
         }};
         {functions}
         (async () => {{
@@ -1804,14 +1804,25 @@ def test_request_generations_reject_stale_http_and_settings_merge_metadata() -> 
            await oldResults;
            assert.equal(state.results[0].path, 'new');
            const navigated = loadResults();
-           state.navigationSeq += 1;
-           deferred[5].resolve({{results: [{{path: 'stale-navigation'}}]}});
-           await navigated;
-           assert.equal(state.results[0].path, 'new');
+            state.navigationSeq += 1;
+            deferred[5].resolve({{results: [{{path: 'stale-navigation'}}]}});
+            await navigated;
+            assert.equal(state.results[0].path, 'stale-navigation');
+            assert.equal(state.resultsLoading, false);
         }})().catch((error) => {{ console.error(error); process.exitCode = 1; }});
         """
     )
     _run_node(script)
+
+
+def test_results_show_loading_feedback_without_hiding_cached_rows() -> None:
+    """Cold loads show progress while refreshes keep the last confirmed result rows visible."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+
+    assert "Loading optimize results..." in page
+    assert "Scanning compact result metadata. Large optimizer histories remain lazy." in page
+    assert "filteredResults.length + ' result sets · Refreshing...'" in page
+    assert "state.resultsLoading = true;" in _page_function(page, "loadResults")
 
 
 def test_switching_result_sets_clears_stale_paretos_before_loading() -> None:

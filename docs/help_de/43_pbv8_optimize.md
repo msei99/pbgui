@@ -165,6 +165,8 @@ Strategiespezifische Optimizer-Overrides werden beim Strategiewechsel entfernt u
 
 Ergebnisse werden nur aus `<pb8dir>/optimize_results` gelesen. Die Results-Tabelle zeigt fuer jeden Lauf die konfigurierte PB8-Strategie und kann nach dieser Spalte sortiert werden. Die Panels Results und Paretos bieten den gemeinsamen PB7-Workflow fuer Ergebnisansicht, Loeschen, 3D-Plots, Pareto Dash, Kandidaten-JSON, Metrik-Zusammenfassungen und Seed-Bundles.
 
+Beim Oeffnen von Results waehrend eines kalten Metadaten-Scans wird ein eindeutiger Ladezustand angezeigt. Ein Hintergrund-Refresh laesst die zuletzt bestaetigten Zeilen sichtbar, und ein Panelwechsel waehrend des Requests verwirft die fertige Antwort nicht mehr.
+
 Ein Wechsel des Optimize-Results leert vorherige Pareto-Zeilen, Metadaten und Auswahl sofort, bevor das neue Result geladen wird. Eine spaete Antwort des vorherigen Results kann keine veralteten Zeilen wiederherstellen.
 
 Die Results-Liste verwendet begrenzte Cold-Start-Metadaten: Jedes Pareto-Verzeichnis wird einmal aufgelistet, Verzeichnis-Zeitstempel ersetzen einzelne Stats aller Kandidaten und ohne Pareto-Config wird nur der erste MessagePack-Record gelesen. Die vollstaendige Validierung von `all_results.bin` bleibt fuer Resume/Continue verpflichtend, blockiert nach einem API-Neustart aber niemals die sichtbare Results-Liste.

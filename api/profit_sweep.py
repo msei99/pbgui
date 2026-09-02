@@ -349,15 +349,13 @@ def _vault_transferable(policy: dict[str, Any], snapshot: dict[str, Any]) -> str
     )
     if bool(vault.get("closed")):
         return "0"
-    if bool(vault.get("always_close_on_withdraw")) and (vault.get("positions") or vault.get("orders")):
-        return "0"
     leader = snapshot.get("leader") if isinstance(snapshot.get("leader"), dict) else {}
     if policy.get("vault_destination") == "main_spot" and leader.get("account_mode") != "standard_manual":
         return "0"
     lockup = vault.get("lockup_until_ms")
     if lockup is not None and int(lockup) > int(time.time() * 1000):
         return "0"
-    if policy.get("vault_withdraw_mode") == "flat_only" and (vault.get("positions") or vault.get("orders")):
+    if policy.get("vault_withdraw_mode") == "flat_only" and vault.get("positions"):
         return "0"
     transferable = max(Decimal("0"), min(caps))
     if transferable < _VAULT_STRICT_EPSILON:
@@ -797,14 +795,6 @@ def _test_transfer_sync(
     snapshot, capability = _test_snapshot(user, asset)
     if snapshot.get("account_kind") == "vault":
         vault = snapshot.get("vault") if isinstance(snapshot.get("vault"), dict) else {}
-        positions = vault.get("positions") if isinstance(vault.get("positions"), list) else []
-        orders = vault.get("orders") if isinstance(vault.get("orders"), list) else []
-        if bool(vault.get("always_close_on_withdraw")) and (positions or orders):
-            raise ValueError(
-                "Vault test withdrawal blocked: Hyperliquid reports alwaysCloseOnWithdraw and the Vault currently "
-                f"has {len(positions)} open position(s) and {len(orders)} open order(s). Stop trading, flatten the "
-                "Vault, and cancel its orders before testing so the withdrawal cannot alter active trading."
-            )
         try:
             vault_policy = _store().get_policy(user_name)["policy"]
         except KeyError:
@@ -925,10 +915,6 @@ def _submit_test_signature_sync(user_name: str, operation_id: str, signature: st
     if operation["direction"] == "forward":
         if descriptor.get("route") != "vault_to_main_perps":
             raise ValueError("Prepared Vault test route is invalid")
-        positions = vault.get("positions") if isinstance(vault.get("positions"), list) else []
-        orders = vault.get("orders") if isinstance(vault.get("orders"), list) else []
-        if bool(vault.get("always_close_on_withdraw")) and (positions or orders):
-            raise ValueError("Vault trading activity changed; flatten the Vault and start a new test transfer")
         try:
             vault_policy = _store().get_policy(user_name)["policy"]
         except KeyError:

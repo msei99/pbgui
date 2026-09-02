@@ -405,7 +405,7 @@
       live_activation_baseline_mode: { label: 'Live baseline', options: ['fresh', 'include_dry_period'], help: 'Fresh starts Live at activation. Include Dry Period recomputes Dry-period entitlement from raw ledger events.' },
       first_live_catchup_limit_enabled: { label: 'Enable first-live catch-up limit', help: 'Enable a separate cap for the first Live catch-up transfer.' },
       first_live_catchup_limit: { label: 'First-live catch-up limit', help: 'Maximum first Live catch-up amount; remaining due is retained for later cycles.' },
-      vault_withdraw_mode: { label: 'Vault withdraw mode', help: 'Flat Only requires no positions or orders. Margin Buffered permits active trading within withdrawable balance and reserve.' },
+      vault_withdraw_mode: { label: 'Vault withdraw mode', help: 'Flat Only requires no non-zero position. Resting orders remain covered by Hyperliquid withdrawable limits. Margin Buffered permits active positions within the conservative cap.' },
       vault_destination: { label: 'Vault destination', help: 'Main Perps stops after the Vault withdrawal. Main Spot forwards the reconciled received amount to leader Spot.' },
       vault_minimum_transfer_amount: { label: 'Vault minimum amount', help: 'Minimum simulated Vault withdrawal amount before a Vault sweep becomes eligible.' },
       retained_leader_equity: { label: 'Retained leader equity', help: 'Minimum leader-owned Vault equity retained after a sweep. Hyperliquid currently requires at least 100 USDC.', min: '100' },
