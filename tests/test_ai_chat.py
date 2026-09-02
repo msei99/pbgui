@@ -1039,6 +1039,72 @@ def test_chatgpt_conversation_reuses_runtime_for_later_turns(
     asyncio.run(scenario())
 
 
+def test_chatgpt_action_promise_gets_one_corrective_tool_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit action request must not finish as an unsupported future promise."""
+    async def scenario() -> None:
+        owner = "a" * 32
+        service = AIChatService(tmp_path / "ai")
+        conversation = await service._conversation(owner, "chatgpt", "model", None)
+        calls = []
+
+        class FakeCapabilities:
+            """Expose an empty proposal catalog for the action-enforcement contract."""
+
+            @staticmethod
+            def codex_dynamic_tools():
+                return []
+
+            @staticmethod
+            async def list_proposals(_owner, _conversation_id):
+                return []
+
+        class FakeRuntime:
+            """Promise first, then produce tool-confirmed UI progress after correction."""
+
+            process = object()
+            closing = False
+
+            async def start_thread(self, model, tools):
+                return "thread-1"
+
+            async def chat(self, thread_id, message, model, effort):
+                calls.append(message)
+                if len(calls) == 1:
+                    return "Ich öffne jetzt Results und erstelle danach den Vorschlag."
+                conversation.ui_actions.append({
+                    "action_id": "action-1",
+                    "type": "page.perform_action",
+                    "target": {"page_key": "v8_optimize"},
+                    "payload": {},
+                })
+                return "PBGui hat die Results-Aktion an den Browser gesendet."
+
+        runtime = FakeRuntime()
+        service.capabilities = FakeCapabilities()
+        monkeypatch.setattr(service, "_codex_runtime", lambda owner_arg: runtime)
+        monkeypatch.setattr(service, "_ensure_reaper", lambda: None)
+        monkeypatch.setattr(service, "_close_idle_codex_runtimes", lambda: asyncio.sleep(0))
+
+        result = await service.chat(
+            owner,
+            "chatgpt",
+            "model",
+            "Kannst du meinen Auftrag jetzt ausführen?",
+            conversation.id,
+        )
+
+        assert len(calls) == 2
+        assert calls[0].startswith("Kannst du meinen Auftrag jetzt ausführen?")
+        assert "PBGui action-enforcement continuation" in calls[1]
+        assert result["reply"] == "PBGui hat die Results-Aktion an den Browser gesendet."
+        assert result["proposals"] == []
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_idle_codex_runtime_keeps_persistent_conversations(
     tmp_path: Path,
 ) -> None:

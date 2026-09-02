@@ -1,6 +1,8 @@
 """Static contracts for explicitly registered, non-sensitive AI page context."""
 
 from pathlib import Path
+import subprocess
+import textwrap
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +27,11 @@ def test_shared_context_boundary_projects_only_the_backend_schema() -> None:
     assert "request.type !== 'page.perform_action'" in NAV
     assert "context.entities.some" in NAV
     assert "continuePageAction" in NAV
+    assert "pbgui.ai.pending-navigation" in NAV
+    assert "continuePageAction(_getApiOrigin() + route, request.action_id)" in NAV
+    assert "completePageActionNavigation" in NAV
+    drawer = (FRONTEND / "js" / "ai_drawer.js").read_text(encoding="utf-8")
+    assert "window.PBGuiAI.completePageActionNavigation(actionId)" in drawer
     assert "FASTAPI_PAGES[String(target.page_key || '')]" in NAV
     assert "pbgui_ai_action" in NAV
     assert "collectAIControls" in NAV
@@ -74,6 +81,47 @@ def test_shared_context_boundary_projects_only_the_backend_schema() -> None:
     assert "event.preventDefault()" not in failed_handler
     assert "querySelectorAll('input" not in NAV
     assert "FormData" not in NAV
+
+
+def test_ai_page_navigation_is_attempted_only_once_per_pending_action() -> None:
+    """A stale action must be acknowledged instead of pulling manual navigation back."""
+    functions = NAV.split("var _aiActionNavigationStorageKey", 1)[1].split("function aiControlVisible", 1)[0]
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const stored = new Map();
+        const assigned = [];
+        const window = {{
+          location: {{
+            href: 'http://localhost/api/backtest-v8/main_page',
+            origin: 'http://localhost',
+            assign(value) {{ assigned.push(value); }}
+          }},
+          sessionStorage: {{
+            getItem(key) {{ return stored.has(key) ? stored.get(key) : null; }},
+            setItem(key, value) {{ stored.set(key, value); }},
+            removeItem(key) {{ stored.delete(key); }}
+          }}
+        }};
+        let _aiActionNavigationTarget = '';
+        const aiContextText = value => String(value || '').slice(0, 64);
+        const _getApiOrigin = () => 'http://localhost';
+        var _aiActionNavigationStorageKey{functions}
+
+        assert.equal(continuePageAction('/api/optimize-v8/main_page', 'action-1'), true);
+        assert.equal(assigned.length, 1);
+        assert.equal(stored.get('pbgui.ai.pending-navigation'), 'action-1');
+
+        _aiActionNavigationTarget = '';
+        assert.equal(continuePageAction('/api/optimize-v8/main_page', 'action-1'), false);
+        assert.equal(assigned.length, 1);
+
+        completePageActionNavigation('action-1');
+        assert.equal(stored.has('pbgui.ai.pending-navigation'), false);
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 def test_productive_pages_register_explicit_context_adapters() -> None:

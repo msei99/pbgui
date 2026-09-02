@@ -106,17 +106,38 @@
     return function () { delete _aiPageActions[key]; };
   }
 
-  function continuePageAction(url) {
+  var _aiActionNavigationStorageKey = 'pbgui.ai.pending-navigation';
+
+  function continuePageAction(url, actionId) {
+    var normalizedActionId = aiContextText(actionId, 64);
     try {
       var target = new URL(String(url || ''), window.location.href);
       var apiOrigin = _getApiOrigin();
       if (target.origin !== window.location.origin && target.origin !== apiOrigin) return false;
+      if (normalizedActionId) {
+        try {
+          if (window.sessionStorage.getItem(_aiActionNavigationStorageKey) === normalizedActionId) return false;
+          window.sessionStorage.setItem(_aiActionNavigationStorageKey, normalizedActionId);
+        } catch (_) {}
+      }
       target.searchParams.set('pbgui_ai_action', '1');
       if (_aiActionNavigationTarget === target.href) return false;
       _aiActionNavigationTarget = target.href;
       window.location.assign(target.href);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function completePageActionNavigation(actionId) {
+    var normalizedActionId = aiContextText(actionId, 64);
+    if (!normalizedActionId) return;
+    try {
+      if (window.sessionStorage.getItem(_aiActionNavigationStorageKey) === normalizedActionId) {
+        window.sessionStorage.removeItem(_aiActionNavigationStorageKey);
+      }
     } catch (_) {}
-    return false;
   }
 
   function aiControlVisible(element) {
@@ -424,6 +445,7 @@
   };
   window.PBGuiAI.registerPageAction = registerPageAction;
   window.PBGuiAI.continuePageAction = continuePageAction;
+  window.PBGuiAI.completePageActionNavigation = completePageActionNavigation;
   window.PBGuiAI.collectContext = collectAIContext;
   window.PBGuiAI.focusedField = function (allowlist) {
     var active = document.activeElement;
@@ -448,7 +470,9 @@
     var entity = payload.entity && typeof payload.entity === 'object' ? payload.entity : {};
     if (String(target.page_key || '') !== String(cfg().current || '')) {
       var route = FASTAPI_PAGES[String(target.page_key || '')];
-      if (route) continuePageAction(_getApiOrigin() + route);
+      if (route && !continuePageAction(_getApiOrigin() + route, request.action_id)) {
+        event.preventDefault();
+      }
       return;
     }
     var key = String(payload.action || '') + ':' + String(entity.kind || '');
@@ -1783,7 +1807,7 @@
       link.href = '/app/css/ai_drawer.css?v=12';
       document.head.appendChild(link);
       var script = document.createElement('script');
-      script.src = '/app/js/ai_drawer.js?v=33';
+      script.src = '/app/js/ai_drawer.js?v=34';
       script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
       script.onerror = function () { _aiDrawerLoading = false; };
       document.head.appendChild(script);

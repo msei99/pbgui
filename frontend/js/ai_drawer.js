@@ -482,6 +482,10 @@
         return api('/conversations/' + encodeURIComponent(conversationId) + '/ui-actions/' + encodeURIComponent(actionId) + '/ack', {
           method: 'POST'
         });
+      }).then(function () {
+        if (window.PBGuiAI && typeof window.PBGuiAI.completePageActionNavigation === 'function') {
+          window.PBGuiAI.completePageActionNavigation(actionId);
+        }
       }).catch(function (error) {
         state.uiActionIds.delete(actionId);
         setStatus(error && error.message ? error.message : 'PBGui page action failed.', true);

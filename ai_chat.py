@@ -204,6 +204,53 @@ _COMPARE_PB8_MARTINGALE_VS_GRID = (
     "Set up a PB8-only strategy comparison between trailing_martingale and the PB8 "
     "trailing_grid_v7 compatibility strategy."
 )
+_ACTION_REQUEST_RE = re.compile(
+    r"\b(?:ausf(?:ü|ue)hr\w*|mach(?:e|en|st)?|reich\w*\s+\w*\s*ein|erstell\w*|"
+    r"öffn\w*|oeffn\w*|wechsel\w*|markier\w*|selektier\w*|wähl\w*|waehl\w*|"
+    r"speicher\w*|starte?\w*|queue\w*|execute\w*|run\w*|open\w*|select\w*|create\w*)\b",
+    re.IGNORECASE,
+)
+_ACTION_PROMISE_RE = re.compile(
+    r"\b(?:ich\s+(?:werde|öffne|oeffne|wechsle|markiere|selektiere|wähle|waehle|"
+    r"erstelle|reiche|führe|fuehre|starte|mache)|(?:danach|anschließend|anschliessend)\s+"
+    r"(?:öffne|oeffne|wechsle|markiere|erstelle|reiche|führe|fuehre|starte)|"
+    r"i(?:'ll|\s+will|\s+am\s+going\s+to))\b",
+    re.IGNORECASE,
+)
+_ACTION_BLOCKER_OR_CLARIFICATION_RE = re.compile(
+    r"(?:\?|\b(?:kann\s+nicht|nicht\s+verfügbar|nicht\s+verfuegbar|fehlt|benötige|"
+    r"benoetige|welche[rsn]?|cannot|can't|unavailable|missing|blocked|which|please\s+choose)\b)",
+    re.IGNORECASE,
+)
+
+
+def _action_request(message: str) -> bool:
+    """Return whether a user explicitly asks PBGui to perform an action now."""
+    return bool(_ACTION_REQUEST_RE.search(str(message or "")))
+
+
+def _action_reply_needs_retry(reply: str, *, progress: bool) -> bool:
+    """Reject future promises and unsupported completions for explicit action turns."""
+    text = str(reply or "").strip()
+    if _ACTION_PROMISE_RE.search(text):
+        return True
+    return not progress and not _ACTION_BLOCKER_OR_CLARIFICATION_RE.search(text)
+
+
+def _action_failure_reply(message: str, *, proposal: bool, ui_action: bool) -> str:
+    """Return a truthful terminal response when the corrective action turn still stalls."""
+    german = bool(re.search(r"\b(?:bitte|jetzt|mach|ausf|reich|öffn|oeffn|wechsel|markier|wähl|waehl)\w*\b", message, re.IGNORECASE))
+    if german:
+        if proposal:
+            return "PBGui hat einen Genehmigungsvorschlag erzeugt. Bitte prüfe und bestätige den angezeigten Vorschlag."
+        if ui_action:
+            return "PBGui hat eine Browser-Aktion an die Seite gesendet. Der weitergehende Auftrag wurde in diesem Turn nicht abgeschlossen."
+        return "PBGui konnte in diesem Turn keine ausführbare Aktion oder Genehmigungsvorlage erzeugen. Der Auftrag wurde nicht ausgeführt."
+    if proposal:
+        return "PBGui created an approval proposal. Review and approve the displayed proposal."
+    if ui_action:
+        return "PBGui sent a browser action to the page. The broader request was not completed in this turn."
+    return "PBGui could not produce an executable action or approval proposal in this turn. The request was not executed."
 
 
 def _codex_instructions(model: str) -> str:
@@ -1176,6 +1223,18 @@ class AIChatService:
             self._validate_model_effort(selected_model, clean_effort)
         conversation = await self._conversation(owner, provider, model, conversation_id)
         provider_message = clean_message + self._context_prompt_suffix(conversation.context)
+        enforce_action = provider == "chatgpt" and _action_request(clean_message)
+        initial_ui_action_ids = {
+            str(item.get("action_id") or "")
+            for item in conversation.ui_actions
+            if isinstance(item, dict)
+        }
+        initial_proposal_ids = {
+            str(item.get("proposal_id") or "")
+            for item in (await self.capabilities.list_proposals(owner, conversation.id) if enforce_action else [])
+            if isinstance(item, dict)
+        }
+        proposals: list[dict[str, Any]] | None = None
         pending_user = (
             conversation.messages[-1]
             if _pre_reserved
@@ -1226,6 +1285,50 @@ class AIChatService:
                     reply = await runtime.chat(
                         conversation.codex_thread_id, provider_message, model or None, clean_effort
                     )
+                    if enforce_action:
+                        proposals = await self.capabilities.list_proposals(owner, conversation.id)
+                        new_proposal = any(
+                            str(item.get("proposal_id") or "") not in initial_proposal_ids
+                            for item in proposals
+                            if isinstance(item, dict)
+                        )
+                        new_ui_action = any(
+                            str(item.get("action_id") or "") not in initial_ui_action_ids
+                            for item in conversation.ui_actions
+                            if isinstance(item, dict)
+                        )
+                        if _action_reply_needs_retry(reply, progress=new_proposal or new_ui_action):
+                            await self._set_activity(owner, conversation.id, "Requiring executable PBGui action evidence")
+                            reply = await runtime.chat(
+                                conversation.codex_thread_id,
+                                (
+                                    "[PBGui action-enforcement continuation]\n"
+                                    "Your previous response did not complete the user's explicit action request. "
+                                    "Continue the same request now and call the required pbgui tools in this turn. "
+                                    "Do not describe future work. Finish only with a created approval proposal, a "
+                                    "completed reversible UI action, one exact blocker, or one focused clarification. "
+                                    "Do not repeat a capability that already succeeded."
+                                ),
+                                model or None,
+                                clean_effort,
+                            )
+                            proposals = await self.capabilities.list_proposals(owner, conversation.id)
+                            new_proposal = any(
+                                str(item.get("proposal_id") or "") not in initial_proposal_ids
+                                for item in proposals
+                                if isinstance(item, dict)
+                            )
+                            new_ui_action = any(
+                                str(item.get("action_id") or "") not in initial_ui_action_ids
+                                for item in conversation.ui_actions
+                                if isinstance(item, dict)
+                            )
+                            if _action_reply_needs_retry(reply, progress=new_proposal or new_ui_action):
+                                reply = _action_failure_reply(
+                                    clean_message,
+                                    proposal=new_proposal,
+                                    ui_action=new_ui_action,
+                                )
                 elif provider in _OPENCODE_PROVIDERS:
                     if pending_user is None:
                         conversation.messages.append(
@@ -1291,7 +1394,8 @@ class AIChatService:
                     f"AI chat completed via {provider} in {time.monotonic() - started:.1f}s",
                     level="INFO",
                 )
-                proposals = await self.capabilities.list_proposals(owner, conversation.id)
+                if proposals is None:
+                    proposals = await self.capabilities.list_proposals(owner, conversation.id)
                 return {
                     "conversation_id": conversation.id,
                     "reply": reply,
