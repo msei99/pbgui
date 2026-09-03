@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 import hashlib
 import json
 import os
@@ -37,6 +37,7 @@ _DEFAULT_POLICY: dict[str, Any] = {
     "minimum_transfer_amount": "25",
     "simulation_minimum_transfer_amount": "25",
     "live_minimum_transfer_amount": "25",
+    "transfer_rounding_step": "0",
     "safety_reserve_mode": "fixed",
     "safety_reserve_amount": "0",
     "safety_reserve_percent": "0",
@@ -95,6 +96,7 @@ _DECIMAL_RANGES = {
     "minimum_transfer_amount": (Decimal("0"), _DECIMAL_MAX),
     "simulation_minimum_transfer_amount": (Decimal("0"), _DECIMAL_MAX),
     "live_minimum_transfer_amount": (Decimal("0"), _DECIMAL_MAX),
+    "transfer_rounding_step": (Decimal("0"), _DECIMAL_MAX),
     "safety_reserve_amount": (Decimal("0"), _DECIMAL_MAX),
     "safety_reserve_percent": (Decimal("0"), Decimal("100")),
     "daily_transfer_limit": (Decimal("0"), _DECIMAL_MAX),
@@ -170,7 +172,9 @@ def _normalize_policy(values: Mapping[str, Any] | None, base: Mapping[str, Any] 
     unknown = set(values) - set(_DEFAULT_POLICY)
     if unknown:
         raise ValueError(f"unknown policy fields: {', '.join(sorted(unknown))}")
-    normalized = deepcopy(dict(base or _DEFAULT_POLICY))
+    normalized = deepcopy(_DEFAULT_POLICY)
+    if base is not None:
+        normalized.update(base)
     normalized.update(values)
 
     if "minimum_transfer_amount" in values:
@@ -242,6 +246,18 @@ def _reserve_amount(policy: Mapping[str, Any]) -> Decimal:
     return max(fixed, percent)
 
 
+def round_transfer_amount(policy: Mapping[str, Any], amount: str | Decimal) -> Decimal:
+    """Round one nonnegative transfer amount down to the configured step."""
+
+    normalized = _normalize_policy(policy)
+    value = _decimal(amount, "amount", Decimal("0"))
+    step = Decimal(normalized["transfer_rounding_step"])
+    if step == 0:
+        return value
+    units = (value / step).to_integral_value(rounding=ROUND_DOWN)
+    return units * step
+
+
 def calculate_sweep(
     policy: Mapping[str, Any],
     *,
@@ -277,7 +293,9 @@ def calculate_sweep(
         limits.append(Decimal(normalized["single_transfer_limit"]))
     if normalized["daily_transfer_limit_enabled"]:
         limits.append(max(Decimal("0"), Decimal(normalized["daily_transfer_limit"]) - daily_used))
-    amount = max(Decimal("0"), min(limits))
+    unrounded_amount = max(Decimal("0"), min(limits))
+    amount = round_transfer_amount(normalized, unrounded_amount)
+    below_rounding_step = unrounded_amount > 0 and amount == 0
     recovered_to_peak = pnl >= hwm
     minimum_field = "simulation_minimum_transfer_amount" if state_kind == "simulation" else "live_minimum_transfer_amount"
     minimum = (
@@ -285,6 +303,7 @@ def calculate_sweep(
         if minimum_transfer_override is not None
         else Decimal(normalized[minimum_field])
     )
+    rounded_amount = amount
     if pnl < trigger or not recovered_to_peak or amount < minimum:
         amount = Decimal("0")
 
@@ -294,7 +313,9 @@ def calculate_sweep(
         reason = "below_high_watermark_recovery"
     elif due == 0:
         reason = "no_new_peak_profit"
-    elif amount == 0 and min(limits) < minimum:
+    elif below_rounding_step:
+        reason = "below_rounding_step"
+    elif amount == 0 and rounded_amount < minimum:
         reason = "below_minimum_or_cap"
     elif amount > 0:
         reason = "would_transfer"
@@ -1419,6 +1440,9 @@ class ProfitSweepStore:
                 and Decimal(live["confirmed_total"]) == 0
             ):
                 amount = min(amount, Decimal(policy["first_live_catchup_limit"]))
+            amount_before_rounding = amount
+            rounded_amount = round_transfer_amount(policy, amount)
+            amount = rounded_amount
             minimum = (
                 _decimal(minimum_transfer_override, "minimum_transfer_override", Decimal("0"))
                 if minimum_transfer_override is not None
@@ -1427,7 +1451,9 @@ class ProfitSweepStore:
             if amount < minimum:
                 amount = Decimal("0")
             reason = (
-                "below_minimum_or_cap"
+                "below_rounding_step"
+                if amount == 0 and amount_before_rounding > 0 and rounded_amount == 0
+                else "below_minimum_or_cap"
                 if amount == 0 and Decimal(decision["amount"]) > 0
                 else decision["reason"]
             )

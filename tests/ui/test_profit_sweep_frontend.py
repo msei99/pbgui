@@ -168,7 +168,7 @@ def test_profit_sweep_classifies_basic_advanced_and_hidden_policy_fields() -> No
     source = _source()
     fields = (
         "operating_mode asset reference_capital baseline_mode trigger_percent sweep_percent minimum_transfer_amount "
-        "simulation_minimum_transfer_amount live_minimum_transfer_amount "
+        "simulation_minimum_transfer_amount live_minimum_transfer_amount transfer_rounding_step "
         "safety_reserve_mode safety_reserve_amount safety_reserve_percent daily_transfer_limit_enabled "
         "daily_transfer_limit single_transfer_limit_enabled single_transfer_limit trigger_mode "
         "periodic_interval settlement_debounce quiet_period stabilization_interval "

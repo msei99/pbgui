@@ -12672,7 +12672,8 @@ async function backtestSelectedSweepHoldouts() {
           name: trainingName,
           config: extractConfigSections(buildSweepHoldoutBacktestConfig(payload.config, training, trainingName)),
           override_configs: payload.override_configs,
-          preserve_timerange: true
+          preserve_timerange: true,
+          preserve_exchanges: true
         });
       }
     }
@@ -12686,7 +12687,8 @@ async function backtestSelectedSweepHoldouts() {
           name: draftName,
           config: extractConfigSections(buildSweepHoldoutBacktestConfig(payload.config, holdout, draftName)),
           override_configs: payload.override_configs,
-          preserve_timerange: true
+          preserve_timerange: true,
+          preserve_exchanges: true
         });
       }
     }
@@ -12696,7 +12698,8 @@ async function backtestSelectedSweepHoldouts() {
         name: fullRangeName,
         config: extractConfigSections(buildSweepFullTimerangeBacktestConfig(payload.config, fullRangeName)),
         override_configs: payload.override_configs,
-        preserve_timerange: true
+        preserve_timerange: true,
+        preserve_exchanges: true
       });
     }
   }

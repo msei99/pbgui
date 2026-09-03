@@ -780,8 +780,9 @@ def test_active_fresh_policy_can_rebaseline_to_include_dry_retroactively(
             "sweep_percent": "50",
             "minimum_transfer_amount": "0",
             "live_minimum_transfer_amount": "0",
+            "transfer_rounding_step": "1",
             "first_live_catchup_limit_enabled": True,
-            "first_live_catchup_limit": "3",
+            "first_live_catchup_limit": "3.5",
         },
         baseline_net_pnl="100",
     )

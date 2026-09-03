@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, StrictStr
 from api.auth import SessionToken, require_auth
 from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR, PBGUI_SERIAL, PBGUI_VERSION
-from profit_sweep import ProfitSweepStore, calculate_sweep, default_policy
+from profit_sweep import ProfitSweepStore, calculate_sweep, default_policy, round_transfer_amount
 from profit_sweep_exchanges import collect_readonly_snapshot, readonly_capability
 from profit_sweep_transfers import (
     BITGET_TRANSFER_PERMISSION_REASON,
@@ -1340,6 +1340,9 @@ def _preview_sync(user_name: str, policy_overrides: dict[str, Any] | None = None
             and Decimal(confirmed_total) == 0
         ):
             amount = min(amount, Decimal(policy["first_live_catchup_limit"]))
+        amount_before_rounding = amount
+        rounded_amount = round_transfer_amount(policy, amount)
+        amount = rounded_amount
         minimum = (
             _decimal(minimum_override, "minimum_override")
             if minimum_override is not None
@@ -1352,7 +1355,9 @@ def _preview_sync(user_name: str, policy_overrides: dict[str, Any] | None = None
             "amount": _decimal_text(amount),
             "would_transfer": amount > 0,
             "reason": (
-                "below_minimum_or_cap"
+                "below_rounding_step"
+                if amount == 0 and amount_before_rounding > 0 and rounded_amount == 0
+                else "below_minimum_or_cap"
                 if amount == 0 and Decimal(decision["amount"]) > 0
                 else decision["reason"]
             ),

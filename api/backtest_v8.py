@@ -1926,6 +1926,9 @@ def create_queue_draft(body: dict, session: SessionToken = Depends(require_auth)
         preserve_timerange = item.get("preserve_timerange", False)
         if type(preserve_timerange) is not bool:
             raise HTTPException(status_code=422, detail="each item.preserve_timerange must be a boolean")
+        preserve_exchanges = item.get("preserve_exchanges", False)
+        if type(preserve_exchanges) is not bool:
+            raise HTTPException(status_code=422, detail="each item.preserve_exchanges must be a boolean")
         normalized_item = {
             "name": str(item.get("name") or "rebacktest"),
             "config": copy.deepcopy(config),
@@ -1933,6 +1936,8 @@ def create_queue_draft(body: dict, session: SessionToken = Depends(require_auth)
         }
         if preserve_timerange:
             normalized_item["preserve_timerange"] = True
+        if preserve_exchanges:
+            normalized_item["preserve_exchanges"] = True
         normalized.append(normalized_item)
     with _DRAFT_LOCK:
         _clean_drafts(reserve_slot=True)

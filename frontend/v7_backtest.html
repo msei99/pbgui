@@ -2564,6 +2564,9 @@ function showInitialBacktestQueueDraftModal(items) {
   var preserveAllTimeranges = items.every(function(item) {
     return item && item.preserve_timerange === true;
   });
+  var preserveAllExchanges = items.every(function(item) {
+    return item && item.preserve_exchanges === true;
+  });
 
   var exOpts = allExchanges.map(function(e) {
     return '<option value="' + e + '"' + (defExchanges.indexOf(e) >= 0 ? ' selected' : '') + '>' + e + '</option>';
@@ -2575,6 +2578,10 @@ function showInitialBacktestQueueDraftModal(items) {
         backtestDialogDateInputHtml('rbt-start', defStart) + '</div>' +
       '<div style="flex-shrink:0"><div class="sb-label">end_date</div>' +
         backtestDialogDateInputHtml('rbt-end', today) + '</div>';
+  var exchangeFields = preserveAllExchanges
+    ? '<div style="flex-shrink:0;color:var(--text-muted);font-size:var(--fs-sm)">Each validation item keeps its own configured exchange group.</div>'
+    : '<div style="flex:1;display:flex;flex-direction:column;min-height:60px"><div class="sb-label">Exchanges</div>' +
+        '<select id="rbt-exchanges" class="sb-input" multiple data-toggle-multiselect style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '</select></div>';
   var body =
     '<div style="display:flex;flex-direction:column;gap:var(--sp-md);height:100%;min-width:0">' +
       timerangeFields +
@@ -2584,8 +2591,7 @@ function showInitialBacktestQueueDraftModal(items) {
           '<button class="act-btn" style="width:28px;padding:0" onclick="document.getElementById(\'rbt-balance\').value=Math.max(1,parseFloat(document.getElementById(\'rbt-balance\').value)-100)">−</button>' +
           '<button class="act-btn" style="width:28px;padding:0" onclick="document.getElementById(\'rbt-balance\').value=parseFloat(document.getElementById(\'rbt-balance\').value)+100">+</button>' +
         '</div></div>' +
-      '<div style="flex:1;display:flex;flex-direction:column;min-height:60px"><div class="sb-label">Exchanges</div>' +
-        '<select id="rbt-exchanges" class="sb-input" multiple data-toggle-multiselect style="flex:1;height:auto;min-height:var(--input-h)">' + exOpts + '</select></div>' +
+      exchangeFields +
       '<div style="flex-shrink:0;display:flex;align-items:center;gap:var(--sp-sm)">' +
         '<input type="checkbox" id="rbt-pbgui-data"' + pbguiMarketDataDefaultCheckedAttr() + ' style="width:auto;margin:0">' +
         '<label for="rbt-pbgui-data" style="font-size:var(--fs-sm);cursor:pointer">📂 Use PBGui Market Data</label>' +
@@ -2602,15 +2608,20 @@ function showInitialBacktestQueueDraftModal(items) {
       var usePbguiData = document.getElementById('rbt-pbgui-data').checked;
       var exSel = document.getElementById('rbt-exchanges');
       var exchanges = [];
-      for (var i = 0; i < exSel.options.length; i++) {
-        if (exSel.options[i].selected) exchanges.push(exSel.options[i].value);
+      if (exSel) {
+        for (var i = 0; i < exSel.options.length; i++) {
+          if (exSel.options[i].selected) exchanges.push(exSel.options[i].value);
+        }
       }
-      if (!exchanges.length) { toast('Select at least one exchange', 'err'); return; }
+      if (!preserveAllExchanges && !exchanges.length) { toast('Select at least one exchange', 'err'); return; }
       closeModal();
       (usePbguiData ? apiFetch('/pbgui_data_path').then(function(d) { return d.path || ''; }) : Promise.resolve('')).then(function(pbguiPath) {
         var promises = [];
         items.forEach(function(item) {
-          getQueueDraftItemExchanges(item, exchanges).forEach(function(exchange) {
+          var exchangeVariants = item && item.preserve_exchanges === true
+            ? [null]
+            : getQueueDraftItemExchanges(item, exchanges);
+          exchangeVariants.forEach(function(exchange) {
             var cfg = JSON.parse(JSON.stringify((item && item.config) || {}));
             if (!cfg.backtest) cfg.backtest = {};
             if (!(item && item.preserve_timerange === true)) {
@@ -2618,7 +2629,7 @@ function showInitialBacktestQueueDraftModal(items) {
               cfg.backtest.end_date = end;
             }
             cfg.backtest.starting_balance = balance;
-            cfg.backtest.exchanges = [exchange];
+            if (exchange !== null) cfg.backtest.exchanges = [exchange];
             if (pbguiPath) cfg.backtest.ohlcv_source_dir = pbguiPath;
             promises.push(apiFetch('/queue', {
               method: 'POST',
@@ -2655,7 +2666,7 @@ async function openInitialBacktestQueueDraftFromUrl() {
   try {
     var draft = await apiFetch('/queue-draft/' + encodeURIComponent(draftId));
     var items = (draft && draft.items) || [];
-    selectPanel('configs');
+    selectPanel('queue');
     showInitialBacktestQueueDraftModal(items);
     return true;
   } catch (e) {

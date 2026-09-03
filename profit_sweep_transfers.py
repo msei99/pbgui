@@ -23,6 +23,7 @@ from Exchange import Exchange
 
 SERVICE = "ProfitSweepTransfers"
 _HYPERLIQUID_EXCHANGE_URL = "https://api.hyperliquid.xyz/exchange"
+_HYPERLIQUID_USD_QUANTUM = Decimal("0.000001")
 
 
 class TransferRequestError(ValueError):
@@ -1143,12 +1144,18 @@ def _hyperliquid_vault_match(
     expected_vault = descriptor["request"]["action"]["vaultAddress"]
     vault = _field(record, "vaultAddress", "vault")
     requested = _field(record, "usdc") if deposit else _field(record, "requestedUsd", "grossUsd")
+    amount_matches = _same_amount(requested, descriptor["amount"])
+    if not deposit and requested is not None and not amount_matches:
+        try:
+            amount_matches = Decimal(str(requested)) == Decimal(descriptor["amount"]) - _HYPERLIQUID_USD_QUANTUM
+        except (InvalidOperation, TypeError, ValueError):
+            amount_matches = False
     return (
         str(_field(record, "type") or "") == expected_type
         and vault is not None
         and str(vault).lower() == expected_vault
         and requested is not None
-        and _same_amount(requested, descriptor["amount"])
+        and amount_matches
     )
 
 

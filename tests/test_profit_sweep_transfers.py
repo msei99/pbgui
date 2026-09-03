@@ -799,6 +799,44 @@ def test_vault_reconciliation_uses_vault_ledger_and_actual_net_amount(
     assert owners[0].closed is True
 
 
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [
+        ("5", True),
+        ("4.999999", True),
+        ("4.999998", False),
+        ("5.000001", False),
+    ],
+)
+def test_vault_withdrawal_matches_only_exact_or_one_micro_down(
+    requested: str,
+    expected: bool,
+) -> None:
+    """Allow Hyperliquid's one-micro withdrawal floor without broad amount tolerance."""
+
+    descriptor = transfers.prepare_transfer(
+        _user("hyperliquid", vault=True),
+        operation_id="vault-micro-floor",
+        amount="5",
+        asset="USDC",
+        route="vault_to_main_perps",
+        snapshot=_snapshot("hyperliquid", vault=True),
+        nonce=3006,
+    )
+    record = {
+        "time": NOW_MS,
+        "delta": {
+            "type": "vaultWithdraw",
+            "vaultAddress": VAULT,
+            "requestedUsd": requested,
+            "netWithdrawnUsd": requested,
+            "closingCost": "0",
+        },
+    }
+
+    assert transfers._hyperliquid_vault_match(record, descriptor, deposit=False) is expected
+
+
 def test_vault_withdrawal_wrong_vault_or_amount_stays_pending(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reject same-window Vault withdrawals that do not identify this exact request."""
 

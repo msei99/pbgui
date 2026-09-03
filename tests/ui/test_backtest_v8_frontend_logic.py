@@ -76,6 +76,17 @@ def test_backtest_page_can_open_the_queue_panel_from_ai_navigation() -> None:
     assert "selectPanel('queue')" in initialize
 
 
+def test_backtest_queue_draft_opens_over_the_queue_panel() -> None:
+    """Cross-page validation drafts should not misleadingly land on Configs."""
+
+    page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(page, "openInitialBacktestQueueDraftFromUrl")
+
+    assert "selectPanel('queue')" in function
+    assert "selectPanel('configs')" not in function
+    assert function.index("selectPanel('queue')") < function.index("showInitialBacktestQueueDraftModal(items)")
+
+
 def test_backtest_page_registers_existing_queue_log_function_as_page_action() -> None:
     """Selected Backtest jobs should expose the existing log viewer through the generic bridge."""
     page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
@@ -215,7 +226,8 @@ def test_suite_pareto_queue_draft_uses_each_candidates_bound_exchange() -> None:
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout
     modal = _extract_function(source, "showInitialBacktestQueueDraftModal")
-    assert "getQueueDraftItemExchanges(item, exchanges).forEach" in modal
+    assert "item && item.preserve_exchanges === true" in modal
+    assert ": getQueueDraftItemExchanges(item, exchanges)" in modal
 
 
 def test_validation_queue_draft_preserves_each_items_timerange() -> None:
@@ -231,8 +243,7 @@ def test_validation_queue_draft_preserves_each_items_timerange() -> None:
         const assert = require('node:assert/strict');
         const controls = {{
           'rbt-balance': {{value: '1000'}},
-          'rbt-pbgui-data': {{checked: false}},
-          'rbt-exchanges': {{options: [{{selected: true, value: 'binance'}}]}}
+          'rbt-pbgui-data': {{checked: false}}
         }};
         const document = {{getElementById: id => controls[id] || null}};
         const backtestDialogDateInputHtml = () => '';
@@ -254,14 +265,15 @@ def test_validation_queue_draft_preserves_each_items_timerange() -> None:
         {functions}
 
         const items = [
-          {{name: 'candidate_train_01', preserve_timerange: true, config: {{backtest: {{start_date: '2024-01-01', end_date: '2024-03-31'}}}}}},
-          {{name: 'candidate_holdout_01', preserve_timerange: true, config: {{backtest: {{start_date: '2026-06-01', end_date: '2026-08-30'}}}}}},
-          {{name: 'candidate_full_timerange', preserve_timerange: true, config: {{backtest: {{start_date: '2024-01-01', end_date: '2026-08-30'}}}}}}
+          {{name: 'candidate_train_01', preserve_timerange: true, preserve_exchanges: true, config: {{backtest: {{start_date: '2024-01-01', end_date: '2024-03-31', exchanges: ['binance', 'bybit']}}}}}},
+          {{name: 'candidate_holdout_01', preserve_timerange: true, preserve_exchanges: true, config: {{backtest: {{start_date: '2026-06-01', end_date: '2026-08-30', exchanges: ['binance', 'bybit']}}}}}},
+          {{name: 'candidate_full_timerange', preserve_timerange: true, preserve_exchanges: true, config: {{backtest: {{start_date: '2024-01-01', end_date: '2026-08-30', exchanges: ['binance', 'bybit']}}}}}}
         ];
 
         (async () => {{
           showInitialBacktestQueueDraftModal(items);
           assert.match(modalBody, /keeps its own configured start and end date/);
+          assert.match(modalBody, /keeps its own configured exchange group/);
           submit();
           await new Promise(resolve => setImmediate(resolve));
           await new Promise(resolve => setImmediate(resolve));
@@ -270,6 +282,8 @@ def test_validation_queue_draft_preserves_each_items_timerange() -> None:
             ['candidate_holdout_01', '2026-06-01', '2026-08-30'],
             ['candidate_full_timerange', '2024-01-01', '2026-08-30']
           ]);
+          assert.equal(queued.length, 3);
+          assert.equal(queued.every(item => JSON.stringify(item.config.backtest.exchanges) === '["binance","bybit"]'), true);
         }})().catch(error => {{ console.error(error); process.exit(1); }});
         """
     )

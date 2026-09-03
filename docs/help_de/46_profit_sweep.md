@@ -25,6 +25,7 @@ Die Overview zeigt die Read-Capability sofort. Die Write-Capability wird bei Liv
 - **Trigger percent** definiert die Gewinnschwelle relativ zum Referenzkapital.
 - **Sweep percent** waehlt den Anteil jedes neuen High-Water-Mark-Gewinnanstiegs.
 - **Minimum transfer amount** sammelt kleinere Due-Betraege und gilt fuer Dry- und Live-Entscheidungen.
+- **Transfer rounding step** rundet den finalen Transferbetrag nach Reserven und Limits auf ein Settlement-Asset-Inkrement ab. `1` verwendet volle USDC/USDT, `0` deaktiviert die Rundung; jeder Nachkomma-Rest bleibt fuer einen spaeteren Sweep Due.
 - **Safety reserve amount** behaelt zusammen mit dem gewaehlten Reserve-Modus transferierbares Guthaben im Quellkonto.
 
 **Keep trading capital** setzt Trigger percent auf `0` und Sweep percent auf `100`. Das Preset aktiviert oder speichert die Policy nicht. High-Water Mark und Verlustausgleich bleiben aktiv.
@@ -111,7 +112,7 @@ Bei Spot-to-Perps-Rueckwegen ist das logische Descriptor-Ziel `default_perps`, w
 
 PBGui sendet signierte Hyperliquid-Aktionen ueber einen festen versiegelten Endpoint und speichert nur einen begrenzten, um Adressen bereinigten Provider-Ablehnungsgrund. Signaturen und Request-Bodies werden niemals persistiert oder angezeigt. Aeltere fehlgeschlagene Vault-Testoperationen von vor dieser Diagnoseunterstuetzung koennen nur anzeigen, dass Hyperliquid die Aktion abgelehnt hat; fuer den exakten bereinigten Provider-Hinweis ist ein neuer ausdruecklich bestaetigter Test erforderlich.
 
-Hyperliquid-L1-Submissions verwenden den aktuellen kanonischen Envelope nur mit `action`, `signature` und `nonce`, wenn kein optionaler Signaturkontext oder Ablauf gesetzt ist. Null-Felder fuer `vaultAddress` und `expiresAfter` werden exakt wie im offiziellen SDK weggelassen. Der Ziel-Vault bleibt innerhalb der signierten `vaultTransfer`-Aktion. PBGui zieht bei der Berechnung der Leader-Retention ein Micro-USDC ab, damit nach dem Withdrawal strikt mehr als 100 USDC und der konfigurierte Share-Floor verbleiben statt exakt gleich viel.
+Hyperliquid-L1-Submissions verwenden den aktuellen kanonischen Envelope nur mit `action`, `signature` und `nonce`, wenn kein optionaler Signaturkontext oder Ablauf gesetzt ist. Null-Felder fuer `vaultAddress` und `expiresAfter` werden exakt wie im offiziellen SDK weggelassen. Der Ziel-Vault bleibt innerhalb der signierten `vaultTransfer`-Aktion. PBGui zieht bei der Berechnung der Leader-Retention ein Micro-USDC ab, damit nach dem Withdrawal strikt mehr als 100 USDC und der konfigurierte Share-Floor verbleiben statt exakt gleich viel. Hyperliquid kann bei einem erfolgreichen Vault-Withdrawal auch `requestedUsd` genau ein Micro-USDC unter dem signierten Integer-Micro-Betrag melden; die Reconciliation akzeptiert ausschliesslich dieses exakte Abwaerts-Quantum und lehnt groessere Betragsabweichungen weiterhin ab.
 
 Persistierte Descriptors verwenden sortiertes JSON fuer stabile Integritaetspruefungen, waehrend Hyperliquid-MessagePack-Hashes von der Object-Key-Reihenfolge abhaengen. Vor jeder Signatur und Submission rekonstruiert PBGui `agentSendAsset`- und `vaultTransfer`-Actions in der aktuellen offiziellen Schema-Reihenfolge. Das bleibt ueber API-Neustarts und vorbereitete Operationen deterministisch. Standard-Account- und Vault-Live-Transfers verwenden beide ihre validierten API-Agent-Pfade.
 

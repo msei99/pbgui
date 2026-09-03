@@ -456,7 +456,7 @@ def test_all_timeranges_validation_queues_training_holdout_and_full_jobs() -> No
         const extractConfigSections = config => config;
         const apiFetch = async () => ({{
           config: {{backtest: {{
-            start_date: '2024-01-01', end_date: '2026-08-30', suite_enabled: true,
+            start_date: '2024-01-01', end_date: '2026-08-30', exchanges: ['binance', 'bybit'], suite_enabled: true,
             scenarios: [
               {{label: 'train_01', start_date: '2024-01-01', end_date: '2024-03-31'}},
               {{label: 'train_02', start_date: '2024-04-08', end_date: '2024-07-07'}}
@@ -479,6 +479,8 @@ def test_all_timeranges_validation_queues_training_holdout_and_full_jobs() -> No
             '2024-01-01', '2024-04-08', '2026-06-01', '2024-01-01'
           ]);
           assert.equal(queued.every(item => item.preserve_timerange === true), true);
+          assert.equal(queued.every(item => item.preserve_exchanges === true), true);
+          assert.equal(queued.every(item => JSON.stringify(item.config.backtest.exchanges) === '["binance","bybit"]'), true);
         }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
         """
     )

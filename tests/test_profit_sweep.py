@@ -113,6 +113,7 @@ def test_policy_defaults_crud_persistence_and_scheduler_hints(tmp_path: Path) ->
     [
         ({"trigger_percent": "-1"}, "trigger_percent"),
         ({"sweep_percent": "100.01"}, "sweep_percent"),
+        ({"transfer_rounding_step": "-0.1"}, "transfer_rounding_step"),
         ({"schedule_jitter_percent": "51"}, "schedule_jitter_percent"),
         ({"daily_transfer_limit_enabled": True, "daily_transfer_limit": "0"}, "daily_transfer_limit"),
         ({"periodic_interval": 0}, "periodic_interval"),
@@ -153,6 +154,54 @@ def test_trigger_zero_sweep_full_and_twenty_five_batching(tmp_path: Path) -> Non
     assert fourth["sweep_due_after_simulation"] == "0"
     assert fourth["simulated_total"] == "50"
     assert fourth["confirmed_total"] == "0"
+
+
+def test_transfer_rounding_step_rounds_down_and_retains_due(tmp_path: Path) -> None:
+    """Rounding never over-transfers and preserves the fractional remainder for later."""
+
+    store = _store(
+        tmp_path,
+        {
+            "trigger_percent": "0",
+            "sweep_percent": "100",
+            "minimum_transfer_amount": "0",
+            "transfer_rounding_step": "1",
+        },
+    )
+
+    first = store.evaluate_dry("alice", cumulative_net_pnl="2.1856825", max_transferable="100", now=1)
+    second = store.evaluate_dry("alice", cumulative_net_pnl="2.1856825", max_transferable="100", now=2)
+    tenths = calculate_sweep(
+        {"trigger_percent": "0", "sweep_percent": "100", "minimum_transfer_amount": "0", "transfer_rounding_step": "0.1"},
+        net_pnl="2.1856825",
+        high_watermark="0",
+        sweep_due="0",
+        max_transferable="100",
+    )
+
+    assert first["amount"] == "2"
+    assert first["sweep_due_after_simulation"] == "0.1856825"
+    assert second["amount"] == "0"
+    assert second["sweep_due_after_simulation"] == "0.1856825"
+    assert second["reason"] == "below_rounding_step"
+    assert tenths["amount"] == "2.1"
+
+
+def test_legacy_policy_update_adds_disabled_rounding_default(tmp_path: Path) -> None:
+    """Policies persisted before rounding existed remain editable without migration."""
+
+    store = _store(tmp_path)
+    legacy = store.get_policy("alice")["policy"]
+    legacy.pop("transfer_rounding_step")
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            "UPDATE policies SET config_json = ? WHERE user_name = 'alice'",
+            (json.dumps(legacy, sort_keys=True, separators=(",", ":")),),
+        )
+
+    updated = store.update_policy("alice", {"quiet_period": 10})
+
+    assert updated["policy"]["transfer_rounding_step"] == "0"
 
 
 def test_loss_carryforward_requires_a_new_high_watermark(tmp_path: Path) -> None:
