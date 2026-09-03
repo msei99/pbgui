@@ -674,6 +674,12 @@ function _suiteCaptureScenarioGeneratorDraft() {
 }
 
 function _suiteRecalculateScenarioGenerator() {
+  var template = document.getElementById('suite-generator-template');
+  var balanceInput = document.getElementById('suite-generator-balance');
+  var contextBalance = Number(_suiteScenarioContext().starting_balance);
+  if (template && template.value === 'sweep_cycles' && balanceInput && isFinite(contextBalance) && contextBalance >= 1) {
+    balanceInput.value = String(contextBalance);
+  }
   _suiteAlignSweepStride();
   var draft = _suiteCaptureScenarioGeneratorDraft();
   if (!draft) return;
@@ -682,7 +688,7 @@ function _suiteRecalculateScenarioGenerator() {
   _suiteState.scenarioPreviewContext = '';
   _suiteState.scenarioRequestId += 1;
   _suiteRender();
-  toast('Scenario Generator recalculated from current dates and exchanges', 'ok');
+  toast('Scenario Generator recalculated from current dates, exchanges, and base balance', 'ok');
 }
 
 function _suiteOpenScenarioGeneratorGuide() {

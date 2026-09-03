@@ -48,7 +48,7 @@ def test_optimize_and_queue_drafts_round_trip_isolated_copies() -> None:
     assert optimize_payload["override_configs"] == {}
 
     queue_id = backtest_v8.create_queue_draft(
-        {"items": [{"name": "candidate", "config": optimize_payload["config"]}]},
+        {"items": [{"name": "candidate", "config": optimize_payload["config"], "preserve_timerange": True}]},
         session=None,
     )["draft_id"]
     queue_payload = backtest_v8.get_queue_draft(queue_id, session=None)
@@ -56,10 +56,18 @@ def test_optimize_and_queue_drafts_round_trip_isolated_copies() -> None:
         "name": "candidate",
         "config": optimize_payload["config"],
         "override_configs": {},
+        "preserve_timerange": True,
     }]
 
     with pytest.raises(HTTPException) as error:
         backtest_v8.create_queue_draft({"items": []}, session=None)
+    assert error.value.status_code == 422
+
+    with pytest.raises(HTTPException) as error:
+        backtest_v8.create_queue_draft(
+            {"items": [{"config": optimize_payload["config"], "preserve_timerange": "yes"}]},
+            session=None,
+        )
     assert error.value.status_code == 422
 
 

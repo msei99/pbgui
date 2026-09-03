@@ -56,7 +56,7 @@ Das optionale First-Live-Catch-up-Limit begrenzt nur den ersten Catch-up; der Re
 
 ## Zeitplanung
 
-**Hybrid** kombiniert PBData-Income-Hinweise mit einem periodischen Fallback. Ein Hinweis startet das Settlement Debounce; Quiet Period und Stabilization lassen Fills, Fees, Rebates und Funding eintreffen. **Interval** verwendet nur periodische Auswertungen. Jitter verteilt Accounts zeitlich, Cooldowns begrenzen erfolgreiche Transfers und Freshness-Limits lehnen alte oder unvollstaendige Daten ab.
+**Hybrid** kombiniert Income-Hinweise von PBData oder neu lokal importierter DB-Sync-History mit einem periodischen Fallback. Ein Hinweis startet das Settlement Debounce; Quiet Period und Stabilization lassen Fills, Fees, Rebates und Funding eintreffen. **Interval** verwendet nur periodische Auswertungen. Jitter verteilt Accounts zeitlich, Cooldowns begrenzen erfolgreiche Transfers und Freshness-Limits lehnen alte oder unvollstaendige Daten ab.
 
 Hinweise wecken nur den Scheduler. Jede commitete Entscheidung liest frische Exchange-Daten und bricht bei unvollstaendiger History oder unvollstaendigem finalen Snapshot fail-closed ab.
 

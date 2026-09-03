@@ -56,7 +56,7 @@ The optional first-Live catch-up cap limits only the first catch-up; any remaind
 
 ## Scheduling
 
-**Hybrid** combines PBData income hints with a periodic fallback. A hint starts the settlement debounce, while quiet and stabilization periods allow fills, fees, rebates, and funding to settle. **Interval** uses only periodic evaluation. Jitter spreads accounts across time, cooldowns limit successful transfers, and freshness limits reject old or incomplete data.
+**Hybrid** combines income hints from PBData or newly imported local DB Sync history with a periodic fallback. A hint starts the settlement debounce, while quiet and stabilization periods allow fills, fees, rebates, and funding to settle. **Interval** uses only periodic evaluation. Jitter spreads accounts across time, cooldowns limit successful transfers, and freshness limits reject old or incomplete data.
 
 Hints only wake the scheduler. Every committed decision obtains fresh exchange data and fails closed when history or the final snapshot is incomplete.
 

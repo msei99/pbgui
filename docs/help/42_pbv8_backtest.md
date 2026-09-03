@@ -38,6 +38,8 @@ Frequently used PB8-specific backtest fields have structured controls:
 
 The V8 queue is stored separately under `data/bt_v8_queue`. **Start** launches `<venv_pb8>/bin/passivbot backtest <snapshot>`. **Stop**, **Restart**, **Delete**, and **Clear Finished** affect only V8 queue items.
 
+Automatic validation drafts opened from PB8 Optimize can carry distinct Training, Holdout, and Full timeranges. The queue parameter dialog preserves each of those configured start/end dates instead of replacing the complete batch with one shared range; the resulting names remain directly selectable together in **Compare**.
+
 Running backtests are independent jobs. Restarting PBGui or updating PB8 does not stop them, and they do not block an update. New starts remain queued while PB8 is being installed or updated and continue afterward. A new start always uses the PB8 installation available at that time; the version and Git commit are recorded on the queue item.
 
 The queue row's log action opens `data/logs/backtests_v8/<queue-id>.log`. For an exact selected or running queue item, PBGui AI can invoke the page-advertised `show_log` action, which calls that same existing log function. Cross-page actions navigate to PB8 Backtest and wait for its queue data before execution. The top-right notification bell opens `PBGui.log`, which persists the short GUI notifications and errors that otherwise disappear after a few seconds. Technical PB8 backend diagnostics remain available separately in `BacktestV8.log`.

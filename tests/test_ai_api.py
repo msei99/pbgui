@@ -324,6 +324,69 @@ def test_proposal_approval_is_owner_scoped_and_no_store(monkeypatch) -> None:
     }
 
 
+def test_python_approval_persists_and_forwards_bounded_analysis_output(monkeypatch) -> None:
+    """Approved Python output must reach durable chat history and the hidden summary turn."""
+    result = {
+        "proposal_id": "a" * 32,
+        "status": "executed",
+        "action": "python_analysis",
+        "analysis_status": "completed",
+        "exit_code": 0,
+        "output": {"format": "json", "value": {"winner": "candidate-1"}},
+    }
+    captured = {}
+
+    class FakeCapabilities:
+        async def approve(self, *args):
+            return result
+
+    class FakeChat:
+        async def record_approved_action_result(self, owner, conversation_id, approved):
+            captured["recorded"] = (owner, conversation_id, approved)
+            return {
+                "analysis_status": "completed",
+                "exit_code": 0,
+                "output": approved["output"],
+            }
+
+        async def start_turn(self, owner, conversation_id, message, *args):
+            captured["message"] = message
+            return {"conversation_id": conversation_id, "turn_id": "d" * 32, "status": "queued"}
+
+    monkeypatch.setattr(ai_api, "get_ai_capability_service", lambda: FakeCapabilities())
+    monkeypatch.setattr(ai_api, "get_ai_chat_service", lambda: FakeChat())
+    response = asyncio_run(ai_api.approve_proposal(
+        "a" * 32,
+        ai_api.ProposalDecisionRequest(
+            payload_digest="sha256:" + "b" * 64,
+            conversation_id="c" * 32,
+        ),
+        SimpleNamespace(user_id="owner"),
+    ))
+
+    assert captured["recorded"][1:] == ("c" * 32, result)
+    assert '"winner":"candidate-1"' in captured["message"]
+    assert json_body(response)["continuation"]["status"] == "queued"
+
+    class FailingRecordChat(FakeChat):
+        async def record_approved_action_result(self, owner, conversation_id, approved):
+            raise RuntimeError("persistence unavailable")
+
+    monkeypatch.setattr(ai_api, "get_ai_chat_service", lambda: FailingRecordChat())
+    monkeypatch.setattr(ai_api, "_log", lambda *args, **kwargs: None)
+    retry_safe_response = asyncio_run(ai_api.approve_proposal(
+        "a" * 32,
+        ai_api.ProposalDecisionRequest(
+            payload_digest="sha256:" + "b" * 64,
+            conversation_id="c" * 32,
+        ),
+        SimpleNamespace(user_id="owner"),
+    ))
+
+    assert json_body(retry_safe_response)["status"] == "executed"
+    assert json_body(retry_safe_response)["continuation"]["status"] == "queued"
+
+
 def test_provider_errors_are_generic_for_unexpected_failures(monkeypatch) -> None:
     """Unexpected provider details must not be returned to the browser."""
     class FailingService:

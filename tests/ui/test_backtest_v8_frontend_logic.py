@@ -218,6 +218,65 @@ def test_suite_pareto_queue_draft_uses_each_candidates_bound_exchange() -> None:
     assert "getQueueDraftItemExchanges(item, exchanges).forEach" in modal
 
 
+def test_validation_queue_draft_preserves_each_items_timerange() -> None:
+    """Validation drafts must retain distinct Training, Holdout, and Full dates."""
+
+    source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _extract_function(source, name)
+        for name in ("getQueueDraftItemExchanges", "showInitialBacktestQueueDraftModal")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const controls = {{
+          'rbt-balance': {{value: '1000'}},
+          'rbt-pbgui-data': {{checked: false}},
+          'rbt-exchanges': {{options: [{{selected: true, value: 'binance'}}]}}
+        }};
+        const document = {{getElementById: id => controls[id] || null}};
+        const backtestDialogDateInputHtml = () => '';
+        const pbguiMarketDataDefaultCheckedAttr = () => '';
+        const getInitialBacktestDraftName = () => 'fallback';
+        const closeModal = () => {{}};
+        const selectPanel = () => {{}};
+        const wsRefresh = () => {{}};
+        const toast = () => {{}};
+        let modalBody = '';
+        let submit = null;
+        let queued = [];
+        const showModal = (_title, body, buttons) => {{ modalBody = body; submit = buttons[0].action; }};
+        const apiFetch = async (path, options) => {{
+          assert.equal(path, '/queue');
+          queued.push(JSON.parse(options.body));
+          return {{}};
+        }};
+        {functions}
+
+        const items = [
+          {{name: 'candidate_train_01', preserve_timerange: true, config: {{backtest: {{start_date: '2024-01-01', end_date: '2024-03-31'}}}}}},
+          {{name: 'candidate_holdout_01', preserve_timerange: true, config: {{backtest: {{start_date: '2026-06-01', end_date: '2026-08-30'}}}}}},
+          {{name: 'candidate_full_timerange', preserve_timerange: true, config: {{backtest: {{start_date: '2024-01-01', end_date: '2026-08-30'}}}}}}
+        ];
+
+        (async () => {{
+          showInitialBacktestQueueDraftModal(items);
+          assert.match(modalBody, /keeps its own configured start and end date/);
+          submit();
+          await new Promise(resolve => setImmediate(resolve));
+          await new Promise(resolve => setImmediate(resolve));
+          assert.deepEqual(queued.map(item => [item.name, item.config.backtest.start_date, item.config.backtest.end_date]), [
+            ['candidate_train_01', '2024-01-01', '2024-03-31'],
+            ['candidate_holdout_01', '2026-06-01', '2026-08-30'],
+            ['candidate_full_timerange', '2024-01-01', '2026-08-30']
+          ]);
+        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_v8_optimize_result_draft_opens_without_repreparing() -> None:
     """A complete PB8 Pareto config must enter the Backtest editor unchanged."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")

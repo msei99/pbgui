@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import traceback
+import urllib.request
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -1241,6 +1242,35 @@ def _next_sync_run_iso(interval_seconds: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=max(30, int(interval_seconds or 60)))).isoformat()
 
 
+def _post_local_income_notification(user_name: str) -> None:
+    """Notify the local API that synchronized income history changed."""
+
+    port_value = pbgui_purefunc.load_ini("api_server", "port")
+    port = int(port_value) if port_value and str(port_value).isdigit() else 8000
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/internal/notify/income",
+        data=json.dumps({"user": user_name}).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=2) as response:
+        response.read(1)
+
+
+async def _notify_local_income_users(users: list[str]) -> None:
+    """Best-effort wake Profit Sweep for users with newly synchronized history."""
+
+    for user_name in _clean_users(users):
+        try:
+            await asyncio.to_thread(_post_local_income_notification, user_name)
+        except Exception as exc:
+            _log(
+                SERVICE,
+                f"Profit Sweep income notification failed for {user_name}: {exc}",
+                level="WARNING",
+            )
+
+
 async def _run_sync_job(
     job_id: str,
     *,
@@ -1303,6 +1333,11 @@ async def _run_sync_job(
             "results": results,
             "verify_failed": verify_failed,
         }
+        if not verify_failed:
+            local_result = results.get("local") if isinstance(results.get("local"), dict) else {}
+            changed_history_users = list(local_result.get("changed_history_users") or [])
+            if changed_history_users:
+                await _notify_local_income_users(changed_history_users)
         if not persist_state:
             return result
         now = datetime.now(timezone.utc).isoformat()
@@ -1763,7 +1798,7 @@ def _apply_sync_rows_to_paths(
     users: list[str],
     mode: Literal["append", "state"],
     payload: dict[str, Any],
-) -> dict[str, int]:
+) -> dict[str, Any]:
     path = db_paths[spec.db_name]
     _ensure_schema(path, spec.db_name)
     source_columns = [str(col) for col in payload.get("columns") or []]
@@ -1774,7 +1809,7 @@ def _apply_sync_rows_to_paths(
         columns = [col for col in source_columns if col in _sync_select_columns(conn, spec)]
         fetched = len(source_rows)
         if spec.user_col not in columns:
-            return {"fetched": fetched, "inserted": 0, "skipped": fetched, "deleted": 0}
+            return {"fetched": fetched, "inserted": 0, "skipped": fetched, "deleted": 0, "inserted_users": []}
         deleted = 0
         if mode == "state":
             cur = conn.execute(
@@ -1785,16 +1820,24 @@ def _apply_sync_rows_to_paths(
         quoted_cols = ", ".join(f'"{col}"' for col in columns)
         insert_sql = f'INSERT OR IGNORE INTO "{spec.table}" ({quoted_cols}) VALUES ({", ".join("?" for _ in columns)})'
         inserted = 0
+        inserted_users: set[str] = set()
         skipped = 0
         for row in source_rows:
             values = dict(zip(source_columns, row))
             cur = conn.execute(insert_sql, [values.get(col) for col in columns])
             if cur.rowcount and cur.rowcount > 0:
                 inserted += 1
+                inserted_users.add(str(values[spec.user_col]))
             else:
                 skipped += 1
         conn.commit()
-        return {"fetched": fetched, "inserted": inserted, "skipped": skipped, "deleted": deleted}
+        return {
+            "fetched": fetched,
+            "inserted": inserted,
+            "skipped": skipped,
+            "deleted": deleted,
+            "inserted_users": sorted(inserted_users),
+        }
     finally:
         conn.close()
 
@@ -1893,7 +1936,7 @@ async def _apply_sync_rows_for_target(
     mode: Literal["append", "state"],
     payload: dict[str, Any],
     temp_dir: Path,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     target = _target_id(target)
     await _assert_known_target(target)
     if target == "local":
@@ -1996,6 +2039,7 @@ async def sync_user_rows_incremental(
     verify = await _verify_sync_target(source, target, users)
     if operation:
         operation.advance(f"Verified sync target {target}", {"ok": verify.get("ok")})
+    history = tables.get(f"{MAIN_DB_NAME}:history") or {}
     return {
         "source_total": sum(int(item.get("fetched") or 0) for item in tables.values()),
         "fetched": sum(int(item.get("fetched") or 0) for item in tables.values()),
@@ -2004,6 +2048,7 @@ async def sync_user_rows_incremental(
         "deleted": sum(int(item.get("deleted") or 0) for item in tables.values()),
         "tables": tables,
         "verify": verify,
+        "changed_history_users": list(history.get("inserted_users") or []) if target == "local" else [],
     }
 
 

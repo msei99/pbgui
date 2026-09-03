@@ -1223,7 +1223,19 @@ class AIChatService:
             self._validate_model_effort(selected_model, clean_effort)
         conversation = await self._conversation(owner, provider, model, conversation_id)
         provider_message = clean_message + self._context_prompt_suffix(conversation.context)
-        enforce_action = provider == "chatgpt" and _action_request(clean_message)
+        pending_user = (
+            conversation.messages[-1]
+            if _pre_reserved
+            and conversation.messages
+            and conversation.messages[-1].get("role") == "user"
+            and conversation.messages[-1].get("pending")
+            else None
+        )
+        enforce_action = (
+            provider == "chatgpt"
+            and _action_request(clean_message)
+            and not bool(pending_user and pending_user.get("hidden"))
+        )
         initial_ui_action_ids = {
             str(item.get("action_id") or "")
             for item in conversation.ui_actions
@@ -1235,14 +1247,6 @@ class AIChatService:
             if isinstance(item, dict)
         }
         proposals: list[dict[str, Any]] | None = None
-        pending_user = (
-            conversation.messages[-1]
-            if _pre_reserved
-            and conversation.messages
-            and conversation.messages[-1].get("role") == "user"
-            and conversation.messages[-1].get("pending")
-            else None
-        )
         if pending_user is not None:
             pending_user["content"] = clean_message
             pending_user["display_content"] = clean_message
@@ -1893,6 +1897,71 @@ class AIChatService:
             conversation.revision += 1
             self._persist_conversation(conversation)
             return self._conversation_projection(conversation, include_messages=True)
+
+    async def record_approved_action_result(
+        self,
+        owner: str,
+        conversation_id: str,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist one idempotent approved Python result and return bounded model context."""
+        await self._ensure_owner_loaded(owner)
+        if not isinstance(result, dict) or result.get("action") != "python_analysis":
+            return {}
+        proposal_id = str(result.get("proposal_id") or "")
+        if len(proposal_id) != 32 or any(char not in "0123456789abcdef" for char in proposal_id):
+            raise AIChatError("Invalid approved analysis result")
+        output = result.get("output") if isinstance(result.get("output"), dict) else {}
+        if output.get("format") == "json":
+            rendered = json.dumps(output.get("value"), indent=2, ensure_ascii=False, allow_nan=False)
+        else:
+            rendered = str(output.get("text") or "")
+        stderr = str(result.get("stderr") or "")
+        message = (
+            f"Python analysis {str(result.get('analysis_status') or 'completed')} "
+            f"(exit {str(result.get('exit_code'))}).\n\n{rendered}"
+        )
+        if stderr:
+            message += f"\n\nstderr:\n{stderr}"
+        if result.get("stdout_truncated") or result.get("stderr_truncated"):
+            message += "\n\nOutput was truncated by PBGui limits."
+        if len(message) > 20_000:
+            message = message[:19_940].rstrip() + "\n\n[Conversation display truncated; complete result remains in Action History.]"
+        async with self.state_lock:
+            conversation = self._owned_conversation(owner, conversation_id)
+            if not any(item.get("approved_result_id") == proposal_id for item in conversation.messages):
+                conversation.messages.append({
+                    "role": "assistant",
+                    "content": message,
+                    "approved_result_id": proposal_id,
+                })
+                self._trim_history(conversation.messages, _MAX_HISTORY_MESSAGES)
+                conversation.updated_at = time.time()
+                conversation.revision += 1
+                self._persist_conversation(conversation)
+        projection = {
+            key: result.get(key)
+            for key in (
+                "proposal_id",
+                "status",
+                "action",
+                "analysis_status",
+                "exit_code",
+                "stdout_truncated",
+                "stderr_truncated",
+            )
+            if result.get(key) is not None
+        }
+        encoded_output = json.dumps(output, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        if len(encoded_output) <= 6_000:
+            projection["output"] = output
+        else:
+            projection["output_preview"] = encoded_output[:6_000]
+            projection["output_preview_truncated"] = True
+            projection["result_tool"] = "get_python_analysis_result"
+        if stderr:
+            projection["stderr_preview"] = stderr[:1_000]
+        return projection
 
     async def _run_detached_turn(
         self, conversation: Conversation, message: str, turn_id: str, internal: bool = False

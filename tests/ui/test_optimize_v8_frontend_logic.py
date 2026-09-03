@@ -364,7 +364,10 @@ def test_sweep_holdout_button_builds_standalone_backtest_config() -> None:
     )
     _run_node(script)
     assert 'id="btn-holdout-selected-paretos"' in page
+    assert 'value="full_timerange"' in page
     assert 'value="holdout_and_full_timerange"' in page
+    assert 'value="all_timeranges"' in page
+    assert "requiresSweepPlan = validationMode === 'holdout_only' || validationMode === 'all_timeranges'" in page
     assert "includeFullTimerange" in page
     assert "backtestSelectedSweepHoldouts().catch(handleError)" in page
 
@@ -421,6 +424,146 @@ def test_sweep_holdout_both_mode_queues_holdout_and_continuous_jobs() -> None:
           assert.equal(queued[0].config.backtest.start_date, '2026-06-01');
           assert.equal(queued[1].config.backtest.start_date, '2024-01-01');
           assert.equal(queued[0].override_configs['HYPE.json'].bot.constructor, Object);
+        }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
+        """
+    )
+    _run_node(script)
+
+
+def test_all_timeranges_validation_queues_training_holdout_and_full_jobs() -> None:
+    """The all-period selector makes every generated window directly comparable."""
+
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _page_function(page, name)
+        for name in (
+            "buildSweepHoldoutBacktestConfig",
+            "buildSweepFullTimerangeBacktestConfig",
+            "backtestSelectedSweepHoldouts",
+        )
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const deepClone = value => JSON.parse(JSON.stringify(value));
+        const state = {{
+          selectedParetos: new Set(['/candidate.json']), paretoSweepEnabled: true,
+          paretos: [{{path: '/candidate.json', name: 'candidate'}}]
+        }};
+        const optimizeEditorAdapter = {{paretoFilePath: path => path}};
+        const el = id => id === 'holdout-validation-mode' ? {{value: 'all_timeranges'}} : null;
+        const normalizeParetoBacktestPayload = data => ({{config: data.config, override_configs: data.override_configs}});
+        const extractConfigSections = config => config;
+        const apiFetch = async () => ({{
+          config: {{backtest: {{
+            start_date: '2024-01-01', end_date: '2026-08-30', suite_enabled: true,
+            scenarios: [
+              {{label: 'train_01', start_date: '2024-01-01', end_date: '2024-03-31'}},
+              {{label: 'train_02', start_date: '2024-04-08', end_date: '2024-07-07'}}
+            ]
+          }}}},
+          override_configs: {{}},
+          sweep_cycles: {{holdout_scenarios: [
+            {{label: 'holdout_01', start_date: '2026-06-01', end_date: '2026-08-30'}}
+          ]}}
+        }});
+        let queued = null;
+        const openBacktestQueueDraft = async items => {{ queued = items; }};
+        {functions}
+
+        backtestSelectedSweepHoldouts().then(() => {{
+          assert.deepEqual(queued.map(item => item.name), [
+            'candidate_train_01', 'candidate_train_02', 'candidate_holdout_01', 'candidate_full_timerange'
+          ]);
+          assert.deepEqual(queued.map(item => item.config.backtest.start_date), [
+            '2024-01-01', '2024-04-08', '2026-06-01', '2024-01-01'
+          ]);
+          assert.equal(queued.every(item => item.preserve_timerange === true), true);
+        }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
+        """
+    )
+    _run_node(script)
+
+
+def test_full_timerange_validation_works_without_sweep_holdouts() -> None:
+    """Standard Pareto candidates can queue continuous validation without a Sweep plan."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _page_function(page, name)
+        for name in ("buildSweepFullTimerangeBacktestConfig", "backtestSelectedSweepHoldouts")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const deepClone = value => JSON.parse(JSON.stringify(value));
+        const state = {{
+          selectedParetos: new Set(['/candidate.json']), paretoSweepEnabled: false,
+          paretos: [{{path: '/candidate.json', name: 'candidate'}}]
+        }};
+        const optimizeEditorAdapter = {{paretoFilePath: path => path}};
+        const el = id => id === 'holdout-validation-mode' ? {{value: 'full_timerange'}} : null;
+        const normalizeParetoBacktestPayload = data => ({{config: data.config, override_configs: {{}}}});
+        const extractConfigSections = config => config;
+        const apiFetch = async () => ({{
+          config: {{backtest: {{start_date: '2024-01-01', end_date: '2026-08-30'}}}}
+        }});
+        const toast = () => {{}};
+        let queued = null;
+        const openBacktestQueueDraft = async items => {{ queued = items; }};
+        {functions}
+
+        backtestSelectedSweepHoldouts().then(() => {{
+          assert.equal(queued.length, 1);
+          assert.equal(queued[0].name, 'candidate_full_timerange');
+          assert.equal(queued[0].config.backtest.start_date, '2024-01-01');
+        }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
+        """
+    )
+    _run_node(script)
+
+
+def test_pareto_result_selection_restores_after_reload_without_storing_paths() -> None:
+    """Session restore revalidates an opaque result directory ID before loading Paretos."""
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _page_function(page, name)
+        for name in (
+            "selectedOptimizeResultStorageKey",
+            "persistSelectedOptimizeResult",
+            "restoreSelectedOptimizeResult",
+        )
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const values = new Map();
+        const window = {{sessionStorage: {{
+          getItem(key) {{ return values.has(key) ? values.get(key) : null; }},
+          setItem(key, value) {{ values.set(key, value); }},
+          removeItem(key) {{ values.delete(key); }}
+        }}}};
+        const optimizeEditorAdapter = {{version: 'v8'}};
+        const state = {{
+          results: [{{path: '/private/optimize/result-1', result: 'result-1', name: 'Run 1'}}],
+          selectedResultPath: '/private/optimize/result-1', selectedResultName: 'Run 1'
+        }};
+        let loaded = null;
+        const loadParetos = async (path, name) => {{ loaded = {{path, name}}; }};
+        {functions}
+
+        persistSelectedOptimizeResult();
+        const raw = values.get('pbgui.optimize.selected-result.v8');
+        assert.equal(raw.includes('/private/'), false);
+        state.selectedResultPath = '';
+        state.selectedResultName = '';
+        restoreSelectedOptimizeResult().then(restored => {{
+          assert.equal(restored, true);
+          assert.deepEqual(loaded, {{path: '/private/optimize/result-1', name: 'Run 1'}});
+          state.results = [];
+          return restoreSelectedOptimizeResult();
+        }}).then(restored => {{
+          assert.equal(restored, false);
+          assert.equal(values.has('pbgui.optimize.selected-result.v8'), false);
         }}).catch(error => {{ console.error(error); process.exitCode = 1; }});
         """
     )
@@ -520,7 +663,7 @@ def test_scenario_generator_recalculate_uses_current_base_dates() -> None:
         };
         global.document = {getElementById: id => fields[id] || null};
         eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
-        let context = {start_date: '2025-01-01', end_date: '2025-12-31', exchanges: ['binance']};
+        let context = {start_date: '2025-01-01', end_date: '2025-12-31', exchanges: ['binance'], starting_balance: 1000};
         let renders = 0;
         global.toast = () => {};
         _suiteRender = () => { renders += 1; };
@@ -528,11 +671,13 @@ def test_scenario_generator_recalculate_uses_current_base_dates() -> None:
         _suiteState.scenarioPreview = {training_scenarios: [{label: 'stale'}]};
         _suiteState.scenarioRequestId = 4;
 
-        context = {start_date: '2025-04-01', end_date: '2025-12-31', exchanges: ['doge-exchange']};
+        context = {start_date: '2025-04-01', end_date: '2025-12-31', exchanges: ['doge-exchange'], starting_balance: 500};
         _suiteRecalculateScenarioGenerator();
 
         assert.equal(fields['suite-generator-training'].value, '2');
+        assert.equal(fields['suite-generator-balance'].value, '500');
         assert.equal(_suiteState.scenarioGeneratorDraft.training_windows, 2);
+        assert.equal(_suiteState.scenarioGeneratorDraft.starting_balance, 500);
         assert.equal(_suiteState.scenarioPreview, null);
         assert.equal(_suiteState.scenarioPreviewContext, '');
         assert.equal(_suiteState.scenarioRequestId, 5);
@@ -1912,6 +2057,7 @@ def test_switching_result_sets_clears_stale_paretos_before_loading() -> None:
         function normalizeParetoStatistic(value) {{ return value || 'mean'; }}
         function clearParetoMeta() {{ state.paretoMode = 'none'; }}
         function applyParetoMeta(meta) {{ state.paretoMode = meta.mode || 'unknown'; }}
+        function persistSelectedOptimizeResult() {{}}
         const renders = [];
         function renderParetos() {{ renders.push(state.paretos.map((item) => item.path)); }}
         const optimizeEditorAdapter = {{paretosPath: (query) => '/paretos?' + query}};

@@ -2227,7 +2227,7 @@ class AICapabilityService:
                             "start_date": holdout.get("start_date"),
                             "end_date": holdout.get("end_date"),
                         })
-                    if not periods:
+                    if not periods and validation_mode == "holdout":
                         raise AICapabilityError("Sweep Holdout dates are unavailable for one or more candidates")
                 if validation_mode in {"full_timerange", "holdout_and_full_timerange"}:
                     periods.append({

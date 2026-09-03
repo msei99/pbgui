@@ -2561,17 +2561,23 @@ function showInitialBacktestQueueDraftModal(items) {
   if (!defExchanges.length) defExchanges = ['bybit'];
   var defStart = (firstCfg.backtest && firstCfg.backtest.start_date) || '2020-01-01';
   var defBalance = (firstCfg.backtest && firstCfg.backtest.starting_balance) || 1000;
+  var preserveAllTimeranges = items.every(function(item) {
+    return item && item.preserve_timerange === true;
+  });
 
   var exOpts = allExchanges.map(function(e) {
     return '<option value="' + e + '"' + (defExchanges.indexOf(e) >= 0 ? ' selected' : '') + '>' + e + '</option>';
   }).join('');
 
-  var body =
-    '<div style="display:flex;flex-direction:column;gap:var(--sp-md);height:100%;min-width:0">' +
-      '<div style="flex-shrink:0"><div class="sb-label">start_date</div>' +
+  var timerangeFields = preserveAllTimeranges
+    ? '<div style="flex-shrink:0;color:var(--text-muted);font-size:var(--fs-sm)">Each validation item keeps its own configured start and end date.</div>'
+    : '<div style="flex-shrink:0"><div class="sb-label">start_date</div>' +
         backtestDialogDateInputHtml('rbt-start', defStart) + '</div>' +
       '<div style="flex-shrink:0"><div class="sb-label">end_date</div>' +
-        backtestDialogDateInputHtml('rbt-end', today) + '</div>' +
+        backtestDialogDateInputHtml('rbt-end', today) + '</div>';
+  var body =
+    '<div style="display:flex;flex-direction:column;gap:var(--sp-md);height:100%;min-width:0">' +
+      timerangeFields +
       '<div style="flex-shrink:0"><div class="sb-label">Starting Balance</div>' +
         '<div style="display:flex;align-items:center;gap:var(--sp-xs)">' +
           '<input id="rbt-balance" class="sb-input" style="flex:1;text-align:right" type="number" min="1" step="100" value="' + defBalance + '">' +
@@ -2588,8 +2594,10 @@ function showInitialBacktestQueueDraftModal(items) {
 
   showModal('Select backtest parameters', body, [
     { text: 'OK', cls: 'modal-btn-primary', action: function() {
-      var start = document.getElementById('rbt-start').value.trim();
-      var end = document.getElementById('rbt-end').value.trim();
+      var startInput = document.getElementById('rbt-start');
+      var endInput = document.getElementById('rbt-end');
+      var start = startInput ? startInput.value.trim() : '';
+      var end = endInput ? endInput.value.trim() : '';
       var balance = parseFloat(document.getElementById('rbt-balance').value) || 1000;
       var usePbguiData = document.getElementById('rbt-pbgui-data').checked;
       var exSel = document.getElementById('rbt-exchanges');
@@ -2605,8 +2613,10 @@ function showInitialBacktestQueueDraftModal(items) {
           getQueueDraftItemExchanges(item, exchanges).forEach(function(exchange) {
             var cfg = JSON.parse(JSON.stringify((item && item.config) || {}));
             if (!cfg.backtest) cfg.backtest = {};
-            cfg.backtest.start_date = start;
-            cfg.backtest.end_date = end;
+            if (!(item && item.preserve_timerange === true)) {
+              cfg.backtest.start_date = start;
+              cfg.backtest.end_date = end;
+            }
             cfg.backtest.starting_balance = balance;
             cfg.backtest.exchanges = [exchange];
             if (pbguiPath) cfg.backtest.ohlcv_source_dir = pbguiPath;

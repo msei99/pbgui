@@ -1923,11 +1923,17 @@ def create_queue_draft(body: dict, session: SessionToken = Depends(require_auth)
         override_configs = _validate_override_payloads(config, item.get("override_configs") or {})
         if set(override_configs) != _override_filenames(config):
             raise HTTPException(status_code=422, detail="each item must supply every referenced override config")
-        normalized.append({
+        preserve_timerange = item.get("preserve_timerange", False)
+        if type(preserve_timerange) is not bool:
+            raise HTTPException(status_code=422, detail="each item.preserve_timerange must be a boolean")
+        normalized_item = {
             "name": str(item.get("name") or "rebacktest"),
             "config": copy.deepcopy(config),
             "override_configs": override_configs,
-        })
+        }
+        if preserve_timerange:
+            normalized_item["preserve_timerange"] = True
+        normalized.append(normalized_item)
     with _DRAFT_LOCK:
         _clean_drafts(reserve_slot=True)
         draft_id = secrets.token_urlsafe(16)

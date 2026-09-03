@@ -43,7 +43,7 @@ Der Scenario Generator macht aus einer PB8-Optimize-Config eine reproduzierbare 
 | Aktion | Was sich aendert | Was unveraendert bleibt |
 | --- | --- | --- |
 | **1st / All** neben `start_date` | Ermittelt ein OHLCV-basiertes Startdatum | Suite-Szenarien und Generator-Einstellungen |
-| **Recalculate** | Liest aktuelle Daten/Exchanges neu und berechnet automatische Sweep-Werte | Gespeicherte Config und bereits angewendete Suite |
+| **Recalculate** | Liest aktuelle Daten/Exchanges/Basisbalance neu und berechnet automatische Sweep-Werte | Gespeicherte Config und bereits angewendete Suite |
 | **Preview** | Zeigt exakte Train-/Holdout-Fenster und Warnungen | Config, Suite, Scoring, Bounds und Queue |
 | **Apply Training Scenarios** | Aktiviert Suite Mode, setzt Train-Szenarien/Reducer, speichert Holdout-Provenance und wendet den Sweep-Preset an | Es wird noch nichts gespeichert oder gequeued |
 | **Save / Save & Queue** | Speichert oder startet das angewendete Experiment | Holdout bleibt aus der Optimierung ausgeschlossen |
@@ -101,7 +101,7 @@ Der Scenario Generator macht aus einer PB8-Optimize-Config eine reproduzierbare 
 
 Wenn Basis-Daten oder Exchanges nach der Preview geaendert wurden, muss vor Apply erneut **Preview** ausgefuehrt werden. PBGui blockiert das Anwenden einer veralteten Preview. Manuelles Bearbeiten, Hinzufuegen, Entfernen, Verschieben oder Ersetzen von Suite-Szenarien nach Apply entfernt die Generator-Provenance, weil die gespeicherte Suite nicht mehr exakt dem erzeugten Plan entspricht.
 
-Nach einer Aenderung der Approved Coins und einem neuen `start_date` ueber **1st** oder **All** muss **Recalculate** neben **Guide** geklickt werden. Die Aktion liest die aktuellen Basis-Daten und Exchanges neu ein, berechnet Sweep Stride und Training windows automatisch und verwirft eine veraltete Preview, bevor eine neue angewendet werden kann.
+Nach einer Aenderung der Approved Coins, Basis-Starting-Balance oder einem neuen `start_date` ueber **1st** oder **All** muss **Recalculate** neben **Guide** geklickt werden. Die Aktion liest aktuelle Basis-Daten, Exchanges und Starting Balance neu ein, berechnet Sweep Stride und Training windows automatisch und verwirft eine veraltete Preview, bevor eine neue angewendet werden kann.
 
 Beispiel: Fuer drei nicht ueberlappende Trainingsquartale und ein unberuehrtes Quartal **Walk-Forward** mit `Window days = 90`, `Stride days = 90`, `Training windows = 3` und `Holdout windows = 1` waehlen. Fuer sechs ueberlappende Dreimonats-Trainingsfenster im Monatsabstand **Rolling Windows** mit `Window days = 90`, `Stride days = 30` und `Training windows = 6` waehlen.
 
@@ -109,7 +109,7 @@ Beispiel: Fuer drei nicht ueberlappende Trainingsquartale und ein unberuehrtes Q
 
 PB8-Gain-Werte sind Endmultiplikatoren und keine additiven Renditen: `1.0` ist Break-even, `2.0` verdoppelt die Startbalance und `0.8` bedeutet 20% Verlust. Die Sweep-Auswertung berechnet deshalb jedes Fenster als `ending_balance = opening_balance × gain_strategy_eq`.
 
-Fuer die Validierung ohne manuelle Bearbeitung einen oder mehrere Kandidaten in der Pareto-Tabelle auswaehlen, **Holdout only** oder **Holdout + Full timerange** waehlen und in der Sidebar **Holdout** klicken. PBGui liest die unveraenderlichen Holdout-Daten aus dem Result-Sidecar, erstellt pro Kandidat und Holdout einen eigenstaendigen PB8-Backtest-Eintrag und fuegt optional einen durchgaengigen Backtest vom originalen Basis-`start_date` bis `end_date` des Kandidaten hinzu. Jeder erzeugte Draft deaktiviert Suite Mode und behaelt Kandidateneinstellungen, Coins, Exchanges, Balance sowie Overrides bei. Der durchgaengige Lauf ist eine Diagnose fuer Pfadabhaengigkeit und Compounding und enthaelt Trainingsdaten; er ersetzt den unberuehrten Holdout nicht als Out-of-Sample-Validierung.
+Fuer die Validierung ohne manuelle Bearbeitung einen oder mehrere Kandidaten in der Pareto-Tabelle auswaehlen, **Holdout only**, **Full timerange only**, **Holdout + Full timerange** oder **Training + Holdout + Full timerange** waehlen und **Validate** klicken. Full timerange ist auch fuer normale PB8-Pareto-Results ohne Sweep-Plan verfuegbar. PBGui liest unveraenderliche Holdout-Daten, sofern vorhanden, erstellt pro Kandidat und Holdout einen eigenstaendigen PB8-Backtest-Eintrag und fuegt optional einen durchgaengigen Backtest vom originalen Basis-`start_date` bis `end_date` hinzu. Der All-period-Modus erstellt zusaetzlich fuer jedes konfigurierte Sweep-Trainingsfenster einen eigenstaendigen Backtest, damit Training, Holdout und kontinuierlicher Full-Lauf direkt in Backtest Compare ausgewaehlt werden koennen. Combined Mode ohne Holdout-Daten queued weiterhin Full timerange und meldet den uebersprungenen Holdout. Jeder erzeugte Validierungs-Draft deaktiviert Suite Mode und behaelt seinen eigenen exakten Datumsbereich sowie Kandidateneinstellungen, Coins, Exchanges, Balance und Overrides bei. Der durchgaengige Lauf enthaelt Trainingsdaten und ist eine Diagnose fuer Pfadabhaengigkeit/Compounding, kein Ersatz fuer eine unberuehrte Out-of-Sample-Holdout-Validierung.
 
 Beim Anwenden einer Sweep-Cycles-Preview setzt PBGui auch das obere PB8-Feld `backtest.starting_balance` auf die **Starting balance** des Generators. Save und Queue lehnen eine spaetere Abweichung ab, weil PB8 die Gains mit derselben Kapitalgroesse berechnen muss, die das Cashflow-Modell verwendet.
 
@@ -166,6 +166,8 @@ Strategiespezifische Optimizer-Overrides werden beim Strategiewechsel entfernt u
 Ergebnisse werden nur aus `<pb8dir>/optimize_results` gelesen. Die Results-Tabelle zeigt fuer jeden Lauf die konfigurierte PB8-Strategie und kann nach dieser Spalte sortiert werden. Die Panels Results und Paretos bieten den gemeinsamen PB7-Workflow fuer Ergebnisansicht, Loeschen, 3D-Plots, Pareto Dash, Kandidaten-JSON, Metrik-Zusammenfassungen und Seed-Bundles.
 
 Beim Oeffnen von Results waehrend eines kalten Metadaten-Scans wird ein eindeutiger Ladezustand angezeigt. Ein Hintergrund-Refresh laesst die zuletzt bestaetigten Zeilen sichtbar, und ein Panelwechsel waehrend des Requests verwirft die fertige Antwort nicht mehr.
+
+Beim Oeffnen von Paretos speichert PBGui nur die versionierte Result-Verzeichnis-ID im Session-State des Tabs. Ein Reload auf `#paretos` laedt zuerst die aktuelle Results-Liste, validiert diese ID erneut und laedt danach die Kandidaten. Fehlende oder geloeschte Results entfernen die gespeicherte Auswahl; absolute Result-Pfade werden nicht gespeichert.
 
 Ein Wechsel des Optimize-Results leert vorherige Pareto-Zeilen, Metadaten und Auswahl sofort, bevor das neue Result geladen wird. Eine spaete Antwort des vorherigen Results kann keine veralteten Zeilen wiederherstellen.
 

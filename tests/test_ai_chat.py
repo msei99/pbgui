@@ -1582,6 +1582,40 @@ def test_failed_internal_continuation_preserves_successful_action_status(
     asyncio.run(scenario())
 
 
+def test_approved_python_result_is_durable_idempotent_and_bounded_for_followup(tmp_path: Path) -> None:
+    """Python output must survive reload while model context remains within the turn limit."""
+    async def scenario() -> None:
+        owner = "a" * 32
+        service = AIChatService(tmp_path / "ai")
+        conversation = await service._conversation(owner, "chatgpt", "model", None)
+        result = {
+            "proposal_id": "b" * 32,
+            "status": "executed",
+            "action": "python_analysis",
+            "analysis_status": "completed",
+            "exit_code": 0,
+            "output": {"format": "json", "value": {"winner": "candidate-1", "score": 1.25}},
+            "stderr": "",
+            "stdout_truncated": False,
+            "stderr_truncated": False,
+        }
+
+        first = await service.record_approved_action_result(owner, conversation.id, result)
+        second = await service.record_approved_action_result(owner, conversation.id, result)
+        snapshot = await service.get_conversation(owner, conversation.id)
+
+        assert first == second
+        assert first["output"]["value"]["winner"] == "candidate-1"
+        assert snapshot["messages"] == [{
+            "role": "assistant",
+            "content": 'Python analysis completed (exit 0).\n\n{\n  "winner": "candidate-1",\n  "score": 1.25\n}',
+        }]
+        assert len(conversation.messages) == 1
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_internal_continuation_keeps_large_context_turn_visible(
     tmp_path: Path, monkeypatch
 ) -> None:

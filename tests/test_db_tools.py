@@ -151,14 +151,16 @@ def test_incremental_sync_helpers_copy_append_rows_and_replace_state(tmp_path: P
 
     history_payload = db_tools._fetch_sync_rows_from_paths(source, history_spec, ["alice"], "append", {"alice": 0})
     history_stats = db_tools._apply_sync_rows_to_paths(target, history_spec, ["alice"], "append", history_payload)
+    repeated_history_stats = db_tools._apply_sync_rows_to_paths(target, history_spec, ["alice"], "append", history_payload)
     execution_payload = db_tools._fetch_sync_rows_from_paths(source, execution_spec, ["alice"], "append", {"alice": 0})
     execution_stats = db_tools._apply_sync_rows_to_paths(target, execution_spec, ["alice"], "append", execution_payload)
     balance_payload = db_tools._fetch_sync_rows_from_paths(source, balance_spec, ["alice"], "state")
     balance_stats = db_tools._apply_sync_rows_to_paths(target, balance_spec, ["alice"], "state", balance_payload)
 
-    assert history_stats == {"fetched": 2, "inserted": 1, "skipped": 1, "deleted": 0}
-    assert execution_stats == {"fetched": 2, "inserted": 1, "skipped": 1, "deleted": 0}
-    assert balance_stats == {"fetched": 1, "inserted": 1, "skipped": 0, "deleted": 1}
+    assert history_stats == {"fetched": 2, "inserted": 1, "skipped": 1, "deleted": 0, "inserted_users": ["alice"]}
+    assert repeated_history_stats == {"fetched": 2, "inserted": 0, "skipped": 2, "deleted": 0, "inserted_users": []}
+    assert execution_stats == {"fetched": 2, "inserted": 1, "skipped": 1, "deleted": 0, "inserted_users": ["alice"]}
+    assert balance_stats == {"fetched": 1, "inserted": 1, "skipped": 0, "deleted": 1, "inserted_users": ["alice"]}
     with sqlite3.connect(target[db_tools.MAIN_DB_NAME]) as conn:
         assert conn.execute("SELECT COUNT(*) FROM history WHERE user='alice'").fetchone()[0] == 2
         assert conn.execute("SELECT timestamp, balance FROM balances WHERE user='alice'").fetchone() == (2000, 1000.0)
@@ -407,6 +409,8 @@ def test_run_sync_job_does_not_create_backups(tmp_path: Path, monkeypatch) -> No
     async def fake_validate(job: dict[str, object]) -> None:
         return None
 
+    notified: list[str] = []
+
     async def fake_sync(source: str, target: str, users: list[str], temp_dir: Path, operation=None) -> dict[str, object]:
         assert source == "remote-a"
         assert target == "local"
@@ -420,7 +424,11 @@ def test_run_sync_job_does_not_create_backups(tmp_path: Path, monkeypatch) -> No
             "deleted": 0,
             "tables": {},
             "verify": {"ok": True, "tables": {}},
+            "changed_history_users": ["alice"],
         }
+
+    async def fake_notify(users: list[str]) -> None:
+        notified.extend(users)
 
     async def fail_backup(*args, **kwargs):
         raise AssertionError("sync must not create backups")
@@ -440,6 +448,7 @@ def test_run_sync_job_does_not_create_backups(tmp_path: Path, monkeypatch) -> No
         monkeypatch.setattr(db_tools, "_save_sync_jobs", lambda: None)
         monkeypatch.setattr(db_tools, "_validate_sync_job_safety", fake_validate)
         monkeypatch.setattr(db_tools, "sync_user_rows_incremental", fake_sync)
+        monkeypatch.setattr(db_tools, "_notify_local_income_users", fake_notify)
         monkeypatch.setattr(db_tools, "_backup_target_dbs", fail_backup)
         monkeypatch.setattr(db_tools, "_log_sync_job", lambda *args, **kwargs: None)
         monkeypatch.setattr(db_tools, "_log", lambda *args, **kwargs: None)
@@ -449,6 +458,7 @@ def test_run_sync_job_does_not_create_backups(tmp_path: Path, monkeypatch) -> No
         assert result["ok"] is True
         assert "backups" not in result
         assert result["results"]["local"]["verify"]["ok"] is True
+        assert notified == ["alice"]
     finally:
         db_tools._sync_jobs.clear()
         db_tools._sync_jobs.update(original)

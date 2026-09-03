@@ -476,11 +476,21 @@ async def approve_proposal(
             _owner(session), proposal_id, body.payload_digest, body.conversation_id
         )
         if result.get("status") == "executed":
+            chat_service = get_ai_chat_service()
             continuation_result = {
                 key: result.get(key)
                 for key in ("proposal_id", "status", "action", "name", "queued_count", "template")
                 if result.get(key) is not None
             }
+            if result.get("action") == "python_analysis":
+                try:
+                    continuation_result.update(
+                        await chat_service.record_approved_action_result(
+                            _owner(session), body.conversation_id, result
+                        )
+                    )
+                except Exception as exc:
+                    _log(SERVICE, f"Approved analysis result could not be attached to chat: {type(exc).__name__}", level="WARNING")
             continuation_message = (
                 "An approved PBGui action completed successfully. Continue the user's existing "
                 "requested workflow now. If no requested step remains, briefly confirm completion "
@@ -488,7 +498,7 @@ async def approve_proposal(
                 + json.dumps(continuation_result, allow_nan=False, separators=(",", ":"))
             )
             try:
-                continuation = await get_ai_chat_service().start_turn(
+                continuation = await chat_service.start_turn(
                     _owner(session),
                     body.conversation_id,
                     continuation_message,

@@ -222,6 +222,40 @@ def test_ai_proposes_holdout_and_full_timerange_from_sweep_sidecar(
     assert captured["preview"]["validation_mode"] == "holdout_and_full_timerange"
     assert result["status"] == "awaiting_approval"
 
+    monkeypatch.setattr(
+        optimize_v8,
+        "get_pareto_file",
+        lambda *args, **kwargs: {
+            "config": {
+                "backtest": {
+                    "start_date": "2024-01-01",
+                    "end_date": "2026-08-30",
+                    "exchanges": ["hyperliquid"],
+                }
+            },
+            "override_configs": {},
+            "sweep_cycles": {"holdout_scenarios": []},
+        },
+    )
+    captured.clear()
+    asyncio.run(service._propose_pareto_backtests(
+        "a" * 32,
+        "b" * 32,
+        {
+            "version": "v8",
+            "run_resource": "run-resource",
+            "candidate_resources": ["candidate-resource"],
+            "validation_mode": "holdout_and_full_timerange",
+        },
+    ))
+
+    assert captured["payload"]["candidates"][0]["validation_periods"] == [{
+        "label": "full_timerange",
+        "start_date": "2024-01-01",
+        "end_date": "2026-08-30",
+    }]
+    assert captured["preview"]["job_count"] == 1
+
 
 def test_passivbot_installations_return_exact_commits_without_local_paths(
     tmp_path: Path, monkeypatch
