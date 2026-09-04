@@ -649,20 +649,33 @@ class AICapabilityService:
     def _list_backtests(self, args: dict[str, Any]) -> dict[str, Any]:
         """List compact completed backtest summaries without filesystem paths."""
         version = self._version(args)
-        limit = self._limit(args, maximum=50)
+        limit = self._bounded_int(args.get("limit"), default=20, maximum=100)
+        offset = self._bounded_int(args.get("offset"), default=0, maximum=5000)
+        name = self._name(args.get("name")) if args.get("name") else None
         if version == "v8":
             from api import backtest_v8
 
-            payload = backtest_v8.get_results(limit=limit, session=object())
+            payload = backtest_v8.get_results(name=name, offset=offset, limit=limit, session=object())
         else:
             from api import backtest_v7
 
-            payload = backtest_v7.list_results(limit=limit, session=object())
+            payload = backtest_v7.list_results(name=name, offset=offset, limit=limit, session=object())
+        listed = payload.get("results", [])
         results = [
             self._resource_projection("backtest", version, item)
-            for item in payload.get("results", [])[:limit]
+            for item in (listed if limit == 0 else listed[:limit])
         ]
-        return {"version": version, "backtests": results, "returned": len(results)}
+        pagination = payload.get("pagination") if isinstance(payload.get("pagination"), dict) else {}
+        return {
+            "version": version,
+            "backtests": results,
+            "returned": len(results),
+            "pagination": {
+                key: pagination.get(key)
+                for key in ("total", "offset", "limit", "returned", "has_more", "next_offset")
+                if pagination.get(key) is not None
+            },
+        }
 
     def _get_optimizer_run_analysis(self, args: dict[str, Any]) -> dict[str, Any]:
         """Project one optimizer Pareto set through an opaque virtual resource."""
@@ -4062,9 +4075,14 @@ class AICapabilityService:
             },
             {
                 "name": "list_backtests",
-                "description": "List recent completed backtest summaries without filesystem paths.",
+                "description": "List completed backtest summaries without filesystem paths. Request up to 100 per page, use limit 0 when all matching results are needed, follow pagination when the requested result is not on the first page, or pass its exact config_name as name to search that config directly.",
                 "schema": AICapabilityService._object_schema(
-                    {"version": version_schema, "limit": {"type": "integer", "minimum": 1, "maximum": 50}},
+                    {
+                        "version": version_schema,
+                        "name": {"type": "string", "maxLength": 128},
+                        "offset": {"type": "integer", "minimum": 0, "maximum": 5000},
+                        "limit": {"type": "integer", "minimum": 0, "maximum": 100},
+                    },
                     ["version"],
                 ),
                 "resources": ["pbgui://backtest/{version}/{opaque-id}"],

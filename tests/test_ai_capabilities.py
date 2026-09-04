@@ -93,6 +93,13 @@ def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
         item for item in service.responses_tools() if item["name"] == "select_pareto_candidates"
     )
     assert pareto_selection["parameters"]["properties"]["candidate_resources"]["maxItems"] == 1000
+    backtest_list = next(
+        item for item in service.responses_tools() if item["name"] == "list_backtests"
+    )
+    assert backtest_list["parameters"]["properties"]["limit"]["maximum"] == 100
+    assert backtest_list["parameters"]["properties"]["limit"]["minimum"] == 0
+    assert backtest_list["parameters"]["properties"]["offset"]["maximum"] == 5000
+    assert backtest_list["parameters"]["properties"]["name"]["maxLength"] == 128
     assert "exchanges" not in pareto_backtests["parameters"]["required"]
 
 
@@ -518,6 +525,56 @@ def test_backtest_compare_capability_resolves_exact_resources_without_paths(
     assert result["ui_action"]["payload"]["selectors"][0]["config_name"] == "grid"
     with pytest.raises(AICapabilityError, match="duplicates"):
         service._select_backtest_results({"version": "v8", "resources": [resources[0], resources[0]]})
+
+
+def test_list_backtests_can_page_or_filter_to_an_exact_holdout(tmp_path: Path, monkeypatch) -> None:
+    """AI result discovery must reach holdouts beyond the first global result page."""
+    from api import backtest_v8
+
+    service = AICapabilityService(tmp_path / "capabilities")
+    calls = []
+
+    def get_results(*, name, offset, limit, session):
+        calls.append({"name": name, "offset": offset, "limit": limit})
+        return {
+            "results": [
+                {
+                    "path": "/private/holdout",
+                    "config_name": name or "candidate_holdout_01_20260307_180d",
+                    "result_name": "2026-09-04T15_10_00",
+                    "exchange_dir": "combined",
+                }
+            ],
+            "pagination": {
+                "total": 52,
+                "offset": offset,
+                "limit": limit,
+                "returned": 1,
+                "has_more": False,
+                "next_offset": 52,
+            },
+        }
+
+    monkeypatch.setattr(backtest_v8, "get_results", get_results)
+    filtered = service._list_backtests(
+        {
+            "version": "v8",
+            "name": "candidate_holdout_01_20260307_180d",
+            "limit": 100,
+        }
+    )
+    paged = service._list_backtests({"version": "v8", "offset": 50, "limit": 100})
+    all_results = service._list_backtests({"version": "v8", "limit": 0})
+
+    assert calls == [
+        {"name": "candidate_holdout_01_20260307_180d", "offset": 0, "limit": 100},
+        {"name": None, "offset": 50, "limit": 100},
+        {"name": None, "offset": 0, "limit": 0},
+    ]
+    assert paged["pagination"]["next_offset"] == 52
+    assert all_results["returned"] == 1
+    assert filtered["backtests"][0]["resource"].startswith("pbgui://backtest/v8/")
+    assert "private" not in json.dumps(filtered)
 
 
 def test_generic_page_capability_returns_exact_browser_action() -> None:
