@@ -1476,6 +1476,33 @@ def test_python_analysis_fails_closed_without_bubblewrap(
     asyncio.run(scenario())
 
 
+def test_python_analysis_fails_closed_without_seccomp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Network namespace compatibility must never fall back to host networking."""
+
+    monkeypatch.setattr(ai_capabilities.ctypes.util, "find_library", lambda _name: None)
+
+    with pytest.raises(AICapabilityError, match="network sandbox is unavailable"):
+        AICapabilityService._python_analysis_seccomp_fd()
+
+
+def test_python_analysis_command_uses_seccomp_without_private_network_namespace() -> None:
+    """The fixed sandbox command must avoid capability-dependent loopback setup."""
+
+    command = AICapabilityService._python_analysis_command(
+        Path("/runtime"),
+        Path("/runtime/bin/python"),
+        Path("/private/analysis.py"),
+        64,
+        7,
+    )
+
+    assert "--unshare-all" in command
+    assert "--share-net" in command
+    assert command[command.index("--seccomp") + 1] == "7"
+
+
 def test_python_analysis_diagnostics_redact_host_paths(tmp_path: Path) -> None:
     """Sandbox diagnostics returned to a model or browser must not expose host paths."""
     service = AICapabilityService(tmp_path / "capabilities")

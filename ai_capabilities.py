@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import ctypes
+import ctypes.util
 import csv
 from dataclasses import dataclass, field
 from datetime import date
@@ -13,6 +15,7 @@ import hmac
 import json
 import math
 import os
+import errno
 from pathlib import Path
 import re
 import signal
@@ -57,6 +60,14 @@ _MAX_ANALYSIS_STDERR_BYTES = 32 * 1024
 _ANALYSIS_TIMEOUT_SECONDS = 15
 _BWRAP_PATH = Path("/usr/bin/bwrap")
 _PRLIMIT_PATH = Path("/usr/bin/prlimit")
+_SECCOMP_ALLOW = 0x7FFF0000
+_SECCOMP_ERRNO = 0x00050000
+_NETWORK_SYSCALLS = (
+    "socket", "socketpair", "connect", "accept", "accept4", "bind", "listen",
+    "sendto", "recvfrom", "sendmsg", "recvmsg", "recvmmsg", "sendmmsg",
+    "getsockname", "getpeername", "setsockopt", "getsockopt", "shutdown",
+    "io_uring_setup", "io_uring_enter", "io_uring_register",
+)
 _SOURCE_EXTENSIONS = {".py", ".rs", ".toml", ".md"}
 _SOURCE_EXCLUDED_PARTS = {
     ".git",
@@ -2503,29 +2514,35 @@ class AICapabilityService:
         with tempfile.TemporaryDirectory(prefix="run-", dir=analysis_root) as directory:
             script = Path(directory) / "analysis.py"
             atomic_write_private_text(script, code)
-            command = self._python_analysis_command(
-                runtime_root,
-                executable,
-                script,
-                self._python_analysis_nproc_limit(),
-                workspace_mounts,
-            )
-            start_task = asyncio.create_task(
-                asyncio.create_subprocess_exec(
-                    *command,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
-                    start_new_session=True,
-                )
-            )
+            seccomp_fd = self._python_analysis_seccomp_fd()
             try:
-                process = await asyncio.shield(start_task)
-            except asyncio.CancelledError:
-                process = await start_task
-                await self._kill_process_group(process)
-                raise
+                command = self._python_analysis_command(
+                    runtime_root,
+                    executable,
+                    script,
+                    self._python_analysis_nproc_limit(),
+                    seccomp_fd,
+                    workspace_mounts,
+                )
+                start_task = asyncio.create_task(
+                    asyncio.create_subprocess_exec(
+                        *command,
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
+                        start_new_session=True,
+                        pass_fds=(seccomp_fd,),
+                    )
+                )
+                try:
+                    process = await asyncio.shield(start_task)
+                except asyncio.CancelledError:
+                    process = await start_task
+                    await self._kill_process_group(process)
+                    raise
+            finally:
+                os.close(seccomp_fd)
             stdout_task = asyncio.create_task(
                 self._read_bounded_stream(process.stdout, _MAX_ANALYSIS_STDOUT_BYTES)
             )
@@ -2684,11 +2701,57 @@ class AICapabilityService:
         return mounts
 
     @staticmethod
+    def _python_analysis_seccomp_fd() -> int:
+        """Build a fail-closed BPF filter that denies network and io_uring syscalls."""
+
+        library_name = ctypes.util.find_library("seccomp")
+        if not library_name or not hasattr(os, "memfd_create"):
+            raise AICapabilityError("Python analysis network sandbox is unavailable")
+        try:
+            library = ctypes.CDLL(library_name, use_errno=True)
+            library.seccomp_init.argtypes = [ctypes.c_uint32]
+            library.seccomp_init.restype = ctypes.c_void_p
+            library.seccomp_syscall_resolve_name.argtypes = [ctypes.c_char_p]
+            library.seccomp_syscall_resolve_name.restype = ctypes.c_int
+            library.seccomp_rule_add.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int, ctypes.c_uint]
+            library.seccomp_rule_add.restype = ctypes.c_int
+            library.seccomp_export_bpf.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            library.seccomp_export_bpf.restype = ctypes.c_int
+            library.seccomp_release.argtypes = [ctypes.c_void_p]
+        except (AttributeError, OSError) as exc:
+            raise AICapabilityError("Python analysis network sandbox is unavailable") from exc
+
+        try:
+            fd = os.memfd_create("pbgui-python-seccomp", os.MFD_CLOEXEC)
+        except OSError as exc:
+            raise AICapabilityError("Python analysis network sandbox is unavailable") from exc
+        context = library.seccomp_init(_SECCOMP_ALLOW)
+        if not context:
+            os.close(fd)
+            raise AICapabilityError("Python analysis network sandbox is unavailable")
+        try:
+            action = _SECCOMP_ERRNO | errno.EPERM
+            for name in _NETWORK_SYSCALLS:
+                syscall = library.seccomp_syscall_resolve_name(name.encode("ascii"))
+                if syscall < 0 or library.seccomp_rule_add(context, action, syscall, 0) != 0:
+                    raise AICapabilityError("Python analysis network sandbox is unavailable")
+            if library.seccomp_export_bpf(context, fd) != 0:
+                raise AICapabilityError("Python analysis network sandbox is unavailable")
+            os.lseek(fd, 0, os.SEEK_SET)
+            return fd
+        except Exception:
+            os.close(fd)
+            raise
+        finally:
+            library.seccomp_release(context)
+
+    @staticmethod
     def _python_analysis_command(
         runtime_root: Path,
         executable: Path,
         script: Path,
         nproc_limit: int,
+        seccomp_fd: int,
         workspace_mounts: list[str] | None = None,
     ) -> list[str]:
         """Build the fixed argv-only prlimit and bubblewrap sandbox command."""
@@ -2714,6 +2777,7 @@ class AICapabilityService:
             "--die-with-parent",
             "--new-session",
             "--unshare-all",
+            "--share-net",
             "--cap-drop",
             "ALL",
             "--clearenv",
@@ -2746,6 +2810,8 @@ class AICapabilityService:
             *mounts,
             *runtime_mounts,
             *(workspace_mounts or []),
+            "--seccomp",
+            str(seccomp_fd),
             "--ro-bind",
             str(script),
             "/analysis.py",
