@@ -43,7 +43,7 @@ The Scenario Generator turns one PB8 Optimize config into a reproducible group o
 | Action | What changes | What does not change |
 | --- | --- | --- |
 | **1st / All** beside `start_date` | Resolves an OHLCV-based start date | Suite scenarios and generator settings |
-| **Recalculate** | Re-reads current dates/exchanges/base balance and recalculates automatic Sweep counts | Saved config and applied Suite |
+| **Recalculate** | Re-reads current base settings and fits the maximum valid Training count for every template | Saved config and applied Suite |
 | **Preview** | Shows exact Train/Holdout windows and warnings | Config, Suite, scoring, bounds, and queue |
 | **Apply Training Scenarios** | Enables Suite Mode, installs Train scenarios/reducer, stores Holdout provenance, and applies the Sweep preset | No config is saved or queued yet |
 | **Save / Save & Queue** | Persists or launches the applied experiment | Holdout remains excluded from optimization |
@@ -57,7 +57,7 @@ The Scenario Generator turns one PB8 Optimize config into a reproducible group o
 | **Template** | Rolling comparison, Walk-Forward validation, or sequential Sweep cash-flow evaluation |
 | **Window days** | Trading days contained in each scenario |
 | **Stride days** | Distance between consecutive window end dates; automatic for Sweep |
-| **Training windows** | Scenarios PB8 evaluates during optimization; automatic for Sweep |
+| **Training windows** | Scenarios PB8 evaluates; editable for Rolling/Walk-Forward, fitted by Recalculate, and automatic for Sweep |
 | **Holdout windows** | Untouched periods reserved for final out-of-sample Backtests |
 | **Exchange mode** | Inherit the combined base exchanges or expand separate exchange scenarios where supported |
 | **Starting balance** | PB8 simulation capital and Sweep reset capital after Apply; defaults to the current base Starting balance |
@@ -93,7 +93,7 @@ The Scenario Generator turns one PB8 Optimize config into a reproducible group o
    - **Walk-Forward** creates chronological training windows followed by separate holdout windows.
    - **Sweep Cycles** creates one sequential combined-exchange track and evaluates each candidate's window gains with carry, sweep-reset, and refill-reset rules. PBGui automatically calculates Stride and the maximum number of complete Training windows from the base date range after reserving Holdouts.
 4. Set **Window days** to the length of each scenario. Rolling Windows and Walk-Forward accept a manual **Stride days** value. Sweep Cycles calculates Stride automatically as Window days plus Cooldown days.
-5. Set **Training windows** manually for Rolling Windows or Walk-Forward. Sweep Cycles calculates the maximum complete Training count automatically from `start_date` through `end_date` after reserving the selected **Holdout windows**. With **Exchange mode = Inherit base**, every window uses the combined base exchange selection.
+5. Set **Training windows** manually for Rolling Windows or Walk-Forward, or use **Recalculate** to fit their maximum count from the current dates and configured Stride. Sweep Cycles always calculates the maximum complete Training count automatically after reserving **Holdout windows**. A range fitting no training window remains invalid instead of being forced to one. With **Exchange mode = Inherit base**, every window uses the combined base exchange selection.
 6. Click **Preview**. Review the generated labels, exact date ranges, Train/Holdout classification, scenario count, and warnings. Preview alone does not change the Suite or config.
 7. Click **Apply Training Scenarios** when the plan is correct. This enables Suite Mode, replaces the current unsaved Suite scenarios, and applies the suggested reducer. Holdout rows are deliberately not copied into `backtest.scenarios`.
 8. Review named Objective Scenario, scoring, and limit references after replacing an existing Suite. Their scenario labels must still exist in the newly generated training set.
@@ -101,7 +101,7 @@ The Scenario Generator turns one PB8 Optimize config into a reproducible group o
 
 Run **Preview** again before Apply if the base dates or exchanges changed. PBGui blocks application of a stale preview. Editing, adding, removing, reordering, or replacing Suite scenarios after Apply clears the generator provenance because the saved Suite no longer exactly matches the generated plan.
 
-After changing approved coins, base Starting balance, or `start_date` through **1st** or **All**, click **Recalculate** beside **Guide**. It reloads the current base dates, exchanges, and Starting balance, recalculates automatic Sweep Stride and Training windows, and discards any stale Preview before a new one can be applied.
+After changing approved coins, base Starting balance, or `start_date` through **1st** or **All**, click **Recalculate** beside **Guide**. It reloads the current base settings, fits Rolling/Walk-Forward counts with their configured Stride, recalculates automatic Sweep Stride/counts, and discards stale Preview state. Preview still preserves a manually selected smaller Rolling/Walk-Forward count.
 
 Example: for three non-overlapping quarterly training periods and one untouched quarter, choose **Walk-Forward**, `Window days = 90`, `Stride days = 90`, `Training windows = 3`, and `Holdout windows = 1`. For six overlapping three-month training periods sampled monthly, choose **Rolling Windows**, `Window days = 90`, `Stride days = 30`, and `Training windows = 6`.
 
@@ -167,7 +167,7 @@ Results are read only from `<pb8dir>/optimize_results`. The Results table shows 
 
 Opening Results during a cold metadata scan shows an explicit loading state. A background refresh keeps the last confirmed rows visible, and changing panels while the request is running does not discard the completed response.
 
-When Paretos is opened for a result, PBGui stores only that versioned result-directory ID in the tab's session state. Refreshing the page on `#paretos` first reloads the current Results list, revalidates the ID, and then reloads its candidates. Missing or deleted results clear the saved selection; absolute result paths are not stored.
+When Paretos is opened for a result, PBGui stores only that versioned result-directory ID in the tab's session state. Reloading on `#paretos` or returning through the sidebar first waits for the current Results list, revalidates the ID, and then reloads its candidates exactly once. Early navigation never deletes a still-valid selection. Missing or deleted results clear the saved selection; absolute result paths are not stored.
 
 Switching Optimize result sets clears previous Pareto rows, metadata, and selections immediately before loading the new result. A late response from the earlier result cannot restore stale rows.
 

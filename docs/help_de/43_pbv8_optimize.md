@@ -43,7 +43,7 @@ Der Scenario Generator macht aus einer PB8-Optimize-Config eine reproduzierbare 
 | Aktion | Was sich aendert | Was unveraendert bleibt |
 | --- | --- | --- |
 | **1st / All** neben `start_date` | Ermittelt ein OHLCV-basiertes Startdatum | Suite-Szenarien und Generator-Einstellungen |
-| **Recalculate** | Liest aktuelle Daten/Exchanges/Basisbalance neu und berechnet automatische Sweep-Werte | Gespeicherte Config und bereits angewendete Suite |
+| **Recalculate** | Liest aktuelle Basiseinstellungen neu und berechnet fuer jedes Template die maximal passende Training-Anzahl | Gespeicherte Config und bereits angewendete Suite |
 | **Preview** | Zeigt exakte Train-/Holdout-Fenster und Warnungen | Config, Suite, Scoring, Bounds und Queue |
 | **Apply Training Scenarios** | Aktiviert Suite Mode, setzt Train-Szenarien/Reducer, speichert Holdout-Provenance und wendet den Sweep-Preset an | Es wird noch nichts gespeichert oder gequeued |
 | **Save / Save & Queue** | Speichert oder startet das angewendete Experiment | Holdout bleibt aus der Optimierung ausgeschlossen |
@@ -57,7 +57,7 @@ Der Scenario Generator macht aus einer PB8-Optimize-Config eine reproduzierbare 
 | **Template** | Rolling-Vergleich, Walk-Forward-Validierung oder sequenzielle Sweep-Cashflow-Auswertung |
 | **Window days** | Handelstage innerhalb eines Szenarios |
 | **Stride days** | Abstand zwischen aufeinanderfolgenden Fensterenden; bei Sweep automatisch |
-| **Training windows** | Szenarien, die PB8 waehrend der Optimierung auswertet; bei Sweep automatisch |
+| **Training windows** | Von PB8 ausgewertete Szenarien; bei Rolling/Walk-Forward editierbar und ueber Recalculate einpassbar, bei Sweep automatisch |
 | **Holdout windows** | Unberuehrte Zeitraeume fuer abschliessende Out-of-Sample-Backtests |
 | **Exchange mode** | Kombinierte Basis-Exchanges erben oder, sofern unterstuetzt, getrennte Exchange-Szenarien erzeugen |
 | **Starting balance** | PB8-Simulationskapital und Sweep-Reset-Kapital nach Apply; verwendet standardmaessig die aktuelle Basis-Starting-Balance |
@@ -93,7 +93,7 @@ Der Scenario Generator macht aus einer PB8-Optimize-Config eine reproduzierbare 
    - **Walk-Forward** erzeugt chronologische Trainingsfenster mit anschliessenden getrennten Holdout-Fenstern.
    - **Sweep Cycles** erzeugt einen sequenziellen Combined-Exchange-Track und wertet die Fenster-Gains jedes Kandidaten mit Carry-, Sweep-Reset- und Refill-Reset-Regeln aus. PBGui berechnet Stride und die maximale Anzahl vollstaendiger Training-Fenster nach Reservierung der Holdouts automatisch aus dem Basis-Datumsbereich.
 4. **Window days** bestimmt die Laenge jedes Szenarios. Rolling Windows und Walk-Forward erlauben einen manuellen **Stride days**-Wert. Sweep Cycles berechnet Stride automatisch als Window days plus Cooldown days.
-5. **Training windows** bei Rolling Windows oder Walk-Forward manuell setzen. Sweep Cycles berechnet nach Reservierung der gewaehlten **Holdout windows** automatisch die maximale vollstaendige Training-Anzahl zwischen `start_date` und `end_date`. Mit **Exchange mode = Inherit base** verwendet jedes Fenster die kombinierte Basis-Exchange-Auswahl.
+5. **Training windows** bei Rolling Windows oder Walk-Forward manuell setzen oder mit **Recalculate** anhand der aktuellen Daten und des konfigurierten Stride maximal einpassen. Sweep Cycles berechnet nach Reservierung der **Holdout windows** immer automatisch die maximale vollstaendige Training-Anzahl. Passt kein Trainingsfenster, bleibt der Plan ungueltig, statt kuenstlich auf eins gesetzt zu werden. Mit **Exchange mode = Inherit base** verwendet jedes Fenster die kombinierte Basis-Exchange-Auswahl.
 6. **Preview** klicken. Labels, exakte Datumsbereiche, Train-/Holdout-Zuordnung, Szenarioanzahl und Warnungen pruefen. Preview allein veraendert weder Suite noch Config.
 7. Wenn der Plan stimmt, **Apply Training Scenarios** klicken. Dadurch wird Suite Mode aktiviert, die aktuelle ungespeicherte Suite ersetzt und der vorgeschlagene Reducer angewendet. Holdout-Zeilen werden absichtlich nicht nach `backtest.scenarios` kopiert.
 8. Nach dem Ersetzen einer bestehenden Suite die benannten Objective-Scenario-, Scoring- und Limit-Referenzen pruefen. Deren Szenarionamen muessen weiterhin in der neu erzeugten Trainings-Suite existieren.
@@ -101,7 +101,7 @@ Der Scenario Generator macht aus einer PB8-Optimize-Config eine reproduzierbare 
 
 Wenn Basis-Daten oder Exchanges nach der Preview geaendert wurden, muss vor Apply erneut **Preview** ausgefuehrt werden. PBGui blockiert das Anwenden einer veralteten Preview. Manuelles Bearbeiten, Hinzufuegen, Entfernen, Verschieben oder Ersetzen von Suite-Szenarien nach Apply entfernt die Generator-Provenance, weil die gespeicherte Suite nicht mehr exakt dem erzeugten Plan entspricht.
 
-Nach einer Aenderung der Approved Coins, Basis-Starting-Balance oder einem neuen `start_date` ueber **1st** oder **All** muss **Recalculate** neben **Guide** geklickt werden. Die Aktion liest aktuelle Basis-Daten, Exchanges und Starting Balance neu ein, berechnet Sweep Stride und Training windows automatisch und verwirft eine veraltete Preview, bevor eine neue angewendet werden kann.
+Nach einer Aenderung der Approved Coins, Basis-Starting-Balance oder einem neuen `start_date` ueber **1st** oder **All** muss **Recalculate** neben **Guide** geklickt werden. Die Aktion liest aktuelle Basiseinstellungen, passt Rolling-/Walk-Forward-Counts mit ihrem konfigurierten Stride ein, berechnet Sweep-Stride/-Count automatisch und verwirft veralteten Preview-State. Preview behaelt weiterhin eine manuell gewaehlte kleinere Rolling-/Walk-Forward-Anzahl.
 
 Beispiel: Fuer drei nicht ueberlappende Trainingsquartale und ein unberuehrtes Quartal **Walk-Forward** mit `Window days = 90`, `Stride days = 90`, `Training windows = 3` und `Holdout windows = 1` waehlen. Fuer sechs ueberlappende Dreimonats-Trainingsfenster im Monatsabstand **Rolling Windows** mit `Window days = 90`, `Stride days = 30` und `Training windows = 6` waehlen.
 
@@ -167,7 +167,7 @@ Ergebnisse werden nur aus `<pb8dir>/optimize_results` gelesen. Die Results-Tabel
 
 Beim Oeffnen von Results waehrend eines kalten Metadaten-Scans wird ein eindeutiger Ladezustand angezeigt. Ein Hintergrund-Refresh laesst die zuletzt bestaetigten Zeilen sichtbar, und ein Panelwechsel waehrend des Requests verwirft die fertige Antwort nicht mehr.
 
-Beim Oeffnen von Paretos speichert PBGui nur die versionierte Result-Verzeichnis-ID im Session-State des Tabs. Ein Reload auf `#paretos` laedt zuerst die aktuelle Results-Liste, validiert diese ID erneut und laedt danach die Kandidaten. Fehlende oder geloeschte Results entfernen die gespeicherte Auswahl; absolute Result-Pfade werden nicht gespeichert.
+Beim Oeffnen von Paretos speichert PBGui nur die versionierte Result-Verzeichnis-ID im Session-State des Tabs. Ein Reload auf `#paretos` oder die Rueckkehr ueber die Sidebar wartet zuerst auf die aktuelle Results-Liste, validiert die ID erneut und laedt danach die Kandidaten genau einmal. Fruehe Navigation loescht keine noch gueltige Auswahl. Fehlende oder geloeschte Results entfernen die gespeicherte Auswahl; absolute Result-Pfade werden nicht gespeichert.
 
 Ein Wechsel des Optimize-Results leert vorherige Pareto-Zeilen, Metadaten und Auswahl sofort, bevor das neue Result geladen wird. Eine spaete Antwort des vorherigen Results kann keine veralteten Zeilen wiederherstellen.
 

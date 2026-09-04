@@ -2444,7 +2444,6 @@ function clearEditedRunStrategyDefaultMark(side, sideConfig) {
 /* ─── Populate Form from Config ────────────────────────────── */
 function forcedModeSelectValue(value) {
   var normalized = String(value || '').trim().toLowerCase();
-  if (runEditorAdapter.isV8) return normalized;
   return {
     normal: 'n',
     manual: 'm',
@@ -2455,6 +2454,15 @@ function forcedModeSelectValue(value) {
     'tp-only': 't',
     take_profit_only: 't'
   }[normalized] || normalized;
+}
+
+function forcedModeConfigValue(value) {
+  var selected = String(value || '').trim().toLowerCase();
+  if (!runEditorAdapter.isV8) return selected;
+  var aliases = {
+    n: '', m: 'manual', gs: 'graceful_stop', p: 'panic', t: 'tp_only'
+  };
+  return aliases[selected] !== undefined ? aliases[selected] : selected;
 }
 
 function populateForm(opts) {
@@ -2933,8 +2941,8 @@ function collectConfig() {
       max_n_creations_per_batch: getInt('f-max-create'),
       fills_recent_overlap_minutes: getNum('f-fills-recent-overlap'),
       fills_confirmation_overlap_minutes: getNum('f-fills-confirm-overlap'),
-      forced_mode_long: getVal('f-forced-long'),
-      forced_mode_short: getVal('f-forced-short'),
+      forced_mode_long: forcedModeConfigValue(getVal('f-forced-long')),
+      forced_mode_short: forcedModeConfigValue(getVal('f-forced-short')),
       hsl_signal_mode: getVal('f-hsl-signal-mode'),
       hsl_position_during_cooldown_policy: getVal('f-hsl-cooldown-policy'),
       max_n_restarts_per_day: getInt('f-max-restarts'),

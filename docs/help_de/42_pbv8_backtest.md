@@ -38,7 +38,7 @@ Häufig verwendete PB8-spezifische Backtest-Felder besitzen strukturierte Contro
 
 Die V8-Queue liegt separat unter `data/bt_v8_queue`. **Start** startet `<venv_pb8>/bin/passivbot backtest <snapshot>`. **Stop**, **Restart**, **Delete** und **Clear Finished** betreffen nur V8-Queue-Einträge.
 
-Automatisch aus PB8 Optimize geoeffnete Validierungs-Drafts koennen unterschiedliche Training-, Holdout- und Full-Zeitraeume enthalten. Der Queue-Parameterdialog behaelt fuer jeden Eintrag dessen konfiguriertes Start-/Enddatum und Exchange-Gruppe, statt den gesamten Batch durch einen gemeinsamen Zeitraum zu ersetzen oder Combined-Szenarien in Einzel-Exchange-Jobs aufzuteilen; die erzeugten Namen lassen sich danach gemeinsam in **Compare** auswaehlen.
+Aus PB8 Optimize geoeffnete Pareto-Drafts behalten pro Kandidat das konfigurierte Start-/Enddatum und die Exchange-Gruppe, statt den Batch durch einen gemeinsamen Zeitraum zu ersetzen oder Combined-Szenarien in Einzel-Exchange-Jobs aufzuteilen. Automatische Validierungs-Drafts enthalten zusaetzlich getrennte Training-, Holdout- und Full-Zeitraeume; die erzeugten Namen lassen sich danach gemeinsam in **Compare** auswaehlen.
 
 Laufende Backtests sind unabhängige Jobs. Ein Neustart von PBGui oder ein PB8-Update stoppt sie nicht, und sie blockieren kein Update. Neue Starts bleiben während einer PB8-Installation oder eines Updates in der Queue und laufen danach weiter. Jeder neue Start verwendet die zu diesem Zeitpunkt installierte PB8-Version; Version und Git-Commit werden am Queue-Eintrag gespeichert.
 

@@ -372,6 +372,54 @@ def test_sweep_holdout_button_builds_standalone_backtest_config() -> None:
     assert "backtestSelectedSweepHoldouts().catch(handleError)" in page
 
 
+def test_pb8_multi_pareto_backtest_preserves_dates_and_exchange_groups() -> None:
+    """Ordinary PB8 multi-candidate drafts retain each optimizer config's scope."""
+
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _page_function(page, name)
+        for name in ("applyParetoBacktestScenario", "backtestSelectedParetos")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const deepClone = value => JSON.parse(JSON.stringify(value));
+        const state = {{
+          selectedParetos: new Set(['/a.json', '/b.json']),
+          selectedParetoScenarios: new Map(),
+          selectedResultName: 'run',
+          paretos: [
+            {{path: '/a.json', name: 'a'}},
+            {{path: '/b.json', name: 'b'}}
+          ]
+        }};
+        const optimizeEditorAdapter = {{isV8: true, paretoFilePath: path => path}};
+        const normalizeParetoBacktestPayload = data => data;
+        const extractConfigSections = config => config;
+        const apiFetch = async path => ({{
+          config: {{backtest: {{
+            start_date: path === '/a.json' ? '2024-01-01' : '2025-01-01',
+            end_date: path === '/a.json' ? '2024-12-31' : '2025-12-31',
+            exchanges: path === '/a.json' ? ['binance', 'bybit'] : ['hyperliquid']
+          }}}},
+          override_configs: {{}}
+        }});
+        const openBacktestDraft = () => {{ throw new Error('single draft path must not run'); }};
+        let queued = null;
+        const openBacktestQueueDraft = async items => {{ queued = items; }};
+        {functions}
+
+        backtestSelectedParetos().then(() => {{
+          assert.deepEqual(queued.map(item => item.config.backtest.start_date), ['2024-01-01', '2025-01-01']);
+          assert.deepEqual(queued.map(item => item.config.backtest.exchanges), [['binance', 'bybit'], ['hyperliquid']]);
+          assert.equal(queued.every(item => item.preserve_timerange === true), true);
+          assert.equal(queued.every(item => item.preserve_exchanges === true), true);
+        }}).catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    _run_node(script)
+
+
 def test_sweep_holdout_both_mode_queues_holdout_and_continuous_jobs() -> None:
     """The combined selector creates one immutable Holdout and one full-range job per candidate."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
@@ -572,6 +620,63 @@ def test_pareto_result_selection_restores_after_reload_without_storing_paths() -
     _run_node(script)
 
 
+def test_sidebar_pareto_restore_waits_for_results_and_runs_once() -> None:
+    """An early Paretos click must preserve the stored ID until Results is authoritative."""
+
+    page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _page_function(page, name)
+        for name in (
+            "selectedOptimizeResultStorageKey",
+            "restoreSelectedOptimizeResult",
+            "restoreSelectedOptimizeResultWhenReady",
+            "loadResults",
+        )
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const values = new Map([['pbgui.optimize.selected-result.v8', JSON.stringify({{version: 'v8', result: 'result-1'}})]]);
+        const window = {{sessionStorage: {{
+          getItem(key) {{ return values.has(key) ? values.get(key) : null; }},
+          removeItem(key) {{ values.delete(key); }}
+        }}}};
+        const optimizeEditorAdapter = {{version: 'v8', resultsPath: '/results'}};
+        const state = {{
+          panel: 'paretos', results: [], resultsLoadSeq: 0, resultsLoading: false,
+          resultsLoadedOnce: false, selectedResultRestorePromise: null,
+          selectedResultPath: '', selectedResultName: ''
+        }};
+        let resolveResults = null;
+        let paretoLoads = 0;
+        const apiFetch = () => new Promise(resolve => {{ resolveResults = resolve; }});
+        const renderResults = () => {{}};
+        const handleError = error => {{ throw error; }};
+        const loadParetos = async () => {{ paretoLoads += 1; }};
+        {functions}
+
+        (async () => {{
+          assert.equal(await restoreSelectedOptimizeResultWhenReady(), false);
+          assert.equal(values.has('pbgui.optimize.selected-result.v8'), true);
+          const loading = loadResults();
+          assert.equal(state.resultsLoading, true);
+          assert.equal(await restoreSelectedOptimizeResultWhenReady(), false);
+          assert.equal(values.has('pbgui.optimize.selected-result.v8'), true);
+          resolveResults({{results: [{{path: '/private/result-1', result: 'result-1', name: 'Run 1'}}]}});
+          await loading;
+          await new Promise(resolve => setImmediate(resolve));
+          assert.equal(state.selectedResultPath, '/private/result-1');
+          assert.equal(paretoLoads, 1);
+          assert.equal(await restoreSelectedOptimizeResultWhenReady(), false);
+          assert.equal(paretoLoads, 1);
+        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    _run_node(script)
+    assert "restoreSelectedOptimizeResultWhenReady().catch(handleError)" in _page_function(page, "setPanel")
+    assert "initialPanel === 'paretos'" not in _page_function(page, "init")
+
+
 def test_suite_generator_applies_training_only_and_invalidates_stale_provenance() -> None:
     """Applying a preview excludes holdout windows and later manual edits clear provenance."""
     script = textwrap.dedent(
@@ -640,6 +745,93 @@ def test_sweep_generator_aligns_stride_with_window_and_cooldown() -> None:
         _suiteAlignSweepStride();
         assert.equal(fields['suite-generator-stride'].value, '97');
         assert.equal(fields['suite-generator-training'].value, '5');
+        """
+    )
+    _run_node(script)
+
+
+def test_scenario_recalculate_fits_rolling_walk_forward_and_zero_ranges() -> None:
+    """Non-Sweep Recalculate uses its configured stride and never invents one window."""
+
+    script = textwrap.dedent(
+        """
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        const fields = {
+          'suite-generator-template': {value: 'rolling_windows'},
+          'suite-generator-window': {value: '60'},
+          'suite-generator-stride': {value: '30'},
+          'suite-generator-training': {value: '4'},
+          'suite-generator-holdout': {value: '9'},
+          'suite-generator-cooldown': {value: '0'},
+          'suite-generator-exchange-mode': {value: 'inherit'}
+        };
+        global.document = {getElementById: id => fields[id] || null};
+        eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
+        let context = {start_date: '2026-06-01', end_date: '2026-08-31', exchanges: ['binance']};
+        _suiteState.getScenarioContext = () => context;
+
+        let fit = _suiteFitScenarioTrainingCount();
+        assert.equal(fit.ok, true);
+        assert.equal(fields['suite-generator-training'].value, '2');
+        assert.equal(fields['suite-generator-stride'].value, '30');
+
+        fields['suite-generator-template'].value = 'walk_forward';
+        fields['suite-generator-holdout'].value = '1';
+        fields['suite-generator-training'].value = '4';
+        fit = _suiteFitScenarioTrainingCount();
+        assert.equal(fit.ok, true);
+        assert.equal(fields['suite-generator-training'].value, '1');
+
+        context = {start_date: '2026-08-01', end_date: '2026-08-30', exchanges: ['binance']};
+        fit = _suiteFitScenarioTrainingCount();
+        assert.equal(fit.ok, false);
+        assert.equal(fields['suite-generator-training'].value, '0');
+        assert.match(fit.message, /does not fit a training window/);
+        """
+    )
+    _run_node(script)
+
+
+def test_scenario_template_switch_updates_automatic_field_modes_immediately() -> None:
+    """Only Sweep keeps stride and training readonly after an in-place template switch."""
+
+    script = textwrap.dedent(
+        """
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        const holdout = {style: {display: ''}};
+        const stride = {value: '30', readOnly: false};
+        const training = {value: '4', readOnly: false};
+        const fields = {
+          'suite-generator-template': {value: 'sweep_cycles'},
+          'suite-generator-window': {value: '90'},
+          'suite-generator-stride': stride,
+          'suite-generator-training': training,
+          'suite-generator-holdout': {value: '1'},
+          'suite-generator-holdout-wrap': holdout,
+          'suite-generator-cooldown': {value: '7'},
+          'suite-generator-exchange-mode': {value: 'inherit'}
+        };
+        const sweepFields = [{style: {display: 'none'}}];
+        global.document = {
+          getElementById: id => fields[id] || null,
+          querySelectorAll: () => sweepFields
+        };
+        eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
+        _suiteState.getScenarioContext = () => ({start_date: '2025-01-01', end_date: '2026-12-31'});
+
+        _suiteUpdateGeneratorFields('sweep_cycles');
+        assert.equal(stride.readOnly, true);
+        assert.equal(training.readOnly, true);
+        assert.equal(sweepFields[0].style.display, '');
+
+        fields['suite-generator-template'].value = 'rolling_windows';
+        _suiteUpdateGeneratorFields('rolling_windows');
+        assert.equal(stride.readOnly, false);
+        assert.equal(training.readOnly, false);
+        assert.equal(holdout.style.display, 'none');
+        assert.equal(sweepFields[0].style.display, 'none');
         """
     )
     _run_node(script)
@@ -1982,6 +2174,8 @@ def test_request_generations_reject_stale_http_without_discarding_results_after_
         function updateMetaCounts() {{}}
         function renderQueue() {{}}
         function renderResults() {{}}
+        function handleError(error) {{ throw error; }}
+        function restoreSelectedOptimizeResultWhenReady() {{ return Promise.resolve(false); }}
         const optimizeEditorAdapter = {{resultsPath: '/results'}};
         const state = {{
           settings: {{strategy_bounds: {{custom: true}}, runtime_options: {{future: true}}}},

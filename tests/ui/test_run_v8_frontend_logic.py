@@ -329,6 +329,9 @@ def test_pb8_run_adapter_enables_existing_forced_mode_actions() -> None:
     adapter = (ROOT / "frontend" / "js" / "run_list_adapter.js").read_text(encoding="utf-8")
     page = (ROOT / "frontend" / "v7_run.html").read_text(encoding="utf-8")
     build_cells = _page_function(page, "buildCells")
+    normalize_mode = _page_function(page, "normalizedForcedMode")
+    mode_label = _page_function(page, "forcedModeLabel")
+    mode_summary = _page_function(page, "forcedModeSummary")
     execute = _page_function(page, "executeForcedMode")
     script = textwrap.dedent(
         f"""
@@ -339,18 +342,61 @@ def test_pb8_run_adapter_enables_existing_forced_mode_actions() -> None:
         const runListAdapter = window.PBGuiRunListAdapter.create('v8');
         const STATUS_LABELS = {{synced: 'synced'}};
         const esc = (value) => String(value == null ? '' : value);
+        {normalize_mode}
+        {mode_label}
+        {mode_summary}
         {build_cells}
         const cells = buildCells({{name: 'alice', user: 'alice', strategy: 'ema_anchor', status: 'synced'}});
         assert.equal(runListAdapter.supportsForcedModes, true);
         assert.match(cells.at(-1), /data-forced-mode="panic"/);
         assert.match(cells.at(-1), /data-forced-mode="graceful_stop"/);
         assert.match(cells.at(-1), /data-forced-mode="tp_only"/);
+        assert.doesNotMatch(cells.at(-1), /data-forced-mode="normal"/);
+        const forced = buildCells({{
+          name: 'alice', user: 'alice', strategy: 'ema_anchor', status: 'synced', version: 7,
+          forced_mode_long: 'panic', forced_mode_short: 'tp_only'
+        }});
+        assert.match(forced[4], /Global: L: PANIC · S: TP ONLY/);
+        assert.match(forced.at(-1), /data-forced-mode="normal"/);
+        assert.match(forced.at(-1), /data-forced-version="7"/);
         """
     )
     _run_node(script)
     assert "'/instances/' + encodeURIComponent(name) + '/forced-mode'" in execute
-    assert 'body: JSON.stringify({ mode: mode })' in execute
+    assert "expected_version: Number(expectedVersion)" in execute
+    assert "mode === 'normal' ? { mode: mode, expected_version: Number(expectedVersion) }" in execute
     assert '/app/js/run_list_adapter.js?v=3' in page
+
+
+def test_pb7_run_shows_normal_for_an_active_global_forced_mode() -> None:
+    """PB7 list rows use the shared mode badge and version-bound Normal action."""
+
+    adapter = (ROOT / "frontend" / "js" / "run_list_adapter.js").read_text(encoding="utf-8")
+    page = (ROOT / "frontend" / "v7_run.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _page_function(page, name)
+        for name in ("normalizedForcedMode", "forcedModeLabel", "forcedModeSummary", "buildCells")
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const window = {{}};
+        const document = {{querySelectorAll: () => [], getElementById: () => null}};
+        {adapter}
+        const runListAdapter = window.PBGuiRunListAdapter.create('v7');
+        const STATUS_LABELS = {{disabled: 'disabled'}};
+        const esc = value => String(value == null ? '' : value);
+        {functions}
+        const cells = buildCells({{
+          name: 'alice', user: 'alice', status: 'disabled', version: 4,
+          forced_mode_long: 'graceful_stop', forced_mode_short: 'tp_only'
+        }});
+        assert.match(cells[3], /Global: L: GRACEFUL STOP · S: TP ONLY/);
+        assert.match(cells.at(-1), /data-forced-mode="normal"/);
+        assert.match(cells.at(-1), /data-forced-version="4"/);
+        """
+    )
+    _run_node(script)
 
 
 def test_run_editor_preserves_configured_target_when_capability_is_unconfirmed() -> None:
@@ -472,11 +518,13 @@ def test_v7_forced_mode_aliases_select_the_visible_editor_options() -> None:
 
     page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
     normalize_mode = _page_function(page, "forcedModeSelectValue")
+    config_mode = _page_function(page, "forcedModeConfigValue")
     script = textwrap.dedent(
         f"""
         const assert = require('node:assert/strict');
         let runEditorAdapter = {{isV8: false}};
         {normalize_mode}
+        {config_mode}
 
         assert.equal(forcedModeSelectValue('graceful_stop'), 'gs');
         assert.equal(forcedModeSelectValue('tp_only'), 't');
@@ -486,7 +534,11 @@ def test_v7_forced_mode_aliases_select_the_visible_editor_options() -> None:
         assert.equal(forcedModeSelectValue('gs'), 'gs');
         assert.equal(forcedModeSelectValue(''), '');
         runEditorAdapter = {{isV8: true}};
-        assert.equal(forcedModeSelectValue('graceful_stop'), 'graceful_stop');
+        assert.equal(forcedModeSelectValue('graceful_stop'), 'gs');
+        assert.equal(forcedModeSelectValue('tp_only'), 't');
+        assert.equal(forcedModeConfigValue('gs'), 'graceful_stop');
+        assert.equal(forcedModeConfigValue('t'), 'tp_only');
+        assert.equal(forcedModeConfigValue('n'), '');
         """
     )
     _run_node(script)
@@ -621,6 +673,7 @@ def test_collect_config_writes_every_managed_field_and_preserves_unknown_json() 
     page = (ROOT / "frontend" / "v7_edit.html").read_text(encoding="utf-8")
     adapter = (ROOT / "frontend" / "js" / "run_editor_adapter.js").read_text(encoding="utf-8")
     collect = _page_function(page, "collectConfig")
+    forced_mode_config = _page_function(page, "forcedModeConfigValue")
     live_fields = _adapter_fields(adapter, "sharedLiveFields")
     logging_fields = _adapter_fields(adapter, "sharedLoggingFields")
     monitor_fields = _adapter_fields(adapter, "sharedMonitorFields")
@@ -703,6 +756,7 @@ def test_collect_config_writes_every_managed_field_and_preserves_unknown_json() 
         const _extraLiveKeys = ['future_flag', 'future_obj'];
         const cfg = {{pbgui: {{starting_config: true}}}};
         const _fromBacktestConfig = '';
+        {forced_mode_config}
         {collect}
 
         const result = collectConfig();

@@ -1099,6 +1099,8 @@ def _list_instances() -> list[dict[str, Any]]:
                 "load_error": load_error,
                 "runtime_error": runtime_error if load_error else "",
                 "twe": " | ".join(exposure_parts),
+                "forced_mode_long": str(live.get("forced_mode_long") or ""),
+                "forced_mode_short": str(live.get("forced_mode_short") or ""),
             })
     return _enrich_v8_runtime(result)
 
@@ -1667,7 +1669,10 @@ async def set_v8_instance_forced_mode(
 ) -> dict[str, Any]:
     """Set the global PB8 forced mode through the normal bundle save pipeline."""
     name = _validate_name(name)
-    requested = str(body.get("mode") or "").strip().lower()
+    requested_value = body.get("mode")
+    if not isinstance(requested_value, str):
+        raise HTTPException(status_code=400, detail="mode must be an explicit string")
+    requested = requested_value.strip().lower()
     if requested == "panic":
         mode = "panic"
         label = "panic"
@@ -1677,8 +1682,15 @@ async def set_v8_instance_forced_mode(
     elif requested in {"tp_only", "take_profit_only"}:
         mode = "tp_only"
         label = "take profit only"
+    elif requested == "normal":
+        mode = ""
+        label = "normal"
     else:
-        raise HTTPException(status_code=400, detail="mode must be panic, graceful_stop or tp_only")
+        raise HTTPException(status_code=400, detail="mode must be panic, graceful_stop, tp_only or normal")
+
+    requested_version = body.get("expected_version")
+    if requested == "normal" and (type(requested_version) is not int or requested_version < 0):
+        raise HTTPException(status_code=400, detail="normal mode requires expected_version")
 
     path = _config_path(name)
     if _run_root().is_symlink() or path.parent.is_symlink() or not path.is_file() or path.is_symlink():
@@ -1687,6 +1699,8 @@ async def set_v8_instance_forced_mode(
         with _run_lock():
             config = load_pb8_config(path)
             expected_version = _current_version(name)
+            if requested == "normal" and requested_version != expected_version:
+                raise HTTPException(status_code=409, detail="PB8 instance changed; refresh before clearing forced mode")
             override_configs = _override_payloads_by_filename(config, {}, path.parent)
     except PB8ConfigurationError as exc:
         raise _configuration_http_error(f"Loading PB8 instance '{name}'", exc) from exc
@@ -1706,11 +1720,15 @@ async def set_v8_instance_forced_mode(
         False,
         session,
     )
-    _log(SERVICE, f"Set PB8 forced mode '{label}' for all positions on '{name}' (v{result['version']})", level="WARNING")
+    _log(
+        SERVICE,
+        f"Set PB8 forced mode '{label}' for all positions on '{name}' (v{result['version']})",
+        level="INFO" if requested == "normal" else "WARNING",
+    )
     return {
         "ok": True,
         "name": name,
-        "mode": requested,
+        "mode": "normal" if requested == "normal" else requested,
         "forced_mode": mode,
         "version": result["version"],
         "backup_id": result.get("backup_id"),

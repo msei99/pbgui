@@ -292,7 +292,7 @@ def test_save_publishes_canonical_pb8_manifest_and_explicit_upsert(
 
 @pytest.mark.parametrize(
     ("requested", "expected"),
-    (("panic", "panic"), ("graceful_stop", "graceful_stop"), ("tp_only", "tp_only")),
+    (("panic", "panic"), ("graceful_stop", "graceful_stop"), ("tp_only", "tp_only"), ("normal", "")),
 )
 def test_pb8_forced_mode_uses_versioned_bundle_save_and_preserves_overrides(
     monkeypatch: pytest.MonkeyPatch,
@@ -304,13 +304,16 @@ def test_pb8_forced_mode_uses_versioned_bundle_save_and_preserves_overrides(
     _configure_root(monkeypatch, tmp_path)
     _install_test_pipeline(monkeypatch)
     payload = _payload()
+    if requested == "normal":
+        payload["config"]["live"].update({"forced_mode_long": "panic", "forced_mode_short": "tp_only"})
     payload["config"]["coin_overrides"] = {"BTC": {"override_config_path": "BTC.json"}}
     payload["override_configs"] = {"BTC.json": {"bot": {"long": {"risk": {"n_positions": 1}}}}}
     asyncio.run(v8_instances.save_v8_instance_config("alice", payload, True, session=None))
 
-    result = asyncio.run(v8_instances.set_v8_instance_forced_mode(
-        "alice", {"mode": requested}, session=None,
-    ))
+    body = {"mode": requested}
+    if requested == "normal":
+        body["expected_version"] = 1
+    result = asyncio.run(v8_instances.set_v8_instance_forced_mode("alice", body, session=None))
 
     bundle = tmp_path / "data" / "run_v8" / "alice"
     saved = json.loads((bundle / "config.json").read_text(encoding="utf-8"))
@@ -322,16 +325,50 @@ def test_pb8_forced_mode_uses_versioned_bundle_save_and_preserves_overrides(
     assert (tmp_path / "data" / "backup" / "v8" / "alice" / "1" / "config.json").is_file()
     assert desired["pb8_instances"]["alice"]["version"] == "2"
     assert result["forced_mode"] == expected
+    assert result["mode"] == requested
     assert result["version"] == 2
     assert result["backup_id"] == "1"
 
 
-def test_pb8_forced_mode_rejects_unknown_mode() -> None:
-    """PB8 forced-mode actions reject values outside the three exposed controls."""
+@pytest.mark.parametrize("mode", ("manual", "off", "clear", "", None, False))
+def test_pb8_forced_mode_rejects_unknown_mode(mode: object) -> None:
+    """PB8 forced-mode actions reject missing and ambiguous clear aliases."""
     with pytest.raises(v8_instances.HTTPException, match="mode must be") as error:
-        asyncio.run(v8_instances.set_v8_instance_forced_mode("alice", {"mode": "manual"}, session=None))
+        asyncio.run(v8_instances.set_v8_instance_forced_mode("alice", {"mode": mode}, session=None))
 
     assert error.value.status_code == 400
+
+
+@pytest.mark.parametrize("expected_version", (None, "1", False, -1))
+def test_pb8_normal_mode_requires_explicit_version(expected_version: object) -> None:
+    """Normal mode requires an exact nonnegative integer config version."""
+
+    with pytest.raises(v8_instances.HTTPException, match="requires expected_version") as error:
+        asyncio.run(v8_instances.set_v8_instance_forced_mode(
+            "alice", {"mode": "normal", "expected_version": expected_version}, session=None,
+        ))
+
+    assert error.value.status_code == 400
+
+
+def test_pb8_normal_mode_rejects_stale_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A stale browser must not clear a newer global emergency mode."""
+
+    _configure_root(monkeypatch, tmp_path)
+    _install_test_pipeline(monkeypatch)
+    payload = _payload()
+    payload["config"]["live"].update({"forced_mode_long": "panic", "forced_mode_short": "panic"})
+    asyncio.run(v8_instances.save_v8_instance_config("alice", payload, True, session=None))
+
+    with pytest.raises(v8_instances.HTTPException, match="changed; refresh") as error:
+        asyncio.run(v8_instances.set_v8_instance_forced_mode(
+            "alice", {"mode": "normal", "expected_version": 0}, session=None,
+        ))
+
+    saved = json.loads((tmp_path / "data" / "run_v8" / "alice" / "config.json").read_text(encoding="utf-8"))
+    assert error.value.status_code == 409
+    assert saved["pbgui"]["version"] == 1
+    assert saved["live"]["forced_mode_long"] == "panic"
 
 
 def test_fast_pb8_activation_has_three_second_transport_budget(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -775,6 +812,8 @@ def test_instance_list_reports_active_pb8_strategy(monkeypatch: pytest.MonkeyPat
 
     assert len(rows) == 1
     assert rows[0]["strategy"] == "trailing_martingale"
+    assert rows[0]["forced_mode_long"] == ""
+    assert rows[0]["forced_mode_short"] == ""
 
 
 @pytest.mark.parametrize("runtime_ready", (False, True))

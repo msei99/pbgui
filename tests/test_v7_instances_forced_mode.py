@@ -4,6 +4,8 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from api import v7_instances
 
 
@@ -174,3 +176,66 @@ def test_set_instance_forced_mode_tp_only(monkeypatch, tmp_path):
     assert result["version"] == 13
     assert saved["live"]["forced_mode_long"] == "tp_only"
     assert saved["live"]["forced_mode_short"] == "tp_only"
+
+
+def test_set_instance_forced_mode_normal_is_version_bound(monkeypatch, tmp_path):
+    """Normal clears both PB7 global modes only from the reviewed config version."""
+
+    inst_dir = tmp_path / "data" / "run_v7" / "test_inst"
+    inst_dir.mkdir(parents=True)
+    config_path = inst_dir / "config.json"
+    config_path.write_text(json.dumps({
+        "live": {"forced_mode_long": "p", "forced_mode_short": "tp_only"},
+        "pbgui": {"version": 3},
+    }), encoding="utf-8")
+
+    def fake_load(path, neutralize_added=False):
+        """Load raw JSON for the test config."""
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def fake_save(cfg, path):
+        """Save raw JSON for assertion."""
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    async def fake_sync(name, operation=None):
+        """Return a successful sync result."""
+        return {"name": name, "ok": 1, "failed": 0, "hosts": {}}
+
+    monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(v7_instances, "load_pb7_config", fake_load)
+    monkeypatch.setattr(v7_instances, "save_pb7_config", fake_save)
+    monkeypatch.setattr(v7_instances, "_ssh_sync_instance", fake_sync)
+
+    with pytest.raises(v7_instances.HTTPException, match="changed; refresh") as error:
+        asyncio.run(v7_instances.set_instance_forced_mode(
+            "test_inst", {"mode": "normal", "expected_version": 2}, session=None,
+        ))
+    result = asyncio.run(v7_instances.set_instance_forced_mode(
+        "test_inst", {"mode": "normal", "expected_version": 3}, session=None,
+    ))
+
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert error.value.status_code == 409
+    assert result["mode"] == "normal"
+    assert result["forced_mode"] == "n"
+    assert saved["live"]["forced_mode_long"] == "n"
+    assert saved["live"]["forced_mode_short"] == "n"
+    assert saved["pbgui"]["version"] == 4
+
+
+def test_pb7_instance_list_exposes_global_forced_modes(monkeypatch, tmp_path):
+    """The shared Run UI receives PB7 modes needed to render Normal."""
+
+    inst_dir = tmp_path / "data" / "run_v7" / "test_inst"
+    inst_dir.mkdir(parents=True)
+    (inst_dir / "config.json").write_text(json.dumps({
+        "live": {"user": "alice", "forced_mode_long": "graceful_stop", "forced_mode_short": "tp_only"},
+        "bot": {"long": {}, "short": {}},
+        "pbgui": {"version": 3, "enabled_on": "disabled"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(v7_instances, "PBGDIR", str(tmp_path))
+
+    rows = v7_instances._load_local_instances()
+
+    assert rows[0]["forced_mode_long"] == "graceful_stop"
+    assert rows[0]["forced_mode_short"] == "tp_only"

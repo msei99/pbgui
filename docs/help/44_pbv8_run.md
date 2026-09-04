@@ -18,7 +18,7 @@ The main **Status** column combines published desired state with exact PB8 proce
 
 The separate **Desired** column remains the published Cluster request. The authenticated WebSocket refreshes both views and stale REST responses cannot overwrite newer socket state.
 
-The row actions **P**, **G**, and **T** set global `panic`, `graceful_stop`, or `tp_only` for both long and short PB8 positions after explicit confirmation. Each action uses the normal PB8 bundle pipeline: it creates a complete backup, increments the config version, validates the config and sparse overrides through PB8, publishes the Cluster operation, and attempts immediate target activation.
+The row actions **P**, **G**, and **T** set global `panic`, `graceful_stop`, or `tp_only` for both long and short PB8 positions after explicit confirmation. Status shows the configured global mode separately from process synchronization. When either side is forced, **N** clears both global modes through a version-bound confirmation; new entries may resume only after the target applies the published config. Disabled sides stay disabled, per-coin and HSL overrides remain unchanged, and completed Panic closes cannot be undone. Each action uses the normal PB8 bundle pipeline: it creates a complete backup, increments the config version, validates the config and sparse overrides through PB8, publishes the Cluster operation, and attempts immediate target activation. The editor losslessly maps PB8's canonical forced-mode values to its visible selectors and back.
 
 ## Create Or Edit
 

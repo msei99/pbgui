@@ -605,32 +605,66 @@ function _suiteRenderScenarioGenerator() {
 
 function _suiteUpdateGeneratorFields(template) {
   var holdout = document.getElementById('suite-generator-holdout-wrap');
+  var stride = document.getElementById('suite-generator-stride');
+  var training = document.getElementById('suite-generator-training');
   if (holdout) holdout.style.display = template === 'rolling_windows' ? 'none' : '';
+  if (stride) stride.readOnly = template === 'sweep_cycles';
+  if (training) training.readOnly = template === 'sweep_cycles';
   document.querySelectorAll('.suite-generator-sweep').forEach(function(field) {
     field.style.display = template === 'sweep_cycles' ? '' : 'none';
   });
   if (template === 'sweep_cycles') _suiteAlignSweepStride();
 }
 
-function _suiteAlignSweepStride() {
+function _suiteFitScenarioTrainingCount() {
   var template = document.getElementById('suite-generator-template');
   var windowInput = document.getElementById('suite-generator-window');
   var strideInput = document.getElementById('suite-generator-stride');
   var cooldownInput = document.getElementById('suite-generator-cooldown');
   var trainingInput = document.getElementById('suite-generator-training');
   var holdoutInput = document.getElementById('suite-generator-holdout');
-  if (!template || template.value !== 'sweep_cycles' || !windowInput || !strideInput || !cooldownInput || !trainingInput || !holdoutInput) return;
-  var minimum = Math.max(1, parseInt(windowInput.value, 10) || 1) + Math.max(0, parseInt(cooldownInput.value, 10) || 0);
-  strideInput.value = String(minimum);
+  var exchangeModeInput = document.getElementById('suite-generator-exchange-mode');
+  if (!template || !windowInput || !strideInput || !trainingInput || !holdoutInput) {
+    return { ok: false, message: 'Scenario Generator fields are unavailable.' };
+  }
+  var templateName = template.value;
+  var windowDays = Math.max(1, parseInt(windowInput.value, 10) || 1);
+  var strideDays = Math.max(1, parseInt(strideInput.value, 10) || 1);
+  if (templateName === 'sweep_cycles') {
+    strideDays = windowDays + Math.max(0, parseInt(cooldownInput && cooldownInput.value, 10) || 0);
+    strideInput.value = String(strideDays);
+  }
   var context = _suiteScenarioContext();
   var startMs = Date.parse(String(context.start_date || '') + 'T00:00:00Z');
   var endMs = Date.parse(String(context.end_date || '') + 'T00:00:00Z');
-  if (!isFinite(startMs) || !isFinite(endMs) || endMs < startMs) return;
+  if (!isFinite(startMs) || !isFinite(endMs) || endMs < startMs) {
+    return { ok: false, message: 'Set a valid base start and end date before recalculating.' };
+  }
   var availableDays = Math.floor((endMs - startMs) / 86400000) + 1;
-  var windowDays = Math.max(1, parseInt(windowInput.value, 10) || 1);
-  var totalWindows = availableDays < windowDays ? 0 : 1 + Math.floor((availableDays - windowDays) / minimum);
-  var holdouts = Math.max(0, parseInt(holdoutInput.value, 10) || 0);
-  trainingInput.value = String(Math.max(0, totalWindows - holdouts));
+  var totalWindows = availableDays < windowDays ? 0 : 1 + Math.floor((availableDays - windowDays) / strideDays);
+  var holdouts = templateName === 'rolling_windows' ? 0 : Math.max(0, parseInt(holdoutInput.value, 10) || 0);
+  var trainingWindows = Math.max(0, totalWindows - holdouts);
+  if (templateName !== 'sweep_cycles') {
+    trainingWindows = Math.min(48, trainingWindows);
+    if (exchangeModeInput && exchangeModeInput.value === 'per_exchange') {
+      var exchangeCount = Math.max(1, Array.isArray(context.exchanges) ? context.exchanges.length : 0);
+      trainingWindows = Math.min(trainingWindows, Math.max(0, Math.floor(64 / exchangeCount) - holdouts));
+    }
+  }
+  trainingInput.value = String(trainingWindows);
+  return {
+    ok: trainingWindows > 0,
+    training_windows: trainingWindows,
+    message: trainingWindows > 0
+      ? ''
+      : 'The base date range does not fit a training window after reserving Holdouts.'
+  };
+}
+
+function _suiteAlignSweepStride() {
+  var template = document.getElementById('suite-generator-template');
+  if (!template || template.value !== 'sweep_cycles') return null;
+  return _suiteFitScenarioTrainingCount();
 }
 
 function _suiteGeneratorInteger(id) {
@@ -680,7 +714,7 @@ function _suiteRecalculateScenarioGenerator() {
   if (template && template.value === 'sweep_cycles' && balanceInput && isFinite(contextBalance) && contextBalance >= 1) {
     balanceInput.value = String(contextBalance);
   }
-  _suiteAlignSweepStride();
+  var fit = _suiteFitScenarioTrainingCount();
   var draft = _suiteCaptureScenarioGeneratorDraft();
   if (!draft) return;
   _suiteState.scenarioGeneratorDraft = draft;
@@ -688,7 +722,11 @@ function _suiteRecalculateScenarioGenerator() {
   _suiteState.scenarioPreviewContext = '';
   _suiteState.scenarioRequestId += 1;
   _suiteRender();
-  toast('Scenario Generator recalculated from current dates, exchanges, and base balance', 'ok');
+  if (!fit.ok) {
+    toast(fit.message, 'err');
+    return;
+  }
+  toast('Scenario Generator recalculated from current base settings', 'ok');
 }
 
 function _suiteOpenScenarioGeneratorGuide() {
@@ -704,6 +742,14 @@ function _suitePreviewScenarioTemplate() {
   var context = _suiteScenarioContext();
   var draft = _suiteCaptureScenarioGeneratorDraft();
   if (!draft) return;
+  if (draft.training_windows < 1) {
+    _suiteState.scenarioPreview = null;
+    _suiteState.scenarioPreviewContext = '';
+    _suiteState.scenarioRequestId += 1;
+    _suiteRender();
+    toast('The base date range does not fit a training window after reserving Holdouts.', 'err');
+    return;
+  }
   var template = draft.template;
   var payload = Object.assign({}, draft, {
     start_date: context.start_date,

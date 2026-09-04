@@ -458,6 +458,8 @@ def _load_local_instances() -> list[dict]:
             "version": pbgui.get("version", 0),
             "note": pbgui.get("note", ""),
             "twe": twe_str,
+            "forced_mode_long": str(live.get("forced_mode_long") or ""),
+            "forced_mode_short": str(live.get("forced_mode_short") or ""),
         })
     return instances
 
@@ -1240,7 +1242,10 @@ async def set_instance_forced_mode(
 ):
     """Set global PB7 forced mode for all long and short positions."""
     _validate_name(name)
-    requested = str(body.get("mode") or "").strip().lower()
+    requested_value = body.get("mode")
+    if not isinstance(requested_value, str):
+        raise HTTPException(status_code=400, detail="mode must be an explicit string")
+    requested = requested_value.strip().lower()
     if requested == "panic":
         mode = "p"
         label = "panic"
@@ -1250,8 +1255,15 @@ async def set_instance_forced_mode(
     elif requested in {"tp_only", "take_profit_only"}:
         mode = "tp_only"
         label = "take profit only"
+    elif requested == "normal":
+        mode = "n"
+        label = "normal"
     else:
-        raise HTTPException(status_code=400, detail="mode must be panic, graceful_stop or tp_only")
+        raise HTTPException(status_code=400, detail="mode must be panic, graceful_stop, tp_only or normal")
+
+    requested_version = body.get("expected_version")
+    if requested == "normal" and (type(requested_version) is not int or requested_version < 0):
+        raise HTTPException(status_code=400, detail="normal mode requires expected_version")
 
     instance_dir = Path(PBGDIR) / "data" / "run_v7" / name
     config_path = instance_dir / "config.json"
@@ -1267,6 +1279,10 @@ async def set_instance_forced_mode(
         old_version = int(cfg.get("pbgui", {}).get("version", 0) or 0)
     except (TypeError, ValueError):
         old_version = 0
+    history_version = _highest_cluster_instance_version(name)
+    version_base = max(old_version, history_version)
+    if requested == "normal" and requested_version != version_base:
+        raise HTTPException(status_code=409, detail="PB7 instance changed; refresh before clearing forced mode")
     try:
         backup_dir = Path(PBGDIR) / "data" / "backup" / "v7" / name / str(old_version)
         if not backup_dir.exists():
@@ -1276,8 +1292,6 @@ async def set_instance_forced_mode(
     except Exception as exc:
         _log(SERVICE, f"Failed to backup '{name}' before forced-mode change: {exc}", level="WARNING")
 
-    history_version = _highest_cluster_instance_version(name)
-    version_base = max(old_version, history_version)
     live = cfg.setdefault("live", {})
     live["forced_mode_long"] = mode
     live["forced_mode_short"] = mode
@@ -1290,11 +1304,15 @@ async def set_instance_forced_mode(
 
     operation = _record_cluster_config_upsert(name, instance_dir, cfg, parent_version=version_base)
     sync_result = await _ssh_sync_instance(name, operation)
-    _log(SERVICE, f"Set forced mode '{label}' for all positions on '{name}' (v{cfg['pbgui']['version']})", level="WARNING")
+    _log(
+        SERVICE,
+        f"Set forced mode '{label}' for all positions on '{name}' (v{cfg['pbgui']['version']})",
+        level="INFO" if requested == "normal" else "WARNING",
+    )
     return {
         "ok": True,
         "name": name,
-        "mode": requested,
+        "mode": "normal" if requested == "normal" else requested,
         "forced_mode": mode,
         "version": cfg["pbgui"]["version"],
         "sync": sync_result,

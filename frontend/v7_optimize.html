@@ -2651,7 +2651,7 @@ textarea.json-invalid:focus {
 <div id="data-tip-tooltip"></div>
 
 <script src="/app/js/editor_shared.js?v=14"></script>
-<script src="/app/js/suite_editor.js?v=24"></script>
+<script src="/app/js/suite_editor.js?v=25"></script>
 <script src="/app/js/log_viewer_panel.js?v=29"></script>
 <script src="/app/js/pbgui_dialogs.js?v=8"></script>
 <script>
@@ -2793,6 +2793,8 @@ var state = {
   queuePushSeq: 0,
   resultsLoadSeq: 0,
   resultsLoading: false,
+  resultsLoadedOnce: false,
+  selectedResultRestorePromise: null,
   navigationSeq: 0,
   paretoStatisticOptions: []
 };
@@ -11000,7 +11002,9 @@ function setPanel(panel) {
   el('ctx-results').style.display = panel === 'results' ? '' : 'none';
   el('ctx-paretos').style.display = panel === 'paretos' ? '' : 'none';
   location.hash = panel;
-  refreshLiveResultsDuringRun().catch(handleError);
+  refreshLiveResultsDuringRun().catch(handleError).finally(function() {
+    restoreSelectedOptimizeResultWhenReady().catch(handleError);
+  });
 }
 
 function selectPanel(panel) {
@@ -12594,11 +12598,16 @@ async function backtestSelectedParetos(paths) {
     return apiFetch(optimizeEditorAdapter.paretoFilePath(item.path)).then(function(data) {
       var payload = normalizeParetoBacktestPayload(data);
       var config = applyParetoBacktestScenario(payload.config, item.scenario);
-      return {
+      var queueItem = {
         name: item.name || 'pareto_backtest',
         config: extractConfigSections(config),
         override_configs: payload.override_configs
       };
+      if (optimizeEditorAdapter.isV8) {
+        queueItem.preserve_timerange = true;
+        queueItem.preserve_exchanges = true;
+      }
+      return queueItem;
     });
   }));
   return openBacktestQueueDraft(queueItems);
@@ -13192,8 +13201,10 @@ async function loadResults() {
   }
   if (requestSeq !== state.resultsLoadSeq) return;
   state.resultsLoading = false;
+  state.resultsLoadedOnce = true;
   state.results = data.results || [];
   renderResults();
+  restoreSelectedOptimizeResultWhenReady().catch(handleError);
 }
 
 function selectedOptimizeResultStorageKey() {
@@ -13226,6 +13237,27 @@ async function restoreSelectedOptimizeResult() {
   state.selectedResultName = selected.name || selected.result;
   await loadParetos(selected.path, state.selectedResultName);
   return true;
+}
+
+function restoreSelectedOptimizeResultWhenReady() {
+  if (
+    state.panel !== 'paretos'
+    || state.selectedResultPath
+    || !state.resultsLoadedOnce
+    || state.resultsLoading
+  ) {
+    return Promise.resolve(false);
+  }
+  if (state.selectedResultRestorePromise) return state.selectedResultRestorePromise;
+  var restorePromise = restoreSelectedOptimizeResult();
+  state.selectedResultRestorePromise = restorePromise.then(function(result) {
+    state.selectedResultRestorePromise = null;
+    return result;
+  }, function(error) {
+    state.selectedResultRestorePromise = null;
+    throw error;
+  });
+  return state.selectedResultRestorePromise;
 }
 
 function removeResultsFromState(paths) {
@@ -13301,7 +13333,13 @@ async function loadParetos(path, name) {
   if (requestedMetrics.length) {
     query.push('metrics=' + encodeURIComponent(requestedMetrics.join(',')));
   }
-  var data = await apiFetch(optimizeEditorAdapter.paretosPath(query.join('&')));
+  var data;
+  try {
+    data = await apiFetch(optimizeEditorAdapter.paretosPath(query.join('&')));
+  } catch (error) {
+    if (loadSeq !== state.paretoLoadSeq || requestPath !== state.selectedResultPath) return;
+    throw error;
+  }
   if (loadSeq !== state.paretoLoadSeq || requestPath !== state.selectedResultPath) return;
   state.paretos = data.paretos || [];
   applyParetoMeta(data.meta || {});
@@ -14346,7 +14384,6 @@ async function init() {
       await handleMigrationDraft(migrationDraftPromise);
     }
     await backgroundData;
-    if (initialPanel === 'paretos') await restoreSelectedOptimizeResult();
     if (!migrationDraftPromise) await handleIncomingDraft();
     await handleOpenConfigParam();
   } finally {
