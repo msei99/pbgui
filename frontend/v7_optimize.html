@@ -11989,7 +11989,10 @@ var aiConfigRefreshGeneration = 0;
 window.addEventListener('pbgui:ai-action-completed', function(event) {
   var result = event && event.detail && typeof event.detail === 'object' ? event.detail : {};
   if (optimizeEditorAdapter.isV8 && result.action === 'queue_backtests') {
-    window.location.assign(buildBacktestMainPageUrl({ panel: 'queue' }));
+    if (!window.PBGuiAI || typeof window.PBGuiAI.openQueuedBacktestCompare !== 'function'
+        || !window.PBGuiAI.openQueuedBacktestCompare(result)) {
+      window.location.assign(buildBacktestMainPageUrl({ panel: 'queue' }));
+    }
     return;
   }
   if (!optimizeEditorAdapter.isV8 || (result.action !== 'save' && result.action !== 'save_and_queue')) return;

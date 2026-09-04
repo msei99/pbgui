@@ -841,8 +841,12 @@
   async function resolveProposal(proposal, approve, card) {
     var conversationId = state.current;
     var preview = proposal.preview || {};
+    var proposalId = String(proposal.proposal_id || '');
     var buttons = Array.from(card.querySelectorAll('button'));
     buttons.forEach(function (button) { button.disabled = true; });
+    state.resolvingProposalIds.add(proposalId);
+    card.hidden = true;
+    renderProposals([]);
     if (approve) {
       var approvalDetail = preview.action === 'python_analysis'
         ? 'The reviewed code and sanitized input will run without network or host-data access. Proposal integrity is verified before execution.'
@@ -855,12 +859,17 @@
         detail: approvalDetail,
         confirmText: 'Approve'
       });
-      if (!confirmed) { buttons.forEach(function (button) { button.disabled = false; }); return; }
+      if (!confirmed) {
+        state.resolvingProposalIds.delete(proposalId);
+        buttons.forEach(function (button) { button.disabled = false; });
+        await reconcileProposals(conversationId);
+        return;
+      }
     }
-    if (!conversationId || conversationId !== state.current) return;
-    var proposalId = String(proposal.proposal_id || '');
-    state.resolvingProposalIds.add(proposalId);
-    card.hidden = true;
+    if (!conversationId || conversationId !== state.current) {
+      state.resolvingProposalIds.delete(proposalId);
+      return;
+    }
     setStatus(approve ? 'Applying approved action...' : 'Rejecting proposal...', false);
     try {
       var result = await api('/proposals/' + encodeURIComponent(proposal.proposal_id) + (approve ? '/approve' : '/reject'), {
@@ -870,6 +879,9 @@
       });
       if (result.status === 'executed' && result.action === 'python_analysis') appendAnalysisResult(result);
       if (result.status === 'executed') {
+        if (window.PBGuiAI && typeof window.PBGuiAI.openQueuedBacktestCompare === 'function') {
+          window.PBGuiAI.openQueuedBacktestCompare(result);
+        }
         window.dispatchEvent(new CustomEvent('pbgui:ai-action-completed', { detail: result }));
       }
       var continuationStatus = String((result.continuation || {}).status || '');

@@ -208,6 +208,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     requestGeneration: 0,
     listGeneration: 0,
     proposalGeneration: 0,
+    resolvingProposalIds: new Set(),
     loginTimer: null,
     activityTimer: null,
     activityStartedAt: 0,
@@ -631,6 +632,7 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     var list = $('proposal-list');
     list.textContent = '';
     (proposals || []).forEach(function (proposal) {
+      if (state.resolvingProposalIds.has(String(proposal.proposal_id || ''))) return;
       var preview = proposal.preview || {};
       var card = document.createElement('div');
       card.className = 'proposal';
@@ -740,8 +742,12 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
     var preview = proposal.preview || {};
     var generation = state.chatGeneration;
     var conversationId = state.conversationId;
+    var proposalId = String(proposal.proposal_id || '');
     var buttons = Array.from(card.querySelectorAll('button'));
     buttons.forEach(function (button) { button.disabled = true; });
+    state.resolvingProposalIds.add(proposalId);
+    card.hidden = true;
+    renderProposals([]);
     if (approve) {
       var approvalDetail = preview.action === 'python_analysis'
         ? 'The reviewed code and sanitized input will run without network or host-data access. Proposal integrity is verified before execution.'
@@ -754,10 +760,17 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
         detail: approvalDetail,
         confirmText: 'Approve'
       });
-      if (!confirmed) { buttons.forEach(function (button) { button.disabled = false; }); return; }
+      if (!confirmed) {
+        state.resolvingProposalIds.delete(proposalId);
+        buttons.forEach(function (button) { button.disabled = false; });
+        await reconcileProposals(conversationId);
+        return;
+      }
     }
-    if (generation !== state.chatGeneration || conversationId !== state.conversationId) return;
-    card.hidden = true;
+    if (generation !== state.chatGeneration || conversationId !== state.conversationId) {
+      state.resolvingProposalIds.delete(proposalId);
+      return;
+    }
     setNotice(approve ? 'Applying approved action...' : 'Rejecting proposal...', false, true);
     try {
       var suffix = approve ? '/approve' : '/reject';
@@ -768,6 +781,12 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
       });
       var executed = result.status === 'executed';
       if (executed && result.action === 'python_analysis') addMessage('assistant', analysisResultText(result));
+      if (executed) {
+        if (window.PBGuiAI && typeof window.PBGuiAI.openQueuedBacktestCompare === 'function') {
+          window.PBGuiAI.openQueuedBacktestCompare(result);
+        }
+        window.dispatchEvent(new CustomEvent('pbgui:ai-action-completed', { detail: result }));
+      }
       var continuationStatus = String((result.continuation || {}).status || '');
       if (continuationStatus === 'queued' || continuationStatus === 'running') {
         setNotice('Action completed. Continuing requested workflow...', false, true);
@@ -778,11 +797,13 @@ window.PBGUI_NAV_CONFIG = { subtitle: 'AI CHAT', current: 'info_ai_chat', authen
         setNotice(executed ? ('Action completed: ' + String(result.action || 'approved')) : ('Proposal status: ' + String(result.status || 'rejected')), false);
       }
     } catch (error) {
-      setNotice(error.message, true);
+      state.resolvingProposalIds.delete(proposalId);
       card.hidden = false;
+      setNotice(error.message, true);
       buttons.forEach(function (button) { button.disabled = false; });
     } finally {
       if (conversationId === state.conversationId) await reconcileProposals(conversationId);
+      state.resolvingProposalIds.delete(proposalId);
     }
   }
 

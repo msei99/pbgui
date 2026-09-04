@@ -86,7 +86,13 @@ def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
         "holdout",
         "full_timerange",
         "holdout_and_full_timerange",
+        "configured_and_holdout_and_full_timerange",
     ]
+    assert pareto_backtests["parameters"]["properties"]["candidate_resources"]["maxItems"] == 1000
+    pareto_selection = next(
+        item for item in service.responses_tools() if item["name"] == "select_pareto_candidates"
+    )
+    assert pareto_selection["parameters"]["properties"]["candidate_resources"]["maxItems"] == 1000
     assert "exchanges" not in pareto_backtests["parameters"]["required"]
 
 
@@ -148,6 +154,63 @@ def test_ai_executes_holdout_and_full_timerange_as_standalone_jobs(monkeypatch) 
     assert all("scenarios" not in item["config"]["backtest"] for item in queued)
     assert all("scenario_template" not in item["config"]["pbgui"] for item in queued)
     assert source["backtest"]["suite_enabled"] is True
+
+
+def test_ai_executes_configured_holdout_and_full_range_as_one_compare_group(monkeypatch) -> None:
+    """One approval queues every requested package and marks the exact batch for Compare."""
+    from api import backtest_v8
+
+    queued = []
+
+    def add_to_queue(body, session):
+        queued.append(copy.deepcopy(body))
+        return {"filename": f"job-{len(queued)}"}
+
+    monkeypatch.setattr(backtest_v8, "add_to_queue", add_to_queue)
+    proposal = ai_capabilities.ActionProposal(
+        id="proposal",
+        owner="a" * 32,
+        conversation_id="b" * 32,
+        action="queue_backtests",
+        name="candidate",
+        config={
+            "validation_mode": "configured_and_holdout_and_full_timerange",
+            "candidates": [{
+                "name": "candidate",
+                "config": {
+                    "backtest": {
+                        "start_date": "2024-01-01",
+                        "end_date": "2026-08-30",
+                        "exchanges": ["hyperliquid"],
+                    }
+                },
+                "override_configs": {},
+                "validation_periods": [
+                    {"label": "holdout_01", "start_date": "2026-06-01", "end_date": "2026-08-30"},
+                    {"label": "full_timerange", "start_date": "2024-01-01", "end_date": "2026-08-30"},
+                ],
+            }],
+            "exchanges": ["binance", "bybit"],
+        },
+        expected_digest=None,
+        create_only=False,
+        preview={},
+        payload_digest="digest",
+    )
+
+    result = AICapabilityService._execute_pareto_backtests(proposal)
+
+    assert result["queued_count"] == 4
+    assert result["compare_after_completion"] is True
+    assert [item["filename"] for item in result["queued"]] == ["job-1", "job-2", "job-3", "job-4"]
+    assert [item["config"]["backtest"]["exchanges"] for item in queued[:2]] == [["binance"], ["bybit"]]
+    assert [item["name"] for item in queued[2:]] == ["candidate_holdout_01", "candidate_full_timerange"]
+    assert [item["operation_id"] for item in queued] == [
+        "proposal_0_configured_0",
+        "proposal_0_configured_1",
+        "proposal_0_validation_0",
+        "proposal_0_validation_1",
+    ]
 
 
 def test_ai_proposes_holdout_and_full_timerange_from_sweep_sidecar(
@@ -255,6 +318,78 @@ def test_ai_proposes_holdout_and_full_timerange_from_sweep_sidecar(
         "end_date": "2026-08-30",
     }]
     assert captured["preview"]["job_count"] == 1
+
+
+def test_ai_pareto_backtest_proposal_accepts_exactly_1000_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The advertised 1000-job contract must be accepted rather than reduced to 100."""
+    from api import backtest_v8, optimize_v8
+
+    service = AICapabilityService(tmp_path / "capabilities")
+    resources = [f"candidate-{index}" for index in range(1000)]
+    captured = {}
+    monkeypatch.setattr(service, "_resource_uri", lambda value, kind, version: str(value))
+    monkeypatch.setattr(
+        service,
+        "_resolve_listed_resource",
+        lambda kind, version, resource: {"path": "optimizer-run", "name": "run"},
+    )
+    monkeypatch.setattr(service, "_virtual_uri", lambda kind, version, path: str(path))
+    monkeypatch.setattr(
+        optimize_v8,
+        "list_paretos",
+        lambda *args, **kwargs: {
+            "paretos": [{"path": resource, "name": resource} for resource in resources]
+        },
+    )
+    monkeypatch.setattr(
+        optimize_v8,
+        "get_pareto_file",
+        lambda *args, **kwargs: {
+            "config": {"backtest": {"exchanges": ["hyperliquid"]}},
+            "override_configs": {},
+        },
+    )
+    monkeypatch.setattr(
+        backtest_v8,
+        "get_settings",
+        lambda session: {"exchange_options": ["hyperliquid"], "autostart": False},
+    )
+
+    async def create_proposal(owner, conversation_id, action, name, payload, preview):
+        captured.update(payload=payload, preview=preview)
+        return {"proposal_id": "proposal", "status": "awaiting_approval", "preview": preview}
+
+    monkeypatch.setattr(service, "_create_custom_proposal", create_proposal)
+    result = asyncio.run(service._propose_pareto_backtests(
+        "a" * 32,
+        "b" * 32,
+        {
+            "version": "v8",
+            "run_resource": "run-resource",
+            "candidate_resources": resources,
+            "exchanges": ["hyperliquid"],
+            "validation_mode": "configured",
+        },
+    ))
+
+    assert result["status"] == "awaiting_approval"
+    assert captured["preview"]["job_count"] == 1000
+    assert len(captured["payload"]["candidates"]) == 1000
+    service._require_bounded_result(result)
+
+    with pytest.raises(AICapabilityError, match="between 1 and 1000"):
+        asyncio.run(service._propose_pareto_backtests(
+            "a" * 32,
+            "b" * 32,
+            {
+                "version": "v8",
+                "run_resource": "run-resource",
+                "candidate_resources": [*resources, "candidate-1000"],
+                "exchanges": ["hyperliquid"],
+            },
+        ))
 
 
 def test_passivbot_installations_return_exact_commits_without_local_paths(
@@ -1315,11 +1450,23 @@ try:
     network = True
 except OSError:
     network = False
+try:
+    os.listdir(\"/home/mani\")
+    host_home_readable = True
+except OSError:
+    host_home_readable = False
+try:
+    with open(\"/tmp/pbgui-ai-write-test\", \"w\", encoding=\"utf-8\") as handle:
+        handle.write(\"blocked\")
+    filesystem_writable = True
+except OSError:
+    filesystem_writable = False
 print(json.dumps({
     \"sum\": float(np.asarray(data[\"values\"]).sum()),
     \"mean\": float(pd.Series(data[\"values\"]).mean()),
     \"cwd\": os.getcwd(),
-    \"host_home_visible\": os.path.exists(\"/home/mani\"),
+    \"host_home_readable\": host_home_readable,
+    \"filesystem_writable\": filesystem_writable,
     \"network\": network,
     \"keys\": sorted(data),
 }))
@@ -1360,8 +1507,9 @@ print(json.dumps({
         assert result["output"]["value"] == {
             "sum": 6.0,
             "mean": 2.0,
-            "cwd": "/work",
-            "host_home_visible": False,
+            "cwd": "/",
+            "host_home_readable": False,
+            "filesystem_writable": False,
             "network": False,
             "keys": ["values"],
         }
@@ -1416,7 +1564,71 @@ def test_optimizer_run_python_analysis_binds_complete_resource_without_previewin
         assert created["preview"]["input_resource"]["candidate_count"] == 759
         assert "input_data" not in created["preview"]
         assert len(proposal.config["input_data"]["candidates"]) == 759
+        assert proposal.config["input_data"]["schema_version"] == 2
+        assert proposal.config["input_data"]["scenarios"] == ["Aggregated"]
+        assert proposal.config["input_data"]["metrics"] == ["drawdown", "gain"]
         assert proposal.preview["input_resource"]["digest"].startswith("sha256:")
+
+    asyncio.run(scenario())
+
+
+def test_optimizer_run_python_analysis_builds_compact_multi_scenario_matrix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cross-period analysis receives one stable candidate matrix instead of guessed nesting."""
+
+    async def scenario() -> None:
+        from api import optimize_v8
+
+        service = AICapabilityService(tmp_path / "capabilities")
+        run_resource = service._virtual_uri("optimizer-run", "v8", "managed/run")
+        monkeypatch.setattr(
+            service,
+            "_resolve_listed_resource",
+            lambda *_args: {"path": "managed/run", "name": "full-run"},
+        )
+        calls = []
+
+        def list_paretos(_path, *, scenario, statistic, session, metrics):
+            calls.append((scenario, statistic, metrics))
+            offset = 1 if scenario == "train_10" else 2
+            return {"paretos": [
+                {
+                    "path": f"managed/run/pareto/{index}.json",
+                    "name": f"candidate-{index}",
+                    "summary": {"gain": index + offset, "drawdown": index / 10, "ignored": 99},
+                }
+                for index in range(2)
+            ]}
+
+        monkeypatch.setattr(optimize_v8, "list_paretos", list_paretos)
+        created = await service._propose_optimizer_run_python_analysis(
+            "a" * 32,
+            "c" * 32,
+            {
+                "version": "v8",
+                "run_resource": run_resource,
+                "scenarios": ["train_10", "train_11"],
+                "metrics": ["gain", "drawdown"],
+                "code": "import json,sys; print(len(json.load(sys.stdin)['candidates']))",
+            },
+        )
+        proposal = service.proposals[created["proposal_id"]]
+        dataset = proposal.config["input_data"]
+
+        assert calls == [
+            ("train_10", "mean", "gain,drawdown"),
+            ("train_11", "mean", "gain,drawdown"),
+        ]
+        assert dataset["schema_version"] == 2
+        assert dataset["scenarios"] == ["train_10", "train_11"]
+        assert dataset["metrics"] == ["gain", "drawdown"]
+        assert dataset["candidates"][0]["values"] == [[1, 0.0], [2, 0.0]]
+        assert "ignored" not in str(dataset["candidates"])
+        assert created["preview"]["input_resource"]["scenarios"] == ["train_10", "train_11"]
+        reloaded = AICapabilityService(tmp_path / "capabilities")
+        pending = await reloaded.list_proposals("a" * 32, "c" * 32)
+        assert pending[0]["proposal_id"] == created["proposal_id"]
 
     asyncio.run(scenario())
 
@@ -1445,11 +1657,11 @@ def test_workspace_python_mounts_logs_and_masks_sensitive_paths(tmp_path: Path, 
     assert "/workspace/pbgui_data/linked" in rendered
 
 
-def test_python_analysis_fails_closed_without_bubblewrap(
+def test_standard_python_analysis_does_not_require_bubblewrap(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """Approval must never fall back to direct Python when sandboxing is unavailable."""
+    """Landlock keeps dataset analysis available when Bubblewrap is unavailable."""
     async def scenario() -> None:
         owner = "a" * 32
         conversation = "c" * 32
@@ -1462,16 +1674,44 @@ def test_python_analysis_fails_closed_without_bubblewrap(
         )
         pending = (await service.list_proposals(owner, conversation))[0]
 
-        with pytest.raises(AICapabilityError, match="sandbox is unavailable"):
-            await service.approve(
-                owner,
-                created["proposal_id"],
-                pending["payload_digest"],
-                conversation,
-            )
+        result = await service.approve(
+            owner,
+            created["proposal_id"],
+            pending["payload_digest"],
+            conversation,
+        )
+
+        assert result["analysis_status"] == "completed"
+        assert service.proposals[created["proposal_id"]].status == "executed"
+        assert restart_block_reason(tmp_path / "capabilities") == ""
+
+    asyncio.run(scenario())
+
+
+def test_workspace_python_analysis_fails_closed_without_bubblewrap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Read-only workspace projection never degrades to direct host paths."""
+
+    async def scenario() -> None:
+        owner = "a" * 32
+        conversation = "c" * 32
+        (tmp_path / "data").mkdir()
+        service = AICapabilityService(tmp_path / "capabilities")
+        monkeypatch.setattr(ai_capabilities, "PBGDIR", tmp_path)
+        monkeypatch.setattr(ai_capabilities, "_BWRAP_PATH", tmp_path / "missing-bwrap")
+        created = await service._propose_workspace_python_analysis(
+            owner,
+            conversation,
+            {"code": "print('never direct')", "roots": ["pbgui_data"]},
+        )
+        pending = (await service.list_proposals(owner, conversation))[0]
+
+        with pytest.raises(AICapabilityError, match="workspace analysis sandbox is unavailable"):
+            await service.approve(owner, created["proposal_id"], pending["payload_digest"], conversation)
 
         assert service.proposals[created["proposal_id"]].status == "failed"
-        assert restart_block_reason(tmp_path / "capabilities") == ""
 
     asyncio.run(scenario())
 
@@ -1487,8 +1727,8 @@ def test_python_analysis_fails_closed_without_seccomp(
         AICapabilityService._python_analysis_seccomp_fd()
 
 
-def test_python_analysis_command_uses_seccomp_without_private_network_namespace() -> None:
-    """The fixed sandbox command must avoid capability-dependent loopback setup."""
+def test_python_analysis_workspace_command_uses_bubblewrap_and_seccomp() -> None:
+    """Explicit workspace mounts retain the stronger Bubblewrap filesystem projection."""
 
     command = AICapabilityService._python_analysis_command(
         Path("/runtime"),
@@ -1500,7 +1740,23 @@ def test_python_analysis_command_uses_seccomp_without_private_network_namespace(
 
     assert "--unshare-all" in command
     assert "--share-net" in command
+    assert "--cpu=30:30" in command
     assert command[command.index("--seccomp") + 1] == "7"
+
+
+def test_python_analysis_standard_command_uses_landlock_without_bubblewrap(tmp_path: Path) -> None:
+    """Dataset analysis must not depend on user or network namespace setup."""
+
+    command = AICapabilityService._python_analysis_landlock_command(
+        Path("/runtime"),
+        Path("/runtime/bin/python"),
+        tmp_path / "analysis.py",
+        64,
+    )
+
+    assert str(ai_capabilities._BWRAP_PATH) not in command
+    assert str(ai_capabilities._LANDLOCK_RUNNER_PATH) in command
+    assert "--cpu=30:30" in command
 
 
 def test_python_analysis_diagnostics_redact_host_paths(tmp_path: Path) -> None:

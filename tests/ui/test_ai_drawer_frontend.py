@@ -12,7 +12,7 @@ CSS = (ROOT / "frontend" / "css" / "ai_drawer.css").read_text(encoding="utf-8")
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=36" in NAV
+    assert "/app/js/ai_drawer.js?v=38" in NAV
     assert "/app/css/ai_drawer.css?v=12" in NAV
     assert "registerPageContext" in NAV
     assert "collectAIContext" in NAV

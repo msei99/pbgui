@@ -437,6 +437,36 @@
   }
 
   window.PBGuiAI = window.PBGuiAI || {};
+  window.PBGuiAI.openQueuedBacktestCompare = function (result) {
+    if (!result || result.action !== 'queue_backtests' || result.compare_after_completion !== true) return false;
+    if (result.compare_handoff_started === true) return true;
+    var queued = Array.isArray(result.queued) ? result.queued : [];
+    var filenames = queued.map(function (item) { return String((item || {}).filename || ''); }).filter(function (value) {
+      return /^[A-Za-z0-9_.-]{1,128}$/.test(value);
+    });
+    filenames = Array.from(new Set(filenames));
+    if (filenames.length < 2 || filenames.length > 1000) return false;
+    var request = {
+      version: 'v8',
+      proposal_id: String(result.proposal_id || ''),
+      filenames: filenames,
+      created_at: Date.now()
+    };
+    try {
+      window.sessionStorage.setItem('pbgui:ai:backtest_compare:v1', JSON.stringify(request));
+    } catch (_error) {
+      return false;
+    }
+    result.compare_handoff_started = true;
+    if (String(cfg().current || '') === 'v8_backtest') {
+      window.dispatchEvent(new CustomEvent('pbgui:ai-backtest-compare-request', { detail: request }));
+      return true;
+    }
+    var route = FASTAPI_PAGES.v8_backtest;
+    if (!route) return false;
+    window.location.assign(_getApiOrigin() + route + '?panel=queue');
+    return true;
+  };
   window.PBGuiAI.registerPageContext = function (registration) {
     if (!registration || typeof registration.id !== 'string' || typeof registration.getContext !== 'function') return function () {};
     var id = registration.id.slice(0, 64);
@@ -1807,7 +1837,7 @@
       link.href = '/app/css/ai_drawer.css?v=12';
       document.head.appendChild(link);
       var script = document.createElement('script');
-      script.src = '/app/js/ai_drawer.js?v=36';
+      script.src = '/app/js/ai_drawer.js?v=38';
       script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
       script.onerror = function () { _aiDrawerLoading = false; };
       document.head.appendChild(script);

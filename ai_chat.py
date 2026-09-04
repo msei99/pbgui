@@ -1205,6 +1205,26 @@ class AIChatService:
             return models
         raise AIChatError("Unsupported AI provider")
 
+    async def _run_internal_followup_with_timeout_retry(
+        self,
+        owner: str,
+        conversation_id: str,
+        pending_user: dict[str, Any] | None,
+        operation: Any,
+    ) -> str:
+        """Retry one transient timeout only for a hidden post-approval continuation."""
+
+        try:
+            return await operation()
+        except AIChatError as exc:
+            detail = str(exc).lower()
+            if not (pending_user and pending_user.get("hidden")) or (
+                "timed out" not in detail and "timeout" not in detail
+            ):
+                raise
+            await self._set_activity(owner, conversation_id, "Retrying optional model follow-up after timeout")
+            return await operation()
+
     async def chat(
         self,
         owner: str,
@@ -1286,8 +1306,13 @@ class AIChatService:
                             self.capabilities.codex_dynamic_tools(),
                         )
                         conversation.codex_runtime = runtime
-                    reply = await runtime.chat(
-                        conversation.codex_thread_id, provider_message, model or None, clean_effort
+                    reply = await self._run_internal_followup_with_timeout_retry(
+                        owner,
+                        conversation.id,
+                        pending_user,
+                        lambda: runtime.chat(
+                            conversation.codex_thread_id, provider_message, model or None, clean_effort
+                        ),
                     )
                     if enforce_action:
                         proposals = await self.capabilities.list_proposals(owner, conversation.id)
@@ -1353,13 +1378,18 @@ class AIChatService:
                     ]
                     try:
                         try:
-                            reply = await self._go_chat(
+                            reply = await self._run_internal_followup_with_timeout_retry(
                                 owner,
-                                model,
-                                provider_history,
-                                provider,
                                 conversation.id,
-                                clean_effort,
+                                pending_user,
+                                lambda: self._go_chat(
+                                    owner,
+                                    model,
+                                    provider_history,
+                                    provider,
+                                    conversation.id,
+                                    clean_effort,
+                                ),
                             )
                         except AIChatError as exc:
                             if self._health_status_from_error(str(exc)) != "error":

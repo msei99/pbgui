@@ -1231,6 +1231,91 @@ def test_ai_backtest_compare_selects_exact_results_and_opens_existing_chart() ->
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
+def test_ai_queue_batch_waits_for_exact_jobs_then_opens_results_compare() -> None:
+    """Approved timeframe and validation jobs should compare automatically after completion."""
+    page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    functions = "\n".join(
+        _extract_function(page, name)
+        for name in (
+            "_resolveQueueComparePaths",
+            "normalizeAIQueueCompareRequest",
+            "storeAIQueueCompareRequest",
+            "clearAIQueueCompareRequest",
+            "selectAIQueueCompareRows",
+            "retryAIQueueCompare",
+            "maybeOpenAIQueueCompare",
+        )
+    )
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        const backtestEditorAdapter = {{isV8:true}};
+        const AI_BACKTEST_COMPARE_KEY = 'pbgui:ai:backtest_compare:v1';
+        let aiQueueCompareRequest = null, aiQueueCompareOpening = false, aiQueueCompareRetryCount = 0, aiQueueCompareRetryTimer = null;
+        const stored = new Map();
+        const sessionStorage = {{
+          setItem: (key, value) => stored.set(key, value),
+          getItem: key => stored.has(key) ? stored.get(key) : null,
+          removeItem: key => stored.delete(key)
+        }};
+        const rows = [
+          {{dataset:{{filename:'job-1'}}, classList:{{toggle:()=>{{}}}}}},
+          {{dataset:{{filename:'job-2'}}, classList:{{toggle:()=>{{}}}}}}
+        ];
+        const versionFilter = {{value:'both'}};
+        const compareEl = {{}};
+        const document = {{
+          querySelectorAll: () => rows,
+          getElementById: id => id === 'results-version-filter' ? versionFilter : id === 'compare-chart-area' ? compareEl : null
+        }};
+        const queueItems = [
+          {{filename:'job-1', name:'candidate', status:'complete', created:'2026-09-04T10:00:00'}},
+          {{filename:'job-2', name:'candidate_holdout', status:'complete', created:'2026-09-04T10:01:00'}}
+        ];
+        const results = [
+          {{config_name:'candidate', result_name:'result-1', path:'path-1', modified:'2026-09-04T10:02:00'}},
+          {{config_name:'candidate_holdout', result_name:'result-2', path:'path-2', modified:'2026-09-04T10:03:00'}}
+        ];
+        let panel = '', selected = [], compared = [], toastMessage = '';
+        function _parseIsoMillis(value) {{ return Date.parse(value); }}
+        function loadResults() {{ return Promise.resolve(results); }}
+        function _clearResultsFilters() {{}}
+        function selectPanel(value) {{ panel = value; }}
+        function setSelectedResults(paths) {{ selected = paths; }}
+        function _compareResultPaths(paths) {{ compared = paths; return Promise.resolve(true); }}
+        function toast(message) {{ toastMessage = message; }}
+        {functions}
+        (async () => {{
+          assert.equal(storeAIQueueCompareRequest({{version:'v8', proposal_id:'proposal', filenames:['job-1','job-2'], created_at:Date.now()}}), true);
+          maybeOpenAIQueueCompare();
+          await new Promise(resolve => setImmediate(resolve));
+          assert.equal(versionFilter.value, 'v8');
+          assert.equal(panel, 'results');
+          assert.deepEqual(selected, ['path-1', 'path-2']);
+          assert.deepEqual(compared, selected);
+          assert.equal(stored.has(AI_BACKTEST_COMPARE_KEY), false);
+          assert.match(toastMessage, /Opened Results Compare for 2 completed backtests/);
+        }})().catch(error => {{ console.error(error); process.exit(1); }});
+        """
+    )
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_ai_approval_clients_stage_queue_compare_handoff() -> None:
+    """Both AI surfaces must stage the exact queue batch before navigating away."""
+    nav = (ROOT / "frontend" / "pbgui_nav.js").read_text(encoding="utf-8")
+    drawer = (ROOT / "frontend" / "js" / "ai_drawer.js").read_text(encoding="utf-8")
+    chat = (ROOT / "frontend" / "ai_chat.html").read_text(encoding="utf-8")
+
+    assert "openQueuedBacktestCompare" in nav
+    assert "filenames.length > 1000" in nav
+    assert "pbgui:ai:backtest_compare:v1" in nav
+    assert "openQueuedBacktestCompare(result)" in drawer
+    assert "openQueuedBacktestCompare(result)" in chat
+    assert "pbgui:ai-action-completed" in chat
+
+
 def test_shared_results_delete_routes_each_version_to_its_own_api() -> None:
     """Mixed PB7/PB8 deletion must remain enabled and use each result's backend."""
     page_source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")

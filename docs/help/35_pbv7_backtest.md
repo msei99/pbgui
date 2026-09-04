@@ -135,7 +135,7 @@ When exactly one queue row is selected, or one running Backtest is available out
 | **🗑 Delete Selected** | Remove selected queue entries |
 | **⚙ Settings** | Open the Settings modal |
 
-When you select multiple completed queue rows and click **📈 Compare**, PBGui resolves the matching result batch for each selected queue item, opens the **Results** panel, preselects those result rows, and renders the comparison chart immediately. Queue items that are not complete yet or have no matching stored result are skipped.
+When you select multiple completed queue rows and click **📈 Compare**, PBGui resolves the matching result batch for each selected queue item, opens the **Results** panel, preselects those result rows, and renders the comparison chart immediately. Queue items that are not complete yet or have no matching stored result are skipped. An approved PBGui AI Pareto batch additionally tracks its exact queue rows automatically and opens this same comparison as soon as its configured timeframe, Holdout, and full-range jobs finish.
 
 The green result action applies its config filter before opening **Results** and requests only that config from the backend. The global list loads newest-first in small batches and renders each batch immediately, so already loaded results remain usable while older entries continue loading.
 

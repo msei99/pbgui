@@ -55,11 +55,16 @@ _MAX_SOURCE_FILES = 5000
 _SOURCE_SEARCH_TIMEOUT_SECONDS = 5
 _MAX_ANALYSIS_CODE_BYTES = 32 * 1024
 _MAX_ANALYSIS_INPUT_BYTES = 1024 * 1024
+_MAX_OPTIMIZER_ANALYSIS_INPUT_BYTES = 2 * 1024 * 1024
+_MAX_AI_STATE_BYTES = 64 * 1024 * 1024
+_MAX_PARETO_BACKTEST_CANDIDATES = 1000
+_MAX_PARETO_BACKTEST_JOBS = 1000
 _MAX_ANALYSIS_STDOUT_BYTES = 128 * 1024
 _MAX_ANALYSIS_STDERR_BYTES = 32 * 1024
-_ANALYSIS_TIMEOUT_SECONDS = 15
+_ANALYSIS_TIMEOUT_SECONDS = 45
 _BWRAP_PATH = Path("/usr/bin/bwrap")
 _PRLIMIT_PATH = Path("/usr/bin/prlimit")
+_LANDLOCK_RUNNER_PATH = Path(PBGDIR) / "ai_analysis_sandbox.py"
 _SECCOMP_ALLOW = 0x7FFF0000
 _SECCOMP_ERRNO = 0x00050000
 _NETWORK_SYSCALLS = (
@@ -920,8 +925,8 @@ class AICapabilityService:
         run_resource = self._resource_uri(args.get("run_resource"), "optimizer-run", version)
         raw = self._resolve_listed_resource("optimizer-run", version, run_resource)
         requested = args.get("candidate_resources")
-        if not isinstance(requested, list) or not 1 <= len(requested) <= 100:
-            raise AICapabilityError("Select between 1 and 100 Pareto candidates")
+        if not isinstance(requested, list) or not 1 <= len(requested) <= _MAX_PARETO_BACKTEST_CANDIDATES:
+            raise AICapabilityError("Select between 1 and 1000 Pareto candidates")
         resources = [self._resource_uri(item, "pareto", version) for item in requested]
         if len(set(resources)) != len(resources):
             raise AICapabilityError("Pareto candidate selection contains duplicates")
@@ -2186,12 +2191,22 @@ class AICapabilityService:
         resources = args.get("candidate_resources")
         exchanges = args.get("exchanges")
         validation_mode = str(args.get("validation_mode") or "configured")
-        allowed_modes = {"configured", "holdout", "full_timerange", "holdout_and_full_timerange"}
+        allowed_modes = {
+            "configured",
+            "holdout",
+            "full_timerange",
+            "holdout_and_full_timerange",
+            "configured_and_holdout_and_full_timerange",
+        }
         if validation_mode not in allowed_modes:
             raise AICapabilityError("Invalid Pareto backtest validation mode")
-        if not isinstance(resources, list) or not 1 <= len(resources) <= 10:
-            raise AICapabilityError("Select between 1 and 10 Pareto candidates")
-        if validation_mode == "configured" and (not isinstance(exchanges, list) or not 1 <= len(exchanges) <= 5):
+        if not isinstance(resources, list) or not 1 <= len(resources) <= _MAX_PARETO_BACKTEST_CANDIDATES:
+            raise AICapabilityError("Select between 1 and 1000 Pareto candidates")
+        includes_configured = validation_mode in {
+            "configured", "configured_and_holdout_and_full_timerange"
+        }
+        includes_validation = validation_mode != "configured"
+        if includes_configured and (not isinstance(exchanges, list) or not 1 <= len(exchanges) <= 5):
             raise AICapabilityError("Select between 1 and 5 backtest exchanges")
         candidate_resources = [self._resource_uri(item, "pareto", version) for item in resources]
         selected_exchanges = [str(item or "").strip().lower() for item in exchanges] if isinstance(exchanges, list) else []
@@ -2223,11 +2238,15 @@ class AICapabilityService:
                 "config": bundle.get("config") or {},
                 "override_configs": bundle.get("override_configs") or {},
             }
-            if validation_mode != "configured":
+            if includes_validation:
                 config = candidate["config"]
                 backtest = config.get("backtest") if isinstance(config.get("backtest"), dict) else {}
                 periods = []
-                if validation_mode in {"holdout", "holdout_and_full_timerange"}:
+                if validation_mode in {
+                    "holdout",
+                    "holdout_and_full_timerange",
+                    "configured_and_holdout_and_full_timerange",
+                }:
                     sweep = bundle.get("sweep_cycles") if isinstance(bundle.get("sweep_cycles"), dict) else {}
                     holdouts = sweep.get("holdout_scenarios") if isinstance(sweep.get("holdout_scenarios"), list) else []
                     for index, holdout in enumerate(holdouts):
@@ -2240,7 +2259,11 @@ class AICapabilityService:
                         })
                     if not periods and validation_mode == "holdout":
                         raise AICapabilityError("Sweep Holdout dates are unavailable for one or more candidates")
-                if validation_mode in {"full_timerange", "holdout_and_full_timerange"}:
+                if validation_mode in {
+                    "full_timerange",
+                    "holdout_and_full_timerange",
+                    "configured_and_holdout_and_full_timerange",
+                }:
                     periods.append({
                         "label": "full_timerange",
                         "start_date": backtest.get("start_date"),
@@ -2250,12 +2273,15 @@ class AICapabilityService:
                     _standalone_validation_config(config, period, f"{candidate['name']}_{period.get('label') or 'validation'}")
                 candidate["validation_periods"] = periods
             candidates.append(candidate)
-        if validation_mode == "configured":
-            job_count = len(candidates) * len(selected_exchanges)
-        else:
-            job_count = sum(len(item.get("validation_periods") or []) for item in candidates)
-            if job_count > 100:
-                raise AICapabilityError("Pareto validation proposal exceeds 100 backtest jobs")
+        configured_jobs = len(candidates) * len(selected_exchanges) if includes_configured else 0
+        validation_jobs = (
+            sum(len(item.get("validation_periods") or []) for item in candidates)
+            if includes_validation
+            else 0
+        )
+        job_count = configured_jobs + validation_jobs
+        if job_count > _MAX_PARETO_BACKTEST_JOBS:
+            raise AICapabilityError("Pareto backtest proposal exceeds 1000 jobs")
         payload = {
             "run_resource": run_resource,
             "candidates": candidates,
@@ -2270,19 +2296,16 @@ class AICapabilityService:
             "validation_mode": validation_mode,
             "job_count": job_count,
             "changed_count": job_count,
-            "changes": [
-                {
-                    "path": "backtests",
-                    "kind": "added",
-                    "item": item["name"],
-                    "after": {
-                        "exchanges": selected_exchanges,
-                        "validation_mode": validation_mode,
-                        "periods": len(item.get("validation_periods") or []),
-                    },
-                }
-                for item in candidates
-            ],
+            "changes": [{
+                "path": "backtests",
+                "kind": "added",
+                "after": {
+                    "candidates": len(candidates),
+                    "exchanges": selected_exchanges,
+                    "validation_mode": validation_mode,
+                    "jobs": job_count,
+                },
+            }],
             "may_start_immediately": bool(backtest_v8.get_settings(session=object()).get("autostart")),
         }
         return await self._create_custom_proposal(
@@ -2294,6 +2317,7 @@ class AICapabilityService:
         owner: str,
         conversation_id: str,
         args: dict[str, Any],
+        max_input_bytes: int = _MAX_ANALYSIS_INPUT_BYTES,
     ) -> dict[str, Any]:
         """Create an approval-bound proposal for open Python over sanitized JSON."""
         code = args.get("code")
@@ -2306,7 +2330,7 @@ class AICapabilityService:
         input_bytes = json.dumps(
             analysis_input, allow_nan=False, separators=(",", ":")
         ).encode("utf-8")
-        if len(input_bytes) > _MAX_ANALYSIS_INPUT_BYTES:
+        if len(input_bytes) > max_input_bytes:
             raise AICapabilityError("Python analysis input is too large after sanitization")
         payload = {"code": code, "input_data": analysis_input}
         preview = {
@@ -2360,45 +2384,117 @@ class AICapabilityService:
         result_path = str(raw.get("path") or "")
         statistic = str(args.get("statistic") or "mean").strip().lower()
         scenario = str(args.get("scenario") or "Aggregated").strip() or "Aggregated"
+        scenario_values = args.get("scenarios")
+        if scenario_values is None:
+            scenarios = [scenario]
+        elif not isinstance(scenario_values, list) or not 1 <= len(scenario_values) <= 16:
+            raise AICapabilityError("Optimizer analysis scenarios must contain 1 to 16 labels")
+        else:
+            scenarios = []
+            for value in scenario_values:
+                label = str(value or "").strip()
+                if not label or len(label) > 128 or any(ord(char) < 32 for char in label):
+                    raise AICapabilityError("Optimizer analysis scenario label is invalid")
+                if label not in scenarios:
+                    scenarios.append(label)
+        metric_values = args.get("metrics")
+        if metric_values is None:
+            requested_metrics: list[str] = []
+        elif not isinstance(metric_values, list) or not 1 <= len(metric_values) <= 16:
+            raise AICapabilityError("Optimizer analysis metrics must contain 1 to 16 names")
+        else:
+            requested_metrics = []
+            for value in metric_values:
+                name = str(value or "").strip()
+                if not name or len(name) > 128 or any(ord(char) < 32 for char in name):
+                    raise AICapabilityError("Optimizer analysis metric name is invalid")
+                if name not in requested_metrics:
+                    requested_metrics.append(name)
+        if len(scenarios) > 1 and (version != "v8" or not requested_metrics):
+            raise AICapabilityError("Multi-scenario optimizer analysis requires PB8 and explicit metrics")
+
         if version == "v8":
             from api import optimize_v8 as module
-
-            listed = module.list_paretos(
-                result_path, scenario=scenario, statistic=statistic, session=object(), metrics=""
-            )
         else:
             from api import optimize_v7 as module
-
-            listed = module.list_paretos(
-                result_path, scenario=scenario, statistic=statistic, session=object()
-            )
+        merged: dict[str, dict[str, Any]] = {}
+        discovered_metrics: list[str] = []
+        for scenario_label in scenarios:
+            if version == "v8":
+                listed = module.list_paretos(
+                    result_path,
+                    scenario=scenario_label,
+                    statistic=statistic,
+                    session=object(),
+                    metrics=",".join(requested_metrics),
+                )
+            else:
+                listed = module.list_paretos(
+                    result_path, scenario=scenario_label, statistic=statistic, session=object()
+                )
+            for item in listed.get("paretos", []):
+                if not isinstance(item, dict):
+                    continue
+                path = str(item.get("path") or "")
+                resource = self._virtual_uri("pareto", version, path)
+                entry = merged.setdefault(resource, {
+                    "resource": resource,
+                    "name": str(item.get("name") or "")[:128],
+                    "summaries": {},
+                })
+                summary = self._sanitize_config(item.get("summary") or {})
+                entry["summaries"][scenario_label] = summary
+                if not requested_metrics and isinstance(summary, dict):
+                    for key, value in summary.items():
+                        if (
+                            key not in discovered_metrics
+                            and len(discovered_metrics) < 64
+                            and isinstance(value, (int, float))
+                            and not isinstance(value, bool)
+                            and math.isfinite(float(value))
+                        ):
+                            discovered_metrics.append(str(key))
+        metric_names = requested_metrics or sorted(discovered_metrics)
         candidates = []
-        for item in listed.get("paretos", []):
-            if not isinstance(item, dict):
-                continue
-            path = str(item.get("path") or "")
+        for entry in merged.values():
+            values = []
+            for scenario_label in scenarios:
+                summary = entry["summaries"].get(scenario_label)
+                row = []
+                for metric_name in metric_names:
+                    value = summary.get(metric_name) if isinstance(summary, dict) else None
+                    row.append(
+                        value
+                        if isinstance(value, (int, float))
+                        and not isinstance(value, bool)
+                        and math.isfinite(float(value))
+                        else None
+                    )
+                values.append(row)
             candidates.append({
-                "resource": self._virtual_uri("pareto", version, path),
-                "name": str(item.get("name") or "")[:128],
-                "metrics": self._sanitize_config(item.get("summary") or {}),
+                "resource": entry["resource"],
+                "name": entry["name"],
+                "values": values,
             })
         dataset = {
-            "schema_version": 1,
+            "schema_version": 2,
             "kind": "optimizer_run_paretos",
             "version": version,
             "run_resource": run_resource,
             "run": self._compact_result(raw),
-            "scenario": scenario,
+            "scenarios": scenarios,
+            "metrics": metric_names,
             "statistic": statistic,
             "candidates": candidates,
         }
         encoded = json.dumps(dataset, allow_nan=False, separators=(",", ":")).encode("utf-8")
-        if len(encoded) > _MAX_ANALYSIS_INPUT_BYTES:
+        if len(encoded) > _MAX_OPTIMIZER_ANALYSIS_INPUT_BYTES:
             raise AICapabilityError("Complete optimizer dataset is too large for one Python analysis")
         result = await self._propose_python_analysis(
             owner,
             conversation_id,
             {"code": args.get("code"), "input_data": dataset},
+            max_input_bytes=_MAX_OPTIMIZER_ANALYSIS_INPUT_BYTES,
         )
         proposal = self.proposals.get(str(result.get("proposal_id") or ""))
         if proposal is None:
@@ -2408,7 +2504,8 @@ class AICapabilityService:
             "kind": "optimizer_run_paretos",
             "resource": run_resource,
             "version": version,
-            "scenario": scenario,
+            "scenarios": scenarios,
+            "metrics": metric_names,
             "statistic": statistic,
             "candidate_count": len(candidates),
             "bytes": len(encoded),
@@ -2494,9 +2591,7 @@ class AICapabilityService:
         return summary
 
     async def _execute_python_analysis(self, proposal: ActionProposal) -> dict[str, Any]:
-        """Run approved Python in a fail-closed, bounded bubblewrap sandbox."""
-        if not _BWRAP_PATH.is_file() or not os.access(_BWRAP_PATH, os.X_OK):
-            raise AICapabilityError("Python analysis sandbox is unavailable")
+        """Run approved Python in a fail-closed, bounded Landlock or Bubblewrap sandbox."""
         if not _PRLIMIT_PATH.is_file() or not os.access(_PRLIMIT_PATH, os.X_OK):
             raise AICapabilityError("Python analysis resource limiter is unavailable")
         payload = proposal.config if isinstance(proposal.config, dict) else {}
@@ -2506,6 +2601,8 @@ class AICapabilityService:
         analysis_input = payload.get("input_data")
         stdin = json.dumps(analysis_input, allow_nan=False, separators=(",", ":")).encode("utf-8") + b"\n"
         workspace_mounts = self._python_workspace_mounts(payload.get("workspace_roots"))
+        if workspace_mounts and (not _BWRAP_PATH.is_file() or not os.access(_BWRAP_PATH, os.X_OK)):
+            raise AICapabilityError("Python workspace analysis sandbox is unavailable")
         runtime_root = Path(sys.prefix).resolve()
         executable = Path(sys.executable)
         if not runtime_root.is_dir() or not executable.is_file():
@@ -2514,16 +2611,28 @@ class AICapabilityService:
         with tempfile.TemporaryDirectory(prefix="run-", dir=analysis_root) as directory:
             script = Path(directory) / "analysis.py"
             atomic_write_private_text(script, code)
-            seccomp_fd = self._python_analysis_seccomp_fd()
+            seccomp_fd = None
             try:
-                command = self._python_analysis_command(
-                    runtime_root,
-                    executable,
-                    script,
-                    self._python_analysis_nproc_limit(),
-                    seccomp_fd,
-                    workspace_mounts,
-                )
+                if workspace_mounts:
+                    seccomp_fd = self._python_analysis_seccomp_fd()
+                    command = self._python_analysis_command(
+                        runtime_root,
+                        executable,
+                        script,
+                        self._python_analysis_nproc_limit(),
+                        seccomp_fd,
+                        workspace_mounts,
+                    )
+                else:
+                    command = self._python_analysis_landlock_command(
+                        runtime_root,
+                        executable,
+                        script,
+                        self._python_analysis_nproc_limit(),
+                    )
+                subprocess_options: dict[str, Any] = {}
+                if seccomp_fd is not None:
+                    subprocess_options["pass_fds"] = (seccomp_fd,)
                 start_task = asyncio.create_task(
                     asyncio.create_subprocess_exec(
                         *command,
@@ -2532,7 +2641,7 @@ class AICapabilityService:
                         stderr=asyncio.subprocess.PIPE,
                         env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
                         start_new_session=True,
-                        pass_fds=(seccomp_fd,),
+                        **subprocess_options,
                     )
                 )
                 try:
@@ -2542,7 +2651,8 @@ class AICapabilityService:
                     await self._kill_process_group(process)
                     raise
             finally:
-                os.close(seccomp_fd)
+                if seccomp_fd is not None:
+                    os.close(seccomp_fd)
             stdout_task = asyncio.create_task(
                 self._read_bounded_stream(process.stdout, _MAX_ANALYSIS_STDOUT_BYTES)
             )
@@ -2746,6 +2856,32 @@ class AICapabilityService:
             library.seccomp_release(context)
 
     @staticmethod
+    def _python_analysis_landlock_command(
+        runtime_root: Path,
+        executable: Path,
+        script: Path,
+        nproc_limit: int,
+    ) -> list[str]:
+        """Build the namespace-free Landlock analysis command."""
+
+        if not _LANDLOCK_RUNNER_PATH.is_file():
+            raise AICapabilityError("Python analysis filesystem sandbox is unavailable")
+        return [
+            str(_PRLIMIT_PATH),
+            "--as=1610612736:1610612736",
+            "--cpu=30:30",
+            "--fsize=1048576:1048576",
+            "--nofile=64:64",
+            f"--nproc={nproc_limit}:{nproc_limit}",
+            "--core=0:0",
+            str(executable),
+            "-I",
+            str(_LANDLOCK_RUNNER_PATH),
+            str(script),
+            str(runtime_root),
+        ]
+
+    @staticmethod
     def _python_analysis_command(
         runtime_root: Path,
         executable: Path,
@@ -2768,7 +2904,7 @@ class AICapabilityService:
         return [
             str(_PRLIMIT_PATH),
             "--as=1610612736:1610612736",
-            "--cpu=10:10",
+            "--cpu=30:30",
             "--fsize=1048576:1048576",
             "--nofile=64:64",
             f"--nproc={nproc_limit}:{nproc_limit}",
@@ -3142,11 +3278,37 @@ class AICapabilityService:
         candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
         exchanges = payload.get("exchanges") if isinstance(payload.get("exchanges"), list) else []
         validation_mode = str(payload.get("validation_mode") or "configured")
+        includes_configured = validation_mode in {
+            "configured", "configured_and_holdout_and_full_timerange"
+        }
+        includes_validation = validation_mode != "configured"
         queued = []
         for candidate_index, candidate in enumerate(candidates):
             if not isinstance(candidate, dict):
                 raise AICapabilityError("Backtest proposal candidate is invalid")
-            if validation_mode != "configured":
+            if includes_configured:
+                for exchange_index, exchange in enumerate(exchanges):
+                    config = copy.deepcopy(candidate.get("config") or {})
+                    backtest = config.setdefault("backtest", {})
+                    if not isinstance(backtest, dict):
+                        raise AICapabilityError("Backtest proposal config is invalid")
+                    backtest["exchanges"] = [exchange]
+                    operation_id = f"{proposal.id}_{candidate_index}_configured_{exchange_index}"
+                    response = backtest_v8.add_to_queue(
+                        {
+                            "name": str(candidate.get("name") or "pareto_backtest"),
+                            "config": config,
+                            "override_configs": candidate.get("override_configs") or {},
+                            "operation_id": operation_id,
+                        },
+                        session=object(),
+                    )
+                    queued.append({
+                        "candidate": candidate.get("name"),
+                        "exchange": exchange,
+                        "filename": response["filename"],
+                    })
+            if includes_validation:
                 periods = candidate.get("validation_periods") if isinstance(candidate.get("validation_periods"), list) else []
                 for period_index, period in enumerate(periods):
                     if not isinstance(period, dict):
@@ -3154,7 +3316,7 @@ class AICapabilityService:
                     label = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(period.get("label") or "validation")).strip("._")
                     name = f"{str(candidate.get('name') or 'pareto_backtest')}_{label or 'validation'}"
                     config = _standalone_validation_config(candidate.get("config") or {}, period, name)
-                    operation_id = f"{proposal.id}_{candidate_index}_{period_index}"
+                    operation_id = f"{proposal.id}_{candidate_index}_validation_{period_index}"
                     response = backtest_v8.add_to_queue(
                         {
                             "name": name,
@@ -3169,30 +3331,13 @@ class AICapabilityService:
                         "validation": label,
                         "filename": response["filename"],
                     })
-                continue
-            for exchange_index, exchange in enumerate(exchanges):
-                config = copy.deepcopy(candidate.get("config") or {})
-                backtest = config.setdefault("backtest", {})
-                if not isinstance(backtest, dict):
-                    raise AICapabilityError("Backtest proposal config is invalid")
-                backtest["exchanges"] = [exchange]
-                operation_id = f"{proposal.id}_{candidate_index}_{exchange_index}"
-                response = backtest_v8.add_to_queue(
-                    {
-                        "name": str(candidate.get("name") or "pareto_backtest"),
-                        "config": config,
-                        "override_configs": candidate.get("override_configs") or {},
-                        "operation_id": operation_id,
-                    },
-                    session=object(),
-                )
-                queued.append({"candidate": candidate.get("name"), "exchange": exchange, "filename": response["filename"]})
         return {
             "proposal_id": proposal.id,
             "status": "executed",
             "action": "queue_backtests",
             "queued_count": len(queued),
             "queued": queued,
+            "compare_after_completion": len(queued) >= 2,
         }
 
     def _execute_optimizer_queue_start(
@@ -3796,13 +3941,16 @@ class AICapabilityService:
     @staticmethod
     def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
         """Atomically write one owner-only finite JSON state file."""
-        atomic_write_private_text(path, json.dumps(payload, indent=4, allow_nan=False) + "\n")
+        atomic_write_private_text(
+            path,
+            json.dumps(payload, allow_nan=False, separators=(",", ":")) + "\n",
+        )
 
     @staticmethod
     def _read_private_json(path: Path, root: Path) -> dict[str, Any]:
         """Read one bounded no-follow private JSON object."""
         raw = read_regular_file_nofollow(path, root)
-        if len(raw) > _MAX_CONFIG_BYTES * 2:
+        if len(raw) > _MAX_AI_STATE_BYTES:
             raise AICapabilityError("AI state record is too large")
         try:
             payload = json.loads(raw.decode("utf-8"))
@@ -3998,7 +4146,7 @@ class AICapabilityService:
             },
             {
                 "name": "select_pareto_candidates",
-                "description": "Select exact Pareto candidates in the currently open PBGui Optimize table. This is a reversible browser action and does not modify files or start jobs.",
+                "description": "Select up to 1000 exact Pareto candidates in the currently open PBGui Optimize table. This is a reversible browser action and does not modify files or start jobs.",
                 "schema": self._object_schema(
                     {
                         "version": version_schema,
@@ -4006,7 +4154,7 @@ class AICapabilityService:
                         "candidate_resources": {
                             "type": "array",
                             "minItems": 1,
-                            "maxItems": 100,
+                            "maxItems": _MAX_PARETO_BACKTEST_CANDIDATES,
                             "items": {"type": "string", "maxLength": 128},
                         },
                         "mode": {"type": "string", "enum": ["replace", "add"]},
@@ -4216,13 +4364,13 @@ class AICapabilityService:
             },
             {
                 "name": "propose_pareto_backtests",
-                "description": "Propose PB8 Pareto backtests either as the configured candidate-by-exchange matrix or as standalone Sweep Holdout, continuous full-timerange, or combined Holdout plus full-timerange validation. Validation modes preserve each candidate's configured exchanges. Never queues or starts jobs without user approval.",
+                "description": "Propose up to 1000 PB8 Pareto backtest jobs in one approval: configured candidate-by-exchange jobs, standalone Holdout/full-timerange validation, or both together. Use configured_and_holdout_and_full_timerange when the request includes both packages; do not split it into sequential proposals. After approval, PBGui waits for the exact queued jobs and opens their Results Compare automatically. Validation modes preserve each candidate's configured exchanges. Never queues or starts jobs without user approval.",
                 "schema": self._object_schema(
                     {
                         "version": {"type": "string", "enum": ["v8"]},
                         "run_resource": {"type": "string", "maxLength": 128},
                         "candidate_resources": {
-                            "type": "array", "minItems": 1, "maxItems": 10,
+                            "type": "array", "minItems": 1, "maxItems": _MAX_PARETO_BACKTEST_CANDIDATES,
                             "items": {"type": "string", "maxLength": 128},
                         },
                         "exchanges": {
@@ -4231,7 +4379,13 @@ class AICapabilityService:
                         },
                         "validation_mode": {
                             "type": "string",
-                            "enum": ["configured", "holdout", "full_timerange", "holdout_and_full_timerange"],
+                            "enum": [
+                                "configured",
+                                "holdout",
+                                "full_timerange",
+                                "holdout_and_full_timerange",
+                                "configured_and_holdout_and_full_timerange",
+                            ],
                         },
                     },
                     ["version", "run_resource", "candidate_resources"],
@@ -4308,13 +4462,21 @@ class AICapabilityService:
             },
             {
                 "name": "propose_optimizer_run_python_analysis",
-                "description": "Propose sandboxed Python over the complete sanitized Pareto metrics dataset of one optimizer-run resource. PBGui resolves all candidates server-side, binds row count and dataset digest to approval, and never exposes host paths or network access.",
+                "description": "Propose sandboxed Python over a complete sanitized Pareto metric matrix for one optimizer run. For cross-period work, pass explicit scenarios and metrics. Stdin schema v2 provides scenarios[], metrics[], and candidates[{resource,name,values}], where values[scenario_index][metric_index] is numeric or null. PBGui resolves all candidates server-side, binds row count and dataset digest to approval, and never exposes host paths or network access.",
                 "schema": self._object_schema(
                     {
                         "version": version_schema,
                         "run_resource": {"type": "string", "maxLength": 128},
                         "scenario": {"type": "string", "maxLength": 128},
+                        "scenarios": {
+                            "type": "array", "minItems": 1, "maxItems": 16,
+                            "items": {"type": "string", "maxLength": 128},
+                        },
                         "statistic": {"type": "string", "maxLength": 32},
+                        "metrics": {
+                            "type": "array", "minItems": 1, "maxItems": 16,
+                            "items": {"type": "string", "maxLength": 128},
+                        },
                         "code": {"type": "string", "minLength": 1, "maxLength": _MAX_ANALYSIS_CODE_BYTES},
                     },
                     ["version", "run_resource", "code"],
@@ -4909,7 +5071,7 @@ def restart_block_reason(root: Path | None = None) -> str:
             if path.is_symlink() or not path.is_file():
                 return "AI action recovery state is unsafe; restart is blocked"
             raw = read_regular_file_nofollow(path, journal_root)
-            if len(raw) > _MAX_CONFIG_BYTES * 2:
+            if len(raw) > _MAX_AI_STATE_BYTES:
                 return "AI action recovery state is invalid; restart is blocked"
             payload = json.loads(raw.decode("utf-8"))
             if not isinstance(payload, dict) or payload.get("phase") != "completed":

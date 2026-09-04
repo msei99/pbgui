@@ -1556,7 +1556,11 @@ def test_failed_internal_continuation_preserves_successful_action_status(
         service.credentials.save_go_key(owner, "sk-test-0123456789abcdef")
         conversation = await service._conversation(owner, "opencode-go", "model", None)
 
+        attempts = 0
+
         async def failing_go_chat(*_args, **_kwargs):
+            nonlocal attempts
+            attempts += 1
             raise AIChatError("ChatGPT response timed out")
 
         monkeypatch.setattr(service, "_go_chat", failing_go_chat)
@@ -1570,12 +1574,53 @@ def test_failed_internal_continuation_preserves_successful_action_status(
         snapshot = await service.get_conversation(owner, conversation.id)
 
         assert snapshot["last_error"] == ""
+        assert attempts == 2
         assert snapshot["messages"] == [{
             "role": "assistant",
             "content": (
                 "The approved PBGui action completed successfully. Its optional AI follow-up did not complete: "
                 "ChatGPT response timed out. No approved action was rolled back."
             ),
+        }]
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_internal_continuation_recovers_from_one_provider_timeout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A transient summary timeout gets one retry without repeating the approved action."""
+
+    async def scenario() -> None:
+        owner = "a" * 32
+        service = AIChatService(tmp_path / "ai")
+        service.credentials.save_go_key(owner, "sk-test-0123456789abcdef")
+        conversation = await service._conversation(owner, "opencode-go", "model", None)
+        attempts = 0
+
+        async def flaky_go_chat(*_args, **_kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise AIChatError("ChatGPT response timed out")
+            return "The approved analysis selected candidate-1."
+
+        monkeypatch.setattr(service, "_go_chat", flaky_go_chat)
+        await service.start_turn(
+            owner,
+            conversation.id,
+            "Approved action completed. Continue.",
+            internal=True,
+        )
+        await service.active_tasks[conversation.id]
+        snapshot = await service.get_conversation(owner, conversation.id)
+
+        assert attempts == 2
+        assert snapshot["last_error"] == ""
+        assert snapshot["messages"] == [{
+            "role": "assistant",
+            "content": "The approved analysis selected candidate-1.",
         }]
         await service.shutdown()
 

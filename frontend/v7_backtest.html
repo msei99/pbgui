@@ -1147,6 +1147,11 @@ var _resultMetricsLoadError = '';
 var _resultMetricsState = { mode: 'default', selected: [], available: [], loading: false, loaded: false, error: '' };
 var ws = null;
 var BACKTEST_VIEW_STATE_KEY = 'pbgui:' + backtestEditorAdapter.version + '_backtest:view_state';
+var AI_BACKTEST_COMPARE_KEY = 'pbgui:ai:backtest_compare:v1';
+var aiQueueCompareRequest = null;
+var aiQueueCompareOpening = false;
+var aiQueueCompareRetryCount = 0;
+var aiQueueCompareRetryTimer = null;
 var BACKTEST_SORT_DEFAULTS = {
   configs: { col: 'modified', asc: false },
   results: { col: 'modified', asc: false },
@@ -1549,6 +1554,7 @@ function connectWS() {
         if (changed) {
           renderQueue();
           updateQueueBadge();
+          maybeOpenAIQueueCompare();
         }
       } else if (msg.type === 'archive_update') {
         // inotify detected a change in the local archives directory
@@ -5732,6 +5738,7 @@ function renderQueue() {
   });
   html += '</tbody></table>';
   el.innerHTML = html;
+  selectAIQueueCompareRows();
 }
 
 function updateQueueBadge() {
@@ -8402,6 +8409,121 @@ function _resolveQueueComparePaths(selectedQueueItems) {
   return { paths: paths, unmatched: unmatched };
 }
 
+function normalizeAIQueueCompareRequest(value) {
+  if (!backtestEditorAdapter.isV8 || !value || value.version !== 'v8' || !Array.isArray(value.filenames)) return null;
+  var filenames = value.filenames.map(String).filter(function(filename) {
+    return /^[A-Za-z0-9_.-]{1,128}$/.test(filename);
+  });
+  filenames = Array.from(new Set(filenames));
+  var createdAt = Number(value.created_at || 0);
+  if (filenames.length < 2 || filenames.length > 1000 || !Number.isFinite(createdAt) || Date.now() - createdAt > 7 * 24 * 60 * 60 * 1000) return null;
+  return {
+    version: 'v8',
+    proposal_id: String(value.proposal_id || ''),
+    filenames: filenames,
+    created_at: createdAt
+  };
+}
+
+function storeAIQueueCompareRequest(value) {
+  var normalized = normalizeAIQueueCompareRequest(value);
+  if (!normalized) return false;
+  aiQueueCompareRequest = normalized;
+  aiQueueCompareOpening = false;
+  aiQueueCompareRetryCount = 0;
+  if (aiQueueCompareRetryTimer) clearTimeout(aiQueueCompareRetryTimer);
+  aiQueueCompareRetryTimer = null;
+  try { sessionStorage.setItem(AI_BACKTEST_COMPARE_KEY, JSON.stringify(normalized)); } catch (_error) {}
+  return true;
+}
+
+function clearAIQueueCompareRequest() {
+  aiQueueCompareRequest = null;
+  aiQueueCompareOpening = false;
+  aiQueueCompareRetryCount = 0;
+  if (aiQueueCompareRetryTimer) clearTimeout(aiQueueCompareRetryTimer);
+  aiQueueCompareRetryTimer = null;
+  try { sessionStorage.removeItem(AI_BACKTEST_COMPARE_KEY); } catch (_error) {}
+}
+
+function restoreAIQueueCompareRequest() {
+  if (!backtestEditorAdapter.isV8) return false;
+  var stored = null;
+  try { stored = JSON.parse(sessionStorage.getItem(AI_BACKTEST_COMPARE_KEY) || 'null'); } catch (_error) {}
+  if (!storeAIQueueCompareRequest(stored)) {
+    try { sessionStorage.removeItem(AI_BACKTEST_COMPARE_KEY); } catch (_error) {}
+    return false;
+  }
+  selectPanel('queue');
+  selectAIQueueCompareRows();
+  maybeOpenAIQueueCompare();
+  return true;
+}
+
+function selectAIQueueCompareRows() {
+  if (!aiQueueCompareRequest) return;
+  var selected = new Set(aiQueueCompareRequest.filenames);
+  document.querySelectorAll('#queue-list .tbl tbody tr[data-filename]').forEach(function(row) {
+    row.classList.toggle('selected', selected.has(String(row.dataset.filename || '')));
+  });
+}
+
+function retryAIQueueCompare() {
+  aiQueueCompareOpening = false;
+  aiQueueCompareRetryCount += 1;
+  if (aiQueueCompareRetryCount >= 15) {
+    clearAIQueueCompareRequest();
+    toast('The queued backtests finished, but their Results Compare could not be resolved.', 'err');
+    return;
+  }
+  aiQueueCompareRetryTimer = setTimeout(function() {
+    aiQueueCompareRetryTimer = null;
+    maybeOpenAIQueueCompare();
+  }, 2000);
+}
+
+function maybeOpenAIQueueCompare() {
+  if (!aiQueueCompareRequest || aiQueueCompareOpening) return;
+  var byFilename = new Map(queueItems.map(function(item) { return [String(item.filename || ''), item]; }));
+  var selectedItems = aiQueueCompareRequest.filenames.map(function(filename) { return byFilename.get(filename); }).filter(Boolean);
+  selectAIQueueCompareRows();
+  if (selectedItems.length !== aiQueueCompareRequest.filenames.length) return;
+  var terminal = selectedItems.every(function(item) {
+    return item.status === 'complete' || item.status === 'error' || item.status === 'stopped';
+  });
+  if (!terminal) return;
+  var completedItems = selectedItems.filter(function(item) { return item.status === 'complete'; });
+  if (completedItems.length < 2) {
+    clearAIQueueCompareRequest();
+    toast('Fewer than 2 backtests completed successfully; Results Compare was not opened.', 'err');
+    return;
+  }
+  aiQueueCompareOpening = true;
+  var versionFilter = document.getElementById('results-version-filter');
+  if (versionFilter) versionFilter.value = 'v8';
+  loadResults('', { keepVisible: true }).then(function() {
+    var matched = _resolveQueueComparePaths(completedItems);
+    if (matched.paths.length < 2 || matched.unmatched.length) {
+      retryAIQueueCompare();
+      return;
+    }
+    _clearResultsFilters();
+    selectPanel('results');
+    setSelectedResults(matched.paths);
+    return _compareResultPaths(matched.paths, results, document.getElementById('compare-chart-area'), 'compare-chart-div').then(function(opened) {
+      if (!opened) {
+        retryAIQueueCompare();
+        return;
+      }
+      var skipped = selectedItems.length - completedItems.length;
+      clearAIQueueCompareRequest();
+      toast('Opened Results Compare for ' + matched.paths.length + ' completed backtests' + (skipped ? '; skipped ' + skipped + ' failed or stopped job(s).' : '.'), skipped ? 'warn' : 'ok');
+    });
+  }).catch(function() {
+    retryAIQueueCompare();
+  });
+}
+
 function compareSelectedQueue() {
   var selected = getSelectedQueue();
   if (selected.length < 2) { toast('Select at least 2 queue items to compare', 'err'); return; }
@@ -10710,6 +10832,7 @@ loadSettings().catch(function(error) { console.error('Failed to load Backtest se
 initBacktestOhlcvPreflightController();
 loadConfigs();
 connectWS();
+restoreAIQueueCompareRequest();
 if (initialViewState.panel === 'archive' && initialViewState.archive) {
   selectedArchiveName = initialViewState.archive;
   archiveResultsMode = archiveModeFromValue(initialViewState.archiveMode);
@@ -10767,6 +10890,13 @@ window.addEventListener('pbgui:ai-ui-action', function(event) {
   openAIBacktestCompare(action).catch(function(error) {
     toast('PBGui AI could not open Results Compare: ' + error.message, 'err');
   });
+});
+window.addEventListener('pbgui:ai-backtest-compare-request', function(event) {
+  var request = event && event.detail && typeof event.detail === 'object' ? event.detail : null;
+  if (!storeAIQueueCompareRequest(request)) return;
+  selectPanel('queue');
+  selectAIQueueCompareRows();
+  maybeOpenAIQueueCompare();
 });
 window.PBGUI_AI_PAGE_CONTEXT = function () {
   var entities = [];
