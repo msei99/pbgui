@@ -401,8 +401,8 @@ def test_tradfi_fill_uses_tiingo_iex_for_mapped_symbol(monkeypatch, tmp_path) ->
 
 
 def test_tradfi_fill_tiingo_month_cache_reuses_single_request_across_days(monkeypatch, tmp_path) -> None:
-    d1 = _recent_weekday() - timedelta(days=3)
-    d2 = d1 + timedelta(days=1)
+    d1 = date(2026, 2, 19)
+    d2 = date(2026, 2, 20)
 
     monkeypatch.setattr(hb, "normalize_hyperliquid_coin", lambda c: c)
     monkeypatch.setattr(hb, "normalize_market_data_coin_dir", lambda *_args, **_kwargs: "XYZ:AAPL_USDC:USDC")

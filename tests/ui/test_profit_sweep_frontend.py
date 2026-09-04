@@ -222,7 +222,6 @@ def test_profit_sweep_live_actions_and_dry_labels_are_explicit() -> None:
         "Save changes",
         "Enable Dry",
         "Disable",
-        "Evaluate now",
         "Reset baseline",
         "Refresh journal",
         "Refresh intents",
@@ -246,11 +245,45 @@ def test_profit_sweep_live_actions_and_dry_labels_are_explicit() -> None:
     assert "'Persistence'" not in source
     assert "state.schema.live_available !== true" in source
     assert "user.is_vault" in source
-    assert source.count("WOULD TRANSFER") >= 4
-    assert "not a submitted or confirmed transfer" in source
+    assert source.count("WOULD TRANSFER") >= 2
+    assert "Dry runs read-only scheduled simulations and never submits a transfer." in source
     assert "server rechecks credentials, account mode, history, and snapshot freshness" in source
     assert 'id="panel-logs"' not in source
     assert 'id="log-drawer"' not in source
+    assert 'id="evaluate-now"' not in source
+    assert 'id="refresh-accounts"' not in source
+    assert "scheduleAutomaticPreview(0)" in source
+    assert "state.previewLoading" in source
+    assert "Fresh read failed; retrying in 15 seconds." in source
+    assert "Date.now() - state.previewLoadedAt >= 60_000" in source
+    assert "document.addEventListener('visibilitychange'" in source
+    assert "if (document.hidden) return" in source
+    assert "!state.previewLoading && state.selectedUser" in source
+    assert "if (!document.hidden) loadUsers(preferredUser)" in source
+    assert "if (!state.users.length)" in source
+    assert "state.usersRetryTimer" in source
+    assert "state.previewRefreshPendingVisibility = true" in source
+    assert "if (state.previewRefreshPendingVisibility)" in source
+    assert "state.previewRefreshPendingVisibility = false" in source
+    assert "var policy = state.record && state.record.policy ? state.record.policy : state.schema.defaults" in source
+    assert "Account Preview" not in source
+    assert 'id="evaluation-preview"' not in source
+    assert 'id="account-freshness"' in source
+    assert "Refreshing in background" in source
+    assert "state.preview = null" not in source.split("async function evaluateNow()", 1)[1].split("async function resetBaseline", 1)[0]
+    assert "text(due) + ' pending'" in source
+    assert "Blocked until HWM recovery" in source
+    assert 'id="status-recovery"' in source
+    assert "Next scheduled check" in source
+    assert "function formatScheduledCheck(value, mode)" in source
+    assert "state.preview.next_scheduled_check_at" in source
+    assert "relative + ' · ' + formatTime(timestamp)" in source
+    assert '<details class="panel journal-disclosure" id="dry-journal-panel" open>' in source
+    assert "syncDryJournalDisclosure(mode)" in source
+    assert "mode === 'live' || mode === 'paused_unknown'" in source
+    assert "previousUser !== state.selectedUser || (!previouslyLive && live)" in source
+    assert "panel.open = !live" in source
+    assert '.journal-disclosure[open] > summary::after { content: "Collapse"; }' in source
 
 
 def test_profit_sweep_live_activation_uses_shared_confirmation_and_saved_settings() -> None:
@@ -272,6 +305,7 @@ def test_profit_sweep_live_activation_uses_shared_confirmation_and_saved_setting
     assert "JSON.stringify({ policy: policy })" in source
     assert "requestJson('/live/' + encodeURIComponent(userName)" in source
     assert "state.writeCapability = result.capability || null" in source
+    assert "state.record = result.policy || state.record" in source
     assert "await refreshPolicyAndIntents(userName, generation" in source
     assert "expected_generation: state.record ? state.record.generation : null" in source
     assert "title: 'Change Live Profit Sweep'" in source
@@ -293,7 +327,7 @@ def test_profit_sweep_live_activation_uses_shared_confirmation_and_saved_setting
     assert "simulation.last_evaluation_at === null" in source
     assert "activeBaseline === selectedBaseline" in source
     assert "previewDecision.sweep_due !== undefined" in source
-    assert "decision.state_kind === 'live' ? 'LIVE PREVIEW' : 'DRY PREVIEW'" in source
+    assert "decisionLabel(reason)" in source
 
 
 def test_profit_sweep_renders_live_capability_modes_and_intents_safely() -> None:
@@ -345,6 +379,13 @@ def test_profit_sweep_renders_live_capability_modes_and_intents_safely() -> None
     assert "vault.leader_fraction" in source
     assert "function vaultShareText(value)" in source
     assert "state.snapshot = result.snapshot || null" in source
+    assert 'id="positions-panel"' in source
+    assert 'id="position-count"' in source
+    assert "function renderPositions(user)" in source
+    assert "Array.isArray(vault.positions)" in source
+    assert "Array.isArray(snapshot.positions)" in source
+    assert "Profit Sweep does not modify or close these positions." in source
+    assert "renderPositions(user);" in source
     assert "byId('vault-panel').hidden" in source
 
 
@@ -386,4 +427,22 @@ def test_profit_sweep_sidebar_and_mobile_contracts() -> None:
     assert "@media (max-width: 720px)" in source
     assert "body.profit-sweep-page { overflow-y: auto; }" in source
     assert '<body class="profit-sweep-page">' in source
-    assert "#status-cards, .field-grid, .overview-grid, .key-values, .preview-grid, .balance-grid, .vault-ownership-grid { grid-template-columns: 1fr; }" in source
+    assert "#status-cards, .field-grid, .key-values, .balance-grid, .vault-ownership-grid { grid-template-columns: 1fr; }" in source
+
+
+def test_profit_sweep_account_transitions_refresh_sidebar_without_default_flash() -> None:
+    """Account changes show a loading state and Live activation updates the sidebar immediately."""
+
+    source = _source()
+    sync_summary = source.split("function syncSelectedUserSummary()", 1)[1].split("async function selectAccount", 1)[0]
+    select_account = source.split("async function selectAccount(userName)", 1)[1].split("async function loadUsers", 1)[0]
+    enable_live = source.split("async function enableLive()", 1)[1].split("async function reconcileIntent", 1)[0]
+
+    assert 'id="account-loading"' in source
+    assert "#main-content.account-loading" in source
+    assert "renderAccounts();" in sync_summary
+    assert "renderAccountLoading(userName);" in select_account
+    assert select_account.index("renderAccountLoading(userName);") < select_account.index("await Promise.all([")
+    assert "renderSelectedAccount();" not in select_account.split("await Promise.all([", 1)[0]
+    assert enable_live.index("state.record = result.policy || state.record;") < enable_live.index("await refreshPolicyAndIntents")
+    assert enable_live.index("syncSelectedUserSummary();") < enable_live.index("await refreshPolicyAndIntents")

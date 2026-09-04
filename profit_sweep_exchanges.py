@@ -577,20 +577,30 @@ def _vault_destination_balances(
     leader_mode: str,
     leader_margin: dict[str, Any],
     leader_spot: dict[str, Any] | None,
+    leader_withdrawable: Any = None,
 ) -> dict[str, dict[str, Any]]:
     """Return separated or unified Leader destination balances by account mode."""
 
     spot_total = leader_spot.get("total") if leader_spot is not None else None
+    spot_available = None
+    try:
+        spot_available = max(
+            Decimal("0"),
+            Decimal(str(spot_total)) - Decimal(str((leader_spot or {}).get("hold") or "0")),
+        )
+    except (InvalidOperation, TypeError, ValueError):
+        pass
     if leader_mode in {"unified", "portfolio_margin"}:
         unified = _destination_account_balance("Main Unified", spot_total, "USDC")
+        unified["withdrawable"] = _money(spot_available)
         return {"main_perps": dict(unified), "main_spot": dict(unified)}
+    main_perps = _destination_account_balance("Main Perps", leader_margin.get("accountValue"), "USDC")
+    main_perps["withdrawable"] = _money(leader_withdrawable)
+    main_spot = _destination_account_balance("Main Spot", spot_total, "USDC")
+    main_spot["withdrawable"] = _money(spot_available)
     return {
-        "main_perps": _destination_account_balance(
-            "Main Perps",
-            leader_margin.get("accountValue"),
-            "USDC",
-        ),
-        "main_spot": _destination_account_balance("Main Spot", spot_total, "USDC"),
+        "main_perps": main_perps,
+        "main_spot": main_spot,
     }
 
 
@@ -955,7 +965,12 @@ def _collect_vault(
                 vault_balances.get("withdrawable"),
                 "USDC",
             ),
-            "destination": _vault_destination_balances(leader_mode, leader_margin, leader_spot),
+            "destination": _vault_destination_balances(
+                leader_mode,
+                leader_margin,
+                leader_spot,
+                leader_state.get("withdrawable") if isinstance(leader_state, dict) else None,
+            ),
             "max_transferable": _money(max_withdrawable),
         },
         "asset": _spot_usdc_meta(spot_meta) if spot_meta is not None else None,
@@ -1376,6 +1391,14 @@ def _collect_bybit(snapshot: dict[str, Any], client: Any, asset: str, since_ms: 
         fills=fills,
         funding=funding,
     )
+    funding_destination = _destination_account_balance(
+        "Funding",
+        funding_coin.get("walletBalance") if funding_coin is not None else None,
+        asset,
+    )
+    funding_destination["withdrawable"] = _money(
+        funding_coin.get("transferBalance") if funding_coin is not None else None
+    )
     snapshot["account_balances"] = {
         "source": _source_account_balance(
             "Unified",
@@ -1383,11 +1406,7 @@ def _collect_bybit(snapshot: dict[str, Any], client: Any, asset: str, since_ms: 
             transfer_balance.get("transferBalance") if transfer_available else None,
             asset,
         ),
-        "destination": _destination_account_balance(
-            "Funding",
-            funding_coin.get("walletBalance") if funding_coin is not None else None,
-            asset,
-        ),
+        "destination": funding_destination,
         "max_transferable": _money(transfer_balance.get("transferBalance")) if transfer_available else None,
     }
     snapshot["transfer_permissions"] = {
@@ -1514,6 +1533,10 @@ def _collect_binance(snapshot: dict[str, Any], client: Any, asset: str, since_ms
         fills=fills,
         funding=funding,
     )
+    funding_destination = _destination_account_balance("Funding Wallet", funding_balance, asset)
+    funding_destination["withdrawable"] = _money(
+        funding_asset.get("free") if funding_asset is not None else "0" if funding_response == [] else None
+    )
     snapshot["account_balances"] = {
         "source": _source_account_balance(
             "USD-M Futures",
@@ -1521,7 +1544,7 @@ def _collect_binance(snapshot: dict[str, Any], client: Any, asset: str, since_ms
             balance.get("maxWithdrawAmount"),
             asset,
         ),
-        "destination": _destination_account_balance("Funding Wallet", funding_balance, asset),
+        "destination": funding_destination,
         "max_transferable": _money(balance.get("maxWithdrawAmount")),
     }
 
@@ -1722,6 +1745,11 @@ def _collect_bitget(snapshot: dict[str, Any], client: Any, asset: str, since_ms:
             "balance",
         )
         destination_balance = destination_asset.get("balance") if destination_asset is not None else None
+        destination_withdrawable = (
+            destination_asset.get("available")
+            if destination_asset is not None and destination_asset.get("available") is not None
+            else destination_asset.get("maxTransfer") if destination_asset is not None else None
+        )
         source_label = "UTA"
         destination_label = "Funding"
     else:
@@ -1759,6 +1787,7 @@ def _collect_bitget(snapshot: dict[str, Any], client: Any, asset: str, since_ms:
             if destination_asset is not None and "balance" in destination_asset
             else _sum_asset_fields(destination_asset, "available", "frozen", "locked")
         )
+        destination_withdrawable = destination_asset.get("available") if destination_asset is not None else None
         source_label = "Classic Futures"
         destination_label = "Spot"
 
@@ -1774,9 +1803,11 @@ def _collect_bitget(snapshot: dict[str, Any], client: Any, asset: str, since_ms:
         fills=fills,
         funding=funding,
     )
+    destination_record = _destination_account_balance(destination_label, destination_balance, asset)
+    destination_record["withdrawable"] = _money(destination_withdrawable)
     snapshot["account_balances"] = {
         "source": _source_account_balance(source_label, source_balance, withdrawable, asset),
-        "destination": _destination_account_balance(destination_label, destination_balance, asset),
+        "destination": destination_record,
         "max_transferable": _money(withdrawable),
     }
     snapshot["transfer_permissions"] = {

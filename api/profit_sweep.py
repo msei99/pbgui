@@ -41,8 +41,9 @@ SERVICE = "ProfitSweep"
 router = APIRouter()
 _VAULT_TEST_MINIMUM = Decimal("5")
 _VAULT_STRICT_EPSILON = Decimal("0.000001")
-_TEST_RECONCILE_ATTEMPTS = 10
-_TEST_RECONCILE_DELAY_SECONDS = 1
+_TRANSFER_RECONCILE_ATTEMPTS = 10
+_TRANSFER_RECONCILE_DELAY_SECONDS = 1
+_TOP_UP_REPEAT_AMOUNT_WINDOW_SECONDS = 10 * 60
 
 _STORE: ProfitSweepStore | None = None
 _SCHEDULER_TASK: asyncio.Task | None = None
@@ -94,6 +95,14 @@ class TestTransferRequest(BaseModel):
     amount: StrictStr = Field(default="1")
     asset: StrictStr = Field(default="")
     operation_id: StrictStr = Field(default="")
+
+
+class TopUpRequest(BaseModel):
+    """Request one fixed-route productive internal transfer."""
+
+    amount: StrictStr
+    operation_id: StrictStr
+    route: StrictStr = Field(default="main_perps_to_vault")
 
 
 class BrowserSignatureRequest(BaseModel):
@@ -691,6 +700,34 @@ def _public_test_operation(operation: dict[str, Any], *, can_transfer_back: bool
     }
 
 
+def _public_top_up_operation(operation: dict[str, Any]) -> dict[str, Any]:
+    """Project one Top Up without descriptors, addresses, signatures, or raw responses."""
+
+    submission = operation.get("submission") if isinstance(operation.get("submission"), dict) else {}
+    reconciliation = (
+        submission.get("reconciliation")
+        if isinstance(submission.get("reconciliation"), dict)
+        else {}
+    )
+    return {
+        "operation_id": operation["operation_id"],
+        "status": operation["state"],
+        "route": operation["route"],
+        "asset": str((operation.get("descriptor") or {}).get("asset") or "USDC"),
+        "requested_amount": operation["requested_amount"],
+        "actual_amount": operation["actual_amount"],
+        "prepared_at": operation["prepared_at"],
+        "submitted_at": operation["submitted_at"],
+        "resolved_at": operation["resolved_at"],
+        "error": operation.get("error") if isinstance(operation.get("error"), dict) else None,
+        "reconciliation": {
+            "status": str(reconciliation.get("status") or "")[:32] or None,
+            "reason": str(reconciliation.get("reason") or "")[:128] or None,
+        },
+        "can_reconcile": operation["state"] == "unknown",
+    }
+
+
 def _public_live_intent(
     intent: dict[str, Any],
     *,
@@ -750,12 +787,12 @@ def _execute_test_operation(
     )
     operation = store.transition_test_operation(operation_id, submission=submission)
     reconciliation: dict[str, Any] = {"status": "pending"}
-    for attempt in range(_TEST_RECONCILE_ATTEMPTS):
+    for attempt in range(_TRANSFER_RECONCILE_ATTEMPTS):
         reconciliation = reconcile_transfer(user, operation["descriptor"], submission)
         if reconciliation.get("status") != "pending":
             break
-        if attempt + 1 < _TEST_RECONCILE_ATTEMPTS:
-            time.sleep(_TEST_RECONCILE_DELAY_SECONDS)
+        if attempt + 1 < _TRANSFER_RECONCILE_ATTEMPTS:
+            time.sleep(_TRANSFER_RECONCILE_DELAY_SECONDS)
     persisted_submission = {**submission, "reconciliation": dict(reconciliation)}
     store.transition_test_operation(operation_id, submission=persisted_submission)
     return store.reconcile_test_operation(operation_id, reconciliation)
@@ -820,6 +857,9 @@ def _test_transfer_sync(
         snapshot=snapshot,
         nonce=int(time.time() * 1000) if str(getattr(user, "exchange", "")).lower() == "hyperliquid" else None,
     )
+    conflict = _recent_manual_transfer_conflict(user_name, route, descriptor["amount"])
+    if conflict:
+        raise ValueError(conflict)
     operation = _store().create_test_operation(
         user_name,
         operation_id=operation_id,
@@ -857,6 +897,9 @@ def _test_transfer_back_sync(user_name: str, operation_id: str) -> dict[str, Any
         raise ValueError("Transfer back requires at least 5 USDC because Hyperliquid enforces that Vault deposit minimum")
     snapshot, _capability = _test_snapshot(user, str(forward["descriptor"]["asset"]))
     reverse_route = reverse_transfer_route(user, snapshot, forward["route"])
+    conflict = _recent_manual_transfer_conflict(user_name, reverse_route, amount)
+    if conflict:
+        raise ValueError(conflict)
     if snapshot.get("account_kind") == "vault":
         balances = snapshot.get("account_balances") if isinstance(snapshot.get("account_balances"), dict) else {}
         destinations = balances.get("destination") if isinstance(balances.get("destination"), dict) else {}
@@ -893,6 +936,310 @@ def _test_transfer_back_sync(user_name: str, operation_id: str) -> dict[str, Any
         "can_transfer_back": False,
         "operation": _public_test_operation(resolved),
     }
+
+
+def _retry_amount_matches(value: Any, operation: dict[str, Any]) -> bool:
+    """Compare a retry after applying the precision persisted in its sealed descriptor."""
+
+    amount = _decimal(_test_amount(value), "amount")
+    descriptor = operation.get("descriptor") if isinstance(operation.get("descriptor"), dict) else {}
+    descriptor_amount = str(descriptor.get("amount") or "")
+    expected = _decimal(descriptor_amount, "persisted transfer amount")
+    precision = descriptor.get("amount_precision") if descriptor.get("schema_version") == 2 else None
+    if precision is not None:
+        if isinstance(precision, int) or str(precision).isdigit():
+            step = Decimal(1).scaleb(-int(precision))
+        else:
+            step = _decimal(str(precision), "persisted transfer precision")
+        amount = (amount / step).to_integral_value(rounding=ROUND_DOWN) * step
+    return amount == expected
+
+
+def _route_spec(
+    route: str,
+    source: str,
+    destination: str,
+    source_balance: Any,
+    maximum: Any,
+    destination_balance: Any,
+    asset: str,
+    minimum: str = "0.000001",
+) -> dict[str, Any]:
+    """Build one bounded browser-safe fixed internal route descriptor."""
+
+    balance = _decimal(source_balance, f"{source} balance")
+    available = _decimal(maximum, f"{source} transferable balance")
+    if balance < 0 or available < 0 or available > balance:
+        raise ValueError(f"{source} balance is invalid")
+    destination_value = None
+    if destination_balance is not None:
+        destination_value = _decimal(destination_balance, f"{destination} balance")
+        if destination_value < 0:
+            raise ValueError(f"{destination} balance is invalid")
+    return {
+        "id": route,
+        "source": source,
+        "destination": destination,
+        "source_balance": _decimal_text(balance),
+        "max_transferable": _decimal_text(available),
+        "destination_balance": _decimal_text(destination_value) if destination_value is not None else None,
+        "asset": asset,
+        "minimum_amount": minimum,
+    }
+
+
+def _manual_transfer_snapshot(user_name: str) -> tuple[Any, dict[str, Any], list[dict[str, Any]]]:
+    """Resolve every fixed internal route supported by one fresh account snapshot."""
+
+    user = _user_or_404(user_name)
+    exchange = str(getattr(user, "exchange", "") or "").lower()
+    asset = "USDC" if exchange == "hyperliquid" else _requested_test_asset(user_name, user, "")
+    snapshot, capability = _test_snapshot(user, asset)
+    balances = snapshot.get("account_balances") if isinstance(snapshot.get("account_balances"), dict) else {}
+    source = balances.get("source") if isinstance(balances.get("source"), dict) else {}
+    destination = balances.get("destination")
+    routes: list[dict[str, Any]] = []
+    if snapshot.get("account_kind") == "vault":
+        vault = snapshot.get("vault") if isinstance(snapshot.get("vault"), dict) else {}
+        destinations = destination if isinstance(destination, dict) else {}
+        main_perps = destinations.get("main_perps") if isinstance(destinations.get("main_perps"), dict) else {}
+        main_spot = destinations.get("main_spot") if isinstance(destinations.get("main_spot"), dict) else {}
+        main_label = (
+            "Main Unified"
+            if str(main_perps.get("label") or "") == "Main Unified"
+            else "Leader Main Perps"
+        )
+        spot_label = (
+            "Main Unified"
+            if str(main_spot.get("label") or "") == "Main Unified"
+            else "Leader Main Spot"
+        )
+        routes.append(_route_spec(
+            "vault_to_main_perps",
+            "Selected Hyperliquid Vault",
+            main_label,
+            vault.get("vault_equity"),
+            vault.get("max_withdrawable"),
+            main_perps.get("balance"),
+            asset,
+        ))
+        routes.append(_route_spec(
+            "main_perps_to_vault",
+            main_label,
+            "Selected Hyperliquid Vault",
+            main_perps.get("balance"),
+            main_perps.get("withdrawable"),
+            vault.get("vault_equity"),
+            asset,
+            "5",
+        ))
+        if "main_perps_to_spot" in capability.get("routes", []):
+            routes.append(_route_spec(
+                "main_perps_to_spot",
+                main_label,
+                spot_label,
+                main_perps.get("balance"),
+                main_perps.get("withdrawable"),
+                main_spot.get("balance"),
+                asset,
+            ))
+        if "main_spot_to_perps" in capability.get("routes", []) and main_spot.get("withdrawable") is not None:
+            routes.append(_route_spec(
+                "main_spot_to_perps",
+                spot_label,
+                main_label,
+                main_spot.get("balance"),
+                main_spot.get("withdrawable"),
+                main_perps.get("balance"),
+                asset,
+            ))
+    else:
+        if not isinstance(destination, dict):
+            raise ValueError("Internal destination balance is unavailable")
+        canonical = list(capability.get("routes") or [])
+        if len(canonical) != 1:
+            raise ValueError("A fixed internal transfer route could not be resolved")
+        forward = str(canonical[0])
+        reverse = reverse_transfer_route(user, snapshot, forward)
+        forward_maximum = source.get("withdrawable") or balances.get("max_transferable")
+        routes.append(_route_spec(
+            forward,
+            str(source.get("label") or "Source"),
+            str(destination.get("label") or "Destination"),
+            source.get("balance"),
+            forward_maximum,
+            destination.get("balance"),
+            asset,
+        ))
+        reverse_maximum = destination.get("withdrawable")
+        if str(getattr(user, "exchange", "") or "").lower() == "hyperliquid":
+            spot = (snapshot.get("account") or {}).get("spot_usdc") if isinstance(snapshot.get("account"), dict) else None
+            if isinstance(spot, dict):
+                reverse_maximum = max(
+                    Decimal("0"),
+                    _decimal(spot.get("total"), "Spot balance") - _decimal(spot.get("hold") or "0", "Spot hold"),
+                )
+        if destination.get("balance") is not None and reverse_maximum is not None:
+            routes.append(_route_spec(
+                reverse,
+                str(destination.get("label") or "Destination"),
+                str(source.get("label") or "Source"),
+                destination.get("balance"),
+                reverse_maximum,
+                source.get("balance"),
+                asset,
+            ))
+    return user, snapshot, routes
+
+
+def _top_up_block_reason(user_name: str, operation_id: str = "") -> str:
+    """Return why another real-funds operation blocks a new Top Up."""
+
+    store = _store()
+    try:
+        policy = store.get_policy(user_name)
+    except KeyError:
+        policy = None
+    if policy is not None and store.list_live_intents(user_name, unresolved_only=True):
+        return "Reconcile the unresolved Profit Sweep transfer before starting a Top Up"
+    for item in store.list_unresolved_transfer_operations():
+        if item["user_name"] == user_name and item["operation_id"] != operation_id:
+            return "Reconcile the unresolved manual transfer before starting another Top Up"
+    return ""
+
+
+def _recent_manual_transfer_conflict(user_name: str, route: str, amount: str) -> str:
+    """Prevent PBGui-owned equal routes from sharing one exchange-history match window."""
+
+    now = int(time.time())
+    operations = [
+        *_store().list_top_up_operations(user_name),
+        *_store().list_test_operations(user_name),
+    ]
+    for previous in operations:
+        if previous["state"] == "failed" or previous["route"] != route:
+            continue
+        previous_time = int(previous.get("submitted_at") or previous.get("prepared_at") or 0)
+        if (
+            Decimal(previous["requested_amount"]) == Decimal(amount)
+            and 0 <= now - previous_time <= _TOP_UP_REPEAT_AMOUNT_WINDOW_SECONDS
+        ):
+            return "Wait 10 minutes before sending the same internal route and amount again"
+    return ""
+
+
+def _top_up_preview_sync(user_name: str, selected_route: str = "") -> dict[str, Any]:
+    """Build a secret-free read-only preview for every supported internal route."""
+
+    user, snapshot, routes = _manual_transfer_snapshot(user_name)
+    selected = next((item for item in routes if item["id"] == selected_route), routes[0])
+    vault = snapshot.get("vault") if isinstance(snapshot.get("vault"), dict) else {}
+    vault_balances = vault.get("balances") if isinstance(vault.get("balances"), dict) else {}
+    leader = snapshot.get("leader") if isinstance(snapshot.get("leader"), dict) else {}
+    account_mode = str(leader.get("account_mode") or "") if snapshot.get("account_kind") == "vault" else ""
+    raw_positions = vault.get("positions") if isinstance(vault.get("positions"), list) else []
+    positions = []
+    for item in raw_positions[:100]:
+        if not isinstance(item, dict):
+            continue
+        size = str(item.get("size") or "")
+        try:
+            side = "long" if Decimal(size) > 0 else "short"
+        except (InvalidOperation, ValueError):
+            continue
+        positions.append({
+            "coin": str(item.get("coin") or "")[:32],
+            "side": side,
+            "size": size[:64],
+            "position_value": str(item.get("position_value") or "")[:64] or None,
+            "entry_price": str(item.get("entry_price") or "")[:64] or None,
+            "unrealized_pnl": str(item.get("unrealized_pnl") or "")[:64] or None,
+            "liquidation_price": str(item.get("liquidation_price") or "")[:64] or None,
+            "leverage_type": str(item.get("leverage_type") or "")[:32] or None,
+        })
+    return {
+        "user_name": user_name,
+        "exchange": str(getattr(user, "exchange", "") or "").lower(),
+        "account_type": "vault" if snapshot.get("account_kind") == "vault" else "standard",
+        "account_mode": account_mode or None,
+        "route_note": (
+            "Leader uses Main Unified: Main Perps and Main Spot share one balance, so no transfer between them is available."
+            if account_mode in {"unified", "portfolio_margin"}
+            else None
+        ),
+        "routes": routes,
+        "route": selected["id"],
+        "asset": selected["asset"],
+        "source": selected["source"],
+        "destination": selected["destination"],
+        "source_balance": selected["source_balance"],
+        "max_transferable": selected["max_transferable"],
+        "destination_balance": selected["destination_balance"],
+        "minimum_amount": selected["minimum_amount"],
+        "your_vault_equity": str(vault.get("vault_equity") or "0"),
+        "vault_account_value": str(vault_balances.get("account_value") or "0"),
+        "user_max_withdrawable": str(vault.get("max_withdrawable") or "0"),
+        "positions": positions,
+        "position_count": len(raw_positions),
+        "positions_truncated": len(raw_positions) > len(positions),
+        "blocked_reason": _top_up_block_reason(user_name),
+        "read_only": True,
+    }
+
+
+def _top_up_sync(user_name: str, amount_value: Any, operation_id_value: Any, route_value: Any) -> dict[str, Any]:
+    """Persist, submit once, and reconcile one productive fixed-route internal transfer."""
+
+    route = str(route_value or "").strip()
+    amount = _test_amount(amount_value)
+    operation_id = _requested_test_operation_id(operation_id_value)
+    store = _store()
+    try:
+        existing = store.get_transfer_operation(operation_id)
+    except KeyError:
+        existing = None
+    if existing is not None:
+        if (
+            existing["operation_kind"] != "top_up"
+            or existing["user_name"] != user_name
+            or existing["route"] != route
+            or not _retry_amount_matches(amount, existing)
+        ):
+            raise ValueError("operation_id is already assigned to another transfer")
+        return {"status": existing["state"], "operation": _public_top_up_operation(existing)}
+    blocked = _top_up_block_reason(user_name, operation_id)
+    if blocked:
+        raise ValueError(blocked)
+    user, snapshot, routes = _manual_transfer_snapshot(user_name)
+    selected = next((item for item in routes if item["id"] == route), None)
+    if selected is None:
+        raise ValueError("Selected internal transfer route is unavailable")
+    descriptor = prepare_transfer(
+        user,
+        operation_id=operation_id,
+        amount=amount,
+        asset=selected["asset"],
+        route=route,
+        snapshot=snapshot,
+        nonce=int(time.time() * 1000) if str(getattr(user, "exchange", "") or "").lower() == "hyperliquid" else None,
+    )
+    amount = descriptor["amount"]
+    if Decimal(amount) < Decimal(selected["minimum_amount"]):
+        raise ValueError("Transfer amount is below the route minimum")
+    if Decimal(amount) > Decimal(selected["max_transferable"]):
+        raise ValueError("Transfer amount exceeds the fresh source availability")
+    conflict = _recent_manual_transfer_conflict(user_name, route, amount)
+    if conflict:
+        raise ValueError(conflict)
+    operation = store.create_top_up_operation(
+        user_name,
+        operation_id=operation_id,
+        route=route,
+        descriptor=descriptor,
+        requested_amount=descriptor["amount"],
+    )
+    resolved = _execute_test_operation(user, operation)
+    return {"status": resolved["state"], "operation": _public_top_up_operation(resolved)}
 
 
 def _submit_test_signature_sync(user_name: str, operation_id: str, signature: str) -> dict[str, Any]:
@@ -1041,7 +1388,13 @@ def _execute_prepared_intent(
     )
     submission = submit_transfer(user, intent["descriptor"])
     intent = _store().transition_live_intent(operation_id, "submitting", submission=submission)
-    reconciliation = reconcile_transfer(user, intent["descriptor"], submission)
+    reconciliation: dict[str, Any] = {"status": "pending"}
+    for attempt in range(_TRANSFER_RECONCILE_ATTEMPTS):
+        reconciliation = reconcile_transfer(user, intent["descriptor"], submission)
+        if reconciliation.get("status") != "pending":
+            break
+        if attempt + 1 < _TRANSFER_RECONCILE_ATTEMPTS:
+            time.sleep(_TRANSFER_RECONCILE_DELAY_SECONDS)
     if require_received and reconciliation.get("status") == "confirmed" and not reconciliation.get("received_amount"):
         reconciliation = {
             **reconciliation,
@@ -1182,6 +1535,11 @@ def _evaluate_live_sync(user_name: str) -> dict[str, Any]:
         raise ValueError("Live evaluation requires operating_mode=live")
     if store.list_live_intents(user_name, unresolved_only=True):
         raise ValueError("An unresolved Live intent blocks new work")
+    if any(
+        operation["user_name"] == user_name
+        for operation in store.list_unresolved_transfer_operations()
+    ):
+        raise ValueError("An unresolved manual transfer blocks Live evaluation")
     now_ms = int(time.time() * 1000)
     since_ms, until_ms = _history_window(policy_record, now_ms, state_kind="live")
     snapshot = collect_readonly_snapshot(
@@ -1362,6 +1720,11 @@ def _preview_sync(user_name: str, policy_overrides: dict[str, Any] | None = None
                 else decision["reason"]
             ),
         }
+    next_scheduled_check_at = (
+        saved[f"{preview_state_kind}_state"].get("next_run_at")
+        if saved is not None
+        else None
+    )
     return {
         "policy": {
             "user_name": user_name,
@@ -1371,6 +1734,7 @@ def _preview_sync(user_name: str, policy_overrides: dict[str, Any] | None = None
         },
         "decision": {**decision, "state_kind": preview_state_kind, "committed": False},
         "snapshot": snapshot,
+        "next_scheduled_check_at": next_scheduled_check_at,
         "read_only": True,
         "saved_policy": saved is not None,
     }
@@ -1505,31 +1869,83 @@ def _reconcile_operation_sync(user_name: str, operation_id: str) -> dict[str, An
 def _reconcile_test_operation_sync(user_name: str, operation_id: str) -> dict[str, Any]:
     """Reconcile one submitted test operation without ever resubmitting it."""
 
-    operation = _store().get_test_operation(operation_id)
-    if operation["user_name"] != user_name:
+    operation = _store().get_transfer_operation(operation_id)
+    if operation["user_name"] != user_name or operation["operation_kind"] != "test":
         raise KeyError("Profit Sweep test operation not found")
+    return _reconcile_manual_operation_sync(operation)
+
+
+def _reconcile_manual_operation_sync(operation: dict[str, Any]) -> dict[str, Any]:
+    """Reconcile one submitted isolated manual operation without resubmission."""
+
     if operation["state"] in {"confirmed", "failed", "prepared"}:
         return operation
-    user = _user_or_404(user_name)
+    user = _user_or_404(operation["user_name"])
     submission = operation.get("submission") or {
         "status": "unknown",
         "submitted_at_ms": int(operation["submitted_at"] or operation["updated_at"]) * 1000,
     }
     reconciliation = reconcile_transfer(user, operation["descriptor"], submission)
-    return _store().reconcile_test_operation(operation_id, reconciliation)
+    return _store().reconcile_test_operation(operation["operation_id"], reconciliation)
+
+
+def _reconcile_top_up_sync(user_name: str, operation_id: str) -> dict[str, Any]:
+    """Reconcile one persisted Top Up without ever submitting it again."""
+
+    operation = _store().get_top_up_operation(operation_id)
+    if operation["user_name"] != user_name:
+        raise KeyError("Top Up operation not found")
+    return _reconcile_manual_operation_sync(operation)
 
 
 def _reconcile_unresolved_sync() -> None:
     """Reconcile every submitted durable operation before scheduler evaluation."""
 
     store = _store()
-    for operation in store.list_unresolved_test_operations():
-        if operation["state"] in {"submitting", "unknown"}:
-            _reconcile_test_operation_sync(operation["user_name"], operation["operation_id"])
+    for operation in store.list_unresolved_transfer_operations():
+        try:
+            if operation["operation_kind"] == "top_up" and operation["state"] == "prepared":
+                store.transition_test_operation(
+                    operation["operation_id"],
+                    submission={"status": "failed", "reason": "interrupted_before_submission"},
+                    claim=True,
+                )
+                store.reconcile_test_operation(
+                    operation["operation_id"],
+                    {"status": "failed", "reason": "interrupted_before_submission"},
+                )
+                continue
+            if operation["state"] in {"submitting", "unknown"}:
+                _reconcile_manual_operation_sync(operation)
+        except Exception as exc:
+            if operation["state"] == "submitting":
+                try:
+                    store.reconcile_test_operation(
+                        operation["operation_id"],
+                        {"status": "unknown", "reason": "recovery_account_unavailable"},
+                    )
+                except Exception:
+                    pass
+            _log(
+                SERVICE,
+                f"Manual transfer recovery failed for {operation['user_name']}: {type(exc).__name__}",
+                level="ERROR",
+                user=operation["user_name"],
+                meta={"operation": "manual_transfer_recovery", "traceback": traceback.format_exc()},
+            )
     for policy_record in store.list_policies():
         user_name = policy_record["user_name"]
         for intent in store.list_live_intents(user_name, unresolved_only=True):
-            _reconcile_operation_sync(user_name, intent["operation_id"])
+            try:
+                _reconcile_operation_sync(user_name, intent["operation_id"])
+            except Exception as exc:
+                _log(
+                    SERVICE,
+                    f"Live intent recovery failed for {user_name}: {type(exc).__name__}",
+                    level="ERROR",
+                    user=user_name,
+                    meta={"operation": "live_intent_recovery", "traceback": traceback.format_exc()},
+                )
         intents = store.list_live_intents(user_name)
         leg_two_parents = {
             item.get("parent_id")
@@ -1548,9 +1964,18 @@ def _reconcile_unresolved_sync() -> None:
                 submission = intent.get("submission") or {}
                 reconciliation = submission.get("reconciliation") if isinstance(submission, dict) else None
                 received = reconciliation.get("received_amount") if isinstance(reconciliation, dict) else None
-                if not received:
-                    raise RuntimeError(f"Vault intent {intent['operation_id']} has no reconciled received amount")
-                _create_vault_leg_two(_user_or_404(user_name), intent, str(received))
+                try:
+                    if not received:
+                        raise RuntimeError(f"Vault intent {intent['operation_id']} has no reconciled received amount")
+                    _create_vault_leg_two(_user_or_404(user_name), intent, str(received))
+                except Exception as exc:
+                    _log(
+                        SERVICE,
+                        f"Vault forwarding recovery failed for {user_name}: {type(exc).__name__}",
+                        level="ERROR",
+                        user=user_name,
+                        meta={"operation": "vault_forward_recovery", "traceback": traceback.format_exc()},
+                    )
 
 
 def _record_income_hint(user_name: str) -> bool:
@@ -1715,10 +2140,11 @@ def restart_block_reason() -> str:
                     f"Profit Sweep transfer {intent['operation_id']} for {policy['user_name']} "
                     "is submitting and must be reconciled before restart"
                 )
-    for operation in _store().list_unresolved_test_operations():
+    for operation in _store().list_unresolved_transfer_operations():
         if operation["state"] == "submitting":
+            label = "Top Up" if operation["operation_kind"] == "top_up" else "Profit Sweep test transfer"
             return (
-                f"Profit Sweep test transfer {operation['operation_id']} for {operation['user_name']} "
+                f"{label} {operation['operation_id']} for {operation['user_name']} "
                 "is submitting and must be reconciled before restart"
             )
     return ""
@@ -1744,6 +2170,152 @@ def get_main_page(request: Request, session: SessionToken = Depends(require_auth
         content=html,
         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
     )
+
+
+@router.get("/transfers/main_page", response_class=HTMLResponse)
+def get_transfers_main_page(
+    request: Request,
+    session: SessionToken = Depends(require_auth),
+) -> HTMLResponse:
+    """Serve the standalone fixed-route Transfers page."""
+
+    del session
+    html_path = Path(__file__).parent.parent / "frontend" / "transfers.html"
+    html = html_path.read_text(encoding="utf-8")
+    scheme = request.url.scheme
+    host = request.url.hostname or "127.0.0.1"
+    port = request.url.port
+    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
+    html = html.replace('"%%API_BASE%%"', json.dumps(origin + "/api/profit-sweep"))
+    html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
+    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    nav_js = Path(__file__).parent.parent / "frontend" / "pbgui_nav.js"
+    nav_hash = str(int(nav_js.stat().st_mtime)) if nav_js.exists() else PBGUI_VERSION
+    html = html.replace("%%NAV_HASH%%", nav_hash)
+    return HTMLResponse(
+        content=html,
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
+
+
+@router.get("/transfers/users")
+def list_transfer_users(session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """List secret-free accounts backed by a fixed internal-transfer adapter."""
+
+    del session
+    users = [
+        {
+            "name": str(getattr(user, "name", "") or ""),
+            "exchange": str(getattr(user, "exchange", "") or "").lower(),
+            "account_type": "vault" if bool(getattr(user, "is_vault", False)) else "standard",
+        }
+        for user in _users()
+        if str(getattr(user, "exchange", "") or "").lower() in {"hyperliquid", "bybit", "binance", "bitget"}
+    ]
+    return {"users": sorted(users, key=lambda item: item["name"].lower())}
+
+
+@router.get("/transfers/preview/{user_name}")
+async def preview_top_up(
+    user_name: str,
+    session: SessionToken = Depends(require_auth),
+    route: str = Query(default=""),
+) -> dict[str, Any]:
+    """Return fresh read-only fixed internal-transfer route previews."""
+
+    del session
+    try:
+        return await _run_account_operation(user_name, _top_up_preview_sync, user_name, route)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise _logged_http_error(409, str(exc), operation="preview_top_up", user_name=user_name, exc=exc) from exc
+    except RuntimeError as exc:
+        raise _logged_http_error(503, str(exc), operation="preview_top_up", user_name=user_name, exc=exc) from exc
+    except Exception as exc:
+        raise _logged_http_error(500, "Top Up preview failed", operation="preview_top_up", user_name=user_name, exc=exc) from exc
+
+
+@router.post("/transfers/top-up/{user_name}")
+@router.post("/transfers/execute/{user_name}")
+async def create_top_up(
+    user_name: str,
+    body: TopUpRequest,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Submit one reviewed fixed internal transfer exactly once."""
+
+    del session
+    try:
+        result = await _run_account_operation(
+            user_name,
+            _top_up_sync,
+            user_name,
+            body.amount,
+            body.operation_id,
+            body.route,
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise _logged_http_error(409, str(exc), operation="create_top_up", user_name=user_name, exc=exc) from exc
+    except RuntimeError as exc:
+        raise _logged_http_error(503, str(exc), operation="create_top_up", user_name=user_name, exc=exc) from exc
+    except Exception as exc:
+        raise _logged_http_error(500, "Top Up failed", operation="create_top_up", user_name=user_name, exc=exc) from exc
+    _log(
+        SERVICE,
+        f"Manual internal transfer for {user_name}: {result['status']}",
+        level="INFO",
+        user=user_name,
+        meta={"operation": "create_top_up", "route": body.route},
+    )
+    return result
+
+
+@router.get("/transfers/operations/{user_name}")
+def list_top_ups(
+    user_name: str,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return one account's secret-free productive internal-transfer history."""
+
+    del session
+    _user_or_404(user_name)
+    try:
+        operations = _store().list_top_up_operations(user_name)
+    except ValueError as exc:
+        raise _logged_http_error(422, str(exc), operation="list_top_ups", user_name=user_name, exc=exc) from exc
+    return {"operations": [_public_top_up_operation(item) for item in reversed(operations)]}
+
+
+@router.post("/transfers/operations/{user_name}/{operation_id}/reconcile")
+async def reconcile_top_up(
+    user_name: str,
+    operation_id: str,
+    session: SessionToken = Depends(require_auth),
+) -> dict[str, Any]:
+    """Reconcile one Top Up without ever resubmitting it."""
+
+    del session
+    try:
+        operation = await _run_account_operation(
+            user_name,
+            _reconcile_top_up_sync,
+            user_name,
+            operation_id,
+        )
+    except HTTPException:
+        raise
+    except KeyError as exc:
+        raise _logged_http_error(404, "Top Up operation not found", operation="reconcile_top_up", user_name=user_name, exc=exc) from exc
+    except ValueError as exc:
+        raise _logged_http_error(409, str(exc), operation="reconcile_top_up", user_name=user_name, exc=exc) from exc
+    except RuntimeError as exc:
+        raise _logged_http_error(503, str(exc), operation="reconcile_top_up", user_name=user_name, exc=exc) from exc
+    except Exception as exc:
+        raise _logged_http_error(500, "Top Up reconciliation failed", operation="reconcile_top_up", user_name=user_name, exc=exc) from exc
+    return {"status": operation["state"], "operation": _public_top_up_operation(operation)}
 
 
 @router.get("/schema")
@@ -2314,8 +2886,8 @@ async def evaluate_now(
 
     _user_or_404(user_name)
     try:
-        return await _run_owned_thread(
-            _preview_sync, user_name, body.policy if body is not None else None
+        return await _run_account_operation(
+            user_name, _preview_sync, user_name, body.policy if body is not None else None
         )
     except ValueError as exc:
         raise _logged_http_error(

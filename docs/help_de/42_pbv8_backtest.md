@@ -52,7 +52,7 @@ PB8 speichert wiederverwendbare Datensaetze unter `pb8/caches/hlcvs_data` und te
 
 ## Results
 
-Wenn der AI-Assistent exakte verwaltete PB8-Backtest-Ressourcen aufgeloest hat, kann er sie ueber dieselbe Results-**Compare**-Ansicht oeffnen: PBGui leert Filter, laedt die vollstaendige Result-Liste, verlangt fuer jeden sicheren Result-Selektor genau eine passende Zeile, waehlt diese Zeilen aus und rendert den vorhandenen Equity-/Balance-Vergleichschart. Generische Button-Klicks oder Host-Pfade werden dafuer nicht verwendet.
+Wenn der AI-Assistent exakte verwaltete PB8-Backtest-Ressourcen aufgeloest hat, kann er sie ueber dieselbe Results-**Compare**-Ansicht oeffnen. Er kann die Auswahl durch 2-20 exakte Results ersetzen oder 1-20 neue Results wie einen fertigen Holdout zur aktuellen Auswahl hinzufuegen. PBGui leert Filter, laedt die vollstaendige Result-Liste, verlangt fuer jeden sicheren Result-Selektor genau eine passende Zeile, entfernt Duplikate aus der kombinierten Auswahl und rendert den vorhandenen Equity-/Balance-Vergleichschart. Grosse Vergleiche reservieren zusaetzliche Zeilen oberhalb der Plotflaeche fuer die umgebrochene Legende, damit Result-Labels die Backtest-Kurven nicht verdecken. Generische Button-Klicks oder Host-Pfade werden dafuer nicht verwendet.
 
 ### Legacy Results
 

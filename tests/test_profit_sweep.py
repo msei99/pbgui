@@ -41,7 +41,7 @@ def test_private_database_permissions_settings_and_decimal_storage(tmp_path: Pat
     assert stat.S_IMODE(store.db_path.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(store.db_path.stat().st_mode) == 0o600
     assert settings == {
-        "schema_version": 5,
+        "schema_version": 6,
         "journal_mode": "wal",
         "synchronous": 2,
         "busy_timeout_ms": 5_000,
@@ -106,6 +106,29 @@ def test_policy_defaults_crud_persistence_and_scheduler_hints(tmp_path: Path) ->
     assert json.loads(json.dumps(loaded)) == loaded
     assert reopened.delete_policy("alice") is True
     assert reopened.delete_policy("alice") is False
+
+
+def test_policy_defaults_match_the_profit_sweep_editor_defaults() -> None:
+    """New policies use the reviewed standard and Vault values shown by the editor."""
+
+    policy = default_policy()
+
+    assert policy["operating_mode"] == "disabled"
+    assert policy["reference_capital"] == "0"
+    assert policy["baseline_mode"] == "from_enable"
+    assert policy["trigger_percent"] == "0"
+    assert policy["sweep_percent"] == "50"
+    assert policy["minimum_transfer_amount"] == "1"
+    assert policy["simulation_minimum_transfer_amount"] == "1"
+    assert policy["live_minimum_transfer_amount"] == "1"
+    assert policy["transfer_rounding_step"] == "1"
+    assert policy["safety_reserve_amount"] == "0"
+    assert policy["live_activation_baseline_mode"] == "include_dry_period"
+    assert policy["vault_withdraw_mode"] == "flat_only"
+    assert policy["vault_destination"] == "main_perps"
+    assert policy["vault_minimum_transfer_amount"] == "1"
+    assert policy["retained_leader_equity"] == "100"
+    assert policy["vault_safety_reserve_amount"] == "100"
 
 
 @pytest.mark.parametrize(
@@ -187,12 +210,23 @@ def test_transfer_rounding_step_rounds_down_and_retains_due(tmp_path: Path) -> N
     assert tenths["amount"] == "2.1"
 
 
-def test_legacy_policy_update_adds_disabled_rounding_default(tmp_path: Path) -> None:
-    """Policies persisted before rounding existed remain editable without migration."""
+def test_legacy_policy_update_preserves_historical_missing_defaults(tmp_path: Path) -> None:
+    """Persisted policies missing newer fields retain their historical behavior on update."""
 
     store = _store(tmp_path)
     legacy = store.get_policy("alice")["policy"]
-    legacy.pop("transfer_rounding_step")
+    historical = {
+        "trigger_percent": "10",
+        "sweep_percent": "5",
+        "minimum_transfer_amount": "25",
+        "simulation_minimum_transfer_amount": "25",
+        "live_minimum_transfer_amount": "25",
+        "transfer_rounding_step": "0",
+        "live_activation_baseline_mode": "fresh",
+        "vault_minimum_transfer_amount": "50",
+    }
+    for field in historical:
+        legacy.pop(field)
     with sqlite3.connect(store.db_path) as connection:
         connection.execute(
             "UPDATE policies SET config_json = ? WHERE user_name = 'alice'",
@@ -201,7 +235,7 @@ def test_legacy_policy_update_adds_disabled_rounding_default(tmp_path: Path) -> 
 
     updated = store.update_policy("alice", {"quiet_period": 10})
 
-    assert updated["policy"]["transfer_rounding_step"] == "0"
+    assert {field: updated["policy"][field] for field in historical} == historical
 
 
 def test_loss_carryforward_requires_a_new_high_watermark(tmp_path: Path) -> None:
@@ -280,6 +314,8 @@ def test_transfer_caps_reserve_single_daily_and_minimum() -> None:
         "trigger_percent": "0",
         "sweep_percent": "100",
         "minimum_transfer_amount": "25",
+        "simulation_minimum_transfer_amount": "25",
+        "live_minimum_transfer_amount": "25",
         "safety_reserve_mode": "max_of_both",
         "safety_reserve_amount": "100",
         "safety_reserve_percent": "5",
@@ -373,7 +409,12 @@ def test_full_unchanged_policy_save_does_not_reset_accounting_generation(tmp_pat
 
     store = _store(
         tmp_path,
-        {"trigger_percent": "0", "sweep_percent": "50", "minimum_transfer_amount": "0"},
+        {
+            "trigger_percent": "0",
+            "sweep_percent": "50",
+            "minimum_transfer_amount": "0",
+            "transfer_rounding_step": "0",
+        },
         baseline="100",
     )
     store.evaluate_dry("alice", cumulative_net_pnl="125", max_transferable="1000", now=1)
@@ -391,7 +432,12 @@ def test_active_live_can_rebaseline_to_include_dry_before_any_transfer(tmp_path:
 
     store = _store(
         tmp_path,
-        {"trigger_percent": "0", "sweep_percent": "50", "minimum_transfer_amount": "0"},
+        {
+            "trigger_percent": "0",
+            "sweep_percent": "50",
+            "minimum_transfer_amount": "0",
+            "transfer_rounding_step": "0",
+        },
         baseline="100",
     )
     store.evaluate_dry("alice", cumulative_net_pnl="125", max_transferable="1000", now=1)
@@ -416,6 +462,56 @@ def test_active_live_can_rebaseline_to_include_dry_before_any_transfer(tmp_path:
     assert rebaselined["live_state"]["active_baseline_mode"] == "include_dry_period"
     assert preview["net_pnl"] == "25"
     assert preview["amount"] == "12.5"
+
+
+def test_include_dry_live_activation_without_dry_activity_starts_fresh(tmp_path: Path) -> None:
+    """A new From Enable policy must not sweep historical PnL when Dry never ran."""
+
+    store = ProfitSweepStore(tmp_path / "fresh-live" / "state.sqlite3")
+    store.create_policy(
+        "alice",
+        "hyperliquid",
+        {
+            "live_activation_baseline_mode": "include_dry_period",
+            "trigger_percent": "0",
+            "sweep_percent": "25",
+        },
+    )
+
+    activated = store.activate_live("alice", "276.193884212")
+    preview = store.evaluate_live(
+        "alice",
+        cumulative_net_pnl="276.193884212",
+        max_transferable="1000",
+        commit=False,
+    )
+
+    assert activated["live_state"]["active_baseline_mode"] == "include_dry_period"
+    assert activated["live_state"]["baseline_pnl"] == "276.193884212"
+    assert preview["net_pnl"] == "0"
+    assert preview["sweep_due"] == "0"
+    assert preview["amount"] == "0"
+
+
+def test_include_dry_live_activation_preserves_explicit_reset_baseline(tmp_path: Path) -> None:
+    """An explicit baseline reset remains authoritative even before another Dry evaluation."""
+
+    store = ProfitSweepStore(tmp_path / "reset-live" / "state.sqlite3")
+    created = store.create_policy("alice", "hyperliquid")
+    reset = store.reset_baseline(
+        "alice",
+        "100",
+        expected_policy_fingerprint=_policy_fingerprint(created["policy"]),
+    )
+    activated = store.activate_live(
+        "alice",
+        "125",
+        baseline_mode="include_dry_period",
+        expected_policy_fingerprint=_policy_fingerprint(reset["policy"]),
+    )
+
+    assert reset["simulation_state"]["last_decision"] == "baseline_reset"
+    assert activated["live_state"]["baseline_pnl"] == "100"
 
 
 def test_retroactive_live_rebaseline_is_blocked_after_confirmed_transfer(tmp_path: Path) -> None:
@@ -801,7 +897,7 @@ def test_schema_v3_migration_collapses_only_exact_event_duplicates(tmp_path: Pat
 
     migrated = ProfitSweepStore(db_path)
 
-    assert migrated.database_settings()["schema_version"] == 5
+    assert migrated.database_settings()["schema_version"] == 6
     assert len(migrated.list_ledger_events("alice", "hyperliquid")) == 2
     assert migrated.ledger_net_pnl("alice", "hyperliquid", "USDT") == "11.9"
     repeated = migrated.upsert_ledger_event(
@@ -853,7 +949,7 @@ def test_schema_v3_migration_rejects_conflicting_event_identities(tmp_path: Path
         assert connection.execute("SELECT COUNT(*) FROM ledger_events").fetchone()[0] == 2
 
 
-def test_schema_v1_migrates_to_v5_without_losing_policy_or_dry_state(tmp_path: Path) -> None:
+def test_schema_v1_migrates_to_v6_without_losing_policy_or_dry_state(tmp_path: Path) -> None:
     """Opening a version-one database adds later schemas without rewriting state."""
 
     db_path = tmp_path / "migration" / "state.sqlite3"
@@ -878,7 +974,7 @@ def test_schema_v1_migrates_to_v5_without_losing_policy_or_dry_state(tmp_path: P
 
     migrated = ProfitSweepStore(db_path)
 
-    assert migrated.database_settings()["schema_version"] == 5
+    assert migrated.database_settings()["schema_version"] == 6
     assert migrated.get_policy("alice") == before
     assert migrated.list_live_intents("alice") == []
     assert migrated.list_test_operations("alice") == []
@@ -901,9 +997,77 @@ def test_schema_v2_adds_isolated_test_operations(tmp_path: Path) -> None:
 
     migrated = ProfitSweepStore(db_path)
 
-    assert migrated.database_settings()["schema_version"] == 5
+    assert migrated.database_settings()["schema_version"] == 6
     assert migrated.get_policy("alice")["simulation_state"]["sweep_due"] == "0"
     assert migrated.list_test_operations("alice") == []
+
+
+def test_schema_v5_adds_operation_kind_without_reclassifying_tests(tmp_path: Path) -> None:
+    """Version-five manual test rows migrate to the explicit test operation kind."""
+
+    db_path = tmp_path / "migration-v5" / "state.sqlite3"
+    store = ProfitSweepStore(db_path)
+    store.create_test_operation(
+        "alice",
+        operation_id="legacy-test",
+        parent_id=None,
+        direction="forward",
+        route="umfuture_to_funding",
+        descriptor={
+            "operation_id": "legacy-test",
+            "route": "umfuture_to_funding",
+            "amount": "1",
+        },
+        requested_amount="1",
+    )
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("DROP INDEX test_operations_one_back")
+        connection.execute("DROP INDEX test_operations_user_time")
+        connection.execute("DROP INDEX test_operations_one_unresolved_top_up")
+        connection.execute("ALTER TABLE test_operations RENAME TO test_operations_v6")
+        connection.execute(
+            """CREATE TABLE test_operations (
+                operation_id TEXT PRIMARY KEY,
+                user_name TEXT NOT NULL,
+                parent_id TEXT,
+                direction TEXT NOT NULL CHECK (direction IN ('forward', 'back')),
+                route TEXT NOT NULL,
+                descriptor_json TEXT NOT NULL,
+                submission_json TEXT,
+                state TEXT NOT NULL CHECK (state IN ('prepared', 'submitting', 'confirmed', 'failed', 'unknown')),
+                requested_amount TEXT NOT NULL,
+                actual_amount TEXT,
+                prepared_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                submitted_at INTEGER,
+                resolved_at INTEGER,
+                error_json TEXT
+            )"""
+        )
+        columns = (
+            "operation_id", "user_name", "parent_id", "direction", "route", "descriptor_json",
+            "submission_json", "state", "requested_amount", "actual_amount", "prepared_at",
+            "updated_at", "submitted_at", "resolved_at", "error_json",
+        )
+        connection.execute(
+            f"INSERT INTO test_operations ({', '.join(columns)}) "
+            f"SELECT {', '.join(columns)} FROM test_operations_v6"
+        )
+        connection.execute("DROP TABLE test_operations_v6")
+        connection.execute(
+            """CREATE UNIQUE INDEX test_operations_one_back ON test_operations(parent_id)
+               WHERE direction = 'back' AND parent_id IS NOT NULL"""
+        )
+        connection.execute(
+            "CREATE INDEX test_operations_user_time ON test_operations(user_name, prepared_at, operation_id)"
+        )
+        connection.execute("PRAGMA user_version=5")
+
+    migrated = ProfitSweepStore(db_path)
+
+    assert migrated.database_settings()["schema_version"] == 6
+    assert migrated.get_test_operation("legacy-test")["operation_kind"] == "test"
+    assert migrated.list_top_up_operations("alice") == []
 
 
 def test_test_operations_never_change_sweep_financial_accounting(tmp_path: Path) -> None:
@@ -971,6 +1135,48 @@ def test_test_operations_never_change_sweep_financial_accounting(tmp_path: Path)
             requested_amount="24.5",
             now=6,
         )
+
+
+def test_top_up_operations_are_separate_from_tests_and_sweep_accounting(tmp_path: Path) -> None:
+    """Productive Top Ups use the isolated journal without entering test or sweep history."""
+
+    store = _live_store(tmp_path)
+    before = store.get_policy("alice")["live_state"]
+    operation = store.create_top_up_operation(
+        "alice",
+        operation_id="top-up-one",
+        route="main_perps_to_vault",
+        descriptor={
+            "operation_id": "top-up-one",
+            "route": "main_perps_to_vault",
+            "amount": "25",
+        },
+        requested_amount="25",
+        now=2,
+    )
+
+    assert operation["operation_kind"] == "top_up"
+    assert store.list_test_operations("alice") == []
+    assert store.list_top_up_operations("alice")[0]["operation_id"] == "top-up-one"
+    assert store.get_top_up_operation("top-up-one")["operation_kind"] == "top_up"
+    with pytest.raises(KeyError):
+        store.get_test_operation("top-up-one")
+
+    store.transition_test_operation(
+        "top-up-one",
+        submission={"status": "submitted", "submitted_at_ms": 2_000},
+        claim=True,
+        now=2,
+    )
+    confirmed = store.reconcile_test_operation(
+        "top-up-one",
+        {"status": "confirmed", "received_amount": "25"},
+        now=3,
+    )
+
+    assert confirmed["state"] == "confirmed"
+    assert confirmed["actual_amount"] == "25"
+    assert store.get_policy("alice")["live_state"] == before
 
 
 def test_live_failure_releases_reservation_without_reducing_due(tmp_path: Path) -> None:

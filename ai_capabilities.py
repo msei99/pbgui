@@ -983,8 +983,16 @@ class AICapabilityService:
         """Select exact managed backtests and open the existing browser compare view."""
         version = self._version(args)
         requested = args.get("resources")
-        if not isinstance(requested, list) or not 2 <= len(requested) <= 20:
-            raise AICapabilityError("Select between 2 and 20 backtest resources")
+        mode = str(args.get("mode") or ("add" if isinstance(requested, list) and len(requested) == 1 else "replace"))
+        if mode not in {"replace", "add"}:
+            raise AICapabilityError("Invalid Backtest result selection mode")
+        minimum = 1 if mode == "add" else 2
+        if not isinstance(requested, list) or not minimum <= len(requested) <= 20:
+            raise AICapabilityError(
+                "Add between 1 and 20 Backtest resources"
+                if mode == "add"
+                else "Select between 2 and 20 Backtest resources"
+            )
         resources = [self._resource_uri(item, "backtest", version) for item in requested]
         if len(set(resources)) != len(resources):
             raise AICapabilityError("Backtest result selection contains duplicates")
@@ -1005,7 +1013,7 @@ class AICapabilityService:
             "ui_action": {
                 "type": "backtest.compare_results",
                 "target": {"page_key": f"{version}_backtest", "version": version},
-                "payload": {"selectors": selectors},
+                "payload": {"selectors": selectors, "mode": mode},
             },
         }
 
@@ -1502,21 +1510,23 @@ class AICapabilityService:
         encoded = json.dumps(config, allow_nan=False, separators=(",", ":")).encode("utf-8")
         if len(encoded) > _MAX_CONFIG_BYTES:
             raise AICapabilityError("Draft config is too large")
-        for path in cls._sensitive_paths(config):
-            if any(part in path.lower() for part in _SENSITIVE_KEY_PARTS) or path == "pbgui":
-                raise AICapabilityError("Draft configs cannot contain secrets or PBGui runtime metadata")
+        if cls._sensitive_paths(config):
+            raise AICapabilityError("Draft configs cannot contain secrets or PBGui runtime metadata")
 
     @classmethod
     def _sensitive_paths(cls, value: Any, prefix: str = "") -> list[str]:
         """Return sensitive dotted fields without ever returning their values."""
-        if not isinstance(value, dict):
-            return []
         paths = []
-        for key, item in value.items():
-            path = f"{prefix}.{key}" if prefix else str(key)
-            if cls._is_sensitive_path(path):
-                paths.append(path)
-            elif isinstance(item, dict):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                path = f"{prefix}.{key}" if prefix else str(key)
+                if cls._is_sensitive_path(path):
+                    paths.append(path)
+                else:
+                    paths.extend(cls._sensitive_paths(item, path))
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                path = f"{prefix}[{index}]" if prefix else f"[{index}]"
                 paths.extend(cls._sensitive_paths(item, path))
         return paths
 
@@ -1726,7 +1736,7 @@ class AICapabilityService:
         patched = copy.deepcopy(current)
         for operation in operations:
             self._apply_json_patch_operation(patched, operation)
-        self._require_safe_draft(patched)
+        self._require_bounded_config(patched, "Patched config")
         prepared = await self._to_thread_uncancellable(self._validate_pb8_config, name, patched)
         self._preserve_protected_config_fields(current, prepared)
         return await self._create_proposal(
@@ -1741,7 +1751,8 @@ class AICapabilityService:
         for key in list(prepared):
             lowered = str(key).lower()
             protected = (
-                lowered in _PATH_KEYS
+                lowered == "pbgui"
+                or lowered in _PATH_KEYS
                 or lowered.endswith("_path")
                 or any(part in lowered for part in _SENSITIVE_KEY_PARTS)
             )
@@ -1750,7 +1761,8 @@ class AICapabilityService:
         for key, value in original.items():
             lowered = str(key).lower()
             protected = (
-                lowered in _PATH_KEYS
+                lowered == "pbgui"
+                or lowered in _PATH_KEYS
                 or lowered.endswith("_path")
                 or any(part in lowered for part in _SENSITIVE_KEY_PARTS)
             )
@@ -1768,6 +1780,8 @@ class AICapabilityService:
         path = str(operation.get("path") or "")
         if op not in {"add", "replace", "remove"} or not path.startswith("/") or len(path) > 512:
             raise AICapabilityError("Invalid JSON Patch operation")
+        if op in {"add", "replace"}:
+            cls._require_safe_patch_value(operation.get("value"))
         parts = [item.replace("~1", "/").replace("~0", "~") for item in path[1:].split("/")]
         if not parts or len(parts) > 32 or any(not item or cls._is_sensitive_path(item) for item in parts):
             raise AICapabilityError("Unsafe JSON Patch path")
@@ -1806,6 +1820,24 @@ class AICapabilityService:
                 parent[index] = copy.deepcopy(operation.get("value"))
             return
         raise AICapabilityError("JSON Patch parent is not a container")
+
+    @classmethod
+    def _require_safe_patch_value(cls, value: Any) -> None:
+        """Reject protected fields nested anywhere in a model-provided patch value."""
+        encoded = json.dumps(value, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > _MAX_CONFIG_BYTES:
+            raise AICapabilityError("JSON Patch value is too large")
+        if cls._sensitive_paths(value):
+            raise AICapabilityError(
+                "JSON Patch values cannot contain secrets, host paths, or PBGui runtime metadata"
+            )
+
+    @staticmethod
+    def _require_bounded_config(config: dict[str, Any], label: str = "Config") -> None:
+        """Reject a complete config whose canonical JSON exceeds the public limit."""
+        encoded = json.dumps(config, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > _MAX_CONFIG_BYTES:
+            raise AICapabilityError(f"{label} is too large")
 
     async def _propose_queue_pb8_config(
         self,
@@ -4184,16 +4216,17 @@ class AICapabilityService:
             },
             {
                 "name": "select_backtest_results",
-                "description": "Select 2-20 exact managed backtest result resources in the currently open matching PB7/PB8 Backtest page and open its existing Results Compare chart. Use this instead of generic control clicks.",
+                "description": "Open exact managed Backtest resources in the matching PB7/PB8 Results Compare chart. Use mode add with only the 1-20 new resources when adding a Holdout or another result to the current browser selection; use replace with 2-20 resources for a new selection. Use exact opaque resources returned by list_backtests and never reconstruct or modify them. Use this instead of generic page controls.",
                 "schema": self._object_schema(
                     {
                         "version": version_schema,
                         "resources": {
                             "type": "array",
-                            "minItems": 2,
+                            "minItems": 1,
                             "maxItems": 20,
                             "items": {"type": "string", "maxLength": 128},
                         },
+                        "mode": {"type": "string", "enum": ["replace", "add"]},
                     },
                     ["version", "resources"],
                 ),

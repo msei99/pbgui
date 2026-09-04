@@ -320,7 +320,7 @@ Use this panel when a backtest finished on disk but does not appear in the norma
 
 ### Compare multiple results
 
-The AI assistant can also open exact managed PB7 backtest resources in this Results Compare view. PBGui resolves every safe selector uniquely against the completely loaded result list, selects the matching rows, and uses the same existing comparison chart instead of generic UI click sequences.
+The AI assistant can also open exact managed PB7 backtest resources in this Results Compare view. It may replace the selection with 2-20 exact results or add 1-20 new results to the current selection. PBGui resolves every safe selector uniquely against the completely loaded result list, deduplicates the combined selection, and uses the same existing comparison chart instead of generic UI click sequences. Large comparisons reserve additional rows above the plot for the wrapped legend, so result labels never cover the backtest curves.
 1. **Results** → select results → **📈 Compare**
 2. The comparison chart opens showing all selected equity curves overlaid
 

@@ -18,6 +18,10 @@ Configure the exchange user under **System > API Keys** before opening **System 
 
 The Overview reports read capability immediately. Write capability is checked from a fresh server-side snapshot when Live or a test transfer is requested. A displayed route does not override missing credentials, the wrong account mode, stale history, liabilities, lockups, or exchange limits.
 
+The account sidebar shows each policy's current mode and due amount. Switching accounts displays a dedicated loading state until that account's stored policy, journal, intents, and test transfers have loaded; PBGui does not briefly present schema defaults as if they belonged to the selected account. Successful Live activation updates the selected sidebar badge immediately from the authoritative activation response and then reconciles it with the stored policy.
+
+Hyperliquid Vault accounts expose **Fund account** under **Exchange / Vault**. It opens the separate Transfers page with the selected Vault prefilled for a fixed Leader Main Perps to Vault Top Up; manual funding remains outside Profit Sweep accounting.
+
 ## Basic Fields
 
 - **Reference capital** is the trading capital retained before profit is swept.
@@ -30,6 +34,8 @@ The Overview reports read capability immediately. Write capability is checked fr
 
 **Keep trading capital** sets Trigger percent to `0` and Sweep percent to `100`. It does not enable or save the policy. The high-water mark and loss recovery still apply.
 
+New policies start **Disabled** with **From Enable**, Trigger percent `0`, Sweep percent `50`, Minimum transfer amount `1`, Transfer rounding step `1`, and Safety reserve amount `0`. The Live baseline defaults to **Include Dry Period**. Hyperliquid Vault defaults are **Flat Only**, **Main Perps**, Vault minimum amount `1`, Retained leader equity `100`, and Vault reserve amount `100`. Reference capital remains `0` until PBGui initializes it from the account snapshot, and the settlement asset remains exchange-specific. Existing saved policies keep their stored values.
+
 ## Advanced Fields
 
 Policy limits include fixed, percentage, or max-of-both reserves; optional per-transfer and UTC-day caps; and a separate cap for the first Live catch-up transfer. Schedule fields control debounce, quiet and stabilization periods, normal and Vault cooldowns, jitter, maximum history age, and maximum preflight age.
@@ -38,9 +44,9 @@ Vault Advanced fields control withdrawal mode, retained leader equity, leader-sh
 
 ## Dry And Live
 
-**Enable Dry** runs scheduled read-only decisions. **Evaluate now** is always a non-committing preview: it does not create an intent, change confirmed totals, sign a request, or move funds. Eligible Dry results are labeled `WOULD TRANSFER` in the Dry Decision Journal.
+**Enable Dry** runs scheduled read-only decisions. Selecting an account automatically starts a non-committing background account read: it does not create an intent, change confirmed totals, sign a request, or move funds. Eligible Dry results are labeled `WOULD TRANSFER` in the Dry Decision Journal.
 
-**Evaluate now** also refreshes the Exchange / Vault balance cards for the source, configured internal destination, and currently transferable amount. For Vault accounts, **Your Vault Equity** is the leader-owned current equity, **Vault TVL** is the total equity across all depositors, and **Your Share** is the leader fraction of that TVL. A successful Live activation or test-transfer action refreshes the same cards. Vault destination changes switch the displayed destination between Main Perps and Main Spot. A confirmed empty Binance Funding Wallet is shown as zero; failed or unsupported exchange balance reads are shown as unavailable.
+The automatic account read refreshes the top status cards and Exchange / Vault balances for the source, configured internal destination, and currently transferable amount. There is no duplicate Account Preview panel. Existing values remain visible while a refresh runs; a small freshness note in Account State shows loading, last update, or retry status. Reads run on account selection, after relevant actions, every 60 seconds while the page is visible, and when a stale tab becomes visible again. Failures retry after 15 seconds only while visible. Account reads use the same per-account lock as real-funds operations, so they cannot overlap a submission or reconciliation. The account catalog itself loads once when the page opens and retries automatically after an initial transient failure, avoiding list replacement during a real-funds operation. **Sweep Due** is marked `pending` when positive; a high-water-mark block is displayed as **Blocked until HWM recovery** with a separate **Recovery needed** value. **Next scheduled check** shows a live countdown and local time from the scheduler's persisted next-run timestamp; Disabled and Paused Unknown policies show that no check is scheduled. The Exchange / Vault tab lists sanitized open positions from the same snapshot, including side, size, value, entry, unrealized PnL, liquidation price, and leverage, and warns that moving collateral can affect Passivbot wallet-exposure sizing without modifying or closing the positions. For Vault accounts, **Your Vault Equity** is the leader-owned current equity, **Vault TVL** is the total equity across all depositors, and **Your Share** is the leader fraction of that TVL. Vault destination changes switch the displayed destination between Main Perps and Main Spot. A confirmed empty Binance Funding Wallet is shown as zero; failed or unsupported exchange balance reads are shown as unavailable.
 
 For a Hyperliquid Leader in Unified or Portfolio Margin mode, PBGui shows **Main Unified** from the shared USDC spot-clearing balance. Hyperliquid reports separate perp `marginSummary` values as meaningless in those modes, often zero. Standard/Manual Leaders continue to show separate Main Perps and Main Spot balances.
 
@@ -51,9 +57,13 @@ Before **Enable Live**, choose the Live baseline:
 - **Fresh** starts entitlement at the activation snapshot and excludes prior Dry entitlement.
 - **Include Dry Period** recomputes entitlement from the current Dry-generation baseline.
 
+If **Include Dry Period** is selected but the current **From Enable** generation has never completed a Dry evaluation, there is no Dry period to include. Live therefore initializes its baseline from the activation snapshot exactly like a fresh start, preventing historical account PnL from becoming immediately due. An explicitly reset baseline remains authoritative.
+
 The active baseline mode is stored separately from the selected setting. Before any Live transfer has been confirmed, select **Include Dry Period** on an active **Fresh** policy and use **Apply baseline to active Live** with the explicit real-funds confirmation. PBGui then recalculates the Live baseline retroactively from the Dry period and schedules a fresh Live evaluation; previous Dry profit may become immediately due. Ordinary policy saves never trigger this recalculation. The action is blocked after a confirmed Live transfer or while an intent is unresolved, preventing duplicate entitlement.
 
 The optional first-Live catch-up cap limits only the first catch-up; any remainder stays due. Enabling Live requires a shared confirmation, saves the selected settings, and runs server-owned preflight. Live then evaluates, prepares a durable intent before exchange I/O, submits at most once, and reconciles the result. **Disable** prevents future scheduled submissions without deleting transfer history.
+
+After an accepted Live submission, PBGui polls exchange history up to ten times at one-second intervals before classifying a still invisible record as **Unknown**. These are read-only reconciliation attempts; the transfer request itself is never repeated.
 
 ## Scheduling
 
@@ -100,7 +110,7 @@ For a Hyperliquid Vault, the forward route withdraws from the Vault to Leader Ma
 
 For standard accounts, the return uses the reconciled received amount when available, otherwise the requested amount. A return never resubmits the forward operation. **Unknown** has no retry or transfer-back action; inspect the exchange and logs instead of creating a blind duplicate.
 
-After a forward or return operation, PBGui performs a separate fresh read-only balance refresh. If that refresh fails, the durable operation status remains authoritative and the page asks you to retry the balance read with **Evaluate now**.
+After a forward or return operation, PBGui schedules another fresh read-only preview automatically. If that refresh fails, the durable operation status remains authoritative and the preview retries without repeating the transfer.
 
 After Hyperliquid accepts a manual test submission, PBGui polls the fixed read-only ledger query for up to ten seconds before classifying the result as Unknown. Ledger-indexing delay never triggers another submission; only reconciliation reads are repeated.
 
@@ -119,6 +129,8 @@ Persisted descriptors use sorted JSON for stable integrity checks, but Hyperliqu
 ## Intents And Reconciliation
 
 The **Live Transfer Intents** table shows durable **Prepared**, **Submitting**, **Confirmed**, **Failed**, and **Unknown** states. Prepared is persisted before exchange I/O. Confirmed updates accounting only after reconciliation. Failed is a definite non-transfer result.
+
+The **Dry Decision Journal** is collapsible. It starts collapsed when a selected policy is already **Live** or **Paused Unknown**, and open for Dry or Disabled policies. A manual Expand/Collapse choice is preserved while refreshing the same account; entering Live or switching to another Live account applies the collapsed default once.
 
 Unknown means PBGui cannot prove whether the exchange executed the request. The policy changes to **Paused Unknown** and blocks new Live submissions. **Reconcile** queries the exchange again with the same durable operation identity; it never blindly submits a second transfer. Test-transfer operations remain separate and deliberately provide no retry action for Unknown.
 

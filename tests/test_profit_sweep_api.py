@@ -157,12 +157,14 @@ def _vault_snapshot(user_name: str = "vault") -> dict[str, Any]:
                     "label": "Main Perps",
                     "balance": "1000",
                     "available": True,
+                    "withdrawable": "900",
                     "asset": "USDC",
                 },
                 "main_spot": {
                     "label": "Main Spot",
                     "balance": "0",
                     "available": True,
+                    "withdrawable": "0",
                     "asset": "USDC",
                 },
             },
@@ -400,6 +402,14 @@ def test_main_page_is_cookie_only_secret_free_and_non_cacheable() -> None:
     assert SESSION_TOKEN not in html
     assert PRIVATE_KEY not in html
 
+    transfers = profit_sweep_api.get_transfers_main_page(_request(), CookieOnlySession())
+    transfers_html = transfers.body.decode("utf-8")
+    assert transfers.headers["cache-control"] == "no-store"
+    assert "system_transfers" in transfers_html
+    assert "%%API_BASE%%" not in transfers_html
+    assert SESSION_TOKEN not in transfers_html
+    assert PRIVATE_KEY not in transfers_html
+
 
 def test_users_and_policy_crud_support_adapters_and_block_live_mode_bypass(
     isolated_api: SimpleNamespace,
@@ -416,6 +426,14 @@ def test_users_and_policy_crud_support_adapters_and_block_live_mode_bypass(
         "vault",
     ]
     assert users["users"][0]["capability"]["read_only"] is True
+    assert profit_sweep_api.list_transfer_users(object()) == {"users": [
+        {"name": "alice", "exchange": "hyperliquid", "account_type": "standard"},
+        {"name": "binance", "exchange": "binance", "account_type": "standard"},
+        {"name": "bitget-classic", "exchange": "bitget", "account_type": "standard"},
+        {"name": "bitget-uta", "exchange": "bitget", "account_type": "standard"},
+        {"name": "bybit", "exchange": "bybit", "account_type": "standard"},
+        {"name": "vault", "exchange": "hyperliquid", "account_type": "vault"},
+    ]}
 
     created = profit_sweep_api.save_policy(
         "alice",
@@ -489,10 +507,32 @@ def test_evaluate_now_preview_leaves_simulation_state_and_journal_unchanged(
     result = asyncio.run(profit_sweep_api.evaluate_now("alice", object()))
 
     assert result["read_only"] is True
+    assert result["next_scheduled_check_at"] == before_state["next_run_at"]
     assert result["decision"]["committed"] is False
     assert result["decision"]["would_transfer"] is True
     assert isolated_api.store.get_policy("alice")["simulation_state"] == before_state
     assert isolated_api.store.list_simulation_journal("alice") == before_journal == []
+
+
+def test_evaluate_preview_uses_the_real_funds_account_lock(
+    isolated_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Automatic read-only snapshots serialize with submissions for the same account."""
+
+    calls: list[tuple[str, Any, tuple[Any, ...]]] = []
+
+    async def run_locked(user_name: str, function: Any, *args: Any) -> dict[str, Any]:
+        calls.append((user_name, function, args))
+        return {"read_only": True}
+
+    monkeypatch.setattr(profit_sweep_api, "_run_account_operation", run_locked)
+    body = profit_sweep_api.PreviewRequest(policy={"trigger_percent": "0"})
+
+    result = asyncio.run(profit_sweep_api.evaluate_now("alice", object(), body))
+
+    assert result == {"read_only": True}
+    assert calls == [("alice", profit_sweep_api._preview_sync, ("alice", body.policy))]
 
 
 def test_evaluate_now_accepts_unsaved_disabled_form_values(
@@ -514,6 +554,7 @@ def test_evaluate_now_accepts_unsaved_disabled_form_values(
     result = asyncio.run(profit_sweep_api.evaluate_now("alice", object(), body))
 
     assert result["saved_policy"] is False
+    assert result["next_scheduled_check_at"] is None
     assert result["decision"]["would_transfer"] is True
     assert result["decision"]["amount"] == "100"
     assert isolated_api.store.list_policies() == []
@@ -1143,6 +1184,403 @@ def test_manual_vault_test_transfer_roundtrip_uses_withdraw_then_deposit(
     assert LEADER_PRIVATE_KEY not in persisted
 
 
+def test_hyperliquid_vault_top_up_is_idempotent_separate_and_reconciled(
+    isolated_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Productive Main Perps to Vault funding is reviewed once and excluded from sweep accounting."""
+
+    snapshot = _vault_snapshot()
+    snapshot["vault"]["positions"] = [{
+        "coin": "BTC",
+        "size": "0.01",
+        "position_value": "650",
+        "entry_price": "64000",
+        "unrealized_pnl": "10",
+        "liquidation_price": "32000",
+        "leverage_type": "cross",
+    }]
+    monkeypatch.setattr(profit_sweep_api, "collect_readonly_snapshot", lambda *_args: snapshot)
+    submitted: list[dict[str, Any]] = []
+
+    def submit(_user_value: Any, descriptor: dict[str, Any]) -> dict[str, Any]:
+        submitted.append(descriptor)
+        return {
+            "status": "submitted",
+            "operation_id": descriptor["operation_id"],
+            "submitted_at_ms": int(profit_sweep_api.time.time() * 1000),
+        }
+
+    monkeypatch.setattr(profit_sweep_api, "submit_transfer", submit)
+    monkeypatch.setattr(
+        profit_sweep_api,
+        "reconcile_transfer",
+        lambda _user_value, descriptor, _submission: {
+            "status": "confirmed",
+            "operation_id": descriptor["operation_id"],
+            "received_amount": descriptor["amount"],
+        },
+    )
+    policy = isolated_api.store.create_policy("vault", "hyperliquid")
+    before = policy["live_state"]
+    preview = asyncio.run(profit_sweep_api.preview_top_up(
+        "vault", object(), "main_perps_to_vault"
+    ))
+    request = profit_sweep_api.TopUpRequest(
+        amount="25.0000001",
+        operation_id="00000000-0000-4000-8000-000000000001",
+    )
+
+    first = asyncio.run(profit_sweep_api.create_top_up("vault", request, object()))
+    repeated = asyncio.run(profit_sweep_api.create_top_up("vault", request, object()))
+    listed = profit_sweep_api.list_top_ups("vault", object())
+
+    assert preview["user_name"] == "vault"
+    assert preview["exchange"] == "hyperliquid"
+    assert preview["account_type"] == "vault"
+    assert [item["id"] for item in preview["routes"]] == [
+        "vault_to_main_perps",
+        "main_perps_to_vault",
+        "main_perps_to_spot",
+        "main_spot_to_perps",
+    ]
+    assert preview["route"] == "main_perps_to_vault"
+    assert preview["source"] == "Leader Main Perps"
+    assert preview["destination"] == "Selected Hyperliquid Vault"
+    assert preview["source_balance"] == "1000"
+    assert preview["max_transferable"] == "900"
+    assert preview["destination_balance"] == "500"
+    assert preview["your_vault_equity"] == "500"
+    assert preview["vault_account_value"] == "1000"
+    assert preview["user_max_withdrawable"] == "200"
+    assert preview["positions"] == [{
+            "coin": "BTC",
+            "side": "long",
+            "size": "0.01",
+            "position_value": "650",
+            "entry_price": "64000",
+            "unrealized_pnl": "10",
+            "liquidation_price": "32000",
+            "leverage_type": "cross",
+        }]
+    assert preview["position_count"] == 1
+    assert preview["positions_truncated"] is False
+    assert preview["minimum_amount"] == "5"
+    assert preview["blocked_reason"] == ""
+    assert preview["read_only"] is True
+    assert first["status"] == repeated["status"] == "confirmed"
+    assert first["operation"]["route"] == "main_perps_to_vault"
+    assert first["operation"]["requested_amount"] == "25"
+    assert first["operation"]["actual_amount"] == "25"
+    assert len(submitted) == 1
+    assert submitted[0]["request"]["action"]["isDeposit"] is True
+    assert listed["operations"] == [first["operation"]]
+    assert isolated_api.store.list_test_operations("vault") == []
+    assert isolated_api.store.get_policy("vault")["live_state"] == before
+    assert "descriptor" not in json.dumps(first)
+    assert LEADER_PRIVATE_KEY not in json.dumps(first)
+    with pytest.raises(HTTPException, match="Wait 10 minutes"):
+        asyncio.run(profit_sweep_api.create_top_up(
+            "vault",
+            profit_sweep_api.TopUpRequest(
+                amount="25",
+                operation_id="00000000-0000-4000-8000-000000000003",
+            ),
+            object(),
+        ))
+
+
+@pytest.mark.parametrize(
+    ("user_name", "snapshot", "source_label", "destination_label", "route_ids"),
+    [
+        ("alice", _normal_snapshot(), "Perps", "Spot", ["perp_to_spot", "spot_to_perp"]),
+        ("bybit", _bybit_snapshot(), "Unified", "Funding", ["unified_to_fund", "fund_to_unified"]),
+        ("binance", _binance_snapshot(), "USD-M Futures", "Funding Wallet", ["umfuture_to_funding", "funding_to_umfuture"]),
+        ("bitget-classic", _bitget_snapshot("classic"), "Classic Futures", "Spot", ["usdt_futures_to_spot", "spot_to_usdt_futures"]),
+        ("bitget-uta", _bitget_snapshot("uta"), "UTA", "Spot", ["uta_to_spot", "spot_to_uta"]),
+    ],
+)
+def test_manual_transfer_preview_exposes_both_fixed_account_directions(
+    isolated_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    user_name: str,
+    snapshot: dict[str, Any],
+    source_label: str,
+    destination_label: str,
+    route_ids: list[str],
+) -> None:
+    """Every supported standard account exposes its sealed forward and reverse routes."""
+
+    snapshot["collected_at_ms"] = int(profit_sweep_api.time.time() * 1000)
+    snapshot["account_balances"] = {
+        "source": {
+            "label": source_label,
+            "balance": "1000",
+            "available": True,
+            "withdrawable": "500",
+            "asset": "USDT" if snapshot["exchange"] != "hyperliquid" else "USDC",
+        },
+        "destination": {
+            "label": destination_label,
+            "balance": "200",
+            "available": True,
+            "withdrawable": "200",
+            "asset": "USDT" if snapshot["exchange"] != "hyperliquid" else "USDC",
+        },
+        "max_transferable": "500",
+    }
+    if snapshot["exchange"] == "hyperliquid":
+        snapshot["account"]["spot_usdc"] = {"total": "200", "hold": "25"}
+    monkeypatch.setattr(profit_sweep_api, "collect_readonly_snapshot", lambda *_args: snapshot)
+
+    preview = asyncio.run(profit_sweep_api.preview_top_up(user_name, object()))
+
+    assert [item["id"] for item in preview["routes"]] == route_ids
+    assert preview["routes"][0]["source"] == source_label
+    assert preview["routes"][0]["destination"] == destination_label
+    assert preview["routes"][0]["max_transferable"] == "500"
+    assert preview["routes"][1]["source"] == destination_label
+    assert preview["routes"][1]["destination"] == source_label
+    assert preview["routes"][1]["max_transferable"] == (
+        "175" if snapshot["exchange"] == "hyperliquid" else "200"
+    )
+
+
+def test_hyperliquid_vault_executes_each_advertised_internal_route(
+    isolated_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Vault, Main Perps, and Main Spot movements use only their sealed route descriptors."""
+
+    snapshot = _vault_snapshot()
+    snapshot["account_balances"]["destination"]["main_spot"].update({
+        "balance": "20",
+        "withdrawable": "20",
+    })
+    monkeypatch.setattr(profit_sweep_api, "collect_readonly_snapshot", lambda *_args: snapshot)
+    submitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        profit_sweep_api,
+        "submit_transfer",
+        lambda _user_value, descriptor: submitted.append(descriptor) or {
+            "status": "submitted",
+            "operation_id": descriptor["operation_id"],
+            "submitted_at_ms": int(profit_sweep_api.time.time() * 1000),
+        },
+    )
+    monkeypatch.setattr(
+        profit_sweep_api,
+        "reconcile_transfer",
+        lambda _user_value, descriptor, _submission: {
+            "status": "confirmed",
+            "operation_id": descriptor["operation_id"],
+            "received_amount": descriptor["amount"],
+        },
+    )
+    requests = [
+        profit_sweep_api.TopUpRequest(
+            amount=str(10 + index),
+            route=route,
+            operation_id=f"00000000-0000-4000-8000-00000000001{index}",
+        )
+        for index, route in enumerate(
+            (
+                "vault_to_main_perps",
+                "main_perps_to_vault",
+                "main_perps_to_spot",
+                "main_spot_to_perps",
+            )
+        )
+    ]
+
+    results = [
+        asyncio.run(profit_sweep_api.create_top_up("vault", request, object()))
+        for request in requests
+    ]
+
+    assert [result["status"] for result in results] == ["confirmed"] * 4
+    assert [item["route"] for item in submitted] == [
+        "vault_to_main_perps",
+        "main_perps_to_vault",
+        "main_perps_to_spot",
+        "main_spot_to_perps",
+    ]
+    assert submitted[0]["request"]["action"]["isDeposit"] is False
+    assert submitted[1]["request"]["action"]["isDeposit"] is True
+    assert submitted[2]["request"]["action"]["type"] == "agentSendAsset"
+    assert submitted[3]["request"]["action"]["sourceDex"] == "spot"
+    assert submitted[3]["request"]["action"]["destinationDex"] == ""
+    assert [item["operation"]["route"] for item in results] == [item["route"] for item in submitted]
+
+
+def test_unified_vault_leader_explains_why_no_main_spot_route_exists(
+    isolated_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unified leaders expose one shared Main balance instead of a fictitious Spot transfer."""
+
+    snapshot = _vault_snapshot()
+    snapshot["leader"]["account_mode"] = "unified"
+    unified = {
+        "label": "Main Unified",
+        "balance": "500",
+        "available": True,
+        "withdrawable": "450",
+        "asset": "USDC",
+    }
+    snapshot["account_balances"]["destination"] = {
+        "main_perps": dict(unified),
+        "main_spot": dict(unified),
+    }
+    monkeypatch.setattr(profit_sweep_api, "collect_readonly_snapshot", lambda *_args: snapshot)
+
+    preview = asyncio.run(profit_sweep_api.preview_top_up("vault", object()))
+
+    assert [item["id"] for item in preview["routes"]] == [
+        "vault_to_main_perps",
+        "main_perps_to_vault",
+    ]
+    assert {item["source"] for item in preview["routes"]} == {
+        "Selected Hyperliquid Vault",
+        "Main Unified",
+    }
+    assert preview["account_mode"] == "unified"
+    assert "Main Perps and Main Spot share one balance" in preview["route_note"]
+
+
+@pytest.mark.parametrize(
+    ("user_name", "snapshot", "source_label", "destination_label", "route"),
+    [
+        ("alice", _normal_snapshot(), "Perps", "Spot", "spot_to_perp"),
+        ("bybit", _bybit_snapshot(), "Unified", "Funding", "fund_to_unified"),
+        ("binance", _binance_snapshot(), "USD-M Futures", "Funding Wallet", "funding_to_umfuture"),
+        ("bitget-classic", _bitget_snapshot("classic"), "Classic Futures", "Spot", "spot_to_usdt_futures"),
+        ("bitget-uta", _bitget_snapshot("uta"), "UTA", "Spot", "spot_to_uta"),
+    ],
+)
+def test_standard_accounts_execute_their_advertised_reverse_route(
+    isolated_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    user_name: str,
+    snapshot: dict[str, Any],
+    source_label: str,
+    destination_label: str,
+    route: str,
+) -> None:
+    """Each standard adapter executes its reverse route through the sealed descriptor builder."""
+
+    snapshot["collected_at_ms"] = int(profit_sweep_api.time.time() * 1000)
+    asset = "USDC" if snapshot["exchange"] == "hyperliquid" else "USDT"
+    snapshot["account_balances"] = {
+        "source": {
+            "label": source_label,
+            "balance": "1000",
+            "available": True,
+            "withdrawable": "500",
+            "asset": asset,
+        },
+        "destination": {
+            "label": destination_label,
+            "balance": "200",
+            "available": True,
+            "withdrawable": "200",
+            "asset": asset,
+        },
+        "max_transferable": "500",
+    }
+    if snapshot["exchange"] == "hyperliquid":
+        snapshot["account"]["spot_usdc"] = {"total": "200", "hold": "25"}
+    submitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(profit_sweep_api, "collect_readonly_snapshot", lambda *_args: snapshot)
+    monkeypatch.setattr(
+        profit_sweep_api,
+        "submit_transfer",
+        lambda _user_value, descriptor: submitted.append(descriptor) or {
+            "status": "submitted",
+            "operation_id": descriptor["operation_id"],
+            "submitted_at_ms": int(profit_sweep_api.time.time() * 1000),
+        },
+    )
+    monkeypatch.setattr(
+        profit_sweep_api,
+        "reconcile_transfer",
+        lambda _user_value, descriptor, _submission: {
+            "status": "confirmed",
+            "operation_id": descriptor["operation_id"],
+            "received_amount": descriptor["amount"],
+        },
+    )
+    request = profit_sweep_api.TopUpRequest(
+        amount="10.000000001",
+        route=route,
+        operation_id="00000000-0000-4000-8000-000000000020",
+    )
+
+    result = asyncio.run(profit_sweep_api.create_top_up(user_name, request, object()))
+    repeated = asyncio.run(profit_sweep_api.create_top_up(user_name, request, object()))
+
+    assert result["status"] == repeated["status"] == "confirmed"
+    assert result["operation"]["route"] == route
+    assert [item["route"] for item in submitted] == [route]
+
+
+def test_unknown_top_up_reconciles_without_a_second_submission(
+    isolated_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A delayed Vault ledger record exposes Reconcile and never repeats the deposit request."""
+
+    monkeypatch.setattr(profit_sweep_api, "collect_readonly_snapshot", lambda *_args: _vault_snapshot())
+    submissions: list[str] = []
+    monkeypatch.setattr(
+        profit_sweep_api,
+        "submit_transfer",
+        lambda _user_value, descriptor: submissions.append(descriptor["operation_id"]) or {
+            "status": "submitted",
+            "operation_id": descriptor["operation_id"],
+            "submitted_at_ms": int(profit_sweep_api.time.time() * 1000),
+        },
+    )
+    monkeypatch.setattr(
+        profit_sweep_api,
+        "reconcile_transfer",
+        lambda _user_value, descriptor, _submission: {
+            "status": "pending",
+            "operation_id": descriptor["operation_id"],
+        },
+    )
+    monkeypatch.setattr(profit_sweep_api.time, "sleep", lambda _seconds: None)
+    request = profit_sweep_api.TopUpRequest(
+        amount="10",
+        operation_id="00000000-0000-4000-8000-000000000002",
+    )
+
+    unknown = asyncio.run(profit_sweep_api.create_top_up("vault", request, object()))
+
+    assert unknown["status"] == "unknown"
+    assert unknown["operation"]["can_reconcile"] is True
+    assert profit_sweep_api._top_up_block_reason("vault")
+    monkeypatch.setattr(
+        profit_sweep_api,
+        "reconcile_transfer",
+        lambda _user_value, descriptor, _submission: {
+            "status": "confirmed",
+            "operation_id": descriptor["operation_id"],
+            "received_amount": descriptor["amount"],
+        },
+    )
+    confirmed = asyncio.run(profit_sweep_api.reconcile_top_up(
+        "vault",
+        request.operation_id,
+        object(),
+    ))
+
+    assert confirmed["status"] == "confirmed"
+    assert confirmed["operation"]["actual_amount"] == "10"
+    assert submissions == [request.operation_id]
+    assert profit_sweep_api._top_up_block_reason("vault") == ""
+
+
 def test_manual_vault_test_below_deposit_minimum_has_no_transfer_back(
     isolated_api: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
@@ -1398,6 +1836,55 @@ def test_submitting_test_transfer_blocks_restart_and_recovers_without_resubmit(
     assert profit_sweep_api.restart_block_reason() == ""
 
 
+def test_top_up_startup_recovery_continues_after_an_orphaned_account(
+    isolated_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One removed account cannot prevent later safe pre-submission Top Up recovery."""
+
+    descriptor = {
+        "operation_id": "orphaned-top-up",
+        "route": "main_perps_to_vault",
+        "amount": "5",
+    }
+    isolated_api.store.create_top_up_operation(
+        "removed-account",
+        operation_id="orphaned-top-up",
+        route="main_perps_to_vault",
+        descriptor=descriptor,
+        requested_amount="5",
+    )
+    isolated_api.store.transition_test_operation(
+        "orphaned-top-up",
+        submission={"status": "submitted", "submitted_at_ms": 1},
+        claim=True,
+    )
+    isolated_api.store.create_top_up_operation(
+        "vault",
+        operation_id="prepared-top-up",
+        route="main_perps_to_vault",
+        descriptor={**descriptor, "operation_id": "prepared-top-up"},
+        requested_amount="5",
+    )
+    logged: list[str] = []
+    monkeypatch.setattr(
+        profit_sweep_api,
+        "_log",
+        lambda _service, message, **_kwargs: logged.append(message),
+    )
+
+    profit_sweep_api._reconcile_unresolved_sync()
+
+    orphaned = isolated_api.store.get_top_up_operation("orphaned-top-up")
+    assert orphaned["state"] == "unknown"
+    assert orphaned["error"]["reason"] == "recovery_account_unavailable"
+    recovered = isolated_api.store.get_top_up_operation("prepared-top-up")
+    assert recovered["state"] == "failed"
+    assert recovered["error"]["reason"] == "interrupted_before_submission"
+    assert any("removed-account" in message for message in logged)
+    assert profit_sweep_api.restart_block_reason() == ""
+
+
 def test_public_binance_authentication_failure_has_actionable_permission_reason() -> None:
     """Explain a persisted Binance transfer-auth failure without exposing its descriptor."""
 
@@ -1548,6 +2035,97 @@ def test_binance_unknown_pauses_and_never_submits_a_duplicate(
     assert '"descriptor"' not in encoded
     assert '"submission"' not in encoded
     assert '"request"' not in encoded
+
+
+def test_live_transfer_retries_pending_reconciliation_without_resubmission(
+    isolated_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Delayed exchange history is polled without repeating the accepted Live transfer."""
+
+    _create_live_policy(
+        isolated_api.store,
+        "vault",
+        "hyperliquid",
+        changes={"asset": "USDC", "vault_destination": "main_perps"},
+    )
+    monkeypatch.setattr(profit_sweep_api, "collect_readonly_snapshot", lambda *_args: _vault_snapshot())
+    submissions: list[str] = []
+    attempts = 0
+
+    def submit(_user_value: Any, descriptor: dict[str, Any]) -> dict[str, Any]:
+        submissions.append(descriptor["operation_id"])
+        return {
+            "status": "submitted",
+            "operation_id": descriptor["operation_id"],
+            "submitted_at_ms": int(profit_sweep_api.time.time() * 1000),
+        }
+
+    def reconcile(_user_value: Any, descriptor: dict[str, Any], _submission: dict[str, Any]) -> dict[str, Any]:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            return {"status": "pending", "operation_id": descriptor["operation_id"]}
+        return {
+            "status": "confirmed",
+            "operation_id": descriptor["operation_id"],
+            "received_amount": descriptor["amount"],
+        }
+
+    monkeypatch.setattr(profit_sweep_api, "submit_transfer", submit)
+    monkeypatch.setattr(profit_sweep_api, "reconcile_transfer", reconcile)
+    monkeypatch.setattr(profit_sweep_api.time, "sleep", lambda _seconds: None)
+
+    result = profit_sweep_api._evaluate_live_sync("vault")
+
+    assert result["intent"]["state"] == "confirmed"
+    assert attempts == 3
+    assert submissions == [result["intent"]["operation_id"]]
+
+
+def test_unresolved_manual_transfer_blocks_live_evaluation(
+    isolated_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ambiguous manual transfer must block a later scheduled Live submission."""
+
+    _create_live_policy(isolated_api.store, "alice", "hyperliquid")
+    operation_id = "00000000-0000-4000-8000-000000000099"
+    descriptor = {
+        "operation_id": operation_id,
+        "route": "perp_to_spot",
+        "amount": "10",
+    }
+    isolated_api.store.create_test_operation(
+        "alice",
+        operation_id=operation_id,
+        parent_id=None,
+        direction="forward",
+        route="perp_to_spot",
+        descriptor=descriptor,
+        requested_amount="10",
+    )
+    isolated_api.store.transition_test_operation(
+        operation_id,
+        submission={"status": "submitted"},
+        claim=True,
+    )
+    isolated_api.store.reconcile_test_operation(
+        operation_id,
+        {"status": "pending", "reason": "not_visible_yet"},
+    )
+    snapshot_reads: list[str] = []
+    monkeypatch.setattr(
+        profit_sweep_api,
+        "collect_readonly_snapshot",
+        lambda *_args: snapshot_reads.append("read") or _normal_snapshot(),
+    )
+
+    with pytest.raises(ValueError, match="unresolved manual transfer"):
+        profit_sweep_api._evaluate_live_sync("alice")
+
+    assert snapshot_reads == []
+    assert isolated_api.store.list_live_intents("alice") == []
 
 
 def test_bybit_scheduler_allocates_a_canonical_uuid_operation_id(
@@ -1831,7 +2409,7 @@ def test_health_is_secret_free_and_non_mutating(isolated_api: SimpleNamespace) -
     assert health["feature_status"] == "live"
     assert health["read_only"] is False
     assert health["scheduler_running"] is False
-    assert health["database"]["schema_version"] == 5
+    assert health["database"]["schema_version"] == 6
     assert isolated_api.store.list_policies() == policies_before
     assert isolated_api.store.list_simulation_journal("alice") == journal_before
 

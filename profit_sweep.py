@@ -18,7 +18,7 @@ from file_lock import advisory_file_lock
 
 
 SERVICE = "ProfitSweep"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 BUSY_TIMEOUT_MS = 5_000
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "state" / "profit_sweep" / "profit_sweep.sqlite3"
 
@@ -32,12 +32,12 @@ _DEFAULT_POLICY: dict[str, Any] = {
     "asset": "USDT",
     "reference_capital": "0",
     "baseline_mode": "from_enable",
-    "trigger_percent": "10",
-    "sweep_percent": "5",
-    "minimum_transfer_amount": "25",
-    "simulation_minimum_transfer_amount": "25",
-    "live_minimum_transfer_amount": "25",
-    "transfer_rounding_step": "0",
+    "trigger_percent": "0",
+    "sweep_percent": "50",
+    "minimum_transfer_amount": "1",
+    "simulation_minimum_transfer_amount": "1",
+    "live_minimum_transfer_amount": "1",
+    "transfer_rounding_step": "1",
     "safety_reserve_mode": "fixed",
     "safety_reserve_amount": "0",
     "safety_reserve_percent": "0",
@@ -55,12 +55,12 @@ _DEFAULT_POLICY: dict[str, Any] = {
     "schedule_jitter_percent": "10",
     "maximum_history_age": 86_400,
     "maximum_preflight_age": 60,
-    "live_activation_baseline_mode": "fresh",
+    "live_activation_baseline_mode": "include_dry_period",
     "first_live_catchup_limit_enabled": False,
     "first_live_catchup_limit": "0",
     "vault_withdraw_mode": "flat_only",
     "vault_destination": "main_perps",
-    "vault_minimum_transfer_amount": "50",
+    "vault_minimum_transfer_amount": "1",
     "retained_leader_equity": "100",
     "share_safety_buffer": "0.01",
     "vault_safety_reserve_mode": "fixed",
@@ -68,6 +68,17 @@ _DEFAULT_POLICY: dict[str, Any] = {
     "vault_safety_reserve_percent": "0",
     "vault_conditional_cost_policy": "pause_on_cost_or_forced_close",
     "main_destination_activity_policy": "warn",
+}
+
+_LEGACY_MISSING_POLICY_DEFAULTS = {
+    "trigger_percent": "10",
+    "sweep_percent": "5",
+    "minimum_transfer_amount": "25",
+    "simulation_minimum_transfer_amount": "25",
+    "live_minimum_transfer_amount": "25",
+    "transfer_rounding_step": "0",
+    "live_activation_baseline_mode": "fresh",
+    "vault_minimum_transfer_amount": "50",
 }
 
 _ENUMS = {
@@ -123,6 +134,14 @@ _INTEGER_RANGES = {
 
 _STATE_TABLES = {"simulation": "simulation_state", "live": "live_state"}
 _STATE_TOTAL_COLUMNS = {"simulation": "simulated_total", "live": "confirmed_total"}
+_MANUAL_TRANSFER_ROUTES = {
+    "perp_to_spot", "spot_to_perp",
+    "vault_to_main_perps", "main_perps_to_vault", "main_perps_to_spot", "main_spot_to_perps",
+    "unified_to_fund", "fund_to_unified",
+    "umfuture_to_funding", "funding_to_umfuture",
+    "usdt_futures_to_spot", "spot_to_usdt_futures",
+    "uta_to_spot", "spot_to_uta",
+}
 
 
 def default_policy() -> dict[str, Any]:
@@ -420,7 +439,7 @@ class ProfitSweepStore:
                 }
                 if version == 0 and tables:
                     raise RuntimeError("unversioned profit sweep schema is not supported")
-                if version not in {0, 1, 2, 3, 4, SCHEMA_VERSION}:
+                if version not in {0, 1, 2, 3, 4, 5, SCHEMA_VERSION}:
                     raise RuntimeError(f"unsupported profit sweep schema version: {version}")
                 if version == 0:
                     self._create_schema(connection)
@@ -430,18 +449,25 @@ class ProfitSweepStore:
                     self._migrate_v2_to_v3(connection)
                     self._migrate_v3_to_v4(connection)
                     self._migrate_v4_to_v5(connection)
+                    self._migrate_v5_to_v6(connection)
                     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 elif version == 2:
                     self._migrate_v2_to_v3(connection)
                     self._migrate_v3_to_v4(connection)
                     self._migrate_v4_to_v5(connection)
+                    self._migrate_v5_to_v6(connection)
                     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 elif version == 3:
                     self._migrate_v3_to_v4(connection)
                     self._migrate_v4_to_v5(connection)
+                    self._migrate_v5_to_v6(connection)
                     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 elif version == 4:
                     self._migrate_v4_to_v5(connection)
+                    self._migrate_v5_to_v6(connection)
+                    connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                elif version == 5:
+                    self._migrate_v5_to_v6(connection)
                     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 connection.commit()
             except Exception:
@@ -577,6 +603,7 @@ class ProfitSweepStore:
             """CREATE TABLE test_operations (
                 operation_id TEXT PRIMARY KEY,
                 user_name TEXT NOT NULL,
+                operation_kind TEXT NOT NULL DEFAULT 'test' CHECK (operation_kind IN ('test', 'top_up')),
                 parent_id TEXT,
                 direction TEXT NOT NULL CHECK (direction IN ('forward', 'back')),
                 route TEXT NOT NULL,
@@ -598,6 +625,10 @@ class ProfitSweepStore:
         )
         connection.execute(
             "CREATE INDEX test_operations_user_time ON test_operations(user_name, prepared_at, operation_id)"
+        )
+        connection.execute(
+            """CREATE UNIQUE INDEX test_operations_one_unresolved_top_up ON test_operations(user_name)
+               WHERE operation_kind = 'top_up' AND state IN ('prepared', 'submitting', 'unknown')"""
         )
 
     def _migrate_v2_to_v3(self, connection: sqlite3.Connection) -> None:
@@ -691,6 +722,24 @@ class ProfitSweepStore:
             "ALTER TABLE live_state ADD COLUMN active_baseline_mode TEXT NOT NULL DEFAULT 'legacy_unknown'"
         )
 
+    @staticmethod
+    def _migrate_v5_to_v6(connection: sqlite3.Connection) -> None:
+        """Separate productive Top Ups from existing manual test operations."""
+
+        columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(test_operations)").fetchall()
+        }
+        if "operation_kind" not in columns:
+            connection.execute(
+                """ALTER TABLE test_operations ADD COLUMN operation_kind TEXT NOT NULL DEFAULT 'test'
+                   CHECK (operation_kind IN ('test', 'top_up'))"""
+            )
+        connection.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS test_operations_one_unresolved_top_up
+               ON test_operations(user_name)
+               WHERE operation_kind = 'top_up' AND state IN ('prepared', 'submitting', 'unknown')"""
+        )
+
     def _write(self, callback: Any) -> Any:
         """Run one callback under an advisory process lock and BEGIN IMMEDIATE."""
         with advisory_file_lock(self.db_path):
@@ -782,6 +831,7 @@ class ProfitSweepStore:
         return {
             "operation_id": row["operation_id"],
             "user_name": row["user_name"],
+            "operation_kind": row["operation_kind"],
             "parent_id": row["parent_id"],
             "direction": row["direction"],
             "route": row["route"],
@@ -896,6 +946,8 @@ class ProfitSweepStore:
                 and _policy_fingerprint(current) != expected_policy_fingerprint
             ):
                 raise ValueError("policy changed before update")
+            for field, value in _LEGACY_MISSING_POLICY_DEFAULTS.items():
+                current.setdefault(field, value)
             normalized = _normalize_policy(changes, current)
             changed_fields = {
                 key for key in changes if normalized.get(key) != current.get(key)
@@ -966,6 +1018,10 @@ class ProfitSweepStore:
             connection.execute("DELETE FROM live_state WHERE user_name = ?", (user,))
             self._insert_states(connection, user, generation, _decimal_text(baseline))
             connection.execute(
+                "UPDATE simulation_state SET last_decision = 'baseline_reset' WHERE user_name = ?",
+                (user,),
+            )
+            connection.execute(
                 "UPDATE policies SET generation = ?, updated_at = ? WHERE user_name = ?",
                 (generation, int(time.time()), user),
             )
@@ -1009,9 +1065,23 @@ class ProfitSweepStore:
             if unresolved is not None:
                 raise ValueError("an unresolved live intent blocks activation")
             simulation = connection.execute(
-                "SELECT baseline_pnl FROM simulation_state WHERE user_name = ?", (user,)
+                "SELECT * FROM simulation_state WHERE user_name = ?", (user,)
             ).fetchone()
-            baseline = cumulative if mode == "fresh" else Decimal(simulation["baseline_pnl"])
+            dry_baseline_initialized = (
+                simulation["last_evaluation_at"] is not None
+                or simulation["last_successful_scan_at"] is not None
+                or simulation["last_decision"] == "baseline_reset"
+            )
+            uninitialized_from_enable = (
+                mode == "include_dry_period"
+                and policy["baseline_mode"] == "from_enable"
+                and not dry_baseline_initialized
+            )
+            baseline = (
+                cumulative
+                if mode == "fresh" or uninitialized_from_enable
+                else Decimal(simulation["baseline_pnl"])
+            )
             connection.execute("DELETE FROM live_state WHERE user_name = ?", (user,))
             connection.execute(
                 """INSERT INTO live_state (
@@ -1643,6 +1713,7 @@ class ProfitSweepStore:
         route: str,
         descriptor: Mapping[str, Any],
         requested_amount: str | Decimal,
+        operation_kind: str = "test",
         now: int | None = None,
     ) -> dict[str, Any]:
         """Persist an isolated manual transfer before any external submission."""
@@ -1651,9 +1722,17 @@ class ProfitSweepStore:
         operation = self._validate_operation_id(operation_id, "operation_id")
         parent = self._validate_operation_id(parent_id, "parent_id") if parent_id is not None else None
         normalized_route = self._validate_operation_id(route, "route")
+        if operation_kind not in {"test", "top_up"}:
+            raise ValueError("operation_kind must be test or top_up")
         if direction not in {"forward", "back"}:
             raise ValueError("direction must be forward or back")
-        if (direction == "forward" and parent is not None) or (direction == "back" and parent is None):
+        if operation_kind == "top_up" and (
+            direction != "forward" or parent is not None or normalized_route not in _MANUAL_TRANSFER_ROUTES
+        ):
+            raise ValueError("productive manual transfer route is invalid")
+        if operation_kind == "test" and (
+            (direction == "forward" and parent is not None) or (direction == "back" and parent is None)
+        ):
             raise ValueError("test operation parent does not match its direction")
         amount = _decimal(requested_amount, "requested_amount", Decimal("0"))
         if amount <= 0:
@@ -1673,7 +1752,7 @@ class ProfitSweepStore:
         def create(connection: sqlite3.Connection) -> dict[str, Any]:
             """Insert one test row without reading or changing sweep financial state."""
 
-            if direction == "back":
+            if operation_kind == "test" and direction == "back":
                 forward = self._test_operation_row(connection, str(parent))
                 if (
                     forward["user_name"] != user
@@ -1689,12 +1768,13 @@ class ProfitSweepStore:
                     raise ValueError("test transfer has already been sent back")
             connection.execute(
                 """INSERT INTO test_operations (
-                    operation_id, user_name, parent_id, direction, route, descriptor_json, state,
+                    operation_id, user_name, operation_kind, parent_id, direction, route, descriptor_json, state,
                     requested_amount, prepared_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?)""",
                 (
                     operation,
                     user,
+                    operation_kind,
                     parent,
                     direction,
                     normalized_route,
@@ -1708,13 +1788,53 @@ class ProfitSweepStore:
 
         return self._write(create)
 
-    def get_test_operation(self, operation_id: str) -> dict[str, Any]:
-        """Return one isolated manual transfer operation."""
+    def create_top_up_operation(
+        self,
+        user_name: str,
+        *,
+        operation_id: str,
+        route: str,
+        descriptor: Mapping[str, Any],
+        requested_amount: str | Decimal,
+        now: int | None = None,
+    ) -> dict[str, Any]:
+        """Persist one productive manual account Top Up before external submission."""
+
+        return self.create_test_operation(
+            user_name,
+            operation_id=operation_id,
+            parent_id=None,
+            direction="forward",
+            route=route,
+            descriptor=descriptor,
+            requested_amount=requested_amount,
+            operation_kind="top_up",
+            now=now,
+        )
+
+    def get_transfer_operation(self, operation_id: str) -> dict[str, Any]:
+        """Return one isolated manual transfer of any supported operation kind."""
 
         operation = self._validate_operation_id(operation_id, "operation_id")
         return self._read(
             lambda connection: self._test_operation_dict(self._test_operation_row(connection, operation))
         )
+
+    def get_test_operation(self, operation_id: str) -> dict[str, Any]:
+        """Return one isolated manual transfer operation."""
+
+        result = self.get_transfer_operation(operation_id)
+        if result["operation_kind"] != "test":
+            raise KeyError(f"profit sweep test operation not found: {operation_id}")
+        return result
+
+    def get_top_up_operation(self, operation_id: str) -> dict[str, Any]:
+        """Return one productive account Top Up by stable operation ID."""
+
+        result = self.get_transfer_operation(operation_id)
+        if result["operation_kind"] != "top_up":
+            raise KeyError(f"top up operation not found: {operation_id}")
+        return result
 
     def list_test_operations(self, user_name: str) -> list[dict[str, Any]]:
         """List manual transfer operations without requiring a sweep policy."""
@@ -1725,7 +1845,24 @@ class ProfitSweepStore:
             """Load one user's isolated test operations in creation order."""
 
             rows = connection.execute(
-                """SELECT * FROM test_operations WHERE user_name = ?
+                """SELECT * FROM test_operations WHERE user_name = ? AND operation_kind = 'test'
+                   ORDER BY prepared_at, operation_id""",
+                (user,),
+            ).fetchall()
+            return [self._test_operation_dict(row) for row in rows]
+
+        return self._read(load)
+
+    def list_top_up_operations(self, user_name: str) -> list[dict[str, Any]]:
+        """List one account's productive Top Ups in creation order."""
+
+        user = _validate_identifier(user_name, "user_name")
+
+        def load(connection: sqlite3.Connection) -> list[dict[str, Any]]:
+            """Load one user's Top Ups from a consistent read snapshot."""
+
+            rows = connection.execute(
+                """SELECT * FROM test_operations WHERE user_name = ? AND operation_kind = 'top_up'
                    ORDER BY prepared_at, operation_id""",
                 (user,),
             ).fetchall()
@@ -1738,6 +1875,21 @@ class ProfitSweepStore:
 
         def load(connection: sqlite3.Connection) -> list[dict[str, Any]]:
             """Load unresolved rows independently of the current exchange-user catalog."""
+
+            rows = connection.execute(
+                """SELECT * FROM test_operations
+                   WHERE operation_kind = 'test' AND state IN ('prepared', 'submitting', 'unknown')
+                   ORDER BY prepared_at, operation_id"""
+            ).fetchall()
+            return [self._test_operation_dict(row) for row in rows]
+
+        return self._read(load)
+
+    def list_unresolved_transfer_operations(self) -> list[dict[str, Any]]:
+        """List every unresolved test or productive manual transfer operation."""
+
+        def load(connection: sqlite3.Connection) -> list[dict[str, Any]]:
+            """Load all unresolved manual operations for recovery and restart safety."""
 
             rows = connection.execute(
                 """SELECT * FROM test_operations

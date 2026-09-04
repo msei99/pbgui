@@ -618,6 +618,7 @@
       { page: '/',                    icon: '&#128682;', label: 'Welcome'           },
       { page: 'system_api_keys',      icon: '&#128273;', label: 'API-Keys'          },
       { page: 'system_profit_sweep',  icon: '&#128176;', label: 'Profit Sweep'      },
+      { page: 'system_transfers',     icon: '&#8644;',   label: 'Transfers'         },
       { page: 'system_cluster',       icon: '&#128260;', label: 'Cluster Sync'      },
       { page: 'system_services',      icon: '&#128295;', label: 'PBGUI Services'    },
       { page: 'system_db_tools',      icon: '&#128736;', label: 'DB Tools'          },
@@ -1555,6 +1556,7 @@
     'info_ai_chat':      '/api/ai/main_page',
     'system_api_keys':   '/api/api-keys/main_page',
     'system_profit_sweep': '/api/profit-sweep/main_page',
+    'system_transfers':  '/api/profit-sweep/transfers/main_page',
     'system_cluster':    '/api/cluster/main_page',
     'system_vps_manager_fastapi': '/api/vps-manager/main_page',
     'system_logging':     '/api/logging/main_page',
@@ -1584,6 +1586,7 @@
     'info_ai_chat':                 '45_ai_chat',
     'system_api_keys':             '20_api_keys',
     'system_profit_sweep':          '46_profit_sweep',
+    'system_transfers':             '47_transfers',
     'system_cluster':              '39_cluster_sync',
     'system_vps_manager_fastapi':  '32_vps_manager',
     'system_logging':              '31_logging',
@@ -1834,10 +1837,10 @@
       _aiDrawerLoading = true;
       var link = document.createElement('link');
       link.rel = 'stylesheet';
-      link.href = '/app/css/ai_drawer.css?v=12';
+      link.href = '/app/css/ai_drawer.css?v=13';
       document.head.appendChild(link);
       var script = document.createElement('script');
-      script.src = '/app/js/ai_drawer.js?v=38';
+      script.src = '/app/js/ai_drawer.js?v=39';
       script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
       script.onerror = function () { _aiDrawerLoading = false; };
       document.head.appendChild(script);

@@ -12,8 +12,8 @@ CSS = (ROOT / "frontend" / "css" / "ai_drawer.css").read_text(encoding="utf-8")
 def test_nav_lazy_loads_the_versioned_global_ai_drawer() -> None:
     """Every authenticated top-level page should receive one isolated drawer loader."""
     assert 'id="pbgui-ai-btn"' in NAV
-    assert "/app/js/ai_drawer.js?v=38" in NAV
-    assert "/app/css/ai_drawer.css?v=12" in NAV
+    assert "/app/js/ai_drawer.js?v=39" in NAV
+    assert "/app/css/ai_drawer.css?v=13" in NAV
     assert "registerPageContext" in NAV
     assert "collectAIContext" in NAV
 
@@ -87,6 +87,16 @@ def test_drawer_uses_cookie_auth_persistent_history_and_detached_turns() -> None
     assert "window.addEventListener('blur', finish)" in DRAWER
     assert "if (!state.resizing) applyWidth(preferences.drawer_width)" in DRAWER
     assert "drawer_open: drawerOpen == null ? state.open : !!drawerOpen" in DRAWER
+    assert "drawer_pinned: state.drawerPinned" in DRAWER
+    assert "preferences.drawer_pinned === true" in DRAWER
+    assert "drawerPinnedDirty: false" in DRAWER
+    assert "if (!state.drawerPinnedDirty) state.drawerPinned = preferences.drawer_pinned === true" in DRAWER
+    assert "state.drawerPinnedDirty = true" in DRAWER
+    assert "else applyDrawerLayout();\n      notifyLayoutChange();" in DRAWER
+    assert "pbgui-ai-drawer-pinned" in DRAWER
+    assert "Place AI beside PBGui" in DRAWER
+    assert "Overlay AI over PBGui" in DRAWER
+    assert "window.innerWidth - 360" in DRAWER
     assert "saveDrawerPreferences(true)" in DRAWER
     assert "saveDrawerPreferences(false)" in DRAWER
     assert "preferences.drawer_open === true" in NAV
@@ -140,4 +150,6 @@ def test_drawer_renders_untrusted_values_as_text_and_has_explicit_close() -> Non
     assert "cursor:ew-resize" in CSS
     assert "width:16px" in CSS
     assert "touch-action:none" in CSS
+    assert "html.pbgui-ai-drawer-pinned body" in CSS
+    assert ".pai-head .pai-pin" in CSS
     assert ".pai-proposal" in CSS

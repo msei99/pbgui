@@ -428,6 +428,15 @@ def test_hyperliquid_vault_uses_separate_exact_leg_descriptors() -> None:
         snapshot=snapshot,
         nonce=2003,
     )
+    spot_return = transfers.prepare_transfer(
+        user,
+        operation_id="vault-main-spot-return",
+        amount="3.500001",
+        asset="USDC",
+        route="main_spot_to_perps",
+        snapshot=snapshot,
+        nonce=2004,
+    )
 
     assert leg1["request"] == {
         "method": "privatePostExchange",
@@ -450,8 +459,41 @@ def test_hyperliquid_vault_uses_separate_exact_leg_descriptors() -> None:
         "nonce": 2003,
     }
     assert (return_leg["source"], return_leg["destination"]) == (LEADER, VAULT)
+    assert spot_return["request"]["action"] == {
+        "type": "agentSendAsset",
+        "destination": LEADER,
+        "sourceDex": "spot",
+        "destinationDex": "",
+        "token": "USDC:0xcanonical-usdc",
+        "amount": "3.500001",
+        "fromSubAccount": "",
+        "nonce": 2004,
+    }
+    assert spot_return["source"] == "leader_spot"
     assert transfers.reverse_transfer_route(user, snapshot, "vault_to_main_perps") == "main_perps_to_vault"
     assert leg1["idempotency"]["value"] != leg2["idempotency"]["value"]
+
+
+def test_legacy_descriptor_without_persisted_precision_remains_valid() -> None:
+    """Persisted schema-one operations remain reconcilable after precision binding was added."""
+
+    user = _user("hyperliquid", vault=True)
+    descriptor = transfers.prepare_transfer(
+        user,
+        operation_id="legacy-vault-transfer",
+        amount="5.25",
+        asset="USDC",
+        route="vault_to_main_perps",
+        snapshot=_snapshot("hyperliquid", vault=True),
+        nonce=2010,
+    )
+    descriptor["schema_version"] = 1
+    descriptor.pop("amount_precision")
+    descriptor["fingerprint"] = transfers._descriptor_fingerprint(descriptor)
+
+    validated = transfers._validate_descriptor(user, descriptor)
+
+    assert validated["schema_version"] == 1
 
 
 def test_submit_vault_transfer_uses_official_leader_signing_context(

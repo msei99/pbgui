@@ -81,6 +81,7 @@ class AIPreferencesRequest(BaseModel):
 
     drawer_width: int | None = Field(default=None, ge=180, le=100_000)
     drawer_open: bool | None = None
+    drawer_pinned: bool | None = None
 
 
 class ConversationRewindRequest(BaseModel):
@@ -177,7 +178,7 @@ async def save_preferences(
     try:
         return _json(
             get_ai_chat_service().save_preferences(
-                _owner(session), body.drawer_width, body.drawer_open
+                _owner(session), body.drawer_width, body.drawer_open, body.drawer_pinned
             )
         )
     except Exception as exc:

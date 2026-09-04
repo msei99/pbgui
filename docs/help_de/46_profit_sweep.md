@@ -18,6 +18,10 @@ Den Exchange-User zuerst unter **System > API Keys** einrichten und danach **Sys
 
 Die Overview zeigt die Read-Capability sofort. Die Write-Capability wird bei Live oder einem Test-Transfer mit einem frischen serverseitigen Snapshot geprueft. Eine angezeigte Route ueberstimmt keine fehlenden Credentials, einen falschen Account-Modus, veraltete History, Liabilities, Lockups oder Exchange-Limits.
 
+Die Account-Sidebar zeigt fuer jede Policy den aktuellen Modus und Due-Betrag. Beim Accountwechsel erscheint ein eigener Ladezustand, bis gespeicherte Policy, Journal, Intents und Test-Transfers dieses Accounts geladen sind; PBGui zeigt Schema-Defaults nicht mehr kurz so an, als gehoerten sie zum ausgewaehlten Account. Nach erfolgreicher Live-Aktivierung aktualisiert PBGui das ausgewaehlte Sidebar-Badge sofort aus der verbindlichen Aktivierungsantwort und gleicht es danach mit der gespeicherten Policy ab.
+
+Hyperliquid-Vault-Accounts zeigen unter **Exchange / Vault** die Aktion **Fund account**. Sie oeffnet die getrennte Transfers-Seite mit dem ausgewaehlten Vault fuer einen festen Top Up von Leader Main Perps zum Vault; manuelles Funding bleibt ausserhalb der Profit-Sweep-Abrechnung.
+
 ## Basic-Felder
 
 - **Reference capital** ist das Trading-Kapital, das vor einem Sweep erhalten bleibt.
@@ -30,6 +34,8 @@ Die Overview zeigt die Read-Capability sofort. Die Write-Capability wird bei Liv
 
 **Keep trading capital** setzt Trigger percent auf `0` und Sweep percent auf `100`. Das Preset aktiviert oder speichert die Policy nicht. High-Water Mark und Verlustausgleich bleiben aktiv.
 
+Neue Policies starten **Disabled** mit **From Enable**, Trigger percent `0`, Sweep percent `50`, Minimum transfer amount `1`, Transfer rounding step `1` und Safety reserve amount `0`. Die Live-Baseline verwendet standardmaessig **Include Dry Period**. Hyperliquid-Vault-Defaults sind **Flat Only**, **Main Perps**, Vault minimum amount `1`, Retained leader equity `100` und Vault reserve amount `100`. Reference capital bleibt `0`, bis PBGui es aus dem Account-Snapshot initialisiert; das Settlement Asset bleibt Exchange-spezifisch. Bereits gespeicherte Policies behalten ihre Werte.
+
 ## Advanced-Felder
 
 Policy-Limits enthalten feste, prozentuale oder Max-of-Both-Reserven, optionale Limits pro Transfer und UTC-Tag sowie ein separates Limit fuer den ersten Live-Catch-up. Schedule-Felder steuern Debounce, Quiet Period, Stabilization, normale und Vault-Cooldowns, Jitter, maximales History-Alter und maximales Preflight-Alter.
@@ -38,9 +44,9 @@ Vault Advanced steuert Withdrawal Mode, retained Leader Equity, Leader-Share Saf
 
 ## Dry Und Live
 
-**Enable Dry** startet geplante read-only Entscheidungen. **Evaluate now** ist immer ein nicht commitendes Preview: Die Aktion erzeugt keinen Intent, veraendert keine bestaetigten Summen, signiert keinen Request und bewegt kein Guthaben. Berechtigte Dry-Ergebnisse erscheinen als `WOULD TRANSFER` im Dry Decision Journal.
+**Enable Dry** startet geplante read-only Entscheidungen. Die Auswahl eines Accounts startet automatisch einen nicht commitenden Background-Account-Read: Er erzeugt keinen Intent, veraendert keine bestaetigten Summen, signiert keinen Request und bewegt kein Guthaben. Berechtigte Dry-Ergebnisse erscheinen als `WOULD TRANSFER` im Dry Decision Journal.
 
-**Evaluate now** aktualisiert ausserdem unter Exchange / Vault die Saldo-Karten fuer Quelle, konfiguriertes internes Ziel und aktuell transferierbaren Betrag. Bei Vault-Accounts ist **Your Vault Equity** die aktuelle leader-eigene Equity, **Vault TVL** die gesamte Equity aller Depositors und **Your Share** der Leader-Anteil an dieser TVL. Eine erfolgreiche Live-Aktivierung oder Test-Transfer-Aktion aktualisiert dieselben Karten. Bei Vaults wechselt eine Aenderung des Ziels die Anzeige zwischen Main Perps und Main Spot. Ein bestaetigt leeres Binance Funding Wallet wird als Null angezeigt; fehlgeschlagene oder nicht unterstuetzte Exchange-Saldo-Reads erscheinen als unavailable.
+Der automatische Account-Read aktualisiert die oberen Statuskarten sowie unter Exchange / Vault die Saldo-Karten fuer Quelle, konfiguriertes internes Ziel und aktuell transferierbaren Betrag. Ein doppeltes Account-Preview-Panel gibt es nicht mehr. Vorhandene Werte bleiben waehrend eines Refreshs sichtbar; nur ein kleiner Freshness-Hinweis im Account-State-Header zeigt Laden, letzte Aktualisierung oder Retry an. Reads laufen bei Accountauswahl, nach relevanten Aktionen, alle 60 Sekunden bei sichtbarer Seite und wenn ein veralteter Tab wieder sichtbar wird. Fehler werden nur bei sichtbarer Seite nach 15 Sekunden erneut gelesen. Account-Reads verwenden denselben accountweiten Lock wie Echtgeldoperationen und koennen deshalb eine Submission oder Reconciliation nicht ueberlappen. Der Accountkatalog selbst wird einmal beim Oeffnen der Seite geladen und nach einem initialen transienten Fehler automatisch erneut versucht, damit er waehrend einer Echtgeldoperation nicht ersetzt wird. Positives **Sweep Due** wird als `pending` markiert; ein High-Water-Mark-Block erscheint als **Blocked until HWM recovery** mit einem getrennten Wert **Recovery needed**. **Next scheduled check** zeigt einen laufenden Countdown und die lokale Uhrzeit aus dem persistierten Next-Run-Zeitstempel des Schedulers; bei Disabled und Paused Unknown ist keine Pruefung geplant. Der Tab Exchange / Vault zeigt bereinigte offene Positionen aus demselben Snapshot mit Seite, Groesse, Positionswert, Entry, unrealisiertem PnL, Liquidationspreis und Leverage. Ein Hinweis erklaert, dass verschobenes Collateral das Wallet-Exposure-Sizing von Passivbot beeinflussen kann, ohne Positionen zu veraendern oder zu schliessen. Bei Vault-Accounts ist **Your Vault Equity** die aktuelle leader-eigene Equity, **Vault TVL** die gesamte Equity aller Depositors und **Your Share** der Leader-Anteil an dieser TVL. Bei Vaults wechselt eine Aenderung des Ziels die Anzeige zwischen Main Perps und Main Spot. Ein bestaetigt leeres Binance Funding Wallet wird als Null angezeigt; fehlgeschlagene oder nicht unterstuetzte Exchange-Saldo-Reads erscheinen als unavailable.
 
 Bei einem Hyperliquid-Leader im Unified- oder Portfolio-Margin-Modus zeigt PBGui **Main Unified** aus dem gemeinsamen USDC-Spot-Clearing-Saldo. Hyperliquid bezeichnet separate Perp-`marginSummary`-Werte in diesen Modi als nicht aussagekraeftig; sie sind oft Null. Standard/Manual-Leader behalten getrennte Main-Perps- und Main-Spot-Salden.
 
@@ -51,9 +57,13 @@ Vor **Enable Live** die Live-Baseline waehlen:
 - **Fresh** startet die Berechtigung beim Activation Snapshot und schliesst vorherige Dry-Berechtigung aus.
 - **Include Dry Period** berechnet die Berechtigung ab der aktuellen Dry-Generation-Baseline neu.
 
+Wenn **Include Dry Period** ausgewaehlt ist, die aktuelle **From Enable**-Generation aber noch keine Dry-Auswertung abgeschlossen hat, existiert keine Dry-Periode zum Einbeziehen. Live initialisiert die Baseline dann wie bei einem frischen Start aus dem Activation Snapshot, damit historischer Account-PnL nicht sofort Due wird. Eine ausdruecklich zurueckgesetzte Baseline bleibt verbindlich.
+
 Der aktive Baseline-Modus wird getrennt von der ausgewaehlten Einstellung gespeichert. Solange noch kein Live-Transfer bestaetigt wurde, bei einer aktiven **Fresh**-Policy **Include Dry Period** waehlen und **Apply baseline to active Live** mit der ausdruecklichen Real-Funds-Bestaetigung verwenden. PBGui berechnet die Live-Baseline dann rueckwirkend aus der Dry-Periode und plant eine frische Live-Auswertung; vorheriger Dry-Gewinn kann dadurch sofort Due werden. Normales Speichern der Policy startet diese Neuberechnung niemals. Nach einem bestaetigten Live-Transfer oder waehrend eines offenen Intents wird die Aktion blockiert, damit keine Berechtigung doppelt entsteht.
 
 Das optionale First-Live-Catch-up-Limit begrenzt nur den ersten Catch-up; der Rest bleibt Due. Live erfordert eine gemeinsame Bestaetigung, speichert die gewaehlten Werte und startet die serverseitige Preflight-Pruefung. Danach wertet Live aus, persistiert vor Exchange-I/O einen dauerhaften Intent, sendet hoechstens einmal und reconciliert das Ergebnis. **Disable** verhindert kuenftige geplante Submissions, ohne Transfer-History zu loeschen.
+
+Nach einer akzeptierten Live-Submission fragt PBGui die Exchange-History bis zu zehnmal im Abstand von einer Sekunde ab, bevor ein weiterhin unsichtbarer Eintrag als **Unknown** eingestuft wird. Diese Versuche sind reine read-only Reconciliation; der Transferrequest selbst wird niemals wiederholt.
 
 ## Zeitplanung
 
@@ -100,7 +110,7 @@ Bei einem Hyperliquid Vault fuehrt die Forward-Route vom Vault zu Leader Main Pe
 
 Bei Standard-Accounts verwendet der Ruecktransfer den reconcilierten Empfangsbetrag, falls vorhanden, sonst den angeforderten Betrag. Ein Ruecktransfer sendet die Forward-Operation niemals erneut. **Unknown** bietet weder Retry noch Ruecktransfer; stattdessen Exchange und Logs pruefen und kein blindes Duplikat erzeugen.
 
-Nach einer Forward- oder Ruecktransfer-Operation fuehrt PBGui einen separaten frischen read-only Saldo-Refresh aus. Schlaegt dieser Refresh fehl, bleibt der dauerhafte Operation-Status massgeblich und die Seite fordert zu einem erneuten Saldo-Read mit **Evaluate now** auf.
+Nach einer Forward- oder Ruecktransfer-Operation plant PBGui automatisch ein weiteres frisches read-only Preview. Schlaegt dieser Refresh fehl, bleibt der dauerhafte Operation-Status massgeblich und das Preview versucht den Read erneut, ohne den Transfer zu wiederholen.
 
 Nachdem Hyperliquid eine manuelle Test-Submission akzeptiert hat, pollt PBGui die feste read-only Ledger-Abfrage bis zu zehn Sekunden, bevor das Ergebnis als Unknown eingestuft wird. Eine Ledger-Indexierungsverzoegerung erzeugt niemals eine weitere Submission; nur Reconciliation-Reads werden wiederholt.
 
@@ -119,6 +129,8 @@ Persistierte Descriptors verwenden sortiertes JSON fuer stabile Integritaetsprue
 ## Intents Und Reconciliation
 
 Die Tabelle **Live Transfer Intents** zeigt die dauerhaften Statuswerte **Prepared**, **Submitting**, **Confirmed**, **Failed** und **Unknown**. Prepared wird vor Exchange-I/O persistiert. Confirmed aktualisiert die Abrechnung erst nach Reconciliation. Failed ist ein eindeutig nicht ausgefuehrtes Ergebnis.
+
+Das **Dry Decision Journal** ist einklappbar. Bei einer bereits **Live** oder **Paused Unknown** laufenden Policy startet es geschlossen, bei Dry oder Disabled offen. Eine manuelle Expand-/Collapse-Auswahl bleibt beim Refresh desselben Accounts erhalten; beim Wechsel in Live oder zu einem anderen Live-Account wird der geschlossene Default einmalig angewendet.
 
 Unknown bedeutet, dass PBGui nicht beweisen kann, ob die Exchange den Request ausgefuehrt hat. Die Policy wechselt zu **Paused Unknown** und blockiert neue Live-Submissions. **Reconcile** fragt die Exchange mit derselben dauerhaften Operation Identity erneut ab und sendet niemals blind einen zweiten Transfer. Test-Transfer-Operationen bleiben getrennt und bieten bei Unknown absichtlich keine Retry-Aktion.
 

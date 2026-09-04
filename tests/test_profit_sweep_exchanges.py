@@ -67,12 +67,14 @@ def test_vault_destination_balance_uses_unified_spot_state() -> None:
             "label": "Main Unified",
             "balance": "4942.027581",
             "available": True,
+            "withdrawable": "4942.027581",
             "asset": "USDC",
         },
         "main_spot": {
             "label": "Main Unified",
             "balance": "4942.027581",
             "available": True,
+            "withdrawable": "4942.027581",
             "asset": "USDC",
         },
     }
@@ -493,17 +495,19 @@ def test_vault_snapshot_uses_leader_context_and_exact_commission_hash(
             "asset": "USDC",
         },
         "destination": {
-            "main_perps": {
-                "label": "Main Perps",
-                "balance": "55.5000",
-                "available": True,
-                "asset": "USDC",
+                "main_perps": {
+                    "label": "Main Perps",
+                    "balance": "55.5000",
+                    "available": True,
+                    "withdrawable": "50.0000",
+                    "asset": "USDC",
             },
-            "main_spot": {
-                "label": "Main Spot",
-                "balance": "12.3400",
-                "available": True,
-                "asset": "USDC",
+                "main_spot": {
+                    "label": "Main Spot",
+                    "balance": "12.3400",
+                    "available": True,
+                    "withdrawable": "12.3400",
+                    "asset": "USDC",
             },
         },
         "max_transferable": "120.5000",
@@ -660,6 +664,7 @@ def test_bybit_snapshot_uses_only_fixed_unified_reads_and_closes(monkeypatch: py
             "label": "Funding",
             "balance": "23.75",
             "available": True,
+            "withdrawable": "23.75",
             "asset": "USDT",
         },
         "max_transferable": "70.5",
@@ -801,6 +806,7 @@ def test_binance_snapshot_separates_income_types_and_preserves_commission(
             "label": "Funding Wallet",
             "balance": "22.00",
             "available": True,
+            "withdrawable": "20.25",
             "asset": "USDT",
         },
         "max_transferable": "420.50",
@@ -839,6 +845,7 @@ def test_binance_empty_funding_wallet_is_zero_not_unavailable(
         "label": "Funding Wallet",
         "balance": "0",
         "available": True,
+        "withdrawable": "0",
         "asset": "USDT",
     }
     assert len(owners) == 1 and owners[0].closed is True
@@ -938,6 +945,7 @@ def test_bitget_classic_snapshot_detects_fallback_and_uses_max_transfer_out(
             "label": "Spot",
             "balance": "17",
             "available": True,
+            "withdrawable": "14",
             "asset": "USDT",
         },
         "max_transferable": "75.5",
@@ -1009,6 +1017,7 @@ def test_bitget_uta_snapshot_uses_max_transferable_and_financial_records(
             "label": "Funding",
             "balance": "32",
             "available": True,
+            "withdrawable": "30",
             "asset": "USDT",
         },
         "max_transferable": "85",
@@ -1088,6 +1097,7 @@ def test_optional_target_balance_failure_does_not_fail_snapshot(monkeypatch: pyt
         "label": "Spot",
         "balance": None,
         "available": False,
+        "withdrawable": None,
         "asset": "USDT",
     }
     assert client.calls == [

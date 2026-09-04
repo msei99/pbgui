@@ -40,6 +40,9 @@
     .mode-badge.paused, .intent-badge.unknown, .intent-badge.failed { color: var(--danger); border-color: rgba(248,113,113,.4); background: rgba(248,113,113,.09); }
     .intent-badge.prepared, .intent-badge.submitting { color: var(--warn); border-color: rgba(246,196,83,.4); background: rgba(246,196,83,.09); }
     #main-content { min-width: 0; flex: 1; overflow-y: auto; padding: var(--sp-lg); }
+    #main-content.account-loading > :not(.page-head):not(#account-loading) { display: none; }
+    #account-loading { padding: 28px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg2); color: var(--muted); text-align: center; }
+    #account-loading.error { border-color: rgba(248,113,113,.4); color: var(--danger); }
     .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-md); margin-bottom: var(--sp-md); }
     h1 { margin: 2px 0 3px; font-size: var(--fs-xl); line-height: 1.15; }
     .subtitle { color: var(--muted); font-size: var(--fs-sm); }
@@ -61,6 +64,11 @@
     .tab-panel.selected { display: block; }
     .panel { margin-bottom: var(--sp-md); border: 1px solid var(--border); border-radius: 11px; background: var(--bg2); overflow: hidden; }
     .panel-head { padding: 13px 15px; border-bottom: 1px solid var(--border); background: #111a29; }
+    .journal-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-md); cursor: pointer; list-style: none; user-select: none; }
+    .journal-disclosure > summary::-webkit-details-marker { display: none; }
+    .journal-disclosure > summary::after { content: "Expand"; flex: 0 0 auto; color: var(--accent); font-size: var(--fs-sm); font-weight: 800; }
+    .journal-disclosure[open] > summary::after { content: "Collapse"; }
+    .journal-disclosure:not([open]) > summary { border-bottom: 0; }
     .panel-title { font-size: var(--fs-lg); font-weight: 850; }
     .panel-desc { margin-top: 2px; color: var(--muted); font-size: var(--fs-sm); }
     .panel-body { padding: 15px; }
@@ -72,18 +80,14 @@
     .field input:not([type="checkbox"]), .field select { width: 100%; height: 35px; padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--field); color: var(--text); }
     .check-field { min-height: 35px; display: flex; align-items: center; gap: 8px; padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--field); }
     .check-field input { width: 16px; height: 16px; accent-color: var(--accent); }
-    .overview-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(260px, .6fr); gap: var(--sp-md); }
+    .overview-grid { display: block; }
     .key-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--border); }
     .key-value { min-width: 0; padding: 10px 11px; background: var(--field); }
     .key-value dt { color: var(--dim); font-size: var(--fs-xs); font-weight: 800; text-transform: uppercase; }
     .key-value dd { margin: 3px 0 0; overflow-wrap: anywhere; font-weight: 700; }
-    .preview { min-height: 176px; padding: 12px; border: 1px solid rgba(246,196,83,.3); border-radius: 8px; background: #151407; }
-    .preview-title { color: var(--warn); font-weight: 900; }
-    .preview-note { margin-top: 5px; color: var(--muted); font-size: var(--fs-sm); }
-    .preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
-    .preview-item { padding: 7px; border-radius: 6px; background: rgba(255,255,255,.035); }
-    .preview-item span:first-child { display: block; color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; }
-    .preview-item span:last-child { display: block; margin-top: 2px; font-weight: 800; overflow-wrap: anywhere; }
+    #account-freshness { margin-left: 6px; color: var(--dim); }
+    #account-freshness.loading { color: var(--warn); }
+    #account-freshness.error { color: var(--danger); }
     .baseline-row { display: grid; grid-template-columns: minmax(150px, 1fr) auto; gap: var(--sp-sm); align-items: end; }
     .notice { padding: 11px 12px; border: 1px solid rgba(77,166,255,.28); border-radius: 8px; background: rgba(77,166,255,.07); color: #bfdfff; font-size: var(--fs-sm); }
     .advanced-settings { margin-top: var(--sp-lg); border-top: 1px solid var(--border); padding-top: var(--sp-md); }
@@ -95,6 +99,9 @@
     .journal-table td { padding: 10px; border-bottom: 1px solid var(--border); color: #cbd5e1; }
     .journal-table tr:last-child td { border-bottom: 0; }
     .journal-empty { padding: 28px 12px; color: var(--muted); text-align: center; }
+    .position-side { font-weight: 850; text-transform: uppercase; }
+    .position-side.long { color: var(--ok); }
+    .position-side.short { color: var(--danger); }
     .test-transfer-toolbar { display: flex; align-items: center; gap: var(--sp-sm); margin-top: var(--sp-md); }
     .balance-grid { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: var(--sp-sm); margin: var(--sp-md) 0; }
     .balance-card { min-width: 0; padding: 10px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--field); }
@@ -121,7 +128,7 @@
       #main-content { padding: var(--sp-md); overflow: visible; }
       .page-head { flex-direction: column; }
       .head-actions { justify-content: flex-start; }
-      #status-cards, .field-grid, .overview-grid, .key-values, .preview-grid, .balance-grid, .vault-ownership-grid { grid-template-columns: 1fr; }
+      #status-cards, .field-grid, .key-values, .balance-grid, .vault-ownership-grid { grid-template-columns: 1fr; }
       .tabs { top: 0; }
       #action-bar { bottom: calc(-1 * var(--sp-md)); margin: var(--sp-md) calc(-1 * var(--sp-md)) calc(-1 * var(--sp-md)); align-items: stretch; flex-direction: column; padding: 8px 12px; }
       #action-message { min-height: 19px; white-space: normal; }
@@ -156,19 +163,21 @@
           <div id="account-subtitle" class="subtitle">Select an exchange account to configure a read-only simulation.</div>
         </div>
         <div class="head-actions">
-          <button type="button" class="btn" id="refresh-accounts">Refresh accounts</button>
           <button type="button" class="btn" id="open-logs">Logs</button>
         </div>
       </div>
+
+      <div id="account-loading" role="status" aria-live="polite" hidden>Loading account data...</div>
 
       <section id="status-cards" aria-label="Always visible account status">
         <div class="status-card"><div class="status-label">Mode</div><div class="status-value" id="status-mode">Disabled</div></div>
         <div class="status-card"><div class="status-label">Sweep due</div><div class="status-value" id="status-due">-</div></div>
         <div class="status-card"><div class="status-label">Last decision</div><div class="status-value" id="status-decision">-</div></div>
-        <div class="status-card"><div class="status-label">Next evaluation</div><div class="status-value" id="status-next">-</div></div>
+        <div class="status-card"><div class="status-label">Next scheduled check</div><div class="status-value" id="status-next">-</div></div>
         <div class="status-card"><div class="status-label">Net PnL</div><div class="status-value" id="status-pnl">-</div></div>
         <div class="status-card"><div class="status-label">Reference capital</div><div class="status-value" id="status-reference">-</div></div>
         <div class="status-card"><div class="status-label">High-water mark</div><div class="status-value" id="status-hwm">-</div></div>
+        <div class="status-card"><div class="status-label">Recovery needed</div><div class="status-value" id="status-recovery">-</div></div>
         <div class="status-card"><div class="status-label">Max transferable</div><div class="status-value" id="status-cap">-</div></div>
       </section>
 
@@ -183,14 +192,8 @@
       <section class="tab-panel selected" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
         <div class="overview-grid">
           <div class="panel">
-            <div class="panel-head"><div class="panel-title">Account State</div><div class="panel-desc">Secret-free policy, scheduler, and exchange capability status.</div></div>
+            <div class="panel-head"><div class="panel-title">Account State</div><div class="panel-desc">Secret-free policy, scheduler, and exchange capability status.<span id="account-freshness"> Fresh data loads automatically.</span></div></div>
             <div class="panel-body"><dl class="key-values" id="overview-values"></dl></div>
-          </div>
-          <div class="panel">
-            <div class="panel-head"><div class="panel-title">Evaluate Now</div><div class="panel-desc">Read-only preview. It never writes a journal entry or creates a transfer.</div></div>
-            <div class="panel-body">
-              <div class="preview" id="evaluation-preview"><div class="preview-title">DRY PREVIEW</div><div class="preview-note">Run an evaluation to preview the current decision.</div></div>
-            </div>
           </div>
         </div>
         <div class="panel">
@@ -230,6 +233,7 @@
           <div class="panel-head"><div class="panel-title">Exchange</div><div class="panel-desc" id="exchange-description">Settlement asset and fixed internal transfer route for this exchange account.</div></div>
           <div class="panel-body">
             <div class="notice" id="exchange-note">Select an exchange account to inspect its Live route.</div>
+            <div class="test-transfer-toolbar"><button type="button" class="btn" id="fund-account" hidden>Fund account</button></div>
             <div class="balance-grid" id="exchange-balances" hidden>
               <div class="balance-card"><div class="balance-label" id="source-balance-label">Source balance</div><div class="balance-value" id="source-balance-value">-</div><div class="balance-detail" id="source-balance-detail"></div></div>
               <div class="balance-card"><div class="balance-label" id="destination-balance-label">Destination balance</div><div class="balance-value" id="destination-balance-value">-</div><div class="balance-detail" id="destination-balance-detail"></div></div>
@@ -240,6 +244,10 @@
               <div class="field" id="asset-field"><label for="policy-asset" data-tip="Settlement currency used for PnL, limits, reserves, and Live internal transfers. Available assets are constrained by the selected exchange adapter.">Settlement asset</label><select id="policy-asset" data-policy-field="asset"></select></div>
             </div>
           </div>
+        </div>
+        <div class="panel" id="positions-panel">
+          <div class="panel-head"><div class="panel-title">Open Positions <span class="intent-badge" id="position-count">0</span></div><div class="panel-desc" id="position-impact">Fresh position data loads automatically with the account snapshot.</div></div>
+          <div class="panel-body"><div class="journal-wrap" id="positions-content"><div class="journal-empty">No position data loaded.</div></div></div>
         </div>
         <div class="panel" id="test-transfer-panel">
           <div class="panel-head"><div class="panel-title">Test Transfers</div><div class="panel-desc">Verify the fixed internal route with a small real transfer and an explicit return action.</div></div>
@@ -267,8 +275,8 @@
           <div class="panel-head"><div class="panel-title">Hyperliquid Vault</div><div class="panel-desc">Leader retention, share buffer, reserve, destination, and withdrawal safety controls.</div></div>
           <div class="panel-body">
             <div class="vault-ownership-grid" id="vault-ownership">
-              <div class="balance-card"><div class="balance-label">Vault TVL</div><div class="balance-value" id="vault-tvl-value">Run Evaluate now</div><div class="balance-detail">Total equity across all Vault depositors</div></div>
-              <div class="balance-card"><div class="balance-label">Your Share</div><div class="balance-value" id="vault-share-value">Run Evaluate now</div><div class="balance-detail">Your current equity as a percentage of TVL</div></div>
+              <div class="balance-card"><div class="balance-label">Vault TVL</div><div class="balance-value" id="vault-tvl-value">Loading fresh data</div><div class="balance-detail">Total equity across all Vault depositors</div></div>
+              <div class="balance-card"><div class="balance-label">Your Share</div><div class="balance-value" id="vault-share-value">Loading fresh data</div><div class="balance-detail">Your current equity as a percentage of TVL</div></div>
             </div>
             <div class="field-grid" id="vault-fields"></div><details class="advanced-settings"><summary>Advanced Vault safety</summary><div class="field-grid" id="vault-advanced-fields"></div></details>
           </div>
@@ -276,17 +284,17 @@
       </section>
 
       <section class="tab-panel" id="panel-journal" role="tabpanel" aria-labelledby="tab-journal">
-        <div class="panel">
-          <div class="panel-head">
+        <details class="panel journal-disclosure" id="dry-journal-panel" open>
+          <summary class="panel-head"><div>
             <div class="panel-title">Dry Decision Journal</div>
             <div class="panel-desc">Simulation outcomes are labeled WOULD TRANSFER and remain separate from Live transfer intents.</div>
-          </div>
+          </div></summary>
           <div class="panel-body">
             <button type="button" class="btn account-action" id="refresh-journal">Refresh journal</button>
             <div style="height:12px"></div>
             <div class="journal-wrap" id="journal-content"></div>
           </div>
-        </div>
+        </details>
         <div class="panel">
           <div class="panel-head">
             <div class="panel-title">Live Transfer Intents</div>
@@ -306,7 +314,6 @@
           <button type="button" class="btn account-action" id="save-policy" hidden>Save changes</button>
           <button type="button" class="btn warning account-action" id="enable-dry">Enable Dry</button>
           <button type="button" class="btn account-action" id="disable-policy">Disable</button>
-          <button type="button" class="btn primary account-action" id="evaluate-now">Evaluate now</button>
           <button type="button" class="btn danger account-action" id="delete-policy">Delete</button>
           <button type="button" class="btn danger account-action" id="enable-live">Enable Live</button>
         </div>
@@ -438,7 +445,15 @@
       accountGeneration: 0,
       accountController: null,
       usersGeneration: 0,
-      usersController: null
+      usersController: null,
+      previewLoading: false,
+      previewError: '',
+      previewLoadedAt: 0,
+      previewTimer: null,
+      previewRefreshQueued: false,
+      previewRefreshPendingVisibility: false,
+      automaticRefreshTimer: null,
+      usersRetryTimer: null
     };
 
     function byId(id) { return document.getElementById(id); }
@@ -460,6 +475,19 @@
       var numeric = Number(value);
       var date = new Date(Number.isFinite(numeric) ? numeric * 1000 : value);
       return Number.isNaN(date.getTime()) ? text(value) : date.toLocaleString();
+    }
+    function formatScheduledCheck(value, mode) {
+      if (mode !== 'dry' && mode !== 'live') return 'Not scheduled';
+      var timestamp = Number(value);
+      if (!Number.isFinite(timestamp)) return 'Scheduling...';
+      var seconds = Math.ceil(timestamp - Date.now() / 1000);
+      var relative;
+      if (seconds <= 0) relative = 'due now';
+      else if (seconds < 60) relative = 'in ' + seconds + 's';
+      else if (seconds < 3600) relative = 'in ' + Math.ceil(seconds / 60) + 'm';
+      else if (seconds < 86400) relative = 'in ' + Math.floor(seconds / 3600) + 'h ' + Math.ceil((seconds % 3600) / 60) + 'm';
+      else relative = 'in ' + Math.floor(seconds / 86400) + 'd ' + Math.ceil((seconds % 86400) / 3600) + 'h';
+      return relative + ' · ' + formatTime(timestamp);
     }
     function setMessage(message, tone) {
       var node = byId('action-message');
@@ -572,6 +600,25 @@
       });
       if (!visible.length) appendText(list, 'div', query ? 'No matching accounts.' : 'No exchange accounts found.', 'empty-state');
       byId('account-count').textContent = visible.length + ' of ' + state.users.length + ' accounts';
+    }
+    function renderAccountLoading(userName) {
+      var user = state.users.find(function (item) { return item.name === userName; }) || null;
+      byId('account-heading').textContent = user ? text(user.name) : 'Profit Sweep';
+      byId('account-subtitle').textContent = user ? text(user.exchange, 'Unknown exchange') + (user.is_vault ? ' Vault account' : ' standard account') : '';
+      var loading = byId('account-loading');
+      loading.textContent = 'Loading account data...';
+      loading.classList.remove('error');
+      loading.hidden = false;
+      byId('main-content').classList.add('account-loading');
+      renderAccounts();
+      setAccountActionsEnabled(false);
+    }
+    function renderAccountLoadError(message) {
+      var loading = byId('account-loading');
+      loading.textContent = 'Could not load account: ' + String(message || 'Unknown error');
+      loading.classList.add('error');
+      loading.hidden = false;
+      byId('main-content').classList.add('account-loading');
     }
 
     function moveAccountFocus(current, direction) {
@@ -722,6 +769,10 @@
       return mode === 'live' || mode === 'paused_unknown' ? state.record.live_state || {} : state.record.simulation_state || {};
     }
     function setStatusCard(id, value) { byId(id).textContent = text(value); }
+    function decisionLabel(reason) {
+      if (reason === 'below_high_watermark_recovery') return 'Blocked until HWM recovery';
+      return titleCase(reason || '-');
+    }
     function renderStatusCards() {
       var policy = state.record && state.record.policy ? state.record.policy : {};
       var simulation = statusState();
@@ -730,12 +781,28 @@
       var modeStatus = byId('status-mode');
       modeStatus.replaceChildren();
       appendText(modeStatus, 'span', titleCase(mode), 'mode-badge ' + modeClass(mode));
-      setStatusCard('status-due', previewDecision.sweep_due !== undefined ? previewDecision.sweep_due : simulation.sweep_due);
-      setStatusCard('status-decision', previewDecision.reason || simulation.last_decision || '-');
-      setStatusCard('status-next', formatTime(simulation.next_run_at));
-      setStatusCard('status-pnl', previewDecision.net_pnl || simulation.last_net_pnl);
+      var due = previewDecision.sweep_due !== undefined ? previewDecision.sweep_due : simulation.sweep_due;
+      var reason = previewDecision.reason || simulation.last_decision || '';
+      var netPnl = previewDecision.net_pnl !== undefined ? previewDecision.net_pnl : simulation.last_net_pnl;
+      var highWatermark = previewDecision.high_watermark !== undefined ? previewDecision.high_watermark : simulation.high_watermark;
+      var duePending = Number(due) > 0;
+      setStatusCard('status-due', duePending ? text(due) + ' pending' : due);
+      setStatusCard('status-decision', decisionLabel(reason));
+      var previewMode = state.preview && state.preview.policy && state.preview.policy.policy ? state.preview.policy.policy.operating_mode : '';
+      var nextRunAt = previewMode === mode && Object.prototype.hasOwnProperty.call(state.preview, 'next_scheduled_check_at')
+        ? state.preview.next_scheduled_check_at
+        : simulation.next_run_at;
+      setStatusCard('status-next', formatScheduledCheck(nextRunAt, mode));
+      setStatusCard('status-pnl', netPnl);
       setStatusCard('status-reference', policy.reference_capital);
-      setStatusCard('status-hwm', previewDecision.high_watermark || simulation.high_watermark);
+      setStatusCard('status-hwm', highWatermark);
+      var recovery = Number(highWatermark) - Number(netPnl);
+      setStatusCard(
+        'status-recovery',
+        reason === 'below_high_watermark_recovery' && Number.isFinite(recovery) && recovery > 0
+          ? String(Number(recovery.toFixed(12)))
+          : '-'
+      );
       setStatusCard('status-cap', previewDecision.effective_cap);
     }
     function addKeyValue(parent, label, value) {
@@ -822,18 +889,18 @@
         destination = destination[selectedDestination];
       }
       byId('source-balance-label').textContent = user.is_vault ? 'Your Vault Equity' : source && source.label ? source.label : 'Source balance';
-      byId('source-balance-value').textContent = balances ? balanceText(source) : 'Run Evaluate now';
+      byId('source-balance-value').textContent = balances ? balanceText(source) : 'Loading fresh data';
       byId('source-balance-detail').textContent = source && source.withdrawable !== null && source.withdrawable !== undefined ? 'Exchange withdrawable: ' + source.withdrawable + (source.asset ? ' ' + source.asset : '') : '';
       byId('destination-balance-label').textContent = destination && destination.label ? destination.label : 'Destination balance';
-      byId('destination-balance-value').textContent = balances ? balanceText(destination) : 'Run Evaluate now';
+      byId('destination-balance-value').textContent = balances ? balanceText(destination) : 'Loading fresh data';
       byId('destination-balance-detail').textContent = permissionReason || (user.is_vault ? 'Configured Vault destination' : 'Internal transfer destination');
-      byId('transferable-balance-value').textContent = balances && balances.max_transferable !== null && balances.max_transferable !== undefined ? text(balances.max_transferable) + (source && source.asset ? ' ' + source.asset : '') : balances ? 'Unavailable' : 'Run Evaluate now';
+      byId('transferable-balance-value').textContent = balances && balances.max_transferable !== null && balances.max_transferable !== undefined ? text(balances.max_transferable) + (source && source.asset ? ' ' + source.asset : '') : balances ? 'Unavailable' : 'Loading fresh data';
       if (user.is_vault) {
         var vault = state.snapshot && state.snapshot.vault;
         var vaultBalances = vault && vault.balances;
         var tvl = vaultBalances && vaultBalances.account_value;
-        byId('vault-tvl-value').textContent = tvl !== null && tvl !== undefined ? text(tvl) + ' USDC' : state.snapshot ? 'Unavailable' : 'Run Evaluate now';
-        byId('vault-share-value').textContent = vault && vault.leader_fraction !== null && vault.leader_fraction !== undefined ? vaultShareText(vault.leader_fraction) : state.snapshot ? 'Unavailable' : 'Run Evaluate now';
+        byId('vault-tvl-value').textContent = tvl !== null && tvl !== undefined ? text(tvl) + ' USDC' : state.snapshot ? 'Unavailable' : 'Loading fresh data';
+        byId('vault-share-value').textContent = vault && vault.leader_fraction !== null && vault.leader_fraction !== undefined ? vaultShareText(vault.leader_fraction) : state.snapshot ? 'Unavailable' : 'Loading fresh data';
       }
     }
     function testTransferEndpoints(user) {
@@ -911,24 +978,21 @@
       container.appendChild(table);
     }
     function renderPreview() {
-      var container = byId('evaluation-preview');
-      container.replaceChildren();
-      var decision = state.preview && state.preview.decision;
-      var previewKind = decision && decision.state_kind === 'live' ? 'LIVE PREVIEW' : 'DRY PREVIEW';
-      var title = appendText(container, 'div', decision && decision.would_transfer ? 'WOULD TRANSFER' : previewKind, 'preview-title');
-      if (decision && decision.would_transfer) title.className += ' decision-badge would';
-      appendText(container, 'div', 'Read-only ' + (previewKind === 'LIVE PREVIEW' ? 'Live' : 'Dry') + ' simulation. This is not a submitted or confirmed transfer.', 'preview-note');
-      if (!decision) return;
-      var grid = document.createElement('div');
-      grid.className = 'preview-grid';
-      [['Amount', decision.amount], ['Reason', titleCase(decision.reason)], ['Net PnL', decision.net_pnl], ['Trigger', decision.trigger_amount], ['High-water mark', decision.high_watermark], ['Sweep due', decision.sweep_due], ['Safety reserve', decision.safety_reserve], ['Effective cap', decision.effective_cap]].forEach(function (item) {
-        var box = document.createElement('div');
-        box.className = 'preview-item';
-        appendText(box, 'span', item[0]);
-        appendText(box, 'span', item[1]);
-        grid.appendChild(box);
-      });
-      container.appendChild(grid);
+      var freshness = byId('account-freshness');
+      if (state.previewLoading) {
+        freshness.textContent = ' Refreshing in background...';
+        freshness.className = 'loading';
+        return;
+      }
+      if (state.previewError) {
+        freshness.textContent = ' Fresh read failed; retrying in 15 seconds.';
+        freshness.className = 'error';
+        return;
+      }
+      freshness.textContent = state.previewLoadedAt
+        ? ' Updated ' + new Date(state.previewLoadedAt).toLocaleTimeString() + '.'
+        : ' Fresh data loads automatically.';
+      freshness.className = '';
     }
     function renderJournal() {
       var container = byId('journal-content');
@@ -999,7 +1063,51 @@
       table.appendChild(body);
       container.appendChild(table);
     }
+    function renderPositions(user) {
+      var snapshot = state.snapshot || {};
+      var vault = snapshot.vault && typeof snapshot.vault === 'object' ? snapshot.vault : {};
+      var positions = user && user.is_vault
+        ? (Array.isArray(vault.positions) ? vault.positions : [])
+        : (Array.isArray(snapshot.positions) ? snapshot.positions : []);
+      var visiblePositions = positions.slice(0, 100);
+      byId('position-count').textContent = String(positions.length);
+      byId('position-impact').textContent = positions.length
+        ? 'Open positions are active. Moving collateral may affect Passivbot wallet-exposure sizing; Profit Sweep does not modify or close these positions.'
+        : 'No open positions reported. Moving collateral can still affect Passivbot sizing for future orders.';
+      var container = byId('positions-content');
+      container.replaceChildren();
+      if (!state.snapshot) {
+        appendText(container, 'div', 'No position data loaded.', 'journal-empty');
+        return;
+      }
+      if (!positions.length) {
+        appendText(container, 'div', 'No open positions in the current account snapshot.', 'journal-empty');
+        return;
+      }
+      var table = document.createElement('table');
+      table.className = 'journal-table';
+      var head = document.createElement('thead');
+      var headRow = document.createElement('tr');
+      ['Coin', 'Side', 'Size', 'Position value', 'Entry', 'Unrealized PnL', 'Liquidation', 'Leverage'].forEach(function (label) { appendText(headRow, 'th', label); });
+      head.appendChild(headRow);
+      table.appendChild(head);
+      var body = document.createElement('tbody');
+      visiblePositions.forEach(function (position) {
+        var row = document.createElement('tr');
+        var size = Number(position.size);
+        var side = Number.isFinite(size) && size < 0 ? 'short' : 'long';
+        appendText(row, 'td', position.coin);
+        appendText(row, 'td', side, 'position-side ' + side);
+        [position.size, position.position_value, position.entry_price, position.unrealized_pnl, position.liquidation_price, position.leverage_type].forEach(function (value) { appendText(row, 'td', value); });
+        body.appendChild(row);
+      });
+      table.appendChild(body);
+      container.appendChild(table);
+      if (positions.length > visiblePositions.length) appendText(container, 'div', 'Showing the first 100 open positions.', 'journal-empty');
+    }
     function renderSelectedAccount() {
+      byId('main-content').classList.remove('account-loading');
+      byId('account-loading').hidden = true;
       var user = state.users.find(function (item) { return item.name === state.selectedUser; }) || null;
       byId('account-heading').textContent = user ? text(user.name) : 'Profit Sweep';
       byId('account-subtitle').textContent = user ? text(user.exchange, 'Unknown exchange') + (user.is_vault ? ' Vault account' : ' standard account') : 'Select an exchange account to configure a read-only simulation.';
@@ -1009,12 +1117,14 @@
       renderStatusCards();
       renderOverview(user);
       renderAccountBalances(user);
+      renderPositions(user);
       renderPreview();
       renderJournal();
       renderIntents();
       renderTestTransfers(user);
       setAccountActionsEnabled(Boolean(user));
       var mode = state.record && state.record.policy ? state.record.policy.operating_mode : 'disabled';
+      syncDryJournalDisclosure(mode);
       var liveActive = mode === 'live' || mode === 'paused_unknown';
       var activeBaseline = state.record && state.record.live_state ? state.record.live_state.active_baseline_mode : '';
       byId('policy-live_activation_baseline_mode').disabled = mode === 'paused_unknown';
@@ -1023,7 +1133,18 @@
         ? 'Active baseline: ' + titleCase(activeBaseline || 'unknown') + '. Changing it recalculates Live entitlement and is blocked after a confirmed transfer.'
         : 'Choose the baseline and optional first-transfer catch-up cap before the one-time confirmation.';
       byId('enable-live').disabled = !user || !state.schema || state.schema.live_available !== true || !['disabled', 'dry'].includes(mode);
+      byId('fund-account').hidden = !user || String(user.exchange || '').toLowerCase() !== 'hyperliquid' || user.is_vault !== true;
       capturePolicyBaseline();
+    }
+    function syncDryJournalDisclosure(mode) {
+      var panel = byId('dry-journal-panel');
+      var live = mode === 'live' || mode === 'paused_unknown';
+      var previousUser = String(panel.dataset.user || '');
+      var previousMode = String(panel.dataset.mode || '');
+      var previouslyLive = previousMode === 'live' || previousMode === 'paused_unknown';
+      if (previousUser !== state.selectedUser || (!previouslyLive && live)) panel.open = !live;
+      panel.dataset.user = state.selectedUser;
+      panel.dataset.mode = mode;
     }
 
     async function loadJournalForAccount(userName, generation, signal) {
@@ -1092,9 +1213,11 @@
       user.has_policy = true;
       user.operating_mode = state.record.policy.operating_mode;
       user.due = current.sweep_due;
+      renderAccounts();
     }
     async function selectAccount(userName) {
       if (!state.users.some(function (user) { return user.name === userName; })) return;
+      stopAutomaticPreview();
       state.accountGeneration += 1;
       var generation = state.accountGeneration;
       if (state.accountController) state.accountController.abort();
@@ -1110,8 +1233,11 @@
       state.baselineRecalculationRequested = false;
       state.preview = null;
       state.snapshot = null;
+      state.previewLoading = false;
+      state.previewError = '';
+      state.previewLoadedAt = 0;
       state.writeCapability = null;
-      renderSelectedAccount();
+      renderAccountLoading(userName);
       setMessage('Loading ' + userName + '...');
       try {
         await Promise.all([
@@ -1123,13 +1249,17 @@
         if (!isCurrentAccount(userName, generation)) return;
         renderSelectedAccount();
         setMessage(state.record ? 'Policy loaded.' : 'No saved policy. Schema defaults are ready.', 'ok');
+        scheduleAutomaticPreview(0);
       } catch (error) {
         if (error.name === 'AbortError' || !isCurrentAccount(userName, generation)) return;
+        renderAccountLoadError(error.message);
         setMessage(error.message, 'error');
       }
     }
 
     async function loadUsers(preferredUser) {
+      if (state.usersRetryTimer) window.clearTimeout(state.usersRetryTimer);
+      state.usersRetryTimer = null;
       state.usersGeneration += 1;
       var generation = state.usersGeneration;
       if (state.usersController) state.usersController.abort();
@@ -1154,6 +1284,12 @@
       } catch (error) {
         if (error.name === 'AbortError' || generation !== state.usersGeneration) return;
         setMessage(error.message, 'error');
+        if (!state.users.length) {
+          state.usersRetryTimer = window.setTimeout(function () {
+            state.usersRetryTimer = null;
+            if (!document.hidden) loadUsers(preferredUser);
+          }, 15_000);
+        }
       }
     }
 
@@ -1227,6 +1363,7 @@
         syncSelectedUserSummary();
         renderSelectedAccount();
         setMessage(mode === 'dry' ? 'Dry simulation enabled.' : mode === 'disabled' ? 'Policy disabled.' : 'Policy saved.', 'ok');
+        scheduleAutomaticPreview(0);
       } catch (error) {
         state.baselineRecalculationRequested = false;
         if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
@@ -1277,11 +1414,14 @@
         if (!isCurrentAccount(userName, generation)) return;
         state.writeCapability = result.capability || null;
         state.snapshot = result.snapshot || null;
+        state.record = result.policy || state.record;
+        syncSelectedUserSummary();
         await refreshPolicyAndIntents(userName, generation, state.accountController.signal);
         if (!isCurrentAccount(userName, generation)) return;
         syncSelectedUserSummary();
         renderSelectedAccount();
         setMessage('Live enabled. Future due sweeps may submit real internal transfers.', 'ok');
+        scheduleAutomaticPreview(0);
       } catch (error) {
         if (error.name === 'AbortError' || !isCurrentAccount(userName, generation)) return;
         state.writeCapability = { writes_available: false, routes: [], reason: error.message };
@@ -1312,6 +1452,7 @@
         syncSelectedUserSummary();
         renderSelectedAccount();
         setMessage('Intent reconciliation refreshed.', 'ok');
+        scheduleAutomaticPreview(0);
       } catch (error) {
         if (error.name === 'AbortError' || !isCurrentAccount(userName, generation)) return;
         try {
@@ -1330,18 +1471,6 @@
       await loadTestTransfersForAccount(userName, generation, state.accountController ? state.accountController.signal : undefined);
       if (!isCurrentAccount(userName, generation)) return;
       var user = state.users.find(function (item) { return item.name === userName; }) || null;
-      renderTestTransfers(user);
-    }
-    async function refreshAccountSnapshot(userName, generation) {
-      var result = await requestJson('/evaluate/' + encodeURIComponent(userName), {
-        method: 'POST',
-        signal: state.accountController ? state.accountController.signal : undefined,
-        body: JSON.stringify({ policy: collectPolicy() })
-      });
-      if (!isCurrentAccount(userName, generation)) return;
-      state.snapshot = result.snapshot || null;
-      var user = state.users.find(function (item) { return item.name === userName; }) || null;
-      renderAccountBalances(user);
       renderTestTransfers(user);
     }
     async function submitPreparedWalletSignature(userName, generation, prepared) {
@@ -1395,19 +1524,9 @@
         await refreshTestTransfersAfterAction(userName, generation);
         if (!isCurrentAccount(userName, generation)) return;
         state.pendingTestOperationId = '';
-        var balanceRefreshFailed = false;
-        try {
-          await refreshAccountSnapshot(userName, generation);
-        } catch (balanceError) {
-          if (balanceError.name === 'AbortError') throw balanceError;
-          balanceRefreshFailed = true;
-          state.snapshot = null;
-          renderAccountBalances(state.users.find(function (item) { return item.name === userName; }) || null);
-        }
-        if (!isCurrentAccount(userName, generation)) return;
         var status = String(result.status || 'unknown');
-        var balanceNote = balanceRefreshFailed ? ' Balance refresh failed; run Evaluate now to retry.' : '';
-        setMessage(resultLabel + ': ' + titleCase(status) + '.' + balanceNote, status === 'confirmed' && !balanceRefreshFailed ? 'ok' : ['failed', 'unknown'].includes(status) ? 'error' : '');
+        setMessage(resultLabel + ': ' + titleCase(status) + '.', status === 'confirmed' ? 'ok' : ['failed', 'unknown'].includes(status) ? 'error' : '');
+        scheduleAutomaticPreview(0);
       } catch (error) {
         if (error.name === 'AbortError' || !isCurrentAccount(userName, generation)) return;
         try {
@@ -1510,13 +1629,36 @@
       }
     }
 
+    function scheduleAutomaticPreview(delay) {
+      if (state.previewTimer) window.clearTimeout(state.previewTimer);
+      state.previewTimer = window.setTimeout(function () {
+        state.previewTimer = null;
+        if (document.hidden) {
+          state.previewRefreshPendingVisibility = true;
+          return;
+        }
+        evaluateNow();
+      }, Math.max(0, Number(delay) || 0));
+    }
+    function stopAutomaticPreview() {
+      if (state.previewTimer) window.clearTimeout(state.previewTimer);
+      state.previewTimer = null;
+      state.previewRefreshQueued = false;
+      state.previewRefreshPendingVisibility = false;
+    }
     async function evaluateNow() {
       var userName = state.selectedUser;
       var generation = state.accountGeneration;
       if (!userName) return;
-      setMessage('Running read-only evaluation...');
+      if (state.previewLoading) {
+        state.previewRefreshQueued = true;
+        return;
+      }
+      state.previewLoading = true;
+      state.previewError = '';
+      renderPreview();
       try {
-        var policy = collectPolicy();
+        var policy = state.record && state.record.policy ? state.record.policy : state.schema.defaults;
         var result = await requestJson('/evaluate/' + encodeURIComponent(userName), {
           method: 'POST',
           signal: state.accountController ? state.accountController.signal : undefined,
@@ -1525,14 +1667,27 @@
         if (!isCurrentAccount(userName, generation)) return;
         state.preview = result;
         state.snapshot = result.snapshot || null;
+        state.previewLoadedAt = Date.now();
+        state.previewError = '';
         renderPreview();
         var user = state.users.find(function (item) { return item.name === userName; }) || null;
         renderAccountBalances(user);
+        renderPositions(user);
         renderTestTransfers(user);
         renderStatusCards();
-        setMessage(result.decision && result.decision.would_transfer ? 'Preview result: WOULD TRANSFER. Nothing was submitted.' : 'Dry preview complete. Nothing was submitted.', 'ok');
       } catch (error) {
-        if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
+        if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) {
+          state.previewError = error.message;
+          scheduleAutomaticPreview(15_000);
+        }
+      } finally {
+        if (!isCurrentAccount(userName, generation)) return;
+        state.previewLoading = false;
+        renderPreview();
+        if (state.previewRefreshQueued) {
+          state.previewRefreshQueued = false;
+          scheduleAutomaticPreview(0);
+        }
       }
     }
 
@@ -1572,6 +1727,7 @@
         if (!isCurrentAccount(userName, generation)) return;
         renderSelectedAccount();
         setMessage('Baseline reset. No transfer was submitted.', 'ok');
+        scheduleAutomaticPreview(0);
       } catch (error) {
         if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
       }
@@ -1603,6 +1759,7 @@
         if (user) { user.has_policy = false; user.operating_mode = 'disabled'; user.due = '0'; }
         renderSelectedAccount();
         setMessage('Policy and Profit Sweep accounting history deleted.', 'ok');
+        scheduleAutomaticPreview(0);
       } catch (error) {
         if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
       }
@@ -1647,6 +1804,10 @@
     function openLogs() {
       var sharedLogButton = document.getElementById('pbgui-notify-btn');
       if (sharedLogButton) sharedLogButton.click();
+    }
+    function openFundAccount() {
+      if (!state.selectedUser) return;
+      window.location.assign(window.API_BASE + '/transfers/main_page?user=' + encodeURIComponent(state.selectedUser) + '&route=main_perps_to_vault');
     }
 
     /* ── data-tip Fixed Tooltip ── */
@@ -1700,11 +1861,9 @@
       else if (event.key === 'End') { event.preventDefault(); moveAccountFocus(event.target, 'end'); }
     });
     document.querySelectorAll('.tab-button').forEach(function (button) { button.addEventListener('click', function () { showTab(button.dataset.tab); }); });
-    byId('refresh-accounts').addEventListener('click', function () { loadUsers(state.selectedUser); });
     byId('save-policy').addEventListener('click', function () { savePolicyWithMode(''); });
     byId('enable-dry').addEventListener('click', function () { savePolicyWithMode('dry'); });
     byId('disable-policy').addEventListener('click', function () { savePolicyWithMode('disabled'); });
-    byId('evaluate-now').addEventListener('click', evaluateNow);
     byId('reset-baseline').addEventListener('click', resetBaseline);
     byId('delete-policy').addEventListener('click', deletePolicy);
     byId('refresh-journal').addEventListener('click', refreshJournal);
@@ -1732,7 +1891,30 @@
       setMessage('Keep trading capital preset applied. Save or Enable Dry to persist it.');
     });
     byId('open-logs').addEventListener('click', openLogs);
+    byId('fund-account').addEventListener('click', openFundAccount);
+    state.automaticRefreshTimer = window.setInterval(function () {
+      if (state.selectedUser) renderStatusCards();
+      if (!document.hidden && !state.previewLoading && state.selectedUser && Date.now() - state.previewLoadedAt >= 60_000) {
+        scheduleAutomaticPreview(0);
+      }
+    }, 15_000);
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) return;
+      if (!state.users.length) {
+        loadUsers('');
+        return;
+      }
+      if (state.previewRefreshPendingVisibility) {
+        state.previewRefreshPendingVisibility = false;
+        scheduleAutomaticPreview(0);
+        return;
+      }
+      if (!state.previewLoading && state.selectedUser && Date.now() - state.previewLoadedAt >= 60_000) scheduleAutomaticPreview(0);
+    });
     window.addEventListener('beforeunload', function () {
+      stopAutomaticPreview();
+      if (state.automaticRefreshTimer) window.clearInterval(state.automaticRefreshTimer);
+      if (state.usersRetryTimer) window.clearTimeout(state.usersRetryTimer);
       if (state.accountController) state.accountController.abort();
       if (state.usersController) state.usersController.abort();
     });

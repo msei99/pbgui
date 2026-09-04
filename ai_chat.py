@@ -1685,7 +1685,7 @@ class AIChatService:
     def _read_preferences_unlocked(self, path: Path) -> dict[str, Any]:
         """Read one preference file while the cross-process lock is held."""
         if not path.is_file() or path.is_symlink():
-            return {"drawer_width": 460, "drawer_open": False}
+            return {"drawer_width": 460, "drawer_open": False, "drawer_pinned": False}
         try:
             raw = read_regular_file_nofollow(path, self.preference_root)
             if len(raw) > 16 * 1024:
@@ -1695,12 +1695,15 @@ class AIChatService:
                 raise AIChatError("AI preferences are invalid")
             width = int(stored.get("drawer_width") or 460)
             drawer_open = stored.get("drawer_open") is True
+            drawer_pinned = stored.get("drawer_pinned") is True
         except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
             width = 460
             drawer_open = False
+            drawer_pinned = False
         return {
             "drawer_width": max(180, min(100_000, width)),
             "drawer_open": drawer_open,
+            "drawer_pinned": drawer_pinned,
         }
 
     def save_preferences(
@@ -1708,9 +1711,10 @@ class AIChatService:
         owner: str,
         drawer_width: int | None = None,
         drawer_open: bool | None = None,
+        drawer_pinned: bool | None = None,
     ) -> dict[str, Any]:
         """Atomically save bounded owner-scoped AI UI preferences."""
-        if drawer_width is None and drawer_open is None:
+        if drawer_width is None and drawer_open is None and drawer_pinned is None:
             raise AIChatError("No AI preferences supplied")
         width = None
         if drawer_width is not None:
@@ -1722,6 +1726,8 @@ class AIChatService:
                 raise AIChatError("AI drawer width is outside the supported browser range")
         if drawer_open is not None and not isinstance(drawer_open, bool):
             raise AIChatError("Invalid AI drawer state")
+        if drawer_pinned is not None and not isinstance(drawer_pinned, bool):
+            raise AIChatError("Invalid AI drawer pin state")
         path = self._preference_path(owner)
         with advisory_file_lock(self.preference_lock_target):
             payload = self._read_preferences_unlocked(path)
@@ -1729,6 +1735,8 @@ class AIChatService:
                 payload["drawer_width"] = width
             if drawer_open is not None:
                 payload["drawer_open"] = drawer_open
+            if drawer_pinned is not None:
+                payload["drawer_pinned"] = drawer_pinned
             atomic_write_private_text(
                 path, json.dumps(payload, indent=4, allow_nan=False) + "\n"
             )

@@ -52,7 +52,7 @@ PB8 stores reusable datasets under `pb8/caches/hlcvs_data` and temporary materia
 
 ## Results
 
-When the AI assistant has resolved exact managed PB8 backtest resources, it can open them through the same Results **Compare** view: PBGui clears filters, loads the complete result list, requires every safe result selector to match exactly one row, selects those rows, and renders the existing equity/balance comparison chart. It does not rely on generic button clicks or expose host paths.
+When the AI assistant has resolved exact managed PB8 backtest resources, it can open them through the same Results **Compare** view. It may replace the selection with 2-20 exact results or add 1-20 new results, such as a finished Holdout, to the current selection. PBGui clears filters, loads the complete result list, requires every safe result selector to match exactly one row, deduplicates the combined selection, and renders the existing equity/balance comparison chart. Large comparisons reserve additional rows above the plot for the wrapped legend, so result labels never cover the backtest curves. The assistant does not rely on generic button clicks or expose host paths.
 
 ### Legacy Results
 

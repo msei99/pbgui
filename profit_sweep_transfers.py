@@ -40,6 +40,7 @@ _ROUTES = {
         "main_perps_to_vault": "hyperliquid_vault",
         "main_perp_to_spot": "hyperliquid_vault_spot",
         "main_perps_to_spot": "hyperliquid_vault_spot",
+        "main_spot_to_perps": "hyperliquid_vault_spot",
         "vault_main_to_spot": "hyperliquid_vault_spot",
     },
     "bybit": {
@@ -113,7 +114,7 @@ _ASSETS = {
     "bitget_uta": frozenset({"USDT"}),
 }
 
-_TOP_LEVEL_KEYS = frozenset({
+_TOP_LEVEL_KEYS_V1 = frozenset({
     "schema_version",
     "adapter",
     "exchange",
@@ -128,6 +129,7 @@ _TOP_LEVEL_KEYS = frozenset({
     "request",
     "fingerprint",
 })
+_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS_V1 | {"amount_precision"}
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _HISTORY_WINDOW_MS = 5 * 60 * 1_000
 
@@ -210,7 +212,7 @@ def transfer_capability(user: Any, snapshot: dict[str, Any]) -> dict[str, Any]:
                 return result
             routes = ["vault_to_main_perps"]
             if str(leader.get("account_mode") or "standard_manual") == "standard_manual":
-                routes.append("main_perps_to_spot")
+                routes.extend(("main_perps_to_spot", "main_spot_to_perps"))
             result.update({
                 "supported": True,
                 "writes_available": True,
@@ -492,13 +494,14 @@ def prepare_transfer(
                     "usd": int(_decimal(amount_text) * Decimal("1000000")),
                 }
             else:
-                source = "leader_default_perps"
+                reverse = route == "main_spot_to_perps"
+                source = "leader_spot" if reverse else "leader_default_perps"
                 destination = leader_address
                 action = {
                     "type": "agentSendAsset",
                     "destination": leader_address,
-                    "sourceDex": "",
-                    "destinationDex": "spot",
+                    "sourceDex": "spot" if reverse else "",
+                    "destinationDex": "" if reverse else "spot",
                     "token": _token(snapshot),
                     "amount": amount_text,
                     "fromSubAccount": "",
@@ -568,13 +571,19 @@ def prepare_transfer(
         }
         idempotency = {"kind": "none", "value": None, "replay_safe": False}
 
+    descriptor_precision = (
+        amount_precision
+        if amount_precision is None or isinstance(amount_precision, int)
+        else str(amount_precision)
+    )
     descriptor = {
-        "schema_version": 1,
+        "schema_version": 2,
         "adapter": adapter,
         "exchange": exchange,
         "operation_id": operation,
         "route": route,
         "amount": amount_text,
+        "amount_precision": descriptor_precision,
         "asset": asset_name,
         "idempotency": idempotency,
         "source": source,
@@ -589,10 +598,20 @@ def prepare_transfer(
 def _validate_descriptor(user: Any, descriptor: Any) -> dict[str, Any]:
     """Validate a persisted descriptor against every fixed adapter field."""
 
-    if not isinstance(descriptor, dict) or set(descriptor) != _TOP_LEVEL_KEYS:
+    if not isinstance(descriptor, dict):
         raise TransferRequestError("descriptor shape is invalid")
-    if descriptor.get("schema_version") != 1:
+    schema_version = descriptor.get("schema_version")
+    expected_top_level = (
+        _TOP_LEVEL_KEYS_V1
+        if schema_version == 1
+        else _TOP_LEVEL_KEYS
+        if schema_version == 2
+        else None
+    )
+    if expected_top_level is None:
         raise TransferRequestError("descriptor schema is unsupported")
+    if set(descriptor) != expected_top_level:
+        raise TransferRequestError("descriptor shape is invalid")
     if descriptor.get("fingerprint") != _descriptor_fingerprint(descriptor):
         raise TransferRequestError("descriptor integrity check failed")
     exchange = _exchange_name(user)
@@ -611,6 +630,12 @@ def _validate_descriptor(user: Any, descriptor: Any) -> dict[str, Any]:
         raise TransferRequestError("descriptor asset is not allowlisted")
     if _amount_string(descriptor.get("amount")) != descriptor.get("amount"):
         raise TransferRequestError("descriptor amount is invalid")
+    if schema_version == 2:
+        precision = descriptor.get("amount_precision")
+        if adapter == "hyperliquid_vault" and precision != 6:
+            raise TransferRequestError("descriptor amount precision is invalid")
+        if _amount_string(descriptor.get("amount"), precision) != descriptor.get("amount"):
+            raise TransferRequestError("descriptor amount precision is invalid")
     if not isinstance(descriptor.get("idempotency"), dict) or set(descriptor["idempotency"]) != {
         "kind",
         "value",
@@ -663,7 +688,11 @@ def _validate_descriptor(user: Any, descriptor: Any) -> dict[str, Any]:
                 or action.get("usd") != int(Decimal(descriptor["amount"]) * Decimal("1000000"))
             ):
                 raise TransferRequestError("vault transfer account, direction, or amount is invalid")
-        reverse_agent = adapter == "hyperliquid_agent" and route == "spot_to_perp"
+        reverse_agent = (
+            adapter == "hyperliquid_agent" and route == "spot_to_perp"
+        ) or (
+            adapter == "hyperliquid_vault_spot" and route == "main_spot_to_perps"
+        )
         if expected_type == "agentSendAsset" and (
             action.get("sourceDex") != ("spot" if reverse_agent else "")
             or action.get("destinationDex") != ("" if reverse_agent else "spot")
@@ -680,13 +709,15 @@ def _validate_descriptor(user: Any, descriptor: Any) -> dict[str, Any]:
                 or (descriptor.get("source"), descriptor.get("destination")) != expected_accounts
             ):
                 raise TransferRequestError("Hyperliquid route is not bound to the user's own wallet")
-        elif adapter == "hyperliquid_vault_spot" and (
-            descriptor.get("source") != "leader_default_perps"
-            or action.get("destination") != descriptor.get("destination")
-            or _address(descriptor.get("destination"), "Vault forwarding destination")
-            != descriptor.get("destination")
-        ):
-            raise TransferRequestError("Hyperliquid Vault forwarding route is invalid")
+        elif adapter == "hyperliquid_vault_spot":
+            expected_source = "leader_spot" if reverse_agent else "leader_default_perps"
+            if (
+                descriptor.get("source") != expected_source
+                or action.get("destination") != descriptor.get("destination")
+                or _address(descriptor.get("destination"), "Vault forwarding destination")
+                != descriptor.get("destination")
+            ):
+                raise TransferRequestError("Hyperliquid Vault forwarding route is invalid")
     else:
         if set(request) != {"method", "params"} or not isinstance(request.get("params"), dict):
             raise TransferRequestError("exchange descriptor shape is invalid")

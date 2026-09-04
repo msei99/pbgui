@@ -320,7 +320,7 @@ Dieses Panel ist sinnvoll, wenn ein Backtest auf Disk fertig vorliegt, aber im n
 
 ### Mehrere Ergebnisse vergleichen
 
-Der AI-Assistent kann exakte verwaltete PB7-Backtest-Ressourcen ebenfalls in dieser Results-Compare-Ansicht oeffnen. PBGui loest dabei jeden sicheren Selektor eindeutig gegen die vollstaendig geladene Result-Liste auf, waehlt die passenden Zeilen und verwendet denselben vorhandenen Vergleichschart statt generischer UI-Klickfolgen.
+Der AI-Assistent kann exakte verwaltete PB7-Backtest-Ressourcen ebenfalls in dieser Results-Compare-Ansicht oeffnen. Er kann die Auswahl durch 2-20 exakte Results ersetzen oder 1-20 neue Results zur aktuellen Auswahl hinzufuegen. PBGui loest dabei jeden sicheren Selektor eindeutig gegen die vollstaendig geladene Result-Liste auf, entfernt Duplikate aus der kombinierten Auswahl und verwendet denselben vorhandenen Vergleichschart statt generischer UI-Klickfolgen. Grosse Vergleiche reservieren zusaetzliche Zeilen oberhalb der Plotflaeche fuer die umgebrochene Legende, damit Result-Labels die Backtest-Kurven nicht verdecken.
 1. **Results** → Ergebnisse auswählen → **📈 Compare**
 2. Das Vergleichschart öffnet sich mit allen ausgewählten Equity-Kurven überlagert
 

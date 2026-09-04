@@ -1207,6 +1207,7 @@ def test_ai_backtest_compare_selects_exact_results_and_opens_existing_chart() ->
         function selectPanel(value, options) {{ panel = value; assert.equal(options.deferResultsLoad, true); }}
         async function loadResults() {{ return results; }}
         function setSelectedResults(paths) {{ selected = paths; }}
+        function getSelectedResults() {{ return selected.slice(); }}
         async function _compareResultPaths(paths) {{ compared = paths; }}
         function toast(message) {{ toastMessage = message; }}
         {functions}
@@ -1224,10 +1225,44 @@ def test_ai_backtest_compare_selects_exact_results_and_opens_existing_chart() ->
           assert.deepEqual(compared, selected);
           assert.deepEqual(compareEl.scrolled, {{block:'start'}});
           assert.match(toastMessage, /opened Results Compare for 2 backtests/);
+          selected = ['path-a'];
+          compared = [];
+          await openAIBacktestCompare({{
+            target: {{version:'v8'}},
+            payload: {{mode:'add', selectors:[
+              {{config_name:'martingale', result_name:'b', exchange_dir:'bybit', modified:'two'}}
+            ]}}
+          }});
+          assert.deepEqual(selected, ['path-a', 'path-b']);
+          assert.deepEqual(compared, selected);
         }})().catch(error => {{ console.error(error); process.exit(1); }});
         """
     )
     completed = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_compare_legend_reserves_rows_above_the_plot() -> None:
+    """Large Compare legends must increase chart margin instead of covering backtests."""
+    page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
+    function = _extract_function(page, "_compareLegendLayout")
+    script = textwrap.dedent(
+        f"""
+        const assert = require('node:assert/strict');
+        {function}
+        const short = _compareLegendLayout([{{name:'eq short'}}, {{name:'bal short'}}], 1200);
+        const many = _compareLegendLayout(
+          Array.from({{length:26}}, (_, index) => ({{name:'equity candidate ' + index + ' with a long period and exchange label'}})),
+          1200
+        );
+        assert.equal(short.marginTop, 64);
+        assert.ok(many.marginTop > short.marginTop);
+        assert.equal(many.height - many.marginTop, 760);
+        """
+    )
+    completed = subprocess.run(
+        ["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=False
+    )
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 

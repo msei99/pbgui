@@ -8273,6 +8273,23 @@ function _clearResultsFilters() {
   if (filterEl) filterEl.value = '';
 }
 
+function _compareLegendLayout(traces, chartWidth) {
+  var available = Math.max(320, Number(chartWidth) || 800);
+  var rowWidth = 0;
+  var rows = 1;
+  (traces || []).forEach(function(trace) {
+    var itemWidth = Math.min(420, Math.max(140, 50 + String(trace.name || '').length * 5.8));
+    if (rowWidth && rowWidth + itemWidth > available) {
+      rows += 1;
+      rowWidth = itemWidth;
+    } else {
+      rowWidth += itemWidth;
+    }
+  });
+  var marginTop = Math.max(64, 18 + rows * 24);
+  return { marginTop: marginTop, height: 800 + marginTop - 40 };
+}
+
 function _compareResultPaths(paths, resultSet, compareEl, chartId) {
   compareEl.style.display = '';
   compareEl.innerHTML = '\x3Cdiv style="text-align:center;padding:var(--sp-lg);color:var(--text-dim)">Loading equity data for comparison…\x3C/div>';
@@ -8306,6 +8323,11 @@ function _compareResultPaths(paths, resultSet, compareEl, chartId) {
     }
     var layout = _chartLayout('', 'Balance');
     compareEl.innerHTML = chartWrap(chartId);
+    var chart = document.getElementById(chartId);
+    var legendLayout = _compareLegendLayout(traces, chart ? chart.clientWidth : compareEl.clientWidth);
+    layout.margin.t = legendLayout.marginTop;
+    layout.height = legendLayout.height;
+    layout.legend = { orientation: 'h', x: 0, y: 1.02, xanchor: 'left', yanchor: 'bottom' };
     Plotly.newPlot(chartId, traces, layout, _plotlyConf());
     return true;
   });
@@ -10863,7 +10885,8 @@ async function openAIBacktestCompare(action) {
   var payload = action && action.payload && typeof action.payload === 'object' ? action.payload : {};
   var version = String(target.version || '');
   var selectors = Array.isArray(payload.selectors) ? payload.selectors : [];
-  if (version !== backtestEditorAdapter.version || selectors.length < 2) throw new Error('AI Backtest comparison target is invalid');
+  var mode = payload.mode === 'add' ? 'add' : 'replace';
+  if (version !== backtestEditorAdapter.version || selectors.length < (mode === 'add' ? 1 : 2)) throw new Error('AI Backtest comparison target is invalid');
   var versionFilter = document.getElementById('results-version-filter');
   if (versionFilter) versionFilter.value = version;
   _clearResultsFilters();
@@ -10875,6 +10898,8 @@ async function openAIBacktestCompare(action) {
     return matches[0].path;
   });
   if (new Set(paths).size !== paths.length) throw new Error('AI Backtest comparison resolved duplicate results');
+  if (mode === 'add') paths = Array.from(new Set(getSelectedResults().concat(paths)));
+  if (paths.length < 2 || paths.length > 20) throw new Error('Results Compare requires between 2 and 20 backtests');
   setSelectedResults(paths);
   var compareEl = document.getElementById('compare-chart-area');
   await _compareResultPaths(paths, results, compareEl, 'compare-chart-div');
