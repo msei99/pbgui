@@ -108,13 +108,15 @@ Unterstuetzte Standard- und Hyperliquid-Vault-Accounts zeigen **Test transfer** 
 
 Bei einem Hyperliquid Vault fuehrt die Forward-Route vom Vault zu Leader Main Perps. Diese Vault-to-Main-Route funktioniert auch mit Unified Account Mode des Leaders; nur das optionale Forwarding von Main Perps zu Spot erfordert Standard/Manual. Der ausdruecklich bestaetigte manuelle Test uebernimmt nicht die automatische **Flat Only**-Policy und erlaubt jeden positiven Test-Withdrawal innerhalb des frischen konservativen leader-eigenen Vault-Caps. Hyperliquids `alwaysCloseOnWithdraw` bleibt als exchange-eigener Risikoschutz aktiv, setzt PBGui's Cap aber nicht auf null. Der Default bleibt 5 USDC. **Transfer back** wird nur angeboten, wenn der reconciliierte Empfangsbetrag mindestens 5 USDC betraegt, weil Hyperliquid kleinere Vault-Deposits ablehnt.
 
-Bei Standard-Accounts verwendet der Ruecktransfer den reconcilierten Empfangsbetrag, falls vorhanden, sonst den angeforderten Betrag. Ein Ruecktransfer sendet die Forward-Operation niemals erneut. **Unknown** bietet weder Retry noch Ruecktransfer; stattdessen Exchange und Logs pruefen und kein blindes Duplikat erzeugen.
+Bei Standard-Accounts verwendet der Ruecktransfer den reconcilierten Empfangsbetrag, falls vorhanden, sonst den angeforderten Betrag. Ein Ruecktransfer sendet die Forward-Operation niemals erneut. **Submitting** und **Unknown** bieten **Reconcile** fuer gezielte History-Reads an, aber weder Retry noch Ruecktransfer. Kein blindes Duplikat erzeugen.
 
 Nach einer Forward- oder Ruecktransfer-Operation plant PBGui automatisch ein weiteres frisches read-only Preview. Schlaegt dieser Refresh fehl, bleibt der dauerhafte Operation-Status massgeblich und das Preview versucht den Read erneut, ohne den Transfer zu wiederholen.
 
 Nachdem Hyperliquid eine manuelle Test-Submission akzeptiert hat, pollt PBGui die feste read-only Ledger-Abfrage bis zu zehn Sekunden, bevor das Ergebnis als Unknown eingestuft wird. Eine Ledger-Indexierungsverzoegerung erzeugt niemals eine weitere Submission; nur Reconciliation-Reads werden wiederholt.
 
-Jede Forward-Test-Aktion traegt eine im Browser erzeugte Idempotency-UUID. PBGui beansprucht die persistierte Operation atomar vor dem Exchange-I/O. Parallele Requests oder ein exakt wiederholter Forward-Request nach einer verlorenen HTTP-Antwort liefern dadurch dieselbe Operation, ohne erneut zu senden. Transfer back ist an die bestaetigte Forward-Operation gebunden, erlaubt nur eine persistierte Rueckoperation und lehnt eine Wiederholung ab, statt erneut zu senden. Ein Test-Transfer im Status Submitting blockiert einen API-Neustart. Beim Start reconciliert PBGui unterbrochene bereits gesendete Tests ueber die Exchange-History und wiederholt niemals deren Write-Request.
+Forward- und Ruecktransfers tragen browsergenerierte Idempotency-UUIDs. PBGui beansprucht jede persistierte Operation atomar vor dem Exchange-I/O. Wiederholte Requests mit derselben ID liefern dieselbe Operation, ohne erneut zu senden. Transfer back bleibt an die bestaetigte Forward-Operation gebunden. **Retry transfer back** erscheint nur, wenn der vorige Ruecktransfer nachweislich keine Geldbewegung ausgelost hat; ein Retry verlangt eine erneute Echtgeld-Bestaetigung und eine neue Operation-ID. Alle fehlgeschlagenen Versuche bleiben in der History. Prepared, Submitting, Unknown, Confirmed und historische Failed-Eintraege ohne eindeutigen Nichttransfer-Nachweis blockieren weiterhin. Ein historischer Timeout ist kein sicherer Retry-Nachweis.
+
+Unerwartete Fehler nach dem Submission-Claim werden mit bereinigter Diagnose als Unknown gespeichert; Descriptor und Nonce bleiben erhalten. Tatsaechlich unterbrochene Submitting-Operationen blockieren den API-Neustart bis zur Reconciliation. Bei **Submitting** und **Unknown** bietet die Testtabelle **Reconcile** an: Die Aktion fragt gezielt nur die Exchange-History dieser Operation ab, niemals den gesamten Recovery-Scanner, und sendet nichts erneut. Auch Startup-Recovery wiederholt deren Write-Request nicht.
 
 Hyperliquid speichert erfolgreiche `agentSendAsset`-Bewegungen aktuell als Non-Funding-Ledger-Events mit `delta.type = "send"`. Die signierte Action enthaelt die kanonische Token-ID (`USDC:0x…`), waehrend das Ledger-Event nur das Symbol (`USDC`) meldet. PBGui prueft dieses Symbol sowie Ziel, DEX-Paar, Betrag, Nonce und Zeitfenster exakt, bevor die Operation bestaetigt wird.
 
@@ -126,7 +128,15 @@ Hyperliquid-L1-Submissions verwenden den aktuellen kanonischen Envelope nur mit 
 
 Persistierte Descriptors verwenden sortiertes JSON fuer stabile Integritaetspruefungen, waehrend Hyperliquid-MessagePack-Hashes von der Object-Key-Reihenfolge abhaengen. Vor jeder Signatur und Submission rekonstruiert PBGui `agentSendAsset`- und `vaultTransfer`-Actions in der aktuellen offiziellen Schema-Reihenfolge. Das bleibt ueber API-Neustarts und vorbereitete Operationen deterministisch. Standard-Account- und Vault-Live-Transfers verwenden beide ihre validierten API-Agent-Pfade.
 
+Hyperliquids dokumentierte agent-signierte interne Route bleibt `agentSendAsset`; sie ist nicht der andere user-signierte Vertrag `sendAsset`. Vault-L1-Signaturen verwenden die offizielle EIP-712-Domain `Exchange` mit `chainId: 1337` und der Phantom-Nachricht `Agent`. Offline-Protokollvektoren sichern diesen Vertrag ab.
+
+Neue Hyperliquid-Aktionen erhalten eine persistierte Nonce unter einem lokalen prozessuebergreifenden Lock fuer die tatsaechliche Signer-Adresse, nicht fuer Accountname oder Vault-Adresse. Forward, Ruecktransfer, manuelle Transfers und beide Live-Legs verwenden denselben Allocator. Reconciliation und wiederholte Requests derselben Operation behalten ihre urspruengliche Nonce. Das koordiniert nur Prozesse mit demselben PBGui-Nonce-Verzeichnis; unabhaengige Bots oder VPS-Prozesse sollten getrennte API-Wallets verwenden. Die Exchange erlaubt begrenzt ausserhalb der Reihenfolge eintreffende Nonces, aber keine Wiederverwendung durch denselben Signer.
+
 ## Intents Und Reconciliation
+
+Neue Hyperliquid-Descriptors binden die reservierte Signer-Adresse an ihren Integritaets-Fingerprint. Vor dem Senden prueft PBGui den tatsaechlichen Signing-Client beziehungsweise rekonstruiert den Browser-Signer aus dessen Signatur. Ein Keywechsel kann die alte Nonce nicht unter dem neuen Key verwenden. Aeltere Descriptors ohne gespeicherten Signer bleiben fuer read-only Reconciliation nutzbar, duerfen aber nicht erneut gesendet werden. Fuer einen anderen Signer ist eine neu vorbereitete Operation erforderlich.
+
+Ruecktransfer-Bestaetigungen verwenden feste Labels aus der konkreten Rueckroute der gespeicherten Operation. Ein historischer Leader-Main-Perps-to-Spot-Test bestaetigt daher **Leader Main Spot zu Leader Main Perps**, keinen Vault-Deposit. Eindeutige CCXT-Ablehnungen wegen fehlenden Bestands, Authentifizierung oder Berechtigungen koennen einen fehlgeschlagenen Rueckweg fuer bestaetigten Retry freigeben. Generische Fehler, doppelte Requests und Timeouts bleiben Unknown.
 
 Die Tabelle **Live Transfer Intents** zeigt die dauerhaften Statuswerte **Prepared**, **Submitting**, **Confirmed**, **Failed** und **Unknown**. Prepared wird vor Exchange-I/O persistiert. Confirmed aktualisiert die Abrechnung erst nach Reconciliation. Failed ist ein eindeutig nicht ausgefuehrtes Ergebnis.
 
@@ -136,7 +146,11 @@ Unknown bedeutet, dass PBGui nicht beweisen kann, ob die Exchange den Request au
 
 Aenderungen an einer aktiven Live-Policy benoetigen eine ausdrueckliche Finanzbestaetigung und den exakten aktuellen Policy-Fingerprint. Dadurch kann ein veralteter Browser-Tab weder neuere Einstellungen ueberschreiben noch andere als die geprueften Einstellungen aktivieren. Settlement-Asset oder Baseline-Abrechnung, Baseline-Reset und Policy-Loeschung erfordern zuerst das Deaktivieren von Live. Kann nach einem bestaetigten Vault-Withdrawal das Main-Spot-Forwarding nicht sofort erstellt werden, pausiert PBGui die Policy und bietet Reconciliation fuer dasselbe erste Leg an; ein weiterer Vault-Withdrawal wird niemals erzeugt.
 
+Policy-Saves verwenden denselben Account-Operation-Lock im API-Prozess wie Live-Auswertungen. Ein Save wartet auf den Abschluss eines laufenden Transfer-Vorgangs; eine danach gestartete Auswertung verwendet die gespeicherten Einstellungen. Speichern ist kein Notabbruch eines laufenden Transfers. Ein Browserabbruch gibt den Lock nicht frei, solange der Worker noch arbeitet; unterschiedliche Accounts bleiben unabhaengig.
+
 ## Fehlerbehebung
+
+Startup-Recovery verwendet den gleichen Account-Lock wie Policy-Saves, auch fuer vorbereitete Live-Submissions und fehlende Vault-Forwarding-Legs. Explizite Live-Reconciliation haelt diesen Lock ebenfalls. Recovery kann keinen Transfer parallel zu einem erfolgreichen Policy-Save desselben Accounts abschliessen; auch ein Abbruch wartet auf den aktiven Worker. Andere Accounts bleiben unabhaengig.
 
 - **Unsupported oder unavailable:** Exchange-Typ, Credentials, Berechtigungen, Hyperliquid-Agent-Freigabe und Account-Modus unter API Keys pruefen.
 - **Live-Aktivierung abgelehnt:** Grund in der Overview lesen und danach vollstaendige History, Snapshot-Freshness, Asset, Liabilities, Margin, Lockup und Transfer-Berechtigung pruefen.
@@ -146,7 +160,9 @@ Aenderungen an einer aktiven Live-Policy benoetigen eine ausdrueckliche Finanzbe
 - **Bitget Spot zeigt unavailable:** Wallet Transfer reicht zum Verschieben der Funds. Bitget Spot read muss nur aktiviert werden, wenn PBGui den Spot-Saldo anzeigen und Transfer-History abfragen soll. Liefert Bitget eine erfolgreiche synchrone Transfer-ID, waehrend History-Reads verboten sind, bestaetigt PBGui anhand dieser Exchange-Antwort ohne erneute Submission.
 
 Die Bitget-Classic-Transfer-History-Reconciliation verwendet die erforderlichen Filter `coin`, `fromType` und die persistierte `clientOid`. Bitget nennt den uebertragenen Betrag `size`; PBGui vergleicht ihn fuer Futures-to-Spot und Spot-to-Futures exakt mit dem angeforderten Betrag.
-- **Unknown Operation:** Nicht erneut senden und nicht zuruecktransferieren. Zeitpunkt und Betrag mit der Exchange-History vergleichen, Logs oeffnen und Reconcile nur fuer einen Live Intent verwenden.
+- **Unknown Operation:** Nicht erneut senden und nicht zuruecktransferieren. Zeitpunkt und Betrag mit der Exchange-History vergleichen, Logs oeffnen und **Reconcile** fuer den bestehenden Live Intent oder die Testoperation verwenden.
 - **Vault pausiert:** Lockup, Positionen/Orders, Leader-Anteil, retained Equity, Zielaktivitaet, Empfangsbetrag und Closing Cost oder Forced Reduction pruefen.
 
 Browser-Requests verwenden das PBGui-HttpOnly-Session-Cookie. API Keys, Private Keys, Passphrases, Descriptors, feste Route-Payloads und rohe Exchange-Antworten werden auf dieser Seite nicht angezeigt.
+
+Profit Sweep und Transfers erhalten den konfigurierten ASGI-Mount-Prefix in API- und lokalen Asset-URLs, auch bei Reverse-Proxy-Unterpfaden und IPv6-Zugriff. API-Requests bleiben auf dem aktuellen Browser-Origin.

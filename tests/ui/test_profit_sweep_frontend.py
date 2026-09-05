@@ -1,6 +1,11 @@
 """Offline source contracts for the Profit Sweep frontend."""
 
 from pathlib import Path
+import json
+import shutil
+import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -11,6 +16,104 @@ def _source() -> str:
     """Return the standalone Profit Sweep page source."""
 
     return PAGE.read_text(encoding="utf-8")
+
+
+def test_test_transfer_recovery_and_retry_are_explicit_and_generation_safe() -> None:
+    """Expose read-only recovery and separately confirmed, idempotent return retries."""
+
+    source = _source()
+    assert 'window.PBGUI_BASE_PREFIX = "%%BASE_PREFIX%%"' in source
+    assert "operation.can_reconcile === true" in source
+    assert "reconcileTestTransfer(operation)" in source
+    assert "encodeURIComponent(operation.operation_id) + '/reconcile'" in source
+    recovery = source.split("async function reconcileTestTransfer(operation)", 1)[1].split("function scheduleAutomaticPreview", 1)[0]
+    assert "isCurrentAccount(userName, generation)" in recovery
+    assert "signal: state.accountController" in recovery
+    assert "submitPreparedWalletSignature" not in recovery
+    assert "_reconcile_unresolved_sync" not in source
+    assert "operation.retry_of ? 'Retry transfer back'" in source
+    assert "JSON.stringify({ operation_id: pending.operation_id, retry_of: pending.retry_of })" in source
+    assert "state.pendingTestBack = pending" in source
+
+
+def test_test_reconciliation_ignores_stale_completion_and_auth_failure() -> None:
+    """Execute the UI action with deferred responses, account changes, and lost authentication."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for the isolated frontend action test")
+    source = _source()
+    action = "async function reconcileTestTransfer(operation)" + source.split("async function reconcileTestTransfer(operation)", 1)[1].split("function scheduleAutomaticPreview", 1)[0]
+    script = r"""
+const assert = require('node:assert/strict');
+const state = {selectedUser:'alice', accountGeneration:1, testActionPending:false, users:[{name:'alice'}], accountController:new AbortController()};
+let resolveRequest, rejectRequest, refreshes = 0, messages = [];
+function requestJson(path, options) {
+  assert.equal(path, '/test-transfers/alice/operation%2Fencoded/reconcile');
+  assert.equal(options.method, 'POST');
+  assert.equal(options.signal, state.accountController.signal);
+  return new Promise((resolve, reject) => {resolveRequest=resolve; rejectRequest=reject;});
+}
+function isCurrentAccount(user, generation) {return user===state.selectedUser && generation===state.accountGeneration;}
+function renderTestTransfers() {}
+function setMessage(message) {messages.push(message);}
+function titleCase(value) {return value;}
+async function refreshTestTransfersAfterAction() {refreshes++;}
+eval(ACTION);
+(async () => {
+  let running = reconcileTestTransfer({operation_id:'operation/encoded', can_reconcile:true});
+  state.accountGeneration++;
+  state.selectedUser='other';
+  state.testActionPending=false;
+  resolveRequest({status:'confirmed'});
+  await running;
+  assert.equal(refreshes, 0);
+  assert.equal(messages.length, 1);
+  assert.equal(state.testActionPending, false);
+  state.selectedUser='alice';
+  running = reconcileTestTransfer({operation_id:'operation/encoded', can_reconcile:true});
+  rejectRequest(Object.assign(new Error('Authentication required'), {status:401}));
+  await running;
+  assert.equal(messages.at(-1), 'Authentication required');
+  assert.equal(refreshes, 0);
+  assert.equal(state.testActionPending, false);
+})().catch(error => {console.error(error); process.exitCode=1;});
+""".replace("ACTION", json.dumps(action))
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+def test_historical_and_vault_return_confirmations_use_projected_route_labels() -> None:
+    """Run the real modal action with historical Spot and normal Vault return projections."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for the isolated frontend action test")
+    source = _source()
+    action = "async function transferTestBack(operation)" + source.split("async function transferTestBack(operation)", 1)[1].split("async function reconcileTestTransfer", 1)[0]
+    script = r"""
+const assert = require('node:assert/strict');
+const state = {selectedUser:'vault', accountGeneration:1, testActionPending:false, pendingTestBack:null, users:[{name:'vault',is_vault:true}]};
+let dialogs = [], messages = [];
+const window = {crypto:{randomUUID:()=> 'fixture-id'}, PBGuiDialogs:{confirm:async options=> {dialogs.push(options); return false;}}};
+function text(value) {return String(value);}
+function setMessage(message) {messages.push(message);}
+function isCurrentAccount(user, generation) {return user===state.selectedUser && generation===state.accountGeneration;}
+function testTransferEndpoints() {throw new Error('Selected capability must not decide the return route');}
+eval(ACTION);
+(async () => {
+  const operation = {operation_id:'forward',status:'confirmed',can_transfer_back:true,asset:'USDC',requested_amount:'1'};
+  await transferTestBack({...operation,return_endpoints:{source:'Leader Main Spot',destination:'Leader Main Perps'}});
+  assert.equal(dialogs[0].message,'Move 1 USDC from Leader Main Spot back to Leader Main Perps?');
+  await transferTestBack({...operation,requested_amount:'5',return_endpoints:{source:'Leader Main Perps',destination:'Hyperliquid Vault'}});
+  assert.equal(dialogs[1].message,'Move 5 USDC from Leader Main Perps back to Hyperliquid Vault?');
+  await transferTestBack(operation);
+  assert.equal(dialogs.length,2);
+  assert.equal(messages.at(-1),'Reload the test history to review the exact return route.');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+""".replace("ACTION", json.dumps(action))
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15, check=False)
+    assert result.returncode == 0, result.stderr
 
 
 def test_profit_sweep_shell_navigation_and_local_assets() -> None:
@@ -126,7 +229,8 @@ def test_profit_sweep_test_transfer_roundtrip_uses_shared_safety_dialogs() -> No
     assert "pendingTestOperationId: ''" in source
     assert "operation.asset || 'settlement asset'" in source
     assert "endpoints.source + ' to ' + endpoints.destination" in source
-    assert "endpoints.destination + ' back to ' + endpoints.source" in source
+    assert "endpoints.source + ' back to ' + endpoints.destination" in source
+    assert "var endpoints = operation.return_endpoints" in source
 
 
 def test_profit_sweep_test_operations_are_generation_safe_and_confirmed_only() -> None:

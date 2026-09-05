@@ -3,6 +3,7 @@
 import asyncio
 import sqlite3
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, nullcontext
 from functools import partial
@@ -19,6 +20,7 @@ import Database as database_mod
 import PBApiServer
 import pbgui_purefunc
 import sqlite_backup
+import db_maintenance
 from api import cluster, coin_data, dashboard, db_tools, pareto_explorer, vps_manager
 from database_lock import DatabaseBusyError, acquire_database_lock
 from master_update_lock import (
@@ -33,6 +35,9 @@ def isolated_runtime(tmp_path, monkeypatch):
     """Keep all databases/leases local to the test and forbid process operations."""
     for module in (database_mod, PBApiServer, pbgui_purefunc, dashboard, db_tools):
         monkeypatch.setattr(module, "PBGDIR", tmp_path)
+    monkeypatch.setattr(db_maintenance, "PBDataControl", Mock(return_value=Mock(
+        inspect=Mock(return_value="systemd"), stop=Mock(), start=Mock(),
+    )))
     monkeypatch.setattr(dashboard, "_income_restore_active", threading.Event())
     for name in ("_get_db", "_pbdata_stop", "_pbdata_start"):
         monkeypatch.setattr(dashboard, name, Mock(side_effect=AssertionError(name)))
@@ -241,10 +246,9 @@ def test_active_restore_excludes_installer_second_restore_and_restart(client, tm
         pass
 
 
-@pytest.mark.parametrize("manage_pbdata,failure", [(False, "backup"), (True, "backup"),
-                                                (True, "stop"), (True, "restart")])
-def test_installer_lease_blocks_restore_through_cleanup(client, tmp_path, monkeypatch, manage_pbdata, failure):
-    """DB Tools holds master SH and DB EX from backup through failed cleanup."""
+@pytest.mark.parametrize("failure", ["backup", "stop", "restart"])
+def test_installer_lease_blocks_restore_through_cleanup(client, tmp_path, monkeypatch, failure):
+    """DB EX/journal excludes restore until the consistent restart phase is reconciled."""
     phases = []
     callback = Mock(side_effect=AssertionError("Restore admitted during install"))
     monkeypatch.setattr(sqlite_backup, "restore_sqlite_backup", callback)
@@ -256,31 +260,39 @@ def test_installer_lease_blocks_restore_through_cleanup(client, tmp_path, monkey
             pass
         with pytest.raises(MasterUpdateBusyError):
             acquire_master_update_lock(tmp_path)
-        with pytest.raises(DatabaseBusyError):
-            acquire_database_lock(tmp_path)
+        if name == "restart":
+            with acquire_database_lock(tmp_path):
+                pass
+        else:
+            with pytest.raises(DatabaseBusyError):
+                acquire_database_lock(tmp_path)
         assert client.post("/api/dashboard/income/restore", json={"path": "unused.db"}).status_code == 409
         assert not dashboard._income_restore_active.is_set()
         if failure == name:
             raise RuntimeError(f"{name} failed")
 
-    async def stop(*_args):
+    def stop(*_args):
         """Simulate PBData ownership without starting or stopping a process."""
         phase("stop")
         return True
 
-    async def restart(*_args):
+    def restart(*_args):
         """Exercise final cleanup while the installer's shared lease is still held."""
         phase("restart")
 
-    monkeypatch.setattr(db_tools, "_backup_local_file", lambda *_: phase("backup") or "")
-    monkeypatch.setattr(db_tools, "_stop_target_pbdata", stop)
-    monkeypatch.setattr(db_tools, "_start_target_pbdata", restart)
+    monkeypatch.setattr(db_maintenance.Maintenance, "prepare", lambda *_: phase("backup") or {})
+    control = Mock(inspect=Mock(return_value="systemd"), stop=Mock(side_effect=stop), start=Mock(side_effect=restart))
+    monkeypatch.setattr(db_maintenance, "PBDataControl", Mock(return_value=control))
     with pytest.raises(RuntimeError, match=f"{failure} failed"):
-        asyncio.run(db_tools._install_db_bundle("local", {}, "test", manage_pbdata=manage_pbdata))
-    assert phases[0] == "backup"
-    assert ("stop" in phases) == (manage_pbdata and failure != "backup")
-    assert ("restart" in phases) == manage_pbdata
+        asyncio.run(db_tools._install_db_bundle("local", {}, "test"))
+    assert phases[0] == "stop"
+    assert ("backup" in phases) == (failure != "stop")
+    assert ("restart" in phases) == (failure != "stop")
     callback.assert_not_called()
+    if failure in {"stop", "restart"}:
+        control.stop.side_effect = None
+        control.start.side_effect = None
+        assert db_maintenance.recover(tmp_path)["recovered"]
     with acquire_master_update_lock(tmp_path):
         pass
     with acquire_database_lock(tmp_path, exclusive=True):
@@ -481,14 +493,13 @@ def test_backup_excludes_install_until_sqlite_helper_finishes(database, tmp_path
         pass
     with acquire_database_lock(tmp_path, exclusive=True):
         pass
-    monkeypatch.setattr(db_tools, "_backup_local_file", Mock(return_value=""))
-    monkeypatch.setattr(db_tools, "_stop_target_pbdata", AsyncMock(return_value=True))
-    monkeypatch.setattr(db_tools, "_start_target_pbdata", AsyncMock())
+    monkeypatch.setattr(db_maintenance.Maintenance, "prepare", lambda *_: {})
     assert asyncio.run(db_tools._install_db_bundle("local", {}, "test")) == {
-        "backups": [], "pbdata_was_running": True,
+        "ok": True, "restored": [], "backups": [], "pbdata_was_running": True,
     }
-    db_tools._stop_target_pbdata.assert_awaited_once_with("local", None)
-    db_tools._start_target_pbdata.assert_awaited_once_with("local", True, None)
+    control = db_maintenance.PBDataControl.return_value
+    control.stop.assert_called_once_with("systemd")
+    control.start.assert_called_once_with("systemd")
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -502,14 +513,14 @@ def test_installer_excludes_backup_and_releases_lease_on_failure(database, tmp_p
         assert release.wait(10), "Installer test did not release callback"
         if fail:
             raise RuntimeError("isolated installer failure")
-        return ""
+        return {}
 
     async def install():
         """Run only leased pre-install steps with an empty bundle and no process control."""
-        return await db_tools._install_db_bundle("local", {}, "test", manage_pbdata=False)
+        return await db_tools._install_db_bundle("local", {}, "test")
 
     backup = Mock(wraps=database_mod.backup_sqlite_database)
-    monkeypatch.setattr(db_tools, "_backup_local_file", install_backup)
+    monkeypatch.setattr(db_maintenance.Maintenance, "prepare", install_backup)
     monkeypatch.setattr(database_mod, "backup_sqlite_database", backup)
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(asyncio.run, install())
@@ -529,7 +540,7 @@ def test_installer_excludes_backup_and_releases_lease_on_failure(database, tmp_p
             with pytest.raises(RuntimeError, match="isolated installer failure"):
                 future.result(timeout=10)
         else:
-            assert future.result(timeout=10) == {"backups": [], "pbdata_was_running": False}
+            assert future.result(timeout=10) == {"ok": True, "restored": [], "backups": [], "pbdata_was_running": True}
     db_tools._stop_target_pbdata.assert_not_called()
     db_tools._start_target_pbdata.assert_not_called()
     assert database.backup_full_db() is not None
@@ -564,6 +575,7 @@ def test_full_copy_runner_delegates_pbdata_ownership_to_leased_installer(
     ))
     monkeypatch.setattr(db_tools, "_assert_known_target", AsyncMock())
     monkeypatch.setattr(db_tools, "_stage_db_bundle", AsyncMock(side_effect=stage))
+    monkeypatch.setattr(db_tools, "_assert_maintenance_available", AsyncMock())
     monkeypatch.setattr(db_tools, "_start_operation", start)
     monkeypatch.setattr(db_tools, "_log", Mock())
     install_result = {"backups": ["isolated-backup"], "pbdata_was_running": True}
@@ -743,7 +755,7 @@ def test_local_user_copy_conflict_precedes_delete_and_connections(tmp_path, monk
 def test_user_copy_lease_spans_replace_all_tables_and_connection_cleanup(
     tmp_path, monkeypatch, live_target, failure,
 ):
-    """ExitStack keeps DB SH through cleanup without blocking master/restart admission."""
+    """An operation owner keeps DB EX through SQL cleanup; staging-only work stays independent."""
     source = {name: tmp_path / "source" / name for name in db_tools.DB_FILE_NAMES}
     target = {name: tmp_path / ("data" if live_target else "staged") / name for name in db_tools.DB_FILE_NAMES}
     source_conns = {name: object() for name in db_tools.DB_FILE_NAMES}
@@ -755,14 +767,18 @@ def test_user_copy_lease_spans_replace_all_tables_and_connection_cleanup(
         """Verify live ownership at every callback, including both connection closes."""
         phases.append(name)
         if live_target:
-            with acquire_master_update_lock(tmp_path), acquire_database_lock(tmp_path):
+            with acquire_master_runtime_lock(tmp_path):
                 pass
+            with pytest.raises(MasterUpdateBusyError):
+                acquire_master_update_lock(tmp_path)
+            with pytest.raises(DatabaseBusyError):
+                acquire_database_lock(tmp_path)
             with pytest.raises(DatabaseBusyError):
                 acquire_database_lock(tmp_path, exclusive=True)
         if failure == name:
             raise RuntimeError(f"isolated {name} failure")
 
-    def delete(paths, users, operation=None):
+    def delete(paths, users, operation=None, *, _maintenance=None):
         """Stand in for replace deletion without modifying any SQLite rows."""
         assert paths == target and users == ["alice"]
         phase("delete")
@@ -790,12 +806,17 @@ def test_user_copy_lease_spans_replace_all_tables_and_connection_cleanup(
     monkeypatch.setattr(db_tools, "_copy_spec_rows", copy)
     monkeypatch.setattr(db_tools, "_close_bundle", close)
     # A staging-only target must still work while the live database is reserved.
-    with nullcontext() if live_target else acquire_database_lock(tmp_path, exclusive=True):
+    context = (db_maintenance.Maintenance(tmp_path, uuid.uuid4().hex) if live_target
+               else acquire_database_lock(tmp_path, exclusive=True))
+    with context as owner:
+        if live_target:
+            owner.record["databases"] = {name: False for name in db_tools.DB_FILE_NAMES}
+            owner.touch(db_tools.DB_FILE_NAMES)
         if failure is not None:
             with pytest.raises(RuntimeError, match=f"isolated {failure} failure"):
-                db_tools.copy_user_rows(source, target, ["alice"], "replace")
+                db_tools.copy_user_rows(source, target, ["alice"], "replace", _maintenance=owner if live_target else None)
         else:
-            result = db_tools.copy_user_rows(source, target, ["alice"], "replace")
+            result = db_tools.copy_user_rows(source, target, ["alice"], "replace", _maintenance=owner if live_target else None)
             assert result["inserted"] == result["source_total"] == len(db_tools.TABLE_SPECS)
             assert result["skipped"] == 0
             assert len(result["tables"]) == len(db_tools.TABLE_SPECS)

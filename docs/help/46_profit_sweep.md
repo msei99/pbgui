@@ -108,13 +108,15 @@ Supported standard and Hyperliquid Vault accounts show **Test transfer** in **Ex
 
 For a Hyperliquid Vault, the forward route withdraws from the Vault to Leader Main Perps. This Vault-to-Main route also works when the Leader uses Unified account mode; only optional Main Perps-to-Spot forwarding requires Standard/Manual mode. The explicitly confirmed manual test does not inherit the automatic **Flat Only** policy and permits any positive test withdrawal within the fresh conservative leader-owned Vault cap. Hyperliquid's `alwaysCloseOnWithdraw` remains active as an exchange-owned risk control but does not zero PBGui's cap. The default remains 5 USDC. **Transfer back** is offered only when the reconciled received amount is at least 5 USDC because Hyperliquid rejects smaller Vault deposits.
 
-For standard accounts, the return uses the reconciled received amount when available, otherwise the requested amount. A return never resubmits the forward operation. **Unknown** has no retry or transfer-back action; inspect the exchange and logs instead of creating a blind duplicate.
+For standard accounts, the return uses the reconciled received amount when available, otherwise the requested amount. A return never resubmits the forward operation. **Submitting** and **Unknown** offer **Reconcile**, which checks only that existing test operation through exchange history and never submits a transfer. They do not permit a retry or transfer back.
 
 After a forward or return operation, PBGui schedules another fresh read-only preview automatically. If that refresh fails, the durable operation status remains authoritative and the preview retries without repeating the transfer.
 
 After Hyperliquid accepts a manual test submission, PBGui polls the fixed read-only ledger query for up to ten seconds before classifying the result as Unknown. Ledger-indexing delay never triggers another submission; only reconciliation reads are repeated.
 
-Each forward test action carries one browser-generated idempotency UUID. PBGui atomically claims that persisted operation before exchange I/O, so concurrent requests or an exact repeated forward request after a lost HTTP response return the same operation without submitting again. Transfer back is bound to the confirmed forward operation, permits only one persisted reverse operation, and rejects a repeated request instead of submitting again. A test transfer in the Submitting state blocks an API restart. Startup reconciles interrupted submitted tests through exchange history and never repeats their write request.
+Forward and return actions carry browser-generated idempotency UUIDs. PBGui atomically claims each persisted operation before exchange I/O, so repeated requests with the same ID return the same operation without submitting again. Transfer back is bound to the confirmed forward operation. **Retry transfer back** becomes available only when the previous return definitely did not move funds; it requires another real-funds confirmation and a new operation ID. All failed attempts remain in history. Prepared, Submitting, Unknown, Confirmed, and historical Failed returns without definite non-transfer evidence still block another return. A historical timeout is not safe retry evidence.
+
+Unexpected errors after submission has been claimed are recorded as Unknown with a redacted diagnostic, retaining the original descriptor and nonce. A genuinely interrupted Submitting operation blocks API restart until reconciled. Startup and the targeted Test Transfers **Reconcile** action never repeat its write request.
 
 Hyperliquid currently records successful `agentSendAsset` movements as non-funding ledger events with `delta.type = "send"`. The signed action contains the canonical token ID (`USDC:0x…`), while the Ledger event reports the symbol (`USDC`). PBGui compares that symbol plus the exact destination, DEX pair, amount, nonce, and time window before confirming the operation.
 
@@ -126,6 +128,14 @@ Hyperliquid L1 submissions use the current canonical envelope containing only `a
 
 Persisted descriptors use sorted JSON for stable integrity checks, but Hyperliquid MessagePack hashes depend on object-key order. Before every signature and submission, PBGui reconstructs `agentSendAsset` and `vaultTransfer` actions in the current official schema order. This remains deterministic across API restarts and prepared operations. Both standard-account and Vault Live transfers use their validated API-agent paths.
 
+Hyperliquid's documented agent-only internal route remains `agentSendAsset`; it is not the distinct user-signed `sendAsset` contract. Vault L1 signing uses the official `Exchange` EIP-712 domain with `chainId: 1337` and the phantom `Agent` message. Offline protocol vectors protect this contract.
+
+New Hyperliquid actions allocate a persisted nonce under a local cross-process lock keyed by the actual signing address, not the account name or Vault address. Forward, return, manual, and both Live legs share this allocator. Reconciliation and repeated requests for an existing operation keep its original nonce. This only coordinates processes sharing the same PBGui nonce directory; use separate API wallets for independent bots or VPS processes. The exchange allows bounded out-of-order nonces, not reuse of a nonce by the same signer.
+
+New Hyperliquid descriptors seal the reserved signer address into their integrity fingerprint. Before submission PBGui checks the actual signing client, or recovers the browser signer from its signature. Key rotation cannot reuse an old operation's nonce under the replacement key. Older descriptors without a recorded signer remain available for read-only reconciliation but cannot be submitted again. A newly prepared operation is required for a different signer.
+
+Transfer-back confirmations use fixed labels from the persisted operation's concrete reverse route. A historical Leader Main Perps-to-Spot test therefore confirms **Leader Main Spot to Leader Main Perps**, not a Vault deposit. Explicit CCXT insufficient-funds, authentication, and permission refusals can release a failed return for confirmed retry; generic errors, duplicate requests, and timeouts remain Unknown.
+
 ## Intents And Reconciliation
 
 The **Live Transfer Intents** table shows durable **Prepared**, **Submitting**, **Confirmed**, **Failed**, and **Unknown** states. Prepared is persisted before exchange I/O. Confirmed updates accounting only after reconciliation. Failed is a definite non-transfer result.
@@ -135,6 +145,10 @@ The **Dry Decision Journal** is collapsible. It starts collapsed when a selected
 Unknown means PBGui cannot prove whether the exchange executed the request. The policy changes to **Paused Unknown** and blocks new Live submissions. **Reconcile** queries the exchange again with the same durable operation identity; it never blindly submits a second transfer. Test-transfer operations remain separate and deliberately provide no retry action for Unknown.
 
 Changes to an active Live policy require an explicit financial confirmation and the exact current policy fingerprint, preventing a stale browser tab from overwriting newer settings or activating settings different from those reviewed. Settlement-asset or baseline-accounting changes, baseline reset, and policy deletion require disabling Live first. If a confirmed Vault withdrawal cannot immediately create its Main-Spot forwarding leg, PBGui pauses the policy and exposes reconciliation of that same first leg; it never performs another Vault withdrawal.
+
+Policy saves share the API process's account-operation lock with Live evaluation. A save waits for a running transfer lifecycle to finish; a later evaluation uses the saved settings. Saving is not an emergency cancellation of an in-flight transfer. Cancelling the browser request does not release the lock while its worker is still running, and different accounts remain independent.
+
+Startup recovery uses this same lock separately for each account, including prepared Live submissions and missing Vault forwarding legs. Explicit Live reconciliation also holds the lock. Recovery cannot complete a transfer concurrently with a successful policy save for that account; cancellation still waits for the active worker.
 
 ## Troubleshooting
 
@@ -146,7 +160,9 @@ Changes to an active Live policy require an explicit financial confirmation and 
 - **Bitget Spot shows unavailable:** Wallet Transfer permission is sufficient to move funds. Enable Bitget Spot read permission only if PBGui should display the Spot balance and query transfer history. When Bitget returns a successful synchronous transfer ID but history reads are forbidden, PBGui confirms from that exchange acknowledgement without resubmitting.
 
 Bitget Classic transfer-history reconciliation uses the required `coin`, `fromType`, and persisted `clientOid` filters. Bitget names the transferred quantity `size`; PBGui matches it exactly against the requested amount for both Futures-to-Spot and Spot-to-Futures.
-- **Unknown operation:** do not retry or transfer back. Compare the operation time and amount with exchange history, open Logs, and use Reconcile only for a Live intent.
+- **Unknown operation:** do not retry or transfer back. Compare the operation time and amount with exchange history, open Logs, and use **Reconcile** on the existing Live intent or test operation.
 - **Vault paused:** inspect lockup, positions/orders, leader share, retained equity, destination activity, received amount, and any closing cost or forced reduction.
 
 Browser requests use the PBGui HttpOnly session cookie. API keys, private keys, passphrases, descriptors, fixed-route payloads, and raw exchange responses are not rendered in this page.
+
+Profit Sweep and Transfers preserve the configured ASGI mount prefix in API and local-asset URLs, including reverse-proxy subpaths and IPv6 access. API requests stay on the browser's current origin.

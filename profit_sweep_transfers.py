@@ -17,8 +17,10 @@ from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from typing import Any
 
 import requests
+import ccxt
 
 from Exchange import Exchange
+from hyperliquid_nonce import allocate_hyperliquid_nonce
 
 
 SERVICE = "ProfitSweepTransfers"
@@ -67,6 +69,7 @@ _ROUTES = {
 _REVERSE_ROUTES = {
     "perp_to_spot": "spot_to_perp",
     "vault_to_main_perps": "main_perps_to_vault",
+    "main_perps_to_spot": "main_spot_to_perps",
     "unified_to_fund": "fund_to_unified",
     "umfuture_to_funding": "funding_to_umfuture",
     "usdt_futures_to_p2p": "p2p_to_usdt_futures",
@@ -130,6 +133,7 @@ _TOP_LEVEL_KEYS_V1 = frozenset({
     "fingerprint",
 })
 _TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS_V1 | {"amount_precision"}
+_TOP_LEVEL_KEYS_V3 = _TOP_LEVEL_KEYS | {"signer_address"}
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _HISTORY_WINDOW_MS = 5 * 60 * 1_000
 
@@ -295,7 +299,8 @@ def reverse_transfer_route(user: Any, snapshot: dict[str, Any], forward_route: A
     if not isinstance(forward_route, str) or forward_route not in capability.get("routes", []):
         raise TransferRequestError("forward route is not available for this account snapshot")
     reverse = _REVERSE_ROUTES.get(forward_route)
-    if reverse is None or _ROUTES.get(_exchange_name(user), {}).get(reverse) != capability.get("adapter"):
+    routes = _ROUTES.get(_exchange_name(user), {})
+    if reverse is None or routes.get(reverse) != routes.get(forward_route):
         raise TransferRequestError("reverse route is not available for this account snapshot")
     return reverse
 
@@ -421,6 +426,8 @@ def prepare_transfer(
     route: Any,
     snapshot: dict[str, Any],
     nonce: Any = None,
+    minimum_nonce: int = 0,
+    browser_signer: str | None = None,
 ) -> dict[str, Any]:
     """Build one JSON-safe descriptor for a fixed internal transfer route."""
 
@@ -455,12 +462,25 @@ def prepare_transfer(
     destination: str
     idempotency: dict[str, Any]
     if adapter.startswith("hyperliquid_"):
+        if browser_signer is not None:
+            signer = _address(browser_signer, "browser signer")
+            leader = snapshot.get("leader")
+            if adapter != "hyperliquid_vault" or not isinstance(leader, dict) or signer != _address(leader.get("address"), "leader address"):
+                raise TransferRequestError("Browser signer must be the snapshotted Vault leader")
+        else:
+            signer = _hyperliquid_signer_address(getattr(user, "private_key", None))
         if isinstance(nonce, bool):
             raise TransferRequestError("nonce must be a positive integer")
-        try:
-            nonce_value = _now_ms() if nonce is None else int(nonce)
-        except (TypeError, ValueError) as exc:
-            raise TransferRequestError("nonce must be a positive integer") from exc
+        if nonce is None:
+            try:
+                nonce_value = allocate_hyperliquid_nonce(signer, minimum=minimum_nonce)
+            except ValueError as exc:
+                raise TransferRequestError(str(exc)) from exc
+        else:
+            try:
+                nonce_value = int(nonce)
+            except (TypeError, ValueError) as exc:
+                raise TransferRequestError("nonce must be a positive integer") from exc
         if nonce_value <= 0:
             raise TransferRequestError("nonce must be a positive integer")
         if adapter == "hyperliquid_agent":
@@ -591,6 +611,8 @@ def prepare_transfer(
         "prepared_at_ms": prepared_at_ms,
         "request": request,
     }
+    if adapter.startswith("hyperliquid_"):
+        descriptor.update({"schema_version": 3, "signer_address": signer})
     descriptor["fingerprint"] = _descriptor_fingerprint(descriptor)
     return descriptor
 
@@ -606,6 +628,8 @@ def _validate_descriptor(user: Any, descriptor: Any) -> dict[str, Any]:
         if schema_version == 1
         else _TOP_LEVEL_KEYS
         if schema_version == 2
+        else _TOP_LEVEL_KEYS_V3
+        if schema_version == 3
         else None
     )
     if expected_top_level is None:
@@ -619,6 +643,8 @@ def _validate_descriptor(user: Any, descriptor: Any) -> dict[str, Any]:
     route = descriptor.get("route")
     if exchange != descriptor.get("exchange") or adapter != _ROUTES.get(exchange, {}).get(route):
         raise TransferRequestError("descriptor does not match the exchange route")
+    if schema_version == 3 and not adapter.startswith("hyperliquid_"):
+        raise TransferRequestError("Signer-bound descriptors require Hyperliquid")
     if _identifier(descriptor.get("operation_id"), "operation_id") != descriptor.get("operation_id"):
         raise TransferRequestError("descriptor operation_id is invalid")
     if not isinstance(descriptor.get("source"), str) or not isinstance(descriptor.get("destination"), str):
@@ -630,7 +656,7 @@ def _validate_descriptor(user: Any, descriptor: Any) -> dict[str, Any]:
         raise TransferRequestError("descriptor asset is not allowlisted")
     if _amount_string(descriptor.get("amount")) != descriptor.get("amount"):
         raise TransferRequestError("descriptor amount is invalid")
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         precision = descriptor.get("amount_precision")
         if adapter == "hyperliquid_vault" and precision != 6:
             raise TransferRequestError("descriptor amount precision is invalid")
@@ -648,6 +674,8 @@ def _validate_descriptor(user: Any, descriptor: Any) -> dict[str, Any]:
     except (TypeError, ValueError) as exc:
         raise TransferRequestError("descriptor timestamp is invalid") from exc
     if adapter.startswith("hyperliquid_"):
+        if schema_version == 3 and _address(descriptor["signer_address"], "signer address") != descriptor["signer_address"]:
+            raise TransferRequestError("Hyperliquid signer address must be canonical")
         if set(request) != {"method", "action", "nonce"} or not isinstance(request.get("action"), dict):
             raise TransferRequestError("Hyperliquid descriptor shape is invalid")
         expected_type = "vaultTransfer" if adapter == "hyperliquid_vault" else "agentSendAsset"
@@ -820,6 +848,26 @@ def _is_timeout(exc: Exception) -> bool:
     return isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower()
 
 
+def _hyperliquid_signer_address(private_key: Any) -> str:
+    """Derive the exact signing identity without exposing invalid credential values."""
+
+    if not isinstance(private_key, str) or re.fullmatch(r"(?:0x)?[0-9a-fA-F]{64}", private_key) is None:
+        raise TransferRequestError("Hyperliquid signing key is invalid")
+    try:
+        return ccxt.hyperliquid().privateKeyToAddress(private_key.removeprefix("0x")).lower()
+    except Exception:
+        raise TransferRequestError("Hyperliquid signing key is invalid") from None
+
+
+def _require_hyperliquid_signer(descriptor: dict[str, Any], signer: str) -> None:
+    """Forbid submission of old or rotated descriptors without altering reconciliation."""
+
+    if descriptor.get("schema_version") != 3 or not descriptor.get("signer_address"):
+        raise TransferRequestError("Legacy Hyperliquid descriptor has no reserved signer; reconciliation only")
+    if descriptor["signer_address"] != signer:
+        raise TransferRequestError("Hyperliquid signer changed since nonce reservation; create a new operation")
+
+
 def _error_result(
     exc: Exception,
     *,
@@ -848,9 +896,17 @@ def _response_status(adapter: str, response: Any) -> tuple[str, str | None]:
         return "unknown", None
     if adapter.startswith("hyperliquid_"):
         status = str(response.get("status") or "").lower()
+        reason = str(response.get("response") or "").lower()
+        if status in {"err", "error"} and any(word in reason for word in ("duplicate", "already", "timeout", "timed out", "unknown")):
+            return "unknown", None
         return ("submitted" if status == "ok" else "failed" if status in {"err", "error"} else "unknown", None)
     if adapter == "bybit_v5":
         code = response.get("retCode")
+        reason = str(response.get("retMsg") or "").lower()
+        if str(code) in {"10000", "10006", "10014"} or (
+            str(code) != "0" and any(word in reason for word in ("duplicate", "already", "timeout", "timed out", "unknown"))
+        ):
+            return "unknown", None
         result = response.get("result") if isinstance(response.get("result"), dict) else {}
         transfer_id = str(result.get("transferId") or "") or None
         return (
@@ -861,6 +917,9 @@ def _response_status(adapter: str, response: Any) -> tuple[str, str | None]:
         transfer_id = response.get("tranId")
         return ("submitted" if transfer_id is not None else "unknown", str(transfer_id) if transfer_id is not None else None)
     code = str(response.get("code") or "")
+    reason = str(response.get("msg") or response.get("message") or "").lower()
+    if code not in {"00000", "0"} and any(word in reason for word in ("duplicate", "already", "timeout", "timed out", "unknown")):
+        return "unknown", None
     data = response.get("data") if isinstance(response.get("data"), dict) else {}
     transfer_id = data.get("transferId") or data.get("clientOid")
     return (
@@ -946,6 +1005,7 @@ def browser_signing_request(user: Any, descriptor: dict[str, Any], expected_sign
     if validated["adapter"] != "hyperliquid_vault":
         raise TransferRequestError("browser wallet signing is available only for Hyperliquid Vault transfers")
     signer = _address(expected_signer, "expected signer")
+    _require_hyperliquid_signer(validated, signer)
     owner: Exchange | None = None
     try:
         owner, client = _owned_client(user, validated["exchange"])
@@ -972,7 +1032,7 @@ def verify_browser_signature(
     reported_recovery_id = raw[64] - 27 if raw[64] >= 27 else raw[64]
     if reported_recovery_id not in {0, 1}:
         raise TransferRequestError("browser wallet signature recovery id is invalid")
-    _address(expected_signer, "expected signer")
+    _require_hyperliquid_signer(validated, _address(expected_signer, "expected signer"))
     return {
         "r": "0x" + raw[:32].hex(),
         "s": "0x" + raw[32:64].hex(),
@@ -985,7 +1045,7 @@ def submit_browser_signed_transfer(
     descriptor: dict[str, Any],
     signature: dict[str, Any],
 ) -> dict[str, Any]:
-    """Submit one preverified Leader-wallet signature without persisting it."""
+    """Verify the reserved browser signer and submit once without persisting its signature."""
 
     validated = _validate_descriptor(user, descriptor)
     if validated["adapter"] != "hyperliquid_vault":
@@ -993,6 +1053,26 @@ def submit_browser_signed_transfer(
     submitted_at_ms = _now_ms()
     submission_started = False
     try:
+        # A browser signature must consume the nonce reserved for its actual recovered signer.
+        from ccxt.static_dependencies import ecdsa
+
+        _require_hyperliquid_signer(validated, validated.get("signer_address", ""))
+        client = ccxt.hyperliquid()
+        typed = _typed_data_for_descriptor(client, validated)
+        encoded = client.eth_encode_structured_data(typed["domain"], {"Agent": typed["types"]["Agent"]}, typed["message"])
+        recovery_id = int(signature["v"]) - 27
+        if recovery_id not in {0, 1}:
+            raise TransferRequestError("Browser signature recovery id is invalid")
+        r, s = int(signature["r"], 16), int(signature["s"], 16)
+        if not (0 < r < ecdsa.SECP256k1.order and 0 < s < ecdsa.SECP256k1.order):
+            raise TransferRequestError("Browser signature scalars are invalid")
+        keys = ecdsa.ecdsa.Signature(r, s, recovery_id).recover_public_keys(
+            int(client.hash(encoded, "keccak"), 16), ecdsa.SECP256k1.generator
+        )
+        point = keys[recovery_id].point
+        public_key = point.x().to_bytes(32, "big") + point.y().to_bytes(32, "big")
+        signer = "0x" + client.hash(public_key, "keccak")[-40:]
+        _require_hyperliquid_signer(validated, signer)
         payload = {
             "action": _canonical_hyperliquid_action(validated),
             "nonce": validated["request"]["nonce"],
@@ -1007,6 +1087,7 @@ def submit_browser_signed_transfer(
             "exchange_id": exchange_id,
             "submitted_at_ms": submitted_at_ms,
             "retry_safe": bool(validated["idempotency"]["replay_safe"] and status == "submitted"),
+            "no_transfer": status == "failed",
         }
         if status == "failed":
             result["error"] = {
@@ -1021,6 +1102,7 @@ def submit_browser_signed_transfer(
             "operation_id": validated["operation_id"],
             "submitted_at_ms": submitted_at_ms,
             "retry_safe": False,
+            "no_transfer": not submission_started and result["status"] == "failed",
         })
         return result
 
@@ -1062,6 +1144,7 @@ def submit_transfer(user: Any, descriptor: dict[str, Any]) -> dict[str, Any]:
         owner, client = _owned_client(user, validated["exchange"])
         request = validated["request"]
         if adapter.startswith("hyperliquid_"):
+            _require_hyperliquid_signer(validated, _hyperliquid_signer_address(getattr(client, "privateKey", None)))
             action = _canonical_hyperliquid_action(validated)
             nonce = request["nonce"]
             signature = client.sign_l1_action(action, nonce)
@@ -1090,6 +1173,7 @@ def submit_transfer(user: Any, descriptor: dict[str, Any]) -> dict[str, Any]:
             "exchange_id": exchange_id,
             "submitted_at_ms": submitted_at_ms,
             "retry_safe": bool(validated["idempotency"]["replay_safe"] and status == "submitted"),
+            "no_transfer": status == "failed",
         }
         if adapter.startswith("hyperliquid_") and status == "failed":
             result["error"] = {
@@ -1099,11 +1183,14 @@ def submit_transfer(user: Any, descriptor: dict[str, Any]) -> dict[str, Any]:
             }
         return result
     except Exception as exc:
-        result = _error_result(exc, adapter=adapter, reconciliation=submission_started)
+        # Narrow typed provider refusals prove non-execution; generic/duplicate errors do not.
+        definitive_rejection = type(exc) in {ccxt.InsufficientFunds, ccxt.AuthenticationError, ccxt.PermissionDenied}
+        result = _error_result(exc, adapter=adapter, reconciliation=submission_started and not definitive_rejection)
         result.update({
             "operation_id": validated["operation_id"],
             "submitted_at_ms": submitted_at_ms,
             "retry_safe": False,
+            "no_transfer": result["status"] == "failed" and (not submission_started or definitive_rejection),
         })
         return result
     finally:

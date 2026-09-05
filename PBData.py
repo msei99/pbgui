@@ -16,6 +16,7 @@ import json
 import re
 from pathlib import Path as _Path
 from Database import Database
+from database_lock import acquire_database_lock
 from User import Users
 from collections import defaultdict
 import asyncio
@@ -23,6 +24,7 @@ import random
 from logging_helpers import human_log as _human_log, set_service_min_level, is_debug_enabled
 
 SERVICE = "PBData"
+DB_MAINTENANCE_PROTOCOL = 1
 from Exchange import MAX_PRIVATE_WS_GLOBAL, set_ws_limits, Exchange as _Exchange
 from ini_watcher import IniWatcher
 from market_data import get_daily_hour_coverage_for_dataset, get_effective_enabled_coins, load_market_data_config, set_enabled_coins
@@ -424,6 +426,9 @@ async def _notify_api_market_data_status(payload: dict):
 
 class PBData():
     def __init__(self):
+        # Refuse startup before creating runtime resources during unresolved recovery.
+        with acquire_database_lock(Path(PBGDIR)):
+            pass
         self.piddir = Path(f'{PBGDIR}/data/pid')
         if not self.piddir.exists():
             self.piddir.mkdir(parents=True)
@@ -2749,6 +2754,8 @@ class PBData():
         self.save_trades_users()
 
     def run(self):
+        with acquire_database_lock(Path(PBGDIR)):
+            pass
         if not self.is_running():
             cmd = [sys.executable, '-u', str(PurePath(f'{PBGDIR}/PBData.py'))]
             if platform.system() == "Windows":

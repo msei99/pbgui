@@ -18,7 +18,7 @@ from file_lock import advisory_file_lock
 
 
 SERVICE = "ProfitSweep"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 BUSY_TIMEOUT_MS = 5_000
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "data" / "state" / "profit_sweep" / "profit_sweep.sqlite3"
 
@@ -439,7 +439,7 @@ class ProfitSweepStore:
                 }
                 if version == 0 and tables:
                     raise RuntimeError("unversioned profit sweep schema is not supported")
-                if version not in {0, 1, 2, 3, 4, 5, SCHEMA_VERSION}:
+                if version not in {0, 1, 2, 3, 4, 5, 6, SCHEMA_VERSION}:
                     raise RuntimeError(f"unsupported profit sweep schema version: {version}")
                 if version == 0:
                     self._create_schema(connection)
@@ -468,6 +468,9 @@ class ProfitSweepStore:
                     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 elif version == 5:
                     self._migrate_v5_to_v6(connection)
+                    connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                if 0 < version < 7:
+                    self._migrate_v6_to_v7(connection)
                     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 connection.commit()
             except Exception:
@@ -612,6 +615,7 @@ class ProfitSweepStore:
                 state TEXT NOT NULL CHECK (state IN ('prepared', 'submitting', 'confirmed', 'failed', 'unknown')),
                 requested_amount TEXT NOT NULL,
                 actual_amount TEXT,
+                retry_safe INTEGER NOT NULL DEFAULT 0 CHECK (retry_safe IN (0, 1)),
                 prepared_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 submitted_at INTEGER,
@@ -621,7 +625,8 @@ class ProfitSweepStore:
         )
         connection.execute(
             """CREATE UNIQUE INDEX test_operations_one_back ON test_operations(parent_id)
-               WHERE direction = 'back' AND parent_id IS NOT NULL"""
+               WHERE direction = 'back' AND parent_id IS NOT NULL
+                 AND (state != 'failed' OR retry_safe = 0)"""
         )
         connection.execute(
             "CREATE INDEX test_operations_user_time ON test_operations(user_name, prepared_at, operation_id)"
@@ -740,6 +745,22 @@ class ProfitSweepStore:
                WHERE operation_kind = 'top_up' AND state IN ('prepared', 'submitting', 'unknown')"""
         )
 
+    @staticmethod
+    def _migrate_v6_to_v7(connection: sqlite3.Connection) -> None:
+        """Allow explicit return retries only after newly recorded no-transfer evidence."""
+
+        columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(test_operations)")}
+        if "retry_safe" not in columns:
+            connection.execute(
+                "ALTER TABLE test_operations ADD COLUMN retry_safe INTEGER NOT NULL DEFAULT 0 CHECK (retry_safe IN (0, 1))"
+            )
+        connection.execute("DROP INDEX IF EXISTS test_operations_one_back")
+        connection.execute(
+            """CREATE UNIQUE INDEX test_operations_one_back ON test_operations(parent_id)
+               WHERE direction = 'back' AND parent_id IS NOT NULL
+                 AND (state != 'failed' OR retry_safe = 0)"""
+        )
+
     def _write(self, callback: Any) -> Any:
         """Run one callback under an advisory process lock and BEGIN IMMEDIATE."""
         with advisory_file_lock(self.db_path):
@@ -840,6 +861,7 @@ class ProfitSweepStore:
             "state": row["state"],
             "requested_amount": row["requested_amount"],
             "actual_amount": row["actual_amount"],
+            "retry_safe": bool(row["retry_safe"]),
             "prepared_at": row["prepared_at"],
             "updated_at": row["updated_at"],
             "submitted_at": row["submitted_at"],
@@ -1761,7 +1783,8 @@ class ProfitSweepStore:
                 ):
                     raise ValueError("test transfer back requires a confirmed forward operation")
                 existing = connection.execute(
-                    "SELECT 1 FROM test_operations WHERE parent_id = ? AND direction = 'back'",
+                    """SELECT 1 FROM test_operations WHERE parent_id = ? AND direction = 'back'
+                       AND (state != 'failed' OR retry_safe = 0)""",
                     (parent,),
                 ).fetchone()
                 if existing is not None:
@@ -1975,15 +1998,22 @@ class ProfitSweepStore:
                 raise ValueError("only submitted test operations can be reconciled")
             if actual_amount is not None and Decimal(actual_amount) > Decimal(row["requested_amount"]):
                 raise ValueError("received_amount exceeds requested_amount")
+            submission = json.loads(row["submission_json"]) if row["submission_json"] else {}
+            retry_safe = (
+                target == "failed"
+                and submission.get("status") == "failed"
+                and submission.get("no_transfer") is True
+            )
             connection.execute(
                 """UPDATE test_operations SET state = ?, actual_amount = COALESCE(?, actual_amount),
-                   error_json = ?, updated_at = ?, resolved_at = ? WHERE operation_id = ?""",
+                    error_json = ?, updated_at = ?, resolved_at = ?, retry_safe = ? WHERE operation_id = ?""",
                 (
                     target,
                     actual_amount,
                     error_json,
                     timestamp,
                     timestamp if target in {"confirmed", "failed"} else None,
+                    int(retry_safe),
                     operation,
                 ),
             )

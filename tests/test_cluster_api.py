@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from api import cluster
 from api import v7_instances
@@ -327,7 +327,11 @@ def test_retention_report_is_read_only_and_main_page_exposes_no_session_token(
 
     report = asyncio.run(cluster.get_retention_report(session=None))
     response = cluster.get_main_page(
-        SimpleNamespace(url=SimpleNamespace(scheme="https", hostname="localhost", port=None)),
+        Request({
+            "type": "http", "scheme": "https", "method": "GET",
+            "path": "/api/cluster/main_page", "root_path": "",
+            "headers": [(b"host", b"localhost")],
+        }),
         session=SimpleNamespace(token="must-not-appear"),
     )
 
@@ -339,6 +343,49 @@ def test_retention_report_is_read_only_and_main_page_exposes_no_session_token(
     assert "must-not-appear" not in html
     assert "%%TOKEN%%" not in html
     assert "headers.Authorization" not in html
+
+
+@pytest.mark.parametrize(
+    ("scheme", "host", "prefix", "expected_prefix", "ws_origin"),
+    [
+        ("http", "localhost:8000", "", "", "ws://localhost:8000"),
+        ("https", "example.com", "/pbgui", "/pbgui", "wss://example.com"),
+        ("http", "[::1]:8000", "/pbgui/", "/pbgui", "ws://[::1]:8000"),
+        ("https", "[2001:db8::1]", "/my gui", "/my%20gui", "wss://[2001:db8::1]"),
+    ],
+)
+def test_cluster_page_urls_preserve_mount_and_ipv6(
+    scheme: str, host: str, prefix: str, expected_prefix: str, ws_origin: str,
+) -> None:
+    """Page URLs stay same-origin, IPv6-safe and mounted without session tokens."""
+
+    import re
+    from urllib.parse import urljoin
+
+    request = Request({
+        "type": "http", "scheme": scheme, "method": "GET",
+        "path": "/api/cluster/main_page", "root_path": prefix,
+        "headers": [(b"host", host.encode())],
+    })
+    response = cluster.get_main_page(request, session=SimpleNamespace(token="never-render"))
+    html = response.body.decode()
+    globals_ = {
+        name: json.loads(value)
+        for name, value in re.findall(r"window\.(API_BASE|WS_BASE|PBGUI_BASE_PREFIX) = (.*?);", html)
+    }
+    assert globals_ == {
+        "API_BASE": expected_prefix + "/api/cluster",
+        "WS_BASE": ws_origin + expected_prefix,
+        "PBGUI_BASE_PREFIX": expected_prefix,
+    }
+    for asset in re.findall(r'(?:href|src)="([^"]*/app/[^"]*)"', html):
+        assert asset.startswith(expected_prefix + "/app/")
+    page = f"{scheme}://{host}{expected_prefix}/api/cluster/main_page"
+    for target in ("../services/main_page", "../api-keys/main_page#tradfi"):
+        assert f'href="{target}"' in html
+        assert urljoin(page, target).startswith(f"{scheme}://{host}{expected_prefix}/api/")
+    assert "%%BASE_PREFIX%%" not in html and "never-render" not in html
+    assert response.headers["cache-control"] == "no-store"
 
 
 def test_retention_report_builds_remote_preview_command(monkeypatch, tmp_path: Path) -> None:

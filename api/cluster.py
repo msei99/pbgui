@@ -6055,15 +6055,9 @@ def get_main_page(
     html_path = Path(__file__).parent.parent / "frontend" / "cluster.html"
     html = html_path.read_text(encoding="utf-8")
 
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
-    api_base = origin + "/api/cluster"
-    ws_base = origin.replace("http://", "ws://").replace("https://", "wss://")
+    from api.page_templates import render_page_urls
 
-    html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
-    html = html.replace('"%%WS_BASE%%"', json.dumps(ws_base))
+    html = render_page_urls(request, html, "/api/cluster")
 
     from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION
 

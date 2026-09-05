@@ -3587,12 +3587,9 @@ def credential_metadata():
             sys.path.insert(0, PBGDIR)
         from cmc_pool import CmcPoolClient
         from credential_store import CredentialStore
-        from master.cluster_state import default_cluster_root, local_cmc_credential_readiness, read_local_identity
+        from master.cluster_state import default_cluster_root, local_cmc_credential_readiness, read_local_identity, read_materialized_state
         cluster_root = default_cluster_root(Path(PBGDIR))
-        materialized = {
-            'cluster_nodes': json.loads((cluster_root / 'cluster_nodes.json').read_text(encoding='utf-8')),
-            'desired_state': json.loads((cluster_root / 'desired_state.json').read_text(encoding='utf-8')),
-        }
+        materialized = read_materialized_state(cluster_root)
         store = CredentialStore(Path(PBGDIR) / 'data' / 'credentials')
         records = store.list_cmc(active_only=False)
         status = CmcPoolClient(

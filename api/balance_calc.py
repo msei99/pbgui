@@ -16,12 +16,15 @@ import math
 import secrets as _secrets
 import time
 import traceback
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
 from pathlib import Path
+from threading import RLock
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
 from api.auth import SessionToken, require_auth
+from api.page_templates import render_page_urls, script_json
 from logging_helpers import human_log as _log
 from pb7_config import load_pb7_config
 from pb8_config import load_pb8_config
@@ -33,13 +36,16 @@ router = APIRouter()
 # ── Draft store ───────────────────────────────────────────────
 _draft_store: dict[str, tuple[float, dict]] = {}
 _DRAFT_TTL = 600  # 10 minutes
+_draft_lock = RLock()
 
 
 def _clean_drafts() -> None:
-    now = time.time()
-    expired = [k for k, (ts, _) in _draft_store.items() if now - ts > _DRAFT_TTL]
-    for k in expired:
-        _draft_store.pop(k, None)
+    """Remove expired process-local drafts under the shared thread lock."""
+    with _draft_lock:
+        now = time.monotonic()
+        expired = [k for k, (ts, _) in _draft_store.items() if now - ts >= _DRAFT_TTL]
+        for k in expired:
+            _draft_store.pop(k, None)
 
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -91,18 +97,10 @@ def _read_json(path: Path) -> dict | list | None:
 
 
 def _norm_coin(c: str) -> str:
-    """Normalize coin name to match mapping 'coin' field.
-
-    Config uses symbol names like 'DOGEUSDT', mapping uses base coin 'DOGE'.
-    PB7 stock perps use 'xyz:AAPL', mapping uses 'XYZ-AAPL'.
-    """
+    """Normalize spelling only; market aliases must come from the mapping."""
     u = c.strip().upper()
     if u.startswith("XYZ:") and len(u) > 4:
         return "XYZ-" + u[4:]
-    # Strip common quote suffixes to get the base coin name
-    for suffix in ("USDT", "USDC", "BUSD", "USD"):
-        if u.endswith(suffix) and len(u) > len(suffix):
-            return u[:-len(suffix)]
     return u
 
 
@@ -115,7 +113,8 @@ def _load_mapping(exchange: str) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
-def _extract_coins(config: dict, available_coins: set[str] | None = None) -> tuple[set[str], set[str], set[str]]:
+def _extract_coins(config: dict, available_coins: set[str] | None = None,
+                   aliases: dict[str, str] | None = None) -> tuple[set[str], set[str], set[str]]:
     """Extract (all_coins, coins_long, coins_short) from config dict."""
     available = available_coins or set()
     live = config.get("live", {}) if isinstance(config.get("live"), dict) else {}
@@ -131,10 +130,12 @@ def _extract_coins(config: dict, available_coins: set[str] | None = None) -> tup
         short_list = []
 
     def resolve(value: object) -> set[str]:
+        """Resolve canonical names first, then unambiguous mapping aliases."""
         values = [value] if isinstance(value, str) else list(value) if isinstance(value, (list, tuple, set)) else []
         if len(values) == 1 and str(values[0]).strip().lower() == "all":
             return set(available)
-        return {_norm_coin(str(coin)) for coin in values if str(coin).strip()}
+        names = {_norm_coin(str(coin)) for coin in values if str(coin).strip()}
+        return {name if name in available else (aliases or {}).get(name, name) for name in names}
 
     coins_long = resolve(long_list)
     coins_short = resolve(short_list)
@@ -161,10 +162,14 @@ def _extract_bot_params(config: dict) -> dict:
     """Extract V7 or V8 bot-side parameters needed for balance calculation."""
     bot = config.get("bot", {})
     live = config.get("live", {})
+    if not isinstance(bot, dict) or not isinstance(live, dict):
+        raise ValueError("bot and live must be JSON objects")
     strategy_kind = str(live.get("strategy_kind") or "").strip()
     result = {}
     for side in ("long", "short"):
         s = bot.get(side, {})
+        if not isinstance(s, dict):
+            raise ValueError(f"bot.{side} must be a JSON object")
         risk = s.get("risk", {}) if isinstance(s.get("risk"), dict) else {}
         strategies = s.get("strategy", {}) if isinstance(s.get("strategy"), dict) else {}
         strategy = strategies.get(strategy_kind) if strategy_kind else None
@@ -177,23 +182,35 @@ def _extract_bot_params(config: dict) -> dict:
             initial_qty_pct = strategy.get("base_qty_pct")
         if initial_qty_pct is None:
             initial_qty_pct = s.get("entry_initial_qty_pct", 0)
-        result[side] = {
-            "n_positions": float(risk.get("n_positions", s.get("n_positions", 0)) or 0),
-            "total_wallet_exposure_limit": float(
-                risk.get("total_wallet_exposure_limit", s.get("total_wallet_exposure_limit", 0)) or 0
-            ),
-            "entry_initial_qty_pct": float(initial_qty_pct or 0),
+        values = {
+            "n_positions": risk.get("n_positions", s.get("n_positions", 0)),
+            "total_wallet_exposure_limit": risk.get("total_wallet_exposure_limit", s.get("total_wallet_exposure_limit", 0)),
+            "entry_initial_qty_pct": initial_qty_pct,
         }
+        result[side] = {}
+        for name, raw in values.items():
+            try:
+                original = Decimal(0 if raw is None else raw)
+            except (TypeError, ValueError, OverflowError, InvalidOperation) as exc:
+                raise ValueError(f"bot.{side}.{name} must be a finite non-negative number") from exc
+            if isinstance(raw, bool) or not original.is_finite() or original < 0:
+                raise ValueError(f"bot.{side}.{name} must be a finite non-negative number")
+            # Nonzero decimal strings must not underflow into a disabled side.
+            value = float(original)
+            if not math.isfinite(value) or (value == 0 and not original.is_zero()):
+                raise ValueError(f"bot.{side}.{name} is outside the supported numeric range")
+            result[side][name] = value
     return result
 
 
-def _apply_dynamic_ignore(config: dict, exchange: str, available_coins: set[str]) -> tuple[set[str], set[str], set[str]]:
+def _apply_dynamic_ignore(config: dict, exchange: str, available_coins: set[str],
+                          aliases: dict[str, str] | None = None) -> tuple[set[str], set[str], set[str]]:
     """If dynamic_ignore is enabled, filter mapping and override approved_coins."""
     from PBCoinData import CoinData
 
     pbgui = config.get("pbgui", {})
     if not pbgui.get("dynamic_ignore", False):
-        return _extract_coins(config, available_coins)
+        return _extract_coins(config, available_coins, aliases)
 
     coindata = CoinData()
     approved, _ = coindata.filter_mapping(
@@ -207,16 +224,14 @@ def _apply_dynamic_ignore(config: dict, exchange: str, available_coins: set[str]
         quote_filter=["USDC" if exchange == "hyperliquid" else "USDT"],
         use_cache=True,
     )
-    coins_long = {_norm_coin(c) for c in approved if c} & available_coins
-    coins_short = {_norm_coin(c) for c in approved if c} & available_coins
-    coins = coins_long | coins_short
-    return coins, coins_long, coins_short
+    return _extract_coins({"live": {"approved_coins": approved}}, available_coins, aliases)
 
 
 def _calculate(config: dict, exchange: str) -> dict:
     """Run the balance calculation and return results."""
     from PBCoinData import compute_coin_name
 
+    bot_params = _extract_bot_params(config)
     mapping = _load_mapping(exchange)
     if not mapping:
         return {"error": f"No mapping data for exchange '{exchange}'. Check Coin Data configuration."}
@@ -241,6 +256,7 @@ def _calculate(config: dict, exchange: str) -> dict:
 
     # Find best mapping row per coin
     best_rows_by_coin = {}
+    alias_targets: dict[str, set[str]] = {}
     for record in mapping:
         if not isinstance(record, dict) or not eligible(record):
             continue
@@ -255,14 +271,18 @@ def _calculate(config: dict, exchange: str) -> dict:
             min_amount = float(record.get("min_amount") or record.get("precision_amount") or 0.0)
             min_cost = float(record.get("min_cost") or 0.0)
             min_order_price = float(record.get("min_order_price") or 0.0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
-        if not all(math.isfinite(value) for value in (price, contract_size, min_amount, min_cost, min_order_price)):
+        if not all(math.isfinite(value) and value >= 0 for value in (price, contract_size, min_amount, min_cost, min_order_price)):
             continue
         if min_order_price <= 0 and price > 0:
             min_order_price = max(min_cost, min_amount * contract_size * price)
-        if min_order_price <= 0:
+        if not math.isfinite(min_order_price) or min_order_price <= 0:
             continue
+
+        for alias in (coin + quote, record.get("symbol"), record.get("base"), record.get("ccxt_symbol")):
+            if isinstance(alias, str) and alias.strip():
+                alias_targets.setdefault(_norm_coin(alias), set()).add(coin)
 
         score = (0 if min_order_price > 0 else 1, -price, str(record.get("symbol") or ""))
 
@@ -271,11 +291,10 @@ def _calculate(config: dict, exchange: str) -> dict:
             best_rows_by_coin[coin] = (score, record, min_order_price, price, contract_size, min_amount, min_cost)
 
     available_coins = set(best_rows_by_coin)
-    coins, coins_long, coins_short = _apply_dynamic_ignore(config, exchange, available_coins)
+    aliases = {alias: next(iter(targets)) for alias, targets in alias_targets.items() if len(targets) == 1}
+    coins, coins_long, coins_short = _apply_dynamic_ignore(config, exchange, available_coins, aliases)
     if not coins:
         return {"error": "No eligible approved coins with usable minimum-order data were found."}
-
-    bot_params = _extract_bot_params(config)
 
     coin_infos = []
     balance_long = []
@@ -287,26 +306,32 @@ def _calculate(config: dict, exchange: str) -> dict:
             continue
         _, record, min_order_price, price, contract_size, min_amount, min_cost = best
         lev = record.get("max_leverage")
+        try:
+            lev = float(lev) if lev is not None else None
+        except (TypeError, ValueError, OverflowError):
+            lev = None
+        if lev is not None and (not math.isfinite(lev) or lev < 0):
+            lev = None
         coin_infos.append({
             "coin": coin,
             "currentPrice": price,
             "contractSize": contract_size,
             "min_amount": min_amount,
             "min_cost": min_cost,
-            "min_order_price": round(min_order_price, 6),
+            "min_order_price": min_order_price,
             "max_lev": lev,
         })
-        lp = bot_params["long"]
-        if coin in coins_long and lp["n_positions"] > 0 and lp["total_wallet_exposure_limit"] > 0 and lp["entry_initial_qty_pct"] > 0:
-            we = lp["total_wallet_exposure_limit"] / lp["n_positions"]
-            balance = min_order_price / (we * lp["entry_initial_qty_pct"])
-            balance_long.append({"coin": coin, "balance": round(balance, 2)})
-
-        sp = bot_params["short"]
-        if coin in coins_short and sp["n_positions"] > 0 and sp["total_wallet_exposure_limit"] > 0 and sp["entry_initial_qty_pct"] > 0:
-            we = sp["total_wallet_exposure_limit"] / sp["n_positions"]
-            balance = min_order_price / (we * sp["entry_initial_qty_pct"])
-            balance_short.append({"coin": coin, "balance": round(balance, 2)})
+        for side, side_coins, balances in (("long", coins_long, balance_long), ("short", coins_short, balance_short)):
+            bp = bot_params[side]
+            if coin not in side_coins or any(value == 0 for value in bp.values()):
+                continue
+            denominator = (bp["total_wallet_exposure_limit"] / bp["n_positions"]) * bp["entry_initial_qty_pct"]
+            if not math.isfinite(denominator) or denominator <= 0:
+                raise ValueError(f"{side} sizing is outside the supported numeric range")
+            balance = min_order_price / denominator
+            if not math.isfinite(balance) or balance <= 0:
+                raise ValueError(f"{side} required balance is outside the supported numeric range")
+            balances.append({"coin": coin, "balance": balance})
 
     # Sort
     coin_infos.sort(key=lambda x: x["min_order_price"], reverse=True)
@@ -335,9 +360,12 @@ def _calculate(config: dict, exchange: str) -> dict:
         bl = balance_long if side == "long" else balance_short
         bp = bot_params[side]
         symbol = bl[0]["coin"]
-        min_op = next((c["min_order_price"] for c in coin_infos if c["coin"] == symbol), 0)
-        calculated = min_op / ((bp["total_wallet_exposure_limit"] / bp["n_positions"]) * bp["entry_initial_qty_pct"])
-        recommended = math.ceil(round(calculated * 1.1, 10) / 10) * 10
+        min_op = best_rows_by_coin[symbol][2]
+        calculated = bl[0]["balance"]
+        if not math.isfinite(calculated * 1.1):
+            raise ValueError("Recommended balance is outside the supported numeric range")
+        # Decimal avoids a spurious extra step for binary floats such as 800 * 1.1.
+        recommended = int((Decimal(str(calculated)) * Decimal("1.1") / 10).to_integral_value(rounding=ROUND_CEILING)) * 10
         result["recommendation"] = {
             "side": side,
             "symbol": symbol,
@@ -349,6 +377,10 @@ def _calculate(config: dict, exchange: str) -> dict:
             "recommended_balance": recommended,
         }
 
+    for item in coin_infos:
+        item["min_order_price"] = round(item["min_order_price"], 6)
+    for item in balance_long + balance_short:
+        item["balance"] = round(item["balance"], 2)
     return result
 
 
@@ -410,33 +442,57 @@ def calculate_balance(
     Body: { "config": <dict>, "exchange": "bybit" }
     or    { "config_file": "/path/to/config.json", "exchange": "bybit" }
     """
-    exchange = request_body.get("exchange", "").strip().lower()
+    exchange = request_body.get("exchange", "")
+    if not isinstance(exchange, str):
+        raise HTTPException(status_code=422, detail="exchange must be a string")
+    exchange = exchange.strip().lower()
     if exchange not in EXCHANGES:
         return {"error": f"Invalid exchange: '{exchange}'. Must be one of {EXCHANGES}"}
 
     config = request_body.get("config")
-    config_file = request_body.get("config_file", "")
-
-    if not config and config_file:
-        p = Path(config_file)
-        # Security: only allow files under data/run_v7
+    if not config and "config_file" in request_body:
+        config_file = request_body["config_file"]
+        if (not isinstance(config_file, str) or not config_file.strip()
+                or "\\" in config_file or any(ord(char) < 32 or ord(char) == 127 for char in config_file)
+                or any(part in {".", ".."} for part in config_file.split("/"))):
+            raise HTTPException(status_code=422, detail="config_file must be a valid non-empty path")
+        path = Path(config_file).absolute()
+        loader = None
+        for root, candidate_loader in ((RUN_V7_DIR, load_pb7_config), (RUN_V8_DIR, load_pb8_config)):
+            try:
+                relative = path.relative_to(root.absolute())
+            except ValueError:
+                continue
+            if root.is_symlink() or any((root / Path(*relative.parts[:index])).is_symlink()
+                                        for index in range(1, len(relative.parts) + 1)):
+                raise HTTPException(status_code=422, detail="Config file symlinks are not allowed")
+            if not path.resolve().is_relative_to(root.resolve()) or not path.is_file():
+                raise HTTPException(status_code=422, detail="Config file not found under the allowed run directory")
+            loader = candidate_loader
+            break
+        if loader is None:
+            raise HTTPException(status_code=422, detail="Config file must be under data/run_v7/ or data/run_v8/")
         try:
-            p.resolve().relative_to(RUN_V7_DIR.resolve())
-        except ValueError:
-            return {"error": "Config file must be under data/run_v7/"}
-        config = _read_json(p)
-        if config is None:
-            return {"error": f"Failed to read config file: {config_file}"}
+            config = loader(path, neutralize_added=False) if loader is load_pb7_config else loader(path)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _log(SERVICE, "Failed to load calculator config", level="ERROR", meta={"error_type": type(exc).__name__})
+            raise HTTPException(status_code=422, detail="Failed to load config file") from exc
 
     if not isinstance(config, dict):
-        return {"error": "Invalid config — must be a JSON object"}
+        raise HTTPException(status_code=422, detail="Invalid config: must be a JSON object")
 
     try:
         return _calculate(config, exchange)
-    except Exception as e:
-        _log(SERVICE, f"Calculation error: {e}", level="ERROR",
-             meta={"traceback": traceback.format_exc()})
-        return {"error": f"Calculation failed: {e}"}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        _log(SERVICE, "Invalid balance calculation parameters", level="WARNING")
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        _log(SERVICE, "Balance calculation failed", level="ERROR", meta={"error_type": type(exc).__name__})
+        raise HTTPException(status_code=500, detail="Balance calculation failed") from exc
 
 
 @router.post("/draft")
@@ -445,18 +501,21 @@ def create_draft(body: dict, session: SessionToken = Depends(require_auth)):
     config = body.get("config")
     if not isinstance(config, dict):
         raise HTTPException(400, "config must be a JSON object")
-    _clean_drafts()
-    draft_id = _secrets.token_urlsafe(16)
-    _draft_store[draft_id] = (time.time(), config)
+    with _draft_lock:
+        _clean_drafts()
+        draft_id = _secrets.token_urlsafe(16)
+        _draft_store[draft_id] = (time.monotonic(), config)
     return {"draft_id": draft_id}
 
 
 @router.get("/draft/{draft_id}")
 def get_draft(draft_id: str, session: SessionToken = Depends(require_auth)):
     """Retrieve a stored draft config."""
-    entry = _draft_store.get(draft_id)
-    if not entry:
-        raise HTTPException(404, "Draft not found or expired")
+    with _draft_lock:
+        entry = _draft_store.get(draft_id)
+        if not entry or time.monotonic() - entry[0] >= _DRAFT_TTL:
+            _draft_store.pop(draft_id, None)
+            raise HTTPException(404, "Draft not found or expired")
     return {"config": entry[1]}
 
 
@@ -473,24 +532,18 @@ def get_main_page(
     html_path = Path(__file__).parent.parent / "frontend" / "balance_calc.html"
     html = html_path.read_text(encoding="utf-8")
 
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
-    api_base = origin + "/api/balance-calc"
-
-    html = html.replace('"%%API_BASE%%"', json.dumps(api_base))
-    html = html.replace('"%%INSTANCE%%"', json.dumps(instance))
-    html = html.replace('"%%INSTANCE_VERSION%%"', json.dumps(instance_version))
-    html = html.replace('"%%DRAFT_ID%%"', json.dumps(draft_id))
-    html = html.replace('"%%INIT_EXCHANGE%%"', json.dumps(exchange))
-    html = html.replace('"%%EXCHANGES%%"', json.dumps(EXCHANGES))
+    html = render_page_urls(request, html, "/api/balance-calc")
+    html = html.replace('"%%INSTANCE%%"', script_json(instance))
+    html = html.replace('"%%INSTANCE_VERSION%%"', script_json(instance_version))
+    html = html.replace('"%%DRAFT_ID%%"', script_json(draft_id))
+    html = html.replace('"%%INIT_EXCHANGE%%"', script_json(exchange))
+    html = html.replace('"%%EXCHANGES%%"', script_json(EXCHANGES))
 
     from pbgui_purefunc import PBGUI_VERSION
     from pbgui_purefunc import PBGUI_SERIAL
-    html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
+    html = html.replace('"%%VERSION%%"', script_json(PBGUI_VERSION))
     html = html.replace("%%VERSION%%", PBGUI_VERSION)
-    html = html.replace('"%%SERIAL%%"', json.dumps(PBGUI_SERIAL))
+    html = html.replace('"%%SERIAL%%"', script_json(PBGUI_SERIAL))
     html = html.replace("%%SERIAL%%", PBGUI_SERIAL)
 
     nav_js = Path(__file__).parent.parent / "frontend" / "pbgui_nav.js"

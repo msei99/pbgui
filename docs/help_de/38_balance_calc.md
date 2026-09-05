@@ -13,6 +13,8 @@ Die eigenständige Seite lässt sich öffnen über:
 
 Beide Backtest-Seiten bieten zusätzlich **Calc Balance** für eine schnelle Inline-Berechnung ohne Seitenwechsel.
 
+Config-Absprunglinks enthalten eine temporaere Draft-ID. Drafts laufen nach 10 Minuten ab und gehen bei einem API-Neustart verloren; bei einem abgelaufenen Draft den Calculator erneut aus dem Editor oeffnen.
+
 Bei PBv8 wird ein exakter `approved_coins`-Wert `all` anhand des lokalen Mappings der gewählten Exchange erweitert. Berücksichtigt werden nur aktive lineare Swap-Märkte mit PB8s Standard-Quote; seitenspezifisch ignorierte Coins werden vor der Berechnung entfernt.
 
 Die PB8-Initialgroesse folgt dem aktiven Strategie-Schema: Trailing-Strategien verwenden `strategy.entry.initial_qty_pct`, EMA Anchor dagegen `strategy.base_qty_pct` auf Strategie-Ebene. Inline-Calc-Balance-Aktionen und die eigenstaendige Seite liefern dadurch fuer PB8-Backtest-Results dieselbe Empfehlung.
@@ -57,6 +59,11 @@ Bei PBv7 werden Bot-Parameter aus `bot.<side>` gelesen. Bei PBv8 kommen Position
 
 ## Fehlerbehebung
 
+Coin-Namen und Exchange-Symbole werden ueber das lokale Mapping aufgeloest, einschliesslich Multiplikator-Kontrakten. Unterschiedliche gemappte Maerkte wie `CAT` und `1000CAT` bleiben getrennt. Fuer die Auswahl des dominanten Coins und der Seite gelten ungerundete Anforderungen; die Rundung der Anzeige beeinflusst die Empfehlung nicht.
+
+Die API akzeptiert auch `config_file` unter `data/run_v7/` oder `data/run_v8/` und verwendet den passenden Config-Loader. Pfade ausserhalb dieser Verzeichnisse, Traversal und Symlinks werden abgewiesen. Die Browser-Auswahl nutzt versionierte Instanznamen statt Dateipfaden. Bei Reverse-Proxys muss der passende ASGI-`root_path` konfiguriert sein; API- und Asset-URLs der Seite behalten dieses Praefix.
+
 - **Kein Ergebnis für eine Seite**: Approved Coins, positive Positionszahl, positives Exposure-Limit und positive initiale Entry-Größe prüfen.
+- **Ungueltige Berechnungsparameter**: Positionszahl, Exposure-Limit und initiale Entry-Groesse muessen endliche, nichtnegative Zahlen sein. Null deaktiviert eine Seite; NaN, Infinity, negative Werte und numerischer Ueber-/Unterlauf werden statt einer irrefuehrenden Empfehlung abgewiesen.
 - **CoinData nicht konfiguriert**: Unter **System -> Services -> PBCoinData -> Pool** einen CMC-Pool-Key anlegen oder aktivieren und die lokale Materialisierung abwarten.
 - **Unerwartete PBv7-Coin-Liste**: Bei aktiviertem Dynamic Ignore können CoinData-Einstellungen die Approved Coins filtern.

@@ -8,17 +8,26 @@ from types import SimpleNamespace
 from typing import Any
 
 import ccxt
+import msgpack
 import pytest
 
 import profit_sweep_transfers as transfers
+import hyperliquid_nonce
 
 
 WALLET = "0x" + "a" * 40
 VAULT = "0x" + "b" * 40
 LEADER = "0x" + "c" * 40
-PRIVATE_KEY = "MASTER-OR-AGENT-PRIVATE-KEY-MUST-NOT-ESCAPE"
+PRIVATE_KEY = "2" * 64
 NOW_MS = 1_800_000_000_000
 BYBIT_ID = "123e4567-e89b-12d3-a456-426614174000"
+
+
+@pytest.fixture(autouse=True)
+def isolated_nonce_store(tmp_path, monkeypatch):
+    """Keep every default nonce allocation outside production state."""
+
+    monkeypatch.setattr(hyperliquid_nonce, "NONCE_ROOT", tmp_path / "nonces")
 
 
 def _user(exchange: str, *, vault: bool = False) -> SimpleNamespace:
@@ -170,6 +179,7 @@ def _install_client(
             """Attach the supplied offline client."""
 
             self.instance = client
+            client.privateKey = self.user.private_key
 
         def close(self) -> None:
             """Record deterministic owner cleanup."""
@@ -317,6 +327,259 @@ def test_prepare_hyperliquid_agent_uses_canonical_token_exact_nonce_and_own_wall
     assert PRIVATE_KEY not in encoded
     assert "private_key" not in encoded
     assert descriptor["destination"] == WALLET
+
+
+@pytest.mark.parametrize("vault,expected_hash", [
+    (False, "87fa6e84534146b743d40b027966768b01cb511efae4b636cd40efa51618192e"),
+    (True, "76c5017f930b7d20743c2f49d67f9d046a7a9facbced6e72d5062bf46a29d4d8"),
+])
+def test_hyperliquid_official_l1_contract_vectors(vault, expected_hash):
+    """Independently encode the documented MessagePack/EIP-712 contract, not a fake signer.
+
+    Reference: hyperliquid-python-sdk 2fdb18f, utils/signing.py action_hash/l1_payload;
+    exchange-endpoint docs 'Agent Send Asset' (not the distinct user-signed sendAsset).
+    """
+
+    nonce = 1787932800123
+    snapshot = _snapshot("hyperliquid", vault=vault)
+    snapshot["asset"]["token_id"] = "0x" + "1" * 32
+    descriptor = transfers.prepare_transfer(
+        _user("hyperliquid", vault=vault), operation_id="official-contract-vector",
+        amount="5" if vault else "5.123456", asset="USDC",
+        route="vault_to_main_perps" if vault else "perp_to_spot", snapshot=snapshot, nonce=nonce,
+    )
+    expected_action = (
+        {"type": "vaultTransfer", "vaultAddress": VAULT, "isDeposit": False, "usd": 5_000_000}
+        if vault else {
+            "type": "agentSendAsset", "destination": WALLET, "sourceDex": "", "destinationDex": "spot",
+            "token": "USDC:0x" + "1" * 32, "amount": "5.123456", "fromSubAccount": "", "nonce": nonce,
+        }
+    )
+    descriptor = json.loads(json.dumps(descriptor, sort_keys=True))
+    assert transfers._canonical_hyperliquid_action(descriptor) == expected_action
+    client = ccxt.hyperliquid({"privateKey": "1" * 64})
+
+    def keccak(value):
+        """Use only the hash primitive to construct an independent EIP-712 preimage."""
+
+        return bytes(client.hash(value, "keccak", "binary"))
+
+    action_hash = keccak(msgpack.packb(expected_action) + nonce.to_bytes(8, "big") + b"\x00")
+    assert action_hash.hex() == expected_hash
+    typed = transfers._typed_data_for_descriptor(client, descriptor)
+    assert typed["domain"] == {
+        "name": "Exchange", "version": "1", "chainId": 1337,
+        "verifyingContract": "0x" + "0" * 40,
+    }
+    assert typed["primaryType"] == "Agent"
+    assert typed["message"] == {"source": "a", "connectionId": "0x" + expected_hash}
+    domain_hash = keccak(
+        keccak(b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")
+        + keccak(b"Exchange") + keccak(b"1") + (1337).to_bytes(32, "big") + bytes(32)
+    )
+    agent_hash = keccak(keccak(b"Agent(string source,bytes32 connectionId)") + keccak(b"a") + action_hash)
+    expected_digest = keccak(b"\x19\x01" + domain_hash + agent_hash)
+    encoded = client.eth_encode_structured_data(typed["domain"], {"Agent": typed["types"]["Agent"]}, typed["message"])
+    assert keccak(encoded) == expected_digest
+    assert client.sign_message(encoded, "1" * 64) == client.sign_hash("0x" + expected_digest.hex(), "1" * 64)
+
+
+def test_main_perps_spot_reverse_uses_concrete_vault_route_adapter():
+    """Return between leader Perps and Spot without confusing that route with vaultTransfer."""
+
+    user = _user("hyperliquid", vault=True)
+    snapshot = _snapshot("hyperliquid", vault=True)
+    assert transfers.reverse_transfer_route(user, snapshot, "main_perps_to_spot") == "main_spot_to_perps"
+    descriptor = transfers.prepare_transfer(
+        user, operation_id="vault-main-return", amount="5", asset="USDC", route="main_spot_to_perps",
+        snapshot=snapshot, nonce=NOW_MS,
+    )
+    assert descriptor["request"]["action"]["sourceDex"] == "spot"
+    assert descriptor["request"]["action"]["destinationDex"] == ""
+    snapshot["leader"]["account_mode"] = "unified"
+    with pytest.raises(transfers.TransferRequestError):
+        transfers.reverse_transfer_route(user, snapshot, "main_perps_to_spot")
+
+
+def test_default_nonce_uses_signer_not_account_and_does_not_change_on_validation(monkeypatch):
+    """Account aliases share the signing-key counter, not their account or Vault address."""
+
+    monkeypatch.setattr(transfers.time, "time", lambda: NOW_MS / 1000)
+    user = _user("hyperliquid")
+    other = _user("hyperliquid", vault=True)
+    first = transfers.prepare_transfer(user, operation_id="normal", amount="1", asset="USDC", route="perp_to_spot", snapshot=_snapshot("hyperliquid"))
+    second = transfers.prepare_transfer(other, operation_id="vault", amount="5", asset="USDC", route="vault_to_main_perps", snapshot=_snapshot("hyperliquid", vault=True))
+    assert first["request"]["nonce"] == NOW_MS
+    assert second["request"]["nonce"] == NOW_MS + 1
+    saved = deepcopy(second)
+    assert transfers._validate_descriptor(other, second) == saved
+    third = transfers.prepare_transfer(user, operation_id="normal-next", amount="1", asset="USDC", route="perp_to_spot", snapshot=_snapshot("hyperliquid"))
+    assert third["request"]["nonce"] == NOW_MS + 2
+
+
+@pytest.mark.parametrize("outcome", ["rejected", "timeout", "signing_failed"])
+def test_retry_evidence_distinguishes_provider_rejection_from_transport_ambiguity(monkeypatch, outcome):
+    """Only an explicit rejection or a proven pre-submission failure permits a new return."""
+
+    user = _user("hyperliquid")
+    descriptor = transfers.prepare_transfer(user, operation_id="failure-evidence", amount="1", asset="USDC", route="perp_to_spot", snapshot=_snapshot("hyperliquid"), nonce=NOW_MS)
+    client = FakeClient()
+    _install_client(monkeypatch, client)
+    posts = []
+
+    def post(payload):
+        """Model either a rejected response or a transport whose outcome is unknown."""
+
+        posts.append(True)
+        if outcome == "timeout":
+            raise TimeoutError("request outcome unknown")
+        return {"status": "err", "response": "Insufficient balance"}
+
+    def signing_failed(*args):
+        """Fail before any signed payload could be submitted."""
+
+        raise ValueError("invalid signing input")
+
+    monkeypatch.setattr(transfers, "_post_hyperliquid_exchange", post)
+    if outcome == "signing_failed":
+        monkeypatch.setattr(client, "sign_l1_action", signing_failed)
+    result = transfers.submit_transfer(user, descriptor)
+    assert result["status"] == ("unknown" if outcome == "timeout" else "failed")
+    assert result["no_transfer"] is (outcome != "timeout")
+    assert bool(posts) is (outcome != "signing_failed")
+
+
+def test_rotated_hyperliquid_signer_cannot_submit_old_nonce_but_can_reconcile(monkeypatch):
+    """A nonce reserved under A cannot be consumed under B, even when B reserves that value."""
+
+    monkeypatch.setattr(transfers.time, "time", lambda: NOW_MS / 1000)
+    user = _user("hyperliquid")
+    descriptor_a = transfers.prepare_transfer(user, operation_id="signer-a", amount="1", asset="USDC", route="perp_to_spot", snapshot=_snapshot("hyperliquid"))
+    assert descriptor_a["schema_version"] == 3
+    assert descriptor_a["signer_address"] == ccxt.hyperliquid().privateKeyToAddress(PRIVATE_KEY)
+    original = deepcopy(descriptor_a)
+    user.private_key = "3" * 64
+    descriptor_b = transfers.prepare_transfer(user, operation_id="signer-b", amount="1", asset="USDC", route="perp_to_spot", snapshot=_snapshot("hyperliquid"))
+    assert descriptor_a["request"]["nonce"] == descriptor_b["request"]["nonce"]
+    tampered = deepcopy(descriptor_a)
+    tampered["signer_address"] = descriptor_b["signer_address"]
+    with pytest.raises(transfers.TransferRequestError, match="integrity"):
+        transfers._validate_descriptor(user, tampered)
+    client = FakeClient({"publicPostInfo": []})
+    _install_client(monkeypatch, client)
+    posts = []
+    monkeypatch.setattr(transfers, "_post_hyperliquid_exchange", lambda payload: posts.append(payload) or {"status": "ok"})
+    rejected = transfers.submit_transfer(user, descriptor_a)
+    assert rejected["status"] == "failed"
+    assert rejected["no_transfer"] is True
+    assert posts == []
+    assert client.calls == []
+    assert transfers.submit_transfer(user, descriptor_b)["status"] == "submitted"
+    assert len(posts) == 1
+    transfers.reconcile_transfer(user, descriptor_a, {"status": "submitted", "submitted_at_ms": NOW_MS})
+    assert client.calls[-1][0] == "publicPostInfo"
+    assert descriptor_a == original
+    assert transfers.prepare_transfer(user, operation_id="signer-b-next", amount="1", asset="USDC", route="perp_to_spot", snapshot=_snapshot("hyperliquid"))["request"]["nonce"] == NOW_MS + 1
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_legacy_hyperliquid_descriptors_are_reconciliation_only(monkeypatch, version):
+    """Unbound persisted descriptors cannot be re-signed, but remain valid history anchors."""
+
+    user = _user("hyperliquid")
+    descriptor = transfers.prepare_transfer(user, operation_id="legacy-signer", amount="1", asset="USDC", route="perp_to_spot", snapshot=_snapshot("hyperliquid"), nonce=NOW_MS)
+    descriptor["schema_version"] = version
+    descriptor.pop("signer_address")
+    if version == 1:
+        descriptor.pop("amount_precision")
+    descriptor["fingerprint"] = transfers._descriptor_fingerprint(descriptor)
+    user.private_key = "3" * 64
+    client = FakeClient({"publicPostInfo": []})
+    _install_client(monkeypatch, client)
+    result = transfers.submit_transfer(user, descriptor)
+    assert result["status"] == "failed" and result["no_transfer"] is True
+    assert client.calls == []
+    transfers.reconcile_transfer(user, descriptor, {"status": "submitted", "submitted_at_ms": NOW_MS})
+    assert client.calls[-1][0] == "publicPostInfo"
+
+
+def test_submission_checks_actual_owned_client_signer(monkeypatch):
+    """Do not trust the user object when the acquired signing client has a different key."""
+
+    user = _user("hyperliquid")
+    descriptor = transfers.prepare_transfer(user, operation_id="client-rotation", amount="1", asset="USDC", route="perp_to_spot", snapshot=_snapshot("hyperliquid"), nonce=NOW_MS)
+    client = FakeClient()
+    client.privateKey = "3" * 64
+    owner = SimpleNamespace(close=lambda: None)
+    monkeypatch.setattr(transfers, "_owned_client", lambda *args: (owner, client))
+    result = transfers.submit_transfer(user, descriptor)
+    assert result["status"] == "failed" and result["no_transfer"] is True
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("code,exception_type,expected", [
+    (131001, ccxt.InsufficientFunds, "failed"),
+    (131212, ccxt.InsufficientFunds, "failed"),
+    (10005, ccxt.PermissionDenied, "failed"),
+    (10014, ccxt.BadRequest, "unknown"),
+    (10000, ccxt.ExchangeError, "unknown"),
+    (999999, ccxt.ExchangeError, "unknown"),
+])
+def test_actual_bybit_parser_refusals_are_narrowly_classified(monkeypatch, code, exception_type, expected):
+    """Exercise CCXT's real parser instead of returning impossible raw error dictionaries."""
+
+    client = ccxt.bybit()
+    response = {"retCode": code, "retMsg": "synthetic response", "result": {}}
+    body = json.dumps(response)
+
+    def parsed_refusal(params):
+        """Raise exactly what the installed CCXT parser produces, with no network."""
+
+        client.handle_errors(200, "OK", "https://api.bybit.com/v5/asset/transfer/inter-transfer", "POST", {}, body, response, {}, "")
+
+    with pytest.raises(exception_type):
+        parsed_refusal({})
+    user = _user("bybit")
+    descriptor = transfers.prepare_transfer(user, operation_id=BYBIT_ID, amount="1", asset="USDT", route="fund_to_unified", snapshot=_snapshot("bybit"))
+    owner = SimpleNamespace(close=lambda: None)
+    monkeypatch.setattr(client, "privatePostV5AssetTransferInterTransfer", parsed_refusal)
+    monkeypatch.setattr(transfers, "_owned_client", lambda *args: (owner, client))
+    result = transfers.submit_transfer(user, descriptor)
+    assert result["status"] == expected
+    assert result["no_transfer"] is (expected == "failed")
+    assert body not in json.dumps(result)
+
+
+@pytest.mark.parametrize("adapter,response", [
+    ("hyperliquid_agent", {"status": "err", "response": "Duplicate nonce"}),
+    ("bybit_v5", {"retCode": 10014, "retMsg": "Request is duplicate"}),
+    ("bitget_classic", {"code": "400", "msg": "Transfer already exists"}),
+    ("bitget_uta", {"code": "500", "msg": "Request timed out"}),
+])
+def test_ambiguous_raw_provider_responses_do_not_prove_non_transfer(adapter, response):
+    """Duplicate and timeout responses must never unlock another real-funds attempt."""
+
+    assert transfers._response_status(adapter, response) == ("unknown", None)
+
+
+def test_browser_submission_recovers_the_reserved_signer_before_dispatch(monkeypatch):
+    """A browser signature under B must not consume A's sealed nonce reservation."""
+
+    user = _user("hyperliquid", vault=True)
+    client = ccxt.hyperliquid()
+    signer = client.privateKeyToAddress("1" * 64)
+    snapshot = _snapshot("hyperliquid", vault=True)
+    snapshot["leader"]["address"] = signer
+    descriptor = transfers.prepare_transfer(user, operation_id="browser-bound", amount="5", asset="USDC", route="vault_to_main_perps", snapshot=snapshot, browser_signer=signer)
+    typed = transfers.browser_signing_request(user, descriptor, signer)["typed_data"]
+    encoded = client.eth_encode_structured_data(typed["domain"], {"Agent": typed["types"]["Agent"]}, typed["message"])
+    posts = []
+    monkeypatch.setattr(transfers, "_post_hyperliquid_exchange", lambda payload: posts.append(payload) or {"status": "ok"})
+    wrong = transfers.submit_browser_signed_transfer(user, descriptor, client.sign_message(encoded, "3" * 64))
+    assert wrong["status"] == "failed" and wrong["no_transfer"] is True
+    assert posts == []
+    assert transfers.submit_browser_signed_transfer(user, descriptor, client.sign_message(encoded, "1" * 64))["status"] == "submitted"
+    assert len(posts) == 1
 
 
 def test_submit_hyperliquid_signs_exact_action_closes_client_and_redacts_signature(
@@ -488,6 +751,7 @@ def test_legacy_descriptor_without_persisted_precision_remains_valid() -> None:
         nonce=2010,
     )
     descriptor["schema_version"] = 1
+    descriptor.pop("signer_address", None)
     descriptor.pop("amount_precision")
     descriptor["fingerprint"] = transfers._descriptor_fingerprint(descriptor)
 
@@ -764,6 +1028,7 @@ def test_browser_wallet_signature_preserves_hyperliquid_wire_fields() -> None:
         route="vault_to_main_perps",
         snapshot=snapshot,
         nonce=NOW_MS + 10,
+        browser_signer=leader,
     )
     signing = transfers.browser_signing_request(user, descriptor, leader)
     typed_data = signing["typed_data"]

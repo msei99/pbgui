@@ -326,6 +326,7 @@
 
   <script>
     window.API_BASE = "%%API_BASE%%";
+    window.PBGUI_BASE_PREFIX = "%%BASE_PREFIX%%";
     window.PBGUI_VERSION = "%%VERSION%%";
     window.PBGUI_SERIAL = "%%SERIAL%%";
     window.PBGUI_NAV_CONFIG = {
@@ -433,6 +434,7 @@
       journal: [],
       intents: [],
       testOperations: [],
+      pendingTestBack: null,
       testActionPending: false,
       pendingTestOperationId: '',
       baselineRecalculationRequested: false,
@@ -964,10 +966,15 @@
         [operation.requested_amount, operation.actual_amount, formatTime(operation.prepared_at), formatTime(operation.resolved_at), testOperationDetail(operation)].forEach(function (value) { appendText(row, 'td', value); });
         var actionCell = document.createElement('td');
         if (operation === latestForward && operation.status === 'confirmed' && operation.can_transfer_back === true) {
-          var backButton = appendText(actionCell, 'button', 'Transfer back', 'btn warning');
+          var backButton = appendText(actionCell, 'button', operation.retry_of ? 'Retry transfer back' : 'Transfer back', 'btn warning');
           backButton.type = 'button';
           backButton.disabled = state.testActionPending;
           backButton.addEventListener('click', function () { transferTestBack(operation); });
+        } else if (operation.can_reconcile === true) {
+          var reconcileButton = appendText(actionCell, 'button', 'Reconcile', 'btn warning');
+          reconcileButton.type = 'button';
+          reconcileButton.disabled = state.testActionPending;
+          reconcileButton.addEventListener('click', function () { reconcileTestTransfer(operation); });
         } else {
           appendText(actionCell, 'span', '-');
         }
@@ -1600,16 +1607,29 @@
       var generation = state.accountGeneration;
       var user = state.users.find(function (item) { return item.name === userName; }) || null;
       if (!user || state.testActionPending || !operation || operation.status !== 'confirmed' || operation.can_transfer_back !== true) return;
-      var endpoints = testTransferEndpoints(user);
+      var endpoints = operation.return_endpoints;
+      if (!endpoints || !endpoints.source || !endpoints.destination) {
+        setMessage('Reload the test history to review the exact return route.', 'error');
+        return;
+      }
       var asset = operation.asset || 'settlement asset';
       var amount = text(operation.actual_amount || operation.requested_amount);
+      if (!window.crypto || typeof window.crypto.randomUUID !== 'function') {
+        setMessage('This browser cannot create a secure transfer request ID.', 'error');
+        return;
+      }
+      var pending = state.pendingTestBack;
+      if (!pending || pending.user !== userName || pending.parent !== operation.operation_id || pending.retry_of !== (operation.retry_of || null)) {
+        pending = { user: userName, parent: operation.operation_id, operation_id: window.crypto.randomUUID(), retry_of: operation.retry_of || null };
+      }
       var accepted = await window.PBGuiDialogs.confirm({
         title: 'Transfer test funds back',
-        message: 'Move ' + amount + ' ' + asset + ' from ' + endpoints.destination + ' back to ' + endpoints.source + '?',
-        detail: 'This action moves real funds through the fixed reverse route. The confirmed forward operation will not be submitted again.',
+        message: 'Move ' + amount + ' ' + asset + ' from ' + endpoints.source + ' back to ' + endpoints.destination + '?',
+        detail: operation.retry_of ? 'The previous return definitely did not move funds. This explicitly confirmed retry creates a new return operation and preserves the failed history.' : 'This action moves real funds through the fixed reverse route. The confirmed forward operation will not be submitted again.',
         confirmText: 'Transfer back'
       });
       if (!accepted || !isCurrentAccount(userName, generation)) return;
+      state.pendingTestBack = pending;
       state.testActionPending = true;
       renderTestTransfers(user);
       try {
@@ -1617,10 +1637,37 @@
           userName,
           generation,
           '/test-transfer/' + encodeURIComponent(userName) + '/' + encodeURIComponent(String(operation.operation_id || '')) + '/back',
-          { method: 'POST', signal: state.accountController ? state.accountController.signal : undefined },
+          { method: 'POST', signal: state.accountController ? state.accountController.signal : undefined,
+            body: JSON.stringify({ operation_id: pending.operation_id, retry_of: pending.retry_of }) },
           'Submitting real transfer back...',
           'Transfer-back status'
         );
+      } finally {
+        if (isCurrentAccount(userName, generation)) {
+          state.testActionPending = false;
+          renderTestTransfers(user);
+        }
+      }
+    }
+
+    async function reconcileTestTransfer(operation) {
+      var userName = state.selectedUser;
+      var generation = state.accountGeneration;
+      if (!userName || state.testActionPending || operation.can_reconcile !== true) return;
+      state.testActionPending = true;
+      var user = state.users.find(function (item) { return item.name === userName; }) || null;
+      renderTestTransfers(user);
+      setMessage('Checking the existing test transfer without resubmission...');
+      try {
+        var result = await requestJson('/test-transfers/' + encodeURIComponent(userName) + '/' + encodeURIComponent(operation.operation_id) + '/reconcile', {
+          method: 'POST', signal: state.accountController ? state.accountController.signal : undefined
+        });
+        if (!isCurrentAccount(userName, generation)) return;
+        await refreshTestTransfersAfterAction(userName, generation);
+        if (!isCurrentAccount(userName, generation)) return;
+        setMessage('Reconciliation: ' + titleCase(result.status) + '.', result.status === 'confirmed' ? 'ok' : '');
+      } catch (error) {
+        if (error.name !== 'AbortError' && isCurrentAccount(userName, generation)) setMessage(error.message, 'error');
       } finally {
         if (isCurrentAccount(userName, generation)) {
           state.testActionPending = false;

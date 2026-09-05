@@ -211,10 +211,19 @@ async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str |
     paths = [path for path in discovered if f"/pb{version}/logs/" in f"/{str(path).lstrip('/')}" ]
     if not paths:
         paths = [f"software/pb{version}/logs/{bot_name}.log"]
-    output = await _streamer.get_recent_log_files(hostname, paths, line_limit, contains=" ERROR ")
-    if not output:
-        return []
-    return [line for line in output.splitlines() if is_today(line) and " ERROR " in line][-line_limit:]
+    paths = list(dict.fromkeys(paths))
+    matches = []
+    # The monitor RPC accepts at most 32 files per request. Scan every batch,
+    # including newer sessions beyond the first page of archived bot logs.
+    for offset in range(0, len(paths), 32):
+        output = await _streamer.get_recent_log_files(
+            hostname, paths[offset:offset + 32], line_limit, contains=" ERROR ",
+        )
+        if output is None:
+            return []
+        matches.extend(line for line in output.splitlines() if is_today(line) and " ERROR " in line)
+        matches = matches[-line_limit:]
+    return matches
 
 
 def get_monitor_state_snapshot() -> dict:

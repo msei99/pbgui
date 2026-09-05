@@ -38,7 +38,11 @@ Einige Exchange-History-Zeilen enthalten PBGui's Operation-UUID nicht. PBGui ver
 
 Die Transfer-History ist von Profit-Sweep-Live-Intents und Test Transfers getrennt. Sie zeigt Route, angeforderten und empfangenen Betrag, Zeitstempel, Status und begrenzte Fehler- oder Reconciliation-Gruende, aber keine Adressen, Descriptors, Signaturen, Credentials oder rohen Providerantworten.
 
+Unerwartete Fehler nach dem Submission-Claim werden als **Unknown** gespeichert; Descriptor und Nonce bleiben erhalten und nur eine bereinigte Diagnose wird geloggt. Hyperliquid verwendet einen persistierten prozesssicheren Nonce-Zaehler je tatsaechlicher Signer-Adresse, gemeinsam fuer Profit Sweep und manuelle Transfers. Andere Hosts teilen diesen Zaehler nicht; unabhaengige Bots oder VPS-Prozesse sollten getrennte API-Wallets verwenden. Eine wiederholte Operation erhaelt keine Ersatz-Nonce.
+
 ## Profit-Sweep-Handoff
+
+Hyperliquid-Descriptors binden ihre Nonce an die reservierte Signer-Adresse. Geaenderte Signing-Credentials koennen einen alten Descriptor nicht senden; alte Descriptors bleiben fuer History-Reconciliation nutzbar. Descriptors von vor der Signer-Bindung sind ausschliesslich reconciliierbar. Browser-Signaturen werden vor dem Senden gegen den reservierten Signer geprueft.
 
 Bei einem Hyperliquid Vault oeffnet **Profit Sweep > Exchange / Vault > Fund account** Transfers mit exakt diesem Account und **Main Perps zu Vault** vorausgewaehlt. Ein vorhandener `PAUSED_UNKNOWN`-Profit-Sweep-Intent muss vor einer Geldbewegung reconciliert werden.
 
@@ -48,3 +52,5 @@ Bei einem Hyperliquid Vault oeffnet **Profit Sweep > Exchange / Vault > Fund acc
 - **Nicht genug Bestand:** Betrag unter den frischen Wert **Available to transfer** der ausgewaehlten Route reduzieren.
 - **Minimum abgelehnt:** das angezeigte Routenminimum verwenden; Hyperliquid-Vault-Deposits erfordern mindestens `5 USDC`.
 - **Unknown:** keinen weiteren identischen Transfer erstellen. **Reconcile** fuer die vorhandene Operation verwenden.
+
+API-Aufrufe und lokale Assets erhalten den konfigurierten ASGI-Mount-Prefix hinter Reverse-Proxys. Root-relative API-URLs unterstuetzen auch IPv6-Zugriff, ohne einen fehlerhaften Origin zusammenzusetzen.

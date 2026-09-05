@@ -6,6 +6,8 @@ Use it when you run more than one master, run bots across multiple VPS, or want 
 
 If you are upgrading an existing PBRemote/API Sync/V7 SSH Sync setup, read [Cluster Mode Migration](40_cluster_migration.md) before joining production VPS nodes.
 
+The Cluster Sync page supports IPv6 listeners and reverse-proxy subpaths. Configure the application's ASGI `root_path` to match the public mount path (for example `/pbgui`); API requests, page assets and navigation then retain that prefix.
+
 ---
 
 ## What a cluster is
@@ -65,6 +67,8 @@ Each node compares its known operation counters with another node. Missing opera
 Each V7 save stores an immutable content-addressed snapshot before publishing its operation. You can therefore save repeatedly or move one instance from host A to host B and immediately to host C; every operation remains transferable, while receivers materialize the newest desired host and config.
 
 This makes sync repeatable and safe to retry.
+
+Local snapshot rebuilds and reads share a process-wide and cross-process history lock. A snapshot commit verifies the complete published state against its operation/checkpoint history, including sequence gaps. Older snapshots without a commit and interrupted or stale publications are rebuilt automatically on the next snapshot read. The operation log remains authoritative; this recovery does not restart bots or rotate credentials.
 
 Credential protocol upgrades are zero-order. Every updated process first keeps
 its own legacy CMC/TradFi credentials available through a local owner-only

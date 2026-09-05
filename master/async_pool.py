@@ -404,14 +404,18 @@ class AsyncSSHPool:
     # ── Command execution ───────────────────────────────────
 
     async def run(self, hostname: str, command: str,
-                  timeout: Optional[int] = 30, check: bool = False
+                  timeout: Optional[int] = 30, check: bool = False, *, retry: bool = True
                   ) -> Optional[asyncssh.SSHCompletedProcess]:
         """Run a command on a VPS.
 
         Returns SSHCompletedProcess or None on connection error.
         If check=True, raises ProcessError on nonzero exit.
         timeout=None means no timeout (wait indefinitely).
+        retry=False owns one process/channel and never resubmits an uncertain
+        non-idempotent command, including after timeout or a lost reply.
         """
+        if not retry:
+            return await self._run_once(hostname, command, timeout, check)
         for attempt in range(1, SFTP_RETRY_ATTEMPTS + 1):
             entry = await self._ensure_live_connection(hostname)
             if not entry or not entry.conn:
@@ -443,6 +447,59 @@ class AsyncSSHPool:
                      level="ERROR")
                 return None
         return None
+
+    async def _run_once(self, hostname: str, command: str, timeout, check: bool):
+        """Own and drain one command's channel/pipes without retrying its execution."""
+        entry = await self._ensure_live_connection(hostname)
+        if not entry or not entry.conn:
+            _log(SERVICE, f"[cmd] Cannot run on {hostname}: no connection", level="WARNING")
+            return None
+        connection = entry.conn
+        process = None
+
+        async def execute():
+            """Retain the process handle before waiting for either output pipe."""
+            nonlocal process
+            process = await connection.create_process(command)
+            return await process.wait(check=check)
+
+        try:
+            if timeout is None:
+                return await execute()
+            return await asyncio.wait_for(execute(), timeout=timeout)
+        except asyncssh.ProcessError:
+            raise
+        except Exception as exc:
+            # Exception strings can contain the command and its inline payload.
+            _log(SERVICE, f"[cmd] {hostname}: single attempt failed ({type(exc).__name__}); remote outcome may be unknown",
+                 level="ERROR")
+            return None
+        finally:
+            if process is not None:
+                process.close()
+                process.channel.abort()
+                closing = process.wait_closed()
+            else:
+                # Creation may have sent exec before losing its reply. Abort the
+                # captured connection, not a concurrently replaced pool entry.
+                connection.abort()
+                closing = connection.wait_closed()
+            cleanup = asyncio.create_task(closing)
+            interrupted = False
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    interrupted = True
+                except Exception:
+                    break
+            try:
+                cleanup.result()
+            except Exception as exc:
+                _log(SERVICE, f"[cmd] {hostname}: single-attempt channel cleanup failed ({type(exc).__name__})", level="ERROR")
+                raise RuntimeError("SSH command cleanup failed; remote outcome is unknown") from None
+            if interrupted:
+                raise asyncio.CancelledError
 
     async def start_process(self, hostname: str, command: str
                             ) -> Optional[asyncssh.SSHClientProcess]:

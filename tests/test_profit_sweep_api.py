@@ -19,15 +19,22 @@ import api.profit_sweep as profit_sweep_api
 from api.auth import require_auth
 from profit_sweep import ProfitSweepStore
 import profit_sweep_exchanges
+import hyperliquid_nonce
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PRIVATE_KEY = "PRIVATE-KEY-MUST-NOT-ESCAPE"
+PRIVATE_KEY = "2" * 64
 API_SECRET = "API-SECRET-MUST-NOT-ESCAPE"
 API_KEY = "API-KEY-MUST-NOT-ESCAPE"
 SESSION_TOKEN = "SESSION-TOKEN-MUST-NOT-ESCAPE"
 LEADER_PRIVATE_KEY = "1" * 64
 LEADER_ADDRESS = ccxt.hyperliquid().privateKeyToAddress(LEADER_PRIVATE_KEY).lower()
+
+
+def _save_policy(*args, **kwargs):
+    """Exercise the async route from synchronous policy contract tests."""
+
+    return asyncio.run(profit_sweep_api.save_policy(*args, **kwargs))
 
 
 class SyntheticUsers:
@@ -359,6 +366,7 @@ def isolated_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNames
         raise AssertionError("Evaluating tests must provide a synthetic snapshot")
 
     monkeypatch.setattr(profit_sweep_api, "_STORE", store)
+    monkeypatch.setattr(hyperliquid_nonce, "NONCE_ROOT", tmp_path / "nonces")
     monkeypatch.setattr(profit_sweep_api, "_SCHEDULER_TASK", None)
     monkeypatch.setattr(profit_sweep_api, "_SCHEDULER_WAKE", None)
     monkeypatch.setattr(profit_sweep_api, "_STOPPING", False)
@@ -435,12 +443,12 @@ def test_users_and_policy_crud_support_adapters_and_block_live_mode_bypass(
         {"name": "vault", "exchange": "hyperliquid", "account_type": "vault"},
     ]}
 
-    created = profit_sweep_api.save_policy(
+    created = _save_policy(
         "alice",
         profit_sweep_api.PolicyRequest(policy={"operating_mode": "disabled"}),
         object(),
     )
-    updated = profit_sweep_api.save_policy(
+    updated = _save_policy(
         "alice",
         profit_sweep_api.PolicyRequest(
             policy={"operating_mode": "dry"},
@@ -465,13 +473,13 @@ def test_users_and_policy_crud_support_adapters_and_block_live_mode_bypass(
     assert reset["generation"] == 2
     assert profit_sweep_api.get_journal("alice", 100, object()) == {"journal": []}
 
-    bybit = profit_sweep_api.save_policy(
+    bybit = _save_policy(
         "bybit", profit_sweep_api.PolicyRequest(policy={"operating_mode": "dry"}), object()
     )
     assert bybit["policy"]["asset"] == "USDT"
 
     with pytest.raises(HTTPException) as live:
-        profit_sweep_api.save_policy(
+        _save_policy(
             "alice",
             profit_sweep_api.PolicyRequest(
                 policy={"operating_mode": "live"},
@@ -724,7 +732,7 @@ def test_live_activation_uses_fresh_server_snapshot_and_returns_no_secrets(
 ) -> None:
     """The authenticated Live route owns capability, route, snapshot, and baseline inputs."""
 
-    saved = profit_sweep_api.save_policy(
+    saved = _save_policy(
         "alice",
         profit_sweep_api.PolicyRequest(policy={
             "operating_mode": "dry",
@@ -758,7 +766,7 @@ def test_vault_live_activation_uses_canonicalized_agent_transfer(
 ) -> None:
     """Allow automatic Vault writes after persisted action order is restored."""
 
-    saved = profit_sweep_api.save_policy(
+    saved = _save_policy(
         "vault",
         profit_sweep_api.PolicyRequest(policy={"operating_mode": "dry", "asset": "USDC"}),
         object(),
@@ -783,7 +791,7 @@ def test_live_activation_rejects_policy_changed_after_confirmation(
 ) -> None:
     """The activation transaction must match the exact policy reviewed by the user."""
 
-    saved = profit_sweep_api.save_policy(
+    saved = _save_policy(
         "alice",
         profit_sweep_api.PolicyRequest(policy={"operating_mode": "dry"}),
         object(),
@@ -837,7 +845,7 @@ def test_active_fresh_policy_can_rebaseline_to_include_dry_retroactively(
     current = profit_sweep_api.get_policy("alice", object())
     policy = {**current["policy"], "live_activation_baseline_mode": "include_dry_period"}
 
-    saved = profit_sweep_api.save_policy(
+    saved = _save_policy(
         "alice",
         profit_sweep_api.PolicyRequest(
             policy=policy,
@@ -907,7 +915,7 @@ def test_live_policy_updates_require_confirmation_and_current_generation(
         changes={"asset": "USDC"},
     )
     with pytest.raises(HTTPException, match="explicit confirmation"):
-        profit_sweep_api.save_policy(
+        _save_policy(
             "alice",
             profit_sweep_api.PolicyRequest(
                 policy={"trigger_percent": "1"},
@@ -916,7 +924,7 @@ def test_live_policy_updates_require_confirmation_and_current_generation(
             ),
             object(),
         )
-    updated = profit_sweep_api.save_policy(
+    updated = _save_policy(
         "alice",
         profit_sweep_api.PolicyRequest(
             policy={"trigger_percent": "1"},
@@ -929,7 +937,7 @@ def test_live_policy_updates_require_confirmation_and_current_generation(
     assert updated["policy"]["trigger_percent"] == "1"
 
     with pytest.raises(HTTPException, match="another request"):
-        profit_sweep_api.save_policy(
+        _save_policy(
             "alice",
             profit_sweep_api.PolicyRequest(
                 policy={"trigger_percent": "2"},
@@ -940,7 +948,7 @@ def test_live_policy_updates_require_confirmation_and_current_generation(
             object(),
         )
     with pytest.raises(HTTPException, match="Disable Live"):
-        profit_sweep_api.save_policy(
+        _save_policy(
             "alice",
             profit_sweep_api.PolicyRequest(
                 policy={"asset": "USDT"},
@@ -981,7 +989,7 @@ def test_live_policy_must_be_disabled_before_baseline_reset_or_deletion(
             object(),
         )
 
-    disabled = profit_sweep_api.save_policy(
+    disabled = _save_policy(
         "alice",
         profit_sweep_api.PolicyRequest(
             policy={"operating_mode": "disabled"},
@@ -1806,15 +1814,18 @@ def test_submitting_test_transfer_blocks_restart_and_recovers_without_resubmit(
     monkeypatch.setattr(profit_sweep_api, "collect_readonly_snapshot", lambda *_args: _binance_snapshot())
     submissions: list[str] = []
 
+    class ProcessLoss(BaseException):
+        """Model process death, not a catchable adapter failure."""
+
     def crash_after_submit(_user_value: Any, descriptor: dict[str, Any]) -> dict[str, Any]:
         """Simulate process loss after the durable submitting claim."""
 
         submissions.append(descriptor["operation_id"])
-        raise RuntimeError("simulated test-transfer crash")
+        raise ProcessLoss("simulated test-transfer crash")
 
     monkeypatch.setattr(profit_sweep_api, "submit_transfer", crash_after_submit)
     operation_id = str(uuid.uuid4())
-    with pytest.raises(RuntimeError, match="test-transfer crash"):
+    with pytest.raises(ProcessLoss, match="test-transfer crash"):
         profit_sweep_api._test_transfer_sync("binance", "1", "USDT", operation_id)
 
     persisted = isolated_api.store.get_test_operation(operation_id)
@@ -1829,7 +1840,7 @@ def test_submitting_test_transfer_blocks_restart_and_recovers_without_resubmit(
             "operation_id": descriptor["operation_id"],
         },
     )
-    profit_sweep_api._reconcile_unresolved_sync()
+    asyncio.run(profit_sweep_api._reconcile_unresolved())
 
     assert submissions == [operation_id]
     assert isolated_api.store.get_test_operation(operation_id)["state"] == "confirmed"
@@ -1873,7 +1884,7 @@ def test_top_up_startup_recovery_continues_after_an_orphaned_account(
         lambda _service, message, **_kwargs: logged.append(message),
     )
 
-    profit_sweep_api._reconcile_unresolved_sync()
+    asyncio.run(profit_sweep_api._reconcile_unresolved())
 
     orphaned = isolated_api.store.get_top_up_operation("orphaned-top-up")
     assert orphaned["state"] == "unknown"
@@ -1980,7 +1991,7 @@ def test_crash_after_submit_reconciles_on_startup_without_duplicate_submission(
             "operation_id": descriptor["operation_id"],
         },
     )
-    profit_sweep_api._reconcile_unresolved_sync()
+    asyncio.run(profit_sweep_api._reconcile_unresolved())
 
     assert submissions == [submitting["operation_id"]]
     assert isolated_api.store.get_live_intent(submitting["operation_id"])["state"] == "confirmed"
@@ -2409,7 +2420,7 @@ def test_health_is_secret_free_and_non_mutating(isolated_api: SimpleNamespace) -
     assert health["feature_status"] == "live"
     assert health["read_only"] is False
     assert health["scheduler_running"] is False
-    assert health["database"]["schema_version"] == 6
+    assert health["database"]["schema_version"] == 7
     assert isolated_api.store.list_policies() == policies_before
     assert isolated_api.store.list_simulation_journal("alice") == journal_before
 

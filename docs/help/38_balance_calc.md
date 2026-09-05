@@ -13,6 +13,8 @@ Open the standalone page from:
 
 Both Backtest pages also offer **Calc Balance** for a quick inline calculation without leaving the page.
 
+Config handoff links contain a temporary draft ID. Drafts expire after 10 minutes and are lost when the API restarts; reopen the calculator from the editor if a draft has expired.
+
 For PBv8, an exact `approved_coins` value of `all` is expanded from the selected exchange's local mapping. Only active linear swap markets with PB8's default quote are considered, and side-specific ignored coins are removed before calculation.
 
 PB8 initial sizing follows the active strategy schema: trailing strategies use `strategy.entry.initial_qty_pct`, while EMA Anchor uses its root `strategy.base_qty_pct`. Inline Calc Balance actions and the standalone page therefore produce the same recommendation for PB8 Backtest results.
@@ -57,6 +59,11 @@ For PBv7, bot parameters are read from `bot.<side>`. For PBv8, position count an
 
 ## Troubleshooting
 
+Coin names and exchange symbols are resolved through the local mapping, including multiplier contracts. Distinct mapped markets such as `CAT` and `1000CAT` remain separate. Dominant coins and sides are selected using unrounded requirements; rounding the displayed values does not affect the recommendation.
+
+The API also accepts `config_file` below `data/run_v7/` or `data/run_v8/` and uses the matching config loader. Paths outside these roots, traversal, and symlinks are rejected. The browser picker uses versioned instance names instead of filesystem paths. Reverse-proxy deployments must configure the correct ASGI `root_path`; page API and asset URLs retain that prefix.
+
 - **No result for one side**: verify that the side has approved coins, a positive position count and exposure limit, and a positive initial entry size.
+- **Invalid calculation parameters**: position count, exposure limit, and initial entry size must be finite non-negative numbers. Zero disables a side; NaN, Infinity, negative values, and numeric overflow/underflow are rejected instead of producing a misleading recommendation.
 - **CoinData not configured**: add or activate a CMC pool key under **System -> Services -> PBCoinData -> Pool** and wait for local materialization.
 - **Unexpected PBv7 coin list**: if Dynamic Ignore is enabled, CoinData settings may filter the approved coins.

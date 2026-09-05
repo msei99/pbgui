@@ -13,6 +13,9 @@ import api.vps as vps_api
 import PBRun as pbrun_module
 from master import async_logs
 from master.async_monitor import VPSMonitor
+from master.async_store import VPSStore
+from master.vps_monitor_client import RemoteLogStreamerProxy
+from master.vps_monitor_daemon import VPSMonitorRPCDaemon
 from Exchange import Exchange
 
 
@@ -320,6 +323,68 @@ def test_today_error_matches_use_monitor_discovered_current_and_rotated_logs(
     assert streamer.calls == [
         (["pb7/logs/archived-bot.log", "pb7/logs/bot.log"], 500, " ERROR ")
     ]
+
+
+@pytest.mark.parametrize("file_count", [32, 33, 65])
+@pytest.mark.parametrize("version", ["7", "8"])
+@pytest.mark.parametrize("transport", ["direct", "rpc"])
+def test_today_errors_survive_restart_with_many_log_files(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, file_count: int, version: str, transport: str,
+) -> None:
+    """Read pre-restart errors beyond the RPC file limit using only isolated logs."""
+    runtime = tmp_path / f"pb{version}"
+    logs = runtime / "logs"
+    logs.mkdir(parents=True)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    expected = [f"{today}T01:00:{index:02d}Z ERROR before restart" for index in range(37)]
+    paths = []
+    for index in range(file_count):
+        filename = f"{index:04d}_bot_config_run.json.log"
+        content = "2000-01-01T00:00:00Z ERROR historical\n"
+        if index == 0:
+            content += "\n".join(expected[:5]) + "\n"
+        if index == file_count - 2:
+            content += "\n".join(expected[5:]) + "\n"
+        if index == file_count - 1:
+            content = f"{today}T02:00:00Z INFO restarted\n"
+        (logs / filename).write_text(content, encoding="utf-8")
+        paths.append(f"pb{version}/logs/{filename}")
+
+    class IsolatedPool(FakePool):
+        """Execute the real read-only log command against temporary files, never SSH."""
+
+        async def run(self, hostname, command, timeout=30):
+            """Capture output from a bounded local subprocess."""
+            del hostname
+            process = await asyncio.create_subprocess_shell(command, stdout=asyncio.subprocess.PIPE)
+            try:
+                stdout, _ = await asyncio.wait_for(process.communicate(), timeout)
+                return SimpleNamespace(exit_status=process.returncode, stdout=stdout.decode())
+            finally:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+
+    pool = IsolatedPool(pb7dir=str(runtime), pb8dir=str(runtime))
+    store = VPSStore()
+    store.update_bot_logs("host", {f"{version}:bot": {"sidebar": paths}})
+    monitor = SimpleNamespace(store=store)
+    streamer = async_logs.AsyncLogStreamer(pool)
+    daemon = VPSMonitorRPCDaemon(tmp_path / "unused.sock", monitor=monitor, streamer=streamer)
+
+    class DirectRPCClient:
+        """Exercise the real RPC dispatcher without opening a socket or starting daemons."""
+
+        async def call_async(self, method, params):
+            """Apply production RPC validation to each grouped log request."""
+            return await daemon.dispatch(method, params)
+
+    monkeypatch.setattr(vps_api, "_monitor", monitor)
+    monkeypatch.setattr(vps_api, "_streamer", RemoteLogStreamerProxy(DirectRPCClient()) if transport == "rpc" else streamer)
+    matches = asyncio.run(vps_api.get_bot_log_matches(
+        "host", "bot", pb_version=version, kind="errors", bucket="today", expected_count=37,
+    ))
+    assert matches == expected
 
 
 def test_today_traceback_matches_use_current_and_old_stderr_in_one_request(

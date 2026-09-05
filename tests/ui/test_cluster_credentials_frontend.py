@@ -33,8 +33,9 @@ def test_cluster_credentials_ui_has_guarded_explicit_actions() -> None:
     assert "migration_blockers" in source
     assert "may retain learned CMC or TradFi plaintext" in source
     assert "rotation is optional and is not automatic" in source
-    assert 'href="/api/services/main_page"' in source
-    assert 'href="/api/api-keys/main_page#tradfi"' in source
+    assert 'href="../services/main_page"' in source
+    assert 'href="../api-keys/main_page#tradfi"' in source
+    assert 'window.PBGUI_BASE_PREFIX = "%%BASE_PREFIX%%";' in source
     assert "affected_credentials" in source
     assert "credentialActionBusy" in source
     assert "credentialPendingAction" in source

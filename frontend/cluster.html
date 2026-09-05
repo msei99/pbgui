@@ -774,8 +774,8 @@
         <div class="setup-state-note warn"><strong>Credential retention warning:</strong> removing membership does not erase the remote host. The removed node may retain learned CMC or TradFi plaintext.</div>
         <div>Credential rotation is optional and is not automatic. If the removed host is no longer trusted, rotate the affected provider credentials after removal:</div>
         <div class="rotation-links">
-          <a href="/api/services/main_page" target="_blank" rel="noopener noreferrer">Open PBGUI Services, select the CMC Pool key, then choose Rotate</a>
-          <a href="/api/api-keys/main_page#tradfi" target="_blank" rel="noopener noreferrer">Open API Keys, select the TradFi profile, then choose Rotate Replacement</a>
+          <a href="../services/main_page" target="_blank" rel="noopener noreferrer">Open PBGUI Services, select the CMC Pool key, then choose Rotate</a>
+          <a href="../api-keys/main_page#tradfi" target="_blank" rel="noopener noreferrer">Open API Keys, select the TradFi profile, then choose Rotate Replacement</a>
         </div>
         <div class="panel-note">The removal writes a REMOVE_NODE operation only. It does not delete remote files, stop services, or contact the removed host.</div>
         <div class="modal-error" id="remove-node-error"></div>
@@ -791,6 +791,7 @@
   <script>
     window.API_BASE = "%%API_BASE%%";
     window.WS_BASE = "%%WS_BASE%%";
+    window.PBGUI_BASE_PREFIX = "%%BASE_PREFIX%%";
     window.PBGUI_VERSION = "%%VERSION%%";
     window.PBGUI_SERIAL = "%%SERIAL%%";
     window.PBGUI_NAV_CONFIG = { subtitle: 'CLUSTER SYNC', current: 'system_cluster' };

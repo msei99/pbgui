@@ -41,7 +41,7 @@ def test_private_database_permissions_settings_and_decimal_storage(tmp_path: Pat
     assert stat.S_IMODE(store.db_path.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(store.db_path.stat().st_mode) == 0o600
     assert settings == {
-        "schema_version": 6,
+        "schema_version": 7,
         "journal_mode": "wal",
         "synchronous": 2,
         "busy_timeout_ms": 5_000,
@@ -897,7 +897,7 @@ def test_schema_v3_migration_collapses_only_exact_event_duplicates(tmp_path: Pat
 
     migrated = ProfitSweepStore(db_path)
 
-    assert migrated.database_settings()["schema_version"] == 6
+    assert migrated.database_settings()["schema_version"] == 7
     assert len(migrated.list_ledger_events("alice", "hyperliquid")) == 2
     assert migrated.ledger_net_pnl("alice", "hyperliquid", "USDT") == "11.9"
     repeated = migrated.upsert_ledger_event(
@@ -974,7 +974,7 @@ def test_schema_v1_migrates_to_v6_without_losing_policy_or_dry_state(tmp_path: P
 
     migrated = ProfitSweepStore(db_path)
 
-    assert migrated.database_settings()["schema_version"] == 6
+    assert migrated.database_settings()["schema_version"] == 7
     assert migrated.get_policy("alice") == before
     assert migrated.list_live_intents("alice") == []
     assert migrated.list_test_operations("alice") == []
@@ -997,7 +997,7 @@ def test_schema_v2_adds_isolated_test_operations(tmp_path: Path) -> None:
 
     migrated = ProfitSweepStore(db_path)
 
-    assert migrated.database_settings()["schema_version"] == 6
+    assert migrated.database_settings()["schema_version"] == 7
     assert migrated.get_policy("alice")["simulation_state"]["sweep_due"] == "0"
     assert migrated.list_test_operations("alice") == []
 
@@ -1065,7 +1065,7 @@ def test_schema_v5_adds_operation_kind_without_reclassifying_tests(tmp_path: Pat
 
     migrated = ProfitSweepStore(db_path)
 
-    assert migrated.database_settings()["schema_version"] == 6
+    assert migrated.database_settings()["schema_version"] == 7
     assert migrated.get_test_operation("legacy-test")["operation_kind"] == "test"
     assert migrated.list_top_up_operations("alice") == []
 

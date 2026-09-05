@@ -312,6 +312,15 @@ async def shutdown() -> None:
 
 def restart_block_reason() -> str:
     """Describe API-owned DB operations that must finish before restart."""
+    from database_lock import DatabaseBusyError, recovery_record
+
+    try:
+        if recovery_record(Path(PBGDIR)):
+            return "DB Tools recovery pending; recover the local target before restarting"
+    except DatabaseBusyError as exc:
+        return str(exc)
+    if any((Path(PBGDIR) / "data" / "locks").glob("db-tools-remote-*.json")):
+        return "Remote DB Tools outcome unresolved; recover the affected target before restarting"
     running = [operation.kind for operation in _operations.values() if operation.status == "running"]
     if not running:
         return ""
@@ -574,15 +583,56 @@ def _remote_path(target: str, *parts: str) -> str:
     return remote_path_join(_remote_pbgui_dir(target), *parts)
 
 
-def _remote_sqlite_backup_command(src: str, dst: str) -> str:
-    script = (
-        "import sqlite3, sys, pathlib; "
-        "src=sys.argv[1]; dst=sys.argv[2]; pathlib.Path(dst).parent.mkdir(parents=True, exist_ok=True); "
-        "pathlib.Path(dst).unlink(missing_ok=True); "
-        "s=sqlite3.connect('file:'+src+'?mode=ro', uri=True); "
-        "d=sqlite3.connect(dst); s.backup(d); d.close(); s.close()"
-    )
-    return f"python3 -c {shlex.quote(script)} {shlex.quote(src)} {shlex.quote(dst)}"
+def _remote_sqlite_backup_command(src: str, dst: str, *, timeout: float = 30.0) -> str:
+    """Publish a bounded remote snapshot without clobbering any destination entry.
+
+    Keep this helper stdlib-only: staging also runs against remote installations
+    that have not yet received the local SQLite helper module.
+    """
+    script = r"""
+import math, os, pathlib, signal, sqlite3, sys, tempfile, time
+from contextlib import closing
+
+def cancelled(signum, frame):
+    for pending in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(pending, signal.SIG_IGN)
+    raise InterruptedError('SQLite backup cancelled')
+
+for signum in (signal.SIGTERM, signal.SIGHUP):
+    signal.signal(signum, cancelled)
+
+source, destination = map(pathlib.Path, sys.argv[1:3])
+budget = float(sys.argv[3])
+if not math.isfinite(budget) or budget <= 0:
+    raise ValueError('Invalid backup timeout')
+deadline = time.monotonic() + budget
+
+def progress(status=sqlite3.SQLITE_OK, remaining=0, total=0):
+    if status != sqlite3.SQLITE_DONE and time.monotonic() >= deadline:
+        raise TimeoutError('SQLite backup deadline exceeded')
+
+destination.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+parent_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    os.fchmod(parent_fd, 0o700)
+    # Pin the publication directory; never open or unlink the final destination.
+    with tempfile.TemporaryDirectory(prefix='.sqlite-backup-', dir=f'/proc/self/fd/{parent_fd}') as temporary:
+        staged = pathlib.Path(temporary) / 'snapshot.db'
+        fd = os.open(staged, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(fd)
+        progress()
+        with closing(sqlite3.connect(source.absolute().as_uri() + '?mode=ro', uri=True, timeout=0.01)) as live:
+            with closing(sqlite3.connect(staged, timeout=0.01)) as snapshot:
+                live.backup(snapshot, pages=256, sleep=0.01, progress=progress)
+        with staged.open('rb') as completed:
+            os.fsync(completed.fileno())
+        # Existing files and symlinks both cause FileExistsError, atomically.
+        os.link(staged, destination.name, dst_dir_fd=parent_fd, follow_symlinks=False)
+        os.fsync(parent_fd)
+finally:
+    os.close(parent_fd)
+""".strip()
+    return f"python3 -c {shlex.quote(script)} {shlex.quote(src)} {shlex.quote(dst)} {shlex.quote(str(timeout))}"
 
 
 def _target_db_paths_local() -> dict[str, Path]:
@@ -605,16 +655,27 @@ async def _backup_target_dbs(target: str, label: str, operation: OperationProgre
     return [item for item in backups if item]
 
 
-async def _run_remote_python(target: str, script: str, args: list[str], timeout: int = 60) -> dict[str, Any]:
+async def _run_remote_python(target: str, script: str, args: list[str], timeout: int = 60, *, retry: bool = True) -> dict[str, Any]:
     """Run a small Python helper on a remote target and parse its JSON stdout."""
 
     pbgui_dir = _remote_pbgui_dir(target)
+    if script in {_REMOTE_SYNC_APPLY_SCRIPT, _REMOTE_DELETE_SCRIPT, _REMOTE_COPY_SCRIPT}:
+        script = (
+            "from pathlib import Path\nfrom database_lock import acquire_database_lock\n"
+            "with acquire_database_lock(Path.cwd()):\n"
+            f"    exec({script!r})\n"
+        )
     command = (
-        f"cd {shlex.quote(pbgui_dir)} && "
-        f"python3 -c {shlex.quote(script)} "
+        f"cd -- {shlex.quote(pbgui_dir)} || exit 1; "
+        "if [ -x ../venv_pbgui/bin/python ]; then py=../venv_pbgui/bin/python; "
+        "elif [ -x ../venv_pbgui312/bin/python ]; then py=../venv_pbgui312/bin/python; "
+        "elif [ -x .venv/bin/python ]; then py=.venv/bin/python; "
+        "else py=python3; fi; "
+        f'"$py" -c {shlex.quote(script)} '
         + " ".join(shlex.quote(str(arg)) for arg in args)
     )
-    result = await _pool().run(target, command, timeout=timeout)
+    options = {} if retry else {"retry": False}
+    result = await _pool().run(target, command, timeout=timeout, **options)
     if not result or result.returncode != 0:
         detail = str(getattr(result, "stderr", "") or getattr(result, "stdout", "") or "remote command failed").strip()
         raise HTTPException(status_code=500, detail=detail or "Remote DB operation failed")
@@ -1657,21 +1718,30 @@ def _table_specs_json() -> str:
 
 
 def _connect_bundle(db_paths: dict[str, Path]) -> dict[str, sqlite3.Connection]:
-    conns = {name: sqlite3.connect(str(path), timeout=30) for name, path in db_paths.items()}
-    for conn in conns.values():
-        try:
+    """Close already opened connections if a later database cannot be opened."""
+    conns = {}
+    try:
+        for name, path in db_paths.items():
+            conn = sqlite3.connect(str(path), timeout=30)
+            conns[name] = conn
             conn.execute("PRAGMA busy_timeout=30000")
-        except Exception:
-            pass
+    except BaseException:
+        _close_bundle(conns)
+        raise
     return conns
 
 
 def _close_bundle(conns: dict[str, sqlite3.Connection]) -> None:
+    """Attempt every close and report failure before a maintenance lease is released."""
+    errors = []
     for conn in conns.values():
         try:
             conn.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log(SERVICE, f"SQLite bundle connection close failed: {exc}", level="ERROR")
+            errors.append(exc)
+    if errors:
+        raise errors[0]
 
 
 def _count_for_spec(conn: sqlite3.Connection, spec: TableSpec, users: list[str], cutoff_ms: int | None = None) -> int:
@@ -2090,17 +2160,30 @@ def delete_user_rows(
     users: list[str],
     cutoff_ms: int | None = None,
     operation: OperationProgress | None = None,
+    *,
+    _maintenance=None,
 ) -> dict[str, Any]:
     """Delete selected users' rows; optionally only rows older than cutoff."""
 
     users = _clean_users(users)
     if not users:
         raise HTTPException(status_code=422, detail="Select at least one user")
+    if _maintenance is not None:
+        _maintenance.assert_target(db_paths)
+    if Path(db_paths[MAIN_DB_NAME]).resolve() == _local_db_path(MAIN_DB_NAME).resolve():
+        if _maintenance is None:
+            from db_maintenance import run
+
+            return run(Path(PBGDIR), {"id": uuid.uuid4().hex, "kind": "cleanup", "users": users,
+                                      "cutoff_ms": cutoff_ms}, progress=operation)["deleted"]
+        _maintenance.check()
     conns = _connect_bundle(db_paths)
     deleted: dict[str, int] = {}
     try:
         for spec in TABLE_SPECS:
             table_key = f"{spec.db_name}:{spec.table}"
+            if _maintenance is not None:
+                _maintenance.check()
             if operation:
                 operation.set_current(f"Delete rows from {table_key}")
             conn = conns[spec.db_name]
@@ -2188,19 +2271,26 @@ def copy_user_rows(
     users: list[str],
     mode: Literal["replace", "add_missing"],
     operation: OperationProgress | None = None,
+    *,
+    _maintenance=None,
 ) -> dict[str, Any]:
     """Copy selected users from source DB bundle into target DB bundle."""
 
     users = _clean_users(users)
     if not users:
         raise HTTPException(status_code=422, detail="Select at least one user")
+    if _maintenance is not None:
+        _maintenance.assert_target(target_paths)
     with ExitStack() as resources:
         if Path(target_paths[MAIN_DB_NAME]).resolve() == _local_db_path(MAIN_DB_NAME).resolve():
-            from database_lock import acquire_database_lock
+            if _maintenance is None:
+                from db_maintenance import run
 
-            resources.enter_context(acquire_database_lock(Path(PBGDIR)))
+                return run(Path(PBGDIR), {"id": uuid.uuid4().hex, "kind": "copy", "users": users,
+                                          "mode": mode, "staged": source_paths}, progress=operation)["copied"]
+            _maintenance.check()
         if mode == "replace":
-            delete_user_rows(target_paths, users, operation=operation)
+            delete_user_rows(target_paths, users, operation=operation, _maintenance=_maintenance)
 
         source_conns = _connect_bundle(source_paths)
         resources.callback(_close_bundle, source_conns)
@@ -2209,6 +2299,8 @@ def copy_user_rows(
         tables: dict[str, dict[str, int]] = {}
         for spec in TABLE_SPECS:
             table_key = f"{spec.db_name}:{spec.table}"
+            if _maintenance is not None:
+                _maintenance.check()
             if operation:
                 operation.set_current(f"Copy rows for {table_key}")
             stats = _copy_spec_rows(source_conns[spec.db_name], target_conns[spec.db_name], spec, users, mode)
@@ -2229,52 +2321,38 @@ async def remote_delete_user_rows(
     cutoff_ms: int | None,
     operation: OperationProgress | None = None,
 ) -> dict[str, Any]:
-    """Delete selected users directly on a remote target's live SQLite DBs."""
-
-    users = _clean_users(users)
-    deleted: dict[str, int] = {}
-    users_json = json.dumps(users)
-    for spec in TABLE_SPECS:
-        table_key = f"{spec.db_name}:{spec.table}"
-        if operation:
-            operation.set_current(f"Delete rows from {table_key} on {target}")
-        data = await _run_remote_python(
-            target,
-            _REMOTE_DELETE_SCRIPT,
-            [
-                _remote_path(target, "data", spec.db_name),
-                spec.table,
-                spec.user_col,
-                spec.timestamp_col or "",
-                "" if cutoff_ms is None else str(int(cutoff_ms)),
-                users_json,
-            ],
-        )
-        count = int(data.get("deleted") or 0)
-        deleted[table_key] = count
-        if operation:
-            operation.advance(f"Deleted rows from {table_key} on {target}", {"deleted": count})
-    return {"total": sum(deleted.values()), "tables": deleted}
+    """Delete under one remote operation owner, never independent per-table commands."""
+    result = await _maintain_target(target, {"kind": "cleanup", "users": _clean_users(users),
+                                             "cutoff_ms": cutoff_ms}, operation)
+    return result["deleted"]
 
 
 async def _upload_source_snapshots(target: str, source_paths: dict[str, Path], operation: OperationProgress | None = None) -> dict[str, str]:
     """Upload source DB snapshots to a remote target for direct SQL import."""
 
     remote_dir = _remote_path(target, "data", "tmp", "db-tools", uuid.uuid4().hex)
-    created = await _pool().run(target, f"mkdir -p {shlex.quote(remote_dir)}", timeout=15)
+    created = await _pool().run(target, f"mkdir -p -- {shlex.quote(remote_dir)}", timeout=15)
     if not created or created.returncode != 0:
         raise HTTPException(status_code=500, detail=f"Failed to create remote temp directory on {target}")
     remote_paths: dict[str, str] = {}
-    for db_name, local_path in source_paths.items():
-        if operation:
-            operation.set_current(f"Upload source snapshot {db_name} to {target}")
-        remote_path = f"{remote_dir}/{db_name}"
-        ok = await _pool().push_file(target, local_path, remote_path)
-        if not ok:
-            raise HTTPException(status_code=500, detail=f"Failed to upload source snapshot {db_name} to {target}")
-        remote_paths[db_name] = remote_path
-        if operation:
-            operation.advance(f"Uploaded source snapshot {db_name} to {target}", {"db": db_name})
+    try:
+        for db_name, local_path in source_paths.items():
+            if db_name not in DB_FILE_NAMES:
+                raise HTTPException(status_code=400, detail="Unsupported snapshot database")
+            if operation:
+                operation.set_current(f"Upload source snapshot {db_name} to {target}")
+            remote_path = f"{remote_dir}/{db_name}"
+            ok = await _pool().push_file(target, local_path, remote_path)
+            if not ok:
+                raise HTTPException(status_code=500, detail=f"Failed to upload source snapshot {db_name} to {target}")
+            remote_paths[db_name] = remote_path
+            if operation:
+                operation.advance(f"Uploaded source snapshot {db_name} to {target}", {"db": db_name})
+    except BaseException:
+        removed = await _pool().run(target, f"rm -rf -- {shlex.quote(remote_dir)}", timeout=15)
+        if not removed or removed.returncode:
+            _log(SERVICE, f"Failed to clean incomplete snapshot upload on {target}", level="ERROR")
+        raise
     return remote_paths
 
 
@@ -2283,9 +2361,21 @@ async def _remove_remote_snapshots(target: str, remote_paths: dict[str, str]) ->
 
     if not remote_paths:
         return
-    parents = sorted({str(Path(path).parent) for path in remote_paths.values()})
-    for parent in parents:
-        await _pool().run(target, f"rm -rf {shlex.quote(parent)}", timeout=15)
+    approved = Path(_remote_path(target, "data", "tmp", "db-tools"))
+    parents = set()
+    for path in remote_paths.values():
+        candidate = Path(path)
+        try:
+            relative = candidate.relative_to(approved)
+            if len(relative.parts) != 2 or candidate.name not in DB_FILE_NAMES or uuid.UUID(relative.parts[0]).hex != relative.parts[0]:
+                raise ValueError("Invalid staging identifier")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Refusing cleanup outside an owned DB Tools staging directory") from exc
+        parents.add(str(candidate.parent))
+    for parent in sorted(parents):
+        result = await _pool().run(target, f"rm -rf -- {shlex.quote(parent)}", timeout=15)
+        if not result or result.returncode:
+            raise HTTPException(status_code=500, detail=f"Failed to clean DB Tools staging on {target}")
 
 
 async def remote_copy_user_rows(
@@ -2295,45 +2385,10 @@ async def remote_copy_user_rows(
     mode: Literal["replace", "add_missing"],
     operation: OperationProgress | None = None,
 ) -> dict[str, Any]:
-    """Copy selected users directly into a remote target's live SQLite DBs."""
-
-    users = _clean_users(users)
-    if mode == "replace":
-        await remote_delete_user_rows(target, users, None, operation)
-    users_json = json.dumps(users)
-    tables: dict[str, dict[str, int]] = {}
-    for spec in TABLE_SPECS:
-        table_key = f"{spec.db_name}:{spec.table}"
-        if operation:
-            operation.set_current(f"Copy rows for {table_key} on {target}")
-        stats = await _run_remote_python(
-            target,
-            _REMOTE_COPY_SCRIPT,
-            [
-                _remote_path(target, "data", spec.db_name),
-                remote_source_paths[spec.db_name],
-                spec.table,
-                spec.user_col,
-                mode,
-                json.dumps(list(spec.key_cols)),
-                users_json,
-            ],
-            timeout=120,
-        )
-        normalized = {
-            "source": int(stats.get("source") or 0),
-            "inserted": int(stats.get("inserted") or 0),
-            "skipped": int(stats.get("skipped") or 0),
-        }
-        tables[table_key] = normalized
-        if operation:
-            operation.advance(f"Copied rows for {table_key} on {target}", normalized)
-    return {
-        "source_total": sum(item["source"] for item in tables.values()),
-        "inserted": sum(item["inserted"] for item in tables.values()),
-        "skipped": sum(item["skipped"] for item in tables.values()),
-        "tables": tables,
-    }
+    """Import caller-owned uploaded snapshots under one remote maintenance lease."""
+    result = await _maintain_target(target, {"kind": "copy", "users": _clean_users(users), "mode": mode,
+                                             "staged": remote_source_paths, "_uploaded": True}, operation)
+    return result["copied"]
 
 
 async def _stage_db_bundle(target: str, temp_dir: Path, prefix: str, operation: OperationProgress | None = None) -> dict[str, Path]:
@@ -2384,7 +2439,9 @@ def _backup_local_file(path: Path, label: str) -> str:
 
 
 async def _backup_remote_file(target: str, remote_path: str, label: str) -> str:
-    backup_remote = _remote_path(target, "data", "backup", "db-tools", f"db-tools-{_timestamp()}-{label}-{Path(remote_path).name}")
+    """Create a distinct remote recovery snapshot, preserving earlier publications."""
+    nonce = f"-{uuid.uuid4().hex}" if Path(remote_path).name in DB_FILE_NAMES else ""
+    backup_remote = _remote_path(target, "data", "backup", "db-tools", f"db-tools-{_timestamp()}{nonce}-{label}-{Path(remote_path).name}")
     if Path(remote_path).name in DB_FILE_NAMES:
         cmd = f"if [ -f {shlex.quote(remote_path)} ]; then {_remote_sqlite_backup_command(remote_path, backup_remote)}; fi"
     else:
@@ -2392,7 +2449,7 @@ async def _backup_remote_file(target: str, remote_path: str, label: str) -> str:
             f"mkdir -p {shlex.quote(str(Path(backup_remote).parent))} && "
             f"if [ -f {shlex.quote(remote_path)} ]; then cp {shlex.quote(remote_path)} {shlex.quote(backup_remote)}; fi"
         )
-    result = await _pool().run(target, cmd, timeout=30)
+    result = await _pool().run(target, cmd, timeout=45)
     if not result or result.returncode != 0:
         raise HTTPException(status_code=500, detail=f"Failed to create remote backup on {target}")
     return f"{target}:{backup_remote}"
@@ -2644,79 +2701,182 @@ async def _install_db_bundle(
     operation: OperationProgress | None = None,
     manage_pbdata: bool = True,
 ) -> dict[str, Any]:
-    backups: list[str] = []
-    pbdata_marker: bool | str = False
-    local_lease = None
-    database_lease = None
+    """Delegate the entire bundle transaction to its local or remote target owner."""
+    if not manage_pbdata:
+        raise HTTPException(status_code=409, detail="Bundle installation requires confirmed PBData ownership")
+    return await _maintain_target(target, {"kind": "install", "staged": staged_paths, "label": label}, operation)
+
+
+async def _maintain_target(target: str, request: dict, operation=None) -> dict:
+    """Drain an owned local/remote worker on cancellation; retain uncertain remote outcomes."""
+    from database_lock import DatabaseBusyError
+    from master_update_lock import MasterUpdateBusyError
+    from db_maintenance import run
+
+    request = {**request, "id": uuid.uuid4().hex}
+    already_uploaded = request.pop("_uploaded", False)
+    cancelled = threading.Event()
+    remote_paths = {}
+    previous_paths = {}
+    previous_cancel_id = None
+    marker = None
+    settled = False
+    resources = ExitStack()
+    if operation:
+        operation.set_current(f"Reserve and maintain databases on {target}")
+
+    async def execute():
+        """Keep all uploads and the single target-owned transaction inside one task."""
+        nonlocal remote_paths, marker, previous_paths, previous_cancel_id, settled
+        if target == "local":
+            return await asyncio.to_thread(run, Path(PBGDIR), request, cancel=cancelled, progress=operation)
+        from hashlib import sha256
+        from secure_files import atomic_write_private_text, ensure_private_directory, read_regular_file_nofollow
+        from db_maintenance import _owner_lock, _sync_directory
+
+        # A capability failure precedes all uploads, service changes and DB writes.
+        key = sha256(target.encode()).hexdigest()
+        resources.enter_context(_owner_lock(Path(PBGDIR), f"db-tools-remote-{key}.lock"))
+        directory = ensure_private_directory(Path(PBGDIR) / "data" / "locks")
+        receipt = directory / f"db-tools-remote-{key}.json"
+        if receipt.exists() or receipt.is_symlink():
+            if request["kind"] != "recover":
+                raise HTTPException(status_code=409, detail="Remote DB outcome unresolved; recover this target first")
+            previous = json.loads(read_regular_file_nofollow(receipt, directory))
+            if previous.get("target") != target:
+                raise HTTPException(status_code=409, detail="Invalid remote recovery receipt; preserve it for repair")
+            previous_paths = previous.get("staged", {})
+            previous_cancel_id = previous.get("cancel_id", previous["id"])
+        probe = "try:\n    from db_maintenance import check_remote_capability\nexcept ImportError:\n    raise RuntimeError('Update and restart remote PBGui/PBData before database maintenance; recovery guards are missing') from None\ncheck_remote_capability()\nprint('{}')"
+        try:
+            await _run_remote_python(target, probe, [])
+        except HTTPException as exc:
+            raise HTTPException(status_code=409, detail=f"Remote maintenance unavailable on {target}: {exc.detail}") from exc
+        if request.get("staged") and not already_uploaded:
+            remote_paths = await _upload_source_snapshots(target, request["staged"], operation)
+            request["staged"] = remote_paths
+        marker = receipt
+        atomic_write_private_text(marker, json.dumps({"target": target, "id": request["id"],
+                                                     "staged": remote_paths or previous_paths,
+                                                     "cancel_id": previous_cancel_id or request["id"]}, indent=4))
+        _sync_directory(directory)
+        script = "import json, sys\nfrom pathlib import Path\nfrom db_maintenance import remote_main\nfrom database_lock import recovery_record\ntry:\n    result = remote_main(json.loads(sys.argv[1]))\nexcept Exception as exc:\n    result = {'maintenance_error': str(exc), 'recovery_pending': recovery_record(Path.cwd()) is not None}\nprint(json.dumps(result))"
+        result = await _run_remote_python(target, script, [json.dumps(request)], timeout=900, retry=False)
+        if result.get("maintenance_error"):
+            if result.get("recovery_pending") is False:
+                settled = True
+            raise HTTPException(status_code=409, detail=result["maintenance_error"])
+        settled = True
+        return result
+
+    worker = asyncio.create_task(execute())
+    interrupted = False
+    cancel_task = None
+    try:
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                interrupted = True
+                cancelled.set()
+                if target != "local" and cancel_task is None:
+                    script = "import sys\nfrom pathlib import Path\nfrom db_maintenance import request_cancel\nrequest_cancel(Path.cwd(), sys.argv[1])\nprint('{}')"
+                    cancel_task = asyncio.create_task(_run_remote_python(target, script, [request["id"]]))
+            except Exception:
+                break
+        if cancel_task is not None:
+            while not cancel_task.done():
+                try:
+                    await asyncio.shield(cancel_task)
+                except asyncio.CancelledError:
+                    interrupted = True
+                except Exception:
+                    break
+            if not cancel_task.cancelled() and cancel_task.exception() is not None:
+                _log(SERVICE, f"Remote maintenance cancellation not acknowledged on {target}", level="ERROR")
+        result = worker.result()
+        if interrupted:
+            raise asyncio.CancelledError
+        return result
+    except (DatabaseBusyError, MasterUpdateBusyError) as exc:
+        _log(SERVICE, f"Database maintenance blocked on {target}: {exc}", level="WARNING")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        _log(SERVICE, f"Database maintenance failed on {target}: {exc}", level="ERROR", meta={"traceback": traceback.format_exc()})
+        if interrupted:
+            raise asyncio.CancelledError from exc
+        raise
+    finally:
+        # On uncertain outcomes, uploaded sources belong to recovery, not this API.
+        async def cleanup():
+            """Own final remote cleanup even when repeated shutdown cancellation arrives."""
+            nonlocal marker
+            if settled and target != "local":
+                if remote_paths or previous_paths:
+                    await _remove_remote_snapshots(target, remote_paths or previous_paths)
+                if cancel_task is not None or previous_cancel_id:
+                    script = "import sys\nfrom pathlib import Path\nfrom db_maintenance import clear_cancel\nclear_cancel(Path.cwd(), sys.argv[1])\nprint('{}')"
+                    await _run_remote_python(target, script, [previous_cancel_id or request["id"]])
+                if marker is not None:
+                    from db_maintenance import _sync_directory
+
+                    marker.unlink(missing_ok=True)
+                    _sync_directory(marker.parent)
+                    marker = None
+
+        cleanup_task = asyncio.create_task(cleanup())
+        cleanup_interrupted = False
+        try:
+            while not cleanup_task.done():
+                try:
+                    await asyncio.shield(cleanup_task)
+                except asyncio.CancelledError:
+                    cleanup_interrupted = True
+                except Exception:
+                    break
+            cleanup_task.result()
+        finally:
+            resources.close()
+        if cleanup_interrupted:
+            raise asyncio.CancelledError
+
+
+@router.post("/maintenance/recover")
+async def recover_maintenance(payload: TargetRef, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
+    """Explicitly reconcile a journaled local/remote operation without new mutations."""
+    del session
+    target = _target_id(payload.target)
+    await _assert_known_target(target)
+    await _assert_maintenance_available(target, recovery=True)
+
+    async def runner(operation):
+        """Register recovery with the ordinary restart blocker and shutdown ownership."""
+        return await _maintain_target(target, {"kind": "recover"}, operation)
+
+    return {"operation": _start_operation("maintenance-recovery", 1, runner).to_dict()}
+
+
+async def _assert_maintenance_available(target: str, *, recovery=False) -> None:
+    """Return useful HTTP 409 before queueing; worker-side admission closes the race."""
+    from db_maintenance import probe
+    from database_lock import DatabaseBusyError
+    from master_update_lock import MasterUpdateBusyError
+
     try:
         if target == "local":
-            from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
-            from database_lock import DatabaseBusyError, acquire_database_lock
-
-            try:
-                local_lease = acquire_master_runtime_lock(Path(PBGDIR))
-                database_lease = acquire_database_lock(Path(PBGDIR), exclusive=True)
-            except (DatabaseBusyError, MasterUpdateBusyError) as exc:
-                raise HTTPException(status_code=409, detail="A local database operation or master update is running") from exc
-            for db_name in DB_FILE_NAMES:
-                if operation:
-                    operation.set_current(f"Back up {db_name} on {target}")
-                backups.append(await _run_backup_worker(_backup_local_file, _local_db_path(db_name), label))
-                if operation:
-                    operation.advance(f"Backed up {db_name} on {target}", {"target": target, "db": db_name})
-            if manage_pbdata:
-                pbdata_marker = await _stop_target_pbdata(target, operation)
-            for db_name, src in staged_paths.items():
-                if operation:
-                    operation.set_current(f"Install {db_name} on {target}")
-                dst = _local_db_path(db_name)
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                tmp = dst.with_suffix(dst.suffix + ".tmp")
-                shutil.copy2(src, tmp)
-                _remove_sqlite_sidecars(dst)
-                os.replace(tmp, dst)
-                _remove_sqlite_sidecars(dst)
-                if operation:
-                    operation.advance(f"Installed {db_name} on {target}", {"target": target, "db": db_name})
+            probe(Path(PBGDIR), recovery=recovery)
         else:
-            for db_name in DB_FILE_NAMES:
-                if operation:
-                    operation.set_current(f"Back up {db_name} on {target}")
-                backups.append(await _backup_remote_file(target, _remote_path(target, "data", db_name), label))
-                if operation:
-                    operation.advance(f"Backed up {db_name} on {target}", {"target": target, "db": db_name})
-            if manage_pbdata:
-                pbdata_marker = await _stop_target_pbdata(target, operation)
-            await _pool().run(target, f"mkdir -p {shlex.quote(_remote_path(target, 'data'))}", timeout=15)
-            for db_name, src in staged_paths.items():
-                if operation:
-                    operation.set_current(f"Upload {db_name} to {target}")
-                remote = _remote_path(target, "data", db_name)
-                tmp_remote = remote + ".tmp"
-                ok = await _pool().push_file(target, src, tmp_remote)
-                if not ok:
-                    raise HTTPException(status_code=500, detail=f"Failed to upload {db_name} to {target}")
-                move = await _pool().run(
-                    target,
-                    f"rm -f {shlex.quote(remote + '-wal')} {shlex.quote(remote + '-shm')} && mv {shlex.quote(tmp_remote)} {shlex.quote(remote)} && rm -f {shlex.quote(remote + '-wal')} {shlex.quote(remote + '-shm')}",
-                    timeout=30,
-                )
-                if not move or move.returncode != 0:
-                    raise HTTPException(status_code=500, detail=f"Failed to install {db_name} on {target}")
-                if operation:
-                    operation.advance(f"Installed {db_name} on {target}", {"target": target, "db": db_name})
-        return {"backups": [item for item in backups if item], "pbdata_was_running": bool(pbdata_marker and pbdata_marker != "none")}
-    finally:
-        try:
-            if manage_pbdata and (target != "local" or database_lease is not None):
-                await _start_target_pbdata(target, pbdata_marker, operation)
-        finally:
-            try:
-                if database_lease is not None:
-                    database_lease.release()
-            finally:
-                if local_lease is not None:
-                    local_lease.release()
+            from hashlib import sha256
+
+            receipt = Path(PBGDIR) / "data" / "locks" / f"db-tools-remote-{sha256(target.encode()).hexdigest()}.json"
+            if not recovery and (receipt.exists() or receipt.is_symlink()):
+                raise DatabaseBusyError("Remote outcome unresolved; recover this target before new maintenance")
+            script = "from pathlib import Path\ntry:\n    from db_maintenance import check_remote_capability, probe\nexcept ImportError:\n    raise RuntimeError('Update and restart remote PBGui/PBData; recovery guards are missing') from None\ncheck_remote_capability()\nprobe(Path.cwd(), recovery=" + repr(recovery) + ")\nprint('{}')"
+            await _run_remote_python(target, script, [])
+    except (DatabaseBusyError, MasterUpdateBusyError, HTTPException) as exc:
+        detail = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+        _log(SERVICE, f"Database maintenance admission denied on {target}: {detail}", level="WARNING")
+        raise HTTPException(status_code=409, detail=detail) from exc
 
 
 def _dashboard_base_path(template: bool) -> Path:
@@ -2847,6 +3007,7 @@ async def restore_backups_run(payload: BackupActionRequest, session: SessionToke
     if not backups:
         raise HTTPException(status_code=400, detail="Select at least one backup")
     await _assert_known_target(target)
+    await _assert_maintenance_available(target)
 
     async def runner(operation: OperationProgress) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="pbgui-db-tools-restore-") as tmp:
@@ -3006,15 +3167,12 @@ async def cleanup_run(payload: CleanupRunRequest, session: SessionToken = Depend
     if payload.mode == "older" and cutoff_ms is None:
         raise HTTPException(status_code=422, detail="cutoff_ms is required for older cleanup")
     await _assert_known_target(target)
+    await _assert_maintenance_available(target)
 
     async def runner(operation: OperationProgress) -> dict[str, Any]:
-        backups = await _backup_target_dbs(target, "cleanup", operation)
-        if target == "local":
-            deleted = delete_user_rows(_target_db_paths_local(), users, cutoff_ms, operation)
-        else:
-            deleted = await remote_delete_user_rows(target, users, cutoff_ms, operation)
-        _log(SERVICE, f"cleanup target={target} users={users} mode={payload.mode} deleted={deleted['total']}", level="INFO")
-        return {"ok": True, "target": target, "users": users, "deleted": deleted, "backups": backups, "pbdata_was_running": False}
+        result = await _maintain_target(target, {"kind": "cleanup", "users": users, "cutoff_ms": cutoff_ms}, operation)
+        _log(SERVICE, f"cleanup target={target} users={users} mode={payload.mode} deleted={result['deleted']['total']}", level="INFO")
+        return {"target": target, "users": users, **result}
 
     operation = _start_operation("cleanup", _operation_total("cleanup"), runner)
     return {"operation": operation.to_dict()}
@@ -3054,24 +3212,16 @@ async def copy_users_run(payload: CopyUsersRequest, session: SessionToken = Depe
         raise HTTPException(status_code=400, detail="Source and target must differ")
     await _assert_known_target(source)
     await _assert_known_target(target)
+    await _assert_maintenance_available(target)
 
     async def runner(operation: OperationProgress) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="pbgui-db-tools-copy-") as tmp:
             tmp_path = Path(tmp)
             source_paths = await _stage_db_bundle(source, tmp_path, "source", operation)
-            backups = await _backup_target_dbs(target, "copy-users", operation)
-            remote_source_paths: dict[str, str] = {}
-            try:
-                if target == "local":
-                    copied = copy_user_rows(source_paths, _target_db_paths_local(), users, payload.mode, operation)
-                else:
-                    remote_source_paths = await _upload_source_snapshots(target, source_paths, operation)
-                    copied = await remote_copy_user_rows(target, remote_source_paths, users, payload.mode, operation)
-                _log(SERVICE, f"copy users source={source} target={target} users={users} mode={payload.mode} inserted={copied['inserted']}", level="INFO")
-                return {"ok": True, "source": source, "target": target, "users": users, "copied": copied, "backups": backups, "pbdata_was_running": False}
-            finally:
-                if remote_source_paths:
-                    await _remove_remote_snapshots(target, remote_source_paths)
+            result = await _maintain_target(target, {"kind": "copy", "users": users, "mode": payload.mode,
+                                                      "staged": source_paths}, operation)
+            _log(SERVICE, f"copy users source={source} target={target} users={users} mode={payload.mode} inserted={result['copied']['inserted']}", level="INFO")
+            return {"source": source, "target": target, "users": users, **result}
 
     operation = _start_operation(
         "copy-users",
@@ -3109,6 +3259,7 @@ async def copy_database_run(payload: CopyDatabaseRequest, session: SessionToken 
         raise HTTPException(status_code=400, detail="Source and target must differ")
     await _assert_known_target(source)
     await _assert_known_target(target)
+    await _assert_maintenance_available(target)
 
     async def runner(operation: OperationProgress) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="pbgui-db-tools-full-") as tmp:

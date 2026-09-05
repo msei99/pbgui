@@ -26,6 +26,7 @@ from test_sqlite_security import QUOTED_SCHEMA_CHANGES
 def isolate_db_tools_runtime(tmp_path, monkeypatch):
     """Keep default INI reads, runtime paths and temporary staging inside the test."""
     monkeypatch.setattr(db_tools, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(database_mod, "PBGDIR", str(tmp_path))
     monkeypatch.setattr(db_tools.pbgui_purefunc, "pbgui_ini_path", lambda: tmp_path / "pbgui.ini")
     monkeypatch.setattr(db_tools.tempfile, "tempdir", str(tmp_path))
 

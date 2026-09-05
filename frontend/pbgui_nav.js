@@ -464,7 +464,7 @@
     }
     var route = FASTAPI_PAGES.v8_backtest;
     if (!route) return false;
-    window.location.assign(_getApiOrigin() + route + '?panel=queue');
+    window.location.assign(_getAppBase() + route + '?panel=queue');
     return true;
   };
   window.PBGuiAI.registerPageContext = function (registration) {
@@ -500,6 +500,7 @@
     var entity = payload.entity && typeof payload.entity === 'object' ? payload.entity : {};
     if (String(target.page_key || '') !== String(cfg().current || '')) {
       var route = FASTAPI_PAGES[String(target.page_key || '')];
+      if (route) route = _appPath(route);
       if (route && !continuePageAction(_getApiOrigin() + route, request.action_id)) {
         event.preventDefault();
       }
@@ -984,7 +985,7 @@
   function _ensureLogViewer(cb) {
     if (typeof window.LogViewerPanel === 'function') { cb(); return; }
     var s = document.createElement('script');
-    s.src = '/app/js/log_viewer_panel.js?v=29';
+    s.src = _appPath('/app/js/log_viewer_panel.js?v=29');
     s.onload = cb;
     s.onerror = function() { console.warn('Failed to load log_viewer_panel.js'); };
     document.head.appendChild(s);
@@ -993,7 +994,7 @@
   function _getWsBase() {
     if (window.WS_BASE) return window.WS_BASE;
     var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return proto + '//' + window.location.host;
+    return proto + '//' + window.location.host + _getBasePrefix();
   }
 
   function _getApiOrigin() {
@@ -1004,6 +1005,31 @@
       if (m) apiOrigin = m[1];
     }
     return apiOrigin || window.location.origin;
+  }
+
+  function _getBasePrefix() {
+    var prefix = window.PBGUI_BASE_PREFIX;
+    if (prefix === undefined || prefix === '') return '';
+    // The server supplies an encoded ASGI path, never an origin or a URL.
+    if (typeof prefix !== 'string' || !/^\/(?:[A-Za-z0-9._~/-]|%[0-9a-f]{2})*$/i.test(prefix)
+        || prefix.indexOf('//') === 0) throw new Error('Invalid PBGui mount path');
+    prefix.split('/').forEach(function (part) {
+      var decoded;
+      try { decoded = decodeURIComponent(part); } catch (_) { throw new Error('Invalid PBGui mount path'); }
+      if (decoded === '.' || decoded === '..' || /[\\/\x00-\x1f\x7f]/.test(decoded)) {
+        throw new Error('Invalid PBGui mount path');
+      }
+    });
+    return prefix.replace(/\/+$/, '');
+  }
+
+  // Only nav-owned root-relative paths use this helper; fetch inputs are untouched.
+  function _appPath(path) {
+    return _getBasePrefix() + path;
+  }
+
+  function _getAppBase() {
+    return _getApiOrigin() + _getBasePrefix();
   }
 
   function _notificationToken() {
@@ -1022,7 +1048,7 @@
     var text = String(message == null ? '' : message).trim();
     var token = _notificationToken();
     if (!text || !token) return;
-    fetch(_getApiOrigin() + '/api/notify_log', {
+    fetch(_getAppBase() + '/api/notify_log', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
       body: JSON.stringify({ msg: text, level: _normalizeNotificationLevel(level) })
@@ -1188,14 +1214,7 @@
       openMonitor.onclick = function (e) {
         e.preventDefault();
         closeAlertOverlay();
-        var c = cfg();
-        var apiOrigin = '';
-        if (c.apiBase) {
-          var m = c.apiBase.match(/^(https?:\/\/[^/]+)/);
-          if (m) apiOrigin = m[1];
-        }
-        if (!apiOrigin) apiOrigin = window.location.origin;
-        var url = apiOrigin + '/api/vps/main_page';
+        var url = _getAppBase() + '/api/vps/main_page';
         window.location.href = url;
       };
     }
@@ -1278,12 +1297,7 @@
 
   function fetchAlerts() {
     var c = cfg();
-    var apiOrigin = '';
-    if (c.apiBase) {
-      var m = c.apiBase.match(/^(https?:\/\/[^/]+)/);
-      if (m) apiOrigin = m[1];
-    }
-    if (!apiOrigin) apiOrigin = window.location.origin;
+    var apiOrigin = _getAppBase();
     fetch(apiOrigin + '/api/vps/alerts', authOptions(c.token, { cache: 'no-store' }))
       .then(function (resp) {
         if (!resp.ok) throw new Error('alerts failed');
@@ -1305,12 +1319,7 @@
 
   function ackAlert(alertId) {
     var c = cfg();
-    var apiOrigin = '';
-    if (c.apiBase) {
-      var m = c.apiBase.match(/^(https?:\/\/[^/]+)/);
-      if (m) apiOrigin = m[1];
-    }
-    if (!apiOrigin) apiOrigin = window.location.origin;
+    var apiOrigin = _getAppBase();
     fetch(apiOrigin + '/api/vps/alerts/ack', authOptions(c.token, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1330,12 +1339,7 @@
 
   function ackAllAlerts() {
     var c = cfg();
-    var apiOrigin = '';
-    if (c.apiBase) {
-      var m = c.apiBase.match(/^(https?:\/\/[^/]+)/);
-      if (m) apiOrigin = m[1];
-    }
-    if (!apiOrigin) apiOrigin = window.location.origin;
+    var apiOrigin = _getAppBase();
     fetch(apiOrigin + '/api/vps/alerts/ack-all', authOptions(c.token, { method: 'POST' }))
       .then(function (resp) {
         if (!resp.ok) throw new Error('ack-all failed');
@@ -1724,15 +1728,8 @@
     var guideTopic = GUIDE_TOPICS[c.current] || '00_overview';
     installNotificationHooks();
 
-    /* Derive API origin (scheme + host + port) from apiBase or current location */
-    var apiOrigin = '';
-    if (c.apiBase) {
-      var m = c.apiBase.match(/^(https?:\/\/[^/]+)/);
-      if (m) apiOrigin = m[1];
-    }
-    if (!apiOrigin) {
-      apiOrigin = window.location.origin;
-    }
+    /* URL construction uses the application base; origin checks stay origin-only. */
+    var apiOrigin = _getAppBase();
 
     function navTo(page) {
       if (!page) return;
@@ -1800,7 +1797,7 @@
 
       guideBtn.disabled = true;
       var script = document.createElement('script');
-      script.src = '/app/js/shared_help_overlay.js?v=6';
+      script.src = _appPath('/app/js/shared_help_overlay.js?v=6');
       script.onload = function () {
         guideBtn.disabled = false;
         if (window.PBGuiSharedHelp && typeof window.PBGuiSharedHelp.open === 'function') {
@@ -1837,10 +1834,10 @@
       _aiDrawerLoading = true;
       var link = document.createElement('link');
       link.rel = 'stylesheet';
-      link.href = '/app/css/ai_drawer.css?v=13';
+      link.href = _appPath('/app/css/ai_drawer.css?v=13');
       document.head.appendChild(link);
       var script = document.createElement('script');
-      script.src = '/app/js/ai_drawer.js?v=39';
+      script.src = _appPath('/app/js/ai_drawer.js?v=39');
       script.onload = function () { _aiDrawerLoading = false; if (window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); };
       script.onerror = function () { _aiDrawerLoading = false; };
       document.head.appendChild(script);
@@ -1856,7 +1853,7 @@
       aiBtn.addEventListener('click', function (event) {
         if (event.isTrusted) aiUserInteracted = true;
       });
-      fetch(_getApiOrigin() + '/api/ai/preferences', {
+      fetch(_getAppBase() + '/api/ai/preferences', {
         credentials: 'same-origin',
         cache: 'no-store'
       }).then(function (response) {
@@ -1936,9 +1933,7 @@
         }).then(function (confirmed) {
           if (!confirmed) return;
           var c2 = cfg();
-          var origin2 = '';
-          if (c2.apiBase) { var m2 = c2.apiBase.match(/^(https?:\/\/[^/]+)/); if (m2) origin2 = m2[1]; }
-          if (!origin2) origin2 = window.location.origin;
+          var origin2 = _getAppBase();
           restartBtn.disabled = true;
           restartBtn.classList.add('disabled');
           restartBtn.innerHTML = '<span class="nav-restart-dot"></span>Restarting...';
@@ -2207,25 +2202,13 @@
       clearInterval(_refreshTimer);
       _refreshTimer = null;
     }
-    var c = cfg();
-    var origin = '';
-    if (c.apiBase) {
-      var match = String(c.apiBase).match(/^(https?:\/\/[^/]+)/);
-      if (match) origin = match[1];
-    }
-    if (!origin) origin = window.location.origin;
-    var url = new URL(origin + '/');
+    var url = new URL(_getAppBase() + '/');
     replaceTopLocation(url.toString());
   }
 
   function performLogout() {
     var c = cfg();
-    var origin = '';
-    if (c.apiBase) {
-      var match = String(c.apiBase).match(/^(https?:\/\/[^/]+)/);
-      if (match) origin = match[1];
-    }
-    if (!origin) origin = window.location.origin;
+    var origin = _getAppBase();
 
     fetch(origin + '/api/auth/logout', authOptions(c.token, {
       method: 'POST',
@@ -2245,7 +2228,7 @@
       var m = String(window.API_BASE).match(/^(https?:\/\/[^/]+)/);
       apiRoot = m ? m[1] : '';
     }
-    return apiRoot + '/api/token-refresh';
+    return apiRoot + _appPath('/api/token-refresh');
   }
 
   function confirmTokenStillValid() {

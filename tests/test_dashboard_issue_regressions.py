@@ -21,6 +21,9 @@ from master_update_lock import MasterUpdateBusyError, acquire_master_update_lock
 @pytest.fixture(autouse=True)
 def isolated_runtime(monkeypatch, tmp_path):
     """Block real clients, process control and database access in every test."""
+    import Database as database_module
+
+    monkeypatch.setattr(database_module, "PBGDIR", tmp_path)
     monkeypatch.setattr(pbgui_purefunc, "PBGDIR", tmp_path)
     monkeypatch.setattr(dashboard, "PBGDIR", tmp_path)
     for name in ("_get_db", "_get_users", "_get_exchange", "_pbdata_stop", "_pbdata_start"):

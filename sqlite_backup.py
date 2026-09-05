@@ -411,6 +411,7 @@ def _validate_main_schema(source, live=None) -> None:
 
 def restore_sqlite_backup(
     backup_path: Path, destination: Path, approved_root: Path, *, timeout: float = 30.0,
+    preserve_live_schema: bool = True,
 ) -> None:
     """Validate a pinned snapshot, then atomically overwrite live SQLite contents.
 
@@ -419,6 +420,9 @@ def restore_sqlite_backup(
     destination also lacks it. Core row layouts and write constraints must match
     production DDL; live balances uniqueness and scan metadata cannot be removed.
     Schema migration belongs to the caller.
+    A leased bundle rollback may set preserve_live_schema=False for its own
+    pre-operation snapshot, undoing constraints introduced by that operation.
+    Snapshot schema allowlisting and integrity validation always remain enabled.
     """
     check = _deadline(timeout)
     source_path, destination, root = map(_path, (backup_path, destination, approved_root))
@@ -456,7 +460,7 @@ def restore_sqlite_backup(
                 try:
                     with closing(_connect(destination, "rw")) as live:
                         if destination.name == "pbgui.db":
-                            _validate_main_schema(source, live)
+                            _validate_main_schema(source, live if preserve_live_schema else None)
                         if live.execute("PRAGMA journal_mode").fetchone()[0] == "wal" and (
                             source.execute("PRAGMA page_size").fetchone()
                             != live.execute("PRAGMA page_size").fetchone()

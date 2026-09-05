@@ -755,7 +755,86 @@ def load_operations(cluster_root: Path, *, expected_cluster_id: str | None = Non
 
 
 def rebuild_materialized_state(cluster_root: Path, *, write: bool = True) -> dict[str, Any]:
-    """Rebuild materialized cluster files from the oplog."""
+    """Replay one locked history and optionally commit its coherent snapshot."""
+
+    paths = ClusterPaths.from_root(cluster_root)
+    read_local_identity(cluster_root)  # Do not create a lock tree for an unconfigured node.
+    with advisory_file_lock(paths.root / ".append_sequence"):
+        materialized = _rebuild_materialized_state_unlocked(cluster_root)
+        if write:
+            history = _materialized_history_identity(paths)
+            _atomic_write_json(paths.cluster_nodes, materialized["cluster_nodes"])
+            _atomic_write_json(paths.desired_state, materialized["desired_state"])
+            _atomic_write_json(paths.state_vector, materialized["state_vector"])
+            # Publish last: a failed/partial replacement must never become current.
+            _atomic_write_json(paths.root / "snapshot_commit.json", {
+                "schema_version": 1,
+                "generation": uuid.uuid4().hex,
+                "history": history,
+                "snapshot_hash": _materialized_snapshot_hash(materialized),
+            })
+        return materialized
+
+
+def _materialized_history_identity(paths: ClusterPaths) -> str:
+    """Fingerprint every history file, including gaps and checkpoint replacements.
+
+    History writers hold .append_sequence and replace immutable files atomically.
+    File identity/ctime also detects replacement with preserved size and mtime;
+    unlike a contiguous vector this includes operations beyond sequence gaps.
+    """
+
+    files = [paths.cluster_id, paths.node_id, paths.node_identity]
+    files.extend(paths.oplog.glob("*/*.json"))
+    entries = []
+    for path in sorted(files):
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            continue
+        entries.append((
+            str(path.relative_to(paths.root)), stat.st_dev, stat.st_ino,
+            stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
+        ))
+    # Checkpoint readers repair permissions, changing ctime without changing data.
+    checkpoint_root = paths.root / "checkpoints"
+    commit_path = checkpoint_root / "commit.json"
+    checkpoint_files = {commit_path}
+    if commit_path.is_symlink():
+        raise ClusterStateError("checkpoint commit must not be a symlink")
+    if commit_path.exists():
+        commit = _read_json(commit_path)
+        if not isinstance(commit, dict):
+            raise ClusterStateError("checkpoint commit must be an object")
+        for field in ("current_checkpoint_id", "previous_checkpoint_id"):
+            checkpoint_id = str(commit.get(field) or "")
+            if not checkpoint_id:
+                continue
+            _validate_hash(checkpoint_id, field)
+            digest = checkpoint_id.removeprefix("sha256:")
+            checkpoint_files.update({
+                checkpoint_root / "objects" / f"{digest}.json",
+                checkpoint_root / "objects" / f"{digest}.backup.json",
+            })
+    for path in sorted(checkpoint_files):
+        if path.is_symlink():
+            entries.append((str(path.relative_to(paths.root)), "symlink", os.readlink(path)))
+        elif path.exists():
+            entries.append((
+                str(path.relative_to(paths.root)), hashlib.sha256(path.read_bytes()).hexdigest(),
+            ))
+    return hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode()).hexdigest()
+
+
+def _materialized_snapshot_hash(materialized: dict[str, Any]) -> str:
+    """Identify the complete three-file snapshot without changing its public shape."""
+
+    raw = json.dumps(materialized, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _rebuild_materialized_state_unlocked(cluster_root: Path) -> dict[str, Any]:
+    """Reduce the oplog/checkpoint while the caller holds the history lock."""
 
     identity = read_local_identity(cluster_root)
     cluster_id = str(identity["cluster_id"])
@@ -774,11 +853,6 @@ def rebuild_materialized_state(cluster_root: Path, *, write: bool = True) -> dic
             active_checkpoint,
             load_checkpoint_tail(cluster_root, active_checkpoint),
         )
-        if write:
-            paths = ClusterPaths.from_root(cluster_root)
-            _atomic_write_json(paths.cluster_nodes, materialized["cluster_nodes"])
-            _atomic_write_json(paths.desired_state, materialized["desired_state"])
-            _atomic_write_json(paths.state_vector, materialized["state_vector"])
         return materialized
     operations = load_operations(cluster_root, expected_cluster_id=cluster_id)
     nodes: dict[str, dict[str, Any]] = {}
@@ -870,11 +944,6 @@ def rebuild_materialized_state(cluster_root: Path, *, write: bool = True) -> dic
         "desired_state": desired_state,
         "state_vector": {key: state_vector[key] for key in sorted(state_vector)},
     }
-    if write:
-        paths = ClusterPaths.from_root(cluster_root)
-        _atomic_write_json(paths.cluster_nodes, cluster_nodes)
-        _atomic_write_json(paths.desired_state, desired_state)
-        _atomic_write_json(paths.state_vector, materialized["state_vector"])
     return materialized
 
 
@@ -883,44 +952,34 @@ def read_materialized_state(cluster_root: Path) -> dict[str, Any]:
 
     root = Path(cluster_root)
     paths = ClusterPaths.from_root(root)
-    try:
-        before = (
-            paths.cluster_nodes.stat().st_mtime_ns,
-            paths.desired_state.stat().st_mtime_ns,
-            paths.state_vector.stat().st_mtime_ns,
-        )
-        snapshot_mtime_ns = min(before)
-        cluster_nodes = _read_json(paths.cluster_nodes)
-        desired_state = _read_json(paths.desired_state)
-        state_vector = _read_json(paths.state_vector)
-        after = (
-            paths.cluster_nodes.stat().st_mtime_ns,
-            paths.desired_state.stat().st_mtime_ns,
-            paths.state_vector.stat().st_mtime_ns,
-        )
-        identity = read_local_identity(root)
-        cluster_id = str(identity["cluster_id"])
-        if before != after:
-            raise ClusterStateError("materialized snapshot changed while being read")
-        if any(
-            actor_dir.is_dir() and actor_dir.stat().st_mtime_ns > snapshot_mtime_ns
-            for actor_dir in paths.oplog.iterdir()
-        ):
-            raise ClusterStateError("materialized snapshot is older than the oplog")
-        if not all(isinstance(item, dict) for item in (cluster_nodes, desired_state, state_vector)):
-            raise ClusterStateError("materialized snapshot is invalid")
-        if (
-            str(cluster_nodes.get("cluster_id") or "") != cluster_id
-            or str(desired_state.get("cluster_id") or "") != cluster_id
-        ):
-            raise ClusterStateError("materialized snapshot belongs to another cluster")
-        return {
-            "cluster_nodes": cluster_nodes,
-            "desired_state": desired_state,
-            "state_vector": state_vector,
-        }
-    except (OSError, ValueError, TypeError, ClusterStateError):
-        return rebuild_materialized_state(root)
+    read_local_identity(root)
+    with advisory_file_lock(root / ".append_sequence"):
+        try:
+            commit = _read_json(root / "snapshot_commit.json")
+            if (
+                not isinstance(commit, dict)
+                or commit.get("schema_version") != 1
+                or commit.get("history") != _materialized_history_identity(paths)
+            ):
+                raise ClusterStateError("materialized snapshot history changed")
+            materialized = {
+                "cluster_nodes": _read_json(paths.cluster_nodes),
+                "desired_state": _read_json(paths.desired_state),
+                "state_vector": _read_json(paths.state_vector),
+            }
+            if not all(isinstance(value, dict) for value in materialized.values()):
+                raise ClusterStateError("materialized snapshot is invalid")
+            if commit.get("snapshot_hash") != _materialized_snapshot_hash(materialized):
+                raise ClusterStateError("materialized snapshot publication is incomplete")
+            cluster_id = str(read_local_identity(root)["cluster_id"])
+            if any(
+                materialized[key].get("cluster_id") != cluster_id
+                for key in ("cluster_nodes", "desired_state")
+            ):
+                raise ClusterStateError("materialized snapshot belongs to another cluster")
+            return materialized
+        except (OSError, ValueError, TypeError, ClusterStateError):
+            return rebuild_materialized_state(root)
 
 
 def credential_lifecycle_status(materialized: dict[str, Any]) -> dict[str, Any]:

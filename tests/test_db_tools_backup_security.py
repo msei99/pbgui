@@ -2,18 +2,23 @@
 
 import ast
 import asyncio
+import json
 import sqlite3
 import threading
 import time
-from contextlib import closing
+import traceback
+import uuid
+from contextlib import ExitStack, closing
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 import database_lock
 import master_update_lock
 import sqlite_backup as backup
+import db_maintenance
 
 
 @pytest.fixture
@@ -23,13 +28,15 @@ def tools(tmp_path):
     These helpers need no FastAPI or exchange clients. Keeping startup out of this
     harness also permits real-SQLite tests on a minimal Python 3.12 installation.
     """
-    names = {"_sqlite_backup_file", "_run_backup_worker", "_install_db_bundle", "_assert_sqlite_integrity", "_track_background_task", "shutdown"}
+    names = {"_sqlite_backup_file", "_run_backup_worker", "_install_db_bundle", "_maintain_target", "_assert_sqlite_integrity", "_track_background_task", "shutdown"}
     tree = ast.parse(Path("api/db_tools.py").read_text())
     body = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names]
     assert {node.name for node in body} == names
     future = ast.parse("from __future__ import annotations").body
     namespace = {
         "asyncio": asyncio, "Path": Path, "sqlite3": sqlite3,
+        "threading": threading, "uuid": uuid, "json": json, "ExitStack": ExitStack,
+        "HTTPException": HTTPException, "traceback": traceback,
         "PBGDIR": str(tmp_path), "DB_FILE_NAMES": ("pbgui.db", "pbgui_trades.db"),
         "MAIN_DB_NAME": "pbgui.db", "SERVICE": "DbTools",
         "_log": lambda *args, **kwargs: None,
@@ -129,7 +136,7 @@ def test_backup_late_done_is_success(tmp_path, monkeypatch, tools):
 
 
 @pytest.mark.parametrize("fail", [False, True])
-def test_install_cancellation_drains_worker_before_releasing_leases(tmp_path, tools, fail):
+def test_install_cancellation_drains_worker_before_releasing_leases(tmp_path, tools, fail, monkeypatch):
     """Cancellation keeps real DB/master leases until the off-loop worker exits."""
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
 
@@ -140,15 +147,18 @@ def test_install_cancellation_drains_worker_before_releasing_leases(tmp_path, to
             assert release.wait(3)
             if fail:
                 raise backup.RestoreBusyError("isolated failure")
-            return ""
+            return {}
         finally:
             finished.set()
 
-    tools.namespace["_backup_local_file"] = slow_backup
+    monkeypatch.setattr(db_maintenance.Maintenance, "prepare", slow_backup)
+    monkeypatch.setattr(db_maintenance, "PBDataControl", lambda root: SimpleNamespace(
+        inspect=lambda: "none", stop=lambda marker: None, start=lambda marker: None,
+    ))
 
     async def exercise():
         """The loop stays responsive and repeated cancellation cannot orphan work."""
-        task = asyncio.create_task(tools._install_db_bundle("local", {}, "test", manage_pbdata=False))
+        task = asyncio.create_task(tools._install_db_bundle("local", {}, "test"))
         try:
             for _ in range(200):
                 if entered.is_set():

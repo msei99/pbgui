@@ -6,6 +6,8 @@ Nutze Cluster Sync, wenn du mehr als einen Master betreibst, Bots auf mehrere VP
 
 Wenn du ein bestehendes PBRemote/API-Sync/V7-SSH-Sync-Setup aktualisierst, lies vor dem Join produktiver VPS-Nodes die [Cluster-Mode-Migration](40_cluster_migration.md).
 
+Die Cluster-Sync-Seite unterstützt IPv6-Listener und Reverse-Proxy-Unterpfade. Setze den ASGI-`root_path` der Anwendung auf den öffentlichen Mount-Pfad (zum Beispiel `/pbgui`); API-Anfragen, Seiten-Assets und Navigation behalten dann dieses Präfix.
+
 ---
 
 ## Was ein Cluster ist
@@ -65,6 +67,8 @@ Jeder Node vergleicht seine bekannten Operation-Counter mit einem anderen Node. 
 Jeder V7-Save speichert einen unveränderlichen, inhaltsadressierten Snapshot, bevor seine Operation veröffentlicht wird. Eine Instanz kann deshalb mehrfach direkt hintereinander gespeichert oder von Host A über Host B sofort nach Host C verschoben werden; jede Operation bleibt übertragbar, während Empfänger nur den neuesten Zielhost und Config-Stand materialisieren.
 
 Dadurch ist Sync wiederholbar und sicher erneut ausführbar.
+
+Lokale Snapshot-Rebuilds und Leser verwenden denselben thread- und prozessübergreifenden History-Lock. Ein Snapshot-Commit prüft den vollständig publizierten Zustand gegen seine Operations-/Checkpoint-Historie, einschließlich Sequenzlücken. Alte Snapshots ohne Commit sowie unterbrochene oder veraltete Veröffentlichungen werden beim nächsten Snapshot-Lesen automatisch neu aufgebaut. Das Operation Log bleibt maßgeblich; diese Wiederherstellung startet keine Bots neu und rotiert keine Credentials.
 
 Credential-Protocol-Upgrades sind Zero-Order. Jeder aktualisierte Prozess haelt
 seine eigenen Legacy-CMC-/TradFi-Credentials zuerst ueber einen lokalen

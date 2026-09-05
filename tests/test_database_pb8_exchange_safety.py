@@ -8,8 +8,9 @@ import threading
 import Database as database_module
 
 
-def test_order_fetch_failure_aborts_before_database_mutation(monkeypatch) -> None:
+def test_order_fetch_failure_aborts_before_database_mutation(monkeypatch, tmp_path) -> None:
     """A partial open-order snapshot must not delete previously persisted rows."""
+    monkeypatch.setattr(database_module, "PBGDIR", tmp_path)
     db = object.__new__(database_module.Database)
     db._write_lock = threading.Lock()
     user = SimpleNamespace(name="alice", exchange="weex")

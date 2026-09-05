@@ -10,12 +10,50 @@ import sqlite3
 import json
 import time
 import threading
+from functools import wraps
 from uuid import uuid4
 from database_lock import DatabaseBusyError, acquire_database_lock
 from master_update_lock import acquire_master_runtime_lock
 from secure_files import ensure_private_directory
 from sqlite_backup import backup_sqlite_database, restore_sqlite_backup
 
+DB_MAINTENANCE_PROTOCOL = 1
+
+
+def _guard_database_writes(cls):
+    """Lease complete write operations, never the lifetime of cached connections.
+
+    Include leaf helpers because legacy callers also invoke them directly. Nested
+    SH leases are supported; history/restore/backup already own their admission.
+    """
+    def guarded(method):
+        """Wrap one method without changing its signature or return contract."""
+        @wraps(method)
+        def call(self, *args, **kwargs):
+            """Refuse startup or mutation while recovery/maintenance owns the DB."""
+            try:
+                lease = acquire_database_lock(Path(PBGDIR))
+            except DatabaseBusyError:
+                _human_log(SERVICE, f"Database operation {method.__name__} blocked by maintenance/recovery", level="WARNING")
+                raise
+            with lease:
+                return method(self, *args, **kwargs)
+        return call
+
+    for name in (
+        "__init__", "create_tables", "create_trades_tables", "_repair_bitget_execution_sides",
+        "update_executions", "update_positions", "update_orders", "update_prices", "update_balances",
+        "add_history", "add_position", "add_order", "add_price", "remove_position", "remove_order",
+        "remove_price", "update_position", "update_order", "update_price", "upsert_price",
+        "batch_upsert_prices", "update_balance", "set_last_scan_ts", "fetch_history",
+        "delete_income_by_ids", "delete_income_older_than_user", "delete_income_older_than",
+        "import_from_save_income_other",
+    ):
+        setattr(cls, name, guarded(getattr(cls, name)))
+    return cls
+
+
+@_guard_database_writes
 class Database():
     def __init__(self):
         self.db = Path(f'{PBGDIR}/data/pbgui.db')

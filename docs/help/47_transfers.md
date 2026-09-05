@@ -38,7 +38,11 @@ Some exchange-history rows do not include PBGui's operation UUID. PBGui therefor
 
 Transfer history is separate from Profit Sweep Live intents and Test Transfers. It shows route, requested and received amounts, timestamps, status, and bounded error or reconciliation reasons without exposing addresses, descriptors, signatures, credentials, or raw provider responses.
 
+Unexpected errors after the submission claim are recorded as **Unknown**, preserving the descriptor and nonce and logging only a redacted diagnostic. Hyperliquid uses a persisted, process-safe nonce counter per actual signing address shared by Profit Sweep and manual transfers. Processes on other hosts do not share this counter; use separate API wallets for independent bots or VPS processes. A repeated operation never allocates a replacement nonce.
+
 ## Profit Sweep Handoff
+
+Hyperliquid operation descriptors also bind their nonce to the reserved signer address. Changed signing credentials cannot submit an old descriptor; old or rotated descriptors remain available for history reconciliation. Descriptors created before signer binding are reconciliation-only. Browser signatures are checked against the reserved signer before dispatch.
 
 For a Hyperliquid Vault, **Profit Sweep > Exchange / Vault > Fund account** opens Transfers with that exact account and **Main Perps to Vault** selected. Reconcile an existing `PAUSED_UNKNOWN` Profit Sweep intent before moving funds.
 
@@ -48,3 +52,5 @@ For a Hyperliquid Vault, **Profit Sweep > Exchange / Vault > Fund account** open
 - **Insufficient balance:** reduce the amount below the selected route's fresh **Available to transfer** value.
 - **Minimum rejected:** follow the displayed route minimum; Hyperliquid Vault deposits require at least `5 USDC`.
 - **Unknown:** do not create another identical transfer. Use **Reconcile** for the existing operation.
+
+API calls and local assets preserve the configured ASGI mount prefix behind reverse proxies. Root-relative API URLs also support IPv6 access without reconstructing a malformed origin.
