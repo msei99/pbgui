@@ -6,11 +6,15 @@ from pbgui_purefunc import PBGDIR
 from logging_helpers import human_log as _human_log
 
 SERVICE = "Database"
-import shutil
 import sqlite3
 import json
 import time
 import threading
+from uuid import uuid4
+from database_lock import DatabaseBusyError, acquire_database_lock
+from master_update_lock import acquire_master_runtime_lock
+from secure_files import ensure_private_directory
+from sqlite_backup import backup_sqlite_database, restore_sqlite_backup
 
 class Database():
     def __init__(self):
@@ -107,14 +111,14 @@ class Database():
         local.trades_conn = conn
         return conn
     
-    # Simple full DB backup: copies the SQLite file to backup/db with timestamp name
     def backup_full_db(self, keep_last: int = 10):
+        """Publish a complete SQLite snapshot, including committed WAL records."""
         try:
-            backups_dir = Path(f'{PBGDIR}/data/backup/db')
-            backups_dir.mkdir(parents=True, exist_ok=True)
+            backups_dir = ensure_private_directory(Path(PBGDIR) / 'data' / 'backup' / 'db')
             ts = datetime.now().strftime('%Y%m%d-%H%M%S')
-            backup_path = backups_dir / f'pbgui-{ts}.db'
-            shutil.copy2(self.db, backup_path)
+            backup_path = backups_dir / f'pbgui-{ts}-{uuid4().hex}.db'
+            with acquire_database_lock(Path(PBGDIR)):
+                backup_sqlite_database(self.db, backup_path)
             # Rotate: keep only the last N backups by modified time
             try:
                 backups = sorted(
@@ -143,17 +147,16 @@ class Database():
                 pass
             return None
 
-    # Restore DB from a given backup file path
     def restore_db_from(self, backup_path: str):
+        """Restore via SQLite without replacing files used by cached connections."""
         try:
-            src = Path(backup_path)
-            if not src.exists():
-                return False
-            # Replace current DB with backup
-            shutil.copy2(src, self.db)
+            with acquire_master_runtime_lock(Path(PBGDIR)), acquire_database_lock(Path(PBGDIR), exclusive=True):
+                restore_sqlite_backup(
+                    Path(backup_path), self.db, Path(PBGDIR) / 'data' / 'backup' / 'db',
+                )
             _human_log(
                 SERVICE,
-                f"Restored database from {src.name}",
+                "Restored database from a validated SQLite snapshot",
                 meta={"operation": "restore_db_from"},
             )
             return True
@@ -326,44 +329,46 @@ class Database():
             pass
 
     def update_history(self, user: User):
-        _human_log(SERVICE, f"update_history called for user={getattr(user, 'name', user)}", level='INFO', user=getattr(user, 'name', user))
+        """Keep the complete incremental scan/write cycle on one side of a restore."""
         try:
-            history = self.fetch_history(user)
-        except Exception as e:
-            # Important: don't write partial history data. If the exchange fetch fails,
-            # abort this update run so we can retry later without creating gaps.
-            _human_log(SERVICE, f"update_history aborting for user={user.name}: {e}", level='WARNING', user=user.name)
+            lease = acquire_database_lock(Path(PBGDIR))
+        except DatabaseBusyError:
+            _human_log(SERVICE, "History update deferred during database restore or installation", level='INFO', user=user.name)
             return
-        try:
-            if history is None:
-                _human_log(SERVICE, f"fetch_history returned None for user={user.name}", level='INFO', user=user.name)
-            else:
-                _human_log(SERVICE, f"fetch_history returned {len(history)} items for user={user.name}", level='INFO', user=user.name)
-                if len(history) > 0:
-                    try:
+        with lease:
+            _human_log(SERVICE, f"update_history called for user={getattr(user, 'name', user)}", level='INFO', user=getattr(user, 'name', user))
+            try:
+                history = self.fetch_history(user)
+            except Exception as e:
+                # Do not write partial history after an exchange fetch failure.
+                _human_log(SERVICE, f"update_history aborting for user={user.name}: {e}", level='WARNING', user=user.name)
+                return
+            try:
+                if history is None:
+                    _human_log(SERVICE, f"fetch_history returned None for user={user.name}", level='INFO', user=user.name)
+                else:
+                    _human_log(SERVICE, f"fetch_history returned {len(history)} items for user={user.name}", level='INFO', user=user.name)
+                    if len(history) > 0:
                         _human_log(SERVICE, f"fetch_history sample[0] for {user.name}: {history[0]}", level='DEBUG', user=user.name)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-        # Only hold the global write lock while actually writing rows to the
-        # DB so that long-running REST history fetches don't block price
-        # updates and other quick writes.
-        try:
-            if history:
-                with self._write_lock:
-                    with self._connect() as conn:
-                        for line in history:
-                            income = [
-                                line['symbol'],
-                                line['timestamp'],
-                                line['income'],
-                                line['uniqueid'],
-                                user.name
-                            ]
-                            self.add_history(conn, income)
-        except sqlite3.Error as e:
-            _human_log(SERVICE, f"DB update_history error for {user.name}: {e}", level='ERROR', user=user.name)
+            except Exception:
+                pass
+            # The shared maintenance lease spans the network fetch, but ordinary
+            # price/position writes remain independent of the short write lock.
+            try:
+                if history:
+                    with self._write_lock:
+                        with self._connect() as conn:
+                            for line in history:
+                                income = [
+                                    line['symbol'],
+                                    line['timestamp'],
+                                    line['income'],
+                                    line['uniqueid'],
+                                    user.name
+                                ]
+                                self.add_history(conn, income)
+            except sqlite3.Error as e:
+                _human_log(SERVICE, f"DB update_history error for {user.name}: {e}", level='ERROR', user=user.name)
 
     def find_last_execution_timestamp(self, user: User, exchange: str):
         """Return max(timestamp) from executions for this user/exchange."""

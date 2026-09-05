@@ -53,6 +53,16 @@ def _valid_name(name: str) -> bool:
     return bool(name) and bool(_VALID_DASHBOARD_NAME.match(name))
 
 
+def _validate_grid_dimensions(payload: dict[str, Any]) -> None:
+    """Require the same integer grid bounds supported by the editor."""
+    if not isinstance(payload, dict) or "rows" not in payload or "cols" not in payload:
+        raise HTTPException(status_code=422, detail="Config must contain 'rows' and 'cols'")
+    for key, maximum in (("rows", 10), ("cols", 2)):
+        value = payload[key]
+        if type(value) is not int or not 1 <= value <= maximum:
+            raise HTTPException(status_code=422, detail=f"'{key}' must be an integer between 1 and {maximum}")
+
+
 # --------------------------------------------------------------------------- /users
 
 @router.get("/users")
@@ -116,8 +126,7 @@ def save_template(
     """Save the given dashboard config as a template."""
     if not _valid_name(name):
         raise HTTPException(status_code=400, detail="Invalid template name")
-    if "rows" not in payload or "cols" not in payload:
-        raise HTTPException(status_code=422, detail="Config must contain 'rows' and 'cols'")
+    _validate_grid_dimensions(payload)
     f = _template_file(name)
     tmp = f.with_suffix(".tmp")
     try:
@@ -202,6 +211,7 @@ def dashboards_from_template(
 
     with tf.open() as fh:
         template_config: dict[str, Any] = json.load(fh)
+    _validate_grid_dimensions(template_config)
 
     # ── Simple mode: single dashboard with free name ──────────────────────
     if free_name:
@@ -292,8 +302,7 @@ def save_dashboard(
     """
     if not _valid_name(name):
         raise HTTPException(status_code=400, detail="Invalid dashboard name")
-    if "rows" not in payload or "cols" not in payload:
-        raise HTTPException(status_code=422, detail="Config must contain 'rows' and 'cols'")
+    _validate_grid_dimensions(payload)
     f = _dashboard_file(name)
     # Atomic write: tmp → rename
     tmp = f.with_suffix(".tmp")

@@ -71,7 +71,8 @@
 </div>
 <script>
 (function () {
-  var API_BASE = "%%API_BASE%%";
+  var BASE_PREFIX = new URL('../', window.location.href).pathname.replace(/^\/+/, '/').replace(/\/$/, '');
+  var API_BASE = BASE_PREFIX + '/api';
   var name = %%DASHBOARD_NAME%%;
   var rows = %%DASHBOARD_ROWS%%;
   var cols = %%DASHBOARD_COLS%%;

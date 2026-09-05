@@ -36,23 +36,25 @@ DASHBOARD_REQUEST_FRAGMENTS = [
 ]
 
 
-def test_dashboard_pages_use_cookie_auth_without_rendering_session_token() -> None:
+def test_dashboard_pages_use_cookie_auth_without_rendering_session_token(monkeypatch, tmp_path) -> None:
     """Dashboard HTML should never expose or require the browser session token."""
+    import pbgui_purefunc
+    from starlette.requests import Request
+
+    monkeypatch.setattr(pbgui_purefunc, "PBGDIR", tmp_path)
     class CookieOnlySession:
         """Fail if page rendering attempts to read any session field."""
 
         def __getattr__(self, name):
             raise AssertionError(f"session field accessed: {name}")
 
-    request = SimpleNamespace(
-        url=SimpleNamespace(scheme="http", hostname="testserver", port=80),
-    )
+    request = Request({"type": "http", "root_path": ""})
     responses = [
         dashboard.get_main_page(request, current="", session=CookieOnlySession()),
         dashboard.get_editor_page(
-            name="", api_base="/api", view_only=False, standalone=False, session=CookieOnlySession()
+            request, name="", api_base="/api", view_only=False, standalone=False, session=CookieOnlySession()
         ),
-        dashboard.get_templates_page(current="", api_base="/api", session=CookieOnlySession()),
+        dashboard.get_templates_page(request, current="", api_base="/api", session=CookieOnlySession()),
     ]
 
     for response in responses:
@@ -114,10 +116,10 @@ def test_dashboard_top_dequeued_old_reconnect_cannot_create_socket() -> None:
         const timers = [];
 
         global.window = global;
-        window.location = {{ protocol: 'http:' }};
+        window.location = {{ protocol: 'http:', host: 'localhost', href: 'http://localhost/app/dashboard_top.html' }};
         global.document = {{ getElementById: function () {{ return {{}}; }} }};
         global.DashRender = {{
-            VERSION: '20260812b',
+            VERSION: '20260904a',
             injectCSS: function () {{}}
         }};
         window.DashRender = global.DashRender;
@@ -205,7 +207,7 @@ def test_dashboard_top_older_fetch_cannot_overwrite_newer_render() -> None:
         const container = {{ appendChild: function () {{}}, innerHTML: '' }};
 
         global.window = global;
-        window.location = {{ protocol: 'http:' }};
+        window.location = {{ protocol: 'http:', host: 'localhost', href: 'http://localhost/app/dashboard_top.html' }};
         global.document = {{
             getElementById: function () {{ return container; }},
             createElement: function () {{
@@ -214,7 +216,7 @@ def test_dashboard_top_older_fetch_cannot_overwrite_newer_render() -> None:
             createTextNode: function () {{ return {{}}; }}
         }};
         global.DashRender = {{
-            VERSION: '20260812b',
+            VERSION: '20260904a',
             injectCSS: function () {{}},
             buildTop: function (target, data) {{ renders.push(data.id); }}
         }};
@@ -288,10 +290,10 @@ def test_dashboard_positions_waits_for_live_before_rendering_db_fallback() -> No
         const container = {{ appendChild: function () {{}}, innerHTML: '' }};
 
         global.window = global;
-        window.location = {{ protocol: 'http:' }};
+        window.location = {{ protocol: 'http:', host: 'localhost', href: 'http://localhost/app/dashboard_positions.html' }};
         global.document = {{ getElementById: function () {{ return container; }} }};
         global.DashRender = {{
-            VERSION: '20260812b',
+            VERSION: '20260904a',
             injectCSS: function () {{}},
             buildPositions: function (target, data) {{ renders.push(data.id); }}
         }};

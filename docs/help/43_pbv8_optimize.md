@@ -188,6 +188,8 @@ Suite summaries keep their configured objective and scenario names and support `
 
 Result actions are enabled only when their required artifacts exist. A verified optimizer blocks deletion only for the exact immediate result directory that it or one of its recursive children has open. Unrelated older results remain deletable. Continuation queue sources and Pareto Dash sessions remain exact deletion blockers, and uncertain active-process ownership is handled conservatively. Batch deletion preserves these conflict details and stages selected directories atomically. Pareto Dash runs through a credential-isolated, bounded PBGui proxy with idle cleanup and verified orphan recovery. Its PBGui window can be moved by its header and resized from every edge or corner, while the dashboard retains PB8's original native presentation.
 
+Deletion accepts only complete, top-level run directories below the managed result root. Nested artifacts such as `run/pareto`, hidden staging directories, and parent/root selectors are rejected before any move or removal, including batch requests. Nested paths remain available for reading candidates and selecting seeds.
+
 ## Archives
 
 PB8 Optimize configurations and PB8 Backtest results use the existing Archive workflow. Files are stored under their `config_version`, so PB7 and PB8 content cannot overwrite each other. Import, export, view, delete, restore, and handoff actions always use the parser belonging to the archived configuration version.

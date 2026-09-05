@@ -68,6 +68,10 @@ PB8 kann beim Backtest historische Daten herunterladen. Config, Exchanges, Coin-
 
 Exchange-Listen in Backtest-/Rebacktest-Dialogen verwenden eine modifier-freie Toggle-Auswahl: Ein Klick auf eine nicht ausgewaehlte Exchange fuegt sie hinzu, ohne bestehende Auswahlen zu leeren; ein Klick auf eine ausgewaehlte Exchange entfernt nur diese Exchange.
 
+Wird ein Results-Rebacktest oder Queue-Draft in mehrere Exchange-Jobs aufgeteilt, erhalten die Namen einen Exchange-Suffix wie `_binance` oder `_bybit`, damit die Ausgabeverzeichnisse getrennt bleiben. Einzel-Exchange-Jobs und Drafts mit erhaltener Exchange-Gruppe behalten ihre bisherigen Namen.
+
+Die gemeinsamen Parameterdialoge stellen Startbalances nur als endliche Zahlen dar. Ungueltige oder nicht endliche Draft-/Archivwerte verwenden den Dialogstandard statt als HTML zu wirken; den Wert vor dem Einreihen pruefen.
+
 Die Results-Toolbar besitzt einen persistenten **Columns**-Picker. **Defaults** stellt die vergleichbare ungewichtete Result-Tabelle wieder her; **All** zeigt zusaetzlich verfuegbare gewichtete Metriken sowie Final Equity und Equity/Balance Difference. Diese browserlokale Auswahl ist vom Archiv getrennt.
 
 Die Panel-Navigation schliesst die Config-Editor-Sidebar synchron, bevor Results-, Queue-, Archive- oder Refine-Aktionen angezeigt werden. Verzoegerter Editor-Zustand kann dadurch keine falsche Sidebar am aktiven Panel hinterlassen.

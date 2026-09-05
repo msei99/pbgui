@@ -68,6 +68,10 @@ PB8 may download historical data when a backtest starts. Review the config, exch
 
 Exchange lists in Backtest/Rebacktest dialogs use modifier-free toggle selection: clicking an unselected exchange adds it without clearing existing choices, while clicking a selected exchange removes only that exchange.
 
+When a Results rebacktest or queue draft splits into multiple exchange jobs, names receive an exchange suffix such as `_binance` or `_bybit` to keep their output directories separate. Single-exchange jobs and drafts that preserve a configured exchange group keep their original names.
+
+The shared parameter dialogs render starting balances only as finite numbers. Invalid or non-finite draft/archive values use the dialog default instead of becoming HTML; review the value before queueing.
+
 The Results toolbar includes a persistent **Columns** picker. **Defaults** restores the comparable unweighted result table, while **All** also exposes available weighted metrics, Final Equity, and Equity/Balance Difference values. This browser-local selection is independent from Archive.
 
 Panel navigation synchronously closes the Config editor sidebar before showing Results, Queue, Archive, or Refine actions, so delayed editor state cannot leave the wrong sidebar attached to the active panel.

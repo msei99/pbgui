@@ -25,6 +25,10 @@ Der Standardbereich **Overview** fasst den aktuellen lokalen Zustand zusammen:
 
 Dieser Bereich ist als schneller Kontrollpunkt nach dem ersten Start, nach Passwortwechseln oder nach Pfad-Anpassungen gedacht.
 
+Die Browser-Authentifizierung verwendet ein geschuetztes HttpOnly-Session-Cookie statt eines Tokens in Seitenskripten oder URLs. Die Navigation richtet sich nach dem von der API gemeldeten Anmeldestatus. Im No-Login-Modus erhalten getrennte Browser eigene Sessions, auch hinter demselben Proxy oder derselben oeffentlichen IP-Adresse. Das Abmelden eines Browsers meldet die anderen nicht ab.
+
+Der erste Seitenaufruf im No-Login-Modus stellt keine Session aus. Welcome richtet das Cookie mit einem Same-Origin-POST ein, auch ueber HTTP-LAN-Adressen. Schreibzugriffe im Browser und WebSockets erfordern exakt den PBGui-Origin; eine benachbarte Subdomain gilt nicht als gleich. Seiten koennen nur vom selben Origin eingebettet werden. Bei HTTP 403 hinter einem Reverse Proxy den sichtbaren Host und das vertrauenswuerdig weitergegebene Schema pruefen, statt die Kontrollen abzuschalten.
+
 Die Problemliste zeigt ausserdem dauerhaft eine Sicherheitswarnung, wenn PBGui auf allen Interfaces lauscht und noch das bekannte alte Standardpasswort verwendet. PBGui kann externe NAT- oder Firewall-Regeln nicht selbst pruefen. Stelle daher sicher, dass der API-Port nur ueber VPN oder vertrauenswuerdige Netze erreichbar ist, oder setze ein individuelles Passwort. Neue Installer-Laeufe erzeugen automatisch ein individuelles Passwort; bei Remote-Installationen ist der PBGui-Port standardmaessig nur fuer das konfigurierte OpenVPN-Netz freigegeben.
 
 Wenn wiederholte fehlgeschlagene Logins eine temporaere Sperre ausloesen, zeigt die Problemliste eine Warnung mit der letzten direkten Client-Adresse und dem Ereigniszeitpunkt. **Acknowledge** blendet diese Warnung global aus, waehrend Login-Sicherheitsstatus und behaltene Historie sichtbar bleiben. Ein neuerer Lockout aktiviert die Warnung automatisch erneut.

@@ -5,7 +5,7 @@
      All rendering delegated to DashRender.buildOrders() — single source of truth.
      Listens for dash-pos-selected events from a linked Positions widget.
      Uses TradingView Lightweight Charts (Apache 2.0) for native candlestick rendering. -->
-<script src="/app/vendor/lightweight-charts.standalone.production.js?v=1"></script>
+<script src="vendor/lightweight-charts.standalone.production.js?v=1"></script>
 
 <div id="do-container-%%POSITION%%" style="width:100%;"></div>
 
@@ -13,8 +13,9 @@
 (function () {
     'use strict';
 
-    var API_BASE   = "%%API_BASE%%";
-    var API_HOST   = "%%API_HOST%%";
+    var BASE_PREFIX = new URL('../', window.location.href).pathname.replace(/^\/+/, '/').replace(/\/$/, '');
+    var API_BASE   = BASE_PREFIX + '/api';
+    var API_HOST   = window.location.host;
     var POSITION   = "%%POSITION%%";
     var LINKED_POS = "%%LINKED_POS%%";
     var TIMEFRAME  = "%%TIMEFRAME%%";
@@ -117,7 +118,7 @@
             try { candleWs.close(); } catch (_) {}
         }
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
-        var url = proto + '://' + API_HOST + '/ws/candles'
+        var url = proto + '://' + API_HOST + BASE_PREFIX + '/ws/candles'
             + '?user='  + encodeURIComponent(selectedPosition.user)
             + '&symbol=' + encodeURIComponent(selectedPosition.symbol)
             + '&side='  + encodeURIComponent(selectedPosition.side || 'long')
@@ -280,7 +281,7 @@
         if (!isCurrentGeneration() || !API_HOST) return;
         clearTimeout(reconnTimer);
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
-        var socket = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard');
+        var socket = new WebSocket(proto + '://' + API_HOST + BASE_PREFIX + '/ws/dashboard');
         ws = socket;
         window[_wsKey] = socket;
         socket.onopen = function () {
@@ -305,7 +306,7 @@
         };
     }
 
-    var DR_VERSION = '20260812b';
+    var DR_VERSION = '20260904a';
 
     function _loadRenderScript(cb) {
         if (window.DashRender && window.DashRender.VERSION !== DR_VERSION) {
@@ -316,9 +317,8 @@
         if (window.DashRender) { cb(); return; }
         if (window._drLoading) { setTimeout(function () { _loadRenderScript(cb); }, 50); return; }
         window._drLoading = true;
-        var proto = (window.location.protocol === 'https:') ? 'https' : 'http';
         var s = document.createElement('script');
-        s.src = proto + '://' + API_HOST + '/app/dashboard_render.js?v=' + DR_VERSION;
+        s.src = BASE_PREFIX + '/app/dashboard_render.js?v=' + DR_VERSION;
         s.onload  = function () { window._drLoading = false; cb(); };
         s.onerror = function () { window._drLoading = false; cb(); };
         document.head.appendChild(s);

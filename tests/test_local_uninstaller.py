@@ -14,8 +14,10 @@ import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from fastapi import HTTPException, Response
 from starlette.requests import Request
+from starlette.datastructures import Headers, URL
 from starlette.websockets import WebSocketState
 
 from api import api_keys, auth, dashboards
@@ -25,6 +27,22 @@ from secure_files import harden_sensitive_paths
 from setup.installer import core
 from setup.installer import web
 import task_queue
+
+
+@pytest.fixture(autouse=True)
+def isolate_auth_and_installer_runtime(monkeypatch, tmp_path):
+    """Keep auth history, sessions, setup discovery, and installer home lookups isolated."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(auth, "PBGDIR", tmp_path)
+    monkeypatch.setattr(auth, "pb7_runtime_status", lambda: {})
+    monkeypatch.setattr(auth, "pb8_runtime_status", lambda: {})
+    monkeypatch.setattr(auth, "_clear_vps_manager_secrets", lambda _token: None)
+    monkeypatch.setattr(auth, "_login_attempts", {})
+    monkeypatch.setattr(auth, "_login_security_history_loaded", False)
+    monkeypatch.setattr(auth, "_login_block_count", 0)
+    monkeypatch.setattr(auth, "_login_last_block", None)
 
 
 def _write_unit(home: Path, unit: str, pbgui_dir: Path) -> Path:
@@ -338,7 +356,9 @@ def test_login_sets_secure_httponly_session_cookie(monkeypatch) -> None:
     result = auth.login(auth.LoginRequest(password="secret"), request, response)
 
     cookie = response.headers.get("set-cookie", "")
-    assert result["auth"]["token"] == "cookie-token"
+    assert result["auth"]["authenticated"] is True
+    assert "token" not in result["auth"]
+    assert session.token not in json.dumps(result)
     assert f"{auth._request_session_cookie_name(request)}=cookie-token" in cookie
     assert "HttpOnly" in cookie
     assert "Secure" in cookie
@@ -382,7 +402,7 @@ def _prepare_login_throttle_test(monkeypatch, clock: dict[str, float]) -> None:
         },
     )
     monkeypatch.setattr(auth, "generate_token", lambda *args, **kwargs: session)
-    monkeypatch.setattr(auth, "_bootstrap_payload", lambda current: {"auth": {"token": current.token}})
+    monkeypatch.setattr(auth, "_bootstrap_payload", lambda current: {"auth": {"authenticated": current is not None}})
 
 
 def _attempt_login(password: str, client_host: str) -> dict | HTTPException:
@@ -415,7 +435,7 @@ def test_login_throttle_blocks_fifth_failure_and_honors_retry_after(monkeypatch)
     clock["now"] += 31
     success = _attempt_login("secret", "198.51.100.10")
     assert isinstance(success, dict)
-    assert success["auth"]["token"] == "test-token"
+    assert success["auth"]["authenticated"] is True
     assert "198.51.100.10" not in auth._login_attempts
 
 
@@ -588,7 +608,7 @@ def test_explicit_disable_rotates_sessions_and_persists_mode(monkeypatch) -> Non
     monkeypatch.setattr(
         auth,
         "_bootstrap_payload",
-        lambda session: {"auth": {"auth_mode": "disabled", "token": session.token}},
+        lambda session: {"auth": {"auth_mode": "disabled", "authenticated": session is not None}},
     )
     monkeypatch.setattr(auth, "_log", lambda *args, **kwargs: None)
     response = Response()
@@ -604,7 +624,8 @@ def test_explicit_disable_rotates_sessions_and_persists_mode(monkeypatch) -> Non
 
     assert written == {"auth_mode": "disabled", "password": ""}
     revoke_all.assert_awaited_once()
-    assert result["auth"]["token"] == "new-token"
+    assert result["auth"]["authenticated"] is True
+    assert "token" not in result["auth"]
     assert result["message"] == "Authentication disabled"
     assert f"{auth._session_cookie_name('pbgui.test')}=new-token" in response.headers["set-cookie"]
 
@@ -626,7 +647,7 @@ def test_password_can_reenable_authentication_without_current_password(monkeypat
     monkeypatch.setattr(
         auth,
         "_bootstrap_payload",
-        lambda session: {"auth": {"auth_mode": "password", "token": session.token}},
+        lambda session: {"auth": {"auth_mode": "password", "authenticated": session is not None}},
     )
     monkeypatch.setattr(auth, "_log", lambda *args, **kwargs: None)
 
@@ -645,14 +666,17 @@ def test_password_can_reenable_authentication_without_current_password(monkeypat
 
 
 def test_passwordless_sessions_are_reused_per_direct_client(monkeypatch, tmp_path) -> None:
-    """Repeated no-login page loads from one client do not create token-file floods."""
+    """Repeated page loads reuse the client's authenticated session, not its IP address."""
     monkeypatch.setattr(auth, "PBGDIR", tmp_path)
     monkeypatch.setattr(auth, "_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auth, "_password_state", lambda: {"required": False, "error": None})
 
     first = auth._get_or_create_passwordless_session("198.51.100.10")
-    second = auth._get_or_create_passwordless_session("198.51.100.10")
+    request = _login_request("198.51.100.10")
+    response = auth.main_page(request, session=first)
 
-    assert second.token == first.token
+    assert response.status_code == 200
+    assert f"{auth._request_session_cookie_name(request)}={first.token}" in response.headers["set-cookie"]
     assert len(list((tmp_path / "data" / "api_tokens").glob("*.json"))) == 1
 
 
@@ -866,6 +890,9 @@ def test_logout_immediately_closes_token_websockets(monkeypatch) -> None:
     """Logout revokes the token cookie and closes every active privileged socket."""
     session = auth.SessionToken(token="socket-token", user_id="test", created_at=1, expires_at=9999999999)
     websocket = MagicMock()
+    websocket.scope = {"type": "websocket"}
+    websocket.headers = Headers({"host": "pbgui.test", "origin": "https://pbgui.test"})
+    websocket.url = URL("wss://pbgui.test/ws/test")
     websocket.cookies = {auth.SESSION_COOKIE_NAME: session.token}
     websocket.client_state = WebSocketState.CONNECTED
     websocket.state = SimpleNamespace()
@@ -900,6 +927,9 @@ def test_expired_session_closes_active_websocket(monkeypatch) -> None:
     """The watchdog closes a privileged socket as soon as its session expires."""
     session = auth.SessionToken(token="expiring-token", user_id="test", created_at=1, expires_at=2)
     websocket = MagicMock()
+    websocket.scope = {"type": "websocket"}
+    websocket.headers = Headers({"host": "pbgui.test", "origin": "https://pbgui.test"})
+    websocket.url = URL("wss://pbgui.test/ws/test")
     websocket.cookies = {auth.SESSION_COOKIE_NAME: session.token}
     websocket.client_state = WebSocketState.CONNECTED
     websocket.state = SimpleNamespace()

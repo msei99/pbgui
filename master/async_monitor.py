@@ -6035,6 +6035,11 @@ class VPSMonitor:
 
     async def _collect_instances(self, hostname: str):
         """Collect bot instances from the monitor-agent cache on a single VPS."""
+        # A refresh may publish diagnostics and then fail before replacing the rows.
+        # Retain visible data, but revoke its delete-authorizing freshness first.
+        if hostname in self.store.v8_instances:
+            self.store.update_v8_instances(hostname, self.store.v8_instances[hostname])
+        snapshot_checked_at = time.time()
         parsed = await self._read_monitor_agent_json(
             hostname,
             "instance_snapshot.json",
@@ -6063,7 +6068,11 @@ class VPSMonitor:
                 enriched_monitors.append(item)
             self.store.update_instances(hostname, enriched_monitors)
             self.store.update_v7_instances(hostname, v7_list)
-            self.store.update_v8_instances(hostname, v8_list)
+            self.store.update_v8_instances(
+                hostname, v8_list,
+                snapshot_generated_at=parsed.get('generated_at'),
+                snapshot_checked_at=snapshot_checked_at,
+            )
             self.store.update_bot_logs(hostname, bot_logs if isinstance(bot_logs, dict) else {})
             self._cache_host_snapshot(hostname)
             if self.debug_logging:

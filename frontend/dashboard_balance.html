@@ -57,8 +57,9 @@
 <script>
 (function () {
     // Config injected directly by the dashboard view renderer.
-    var API_BASE = "%%API_BASE%%";
-    var API_HOST = "%%API_HOST%%";
+    var BASE_PREFIX = new URL('../', window.location.href).pathname.replace(/^\/+/, '/').replace(/\/$/, '');
+    var API_BASE = BASE_PREFIX + '/api';
+    var API_HOST = window.location.host;
     var EDIT_MODE = %%EDIT_MODE%%;
     var selectedUsers = %%USERS%%;
     var allUsers = %%ALL_USERS%%;
@@ -82,7 +83,7 @@
         }
     }
 
-    var DR_VERSION = '20260812b';
+    var DR_VERSION = '20260904a';
 
     /* Load dashboard_render.js once (CSS + shared render primitives) */
     function _loadRenderScript(cb) {
@@ -94,9 +95,8 @@
         if (window.DashRender) { cb(); return; }
         if (window._drLoading) { setTimeout(function () { _loadRenderScript(cb); }, 50); return; }
         window._drLoading = true;
-        var proto = (window.location.protocol === 'https:') ? 'https' : 'http';
         var s = document.createElement('script');
-        s.src = proto + '://' + API_HOST + '/app/dashboard_render.js?v=' + DR_VERSION;
+        s.src = BASE_PREFIX + '/app/dashboard_render.js?v=' + DR_VERSION;
         s.onload  = function () { window._drLoading = false; cb(); };
         s.onerror = function () { window._drLoading = false; cb(); };   // fallback: continue anyway
         document.head.appendChild(s);
@@ -394,7 +394,7 @@
         if (!API_HOST) return;
         clearTimeout(reconnTimer);
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
-        ws = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard');
+        ws = new WebSocket(proto + '://' + API_HOST + BASE_PREFIX + '/ws/dashboard');
         window._dbBalanceWs = ws;
         ws.onopen    = function() { if (isStale()) { ws.close(); return; } reconnDelay = 1000; };
         ws.onmessage = function(evt) {

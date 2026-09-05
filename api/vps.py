@@ -709,17 +709,7 @@ async def _local_kill_instance(name: str, pb_version: str) -> dict:
             runner.pb7dir = pbrun.pb7dir
             runner.pb7venv = pbrun.pb7venv
 
-        config_path = Path(runner.path) / "config.json"
-        if not config_path.exists():
-            return {"type": "result", "cmd": "kill_instance",
-                    "host": "local", "name": name,
-                    "success": False, "pid": None}
-
-        if not runner.load():
-            return {"type": "result", "cmd": "kill_instance",
-                    "host": "local", "name": name,
-                    "success": False, "pid": None}
-
+        # Stopping must also work when the config no longer permits a start.
         process = runner.pid()
         if process is None:
             return {"type": "result", "cmd": "kill_instance",

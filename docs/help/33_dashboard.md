@@ -5,6 +5,8 @@ After an approved PBGui AI dashboard creation or layout change, the open Dashboa
 The **Dashboards** page provides a fully customisable portfolio overview for your live Passivbot instances.
 You can build multi-widget layouts, combine data from multiple users, and rearrange everything freely.
 
+Dashboard APIs, renderer scripts and WebSockets stay on PBGui's own origin, preserving a server-configured mount prefix. An `api_base` query parameter cannot select another server. Editor/template messages are accepted only from their expected same-origin parent or iframe, and external sites cannot frame the pages.
+
 ---
 
 ## Viewing a dashboard
@@ -69,6 +71,8 @@ You can also **drag** a widget type from the **palette** on the right of the too
 
 Each cell has a **resize handle** at the bottom-right corner. Drag it to make the cell taller or shorter. The height is stored per cell in the dashboard.
 
+Releasing outside the editor or leaving the browser window ends the resize and restores scrolling.
+
 ### Cell configuration panel
 
 Each cell shows a compact configuration area directly below the header:
@@ -115,6 +119,20 @@ Makes it easy to see which coins drive gains or losses over a time period.
 
 A **line chart** of cumulative income over time, with one line per symbol.
 Useful for identifying the best and worst performing coins over the selected period.
+
+In Table mode, income rows initially appear newest first. Clicking **Date** reverses the sort direction.
+
+#### Restoring an income backup
+
+The restore picker restores the complete local `pbgui.db` snapshot, not only the visible income rows. The separate trades database is unchanged.
+
+- Backups include committed WAL data. Restore validates a private snapshot, SQLite integrity, and the PBGui schema before changing live data; linked files and incomplete WAL-dependent backups are rejected.
+- Snapshot schema is checked before integrity expressions run. Triggers, views, virtual tables and unsupported expressions are rejected; SQLite parsing and allocation limits also reject oversized content. Restore is for compatible PBGui snapshots, not arbitrary SQLite files.
+- Restore uses one SQLite transaction without replacing the live database file or deleting its WAL/SHM files. Existing readers can finish their current snapshot; subsequent reads see the restored data.
+- PBData is not stopped by restore. Its incremental history scans, local DB Sync cycles and user imports cannot overlap restore admission. A busy database, active scan, local install or master operation can return HTTP 409; wait for the operation to finish before retrying.
+- API restart is blocked while restore is active. Failed or timed-out unfinished restores roll back; temporary files and leases are released.
+- Live collection resumes after restore and can immediately update current balances, prices, positions, and history. After installing this fix, reload both the API and PBData before using restore so all processes use the new coordination; older detached DB Sync workers must finish first.
+- Income deletion is refused if its automatic safety backup cannot be created.
 
 Extra controls:
 - **Last N** — show only the top-N symbols by absolute value
@@ -177,6 +195,8 @@ Controls:
 Templates are **pre-built dashboard layouts** you can use as a starting point.
 Instead of building a grid from scratch, apply a template to instantly fill the cells with a sensible widget arrangement.
 
+After creating dashboards from a template, the panel closes and the last successfully created dashboard opens. Failed or skipped creations are not selected.
+
 ### Applying a template
 
 1. In the sidebar, click 📋 **Templates**.
@@ -205,6 +225,8 @@ Instead of building a grid from scratch, apply a template to instantly fill the 
 4. Assign a widget type to each cell (drag from palette or click the type badge).
 5. Configure each widget (users, time period, links between cells).
 6. Click 💾 — the dashboard is saved and immediately shown in the live view.
+
+Cancelling an unsaved new dashboard returns to an idle content area without a loading spinner.
 
 ---
 

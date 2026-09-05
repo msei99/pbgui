@@ -47,6 +47,7 @@ from fastapi.staticfiles import StaticFiles
 from secure_files import harden_sensitive_paths
 
 from api.auth import (
+    BrowserOriginMiddleware,
     SessionToken,
     auth_runtime_status,
     authenticate_websocket,
@@ -291,12 +292,14 @@ async def _restart_block_state() -> tuple[bool, str]:
     from api.cluster import restart_block_reason as cluster_restart_block_reason
     from api.coin_data import restart_block_reason as coin_data_restart_block_reason
     from api.db_tools import restart_block_reason as db_tools_restart_block_reason
+    from api.dashboard import restart_block_reason as dashboard_restart_block_reason
     from api.pareto_explorer import restart_block_reason as pareto_restart_block_reason
 
     local_reasons = [
         reason
         for reason in (
             db_tools_restart_block_reason(),
+            dashboard_restart_block_reason(),
             cluster_restart_block_reason(),
             coin_data_restart_block_reason(),
             pareto_restart_block_reason(),
@@ -970,6 +973,9 @@ async def redirect_unauthenticated_page(request: Request, call_next):
         response = redirect or response
         response.headers["X-Request-ID"] = request_id
         return response
+
+# Register last so rejected browser requests never reach URL-based request logging.
+app.add_middleware(BrowserOriginMiddleware)
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(ai_router, prefix="/api/ai", tags=["ai"])

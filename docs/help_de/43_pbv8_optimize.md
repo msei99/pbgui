@@ -188,6 +188,8 @@ Suite-Summaries behalten ihre konfigurierten Objective- und Szenarionamen und un
 
 Result-Aktionen sind nur aktiv, wenn ihre benoetigten Artefakte vorhanden sind. Ein verifizierter Optimizer blockiert das Loeschen nur fuer das exakte direkte Result-Verzeichnis, aus dem er oder einer seiner rekursiven Child-Prozesse eine Datei geoeffnet hat. Nicht zugehoerige aeltere Results bleiben loeschbar. Continue-Queue-Quellen und Pareto-Dash-Sessions bleiben exakte Loeschblocker; unsichere Ownership eines aktiven Prozesses wird konservativ behandelt. Batch-Loeschen erhaelt diese Konfliktdetails und staged die ausgewaehlten Verzeichnisse atomar. Pareto Dash laeuft ueber einen Credential-isolierten, begrenzten PBGui-Proxy mit Idle-Cleanup und verifizierter Orphan-Recovery. Das PBGui-Fenster kann am Header verschoben und an allen Kanten und Ecken vergroessert oder verkleinert werden; das Dashboard behaelt die urspruengliche native PB8-Darstellung.
 
+Loeschen akzeptiert nur vollstaendige Run-Verzeichnisse direkt unter dem verwalteten Result-Root. Verschachtelte Artefakte wie `run/pareto`, versteckte Staging-Verzeichnisse sowie Parent-/Root-Selektoren werden vor jedem Verschieben oder Entfernen abgelehnt, auch bei Batch-Anfragen. Verschachtelte Pfade bleiben zum Lesen von Kandidaten und zur Seed-Auswahl verfuegbar.
+
 ## Archive
 
 PB8-Optimize-Configs und PB8-Backtest-Ergebnisse verwenden den bestehenden Archive-Workflow. Dateien werden unter ihrer `config_version` gespeichert, damit PB7- und PB8-Inhalte einander nicht ueberschreiben. Import, Export, Ansicht, Loeschen, Restore und Handoffs verwenden immer den Parser der archivierten Config-Version.

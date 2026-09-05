@@ -19,6 +19,12 @@ Die **🟢 PBAPIServer ●** / **🔴 PBAPIServer ○** Schaltfläche in der Sid
 
 Alle Einstellungen mit der **💾** Schaltfläche in der Sidebar speichern.
 
+## Browser-Sicherheit
+
+Cookie-authentifizierte Schreibzugriffe werden vor dem Routing geprueft. Der Browser-Origin muss dem effektiven PBGui-Schema, Host und Port entsprechen; ohne Origin ist ein vertrauenswuerdiger Same-Origin-Browsernachweis erforderlich. Browser-WebSockets benoetigen immer den exakten Origin. Gueltige explizite Bearer-Zugangsdaten bleiben fuer externe REST-Clients verfuegbar; ungueltige Authorization-Header fallen niemals auf ein Cookie zurueck. CORS-Ausnahmen umgehen diese Cookie-Pruefung nicht.
+
+Externer Host und Schema muessen durch einen vertrauenswuerdigen Reverse Proxy konsistent bleiben. IPv6-Adressen und LAN-Hostnamen mit Unterstrichen werden unterstuetzt. HTML-Antworten einschliesslich statischer Seiten verbieten fremde Frames, waehrend Same-Origin-Anwendungsframes weiter funktionieren.
+
 ## Log
 
 Alle PBAPIServer-Aktivitäten werden in `PBApiServer.log` protokolliert, sichtbar im Log-Viewer des Haupttabs.

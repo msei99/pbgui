@@ -99,6 +99,10 @@ After adjusting them click **Apply Filters** to update the approved/ignored list
 
 Shows all pending, running and finished backtest jobs with live status updates.
 
+When a Results rebacktest or queue draft splits into multiple exchange jobs, names receive an exchange suffix such as `_binance` or `_bybit` to keep their output directories separate. Single-exchange jobs keep their original names.
+
+Backtest parameter dialogs treat imported starting balances as finite numbers, never as HTML. Invalid or non-finite stored values fall back to the dialog default; review the displayed balance before queueing.
+
 ### Table columns
 
 | Column | Description |

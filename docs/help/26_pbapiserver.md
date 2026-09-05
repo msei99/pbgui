@@ -19,6 +19,12 @@ Open **Settings** from the sidebar to configure:
 
 Save all settings with the **💾** button in the sidebar.
 
+## Browser Security
+
+Cookie-authenticated writes are checked before routing. The browser's Origin must match the effective PBGui scheme, host and port; absent Origin requires trustworthy same-origin browser evidence. Browser WebSockets always require an exact Origin. Valid explicit Bearer credentials remain available for external REST clients; invalid Authorization headers never fall back to a cookie. CORS configuration does not exempt cookie requests from these checks.
+
+Keep the external Host and scheme consistent through a trusted reverse proxy. IPv6 literals and LAN hostnames containing underscores are supported. HTML responses, including static pages, disallow cross-origin framing while retaining same-origin application frames.
+
 ## Log
 
 All PBAPIServer activity is logged to `PBApiServer.log`, visible in the log viewer on the main tab.

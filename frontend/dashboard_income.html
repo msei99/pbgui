@@ -4,7 +4,7 @@
      Config injected as JS variables (%%PLACEHOLDER%%).
      All rendering delegated to DashRender.buildIncome() — single source of truth.
      Data updates driven by WebSocket income_updated events — zero polling. -->
-<script src="/app/plotly.min.js?v=1"></script>
+<script src="plotly.min.js?v=1"></script>
 
 <div id="di-container-%%POSITION%%" style="width:100%;"></div>
 
@@ -12,8 +12,9 @@
 (function () {
     'use strict';
 
-    var API_BASE = "%%API_BASE%%";
-    var API_HOST = "%%API_HOST%%";
+    var BASE_PREFIX = new URL('../', window.location.href).pathname.replace(/^\/+/, '/').replace(/\/$/, '');
+    var API_BASE = BASE_PREFIX + '/api';
+    var API_HOST = window.location.host;
     var USERS    = %%USERS%%;
     var PERIOD   = "%%PERIOD%%";
     var LAST_N   = %%LAST_N%%;
@@ -257,7 +258,7 @@
         if (!isCurrentGeneration() || !API_HOST) return;
         clearTimeout(reconnTimer);
         var proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
-        var socket = new WebSocket(proto + '://' + API_HOST + '/ws/dashboard');
+        var socket = new WebSocket(proto + '://' + API_HOST + BASE_PREFIX + '/ws/dashboard');
         ws = socket;
         window[_wsKey] = socket;
         socket.onopen = function () {
@@ -293,7 +294,7 @@
         else { setTimeout(function () { waitForPlotly(cb); }, 50); }
     }
 
-    var DR_VERSION = '20260812b';
+    var DR_VERSION = '20260904a';
 
     function _loadRenderScript(cb) {
         /* Force reload if a stale version of DashRender is cached in window */
@@ -305,9 +306,8 @@
         if (window.DashRender) { cb(); return; }
         if (window._drLoading) { setTimeout(function () { _loadRenderScript(cb); }, 50); return; }
         window._drLoading = true;
-        var proto = (window.location.protocol === 'https:') ? 'https' : 'http';
         var s = document.createElement('script');
-        s.src = proto + '://' + API_HOST + '/app/dashboard_render.js?v=' + DR_VERSION;
+        s.src = BASE_PREFIX + '/app/dashboard_render.js?v=' + DR_VERSION;
         s.onload  = function () { window._drLoading = false; cb(); };
         s.onerror = function () { window._drLoading = false; cb(); };
         document.head.appendChild(s);

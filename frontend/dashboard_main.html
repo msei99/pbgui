@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!-- PBGui Dashboard — standalone FastAPI page.
      Full dashboard view/edit experience with PBGui navigation.
-     Injected placeholders: API_BASE, WS_BASE, CURRENT, DASHBOARDS_JSON
+     Injected placeholders: API_BASE, CURRENT, DASHBOARDS_JSON
 -->
 <html lang="en">
 <head>
@@ -791,7 +791,6 @@ html, body {
 
   /* ── injected by FastAPI ── */
   var API_BASE   = "%%API_BASE%%";
-  var WS_BASE    = "%%WS_BASE%%";
   var VERSION    = "%%VERSION%%";
   var CURRENT    = "%%CURRENT%%";
   var DASHBOARDS = %%DASHBOARDS_JSON%%;
@@ -835,7 +834,6 @@ html, body {
     contentFrame.classList.remove('visible');
     var url = API_BASE + '/dashboard/editor_page'
       + '?name='      + encodeURIComponent(name)
-      + '&api_base='  + encodeURIComponent(API_BASE)
       + '&view_only=1';
     if (forceReload) url += '&refresh=' + Date.now();
     contentFrame.src = url;
@@ -856,7 +854,6 @@ html, body {
     contentFrame.classList.remove('visible');
     var url = API_BASE + '/dashboard/editor_page'
       + '?name='       + encodeURIComponent(name || '')
-      + '&api_base='   + encodeURIComponent(API_BASE)
       + '&standalone=1';
     contentFrame.src = url;
     contentFrame.onload = function () {
@@ -898,7 +895,7 @@ html, body {
           btn.innerHTML = '&#128190;';
           btn.addEventListener('click', function () {
             if (contentFrame.contentWindow) {
-              contentFrame.contentWindow.postMessage({ type: 'pbgui_trigger_view_save' }, '*');
+              contentFrame.contentWindow.postMessage({ type: 'pbgui_trigger_view_save' }, location.origin);
             }
           });
           tplBtn.parentNode.insertBefore(btn, tplBtn.nextSibling);
@@ -918,10 +915,10 @@ html, body {
         '<button class="sb-btn"               id="sb-cancel" title="Cancel edit">&#x2715;</button>' +
         '<button class="sb-btn danger"         id="sb-delete" title="Delete dashboard">&#128465;</button>';
       document.getElementById('sb-save').addEventListener('click', function () {
-        contentFrame.contentWindow.postMessage({ type: 'pbgui_trigger_save' }, '*');
+        contentFrame.contentWindow.postMessage({ type: 'pbgui_trigger_save' }, location.origin);
       });
       document.getElementById('sb-cancel').addEventListener('click', function () {
-        contentFrame.contentWindow.postMessage({ type: 'pbgui_trigger_cancel' }, '*');
+        contentFrame.contentWindow.postMessage({ type: 'pbgui_trigger_cancel' }, location.origin);
       });
       document.getElementById('sb-delete').addEventListener('click', function () {
         openDeleteDialog(currentDash);
@@ -1130,9 +1127,12 @@ html, body {
   });
 
   /* ── postMessage from editor iframe ── */
+  var dashboardCreatedGeneration = 0;
   window.addEventListener('message', function (e) {
-    if (!e.data || typeof e.data !== 'object') return;
+    if (e.origin !== location.origin || !e.data || typeof e.data !== 'object') return;
     var t = e.data.type;
+    var sender = t === 'pbgui_dashboard_created' ? tplIframe : contentFrame;
+    if (!sender || !sender.contentWindow || e.source !== sender.contentWindow) return;
     if (t === 'pbgui_editor_saved') {
       var savedName = e.data.name || currentDash;
       editMode = false;
@@ -1140,14 +1140,16 @@ html, body {
     } else if (t === 'pbgui_editor_cancelled') {
       editMode = false;
       var origName = e.data.original_name || currentDash;
-      if (origName) {
+      if (origName && DASHBOARDS.indexOf(origName) >= 0) {
         loadView(origName);
       } else {
+        currentDash = '';
         editBanner.classList.remove('visible');
         renderToolbar();
         renderList();
-        contentLoading.style.display = 'flex';
+        contentLoading.style.display = 'none';
         contentFrame.classList.remove('visible');
+        contentFrame.onload = null;
         contentFrame.src = '';
       }
     } else if (t === 'pbgui_view_dirty') {
@@ -1164,7 +1166,16 @@ html, body {
       document.documentElement.style.overflow = '';
       document.body.style.overflow = '';
     } else if (t === 'pbgui_dashboard_created') {
-      refreshList(function () { loadView(e.data.name || currentDash); });
+      var targetName = e.data.name || currentDash;
+      var previousSrc = contentFrame.src;
+      var generation = ++dashboardCreatedGeneration;
+      tplOverlay.classList.remove('visible');
+      tplIframe.src = '';
+      refreshList(function () {
+        if (generation !== dashboardCreatedGeneration || contentFrame.src !== previousSrc) return;
+        selectedDashboards = targetName ? [targetName] : [];
+        loadView(targetName, true);
+      });
     }
   });
 
@@ -1282,22 +1293,17 @@ html, body {
   });
 
   window.addEventListener('message', function (e) {
+    if (e.origin !== location.origin || !tplIframe || !tplIframe.contentWindow || e.source !== tplIframe.contentWindow) return;
     if (!e.data || typeof e.data !== 'object') return;
     if (e.data.type === 'pbgui_close_templates') {
       tplOverlay.classList.remove('visible');
       tplIframe.src = '';
     }
-    if (e.data.type === 'pbgui_dashboard_created') {
-      tplOverlay.classList.remove('visible');
-      tplIframe.src = '';
-      refreshList(function () { loadView(currentDash); });
-    }
   });
 
   function openTemplates() {
     var url = API_BASE + '/dashboard/templates_page'
-      + '?current='  + encodeURIComponent(currentDash)
-      + '&api_base=' + encodeURIComponent(API_BASE);
+      + '?current='  + encodeURIComponent(currentDash);
     tplIframe.src = url;
     tplOverlay.classList.add('visible');
   }

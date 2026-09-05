@@ -80,6 +80,8 @@ The Backup Manager lists backups created by DB Tools for one master. Sort or sel
 
 Restore performs another safety backup before replacing any database. It stops PBData, installs the selected backup, removes stale SQLite sidecars, and restarts PBData when appropriate.
 
+Local backup creation has a 30-second per-file deadline that includes SQLite busy retries. Backups and validation run outside the API event loop; cancellation waits for their cleanup before releasing maintenance leases. Snapshot names are unique and publication does not overwrite existing backups. Staged schemas are allowlisted before integrity checking: executable schema objects, unsupported expressions and oversized SQLite values are rejected. A failed validation never reaches installation.
+
 Delete permanently removes the selected backup files. Keep at least one verified recent backup before deleting older copies.
 
 ## Dashboards

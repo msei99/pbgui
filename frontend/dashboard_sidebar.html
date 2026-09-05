@@ -235,12 +235,13 @@
 
 </style>
 
-<script src="/app/js/pbgui_dialogs.js?v=8"></script>
+<script src="js/pbgui_dialogs.js?v=8"></script>
 <script>
 (function() {
   'use strict';
 
-  var API_BASE = "%%API_BASE%%";
+  var BASE_PREFIX = new URL('../', window.location.href).pathname.replace(/^\/+/, '/').replace(/\/$/, '');
+  var API_BASE = BASE_PREFIX + '/api';
   var DASHBOARDS    = (%%DASHBOARDS%%).slice().sort(function(a,b){return a.toLowerCase().localeCompare(b.toLowerCase());});
   var CURRENT       = "%%CURRENT%%";
   var EDIT_MODE     = %%EDIT_MODE%%;
@@ -388,8 +389,7 @@
     if (old) old.remove();
 
     var url = API_BASE + '/dashboard/templates_page'
-      + '?current='  + encodeURIComponent(CURRENT)
-      + '&api_base=' + encodeURIComponent(API_BASE);
+      + '?current='  + encodeURIComponent(CURRENT);
 
     /* Floating window — no backdrop, free-floating box */
     var box = doc.createElement('div');
@@ -467,6 +467,7 @@
 
     /* postMessage close from templates iframe */
     function onMsg(e) {
+      if (e.origin !== location.origin || !iframe.contentWindow || e.source !== iframe.contentWindow || !box.isConnected) return;
       if (e.data && e.data.type === 'pbgui_close_templates') {
         box.remove();
         window.parent.removeEventListener('message', onMsg);

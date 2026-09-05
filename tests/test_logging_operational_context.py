@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -62,17 +63,23 @@ def test_database_backup_and_restore_logs_operations(tmp_path, monkeypatch):
     data_dir.mkdir()
     database = database_mod.Database.__new__(database_mod.Database)
     database.db = data_dir / "pbgui.db"
-    database.db.write_text("original", encoding="utf-8")
     events = []
     monkeypatch.setattr(database_mod, "PBGDIR", tmp_path)
     monkeypatch.setattr(database_mod, "_human_log", lambda *args, **kwargs: events.append((args, kwargs)))
 
-    backup_path = database.backup_full_db()
-    database.db.write_text("changed", encoding="utf-8")
-    assert database.restore_db_from(backup_path) is True
+    with closing(database._connect()) as conn:
+        database.create_tables()
+        conn.execute("INSERT INTO balances(timestamp, balance, user) VALUES (1, 100, 'alice')")
+        conn.commit()
+        backup_path = database.backup_full_db()
+        assert backup_path is not None
+        conn.execute("UPDATE balances SET balance = 200")
+        conn.commit()
+        assert database.restore_db_from(backup_path) is True
+        assert database._connect() is conn
+        assert conn.execute("SELECT balance FROM balances WHERE user = 'alice'").fetchone() == (100,)
 
     assert [event[1]["meta"]["operation"] for event in events] == ["backup_full_db", "restore_db_from"]
-    assert database.db.read_text(encoding="utf-8") == "original"
 
 
 def test_runv7_start_and_stop_logs_instance_operations(tmp_path, monkeypatch):

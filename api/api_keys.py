@@ -236,24 +236,18 @@ def _is_user_in_use(user_name: str) -> bool:
 
 
 def _get_in_use_names() -> set[str]:
-    """Collect all user names referenced by any instance (built once).
-
-    V7 instance directories are named after the user directly,
-    so we scan the filesystem to stay Streamlit-session-state-free.
-    """
+    """Protect users with PB7 or PB8 bundles, even if their config is damaged."""
     names: set[str] = set()
-
-    # V7 instances — directory name IS the user name
-    try:
-        import glob as _glob
-        from pathlib import Path as _Path
-        for p in _glob.glob(str(_Path.cwd() / "data" / "run_v7" / "*")):
-            name = _Path(p).name
-            if name:
-                names.add(name)
-    except Exception:
-        pass
-
+    for runtime_dir in ("run_v7", "run_v8"):
+        try:
+            for entry in (_Path(_PBGDIR) / "data" / runtime_dir).iterdir():
+                if not entry.name.startswith(".") and not entry.is_symlink() and entry.is_dir():
+                    names.add(entry.name)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            _log(SERVICE, f"Could not check {runtime_dir} credential usage: {exc}", level="ERROR")
+            raise HTTPException(status_code=503, detail="Cannot verify live instance credential usage") from exc
     return names
 
 

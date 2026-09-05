@@ -746,7 +746,7 @@ body {
   function bindEvents() {
     /* Close */
     document.getElementById('btn-close').addEventListener('click', function() {
-      window.parent.postMessage({type: 'pbgui_close_templates'}, '*');
+      window.parent.postMessage({type: 'pbgui_close_templates'}, location.origin);
     });
 
     /* Save as template */
@@ -884,13 +884,14 @@ body {
           createBtn.disabled = true;
           var pending = users.slice();
           var nCreated = 0, nSkipped = 0;
+          var lastCreatedName = '';
           function createNext() {
             if (pending.length === 0) {
               createBtn.disabled = false;
               var msg = nCreated + ' dashboard(s) created';
               if (nSkipped > 0) msg += ', ' + nSkipped + ' skipped';
               showMsg('create-msg', msg, nCreated > 0 ? 'ok' : 'err');
-              if (nCreated > 0) window.parent.postMessage({type: 'pbgui_dashboard_created'}, '*');
+              if (nCreated > 0) window.parent.postMessage({type: 'pbgui_dashboard_created', name: lastCreatedName}, location.origin);
               return;
             }
             var user = pending.shift();
@@ -909,14 +910,14 @@ body {
                     return;
                   }
                   apiPost('/dashboards/from_template', {template: template, name: dashName}, function(res) {
-                    if (res && res.status === 'ok') nCreated++; else nSkipped++;
+                    if (res && res.status === 'ok') { nCreated++; lastCreatedName = dashName; } else nSkipped++;
                     createNext();
                   });
                 });
                 return;
               }
               apiPost('/dashboards/from_template', {template: template, name: dashName}, function(res) {
-                if (res && res.status === 'ok') nCreated++; else nSkipped++;
+                if (res && res.status === 'ok') { nCreated++; lastCreatedName = dashName; } else nSkipped++;
                 createNext();
               });
             });
@@ -944,7 +945,7 @@ body {
                     showMsg('create-msg', '\u201c' + nameInput + '\u201d created', 'ok');
                     document.getElementById('dash-name').value = '';
                     if (window.parent && window.parent !== window) {
-                      window.parent.postMessage({type: 'pbgui_dashboard_created'}, '*');
+                      window.parent.postMessage({type: 'pbgui_dashboard_created', name: nameInput}, location.origin);
                     }
                   } else {
                     showMsg('create-msg', 'Error creating dashboard', 'err');
@@ -958,7 +959,7 @@ body {
               if (res && res.status === 'ok') {
                 showMsg('create-msg', '\u201c' + nameInput + '\u201d created', 'ok');
                 document.getElementById('dash-name').value = '';
-                window.parent.postMessage({type: 'pbgui_dashboard_created'}, '*');
+                window.parent.postMessage({type: 'pbgui_dashboard_created', name: nameInput}, location.origin);
               } else {
                 showMsg('create-msg', 'Error creating dashboard', 'err');
               }
@@ -984,7 +985,7 @@ body {
 
   /* Close button (header) pre-bind before render */
   document.getElementById('btn-close').addEventListener('click', function() {
-    window.parent.postMessage({type: 'pbgui_close_templates'}, '*');
+    window.parent.postMessage({type: 'pbgui_close_templates'}, location.origin);
   });
 })();
 </script>

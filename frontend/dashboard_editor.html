@@ -491,6 +491,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
 
   /* ── injected by FastAPI ── */
   var API_BASE = "%%API_BASE%%";
+  var BASE_PREFIX = "%%BASE_PREFIX%%";
   var ORIG_NAME  = %%DASHBOARD_NAME%%;  /* JSON-encoded: "MyDash" or "" */
   var VIEW_ONLY  = %%VIEW_ONLY%%;       /* 0 = edit, 1 = view-only */
   var STANDALONE = %%STANDALONE%%;      /* 0 = embedded frame, 1 = standalone page */
@@ -608,7 +609,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
 
   function markViewDirty() {
     if (!VIEW_ONLY) return;
-    try { window.parent.postMessage({ type: 'pbgui_view_dirty' }, '*'); } catch (_) {}
+    try { window.parent.postMessage({ type: 'pbgui_view_dirty' }, location.origin); } catch (_) {}
   }
 
   function saveViewLayout() {
@@ -618,7 +619,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
       method: 'POST',
       body: JSON.stringify(payload)
     }).then(function () {
-      try { window.parent.postMessage({ type: 'pbgui_view_saved' }, '*'); } catch (_) {}
+      try { window.parent.postMessage({ type: 'pbgui_view_saved' }, location.origin); } catch (_) {}
     }).catch(function () { /* stay dirty on error */ });
   }
 
@@ -990,7 +991,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     reportHeight();
   }
 
-   var DR_VERSION = '20260812b';
+   var DR_VERSION = '20260904a';
 
   /* ── lazy-load shared render module ── */
   function _ensureRenderScript(cb) {
@@ -1003,7 +1004,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     if (window._drLoading) { setTimeout(function () { _ensureRenderScript(cb); }, 50); return; }
     window._drLoading = true;
     var s = document.createElement('script');
-    s.src = API_BASE.replace(/\/api$/, '') + '/app/dashboard_render.js?v=' + DR_VERSION;
+    s.src = BASE_PREFIX + '/app/dashboard_render.js?v=' + DR_VERSION;
     s.onload  = function () { window._drLoading = false; if (window.DashRender) { DashRender.injectCSS(); } cb(); };
     s.onerror = function () { window._drLoading = false; cb(); };
     document.head.appendChild(s);
@@ -2441,6 +2442,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             reportHeight();
           });
           handle.addEventListener('mousedown', function (e) {
+            if (e.button !== 0) return;
             e.preventDefault(); e.stopPropagation();
             handle.classList.add('active');
             startH = Math.round(cellEl.getBoundingClientRect().height);
@@ -2454,24 +2456,46 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
             cellEl.style.height = startH + 'px';
             cellEl.style.overflow = 'hidden';
             /* Tell parent to lock page scroll so the iframe doesn't shift under the mouse */
-            try { parent.postMessage({ type: 'pbgui_resize_start' }, '*'); } catch(_) {}
+            try { parent.postMessage({ type: 'pbgui_resize_start' }, location.origin); } catch(_) {}
             /* Freeze scroll on table wrappers so upward drag doesn't scroll the table */
             cellEl.querySelectorAll('.di-table-wrap, .dp-table-wrap, .db-table-wrap').forEach(function (w) {
               w._prevOverflowY = w.style.overflowY;
               w.style.overflowY = 'hidden';
             });
             document.addEventListener('mousemove', onMouseMove);
-            document.addEventListener('mouseup', function onUp(ev) {
+            var finished = false;
+            function onUp(ev) {
+              if (finished) return;
+              finished = true;
               document.removeEventListener('mouseup', onUp);
+              document.removeEventListener('mousemove', onMouseMove);
+              window.removeEventListener('blur', onUp);
+              window.removeEventListener('pagehide', onUp);
+              if (parent !== window) {
+                parent.document.removeEventListener('mouseup', onUp);
+                parent.removeEventListener('blur', onUp);
+              }
+              cancelAnimationFrame(_resizeRaf);
               /* Restore scroll on table wrappers */
               cellEl.querySelectorAll('.di-table-wrap, .dp-table-wrap, .db-table-wrap').forEach(function (w) {
                 w.style.overflowY = w._prevOverflowY || '';
                 delete w._prevOverflowY;
               });
               /* Unlock parent page scroll */
-              try { parent.postMessage({ type: 'pbgui_resize_end' }, '*'); } catch(_) {}
+              try { parent.postMessage({ type: 'pbgui_resize_end' }, location.origin); } catch(_) {}
+              /* Parent coordinates use a different viewport; keep the last local height. */
+              if (ev.currentTarget !== document) {
+                ev = { clientY: startY + cellEl.getBoundingClientRect().height - startH };
+              }
               onMouseUp(ev);
-            });
+            }
+            document.addEventListener('mouseup', onUp);
+            window.addEventListener('blur', onUp);
+            window.addEventListener('pagehide', onUp);
+            if (parent !== window) {
+              parent.document.addEventListener('mouseup', onUp);
+              parent.addEventListener('blur', onUp);
+            }
           });
           /* ── Min button: collapse to compact scrollable view ── */
           rBtnMin.addEventListener('mousedown', function (e) { e.stopPropagation(); });
@@ -2714,7 +2738,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
     }).then(function (r) {
       if (r.ok) {
         setStatus('saved', 'saved');
-        window.parent.postMessage({ type: 'pbgui_editor_saved', name: name }, '*');
+        window.parent.postMessage({ type: 'pbgui_editor_saved', name: name }, location.origin);
       } else {
         setStatus('error', 'error');
       }
@@ -2722,11 +2746,12 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
   }
 
   function doCancel() {
-    window.parent.postMessage({ type: 'pbgui_editor_cancelled', original_name: ORIG_NAME }, '*');
+    window.parent.postMessage({ type: 'pbgui_editor_cancelled', original_name: ORIG_NAME }, location.origin);
   }
 
   /* ── Listen for messages from parent (sidebar buttons) ── */
   window.addEventListener('message', function (e) {
+    if (e.origin !== location.origin || e.source !== window.parent) return;
     if (!e.data || typeof e.data !== 'object') return;
     if (e.data.type === 'pbgui_trigger_cancel') {
       doCancel();
@@ -2801,10 +2826,8 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
 
     function _connectWs() {
       clearTimeout(_reconnTimer);
-      var wsBase = API_BASE.replace(/\/api$/, '')
-                           .replace(/^http:/, 'ws:')
-                           .replace(/^https:/, 'wss:');
-      _ws = new WebSocket(wsBase + '/ws/dashboard');
+      var wsBase = location.origin.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
+      _ws = new WebSocket(wsBase + BASE_PREFIX + '/ws/dashboard');
       _ws.onopen    = function () { _reconnDelay = 1000; };
       _ws.onmessage = function (evt) {
         try {

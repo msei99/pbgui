@@ -80,6 +80,8 @@ Der Backup Manager zeigt von DB Tools erstellte Backups eines Masters. Zeilen k�
 
 Restore erstellt vor jedem Austausch ein zusätzliches Sicherheitsbackup. PBData wird gestoppt, das gewählte Backup installiert, veraltete SQLite-Sidecars werden entfernt und PBData wird bei Bedarf erneut gestartet.
 
+Lokale Backups haben ein Zeitbudget von 30 Sekunden je Datei einschliesslich SQLite-Busy-Wiederholungen. Backup und Validierung laufen ausserhalb der API-Ereignisschleife; ein Abbruch wartet auf deren Aufraeumen, bevor Wartungssperren freigegeben werden. Snapshot-Namen sind eindeutig, bestehende Backups werden nicht ueberschrieben. Das Schema wird vor der Integritaetspruefung gegen eine Allowlist geprueft: ausfuehrbare Schemaobjekte, nicht unterstuetzte Ausdruecke und uebergrosse SQLite-Werte werden abgelehnt. Fehlgeschlagene Validierung erreicht die Installation nicht.
+
 Delete entfernt die ausgewählten Backup-Dateien dauerhaft. Behalte mindestens ein geprüftes aktuelles Backup, bevor ältere Kopien gelöscht werden.
 
 ## Dashboards

@@ -25,6 +25,10 @@ The default **Overview** section summarizes the current local state:
 
 This section is intended as a quick sanity check after first startup, password changes, or path updates.
 
+Browser authentication uses a protected HttpOnly session cookie, not a token in page scripts or URLs. Navigation follows the authenticated session status reported by the API. In No-Login mode, separate browsers receive independent sessions even when they share a proxy or public IP address; logging out of one does not sign out the others.
+
+The first No-Login page load does not issue a session. Welcome completes a same-origin POST to establish its cookie, including on HTTP LAN addresses. Browser writes and WebSockets require the exact PBGui origin; a sibling subdomain is not equivalent. Pages can be embedded only by the same origin. If a reverse proxy causes HTTP 403, check the visible Host and trusted proxy scheme rather than disabling the checks.
+
 The issue list also shows a persistent security warning when PBGui listens on all interfaces while still using the known legacy default password. PBGui cannot inspect external NAT or firewall rules, so either verify that the API port is limited to VPN or trusted networks, or set an individual password. New installer runs generate an individual password automatically, and remote installs expose the PBGui port only to the configured OpenVPN network by default.
 
 When repeated failed logins trigger a temporary block, the issue list shows a warning with the last direct client address and event time. **Acknowledge** hides that warning globally while keeping the Login security status and retained history visible. A newer lockout automatically raises the warning again.

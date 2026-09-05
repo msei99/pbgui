@@ -920,12 +920,10 @@
 
     <script src="/app/js/pbgui_dialogs.js?v=8"></script>
     <script>
-        var TOKEN = "%%TOKEN%%";
         var API_ORIGIN = "%%API_ORIGIN%%";
         var PBGUI_VERSION = "%%VERSION%%";
         var PBGUI_SERIAL = "%%SERIAL%%";
 
-        if (TOKEN === "%%" + "TOKEN%%") TOKEN = "";
         if (API_ORIGIN === "%%" + "API_ORIGIN%%") API_ORIGIN = window.location.origin;
         if (PBGUI_VERSION === "%%" + "VERSION%%") PBGUI_VERSION = "";
         if (PBGUI_SERIAL === "%%" + "SERIAL%%") PBGUI_SERIAL = "";
@@ -937,6 +935,7 @@
 
         var state = {
             bootstrap: null,
+            bootstrapLoading: false,
             passwordOpen: false,
             activeSection: "overview",
             fileBrowser: {
@@ -954,7 +953,6 @@
             window.PBGUI_NAV_CONFIG = {
                 subtitle: "WELCOME",
                 current: "/",
-                token: TOKEN,
                 apiBase: API_BASE,
                 version: PBGUI_VERSION,
                 serial: PBGUI_SERIAL
@@ -964,7 +962,7 @@
         function initWelcomeHelp() {
             window.PBGUI_HELP_OPENER = function () {
                 if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== "function") return;
-                window.PBGuiSharedHelp.open("welcome", { token: TOKEN });
+                window.PBGuiSharedHelp.open("welcome");
             };
         }
 
@@ -973,7 +971,6 @@
         function authHeaders(jsonBody) {
             var headers = {};
             if (jsonBody !== false) headers["Content-Type"] = "application/json";
-            if (TOKEN) headers["Authorization"] = "Bearer " + TOKEN;
             return headers;
         }
 
@@ -1170,7 +1167,8 @@
         }
 
         function navigateTo(path) {
-            if (!TOKEN) {
+            var auth = (state.bootstrap && state.bootstrap.auth) || {};
+            if (!auth.authenticated) {
                 setBanner("Login required before leaving the welcome page.", "error");
                 focusSection("overview");
                 return;
@@ -1317,7 +1315,7 @@
         function renderSummary(auth, setup) {
             document.getElementById("summary-auth").textContent = auth.authenticated ? "Authenticated" : "Guest";
             document.getElementById("summary-auth-copy").textContent = auth.authenticated
-                ? "A valid API token is active for this browser session."
+                ? "This browser is authenticated with a protected session cookie."
                 : auth.password_required
                     ? "Use the simple PBGui root login page to authenticate this browser session."
                     : "This browser session is authenticated automatically because no password is configured.";
@@ -1426,14 +1424,26 @@
         }
 
         async function loadBootstrap(message, kind) {
+            if (state.bootstrapLoading) return;
+            state.bootstrapLoading = true;
             try {
-                var headers = TOKEN ? { "Authorization": "Bearer " + TOKEN } : {};
-                var data = await fetchJson(API_ORIGIN + "/api/auth/bootstrap", { headers: headers });
-                if (!data.auth.authenticated) TOKEN = "";
+                var data = await fetchJson(API_ORIGIN + "/api/auth/bootstrap");
+                var auth = data.auth || {};
+                // A static copy of this page must not bootstrap sessions inside an attacker's frame.
+                if (window.self === window.top && auth.password_required === false && auth.authenticated === false && !auth.error) {
+                    data = await fetchJson(API_ORIGIN + "/api/auth/passwordless-session", {
+                        method: "POST",
+                        credentials: "same-origin",
+                        headers: authHeaders(true),
+                        body: "{}"
+                    });
+                }
                 render(data);
                 setBanner(message || "", kind || "info");
             } catch (error) {
                 setBanner(error.message, "error");
+            } finally {
+                state.bootstrapLoading = false;
             }
         }
 

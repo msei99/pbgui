@@ -52,6 +52,21 @@ _PANIC_GLOBAL_MODE = "p"
 _PANIC_OVERRIDE_MODE = "panic"
 _GRACEFUL_STOP_MODE = "graceful_stop"
 _TP_ONLY_MODE = "tp_only"
+_income_restore_active = threading.Event()
+
+
+def restart_block_reason() -> str:
+    """Keep API-owned restore work alive until SQLite commits or rolls back."""
+    return "Income database restore is running. Wait for it to finish." if _income_restore_active.is_set() else ""
+
+
+def _script_json(value: Any) -> str:
+    """Encode inline-script values, including markers used in later replacements."""
+    return (json.dumps(value)
+            .replace("&", "\\u0026")
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("%", "\\u0025"))
 
 
 def _classify_position_orders(orders: list, side: str) -> tuple[int, float, float]:
@@ -1912,22 +1927,38 @@ def set_pending_full(
 
 # ---------------------------------------------------------------- /editor_page
 
+def _dashboard_page_html(request: Request, filename: str) -> str:
+    """Bind dashboard URLs to the trusted ASGI mount, never to query parameters."""
+    from urllib.parse import quote
+
+    root_path = request.scope.get("root_path", "").rstrip("/")
+    if root_path and (
+        not root_path.startswith("/") or root_path.startswith("//")
+        or "\\" in root_path or any(ord(char) < 32 or ord(char) == 127 for char in root_path)
+        or any(part in {".", ".."} for part in root_path.split("/"))
+    ):
+        _log(SERVICE, "Invalid dashboard ASGI root_path", level="ERROR")
+        raise HTTPException(status_code=500, detail="Invalid dashboard mount path")
+    prefix = quote(root_path, safe="/")
+    html = (Path(__file__).parent.parent / "frontend" / filename).read_text(encoding="utf-8")
+    html = html.replace('"%%API_BASE%%"', _script_json(prefix + "/api"))
+    html = html.replace('"%%BASE_PREFIX%%"', _script_json(prefix))
+    return html.replace('src="/app/', f'src="{prefix}/app/')
+
+
 @router.get("/editor_page", response_class=HTMLResponse)
 def get_editor_page(
+    request: Request,
     name: str = Query(default="", description="Dashboard name"),
-    api_base: str = Query(default="", description="API base URL"),
+    api_base: str = Query(default="", description="Legacy iframe parameter (ignored; always same-origin)"),
     view_only: bool = Query(default=False, description="View-only mode (no editing controls)"),
     standalone: bool = Query(default=False, description="Standalone mode (save/cancel post to parent)"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
     """Serve the full dashboard grid editor HTML page."""
-    import json as _json
-    from pathlib import Path as _P
-    html_path = _P(__file__).parent.parent / "frontend" / "dashboard_editor.html"
-    html = html_path.read_text(encoding="utf-8")
+    html = _dashboard_page_html(request, "dashboard_editor.html")
     html = html.replace("%%TOKEN%%", "")
-    html = html.replace("%%API_BASE%%", api_base)
-    html = html.replace("%%DASHBOARD_NAME%%", _json.dumps(name))
+    html = html.replace("%%DASHBOARD_NAME%%", _script_json(name))
     html = html.replace("%%VIEW_ONLY%%", "1" if view_only else "0")
     html = html.replace("%%STANDALONE%%", "1" if standalone else "0")
     html = html.replace("%%EDIT_ONLY_STYLE%%",
@@ -1956,21 +1987,10 @@ def get_main_page(
     import json as _json
     from pathlib import Path as _P
 
-    html_path = _P(__file__).parent.parent / "frontend" / "dashboard_main.html"
-    html = html_path.read_text(encoding="utf-8")
-
-    # Derive API base from the actual request URL so iframes use the correct host/port
-    scheme = request.url.scheme
-    host   = request.url.hostname or "127.0.0.1"
-    port   = request.url.port
-    origin = f"{scheme}://{host}" + (f":{port}" if port else "")
-    api_base = origin + "/api"
-    ws_base  = api_base.replace("http://", "ws://").replace("https://", "wss://")
+    html = _dashboard_page_html(request, "dashboard_main.html")
 
     html = html.replace('"%%TOKEN%%"',         _json.dumps(""))
-    html = html.replace('"%%API_BASE%%"',      _json.dumps(api_base))
-    html = html.replace('"%%WS_BASE%%"',       _json.dumps(ws_base))
-    html = html.replace('"%%CURRENT%%"',       _json.dumps(current))
+    html = html.replace('"%%CURRENT%%"',       _script_json(current))
 
     from pbgui_purefunc import PBGDIR, PBGUI_SERIAL, PBGUI_VERSION
 
@@ -1979,7 +1999,7 @@ def get_main_page(
         dashboards = sorted(path.stem for path in dashboards_dir.glob("*.json") if path.is_file())
     except Exception:
         dashboards = []
-    html = html.replace("%%DASHBOARDS_JSON%%", _json.dumps(dashboards))
+    html = html.replace("%%DASHBOARDS_JSON%%", _script_json(dashboards))
 
     html = html.replace('"%%VERSION%%"', _json.dumps(PBGUI_VERSION))
     html = html.replace('%%VERSION%%', PBGUI_VERSION)
@@ -2001,18 +2021,15 @@ def get_main_page(
 
 @router.get("/templates_page", response_class=HTMLResponse)
 def get_templates_page(
+    request: Request,
     current: str = Query(default="", description="Currently open dashboard name"),
-    api_base: str = Query(default="", description="API base URL"),
+    api_base: str = Query(default="", description="Legacy iframe parameter (ignored; always same-origin)"),
     session: SessionToken = Depends(require_auth),
 ) -> HTMLResponse:
     """Serve the template manager popup page."""
-    import json as _json
-    from pathlib import Path as _P
-    html_path = _P(__file__).parent.parent / "frontend" / "dashboard_templates.html"
-    html = html_path.read_text(encoding="utf-8")
+    html = _dashboard_page_html(request, "dashboard_templates.html")
     html = html.replace('"%%TOKEN%%"', '""')
-    html = html.replace('"%%API_BASE%%"', f'"{api_base}"')
-    html = html.replace('%%CURRENT%%', _json.dumps(current))
+    html = html.replace('%%CURRENT%%', _script_json(current))
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
 
 
@@ -2395,10 +2412,15 @@ def delete_income_by_ids(
     db = _get_db()
     # Pause PBData, backup, delete, restart
     was_running = _pbdata_stop()
-    backup = db.backup_full_db()
-    deleted = db.delete_income_by_ids(payload.ids)
-    if was_running:
-        _pbdata_start()
+    try:
+        backup = db.backup_full_db()
+        if not backup:
+            _log(SERVICE, "Income deletion blocked: database backup unavailable", level="WARNING")
+            raise HTTPException(status_code=409, detail="Database backup failed or is busy. No income was deleted.")
+        deleted = db.delete_income_by_ids(payload.ids)
+    finally:
+        if was_running:
+            _pbdata_start()
     return {"deleted": deleted, "backup": backup or ""}
 
 
@@ -2416,10 +2438,15 @@ def delete_income_older(
     """Delete income entries older-than-or-equal to cutoff for given users."""
     db = _get_db()
     was_running = _pbdata_stop()
-    backup = db.backup_full_db()
-    deleted = db.delete_income_older_than(payload.users, payload.cutoff_ms)
-    if was_running:
-        _pbdata_start()
+    try:
+        backup = db.backup_full_db()
+        if not backup:
+            _log(SERVICE, "Income deletion blocked: database backup unavailable", level="WARNING")
+            raise HTTPException(status_code=409, detail="Database backup failed or is busy. No income was deleted.")
+        deleted = db.delete_income_older_than(payload.users, payload.cutoff_ms)
+    finally:
+        if was_running:
+            _pbdata_start()
     return {"deleted": deleted, "backup": backup or ""}
 
 
@@ -2456,21 +2483,37 @@ def restore_income_backup(
     payload: IncomeRestore,
     session: SessionToken = Depends(require_auth),
 ):
-    """Restore the DB from a backup file."""
+    """Restore a validated snapshot atomically without stopping live DB writers."""
     from pbgui_purefunc import PBGDIR
-    backup_dir = Path(f"{PBGDIR}/data/backup/db").resolve()
+    from database_lock import DatabaseBusyError, acquire_database_lock
+    from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
+    from sqlite_backup import InvalidBackupError, RestoreBusyError, restore_sqlite_backup
+
     try:
-        restore_path = Path(payload.path).resolve()
-    except (ValueError, OSError):
-        raise HTTPException(status_code=400, detail="Invalid path")
-    if not restore_path.is_relative_to(backup_dir):
-        raise HTTPException(status_code=400, detail="Path outside backup directory")
-    db = _get_db()
-    was_running = _pbdata_stop()
-    ok = db.restore_db_from(str(restore_path))
-    if was_running:
-        _pbdata_start()
-    return {"ok": ok}
+        # Only the API-owned restore reserves restart admission. Independent
+        # scans and sync workers share a separate database-maintenance lease.
+        with acquire_master_runtime_lock(Path(PBGDIR)), acquire_database_lock(Path(PBGDIR), exclusive=True):
+            _income_restore_active.set()
+            try:
+                restore_sqlite_backup(
+                    Path(payload.path), Path(PBGDIR) / "data" / "pbgui.db",
+                    Path(PBGDIR) / "data" / "backup" / "db",
+                )
+            finally:
+                _income_restore_active.clear()
+    except HTTPException:
+        raise
+    except InvalidBackupError as exc:
+        _log(SERVICE, "Backup validation failed", level="WARNING", meta={"exception_type": type(exc).__name__})
+        raise HTTPException(status_code=400, detail="Backup is not a safe, compatible SQLite snapshot") from exc
+    except (DatabaseBusyError, MasterUpdateBusyError, RestoreBusyError) as exc:
+        _log(SERVICE, "Database restore blocked or timed out", level="WARNING", meta={"exception_type": type(exc).__name__})
+        raise HTTPException(status_code=409, detail="Database restore is busy or blocked by a local operation. Retry after it finishes.") from exc
+    except Exception as exc:
+        _log(SERVICE, "Database restore failed", level="ERROR", meta={"exception_type": type(exc).__name__})
+        raise HTTPException(status_code=500, detail="Database restore failed") from exc
+    _log(SERVICE, "Restored income database from a validated SQLite snapshot", meta={"operation": "restore_db_from"})
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- PBData helpers
@@ -2831,14 +2874,17 @@ def get_orders_data(
                         "l": c[3], "c": c[4], "v": c[5]} for c in cached]
         else:
             # Cache miss — fetch from exchange and populate cache
-            exchange = _get_exchange(user_obj)
-            symbol_ccxt = _symbol_to_ccxt(symbol)
             try:
+                exchange = _get_exchange(user_obj)
+                symbol_ccxt = _symbol_to_ccxt(symbol)
                 ohlcv = exchange.fetch_ohlcv(
                     symbol_ccxt, "futures",
                     timeframe=timeframe, limit=limit
                 )
-            except Exception:
+            except HTTPException:
+                raise
+            except Exception as exc:
+                _log(SERVICE, "Orders candle fetch failed", level="WARNING", meta={"exception_type": type(exc).__name__})
                 ohlcv = []
             if ohlcv:
                 _ohlcv_cache_put(user, symbol, timeframe, ohlcv)
@@ -2846,14 +2892,17 @@ def get_orders_data(
                         "l": c[3], "c": c[4], "v": c[5]} for c in (ohlcv or [])]
     else:
         # Historical navigation — always fetch from exchange
-        exchange = _get_exchange(user_obj)
-        symbol_ccxt = _symbol_to_ccxt(symbol)
         try:
+            exchange = _get_exchange(user_obj)
+            symbol_ccxt = _symbol_to_ccxt(symbol)
             ohlcv = exchange.fetch_ohlcv(
                 symbol_ccxt, "futures",
                 timeframe=timeframe, limit=limit, since=since
             )
-        except Exception:
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _log(SERVICE, "Orders candle fetch failed", level="WARNING", meta={"exception_type": type(exc).__name__})
             ohlcv = []
         candles = [{"t": c[0], "o": c[1], "h": c[2],
                     "l": c[3], "c": c[4], "v": c[5]} for c in (ohlcv or [])]

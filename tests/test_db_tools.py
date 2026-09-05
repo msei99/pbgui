@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+from contextlib import ExitStack, closing
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -18,6 +19,59 @@ from PBData import PBData
 from api import db_tools
 from master import async_pool as async_pool_mod
 import task_worker
+from test_sqlite_security import QUOTED_SCHEMA_CHANGES
+
+
+@pytest.fixture(autouse=True)
+def isolate_db_tools_runtime(tmp_path, monkeypatch):
+    """Keep default INI reads, runtime paths and temporary staging inside the test."""
+    monkeypatch.setattr(db_tools, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(db_tools.pbgui_purefunc, "pbgui_ini_path", lambda: tmp_path / "pbgui.ini")
+    monkeypatch.setattr(db_tools.tempfile, "tempdir", str(tmp_path))
+
+
+@pytest.mark.parametrize("old,new", QUOTED_SCHEMA_CHANGES)
+def test_restore_route_runner_rejects_quoted_schema_before_install(tmp_path, monkeypatch, old, new):
+    """The real restore runner's staging helper raises HTTP 400 without installing."""
+    from fastapi import HTTPException
+    from unittest.mock import AsyncMock, Mock
+    from test_sqlite_backup_restore import _main_schema
+
+    backup_dir = db_tools._backup_dir()
+    backup_dir.mkdir(parents=True)
+    source = backup_dir / "quoted-pbgui.db"
+    _main_schema(source, change=("history", old, new))
+    live = db_tools._local_db_path(db_tools.MAIN_DB_NAME)
+    _main_schema(live)
+    before, source_before = live.read_bytes(), source.read_bytes()
+    runners = []
+    operation = db_tools.OperationProgress(id="quoted-schema", kind="restore-backups", total=10)
+
+    def start(kind, total, runner):
+        """Capture only scheduling; execute the actual route runner below."""
+        runners.append(runner)
+        return operation
+
+    install = AsyncMock(side_effect=AssertionError("Invalid schema must never install"))
+    validate = Mock(wraps=db_tools._assert_sqlite_integrity)
+    monkeypatch.setattr(db_tools, "_start_operation", start)
+    monkeypatch.setattr(db_tools, "_install_db_bundle", install)
+    monkeypatch.setattr(db_tools, "_assert_sqlite_integrity", validate)
+
+    async def exercise():
+        """Keep the asynchronous operation response contract, inspecting its runner."""
+        await db_tools.restore_backups_run(db_tools.BackupActionRequest(backups=[source.name]), session=None)
+        assert len(runners) == 1
+        with pytest.raises(HTTPException) as error:
+            await runners[0](operation)
+        assert error.value.status_code == 400
+
+    asyncio.run(exercise())
+    validate.assert_called_once()
+    install.assert_not_called()
+    assert live.read_bytes() == before
+    assert source.read_bytes() == source_before
+    assert not list(tmp_path.glob("pbgui-db-tools-restore-*"))
 
 
 def _bundle(tmp_path: Path, name: str) -> dict[str, Path]:
@@ -204,6 +258,67 @@ def test_sqlite_backup_file_captures_wal_content(tmp_path: Path) -> None:
     with sqlite3.connect(dst) as conn:
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("db_name", db_tools.DB_FILE_NAMES)
+def test_local_sqlite_backups_in_same_second_are_distinct(tmp_path, monkeypatch, db_name):
+    """Repeated local backups preserve earlier snapshots instead of colliding."""
+    source = tmp_path / db_name
+    db_tools._ensure_schema(source, db_name)
+    monkeypatch.setattr(db_tools, "_timestamp", lambda: "20260905-120000")
+    assert not db_tools._backup_dir().exists()
+    first = Path(db_tools._backup_local_file(source, "cleanup"))
+    before = first.read_bytes()
+    second = Path(db_tools._backup_local_file(source, "cleanup"))
+    assert first != second and second.is_file()
+    assert first.read_bytes() == before
+    for path in (first, second):
+        assert path.parent == db_tools._backup_dir()
+        assert db_tools._validate_backup_name(path.name) == path.name
+        assert db_tools._backup_db_name(path.name) == db_name
+    assert {item["name"] for item in asyncio.run(db_tools._list_backup_files("local"))} == {first.name, second.name}
+
+
+@pytest.mark.parametrize("trades_exists", [False, True])
+def test_stage_actual_database_bundle_and_restore(tmp_path, trades_exists):
+    """Stage and restore real Database DDL, including ALTER side and an absent trades DB."""
+    from sqlite_backup import restore_sqlite_backup
+
+    main_path = db_tools._local_db_path(db_tools.MAIN_DB_NAME)
+    trades_path = db_tools._local_db_path(db_tools.TRADES_DB_NAME)
+    main_path.parent.mkdir()
+    database = database_mod.Database.__new__(database_mod.Database)
+    with ExitStack() as resources:
+        database._connect = lambda: resources.enter_context(closing(sqlite3.connect(main_path)))
+        database._connect_trades = lambda: resources.enter_context(closing(sqlite3.connect(trades_path)))
+        database.create_tables()
+        if trades_exists:
+            database.create_trades_tables()
+    with closing(sqlite3.connect(main_path)) as conn:
+        conn.execute("INSERT INTO history(symbol,timestamp,income,uniqueid,user) VALUES('BTCUSDT',1,2.5,'id','alice')")
+        conn.commit()
+        ddl = conn.execute("SELECT sql FROM sqlite_schema WHERE name='position'").fetchone()[0]
+        assert "side TEXT" in ddl
+        # SQLite normalizes away IF NOT EXISTS when persisting Database's DDL.
+        assert "IF NOT EXISTS" not in ddl.upper()
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    staged = asyncio.run(db_tools._stage_db_bundle("local", stage, "source"))
+    target = tmp_path / "target"
+    target.mkdir()
+    for db_name, snapshot in staged.items():
+        destination = target / db_name
+        db_tools._ensure_schema(destination, db_name)
+        restore_sqlite_backup(snapshot, destination, stage)
+        with closing(sqlite3.connect(destination)) as conn:
+            assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+            if db_name == db_tools.MAIN_DB_NAME:
+                assert conn.execute("SELECT income FROM history").fetchone() == (2.5,)
+                assert conn.execute("SELECT name FROM pragma_table_info('position') WHERE name='side'").fetchone() == ("side",)
+                assert conn.execute("SELECT count(*) FROM sqlite_schema WHERE type='index' AND sql IS NOT NULL").fetchone() == (5,)
+            else:
+                assert conn.execute("SELECT count(*) FROM executions").fetchone() == (0,)
+                assert conn.execute("SELECT count(*) FROM sqlite_schema WHERE type='index' AND sql IS NOT NULL").fetchone() == (3 if trades_exists else 0,)
 
 
 def test_remove_sqlite_sidecars_removes_wal_and_shm(tmp_path: Path) -> None:

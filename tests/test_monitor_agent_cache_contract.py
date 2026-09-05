@@ -1510,6 +1510,7 @@ def test_master_consumes_v8_instance_snapshot_contract() -> None:
 
         async def read_snapshot(*_args, **_kwargs):
             return {
+                "generated_at": 1000,
                 "monitors": [{"u": "same", "p": "7"}, {"u": "same", "p": "8"}],
                 "v7": [{"name": "same", "running": True}],
                 "v8": [{"name": "same", "running": True}],
@@ -1523,7 +1524,10 @@ def test_master_consumes_v8_instance_snapshot_contract() -> None:
         await monitor._collect_instances("vps-1")
 
         assert [item["p"] for item in monitor.store.instances["vps-1"]] == ["7", "8"]
-        assert monitor.store.v8_instances["vps-1"] == [{"name": "same", "running": True}]
+        row = monitor.store.v8_instances["vps-1"][0]
+        assert row["name"] == "same" and row["running"] is True
+        assert row["snapshot_generated_at"] == 1000
+        assert row["snapshot_checked_at"] > 0
         assert monitor.store.bot_logs["vps-1"]["8:same"] == ["pb8/logs/same.log"]
 
     asyncio.run(exercise())
@@ -1960,6 +1964,9 @@ def test_embedded_instance_collector_reports_unstamped_pb8_runtime(tmp_path: Pat
         "PBGUI_CACHE": "{}",
         "PBGUI_CACHE_VERSION": "0",
     }
+    # This config-only regression must never enumerate the machine's real processes.
+    assert "os.listdir('/proc')" in source
+    source = source.replace("os.listdir('/proc')", "[]")
 
     result = subprocess.run(
         [sys.executable, "-u", "-c", source],

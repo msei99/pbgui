@@ -70,4 +70,6 @@ PB8 live operations use a separate Cluster protocol namespace so older nodes can
 
 ## Delete
 
+Stop the instance before deleting. PBGui checks its exact local process even when it is disabled, reassigned, or cannot currently start. Relevant remote hosts must provide an explicit stopped observation from one snapshot generation no older than 90 seconds. Missing, stale, unstamped or inconsistent observations return HTTP 409 before backup, tombstone or directory removal. Fresh monitor diagnostics cannot make an older instance list current; wait for the next complete instance snapshot. After upgrading, the monitor service must load the new collector code before remote deletion can use these observations.
+
 Delete publishes `DELETE_PB8_INSTANCE` before removing the local bundle. PB8 tombstones are separate from PB7 tombstones, so equal PB7 and PB8 instance names do not affect each other. Cluster Sync and PBRun consume the tombstone to stop and remove the PB8 deployment.

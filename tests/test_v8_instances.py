@@ -16,6 +16,22 @@ from api import v8_instances
 from secure_files import atomic_write_private_text
 
 
+@pytest.fixture(autouse=True)
+def isolated_local_runtime(tmp_path, monkeypatch):
+    """Keep the whole CRUD test module away from local settings and real processes."""
+    import PBRun
+    import pb8_config
+
+    monkeypatch.setattr(v8_instances, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(pb8_config, "PBGDIR", str(tmp_path))
+    monkeypatch.setattr(v8_instances, "_master_hostname", lambda: "master-a")
+    monkeypatch.setattr(v8_instances.pbgui_purefunc, "pb8dir", lambda: str(tmp_path / "pb8"))
+    monkeypatch.setattr(v8_instances.pbgui_purefunc, "pb8venv", lambda: str(tmp_path / "venv" / "bin" / "python"))
+    monkeypatch.setattr(v8_instances.pbgui_purefunc, "pb8_runtime_status", lambda: {"ready": False})
+    monkeypatch.setattr(pb8_config, "pb8_runtime_status", lambda: {"ready": False, "pb8dir": str(tmp_path / "pb8")})
+    monkeypatch.setattr(PBRun.psutil, "process_iter", lambda: iter([]))
+
+
 def _install_test_pipeline(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     """Replace only the external PB8 helper while retaining atomic persistence."""
 
@@ -37,6 +53,7 @@ def _install_test_pipeline(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     monkeypatch.setattr(v8_instances, "prepare_pb8_config", prepare)
     monkeypatch.setattr(v8_instances, "save_prepared_pb8_config", save)
     monkeypatch.setattr(v8_instances, "load_pb8_config", load)
+    monkeypatch.setattr(v8_instances, "validate_pb8_override_bundle", lambda _path: None)
     return prepared_calls
 
 
@@ -623,7 +640,7 @@ def test_delete_records_pb8_tombstone_before_local_cleanup(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Delete removes the local bundle only after publishing PB8 desired state."""
+    """A verified stopped bundle is backed up and tombstoned before local cleanup."""
 
     _configure_root(monkeypatch, tmp_path)
     _install_test_pipeline(monkeypatch)

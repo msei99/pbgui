@@ -1855,6 +1855,7 @@ class ParetoDataLoader:
         # Reset state
         self.configs = []
         self.raw_configs_cache = {}
+        self.pareto_configs_cache = {}
 
         # Find all JSON files in pareto directory
         json_pattern = os.path.join(self.pareto_dir, "*.json")
@@ -1879,6 +1880,7 @@ class ParetoDataLoader:
                     if metrics:
                         metrics.is_pareto = True  # All configs in pareto/ are Pareto-optimal
                         self.configs.append(metrics)
+                        self.pareto_configs_cache[parsed_count] = config_data
                         parsed_count += 1
             except Exception as e:
                 if parsed_count < 3:  # Show first 3 errors
@@ -2299,7 +2301,7 @@ class ParetoDataLoader:
         Get full config for a specific index
         
         Two modes:
-        1. Fast mode (pareto JSONs only): Load JSON file directly at sorted index
+        1. Fast mode (pareto JSONs only): Return the successfully parsed snapshot
         2. All results mode: Merge all_results.bin[index] with pareto JSON template
         
         Args:
@@ -2312,24 +2314,13 @@ class ParetoDataLoader:
         # Check cache first
         if config_index in self.pareto_configs_cache:
             return self.pareto_configs_cache[config_index]
-        
+
         try:
+            if 'pareto_only' in self.load_stats.get('load_strategy', []):
+                return None
+
             # Get sorted pareto JSON files
             pareto_files = sorted([f for f in os.listdir(self.pareto_dir) if f.endswith('.json')]) if os.path.isdir(self.pareto_dir) else []
-            
-            # FAST MODE: Configs loaded from pareto/*.json
-            # In this mode, config_index is the position in sorted pareto files
-            # Check if we loaded from JSONs (load_stats has 'pareto_only' strategy)
-            load_strategy = self.load_stats.get('load_strategy', [])
-            if 'pareto_only' in load_strategy:
-                # Fast mode: Load JSON directly at this index
-                if 0 <= config_index < len(pareto_files):
-                    json_file = os.path.join(self.pareto_dir, pareto_files[config_index])
-                    with open(json_file, 'r') as f:
-                        full_config = json.load(f)
-                    self.pareto_configs_cache[config_index] = full_config
-                    return full_config
-                return None
             
             # Get config_data from cache (avoids re-reading entire file!)
             config_data = self.raw_configs_cache.get(config_index)
@@ -2930,7 +2921,7 @@ class ParetoDataLoader:
         # Sort by metric
         sorted_configs = sorted(
             configs,
-            key=lambda c: c.suite_metrics.get(metric_name, float('-inf') if ascending else float('inf')),
+            key=lambda c: c.suite_metrics.get(metric_name, float('inf') if ascending else float('-inf')),
             reverse=not ascending
         )
         

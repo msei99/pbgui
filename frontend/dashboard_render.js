@@ -566,6 +566,43 @@
 
     /* ──────────────────────── Top Symbols helpers ───────────────────────── */
 
+    function bindChartFullscreen(chartDiv, P, origHeight) {
+        if (chartDiv._pbguiFsCleanup) chartDiv._pbguiFsCleanup();
+        var root = chartDiv.closest('.dt-root, .di-root') || chartDiv;
+        var resizeTimer = null;
+        var active = true;
+        function isLive() { return active && chartDiv.isConnected && !!chartDiv._fullLayout; }
+        function onFullscreenChange() {
+            if (!isLive()) return;
+            clearTimeout(resizeTimer);
+            var isFull = document.fullscreenElement === root || document.webkitFullscreenElement === root;
+            var closeBtn = root.querySelector('.dt-fs-close');
+            if (closeBtn) closeBtn.style.display = isFull ? 'block' : 'none';
+            if (isFull) {
+                P.relayout(chartDiv, {
+                    width: window.screen.width || window.innerWidth,
+                    height: (window.screen.availHeight || window.innerHeight) - 62
+                });
+            } else {
+                P.relayout(chartDiv, { width: null, height: origHeight || null });
+                resizeTimer = setTimeout(function () {
+                    if (isLive()) P.Plots.resize(chartDiv);
+                }, 100);
+            }
+        }
+        /* Fullscreen events bubble from the widget root. Keep ownership local so
+           removing a widget also releases its handlers, without a document registry. */
+        root.addEventListener('fullscreenchange', onFullscreenChange);
+        root.addEventListener('webkitfullscreenchange', onFullscreenChange);
+        chartDiv._pbguiFsCleanup = function () {
+            active = false;
+            clearTimeout(resizeTimer);
+            root.removeEventListener('fullscreenchange', onFullscreenChange);
+            root.removeEventListener('webkitfullscreenchange', onFullscreenChange);
+            delete chartDiv._pbguiFsCleanup;
+        };
+    }
+
     /**
      * Render / update a Plotly bar chart into chartDiv.
      * Requires global Plotly (or opts.Plotly).
@@ -604,28 +641,7 @@
         var origHeight = opts.height || null;
         if (origHeight) { layout.height = origHeight; }
 
-        /* fullscreen change: relayout to fill full screen or restore original size */
-        var fschangeHandler = function () {
-            var root = chartDiv.closest ? chartDiv.closest('.dt-root') : null;
-            var isFull = root
-                ? (document.fullscreenElement === root || document.webkitFullscreenElement === root)
-                : !!(document.fullscreenElement || document.webkitFullscreenElement);
-            /* show/hide the X close button */
-            var closeBtn = root ? root.querySelector('.dt-fs-close') : null;
-            if (closeBtn) { closeBtn.style.display = isFull ? 'block' : 'none'; }
-            if (isFull) {
-                /* header (~40px) + daterange (~22px) = ~62px overhead */
-                var fsW = window.screen.width  || window.innerWidth;
-                var fsH = (window.screen.availHeight || window.innerHeight) - 62;
-                P.relayout(chartDiv, { width: fsW, height: fsH });
-            } else {
-                /* restore original size — null lets Plotly infer from container */
-                P.relayout(chartDiv, { width: null, height: origHeight || null });
-                setTimeout(function () { P.Plots.resize(chartDiv); }, 100);
-            }
-        };
-        document.addEventListener('fullscreenchange', fschangeHandler);
-        document.addEventListener('webkitfullscreenchange', fschangeHandler);
+        bindChartFullscreen(chartDiv, P, origHeight);
 
         var cfg = {
             displayModeBar: opts.displayModeBar !== undefined ? opts.displayModeBar : false,
@@ -1221,6 +1237,7 @@
             });
         }
 
+        doSort();
         renderTable();
 
         wrap.appendChild(table);
@@ -1500,24 +1517,7 @@
         };
         if (origHeight) { layout.height = origHeight; }
 
-        /* fullscreen change: relayout or restore (same pattern as renderTop) */
-        var fsHandler = function () {
-            var root = chartDiv.closest ? chartDiv.closest('.di-root') : null;
-            var isFull = root
-                ? (document.fullscreenElement === root || document.webkitFullscreenElement === root)
-                : !!(document.fullscreenElement || document.webkitFullscreenElement);
-            closeBtn.style.display = isFull ? 'block' : 'none';
-            if (isFull) {
-                var fsW = window.screen.width  || window.innerWidth;
-                var fsH = (window.screen.availHeight || window.innerHeight) - 62;
-                Plotly.relayout(chartDiv, { width: fsW, height: fsH });
-            } else {
-                Plotly.relayout(chartDiv, { width: null, height: origHeight || null });
-                setTimeout(function () { Plotly.Plots.resize(chartDiv); }, 100);
-            }
-        };
-        document.addEventListener('fullscreenchange', fsHandler);
-        document.addEventListener('webkitfullscreenchange', fsHandler);
+        bindChartFullscreen(chartDiv, Plotly, origHeight);
 
         /* fullscreen button — same icon as renderTop */
         var plotCfg = {
@@ -1615,24 +1615,7 @@
             }
         }
 
-        var fschangeHandler = function () {
-            var root = chartDiv.closest ? chartDiv.closest('.dt-root') : null;
-            var isFull = root
-                ? (document.fullscreenElement === root || document.webkitFullscreenElement === root)
-                : !!(document.fullscreenElement || document.webkitFullscreenElement);
-            var closeBtn = root ? root.querySelector('.dt-fs-close') : null;
-            if (closeBtn) { closeBtn.style.display = isFull ? 'block' : 'none'; }
-            if (isFull) {
-                var fsW = window.screen.width  || window.innerWidth;
-                var fsH = (window.screen.availHeight || window.innerHeight) - 62;
-                P.relayout(chartDiv, { width: fsW, height: fsH });
-            } else {
-                P.relayout(chartDiv, { width: null, height: origHeight || null });
-                setTimeout(function () { P.Plots.resize(chartDiv); }, 100);
-            }
-        };
-        document.addEventListener('fullscreenchange', fschangeHandler);
-        document.addEventListener('webkitfullscreenchange', fschangeHandler);
+        bindChartFullscreen(chartDiv, P, origHeight);
 
         var cfg = {
             displayModeBar: opts.displayModeBar !== undefined ? opts.displayModeBar : false,
@@ -1899,24 +1882,7 @@
             }
         }
 
-        var fschangeHandler = function () {
-            var root = chartDiv.closest ? chartDiv.closest('.dt-root') : null;
-            var isFull = root
-                ? (document.fullscreenElement === root || document.webkitFullscreenElement === root)
-                : !!(document.fullscreenElement || document.webkitFullscreenElement);
-            var closeBtn = root ? root.querySelector('.dt-fs-close') : null;
-            if (closeBtn) { closeBtn.style.display = isFull ? 'block' : 'none'; }
-            if (isFull) {
-                var fsW = window.screen.width  || window.innerWidth;
-                var fsH = (window.screen.availHeight || window.innerHeight) - 62;
-                P.relayout(chartDiv, { width: fsW, height: fsH });
-            } else {
-                P.relayout(chartDiv, { width: null, height: origHeight || null });
-                setTimeout(function () { P.Plots.resize(chartDiv); }, 100);
-            }
-        };
-        document.addEventListener('fullscreenchange', fschangeHandler);
-        document.addEventListener('webkitfullscreenchange', fschangeHandler);
+        bindChartFullscreen(chartDiv, P, origHeight);
 
         var cfg = {
             displayModeBar: opts.displayModeBar !== undefined ? opts.displayModeBar : false,
@@ -3880,24 +3846,7 @@
             }
         }
 
-        var fschangeHandler = function () {
-            var root = chartDiv.closest ? chartDiv.closest('.dt-root') : null;
-            var isFull = root
-                ? (document.fullscreenElement === root || document.webkitFullscreenElement === root)
-                : !!(document.fullscreenElement || document.webkitFullscreenElement);
-            var closeBtn = root ? root.querySelector('.dt-fs-close') : null;
-            if (closeBtn) { closeBtn.style.display = isFull ? 'block' : 'none'; }
-            if (isFull) {
-                var fsW = window.screen.width  || window.innerWidth;
-                var fsH = (window.screen.availHeight || window.innerHeight) - 62;
-                P.relayout(chartDiv, { width: fsW, height: fsH });
-            } else {
-                P.relayout(chartDiv, { width: null, height: origHeight || null });
-                setTimeout(function () { P.Plots.resize(chartDiv); }, 100);
-            }
-        };
-        document.addEventListener('fullscreenchange', fschangeHandler);
-        document.addEventListener('webkitfullscreenchange', fschangeHandler);
+        bindChartFullscreen(chartDiv, P, origHeight);
 
         var cfg = {
             displayModeBar: opts.displayModeBar !== undefined ? opts.displayModeBar : false,
@@ -4098,7 +4047,7 @@
     /* ──────────────────────────── Export ───────────────────────────────── */
 
     global.DashRender = {
-        VERSION:            '20260812b',
+        VERSION:            '20260904a',
         injectCSS:          injectCSS,
         tweColor:           tweColor,
         upnlColor:          upnlColor,

@@ -343,6 +343,67 @@ class LocalPoolFake:
         return None
 
 
+def test_pb8_snapshot_stamps_survive_rpc_and_proxy_without_retimestamping(tmp_path: Path) -> None:
+    """Rows and their freshness travel together through the actual daemon/proxy packet."""
+    from master.vps_monitor_rpc import encode_frame
+
+    monitor = FakeMonitor()
+    source = [{"name": "alice", "running": False, "nested": {"value": 1},
+               "snapshot_generated_at": 9999, "snapshot_checked_at": 9999}]
+    monitor.store.update_v8_instances("vps-1", source,
+                                      snapshot_generated_at=100, snapshot_checked_at=101)
+    expected = [{"name": "alice", "running": False, "nested": {"value": 1},
+                 "snapshot_generated_at": 100, "snapshot_checked_at": 101}]
+    published = monitor.store.v8_instances["vps-1"]
+    source[0]["running"] = True
+    source[0]["nested"]["value"] = 2
+    assert published == expected
+    daemon = VPSMonitorRPCDaemon(tmp_path / "unused.sock", monitor=monitor, streamer=FakeStreamer())
+
+    def packet() -> dict[str, Any]:
+        """Serialize a full state response exactly as RPC does, without opening a socket."""
+        return json.loads(encode_frame({"id": "test", "ok": True, "result": daemon._state_snapshot()}))["result"]
+
+    client = StateClient(packet())
+    proxy = VPSMonitorProxy(client=client)
+
+    async def exercise() -> None:
+        """Later diagnostics and transport polling cannot refresh the row's timestamps."""
+        assert await proxy._poll_once()
+        assert proxy.store.v8_instances["vps-1"] == expected
+        monitor.store.update_stream_info("vps-1", {"monitor_agent": {"files": {
+            "instance_snapshot.json": {"state": "ok", "generated_at": 9999, "checked_at": 9999},
+        }}})
+        client.state = packet()
+        assert await proxy._poll_once()
+        assert proxy.store.v8_instances["vps-1"] == expected
+        monitor.store.update_v8_instances("vps-1", published)
+        assert published == expected
+        client.state = packet()
+        assert await proxy._poll_once()
+        assert proxy.store.v8_instances["vps-1"] == [{"name": "alice", "running": False, "nested": {"value": 1}}]
+
+    asyncio.run(exercise())
+
+
+def test_pb8_cache_hydration_preserves_generation_and_legacy_unknown() -> None:
+    """Cache restart preserves exact stamps and never upgrades unstamped legacy rows."""
+    from master.async_monitor import VPSMonitor
+
+    tagged = {"name": "alice", "running": False, "snapshot_generated_at": 100, "snapshot_checked_at": 101}
+    monitor = object.__new__(VPSMonitor)
+    monitor.store = VPSStore()
+    monitor._monitor_cache = {
+        "vps-1": {"v8_instances": [tagged]},
+        "legacy": {"v8_instances": [{"name": "bob", "running": False}]},
+    }
+    monitor._hydrate_monitor_cache()
+    assert monitor.store.v8_instances["vps-1"] == [tagged]
+    assert monitor.store.v8_instances["legacy"] == [{"name": "bob", "running": False}]
+    monitor.store.update_v8_instances("vps-1", monitor.store.v8_instances["vps-1"])
+    assert monitor._monitor_cache["vps-1"]["v8_instances"] == [tagged]
+
+
 def test_proxy_hydrates_system_metrics_only_for_new_revision() -> None:
     """Polling turns serialized metrics back into SystemMetrics and honors revisions."""
     state = {

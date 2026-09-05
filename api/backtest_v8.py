@@ -1303,15 +1303,21 @@ def _resolve_result_dir(
     allow_legacy: bool = True,
 ) -> Path:
     """Resolve a PB8 result below its local root or a read-only archive root."""
+    raw = str(path or "")
+    if not raw or any(ord(char) < 32 for char in raw) or "\\" in raw or ".." in Path(raw).parts:
+        raise HTTPException(status_code=400, detail="Invalid result path")
+    candidate = Path(raw)
     local_root = _results_root().resolve()
     archive_root = (_data_dir() / "archives").resolve()
-    result_dir = Path(str(path or "")).resolve()
+    result_dir = candidate
     selected_root: Path | None = None
     legacy_roots = _legacy_results_roots() if allow_legacy else []
     for root in [local_root, *legacy_roots, *([archive_root] if allow_archives else [])]:
         try:
-            result_dir = _safe_path(Path(path), root)
+            result_dir = _safe_path(candidate if candidate.is_absolute() else root / candidate, root)
             result_dir.relative_to(root)
+            if not candidate.is_absolute() and not result_dir.exists():
+                continue
             selected_root = root
             break
         except (RuntimeError, ValueError):

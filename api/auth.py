@@ -5,6 +5,7 @@ from collections import deque
 from dataclasses import dataclass, field
 import hashlib
 import hmac
+import ipaddress
 import json
 import math
 import re
@@ -13,11 +14,14 @@ import time
 import toml
 from pathlib import Path
 from typing import Optional
-from uuid import uuid4
+from urllib.parse import urlsplit
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
+from starlette._utils import get_route_path
+from starlette.datastructures import MutableHeaders
 from starlette.websockets import WebSocketState
 
 from logging_helpers import human_log as _log
@@ -325,6 +329,28 @@ def get_tokens_dir() -> Path:
     return ensure_private_directory(Path(PBGDIR) / "data" / "api_tokens")
 
 
+def _safe_token_file(token: str) -> Optional[Path]:
+    """Resolve only canonical UUIDv4 tokens to non-symlink files in the token store."""
+    if not isinstance(token, str):
+        return None
+    raw = token.strip()
+    try:
+        parsed = UUID(raw)
+    except ValueError:
+        return None
+    if parsed.version != 4 or str(parsed) != raw:
+        return None
+    try:
+        tokens_dir = get_tokens_dir().resolve()
+        target = tokens_dir / f"{raw}.json"
+        if target.is_symlink() or target.resolve().parent != tokens_dir:
+            return None
+        return target
+    except (OSError, RuntimeError):
+        _log(SERVICE, "Unable to resolve session token file", level="WARNING")
+        return None
+
+
 def _write_auth_secrets_toml(secrets: dict) -> None:
     secrets_path = pbgui_auth_secrets_path()
     ensure_private_directory(secrets_path.parent)
@@ -415,10 +441,15 @@ def _frontend_template_path(name: str) -> Path:
 
 
 def _request_origin(request: Request) -> str:
-    scheme = request.url.scheme
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port
-    return f"{scheme}://{host}" + (f":{port}" if port else "")
+    """Return the validated visible authority, retaining IPv6 brackets and ports."""
+    try:
+        origin = f"{request.url.scheme}://{request.url.netloc}"
+        if len(request.headers.getlist("host")) == 1 and _parsed_origin(origin) is not None:
+            return origin
+    except ValueError:
+        pass
+    _log(SERVICE, "Rejected page request: invalid origin authority", level="WARNING")
+    raise HTTPException(status_code=400, detail="Invalid request origin")
 
 
 def _main_page_url() -> str:
@@ -441,11 +472,14 @@ def build_root_entry_response(
     auth_state = _password_state()
 
     if auth_state["error"] or session is not None or not auth_state["required"]:
-        return RedirectResponse(url=_main_page_url())
+        return RedirectResponse(
+            url=_main_page_url(), status_code=303,
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
 
     html = _frontend_template_path("root_login.html").read_text(encoding="utf-8")
     html = html.replace('"%%API_ORIGIN%%"', json.dumps(_request_origin(request)))
-    return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
+    return HTMLResponse(content=html, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
 def _bootstrap_payload(session: SessionToken | None = None) -> dict:
@@ -465,7 +499,6 @@ def _bootstrap_payload(session: SessionToken | None = None) -> dict:
             "error": auth_state["error"],
             "security_warnings": auth_state["security_warnings"] if session is not None else [],
             "login_security": _login_security_status() if session is not None else {},
-            "token": session.token if session else "",
             "user_id": session.user_id if session else "",
             "expires_at": session.expires_at if session else 0,
         },
@@ -504,30 +537,15 @@ def generate_token(user_id: str, expires_in_seconds: int = 86400) -> SessionToke
 
 
 def _get_or_create_passwordless_session(client_host: str) -> SessionToken:
-    """Reuse one bounded passwordless session per direct client address."""
+    """Issue an independent session; only the requesting browser's cookie permits reuse."""
     user_id = f"passwordless:{client_host}"
     with _passwordless_sessions_lock:
-        now = time.time()
         sessions: list[SessionToken] = []
         for token_file in get_tokens_dir().glob("*.json"):
-            try:
-                session = SessionToken(**json.loads(token_file.read_text(encoding="utf-8")))
-            except (OSError, json.JSONDecodeError, ValueError):
-                continue
-            if not session.user_id.startswith("passwordless:"):
-                continue
-            if session.expires_at <= now:
-                revoke_token(session.token)
+            session = validate_token(token_file.stem)
+            if session is None or not session.user_id.startswith("passwordless:"):
                 continue
             sessions.append(session)
-
-        matching = [session for session in sessions if session.user_id == user_id]
-        if matching:
-            keep = max(matching, key=lambda session: session.expires_at)
-            for duplicate in matching:
-                if duplicate.token != keep.token:
-                    revoke_token(duplicate.token)
-            return keep
 
         if len(sessions) >= _PASSWORDLESS_SESSION_LIMIT:
             oldest = min(sessions, key=lambda session: session.created_at)
@@ -556,17 +574,15 @@ def validate_token(token: str) -> Optional[SessionToken]:
     Returns:
         SessionToken if valid and not expired, None otherwise
     """
-    if not token or not token.strip():
-        return None
-    
-    token_file = get_tokens_dir() / f"{token.strip()}.json"
-    
-    if not token_file.exists():
+    token_file = _safe_token_file(token)
+    if token_file is None or not token_file.is_file():
         return None
     
     try:
         data = json.loads(token_file.read_text(encoding="utf-8"))
         session = SessionToken(**data)
+        if session.token != token_file.stem:
+            return None
         
         # Check expiration
         if session.expires_at < time.time():
@@ -590,10 +606,12 @@ def revoke_token(token: str) -> bool:
     Returns:
         True if token was found and deleted, False otherwise
     """
-    token_file = get_tokens_dir() / f"{token.strip()}.json"
+    token_file = _safe_token_file(token)
+    if token_file is None:
+        return False
     _clear_vps_manager_secrets(token.strip())
-    if token_file.exists():
-        token_file.unlink()
+    if token_file.is_file():
+        token_file.unlink(missing_ok=True)
         return True
     return False
 
@@ -608,6 +626,123 @@ def _session_cookie_name(host: str) -> str:
 def _request_session_cookie_name(request: Request | WebSocket) -> str:
     """Return the browser-session cookie name for one HTTP or WebSocket request."""
     return _session_cookie_name(request.headers.get("host", ""))
+
+
+def _parsed_origin(value: str, *, referer: bool = False) -> tuple[str, str, int] | None:
+    """Parse an HTTP origin without URL parser whitespace or authority leniency."""
+    if not value or any(ord(char) <= 32 or ord(char) >= 127 for char in value) or "\\" in value:
+        return None
+    try:
+        parts = urlsplit(value)
+        if parts.scheme not in {"http", "https"} or not parts.netloc:
+            return None
+        if parts.fragment or "#" in value or (not referer and (parts.path or "?" in value)):
+            return None
+        if not re.fullmatch(r"(?:\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9._-]+)(?::[0-9]+)?", parts.netloc):
+            return None
+        host = parts.hostname
+        if ":" in host:
+            host = str(ipaddress.IPv6Address(host))
+        elif any(not label or label.startswith("-") or label.endswith("-") for label in host.removesuffix(".").split(".")):
+            return None
+        port = parts.port if parts.port is not None else (443 if parts.scheme == "https" else 80)
+        return parts.scheme, host, port
+    except ValueError:
+        return None
+
+
+def require_same_origin(connection: Request | WebSocket, *, require_origin: bool = False) -> None:
+    """Require exact browser origin evidence; WebSockets must always send Origin.
+
+    Session entry points may also require Origin instead of metadata fallbacks.
+    Trust only the ASGI URL (including the proxy-validated scheme and preserved
+    Host), never raw Forwarded/X-Forwarded-* headers. Metadata is a fallback only
+    when Origin is absent; same-site is deliberately NOT equivalent to same-origin.
+    """
+    headers = connection.headers
+    valid = False
+    single_headers = ("host", "origin", "referer", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest")
+    if len(headers.getlist("host")) == 1 and all(len(headers.getlist(name)) <= 1 for name in single_headers):
+        try:
+            scheme = {"ws": "http", "wss": "https"}.get(connection.url.scheme, connection.url.scheme)
+            target = _parsed_origin(f"{scheme}://{connection.url.netloc}")
+        except ValueError:
+            target = None
+        site = headers.get("sec-fetch-site")
+        origin = headers.get("origin")
+        referer = headers.get("referer")
+        if target is not None:
+            if origin is not None:
+                valid = _parsed_origin(origin) == target and site in {None, "same-origin"}
+            elif not require_origin and connection.scope["type"] != "websocket":
+                valid = site == "same-origin"
+                if referer is not None:
+                    valid = _parsed_origin(referer, referer=True) == target and site in {None, "same-origin"}
+            if referer is not None and _parsed_origin(referer, referer=True) != target:
+                valid = False
+    if not valid:
+        # Do not log attacker-controlled origins, URLs, headers, or credentials.
+        _log(SERVICE, "Rejected browser request: same-origin validation failed", level="WARNING")
+        raise HTTPException(status_code=403, detail="Same-origin browser request required")
+
+
+class BrowserOriginMiddleware:
+    """Reject CSRF before routing, body parsing, dependencies, or CORS processing."""
+
+    def __init__(self, app):
+        """Wrap the application without owning background resources."""
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        """Guard browser requests and frame-protect HTML, including static responses."""
+        if scope["type"] == "http":
+            request = Request(scope)
+            path = get_route_path(scope).rstrip("/")
+            welcome = path == "/api/auth/main_page" and request.method == "GET"
+            unsafe = request.method not in {"GET", "HEAD", "OPTIONS", "TRACE"}
+            if unsafe or welcome:
+                try:
+                    if path == "/api/auth/passwordless-session":
+                        require_same_origin(request, require_origin=True)
+                    if "authorization" in request.headers:
+                        # An explicit credential is not ambient browser authority.
+                        # Invalid credentials must never downgrade to cookie auth.
+                        token = get_token_from_request(request, request.headers["authorization"])
+                        if validate_token(token) is None:
+                            raise HTTPException(status_code=401, detail="Invalid or expired token")
+                    elif not welcome and (
+                        path in {"/api/auth/login", "/api/auth/passwordless-session"}
+                        or _request_session_cookie_name(request) in request.cookies
+                        or SESSION_COOKIE_NAME in request.cookies
+                        or any(name in request.headers for name in ("origin", "referer", "sec-fetch-site"))
+                    ):
+                        require_same_origin(request)
+                except HTTPException as exc:
+                    response = JSONResponse(
+                        {"detail": exc.detail}, status_code=exc.status_code,
+                        headers={"Cache-Control": "no-store", **(exc.headers or {})},
+                    )
+                    await response(scope, receive, send)
+                    return
+
+            async def send_framed_response(message):
+                """Constrain framing without buffering bodies or weakening existing CSP."""
+                if message["type"] == "http.response.start":
+                    headers = MutableHeaders(scope=message)
+                    media_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    # A 304 must update framing policy for previously cached HTML too.
+                    if media_type in {"text/html", "application/xhtml+xml"} or message["status"] == 304:
+                        policy = "frame-ancestors 'self'"
+                        if policy not in headers.getlist("content-security-policy"):
+                            # Multiple enforced CSP policies intersect; never replace other directives.
+                            headers.append("Content-Security-Policy", policy)
+                        deny = any(value.strip().upper() == "DENY" for value in headers.getlist("x-frame-options"))
+                        headers["X-Frame-Options"] = "DENY" if deny else "SAMEORIGIN"
+                await send(message)
+
+            await self.app(scope, receive, send_framed_response)
+            return
+        await self.app(scope, receive, send)
 
 
 def set_session_cookie(response: Response, request: Request, session: SessionToken) -> None:
@@ -628,7 +763,10 @@ def unauthenticated_page_redirect(request: Request, status_code: int) -> Optiona
     """Redirect unauthenticated browser page loads to login without altering API 401s."""
     accepts_html = "text/html" in request.headers.get("accept", "").lower()
     if request.method == "GET" and status_code == 401 and accepts_html:
-        return RedirectResponse(url="/", status_code=303, headers={"Cache-Control": "no-store"})
+        return RedirectResponse(
+            url="/", status_code=303,
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
     return None
 
 
@@ -658,6 +796,11 @@ async def _websocket_auth_watchdog(websocket: WebSocket, token: str) -> None:
 
 async def authenticate_websocket(websocket: WebSocket) -> Optional[SessionToken]:
     """Authenticate and track a browser WebSocket through its HttpOnly cookie."""
+    try:
+        require_same_origin(websocket)
+    except HTTPException:
+        await websocket.close(code=1008, reason="Same-origin browser request required")
+        return None
     token = str(
         websocket.cookies.get(_request_session_cookie_name(websocket))
         or websocket.cookies.get(SESSION_COOKIE_NAME)
@@ -747,16 +890,16 @@ def refresh_token(token: str, extends_seconds: int = 86400) -> Optional[SessionT
 
     Returns the updated SessionToken, or None if the token is invalid/expired.
     """
-    if not token or not token.strip():
-        return None
-
-    token_file = get_tokens_dir() / f"{token.strip()}.json"
-    if not token_file.exists():
+    token_file = _safe_token_file(token)
+    if token_file is None or not token_file.is_file():
         return None
 
     try:
         data = json.loads(token_file.read_text(encoding="utf-8"))
         session = SessionToken(**data)
+
+        if session.token != token_file.stem:
+            return None
 
         if session.expires_at < time.time():
             token_file.unlink(missing_ok=True)
@@ -776,8 +919,15 @@ def get_token_from_request(
     authorization: Optional[str] = Header(None, description="Bearer token"),
 ) -> str:
     """Extract a token from a Bearer header or the HttpOnly browser cookie."""
-    if authorization and authorization.startswith("Bearer "):
-        return authorization.replace("Bearer ", "").strip()
+    if authorization is not None:
+        scheme, separator, token = authorization.partition(" ")
+        if (
+            len(request.headers.getlist("authorization")) > 1
+            or scheme.lower() != "bearer" or not separator or not token.strip()
+            or any(char.isspace() for char in token.strip())
+        ):
+            raise HTTPException(status_code=401, detail="Invalid Authorization Bearer header")
+        return token.strip()
     session_cookie = (
         request.cookies.get(_request_session_cookie_name(request))
         or request.cookies.get(SESSION_COOKIE_NAME)
@@ -821,27 +971,39 @@ def optional_auth(
     Returns SessionToken if valid token provided, None otherwise.
     Does not raise exception for missing/invalid tokens.
     """
-    # Try to extract token
-    token_str = None
-    session_cookie = None
-    if authorization and authorization.startswith("Bearer "):
-        token_str = authorization.replace("Bearer ", "").strip()
-    else:
-        session_cookie = (
-            request.cookies.get(_request_session_cookie_name(request))
-            or request.cookies.get(SESSION_COOKIE_NAME)
-        )
-    if not token_str and session_cookie:
-        token_str = session_cookie.strip()
-    if not token_str:
+    try:
+        token_str = get_token_from_request(request, authorization)
+    except HTTPException:
         return None
-    
     return validate_token(token_str)
 
 
 @router.get("/bootstrap")
 def bootstrap(session: Optional[SessionToken] = Depends(optional_auth)) -> dict:
     """Return welcome-page bootstrap data for auth and runtime status."""
+    return _bootstrap_payload(session)
+
+
+@router.post("/passwordless-session")
+def passwordless_session(request: Request, response: Response) -> dict:
+    """Issue or reuse a browser session only after an explicit same-origin POST."""
+    require_same_origin(request, require_origin=True)
+    auth_state = _password_state()
+    if auth_state["error"]:
+        _log(SERVICE, "Passwordless session refused: authentication configuration error", level="WARNING")
+        raise HTTPException(status_code=500, detail="Authentication configuration error")
+    if auth_state["required"] or auth_state["mode"] != "disabled":
+        raise HTTPException(status_code=401, detail="Password authentication required")
+
+    authorization = request.headers.get("authorization")
+    session = optional_auth(request, authorization)
+    if authorization is not None and session is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if session is None:
+        client_host = request.client.host if request.client else "local"
+        session = _get_or_create_passwordless_session(client_host)
+    response.headers["Cache-Control"] = "no-store"
+    set_session_cookie(response, request, session)
     return _bootstrap_payload(session)
 
 
@@ -1066,19 +1228,18 @@ def main_page(
     request: Request,
     session: Optional[SessionToken] = Depends(optional_auth),
 ) -> Response:
-    """Serve the standalone Welcome/Login page."""
+    """Serve the Welcome shell; new passwordless sessions require a separate POST."""
     auth_state = _password_state()
     active_session = session
     if active_session is None and auth_state["required"] and not auth_state["error"]:
-        return RedirectResponse(url=_root_url())
-    if active_session is None and not auth_state["required"] and not auth_state["error"]:
-        client_host = request.client.host if request.client else "local"
-        active_session = _get_or_create_passwordless_session(client_host)
-
+        return RedirectResponse(
+            url=_root_url(), status_code=303,
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
     html_path = _frontend_template_path("welcome.html")
     html = html_path.read_text(encoding="utf-8")
 
-    html = html.replace('"%%TOKEN%%"', json.dumps(active_session.token if active_session else ""))
+    html = html.replace('"%%TOKEN%%"', '""')
     html = html.replace('"%%API_ORIGIN%%"', json.dumps(_request_origin(request)))
     html = html.replace('"%%VERSION%%"', json.dumps(PBGUI_VERSION))
     html = html.replace('%%VERSION%%', PBGUI_VERSION)
@@ -1091,7 +1252,10 @@ def main_page(
 
     response = HTMLResponse(
         content=html,
-        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        headers={
+            "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "frame-ancestors 'self'", "X-Frame-Options": "SAMEORIGIN",
+        },
     )
     if active_session is not None:
         set_session_cookie(response, request, active_session)

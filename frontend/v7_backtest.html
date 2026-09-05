@@ -2566,7 +2566,8 @@ function showInitialBacktestQueueDraftModal(items) {
   });
   if (!defExchanges.length) defExchanges = ['bybit'];
   var defStart = (firstCfg.backtest && firstCfg.backtest.start_date) || '2020-01-01';
-  var defBalance = (firstCfg.backtest && firstCfg.backtest.starting_balance) || 1000;
+  var defBalance = Number((firstCfg.backtest && firstCfg.backtest.starting_balance) || 1000);
+  if (!Number.isFinite(defBalance)) defBalance = 1000;
   var preserveAllTimeranges = items.every(function(item) {
     return item && item.preserve_timerange === true;
   });
@@ -2641,7 +2642,7 @@ function showInitialBacktestQueueDraftModal(items) {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                name: String((item && item.name) || getInitialBacktestDraftName(cfg, null) || 'rebacktest'),
+                name: String((item && item.name) || getInitialBacktestDraftName(cfg, null) || 'rebacktest') + (exchangeVariants.length > 1 ? '_' + exchange : ''),
                 config: cfg,
                 override_configs: (item && item.override_configs) || {}
               })
@@ -8691,7 +8692,8 @@ function rebacktestSelected() {
   apiFetch('/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
     var defExchanges = (cfg.backtest && cfg.backtest.exchanges) || ['bybit'];
     var defStart = (cfg.backtest && cfg.backtest.start_date) || '2020-01-01';
-    var defBalance = (cfg.backtest && cfg.backtest.starting_balance) || 1000;
+    var defBalance = Number((cfg.backtest && cfg.backtest.starting_balance) || 1000);
+    if (!Number.isFinite(defBalance)) defBalance = 1000;
 
     var exOpts = allExchanges.map(function(e) {
       return '<option value="' + e + '"' + (defExchanges.indexOf(e) >= 0 ? ' selected' : '') + '>' + e + '</option>';
@@ -8746,7 +8748,7 @@ function rebacktestSelected() {
                 return apiFetch('/queue', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ name: name, config: cfgForExchange })
+                  body: JSON.stringify({ name: name + (exchanges.length > 1 ? '_' + exchange : ''), config: cfgForExchange })
                 });
               });
               return Promise.all(queuePromises);
@@ -8786,7 +8788,8 @@ function rebacktestSelectedArchive() {
     var defExchanges = (cfg.backtest && cfg.backtest.exchanges) || ['bybit'];
     var defStart = (cfg.backtest && cfg.backtest.start_date) || '2020-01-01';
     var defEnd = (cfg.backtest && cfg.backtest.end_date) || today;
-    var defBalance = (cfg.backtest && cfg.backtest.starting_balance) || 1000;
+    var defBalance = Number((cfg.backtest && cfg.backtest.starting_balance) || 1000);
+    if (!Number.isFinite(defBalance)) defBalance = 1000;
     var usePbguiMarketData = archiveConfigUsesPbguiMarketData(cfg, pbguiPath);
     var exOpts = allExchanges.map(function(e) {
       return '\x3Coption value="' + e + '"' + (defExchanges.indexOf(e) >= 0 ? ' selected' : '') + '>' + e + '\x3C/option>';
@@ -8892,7 +8895,8 @@ function retestReplaceSelectedArchive() {
   var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'kucoin', 'combined'];
   archiveResultApiFetch(sel[0], '/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
     var defExchanges = (cfg.backtest && cfg.backtest.exchanges) || ['bybit'];
-    var defBalance = (cfg.backtest && cfg.backtest.starting_balance) || 1000;
+    var defBalance = Number((cfg.backtest && cfg.backtest.starting_balance) || 1000);
+    if (!Number.isFinite(defBalance)) defBalance = 1000;
     var defDays = archiveRetestDefaultDays(cfg);
     var exOpts = allExchanges.map(function(e) {
       return '\x3Coption value="' + e + '"' + (defExchanges.indexOf(e) >= 0 ? ' selected' : '') + '>' + e + '\x3C/option>';
@@ -8990,7 +8994,8 @@ function rebacktestSelectedLegacy() {
   apiFetch('/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
     var defExchanges = (cfg.backtest && cfg.backtest.exchanges) || ['bybit'];
     var defStart = (cfg.backtest && cfg.backtest.start_date) || '2020-01-01';
-    var defBalance = (cfg.backtest && cfg.backtest.starting_balance) || 1000;
+    var defBalance = Number((cfg.backtest && cfg.backtest.starting_balance) || 1000);
+    if (!Number.isFinite(defBalance)) defBalance = 1000;
     var exOpts = allExchanges.map(function(e) {
       return '\x3Coption value="' + e + '"' + (defExchanges.indexOf(e) >= 0 ? ' selected' : '') + '>' + e + '\x3C/option>';
     }).join('');

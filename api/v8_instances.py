@@ -14,6 +14,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -1800,15 +1801,114 @@ async def copy_v8_instance_config(
     return result
 
 
+def _assert_v8_instance_stopped(name: str, target: Path) -> None:
+    """Verify exact local identity and fresh observations on relevant remote hosts."""
+    try:
+        import psutil
+        from PBRun import RunV8
+
+        runner = RunV8()
+        runner.user = name
+        runner.path = str(target)
+        runner.name = _master_hostname()
+        runner.pbgdir = Path(PBGDIR)
+        runner.pb8dir = pbgui_purefunc.pb8dir()
+        runner.pb8venv = pbgui_purefunc.pb8venv()
+        if not runner.pb8dir or not runner.pb8venv:
+            raise ValueError("Local PB8 process identity is not configured")
+        # Stop detection must not depend on assignment, config loading, or start readiness.
+        config_path = str(runner.config_path)
+        for process in psutil.process_iter():
+            try:
+                command = process.cmdline()
+                if config_path not in command:
+                    continue
+                cwd = process.cwd()
+            except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                continue
+            # Capture outside RunV8's matcher: it treats inspection errors as non-matches.
+            observed = SimpleNamespace(cmdline=lambda: command, cwd=lambda: cwd)
+            if runner._matches_process(observed):
+                raise HTTPException(status_code=409, detail=f"PB8 instance '{name}' is running locally - stop it first")
+            raise ValueError("A process references this config but its runtime identity is unverified")
+
+        config = load_pb8_config(target / "config.json")
+        enabled_on = _validate_target(config.get("pbgui", {}).get("enabled_on", "disabled"))
+        relevant = {enabled_on} - {"disabled", runner.name}
+        # Read snapshots directly: read_materialized_state may rebuild and write before the guard.
+        snapshots = {}
+        root = _cluster_root()
+        if root.is_symlink():
+            raise ValueError("Unsafe cluster state root")
+        for filename in ("desired_state.json", "cluster_nodes.json"):
+            path = root / filename
+            if path.is_symlink():
+                raise ValueError("Unsafe cluster snapshot")
+            snapshots[filename] = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        record = snapshots["desired_state.json"].get("pb8_instances", {}).get(name, {})
+        assigned = record.get("assigned_host")
+        if assigned:
+            node = snapshots["cluster_nodes.json"].get("nodes", {}).get(assigned, {})
+            hostname = node.get("pbname") or node.get("hostname")
+            if not hostname:
+                raise ValueError("Assigned PB8 host is unknown")
+            if hostname != runner.name:
+                relevant.add(hostname)
+
+        store = getattr(_monitor, "store", None)
+        observations = getattr(store, "v8_instances", {})
+        streams = getattr(store, "streams", {})
+        for host, items in observations.items():
+            if host == runner.name or not isinstance(items, list):
+                continue
+            if any(isinstance(item, dict) and item.get("name") == name for item in items):
+                relevant.add(host)
+        for host in sorted(relevant):
+            items = observations.get(host)
+            matches = [item for item in items if isinstance(item, dict) and item.get("name") == name] if isinstance(items, list) else []
+            if any(item.get("running") is True for item in matches):
+                raise HTTPException(status_code=409, detail=f"PB8 instance '{name}' is running on {host} - stop it first")
+            status = streams.get(host, {}).get("monitor_agent", {}).get("files", {}).get("instance_snapshot.json", {})
+            now = time.time()
+            generations = {
+                (float(item.get("snapshot_generated_at") or 0), float(item.get("snapshot_checked_at") or 0))
+                for item in matches
+            }
+            # Diagnostics may deny deletion, but only the rows themselves carry freshness.
+            fresh = (
+                status.get("state") == "ok" and not status.get("collector_error")
+                and len(generations) == 1
+                and all(
+                    generated_at > 0 and checked_at > 0
+                    and 0 <= now - generated_at <= 90 and 0 <= now - checked_at <= 90
+                    for generated_at, checked_at in generations
+                )
+            )
+            if not fresh or not matches or any(item.get("running") is not False for item in matches):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"PB8 instance '{name}' runtime on {host} is unverified; wait for a fresh stopped observation before deleting",
+                )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log(SERVICE, f"PB8 delete runtime verification failed for '{name}': {exc.__class__.__name__}", level="WARNING")
+        raise HTTPException(status_code=409, detail="PB8 runtime could not be verified safely; instance was not deleted") from exc
+
+
 @router.delete("/instances/{name}")
 def delete_v8_instance(name: str, session: SessionToken = Depends(require_auth)) -> dict[str, Any]:
     """Tombstone a PB8 instance and remove its local run bundle."""
 
     name = _validate_name(name)
     target = _instance_dir(name)
-    with _run_lock():
-        if not target.is_dir() or target.is_symlink() or not (target / "config.json").is_file():
+    if _run_root().is_symlink() or not _run_root().is_dir():
+        raise HTTPException(status_code=404, detail=f"PB8 instance '{name}' not found")
+    # Unlike _run_lock, this does not remove transaction stages before runtime checks.
+    with advisory_file_lock(_run_root() / ".write"):
+        if not target.is_dir() or target.is_symlink() or not (target / "config.json").is_file() or (target / "config.json").is_symlink():
             raise HTTPException(status_code=404, detail=f"PB8 instance '{name}' not found")
+        _assert_v8_instance_stopped(name, target)
         version = max(_current_version(name), _highest_cluster_version(name))
         try:
             backup_id = _snapshot_v8_bundle(name, target)

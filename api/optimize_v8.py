@@ -1028,12 +1028,21 @@ def _record_launch_failure(filename: str, exc: Exception) -> bool:
     return transient
 
 
-def _resolve_result_path(path: str, *, require_directory: bool = True) -> Path:
+def _resolve_result_path(path: str, *, require_directory: bool = True, for_delete: bool = False) -> Path:
+    """Resolve absolute or root-relative result paths within managed storage."""
     root = _results_root()
+    raw = str(path or "")
+    if not raw or any(ord(char) < 32 for char in raw) or "\\" in raw or ".." in Path(raw).parts:
+        raise HTTPException(status_code=400, detail="Invalid result path")
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = root / candidate
     try:
-        target = _safe_path(Path(str(path or "")), root)
+        target = _safe_path(candidate, root)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail="Invalid result path") from exc
+    if for_delete and (target.parent != Path(os.path.abspath(root)) or target.name.startswith(".")):
+        raise HTTPException(status_code=400, detail="Deletion requires a top-level optimize result run directory")
     if require_directory:
         if not target.is_dir() or target.is_symlink() or target == root:
             raise HTTPException(status_code=404, detail="Result not found")
@@ -1799,11 +1808,16 @@ def _cached_evaluation_scan_progress(path: Path) -> dict:
 
 def _run_active_evaluation_scan(path: Path, key: str, stop_event: threading.Event) -> None:
     """Continuously drain a legacy result history without blocking status requests."""
+    last_offset = -1
     try:
         while not stop_event.is_set():
             progress = _all_results_evaluation_count(path)
-            if progress.get("error") or progress.get("scan_complete"):
+            offset = int(progress.get("bytes_scanned") or 0)
+            # A later status poll can resume when the writer appends more bytes.
+            if (progress.get("error") or progress.get("scan_complete")
+                    or progress.get("trailing_partial_entry") or offset <= last_offset):
                 break
+            last_offset = offset
     finally:
         with _active_eval_count_cache_lock:
             _active_eval_scan_threads.pop(key, None)
@@ -4663,11 +4677,15 @@ def _source_references_result(source: str, result_dir: Path) -> bool:
 
 
 def _assert_result_deletable(result_dir: Path) -> None:
+    """Accept only canonical run directories, never their nested artifacts or parents."""
+    results_root = Path(os.path.abspath(_results_root()))
+    result_dir = Path(os.path.abspath(result_dir))
+    if result_dir.parent != results_root or result_dir.name.startswith("."):
+        raise HTTPException(status_code=400, detail="Deletion requires a top-level optimize result run directory")
     try:
         pid_paths = list(_queue_dir().glob("*.pid"))
     except OSError as exc:
         raise HTTPException(status_code=409, detail="Active PB8 optimizer ownership could not be verified safely") from exc
-    results_root = Path(os.path.abspath(_results_root()))
     for pid_path in pid_paths:
         try:
             filename = _validate_name(pid_path.stem)
@@ -4803,7 +4821,7 @@ def _rollback_staged_results(staged: list[tuple[Path, Path]]) -> None:
 @router.delete("/results")
 def delete_result(path: str, session: SessionToken = Depends(require_auth)) -> dict:
     with _result_lock():
-        result_dir = _resolve_result_path(path)
+        result_dir = _resolve_result_path(path, for_delete=True)
         with _queue_lock():
             _assert_result_deletable(result_dir)
             try:
@@ -4828,7 +4846,7 @@ def delete_results(body: dict, session: SessionToken = Depends(require_auth)) ->
     with _result_lock():
         for raw in paths:
             try:
-                result_dir = _resolve_result_path(str(raw))
+                result_dir = _resolve_result_path(str(raw), for_delete=True)
             except HTTPException as exc:
                 if exc.status_code == 404:
                     missing.append(str(raw))

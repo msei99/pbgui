@@ -99,6 +99,10 @@ Nach dem Anpassen **Apply Filters** klicken, um die Approved/Ignored-Listen zu a
 
 Zeigt alle ausstehenden, laufenden und abgeschlossenen Backtest-Jobs mit Echtzeit-Updates.
 
+Wird ein Results-Rebacktest oder Queue-Draft in mehrere Exchange-Jobs aufgeteilt, erhalten die Namen einen Exchange-Suffix wie `_binance` oder `_bybit`, damit die Ausgabeverzeichnisse getrennt bleiben. Einzel-Exchange-Jobs behalten ihre bisherigen Namen.
+
+Backtest-Parameterdialoge behandeln importierte Startbalances als endliche Zahlen, niemals als HTML. Ungueltige oder nicht endliche gespeicherte Werte verwenden den Dialogstandard; die angezeigte Balance vor dem Einreihen pruefen.
+
 ### Tabellenspalten
 
 | Spalte | Beschreibung |

@@ -9,6 +9,7 @@ Uses asyncio.Event to wake WebSocket push loops instantly on data change
 from __future__ import annotations
 
 import asyncio
+import copy
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -179,9 +180,19 @@ class VPSStore:
         self.v7_instances[hostname] = data
         self.changed.set()
 
-    def update_v8_instances(self, hostname: str, data: list[dict]):
-        """Update v8 instance details (config version, assignment, and status)."""
-        self.v8_instances[hostname] = data
+    def update_v8_instances(self, hostname: str, data: list[dict], *,
+                            snapshot_generated_at: float | None = None,
+                            snapshot_checked_at: float | None = None):
+        """Publish copied PB8 rows with freshness bound to this exact collection."""
+        rows = copy.deepcopy(data)
+        for row in rows:
+            # Never trust stamp fields supplied by an agent or preserve them on invalidation.
+            row.pop("snapshot_generated_at", None)
+            row.pop("snapshot_checked_at", None)
+            if snapshot_generated_at is not None and snapshot_checked_at is not None:
+                row["snapshot_generated_at"] = snapshot_generated_at
+                row["snapshot_checked_at"] = snapshot_checked_at
+        self.v8_instances[hostname] = rows
         self.changed.set()
 
     def update_bot_logs(self, hostname: str, data: dict[str, Any]):

@@ -5,6 +5,8 @@ Nach einer freigegebenen PBGui-AI-Erstellung oder Layout-Aenderung aktualisiert 
 Die **Dashboards**-Seite bietet eine vollständig anpassbare Portfolio-Übersicht für deine aktiven Passivbot-Instanzen.
 Du kannst mehrspaltige Widget-Layouts erstellen, Daten mehrerer Benutzerkonten kombinieren und alles frei verschieben.
 
+Dashboard-APIs, Renderer-Skripte und WebSockets bleiben auf dem eigenen PBGui-Origin und behalten einen serverseitig konfigurierten Mount-Praefix. Ein `api_base`-Queryparameter kann keinen anderen Server auswaehlen. Editor-/Template-Nachrichten werden nur vom erwarteten Same-Origin-Parent oder Iframe akzeptiert; fremde Seiten koennen die Seiten nicht einbetten.
+
 ---
 
 ## Dashboard anzeigen
@@ -69,6 +71,8 @@ Alternativ einen Widget-Typ aus der **Palette** rechts in der Toolbar per Drag &
 
 Jede Zelle hat einen **Resize-Griff** unten rechts. Ziehen macht die Zelle höher oder kürzer. Die Höhe wird pro Zelle im Dashboard gespeichert.
 
+Loslassen ausserhalb des Editors oder Verlassen des Browserfensters beendet die Groessenaenderung und gibt das Scrollen wieder frei.
+
 ### Zellkonfiguration
 
 Unter der Kopfleiste zeigt jede Zelle ein kompaktes Konfigurationspanel:
@@ -115,6 +119,20 @@ Zeigt auf einen Blick, welche Coins Gewinne oder Verluste über einen Zeitraum t
 
 Ein **Liniendiagramm** der kumulativen Einnahmen über die Zeit, mit je einer Linie pro Symbol.
 Nützlich, um die besten und schlechtesten Coins im gewählten Zeitraum zu identifizieren.
+
+Im Table-Modus stehen die neuesten Income-Zeilen zuerst. Ein Klick auf **Date** kehrt die Sortierrichtung um.
+
+#### Income-Backup wiederherstellen
+
+Die Restore-Auswahl stellt den gesamten lokalen Snapshot von `pbgui.db` wieder her, nicht nur die sichtbaren Income-Zeilen. Die separate Trades-Datenbank bleibt unveraendert.
+
+- Backups enthalten bestaetigte WAL-Daten. Vor einer Aenderung werden eine private Kopie, die SQLite-Integritaet und das PBGui-Schema geprueft; verlinkte Dateien und unvollstaendige WAL-abhaengige Backups werden abgelehnt.
+- Das Snapshot-Schema wird vor der Ausfuehrung von Integritaetsausdruecken geprueft. Trigger, Views, virtuelle Tabellen und nicht unterstuetzte Ausdruecke werden abgelehnt; SQLite-Parsing- und Speicherlimits begrenzen auch uebergrosse Inhalte. Restore ist fuer kompatible PBGui-Snapshots gedacht, nicht fuer beliebige SQLite-Dateien.
+- Restore erfolgt in einer SQLite-Transaktion, ohne die aktive Datenbankdatei auszutauschen oder WAL-/SHM-Dateien zu loeschen. Bestehende Leser koennen ihren aktuellen Snapshot beenden; anschliessende Abfragen sehen den wiederhergestellten Stand.
+- Restore stoppt PBData nicht. Inkrementelle History-Abfragen, lokale DB-Sync-Zyklen und Benutzerimporte koennen nicht gleichzeitig mit einem Restore zugelassen werden. Eine belegte Datenbank, aktive Abfrage, lokale Installation oder Master-Operation kann HTTP 409 ausloesen; vor einem neuen Versuch deren Ende abwarten.
+- Der API-Neustart ist waehrend des Restores gesperrt. Fehlgeschlagene oder durch Timeout abgebrochene, noch nicht abgeschlossene Restores werden zurueckgerollt; temporaere Dateien und Sperren werden freigegeben.
+- Die Live-Erfassung laeuft danach weiter und kann aktuelle Balances, Preise, Positionen und History sofort wieder aktualisieren. Nach Installation dieses Fixes API und PBData neu laden, bevor Restore verwendet wird, damit alle Prozesse die neue Koordination nutzen; aeltere abgekoppelte DB-Sync-Worker zuerst fertig laufen lassen.
+- Income-Loeschungen werden abgelehnt, wenn ihr automatisches Sicherheitsbackup nicht erstellt werden kann.
 
 Zusätzliche Steuerung:
 - **Last N** — nur die Top-N-Symbole nach absolutem Wert anzeigen
@@ -177,6 +195,8 @@ Steuerung:
 Templates sind **vorgefertigte Dashboard-Layouts**, die als Ausgangspunkt genutzt werden können.
 Statt ein Raster von Grund auf aufzubauen, lädt man ein Template und die Zellen werden mit einer sinnvollen Widget-Anordnung befüllt.
 
+Nach dem Erstellen von Dashboards aus einem Template schliesst sich das Panel und das zuletzt erfolgreich erstellte Dashboard wird geoeffnet. Fehlgeschlagene oder uebersprungene Erstellungen werden nicht ausgewaehlt.
+
 ### Template verwenden
 
 1. In der Sidebar 📋 **Templates** klicken.
@@ -205,6 +225,8 @@ Statt ein Raster von Grund auf aufzubauen, lädt man ein Template und die Zellen
 4. Jeder Zelle einen Widget-Typ zuweisen (aus Palette ziehen oder Typ-Badge klicken).
 5. Jedes Widget konfigurieren (Benutzer, Zeitraum, Verknüpfungen zwischen Zellen).
 6. 💾 klicken — das Dashboard wird gespeichert und sofort in der Live-Ansicht angezeigt.
+
+Beim Abbrechen eines neuen, ungespeicherten Dashboards bleibt der Inhaltsbereich ohne Ladespinner im Ruhezustand.
 
 ---
 

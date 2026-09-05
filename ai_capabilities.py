@@ -3060,6 +3060,8 @@ class AICapabilityService:
                     stripped,
                     parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
                 )
+                # Valid JSON exponents can still overflow Python floats (e.g. 1e999).
+                json.dumps(value, allow_nan=False)
                 return {"format": "json", "value": value}
             except (json.JSONDecodeError, ValueError):
                 pass
@@ -4851,6 +4853,8 @@ class AICapabilityService:
             return [cls._sanitize_config(item, depth=depth + 1) for item in value[:1000]]
         if isinstance(value, str):
             return value[:4096]
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
         if isinstance(value, (bool, int, float)) or value is None:
             return value
         return str(value)[:4096]
@@ -4866,6 +4870,8 @@ class AICapabilityService:
             }
         if isinstance(value, list):
             return [cls._strip_paths(item) for item in value]
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
         return value
 
     @classmethod

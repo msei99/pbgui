@@ -15,6 +15,7 @@ import traceback
 import urllib.request
 import uuid
 from dataclasses import dataclass
+from contextlib import ExitStack, nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -517,15 +518,39 @@ def _local_db_path(db_name: str) -> Path:
     return _data_dir() / db_name
 
 
-def _sqlite_backup_file(src: Path, dst: Path) -> None:
-    """Create a consistent SQLite copy, including any active WAL content."""
+def _sqlite_backup_file(src: Path, dst: Path, *, timeout: float = 30.0) -> None:
+    """Publish a NEW coherent snapshot with an overall, busy-inclusive deadline.
 
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.unlink(missing_ok=True)
-    src_uri = f"file:{src}?mode=ro"
-    with sqlite3.connect(src_uri, uri=True) as src_conn:
-        with sqlite3.connect(str(dst)) as dst_conn:
-            src_conn.backup(dst_conn)
+    Callers supply trusted local DB paths and existing private staging/backup
+    directories. Never unlink an earlier destination, even on a naming collision.
+    """
+    from sqlite_backup import backup_sqlite_database
+
+    backup_sqlite_database(src, dst, timeout=timeout)
+
+
+async def _run_backup_worker(function, *args):
+    """Keep the bounded worker owned until it closes files, including cancellation.
+
+    The calling DBTools operation is registered in _background_tasks. Shield its
+    worker and drain it before releasing leases or deleting its staging directory.
+    """
+    worker = asyncio.create_task(asyncio.to_thread(function, *args))
+    cancelled = False
+    while not worker.done():
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            break
+    if cancelled:
+        if not worker.cancelled():
+            error = worker.exception()
+            if error is not None:
+                _log(SERVICE, f"Backup worker failed during cancellation: {type(error).__name__}", level="WARNING")
+        raise asyncio.CancelledError
+    return worker.result()
 
 
 def _remove_sqlite_sidecars(db_path: Path) -> None:
@@ -572,7 +597,7 @@ async def _backup_target_dbs(target: str, label: str, operation: OperationProgre
         if operation:
             operation.set_current(f"Back up {db_name} on {target}")
         if target == "local":
-            backups.append(_backup_local_file(_local_db_path(db_name), label))
+            backups.append(await _run_backup_worker(_backup_local_file, _local_db_path(db_name), label))
         else:
             backups.append(await _backup_remote_file(target, _remote_path(target, "data", db_name), label))
         if operation:
@@ -1374,13 +1399,19 @@ async def run_sync_job_snapshot(job: dict[str, Any], operation: Any = None) -> d
     job_id = str(job.get("id") or "").strip()
     if not job_id:
         raise ValueError("Sync job ID is missing")
-    return await _run_sync_job(
-        job_id,
-        manual=bool(job.get("manual")),
-        operation=operation,
-        job_override=dict(job),
-        persist_state=False,
-    )
+    from database_lock import acquire_database_lock
+
+    touches_local = job.get("source") == "local" or "local" in (job.get("targets") or [])
+    # Keep incremental cutoffs, all table writes, and scan metadata on the same
+    # side of a restore, including work done by detached worker processes.
+    with acquire_database_lock(Path(PBGDIR)) if touches_local else nullcontext():
+        return await _run_sync_job(
+            job_id,
+            manual=bool(job.get("manual")),
+            operation=operation,
+            job_override=dict(job),
+            persist_state=False,
+        )
 
 
 def _task_jobs_by_id() -> dict[str, dict[str, Any]]:
@@ -1586,9 +1617,11 @@ async def _sync_scheduler_loop() -> None:
 
 
 def _ensure_schema(db_path: Path, db_name: str) -> None:
+    """Initialize sync schemas with the same lock wait as subsequent writes."""
     schema = MAIN_SCHEMA if db_name == MAIN_DB_NAME else TRADES_SCHEMA
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(db_path)) as conn:
+    with sqlite3.connect(str(db_path), timeout=30) as conn:
+        conn.execute("PRAGMA busy_timeout=30000")
         for statement in schema:
             conn.execute(statement)
         conn.commit()
@@ -2161,12 +2194,18 @@ def copy_user_rows(
     users = _clean_users(users)
     if not users:
         raise HTTPException(status_code=422, detail="Select at least one user")
-    if mode == "replace":
-        delete_user_rows(target_paths, users, operation=operation)
+    with ExitStack() as resources:
+        if Path(target_paths[MAIN_DB_NAME]).resolve() == _local_db_path(MAIN_DB_NAME).resolve():
+            from database_lock import acquire_database_lock
 
-    source_conns = _connect_bundle(source_paths)
-    target_conns = _connect_bundle(target_paths)
-    try:
+            resources.enter_context(acquire_database_lock(Path(PBGDIR)))
+        if mode == "replace":
+            delete_user_rows(target_paths, users, operation=operation)
+
+        source_conns = _connect_bundle(source_paths)
+        resources.callback(_close_bundle, source_conns)
+        target_conns = _connect_bundle(target_paths)
+        resources.callback(_close_bundle, target_conns)
         tables: dict[str, dict[str, int]] = {}
         for spec in TABLE_SPECS:
             table_key = f"{spec.db_name}:{spec.table}"
@@ -2182,9 +2221,6 @@ def copy_user_rows(
             "skipped": sum(item["skipped"] for item in tables.values()),
             "tables": tables,
         }
-    finally:
-        _close_bundle(source_conns)
-        _close_bundle(target_conns)
 
 
 async def remote_delete_user_rows(
@@ -2310,7 +2346,7 @@ async def _stage_db_bundle(target: str, temp_dir: Path, prefix: str, operation: 
         if target == "local":
             src = _local_db_path(db_name)
             if src.exists():
-                _sqlite_backup_file(src, local_path)
+                await _run_backup_worker(_sqlite_backup_file, src, local_path)
         else:
             remote = _remote_path(target, "data", db_name)
             snapshot = _remote_path(target, "data", "backup", "db-tools", f"stage-{_timestamp()}-{uuid.uuid4().hex}-{db_name}")
@@ -2333,11 +2369,13 @@ async def _stage_db_bundle(target: str, temp_dir: Path, prefix: str, operation: 
 
 
 def _backup_local_file(path: Path, label: str) -> str:
+    """Create a local backup with a collision-resistant SQLite publication name."""
     if not path.exists():
         return ""
     target_dir = _backup_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
-    backup = target_dir / f"db-tools-{_timestamp()}-{label}-{path.name}"
+    nonce = f"-{uuid.uuid4().hex}" if path.name in DB_FILE_NAMES else ""
+    backup = target_dir / f"db-tools-{_timestamp()}{nonce}-{label}-{path.name}"
     if path.name in DB_FILE_NAMES:
         _sqlite_backup_file(path, backup)
     else:
@@ -2422,15 +2460,16 @@ print(json.dumps(items))
     return result
 
 
-def _assert_sqlite_integrity(path: Path) -> None:
+def _assert_sqlite_integrity(path: Path, *, timeout: float = 30.0) -> None:
+    """Validate a private staged snapshot before any schema expressions can run."""
+    from sqlite_backup import InvalidBackupError, RestoreBusyError, validate_sqlite_snapshot
+
     try:
-        uri = f"file:{path}?mode=ro"
-        with sqlite3.connect(uri, uri=True) as conn:
-            row = conn.execute("PRAGMA integrity_check").fetchone()
-    except sqlite3.Error as exc:
+        validate_sqlite_snapshot(path, main=path.name.endswith(MAIN_DB_NAME), timeout=timeout)
+    except RestoreBusyError as exc:
+        raise HTTPException(status_code=409, detail="SQLite backup validation timed out") from exc
+    except (InvalidBackupError, sqlite3.Error) as exc:
         raise HTTPException(status_code=400, detail=f"Backup is not a readable SQLite database: {path.name}") from exc
-    if not row or str(row[0]).lower() != "ok":
-        raise HTTPException(status_code=400, detail=f"Backup integrity check failed: {path.name}")
 
 
 async def _stage_backup_files(target: str, backups: list[str], temp_dir: Path, operation: OperationProgress | None = None) -> dict[str, Path]:
@@ -2453,7 +2492,7 @@ async def _stage_backup_files(target: str, backups: list[str], temp_dir: Path, o
             ok = await _pool().pull_file(target, remote, local_path)
             if not ok:
                 raise HTTPException(status_code=404, detail=f"Backup not found on {target}: {name}")
-        _assert_sqlite_integrity(local_path)
+        await _run_backup_worker(_assert_sqlite_integrity, local_path)
         staged[db_name] = local_path
         if operation:
             operation.advance(f"Loaded backup {name}", {"target": target, "db": db_name})
@@ -2607,12 +2646,22 @@ async def _install_db_bundle(
 ) -> dict[str, Any]:
     backups: list[str] = []
     pbdata_marker: bool | str = False
+    local_lease = None
+    database_lease = None
     try:
         if target == "local":
+            from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
+            from database_lock import DatabaseBusyError, acquire_database_lock
+
+            try:
+                local_lease = acquire_master_runtime_lock(Path(PBGDIR))
+                database_lease = acquire_database_lock(Path(PBGDIR), exclusive=True)
+            except (DatabaseBusyError, MasterUpdateBusyError) as exc:
+                raise HTTPException(status_code=409, detail="A local database operation or master update is running") from exc
             for db_name in DB_FILE_NAMES:
                 if operation:
                     operation.set_current(f"Back up {db_name} on {target}")
-                backups.append(_backup_local_file(_local_db_path(db_name), label))
+                backups.append(await _run_backup_worker(_backup_local_file, _local_db_path(db_name), label))
                 if operation:
                     operation.advance(f"Backed up {db_name} on {target}", {"target": target, "db": db_name})
             if manage_pbdata:
@@ -2658,8 +2707,16 @@ async def _install_db_bundle(
                     operation.advance(f"Installed {db_name} on {target}", {"target": target, "db": db_name})
         return {"backups": [item for item in backups if item], "pbdata_was_running": bool(pbdata_marker and pbdata_marker != "none")}
     finally:
-        if manage_pbdata:
-            await _start_target_pbdata(target, pbdata_marker, operation)
+        try:
+            if manage_pbdata and (target != "local" or database_lease is not None):
+                await _start_target_pbdata(target, pbdata_marker, operation)
+        finally:
+            try:
+                if database_lease is not None:
+                    database_lease.release()
+            finally:
+                if local_lease is not None:
+                    local_lease.release()
 
 
 def _dashboard_base_path(template: bool) -> Path:
@@ -3056,13 +3113,9 @@ async def copy_database_run(payload: CopyDatabaseRequest, session: SessionToken 
     async def runner(operation: OperationProgress) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="pbgui-db-tools-full-") as tmp:
             source_paths = await _stage_db_bundle(source, Path(tmp), "source", operation)
-            pbdata_marker = await _stop_target_pbdata(target, operation)
-            try:
-                install = await _install_db_bundle(target, source_paths, "full-db-copy", operation, manage_pbdata=False)
-                _log(SERVICE, f"copy full database source={source} target={target}", level="INFO")
-                return {"ok": True, "source": source, "target": target, **install, "pbdata_was_running": bool(pbdata_marker and pbdata_marker != "none")}
-            finally:
-                await _start_target_pbdata(target, pbdata_marker, operation)
+            install = await _install_db_bundle(target, source_paths, "full-db-copy", operation)
+            _log(SERVICE, f"copy full database source={source} target={target}", level="INFO")
+            return {"ok": True, "source": source, "target": target, **install}
 
     operation = _start_operation("copy-database", _operation_total("copy-database"), runner)
     return {"operation": operation.to_dict()}

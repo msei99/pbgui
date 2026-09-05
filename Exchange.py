@@ -395,6 +395,7 @@ class Exchange:
             self.instance.secret = self.user.secret
             if getattr(self.user, 'passphrase', None):
                 self.instance.password = self.user.passphrase
+        if self._user and (self.id == 'hyperliquid' or self.user.key != 'key'):
             if getattr(self.user, 'wallet_address', None):
                 self.instance.walletAddress = self.user.wallet_address
             if getattr(self.user, 'private_key', None):
@@ -1037,14 +1038,18 @@ class Exchange:
 
     def fetch_balance(self, market_type: str):
         if not self.instance: self.connect()
+        params = {"type": market_type}
+        if self.id == "hyperliquid" and getattr(self.user, "is_vault", False):
+            if getattr(self.user, "wallet_address", None):
+                params["vaultAddress"] = self.user.wallet_address
         try:
-            balance = self.instance.fetch_balance(params = {"type": market_type})
+            balance = self.instance.fetch_balance(params=params)
         except Exception as e:
             if self.id in {"bitunix", "weex"}:
                 raise
             return e
         if self.id == "hyperliquid":
-            return float(balance["total"]["USDC"])
+            return float((balance.get("total") or {}).get("USDC") or 0.0)
         if self.id == "bitget":
             return float(balance["info"][0]["available"])
         elif self.id == "bybit":
